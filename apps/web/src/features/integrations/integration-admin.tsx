@@ -90,7 +90,7 @@ export function IntegrationAdmin({
   const loadSnapshot = useCallback(
     async (signal?: AbortSignal) => {
       if (!api) {
-        if (!snapshot) {
+        if (!initialSnapshot) {
           setLoadError("The admin API URL is not configured.");
           setLoading(false);
         }
@@ -109,7 +109,7 @@ export function IntegrationAdmin({
         }
       }
     },
-    [api, eventId, snapshot],
+    [api, eventId, initialSnapshot],
   );
 
   useEffect(() => {
@@ -248,6 +248,21 @@ export function IntegrationAdmin({
       await refreshAfter();
       return true;
     },
+    async deleteWebhook(subscriptionId: string) {
+      if (!api) {
+        setMutationError("The admin API URL is not configured.");
+        return false;
+      }
+      const removed = await mutate(
+        () => api.deleteWebhook(eventId, subscriptionId),
+        "Webhook endpoint removed.",
+      );
+      if (removed === null) {
+        return false;
+      }
+      await refreshAfter();
+      return true;
+    },
     async previewAccelevents() {
       if (!api) {
         setMutationError("The admin API URL is not configured.");
@@ -343,7 +358,7 @@ export function IntegrationAdmin({
         ))}
       </nav>
 
-      <main id="integration-content" className={styles.integrationContent} tabIndex={-1}>
+      <div id="integration-content" className={styles.integrationContent} tabIndex={-1}>
         {notice ? (
           <div className={styles.successPanel} role="status" aria-live="polite">
             <p>{notice}</p>
@@ -403,7 +418,7 @@ export function IntegrationAdmin({
             <DeliverySection snapshot={snapshot} actions={actions} />
           )
         ) : null}
-      </main>
+      </div>
     </div>
   );
 }

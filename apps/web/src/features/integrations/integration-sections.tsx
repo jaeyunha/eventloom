@@ -40,6 +40,7 @@ interface IntegrationActions {
   }): Promise<boolean>;
   setWebhookActive(subscriptionId: string, active: boolean): Promise<boolean>;
   rotateWebhookSecret(subscriptionId: string): Promise<boolean>;
+  deleteWebhook(subscriptionId: string): Promise<boolean>;
   previewAccelevents(): Promise<boolean>;
   publishAccelevents(preview: AcceleventsAdminPreview): Promise<boolean>;
   retryCalendarDelivery(deliveryId: string): Promise<boolean>;
@@ -175,6 +176,12 @@ export function OverviewSection({ snapshot }: Readonly<{ snapshot: IntegrationAd
   const activeKeys = snapshot.apiKeys.filter((key) => key.revokedAt === null).length;
   const activeWebhooks = snapshot.webhooks.filter((webhook) => webhook.active).length;
   const base = `/admin/events/${encodeURIComponent(snapshot.event.id)}/integrations`;
+  const deliveryStates = [snapshot.delivery.openSend.state, snapshot.delivery.calendar.state];
+  const deliveryState: ConnectionState = deliveryStates.includes("degraded")
+    ? "degraded"
+    : deliveryStates.includes("not_configured")
+      ? "not_configured"
+      : "connected";
 
   return (
     <div className={styles.sectionStack}>
@@ -201,7 +208,7 @@ export function OverviewSection({ snapshot }: Readonly<{ snapshot: IntegrationAd
             <CardHeader>
               <div className={styles.cardTitleRow}>
                 <CardTitle>Email &amp; calendar</CardTitle>
-                <StatusBadge state={snapshot.delivery.openSend.state} />
+                <StatusBadge state={deliveryState} />
               </div>
               <CardDescription>OpenSend delivery and provider-neutral calendar invitations.</CardDescription>
             </CardHeader>
@@ -758,6 +765,12 @@ export function WebhooksSection({
                       <dt>Delivery</dt>
                       <dd><Badge variant={delivery.variant}>{delivery.label}</Badge></dd>
                     </div>
+                    {webhook.lastDelivery?.responseStatus ? (
+                      <div>
+                        <dt>Last response</dt>
+                        <dd>HTTP {webhook.lastDelivery.responseStatus}</dd>
+                      </div>
+                    ) : null}
                   </dl>
                 </CardContent>
                 <CardFooter>
@@ -781,6 +794,19 @@ export function WebhooksSection({
                       onClick={() => void actions.rotateWebhookSecret(webhook.id)}
                     >
                       Confirm rotation
+                    </Button>
+                  </details>
+                  <details className={styles.confirmDetails}>
+                    <summary>Remove endpoint</summary>
+                    <p>Pending deliveries stop and this endpoint is permanently removed.</p>
+                    <Button
+                      type="button"
+                      size="small"
+                      variant="danger"
+                      disabled={actions.busy}
+                      onClick={() => void actions.deleteWebhook(webhook.id)}
+                    >
+                      Confirm removal
                     </Button>
                   </details>
                 </CardFooter>

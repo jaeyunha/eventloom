@@ -42,6 +42,7 @@ export interface IntegrationAdminApi {
   }): Promise<OneTimeSecret>;
   setWebhookActive(eventId: string, subscriptionId: string, active: boolean): Promise<void>;
   rotateWebhookSecret(eventId: string, subscriptionId: string): Promise<OneTimeSecret>;
+  deleteWebhook(eventId: string, subscriptionId: string): Promise<void>;
   previewAccelevents(eventId: string): Promise<AcceleventsAdminPreview>;
   publishAccelevents(input: {
     eventId: string;
@@ -185,6 +186,13 @@ export function createIntegrationAdminApi(
           body: JSON.stringify({}),
         },
       );
+    },
+
+    deleteWebhook(eventId, subscriptionId) {
+      return request<void>(`${eventPath(eventId)}/webhooks/${segment(subscriptionId)}`, {
+        method: "DELETE",
+        headers: { "idempotency-key": idempotencyKey() },
+      });
     },
 
     previewAccelevents(eventId) {
