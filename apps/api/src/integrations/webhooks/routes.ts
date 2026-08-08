@@ -215,4 +215,3 @@ export function createWebhookSubscriptionRoutes(
 
   return routes;
 }
-
