@@ -1,0 +1,956 @@
+.workspace {
+  width: min(calc(100% - 2rem), 76rem);
+  margin: 0 auto;
+  padding: 1.5rem 0 5rem;
+}
+
+.skipLink {
+  position: absolute;
+  top: 0.75rem;
+  left: 0.75rem;
+  z-index: 2;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.5rem;
+  background: var(--color-ink);
+  color: var(--color-surface);
+  transform: translateY(-180%);
+}
+
+.skipLink:focus {
+  transform: translateY(0);
+}
+
+.workspaceHeader {
+  display: flex;
+  gap: 2rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 2rem 0 1.75rem;
+}
+
+.eyebrow,
+.sectionEyebrow {
+  margin: 0 0 0.5rem;
+  color: var(--color-brand-strong);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.workspaceHeader h1 {
+  max-width: 25ch;
+  margin: 0;
+  color: var(--color-ink);
+  font-size: clamp(2.25rem, 5vw, 4.25rem);
+  letter-spacing: -0.055em;
+  line-height: 1.02;
+}
+
+.headerDescription {
+  max-width: 51rem;
+  margin-top: 1rem;
+  color: var(--color-muted);
+  font-size: 1.05rem;
+}
+
+.headerDescription strong {
+  color: var(--color-ink);
+}
+
+.headerSide {
+  display: grid;
+  gap: 1rem;
+  justify-items: end;
+  min-width: 13rem;
+}
+
+.reviewNavigation {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  justify-content: flex-end;
+}
+
+.navLink,
+.navCurrent {
+  padding: 0.45rem 0.7rem;
+  border: 1px solid transparent;
+  border-radius: 0.5rem;
+  color: var(--color-muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.navLink:hover,
+.navCurrent {
+  border-color: var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-ink);
+}
+
+.navCurrent {
+  border-color: rgb(80 101 232 / 30%);
+  background: var(--color-brand-soft);
+  color: var(--color-brand-strong);
+}
+
+.statusBadge {
+  display: inline-flex;
+  gap: 0.45rem;
+  align-items: center;
+  width: fit-content;
+  padding: 0.35rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.statusBadge > span:first-child {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.statusOpen {
+  background: var(--color-success-soft);
+  color: var(--color-success);
+}
+
+.statusScheduled {
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
+}
+
+.authorityNotice,
+.privacyNotice,
+.abstentionResult {
+  display: flex;
+  gap: 0.9rem;
+  align-items: flex-start;
+  padding: 1.15rem 1.25rem;
+  border: 1px solid rgb(80 101 232 / 30%);
+  border-radius: var(--radius-md);
+  background: linear-gradient(110deg, var(--color-brand-soft), var(--color-surface));
+}
+
+.authorityNotice h2,
+.privacyNotice h2,
+.abstentionResult h2 {
+  margin: 0;
+  color: var(--color-ink);
+  font-size: 1rem;
+  letter-spacing: -0.015em;
+}
+
+.authorityNotice p,
+.privacyNotice p,
+.abstentionResult p {
+  max-width: 68rem;
+  margin-top: 0.25rem;
+  color: var(--color-muted);
+  font-size: 0.9rem;
+}
+
+.noticeIcon {
+  display: inline-grid;
+  flex: 0 0 auto;
+  width: 1.65rem;
+  height: 1.65rem;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--color-brand);
+  color: white;
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.section {
+  margin-top: 2rem;
+  padding: 1.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+}
+
+.sectionHeading {
+  display: flex;
+  gap: 1.25rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 1.15rem;
+}
+
+.sectionHeading h2,
+.submissionPanel h2,
+.submitPanel h2,
+.conflictPanel h2 {
+  margin: 0;
+  color: var(--color-ink);
+  font-size: clamp(1.35rem, 3vw, 2rem);
+  letter-spacing: -0.04em;
+  line-height: 1.15;
+}
+
+.versionLabel,
+.mutedLabel,
+.roundNumber,
+.cardLabel,
+.referenceBadge {
+  color: var(--color-subtle);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.summaryGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.summaryCard,
+.roundCard,
+.progressPanel,
+.decisionCard,
+.scoreCard {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: #fcfcfe;
+}
+
+.summaryCard {
+  min-height: 10.3rem;
+  padding: 1rem;
+}
+
+.cardValue {
+  display: block;
+  margin-top: 0.55rem;
+  color: var(--color-ink);
+  font-size: 1.25rem;
+  letter-spacing: -0.025em;
+}
+
+.summaryCard p,
+.roundRubric,
+.progressMeta,
+.sectionIntro,
+.tableNote,
+.submissionAbstract,
+.submitPanel p,
+.conflictPanel p {
+  color: var(--color-muted);
+  font-size: 0.88rem;
+}
+
+.summaryCard p {
+  margin-top: 0.4rem;
+}
+
+.compactDefinitionList,
+.dateList,
+.assignmentDetails {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0.6rem 0 0;
+}
+
+.compactDefinitionList div,
+.dateList div,
+.assignmentDetails div {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: space-between;
+}
+
+.compactDefinitionList dt,
+.dateList dt,
+.assignmentDetails dt {
+  color: var(--color-muted);
+  font-size: 0.78rem;
+}
+
+.compactDefinitionList dd,
+.dateList dd,
+.assignmentDetails dd {
+  margin: 0;
+  color: var(--color-ink);
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-align: right;
+}
+
+.roundGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.9rem;
+}
+
+.roundCard {
+  padding: 1.1rem;
+}
+
+.roundCardHeader,
+.decisionSummary,
+.scoreCardHeader,
+.scoreControls,
+.confirmationActions {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.roundCardHeader h3,
+.decisionSummary h3,
+.scoreCard h3,
+.confirmationBox h3 {
+  margin: 0.25rem 0 0;
+  color: var(--color-ink);
+  font-size: 1.05rem;
+  letter-spacing: -0.02em;
+}
+
+.dateList {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 0.9rem 0;
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.dateList div {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.dateList dd {
+  text-align: left;
+}
+
+.roundRubric {
+  margin: 0.75rem 0;
+}
+
+.progressBlock {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.progressLabel {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--color-muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.progressLabel strong {
+  color: var(--color-ink);
+}
+
+.progressTrack {
+  height: 0.55rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--color-border);
+}
+
+.progressTrack span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--color-brand), #7a87ee);
+}
+
+.tableWrap {
+  overflow-x: auto;
+}
+
+.dataTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.86rem;
+}
+
+.dataTable caption {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.dataTable th,
+.dataTable td {
+  padding: 0.85rem 0.7rem;
+  border-bottom: 1px solid var(--color-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.dataTable thead th {
+  color: var(--color-muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.dataTable tbody tr:last-child th,
+.dataTable tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.dataTable tbody th {
+  min-width: 17rem;
+  color: var(--color-ink);
+  font-weight: 700;
+}
+
+.dataTable tbody th strong,
+.dataTable tbody th span {
+  display: block;
+}
+
+.dataTable tbody th span {
+  margin-top: 0.2rem;
+  color: var(--color-muted);
+  font-weight: 400;
+}
+
+.tableNote {
+  margin-top: 1rem;
+}
+
+.progressLayout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(17rem, 0.9fr);
+  gap: 1rem;
+}
+
+.progressPanel {
+  padding: 1.1rem;
+}
+
+.progressMeta {
+  margin-top: 0.75rem;
+}
+
+.indicatorList {
+  display: grid;
+  gap: 0.7rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.indicatorList li {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  gap: 0.45rem;
+  align-items: center;
+  padding: 0.68rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-muted);
+  font-size: 0.78rem;
+}
+
+.indicatorList strong {
+  color: var(--color-ink);
+}
+
+.indicatorDot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+}
+
+.dotSuccess {
+  background: var(--color-success);
+}
+
+.dotWarning {
+  background: #d49b16;
+}
+
+.dotDanger {
+  background: #bd4545;
+}
+
+.sectionIntro {
+  max-width: 55rem;
+  margin: -0.45rem 0 1.1rem;
+}
+
+.decisionList {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.decisionCard {
+  padding: 1.1rem;
+}
+
+.decisionSummary {
+  align-items: center;
+  padding-bottom: 0.9rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.scorePill,
+.referenceBadge,
+.uncountedPill,
+.confirmedPill {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  padding: 0.35rem 0.6rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.scorePill {
+  background: var(--color-brand-soft);
+  color: var(--color-brand-strong);
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.decisionForm {
+  display: grid;
+  grid-template-columns: minmax(11rem, 0.4fr) minmax(17rem, 1fr);
+  gap: 0.9rem;
+  align-items: end;
+  padding-top: 1rem;
+}
+
+.decisionForm .checkboxLabel,
+.decisionForm .formError,
+.decisionForm .primaryButton {
+  grid-column: 1 / -1;
+}
+
+.formField {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.formField label,
+.checkboxLabel {
+  color: var(--color-ink);
+  font-size: 0.82rem;
+  font-weight: 750;
+}
+
+.formField label span,
+.checkboxLabel span {
+  color: var(--color-muted);
+  font-weight: 500;
+}
+
+.formField input,
+.formField select,
+.formField textarea {
+  width: 100%;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font: inherit;
+  font-size: 0.9rem;
+}
+
+.formField input,
+.formField select {
+  min-height: 2.6rem;
+  padding: 0.5rem 0.65rem;
+}
+
+.formField textarea {
+  min-height: 5rem;
+  padding: 0.6rem 0.65rem;
+  resize: vertical;
+}
+
+.formField input:focus-visible,
+.formField select:focus-visible,
+.formField textarea:focus-visible,
+.checkboxLabel input:focus-visible,
+.primaryButton:focus-visible,
+.secondaryButton:focus-visible,
+.dangerButton:focus-visible,
+.navLink:focus-visible,
+.navCurrent:focus-visible {
+  outline: 3px solid rgb(80 101 232 / 45%);
+  outline-offset: 2px;
+}
+
+.fieldHint {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 0.75rem;
+}
+
+.checkboxLabel {
+  display: flex;
+  gap: 0.55rem;
+  align-items: flex-start;
+}
+
+.checkboxLabel input {
+  width: 1.1rem;
+  height: 1.1rem;
+  flex: 0 0 auto;
+  margin-top: 0.08rem;
+  accent-color: var(--color-brand);
+}
+
+.primaryButton,
+.secondaryButton,
+.dangerButton {
+  min-height: 2.55rem;
+  padding: 0.55rem 0.85rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.primaryButton {
+  background: var(--color-brand);
+  color: white;
+}
+
+.primaryButton:hover {
+  background: var(--color-brand-strong);
+}
+
+.secondaryButton {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface);
+  color: var(--color-ink);
+}
+
+.secondaryButton:hover {
+  border-color: var(--color-brand);
+  color: var(--color-brand-strong);
+}
+
+.dangerButton {
+  border-color: #e1aaaa;
+  background: #fff6f6;
+  color: #9f3030;
+}
+
+.dangerButton:hover {
+  background: #ffe9e9;
+}
+
+.primaryButton:disabled,
+.secondaryButton:disabled,
+.dangerButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.formError {
+  margin: 0;
+  color: #a12e2e;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.privacyNotice {
+  margin-top: 1.4rem;
+}
+
+.submissionPanel {
+  margin-top: 2rem;
+  padding: 1.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+}
+
+.referenceBadge {
+  background: var(--color-brand-soft);
+  color: var(--color-brand-strong);
+}
+
+.submissionAbstract {
+  max-width: 60rem;
+  margin-top: 0.9rem;
+  font-size: 1rem;
+}
+
+.assignmentDetails {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 1.2rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.assignmentDetails div {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.assignmentDetails dd {
+  text-align: left;
+}
+
+.autosaveStatus {
+  margin: 0;
+  color: var(--color-success);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.scoreList {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.scoreCard {
+  padding: 1.1rem;
+}
+
+.scoreCardHeader {
+  padding-bottom: 0.9rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.scoreCardHeader h3 {
+  margin-top: 0;
+}
+
+.scoreCardHeader p {
+  max-width: 42rem;
+  margin-top: 0.25rem;
+  color: var(--color-muted);
+  font-size: 0.82rem;
+}
+
+.uncountedPill,
+.aiLabel {
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
+  font-size: 0.7rem;
+  font-weight: 800;
+}
+
+.confirmedPill {
+  background: var(--color-success-soft);
+  color: var(--color-success);
+  font-size: 0.7rem;
+  font-weight: 800;
+}
+
+.scoreControls {
+  gap: 1.2rem;
+  align-items: stretch;
+  padding-top: 1rem;
+}
+
+.scoreControls > .formField {
+  flex: 0 0 12rem;
+}
+
+.aiSuggestion {
+  flex: 1 1 auto;
+  padding: 0.8rem;
+  border: 1px solid #ead79c;
+  border-radius: var(--radius-sm);
+  background: #fffdf4;
+}
+
+.aiSuggestion > div:first-child {
+  display: flex;
+  gap: 0.8rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.aiLabel {
+  padding: 0.2rem 0.4rem;
+  border-radius: 0.35rem;
+}
+
+.aiSuggestion strong {
+  color: var(--color-ink);
+  font-size: 1.15rem;
+}
+
+.aiSuggestion ul {
+  margin: 0.6rem 0 0.75rem;
+  padding-left: 1.1rem;
+  color: var(--color-muted);
+  font-size: 0.78rem;
+}
+
+.aiSuggestion li + li {
+  margin-top: 0.2rem;
+}
+
+.countedTotal {
+  margin: 1.15rem 0 0;
+  color: var(--color-ink);
+  font-size: 0.9rem;
+}
+
+.countedTotal span {
+  color: var(--color-muted);
+}
+
+.submitPanel,
+.conflictPanel {
+  display: grid;
+  gap: 1rem;
+  margin-top: 2rem;
+  padding: 1.5rem;
+  border-radius: var(--radius-lg);
+}
+
+.submitPanel {
+  border: 1px solid rgb(80 101 232 / 35%);
+  background: var(--color-brand-soft);
+}
+
+.conflictPanel {
+  border: 1px solid #e3b4b4;
+  background: #fffafa;
+}
+
+.submitPanel > div:first-child,
+.conflictPanel > div:first-child {
+  max-width: 59rem;
+}
+
+.submitPanel p,
+.conflictPanel p {
+  margin-top: 0.45rem;
+}
+
+.submitPanel .primaryButton,
+.conflictPanel .dangerButton {
+  justify-self: start;
+}
+
+.confirmationBox {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+  border: 1px solid rgb(80 101 232 / 35%);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.confirmationBox p {
+  margin: 0;
+}
+
+.confirmationActions {
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.submittedMessage {
+  margin: 0;
+  color: var(--color-success);
+  font-weight: 800;
+}
+
+.abstentionResult {
+  margin-top: 2rem;
+  border-color: #e3b4b4;
+  background: #fffafa;
+}
+
+@media (max-width: 64rem) {
+  .summaryGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 48rem) {
+  .workspace {
+    width: min(calc(100% - 1.25rem), 76rem);
+    padding-top: 0.75rem;
+  }
+
+  .workspaceHeader,
+  .sectionHeading,
+  .roundCardHeader,
+  .decisionSummary,
+  .scoreCardHeader,
+  .scoreControls {
+    display: grid;
+  }
+
+  .workspaceHeader {
+    gap: 1.1rem;
+    padding-top: 1rem;
+  }
+
+  .headerSide {
+    justify-items: start;
+  }
+
+  .reviewNavigation {
+    justify-content: flex-start;
+  }
+
+  .summaryGrid,
+  .roundGrid,
+  .progressLayout,
+  .assignmentDetails {
+    grid-template-columns: 1fr;
+  }
+
+  .section,
+  .submissionPanel,
+  .submitPanel,
+  .conflictPanel {
+    padding: 1rem;
+  }
+
+  .decisionForm {
+    grid-template-columns: 1fr;
+  }
+
+  .decisionForm .checkboxLabel,
+  .decisionForm .formError,
+  .decisionForm .primaryButton {
+    grid-column: auto;
+  }
+
+  .scoreControls > .formField {
+    flex-basis: auto;
+  }
+
+  .confirmationActions {
+    justify-content: stretch;
+  }
+
+  .confirmationActions button {
+    flex: 1 1 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skipLink {
+    transition: none;
+  }
+}
