@@ -1,0 +1,68 @@
+import { z } from "zod";
+
+const stableIdBody = "[0-9A-HJKMNP-TV-Z]{26}";
+
+const stableId = (prefix: string) =>
+  z.string().regex(new RegExp(`^${prefix}_${stableIdBody}$`), `Expected a stable ${prefix} ID`);
+
+export const organizationIdSchema = stableId("org").brand<"OrganizationId">();
+export const eventIdSchema = stableId("evt").brand<"EventId">();
+export const userIdSchema = stableId("usr").brand<"UserId">();
+export const accountIdSchema = stableId("acc").brand<"AccountId">();
+export const apiKeyIdSchema = stableId("key").brand<"ApiKeyId">();
+export const submissionFormIdSchema = stableId("frm").brand<"SubmissionFormId">();
+export const formFieldIdSchema = stableId("fld").brand<"FormFieldId">();
+export const submissionIdSchema = stableId("sub").brand<"SubmissionId">();
+export const submissionVersionIdSchema = stableId("svr").brand<"SubmissionVersionId">();
+export const participantIdSchema = stableId("par").brand<"ParticipantId">();
+export const secondaryContactIdSchema = stableId("con").brand<"SecondaryContactId">();
+export const speakerProfileIdSchema = stableId("spk").brand<"SpeakerProfileId">();
+export const assetIdSchema = stableId("ast").brand<"AssetId">();
+export const evaluationPlanIdSchema = stableId("evp").brand<"EvaluationPlanId">();
+export const reviewRoundIdSchema = stableId("rnd").brand<"ReviewRoundId">();
+export const rubricCriterionIdSchema = stableId("rub").brand<"RubricCriterionId">();
+export const reviewAssignmentIdSchema = stableId("ras").brand<"ReviewAssignmentId">();
+export const reviewIdSchema = stableId("rev").brand<"ReviewId">();
+export const reviewCommentIdSchema = stableId("rcm").brand<"ReviewCommentId">();
+export const taskIdSchema = stableId("tsk").brand<"TaskId">();
+export const taskTransitionIdSchema = stableId("ttr").brand<"TaskTransitionId">();
+export const agendaIdSchema = stableId("agd").brand<"AgendaId">();
+export const agendaVersionIdSchema = stableId("agv").brand<"AgendaVersionId">();
+export const sessionIdSchema = stableId("ses").brand<"SessionId">();
+export const roomIdSchema = stableId("rom").brand<"RoomId">();
+export const trackIdSchema = stableId("trk").brand<"TrackId">();
+export const webhookSubscriptionIdSchema = stableId("whs").brand<"WebhookSubscriptionId">();
+export const webhookDeliveryIdSchema = stableId("whd").brand<"WebhookDeliveryId">();
+export const integrationPublicationIdSchema = stableId("pub").brand<"IntegrationPublicationId">();
+export const syncAttemptIdSchema = stableId("syn").brand<"SyncAttemptId">();
+
+export type OrganizationId = z.infer<typeof organizationIdSchema>;
+export type EventId = z.infer<typeof eventIdSchema>;
+export type UserId = z.infer<typeof userIdSchema>;
+export type AccountId = z.infer<typeof accountIdSchema>;
+export type ApiKeyId = z.infer<typeof apiKeyIdSchema>;
+export type SubmissionFormId = z.infer<typeof submissionFormIdSchema>;
+export type FormFieldId = z.infer<typeof formFieldIdSchema>;
+export type SubmissionId = z.infer<typeof submissionIdSchema>;
+export type SubmissionVersionId = z.infer<typeof submissionVersionIdSchema>;
+export type ParticipantId = z.infer<typeof participantIdSchema>;
+export type SecondaryContactId = z.infer<typeof secondaryContactIdSchema>;
+export type SpeakerProfileId = z.infer<typeof speakerProfileIdSchema>;
+export type AssetId = z.infer<typeof assetIdSchema>;
+export type EvaluationPlanId = z.infer<typeof evaluationPlanIdSchema>;
+export type ReviewRoundId = z.infer<typeof reviewRoundIdSchema>;
+export type RubricCriterionId = z.infer<typeof rubricCriterionIdSchema>;
+export type ReviewAssignmentId = z.infer<typeof reviewAssignmentIdSchema>;
+export type ReviewId = z.infer<typeof reviewIdSchema>;
+export type ReviewCommentId = z.infer<typeof reviewCommentIdSchema>;
+export type TaskId = z.infer<typeof taskIdSchema>;
+export type TaskTransitionId = z.infer<typeof taskTransitionIdSchema>;
+export type AgendaId = z.infer<typeof agendaIdSchema>;
+export type AgendaVersionId = z.infer<typeof agendaVersionIdSchema>;
+export type SessionId = z.infer<typeof sessionIdSchema>;
+export type RoomId = z.infer<typeof roomIdSchema>;
+export type TrackId = z.infer<typeof trackIdSchema>;
+export type WebhookSubscriptionId = z.infer<typeof webhookSubscriptionIdSchema>;
+export type WebhookDeliveryId = z.infer<typeof webhookDeliveryIdSchema>;
+export type IntegrationPublicationId = z.infer<typeof integrationPublicationIdSchema>;
+export type SyncAttemptId = z.infer<typeof syncAttemptIdSchema>;
