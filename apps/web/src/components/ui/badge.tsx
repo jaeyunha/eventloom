@@ -4,7 +4,7 @@ import { cx } from "./class-names";
 
 export type BadgeVariant = "neutral" | "info" | "success" | "warning" | "danger" | "outline";
 
-const variantClasses: Record<BadgeVariant, string> = {
+const variantClasses = {
   neutral: styles.badgeNeutral,
   info: styles.badgeInfo,
   success: styles.badgeSuccess,

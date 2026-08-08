@@ -179,10 +179,10 @@ export function RichTextArea({
 
   return (
     <RichTextShell
-      disabled={disabled}
-      footer={maxLength ? `${editorValue.length}/${maxLength}` : undefined}
+      disabled={Boolean(disabled)}
+      footer={maxLength === undefined ? null : `${editorValue.length}/${maxLength}`}
       onCommand={handleCommand}
-      toolbarLabel={toolbarLabel}
+      toolbarLabel={toolbarLabel ?? "Formatting options"}
     >
       <textarea
         className={cx(styles.richTextEditor, className)}

@@ -169,7 +169,7 @@ export function SearchableSelect({
     }
   }
 
-  function handleBlur(event: FocusEvent<HTMLDivElement>) {
+  function handleBlur(event: FocusEvent<HTMLFieldSetElement>) {
     const nextTarget = event.relatedTarget;
     if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) {
       return;
@@ -184,7 +184,11 @@ export function SearchableSelect({
   const displayValue = open ? query : (selectedOption?.label ?? "");
 
   return (
-    <div className={cx(styles.combo, className)} onBlur={handleBlur}>
+    <fieldset
+      aria-label={ariaLabel ? `${ariaLabel} select` : "Searchable select"}
+      className={cx(styles.combo, className)}
+      onBlur={handleBlur}
+    >
       {name ? <input name={name} type="hidden" value={selectedValue} /> : null}
       <div className={styles.comboControl}>
         <input
@@ -228,38 +232,38 @@ export function SearchableSelect({
         </svg>
       </div>
       {open ? (
-        <ul className={styles.comboList} id={listId} role="listbox">
+        <div className={styles.comboList} id={listId} role="listbox">
           {visibleOptions.length === 0 ? (
-            <li className={styles.comboEmpty}>{emptyMessage}</li>
+            <div className={styles.comboEmpty} role="status">
+              {emptyMessage}
+            </div>
           ) : (
             visibleOptions.map((option, index) => (
-              <li
+              <button
+                aria-disabled={option.disabled || undefined}
                 aria-selected={option.value === selectedValue}
+                className={cx(
+                  styles.comboOption,
+                  index === activeIndex && styles.comboOptionActive,
+                  option.value === selectedValue && styles.comboOptionSelected,
+                )}
+                disabled={option.disabled}
                 id={`${listId}-option-${index}`}
                 key={option.value}
+                onClick={() => selectOption(option)}
                 role="option"
+                tabIndex={-1}
+                type="button"
               >
-                <button
-                  className={cx(
-                    styles.comboOption,
-                    index === activeIndex && styles.comboOptionActive,
-                    option.value === selectedValue && styles.comboOptionSelected,
-                  )}
-                  disabled={option.disabled}
-                  onClick={() => selectOption(option)}
-                  tabIndex={-1}
-                  type="button"
-                >
-                  {option.label}
-                  {option.description ? (
-                    <span className={styles.comboOptionDescription}>{option.description}</span>
-                  ) : null}
-                </button>
-              </li>
+                {option.label}
+                {option.description ? (
+                  <span className={styles.comboOptionDescription}>{option.description}</span>
+                ) : null}
+              </button>
             ))
           )}
-        </ul>
+        </div>
       ) : null}
-    </div>
+    </fieldset>
   );
 }

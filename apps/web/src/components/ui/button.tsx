@@ -5,7 +5,7 @@ import { cx } from "./class-names";
 export type ButtonVariant = "primary" | "secondary" | "accent" | "danger" | "ghost";
 export type ButtonSize = "small" | "medium" | "large";
 
-const variantClasses: Record<ButtonVariant, string> = {
+const variantClasses = {
   primary: styles.buttonPrimary,
   secondary: styles.buttonSecondary,
   accent: styles.buttonAccent,
@@ -13,7 +13,7 @@ const variantClasses: Record<ButtonVariant, string> = {
   ghost: styles.buttonGhost,
 };
 
-const sizeClasses: Record<ButtonSize, string | undefined> = {
+const sizeClasses = {
   small: styles.buttonSmall,
   medium: undefined,
   large: styles.buttonLarge,

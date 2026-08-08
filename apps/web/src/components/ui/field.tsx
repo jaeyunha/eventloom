@@ -11,9 +11,9 @@ import { cx } from "./class-names";
 
 export interface FieldControlProps {
   id: string;
-  "aria-describedby"?: string;
-  "aria-invalid"?: true;
-  "aria-required"?: true;
+  "aria-describedby"?: string | undefined;
+  "aria-invalid"?: true | undefined;
+  "aria-required"?: true | undefined;
 }
 
 export interface FieldProps {
