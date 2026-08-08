@@ -53,11 +53,13 @@ export interface SpeakerTask {
   submissionId: string;
   participantId: string;
   type: SpeakerTaskType;
+  owner: "speaker" | "organizer";
   title: string;
   description?: string;
   status: SpeakerTaskStatus;
   dueAt?: string;
   dependencyIds: readonly string[];
+  reminderOffsetsMinutes: readonly number[];
   acceptedAssetKinds?: readonly SpeakerAssetKind[];
   version: number;
   updatedAt: string;

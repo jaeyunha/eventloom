@@ -1,6 +1,6 @@
 import { type Context, Hono } from "hono";
 import { z } from "zod";
-import { SpeakerService, SpeakerServiceError } from "./service";
+import { type SpeakerService, SpeakerServiceError } from "./service";
 import { speakerTaskStatuses } from "./types";
 
 interface SpeakerRouteEnvironment {

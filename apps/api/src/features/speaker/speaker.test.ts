@@ -210,9 +210,11 @@ function task(input: Partial<SpeakerTask> & Pick<SpeakerTask, "id" | "participan
     eventId: "event-1",
     submissionId: "submission-1",
     type: "upload",
+    owner: "speaker",
     title: `Task ${input.id}`,
     status: "not_started",
     dependencyIds: [],
+    reminderOffsetsMinutes: [],
     version: 0,
     updatedAt: now,
     ...input,
@@ -254,6 +256,12 @@ function createFixture() {
       acceptedAssetKinds: ["slides"],
     }),
     task({ id: "action-task", participantId: "participant-1", type: "action" }),
+    task({
+      id: "organizer-task",
+      participantId: "participant-1",
+      owner: "organizer",
+      type: "action",
+    }),
     task({
       id: "declined-task",
       participantId: "participant-1",
@@ -302,6 +310,7 @@ describe("SpeakerService portal access", () => {
       "action-task",
     ]);
     expect(portal.outstandingTaskCount).toBe(2);
+    expect(JSON.stringify(portal)).not.toContain("organizer-task");
     expect(JSON.stringify(portal)).not.toContain("participant-2");
     expect(JSON.stringify(portal)).not.toContain("participant-other-event");
   });
@@ -465,6 +474,18 @@ describe("SpeakerService task workflow", () => {
       expectServiceError(error, "INVALID_TASK_TRANSITION");
       return true;
     });
+    await expect(
+      service.transitionTask({
+        eventId: "event-1",
+        accountId: "account-1",
+        taskId: "organizer-task",
+        toStatus: "completed",
+        expectedVersion: 0,
+      }),
+    ).rejects.toSatisfy((error: unknown) => {
+      expectServiceError(error, "NOT_FOUND");
+      return true;
+    });
     expect(repository.transitions).toHaveLength(1);
   });
 
@@ -524,6 +545,32 @@ describe("SpeakerService private asset authorization", () => {
     ]);
   });
 
+  it("binds task uploads to the authorized task and its configured asset kinds", async () => {
+    const { gateway, service } = createFixture();
+
+    const result = await service.issueUploadGrant({
+      eventId: "event-1",
+      accountId: "account-1",
+      participantId: "participant-1",
+      taskId: "slides-task",
+      kind: "slides",
+      fileName: "conference-slides.pdf",
+      contentType: "application/pdf",
+      sizeBytes: 2_000_000,
+    });
+
+    expect(result.asset).toMatchObject({
+      taskId: "slides-task",
+      kind: "slides",
+      state: "pending_upload",
+    });
+    expect(gateway.uploads[0]).toMatchObject({
+      private: true,
+      requireMalwareScan: true,
+      stripMetadata: false,
+    });
+  });
+
   it("enforces participant, task, media-type, and size policies before issuing access", async () => {
     const { gateway, service } = createFixture();
 
@@ -554,7 +601,7 @@ describe("SpeakerService private asset authorization", () => {
         kind: "headshot",
         fileName: "speaker.jpg",
         contentType: "image/jpeg",
-        sizeBytes: 6 * 1024 * 1024,
+        sizeBytes: 100,
       }),
     ];
 

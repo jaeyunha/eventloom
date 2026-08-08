@@ -92,12 +92,28 @@ function notFound(): SpeakerServiceError {
   return new SpeakerServiceError("NOT_FOUND", 404, "The requested speaker resource was not found.");
 }
 
+function containsDisallowedTextControl(value: string): boolean {
+  return [...value].some((character) => {
+    const codePoint = character.codePointAt(0);
+    return (
+      codePoint !== undefined &&
+      (codePoint === 0x7f || (codePoint < 0x20 && codePoint !== 0x09 && codePoint !== 0x0a))
+    );
+  });
+}
+
+function stripFileNameControls(value: string): string {
+  return [...value]
+    .filter((character) => {
+      const codePoint = character.codePointAt(0);
+      return codePoint !== undefined && codePoint >= 0x20 && codePoint !== 0x7f;
+    })
+    .join("");
+}
+
 function normalizeBiography(value: string): string {
   const normalized = value.replace(/\r\n?/g, "\n").normalize("NFC").trim();
-  if (
-    normalized.length > 5_000 ||
-    /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/.test(normalized)
-  ) {
+  if (normalized.length > 5_000 || containsDisallowedTextControl(normalized)) {
     throw new SpeakerServiceError(
       "VALIDATION_ERROR",
       400,
@@ -116,7 +132,7 @@ function normalizeTransitionNote(value: string | undefined): string | undefined 
   if (
     normalized.length === 0 ||
     normalized.length > 1_000 ||
-    /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/.test(normalized)
+    containsDisallowedTextControl(normalized)
   ) {
     throw new SpeakerServiceError(
       "VALIDATION_ERROR",
@@ -128,11 +144,7 @@ function normalizeTransitionNote(value: string | undefined): string | undefined 
 }
 
 function normalizeFileName(value: string): string {
-  const normalized = value
-    .normalize("NFC")
-    .replace(/[\\/]/g, "-")
-    .replace(/[\u0000-\u001F\u007F]/g, "")
-    .trim();
+  const normalized = stripFileNameControls(value.normalize("NFC").replace(/[\\/]/g, "-")).trim();
   if (normalized.length === 0 || normalized.length > 120 || normalized === ".") {
     throw new SpeakerServiceError(
       "UPLOAD_POLICY_VIOLATION",
@@ -222,7 +234,10 @@ export class SpeakerService {
     const scope = await this.getScope(eventId, accountId);
     const allowedParticipantIds = new Set(scope.participantIds);
     const tasks = (await this.repository.listTasks(eventId, scope.participantIds)).filter(
-      (task) => task.eventId === eventId && allowedParticipantIds.has(task.participantId),
+      (task) =>
+        task.eventId === eventId &&
+        task.owner === "speaker" &&
+        allowedParticipantIds.has(task.participantId),
     );
     const submissionIds = unique(tasks.map((task) => task.submissionId));
     const submissions = await this.repository.listSubmissions(eventId, submissionIds);
@@ -288,7 +303,12 @@ export class SpeakerService {
     assertExpectedVersion(input.expectedVersion);
     const scope = await this.getScope(input.eventId, input.accountId);
     const task = await this.repository.getTask(input.eventId, input.taskId);
-    if (!task || task.eventId !== input.eventId || !scope.participantIds.includes(task.participantId)) {
+    if (
+      !task ||
+      task.eventId !== input.eventId ||
+      task.owner !== "speaker" ||
+      !scope.participantIds.includes(task.participantId)
+    ) {
       throw notFound();
     }
     if (task.version !== input.expectedVersion) {
@@ -368,6 +388,7 @@ export class SpeakerService {
         !task ||
         task.eventId !== input.eventId ||
         task.participantId !== input.participantId ||
+        task.owner !== "speaker" ||
         task.type !== "upload"
       ) {
         throw notFound();
