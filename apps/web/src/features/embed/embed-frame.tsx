@@ -9,7 +9,7 @@ export function EmbedFrame({
   theme,
   view,
 }: Readonly<{
-  children: ReactNode;
+  children?: ReactNode;
   event: PublishedEvent;
   eventSlug: string;
   theme: EmbedTheme;

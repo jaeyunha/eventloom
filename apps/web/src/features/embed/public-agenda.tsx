@@ -47,10 +47,10 @@ export function PublicAgendaView({
             Browse revision {agenda.revision.number}, published for attendees and event partners.
           </p>
         </div>
-        <div className={styles.feedLinks} aria-label="Agenda downloads">
+        <nav className={styles.feedLinks} aria-label="Agenda downloads">
           <a href={`${publicBase}/agenda.json`}>JSON feed</a>
           <a href={`${publicBase}/agenda.ics`}>Add to calendar</a>
-        </div>
+        </nav>
       </div>
 
       <form className={styles.agendaFilters} onSubmit={(event) => event.preventDefault()}>

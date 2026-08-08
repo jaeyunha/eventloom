@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { AgendaApiError, createAgendaApi } from "./api";
 import type { AgendaWorkspaceData } from "./types";
 
@@ -25,12 +25,14 @@ const workspace = {
 
 describe("agenda API adapter", () => {
   it("uses credentialed admin endpoints and expected draft versions", async () => {
-    const fetcher = vi.fn(async () =>
-      new Response(JSON.stringify({ data: workspace }), {
+    const calls: Array<{ input: RequestInfo | URL; init: RequestInit | undefined }> = [];
+    const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ input, init });
+      return new Response(JSON.stringify({ data: workspace }), {
         status: 200,
         headers: { "content-type": "application/json" },
-      }),
-    );
+      });
+    };
     const api = createAgendaApi("https://api.example.com/", fetcher);
 
     await api.saveEntry({
@@ -45,20 +47,21 @@ describe("agenda API adapter", () => {
       },
     });
 
-    expect(fetcher).toHaveBeenCalledOnce();
-    const [url, init] = fetcher.mock.calls[0] ?? [];
-    expect(url).toBe("https://api.example.com/api/admin/events/evt%2Fopen/agenda/draft/entries");
-    expect(init).toMatchObject({
+    expect(calls).toHaveLength(1);
+    expect(String(calls[0]?.input)).toBe(
+      "https://api.example.com/api/admin/events/evt%2Fopen/agenda/draft/entries",
+    );
+    expect(calls[0]?.init).toMatchObject({
       method: "PUT",
       credentials: "include",
       headers: { accept: "application/json", "content-type": "application/json" },
     });
-    expect(JSON.parse(String(init?.body))).toMatchObject({ expectedVersion: 2 });
+    expect(JSON.parse(String(calls[0]?.init?.body))).toMatchObject({ expectedVersion: 2 });
   });
 
   it("preserves structured conflict details from failed mutations", async () => {
-    const fetcher = vi.fn(async () =>
-      new Response(
+    const fetcher = async () => {
+      return new Response(
         JSON.stringify({
           error: {
             code: "PUBLICATION_BLOCKED",
@@ -78,8 +81,8 @@ describe("agenda API adapter", () => {
           },
         }),
         { status: 409, headers: { "content-type": "application/json" } },
-      ),
-    );
+      );
+    };
     const api = createAgendaApi("https://api.example.com", fetcher);
 
     const error = await api.preview("evt_open").catch((caught: unknown) => caught);

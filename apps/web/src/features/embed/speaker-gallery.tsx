@@ -42,7 +42,8 @@ export function SpeakerGallery({ gallery }: Readonly<{ gallery: PublishedSpeaker
         </span>
       </div>
 
-      <form className={styles.filters} role="search" onSubmit={(event) => event.preventDefault()}>
+      <search>
+        <form className={styles.filters} onSubmit={(event) => event.preventDefault()}>
         <label>
           <span>Search speakers or sessions</span>
           <input
@@ -75,7 +76,8 @@ export function SpeakerGallery({ gallery }: Readonly<{ gallery: PublishedSpeaker
             Clear filters
           </button>
         ) : null}
-      </form>
+        </form>
+      </search>
 
       {speakers.length === 0 ? (
         <div className={styles.emptyResult} role="status">
@@ -91,13 +93,10 @@ export function SpeakerGallery({ gallery }: Readonly<{ gallery: PublishedSpeaker
                 <article className={styles.speakerCard} id={`speaker-${speaker.id}`}>
                   <div className={styles.speakerPhoto}>
                     {photoUrl ? (
-                      <img
-                        src={photoUrl}
-                        alt=""
-                        width={240}
-                        height={240}
-                        loading="lazy"
-                        referrerPolicy="no-referrer"
+                      <span
+                        className={styles.photoImage}
+                        aria-hidden="true"
+                        style={{ backgroundImage: `url(${JSON.stringify(photoUrl)})` }}
                       />
                     ) : (
                       <span aria-hidden="true">{speakerInitials(speaker.displayName)}</span>

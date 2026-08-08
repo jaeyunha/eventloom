@@ -106,7 +106,7 @@
   font-size: clamp(2rem, 4vw, 3.25rem);
 }
 
-.pageHeading > div:first-child > p:last-child {
+.pageDescription {
   max-width: 48rem;
   margin-top: 0.65rem;
   color: var(--sb-color-muted);
@@ -590,7 +590,8 @@
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   margin-top: 0.85rem;
-  padding-top: 0.75rem;
+  padding: 0.75rem 0 0;
+  border: 0;
   border-top: 1px solid var(--sb-color-border);
   color: var(--sb-color-muted);
   font-size: 0.72rem;

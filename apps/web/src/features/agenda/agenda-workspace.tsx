@@ -235,7 +235,7 @@ export function AgendaBoard({
           <div>
             <p className={styles.eyebrow}>{data.event.name}</p>
             <h1>Agenda workspace</h1>
-            <p>
+            <p className={styles.pageDescription}>
               Schedule accepted sessions in a private draft. Public embeds continue to use the last
               published revision until you publish again.
             </p>
@@ -436,11 +436,12 @@ export function AgendaBoard({
                 {busy ? "Checking..." : "Preview and validate"}
               </button>
               {preview ? (
-                <div className={styles.diffSummary} aria-label="Changes from published revision">
+                <fieldset className={styles.diffSummary}>
+                  <legend className={styles.srOnly}>Changes from published revision</legend>
                   <span><strong>{preview.diff.added}</strong> added</span>
                   <span><strong>{preview.diff.changed}</strong> changed</span>
                   <span><strong>{preview.diff.removed}</strong> removed</span>
-                </div>
+                </fieldset>
               ) : null}
             </section>
 
@@ -629,6 +630,7 @@ export function AgendaWorkspace({
   async function mutate(
     operation: (activeApi: AgendaApi, current: AgendaWorkspaceData) => Promise<AgendaWorkspaceData>,
     successMessage: string,
+    refreshPreview = false,
   ) {
     if (!api || !data) {
       return;
@@ -639,7 +641,7 @@ export function AgendaWorkspace({
     try {
       const nextData = await operation(api, data);
       setData(nextData);
-      setPreview(null);
+      setPreview(refreshPreview ? await api.preview(eventId) : null);
       setStatusMessage(successMessage);
     } catch (mutationError) {
       setError(messageFrom(mutationError));
@@ -723,18 +725,15 @@ export function AgendaWorkspace({
       }}
       onOverrideWarning={(warningId, reason) =>
         mutate(
-          async (activeApi, current) => {
-            const nextData = await activeApi.overrideWarning({
+          (activeApi, current) =>
+            activeApi.overrideWarning({
               eventId,
               expectedVersion: current.draft.version,
               warningId,
               reason,
-            });
-            const nextPreview = await activeApi.preview(eventId);
-            setPreview(nextPreview);
-            return nextData;
-          },
+            }),
           "Warning override recorded in the agenda audit history.",
+          true,
         )
       }
       onPublish={() =>
