@@ -7,7 +7,7 @@ export class HmacAcceleventsConfirmationTokens implements AcceleventsConfirmatio
   private readonly key: Promise<CryptoKey>;
   private readonly subtle: SubtleCrypto;
 
-  constructor(secret: string, subtle: SubtleCrypto = globalThis.crypto.subtle) {
+  constructor(secret: string, subtle: SubtleCrypto = crypto.subtle) {
     if (new TextEncoder().encode(secret).byteLength < 32) {
       throw new Error("Accelevents confirmation secret must contain at least 32 bytes.");
     }

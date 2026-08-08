@@ -47,7 +47,7 @@ export function canonicalJson(value: unknown): string {
 
 export async function sha256Hex(
   value: unknown,
-  subtle: SubtleCrypto = globalThis.crypto.subtle,
+  subtle: SubtleCrypto = crypto.subtle,
 ): Promise<string> {
   const digest = await subtle.digest("SHA-256", new TextEncoder().encode(canonicalJson(value)));
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -122,13 +122,14 @@ export function mapAcceptedProgram(source: AcceleventsProgramSource): Accelevent
     }
   }
 
+  validationErrors.sort(compareErrors);
   return {
     eventId: source.eventId,
     agendaRevisionId: source.agendaRevisionId,
     speakers,
     sessions,
     mappings: ACCELEVENTS_FIELD_MAPPINGS,
-    validationErrors: validationErrors.toSorted(compareErrors),
+    validationErrors,
   };
 }
 
@@ -139,8 +140,13 @@ export function diffAcceleventsProgram(
   const records = [
     ...diffKind("speaker", desired.speakers, current.speakers),
     ...diffKind("session", desired.sessions, current.sessions),
-  ].toSorted(compareDiffRecords);
-  const summary = { create: 0, unchanged: 0, update: 0 };
+  ];
+  records.sort(compareDiffRecords);
+  const summary: { create: number; unchanged: number; update: number } = {
+    create: 0,
+    unchanged: 0,
+    update: 0,
+  };
   for (const record of records) {
     summary[record.operation] += 1;
   }
@@ -172,11 +178,10 @@ function canonicalize(value: unknown): unknown {
     return value.map(canonicalize);
   }
   if (value !== null && typeof value === "object") {
+    const entries = Object.entries(value).filter(([, entryValue]) => entryValue !== undefined);
+    entries.sort(([left], [right]) => left.localeCompare(right));
     return Object.fromEntries(
-      Object.entries(value)
-        .filter(([, entryValue]) => entryValue !== undefined)
-        .toSorted(([left], [right]) => left.localeCompare(right))
-        .map(([key, entryValue]) => [key, canonicalize(entryValue)]),
+      entries.map(([key, entryValue]) => [key, canonicalize(entryValue)]),
     );
   }
   return value;
@@ -191,7 +196,7 @@ function nullableTrim(value: string | null): string | null {
 }
 
 function uniqueSorted<T extends string>(values: readonly T[]): T[] {
-  return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
+  return [...new Set(values)].sort((left, right) => left.localeCompare(right));
 }
 
 function uniqueRecords<T extends { readonly externalId: string }>(
@@ -199,7 +204,7 @@ function uniqueRecords<T extends { readonly externalId: string }>(
   records: readonly T[],
   errors: IntegrationRecordError[],
 ): T[] {
-  const sorted = [...records].toSorted(
+  const sorted = [...records].sort(
     (left, right) =>
       left.externalId.localeCompare(right.externalId) || canonicalJson(left).localeCompare(canonicalJson(right)),
   );
@@ -224,7 +229,7 @@ function uniqueRecords<T extends { readonly externalId: string }>(
 function issueMessage(issues: readonly { readonly message: string; readonly path: PropertyKey[] }[]): string {
   return issues
     .map((issue) => `${issue.path.join(".") || "record"}: ${issue.message}`)
-    .toSorted()
+    .sort()
     .join("; ");
 }
 
@@ -241,15 +246,12 @@ function diffKind<T extends { readonly externalId: string }>(
   desiredRecords: readonly T[],
   currentRecords: readonly T[],
 ): AcceleventsDiffRecord[] {
-  const currentById = new Map(
-    [...currentRecords]
-      .toSorted(
-        (left, right) =>
-          left.externalId.localeCompare(right.externalId) ||
-          canonicalJson(left).localeCompare(canonicalJson(right)),
-      )
-      .map((record) => [record.externalId, record]),
+  const sortedCurrent = [...currentRecords].sort(
+    (left, right) =>
+      left.externalId.localeCompare(right.externalId) ||
+      canonicalJson(left).localeCompare(canonicalJson(right)),
   );
+  const currentById = new Map(sortedCurrent.map((record) => [record.externalId, record]));
   return desiredRecords.map((desired) => {
     const current = currentById.get(desired.externalId);
     if (current === undefined) {
@@ -260,7 +262,7 @@ function diffKind<T extends { readonly externalId: string }>(
         (field) =>
           canonicalJson(desired[field as keyof T]) !== canonicalJson(current[field as keyof T]),
       )
-      .toSorted();
+      .sort();
     return {
       kind,
       externalId: desired.externalId,
