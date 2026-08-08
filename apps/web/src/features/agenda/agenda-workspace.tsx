@@ -1,8 +1,13 @@
 "use client";
 
-import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import styles from "./agenda.module.css";
 import { type AgendaApi, AgendaApiError, createAgendaApi } from "./api";
+import {
+  createLocalAgendaDemoApi,
+  loadAgendaWorkspace,
+  resolveAgendaAppEnvironment,
+} from "./demo/agenda-demo-api";
 import {
   agendaDays,
   conflictsForEntry,
@@ -599,15 +604,38 @@ function WarningOverrideForm({
   );
 }
 
+interface AgendaWorkspaceProps {
+  eventId: string;
+  api?: AgendaApi;
+  appEnvironment?: string;
+}
+
 export function AgendaWorkspace({
   eventId,
   api: providedApi,
-}: Readonly<{ eventId: string; api?: AgendaApi }>) {
+  appEnvironment = process.env.APP_ENV,
+}: Readonly<AgendaWorkspaceProps>) {
   const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
   const api = useMemo(
     () => providedApi ?? (apiBaseUrl ? createAgendaApi(apiBaseUrl) : null),
     [apiBaseUrl, providedApi],
   );
+  const localDemoApiRef = useRef<{ eventId: string; api: AgendaApi } | null>(null);
+  const resolveLocalDemoApi = useCallback(
+    async (signal?: AbortSignal) => {
+      if (localDemoApiRef.current?.eventId === eventId) {
+        return localDemoApiRef.current.api;
+      }
+      const environment = await resolveAgendaAppEnvironment(appEnvironment, signal);
+      const localApi = createLocalAgendaDemoApi(environment, eventId);
+      if (localApi) {
+        localDemoApiRef.current = { eventId, api: localApi };
+      }
+      return localApi;
+    },
+    [appEnvironment, eventId],
+  );
+  const [activeApi, setActiveApi] = useState<AgendaApi | null>(api);
   const [data, setData] = useState<AgendaWorkspaceData | null>(null);
   const [preview, setPreview] = useState<AgendaPreview | null>(null);
   const [loading, setLoading] = useState(true);
@@ -624,8 +652,16 @@ export function AgendaWorkspace({
       }
       setLoading(true);
       setError(null);
+      setStatusMessage(null);
       try {
-        setData(await api.getWorkspace(eventId, signal));
+        const loaded = await loadAgendaWorkspace(api, resolveLocalDemoApi, eventId, signal);
+        setActiveApi(loaded.api);
+        setData(loaded.data);
+        if (loaded.usingLocalDemo) {
+          setStatusMessage(
+            "Showing the deterministic local demo agenda because the local API has no agenda data.",
+          );
+        }
       } catch (loadError) {
         if (!(loadError instanceof DOMException && loadError.name === "AbortError")) {
           setError(messageFrom(loadError));
@@ -636,7 +672,7 @@ export function AgendaWorkspace({
         }
       }
     },
-    [api, eventId],
+    [api, eventId, resolveLocalDemoApi],
   );
 
   useEffect(() => {
@@ -650,16 +686,16 @@ export function AgendaWorkspace({
     successMessage: string,
     refreshPreview = false,
   ) {
-    if (!api || !data) {
+    if (!activeApi || !data) {
       return;
     }
     setBusy(true);
     setError(null);
     setStatusMessage(null);
     try {
-      const nextData = await operation(api, data);
+      const nextData = await operation(activeApi, data);
       setData(nextData);
-      setPreview(refreshPreview ? await api.preview(eventId) : null);
+      setPreview(refreshPreview ? await activeApi.preview(eventId) : null);
       setStatusMessage(successMessage);
     } catch (mutationError) {
       setError(messageFrom(mutationError));
@@ -724,11 +760,11 @@ export function AgendaWorkspace({
         )
       }
       onPreview={async () => {
-        if (!api) return;
+        if (!activeApi) return;
         setBusy(true);
         setError(null);
         try {
-          const result = await api.preview(eventId);
+          const result = await activeApi.preview(eventId);
           setPreview(result);
           setStatusMessage(
             result.conflicts.length === 0
