@@ -1,0 +1,395 @@
+.viewport {
+  min-height: 100vh;
+  padding: clamp(1rem, 4vw, 4rem);
+  background: var(--sb-color-canvas, #f7f8fa);
+  color: var(--sb-color-text, #20242a);
+}
+
+.card {
+  width: min(100%, 74rem);
+  margin: 0 auto;
+  padding: clamp(1.25rem, 4vw, 3.5rem);
+  border: 1px solid var(--sb-color-border, #e2e5e9);
+  border-radius: var(--sb-radius-card, 0.75rem);
+  background: var(--sb-color-surface, #ffffff);
+  box-shadow: 0 1rem 2.75rem rgb(27 31 43 / 9%);
+}
+
+.loading {
+  margin: 4rem auto;
+  text-align: center;
+  color: var(--sb-color-muted, #667085);
+}
+
+
+
+.limitBanner {
+  margin: 1.25rem 0 2rem;
+  padding: 1rem;
+  border: 1px solid var(--sb-color-border, #dfe2e7);
+  border-radius: 0.25rem;
+  text-align: center;
+  font-weight: 650;
+}
+
+.card h1 {
+  margin: 0 0 0.8rem;
+  font-size: clamp(1.65rem, 4vw, 2.25rem);
+  line-height: 1.2;
+}
+
+.card h2 {
+  margin: 1.75rem 0 0.65rem;
+  font-size: 1.25rem;
+}
+
+.card h3 {
+  font-size: 1rem;
+}
+
+.card p,
+.card li {
+  line-height: 1.6;
+}
+
+.card a,
+.textButton {
+  color: var(--sb-color-link, #1662c6);
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+.welcomeContent {
+  max-width: 61rem;
+}
+
+.sectionPanel {
+  margin-top: 1.5rem;
+  padding: clamp(1rem, 3vw, 2rem);
+  border-radius: 0.65rem;
+  background: var(--sb-color-panel, #f7f7f8);
+}
+
+.tagFieldset legend,
+.invalidFieldset legend {
+  color: var(--sb-color-text, #24272c);
+  font-weight: 550;
+}
+
+.required {
+  color: var(--sb-color-danger, #d92d20);
+}
+
+.card button:focus-visible,
+.consent input:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--sb-color-primary, #4f5ee8) 30%, transparent);
+  outline-offset: 2px;
+  border-color: var(--sb-color-primary, #4f5ee8);
+}
+
+.invalidFieldset {
+  border-color: var(--sb-color-danger, #d92d20);
+  box-shadow: 0 0 0 1px var(--sb-color-danger, #d92d20);
+}
+
+.fieldError,
+.saveError {
+  color: var(--sb-color-danger, #c43227);
+  font-size: 0.9rem;
+}
+
+.twoColumns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.25rem;
+}
+
+.passwordChecks {
+  display: grid;
+  gap: 0.35rem;
+  margin: -0.5rem 0 1.25rem;
+  padding: 0;
+  list-style: none;
+}
+
+.checkPassed {
+  color: var(--sb-color-success, #079669);
+}
+
+.checkPending {
+  color: var(--sb-color-danger, #d92d20);
+}
+
+.consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+}
+
+.consent input {
+  width: 1.25rem;
+  height: 1.25rem;
+  margin-top: 0.15rem;
+}
+
+.errorSummary {
+  margin: 1rem 0;
+  padding: 1rem 1.25rem;
+  border-left: 4px solid var(--sb-color-danger, #d92d20);
+  background: #fff3f2;
+  color: #8f2018;
+}
+
+.errorSummary ul {
+  margin-bottom: 0;
+}
+
+
+.tagFieldset,
+.invalidFieldset {
+  margin: 1.15rem 0;
+  padding: 0.85rem 1rem 1rem;
+  border: 1px solid var(--sb-color-border-strong, #d2d6dc);
+  border-radius: 0.55rem;
+}
+
+.tagOptions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem 1.25rem;
+}
+
+.tagOptions label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.participantHeading,
+.participantCardHeading,
+.reviewHeading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.participantCard,
+.contactCard,
+.reviewCard {
+  margin: 1.5rem 0;
+  padding: clamp(1rem, 3vw, 1.75rem);
+  border: 1px solid var(--sb-color-border, #e2e5e9);
+  border-radius: 0.65rem;
+}
+
+.participantCard h2,
+.contactCard h2,
+.reviewCard h2 {
+  margin-top: 0;
+}
+
+.addButton,
+.removeButton,
+.textButton {
+  border: 0;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.addButton {
+  padding: 0.65rem 0.9rem;
+  border: 1px solid var(--sb-color-border-strong, #d2d6dc);
+  border-radius: 0.5rem;
+}
+
+.addButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.removeButton {
+  color: var(--sb-color-danger, #c43227);
+  text-decoration: underline;
+}
+
+.secondaryContacts {
+  margin: 2rem 0 0;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--sb-color-border, #e2e5e9);
+}
+
+.secondaryContacts > p {
+  color: var(--sb-color-muted, #667085);
+}
+
+.reviewHeading .textButton {
+  flex: 0 0 auto;
+}
+
+.reviewValue {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.85rem 0;
+  border-bottom: 1px solid var(--sb-color-border, #edf0f2);
+}
+
+.reviewValue dt {
+  font-weight: 600;
+}
+
+.reviewValue dd {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.reviewParticipant + .reviewParticipant {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--sb-color-border, #e2e5e9);
+}
+
+.reviewParticipant h3 span {
+  margin-left: 0.35rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 999px;
+  background: var(--sb-color-panel, #eceef1);
+  color: var(--sb-color-muted, #667085);
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 2rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--sb-color-border, #e2e5e9);
+}
+
+.forwardActions {
+  display: flex;
+  gap: 0.85rem;
+}
+
+.primaryButton,
+.backButton,
+.draftButton {
+  min-height: 3rem;
+  padding: 0.75rem 1.4rem;
+  border-radius: 999px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.primaryButton {
+  border: 1px solid var(--sb-color-primary, #4f5ee8);
+  background: var(--sb-color-primary, #4f5ee8);
+  color: #fff;
+}
+
+.backButton {
+  border: 1px solid var(--sb-color-success, #079669);
+  background: var(--sb-color-success, #079669);
+  color: #fff;
+}
+
+.draftButton {
+  border: 1px solid var(--sb-color-success, #079669);
+  background: #fff;
+  color: var(--sb-color-success-dark, #087c58);
+}
+
+.primaryButton:hover,
+.backButton:hover {
+  filter: brightness(0.94);
+}
+
+.sessionFooter {
+  margin-top: 1.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--sb-color-border, #e2e5e9);
+  color: var(--sb-color-muted, #667085);
+  text-align: center;
+  font-size: 0.9rem;
+}
+
+.saveStatus,
+.saveError {
+  min-height: 1.3rem;
+  margin: 0.5rem 0 -1rem;
+  text-align: center;
+  font-size: 0.82rem;
+}
+
+.saveStatus {
+  color: var(--sb-color-muted, #667085);
+}
+
+.completeCard {
+  display: flex;
+  min-height: 43rem;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.completeCard p {
+  max-width: 48rem;
+}
+
+.completeCard .primaryButton {
+  margin-top: 1.25rem;
+}
+
+.successMarker {
+  display: grid;
+  width: 4rem;
+  height: 4rem;
+  margin-bottom: 1.5rem;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--sb-color-success, #079669);
+  color: #fff;
+  font-size: 2.25rem;
+}
+
+@media (max-width: 700px) {
+  .viewport {
+    padding: 0;
+  }
+
+  .card {
+    min-height: 100vh;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .twoColumns {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  .participantHeading,
+  .reviewHeading,
+  .actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .forwardActions {
+    display: grid;
+  }
+
+  .primaryButton,
+  .backButton,
+  .draftButton {
+    width: 100%;
+  }
+}

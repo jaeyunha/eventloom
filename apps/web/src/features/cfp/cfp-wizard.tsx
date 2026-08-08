@@ -2,6 +2,11 @@
 
 import { useRouter } from "next/navigation";
 import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { Button } from "../../components/ui/button";
+import { CharacterCount, Field, Input, Select } from "../../components/ui/field";
+import { RichTextArea } from "../../components/ui/rich-text";
+import { SearchableSelect } from "../../components/ui/searchable-select";
+import { Stepper } from "../../components/ui/stepper";
 import { BrowserCfpDraftPersistence, type CfpDraftPersistence } from "./draft-persistence";
 import { getCfpStepRoute, getNextCfpStep, getPreviousCfpStep } from "./routes";
 import {
@@ -42,56 +47,10 @@ interface CfpWizardProps {
   step: CfpStep;
 }
 
-interface FieldProps {
-  children: ReactNode;
-  errorKey: string;
-  errors: ValidationErrors;
-  label: string;
-  required?: boolean;
-}
-
-function Field({ children, errorKey, errors, label, required = false }: FieldProps) {
-  const error = errors[errorKey];
-  const errorId = error ? `${errorKey.replaceAll(".", "-")}-error` : undefined;
-
-  return (
-    <label className={styles.field} data-error-key={errorKey}>
-      <span className={styles.label}>
-        {label} {required ? <span aria-hidden="true" className={styles.required}>*</span> : null}
-      </span>
-      {children}
-      {error ? (
-        <span className={styles.fieldError} id={errorId} role="alert">
-          {error}
-        </span>
-      ) : null}
-    </label>
-  );
-}
-
-function ProgressStepper({ currentStep }: { currentStep: CfpStep }) {
-  const currentIndex = CFP_STEPS.indexOf(currentStep);
-
-  return (
-    <nav aria-label="Submission progress" className={styles.stepper}>
-      <ol>
-        {CFP_STEPS.map((step, index) => {
-          const isComplete = index < currentIndex;
-          const isCurrent = step === currentStep;
-          return (
-            <li aria-current={isCurrent ? "step" : undefined} className={isCurrent ? styles.currentStep : ""} key={step}>
-              <span className={isComplete ? styles.completeMarker : styles.stepMarker} aria-hidden="true">
-                {isComplete ? "✓" : index + 1}
-              </span>
-              <span>{STEP_LABELS[step]}</span>
-              {index < CFP_STEPS.length - 1 ? <span className={styles.stepArrow} aria-hidden="true">→</span> : null}
-            </li>
-          );
-        })}
-      </ol>
-    </nav>
-  );
-}
+const WIZARD_STEPS = CFP_STEPS.map((step) => ({
+  id: step,
+  label: STEP_LABELS[step],
+}));
 
 function ErrorSummary({ errors }: { errors: ValidationErrors }) {
   const messages = [...new Set(Object.values(errors))];
@@ -107,9 +66,6 @@ function ErrorSummary({ errors }: { errors: ValidationErrors }) {
   );
 }
 
-function CharacterCount({ current, maximum }: { current: number; maximum: number }) {
-  return <span className={styles.characterCount} aria-live="polite">{current}/{maximum}</span>;
-}
 
 function newId(prefix: string): string {
   const suffix = typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -197,8 +153,7 @@ export function CfpWizard({ eventSlug, step }: CfpWizardProps) {
     const firstKey = Object.keys(nextErrors)[0];
     if (!firstKey) return;
     window.setTimeout(() => {
-      const field = document.querySelector<HTMLElement>(`[data-error-key="${firstKey}"]`);
-      field?.focus();
+      document.getElementById(firstKey)?.focus();
     });
   }
 
@@ -253,7 +208,7 @@ export function CfpWizard({ eventSlug, step }: CfpWizardProps) {
   return (
     <main className={styles.viewport}>
       <section className={styles.card}>
-        <ProgressStepper currentStep={step} />
+        <Stepper currentStep={step} label="Submission progress" steps={WIZARD_STEPS} />
         <div className={styles.limitBanner}>Submission Limit: 3 submissions per user</div>
         <ErrorSummary errors={errors} />
         <form noValidate onSubmit={(event) => void continueFlow(event)}>
@@ -273,19 +228,19 @@ export function CfpWizard({ eventSlug, step }: CfpWizardProps) {
 
           <div className={styles.actions}>
             {step !== "welcome" ? (
-              <button className={styles.backButton} onClick={goBack} type="button">← Back</button>
+              <Button className={styles.backButton} onClick={goBack} variant="accent">← Back</Button>
             ) : <span />}
             <div className={styles.forwardActions}>
               {step !== "welcome" ? (
-                <button className={styles.draftButton} onClick={() => void saveNow()} type="button">Save as draft</button>
+                <Button className={styles.draftButton} onClick={() => void saveNow()} variant="secondary">Save as draft</Button>
               ) : null}
-              <button className={styles.primaryButton} type="submit">
+              <Button className={styles.primaryButton} type="submit">
                 {step === "welcome" ? "Continue →" : null}
                 {step === "account" ? "Create account →" : null}
                 {step === "submission" ? "Next step →" : null}
                 {step === "participants" ? "Continue to review →" : null}
                 {step === "review" ? "Submit" : null}
-              </button>
+              </Button>
             </div>
           </div>
         </form>
@@ -339,11 +294,15 @@ function AccountStep({ draft, errors, password, setPassword, updateDraft }: Step
     <div>
       <h1>Create account</h1>
       <div className={styles.sectionPanel}>
-        <Field errorKey="account.email" errors={errors} label="Your Email Address:" required>
-          <input aria-invalid={Boolean(errors["account.email"])} autoComplete="email" onChange={(event) => updateDraft((current) => ({ ...current, account: { ...current.account, email: event.target.value } }))} type="email" value={draft.account.email} />
+        <Field error={errors["account.email"]} label="Your Email Address:" name="account.email" required>
+          {(controlProps) => (
+            <Input {...controlProps} autoComplete="email" onChange={(event) => updateDraft((current) => ({ ...current, account: { ...current.account, email: event.target.value } }))} type="email" value={draft.account.email} />
+          )}
         </Field>
-        <Field errorKey="account.password" errors={errors} label="Create a password:" required>
-          <input aria-invalid={Boolean(errors["account.password"])} autoComplete="new-password" onChange={(event) => { setPassword(event.target.value); setPassword(event.target.value); }} type="password" value={password} />
+        <Field error={errors["account.password"]} label="Create a password:" name="account.password" required>
+          {(controlProps) => (
+            <Input {...controlProps} autoComplete="new-password" onChange={(event) => setPassword(event.target.value)} type="password" value={password} />
+          )}
         </Field>
         <ul className={styles.passwordChecks}>
           <PasswordCheck passed={checks.minimumLength}>Password includes at least 8 characters</PasswordCheck>
@@ -352,17 +311,25 @@ function AccountStep({ draft, errors, password, setPassword, updateDraft }: Step
           <PasswordCheck passed={checks.capitalLetter}>Password includes at least 1 capital letter</PasswordCheck>
         </ul>
         <div className={styles.twoColumns}>
-          <Field errorKey="account.firstName" errors={errors} label="First Name" required>
-            <input aria-invalid={Boolean(errors["account.firstName"])} maxLength={255} onChange={(event) => updateDraft((current) => ({ ...current, account: { ...current.account, firstName: event.target.value } }))} value={draft.account.firstName} />
-            <CharacterCount current={draft.account.firstName.length} maximum={255} />
+          <Field error={errors["account.firstName"]} label="First Name" name="account.firstName" required>
+            {(controlProps) => (
+              <>
+                <Input {...controlProps} maxLength={255} onChange={(event) => updateDraft((current) => ({ ...current, account: { ...current.account, firstName: event.target.value } }))} value={draft.account.firstName} />
+                <CharacterCount current={draft.account.firstName.length} maximum={255} />
+              </>
+            )}
           </Field>
-          <Field errorKey="account.lastName" errors={errors} label="Last Name" required>
-            <input aria-invalid={Boolean(errors["account.lastName"])} maxLength={255} onChange={(event) => updateDraft((current) => ({ ...current, account: { ...current.account, lastName: event.target.value } }))} value={draft.account.lastName} />
-            <CharacterCount current={draft.account.lastName.length} maximum={255} />
+          <Field error={errors["account.lastName"]} label="Last Name" name="account.lastName" required>
+            {(controlProps) => (
+              <>
+                <Input {...controlProps} maxLength={255} onChange={(event) => updateDraft((current) => ({ ...current, account: { ...current.account, lastName: event.target.value } }))} value={draft.account.lastName} />
+                <CharacterCount current={draft.account.lastName.length} maximum={255} />
+              </>
+            )}
           </Field>
         </div>
         <label className={styles.consent} data-error-key="account.acceptedTerms">
-          <input checked={draft.account.acceptedTerms} onChange={(event) => updateDraft((current) => ({ ...current, account: { ...current.account, acceptedTerms: event.target.checked } }))} type="checkbox" />
+          <input aria-invalid={Boolean(errors["account.acceptedTerms"])} checked={draft.account.acceptedTerms} id="account.acceptedTerms" onChange={(event) => updateDraft((current) => ({ ...current, account: { ...current.account, acceptedTerms: event.target.checked } }))} type="checkbox" />
           <span>I agree to the <a href="#terms">Terms of Service</a> and <a href="#privacy">Privacy Policy</a>. <span aria-hidden="true" className={styles.required}>*</span></span>
         </label>
         {errors["account.acceptedTerms"] ? <span className={styles.fieldError} role="alert">{errors["account.acceptedTerms"]}</span> : null}
@@ -392,24 +359,28 @@ function SubmissionStep({ draft, errors, updateDraft }: StepFormProps) {
     <div>
       <h1>Tell us about your submission</h1>
       <p>What do you want to present? Fill out the following information to tell us more.</p>
-      <Field errorKey="submission.title" errors={errors} label="Title" required>
-        <input aria-invalid={Boolean(errors["submission.title"])} maxLength={255} onChange={(event) => updateDraft((current) => ({ ...current, submission: { ...current.submission, title: event.target.value } }))} value={draft.submission.title} />
-        <CharacterCount current={draft.submission.title.length} maximum={255} />
+      <Field error={errors["submission.title"]} label="Title" name="submission.title" required>
+        {(controlProps) => (
+          <>
+            <Input {...controlProps} maxLength={255} onChange={(event) => updateDraft((current) => ({ ...current, submission: { ...current.submission, title: event.target.value } }))} value={draft.submission.title} />
+            <CharacterCount current={draft.submission.title.length} maximum={255} />
+          </>
+        )}
       </Field>
-      <Field errorKey="submission.description" errors={errors} label="Description" required>
-        <div className={styles.richTextShell}>
-          <div aria-label="Text formatting" className={styles.richTextToolbar} role="toolbar">
-            <button aria-label="Bold" type="button"><strong>B</strong></button>
-            <button aria-label="Italic" type="button"><em>I</em></button>
-            <button aria-label="Bulleted list" type="button">☷</button>
-            <button aria-label="Insert link" type="button">↗</button>
-          </div>
-          <textarea aria-invalid={Boolean(errors["submission.description"])} maxLength={5000} onChange={(event) => updateDraft((current) => ({ ...current, submission: { ...current.submission, description: event.target.value } }))} placeholder="Enter text here…" rows={8} value={draft.submission.description} />
-          <CharacterCount current={draft.submission.description.length} maximum={5000} />
-        </div>
+      <Field error={errors["submission.description"]} label="Description" name="submission.description" required>
+        {(controlProps) => (
+          <RichTextArea
+            {...controlProps}
+            maxLength={5000}
+            onValueChange={(value) => updateDraft((current) => ({ ...current, submission: { ...current.submission, description: value } }))}
+            placeholder="Enter text here…"
+            rows={8}
+            value={draft.submission.description}
+          />
+        )}
       </Field>
       <SearchableField errorKey="submission.format" errors={errors} label="Format" options={FORMAT_OPTIONS} required value={draft.submission.format} onChange={(value) => updateDraft((current) => ({ ...current, submission: { ...current.submission, format: value } }))} />
-      <fieldset className={errors["submission.tags"] ? styles.invalidFieldset : styles.tagFieldset} data-error-key="submission.tags">
+      <fieldset className={errors["submission.tags"] ? styles.invalidFieldset : styles.tagFieldset} id="submission.tags" tabIndex={-1}>
         <legend>Tags <span aria-hidden="true" className={styles.required}>*</span></legend>
         <div className={styles.tagOptions}>
           {TAG_OPTIONS.map((tag) => <label key={tag}><input checked={draft.submission.tags.includes(tag)} onChange={() => toggleTag(tag)} type="checkbox" /> {tag}</label>)}
@@ -424,11 +395,20 @@ function SubmissionStep({ draft, errors, updateDraft }: StepFormProps) {
 }
 
 function SearchableField({ errorKey, errors, label, onChange, options, required = false, value }: { errorKey: string; errors: ValidationErrors; label: string; onChange: (value: string) => void; options: string[]; required?: boolean; value: string }) {
-  const listId = `${errorKey.replaceAll(".", "-")}-options`;
   return (
-    <Field errorKey={errorKey} errors={errors} label={label} required={required}>
-      <input aria-invalid={Boolean(errors[errorKey])} autoComplete="off" list={listId} onChange={(event) => onChange(event.target.value)} placeholder="Search or select…" value={value} />
-      <datalist id={listId}>{options.map((option) => <option key={option} value={option} />)}</datalist>
+    <Field error={errors[errorKey]} label={label} name={errorKey} required={required}>
+      {(controlProps) => (
+        <SearchableSelect
+          {...(controlProps["aria-describedby"] ? { describedBy: controlProps["aria-describedby"] } : {})}
+          id={controlProps.id}
+          invalid={Boolean(controlProps["aria-invalid"])}
+          onValueChange={onChange}
+          options={options.map((option) => ({ label: option, value: option }))}
+          placeholder="Search or select…"
+          required={required}
+          value={value}
+        />
+      )}
     </Field>
   );
 }
@@ -443,39 +423,55 @@ function ParticipantsStep({ draft, errors, updateDraft }: StepFormProps) {
     <div>
       <div className={styles.participantHeading}>
         <div><h1>Tell us about you</h1><p>Give us information about yourself and your credentials for presenting at our event.</p></div>
-        <button className={styles.addButton} disabled={draft.participants.length >= 15} onClick={addParticipant} type="button">＋ Add participant</button>
+        <Button className={styles.addButton} disabled={draft.participants.length >= 15} onClick={addParticipant} size="small" variant="secondary">＋ Add participant</Button>
       </div>
-      {errors.participants ? <p className={styles.fieldError} role="alert">{errors.participants}</p> : null}
+      {errors.participants ? <p className={styles.fieldError} id="participants" role="alert" tabIndex={-1}>{errors.participants}</p> : null}
       {draft.participants.map((participant, index) => (
         <section className={styles.participantCard} key={participant.id}>
           <div className={styles.participantCardHeading}>
             <h2>Participant {index + 1} of {draft.participants.length}</h2>
-            {index > 0 ? <button className={styles.removeButton} onClick={() => updateDraft((current) => ({ ...current, participants: current.participants.filter((_, itemIndex) => itemIndex !== index) }))} type="button">Remove</button> : null}
+            {index > 0 ? <Button className={styles.removeButton} onClick={() => updateDraft((current) => ({ ...current, participants: current.participants.filter((_, itemIndex) => itemIndex !== index) }))} size="small" variant="ghost">Remove</Button> : null}
           </div>
-          <Field errorKey={`participants.${index}.role`} errors={errors} label="Role for this participant">
-            <select onChange={(event) => updateDraft((current) => mergeParticipant(current, index, { role: event.target.value as CfpParticipant["role"] }))} value={participant.role}>
-              <option>Speaker</option><option>Co-speaker</option><option>Moderator</option>
-            </select>
+          <Field label="Role for this participant" name={`participants.${index}.role`}>
+            {(controlProps) => (
+              <Select {...controlProps} onChange={(event) => updateDraft((current) => mergeParticipant(current, index, { role: event.target.value as CfpParticipant["role"] }))} value={participant.role}>
+                <option>Speaker</option><option>Co-speaker</option><option>Moderator</option>
+              </Select>
+            )}
           </Field>
           <div className={styles.twoColumns}>
-            <Field errorKey={`participants.${index}.firstName`} errors={errors} label="First Name" required>
-              <input aria-invalid={Boolean(errors[`participants.${index}.firstName`])} maxLength={255} onChange={(event) => updateDraft((current) => mergeParticipant(current, index, { firstName: event.target.value }))} value={participant.firstName} />
+            <Field error={errors[`participants.${index}.firstName`]} label="First Name" name={`participants.${index}.firstName`} required>
+              {(controlProps) => (
+                <Input {...controlProps} maxLength={255} onChange={(event) => updateDraft((current) => mergeParticipant(current, index, { firstName: event.target.value }))} value={participant.firstName} />
+              )}
             </Field>
-            <Field errorKey={`participants.${index}.lastName`} errors={errors} label="Last Name" required>
-              <input aria-invalid={Boolean(errors[`participants.${index}.lastName`])} maxLength={255} onChange={(event) => updateDraft((current) => mergeParticipant(current, index, { lastName: event.target.value }))} value={participant.lastName} />
+            <Field error={errors[`participants.${index}.lastName`]} label="Last Name" name={`participants.${index}.lastName`} required>
+              {(controlProps) => (
+                <Input {...controlProps} maxLength={255} onChange={(event) => updateDraft((current) => mergeParticipant(current, index, { lastName: event.target.value }))} value={participant.lastName} />
+              )}
             </Field>
           </div>
-          <Field errorKey={`participants.${index}.email`} errors={errors} label="Email" required>
-            <input aria-invalid={Boolean(errors[`participants.${index}.email`])} onChange={(event) => updateDraft((current) => mergeParticipant(current, index, { email: event.target.value }))} type="email" value={participant.email} />
+          <Field error={errors[`participants.${index}.email`]} label="Email" name={`participants.${index}.email`} required>
+            {(controlProps) => (
+              <Input {...controlProps} onChange={(event) => updateDraft((current) => mergeParticipant(current, index, { email: event.target.value }))} type="email" value={participant.email} />
+            )}
           </Field>
-          <Field errorKey={`participants.${index}.mobilePhone`} errors={errors} label="Mobile Phone">
-            <input autoComplete="tel" onChange={(event) => updateDraft((current) => mergeParticipant(current, index, { mobilePhone: event.target.value }))} placeholder="+1" type="tel" value={participant.mobilePhone} />
+          <Field label="Mobile Phone" name={`participants.${index}.mobilePhone`}>
+            {(controlProps) => (
+              <Input {...controlProps} autoComplete="tel" onChange={(event) => updateDraft((current) => mergeParticipant(current, index, { mobilePhone: event.target.value }))} placeholder="+1" type="tel" value={participant.mobilePhone} />
+            )}
           </Field>
-          <Field errorKey={`participants.${index}.biography`} errors={errors} label="Biography">
-            <div className={styles.richTextShell}>
-              <textarea maxLength={5000} onChange={(event) => updateDraft((current) => mergeParticipant(current, index, { biography: event.target.value }))} placeholder="Tell us a bit about yourself" rows={6} value={participant.biography} />
-              <CharacterCount current={participant.biography.length} maximum={5000} />
-            </div>
+          <Field error={errors[`participants.${index}.biography`]} label="Biography" name={`participants.${index}.biography`}>
+            {(controlProps) => (
+              <RichTextArea
+                {...controlProps}
+                maxLength={5000}
+                onValueChange={(value) => updateDraft((current) => mergeParticipant(current, index, { biography: value }))}
+                placeholder="Tell us a bit about yourself"
+                rows={6}
+                value={participant.biography}
+              />
+            )}
           </Field>
         </section>
       ))}
@@ -492,16 +488,16 @@ function SecondaryContacts({ draft, errors, updateDraft }: StepFormProps) {
 
   return (
     <section className={styles.secondaryContacts}>
-      <button className={styles.textButton} onClick={addContact} type="button">＋ Add Secondary Contact</button>
+      <Button className={styles.textButton} onClick={addContact} size="small" variant="ghost">＋ Add Secondary Contact</Button>
       <p>Secondary contacts can assist with tasks and communication.</p>
       {draft.secondaryContacts.map((contact, index) => (
         <div className={styles.contactCard} key={contact.id}>
-          <div className={styles.participantCardHeading}><h2>Secondary contact {index + 1}</h2><button className={styles.removeButton} onClick={() => updateDraft((current) => ({ ...current, secondaryContacts: current.secondaryContacts.filter((_, itemIndex) => itemIndex !== index) }))} type="button">Remove</button></div>
+          <div className={styles.participantCardHeading}><h2>Secondary contact {index + 1}</h2><Button className={styles.removeButton} onClick={() => updateDraft((current) => ({ ...current, secondaryContacts: current.secondaryContacts.filter((_, itemIndex) => itemIndex !== index) }))} size="small" variant="ghost">Remove</Button></div>
           <div className={styles.twoColumns}>
-            <Field errorKey={`secondaryContacts.${index}.firstName`} errors={errors} label="First Name" required><input onChange={(event) => updateDraft((current) => mergeSecondaryContact(current, index, { firstName: event.target.value }))} value={contact.firstName} /></Field>
-            <Field errorKey={`secondaryContacts.${index}.lastName`} errors={errors} label="Last Name" required><input onChange={(event) => updateDraft((current) => mergeSecondaryContact(current, index, { lastName: event.target.value }))} value={contact.lastName} /></Field>
+            <Field error={errors[`secondaryContacts.${index}.firstName`]} label="First Name" name={`secondaryContacts.${index}.firstName`} required>{(controlProps) => <Input {...controlProps} onChange={(event) => updateDraft((current) => mergeSecondaryContact(current, index, { firstName: event.target.value }))} value={contact.firstName} />}</Field>
+            <Field error={errors[`secondaryContacts.${index}.lastName`]} label="Last Name" name={`secondaryContacts.${index}.lastName`} required>{(controlProps) => <Input {...controlProps} onChange={(event) => updateDraft((current) => mergeSecondaryContact(current, index, { lastName: event.target.value }))} value={contact.lastName} />}</Field>
           </div>
-          <Field errorKey={`secondaryContacts.${index}.email`} errors={errors} label="Email" required><input onChange={(event) => updateDraft((current) => mergeSecondaryContact(current, index, { email: event.target.value }))} type="email" value={contact.email} /></Field>
+          <Field error={errors[`secondaryContacts.${index}.email`]} label="Email" name={`secondaryContacts.${index}.email`} required>{(controlProps) => <Input {...controlProps} onChange={(event) => updateDraft((current) => mergeSecondaryContact(current, index, { email: event.target.value }))} type="email" value={contact.email} />}</Field>
         </div>
       ))}
     </section>
@@ -515,7 +511,7 @@ function ReviewStep({ draft, eventSlug }: { draft: CfpDraft; eventSlug: string }
       <h1>Review your submission</h1>
       <p>Check that everything looks correct. You can go back to make changes before submitting.</p>
       <section className={styles.reviewCard}>
-        <div className={styles.reviewHeading}><h2>Tell us about your submission</h2><button className={styles.textButton} onClick={() => router.push(getCfpStepRoute(eventSlug, "submission"))} type="button">✎ Edit session</button></div>
+        <div className={styles.reviewHeading}><h2>Tell us about your submission</h2><Button className={styles.textButton} onClick={() => router.push(getCfpStepRoute(eventSlug, "submission"))} size="small" variant="ghost">✎ Edit session</Button></div>
         <ReviewValue label="Title" value={draft.submission.title} />
         <ReviewValue label="Description" value={draft.submission.description} />
         <ReviewValue label="Format" value={draft.submission.format} />
@@ -525,7 +521,7 @@ function ReviewStep({ draft, eventSlug }: { draft: CfpDraft; eventSlug: string }
         <ReviewValue label="Language" value={draft.submission.language || "Not specified"} />
       </section>
       <section className={styles.reviewCard}>
-        <div className={styles.reviewHeading}><h2>Tell us about you</h2><button className={styles.textButton} onClick={() => router.push(getCfpStepRoute(eventSlug, "participants"))} type="button">✎ Edit participants</button></div>
+        <div className={styles.reviewHeading}><h2>Tell us about you</h2><Button className={styles.textButton} onClick={() => router.push(getCfpStepRoute(eventSlug, "participants"))} size="small" variant="ghost">✎ Edit participants</Button></div>
         {draft.participants.map((participant) => (
           <div className={styles.reviewParticipant} key={participant.id}>
             <h3>{participant.firstName} {participant.lastName} <span>{participant.role}</span></h3>
@@ -540,11 +536,40 @@ function ReviewStep({ draft, eventSlug }: { draft: CfpDraft; eventSlug: string }
 }
 
 function ReviewValue({ label, value }: { label: string; value: string }) {
-  return <div className={styles.reviewValue}><dt>{label}</dt><dd>{value}</dd></div>;
+  return <dl className={styles.reviewValue}><dt>{label}</dt><dd>{value}</dd></dl>;
 }
 
 export function CfpComplete({ eventSlug }: { eventSlug: string }) {
   const router = useRouter();
+  const [confirmed, setConfirmed] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    const persistence = new BrowserCfpDraftPersistence(window.localStorage);
+    void persistence.load(eventSlug).then((draft) => {
+      if (!active) return;
+      if (!draft?.receipt) {
+        router.replace(getCfpStepRoute(eventSlug, "review"));
+        return;
+      }
+      setConfirmed(true);
+    }).catch(() => router.replace(getCfpStepRoute(eventSlug, "review")));
+
+    return () => {
+      active = false;
+    };
+  }, [eventSlug, router]);
+
+  if (!confirmed) {
+    return (
+      <main className={styles.viewport}>
+        <section aria-busy="true" aria-live="polite" className={styles.card}>
+          <p className={styles.loading}>Confirming your submission…</p>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className={styles.viewport}>
       <section className={`${styles.card} ${styles.completeCard}`}>
@@ -552,8 +577,8 @@ export function CfpComplete({ eventSlug }: { eventSlug: string }) {
         <h1>Thank you for submitting to present at our event!</h1>
         <p>You will receive a confirmation email shortly with a link to your speaker portal. We will review sessions and notify you when your status changes.</p>
         <p>Your speaker portal shows your submission and any tasks that need to be completed.</p>
-        <button className={styles.textButton} onClick={() => router.push(getCfpStepRoute(eventSlug, "welcome"))} type="button">Submit another session</button>
-        <button className={styles.primaryButton} onClick={() => router.push("/portal")} type="button">Continue to portal →</button>
+        <Button className={styles.textButton} onClick={() => router.push(getCfpStepRoute(eventSlug, "welcome"))} variant="ghost">Submit another session</Button>
+        <Button className={styles.primaryButton} onClick={() => router.push("/portal")}>Continue to portal →</Button>
       </section>
     </main>
   );
