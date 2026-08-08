@@ -1,0 +1,253 @@
+import { describe, expect, it } from "vitest";
+import {
+  createOpenSendOutboxJob,
+  InMemoryOpenSendOutboxRepository,
+  OpenSendClient,
+  OpenSendError,
+  OpenSendOutboxProcessor,
+  type OpenSendMessage,
+  type OpenSendOutboxQueue,
+  type OpenSendSender,
+} from "./index";
+
+const message: OpenSendMessage = {
+  from: "speakers@foreverbrowsing.com",
+  to: ["speaker@example.com"],
+  subject: "Your session is accepted",
+  html: "<p>Congratulations</p>",
+  text: "Congratulations",
+  idempotencyKey: "email-job-0001",
+};
+
+describe("OpenSendClient", () => {
+  it("uses the hosted send contract and forwards idempotency and calendar attachments", async () => {
+    const requests: Array<{ url: string; init: RequestInit }> = [];
+    const fetch: typeof globalThis.fetch = async (input, init = {}) => {
+      requests.push({ url: String(input), init });
+      return Response.json({ id: "email-provider-1" }, { status: 201 });
+    };
+    const client = new OpenSendClient({
+      sendingApiKey: "os_sending_secret",
+      baseUrl: "https://mail.example.test/",
+      fetch,
+    });
+
+    const result = await client.send({
+      ...message,
+      from: "calendar@foreverbrowsing.com",
+      headers: { "X-Sessionboard-Calendar-Action": "REQUEST" },
+      attachments: [
+        {
+          filename: "session.ics",
+          content: "QkVHSU46VkNBTEVOREFS",
+          content_type: "text/calendar; charset=utf-8; method=REQUEST",
+        },
+      ],
+    });
+
+    expect(result).toEqual({
+      providerMessageId: "email-provider-1",
+      idempotencyKey: "email-job-0001",
+    });
+    expect(requests).toHaveLength(1);
+    const request = requests[0];
+    if (request === undefined) {
+      throw new Error("Expected an OpenSend request.");
+    }
+    expect(request.url).toBe("https://mail.example.test/api/emails");
+    const headers = new Headers(request.init.headers);
+    expect(headers.get("authorization")).toBe("Bearer os_sending_secret");
+    expect(headers.get("idempotency-key")).toBe("email-job-0001");
+    expect(JSON.parse(String(request.init.body))).toMatchObject({
+      from: "calendar@foreverbrowsing.com",
+      to: ["speaker@example.com"],
+      attachments: [{ filename: "session.ics" }],
+    });
+  });
+
+  it("classifies retryable provider failures without exposing response bodies", async () => {
+    const fetch: typeof globalThis.fetch = async () =>
+      new Response(JSON.stringify({ secret: "must-not-leak" }), {
+        status: 429,
+        headers: { "retry-after": "3" },
+      });
+    const client = new OpenSendClient({ sendingApiKey: "os_key", fetch });
+
+    const rejection = client.send(message);
+    await expect(rejection).rejects.toMatchObject({
+      code: "RATE_LIMITED",
+      retryable: true,
+      status: 429,
+      retryAfterMs: 3_000,
+    });
+    await expect(rejection).rejects.not.toThrow(/must-not-leak/);
+  });
+
+  it("rejects invalid payloads before transport and malformed success responses safely", async () => {
+    let requestCount = 0;
+    const fetch: typeof globalThis.fetch = async () => {
+      requestCount += 1;
+      return Response.json({ accepted: true });
+    };
+    const client = new OpenSendClient({ sendingApiKey: "os_key", fetch });
+
+    await expect(
+      client.send({ ...message, from: "attacker@example.com" } as OpenSendMessage),
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR", retryable: false });
+    expect(requestCount).toBe(0);
+
+    await expect(client.send(message)).rejects.toMatchObject({
+      code: "MALFORMED_RESPONSE",
+      retryable: true,
+    });
+  });
+});
+
+describe("OpenSendOutboxProcessor", () => {
+  it("delivers once and preserves an observable receipt for duplicate queue delivery", async () => {
+    const repository = new InMemoryOpenSendOutboxRepository();
+    await repository.insert(
+      createOpenSendOutboxJob({
+        id: "outbox-1",
+        message,
+        createdAt: "2026-08-08T12:00:00.000Z",
+      }),
+    );
+    let sends = 0;
+    const sender: OpenSendSender = {
+      send: async (payload) => {
+        sends += 1;
+        return { providerMessageId: "provider-1", idempotencyKey: payload.idempotencyKey };
+      },
+    };
+    const processor = new OpenSendOutboxProcessor({
+      repository,
+      queue: new RecordingQueue(),
+      sender,
+      now: () => new Date("2026-08-08T12:01:00.000Z"),
+    });
+
+    await expect(processor.process("outbox-1")).resolves.toEqual({
+      outcome: "delivered",
+      providerMessageId: "provider-1",
+    });
+    await expect(processor.process("outbox-1")).resolves.toEqual({ outcome: "skipped" });
+
+    expect(sends).toBe(1);
+    expect(await repository.find("outbox-1")).toMatchObject({
+      status: "delivered",
+      attemptCount: 1,
+      providerMessageId: "provider-1",
+      lastError: null,
+      attempts: [{ outcome: "delivered", providerMessageId: "provider-1" }],
+    });
+  });
+
+  it("honors Retry-After, keeps the idempotency key, and succeeds on retry", async () => {
+    let now = new Date("2026-08-08T12:00:00.000Z");
+    const repository = new InMemoryOpenSendOutboxRepository();
+    await repository.insert(
+      createOpenSendOutboxJob({ id: "outbox-2", message, createdAt: now.toISOString() }),
+    );
+    const seenKeys: string[] = [];
+    const sender: OpenSendSender = {
+      send: async (payload) => {
+        seenKeys.push(payload.idempotencyKey);
+        if (seenKeys.length === 1) {
+          throw new OpenSendError("RATE_LIMITED", "OpenSend rate limited the request.", {
+            retryable: true,
+            status: 429,
+            retryAfterMs: 5_000,
+          });
+        }
+        return { providerMessageId: "provider-2", idempotencyKey: payload.idempotencyKey };
+      },
+    };
+    const queue = new RecordingQueue();
+    const processor = new OpenSendOutboxProcessor({
+      repository,
+      queue,
+      sender,
+      now: () => now,
+      baseRetryDelayMs: 1_000,
+    });
+
+    await expect(processor.process("outbox-2")).resolves.toEqual({
+      outcome: "retry_scheduled",
+      delayMs: 5_000,
+    });
+    expect(queue.enqueued).toEqual([{ jobId: "outbox-2", delayMs: 5_000 }]);
+    await expect(processor.process("outbox-2")).resolves.toEqual({ outcome: "skipped" });
+
+    now = new Date("2026-08-08T12:00:05.000Z");
+    await expect(processor.process("outbox-2")).resolves.toMatchObject({ outcome: "delivered" });
+    expect(seenKeys).toEqual(["email-job-0001", "email-job-0001"]);
+    expect(await repository.find("outbox-2")).toMatchObject({
+      status: "delivered",
+      attemptCount: 2,
+      attempts: [{ outcome: "retry_scheduled" }, { outcome: "delivered" }],
+    });
+  });
+
+  it("preserves terminal failure details and reclaims expired processing leases", async () => {
+    let now = new Date("2026-08-08T12:00:00.000Z");
+    const repository = new InMemoryOpenSendOutboxRepository();
+    await repository.insert(
+      createOpenSendOutboxJob({
+        id: "outbox-3",
+        message,
+        createdAt: now.toISOString(),
+        maxAttempts: 1,
+      }),
+    );
+    const claimed = await repository.claim(
+      "outbox-3",
+      now,
+      new Date("2026-08-08T12:00:30.000Z"),
+    );
+    expect(claimed?.status).toBe("processing");
+
+    const sender: OpenSendSender = {
+      send: async () => {
+        throw new OpenSendError("VALIDATION_ERROR", "OpenSend rejected the message.", {
+          retryable: false,
+          status: 422,
+        });
+      },
+    };
+    const processor = new OpenSendOutboxProcessor({
+      repository,
+      queue: new RecordingQueue(),
+      sender,
+      now: () => now,
+    });
+
+    await expect(processor.process("outbox-3")).resolves.toEqual({ outcome: "skipped" });
+    now = new Date("2026-08-08T12:00:31.000Z");
+    await expect(processor.process("outbox-3")).resolves.toEqual({
+      outcome: "failed",
+      errorCode: "VALIDATION_ERROR",
+    });
+    expect(await repository.find("outbox-3")).toMatchObject({
+      status: "failed",
+      attemptCount: 1,
+      lastError: "OpenSend rejected the message.",
+      attempts: [
+        {
+          outcome: "failed",
+          errorCode: "VALIDATION_ERROR",
+          responseStatus: 422,
+          retryable: false,
+        },
+      ],
+    });
+  });
+});
+
+class RecordingQueue implements OpenSendOutboxQueue {
+  readonly enqueued: Array<{ jobId: string; delayMs: number }> = [];
+
+  async enqueue(jobId: string, delayMs: number): Promise<void> {
+    this.enqueued.push({ jobId, delayMs });
+  }
+}
