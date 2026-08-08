@@ -3,15 +3,15 @@
 import Link from "next/link";
 import { useState } from "react";
 import { filterSubmissions, submissionStatusPresentation } from "./model";
+import styles from "./portal.module.css";
 import { usePortal } from "./portal-provider";
 import {
   EmptyState,
+  formatPortalDate,
   PageHeading,
   PortalContentState,
   SubmissionStatusBadge,
-  formatPortalDate,
 } from "./portal-ui";
-import styles from "./portal.module.css";
 
 export function PortalSubmissions() {
   return (
@@ -66,7 +66,11 @@ function PortalSubmissionsContent() {
             title="No matching submissions"
             description="Try a different title or clear your search."
             action={
-              <button className={styles.secondaryButton} type="button" onClick={() => setSearch("")}>
+              <button
+                className={styles.secondaryButton}
+                type="button"
+                onClick={() => setSearch("")}
+              >
                 Clear search
               </button>
             }

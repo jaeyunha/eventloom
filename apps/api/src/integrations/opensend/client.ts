@@ -3,8 +3,8 @@ import {
   OpenSendError,
   type OpenSendErrorCode,
   type OpenSendMessage,
-  type OpenSendSendResult,
   type OpenSendSender,
+  type OpenSendSendResult,
 } from "./types";
 
 const DEFAULT_BASE_URL = "https://opensend.namuh.co";
@@ -136,7 +136,8 @@ function assertMessage(message: OpenSendMessage): void {
       containsLineBreak(attachment.filename) ||
       attachment.content.length === 0 ||
       (attachment.content_type !== undefined &&
-        (attachment.content_type.trim().length === 0 || containsLineBreak(attachment.content_type))) ||
+        (attachment.content_type.trim().length === 0 ||
+          containsLineBreak(attachment.content_type))) ||
       (attachment.content_id !== undefined &&
         (attachment.content_id.trim().length === 0 || containsLineBreak(attachment.content_id)))
     ) {

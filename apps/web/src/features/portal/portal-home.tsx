@@ -7,17 +7,17 @@ import {
   submissionStatusPresentation,
   summarizePortal,
 } from "./model";
+import styles from "./portal.module.css";
 import { usePortal } from "./portal-provider";
 import {
   EmptyState,
+  formatPortalDate,
   PageHeading,
   PortalContentState,
   Progress,
   SubmissionStatusBadge,
   TaskStatusBadge,
-  formatPortalDate,
 } from "./portal-ui";
-import styles from "./portal.module.css";
 
 export function PortalHome() {
   return (

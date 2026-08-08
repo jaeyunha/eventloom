@@ -38,9 +38,7 @@ export function createCalendarOpenSendMessage(
     html: [
       `<p>${escapeHtml(htmlIntroduction)}</p>`,
       `<p><strong>When:</strong> ${escapeHtml(when)}</p>`,
-      ...(location.length === 0
-        ? []
-        : [`<p><strong>Where:</strong> ${escapeHtml(location)}</p>`]),
+      ...(location.length === 0 ? [] : [`<p><strong>Where:</strong> ${escapeHtml(location)}</p>`]),
       "<p>Open the attached iCalendar file to add or update this event.</p>",
     ].join(""),
     idempotencyKey: payload.idempotencyKey,

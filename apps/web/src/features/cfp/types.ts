@@ -52,7 +52,10 @@ export interface CfpDraft {
   receipt: CfpSubmissionReceipt | null;
 }
 
-export function createEmptyParticipant(id: string, role: CfpParticipant["role"] = "Speaker"): CfpParticipant {
+export function createEmptyParticipant(
+  id: string,
+  role: CfpParticipant["role"] = "Speaker",
+): CfpParticipant {
   return {
     id,
     role,

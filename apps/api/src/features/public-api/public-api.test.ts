@@ -1,6 +1,6 @@
 import { Hono } from "hono";
-import { z } from "zod";
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import type { AuthPrincipal } from "../auth/types";
 import {
   AtomicIdempotencyCoordinator,
@@ -24,6 +24,8 @@ interface EventRecord {
   readonly name: string;
   readonly version: number;
 }
+
+type EventMutation = Readonly<Pick<EventRecord, "name">>;
 
 class TestIdempotencyStore implements IdempotencyStore {
   readonly records = new Map<string, IdempotencyRecord>();
@@ -59,7 +61,7 @@ class TestIdempotencyStore implements IdempotencyStore {
   }
 }
 
-class EventRepository implements PublicApiRepository<EventRecord> {
+class EventRepository implements PublicApiRepository<EventRecord, EventMutation, EventMutation> {
   readonly records: EventRecord[] = [
     { id: "event-a", organizationId: "org-1", name: "Same", version: 1 },
     { id: "event-b", organizationId: "org-1", name: "Same", version: 1 },
@@ -73,11 +75,22 @@ class EventRepository implements PublicApiRepository<EventRecord> {
     const rows = this.records
       .filter((record) => record.organizationId === input.organizationId)
       .sort((left, right) => {
-        const name = left[input.sort as "name"] < right[input.sort as "name"] ? -1 : left.id < right.id ? -1 : 1;
+        const name =
+          left[input.sort as "name"] < right[input.sort as "name"]
+            ? -1
+            : left.id < right.id
+              ? -1
+              : 1;
         return name;
       });
-    const start = input.cursorData === undefined ? 0 : rows.findIndex((row) => row.id === input.cursorData?.id) + 1;
-    return { items: rows.slice(start, start + input.limit + 1), hasMore: start + input.limit < rows.length };
+    const start =
+      input.cursorData === undefined
+        ? 0
+        : rows.findIndex((row) => row.id === input.cursorData?.id) + 1;
+    return {
+      items: rows.slice(start, start + input.limit + 1),
+      hasMore: start + input.limit < rows.length,
+    };
   }
 
   async get(input: PublicApiGetInput) {
@@ -86,7 +99,7 @@ class EventRepository implements PublicApiRepository<EventRecord> {
     );
   }
 
-  async create(input: PublicApiCreateInput<Record<string, unknown>>) {
+  async create(input: PublicApiCreateInput<EventMutation>) {
     this.creates += 1;
     const record: EventRecord = {
       id: `event-created-${this.creates}`,
@@ -98,7 +111,7 @@ class EventRepository implements PublicApiRepository<EventRecord> {
     return record;
   }
 
-  async update(input: PublicApiUpdateInput<Record<string, unknown>>) {
+  async update(input: PublicApiUpdateInput<EventMutation>) {
     const index = this.records.findIndex(
       (record) => record.organizationId === input.organizationId && record.id === input.id,
     );
@@ -140,7 +153,7 @@ function fixture(principal: AuthPrincipal | null = apiKey) {
   });
   app.route(
     "/api/v1",
-    createPublicApiV1Routes({
+    createPublicApiV1Routes<EventRecord, EventMutation, EventMutation>({
       idempotency: new AtomicIdempotencyCoordinator(store),
       resources: [
         {
@@ -160,7 +173,10 @@ describe("public API v1", () => {
   it("keeps cursor pages stable when sort values tie", async () => {
     const { app } = fixture();
     const first = await app.request("/api/v1/organizations/org-1/events?sort=name&limit=1");
-    const firstBody = (await first.json()) as { data: EventRecord[]; page: { nextCursor: string | null } };
+    const firstBody = (await first.json()) as {
+      data: EventRecord[];
+      page: { nextCursor: string | null };
+    };
     const second = await app.request(
       `/api/v1/organizations/org-1/events?sort=name&limit=1&cursor=${encodeURIComponent(firstBody.page.nextCursor ?? "")}`,
     );
@@ -171,28 +187,22 @@ describe("public API v1", () => {
   });
 
   it("denies unauthenticated, cross-tenant, and missing-scope access", async () => {
-    const unauthenticated = await fixture(null).app.request(
-      "/api/v1/organizations/org-1/events",
-      { headers: { "x-request-id": "trace-test" } },
-    );
-    const browserSession = await fixture(user).app.request(
-      "/api/v1/organizations/org-1/events",
-    );
+    const unauthenticated = await fixture(null).app.request("/api/v1/organizations/org-1/events", {
+      headers: { "x-request-id": "trace-test" },
+    });
+    const browserSession = await fixture(user).app.request("/api/v1/organizations/org-1/events");
     const crossTenant = await fixture(apiKey).app.request("/api/v1/organizations/org-2/events");
     const missingScope = await fixture({
       ...apiKey,
       scopes: ["events:read"],
-    } as AuthPrincipal).app.request(
-      "/api/v1/organizations/org-1/events",
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "idempotency-key": "create-1",
-        },
-        body: JSON.stringify({ name: "Denied" }),
+    } as AuthPrincipal).app.request("/api/v1/organizations/org-1/events", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "idempotency-key": "create-1",
       },
-    );
+      body: JSON.stringify({ name: "Denied" }),
+    });
     expect(unauthenticated.status).toBe(401);
     expect(browserSession.status).toBe(403);
     expect(crossTenant.status).toBe(403);
@@ -255,7 +265,9 @@ describe("public API v1", () => {
       headers: { "x-request-id": "trace-test" },
     });
     const openapi = await app.request("/api/v1/openapi.json");
-    const body = (await malformed.json()) as { error: { code: string; message: string; traceId: string } };
+    const body = (await malformed.json()) as {
+      error: { code: string; message: string; traceId: string };
+    };
     const document = (await openapi.json()) as { openapi: string; paths: Record<string, unknown> };
     expect(malformed.status).toBe(400);
     expect(body.error.traceId).toBe("trace-test");

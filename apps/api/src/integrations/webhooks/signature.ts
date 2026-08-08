@@ -102,7 +102,10 @@ function bytesToBase64(bytes: Uint8Array): string {
 
 function base64ToBytes(value: string): Uint8Array | null {
   try {
-    const normalized = value.replaceAll("-", "+").replaceAll("_", "/").padEnd(Math.ceil(value.length / 4) * 4, "=");
+    const normalized = value
+      .replaceAll("-", "+")
+      .replaceAll("_", "/")
+      .padEnd(Math.ceil(value.length / 4) * 4, "=");
     const binary = atob(normalized);
     const bytes = new Uint8Array(binary.length);
     for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
@@ -169,7 +172,9 @@ function headerValue(source: HeaderSource, key: string): string | undefined {
     return key === WEBHOOK_SIGNATURE_HEADER ? source : undefined;
   }
   if (source instanceof Headers) {
-    return source.get(key) ?? source.get(key.toLowerCase()) ?? source.get(key.toUpperCase()) ?? undefined;
+    return (
+      source.get(key) ?? source.get(key.toLowerCase()) ?? source.get(key.toUpperCase()) ?? undefined
+    );
   }
   const record = source as Readonly<Record<string, string | undefined>>;
   return (

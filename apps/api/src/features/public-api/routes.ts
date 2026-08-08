@@ -1,31 +1,31 @@
-import { Hono, type Context } from "hono";
+import { type Context, Hono } from "hono";
 import { ZodError, type ZodType } from "zod";
-import { AuthAccessError, type ApiKeyScope, type AuthPrincipal } from "../auth/types";
+import { type ApiKeyScope, AuthAccessError, type AuthPrincipal } from "../auth/types";
 import {
-  CursorError,
   type CursorDirection,
+  CursorError,
   type CursorPayload,
   cursorPage,
   decodeCursor,
   encodeCursor,
 } from "./cursor";
 import {
-  createIdempotencyCoordinator,
-  type IdempotencyCoordinator,
-  type IdempotencyStore,
-  IdempotencyConflictError,
-  requestFingerprint,
-  runIdempotent,
-  stableStringify,
-} from "./idempotency";
-import {
+  internalError,
   PublicApiError,
   type PublicApiErrorCode,
-  internalError,
   publicApiErrorResponse,
   traceIdFor,
   validationError,
 } from "./errors";
+import {
+  createIdempotencyCoordinator,
+  IdempotencyConflictError,
+  type IdempotencyCoordinator,
+  type IdempotencyStore,
+  requestFingerprint,
+  runIdempotent,
+  stableStringify,
+} from "./idempotency";
 
 export interface PublicApiRouteVariables {
   authPrincipal: AuthPrincipal | null;
@@ -150,8 +150,12 @@ export interface PublicApiOpenApiOptions {
   readonly description?: string;
 }
 
-export interface PublicApiRoutesOptions {
-  readonly resources: readonly PublicApiResourceDefinition[];
+export interface PublicApiRoutesOptions<
+  TRecord = Record<string, unknown>,
+  TCreate = Record<string, unknown>,
+  TUpdate = Record<string, unknown>,
+> {
+  readonly resources: readonly PublicApiResourceDefinition<TRecord, TCreate, TUpdate>[];
   readonly idempotency?: IdempotencyCoordinator;
   readonly idempotencyStore?: IdempotencyStore;
   readonly authorize?: PublicApiAuthorizationHook;
@@ -185,7 +189,9 @@ interface MutationResult {
   readonly body: unknown;
 }
 
-function resourceSegment(resource: PublicApiResourceDefinition): string {
+function resourceSegment<TRecord, TCreate, TUpdate>(
+  resource: PublicApiResourceDefinition<TRecord, TCreate, TUpdate>,
+): string {
   const segment = (resource.path ?? resource.name ?? "").replace(/^\/+|\/+$/gu, "");
   if (segment.length === 0 || segment.includes("/")) {
     throw new TypeError("A public API resource needs a single non-empty path segment.");
@@ -193,12 +199,14 @@ function resourceSegment(resource: PublicApiResourceDefinition): string {
   return segment;
 }
 
-function resourceDisplayName(resource: PublicApiResourceDefinition): string {
+function resourceDisplayName<TRecord, TCreate, TUpdate>(
+  resource: PublicApiResourceDefinition<TRecord, TCreate, TUpdate>,
+): string {
   return resource.name ?? resource.path ?? resourceSegment(resource);
 }
 
-function scopeFor(
-  resource: PublicApiResourceDefinition,
+function scopeFor<TRecord, TCreate, TUpdate>(
+  resource: PublicApiResourceDefinition<TRecord, TCreate, TUpdate>,
   action: PublicApiAction,
 ): ApiKeyScope | undefined {
   const explicit = action === "read" ? resource.readScope : resource.writeScope;
@@ -269,7 +277,11 @@ function principalIdentity(principal: AuthPrincipal): string {
   return principal.kind === "apiKey" ? `api-key:${principal.apiKeyId}` : `user:${principal.userId}`;
 }
 
-function parsePositiveInteger(value: string | undefined, fallback: number, maximum: number): number {
+function parsePositiveInteger(
+  value: string | undefined,
+  fallback: number,
+  maximum: number,
+): number {
   if (value === undefined || value.trim().length === 0) {
     return fallback;
   }
@@ -317,9 +329,9 @@ function filterValues(query: Record<string, string | undefined>): Record<string,
   return filters;
 }
 
-function parseListQuery(
+function parseListQuery<TRecord, TCreate, TUpdate>(
   context: Context<PublicApiRouteEnvironment>,
-  resource: PublicApiResourceDefinition,
+  resource: PublicApiResourceDefinition<TRecord, TCreate, TUpdate>,
 ): ListQuery {
   const query = context.req.query();
   const cursor = query.cursor;
@@ -352,8 +364,21 @@ function parseListQuery(
   };
 }
 
+function requiredRouteParam(context: Context<PublicApiRouteEnvironment>, name: string): string {
+  const value = context.req.param(name);
+  if (value === undefined || value.trim().length === 0) {
+    throw validationError(`The ${name} path parameter is required.`);
+  }
+  return value;
+}
+
 function scalarValue(value: unknown): string | number | boolean | null {
-  if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
     return value;
   }
   if (value instanceof Date) {
@@ -398,7 +423,8 @@ function sortItems<TRecord>(
   const copy = [...items];
   copy.sort((left, right) => {
     const primary = compareValues(recordValue(left, sort), recordValue(right, sort));
-    const tie = primary === 0 ? compareValues(recordValue(left, idField), recordValue(right, idField)) : 0;
+    const tie =
+      primary === 0 ? compareValues(recordValue(left, idField), recordValue(right, idField)) : 0;
     const result = primary === 0 ? tie : primary;
     return direction === "asc" ? result : -result;
   });
@@ -502,7 +528,8 @@ function nextCursorFromResult<TRecord>(
   }
   if (typeof nextCursor === "object") {
     const candidate = nextCursor as Partial<CursorPayload>;
-    const id = candidate.id ?? (last === undefined ? undefined : String(recordValue(last, input.idField)));
+    const id =
+      candidate.id ?? (last === undefined ? undefined : String(recordValue(last, input.idField)));
     if (id === undefined) {
       return null;
     }
@@ -560,10 +587,7 @@ function parseExpectedVersion(
     }
   }
   if (raw === undefined || !/^\d+$/u.test(raw)) {
-    throw new PublicApiError(
-      "PRECONDITION_FAILED",
-      "An If-Match version is required for updates.",
-    );
+    throw new PublicApiError("PRECONDITION_FAILED", "An If-Match version is required for updates.");
   }
   const expectedVersion = Number(raw);
   if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
@@ -637,15 +661,23 @@ function mutationResponse(value: unknown): MutationResult {
 
 function resourceSchema<TRecord, TCreate, TUpdate>(
   resource: PublicApiResourceDefinition<TRecord, TCreate, TUpdate>,
+  action: "create",
+): ZodType<TCreate> | undefined;
+function resourceSchema<TRecord, TCreate, TUpdate>(
+  resource: PublicApiResourceDefinition<TRecord, TCreate, TUpdate>,
+  action: "update",
+): ZodType<TUpdate> | undefined;
+function resourceSchema<TRecord, TCreate, TUpdate>(
+  resource: PublicApiResourceDefinition<TRecord, TCreate, TUpdate>,
   action: "create" | "update",
 ): ZodType<TCreate> | ZodType<TUpdate> | undefined {
   return action === "create"
-    ? resource.createSchema ?? resource.schemas?.create
-    : resource.updateSchema ?? resource.schemas?.update;
+    ? (resource.createSchema ?? resource.schemas?.create)
+    : (resource.updateSchema ?? resource.schemas?.update);
 }
 
-function openApiDocument(
-  resources: readonly PublicApiResourceDefinition[],
+function openApiDocument<TRecord, TCreate, TUpdate>(
+  resources: readonly PublicApiResourceDefinition<TRecord, TCreate, TUpdate>[],
   options: PublicApiOpenApiOptions | undefined,
 ): Record<string, unknown> {
   const paths: Record<string, unknown> = {};
@@ -700,7 +732,11 @@ function openApiDocument(
           ...operationBase.parameters,
           { name: "id", in: "path", required: true, schema: { type: "string" } },
         ],
-        responses: { ...operationBase.responses, "200": { description: "The resource" }, "404": { description: "Not found" } },
+        responses: {
+          ...operationBase.responses,
+          "200": { description: "The resource" },
+          "404": { description: "Not found" },
+        },
       },
       patch: {
         ...operationBase,
@@ -730,7 +766,10 @@ function openApiDocument(
       },
     };
     if (resource.openApi !== undefined) {
-      paths[collection] = { ...(paths[collection] as Record<string, unknown>), ...resource.openApi };
+      paths[collection] = {
+        ...(paths[collection] as Record<string, unknown>),
+        ...resource.openApi,
+      };
     }
   }
   return {
@@ -771,9 +810,11 @@ function routeError(context: Context<PublicApiRouteEnvironment>, error: unknown)
   return publicApiErrorResponse(context, internalError());
 }
 
-export function createPublicApiV1Routes(
-  options: PublicApiRoutesOptions,
-): Hono<PublicApiRouteEnvironment> {
+export function createPublicApiV1Routes<
+  TRecord = Record<string, unknown>,
+  TCreate = Record<string, unknown>,
+  TUpdate = Record<string, unknown>,
+>(options: PublicApiRoutesOptions<TRecord, TCreate, TUpdate>): Hono<PublicApiRouteEnvironment> {
   const resources = options.resources;
   const idempotency =
     options.idempotency ??
@@ -783,23 +824,24 @@ export function createPublicApiV1Routes(
   const routes = new Hono<PublicApiRouteEnvironment>();
   const authorize = async (
     context: Context<PublicApiRouteEnvironment>,
-    resource: PublicApiResourceDefinition,
+    resource: PublicApiResourceDefinition<TRecord, TCreate, TUpdate>,
     organizationId: string,
     action: PublicApiAction,
   ): Promise<AuthPrincipal> => {
+    const scope = scopeFor(resource, action);
     const principal =
       action === "read"
         ? requirePublicApiRead(
             context.get("authPrincipal"),
             organizationId,
             resourceDisplayName(resource),
-            scopeFor(resource, "read"),
+            scope,
           )
         : requirePublicApiWrite(
             context.get("authPrincipal"),
             organizationId,
             resourceDisplayName(resource),
-            scopeFor(resource, "write"),
+            scope,
           );
     if (options.authorize !== undefined) {
       await options.authorize({
@@ -807,9 +849,7 @@ export function createPublicApiV1Routes(
         organizationId,
         action,
         resource: resourceSegment(resource),
-        ...(scopeFor(resource, action) === undefined
-          ? {}
-          : { scope: scopeFor(resource, action) }),
+        ...(scope === undefined ? {} : { scope }),
       });
     }
     return principal;
@@ -828,7 +868,7 @@ export function createPublicApiV1Routes(
     const versionField = resource.versionField ?? "version";
 
     routes.get(collectionPath, async (context) => {
-      const organizationId = context.req.param("organizationId");
+      const organizationId = requiredRouteParam(context, "organizationId");
       const principal = await authorize(context, resource, organizationId, "read");
       const query = parseListQuery(context, resource);
       let cursorData: CursorPayload | undefined;
@@ -859,34 +899,31 @@ export function createPublicApiV1Routes(
         filters: query.filters,
         principal,
       };
-      const listed = normalizeListResult<Record<string, unknown>>(
-        await resource.repository.list(listInput),
-      );
+      const listed = normalizeListResult<TRecord>(await resource.repository.list(listInput));
       const sorted = sortItems(listed.items, query.sort, query.direction, idField);
       const hasOverflow = sorted.length > query.limit;
       const data = hasOverflow ? sorted.slice(0, query.limit) : sorted;
-      const hasMore = listed.hasMore === true || listed.nextCursor !== undefined && listed.nextCursor !== null || hasOverflow;
+      const hasMore =
+        listed.hasMore === true ||
+        (listed.nextCursor !== undefined && listed.nextCursor !== null) ||
+        hasOverflow;
       const nextCursor = hasMore
-        ? nextCursorFromResult(
-            listed.nextCursor,
-            data[data.length - 1],
-            {
-              tenantId: organizationId,
-              resource: segment,
-              sort: query.sort,
-              direction: query.direction,
-              idField,
-              filterHash: query.filterHash,
-            },
-          )
+        ? nextCursorFromResult(listed.nextCursor, data[data.length - 1], {
+            tenantId: organizationId,
+            resource: segment,
+            sort: query.sort,
+            direction: query.direction,
+            idField,
+            filterHash: query.filterHash,
+          })
         : null;
       return context.json(cursorPage(data, nextCursor, hasMore && nextCursor !== null));
     });
 
     routes.get(itemPath, async (context) => {
-      const organizationId = context.req.param("organizationId");
+      const organizationId = requiredRouteParam(context, "organizationId");
       const principal = await authorize(context, resource, organizationId, "read");
-      const id = context.req.param("id");
+      const id = requiredRouteParam(context, "id");
       const record = await resource.repository.get({
         tenantId: organizationId,
         organizationId,
@@ -901,7 +938,7 @@ export function createPublicApiV1Routes(
     });
 
     routes.post(collectionPath, async (context) => {
-      const organizationId = context.req.param("organizationId");
+      const organizationId = requiredRouteParam(context, "organizationId");
       const principal = await authorize(context, resource, organizationId, "write");
       const key = idempotencyKey(context);
       const rawBody = await requestBody(context);
@@ -938,7 +975,7 @@ export function createPublicApiV1Routes(
     });
 
     const updateHandler = async (context: Context<PublicApiRouteEnvironment>) => {
-      const organizationId = context.req.param("organizationId");
+      const organizationId = requiredRouteParam(context, "organizationId");
       const principal = await authorize(context, resource, organizationId, "write");
       const key = idempotencyKey(context);
       const rawBody = await requestBody(context);
@@ -950,7 +987,7 @@ export function createPublicApiV1Routes(
           "An atomic idempotency store is required for public API writes.",
         );
       }
-      const id = context.req.param("id");
+      const id = requiredRouteParam(context, "id");
       const operation = async (): Promise<MutationResult> => {
         const current = await resource.repository.get({
           tenantId: organizationId,
@@ -963,7 +1000,10 @@ export function createPublicApiV1Routes(
           throw new PublicApiError("NOT_FOUND", "The requested resource was not found.");
         }
         const currentVersion = recordValue(current, versionField);
-        if (typeof currentVersion === "number" && currentVersion !== parsedVersion.expectedVersion) {
+        if (
+          typeof currentVersion === "number" &&
+          currentVersion !== parsedVersion.expectedVersion
+        ) {
           throw new PublicApiError(
             "PRECONDITION_FAILED",
             "The resource has changed since it was read.",
@@ -1014,7 +1054,6 @@ export function createPublicApiV1Routes(
   routes.onError((error, context) => routeError(context, error));
   return routes;
 }
-
 
 export function publicApiTraceId(context: Context<PublicApiRouteEnvironment>): string {
   return traceIdFor(context);

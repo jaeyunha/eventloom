@@ -67,10 +67,10 @@ function decodeBase64Url(value: string): Uint8Array | null {
   if (!/^[A-Za-z0-9_-]+$/u.test(value)) {
     return null;
   }
-  const padded = value.replaceAll("-", "+").replaceAll("_", "/").padEnd(
-    value.length + ((4 - (value.length % 4)) % 4),
-    "=",
-  );
+  const padded = value
+    .replaceAll("-", "+")
+    .replaceAll("_", "/")
+    .padEnd(value.length + ((4 - (value.length % 4)) % 4), "=");
   try {
     const binary = atob(padded);
     return Uint8Array.from(binary, (character) => character.charCodeAt(0));

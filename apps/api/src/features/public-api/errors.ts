@@ -32,7 +32,9 @@ export interface PublicApiErrorBody {
   };
 }
 
-const statuses: Readonly<Record<PublicApiErrorCode, 400 | 401 | 403 | 404 | 409 | 412 | 429 | 500 | 503>> = {
+const statuses: Readonly<
+  Record<PublicApiErrorCode, 400 | 401 | 403 | 404 | 409 | 412 | 429 | 500 | 503>
+> = {
   AUTHENTICATION_REQUIRED: 401,
   ACCESS_DENIED: 403,
   TENANT_SCOPE_VIOLATION: 403,
@@ -90,10 +92,7 @@ export function traceIdFor(context: Pick<Context, "get" | "req">): string {
   return crypto.randomUUID();
 }
 
-export function publicApiErrorBody(
-  error: PublicApiError,
-  traceId: string,
-): PublicApiErrorBody {
+export function publicApiErrorBody(error: PublicApiError, traceId: string): PublicApiErrorBody {
   const details = error.details;
   if (details === undefined) {
     return {

@@ -10,7 +10,7 @@ import {
   useMemo,
   useState,
 } from "react";
-import { createPortalApi, PortalApiError, type PortalApi } from "./api";
+import { createPortalApi, type PortalApi, PortalApiError } from "./api";
 import type { PortalProfile, PortalTask, PortalTaskStatus, PortalView } from "./types";
 
 interface PortalContextValue {

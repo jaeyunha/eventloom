@@ -3,8 +3,8 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { submissionStatusPresentation, taskStatusPresentation } from "./model";
-import { usePortal } from "./portal-provider";
 import styles from "./portal.module.css";
+import { usePortal } from "./portal-provider";
 import type { PortalSubmissionStatus, PortalTaskStatus } from "./types";
 
 const navigation = [

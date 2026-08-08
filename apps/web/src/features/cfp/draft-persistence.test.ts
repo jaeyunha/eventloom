@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   BrowserCfpDraftPersistence,
-  MemoryCfpDraftPersistence,
   getCfpDraftStorageKey,
+  MemoryCfpDraftPersistence,
 } from "./draft-persistence";
 import { createEmptyDraft } from "./types";
 
@@ -50,7 +50,10 @@ describe("CFP draft persistence", () => {
     const storage = new FakeStorage();
     const persistence = new BrowserCfpDraftPersistence(storage);
     storage.setItem(getCfpDraftStorageKey("event-a"), "not-json");
-    storage.setItem(getCfpDraftStorageKey("event-b"), JSON.stringify(createEmptyDraft("other-event")));
+    storage.setItem(
+      getCfpDraftStorageKey("event-b"),
+      JSON.stringify(createEmptyDraft("other-event")),
+    );
 
     expect(await persistence.load("event-a")).toBeNull();
     expect(await persistence.load("event-b")).toBeNull();

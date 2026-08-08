@@ -21,8 +21,6 @@
   color: var(--sb-color-muted, #667085);
 }
 
-
-
 .limitBanner {
   margin: 1.25rem 0 2rem;
   padding: 1rem;
@@ -144,7 +142,6 @@
 .errorSummary ul {
   margin-bottom: 0;
 }
-
 
 .tagFieldset,
 .invalidFieldset {

@@ -1,16 +1,16 @@
-import { describe, expect, it } from "vitest";
 import type { CalendarInvitationPayload } from "@open-sessionboard/contracts";
+import { describe, expect, it } from "vitest";
 import {
+  type CalendarInvitationActionInput,
   CalendarInvitationError,
   CalendarInvitationLifecycle,
-  InMemoryCalendarInvitationRepository,
+  type CalendarInvitationScope,
   createCalendarInvitation,
   createCalendarInvitationPayload,
   createCalendarUid,
   foldIcalLine,
+  InMemoryCalendarInvitationRepository,
   serializeCalendarInvitation,
-  type CalendarInvitationActionInput,
-  type CalendarInvitationScope,
 } from "./index";
 
 const scope: CalendarInvitationScope = {
@@ -31,7 +31,9 @@ const details: Omit<CalendarInvitationPayload, "uid" | "sequence"> = {
   idempotencyKey: "calendar-demo-001",
 };
 
-function initialPayload(overrides: Partial<CalendarInvitationPayload> = {}): CalendarInvitationPayload {
+function initialPayload(
+  overrides: Partial<CalendarInvitationPayload> = {},
+): CalendarInvitationPayload {
   return {
     ...createCalendarInvitationPayload(scope, details),
     ...overrides,
@@ -150,9 +152,9 @@ describe("RFC 5545 serialization", () => {
     expect(() => serializeCalendarInvitation(initialPayload({ timeZone: "Not/AZone" }))).toThrow(
       CalendarInvitationError,
     );
-    expect(() => serializeCalendarInvitation(initialPayload({ startsAt: "2025-02-30T09:30:00Z" }))).toThrow(
-      CalendarInvitationError,
-    );
+    expect(() =>
+      serializeCalendarInvitation(initialPayload({ startsAt: "2025-02-30T09:30:00Z" })),
+    ).toThrow(CalendarInvitationError);
     expect(() =>
       serializeCalendarInvitation(
         initialPayload({ startsAt: "2025-03-09T11:00:00Z", endsAt: "2025-03-09T11:00:00Z" }),

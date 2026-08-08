@@ -72,9 +72,7 @@ export type OpenSendProcessResult =
   | { readonly outcome: "retry_scheduled"; readonly delayMs: number }
   | { readonly outcome: "failed"; readonly errorCode: string };
 
-export function createOpenSendOutboxJob(
-  input: CreateOpenSendOutboxJobInput,
-): OpenSendOutboxJob {
+export function createOpenSendOutboxJob(input: CreateOpenSendOutboxJobInput): OpenSendOutboxJob {
   if (input.id.trim().length === 0) {
     throw new TypeError("An OpenSend outbox job ID is required.");
   }
@@ -189,10 +187,7 @@ export class OpenSendOutboxProcessor {
           nextAttemptAt: null,
           leaseExpiresAt: null,
           lastError: error.message,
-          attempts: [
-            ...job.attempts,
-            failedAttempt(attempt, completedAt, "failed", error),
-          ],
+          attempts: [...job.attempts, failedAttempt(attempt, completedAt, "failed", error)],
           updatedAt: completedAt.toISOString(),
         });
         return { outcome: "failed", errorCode: error.code };
@@ -207,10 +202,7 @@ export class OpenSendOutboxProcessor {
         nextAttemptAt,
         leaseExpiresAt: null,
         lastError: error.message,
-        attempts: [
-          ...job.attempts,
-          failedAttempt(attempt, completedAt, "retry_scheduled", error),
-        ],
+        attempts: [...job.attempts, failedAttempt(attempt, completedAt, "retry_scheduled", error)],
         updatedAt: completedAt.toISOString(),
       });
       await this.#queue.enqueue(job.id, delayMs);
@@ -242,11 +234,7 @@ export class InMemoryOpenSendOutboxRepository implements OpenSendOutboxRepositor
     return job === undefined ? undefined : cloneJob(job);
   }
 
-  async claim(
-    id: string,
-    now: Date,
-    leaseExpiresAt: Date,
-  ): Promise<OpenSendOutboxJob | undefined> {
+  async claim(id: string, now: Date, leaseExpiresAt: Date): Promise<OpenSendOutboxJob | undefined> {
     const job = this.#jobs.get(id);
     if (job === undefined || !isClaimable(job, now)) {
       return undefined;

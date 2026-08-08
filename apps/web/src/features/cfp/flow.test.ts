@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { getCfpStepRoute, getNextCfpStep, getPreviousCfpStep } from "./routes";
-import { createEmptyDraft, createEmptyParticipant, markDraftSubmitted, syncPrimaryParticipant } from "./types";
+import {
+  createEmptyDraft,
+  createEmptyParticipant,
+  markDraftSubmitted,
+  syncPrimaryParticipant,
+} from "./types";
 
 describe("CFP flow", () => {
   it("maps the evidence-defined account-first sequence to stable routes", () => {

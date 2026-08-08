@@ -106,9 +106,9 @@ describe("speaker portal view model", () => {
       completedTaskCount: 1,
       completionPercent: 50,
     });
-    expect(summarizePortal({ ...portal, tasks: [], outstandingTaskCount: 0 }).completionPercent).toBe(
-      100,
-    );
+    expect(
+      summarizePortal({ ...portal, tasks: [], outstandingTaskCount: 0 }).completionPercent,
+    ).toBe(100);
   });
 
   it("normalizes biographies and enforces the API text policy", () => {

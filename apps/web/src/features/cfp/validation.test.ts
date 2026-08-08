@@ -77,11 +77,18 @@ describe("CFP validation", () => {
       lastName: "Speaker",
       email: "SPEAKER@example.com",
     });
-    draft.secondaryContacts.push({ id: "contact-1", firstName: "", lastName: "Helper", email: "invalid" });
+    draft.secondaryContacts.push({
+      id: "contact-1",
+      firstName: "",
+      lastName: "Helper",
+      email: "invalid",
+    });
 
     const errors = validateParticipants(draft);
 
-    expect(errors["participants.1.email"]).toBe("Each participant must use a unique email address.");
+    expect(errors["participants.1.email"]).toBe(
+      "Each participant must use a unique email address.",
+    );
     expect(errors["secondaryContacts.0.firstName"]).toBe("First name is required.");
     expect(errors["secondaryContacts.0.email"]).toBe("Enter a valid email address.");
   });

@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -106,9 +106,10 @@ function validateWrangler(source, options) {
   }
 
   for (const binding of ["DB", "AGENDA_COORDINATOR", "PRIVATE_FILES", "OUTBOX_QUEUE"]) {
-    const count = collectValues(source, binding === "AGENDA_COORDINATOR" ? "name" : "binding").filter(
-      (value) => value === binding,
-    ).length;
+    const count = collectValues(
+      source,
+      binding === "AGENDA_COORDINATOR" ? "name" : "binding",
+    ).filter((value) => value === binding).length;
     if (count !== 3) {
       throw new Error(`${binding} must be bound once in every environment`);
     }

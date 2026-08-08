@@ -6,9 +6,9 @@ import type {
 } from "@open-sessionboard/contracts";
 import { canonicalJson } from "./mapper";
 import {
-  AcceleventsProviderError,
   type AcceleventsPreview,
   type AcceleventsProvider,
+  AcceleventsProviderError,
   type AcceleventsProviderSnapshot,
   type AcceleventsPublicationLock,
   type AcceleventsPublishReceipt,
@@ -20,7 +20,10 @@ import {
 
 export class InMemoryAcceleventsStateRepository implements AcceleventsStateRepository {
   private readonly previews = new Map<IntegrationPublicationId, AcceleventsPreview>();
-  private readonly attempts = new Map<IntegrationPublicationId, Map<number, AcceleventsSyncAttempt>>();
+  private readonly attempts = new Map<
+    IntegrationPublicationId,
+    Map<number, AcceleventsSyncAttempt>
+  >();
   private readonly receipts = new Map<string, AcceleventsPublishReceipt>();
   private readonly reconciliations = new Map<IntegrationPublicationId, AcceleventsReconciliation>();
 
@@ -49,9 +52,7 @@ export class InMemoryAcceleventsStateRepository implements AcceleventsStateRepos
     if (attempts === undefined) {
       return [];
     }
-    return [...attempts.values()]
-      .sort((left, right) => left.attempt - right.attempt)
-      .map(clone);
+    return [...attempts.values()].sort((left, right) => left.attempt - right.attempt).map(clone);
   }
 
   async saveReceipt(receipt: AcceleventsPublishReceipt): Promise<void> {
@@ -236,7 +237,10 @@ export class FakeAcceleventsProvider implements AcceleventsProvider {
     return event;
   }
 
-  private throwQueuedFailure(kind: "read" | "session" | "speaker", externalId: string | null): void {
+  private throwQueuedFailure(
+    kind: "read" | "session" | "speaker",
+    externalId: string | null,
+  ): void {
     const key = failureKey(kind, externalId);
     const queue = this.failures.get(key);
     const error = queue?.shift();

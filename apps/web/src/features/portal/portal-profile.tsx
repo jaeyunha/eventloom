@@ -3,15 +3,15 @@
 import Link from "next/link";
 import { type FormEvent, useEffect, useState } from "react";
 import { validateBiography } from "./model";
+import styles from "./portal.module.css";
 import { usePortal } from "./portal-provider";
 import {
   EmptyState,
+  formatPortalDate,
   InlineMutationError,
   PageHeading,
   PortalContentState,
-  formatPortalDate,
 } from "./portal-ui";
-import styles from "./portal.module.css";
 import type { PortalProfile } from "./types";
 
 export function PortalProfilePage() {
@@ -47,10 +47,7 @@ function PortalProfileContent() {
     );
   }
 
-  async function submitBiography(
-    event: FormEvent<HTMLFormElement>,
-    currentProfile: PortalProfile,
-  ) {
+  async function submitBiography(event: FormEvent<HTMLFormElement>, currentProfile: PortalProfile) {
     event.preventDefault();
     setSaved(false);
     const validation = validateBiography(biography);

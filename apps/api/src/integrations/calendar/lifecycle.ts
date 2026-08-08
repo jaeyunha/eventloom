@@ -1,13 +1,10 @@
 import type { CalendarInvitationPayload } from "@open-sessionboard/contracts";
-import {
-  createCalendarInvitation,
-  validateCalendarInvitationPayload,
-} from "./ical";
+import { createCalendarInvitation, validateCalendarInvitationPayload } from "./ical";
 import {
   CALENDAR_ORGANIZER,
   CALENDAR_UID_DOMAIN,
-  CalendarInvitationError,
   type CalendarInvitationDetails,
+  CalendarInvitationError,
   type CalendarInvitationInput,
   type CalendarInvitationRecord,
   type CalendarInvitationRepository,
@@ -62,7 +59,10 @@ export interface InMemoryCalendarInvitationRepositoryOptions {
 
 export class InMemoryCalendarInvitationRepository implements CalendarInvitationRepository {
   readonly #records = new Map<string, CalendarInvitationRecord>();
-  readonly #idempotency = new Map<string, { fingerprint: string; record: CalendarInvitationRecord }>();
+  readonly #idempotency = new Map<
+    string,
+    { fingerprint: string; record: CalendarInvitationRecord }
+  >();
   readonly #now: () => Date;
 
   constructor(options: InMemoryCalendarInvitationRepositoryOptions = {}) {
@@ -183,7 +183,10 @@ function encodeUidPart(value: string, fieldName: string): string {
   try {
     return encodeURIComponent(value).replaceAll(".", "%2E");
   } catch {
-    throw new CalendarInvitationError("INVALID_PAYLOAD", `${fieldName} contains invalid characters`);
+    throw new CalendarInvitationError(
+      "INVALID_PAYLOAD",
+      `${fieldName} contains invalid characters`,
+    );
   }
 }
 

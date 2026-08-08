@@ -17,11 +17,9 @@ import type {
 
 export { canonicalJson };
 
-
 export function canonicalWebhookPayload(event: unknown): string {
   return canonicalJson(event);
 }
-
 
 export interface WebhookDispatcherOptions {
   clock?: WebhookClock;
@@ -83,7 +81,10 @@ export interface WebhookDeliveryAttempt {
 }
 
 const defaultWorkerOptions: Required<
-  Pick<WebhookDeliveryWorkerOptions, "maxAttempts" | "initialRetryDelayMs" | "maxRetryDelayMs" | "userAgent" | "maxResponseBodyBytes">
+  Pick<
+    WebhookDeliveryWorkerOptions,
+    "maxAttempts" | "initialRetryDelayMs" | "maxRetryDelayMs" | "userAgent" | "maxResponseBodyBytes"
+  >
 > = {
   maxAttempts: 5,
   initialRetryDelayMs: 1_000,
@@ -103,7 +104,8 @@ function redact(value: string, secret: string): string {
 
 function responseStatus(value: unknown): number | null {
   if (typeof value !== "object" || value === null) return null;
-  const status = (value as { status?: unknown; statusCode?: unknown }).status ??
+  const status =
+    (value as { status?: unknown; statusCode?: unknown }).status ??
     (value as { statusCode?: unknown }).statusCode;
   return typeof status === "number" && Number.isInteger(status) ? status : null;
 }
@@ -125,10 +127,19 @@ async function responseBody(value: unknown, maxBytes: number): Promise<string | 
 }
 
 function isRetryableStatus(status: number | null): boolean {
-  return status === null || status <= 0 || status === 408 || status === 425 || status === 429 || status >= 500;
+  return (
+    status === null ||
+    status <= 0 ||
+    status === 408 ||
+    status === 425 ||
+    status === 429 ||
+    status >= 500
+  );
 }
 
-export function classifyWebhookResponse(status: number | null): "retryable" | "terminal" | "success" {
+export function classifyWebhookResponse(
+  status: number | null,
+): "retryable" | "terminal" | "success" {
   if (status !== null && status >= 200 && status < 300) return "success";
   return isRetryableStatus(status) ? "retryable" : "terminal";
 }
@@ -156,7 +167,14 @@ async function normalizeTransportResponse(
  */
 export class WebhookDeliveryWorker {
   private readonly options: Required<
-    Pick<WebhookDeliveryWorkerOptions, "maxAttempts" | "initialRetryDelayMs" | "maxRetryDelayMs" | "userAgent" | "maxResponseBodyBytes">
+    Pick<
+      WebhookDeliveryWorkerOptions,
+      | "maxAttempts"
+      | "initialRetryDelayMs"
+      | "maxRetryDelayMs"
+      | "userAgent"
+      | "maxResponseBodyBytes"
+    >
   >;
   private readonly clock: WebhookClock;
   private running = false;
@@ -172,7 +190,8 @@ export class WebhookDeliveryWorker {
       initialRetryDelayMs: options.initialRetryDelayMs ?? defaultWorkerOptions.initialRetryDelayMs,
       maxRetryDelayMs: options.maxRetryDelayMs ?? defaultWorkerOptions.maxRetryDelayMs,
       userAgent: options.userAgent ?? defaultWorkerOptions.userAgent,
-      maxResponseBodyBytes: options.maxResponseBodyBytes ?? defaultWorkerOptions.maxResponseBodyBytes,
+      maxResponseBodyBytes:
+        options.maxResponseBodyBytes ?? defaultWorkerOptions.maxResponseBodyBytes,
     };
     if (!Number.isInteger(this.options.maxAttempts) || this.options.maxAttempts < 1) {
       throw new RangeError("maxAttempts must be a positive integer.");
@@ -183,15 +202,24 @@ export class WebhookDeliveryWorker {
     return this.repository.claimDueDelivery(now);
   }
 
-  private async succeed(deliveryId: string, result: DeliveryAttemptResult): Promise<WebhookDelivery | null> {
+  private async succeed(
+    deliveryId: string,
+    result: DeliveryAttemptResult,
+  ): Promise<WebhookDelivery | null> {
     return this.repository.markDeliverySucceeded(deliveryId, result);
   }
 
-  private async retry(deliveryId: string, result: DeliveryAttemptResult): Promise<WebhookDelivery | null> {
+  private async retry(
+    deliveryId: string,
+    result: DeliveryAttemptResult,
+  ): Promise<WebhookDelivery | null> {
     return this.repository.markDeliveryRetry(deliveryId, result);
   }
 
-  private async fail(deliveryId: string, result: DeliveryAttemptResult): Promise<WebhookDelivery | null> {
+  private async fail(
+    deliveryId: string,
+    result: DeliveryAttemptResult,
+  ): Promise<WebhookDelivery | null> {
     return this.repository.markDeliveryFailed(deliveryId, result);
   }
 
@@ -221,11 +249,7 @@ export class WebhookDeliveryWorker {
         if (attempt < this.options.maxAttempts) {
           failure.nextAttemptAt = new Date(
             now.getTime() +
-              retryDelayMs(
-                attempt,
-                this.options.initialRetryDelayMs,
-                this.options.maxRetryDelayMs,
-              ),
+              retryDelayMs(attempt, this.options.initialRetryDelayMs, this.options.maxRetryDelayMs),
           );
           const retried = await this.retry(delivery.id, failure);
           return { delivery: retried ?? delivery, outcome: "retrying" };
@@ -305,7 +329,8 @@ export class WebhookDeliveryWorker {
       };
       if (classification === "retryable" && attempt < this.options.maxAttempts) {
         attemptResult.nextAttemptAt = new Date(
-          now.getTime() + retryDelayMs(attempt, this.options.initialRetryDelayMs, this.options.maxRetryDelayMs),
+          now.getTime() +
+            retryDelayMs(attempt, this.options.initialRetryDelayMs, this.options.maxRetryDelayMs),
         );
         const retried = await this.retry(delivery.id, attemptResult);
         return { delivery: retried ?? delivery, outcome: "retrying" };

@@ -7,6 +7,8 @@ import {
 } from "@open-sessionboard/contracts";
 import { describe, expect, it } from "vitest";
 import {
+  type AcceleventsClock,
+  type AcceleventsProgramSource,
   AcceleventsProviderError,
   AcceleventsPublicationService,
   FakeAcceleventsProvider,
@@ -14,8 +16,6 @@ import {
   InMemoryAcceleventsPublicationLock,
   InMemoryAcceleventsStateRepository,
   mapAcceptedProgram,
-  type AcceleventsClock,
-  type AcceleventsProgramSource,
 } from "./index";
 
 const EVENT_ID = eventIdSchema.parse(stableId("evt", "0"));
@@ -136,9 +136,7 @@ describe("Accelevents publication", () => {
     const { provider, service } = createFixture();
     const desired = mapAcceptedProgram(programSource());
     provider.seed(EVENT_ID, {
-      speakers: [
-        { ...desired.speakers[0]!, biography: "Older biography" },
-      ],
+      speakers: [{ ...desired.speakers[0]!, biography: "Older biography" }],
       sessions: [...desired.sessions],
     });
 
@@ -185,7 +183,10 @@ describe("Accelevents publication", () => {
 
   it("requires the current explicit confirmation token before any outbound write", async () => {
     const { provider, service } = createFixture();
-    const preview = await service.preview({ publicationId: PUBLICATION_ID, source: programSource() });
+    const preview = await service.preview({
+      publicationId: PUBLICATION_ID,
+      source: programSource(),
+    });
 
     await expect(
       service.publish({
@@ -200,7 +201,10 @@ describe("Accelevents publication", () => {
 
   it("serializes concurrent requests and returns the same idempotent publication receipt", async () => {
     const { provider, repository, service } = createFixture();
-    const preview = await service.preview({ publicationId: PUBLICATION_ID, source: programSource() });
+    const preview = await service.preview({
+      publicationId: PUBLICATION_ID,
+      source: programSource(),
+    });
     const request = {
       publicationId: PUBLICATION_ID,
       snapshotHash: preview.snapshotHash,
@@ -284,7 +288,9 @@ describe("Accelevents publication", () => {
       source: {
         ...invalidSource,
         speakers: invalidSource.speakers.map((speaker) =>
-          speaker.participantId === SPEAKER_ONE_ID ? { ...speaker, email: "not-an-email" } : speaker,
+          speaker.participantId === SPEAKER_ONE_ID
+            ? { ...speaker, email: "not-an-email" }
+            : speaker,
         ),
       },
     });
@@ -305,7 +311,10 @@ describe("Accelevents publication", () => {
 
     const { provider, service } = createFixture();
     const desired = mapAcceptedProgram(programSource());
-    const preview = await service.preview({ publicationId: PUBLICATION_ID, source: programSource() });
+    const preview = await service.preview({
+      publicationId: PUBLICATION_ID,
+      source: programSource(),
+    });
     provider.seed(EVENT_ID, {
       speakers: [
         { ...desired.speakers[0]!, biography: "Provider drift" },

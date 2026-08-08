@@ -69,13 +69,9 @@ export interface IdempotencyCoordinator {
   ): Promise<IdempotencyOutcome<T>>;
 }
 
-
 export class IdempotencyConflictError extends PublicApiError {
   constructor() {
-    super(
-      "IDEMPOTENCY_CONFLICT",
-      "The idempotency key was already used with a different request.",
-    );
+    super("IDEMPOTENCY_CONFLICT", "The idempotency key was already used with a different request.");
   }
 }
 

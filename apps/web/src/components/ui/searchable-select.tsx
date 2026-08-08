@@ -1,13 +1,13 @@
 "use client";
 
 import {
+  type ChangeEvent,
+  type FocusEvent,
+  type KeyboardEvent,
   useId,
   useMemo,
   useRef,
   useState,
-  type ChangeEvent,
-  type FocusEvent,
-  type KeyboardEvent,
 } from "react";
 import styles from "../../styles/design-system.module.css";
 import { cx } from "./class-names";
@@ -179,8 +179,7 @@ export function SearchableSelect({
     setActiveIndex(-1);
   }
 
-  const activeOptionId =
-    open && activeIndex >= 0 ? `${listId}-option-${activeIndex}` : undefined;
+  const activeOptionId = open && activeIndex >= 0 ? `${listId}-option-${activeIndex}` : undefined;
   const displayValue = open ? query : (selectedOption?.label ?? "");
 
   return (

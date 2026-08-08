@@ -160,7 +160,9 @@ export function validateCalendarInvitationPayload(
     );
   }
 
-  return timeZone === payload.timeZone ? clonePayload(payload) : { ...clonePayload(payload), timeZone };
+  return timeZone === payload.timeZone
+    ? clonePayload(payload)
+    : { ...clonePayload(payload), timeZone };
 }
 
 export function canonicalizeCalendarTimeZone(timeZone: string): string {
@@ -204,10 +206,7 @@ export function foldIcalLine(line: string): readonly string[] {
 
   for (const codePoint of line) {
     const codePointOctets = encoder.encode(codePoint).length;
-    if (
-      current.length > 0 &&
-      currentOctets + codePointOctets > MAX_ICAL_LINE_OCTETS
-    ) {
+    if (current.length > 0 && currentOctets + codePointOctets > MAX_ICAL_LINE_OCTETS) {
       folded.push(current);
       current = " ";
       currentOctets = 1;
@@ -277,7 +276,11 @@ function collectTimeZoneTransitions(timeZone: string, eventYear: number): TimeZo
   let previousEpoch = rangeStart;
   let previousOffset = offsetAt(previousEpoch, timeZone, formatter);
 
-  for (let probe = rangeStart + TRANSITION_SCAN_STEP; probe <= rangeEnd; probe += TRANSITION_SCAN_STEP) {
+  for (
+    let probe = rangeStart + TRANSITION_SCAN_STEP;
+    probe <= rangeEnd;
+    probe += TRANSITION_SCAN_STEP
+  ) {
     const currentOffset = offsetAt(probe, timeZone, formatter);
     if (currentOffset !== previousOffset) {
       const transitionProbe = findTransitionEpoch(
@@ -354,15 +357,7 @@ function parseInstant(value: string, fieldName: string): InstantParts {
     throw new CalendarInvitationError("INVALID_TIMESTAMP", `Missing offset in ${fieldName}`);
   }
 
-  if (
-    month < 1 ||
-    month > 12 ||
-    day < 1 ||
-    day > 31 ||
-    hour > 23 ||
-    minute > 59 ||
-    second > 59
-  ) {
+  if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 || second > 59) {
     throw new CalendarInvitationError("INVALID_TIMESTAMP", `Invalid ISO timestamp in ${fieldName}`);
   }
 
@@ -383,15 +378,12 @@ function parseInstant(value: string, fieldName: string): InstantParts {
   }
 
   const offsetMatch = /^([+-])(\d{2}):(\d{2})$/.exec(offset);
-  const offsetHours = offsetMatch === null ? Number.NaN : numberFromMatch(offsetMatch, 2, fieldName);
+  const offsetHours =
+    offsetMatch === null ? Number.NaN : numberFromMatch(offsetMatch, 2, fieldName);
   const offsetMinutePart =
     offsetMatch === null ? Number.NaN : numberFromMatch(offsetMatch, 3, fieldName);
   const offsetMinutes =
-    offset === "Z"
-      ? 0
-      : offsetMatch === null
-        ? Number.NaN
-        : offsetHours * 60 + offsetMinutePart;
+    offset === "Z" ? 0 : offsetMatch === null ? Number.NaN : offsetHours * 60 + offsetMinutePart;
   if (
     !Number.isFinite(offsetMinutes) ||
     (offsetMatch !== null &&
@@ -472,7 +464,9 @@ function timeZoneNameAt(epoch: number, timeZone: string): string {
     timeZone,
     timeZoneName: "short",
   });
-  const part = formatter.formatToParts(new Date(epoch)).find((entry) => entry.type === "timeZoneName");
+  const part = formatter
+    .formatToParts(new Date(epoch))
+    .find((entry) => entry.type === "timeZoneName");
   return part?.value ?? timeZone;
 }
 
@@ -481,22 +475,21 @@ function isDaylightAt(epoch: number, timeZone: string): boolean {
     timeZone,
     timeZoneName: "long",
   });
-  const part = formatter.formatToParts(new Date(epoch)).find((entry) => entry.type === "timeZoneName");
+  const part = formatter
+    .formatToParts(new Date(epoch))
+    .find((entry) => entry.type === "timeZoneName");
   return /daylight|summer/i.test(part?.value ?? "");
 }
 
 function formatUtcDateTime(epoch: number): string {
   const date = new Date(epoch);
-  return `${String(date.getUTCFullYear()).padStart(4, "0")}${String(date.getUTCMonth() + 1).padStart(
-    2,
-    "0",
-  )}${String(date.getUTCDate()).padStart(2, "0")}T${String(date.getUTCHours()).padStart(
-    2,
-    "0",
-  )}${String(date.getUTCMinutes()).padStart(2, "0")}${String(date.getUTCSeconds()).padStart(
-    2,
-    "0",
-  )}Z`;
+  return `${String(date.getUTCFullYear()).padStart(4, "0")}${String(
+    date.getUTCMonth() + 1,
+  ).padStart(2, "0")}${String(date.getUTCDate()).padStart(2, "0")}T${String(
+    date.getUTCHours(),
+  ).padStart(2, "0")}${String(date.getUTCMinutes()).padStart(2, "0")}${String(
+    date.getUTCSeconds(),
+  ).padStart(2, "0")}Z`;
 }
 
 function formatBasicDateTime(parts: DateTimeParts): string {
@@ -534,8 +527,11 @@ function normalizeGeneratedAt(value: string | undefined): { epoch: number; iso: 
   return { epoch: instant.epoch, iso: new Date(instant.epoch).toISOString() };
 }
 
-
-function assertSafeText(value: unknown, fieldName: string, requireNonEmpty: boolean): asserts value is string {
+function assertSafeText(
+  value: unknown,
+  fieldName: string,
+  requireNonEmpty: boolean,
+): asserts value is string {
   if (typeof value !== "string") {
     throw calendarPayloadError(`${fieldName} must be a string`);
   }
@@ -561,7 +557,12 @@ function assertCalendarText(
     throw calendarPayloadError(`${fieldName} must not be empty`);
   }
 }
-function assertTextLength(value: string, fieldName: string, minimum: number, maximum: number): void {
+function assertTextLength(
+  value: string,
+  fieldName: string,
+  minimum: number,
+  maximum: number,
+): void {
   if (value.trim().length < minimum || value.length > maximum) {
     throw calendarPayloadError(
       `${fieldName} must contain between ${minimum} and ${maximum} characters`,
@@ -589,4 +590,3 @@ function optionalNumberFromMatch(match: RegExpExecArray, index: number): number 
   const value = match[index];
   return value === undefined ? 0 : Number(value);
 }
-

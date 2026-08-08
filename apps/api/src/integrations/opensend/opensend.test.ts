@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
-  createOpenSendOutboxJob,
   createCalendarOpenSendMessage,
+  createOpenSendOutboxJob,
   enqueueOpenSendOutboxJob,
   InMemoryOpenSendOutboxRepository,
   OpenSendClient,
   OpenSendError,
-  OpenSendOutboxProcessor,
   type OpenSendMessage,
+  OpenSendOutboxProcessor,
   type OpenSendOutboxQueue,
   type OpenSendSender,
 } from "./index";
@@ -287,11 +287,7 @@ describe("OpenSendOutboxProcessor", () => {
         maxAttempts: 1,
       }),
     );
-    const claimed = await repository.claim(
-      "outbox-3",
-      now,
-      new Date("2026-08-08T12:00:30.000Z"),
-    );
+    const claimed = await repository.claim("outbox-3", now, new Date("2026-08-08T12:00:30.000Z"));
     expect(claimed?.status).toBe("processing");
 
     const sender: OpenSendSender = {

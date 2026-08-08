@@ -29,9 +29,7 @@ class FakeDurableObjectStorage {
     this.values.set(key, value);
   }
 
-  async transaction<T>(
-    closure: (transaction: DurableObjectTransaction) => Promise<T>,
-  ): Promise<T> {
+  async transaction<T>(closure: (transaction: DurableObjectTransaction) => Promise<T>): Promise<T> {
     return closure(this as unknown as DurableObjectTransaction);
   }
 }
@@ -76,10 +74,7 @@ describe("Cloudflare binding validation", () => {
 
     expect(inspection).toEqual({
       success: false,
-      issues: [
-        "non-local WEB_ORIGIN must use HTTPS",
-        "PRIVATE_FILES must be an R2 binding",
-      ],
+      issues: ["non-local WEB_ORIGIN must use HTTPS", "PRIVATE_FILES must be an R2 binding"],
     });
   });
 

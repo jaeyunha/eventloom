@@ -52,11 +52,13 @@ function isSecondaryContact(value: unknown): value is CfpSecondaryContact {
 }
 
 export function isCfpDraft(value: unknown, eventSlug?: string): value is CfpDraft {
-  if (!isRecord(value) || value.schemaVersion !== 1 || typeof value.eventSlug !== "string") return false;
+  if (!isRecord(value) || value.schemaVersion !== 1 || typeof value.eventSlug !== "string")
+    return false;
   if (eventSlug !== undefined && value.eventSlug !== eventSlug) return false;
   if (!isRecord(value.account) || !isRecord(value.submission)) return false;
   if (!Array.isArray(value.participants) || !value.participants.every(isParticipant)) return false;
-  if (!Array.isArray(value.secondaryContacts) || !value.secondaryContacts.every(isSecondaryContact)) return false;
+  if (!Array.isArray(value.secondaryContacts) || !value.secondaryContacts.every(isSecondaryContact))
+    return false;
 
   const receiptIsValid =
     value.receipt === null ||

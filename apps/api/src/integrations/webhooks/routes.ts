@@ -1,13 +1,13 @@
-import { Hono, type Context } from "hono";
+import { type Context, Hono } from "hono";
 import { ZodError, z } from "zod";
 import type { AuthPrincipal } from "../../features/auth/types";
 import {
   type CreateWebhookSubscriptionInput,
+  toWebhookSubscriptionView,
   type UpdateWebhookSubscriptionInput,
-  type WebhookSubscriptionRepository,
   WebhookRepositoryError,
   type WebhookSubscriptionRecord,
-  toWebhookSubscriptionView,
+  type WebhookSubscriptionRepository,
 } from "./types";
 
 export interface WebhookRouteEnvironment {
@@ -21,11 +21,7 @@ export class WebhookRouteError extends Error {
   readonly code: string;
   readonly status: 400 | 401 | 403 | 404 | 409;
 
-  constructor(
-    code: string,
-    message: string,
-    status: 400 | 401 | 403 | 404 | 409,
-  ) {
+  constructor(code: string, message: string, status: 400 | 401 | 403 | 404 | 409) {
     super(message);
     this.name = "WebhookRouteError";
     this.code = code;
@@ -70,6 +66,14 @@ function errorBody(context: Context<WebhookRouteEnvironment>, code: string, mess
   return { error: { code, message, traceId: traceId(context) } };
 }
 
+function requiredRouteParam(context: Context<WebhookRouteEnvironment>, name: string): string {
+  const value = context.req.param(name);
+  if (value === undefined || value.trim().length === 0) {
+    throw new WebhookRouteError("INVALID_INPUT", `The ${name} path parameter is required.`, 400);
+  }
+  return value;
+}
+
 function requireApiKey(
   context: Context<WebhookRouteEnvironment>,
   organizationId: string,
@@ -102,7 +106,8 @@ async function requestBody(context: Context<WebhookRouteEnvironment>): Promise<u
 
 function parseCreate(body: unknown, organizationId: string): CreateWebhookSubscriptionInput {
   const parsed = createSubscriptionSchema.safeParse(body);
-  if (!parsed.success) throw new WebhookRouteError("INVALID_INPUT", "The webhook payload is invalid.", 400);
+  if (!parsed.success)
+    throw new WebhookRouteError("INVALID_INPUT", "The webhook payload is invalid.", 400);
   return {
     organizationId,
     endpointUrl: parsed.data.endpointUrl,
@@ -117,11 +122,10 @@ function parseCreate(body: unknown, organizationId: string): CreateWebhookSubscr
 
 function parseUpdate(body: unknown): UpdateWebhookSubscriptionInput {
   const parsed = updateSubscriptionSchema.safeParse(body);
-  if (!parsed.success) throw new WebhookRouteError("INVALID_INPUT", "The webhook payload is invalid.", 400);
+  if (!parsed.success)
+    throw new WebhookRouteError("INVALID_INPUT", "The webhook payload is invalid.", 400);
   return {
-    ...(parsed.data.endpointUrl === undefined
-      ? {}
-      : { endpointUrl: parsed.data.endpointUrl }),
+    ...(parsed.data.endpointUrl === undefined ? {} : { endpointUrl: parsed.data.endpointUrl }),
     ...(parsed.data.events === undefined ? {} : { events: parsed.data.events }),
     ...(parsed.data.active === undefined ? {} : { active: parsed.data.active }),
     ...(parsed.data.signingSecret === undefined
@@ -150,14 +154,14 @@ export function createWebhookSubscriptionRoutes(
   const routes = new Hono<WebhookRouteEnvironment>();
 
   routes.get("/", async (context) => {
-    const organizationId = context.req.param("organizationId");
+    const organizationId = requiredRouteParam(context, "organizationId");
     requireApiKey(context, organizationId, "webhooks:read");
     const subscriptions = await repository.listSubscriptions(organizationId);
     return context.json({ data: subscriptions.map(view) });
   });
 
   routes.post("/", async (context) => {
-    const organizationId = context.req.param("organizationId");
+    const organizationId = requiredRouteParam(context, "organizationId");
     requireApiKey(context, organizationId, "webhooks:write");
     const input = parseCreate(await requestBody(context), organizationId);
     const subscription = await repository.createSubscription(input);
@@ -165,22 +169,22 @@ export function createWebhookSubscriptionRoutes(
   });
 
   routes.get("/:subscriptionId", async (context) => {
-    const organizationId = context.req.param("organizationId");
+    const organizationId = requiredRouteParam(context, "organizationId");
     requireApiKey(context, organizationId, "webhooks:read");
     const subscription = await repository.getSubscription(
       organizationId,
-      context.req.param("subscriptionId"),
+      requiredRouteParam(context, "subscriptionId"),
     );
     if (!subscription) notFound();
     return context.json({ data: view(subscription) });
   });
 
   const update = async (context: Context<WebhookRouteEnvironment>) => {
-    const organizationId = context.req.param("organizationId");
+    const organizationId = requiredRouteParam(context, "organizationId");
     requireApiKey(context, organizationId, "webhooks:write");
     const subscription = await repository.updateSubscription(
       organizationId,
-      context.req.param("subscriptionId"),
+      requiredRouteParam(context, "subscriptionId"),
       parseUpdate(await requestBody(context)),
     );
     if (!subscription) notFound();
@@ -190,11 +194,11 @@ export function createWebhookSubscriptionRoutes(
   routes.put("/:subscriptionId", update);
 
   routes.delete("/:subscriptionId", async (context) => {
-    const organizationId = context.req.param("organizationId");
+    const organizationId = requiredRouteParam(context, "organizationId");
     requireApiKey(context, organizationId, "webhooks:write");
     const deleted = await repository.deleteSubscription(
       organizationId,
-      context.req.param("subscriptionId"),
+      requiredRouteParam(context, "subscriptionId"),
     );
     if (!deleted) notFound();
     return context.json({ data: { deleted: true } });
@@ -208,9 +212,15 @@ export function createWebhookSubscriptionRoutes(
       return context.json(errorBody(context, `WEBHOOK_${error.code}`, error.message), error.status);
     }
     if (error instanceof ZodError) {
-      return context.json(errorBody(context, "INVALID_INPUT", "The webhook payload is invalid."), 400);
+      return context.json(
+        errorBody(context, "INVALID_INPUT", "The webhook payload is invalid."),
+        400,
+      );
     }
-    return context.json(errorBody(context, "INTERNAL_ERROR", "The webhook request could not be completed."), 500);
+    return context.json(
+      errorBody(context, "INTERNAL_ERROR", "The webhook request could not be completed."),
+      500,
+    );
   });
 
   return routes;

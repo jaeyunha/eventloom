@@ -126,12 +126,9 @@ export function isTaskBlocked(task: PortalTask, tasks: readonly PortalTask[]): b
   });
 }
 
-export function taskPrimaryAction(task: PortalTask):
-  | "start"
-  | "upload"
-  | "submit"
-  | "complete"
-  | null {
+export function taskPrimaryAction(
+  task: PortalTask,
+): "start" | "upload" | "submit" | "complete" | null {
   if (["completed", "waived", "submitted"].includes(task.status)) {
     return null;
   }
@@ -174,10 +171,7 @@ export function findProfileForTask(task: PortalTask, profiles: readonly PortalPr
   return profiles.find((profile) => profile.participantId === task.participantId);
 }
 
-export function findSubmissionForTask(
-  task: PortalTask,
-  submissions: readonly PortalSubmission[],
-) {
+export function findSubmissionForTask(task: PortalTask, submissions: readonly PortalSubmission[]) {
   return submissions.find((submission) => submission.id === task.submissionId);
 }
 

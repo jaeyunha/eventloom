@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Suspense, type ReactNode } from "react";
+import { type ReactNode, Suspense } from "react";
 import styles from "../../features/portal/portal.module.css";
 import { PortalProvider } from "../../features/portal/portal-provider";
 import { PortalFrame } from "../../features/portal/portal-ui";

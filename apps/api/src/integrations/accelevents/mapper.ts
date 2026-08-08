@@ -1,8 +1,8 @@
 import {
-  acceleventsSessionPayloadSchema,
-  acceleventsSpeakerPayloadSchema,
   type AcceleventsSessionPayload,
   type AcceleventsSpeakerPayload,
+  acceleventsSessionPayloadSchema,
+  acceleventsSpeakerPayloadSchema,
   type IntegrationFieldMapping,
   type IntegrationRecordError,
 } from "@open-sessionboard/contracts";
@@ -20,7 +20,11 @@ export const ACCELEVENTS_FIELD_MAPPINGS: readonly IntegrationFieldMapping[] = [
   { sourceField: "participant.company", destinationField: "speaker.company", required: false },
   { sourceField: "participant.email", destinationField: "speaker.email", required: true },
   { sourceField: "participant.firstName", destinationField: "speaker.firstName", required: true },
-  { sourceField: "participant.headshotUrl", destinationField: "speaker.headshotUrl", required: false },
+  {
+    sourceField: "participant.headshotUrl",
+    destinationField: "speaker.headshotUrl",
+    required: false,
+  },
   { sourceField: "participant.id", destinationField: "speaker.externalId", required: true },
   { sourceField: "participant.jobTitle", destinationField: "speaker.jobTitle", required: false },
   { sourceField: "participant.lastName", destinationField: "speaker.lastName", required: true },
@@ -180,9 +184,7 @@ function canonicalize(value: unknown): unknown {
   if (value !== null && typeof value === "object") {
     const entries = Object.entries(value).filter(([, entryValue]) => entryValue !== undefined);
     entries.sort(([left], [right]) => left.localeCompare(right));
-    return Object.fromEntries(
-      entries.map(([key, entryValue]) => [key, canonicalize(entryValue)]),
-    );
+    return Object.fromEntries(entries.map(([key, entryValue]) => [key, canonicalize(entryValue)]));
   }
   return value;
 }
@@ -206,7 +208,8 @@ function uniqueRecords<T extends { readonly externalId: string }>(
 ): T[] {
   const sorted = [...records].sort(
     (left, right) =>
-      left.externalId.localeCompare(right.externalId) || canonicalJson(left).localeCompare(canonicalJson(right)),
+      left.externalId.localeCompare(right.externalId) ||
+      canonicalJson(left).localeCompare(canonicalJson(right)),
   );
   const unique: T[] = [];
   let previousId: string | null = null;
@@ -226,7 +229,9 @@ function uniqueRecords<T extends { readonly externalId: string }>(
   return unique;
 }
 
-function issueMessage(issues: readonly { readonly message: string; readonly path: PropertyKey[] }[]): string {
+function issueMessage(
+  issues: readonly { readonly message: string; readonly path: PropertyKey[] }[],
+): string {
   return issues
     .map((issue) => `${issue.path.join(".") || "record"}: ${issue.message}`)
     .sort()

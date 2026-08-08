@@ -1,8 +1,8 @@
+import { spawnSync as run } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawnSync as run } from "node:child_process";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(scriptDirectory, "../..");
@@ -16,11 +16,10 @@ if (!allowedEnvironments.has(environment)) {
   process.exit(1);
 }
 
-const validation = run(
-  process.execPath,
-  [validator, "--environment", environment],
-  { cwd: repositoryRoot, stdio: "inherit" },
-);
+const validation = run(process.execPath, [validator, "--environment", environment], {
+  cwd: repositoryRoot,
+  stdio: "inherit",
+});
 if (validation.status !== 0) {
   process.exit(validation.status ?? 1);
 }

@@ -1,6 +1,6 @@
 import {
-  deploymentEnvironmentSchema,
   type DeploymentEnvironment,
+  deploymentEnvironmentSchema,
 } from "@open-sessionboard/contracts";
 
 export const cloudflareBindingNames = {
@@ -74,7 +74,10 @@ function hasFunction(value: unknown, property: string): boolean {
   return isRecord(value) && typeof value[property] === "function";
 }
 
-function inspectWebOrigin(value: unknown, environment: DeploymentEnvironment | undefined): string | null {
+function inspectWebOrigin(
+  value: unknown,
+  environment: DeploymentEnvironment | undefined,
+): string | null {
   if (typeof value !== "string") {
     return "WEB_ORIGIN must be a URL";
   }

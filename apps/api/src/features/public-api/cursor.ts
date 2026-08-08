@@ -51,7 +51,9 @@ function base64UrlToBytes(value: string): Uint8Array {
   }
 }
 
-function normalizeCursorInput(input: CursorPayload | Omit<CursorPayload, "version">): CursorPayload {
+function normalizeCursorInput(
+  input: CursorPayload | Omit<CursorPayload, "version">,
+): CursorPayload {
   const withVersion = "version" in input ? input : { ...input, version: 1 as const };
   const result = cursorPayloadSchema.safeParse(withVersion);
   if (!result.success) {

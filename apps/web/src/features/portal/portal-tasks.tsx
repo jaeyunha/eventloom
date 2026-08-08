@@ -6,21 +6,21 @@ import {
   findProfileForTask,
   findSubmissionForTask,
   isTaskBlocked,
+  type TaskFilter,
   taskPrimaryAction,
   taskStatusPresentation,
-  type TaskFilter,
 } from "./model";
+import styles from "./portal.module.css";
 import { usePortal } from "./portal-provider";
 import {
   EmptyState,
+  formatPortalDate,
   InlineMutationError,
   PageHeading,
   PortalContentState,
   Progress,
   TaskStatusBadge,
-  formatPortalDate,
 } from "./portal-ui";
-import styles from "./portal.module.css";
 import type { PortalAssetKind, PortalTask } from "./types";
 
 const filters: readonly { value: TaskFilter; label: string }[] = [
@@ -133,7 +133,8 @@ function TaskCard({ task }: Readonly<{ task: PortalTask }>) {
   const action = blocked ? null : taskPrimaryAction(task);
   const busy = busyTaskIds.has(task.id);
   const dependencyNames = task.dependencyIds.map(
-    (dependencyId) => view.tasks.find((candidate) => candidate.id === dependencyId)?.title ?? dependencyId,
+    (dependencyId) =>
+      view.tasks.find((candidate) => candidate.id === dependencyId)?.title ?? dependencyId,
   );
   const uploadKind = task.acceptedAssetKinds?.[0];
 
@@ -174,9 +175,7 @@ function TaskCard({ task }: Readonly<{ task: PortalTask }>) {
         </div>
         <TaskStatusBadge status={task.status} />
       </div>
-      <p className={styles.taskDescription}>
-        {task.description || presentation.description}
-      </p>
+      <p className={styles.taskDescription}>{task.description || presentation.description}</p>
       <div className={styles.taskMetadata}>
         <span>
           <strong>Type</strong> {task.type === "upload" ? "File upload" : task.type}
@@ -210,7 +209,11 @@ function TaskCard({ task }: Readonly<{ task: PortalTask }>) {
 
       {!blocked && (action === "submit" || action === "complete") ? (
         <label className={styles.taskNoteField}>
-          <span>{action === "complete" ? "Completion note (optional)" : "Message to organizers (optional)"}</span>
+          <span>
+            {action === "complete"
+              ? "Completion note (optional)"
+              : "Message to organizers (optional)"}
+          </span>
           <textarea
             rows={3}
             maxLength={1_000}

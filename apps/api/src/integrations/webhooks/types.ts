@@ -1,4 +1,3 @@
-
 export const webhookDeliveryStatuses = [
   "pending",
   "delivering",
@@ -26,7 +25,6 @@ export interface WebhookEvent {
   eventId?: string;
   resource?: { type: string; id: string } | null;
 }
-
 
 /** A stored subscription includes the signing secret and must never be sent to callers. */
 export interface WebhookSubscriptionRecord {
@@ -157,7 +155,6 @@ export interface WebhookRepository {
     deliveryId: string,
     result: DeliveryAttemptResult,
   ): Promise<WebhookDelivery | null>;
-
 }
 
 export type WebhookSubscriptionRepository = Pick<
@@ -181,10 +178,7 @@ export class WebhookRepositoryError extends Error {
   readonly code: "NOT_FOUND" | "CONFLICT" | "INVALID";
   readonly status: 400 | 404 | 409;
 
-  constructor(
-    code: "NOT_FOUND" | "CONFLICT" | "INVALID",
-    message: string,
-  ) {
+  constructor(code: "NOT_FOUND" | "CONFLICT" | "INVALID", message: string) {
     super(message);
     this.name = "WebhookRepositoryError";
     this.code = code;
@@ -196,10 +190,17 @@ export interface InMemoryWebhookRepositoryOptions {
   idFactory?: (prefix: "whs" | "whd") => string;
 }
 
+interface InMemoryWebhookRepositorySeed {
+  readonly subscriptions?: readonly WebhookSubscriptionRecord[];
+  readonly deliveries?: readonly WebhookDelivery[];
+}
+
 function cloneEvent(event: WebhookEvent): WebhookEvent {
   return {
     ...event,
-    ...(event.resource === undefined ? {} : { resource: event.resource ? { ...event.resource } : null }),
+    ...(event.resource === undefined
+      ? {}
+      : { resource: event.resource ? { ...event.resource } : null }),
     ...(event.data === undefined ? { data: null } : { data: event.data }),
   };
 }
@@ -249,6 +250,12 @@ function asClock(clock?: WebhookClock): WebhookClock {
   return clock ?? { now: () => new Date() };
 }
 
+function isRepositorySeed(
+  seed: readonly WebhookSubscriptionRecord[] | InMemoryWebhookRepositorySeed,
+): seed is InMemoryWebhookRepositorySeed {
+  return !Array.isArray(seed);
+}
+
 /** A deterministic, concurrency-safe reference repository for tests and local adapters. */
 export class InMemoryWebhookRepository implements WebhookRepository {
   private readonly subscriptions = new Map<string, WebhookSubscriptionRecord>();
@@ -258,17 +265,18 @@ export class InMemoryWebhookRepository implements WebhookRepository {
   private readonly idFactory: (prefix: "whs" | "whd") => string;
 
   constructor(
-    seed:
-      | readonly WebhookSubscriptionRecord[]
-      | {
-          subscriptions?: readonly WebhookSubscriptionRecord[];
-          deliveries?: readonly WebhookDelivery[];
-        } = [],
+    seed?: readonly WebhookSubscriptionRecord[],
+    options?: InMemoryWebhookRepositoryOptions,
+  );
+  constructor(seed?: InMemoryWebhookRepositorySeed, options?: InMemoryWebhookRepositoryOptions);
+  constructor(
+    seed: readonly WebhookSubscriptionRecord[] | InMemoryWebhookRepositorySeed = [],
     options: InMemoryWebhookRepositoryOptions = {},
   ) {
     this.clock = asClock(options.clock);
     this.idFactory = options.idFactory ?? randomId;
-    const subscriptions = Array.isArray(seed) ? seed : (seed.subscriptions ?? []);
+    const subscriptions = isRepositorySeed(seed) ? (seed.subscriptions ?? []) : seed;
+    const deliveries = isRepositorySeed(seed) ? (seed.deliveries ?? []) : [];
     for (const subscription of subscriptions) {
       const secret = subscription.signingSecret || randomSecret();
       this.subscriptions.set(subscription.id, {
@@ -277,12 +285,10 @@ export class InMemoryWebhookRepository implements WebhookRepository {
         signingSecretLastFour: secretLastFour(secret),
       });
     }
-    if (!Array.isArray(seed)) {
-      for (const delivery of seed.deliveries ?? []) {
-        const copy = cloneDelivery(delivery);
-        this.deliveries.set(copy.id, copy);
-        this.deliveryKeys.set(this.deliveryKey(copy.subscriptionId, copy.event.id), copy.id);
-      }
+    for (const delivery of deliveries) {
+      const copy = cloneDelivery(delivery);
+      this.deliveries.set(copy.id, copy);
+      this.deliveryKeys.set(this.deliveryKey(copy.subscriptionId, copy.event.id), copy.id);
     }
   }
 
@@ -306,10 +312,13 @@ export class InMemoryWebhookRepository implements WebhookRepository {
     return cloneSubscription(subscription);
   }
 
-  async createSubscription(input: CreateWebhookSubscriptionInput): Promise<WebhookSubscriptionRecord> {
+  async createSubscription(
+    input: CreateWebhookSubscriptionInput,
+  ): Promise<WebhookSubscriptionRecord> {
     const now = this.clock.now();
     const signingSecret = input.signingSecret ?? randomSecret();
-    if (!signingSecret) throw new WebhookRepositoryError("INVALID", "A signing secret is required.");
+    if (!signingSecret)
+      throw new WebhookRepositoryError("INVALID", "A signing secret is required.");
     const subscription: WebhookSubscriptionRecord = {
       id: this.idFactory("whs"),
       organizationId: input.organizationId,
@@ -389,7 +398,6 @@ export class InMemoryWebhookRepository implements WebhookRepository {
     return cloneDelivery(delivery);
   }
 
-
   async claimDueDelivery(now: Date): Promise<WebhookDelivery | null> {
     const due = [...this.deliveries.values()]
       .filter(
@@ -410,7 +418,6 @@ export class InMemoryWebhookRepository implements WebhookRepository {
     return cloneDelivery(due);
   }
 
-
   private applyAttempt(
     deliveryId: string,
     result: DeliveryAttemptResult,
@@ -418,7 +425,8 @@ export class InMemoryWebhookRepository implements WebhookRepository {
     completedAt: Date | null,
   ): WebhookDelivery | null {
     const delivery = this.deliveries.get(deliveryId);
-    if (!delivery || delivery.status === "succeeded") return delivery ? cloneDelivery(delivery) : null;
+    if (!delivery || delivery.status === "succeeded")
+      return delivery ? cloneDelivery(delivery) : null;
     delivery.attemptCount = Math.max(delivery.attemptCount, result.attemptCount);
     delivery.status = status;
     delivery.nextAttemptAt = result.nextAttemptAt === undefined ? null : result.nextAttemptAt;
@@ -448,14 +456,12 @@ export class InMemoryWebhookRepository implements WebhookRepository {
     return this.applyAttempt(deliveryId, result, "succeeded", result.attemptedAt);
   }
 
-
   async markDeliveryRetry(
     deliveryId: string,
     result: DeliveryAttemptResult,
   ): Promise<WebhookDelivery | null> {
     return this.applyAttempt(deliveryId, result, "retrying", null);
   }
-
 
   async markDeliveryFailed(
     deliveryId: string,
@@ -469,7 +475,6 @@ export class InMemoryWebhookRepository implements WebhookRepository {
     );
   }
 
-
   async getDelivery(deliveryId: string): Promise<WebhookDelivery | null> {
     const delivery = this.deliveries.get(deliveryId);
     return delivery ? cloneDelivery(delivery) : null;
@@ -477,7 +482,9 @@ export class InMemoryWebhookRepository implements WebhookRepository {
 
   async listDeliveries(organizationId?: string): Promise<readonly WebhookDelivery[]> {
     return [...this.deliveries.values()]
-      .filter((delivery) => organizationId === undefined || delivery.organizationId === organizationId)
+      .filter(
+        (delivery) => organizationId === undefined || delivery.organizationId === organizationId,
+      )
       .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
       .map(cloneDelivery);
   }

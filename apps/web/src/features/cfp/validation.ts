@@ -33,9 +33,12 @@ function validateAccountProfile(draft: CfpDraft): ValidationErrors {
   if (draft.account.email && !EMAIL_PATTERN.test(draft.account.email)) {
     errors["account.email"] = "Enter a valid email address.";
   }
-  if (draft.account.firstName.length > 255) errors["account.firstName"] = "First name must be 255 characters or fewer.";
-  if (draft.account.lastName.length > 255) errors["account.lastName"] = "Last name must be 255 characters or fewer.";
-  if (!draft.account.acceptedTerms) errors["account.acceptedTerms"] = "Accept the terms to continue.";
+  if (draft.account.firstName.length > 255)
+    errors["account.firstName"] = "First name must be 255 characters or fewer.";
+  if (draft.account.lastName.length > 255)
+    errors["account.lastName"] = "Last name must be 255 characters or fewer.";
+  if (!draft.account.acceptedTerms)
+    errors["account.acceptedTerms"] = "Accept the terms to continue.";
 
   return errors;
 }
@@ -59,7 +62,8 @@ export function validateSubmission(draft: CfpDraft): ValidationErrors {
   addRequired(errors, "submission.track", submission.track, "Track");
 
   if (submission.tags.length === 0) errors["submission.tags"] = "Select at least one tag.";
-  if (submission.title.length > 255) errors["submission.title"] = "Title must be 255 characters or fewer.";
+  if (submission.title.length > 255)
+    errors["submission.title"] = "Title must be 255 characters or fewer.";
   if (submission.description.length > 5_000) {
     errors["submission.description"] = "Description must be 5,000 characters or fewer.";
   }
@@ -70,7 +74,8 @@ export function validateSubmission(draft: CfpDraft): ValidationErrors {
 export function validateParticipants(draft: CfpDraft): ValidationErrors {
   const errors: ValidationErrors = {};
   if (draft.participants.length === 0) errors.participants = "Add at least one participant.";
-  if (draft.participants.length > 15) errors.participants = "A submission can include at most 15 participants.";
+  if (draft.participants.length > 15)
+    errors.participants = "A submission can include at most 15 participants.";
 
   const participantEmails = new Set<string>();
   draft.participants.forEach((participant, index) => {
@@ -86,9 +91,12 @@ export function validateParticipants(draft: CfpDraft): ValidationErrors {
       errors[`${prefix}.email`] = "Each participant must use a unique email address.";
     }
     if (normalizedEmail) participantEmails.add(normalizedEmail);
-    if (participant.firstName.length > 255) errors[`${prefix}.firstName`] = "First name must be 255 characters or fewer.";
-    if (participant.lastName.length > 255) errors[`${prefix}.lastName`] = "Last name must be 255 characters or fewer.";
-    if (participant.biography.length > 5_000) errors[`${prefix}.biography`] = "Biography must be 5,000 characters or fewer.";
+    if (participant.firstName.length > 255)
+      errors[`${prefix}.firstName`] = "First name must be 255 characters or fewer.";
+    if (participant.lastName.length > 255)
+      errors[`${prefix}.lastName`] = "Last name must be 255 characters or fewer.";
+    if (participant.biography.length > 5_000)
+      errors[`${prefix}.biography`] = "Biography must be 5,000 characters or fewer.";
   });
 
   draft.secondaryContacts.forEach((contact, index) => {

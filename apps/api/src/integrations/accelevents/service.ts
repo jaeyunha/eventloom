@@ -1,4 +1,7 @@
-import type { IntegrationPublicationId, IntegrationRecordError } from "@open-sessionboard/contracts";
+import type {
+  IntegrationPublicationId,
+  IntegrationRecordError,
+} from "@open-sessionboard/contracts";
 import {
   diffAcceleventsProgram,
   mapAcceptedProgram,
@@ -6,20 +9,20 @@ import {
   unexpectedExternalIds,
 } from "./mapper";
 import {
-  AcceleventsProviderError,
-  AcceleventsServiceError,
   type AcceleventsClock,
   type AcceleventsConfirmationTokens,
   type AcceleventsDiffRecord,
   type AcceleventsPreview,
+  type AcceleventsProgramSource,
   type AcceleventsProvider,
+  AcceleventsProviderError,
   type AcceleventsPublicationLock,
   type AcceleventsPublishReceipt,
   type AcceleventsPublishRequest,
-  type AcceleventsProgramSource,
+  type AcceleventsReconciliation,
   type AcceleventsRecordKind,
   type AcceleventsRecordResult,
-  type AcceleventsReconciliation,
+  AcceleventsServiceError,
   type AcceleventsStateRepository,
   type AcceleventsSyncAttempt,
 } from "./types";
@@ -324,7 +327,10 @@ function toRecordError(externalId: string, error: unknown): IntegrationRecordErr
 }
 
 function normalizeErrorCode(code: string): string {
-  const normalized = code.trim().toUpperCase().replaceAll(/[^A-Z0-9]+/gu, "_");
+  const normalized = code
+    .trim()
+    .toUpperCase()
+    .replaceAll(/[^A-Z0-9]+/gu, "_");
   return /^[A-Z][A-Z0-9_]*$/u.test(normalized) ? normalized : "PROVIDER_ERROR";
 }
 

@@ -2,16 +2,16 @@
 
 import Link from "next/link";
 import { submissionStatusPresentation } from "./model";
+import styles from "./portal.module.css";
 import { usePortal } from "./portal-provider";
 import {
   EmptyState,
+  formatPortalDate,
   PageHeading,
   PortalContentState,
   SubmissionStatusBadge,
   TaskStatusBadge,
-  formatPortalDate,
 } from "./portal-ui";
-import styles from "./portal.module.css";
 import type { PortalSubmissionStatus } from "./types";
 
 const standardJourney: readonly PortalSubmissionStatus[] = [
@@ -64,7 +64,10 @@ function SubmissionDetailContent({ submissionId }: Readonly<{ submissionId: stri
       />
 
       <section className={`${styles.panel} ${styles.statusHero}`}>
-        <div className={`${styles.statusMark} ${styles[`tone_${presentation.tone}`]}`} aria-hidden="true">
+        <div
+          className={`${styles.statusMark} ${styles[`tone_${presentation.tone}`]}`}
+          aria-hidden="true"
+        >
           {submission.status === "accepted" ? "✓" : "i"}
         </div>
         <div>
@@ -89,7 +92,11 @@ function SubmissionDetailContent({ submissionId }: Readonly<{ submissionId: stri
               const isCurrent = submission.status === status;
               const complete = currentJourneyIndex > index;
               return (
-                <li key={status} data-current={isCurrent || undefined} data-complete={complete || undefined}>
+                <li
+                  key={status}
+                  data-current={isCurrent || undefined}
+                  data-complete={complete || undefined}
+                >
                   <span aria-hidden="true">{complete ? "✓" : index + 1}</span>
                   <div>
                     <strong>{statusPresentation.label}</strong>

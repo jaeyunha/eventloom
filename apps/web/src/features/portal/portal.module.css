@@ -1239,7 +1239,8 @@
     left: 0;
     display: grid;
     grid-template-columns: repeat(4, 1fr);
-    padding: 0.45rem max(0.5rem, env(safe-area-inset-right)) max(0.45rem, env(safe-area-inset-bottom));
+    padding: 0.45rem max(0.5rem, env(safe-area-inset-right))
+      max(0.45rem, env(safe-area-inset-bottom));
     border: 1px solid var(--portal-border);
     background: rgb(255 255 255 / 97%);
     box-shadow: 0 -8px 24px rgb(37 43 67 / 8%);

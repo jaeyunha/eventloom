@@ -43,14 +43,11 @@ function CompleteIcon() {
   );
 }
 
-export function Stepper({
-  steps,
-  currentStep,
-  label = "Progress",
-  className,
-}: StepperProps) {
+export function Stepper({ steps, currentStep, label = "Progress", className }: StepperProps) {
   const requestedIndex =
-    typeof currentStep === "number" ? currentStep : steps.findIndex((step) => step.id === currentStep);
+    typeof currentStep === "number"
+      ? currentStep
+      : steps.findIndex((step) => step.id === currentStep);
   const currentIndex = Math.max(0, Math.min(requestedIndex, Math.max(steps.length - 1, 0)));
 
   return (
