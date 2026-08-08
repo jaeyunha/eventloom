@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { getPublishedAgenda } from "../../../../features/embed/api";
+import { getPublishedAgendaOrLocalDemo } from "../../../../features/embed/demo/projections";
 import { EmbedFrame, EmbedUnavailable } from "../../../../features/embed/embed-frame";
 import { embedTheme } from "../../../../features/embed/model";
 import { PublicAgendaView } from "../../../../features/embed/public-agenda";
@@ -22,9 +22,13 @@ export default async function PublicAgendaPage({ params, searchParams }: PublicA
     return <EmbedUnavailable message="The public program endpoint is not configured." />;
   }
 
+  const theme = embedTheme(query.theme);
   try {
-    const agenda = await getPublishedAgenda(apiBaseUrl, eventSlug);
-    const theme = embedTheme(query.theme);
+    const agenda = await getPublishedAgendaOrLocalDemo(
+      apiBaseUrl,
+      eventSlug,
+      process.env.APP_ENV,
+    );
     return (
       <EmbedFrame event={agenda.event} eventSlug={eventSlug} theme={theme} view="agenda">
         <PublicAgendaView agenda={agenda} apiBaseUrl={apiBaseUrl} />
