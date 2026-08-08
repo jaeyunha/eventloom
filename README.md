@@ -27,6 +27,15 @@ CRM, marketing automation, payments, sponsorship/exhibitor management, transcrip
 
 See [`ARCHITECTURE.md`](ARCHITECTURE.md), [`prd.json`](prd.json), and [`spec/open-sessionboard.md`](spec/open-sessionboard.md) for the governing design and requirements.
 
+## Documentation
+
+- [Environment and provider setup](docs/setup.md) — isolated Cloudflare, Airtable, OpenSend, OAuth, and Accelevents configuration
+- [Public API and webhooks](docs/api.md) — authentication, scopes, pagination, idempotency, concurrency, errors, and signatures
+- [OpenAPI 3.1 contract](openapi/openapi.yaml) — checked-in stable API contract; deployed Workers expose their enabled resource contract at `/api/v1/openapi.json`
+- [Calendar semantics](docs/calendar-semantics.md) — IANA timezone, DST, RFC 5545, UID, sequence, update, cancellation, and retry rules
+- [Browser and accessibility QA](docs/qa-runbook.md) — seeded Playwright, Ever, and `codex-cua` acceptance evidence
+- [Release and submission runbook](docs/release-runbook.md) — deployment evidence, private-to-public Forge gate, and competition checklist
+
 ## Evidence
 
 The visual and product evidence used to derive the implementation is preserved under [`evidence/`](evidence/). `evidence/manifest.json` explains provenance and intended use. Sessionboard remains the visual reference, not a source-code dependency.
@@ -43,6 +52,10 @@ bun run dev
 
 The Next.js web application runs on port `3015`; the standalone Hono Worker runs on port `8787`. Their liveness endpoints are `http://localhost:3015/health` and `http://localhost:8787/api/health`. Each deployable validates only its own environment boundary and returns a structured `503` when required configuration is invalid.
 
+## Environment isolation
+
+Local, staging, and production must use separate Airtable bases, D1 databases, R2 buckets, Queues, secrets, API keys, OAuth applications, and integration credentials. Verify those boundaries from provider inventories before release. Staging must contain synthetic data and use suppressed/sandboxed email recipients and an Accelevents sandbox event. See [the setup guide](docs/setup.md); do not share production data or credentials with another environment.
+
 ## Quality gates
 
 ```bash
@@ -54,9 +67,25 @@ make all
 
 Interaction acceptance is verified with Ever and the `codex-cua` skill against the running application. Tests must not be weakened to obtain a passing build.
 
+Release candidates also run `make build`; `make all` covers checks and tests but does not build deployables.
+
+Release QA runs the complete authenticated, seeded workflow rather than only smoke navigation. It includes CFP/draft/submission, speaker ownership, multi-round human-authoritative review, agenda conflict/publish/rollback, accessible embeds, API/webhooks, calendar updates, and controlled Accelevents preview/confirm.
+
+## API contract
+
+API clients use organization-scoped bearer keys with least-privilege read/write scopes. Collections use stable cursor pagination. Generic resource mutations require `Idempotency-Key`; generic updates also require the current version in `If-Match`. Webhook-subscription administration has its own contract. Stable trace-bearing errors never expose provider or storage details. Public embeds and feeds are separate immutable projections and never expose draft or private fields.
+
+Read [the API guide](docs/api.md) and use the checked-in [OpenAPI 3.1 contract](openapi/openapi.yaml) for client generation and request semantics. A configured environment's `/api/v1/openapi.json` confirms mounted adapters only; its path keys are relative to the `/api/v1` mount and are not a client-generation contract.
+
 ## Deployment credentials
 
 The implementation expects scoped credentials for Cloudflare, Airtable, OpenSend, Google OAuth, Microsoft OAuth, and Accelevents. Calendar delivery uses standards-based ICS messages and does not require Google or Microsoft Calendar OAuth.
+
+## Deployment and release
+
+The guarded Cloudflare scripts validate isolated bindings, reject placeholder D1 IDs for deployment, apply D1 migrations, and deploy the API Worker. The frontend remains a separate deployment and receives only public application/API URLs. No deployment is implied by this repository state.
+
+Forge must remain private throughout development and deployment verification. It becomes public only after automated gates, the seeded end-to-end workflow, Ever, `codex-cua`, accessibility, security, performance, production smoke checks, and submission assets all pass against the same clean release commit. Follow the [release runbook](docs/release-runbook.md); an unchecked gate is a no-go.
 
 ## License
 

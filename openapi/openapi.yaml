@@ -1,0 +1,722 @@
+openapi: 3.1.0
+info:
+  title: Open Sessionboard API
+  version: 1.0.0
+  summary: Tenant-scoped program data, publications, integrations, and webhooks.
+  description: |
+    Open Sessionboard exposes a separately deployed Hono API. Browser sessions use the
+    product UI; `/api/v1` is for scoped API keys and is always tenant-bound through the
+    `organizationId` path segment.
+
+    The checked-in document describes detailed request/response semantics and is the client
+    generation source. A deployed environment may enable only some resource families.
+    `/api/v1/openapi.json` lists mounted path keys relative to `/api/v1`; use it only for discovery.
+
+    API keys are secrets. Do not put them in browser bundles, query strings, logs, or
+    webhook payloads. Public embeds and feeds are separate published projections and do
+    not grant access to this API.
+  license:
+    name: AGPL-3.0-or-later
+    identifier: AGPL-3.0-or-later
+servers:
+  - url: http://localhost:8787
+    description: Local Hono worker
+  - url: https://{apiHost}
+    description: Replace with the verified staging or production Worker host.
+    variables:
+      apiHost:
+        default: api.example.invalid
+        description: Exact hostname reported by the deployment platform.
+tags:
+  - name: System
+    description: Worker health and environment-specific contract discovery.
+  - name: Resources
+    description: Tenant-scoped versioned program and publication resources.
+  - name: Webhooks
+    description: Subscription administration and signed outbound event delivery.
+security: []
+paths:
+  /api/health:
+    get:
+      tags: [System]
+      operationId: getHealth
+      summary: Check Worker liveness and configuration
+      security: []
+      responses:
+        "200":
+          description: The Worker is configured.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+            X-Request-ID:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+        "503":
+          $ref: "#/components/responses/ConfigurationError"
+  /api/v1/openapi.json:
+    get:
+      tags: [System]
+      operationId: getRuntimeOpenApi
+      summary: Read the resource contract enabled in this environment
+      security: []
+      responses:
+        "200":
+          description: An OpenAPI 3.1 document for the mounted resource adapters.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [openapi, info, paths]
+                properties:
+                  openapi: { type: string, const: 3.1.0 }
+                  info: { type: object }
+                  paths: { type: object }
+                additionalProperties: true
+  /api/v1/organizations/{organizationId}/{resource}:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationId"
+      - $ref: "#/components/parameters/Resource"
+    get:
+      tags: [Resources]
+      operationId: listResources
+      summary: List a stable cursor page from a resource family
+      description: |
+        The cursor is opaque and bound to the organization, resource, sort, direction,
+        and filters that produced it. Reusing it with different query inputs returns 400.
+        Filters may be sent as a JSON object in `filter`, as `filter.field=value`, or as
+        `filter[field]=value`. Supported sort and filter fields are resource-specific.
+      security:
+        - apiKey: []
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Sort"
+        - $ref: "#/components/parameters/Direction"
+        - $ref: "#/components/parameters/Filter"
+      responses:
+        "200":
+          description: A tenant-scoped stable page.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResourcePage"
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/AuthenticationError" }
+        "403": { $ref: "#/components/responses/AuthorizationError" }
+        "429": { $ref: "#/components/responses/RateLimitError" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    post:
+      tags: [Resources]
+      operationId: createResource
+      summary: Create a resource
+      description: |
+        Requires the resource family's write scope and an atomic idempotency store.
+        Replaying the same key and body returns the original response. Reusing the key
+        with a different body returns 409.
+      security:
+        - apiKey: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              anyOf:
+                - $ref: "#/components/schemas/ResourceMutation"
+                - type: object
+                  required: [data]
+                  properties:
+                    data: { $ref: "#/components/schemas/ResourceMutation" }
+                  additionalProperties: false
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ResourceDocument" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/AuthenticationError" }
+        "403": { $ref: "#/components/responses/AuthorizationError" }
+        "409": { $ref: "#/components/responses/ConflictError" }
+        "429": { $ref: "#/components/responses/RateLimitError" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /api/v1/organizations/{organizationId}/{resource}/{id}:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationId"
+      - $ref: "#/components/parameters/Resource"
+      - $ref: "#/components/parameters/ResourceId"
+    get:
+      tags: [Resources]
+      operationId: getResource
+      summary: Read one resource
+      security:
+        - apiKey: []
+      responses:
+        "200":
+          description: The tenant-scoped resource.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ResourceDocument" }
+        "401": { $ref: "#/components/responses/AuthenticationError" }
+        "403": { $ref: "#/components/responses/AuthorizationError" }
+        "404": { $ref: "#/components/responses/NotFoundError" }
+        "429": { $ref: "#/components/responses/RateLimitError" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    patch:
+      tags: [Resources]
+      operationId: updateResource
+      summary: Partially update a resource with optimistic concurrency
+      security:
+        - apiKey: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ResourceMutation" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ResourceDocument" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/AuthenticationError" }
+        "403": { $ref: "#/components/responses/AuthorizationError" }
+        "404": { $ref: "#/components/responses/NotFoundError" }
+        "409": { $ref: "#/components/responses/ConflictError" }
+        "412": { $ref: "#/components/responses/PreconditionError" }
+        "429": { $ref: "#/components/responses/RateLimitError" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    put:
+      tags: [Resources]
+      operationId: putResource
+      summary: Update a resource through the PUT alias with optimistic concurrency
+      security:
+        - apiKey: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ResourceMutation" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ResourceDocument" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/AuthenticationError" }
+        "403": { $ref: "#/components/responses/AuthorizationError" }
+        "404": { $ref: "#/components/responses/NotFoundError" }
+        "409": { $ref: "#/components/responses/ConflictError" }
+        "412": { $ref: "#/components/responses/PreconditionError" }
+        "429": { $ref: "#/components/responses/RateLimitError" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /api/v1/organizations/{organizationId}/webhooks:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationId"
+    get:
+      tags: [Webhooks]
+      operationId: listWebhookSubscriptions
+      summary: List webhook subscriptions without signing secrets
+      security:
+        - apiKey: []
+      responses:
+        "200":
+          description: Subscriptions visible to the organization.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/WebhookSubscription" }
+        "401": { $ref: "#/components/responses/AuthenticationError" }
+        "403": { $ref: "#/components/responses/AuthorizationError" }
+    post:
+      tags: [Webhooks]
+      operationId: createWebhookSubscription
+      summary: Create a webhook subscription
+      security:
+        - apiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WebhookSubscriptionInput" }
+      responses:
+        "201":
+          description: Created; the full signing secret is never returned.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/WebhookSubscription" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/AuthenticationError" }
+        "403": { $ref: "#/components/responses/AuthorizationError" }
+        "409": { $ref: "#/components/responses/ConflictError" }
+  /api/v1/organizations/{organizationId}/webhooks/{subscriptionId}:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationId"
+      - name: subscriptionId
+        in: path
+        required: true
+        schema: { type: string, minLength: 1, maxLength: 200 }
+    get:
+      tags: [Webhooks]
+      operationId: getWebhookSubscription
+      summary: Read a webhook subscription without its signing secret
+      security:
+        - apiKey: []
+      responses:
+        "200":
+          description: The subscription.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/WebhookSubscription" }
+        "401": { $ref: "#/components/responses/AuthenticationError" }
+        "403": { $ref: "#/components/responses/AuthorizationError" }
+        "404": { $ref: "#/components/responses/NotFoundError" }
+    patch:
+      tags: [Webhooks]
+      operationId: updateWebhookSubscription
+      summary: Update a webhook subscription or rotate its signing secret
+      security:
+        - apiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WebhookSubscriptionPatch" }
+      responses:
+        "200":
+          description: Updated; the full signing secret is never returned.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/WebhookSubscription" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/AuthenticationError" }
+        "403": { $ref: "#/components/responses/AuthorizationError" }
+        "404": { $ref: "#/components/responses/NotFoundError" }
+    put:
+      tags: [Webhooks]
+      operationId: putWebhookSubscription
+      summary: Update a webhook subscription through the PUT alias
+      security:
+        - apiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WebhookSubscriptionPatch" }
+      responses:
+        "200":
+          description: Updated; the full signing secret is never returned.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/WebhookSubscription" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/AuthenticationError" }
+        "403": { $ref: "#/components/responses/AuthorizationError" }
+        "404": { $ref: "#/components/responses/NotFoundError" }
+    delete:
+      tags: [Webhooks]
+      operationId: deleteWebhookSubscription
+      summary: Delete a webhook subscription
+      security:
+        - apiKey: []
+      responses:
+        "200":
+          description: Deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [deleted]
+                    properties:
+                      deleted: { type: boolean, const: true }
+        "401": { $ref: "#/components/responses/AuthenticationError" }
+        "403": { $ref: "#/components/responses/AuthorizationError" }
+        "404": { $ref: "#/components/responses/NotFoundError" }
+webhooks:
+  outboundEvent:
+    post:
+      tags: [Webhooks]
+      operationId: receiveOutboundEvent
+      summary: Event delivered to a subscriber's HTTPS endpoint
+      description: |
+        Verify `webhook-signature` before parsing or acting on the event. The signed bytes
+        are `{webhook-id}.{webhook-timestamp}.{canonical-json-body}`. The signature is
+        HMAC-SHA256 with the subscription secret and is encoded as `v1,{base64}`.
+        Canonical JSON sorts object keys lexicographically. Consumers must compare in
+        constant time, reject stale timestamps according to their replay policy, and
+        deduplicate by `webhook-id`. Return any 2xx status to acknowledge delivery.
+      parameters:
+        - name: webhook-id
+          in: header
+          required: true
+          schema: { type: string, minLength: 1 }
+        - name: webhook-timestamp
+          in: header
+          required: true
+          schema: { type: string, pattern: "^[0-9]+$" }
+        - name: webhook-signature
+          in: header
+          required: true
+          schema: { type: string, pattern: "^v1," }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WebhookEvent" }
+      responses:
+        "204": { description: Acknowledged without a response body. }
+components:
+  securitySchemes:
+    apiKey:
+      type: http
+      scheme: bearer
+      bearerFormat: Open Sessionboard scoped API key
+      description: |
+        Organization-scoped API key. The product contract reserves `:read` and `:write`
+        variants for `events`, `forms`, `submissions`, `participants`, `reviews`, `tasks`,
+        `agenda`, `files`, `publications`, `integrations`, and `webhooks`. Each mounted
+        adapter declares its required scope. The live key issuer is authoritative for enabled
+        scopes; `/api/v1/openapi.json` identifies mounted resource paths only.
+  parameters:
+    OrganizationId:
+      name: organizationId
+      in: path
+      required: true
+      description: Stable application-owned organization ID; it must match the API key tenant.
+      schema: { type: string, minLength: 1, maxLength: 200 }
+    Resource:
+      name: resource
+      in: path
+      required: true
+      description: |
+        Enabled resource family. `/api/v1/openapi.json` identifies which resource paths
+        are mounted in a configured environment.
+      schema:
+        type: string
+        enum:
+          - events
+          - forms
+          - form-fields
+          - submissions
+          - participants
+          - speakers
+          - review-plans
+          - rubrics
+          - reviews
+          - tasks
+          - agenda-drafts
+          - agenda-revisions
+          - agenda-rules
+          - rooms
+          - tracks
+          - tags
+          - formats
+          - statuses
+          - files
+          - embeds
+          - publications
+          - integration-status
+    ResourceId:
+      name: id
+      in: path
+      required: true
+      description: Stable application-owned ID, never an Airtable record ID.
+      schema: { type: string, minLength: 1, maxLength: 200 }
+    Cursor:
+      name: cursor
+      in: query
+      schema: { type: string, minLength: 1, maxLength: 512 }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 25 }
+    Sort:
+      name: sort
+      in: query
+      schema: { type: string, minLength: 1, maxLength: 100 }
+    Direction:
+      name: direction
+      in: query
+      schema: { type: string, enum: [asc, desc], default: asc }
+    Filter:
+      name: filter
+      in: query
+      description: JSON object whose values are strings, numbers, or booleans.
+      schema: { type: string }
+      example: '{"status":"accepted"}'
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Unique to one intended write. A key cannot be reused with different content.
+      schema: { type: string, minLength: 8, maxLength: 128 }
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      description: Current positive integer resource version, optionally quoted or weakly quoted.
+      schema: { type: string, pattern: '^(W/)?"?[1-9][0-9]*"?$' }
+  headers:
+    RequestId:
+      description: UUID request trace. A valid incoming X-Request-ID is preserved.
+      schema: { type: string, format: uuid }
+    RetryAfter:
+      description: Seconds until the client should retry.
+      schema: { type: integer, minimum: 1 }
+  schemas:
+    Health:
+      type: object
+      required: [status, service, version, environment, timestamp, traceId]
+      properties:
+        status: { type: string, const: ok }
+        service: { type: string, const: api }
+        version: { type: string, example: 0.1.0 }
+        environment: { type: string, enum: [local, staging, production] }
+        timestamp: { type: string, format: date-time }
+        traceId: { type: string, format: uuid }
+      additionalProperties: false
+    ResourceDocument:
+      type: object
+      description: Resource-specific fields plus stable ID and optimistic concurrency version.
+      required: [id]
+      properties:
+        id: { type: string, minLength: 1 }
+        version: { type: integer, minimum: 1 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      additionalProperties: true
+    ResourceMutation:
+      type: object
+      description: Writable resource-specific fields. Server-managed IDs, tenant IDs, and audit fields are rejected or ignored by the resource adapter.
+      additionalProperties: true
+    ResourcePage:
+      type: object
+      required: [data, page]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/ResourceDocument" }
+        page:
+          type: object
+          required: [nextCursor, hasMore]
+          properties:
+            nextCursor: { type: [string, "null"] }
+            hasMore: { type: boolean }
+          additionalProperties: false
+      additionalProperties: false
+    ValidationIssue:
+      type: object
+      required: [path, code, message]
+      properties:
+        path:
+          type: array
+          items: { type: [string, integer] }
+        code: { type: string, minLength: 1 }
+        message: { type: string, minLength: 1 }
+      additionalProperties: false
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, traceId]
+          properties:
+            code:
+              type: string
+              enum:
+                - AUTHENTICATION_REQUIRED
+                - ACCESS_DENIED
+                - TENANT_SCOPE_VIOLATION
+                - NOT_FOUND
+                - VALIDATION_FAILED
+                - INVALID_INPUT
+                - CONFLICT
+                - PRECONDITION_FAILED
+                - IDEMPOTENCY_CONFLICT
+                - RATE_LIMITED
+                - INTEGRATION_UNAVAILABLE
+                - CONFIGURATION_ERROR
+                - INTERNAL_ERROR
+            message: { type: string, minLength: 1 }
+            traceId: { type: string, format: uuid }
+            details:
+              type: array
+              items: { $ref: "#/components/schemas/ValidationIssue" }
+            retryAfterSeconds: { type: integer, minimum: 1 }
+          additionalProperties: false
+      additionalProperties: false
+    WebhookSubscriptionInput:
+      type: object
+      required: [endpointUrl, events]
+      properties:
+        endpointUrl:
+          type: string
+          format: uri
+          pattern: '^https://'
+          description: HTTPS only; embedded credentials are rejected.
+        events:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { type: string, minLength: 1, maxLength: 200 }
+        active: { type: boolean, default: true }
+        signingSecret:
+          type: string
+          minLength: 32
+          maxLength: 512
+          writeOnly: true
+          description: Omit to generate a secret; the full value is never returned.
+        eventId: { type: string, minLength: 1, maxLength: 200 }
+      additionalProperties: false
+    WebhookSubscriptionPatch:
+      type: object
+      properties:
+        endpointUrl:
+          type: string
+          format: uri
+          pattern: '^https://'
+        events:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { type: string, minLength: 1, maxLength: 200 }
+        active: { type: boolean }
+        signingSecret:
+          type: string
+          minLength: 32
+          maxLength: 512
+          writeOnly: true
+        eventId: { type: [string, "null"], minLength: 1, maxLength: 200 }
+      additionalProperties: false
+    WebhookSubscription:
+      type: object
+      required:
+        - id
+        - organizationId
+        - endpointUrl
+        - events
+        - active
+        - signingSecretLastFour
+        - createdAt
+        - updatedAt
+      properties:
+        id: { type: string }
+        organizationId: { type: string }
+        endpointUrl: { type: string, format: uri }
+        events:
+          type: array
+          items: { type: string }
+        active: { type: boolean }
+        signingSecretLastFour:
+          type: string
+          minLength: 4
+          maxLength: 4
+          description: Display-only suffix; not enough to reconstruct the secret.
+        eventId: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      additionalProperties: false
+    WebhookEvent:
+      type: object
+      required: [id, organizationId, type, occurredAt, data]
+      properties:
+        id: { type: string }
+        organizationId: { type: string }
+        type: { type: string, minLength: 1, maxLength: 200 }
+        occurredAt: { type: string, format: date-time }
+        eventId: { type: string }
+        resource:
+          type: [object, "null"]
+          required: [type, id]
+          properties:
+            type: { type: string }
+            id: { type: string }
+          additionalProperties: false
+        data: true
+      additionalProperties: false
+  responses:
+    ValidationError:
+      description: Path, query, header, or body validation failed.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    AuthenticationError:
+      description: No valid API key was presented.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    AuthorizationError:
+      description: The key has the wrong tenant or lacks the required scope.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFoundError:
+      description: The resource is absent or not visible in this tenant.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    ConflictError:
+      description: State, idempotency, or integration conflict.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    PreconditionError:
+      description: If-Match is missing, invalid, or stale.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    RateLimitError:
+      description: Rate limited; honor Retry-After.
+      headers:
+        Retry-After: { $ref: "#/components/headers/RetryAfter" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    ConfigurationError:
+      description: Required runtime configuration is absent or invalid.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    InternalError:
+      description: Safe internal error with a trace ID and no implementation detail.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
