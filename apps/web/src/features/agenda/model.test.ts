@@ -1,0 +1,111 @@
+import { describe, expect, it } from "vitest";
+import { agendaDays, publicationReadiness } from "./model";
+import type { AgendaPreview, AgendaWorkspaceData } from "./types";
+
+const data: AgendaWorkspaceData = {
+  event: {
+    id: "evt_open",
+    name: "Open Systems Summit",
+    timeZone: "America/Los_Angeles",
+    startsOn: "2026-09-18",
+    endsOn: "2026-09-19",
+  },
+  draft: {
+    version: 4,
+    updatedAt: "2026-08-08T12:00:00.000Z",
+    updatedBy: "Avery",
+    entries: [
+      {
+        id: "entry_later",
+        sessionId: "session_later",
+        title: "Building in public",
+        format: "Talk",
+        speakerNames: ["Avery Kim"],
+        roomId: "room_main",
+        roomName: "Main hall",
+        trackIds: ["track_build"],
+        trackNames: ["Build"],
+        startsAtLocal: "2026-09-19T10:00",
+        endsAtLocal: "2026-09-19T10:45",
+      },
+      {
+        id: "entry_early",
+        sessionId: "session_early",
+        title: "Opening keynote",
+        format: "Keynote",
+        speakerNames: ["Morgan Lee"],
+        roomId: "room_main",
+        roomName: "Main hall",
+        trackIds: ["track_main"],
+        trackNames: ["Main stage"],
+        startsAtLocal: "2026-09-18T09:00",
+        endsAtLocal: "2026-09-18T09:45",
+      },
+    ],
+  },
+  rooms: [],
+  tracks: [],
+  unscheduledSessions: [],
+  revisions: [],
+  currentPublishedRevision: null,
+};
+
+function preview(overrides: Partial<AgendaPreview> = {}): AgendaPreview {
+  return {
+    draftVersion: 4,
+    conflicts: [],
+    warnings: [],
+    diff: { added: 2, changed: 0, removed: 0 },
+    validatedAt: "2026-08-08T12:01:00.000Z",
+    ...overrides,
+  };
+}
+
+describe("agenda workspace model", () => {
+  it("groups and orders draft entries by local event day", () => {
+    const days = agendaDays(data.draft.entries);
+
+    expect(days.map((day) => day.date)).toEqual(["2026-09-18", "2026-09-19"]);
+    expect(days[0]?.label).toBe("Friday, September 18");
+    expect(days[0]?.entries[0]?.title).toBe("Opening keynote");
+  });
+
+  it("requires validation of the exact current draft", () => {
+    expect(publicationReadiness(data, preview()).ready).toBe(true);
+    expect(publicationReadiness(data, preview({ draftVersion: 3 }))).toEqual({
+      ready: false,
+      reasons: ["Validate the current draft before publishing."],
+    });
+  });
+
+  it("blocks publication for hard conflicts and unoverridden warnings", () => {
+    const readiness = publicationReadiness(
+      data,
+      preview({
+        conflicts: [
+          {
+            id: "conflict_room",
+            kind: "room",
+            entryIds: ["entry_early"],
+            message: "Main hall already has a session at this time.",
+          },
+        ],
+        warnings: [
+          {
+            id: "warning_capacity",
+            kind: "capacity",
+            entryIds: ["entry_early"],
+            message: "Expected attendance exceeds room capacity.",
+            overridden: false,
+          },
+        ],
+      }),
+    );
+
+    expect(readiness.ready).toBe(false);
+    expect(readiness.reasons).toEqual([
+      "Resolve 1 hard conflict.",
+      "Resolve or override 1 warning.",
+    ]);
+  });
+});
