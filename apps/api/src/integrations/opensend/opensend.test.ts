@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   createOpenSendOutboxJob,
+  createCalendarOpenSendMessage,
+  enqueueOpenSendOutboxJob,
   InMemoryOpenSendOutboxRepository,
   OpenSendClient,
   OpenSendError,
@@ -92,7 +94,7 @@ describe("OpenSendClient", () => {
     const client = new OpenSendClient({ sendingApiKey: "os_key", fetch });
 
     await expect(
-      client.send({ ...message, from: "attacker@example.com" } as OpenSendMessage),
+      client.send({ ...message, from: "attacker@example.com" } as unknown as OpenSendMessage),
     ).rejects.toMatchObject({ code: "VALIDATION_ERROR", retryable: false });
     expect(requestCount).toBe(0);
 
@@ -103,7 +105,92 @@ describe("OpenSendClient", () => {
   });
 });
 
+describe("createCalendarOpenSendMessage", () => {
+  it("delivers UPDATE as a REQUEST calendar attachment without provider OAuth", () => {
+    const email = createCalendarOpenSendMessage(
+      {
+        method: "UPDATE",
+        uid: "tenant-event-session@calendar.foreverbrowsing.com",
+        sequence: 3,
+        timeZone: "America/Los_Angeles",
+        startsAt: "2026-11-01T10:30:00.000Z",
+        endsAt: "2026-11-01T11:30:00.000Z",
+        organizer: "calendar@foreverbrowsing.com",
+        attendees: ["speaker@example.com"],
+        summary: "A <safer> session",
+        location: "Room & Board",
+        idempotencyKey: "calendar-update-0003",
+      },
+      {
+        ics: "BEGIN:VCALENDAR\r\nMETHOD:REQUEST\r\nEND:VCALENDAR\r\n",
+        method: "REQUEST",
+        contentType: "text/calendar; charset=utf-8; method=REQUEST",
+        generatedAt: "2026-08-08T12:00:00.000Z",
+      },
+    );
+
+    expect(email).toMatchObject({
+      from: "calendar@foreverbrowsing.com",
+      to: ["speaker@example.com"],
+      subject: "Updated invitation: A <safer> session",
+      idempotencyKey: "calendar-update-0003",
+      headers: { "X-Sessionboard-Calendar-Action": "UPDATE" },
+      attachments: [
+        {
+          content_type: "text/calendar; charset=utf-8; method=REQUEST",
+        },
+      ],
+    });
+    expect(email.html).toContain("A &lt;safer&gt; session");
+    expect(atob(email.attachments?.[0]?.content ?? "")).toContain("METHOD:REQUEST");
+  });
+
+  it("rejects a lifecycle/MIME method mismatch", () => {
+    expect(() =>
+      createCalendarOpenSendMessage(
+        {
+          method: "CANCEL",
+          uid: "tenant-event-session@calendar.foreverbrowsing.com",
+          sequence: 4,
+          timeZone: "America/Los_Angeles",
+          startsAt: "2026-11-01T10:30:00.000Z",
+          endsAt: "2026-11-01T11:30:00.000Z",
+          organizer: "calendar@foreverbrowsing.com",
+          attendees: ["speaker@example.com"],
+          summary: "Session",
+          location: "",
+          idempotencyKey: "calendar-cancel-0004",
+        },
+        {
+          ics: "BEGIN:VCALENDAR\r\nMETHOD:REQUEST\r\nEND:VCALENDAR\r\n",
+          method: "REQUEST",
+          contentType: "text/calendar; charset=utf-8; method=REQUEST",
+          generatedAt: "2026-08-08T12:00:00.000Z",
+        },
+      ),
+    ).toThrow("does not match");
+  });
+});
+
 describe("OpenSendOutboxProcessor", () => {
+  it("persists a job before scheduling its initial queue delivery", async () => {
+    const repository = new InMemoryOpenSendOutboxRepository();
+    const queue = new RecordingQueue();
+
+    const job = await enqueueOpenSendOutboxJob(
+      {
+        id: "outbox-enqueue",
+        message,
+        createdAt: "2026-08-08T12:00:00.000Z",
+      },
+      repository,
+      queue,
+    );
+
+    expect(job.status).toBe("queued");
+    expect(await repository.find(job.id)).toEqual(job);
+    expect(queue.enqueued).toEqual([{ jobId: job.id, delayMs: 0 }]);
+  });
   it("delivers once and preserves an observable receipt for duplicate queue delivery", async () => {
     const repository = new InMemoryOpenSendOutboxRepository();
     await repository.insert(

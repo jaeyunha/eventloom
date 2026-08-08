@@ -11,8 +11,18 @@ export interface CalendarInvitationScope {
 export type CalendarInvitationDetails = Omit<CalendarInvitationPayload, "uid" | "sequence">;
 
 export type CalendarInvitationInput = CalendarInvitationScope & CalendarInvitationDetails;
+export interface CalendarInvitationSerializationOptions {
+  readonly generatedAt?: string;
+}
 
-export interface CalendarInvitationRecord {
+export interface CalendarInvitationResult {
+  readonly ics: string;
+  readonly method: "REQUEST" | "CANCEL";
+  readonly contentType: string;
+  readonly generatedAt: string;
+}
+
+export interface CalendarInvitationRecord extends CalendarInvitationResult {
   readonly uid: string;
   readonly sequence: number;
   readonly payload: CalendarInvitationPayload;

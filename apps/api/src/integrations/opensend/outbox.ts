@@ -103,6 +103,16 @@ export function createOpenSendOutboxJob(
     version: 0,
   };
 }
+export async function enqueueOpenSendOutboxJob(
+  input: CreateOpenSendOutboxJobInput,
+  repository: OpenSendOutboxRepository,
+  queue: OpenSendOutboxQueue,
+): Promise<OpenSendOutboxJob> {
+  const job = createOpenSendOutboxJob(input);
+  await repository.insert(job);
+  await queue.enqueue(job.id, 0);
+  return job;
+}
 
 export class OpenSendOutboxProcessor {
   readonly #repository: OpenSendOutboxRepository;

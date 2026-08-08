@@ -90,10 +90,19 @@ function normalizeBaseUrl(value: string): string {
     });
   }
 
-  if ((url.protocol !== "https:" && url.protocol !== "http:") || url.search || url.hash) {
+  const localHttp =
+    url.protocol === "http:" &&
+    (url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]");
+  if (
+    (url.protocol !== "https:" && !localHttp) ||
+    url.username.length > 0 ||
+    url.password.length > 0 ||
+    url.search ||
+    url.hash
+  ) {
     throw new OpenSendError(
       "CONFIGURATION_ERROR",
-      "OpenSend base URL must use HTTP or HTTPS and must not include a query or fragment.",
+      "OpenSend base URL must use HTTPS (or local HTTP) and must not include credentials, a query, or a fragment.",
       { retryable: false },
     );
   }
