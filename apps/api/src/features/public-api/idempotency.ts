@@ -69,21 +69,6 @@ export interface IdempotencyCoordinator {
   ): Promise<IdempotencyOutcome<T>>;
 }
 
-export interface LegacyIdempotencyCoordinator {
-  run<T>(scope: string, key: string, operation: () => Promise<T>): Promise<T>;
-}
-
-export type IdempotencyCoordinatorLike =
-  | IdempotencyCoordinator
-  | LegacyIdempotencyCoordinator
-  | {
-      execute<T>(input: {
-        readonly scope: string;
-        readonly key: string;
-        readonly fingerprint: string;
-        readonly operation: () => Promise<T>;
-      }): Promise<IdempotencyOutcome<T> | T>;
-    };
 
 export class IdempotencyConflictError extends PublicApiError {
   constructor() {
@@ -158,7 +143,8 @@ export class AtomicIdempotencyCoordinator implements IdempotencyCoordinator {
 
 export function stableStringify(value: unknown): string {
   if (value === null || typeof value !== "object") {
-    return JSON.stringify(value);
+    const encoded = JSON.stringify(value);
+    return encoded === undefined ? "null" : encoded;
   }
   if (Array.isArray(value)) {
     return `[${value.map((entry) => stableStringify(entry)).join(",")}]`;
@@ -182,22 +168,8 @@ export function requestFingerprint(input: {
   });
 }
 
-function isOutcome<T>(value: unknown): value is IdempotencyOutcome<T> {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "value" in value &&
-    "replayed" in value &&
-    typeof (value as { replayed?: unknown }).replayed === "boolean"
-  );
-}
-
-/**
- * Supports the canonical coordinator and the small legacy run shape used by
- * older services while keeping the router's production dependency explicit.
- */
-export async function runIdempotent<T>(
-  coordinator: IdempotencyCoordinatorLike,
+export function runIdempotent<T>(
+  coordinator: IdempotencyCoordinator,
   input: {
     readonly scope: string;
     readonly key: string;
@@ -205,16 +177,5 @@ export async function runIdempotent<T>(
     readonly operation: () => Promise<T>;
   },
 ): Promise<IdempotencyOutcome<T>> {
-  if ("execute" in coordinator && typeof coordinator.execute === "function") {
-    const result = await coordinator.execute(input);
-    return isOutcome<T>(result) ? result : { value: result as T, replayed: false };
-  }
-
-  const runner = coordinator.run as (...args: unknown[]) => Promise<unknown>;
-  if (runner.length <= 3) {
-    const result = await runner(input.scope, input.key, input.operation);
-    return isOutcome<T>(result) ? result : { value: result as T, replayed: false };
-  }
-  const result = await runner(input.scope, input.key, input.fingerprint, input.operation);
-  return isOutcome<T>(result) ? result : { value: result as T, replayed: false };
+  return coordinator.run(input.scope, input.key, input.fingerprint, input.operation);
 }

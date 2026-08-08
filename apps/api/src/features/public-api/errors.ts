@@ -76,7 +76,8 @@ export function isPublicApiError(error: unknown): error is PublicApiError {
 }
 
 export function traceIdFor(context: Pick<Context, "get" | "req">): string {
-  const contextTraceId = context.get("traceId" as never) as unknown;
+  const getVariable = context.get as unknown as (name: string) => unknown;
+  const contextTraceId = getVariable("traceId");
   if (typeof contextTraceId === "string" && contextTraceId.length > 0) {
     return contextTraceId;
   }
