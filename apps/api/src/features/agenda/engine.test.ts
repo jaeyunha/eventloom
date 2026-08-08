@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   AgendaEngine,
-  AgendaError,
-  AgendaTimeZoneError,
+  type AgendaError,
+  type AgendaTimeZoneError,
   AgendaValidationError,
   InMemoryAgendaMutationLock,
   InMemoryAgendaRepository,
@@ -65,7 +65,10 @@ function createEngine(): AgendaEngine {
   let nextId = 0;
   const clock: AgendaClock = { now: () => new Date("2026-08-08T18:00:00.000Z") };
   const idGenerator: AgendaIdGenerator = {
-    nextId: (prefix) => `${prefix}-${(nextId += 1)}`,
+    nextId: (prefix) => {
+      nextId += 1;
+      return `${prefix}-${nextId}`;
+    },
   };
   return new AgendaEngine(new InMemoryAgendaRepository(), new InMemoryAgendaMutationLock(), {
     clock,
@@ -167,6 +170,54 @@ describe("agenda validation", () => {
     ).rejects.toBeInstanceOf(AgendaValidationError);
   });
 
+  it("reports track, capacity, and travel constraints as overridable warnings", async () => {
+    const engine = createEngine();
+    await initialize(engine);
+
+    const trackReport = await engine.validateEntries("event-1", [
+      entry(
+        "entry-1",
+        "session-1",
+        "room-small",
+        "2026-08-10T09:00",
+        "2026-08-10T10:00",
+        ["track-a"],
+      ),
+      entry(
+        "entry-2",
+        "session-2",
+        "room-large",
+        "2026-08-10T09:30",
+        "2026-08-10T10:30",
+        ["track-a"],
+      ),
+    ]);
+    const travelReport = await engine.validateEntries("event-1", [
+      entry(
+        "entry-1",
+        "session-1",
+        "room-small",
+        "2026-08-10T09:00",
+        "2026-08-10T10:00",
+      ),
+      entry(
+        "entry-3",
+        "session-3",
+        "room-large",
+        "2026-08-10T10:05",
+        "2026-08-10T11:00",
+      ),
+    ]);
+
+    expect(new Set(trackReport.warnings.map((warning) => warning.kind))).toEqual(
+      new Set(["capacity", "track"]),
+    );
+    expect(new Set(travelReport.warnings.map((warning) => warning.kind))).toEqual(
+      new Set(["capacity", "travel"]),
+    );
+    expect(trackReport.conflicts).toEqual([]);
+    expect(travelReport.conflicts).toEqual([]);
+  });
   it("requires reasoned warning overrides before atomic publication", async () => {
     const engine = createEngine();
     await initialize(engine);

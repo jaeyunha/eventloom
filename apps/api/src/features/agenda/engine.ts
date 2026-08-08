@@ -20,7 +20,6 @@ import type {
   AgendaState,
   AgendaTrack,
   AgendaValidationReport,
-  AgendaWarning,
   AgendaWarningOverride,
   PublishedAgendaRevision,
 } from "./types";
