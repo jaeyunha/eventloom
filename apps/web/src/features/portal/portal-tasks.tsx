@@ -80,9 +80,10 @@ function PortalTasksContent() {
         <div className={styles.listToolbar}>
           <div>
             <h2 id="task-list-heading">Your tasks</h2>
-            <p>Tasks appear after a proposal is accepted.</p>
+            <p className={styles.toolbarDescription}>Tasks appear after a proposal is accepted.</p>
           </div>
-          <div className={styles.segmentedControl} aria-label="Filter tasks">
+          <fieldset className={styles.segmentedControl}>
+            <legend className={styles.srOnly}>Filter tasks</legend>
             {filters.map((item) => (
               <button
                 key={item.value}
@@ -93,7 +94,7 @@ function PortalTasksContent() {
                 {item.label}
               </button>
             ))}
-          </div>
+          </fieldset>
         </div>
 
         {view.tasks.length === 0 ? (

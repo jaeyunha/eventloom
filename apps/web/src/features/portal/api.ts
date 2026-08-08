@@ -86,7 +86,10 @@ export function createPortalApi(baseUrl: string, fetcher: Fetcher = fetch): Port
 
   return {
     getPortal(eventId, signal) {
-      return request<PortalView>(`/events/${routeSegment(eventId)}/portal`, { signal });
+      return request<PortalView>(
+        `/events/${routeSegment(eventId)}/portal`,
+        signal === undefined ? undefined : { signal },
+      );
     },
 
     updateBiography(input) {

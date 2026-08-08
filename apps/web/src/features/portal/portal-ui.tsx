@@ -33,7 +33,7 @@ export function PortalFrame({ children }: Readonly<{ children: ReactNode }>) {
           <span aria-hidden="true">OS</span>
           <strong>Open Sessionboard</strong>
         </Link>
-        <div className={styles.account} aria-label={`Signed in as ${displayName}`}>
+        <div className={styles.account}>
           <span className={styles.avatar} aria-hidden="true">
             {initials || "SP"}
           </span>
@@ -51,8 +51,9 @@ export function PortalFrame({ children }: Readonly<{ children: ReactNode }>) {
               <span aria-hidden="true">{item.icon}</span>
               {item.label}
               {item.label === "Tasks" && (view?.outstandingTaskCount ?? 0) > 0 ? (
-                <span className={styles.navCount} aria-label={`${view?.outstandingTaskCount} outstanding`}>
+                <span className={styles.navCount}>
                   {view?.outstandingTaskCount}
+                  <span className={styles.srOnly}> outstanding tasks</span>
                 </span>
               ) : null}
             </Link>

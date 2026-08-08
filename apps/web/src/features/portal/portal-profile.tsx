@@ -12,6 +12,7 @@ import {
   formatPortalDate,
 } from "./portal-ui";
 import styles from "./portal.module.css";
+import type { PortalProfile } from "./types";
 
 export function PortalProfilePage() {
   return (
@@ -46,7 +47,10 @@ function PortalProfileContent() {
     );
   }
 
-  async function submitBiography(event: FormEvent<HTMLFormElement>) {
+  async function submitBiography(
+    event: FormEvent<HTMLFormElement>,
+    currentProfile: PortalProfile,
+  ) {
     event.preventDefault();
     setSaved(false);
     const validation = validateBiography(biography);
@@ -55,7 +59,7 @@ function PortalProfileContent() {
       return;
     }
     setValidationError(null);
-    const didSave = await saveBiography(profile, validation.biography);
+    const didSave = await saveBiography(currentProfile, validation.biography);
     setSaved(didSave);
   }
 
@@ -111,7 +115,10 @@ function PortalProfileContent() {
               <h2 id="profile-form-heading">Edit your profile</h2>
             </div>
           </div>
-          <form className={styles.profileForm} onSubmit={(event) => void submitBiography(event)}>
+          <form
+            className={styles.profileForm}
+            onSubmit={(event) => void submitBiography(event, profile)}
+          >
             <div className={styles.readOnlyField}>
               <span>Display name</span>
               <strong>{profile.displayName}</strong>

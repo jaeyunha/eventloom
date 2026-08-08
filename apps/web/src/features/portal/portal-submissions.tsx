@@ -40,7 +40,7 @@ function PortalSubmissionsContent() {
         <div className={styles.listToolbar}>
           <div>
             <h2 id="submissions-heading">All submissions</h2>
-            <p>
+            <p className={styles.toolbarDescription}>
               {view.submissions.length} {view.submissions.length === 1 ? "proposal" : "proposals"}
             </p>
           </div>
