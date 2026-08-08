@@ -11,6 +11,8 @@ import {
   useState,
 } from "react";
 import { createPortalApi, type PortalApi, PortalApiError } from "./api";
+import { createLocalPortalDemoApi } from "./demo/api";
+import { loadPortalWithLocalDemo } from "./demo/fallback";
 import type { PortalProfile, PortalTask, PortalTaskStatus, PortalView } from "./types";
 
 interface PortalContextValue {
@@ -59,32 +61,45 @@ export function PortalProvider({ children }: Readonly<{ children: ReactNode }>) 
     () => (apiBaseUrl ? createPortalApi(apiBaseUrl) : null),
     [apiBaseUrl],
   );
+  const demoApi = useMemo<PortalApi>(() => createLocalPortalDemoApi(eventId), [eventId]);
   const [view, setView] = useState<PortalView | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [mutationError, setMutationError] = useState<string | null>(null);
   const [busyTaskIds, setBusyTaskIds] = useState<ReadonlySet<string>>(new Set());
   const [savingProfile, setSavingProfile] = useState(false);
+  const [usingDemoApi, setUsingDemoApi] = useState(false);
+  const mutationApi = api && usingDemoApi ? demoApi : api;
 
   const reload = useCallback(async () => {
-    if (!api) {
+    if (!api || !apiBaseUrl) {
+      setUsingDemoApi(false);
       setError("The speaker portal API URL is not configured.");
       setLoading(false);
       return;
     }
     setLoading(true);
     setError(null);
+    setUsingDemoApi(false);
     try {
-      setView(await api.getPortal(eventId));
+      const result = await loadPortalWithLocalDemo({
+        api,
+        demoApi,
+        apiBaseUrl,
+        eventId,
+      });
+      setUsingDemoApi(result.source === "demo");
+      setView(result.view);
     } catch (loadError) {
       setError(messageFrom(loadError));
     } finally {
       setLoading(false);
     }
-  }, [api, eventId]);
+  }, [api, apiBaseUrl, demoApi, eventId]);
 
   useEffect(() => {
-    if (!api) {
+    if (!api || !apiBaseUrl) {
+      setUsingDemoApi(false);
       setError("The speaker portal API URL is not configured.");
       setLoading(false);
       return;
@@ -92,9 +107,18 @@ export function PortalProvider({ children }: Readonly<{ children: ReactNode }>) 
     const controller = new AbortController();
     setLoading(true);
     setError(null);
-    api
-      .getPortal(eventId, controller.signal)
-      .then(setView)
+    setUsingDemoApi(false);
+    loadPortalWithLocalDemo({
+      api,
+      demoApi,
+      apiBaseUrl,
+      eventId,
+      signal: controller.signal,
+    })
+      .then((result) => {
+        setUsingDemoApi(result.source === "demo");
+        setView(result.view);
+      })
       .catch((loadError: unknown) => {
         if (!(loadError instanceof DOMException && loadError.name === "AbortError")) {
           setError(messageFrom(loadError));
@@ -106,18 +130,18 @@ export function PortalProvider({ children }: Readonly<{ children: ReactNode }>) 
         }
       });
     return () => controller.abort();
-  }, [api, eventId]);
+  }, [api, apiBaseUrl, demoApi, eventId]);
 
   const saveBiography = useCallback(
     async (profile: PortalProfile, biography: string) => {
-      if (!api) {
+      if (!mutationApi) {
         setMutationError("The speaker portal API URL is not configured.");
         return false;
       }
       setSavingProfile(true);
       setMutationError(null);
       try {
-        const updated = await api.updateBiography({
+        const updated = await mutationApi.updateBiography({
           eventId,
           participantId: profile.participantId,
           biography,
@@ -141,19 +165,19 @@ export function PortalProvider({ children }: Readonly<{ children: ReactNode }>) 
         setSavingProfile(false);
       }
     },
-    [api, eventId],
+    [eventId, mutationApi],
   );
 
   const transitionTask = useCallback(
     async (task: PortalTask, toStatus: PortalTaskStatus, note?: string) => {
-      if (!api) {
+      if (!mutationApi) {
         setMutationError("The speaker portal API URL is not configured.");
         return false;
       }
       setBusyTaskIds((current) => new Set(current).add(task.id));
       setMutationError(null);
       try {
-        const updated = await api.transitionTask({
+        const updated = await mutationApi.transitionTask({
           eventId,
           taskId: task.id,
           toStatus,
@@ -173,12 +197,12 @@ export function PortalProvider({ children }: Readonly<{ children: ReactNode }>) 
         });
       }
     },
-    [api, eventId],
+    [eventId, mutationApi],
   );
 
   const uploadTask = useCallback(
     async (task: PortalTask, file: File) => {
-      if (!api) {
+      if (!mutationApi) {
         setMutationError("The speaker portal API URL is not configured.");
         return false;
       }
@@ -190,14 +214,14 @@ export function PortalProvider({ children }: Readonly<{ children: ReactNode }>) 
       setBusyTaskIds((current) => new Set(current).add(task.id));
       setMutationError(null);
       try {
-        await api.uploadTaskFile({
+        await mutationApi.uploadTaskFile({
           eventId,
           participantId: task.participantId,
           taskId: task.id,
           kind,
           file,
         });
-        const updated = await api.transitionTask({
+        const updated = await mutationApi.transitionTask({
           eventId,
           taskId: task.id,
           toStatus: "submitted",
@@ -217,7 +241,7 @@ export function PortalProvider({ children }: Readonly<{ children: ReactNode }>) 
         });
       }
     },
-    [api, eventId],
+    [eventId, mutationApi],
   );
 
   const value = useMemo<PortalContextValue>(
