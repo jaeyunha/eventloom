@@ -203,9 +203,14 @@ describe.sequential("composed local Worker", () => {
 
   it("rejects agenda conflicts and stale writes, then publishes the immutable public projection", async () => {
     const adminBase = `/api/admin/organizations/${organizationId}/events/${eventId}/agenda`;
+    const seededPublicResponse = await runtimeRequest(`/api/public/events/${eventId}/agenda`);
+    const seededPublic = await jsonData<{ entries: unknown[] }>(seededPublicResponse);
+    expect(seededPublicResponse.status).toBe(200);
+    expect(seededPublic.entries.length).toBeGreaterThanOrEqual(2);
     const draftResponse = await runtimeRequest(`${adminBase}/draft`, {
       headers: organizerHeaders,
     });
+    expect(draftResponse.status).toBe(200);
     const draft = await jsonData<{
       eventId: string;
       version: number;
@@ -218,15 +223,24 @@ describe.sequential("composed local Worker", () => {
         endsAtLocal: string;
       }>;
     }>(draftResponse);
-    const firstEntry = draft.entries[0];
-    const secondEntry = draft.entries[1];
+    const inputEntries = draft.entries.map(
+      ({ id, sessionId, roomId, trackIds, startsAtLocal, endsAtLocal }) => ({
+        id,
+        sessionId,
+        roomId,
+        trackIds,
+        startsAtLocal,
+        endsAtLocal,
+      }),
+    );
+    const firstEntry = inputEntries[0];
+    const secondEntry = inputEntries[1];
 
-    expect(draftResponse.status).toBe(200);
     expect(draft.eventId).toBe(eventId);
-    expect(draft.entries.length).toBeGreaterThanOrEqual(2);
+    expect(inputEntries.length).toBeGreaterThanOrEqual(2);
     if (!firstEntry || !secondEntry) throw new Error("The local agenda seed needs two entries.");
 
-    const conflictingEntries = draft.entries.map((entry, index) =>
+    const conflictingEntries = inputEntries.map((entry, index) =>
       index === 1
         ? {
             ...entry,
@@ -256,7 +270,7 @@ describe.sequential("composed local Worker", () => {
 
     const updateResponse = await runtimeRequest(
       `${adminBase}/draft`,
-      jsonRequest("PUT", { expectedVersion: draft.version, entries: draft.entries }, organizerHeaders),
+      jsonRequest("PUT", { expectedVersion: draft.version, entries: inputEntries }, organizerHeaders),
     );
     const updated = await jsonData<{ version: number }>(updateResponse);
     expect(updateResponse.status).toBe(200);
@@ -319,6 +333,12 @@ describe.sequential("composed local Worker", () => {
       headers: { "idempotency-key": "runtime-cfp-unauthenticated-1", "x-request-id": traceId },
     });
     await errorResponse(unauthenticated, 401, "AUTHENTICATION_REQUIRED");
+
+    const missingIdempotencyKey = await runtimeRequest(createPath, {
+      method: "POST",
+      headers: organizerHeaders,
+    });
+    await errorResponse(missingIdempotencyKey, 400, "VALIDATION_FAILED");
 
     const createdResponse = await runtimeRequest(createPath, createInit);
     const created = await jsonData<{
