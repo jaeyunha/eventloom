@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  parseDotEnv,
   PreflightError,
+  parseDotEnv,
   validateReleaseConfiguration,
   verifyCloudflare,
   verifyForgePrivacy,
@@ -50,7 +50,10 @@ function configurationFor(environment, index) {
 
 function fixtures() {
   const configurations = Object.fromEntries(
-    environments.map((environment, index) => [environment, configurationFor(environment, index + 1)]),
+    environments.map((environment, index) => [
+      environment,
+      configurationFor(environment, index + 1),
+    ]),
   );
   const wranglerInventory = Object.fromEntries(
     environments.map((environment) => [
@@ -129,7 +132,10 @@ test("verifies Cloudflare policy scopes and exact D1, R2, and Queue resources", 
   const fetchImplementation = async (url, options) => {
     requested.push({ url: String(url), authorization: options.headers.Authorization });
     if (String(url).endsWith("/user/tokens/verify")) {
-      return jsonResponse({ success: true, result: { id: "deployment-token-id", status: "active" } });
+      return jsonResponse({
+        success: true,
+        result: { id: "deployment-token-id", status: "active" },
+      });
     }
     if (String(url).endsWith("/user/tokens/deployment-token-id")) {
       return jsonResponse({
@@ -151,7 +157,10 @@ test("verifies Cloudflare policy scopes and exact D1, R2, and Queue resources", 
       });
     }
     if (String(url).includes("/d1/database/")) {
-      return jsonResponse({ success: true, result: { uuid: wrangler.databaseId, name: wrangler.databaseName } });
+      return jsonResponse({
+        success: true,
+        result: { uuid: wrangler.databaseId, name: wrangler.databaseName },
+      });
     }
     if (String(url).includes("/r2/buckets/")) {
       return jsonResponse({ success: true, result: { name: wrangler.bucketName } });
@@ -209,12 +218,15 @@ test("requires Forge to report the exact repository as private", async () => {
     assert.equal(options.headers.Authorization, `token ${configuration.FORGE_API_TOKEN}`);
     return jsonResponse({ private: true, full_name: configuration.FORGE_REPOSITORY });
   };
-  assert.deepEqual(await verifyForgePrivacy({ configuration, fetchImplementation }), { private: true });
+  assert.deepEqual(await verifyForgePrivacy({ configuration, fetchImplementation }), {
+    private: true,
+  });
 
   await assert.rejects(
     verifyForgePrivacy({
       configuration,
-      fetchImplementation: async () => jsonResponse({ private: false, full_name: configuration.FORGE_REPOSITORY }),
+      fetchImplementation: async () =>
+        jsonResponse({ private: false, full_name: configuration.FORGE_REPOSITORY }),
     }),
     (error) => error.code === "FORGE_NOT_PRIVATE",
   );

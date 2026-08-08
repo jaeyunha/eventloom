@@ -74,7 +74,10 @@ describe("local agenda demo API", () => {
     const conflictPreview = await api.preview("evt_demo");
 
     expect(conflictPreview.conflicts).toEqual([
-      expect.objectContaining({ kind: "room", entryIds: ["entry_keynote", "entry_session_review"] }),
+      expect.objectContaining({
+        kind: "room",
+        entryIds: ["entry_keynote", "entry_session_review"],
+      }),
     ]);
     await expect(
       api.publish({ eventId: "evt_demo", expectedVersion: conflicted.draft.version }),
@@ -173,9 +176,7 @@ describe("agenda local fallback", () => {
       return Response.json({ status: "ok", environment: "local" });
     };
 
-    await expect(
-      resolveAgendaAppEnvironment(undefined, undefined, fetcher),
-    ).resolves.toBe("local");
+    await expect(resolveAgendaAppEnvironment(undefined, undefined, fetcher)).resolves.toBe("local");
     await expect(resolveAgendaAppEnvironment("production", undefined, fetcher)).resolves.toBe(
       "production",
     );
@@ -197,9 +198,7 @@ describe("agenda local fallback", () => {
       return local;
     };
 
-    await expect(
-      loadAgendaWorkspace(primary, resolveFallback, "evt_demo"),
-    ).resolves.toMatchObject({
+    await expect(loadAgendaWorkspace(primary, resolveFallback, "evt_demo")).resolves.toMatchObject({
       api: local,
       usingLocalDemo: true,
       data: { event: { id: "evt_demo" } },
@@ -231,8 +230,8 @@ describe("agenda local fallback", () => {
     }
 
     const productionApi = createAgendaDemoApi("evt_demo");
-    await expect(
-      loadAgendaWorkspace(productionApi, null, "different-event"),
-    ).rejects.toMatchObject({ status: 404 });
+    await expect(loadAgendaWorkspace(productionApi, null, "different-event")).rejects.toMatchObject(
+      { status: 404 },
+    );
   });
 });

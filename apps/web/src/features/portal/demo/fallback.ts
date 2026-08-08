@@ -1,12 +1,9 @@
-import { PortalApiError, type PortalApi } from "../api";
+import { type PortalApi, PortalApiError } from "../api";
 import type { PortalView } from "../types";
 
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
-export type LocalEnvironmentCheck = (
-  apiBaseUrl: string,
-  signal?: AbortSignal,
-) => Promise<boolean>;
+export type LocalEnvironmentCheck = (apiBaseUrl: string, signal?: AbortSignal) => Promise<boolean>;
 
 export interface PortalLoadResult {
   source: "api" | "demo";

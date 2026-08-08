@@ -20,9 +20,7 @@ describe("local public embed demo projections", () => {
     expect(agenda.entries).toHaveLength(4);
     expect(gallery.speakers).toHaveLength(3);
 
-    const publishedSpeakerNames = new Set(
-      agenda.entries.flatMap((entry) => entry.speakerNames),
-    );
+    const publishedSpeakerNames = new Set(agenda.entries.flatMap((entry) => entry.speakerNames));
     expect(gallery.speakers.map((speaker) => speaker.displayName)).toEqual(
       expect.arrayContaining([...publishedSpeakerNames]),
     );

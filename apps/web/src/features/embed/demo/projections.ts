@@ -1,8 +1,4 @@
-import {
-  getPublishedAgenda,
-  getPublishedSpeakers,
-  PublicEmbedApiError,
-} from "../api";
+import { getPublishedAgenda, getPublishedSpeakers, PublicEmbedApiError } from "../api";
 import type { PublishedAgenda, PublishedEvent, PublishedSpeakerGallery } from "../types";
 
 type PublicFetcher = NonNullable<Parameters<typeof getPublishedAgenda>[2]>;
@@ -54,7 +50,8 @@ export function createLocalDemoAgenda(eventSlug: string): PublishedAgenda {
       {
         id: "entry_panel",
         title: "Human decisions, dependable delivery",
-        summary: "Program leaders share how they keep review, communication, and publication accountable.",
+        summary:
+          "Program leaders share how they keep review, communication, and publication accountable.",
         format: "Panel",
         speakerNames: ["Morgan Lee", "Sam Rivera"],
         roomName: "Main hall",
@@ -100,7 +97,8 @@ export function createLocalDemoSpeakerGallery(eventSlug: string): PublishedSpeak
         pronouns: "she/her",
         jobTitle: "Program Director",
         organization: "Common Thread Events",
-        biography: "Avery helps program teams turn complex scheduling constraints into calm attendee experiences.",
+        biography:
+          "Avery helps program teams turn complex scheduling constraints into calm attendee experiences.",
         photoUrl: null,
         sessionIds: ["session_workshop"],
         sessionTitles: ["Designing conflict-safe schedules"],
@@ -112,10 +110,14 @@ export function createLocalDemoSpeakerGallery(eventSlug: string): PublishedSpeak
         pronouns: "he/him",
         jobTitle: "Accessibility Lead",
         organization: "Civic Stage",
-        biography: "Sam works with speakers and organizers to make event participation clear and inclusive.",
+        biography:
+          "Sam works with speakers and organizers to make event participation clear and inclusive.",
         photoUrl: null,
         sessionIds: ["session_panel", "session_clinic"],
-        sessionTitles: ["Human decisions, dependable delivery", "Accessible speaker operations clinic"],
+        sessionTitles: [
+          "Human decisions, dependable delivery",
+          "Accessible speaker operations clinic",
+        ],
         trackNames: ["Main stage", "Operations"],
       },
     ],

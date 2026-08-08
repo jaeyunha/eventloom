@@ -1,6 +1,6 @@
-import { apiErrorSchema, type ApiErrorCode } from "@open-sessionboard/contracts";
+import { type ApiErrorCode, apiErrorSchema } from "@open-sessionboard/contracts";
 import { type Context, Hono } from "hono";
-import { z, ZodError } from "zod";
+import { ZodError, z } from "zod";
 import { requireOrganizationRole } from "../auth/authorization";
 import { AuthAccessError, type UserPrincipal } from "../auth/types";
 import {

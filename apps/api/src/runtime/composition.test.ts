@@ -1,12 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { RuntimeBindings } from "./cloudflare";
 import { createLocalCfpService } from "./cfp";
+import type { RuntimeBindings } from "./cloudflare";
 import { createRuntimeApp, createRuntimeWorker } from "./composition";
-import {
-  LOCAL_API_KEY,
-  LOCAL_ORGANIZATION_ID,
-  LOCAL_SESSION_TOKEN,
-} from "./local";
+import { LOCAL_API_KEY, LOCAL_ORGANIZATION_ID, LOCAL_SESSION_TOKEN } from "./local";
 
 const localBindings: RuntimeBindings = {
   APP_ENV: "local",
@@ -22,7 +18,11 @@ describe("local runtime composition", () => {
     const app = createRuntimeApp(localBindings);
 
     const health = await app.request("/api/health", undefined, localBindings);
-    const portal = await app.request("/api/speaker/events/current/portal", undefined, localBindings);
+    const portal = await app.request(
+      "/api/speaker/events/current/portal",
+      undefined,
+      localBindings,
+    );
 
     expect(health.status).toBe(200);
     await expect(health.json()).resolves.toMatchObject({ status: "ok", environment: "local" });

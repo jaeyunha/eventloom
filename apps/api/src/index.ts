@@ -6,7 +6,6 @@ export type {
   ApiDependencies,
   EvaluationRouteDependencies,
 } from "./app";
-export { createApp };
 export type { RuntimeBindings, RuntimeConfigurationInspection } from "./runtime/cloudflare";
 export {
   D1ApiKeyAuthenticatorGateway,
@@ -25,5 +24,6 @@ export {
   LOCAL_SESSION_TOKEN,
   LOCAL_SPEAKER_ACCOUNT_ID,
 } from "./runtime/local";
+export { createApp };
 
 export default createRuntimeWorker();

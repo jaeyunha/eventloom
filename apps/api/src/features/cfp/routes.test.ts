@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { createApp } from "../../app";
 import { AuthAccessError, type AuthPrincipal } from "../auth/types";
 import type { CfpForm, EventCfp, Submission } from "./model";
-import { CfpError, type CfpService } from "./service";
 import type { CfpRouteService } from "./routes";
+import { CfpError, type CfpService } from "./service";
 
 const environment = { APP_ENV: "local", WEB_ORIGIN: "http://localhost:3000" };
 const basePath = "/api/cfp/organizations/org_1/events/event_1";

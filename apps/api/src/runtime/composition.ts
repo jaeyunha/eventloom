@@ -1,5 +1,5 @@
 import { apiErrorSchema } from "@open-sessionboard/contracts";
-import { createApp, type ApiDependencies } from "../app";
+import { type ApiDependencies, createApp } from "../app";
 import {
   createCloudflareDependencies,
   inspectProductionRuntime,

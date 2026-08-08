@@ -103,7 +103,9 @@ function conflictsFor(entries: readonly AgendaEntry[]): readonly AgendaConflict[
           message: `${left.roomName} already has a session at this time.`,
         });
       }
-      const sharedSpeakers = left.speakerNames.filter((speaker) => right.speakerNames.includes(speaker));
+      const sharedSpeakers = left.speakerNames.filter((speaker) =>
+        right.speakerNames.includes(speaker),
+      );
       if (sharedSpeakers.length > 0) {
         conflicts.push({
           id: `conflict_participant_${left.id}_${right.id}`,
@@ -262,7 +264,11 @@ export function createAgendaDemoApi(eventId: string): AgendaApi {
       (entry) => entry.sessionId === session.id && entry.id !== input.id,
     );
     if (existingForSession) {
-      throw demoError("SESSION_ALREADY_SCHEDULED", "This session is already in the draft agenda.", 409);
+      throw demoError(
+        "SESSION_ALREADY_SCHEDULED",
+        "This session is already in the draft agenda.",
+        409,
+      );
     }
     return {
       id: input.id ?? `entry_${session.id}`,
@@ -326,7 +332,11 @@ export function createAgendaDemoApi(eventId: string): AgendaApi {
         throw demoError("AGENDA_WARNING_NOT_FOUND", "The agenda warning was not found.", 404);
       }
       if (input.reason.trim().length < 3) {
-        throw demoError("AGENDA_OVERRIDE_INVALID", "Provide a reason for the warning override.", 400);
+        throw demoError(
+          "AGENDA_OVERRIDE_INVALID",
+          "Provide a reason for the warning override.",
+          400,
+        );
       }
       overrides.set(input.warningId, input.reason.trim());
       touch();
@@ -373,10 +383,7 @@ export function createLocalAgendaDemoApi(
   return appEnvironment?.trim() === "local" ? createAgendaDemoApi(eventId) : null;
 }
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-type LocalDemoApiSource =
-  | AgendaApi
-  | null
-  | ((signal?: AbortSignal) => Promise<AgendaApi | null>);
+type LocalDemoApiSource = AgendaApi | null | ((signal?: AbortSignal) => Promise<AgendaApi | null>);
 
 export async function resolveAgendaAppEnvironment(
   configuredEnvironment: string | undefined,
@@ -401,10 +408,14 @@ export async function resolveAgendaAppEnvironment(
   }
 }
 
-export function isAgendaUnavailable(error: unknown): error is AgendaApiError {
+export function isAgendaUnavailable(error: unknown): boolean {
   return (
-    error instanceof AgendaApiError &&
-    (error.status === 404 || error.status === 502 || error.status === 503 || error.status === 504)
+    error instanceof TypeError ||
+    (error instanceof AgendaApiError &&
+      (error.status === 404 ||
+        error.status === 502 ||
+        error.status === 503 ||
+        error.status === 504))
   );
 }
 

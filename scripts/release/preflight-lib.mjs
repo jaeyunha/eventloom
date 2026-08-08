@@ -65,12 +65,12 @@ function fail(code, message) {
   throw new PreflightError(code, message);
 }
 
-function valueOf(configuration, key) {
+function configValue(configuration, key) {
   return typeof configuration[key] === "string" ? configuration[key].trim() : "";
 }
 
 function assertPresent(configuration, key, environment) {
-  const value = valueOf(configuration, key);
+  const value = configValue(configuration, key);
   if (!value || PLACEHOLDER_VALUE.test(value)) {
     fail("MISSING_CONFIGURATION", `${environment} is missing a non-placeholder ${key}`);
   }
@@ -120,7 +120,13 @@ function policyPermissionNames(policy, permissionNamesById) {
   });
 }
 
-async function requestJson(fetchImplementation, url, token, provider, authorizationScheme = "Bearer") {
+async function requestJson(
+  fetchImplementation,
+  url,
+  token,
+  provider,
+  authorizationScheme = "Bearer",
+) {
   let response;
   try {
     response = await fetchImplementation(url, {
@@ -150,7 +156,7 @@ async function requestJson(fetchImplementation, url, token, provider, authorizat
 }
 
 function providerState(configuration, keys) {
-  const present = keys.filter((key) => Boolean(valueOf(configuration, key)));
+  const present = keys.filter((key) => Boolean(configValue(configuration, key)));
   if (present.length === 0) return "disabled";
   if (present.length !== keys.length) return "partial";
   return "configured";
@@ -216,7 +222,10 @@ export function parseWranglerInventory(source) {
     fail("INVALID_WRANGLER_CONFIGURATION", "Wrangler must declare exactly one Cloudflare account");
   }
   if (appEnvironments.join(",") !== ENVIRONMENTS.join(",")) {
-    fail("INVALID_WRANGLER_CONFIGURATION", "Wrangler environments are not ordered local, staging, production");
+    fail(
+      "INVALID_WRANGLER_CONFIGURATION",
+      "Wrangler environments are not ordered local, staging, production",
+    );
   }
 
   return Object.fromEntries(
@@ -255,17 +264,27 @@ export function validateReleaseConfiguration({
   const providerStates = {};
   for (const environment of ENVIRONMENTS) {
     const configuration = configurations[environment];
-    if (!configuration) fail("MISSING_CONFIGURATION", `No configuration was supplied for ${environment}`);
+    if (!configuration)
+      fail("MISSING_CONFIGURATION", `No configuration was supplied for ${environment}`);
 
     for (const key of REQUIRED_CONFIGURATION) assertPresent(configuration, key, environment);
-    if (valueOf(configuration, "APP_ENV") !== environment) {
+    if (configValue(configuration, "APP_ENV") !== environment) {
       fail("INVALID_CONFIGURATION", `${environment} APP_ENV does not match its environment`);
     }
     if (assertPresent(configuration, "BETTER_AUTH_SECRET", environment).length < 32) {
-      fail("INVALID_CONFIGURATION", `${environment} BETTER_AUTH_SECRET must be at least 32 characters`);
+      fail(
+        "INVALID_CONFIGURATION",
+        `${environment} BETTER_AUTH_SECRET must be at least 32 characters`,
+      );
     }
 
-    for (const key of ["WEB_ORIGIN", "NEXT_PUBLIC_APP_URL", "NEXT_PUBLIC_API_URL", "API_URL", "OPENSEND_API_URL"]) {
+    for (const key of [
+      "WEB_ORIGIN",
+      "NEXT_PUBLIC_APP_URL",
+      "NEXT_PUBLIC_API_URL",
+      "API_URL",
+      "OPENSEND_API_URL",
+    ]) {
       assertHttps(configuration, key, environment);
     }
     for (const key of ["AUTH_FROM_EMAIL", "SPEAKERS_FROM_EMAIL", "CALENDAR_FROM_EMAIL"]) {
@@ -279,10 +298,20 @@ export function validateReleaseConfiguration({
       const state = providerState(configuration, keys);
       providerStates[environment][provider] = state;
       if (state === "partial") {
-        fail("PARTIAL_PROVIDER_CONFIGURATION", `${environment} has partial ${provider} configuration`);
+        fail(
+          "PARTIAL_PROVIDER_CONFIGURATION",
+          `${environment} has partial ${provider} configuration`,
+        );
       }
-      if (environment === targetEnvironment && requiredProviders.includes(provider) && state !== "configured") {
-        fail("MISSING_PROVIDER_CONFIGURATION", `${targetEnvironment} requires ${provider} configuration`);
+      if (
+        environment === targetEnvironment &&
+        requiredProviders.includes(provider) &&
+        state !== "configured"
+      ) {
+        fail(
+          "MISSING_PROVIDER_CONFIGURATION",
+          `${targetEnvironment} requires ${provider} configuration`,
+        );
       }
       if (provider === "accelevents" && state === "configured") {
         assertHttps(configuration, "ACCELEVENTS_API_BASE_URL", environment);
@@ -298,7 +327,7 @@ export function validateReleaseConfiguration({
       ["R2_BUCKET_NAME", "bucketName"],
       ["QUEUE_NAME", "queueName"],
     ]) {
-      if (valueOf(configuration, configurationKey) !== wrangler[wranglerKey]) {
+      if (configValue(configuration, configurationKey) !== wrangler[wranglerKey]) {
         fail("WRANGLER_ENV_MISMATCH", `${environment} ${configurationKey} does not match Wrangler`);
       }
     }
@@ -307,7 +336,7 @@ export function validateReleaseConfiguration({
       ["R2_BUCKET_NAME", `-${environment}`],
       ["QUEUE_NAME", `-${environment}`],
     ]) {
-      if (!valueOf(configuration, key).endsWith(expected)) {
+      if (!configValue(configuration, key).endsWith(expected)) {
         fail("INVALID_ISOLATION", `${environment} ${key} must end with ${expected}`);
       }
     }
@@ -316,7 +345,7 @@ export function validateReleaseConfiguration({
   for (const key of ISOLATED_CONFIGURATION) {
     const ownersByValue = new Map();
     for (const environment of ENVIRONMENTS) {
-      const value = valueOf(configurations[environment], key);
+      const value = configValue(configurations[environment], key);
       if (!value) continue;
       const priorEnvironment = ownersByValue.get(value);
       if (priorEnvironment) {
@@ -327,13 +356,16 @@ export function validateReleaseConfiguration({
   }
 
   for (const key of ["WEB_ORIGIN", "NEXT_PUBLIC_APP_URL", "NEXT_PUBLIC_API_URL", "API_URL"]) {
-    const values = ENVIRONMENTS.map((environment) => valueOf(configurations[environment], key));
+    const values = ENVIRONMENTS.map((environment) => configValue(configurations[environment], key));
     if (new Set(values).size !== ENVIRONMENTS.length) {
       fail("INVALID_ISOLATION", `${key} must be unique across environments`);
     }
   }
 
-  if (targetEnvironment !== "local" && PLACEHOLDER_D1_ID.test(wranglerInventory[targetEnvironment].databaseId)) {
+  if (
+    targetEnvironment !== "local" &&
+    PLACEHOLDER_D1_ID.test(wranglerInventory[targetEnvironment].databaseId)
+  ) {
     fail("UNPROVISIONED_RESOURCE", `${targetEnvironment} D1 database is still a placeholder`);
   }
 
@@ -342,9 +374,13 @@ export function validateReleaseConfiguration({
 
 export async function verifyCloudflare({ configuration, wrangler, fetchImplementation = fetch }) {
   const token = assertPresent(configuration, "CLOUDFLARE_API_TOKEN", configuration.APP_ENV);
-  const auditToken = assertPresent(configuration, "CLOUDFLARE_API_AUDIT_TOKEN", configuration.APP_ENV);
+  const auditToken = assertPresent(
+    configuration,
+    "CLOUDFLARE_API_AUDIT_TOKEN",
+    configuration.APP_ENV,
+  );
   const accountId = assertPresent(configuration, "CLOUDFLARE_ACCOUNT_ID", configuration.APP_ENV);
-  const tokenKind = valueOf(configuration, "CLOUDFLARE_TOKEN_KIND") || "user";
+  const tokenKind = configValue(configuration, "CLOUDFLARE_TOKEN_KIND") || "user";
   if (!new Set(["user", "account"]).has(tokenKind)) {
     fail("INVALID_CONFIGURATION", "CLOUDFLARE_TOKEN_KIND must be user or account");
   }
@@ -375,7 +411,9 @@ export async function verifyCloudflare({ configuration, wrangler, fetchImplement
 
   let permissionNamesById = new Map();
   const hasUnnamedGroup = policies.some((policy) =>
-    (policy?.permission_groups ?? []).some((group) => typeof group === "object" && group?.id && !group?.name),
+    (policy?.permission_groups ?? []).some(
+      (group) => typeof group === "object" && group?.id && !group?.name,
+    ),
   );
   if (hasUnnamedGroup) {
     const permissions = await requestJson(
@@ -437,7 +475,7 @@ export async function verifyCloudflare({ configuration, wrangler, fetchImplement
 }
 
 export async function verifyForgePrivacy({ configuration, fetchImplementation = fetch }) {
-  const environment = valueOf(configuration, "APP_ENV") || "target";
+  const environment = configValue(configuration, "APP_ENV") || "target";
   const baseUrl = assertPresent(configuration, "FORGE_API_URL", environment).replace(/\/$/, "");
   const repository = assertPresent(configuration, "FORGE_REPOSITORY", environment);
   const token = assertPresent(configuration, "FORGE_API_TOKEN", environment);

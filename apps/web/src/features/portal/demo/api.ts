@@ -1,10 +1,5 @@
-import { PortalApiError, type PortalApi } from "../api";
-import type {
-  PortalProfile,
-  PortalTask,
-  PortalTaskStatus,
-  PortalView,
-} from "../types";
+import { type PortalApi, PortalApiError } from "../api";
+import type { PortalProfile, PortalTask, PortalTaskStatus, PortalView } from "../types";
 
 const INITIAL_TIMESTAMP = "2026-08-08T12:00:00.000Z";
 const MUTATION_TIMESTAMPS = [
@@ -172,11 +167,7 @@ function isTransitionAllowed(task: PortalTask, toStatus: PortalTaskStatus): bool
 }
 
 function notFound(): PortalApiError {
-  return new PortalApiError(
-    "NOT_FOUND",
-    "The requested speaker resource was not found.",
-    404,
-  );
+  return new PortalApiError("NOT_FOUND", "The requested speaker resource was not found.", 404);
 }
 
 function versionConflict(message: string): PortalApiError {

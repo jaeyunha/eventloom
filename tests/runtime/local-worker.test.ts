@@ -1,6 +1,6 @@
-import { apiErrorSchema, healthResponseSchema } from "../../packages/contracts/src";
 import { describe, expect, it } from "vitest";
 import worker from "../../apps/api/src/index";
+import { apiErrorSchema, healthResponseSchema } from "../../packages/contracts/src";
 
 type RuntimeBindings = {
   APP_ENV: "local" | "staging" | "production";
@@ -12,7 +12,11 @@ type RuntimeBindings = {
 };
 
 type RuntimeWorker = {
-  fetch(request: Request, bindings: RuntimeBindings, executionContext: unknown): Response | Promise<Response>;
+  fetch(
+    request: Request,
+    bindings: RuntimeBindings,
+    executionContext: unknown,
+  ): Response | Promise<Response>;
 };
 
 const traceId = "a326508b-2ef9-4a90-b57f-24af14b6092f";
@@ -139,7 +143,6 @@ describe.sequential("composed local Worker", () => {
   });
 
   it("enforces auth boundaries while exposing a useful seeded speaker portal", async () => {
-
     const unauthenticatedAgenda = await runtimeRequest(
       `/api/admin/organizations/${organizationId}/events/${eventId}/agenda/draft`,
       { headers: { "x-request-id": traceId } },
@@ -170,9 +173,8 @@ describe.sequential("composed local Worker", () => {
       `/api/v1/organizations/${organizationId}/agenda`,
       { headers: apiKeyHeaders },
     );
-    const agendaProjection = await jsonData<Array<Record<string, unknown>>>(
-      agendaProjectionResponse,
-    );
+    const agendaProjection =
+      await jsonData<Array<Record<string, unknown>>>(agendaProjectionResponse);
 
     expect(speakersResponse.status).toBe(200);
     expect(speakers.length).toBeGreaterThan(0);
@@ -270,7 +272,11 @@ describe.sequential("composed local Worker", () => {
 
     const updateResponse = await runtimeRequest(
       `${adminBase}/draft`,
-      jsonRequest("PUT", { expectedVersion: draft.version, entries: inputEntries }, organizerHeaders),
+      jsonRequest(
+        "PUT",
+        { expectedVersion: draft.version, entries: inputEntries },
+        organizerHeaders,
+      ),
     );
     const updated = await jsonData<{ version: number }>(updateResponse);
     expect(updateResponse.status).toBe(200);
@@ -370,7 +376,8 @@ describe.sequential("composed local Worker", () => {
                   answers: {
                     title: "Reliable local runtime verification",
                     format: "talk",
-                    abstract: "A complete deterministic CFP submission exercised without credentials.",
+                    abstract:
+                      "A complete deterministic CFP submission exercised without credentials.",
                   },
                 }
               : {}),

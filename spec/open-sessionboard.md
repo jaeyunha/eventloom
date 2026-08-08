@@ -260,7 +260,7 @@ Deliver a production-grade, public, open-source alternative for the Sessionboard
 - GJC-native workflows are the only supported planning, implementation, QA, and deployment path; no legacy orchestration remains.
 - After cleanup, inherited template Git history is replaced by one clean root baseline commit on `main`.
 - Forge is the sole origin and remains private until submission.
-- `README.md` is rewritten for Open Sessionboard and contains no Ralph template guidance.
+- `README.md` is rewritten for Open Sessionboard and contains no legacy template guidance.
 - Ever and the `codex-cua` skill are mandatory interaction-verification surfaces.
 
 ### Selected architecture

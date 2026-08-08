@@ -11,8 +11,8 @@ import type {
 } from "../features/auth/types";
 import { apiKeyScopes, organizationRoles } from "../features/auth/types";
 import {
-  inspectCloudflareBindings,
   type CloudflareBindings,
+  inspectCloudflareBindings,
 } from "../infrastructure/cloudflare/bindings";
 
 export type RuntimeBindings = ApiBindings &
@@ -192,7 +192,10 @@ export class D1ApiKeyAuthenticatorGateway implements D1ApiKeyGateway {
     if (scopes === null || !nonEmpty(row.id) || !nonEmpty(row.organization_id)) return null;
     const expiresAt = row.expires_at === null ? null : validDate(row.expires_at);
     const revokedAt = row.revoked_at === null ? null : validDate(row.revoked_at);
-    if ((row.expires_at !== null && expiresAt === null) || (row.revoked_at !== null && revokedAt === null)) {
+    if (
+      (row.expires_at !== null && expiresAt === null) ||
+      (row.revoked_at !== null && revokedAt === null)
+    ) {
       return null;
     }
     return {
@@ -213,7 +216,9 @@ export class D1ApiKeyAuthenticatorGateway implements D1ApiKeyGateway {
   }
 }
 
-export function inspectProductionRuntime(bindings: RuntimeBindings): RuntimeConfigurationInspection {
+export function inspectProductionRuntime(
+  bindings: RuntimeBindings,
+): RuntimeConfigurationInspection {
   const issues: string[] = [];
   const cloudflare = inspectCloudflareBindings(bindings);
   if (!cloudflare.success) issues.push(...cloudflare.issues);

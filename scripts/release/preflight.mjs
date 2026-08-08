@@ -5,9 +5,9 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   ENVIRONMENTS,
+  PreflightError,
   parseDotEnv,
   parseWranglerInventory,
-  PreflightError,
   validateReleaseConfiguration,
   verifyCloudflare,
   verifyForgePrivacy,
@@ -44,11 +44,15 @@ function parseArguments(argv) {
       const assignment = argv[index + 1] ?? "";
       index += 1;
       const separator = assignment.indexOf("=");
-      if (separator < 1) throw new PreflightError("INVALID_ARGUMENT", "--env must be environment=path");
+      if (separator < 1)
+        throw new PreflightError("INVALID_ARGUMENT", "--env must be environment=path");
       const environment = assignment.slice(0, separator);
       const path = assignment.slice(separator + 1);
       if (!ENVIRONMENTS.includes(environment) || !path) {
-        throw new PreflightError("INVALID_ARGUMENT", "--env must name local, staging, or production");
+        throw new PreflightError(
+          "INVALID_ARGUMENT",
+          "--env must name local, staging, or production",
+        );
       }
       if (options.environmentSources[environment]) {
         throw new PreflightError("INVALID_ARGUMENT", `Duplicate --env for ${environment}`);
@@ -90,14 +94,23 @@ function loadConfiguration(environment, source) {
     return parseDotEnv(readFileSync(resolve(source), "utf8"));
   } catch (error) {
     if (error instanceof PreflightError) throw error;
-    throw new PreflightError("ENV_FILE_UNREADABLE", `Could not read the ${environment} environment file`);
+    throw new PreflightError(
+      "ENV_FILE_UNREADABLE",
+      `Could not read the ${environment} environment file`,
+    );
   }
 }
 
 function addRuntimeCredentials(configuration) {
   const merged = { ...configuration };
-  for (const key of ["CLOUDFLARE_API_AUDIT_TOKEN", "FORGE_API_TOKEN", "FORGE_API_URL", "FORGE_REPOSITORY"]) {
-    if (typeof process.env[key] === "string" && process.env[key].trim()) merged[key] = process.env[key];
+  for (const key of [
+    "CLOUDFLARE_API_AUDIT_TOKEN",
+    "FORGE_API_TOKEN",
+    "FORGE_API_URL",
+    "FORGE_REPOSITORY",
+  ]) {
+    if (typeof process.env[key] === "string" && process.env[key].trim())
+      merged[key] = process.env[key];
   }
   return merged;
 }

@@ -1,3 +1,4 @@
+import type { ApiDependencies } from "../app";
 import { AgendaEngine } from "../features/agenda/engine";
 import {
   InMemoryAgendaMutationLock,
@@ -45,21 +46,21 @@ import type {
   UpdateBiographyCommand,
 } from "../features/speaker/types";
 import { InMemoryWebhookRepository } from "../integrations/webhooks/types";
-import type { ApiDependencies } from "../app";
 import { createLocalCfpService } from "./cfp";
+
 export {
   LOCAL_API_KEY,
   LOCAL_ORGANIZATION_ID,
   LOCAL_SESSION_TOKEN,
   LOCAL_SPEAKER_ACCOUNT_ID,
 } from "./constants";
+
 import {
   LOCAL_API_KEY,
   LOCAL_ORGANIZATION_ID,
   LOCAL_SESSION_TOKEN,
   LOCAL_SPEAKER_ACCOUNT_ID,
 } from "./constants";
-
 
 const SEEDED_AT = "2026-08-08T12:00:00.000Z";
 const FAR_FUTURE = new Date("2099-01-01T00:00:00.000Z");
@@ -222,14 +223,19 @@ class LocalSpeakerRepository implements SpeakerRepository {
   async getProfile(eventId: string, participantId: string) {
     this.#seed(eventId);
     return clone(
-      this.#profiles.get(eventId)?.find((profile) => profile.participantId === participantId) ?? null,
+      this.#profiles.get(eventId)?.find((profile) => profile.participantId === participantId) ??
+        null,
     );
   }
 
-  async updateBiography(command: UpdateBiographyCommand): Promise<RepositoryResult<SpeakerProfile>> {
+  async updateBiography(
+    command: UpdateBiographyCommand,
+  ): Promise<RepositoryResult<SpeakerProfile>> {
     this.#seed(command.eventId);
     const profiles = this.#profiles.get(command.eventId) ?? [];
-    const index = profiles.findIndex(({ participantId }) => participantId === command.participantId);
+    const index = profiles.findIndex(
+      ({ participantId }) => participantId === command.participantId,
+    );
     const profile = profiles[index];
     if (profile === undefined) return { ok: false, reason: "not_found" };
     if (profile.version !== command.expectedVersion) {

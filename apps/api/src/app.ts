@@ -12,7 +12,7 @@ import { z } from "zod";
 import { parseApiEnvironment } from "./env";
 import type { RequestAuthenticator } from "./features/auth/authenticator";
 import { AuthAccessError, type AuthPrincipal } from "./features/auth/types";
-import { createCfpRoutes, type CfpRouteDependencies } from "./features/cfp/routes";
+import { type CfpRouteDependencies, createCfpRoutes } from "./features/cfp/routes";
 import { createEvaluationRoutes } from "./features/evaluations/routes";
 import type { EvaluationService } from "./features/evaluations/service";
 import type { EvaluationActor } from "./features/evaluations/types";

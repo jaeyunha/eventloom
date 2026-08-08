@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { PortalApiError, type PortalApi } from "../api";
+import { type PortalApi, PortalApiError } from "../api";
 import type { PortalView } from "../types";
 import { createLocalPortalDemoApi } from "./api";
 import {
@@ -39,12 +39,7 @@ describe("local speaker portal demo adapter", () => {
       profiles: [{ displayName: "Ada Lovelace", version: 1 }],
       submissions: [{ status: "accepted" }, { status: "under_review" }],
     });
-    expect(first.tasks.map((task) => task.type)).toEqual([
-      "action",
-      "upload",
-      "upload",
-      "form",
-    ]);
+    expect(first.tasks.map((task) => task.type)).toEqual(["action", "upload", "upload", "form"]);
 
     const profile = first.profiles[0];
     expect(profile).toBeDefined();
@@ -148,11 +143,12 @@ describe("local speaker portal demo adapter", () => {
 
 describe("local speaker portal fallback", () => {
   it("reads the API APP_ENV without sending portal credentials", async () => {
-    const fetcher = vi.fn(async () =>
-      new Response(JSON.stringify({ environment: "local" }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
+    const fetcher = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ environment: "local" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
     );
 
     await expect(isLocalApiEnvironment("http://localhost:8787/", undefined, fetcher)).resolves.toBe(
