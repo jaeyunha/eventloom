@@ -1,8 +1,8 @@
 import {
-  apiErrorSchema,
-  healthResponseSchema,
   type ApiError,
+  apiErrorSchema,
   type HealthResponse,
+  healthResponseSchema,
 } from "@open-sessionboard/contracts";
 import { Hono } from "hono";
 import { cors } from "hono/cors";

@@ -11,10 +11,7 @@ test("web and API foundations run as independent healthy services", async ({ pag
   ).toBeVisible();
   await expect(page.getByRole("status")).toContainText("Foundation configured");
   await expect(page.getByText("Cloudflare Worker", { exact: true })).toBeVisible();
-  await expect(page.locator(".wordmark span")).toHaveCSS(
-    "background-color",
-    "rgb(80, 101, 232)",
-  );
+  await expect(page.locator(".wordmark span")).toHaveCSS("background-color", "rgb(80, 101, 232)");
 
   const webHealth = await request.get("/health");
   expect(webHealth.status()).toBe(200);

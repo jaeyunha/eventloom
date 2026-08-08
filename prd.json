@@ -8,7 +8,12 @@
     "build_pass": false,
     "qa_pass": false,
     "dependencies": [],
-    "steps": ["Web runs on port 3015", "API health endpoint runs independently", "Invalid or missing environment fails safely", "Requests carry trace IDs and structured errors"],
+    "steps": [
+      "Web runs on port 3015",
+      "API health endpoint runs independently",
+      "Invalid or missing environment fails safely",
+      "Requests carry trace IDs and structured errors"
+    ],
     "pages": ["/", "/api/health"]
   },
   {
@@ -20,7 +25,13 @@
     "build_pass": false,
     "qa_pass": false,
     "dependencies": ["platform-foundation"],
-    "steps": ["Magic-link login works", "Google and Microsoft providers can be configured", "Unauthorized requests return 401", "Cross-tenant access is denied", "API keys are scoped and revocable"],
+    "steps": [
+      "Magic-link login works",
+      "Google and Microsoft providers can be configured",
+      "Unauthorized requests return 401",
+      "Cross-tenant access is denied",
+      "API keys are scoped and revocable"
+    ],
     "pages": ["/login", "/admin", "/portal"]
   },
   {
@@ -32,7 +43,12 @@
     "build_pass": false,
     "qa_pass": false,
     "dependencies": ["platform-foundation"],
-    "steps": ["All core entities round-trip", "Airtable record IDs never become public IDs", "Rate limits retry safely", "Repository tests use a deterministic fake"],
+    "steps": [
+      "All core entities round-trip",
+      "Airtable record IDs never become public IDs",
+      "Rate limits retry safely",
+      "Repository tests use a deterministic fake"
+    ],
     "pages": []
   },
   {
@@ -44,7 +60,12 @@
     "build_pass": false,
     "qa_pass": false,
     "dependencies": ["auth-tenant-access", "airtable-domain-store"],
-    "steps": ["Organizer can create and edit an event", "Required and optional fields are configurable", "Submission limits and dates are enforced", "Preview matches the public form"],
+    "steps": [
+      "Organizer can create and edit an event",
+      "Required and optional fields are configurable",
+      "Submission limits and dates are enforced",
+      "Preview matches the public form"
+    ],
     "pages": ["/admin/events", "/admin/events/[eventId]/cfp"]
   },
   {
@@ -56,8 +77,22 @@
     "build_pass": false,
     "qa_pass": false,
     "dependencies": ["event-cfp-builder"],
-    "steps": ["Progress is preserved across steps", "Drafts resume without data loss", "Required validation is accessible", "Participants can be added and edited", "Review can navigate back to edit", "Submission emits one confirmation"],
-    "pages": ["/cfp/[eventSlug]", "/cfp/[eventSlug]/account", "/cfp/[eventSlug]/submission", "/cfp/[eventSlug]/participants", "/cfp/[eventSlug]/review", "/cfp/[eventSlug]/complete"]
+    "steps": [
+      "Progress is preserved across steps",
+      "Drafts resume without data loss",
+      "Required validation is accessible",
+      "Participants can be added and edited",
+      "Review can navigate back to edit",
+      "Submission emits one confirmation"
+    ],
+    "pages": [
+      "/cfp/[eventSlug]",
+      "/cfp/[eventSlug]/account",
+      "/cfp/[eventSlug]/submission",
+      "/cfp/[eventSlug]/participants",
+      "/cfp/[eventSlug]/review",
+      "/cfp/[eventSlug]/complete"
+    ]
   },
   {
     "id": "speaker-portal",
@@ -68,7 +103,13 @@
     "build_pass": false,
     "qa_pass": false,
     "dependencies": ["speaker-submission-flow", "auth-tenant-access"],
-    "steps": ["Speaker sees only owned records", "Status changes are visible", "Biography can be updated", "Accepted speakers receive tasks", "Private uploads require authorized expiring access"],
+    "steps": [
+      "Speaker sees only owned records",
+      "Status changes are visible",
+      "Biography can be updated",
+      "Accepted speakers receive tasks",
+      "Private uploads require authorized expiring access"
+    ],
     "pages": ["/portal", "/portal/submissions", "/portal/profile", "/portal/tasks"]
   },
   {
@@ -80,7 +121,14 @@
     "build_pass": false,
     "qa_pass": false,
     "dependencies": ["speaker-submission-flow", "auth-tenant-access"],
-    "steps": ["Assignments obey plan rules", "Reviewers cannot access unassigned content", "Conflicts remove access", "Rubric totals are reproducible", "Only authorized organizers decide", "AI cannot make final decisions"],
+    "steps": [
+      "Assignments obey plan rules",
+      "Reviewers cannot access unassigned content",
+      "Conflicts remove access",
+      "Rubric totals are reproducible",
+      "Only authorized organizers decide",
+      "AI cannot make final decisions"
+    ],
     "pages": ["/admin/events/[eventId]/reviews", "/review"]
   },
   {
@@ -92,7 +140,12 @@
     "build_pass": false,
     "qa_pass": false,
     "dependencies": ["auth-tenant-access", "review-evaluation"],
-    "steps": ["Correct sender identity is used", "Duplicate jobs do not duplicate mail", "Failures retry and remain observable", "Templates escape unsafe content"],
+    "steps": [
+      "Correct sender identity is used",
+      "Duplicate jobs do not duplicate mail",
+      "Failures retry and remain observable",
+      "Templates escape unsafe content"
+    ],
     "pages": ["/admin/events/[eventId]/communications"]
   },
   {
@@ -104,7 +157,13 @@
     "build_pass": false,
     "qa_pass": false,
     "dependencies": ["review-evaluation"],
-    "steps": ["Accepted sessions can be scheduled", "Speaker and room overlaps are blocked", "Concurrent writes cannot bypass conflicts", "Draft changes do not leak publicly", "Published versions remain auditable"],
+    "steps": [
+      "Accepted sessions can be scheduled",
+      "Speaker and room overlaps are blocked",
+      "Concurrent writes cannot bypass conflicts",
+      "Draft changes do not leak publicly",
+      "Published versions remain auditable"
+    ],
     "pages": ["/admin/events/[eventId]/agenda"]
   },
   {
@@ -116,7 +175,13 @@
     "build_pass": false,
     "qa_pass": false,
     "dependencies": ["agenda-scheduling", "communications"],
-    "steps": ["Initial publish sends REQUEST", "Schedule changes reuse UID and increment SEQUENCE", "Removal sends CANCEL", "DST and timezone fixtures pass", "No calendar-provider OAuth is required"],
+    "steps": [
+      "Initial publish sends REQUEST",
+      "Schedule changes reuse UID and increment SEQUENCE",
+      "Removal sends CANCEL",
+      "DST and timezone fixtures pass",
+      "No calendar-provider OAuth is required"
+    ],
     "pages": []
   },
   {
@@ -128,7 +193,12 @@
     "build_pass": false,
     "qa_pass": false,
     "dependencies": ["agenda-scheduling"],
-    "steps": ["Unpublished data is never exposed", "Embeds work responsively", "Keyboard and screen-reader navigation passes", "Public responses are cacheable and fast"],
+    "steps": [
+      "Unpublished data is never exposed",
+      "Embeds work responsively",
+      "Keyboard and screen-reader navigation passes",
+      "Public responses are cacheable and fast"
+    ],
     "pages": ["/embed/[eventSlug]/speakers", "/embed/[eventSlug]/agenda"]
   },
   {
@@ -140,7 +210,13 @@
     "build_pass": false,
     "qa_pass": false,
     "dependencies": ["airtable-domain-store", "auth-tenant-access"],
-    "steps": ["OpenAPI describes every public endpoint", "Unauthorized calls return 401", "Pagination is stable", "Idempotency prevents duplicate writes", "Webhook signatures and retries verify"],
+    "steps": [
+      "OpenAPI describes every public endpoint",
+      "Unauthorized calls return 401",
+      "Pagination is stable",
+      "Idempotency prevents duplicate writes",
+      "Webhook signatures and retries verify"
+    ],
     "pages": ["/docs/api"]
   },
   {
@@ -152,7 +228,12 @@
     "build_pass": false,
     "qa_pass": false,
     "dependencies": ["agenda-scheduling"],
-    "steps": ["Preview shows deterministic changes", "No outbound write occurs without confirmation", "Retries are idempotent", "Provider failures preserve local state"],
+    "steps": [
+      "Preview shows deterministic changes",
+      "No outbound write occurs without confirmation",
+      "Retries are idempotent",
+      "Provider failures preserve local state"
+    ],
     "pages": ["/admin/events/[eventId]/integrations/accelevents"]
   },
   {
@@ -164,7 +245,13 @@
     "build_pass": false,
     "qa_pass": false,
     "dependencies": ["platform-foundation", "auth-tenant-access"],
-    "steps": ["XSS and injection payloads are harmless", "Disallowed origins are rejected", "No secrets or stack traces leak", "Sensitive mutations are audited", "Rate limits protect public and auth routes"],
+    "steps": [
+      "XSS and injection payloads are harmless",
+      "Disallowed origins are rejected",
+      "No secrets or stack traces leak",
+      "Sensitive mutations are audited",
+      "Rate limits protect public and auth routes"
+    ],
     "pages": []
   },
   {
@@ -176,7 +263,12 @@
     "build_pass": false,
     "qa_pass": false,
     "dependencies": ["platform-foundation"],
-    "steps": ["Preview and production deployments are reproducible", "Migrations apply safely", "Secrets are provider-managed", "Health and smoke checks pass after deploy"],
+    "steps": [
+      "Preview and production deployments are reproducible",
+      "Migrations apply safely",
+      "Secrets are provider-managed",
+      "Health and smoke checks pass after deploy"
+    ],
     "pages": []
   },
   {
@@ -187,8 +279,18 @@
     "category": "quality",
     "build_pass": false,
     "qa_pass": false,
-    "dependencies": ["speaker-submission-flow", "speaker-portal", "review-evaluation", "public-embeds"],
-    "steps": ["axe has no critical violations", "Primary flows are keyboard operable", "Labels and errors are announced", "Core pages meet defined Web Vitals and API latency budgets"],
+    "dependencies": [
+      "speaker-submission-flow",
+      "speaker-portal",
+      "review-evaluation",
+      "public-embeds"
+    ],
+    "steps": [
+      "axe has no critical violations",
+      "Primary flows are keyboard operable",
+      "Labels and errors are announced",
+      "Core pages meet defined Web Vitals and API latency budgets"
+    ],
     "pages": ["/cfp/[eventSlug]", "/portal", "/admin", "/embed/[eventSlug]/agenda"]
   },
   {
@@ -199,8 +301,21 @@
     "category": "release",
     "build_pass": false,
     "qa_pass": false,
-    "dependencies": ["cloudflare-deployment", "calendar-delivery", "public-embeds", "public-api-webhooks", "accelevents-publish", "accessibility-performance"],
-    "steps": ["Checks, unit, API, security, and E2E suites pass", "Ever walkthrough passes", "codex-cua visual and interaction checks pass", "Deployed smoke test passes", "Forge remains private until every gate passes"],
+    "dependencies": [
+      "cloudflare-deployment",
+      "calendar-delivery",
+      "public-embeds",
+      "public-api-webhooks",
+      "accelevents-publish",
+      "accessibility-performance"
+    ],
+    "steps": [
+      "Checks, unit, API, security, and E2E suites pass",
+      "Ever walkthrough passes",
+      "codex-cua visual and interaction checks pass",
+      "Deployed smoke test passes",
+      "Forge remains private until every gate passes"
+    ],
     "pages": []
   }
 ]

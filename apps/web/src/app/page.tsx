@@ -49,7 +49,9 @@ export default function Home() {
           <article className="boundary-card">
             <span className="card-label">Web</span>
             <h3>Accessible interface</h3>
-            <p>Sessionboard-inspired patterns without direct access to data providers or secrets.</p>
+            <p>
+              Sessionboard-inspired patterns without direct access to data providers or secrets.
+            </p>
           </article>
           <article className="boundary-card">
             <span className="card-label">API</span>
@@ -59,7 +61,9 @@ export default function Home() {
           <article className="boundary-card">
             <span className="card-label">Authority</span>
             <h3>Airtable records</h3>
-            <p>Business data remains separate from Cloudflare operational and coordination state.</p>
+            <p>
+              Business data remains separate from Cloudflare operational and coordination state.
+            </p>
           </article>
         </div>
 
