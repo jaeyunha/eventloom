@@ -7,12 +7,8 @@ export function sanitizePlainText(value: string): string {
 }
 
 export function sanitizeRichText(value: string): string {
-  return sanitizePlainText(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
+  // CFP rich text uses a text-only storage policy so repeated autosaves stay safe and idempotent.
+  return sanitizePlainText(value).replaceAll("<", "").replaceAll(">", "");
 }
 
 function sanitizeFieldAnswers(

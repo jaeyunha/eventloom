@@ -22,7 +22,7 @@ export interface FormValidationIssue {
 }
 
 export interface EvaluatedFormState {
-  fields: Record<string, { visible: boolean; required: boolean }>;
+  fields: Record<string, { visible: boolean; required: boolean; skipped: boolean }>;
   sections: Record<string, { visible: boolean; skipped: boolean }>;
   routes: RoutingTarget[];
   matchedRuleIds: string[];
@@ -63,6 +63,7 @@ function actionTarget(action: FormRuleAction): string | undefined {
     case "show_field":
     case "hide_field":
     case "require_field":
+    case "skip_field":
       return `field:${action.fieldKey}`;
     case "show_section":
     case "hide_section":
@@ -299,7 +300,7 @@ export function evaluateFormRules(
   const fields: EvaluatedFormState["fields"] = {};
   const sections: EvaluatedFormState["sections"] = {};
   for (const field of [...form.submissionFields, ...form.participantFields]) {
-    fields[field.key] = { visible: true, required: field.required };
+    fields[field.key] = { visible: true, required: field.required, skipped: false };
   }
   for (const section of form.sections) {
     sections[section.id] = { visible: true, skipped: false };
@@ -315,30 +316,55 @@ export function evaluateFormRules(
     matchedRuleIds.push(rule.id);
     for (const action of rule.actions) {
       switch (action.type) {
-        case "show_field":
-          fields[action.fieldKey].visible = true;
+        case "show_field": {
+          const field = fields[action.fieldKey];
+          if (field) {
+            field.visible = true;
+            field.skipped = false;
+          }
           break;
-        case "hide_field":
-          fields[action.fieldKey].visible = false;
+        }
+        case "hide_field": {
+          const field = fields[action.fieldKey];
+          if (field) {
+            field.visible = false;
+          }
           break;
-        case "require_field":
-          fields[action.fieldKey].required = true;
+        }
+        case "require_field": {
+          const field = fields[action.fieldKey];
+          if (field) {
+            field.required = true;
+          }
           break;
+        }
+        case "skip_field": {
+          const field = fields[action.fieldKey];
+          if (field) {
+            field.visible = false;
+            field.skipped = true;
+          }
+          break;
+        }
         case "show_section":
           sections[action.sectionId] = { visible: true, skipped: false };
           break;
-        case "hide_section":
-          sections[action.sectionId].visible = false;
+        case "hide_section": {
+          const section = sections[action.sectionId];
+          if (section) {
+            section.visible = false;
+          }
           break;
+        }
         case "skip_section":
           sections[action.sectionId] = { visible: false, skipped: true };
           break;
         case "route":
           routes.push({
             queue: action.queue,
-            format: action.format,
-            track: action.track,
-            category: action.category,
+            ...(action.format ? { format: action.format } : {}),
+            ...(action.track ? { track: action.track } : {}),
+            ...(action.category ? { category: action.category } : {}),
             tags: action.tags,
           });
           break;
@@ -394,7 +420,15 @@ function validateFieldSet(
   for (const field of fields) {
     const fieldState = state.fields[field.key];
     const sectionState = state.sections[field.sectionId];
-    if (!fieldState.visible || !sectionState.visible || sectionState.skipped) {
+    if (!fieldState || !sectionState) {
+      continue;
+    }
+    if (
+      fieldState.skipped ||
+      !fieldState.visible ||
+      !sectionState.visible ||
+      sectionState.skipped
+    ) {
       continue;
     }
     const value = answers[field.key];

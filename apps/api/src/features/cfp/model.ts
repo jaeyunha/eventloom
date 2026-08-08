@@ -18,6 +18,7 @@ export const eventCfpSchema = z
   .object({
     id: identifierSchema,
     tenantId: identifierSchema,
+    version: z.number().int().positive(),
     slug: z
       .string()
       .trim()
@@ -109,6 +110,7 @@ export const formRuleActionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("show_field"), fieldKey: identifierSchema }),
   z.object({ type: z.literal("hide_field"), fieldKey: identifierSchema }),
   z.object({ type: z.literal("require_field"), fieldKey: identifierSchema }),
+  z.object({ type: z.literal("skip_field"), fieldKey: identifierSchema }),
   z.object({ type: z.literal("show_section"), sectionId: identifierSchema }),
   z.object({ type: z.literal("hide_section"), sectionId: identifierSchema }),
   z.object({ type: z.literal("skip_section"), sectionId: identifierSchema }),
@@ -160,9 +162,9 @@ export type CfpForm = z.infer<typeof cfpFormSchema>;
 
 export const submissionParticipantSchema = z.object({
   id: identifierSchema,
-  firstName: z.string().trim().min(1).max(100),
-  lastName: z.string().trim().min(1).max(100),
-  email: z.email(),
+  firstName: z.string().trim().max(100),
+  lastName: z.string().trim().max(100),
+  email: z.union([z.email(), z.literal("")]),
   role: z.enum(["primary", "co_speaker"]),
   biography: z.string().max(20_000).default(""),
   answers: z.record(z.string(), z.unknown()).default({}),
@@ -171,8 +173,8 @@ export type SubmissionParticipant = z.infer<typeof submissionParticipantSchema>;
 
 export const secondaryContactSchema = z.object({
   id: identifierSchema,
-  name: z.string().trim().min(1).max(200),
-  email: z.email(),
+  name: z.string().trim().max(200),
+  email: z.union([z.email(), z.literal("")]),
 });
 export type SecondaryContact = z.infer<typeof secondaryContactSchema>;
 
@@ -185,6 +187,7 @@ export const submissionSchema = z.object({
   eventId: identifierSchema,
   formId: identifierSchema,
   ownerAccountId: identifierSchema,
+  formVersion: z.number().int().positive(),
   version: z.number().int().positive(),
   status: submissionStatusSchema,
   completedSteps: z.array(submissionStepSchema).max(submissionSteps.length),
