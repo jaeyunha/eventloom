@@ -41,7 +41,7 @@ cp .env.example .env
 bun run dev
 ```
 
-The web application runs on port `3015`. The API worker is developed and deployed separately.
+The Next.js web application runs on port `3015`; the standalone Hono Worker runs on port `8787`. Their liveness endpoints are `http://localhost:3015/health` and `http://localhost:8787/api/health`. Each deployable validates only its own environment boundary and returns a structured `503` when required configuration is invalid.
 
 ## Quality gates
 

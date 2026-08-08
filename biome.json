@@ -3,12 +3,13 @@
   "files": {
     "includes": [
       "**",
-      "!!**/.next/**",
-      "!!**/dist/**",
-      "!!**/coverage/**",
-      "!!**/playwright-report/**",
-      "!!**/test-results/**",
-      "!!evidence/**"
+      "!!**/.next",
+      "!!**/.wrangler",
+      "!!**/dist",
+      "!!**/coverage",
+      "!!**/playwright-report",
+      "!!**/test-results",
+      "!!evidence"
     ]
   },
   "formatter": {
@@ -19,7 +20,7 @@
   "linter": {
     "enabled": true,
     "rules": {
-      "recommended": true
+      "preset": "recommended"
     }
   },
   "assist": {

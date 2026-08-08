@@ -8,12 +8,13 @@ const webEnvironmentSchema = z.object({
 });
 
 export type WebEnvironment = z.infer<typeof webEnvironmentSchema>;
+export type EnvironmentSource = Readonly<Record<string, string | undefined>>;
 
-export function readWebEnvironment(source: NodeJS.ProcessEnv = process.env) {
+export function readWebEnvironment(source: EnvironmentSource = process.env) {
   return webEnvironmentSchema.safeParse(source);
 }
 
-export function getInvalidEnvironmentFields(source: NodeJS.ProcessEnv = process.env) {
+export function getInvalidEnvironmentFields(source: EnvironmentSource = process.env) {
   const result = readWebEnvironment(source);
 
   if (result.success) {

@@ -25,14 +25,14 @@ export default function Home() {
           A fast, accessible workspace for conference organizers and speakers, built around
           deliberate review and conflict-safe publishing.
         </p>
-        <div className="workflow" aria-label="Program workflow">
+        <ol className="workflow" aria-label="Program workflow">
           {workflowSteps.map((step, index) => (
-            <div className="workflow-step" key={step}>
+            <li className="workflow-step" key={step}>
               <span>{index + 1}</span>
               {step}
-            </div>
+            </li>
           ))}
-        </div>
+        </ol>
       </section>
 
       <section className="foundation" id="foundation" aria-labelledby="foundation-title">
