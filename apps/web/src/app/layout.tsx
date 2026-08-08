@@ -4,10 +4,20 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: {
-    default: "Open Sessionboard",
-    template: "%s · Open Sessionboard",
+    default: "Open Sessionboard | Open program operations",
+    template: "%s | Open Sessionboard",
   },
-  description: "Fast, open program operations for conference teams and speakers.",
+  description:
+    "Open-source program operations for conference teams: collect submissions, review with care, schedule without conflicts, and publish deliberately.",
+  applicationName: "Open Sessionboard",
+  category: "conference program operations",
+  creator: "Open Sessionboard contributors",
+  keywords: [
+    "conference operations",
+    "call for speakers",
+    "program management",
+    "open source",
+  ],
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {

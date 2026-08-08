@@ -1,97 +1,224 @@
-import { getInvalidEnvironmentFields, readWebEnvironment } from "../env";
+import { ProductNavigation } from "../components/product-shell/product-navigation";
 
-const workflowSteps = ["Collect", "Review", "Schedule", "Publish"];
+const workflowSteps = [
+  {
+    number: "01",
+    label: "Collect",
+    description: "Open a clear call for speakers and keep drafts, participants, and uploads in their proper boundary.",
+  },
+  {
+    number: "02",
+    label: "Review",
+    description: "Give reviewers focused assignments while human organizers remain the final decision-makers.",
+  },
+  {
+    number: "03",
+    label: "Schedule",
+    description: "Turn accepted sessions into a versioned agenda with conflict checks before anything is published.",
+  },
+  {
+    number: "04",
+    label: "Publish",
+    description: "Release an intentional public projection of the program, not private working data.",
+  },
+] as const;
+
+const roleSurfaces = [
+  {
+    label: "For speakers",
+    title: "A calm place to submit and prepare",
+    description:
+      "Speakers can follow their submission, profile, participant, and task work without seeing organizer-only notes.",
+    href: "/portal",
+    linkLabel: "Open speaker portal",
+  },
+  {
+    label: "For organizers",
+    title: "A program desk with clear authority",
+    description:
+      "Organizers coordinate the event, make final decisions, and publish only after the program is ready to share.",
+    href: "/admin",
+    linkLabel: "Open organizer workspace",
+  },
+  {
+    label: "For reviewers",
+    title: "Focused review, accountable decisions",
+    description:
+      "Reviewers see assigned work and submit human evaluations. Assistance can summarize, but it never accepts or rejects.",
+    href: "/review",
+    linkLabel: "Open reviewer workspace",
+  },
+] as const;
 
 export default function Home() {
-  const environment = readWebEnvironment();
-  const invalidFields = environment.success ? [] : getInvalidEnvironmentFields();
-
   return (
-    <main>
-      <nav className="site-nav" aria-label="Primary navigation">
-        <a className="wordmark" href="#top" aria-label="Open Sessionboard home">
-          <span aria-hidden="true">OS</span>
-          Open Sessionboard
-        </a>
-        <a className="nav-link" href="#foundation">
-          Platform foundation
-        </a>
-      </nav>
+    <div className="home-shell">
+      <a className="skip-link" href="#main-content">
+        Skip to main content
+      </a>
+      <ProductNavigation />
 
-      <section className="hero" id="top" aria-labelledby="hero-title">
-        <div className="eyebrow">Open program operations</div>
-        <h1 id="hero-title">A clear path from call for speakers to published agenda.</h1>
-        <p className="hero-copy">
-          A fast, accessible workspace for conference organizers and speakers, built around
-          deliberate review and conflict-safe publishing.
-        </p>
-        <ol className="workflow" aria-label="Program workflow">
-          {workflowSteps.map((step, index) => (
-            <li className="workflow-step" key={step}>
-              <span>{index + 1}</span>
-              {step}
-            </li>
-          ))}
-        </ol>
-      </section>
-
-      <section className="foundation" id="foundation" aria-labelledby="foundation-title">
-        <div>
-          <div className="eyebrow">Application foundation</div>
-          <h2 id="foundation-title">Independent surfaces. Explicit boundaries.</h2>
-          <p>
-            The browser application is a dedicated Next.js deployment. Program workflows and
-            provider access belong to the standalone Cloudflare Worker API.
-          </p>
-        </div>
-
-        <div className="boundary-grid">
-          <article className="boundary-card">
-            <span className="card-label">Web</span>
-            <h3>Accessible interface</h3>
-            <p>
-              Sessionboard-inspired patterns without direct access to data providers or secrets.
+      <main className="home-main" id="main-content" tabIndex={-1}>
+        <section className="home-hero" aria-labelledby="hero-title">
+          <div className="home-hero-copy">
+            <p className="home-kicker">Open-source program operations</p>
+            <h1 id="hero-title">Move from a call for speakers to a published agenda with care.</h1>
+            <p className="home-lede">
+              Open Sessionboard brings collecting, reviewing, scheduling, and publishing into one
+              deliberate workflow for conference teams and speakers.
             </p>
-          </article>
-          <article className="boundary-card">
-            <span className="card-label">API</span>
-            <h3>Cloudflare Worker</h3>
-            <p>Hono owns validation, authorization, workflow orchestration, and integrations.</p>
-          </article>
-          <article className="boundary-card">
-            <span className="card-label">Authority</span>
-            <h3>Airtable records</h3>
-            <p>
-              Business data remains separate from Cloudflare operational and coordination state.
+            <div className="home-actions">
+              <a className="home-button home-button-primary" href="/cfp/open-sessionboard-conf">
+                Open the CFP
+              </a>
+              <a className="home-button home-button-secondary" href="/portal">
+                Visit speaker portal
+              </a>
+            </div>
+            <p className="home-note">
+              Built in the open for teams that want useful defaults, visible boundaries, and
+              people in charge of the final call. This landing page shows workflow surfaces, not
+              live event data.
             </p>
-          </article>
-        </div>
+          </div>
 
-        {environment.success ? (
-          <div className="status-banner status-ready" role="status">
-            <span className="status-dot" aria-hidden="true" />
-            <div>
-              <strong>Foundation configured</strong>
-              <span>
-                API boundary: <code>{environment.data.NEXT_PUBLIC_API_URL}</code>
+          <aside className="home-hero-card" aria-label="Workflow guardrails">
+            <div className="home-card-heading">
+              <span className="home-card-label">Workflow map</span>
+              <span className="home-card-meta">Human-led</span>
+            </div>
+            <p className="home-card-title">Four handoffs. No mystery state.</p>
+            <ol className="home-mini-workflow">
+              {workflowSteps.map((step, index) => (
+                <li className={index === 0 ? "home-mini-step home-mini-step-current" : "home-mini-step"} key={step.label}>
+                  <span className="home-mini-marker" aria-hidden="true">
+                    {step.number}
+                  </span>
+                  <span>
+                    <strong>{step.label}</strong>
+                    <small>
+                      {index === 0
+                        ? "Open the call and collect the work."
+                        : index === 1
+                          ? "Reviewers advise; people decide."
+                          : index === 2
+                            ? "Check conflicts before committing."
+                            : "Share an explicit public projection."}
+                    </small>
+                  </span>
+                </li>
+              ))}
+            </ol>
+          </aside>
+        </section>
+
+        <section className="home-section home-workflow-section" id="workflow" aria-labelledby="workflow-title">
+          <div className="home-section-heading">
+            <p className="home-kicker">The operating model</p>
+            <h2 id="workflow-title">One connected workflow, with the right person at each handoff.</h2>
+            <p>
+              The shell is intentionally straightforward: collect the material, review it with
+              care, schedule around real constraints, then publish what the audience should see.
+            </p>
+          </div>
+          <ol className="home-workflow-grid">
+            {workflowSteps.map((step) => (
+              <li className="home-workflow-card" key={step.label}>
+                <span className="home-step-number">{step.number}</span>
+                <h3>{step.label}</h3>
+                <p>{step.description}</p>
+              </li>
+            ))}
+          </ol>
+        </section>
+
+        <section className="home-section home-surfaces-section" id="workspaces" aria-labelledby="surfaces-title">
+          <div className="home-section-heading">
+            <p className="home-kicker">A surface for every role</p>
+            <h2 id="surfaces-title">Keep private work private, and make the next action obvious.</h2>
+            <p>
+              Different people need different views of the same program. Product surfaces stay
+              scoped to the role and event they serve.
+            </p>
+          </div>
+          <div className="home-role-grid">
+            {roleSurfaces.map((surface) => (
+              <article className="home-role-card" key={surface.label}>
+                <span className="home-card-label">{surface.label}</span>
+                <h3>{surface.title}</h3>
+                <p>{surface.description}</p>
+                <a className="home-inline-link" href={surface.href}>
+                  {surface.linkLabel}
+                  <span aria-hidden="true"> →</span>
+                </a>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="home-boundaries" id="boundaries" aria-labelledby="boundaries-title">
+          <div className="home-boundaries-copy">
+            <p className="home-kicker">Designed for responsible publishing</p>
+            <h2 id="boundaries-title">The public view is a projection, not the working table.</h2>
+            <p>
+              Drafts, reviewer notes, private uploads, and coordination details stay behind
+              authorization. Public speaker and agenda surfaces expose only fields an organizer
+              has explicitly published.
+            </p>
+          </div>
+          <div className="home-boundary-list">
+            <div className="home-boundary-item">
+              <span className="home-boundary-mark" aria-hidden="true">
+                01
               </span>
+              <div>
+                <h3>Human-authoritative review</h3>
+                <p>Tools may assist with summaries, but acceptance and rejection remain human decisions.</p>
+              </div>
+            </div>
+            <div className="home-boundary-item">
+              <span className="home-boundary-mark" aria-hidden="true">
+                02
+              </span>
+              <div>
+                <h3>Conflict-safe scheduling</h3>
+                <p>Agenda changes are checked and versioned before the next published calendar is made.</p>
+              </div>
+            </div>
+            <div className="home-boundary-item">
+              <span className="home-boundary-mark" aria-hidden="true">
+                03
+              </span>
+              <div>
+                <h3>Explicit public projections</h3>
+                <p>Publishing is a deliberate boundary, so private working context does not leak into embeds.</p>
+              </div>
             </div>
           </div>
-        ) : (
-          <div className="status-banner status-warning" role="status">
-            <span className="status-dot" aria-hidden="true" />
-            <div>
-              <strong>Local configuration required</strong>
-              <span>Set {invalidFields.join(", ")} before connecting the application.</span>
-            </div>
-          </div>
-        )}
-      </section>
+        </section>
 
-      <footer>
-        <span>Open Sessionboard</span>
+        <section className="home-open-source" aria-labelledby="open-source-title">
+          <div>
+            <p className="home-kicker">Open by default</p>
+            <h2 id="open-source-title">Program infrastructure should be inspectable.</h2>
+          </div>
+          <p>
+            Open Sessionboard is open-source software for teams who want to understand their
+            workflow, adapt it to their events, and keep operational decisions accountable.
+          </p>
+          <a className="home-button home-button-secondary" href="/docs/api">
+            Read the API docs
+          </a>
+        </section>
+      </main>
+
+      <footer className="home-footer">
+        <div>
+          <strong>Open Sessionboard</strong>
+          <span>Open-source program operations for conference teams.</span>
+        </div>
         <span>AGPL-3.0-or-later</span>
       </footer>
-    </main>
+    </div>
   );
 }
