@@ -13,10 +13,16 @@ export interface EvaluationRepository {
   putPlan(plan: EvaluationPlan, expectedVersion: number | null): Promise<void>;
   getAssignment(tenantId: string, assignmentId: string): Promise<EvaluationAssignment | null>;
   listAssignments(tenantId: string, planId: string): Promise<readonly EvaluationAssignment[]>;
-  putAssignment(assignment: EvaluationAssignment, expectedVersion: number | null): Promise<void>;
+  putAssignments(assignments: readonly EvaluationAssignment[]): Promise<void>;
   getReview(tenantId: string, assignmentId: string): Promise<EvaluationReview | null>;
   listReviews(tenantId: string, planId: string): Promise<readonly EvaluationReview[]>;
   putReview(review: EvaluationReview, expectedVersion: number | null): Promise<void>;
+  saveReviewDraft(
+    assignment: EvaluationAssignment,
+    expectedAssignmentVersion: number,
+    review: EvaluationReview,
+    expectedReviewVersion: number | null,
+  ): Promise<void>;
   getConflict(
     tenantId: string,
     assignmentId: string,
@@ -105,13 +111,14 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
       .map(clone);
   }
 
-  async putAssignment(
-    assignment: EvaluationAssignment,
-    expectedVersion: number | null,
-  ): Promise<void> {
-    const key = storageKey(assignment.tenantId, assignment.id);
-    assertVersion(this.#assignments.get(key)?.version ?? null, expectedVersion, "Assignment");
-    this.#assignments.set(key, clone(assignment));
+  async putAssignments(assignments: readonly EvaluationAssignment[]): Promise<void> {
+    const keys = assignments.map((assignment) => storageKey(assignment.tenantId, assignment.id));
+    if (new Set(keys).size !== keys.length || keys.some((key) => this.#assignments.has(key))) {
+      throw conflict("One or more reviewer assignments already exist.");
+    }
+    for (const assignment of assignments) {
+      this.#assignments.set(storageKey(assignment.tenantId, assignment.id), clone(assignment));
+    }
   }
 
   async getReview(tenantId: string, assignmentId: string): Promise<EvaluationReview | null> {
@@ -129,6 +136,27 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
     const key = storageKey(review.tenantId, review.assignmentId);
     assertVersion(this.#reviews.get(key)?.version ?? null, expectedVersion, "Review");
     this.#reviews.set(key, clone(review));
+  }
+  async saveReviewDraft(
+    assignment: EvaluationAssignment,
+    expectedAssignmentVersion: number,
+    review: EvaluationReview,
+    expectedReviewVersion: number | null,
+  ): Promise<void> {
+    const assignmentStorageKey = storageKey(assignment.tenantId, assignment.id);
+    const reviewStorageKey = storageKey(review.tenantId, review.assignmentId);
+    assertVersion(
+      this.#assignments.get(assignmentStorageKey)?.version ?? null,
+      expectedAssignmentVersion,
+      "Assignment",
+    );
+    assertVersion(
+      this.#reviews.get(reviewStorageKey)?.version ?? null,
+      expectedReviewVersion,
+      "Review",
+    );
+    this.#assignments.set(assignmentStorageKey, clone(assignment));
+    this.#reviews.set(reviewStorageKey, clone(review));
   }
 
   async getConflict(
