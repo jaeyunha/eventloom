@@ -26,9 +26,9 @@ describe("webhook signatures and retry safety", () => {
 
     expect(canonicalJson(left)).toBe(canonicalJson(right));
     await expect(verifyWebhookSignature(signingSecret, right, headers)).resolves.toBe(true);
-    await expect(
-      verifyWebhookSignature(signingSecret, { ...right, z: 2 }, headers),
-    ).resolves.toBe(false);
+    await expect(verifyWebhookSignature(signingSecret, { ...right, z: 2 }, headers)).resolves.toBe(
+      false,
+    );
     await expect(
       verifyWebhookSignature(signingSecret, right, { ...headers, "webhook-id": "delivery-2" }),
     ).resolves.toBe(false);

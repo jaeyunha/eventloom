@@ -3,7 +3,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { PageHeader } from "../../components/layout";
 import { Button } from "../../components/ui";
-import { createIntegrationAdminApi, IntegrationAdminApiError, type IntegrationAdminApi } from "./api";
+import {
+  createIntegrationAdminApi,
+  type IntegrationAdminApi,
+  IntegrationAdminApiError,
+} from "./api";
 import {
   AcceleventsSection,
   ApiKeysSection,
@@ -74,7 +78,9 @@ export function IntegrationAdmin({
     () => injectedApi ?? (configuredApiUrl ? createIntegrationAdminApi(configuredApiUrl) : null),
     [configuredApiUrl, injectedApi],
   );
-  const [snapshot, setSnapshot] = useState<IntegrationAdminSnapshot | null>(initialSnapshot ?? null);
+  const [snapshot, setSnapshot] = useState<IntegrationAdminSnapshot | null>(
+    initialSnapshot ?? null,
+  );
   const [preview, setPreview] = useState<AcceleventsAdminPreview | null>(initialPreview ?? null);
   const [publishResult, setPublishResult] = useState<AcceleventsPublishResult | null>(null);
   const [loading, setLoading] = useState(initialSnapshot === undefined);
@@ -169,9 +175,11 @@ export function IntegrationAdmin({
       await refreshAfter();
       return true;
     },
-    async createApiKey(input: Parameters<IntegrationAdminApi["createApiKey"]>[0] extends infer P
-      ? Omit<Extract<P, object>, "eventId">
-      : never) {
+    async createApiKey(
+      input: Parameters<IntegrationAdminApi["createApiKey"]>[0] extends infer P
+        ? Omit<Extract<P, object>, "eventId">
+        : never,
+    ) {
       if (!api) {
         setMutationError("The admin API URL is not configured.");
         return false;
@@ -199,9 +207,11 @@ export function IntegrationAdmin({
       await refreshAfter();
       return true;
     },
-    async createWebhook(input: Parameters<IntegrationAdminApi["createWebhook"]>[0] extends infer P
-      ? Omit<Extract<P, object>, "eventId">
-      : never) {
+    async createWebhook(
+      input: Parameters<IntegrationAdminApi["createWebhook"]>[0] extends infer P
+        ? Omit<Extract<P, object>, "eventId">
+        : never,
+    ) {
       if (!api) {
         setMutationError("The admin API URL is not configured.");
         return false;
@@ -320,7 +330,11 @@ export function IntegrationAdmin({
   };
 
   const base = `/admin/events/${encodeURIComponent(eventId)}/integrations`;
-  const tabs: readonly { readonly section: IntegrationSection; readonly label: string; readonly href: string }[] = [
+  const tabs: readonly {
+    readonly section: IntegrationSection;
+    readonly label: string;
+    readonly href: string;
+  }[] = [
     { section: "overview", label: "Overview", href: base },
     { section: "accelevents", label: "Accelevents", href: `${base}/accelevents` },
     { section: "api-keys", label: "API keys", href: `${base}/api-keys` },
@@ -334,13 +348,15 @@ export function IntegrationAdmin({
       <a className={styles.skipLink} href="#integration-content">
         Skip to integration settings
       </a>
-      <div className={styles.breadcrumbs} aria-label="Breadcrumb">
+      <nav className={styles.breadcrumbs} aria-label="Breadcrumb">
         <a href="/admin">Events</a>
         <span aria-hidden="true">/</span>
-        <a href={`/admin/events/${encodeURIComponent(eventId)}`}>{snapshot?.event.name ?? "Event"}</a>
+        <a href={`/admin/events/${encodeURIComponent(eventId)}`}>
+          {snapshot?.event.name ?? "Event"}
+        </a>
         <span aria-hidden="true">/</span>
         <span>Integrations</span>
-      </div>
+      </nav>
       <PageHeader
         eyebrow={<span className={styles.eyebrow}>Organizer workspace</span>}
         title={copy.title}
@@ -370,7 +386,12 @@ export function IntegrationAdmin({
               <h2>Could not save the change</h2>
               <p>{mutationError}</p>
             </div>
-            <Button type="button" variant="ghost" size="small" onClick={() => setMutationError(null)}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="small"
+              onClick={() => setMutationError(null)}
+            >
               Dismiss
             </Button>
           </div>

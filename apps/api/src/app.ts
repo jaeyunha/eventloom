@@ -9,28 +9,20 @@ import {
 import { type Context, Hono, type MiddlewareHandler } from "hono";
 import { cors } from "hono/cors";
 import { z } from "zod";
-import type { EvaluationService } from "./features/evaluations/service";
-import type { EvaluationActor } from "./features/evaluations/types";
-import { createEvaluationRoutes } from "./features/evaluations/routes";
+import { parseApiEnvironment } from "./env";
 import type { RequestAuthenticator } from "./features/auth/authenticator";
 import { AuthAccessError, type AuthPrincipal } from "./features/auth/types";
-import {
-  createPublicApiV1Routes,
-  type PublicApiRoutesOptions,
-} from "./features/public-api/routes";
-import {
-  createSpeakerRoutes,
-  type SpeakerRouteDependencies,
-} from "./features/speaker/routes";
-import { parseApiEnvironment } from "./env";
-import {
-  createWebhookSubscriptionRoutes,
-} from "./integrations/webhooks/routes";
+import { createEvaluationRoutes } from "./features/evaluations/routes";
+import type { EvaluationService } from "./features/evaluations/service";
+import type { EvaluationActor } from "./features/evaluations/types";
+import { createPublicApiV1Routes, type PublicApiRoutesOptions } from "./features/public-api/routes";
+import { createSpeakerRoutes, type SpeakerRouteDependencies } from "./features/speaker/routes";
+import { createWebhookSubscriptionRoutes } from "./integrations/webhooks/routes";
 import type { WebhookSubscriptionRepository } from "./integrations/webhooks/types";
 import {
+  type AgendaRouteDependencies,
   createAgendaAdminRoutes,
   createPublishedAgendaRoutes,
-  type AgendaRouteDependencies,
 } from "./routes/agenda";
 
 export interface ApiBindings {
@@ -114,7 +106,10 @@ function responseMessage(payload: unknown, status: number): string {
 
 async function normalizeErrorResponse(context: Context<ApiContext>): Promise<void> {
   const response = context.res;
-  if (response.status < 400 || !response.headers.get("content-type")?.includes("application/json")) {
+  if (
+    response.status < 400 ||
+    !response.headers.get("content-type")?.includes("application/json")
+  ) {
     return;
   }
 
@@ -145,7 +140,9 @@ async function normalizeErrorResponse(context: Context<ApiContext>): Promise<voi
   const headers = new Headers(response.headers);
   headers.set("content-type", "application/json; charset=UTF-8");
   context.res = new Response(
-    JSON.stringify(createError(context.get("traceId"), code, responseMessage(payload, response.status))),
+    JSON.stringify(
+      createError(context.get("traceId"), code, responseMessage(payload, response.status)),
+    ),
     { status: response.status, headers },
   );
 }
@@ -180,7 +177,11 @@ function evaluationActorMiddleware(
     const principal = context.get("authPrincipal");
     if (!principal) {
       return context.json(
-        createError(context.get("traceId"), "AUTHENTICATION_REQUIRED", "Authentication is required."),
+        createError(
+          context.get("traceId"),
+          "AUTHENTICATION_REQUIRED",
+          "Authentication is required.",
+        ),
         401,
       );
     }
@@ -212,7 +213,9 @@ function assertAuthenticationConfigured(
       dependencies.evaluations !== undefined ||
       dependencies.agenda !== undefined)
   ) {
-    throw new TypeError("Authentication must be configured before protected API routes are mounted.");
+    throw new TypeError(
+      "Authentication must be configured before protected API routes are mounted.",
+    );
   }
 }
 
@@ -233,7 +236,10 @@ export function createApp<
     await next();
     await normalizeErrorResponse(context);
 
-    context.header("content-security-policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'");
+    context.header(
+      "content-security-policy",
+      "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    );
     context.header("referrer-policy", "no-referrer");
     context.header("x-content-type-options", "nosniff");
     context.header("x-frame-options", "DENY");

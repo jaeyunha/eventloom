@@ -1,8 +1,4 @@
-import type {
-  PublicEmbedErrorResponse,
-  PublishedAgenda,
-  PublishedSpeakerGallery,
-} from "./types";
+import type { PublicEmbedErrorResponse, PublishedAgenda, PublishedSpeakerGallery } from "./types";
 
 export class PublicEmbedApiError extends Error {
   readonly code: string;

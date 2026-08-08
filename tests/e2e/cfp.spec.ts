@@ -16,7 +16,9 @@ async function selectSearchable(
 test("submitter completes the account-first CFP with two participants", async ({ page }) => {
   await page.goto("/cfp/evaluator-2026");
 
-  await expect(page.getByRole("heading", { level: 1, name: "Welcome to our event!" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Welcome to our event!" }),
+  ).toBeVisible();
   const continueButton = page.getByRole("button", { name: "Continue →" });
   await continueButton.focus();
   await page.keyboard.press("Enter");
@@ -33,7 +35,9 @@ test("submitter completes the account-first CFP with two participants", async ({
   await page.getByLabel("Title").fill("Designing calm incident response");
   await page
     .getByLabel("Description")
-    .fill("A practical, evidence-led approach to building resilient teams before an incident begins.");
+    .fill(
+      "A practical, evidence-led approach to building resilient teams before an incident begins.",
+    );
   await selectSearchable(page, "Format", "Breakout Session");
   await page.getByRole("checkbox", { name: "Leadership" }).check();
   await selectSearchable(page, "Track", "Track 2");
@@ -54,7 +58,9 @@ test("submitter completes the account-first CFP with two participants", async ({
   await page.getByRole("button", { name: "Continue to review →" }).click();
   await expect(page).toHaveURL(/\/cfp\/evaluator-2026\/review$/);
 
-  await expect(page.getByRole("heading", { level: 1, name: "Review your submission" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Review your submission" }),
+  ).toBeVisible();
   await expect(page.getByText("Designing calm incident response", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { level: 3, name: /Ada Speaker/ })).toBeVisible();
   await expect(page.getByRole("heading", { level: 3, name: /Grace Cooper/ })).toBeVisible();
@@ -70,21 +76,21 @@ test("submitter completes the account-first CFP with two participants", async ({
   await expect(page.getByRole("button", { name: "Continue to portal →" })).toBeVisible();
 
   const persistedReceipt = await page.evaluate(() => {
-    const raw = window.localStorage.getItem(
-      "open-sessionboard:cfp-draft:v1:evaluator-2026",
-    );
+    const raw = window.localStorage.getItem("open-sessionboard:cfp-draft:v1:evaluator-2026");
     return raw ? (JSON.parse(raw) as { receipt?: { id?: string } }).receipt : null;
   });
   expect(persistedReceipt?.id).toMatch(/^submission-/);
 });
 
-test("required CFP validation announces errors and focuses the first invalid field", async ({ page }) => {
+test("required CFP validation announces errors and focuses the first invalid field", async ({
+  page,
+}) => {
   await page.goto("/cfp/validation-check/account");
   await page.getByRole("button", { name: "Create account →" }).click();
 
   const errorSummary = page.getByRole("alert").filter({ hasText: "Check the highlighted fields." });
   await expect(errorSummary).toBeVisible();
-  await expect(errorSummary).toContainText("Enter a valid email address.");
+  await expect(errorSummary).toContainText("Email address is required.");
   await expect(page.getByLabel("Your Email Address:")).toBeFocused();
   await expect(page.getByLabel("Your Email Address:")).toHaveAttribute("aria-invalid", "true");
 });

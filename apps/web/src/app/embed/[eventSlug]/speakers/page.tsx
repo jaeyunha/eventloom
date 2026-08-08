@@ -15,7 +15,10 @@ interface SpeakerGalleryPageProps {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }
 
-export default async function SpeakerGalleryPage({ params, searchParams }: SpeakerGalleryPageProps) {
+export default async function SpeakerGalleryPage({
+  params,
+  searchParams,
+}: SpeakerGalleryPageProps) {
   const [{ eventSlug }, query] = await Promise.all([params, searchParams]);
   const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
   if (!apiBaseUrl) {
@@ -26,12 +29,7 @@ export default async function SpeakerGalleryPage({ params, searchParams }: Speak
     const gallery = await getPublishedSpeakers(apiBaseUrl, eventSlug);
     const theme = embedTheme(query.theme);
     return (
-      <EmbedFrame
-        event={gallery.event}
-        eventSlug={eventSlug}
-        theme={theme}
-        view="speakers"
-      >
+      <EmbedFrame event={gallery.event} eventSlug={eventSlug} theme={theme} view="speakers">
         <SpeakerGallery gallery={gallery} />
       </EmbedFrame>
     );

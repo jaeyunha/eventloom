@@ -163,7 +163,7 @@ describe("integration admin UI", () => {
     expect(markup).toContain('type="password"');
     expect(markup).toMatch(/autocomplete="off"/i);
     expect(markup).not.toContain("os_sending_secret");
-    expect(markup).not.toContain("2468\" value=");
+    expect(markup).not.toContain('2468" value=');
     expect(markup).toContain("Google or Microsoft Calendar OAuth is not required");
   });
 

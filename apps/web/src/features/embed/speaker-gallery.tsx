@@ -1,8 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { filterSpeakers, speakerInitials, uniqueSorted } from "./model";
 import styles from "./embed.module.css";
+import { filterSpeakers, speakerInitials, uniqueSorted } from "./model";
 import type { PublishedSpeakerGallery } from "./types";
 
 function safePhotoUrl(value: string | null): string | null {
@@ -44,38 +44,38 @@ export function SpeakerGallery({ gallery }: Readonly<{ gallery: PublishedSpeaker
 
       <search>
         <form className={styles.filters} onSubmit={(event) => event.preventDefault()}>
-        <label>
-          <span>Search speakers or sessions</span>
-          <input
-            type="search"
-            value={query}
-            placeholder="Search by name, company, or topic"
-            onChange={(event) => setQuery(event.target.value)}
-          />
-        </label>
-        <label>
-          <span>Track</span>
-          <select value={track} onChange={(event) => setTrack(event.target.value)}>
-            <option value="">All tracks</option>
-            {tracks.map((trackName) => (
-              <option key={trackName} value={trackName}>
-                {trackName}
-              </option>
-            ))}
-          </select>
-        </label>
-        {query || track ? (
-          <button
-            className={styles.clearButton}
-            type="button"
-            onClick={() => {
-              setQuery("");
-              setTrack("");
-            }}
-          >
-            Clear filters
-          </button>
-        ) : null}
+          <label>
+            <span>Search speakers or sessions</span>
+            <input
+              type="search"
+              value={query}
+              placeholder="Search by name, company, or topic"
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          </label>
+          <label>
+            <span>Track</span>
+            <select value={track} onChange={(event) => setTrack(event.target.value)}>
+              <option value="">All tracks</option>
+              {tracks.map((trackName) => (
+                <option key={trackName} value={trackName}>
+                  {trackName}
+                </option>
+              ))}
+            </select>
+          </label>
+          {query || track ? (
+            <button
+              className={styles.clearButton}
+              type="button"
+              onClick={() => {
+                setQuery("");
+                setTrack("");
+              }}
+            >
+              Clear filters
+            </button>
+          ) : null}
         </form>
       </search>
 
@@ -104,7 +104,9 @@ export function SpeakerGallery({ gallery }: Readonly<{ gallery: PublishedSpeaker
                   </div>
                   <div className={styles.speakerCopy}>
                     <h3>{speaker.displayName}</h3>
-                    {speaker.pronouns ? <p className={styles.pronouns}>{speaker.pronouns}</p> : null}
+                    {speaker.pronouns ? (
+                      <p className={styles.pronouns}>{speaker.pronouns}</p>
+                    ) : null}
                     {speaker.jobTitle || speaker.organization ? (
                       <p className={styles.speakerRole}>
                         {[speaker.jobTitle, speaker.organization].filter(Boolean).join(" at ")}

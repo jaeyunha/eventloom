@@ -182,7 +182,9 @@ export async function installPortalApi(
 
     if (request.method() === "PATCH" && url.pathname.includes("/profiles/")) {
       const input = request.postDataJSON() as { biography: string; expectedVersion: number };
-      const profile = view.profiles.find((candidate) => url.pathname.endsWith(candidate.participantId));
+      const profile = view.profiles.find((candidate) =>
+        url.pathname.endsWith(candidate.participantId),
+      );
       expect(profile).toBeDefined();
       expect(input.expectedVersion).toBe(profile?.version);
       if (!profile) throw new Error("Missing seeded profile");
@@ -197,7 +199,10 @@ export async function installPortalApi(
       const task = view.tasks.find((candidate) => url.pathname.includes(`/${candidate.id}/`));
       expect(task).toBeDefined();
       if (!task) throw new Error("Missing seeded task");
-      const input = request.postDataJSON() as { toStatus: PortalTaskSeed["status"]; expectedVersion: number };
+      const input = request.postDataJSON() as {
+        toStatus: PortalTaskSeed["status"];
+        expectedVersion: number;
+      };
       expect(input.expectedVersion).toBe(task.version);
       task.status = input.toStatus;
       task.version += 1;
@@ -221,7 +226,6 @@ export async function installPortalApi(
       });
       return;
     }
-
 
     await route.fulfill({
       status: 404,

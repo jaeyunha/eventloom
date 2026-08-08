@@ -13,29 +13,31 @@ test("authenticated speaker completes dependent action and upload tasks", async 
   await page.goto("/portal?event=event-evaluator");
   await expect(page.getByRole("heading", { level: 1, name: "Welcome, Ada" })).toBeVisible();
   await expect(page.getByText("1 accepted", { exact: true })).toBeVisible();
-  await expect(page.getByText("2 tasks still need your attention.")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { level: 2, name: "Prepare for the event" }),
+  ).toBeVisible();
 
-  await page.getByRole("link", { name: "View tasks" }).click();
+  await page.getByRole("link", { name: "Open all tasks" }).click();
   await expect(page).toHaveURL(/\/portal\/tasks\?event=event-evaluator$/);
-
+  await expect(page.getByText("2 tasks still need your attention.")).toBeVisible();
   const agreement = page.getByRole("article", { name: "Confirm speaker agreement" });
   const headshot = page.getByRole("article", { name: "Upload a headshot" });
   await expect(headshot.getByText("Complete a prerequisite first")).toBeVisible();
 
-  await agreement.getByRole("button", { name: "Start task" }).click();
-  await expect(agreement.getByText("In progress", { exact: true })).toBeVisible();
   await agreement.getByLabel("Completion note (optional)").fill("Agreement reviewed and accepted.");
   await agreement.getByRole("button", { name: "Mark complete" }).click();
   await expect(agreement.getByText("Completed", { exact: true })).toBeVisible();
 
   await expect(headshot.getByText("Complete a prerequisite first")).toHaveCount(0);
+  await headshot.getByRole("button", { name: "Start task" }).click();
+  await expect(headshot.getByText("In progress", { exact: true })).toBeVisible();
   await headshot.getByLabel(/Choose headshot/).setInputFiles({
     name: "ada-speaker.png",
     mimeType: "image/png",
     buffer: Buffer.from("deterministic-e2e-image"),
   });
   await expect(headshot.getByText("Submitted", { exact: true })).toBeVisible();
-  await expect(page.getByText("0 tasks still need your attention.")).toBeVisible();
+  await expect(page.getByText("1 task still needs your attention.")).toBeVisible();
 
   expect(api.view.tasks.find((task) => task.id === "task-agreement")?.status).toBe("completed");
   expect(api.view.tasks.find((task) => task.id === "task-headshot")?.status).toBe("submitted");

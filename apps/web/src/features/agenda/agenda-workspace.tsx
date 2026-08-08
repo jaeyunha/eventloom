@@ -1,7 +1,8 @@
 "use client";
 
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { AgendaApiError, createAgendaApi, type AgendaApi } from "./api";
+import styles from "./agenda.module.css";
+import { type AgendaApi, AgendaApiError, createAgendaApi } from "./api";
 import {
   agendaDays,
   conflictsForEntry,
@@ -10,7 +11,6 @@ import {
   publicationReadiness,
   warningsForEntry,
 } from "./model";
-import styles from "./agenda.module.css";
 import type {
   AgendaEntry,
   AgendaEntryInput,
@@ -67,9 +67,7 @@ function EntryForm({
   const [trackIds, setTrackIds] = useState<readonly string[]>(
     entry?.trackIds ?? (tracks[0] ? [tracks[0].id] : []),
   );
-  const [startsAtLocal, setStartsAtLocal] = useState(
-    entry?.startsAtLocal ?? `${eventStart}T09:00`,
-  );
+  const [startsAtLocal, setStartsAtLocal] = useState(entry?.startsAtLocal ?? `${eventStart}T09:00`);
   const [endsAtLocal, setEndsAtLocal] = useState(entry?.endsAtLocal ?? `${eventStart}T10:00`);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -312,7 +310,11 @@ export function AgendaBoard({
             ) : (
               <div className={styles.days}>
                 {days.map((day) => (
-                  <section key={day.date} className={styles.day} aria-labelledby={`day-${day.date}`}>
+                  <section
+                    key={day.date}
+                    className={styles.day}
+                    aria-labelledby={`day-${day.date}`}
+                  >
                     <header>
                       <h3 id={`day-${day.date}`}>{day.label}</h3>
                       <span>
@@ -321,7 +323,10 @@ export function AgendaBoard({
                     </header>
                     <ol className={styles.sessionList}>
                       {day.entries.map((entry) => {
-                        const entryConflicts = conflictsForEntry(entry.id, preview?.conflicts ?? []);
+                        const entryConflicts = conflictsForEntry(
+                          entry.id,
+                          preview?.conflicts ?? [],
+                        );
                         const entryWarnings = warningsForEntry(entry.id, preview?.warnings ?? []);
                         const hasIssues = entryConflicts.length + entryWarnings.length > 0;
                         return (
@@ -438,9 +443,15 @@ export function AgendaBoard({
               {preview ? (
                 <fieldset className={styles.diffSummary}>
                   <legend className={styles.srOnly}>Changes from published revision</legend>
-                  <span><strong>{preview.diff.added}</strong> added</span>
-                  <span><strong>{preview.diff.changed}</strong> changed</span>
-                  <span><strong>{preview.diff.removed}</strong> removed</span>
+                  <span>
+                    <strong>{preview.diff.added}</strong> added
+                  </span>
+                  <span>
+                    <strong>{preview.diff.changed}</strong> changed
+                  </span>
+                  <span>
+                    <strong>{preview.diff.removed}</strong> removed
+                  </span>
                 </fieldset>
               ) : null}
             </section>
@@ -508,7 +519,9 @@ export function AgendaBoard({
                   ))}
                 </ul>
               ) : (
-                <p className={styles.readyMessage}>Draft v{data.draft.version} is ready to publish.</p>
+                <p className={styles.readyMessage}>
+                  Draft v{data.draft.version} is ready to publish.
+                </p>
               )}
               <button
                 className={styles.publishButton}
@@ -535,7 +548,8 @@ export function AgendaBoard({
                         {revision.current ? <span>Current</span> : null}
                       </div>
                       <small>
-                        {revision.sessionCount} sessions, {formatRevisionTimestamp(revision.publishedAt)}
+                        {revision.sessionCount} sessions,{" "}
+                        {formatRevisionTimestamp(revision.publishedAt)}
                       </small>
                     </li>
                   ))}
@@ -574,7 +588,11 @@ function WarningOverrideForm({
           onChange={(event) => setReason(event.target.value)}
         />
       </label>
-      <button type="submit" className={styles.textButton} disabled={busy || reason.trim().length < 3}>
+      <button
+        type="submit"
+        className={styles.textButton}
+        disabled={busy || reason.trim().length < 3}
+      >
         Record override
       </button>
     </form>

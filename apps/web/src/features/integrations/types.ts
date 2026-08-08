@@ -1,11 +1,6 @@
 import type { ApiScope, WebhookEventType } from "@open-sessionboard/contracts";
 
-export type IntegrationSection =
-  | "overview"
-  | "accelevents"
-  | "api-keys"
-  | "webhooks"
-  | "delivery";
+export type IntegrationSection = "overview" | "accelevents" | "api-keys" | "webhooks" | "delivery";
 
 export type ConnectionState = "connected" | "degraded" | "not_configured";
 
@@ -73,7 +68,13 @@ export interface AcceleventsStatus {
   readonly credentialLastFour: string | null;
   readonly lastPublication: {
     readonly publicationId: string;
-    readonly status: "preview" | "queued" | "publishing" | "succeeded" | "partially_failed" | "failed";
+    readonly status:
+      | "preview"
+      | "queued"
+      | "publishing"
+      | "succeeded"
+      | "partially_failed"
+      | "failed";
     readonly completedAt: string | null;
     readonly errorCount: number;
   } | null;

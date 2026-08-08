@@ -99,7 +99,9 @@ export function publicationReadiness(
     reasons.push("Validate the current draft before publishing.");
   } else {
     if (preview.conflicts.length > 0) {
-      reasons.push(`Resolve ${preview.conflicts.length} hard conflict${preview.conflicts.length === 1 ? "" : "s"}.`);
+      reasons.push(
+        `Resolve ${preview.conflicts.length} hard conflict${preview.conflicts.length === 1 ? "" : "s"}.`,
+      );
     }
     const unoverriddenWarnings = preview.warnings.filter((warning) => !warning.overridden);
     if (unoverriddenWarnings.length > 0) {

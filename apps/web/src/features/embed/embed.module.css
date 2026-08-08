@@ -259,8 +259,7 @@
   place-items: center;
   overflow: hidden;
   background:
-    linear-gradient(135deg, rgb(79 94 232 / 15%), rgb(16 155 107 / 13%)),
-    var(--embed-surface-muted);
+    linear-gradient(135deg, rgb(79 94 232 / 15%), rgb(16 155 107 / 13%)), var(--embed-surface-muted);
   color: var(--embed-brand-strong);
   font-size: 2.5rem;
   font-weight: 850;

@@ -1,7 +1,12 @@
 "use client";
 
-import { apiScopes, webhookEventTypes, type ApiScope, type WebhookEventType } from "@open-sessionboard/contracts";
-import { useState, type FormEvent } from "react";
+import {
+  type ApiScope,
+  apiScopes,
+  type WebhookEventType,
+  webhookEventTypes,
+} from "@open-sessionboard/contracts";
+import { type FormEvent, useState } from "react";
 import {
   Badge,
   Button,
@@ -193,12 +198,17 @@ export function OverviewSection({ snapshot }: Readonly<{ snapshot: IntegrationAd
                 <CardTitle>Accelevents</CardTitle>
                 <StatusBadge state={snapshot.accelevents.state} />
               </div>
-              <CardDescription>Preview and explicitly publish accepted program records.</CardDescription>
+              <CardDescription>
+                Preview and explicitly publish accepted program records.
+              </CardDescription>
             </CardHeader>
             <CardContent>
-              <p className={styles.metric}>{snapshot.accelevents.accountLabel ?? "No account selected"}</p>
+              <p className={styles.metric}>
+                {snapshot.accelevents.accountLabel ?? "No account selected"}
+              </p>
               <p className={styles.muted}>
-                Last publication: {formatDate(snapshot.accelevents.lastPublication?.completedAt ?? null)}
+                Last publication:{" "}
+                {formatDate(snapshot.accelevents.lastPublication?.completedAt ?? null)}
               </p>
             </CardContent>
           </Card>
@@ -210,10 +220,14 @@ export function OverviewSection({ snapshot }: Readonly<{ snapshot: IntegrationAd
                 <CardTitle>Email &amp; calendar</CardTitle>
                 <StatusBadge state={deliveryState} />
               </div>
-              <CardDescription>OpenSend delivery and provider-neutral calendar invitations.</CardDescription>
+              <CardDescription>
+                OpenSend delivery and provider-neutral calendar invitations.
+              </CardDescription>
             </CardHeader>
             <CardContent>
-              <p className={styles.metric}>{snapshot.delivery.openSend.deliveredLast24Hours} delivered</p>
+              <p className={styles.metric}>
+                {snapshot.delivery.openSend.deliveredLast24Hours} delivered
+              </p>
               <p className={styles.muted}>in the last 24 hours</p>
             </CardContent>
           </Card>
@@ -227,7 +241,9 @@ export function OverviewSection({ snapshot }: Readonly<{ snapshot: IntegrationAd
                   {activeKeys > 0 ? "Active" : "None"}
                 </Badge>
               </div>
-              <CardDescription>Scoped credentials for tenant-owned public API access.</CardDescription>
+              <CardDescription>
+                Scoped credentials for tenant-owned public API access.
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <p className={styles.metric}>{activeKeys}</p>
@@ -290,7 +306,8 @@ export function AcceleventsSection({
               <StatusBadge state={snapshot.accelevents.state} />
             </div>
             <CardDescription>
-              Outbound only. Accelevents data is read for diffing and never copied back into Airtable.
+              Outbound only. Accelevents data is read for diffing and never copied back into
+              Airtable.
             </CardDescription>
           </CardHeader>
           <CardContent className={styles.formStack}>
@@ -316,7 +333,9 @@ export function AcceleventsSection({
         <Card>
           <CardHeader>
             <CardTitle>Publication guardrail</CardTitle>
-            <CardDescription>Every publication is tied to one immutable agenda revision.</CardDescription>
+            <CardDescription>
+              Every publication is tied to one immutable agenda revision.
+            </CardDescription>
           </CardHeader>
           <CardContent>
             <dl className={styles.definitionList}>
@@ -326,7 +345,9 @@ export function AcceleventsSection({
               </div>
               <div>
                 <dt>Last result</dt>
-                <dd>{snapshot.accelevents.lastPublication?.status.replace("_", " ") ?? "Not yet"}</dd>
+                <dd>
+                  {snapshot.accelevents.lastPublication?.status.replace("_", " ") ?? "Not yet"}
+                </dd>
               </div>
               <div>
                 <dt>Record errors</dt>
@@ -359,8 +380,8 @@ export function AcceleventsSection({
               </Badge>
             </div>
             <CardDescription>
-              Snapshot {preview.snapshotHash.slice(0, 12)}… from {formatDate(preview.createdAt)}. A fresh
-              preview is required if the agenda changes.
+              Snapshot {preview.snapshotHash.slice(0, 12)}… from {formatDate(preview.createdAt)}. A
+              fresh preview is required if the agenda changes.
             </CardDescription>
           </CardHeader>
           <CardContent className={styles.sectionStack}>
@@ -420,7 +441,9 @@ export function AcceleventsSection({
                           {operationPresentation[record.operation].label}
                         </Badge>
                       </td>
-                      <td>{record.changedFields.length > 0 ? record.changedFields.join(", ") : "—"}</td>
+                      <td>
+                        {record.changedFields.length > 0 ? record.changedFields.join(", ") : "—"}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -453,7 +476,9 @@ export function AcceleventsSection({
 
       {publishResult ? (
         <div
-          className={publishResult.status === "succeeded" ? styles.successPanel : styles.warningPanel}
+          className={
+            publishResult.status === "succeeded" ? styles.successPanel : styles.warningPanel
+          }
           role="status"
           aria-live="polite"
         >
@@ -463,8 +488,8 @@ export function AcceleventsSection({
               : "Publication completed with errors"}
           </h2>
           <p>
-            {publishResult.created} created, {publishResult.updated} updated, and {publishResult.unchanged}{" "}
-            unchanged at {formatDate(publishResult.completedAt)}.
+            {publishResult.created} created, {publishResult.updated} updated, and{" "}
+            {publishResult.unchanged} unchanged at {formatDate(publishResult.completedAt)}.
           </p>
           {publishResult.errors.length > 0 ? (
             <>
@@ -530,7 +555,8 @@ export function ApiKeysSection({
         <CardHeader>
           <CardTitle>Create a scoped API key</CardTitle>
           <CardDescription>
-            Select only the permissions this client needs. The full key is displayed once after creation.
+            Select only the permissions this client needs. The full key is displayed once after
+            creation.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -538,7 +564,13 @@ export function ApiKeysSection({
             <div className={styles.formGrid}>
               <Field label="Key name" name="api-key-label" required>
                 {(control) => (
-                  <Input {...control} name="label" maxLength={100} placeholder="Agenda export" required />
+                  <Input
+                    {...control}
+                    name="label"
+                    maxLength={100}
+                    placeholder="Agenda export"
+                    required
+                  />
                 )}
               </Field>
               <Field
@@ -574,7 +606,9 @@ export function ApiKeysSection({
       <Card flat>
         <CardHeader>
           <CardTitle>API keys</CardTitle>
-          <CardDescription>Key material is never displayed after the initial creation response.</CardDescription>
+          <CardDescription>
+            Key material is never displayed after the initial creation response.
+          </CardDescription>
         </CardHeader>
         <CardContent>
           {keys.length === 0 ? (
@@ -589,7 +623,9 @@ export function ApiKeysSection({
                     <th scope="col">Permissions</th>
                     <th scope="col">Last used</th>
                     <th scope="col">Status</th>
-                    <th scope="col"><span className={styles.srOnly}>Actions</span></th>
+                    <th scope="col">
+                      <span className={styles.srOnly}>Actions</span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -597,7 +633,9 @@ export function ApiKeysSection({
                     <tr key={key.id}>
                       <td>
                         <strong>{key.label}</strong>
-                        <small><code>{key.prefix}••••••••</code></small>
+                        <small>
+                          <code>{key.prefix}••••••••</code>
+                        </small>
                       </td>
                       <td>{key.scopes.join(", ")}</td>
                       <td>{formatDate(key.lastUsedAt)}</td>
@@ -685,7 +723,8 @@ export function WebhooksSection({
         <CardHeader>
           <CardTitle>Add a webhook endpoint</CardTitle>
           <CardDescription>
-            HTTPS deliveries include a timestamped HMAC signature. The signing secret is displayed once.
+            HTTPS deliveries include a timestamped HMAC signature. The signing secret is displayed
+            once.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -744,7 +783,9 @@ export function WebhooksSection({
               <Card key={webhook.id}>
                 <CardHeader>
                   <div className={styles.cardTitleRow}>
-                    <CardTitle><code>{webhook.endpointUrl}</code></CardTitle>
+                    <CardTitle>
+                      <code>{webhook.endpointUrl}</code>
+                    </CardTitle>
                     <Badge variant={webhook.active ? "success" : "outline"}>
                       {webhook.active ? "Active" : "Paused"}
                     </Badge>
@@ -763,7 +804,9 @@ export function WebhooksSection({
                     </div>
                     <div>
                       <dt>Delivery</dt>
-                      <dd><Badge variant={delivery.variant}>{delivery.label}</Badge></dd>
+                      <dd>
+                        <Badge variant={delivery.variant}>{delivery.label}</Badge>
+                      </dd>
                     </div>
                     {webhook.lastDelivery?.responseStatus ? (
                       <div>
@@ -870,7 +913,8 @@ export function DeliverySection({
               <StatusBadge state={calendar.state} />
             </div>
             <CardDescription>
-              RFC 5545 invitations are attached to email. Google or Microsoft Calendar OAuth is not required.
+              RFC 5545 invitations are attached to email. Google or Microsoft Calendar OAuth is not
+              required.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -917,7 +961,11 @@ export function DeliverySection({
                         : "warning"
                   }
                 >
-                  {sender.status === "verified" ? "Verified" : sender.status === "failed" ? "Failed" : "Pending"}
+                  {sender.status === "verified"
+                    ? "Verified"
+                    : sender.status === "failed"
+                      ? "Failed"
+                      : "Pending"}
                 </Badge>
               </li>
             ))}

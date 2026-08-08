@@ -4,22 +4,26 @@ const workflowSteps = [
   {
     number: "01",
     label: "Collect",
-    description: "Open a clear call for speakers and keep drafts, participants, and uploads in their proper boundary.",
+    description:
+      "Open a clear call for speakers and keep drafts, participants, and uploads in their proper boundary.",
   },
   {
     number: "02",
     label: "Review",
-    description: "Give reviewers focused assignments while human organizers remain the final decision-makers.",
+    description:
+      "Give reviewers focused assignments while human organizers remain the final decision-makers.",
   },
   {
     number: "03",
     label: "Schedule",
-    description: "Turn accepted sessions into a versioned agenda with conflict checks before anything is published.",
+    description:
+      "Turn accepted sessions into a versioned agenda with conflict checks before anything is published.",
   },
   {
     number: "04",
     label: "Publish",
-    description: "Release an intentional public projection of the program, not private working data.",
+    description:
+      "Release an intentional public projection of the program, not private working data.",
   },
 ] as const;
 
@@ -76,9 +80,9 @@ export default function Home() {
               </a>
             </div>
             <p className="home-note">
-              Built in the open for teams that want useful defaults, visible boundaries, and
-              people in charge of the final call. This landing page shows workflow surfaces, not
-              live event data.
+              Built in the open for teams that want useful defaults, visible boundaries, and people
+              in charge of the final call. This landing page shows workflow surfaces, not live event
+              data.
             </p>
           </div>
 
@@ -90,7 +94,12 @@ export default function Home() {
             <p className="home-card-title">Four handoffs. No mystery state.</p>
             <ol className="home-mini-workflow">
               {workflowSteps.map((step, index) => (
-                <li className={index === 0 ? "home-mini-step home-mini-step-current" : "home-mini-step"} key={step.label}>
+                <li
+                  className={
+                    index === 0 ? "home-mini-step home-mini-step-current" : "home-mini-step"
+                  }
+                  key={step.label}
+                >
                   <span className="home-mini-marker" aria-hidden="true">
                     {step.number}
                   </span>
@@ -112,13 +121,19 @@ export default function Home() {
           </aside>
         </section>
 
-        <section className="home-section home-workflow-section" id="workflow" aria-labelledby="workflow-title">
+        <section
+          className="home-section home-workflow-section"
+          id="workflow"
+          aria-labelledby="workflow-title"
+        >
           <div className="home-section-heading">
             <p className="home-kicker">The operating model</p>
-            <h2 id="workflow-title">One connected workflow, with the right person at each handoff.</h2>
+            <h2 id="workflow-title">
+              One connected workflow, with the right person at each handoff.
+            </h2>
             <p>
-              The shell is intentionally straightforward: collect the material, review it with
-              care, schedule around real constraints, then publish what the audience should see.
+              The shell is intentionally straightforward: collect the material, review it with care,
+              schedule around real constraints, then publish what the audience should see.
             </p>
           </div>
           <ol className="home-workflow-grid">
@@ -132,10 +147,16 @@ export default function Home() {
           </ol>
         </section>
 
-        <section className="home-section home-surfaces-section" id="workspaces" aria-labelledby="surfaces-title">
+        <section
+          className="home-section home-surfaces-section"
+          id="workspaces"
+          aria-labelledby="surfaces-title"
+        >
           <div className="home-section-heading">
             <p className="home-kicker">A surface for every role</p>
-            <h2 id="surfaces-title">Keep private work private, and make the next action obvious.</h2>
+            <h2 id="surfaces-title">
+              Keep private work private, and make the next action obvious.
+            </h2>
             <p>
               Different people need different views of the same program. Product surfaces stay
               scoped to the role and event they serve.
@@ -162,8 +183,8 @@ export default function Home() {
             <h2 id="boundaries-title">The public view is a projection, not the working table.</h2>
             <p>
               Drafts, reviewer notes, private uploads, and coordination details stay behind
-              authorization. Public speaker and agenda surfaces expose only fields an organizer
-              has explicitly published.
+              authorization. Public speaker and agenda surfaces expose only fields an organizer has
+              explicitly published.
             </p>
           </div>
           <div className="home-boundary-list">
@@ -173,7 +194,10 @@ export default function Home() {
               </span>
               <div>
                 <h3>Human-authoritative review</h3>
-                <p>Tools may assist with summaries, but acceptance and rejection remain human decisions.</p>
+                <p>
+                  Tools may assist with summaries, but acceptance and rejection remain human
+                  decisions.
+                </p>
               </div>
             </div>
             <div className="home-boundary-item">
@@ -182,7 +206,10 @@ export default function Home() {
               </span>
               <div>
                 <h3>Conflict-safe scheduling</h3>
-                <p>Agenda changes are checked and versioned before the next published calendar is made.</p>
+                <p>
+                  Agenda changes are checked and versioned before the next published calendar is
+                  made.
+                </p>
               </div>
             </div>
             <div className="home-boundary-item">
@@ -191,7 +218,10 @@ export default function Home() {
               </span>
               <div>
                 <h3>Explicit public projections</h3>
-                <p>Publishing is a deliberate boundary, so private working context does not leak into embeds.</p>
+                <p>
+                  Publishing is a deliberate boundary, so private working context does not leak into
+                  embeds.
+                </p>
               </div>
             </div>
           </div>

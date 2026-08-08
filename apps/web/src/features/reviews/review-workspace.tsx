@@ -286,14 +286,18 @@ function AuthorityNotice() {
         <h2 id="human-authority-title">Human authority is required</h2>
         <p>
           AI suggestions never count and never decide an outcome; they remain advisory until a human
-          reviewer confirms or edits every score, and a human organizer confirms each final decision.
+          reviewer confirms or edits every score, and a human organizer confirms each final
+          decision.
         </p>
       </div>
     </aside>
   );
 }
 
-function ReviewNavigation({ eventId, mode }: Readonly<{ eventId: string; mode: ReviewWorkspaceMode }>) {
+function ReviewNavigation({
+  eventId,
+  mode,
+}: Readonly<{ eventId: string; mode: ReviewWorkspaceMode }>) {
   return (
     <nav className={styles.reviewNavigation} aria-label="Review workspace">
       <Link
@@ -333,13 +337,11 @@ function OrganizerWorkspace({ seed }: Readonly<{ seed: ReviewPlanSeed }>) {
       </a>
       <header className={styles.workspaceHeader}>
         <div>
-          <p className={styles.eyebrow}>
-            {seed.eventName} · organizer review
-          </p>
+          <p className={styles.eyebrow}>{seed.eventName} · organizer review</p>
           <h1>Evaluation plan</h1>
           <p className={styles.headerDescription}>
-            Configure rounds, monitor reviewer coverage, and record the committee&apos;s human-approved
-            decisions for <strong>{seed.planName}</strong>.
+            Configure rounds, monitor reviewer coverage, and record the committee&apos;s
+            human-approved decisions for <strong>{seed.planName}</strong>.
           </p>
         </div>
         <div className={styles.headerSide}>
@@ -392,8 +394,13 @@ function OrganizerWorkspace({ seed }: Readonly<{ seed: ReviewPlanSeed }>) {
             </article>
             <article className={styles.summaryCard}>
               <span className={styles.cardLabel}>Assignment rule</span>
-              <strong className={styles.cardValue}>{seed.assignmentRule.reviewsPerSubmission} reviews</strong>
-              <p>per submission · {seed.assignmentRule.maxAssignmentsPerReviewer} maximum per reviewer</p>
+              <strong className={styles.cardValue}>
+                {seed.assignmentRule.reviewsPerSubmission} reviews
+              </strong>
+              <p>
+                per submission · {seed.assignmentRule.maxAssignmentsPerReviewer} maximum per
+                reviewer
+              </p>
             </article>
           </div>
         </section>
@@ -411,10 +418,14 @@ function OrganizerWorkspace({ seed }: Readonly<{ seed: ReviewPlanSeed }>) {
               <article className={styles.roundCard} key={round.id}>
                 <div className={styles.roundCardHeader}>
                   <div>
-                    <span className={styles.roundNumber}>Round {round.id === "round-initial" ? "1" : "2"}</span>
+                    <span className={styles.roundNumber}>
+                      Round {round.id === "round-initial" ? "1" : "2"}
+                    </span>
                     <h3>{round.name}</h3>
                   </div>
-                  <span className={`${styles.statusBadge} ${round.status === "open" ? styles.statusOpen : styles.statusScheduled}`}>
+                  <span
+                    className={`${styles.statusBadge} ${round.status === "open" ? styles.statusOpen : styles.statusScheduled}`}
+                  >
                     <span aria-hidden="true" />
                     {formatRoundStatus(round.status)}
                   </span>
@@ -429,7 +440,9 @@ function OrganizerWorkspace({ seed }: Readonly<{ seed: ReviewPlanSeed }>) {
                     <dd>{round.closesAt}</dd>
                   </div>
                 </dl>
-                <p className={styles.roundRubric}>{round.rubric.name} · {round.rubric.criteria.length} criteria</p>
+                <p className={styles.roundRubric}>
+                  {round.rubric.name} · {round.rubric.criteria.length} criteria
+                </p>
                 <ProgressBar label={`${round.name} completion`} value={round.completionPercent} />
               </article>
             ))}
@@ -462,7 +475,9 @@ function OrganizerWorkspace({ seed }: Readonly<{ seed: ReviewPlanSeed }>) {
                       <strong>{criterion.label}</strong>
                       <span>{criterion.description}</span>
                     </th>
-                    <td>{criterion.minimum}–{criterion.maximum}</td>
+                    <td>
+                      {criterion.minimum}–{criterion.maximum}
+                    </td>
                     <td>{criterion.weight}%</td>
                     <td>{criterion.required ? "Required" : "Optional"}</td>
                   </tr>
@@ -471,8 +486,8 @@ function OrganizerWorkspace({ seed }: Readonly<{ seed: ReviewPlanSeed }>) {
             </table>
           </div>
           <p className={styles.tableNote}>
-            Weighted aggregate scores include only scores that a human reviewer has confirmed or edited;
-            AI-prefilled values remain uncounted until then.
+            Weighted aggregate scores include only scores that a human reviewer has confirmed or
+            edited; AI-prefilled values remain uncounted until then.
           </p>
         </section>
 
@@ -488,17 +503,24 @@ function OrganizerWorkspace({ seed }: Readonly<{ seed: ReviewPlanSeed }>) {
             <div className={styles.progressPanel}>
               <ProgressBar label="Submitted reviews" value={seed.progress.completionPercent} />
               <p className={styles.progressMeta}>
-                {seed.progress.submitted} of {seed.progress.totalAssignments} assigned reviews submitted · {seed.progress.inProgress} in progress
+                {seed.progress.submitted} of {seed.progress.totalAssignments} assigned reviews
+                submitted · {seed.progress.inProgress} in progress
               </p>
             </div>
             <ul className={styles.indicatorList}>
               <li>
-                <span className={`${styles.indicatorDot} ${styles.dotSuccess}`} aria-hidden="true" />
+                <span
+                  className={`${styles.indicatorDot} ${styles.dotSuccess}`}
+                  aria-hidden="true"
+                />
                 <strong>{seed.progress.assigned} assigned</strong>
                 <span>within reviewer load limits</span>
               </li>
               <li>
-                <span className={`${styles.indicatorDot} ${styles.dotWarning}`} aria-hidden="true" />
+                <span
+                  className={`${styles.indicatorDot} ${styles.dotWarning}`}
+                  aria-hidden="true"
+                />
                 <strong>{seed.progress.abstained} abstention</strong>
                 <span>requires a replacement assignment</span>
               </li>
@@ -537,10 +559,16 @@ function OrganizerWorkspace({ seed }: Readonly<{ seed: ReviewPlanSeed }>) {
                       <strong>{aggregate.reference}</strong>
                       <span>{aggregate.title}</span>
                     </th>
-                    <td><strong>{aggregate.countedScore}</strong> / {aggregate.possibleScore}</td>
-                    <td>{aggregate.countedReviews} / {aggregate.expectedReviews}</td>
                     <td>
-                      {aggregate.conflicts > 0 ? `${aggregate.conflicts} conflict${aggregate.conflicts === 1 ? "" : "s"}` : "No conflicts"}
+                      <strong>{aggregate.countedScore}</strong> / {aggregate.possibleScore}
+                    </td>
+                    <td>
+                      {aggregate.countedReviews} / {aggregate.expectedReviews}
+                    </td>
+                    <td>
+                      {aggregate.conflicts > 0
+                        ? `${aggregate.conflicts} conflict${aggregate.conflicts === 1 ? "" : "s"}`
+                        : "No conflicts"}
                       {aggregate.abstentions > 0 ? ` · ${aggregate.abstentions} abstention` : ""}
                     </td>
                   </tr>
@@ -559,8 +587,9 @@ function OrganizerWorkspace({ seed }: Readonly<{ seed: ReviewPlanSeed }>) {
             <span className={styles.mutedLabel}>Accept · waitlist · reject</span>
           </div>
           <p className={styles.sectionIntro}>
-            Only an authorized human organizer can record an outcome. Choose a status, write the reason,
-            and confirm; AI suggestions cannot accept, waitlist, reject, or publish a decision.
+            Only an authorized human organizer can record an outcome. Choose a status, write the
+            reason, and confirm; AI suggestions cannot accept, waitlist, reject, or publish a
+            decision.
           </p>
           <div className={styles.decisionList}>
             {seed.aggregates.map((aggregate) => (
@@ -602,7 +631,9 @@ function DecisionEditor({ aggregate }: Readonly<{ aggregate: AggregateRow }>) {
           <span className={styles.cardLabel}>{aggregate.reference}</span>
           <h3>{aggregate.title}</h3>
         </div>
-        <span className={styles.scorePill}>{aggregate.countedScore} / {aggregate.possibleScore}</span>
+        <span className={styles.scorePill}>
+          {aggregate.countedScore} / {aggregate.possibleScore}
+        </span>
       </div>
       <div className={styles.decisionForm}>
         <div className={styles.formField}>
@@ -620,7 +651,9 @@ function DecisionEditor({ aggregate }: Readonly<{ aggregate: AggregateRow }>) {
           </select>
         </div>
         <div className={styles.formField}>
-          <label htmlFor={`${aggregate.id}-reason`}>Written reason <span>(required)</span></label>
+          <label htmlFor={`${aggregate.id}-reason`}>
+            Written reason <span>(required)</span>
+          </label>
           <textarea
             id={`${aggregate.id}-reason`}
             value={reason}
@@ -640,7 +673,11 @@ function DecisionEditor({ aggregate }: Readonly<{ aggregate: AggregateRow }>) {
           />
           I confirm this is a human organizer decision, not an AI decision.
         </label>
-        {error ? <p className={styles.formError} role="alert">{error}</p> : null}
+        {error ? (
+          <p className={styles.formError} role="alert">
+            {error}
+          </p>
+        ) : null}
         <button className={styles.primaryButton} type="button" onClick={saveDecision}>
           Confirm human decision
         </button>
@@ -656,7 +693,10 @@ function EvaluatorWorkspace({
   const assignment = useMemo(() => createEvaluatorAssignment(seed), [seed]);
   const [scoreValues, setScoreValues] = useState<Record<string, string>>(() =>
     Object.fromEntries(
-      assignment.round.rubric.criteria.map((criterion, index) => [criterion.id, String(3 + (index % 3))]),
+      assignment.round.rubric.criteria.map((criterion, index) => [
+        criterion.id,
+        String(3 + (index % 3)),
+      ]),
     ),
   );
   const [humanConfirmed, setHumanConfirmed] = useState<Set<string>>(() => new Set<string>());
@@ -701,7 +741,10 @@ function EvaluatorWorkspace({
       ) {
         return total;
       }
-      return total + ((value - criterion.minimum) / (criterion.maximum - criterion.minimum)) * criterion.weight;
+      return (
+        total +
+        ((value - criterion.minimum) / (criterion.maximum - criterion.minimum)) * criterion.weight
+      );
     }, 0);
   }
 
@@ -743,7 +786,9 @@ function EvaluatorWorkspace({
   if (abstained) {
     return (
       <div className={styles.workspace} id="review-workspace">
-        <a className={styles.skipLink} href="#abstention-result">Skip to abstention result</a>
+        <a className={styles.skipLink} href="#abstention-result">
+          Skip to abstention result
+        </a>
         <header className={styles.workspaceHeader}>
           <div>
             <p className={styles.eyebrow}>{seed.eventName} · evaluator</p>
@@ -754,13 +799,21 @@ function EvaluatorWorkspace({
             <ReviewNavigation eventId={eventId} mode="evaluator" />
           </div>
         </header>
-        <section className={styles.abstentionResult} id="abstention-result" role="alert" tabIndex={-1}>
-          <span className={styles.noticeIcon} aria-hidden="true">!</span>
+        <section
+          className={styles.abstentionResult}
+          id="abstention-result"
+          role="alert"
+          tabIndex={-1}
+        >
+          <span className={styles.noticeIcon} aria-hidden="true">
+            !
+          </span>
           <div>
             <h2>Assignment abstained</h2>
             <p>
-              Access to the assigned submission has been removed from this workspace. The written reason
-              was recorded for organizer audit and a replacement reviewer can now be assigned.
+              Access to the assigned submission has been removed from this workspace. The written
+              reason was recorded for organizer audit and a replacement reviewer can now be
+              assigned.
             </p>
           </div>
         </section>
@@ -770,14 +823,16 @@ function EvaluatorWorkspace({
 
   return (
     <div className={styles.workspace} id="review-workspace">
-      <a className={styles.skipLink} href="#review-content">Skip to review workspace content</a>
+      <a className={styles.skipLink} href="#review-content">
+        Skip to review workspace content
+      </a>
       <header className={styles.workspaceHeader}>
         <div>
           <p className={styles.eyebrow}>{seed.eventName} · evaluator</p>
           <h1>Assigned review</h1>
           <p className={styles.headerDescription}>
-            Complete one assigned review for <strong>{assignment.round.name}</strong>. Only your assigned
-            submission is available in this workspace.
+            Complete one assigned review for <strong>{assignment.round.name}</strong>. Only your
+            assigned submission is available in this workspace.
           </p>
         </div>
         <div className={styles.headerSide}>
@@ -792,13 +847,19 @@ function EvaluatorWorkspace({
       <div id="review-content" tabIndex={-1}>
         <AuthorityNotice />
 
-        <section className={styles.privacyNotice} role="note" aria-labelledby="blind-review-heading">
-          <span className={styles.noticeIcon} aria-hidden="true">◌</span>
+        <section
+          className={styles.privacyNotice}
+          role="note"
+          aria-labelledby="blind-review-heading"
+        >
+          <span className={styles.noticeIcon} aria-hidden="true">
+            ◌
+          </span>
           <div>
             <h2 id="blind-review-heading">Blind review is on</h2>
             <p>
-              Author identity is hidden from reviewers. Names, email addresses, and biographies are not
-              shown in this workspace; evaluate the content only.
+              Author identity is hidden from reviewers. Names, email addresses, and biographies are
+              not shown in this workspace; evaluate the content only.
             </p>
           </div>
         </section>
@@ -834,11 +895,13 @@ function EvaluatorWorkspace({
               <p className={styles.sectionEyebrow}>Human rubric</p>
               <h2 id="score-heading">Score this submission</h2>
             </div>
-            <p className={styles.autosaveStatus} aria-live="polite">{autosaveState}</p>
+            <p className={styles.autosaveStatus} aria-live="polite">
+              {autosaveState}
+            </p>
           </div>
           <p className={styles.sectionIntro}>
-            Scores are bounded from 1 to 5. An AI prefill is advisory and uncounted; editing a score or
-            pressing its human confirmation control makes your human score count.
+            Scores are bounded from 1 to 5. An AI prefill is advisory and uncounted; editing a score
+            or pressing its human confirmation control makes your human score count.
           </p>
           <div className={styles.scoreList}>
             {assignment.round.rubric.criteria.map((criterion) => {
@@ -858,7 +921,10 @@ function EvaluatorWorkspace({
                   <div className={styles.scoreControls}>
                     <div className={styles.formField}>
                       <label htmlFor={`${criterion.id}-score`}>
-                        Human score <span>({criterion.minimum}–{criterion.maximum})</span>
+                        Human score{" "}
+                        <span>
+                          ({criterion.minimum}–{criterion.maximum})
+                        </span>
                       </label>
                       <input
                         id={`${criterion.id}-score`}
@@ -877,19 +943,30 @@ function EvaluatorWorkspace({
                       </p>
                     </div>
                     {suggestion ? (
-                      <div className={styles.aiSuggestion} aria-label={`AI suggestion for ${criterion.label}`}>
+                      <aside
+                        className={styles.aiSuggestion}
+                        aria-label={`AI suggestion for ${criterion.label}`}
+                      >
                         <div>
                           <span className={styles.aiLabel}>AI suggestion · uncounted</span>
-                          <strong>{suggestion.value} / {criterion.maximum}</strong>
+                          <strong>
+                            {suggestion.value} / {criterion.maximum}
+                          </strong>
                         </div>
                         <p className={styles.fieldHint}>Cited evidence</p>
                         <ul>
-                          {suggestion.evidence.map((evidence) => <li key={evidence}>{evidence}</li>)}
+                          {suggestion.evidence.map((evidence) => (
+                            <li key={evidence}>{evidence}</li>
+                          ))}
                         </ul>
-                        <button className={styles.secondaryButton} type="button" onClick={() => confirmAiSuggestion(criterion)}>
+                        <button
+                          className={styles.secondaryButton}
+                          type="button"
+                          onClick={() => confirmAiSuggestion(criterion)}
+                        >
                           Confirm or edit this suggestion
                         </button>
-                      </div>
+                      </aside>
                     ) : null}
                   </div>
                 </article>
@@ -929,16 +1006,26 @@ function EvaluatorWorkspace({
             <p className={styles.sectionEyebrow}>Final step</p>
             <h2 id="submit-heading">Submit review</h2>
             <p>
-              A confirmation is required before this review is submitted. Submission locks your scores
-              and comments for organizer aggregation.
+              A confirmation is required before this review is submitted. Submission locks your
+              scores and comments for organizer aggregation.
             </p>
           </div>
-          {submitError ? <p className={styles.formError} role="alert">{submitError}</p> : null}
+          {submitError ? (
+            <p className={styles.formError} role="alert">
+              {submitError}
+            </p>
+          ) : null}
           {submitted ? (
-            <p className={styles.submittedMessage} role="status">Review submitted to the committee.</p>
+            <p className={styles.submittedMessage} role="status">
+              Review submitted to the committee.
+            </p>
           ) : (
             <>
-              <button className={styles.primaryButton} type="button" onClick={openSubmitConfirmation}>
+              <button
+                className={styles.primaryButton}
+                type="button"
+                onClick={openSubmitConfirmation}
+              >
                 Review and submit
               </button>
               <div
@@ -949,9 +1036,16 @@ function EvaluatorWorkspace({
                 aria-modal="false"
               >
                 <h3 id="confirm-submit-heading">Confirm review submission</h3>
-                <p>Check that every required score is human-confirmed or edited before locking this review.</p>
+                <p>
+                  Check that every required score is human-confirmed or edited before locking this
+                  review.
+                </p>
                 <div className={styles.confirmationActions}>
-                  <button className={styles.secondaryButton} type="button" onClick={() => setSubmitConfirmation(false)}>
+                  <button
+                    className={styles.secondaryButton}
+                    type="button"
+                    onClick={() => setSubmitConfirmation(false)}
+                  >
                     Keep editing
                   </button>
                   <button className={styles.primaryButton} type="button" onClick={submitReview}>
@@ -968,12 +1062,15 @@ function EvaluatorWorkspace({
             <p className={styles.sectionEyebrow}>Safety control</p>
             <h2 id="conflict-heading">Conflict of interest</h2>
             <p>
-              If you have a personal, financial, or professional conflict with this submission, abstain
-              instead of scoring it. A written reason is required and immediately removes your access.
+              If you have a personal, financial, or professional conflict with this submission,
+              abstain instead of scoring it. A written reason is required and immediately removes
+              your access.
             </p>
           </div>
           <div className={styles.formField}>
-            <label htmlFor="abstention-reason">Reason for abstention <span>(required)</span></label>
+            <label htmlFor="abstention-reason">
+              Reason for abstention <span>(required)</span>
+            </label>
             <textarea
               id="abstention-reason"
               value={abstentionReason}
@@ -984,10 +1081,15 @@ function EvaluatorWorkspace({
               placeholder="Describe the conflict for the organizer audit log."
             />
             <p className={styles.fieldHint} id="abstention-help">
-              The reason is visible to organizers; declaring a conflict removes this assignment from your view.
+              The reason is visible to organizers; declaring a conflict removes this assignment from
+              your view.
             </p>
           </div>
-          {abstentionError ? <p className={styles.formError} role="alert">{abstentionError}</p> : null}
+          {abstentionError ? (
+            <p className={styles.formError} role="alert">
+              {abstentionError}
+            </p>
+          ) : null}
           <button className={styles.dangerButton} type="button" onClick={declareAbstention}>
             Declare conflict and abstain
           </button>

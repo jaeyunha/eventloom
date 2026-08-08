@@ -69,7 +69,10 @@
   font-weight: 750;
   line-height: 1.2;
   text-decoration: none;
-  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
 }
 
 .primaryButton {

@@ -100,7 +100,9 @@ export default function AdminEventsPage() {
                 <th scope="col">Status</th>
                 <th scope="col">Event date</th>
                 <th scope="col">Submissions</th>
-                <th scope="col"><span className={styles.srOnly}>Actions</span></th>
+                <th scope="col">
+                  <span className={styles.srOnly}>Actions</span>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -124,10 +126,16 @@ export default function AdminEventsPage() {
                   <td>{event.submissions}</td>
                   <td>
                     <div className={styles.eventActions}>
-                      <Link className={styles.eventLink} href={`/admin/events/${event.id}/cfp#event-details`}>
+                      <Link
+                        className={styles.eventLink}
+                        href={`/admin/events/${event.id}/cfp#event-details`}
+                      >
                         Configure
                       </Link>
-                      <Link className={styles.outlineButton} href={`/admin/events/${event.id}/cfp#fields-rules`}>
+                      <Link
+                        className={styles.outlineButton}
+                        href={`/admin/events/${event.id}/cfp#fields-rules`}
+                      >
                         Open CFP <span aria-hidden="true">→</span>
                       </Link>
                     </div>
@@ -138,7 +146,7 @@ export default function AdminEventsPage() {
           </table>
         </div>
 
-        <div className={styles.eventCardList} aria-label="Events list">
+        <section className={styles.eventCardList} aria-label="Events list">
           {events.map((event) => (
             <article className={styles.eventCard} key={event.id}>
               <div className={styles.eventCardTop}>
@@ -163,16 +171,22 @@ export default function AdminEventsPage() {
                 </span>
               </div>
               <div className={styles.eventCardActions}>
-                <Link className={styles.secondaryButton} href={`/admin/events/${event.id}/cfp#event-details`}>
+                <Link
+                  className={styles.secondaryButton}
+                  href={`/admin/events/${event.id}/cfp#event-details`}
+                >
                   Configure
                 </Link>
-                <Link className={styles.primaryButton} href={`/admin/events/${event.id}/cfp#fields-rules`}>
+                <Link
+                  className={styles.primaryButton}
+                  href={`/admin/events/${event.id}/cfp#fields-rules`}
+                >
                   Open CFP <span aria-hidden="true">→</span>
                 </Link>
               </div>
             </article>
           ))}
-        </div>
+        </section>
       </section>
 
       <aside className={styles.callout} aria-label="Timezone guidance">

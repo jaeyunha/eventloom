@@ -122,11 +122,7 @@ export function createIntegrationAdminApi(
       const secret = input.secret.trim();
       if (!secret) {
         return Promise.reject(
-          new IntegrationAdminApiError(
-            "SECRET_REQUIRED",
-            "Enter a credential before saving.",
-            400,
-          ),
+          new IntegrationAdminApiError("SECRET_REQUIRED", "Enter a credential before saving.", 400),
         );
       }
       return request<void>(

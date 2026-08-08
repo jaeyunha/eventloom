@@ -1,12 +1,12 @@
-import { apiErrorSchema } from "../../packages/contracts/src";
 import { describe, expect, it } from "vitest";
-import { createApp, type ApiBindings } from "../../apps/api/src/app";
+import { type ApiBindings, createApp } from "../../apps/api/src/app";
+import type { AuthPrincipal } from "../../apps/api/src/features/auth/types";
 import {
   InMemoryEvaluationRepository,
   InMemorySubmissionReviewSource,
 } from "../../apps/api/src/features/evaluations/repository";
 import { EvaluationService } from "../../apps/api/src/features/evaluations/service";
-import type { AuthPrincipal } from "../../apps/api/src/features/auth/types";
+import { apiErrorSchema } from "../../packages/contracts/src";
 
 const environment: ApiBindings = {
   APP_ENV: "local",

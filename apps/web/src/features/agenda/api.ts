@@ -46,10 +46,7 @@ export interface AgendaApi {
     warningId: string;
     reason: string;
   }): Promise<AgendaWorkspaceData>;
-  publish(input: {
-    eventId: string;
-    expectedVersion: number;
-  }): Promise<AgendaWorkspaceData>;
+  publish(input: { eventId: string; expectedVersion: number }): Promise<AgendaWorkspaceData>;
 }
 
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;

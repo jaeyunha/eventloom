@@ -1,4 +1,4 @@
-import { expect, test as base, type BrowserContext } from "@playwright/test";
+import { type BrowserContext, test as base, expect } from "@playwright/test";
 
 export const E2E_SESSION_COOKIE = "open-sessionboard.session";
 

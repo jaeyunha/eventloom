@@ -83,15 +83,48 @@ const quickLinks = [
 ] as const;
 
 const reviewRounds = [
-  { name: "Summit 2026 · Round one", meta: "128 submissions", count: "54 / 128", status: "In progress", pending: true },
-  { name: "Summit 2026 · Accessibility pass", meta: "Accepted proposals", count: "42 / 42", status: "Complete", pending: false },
-  { name: "Community meetup · Final check", meta: "24 submissions", count: "24 / 24", status: "Complete", pending: false },
+  {
+    name: "Summit 2026 · Round one",
+    meta: "128 submissions",
+    count: "54 / 128",
+    status: "In progress",
+    pending: true,
+  },
+  {
+    name: "Summit 2026 · Accessibility pass",
+    meta: "Accepted proposals",
+    count: "42 / 42",
+    status: "Complete",
+    pending: false,
+  },
+  {
+    name: "Community meetup · Final check",
+    meta: "24 submissions",
+    count: "24 / 24",
+    status: "Complete",
+    pending: false,
+  },
 ] as const;
 
 const activity = [
-  { event: "Summit 2026", action: "Maya Chen submitted a proposal", detail: "Designing calm systems for busy teams", time: "18 min ago" },
-  { event: "Community meetup", action: "Round one review closed", detail: "24 of 24 reviews confirmed", time: "2 hr ago" },
-  { event: "Summit 2026", action: "CFP welcome copy updated", detail: "Saved by Alex Rivera", time: "Yesterday" },
+  {
+    event: "Summit 2026",
+    action: "Maya Chen submitted a proposal",
+    detail: "Designing calm systems for busy teams",
+    time: "18 min ago",
+  },
+  {
+    event: "Community meetup",
+    action: "Round one review closed",
+    detail: "24 of 24 reviews confirmed",
+    time: "2 hr ago",
+  },
+  {
+    event: "Summit 2026",
+    action: "CFP welcome copy updated",
+    detail: "Saved by Alex Rivera",
+    time: "Yesterday",
+  },
 ] as const;
 
 export default function AdminOverviewPage() {
@@ -143,14 +176,20 @@ export default function AdminOverviewPage() {
                 Tasks that need you
               </h2>
             </div>
-            <Link className={styles.panelLink} href="/admin/events/summit-2026/integrations#communications">
+            <Link
+              className={styles.panelLink}
+              href="/admin/events/summit-2026/integrations#communications"
+            >
               View activity <span aria-hidden="true">→</span>
             </Link>
           </div>
           <div className={styles.panelContent}>
             <ul className={styles.taskList}>
               {tasks.map((task) => (
-                <li className={`${styles.taskItem} ${task.critical ? styles.taskItemCritical : ""}`} key={task.title}>
+                <li
+                  className={`${styles.taskItem} ${task.critical ? styles.taskItemCritical : ""}`}
+                  key={task.title}
+                >
                   <span className={styles.taskIcon} aria-hidden="true">
                     {task.critical ? "!" : "·"}
                   </span>
@@ -159,7 +198,10 @@ export default function AdminOverviewPage() {
                     <p className={styles.taskDescription}>{task.description}</p>
                     <p className={styles.taskMeta}>{task.meta}</p>
                   </div>
-                  <Link className={`${styles.alertTag} ${task.critical ? styles.alertTagCritical : ""}`} href={task.href}>
+                  <Link
+                    className={`${styles.alertTag} ${task.critical ? styles.alertTagCritical : ""}`}
+                    href={task.href}
+                  >
                     {task.label}
                     <span className={styles.srOnly}>: {task.title}</span>
                   </Link>
@@ -227,7 +269,9 @@ export default function AdminOverviewPage() {
                     <p className={styles.reviewMeta}>{round.meta}</p>
                   </div>
                   <span className={styles.reviewCount}>{round.count}</span>
-                  <span className={`${styles.reviewBadge} ${round.pending ? styles.reviewBadgePending : ""}`}>
+                  <span
+                    className={`${styles.reviewBadge} ${round.pending ? styles.reviewBadgePending : ""}`}
+                  >
                     {round.status}
                   </span>
                 </div>

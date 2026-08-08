@@ -26,12 +26,7 @@ export default async function PublicAgendaPage({ params, searchParams }: PublicA
     const agenda = await getPublishedAgenda(apiBaseUrl, eventSlug);
     const theme = embedTheme(query.theme);
     return (
-      <EmbedFrame
-        event={agenda.event}
-        eventSlug={eventSlug}
-        theme={theme}
-        view="agenda"
-      >
+      <EmbedFrame event={agenda.event} eventSlug={eventSlug} theme={theme} view="agenda">
         <PublicAgendaView agenda={agenda} apiBaseUrl={apiBaseUrl} />
       </EmbedFrame>
     );

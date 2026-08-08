@@ -203,6 +203,14 @@ export function summarizeRule(rule: CfpRule): string {
   return `(${rule.conditions.map(summarizeRule).join(joiner)})`;
 }
 
+function ruleKey(rule: CfpRule): string {
+  if (rule.type === "condition") {
+    return `condition:${rule.field}:${rule.operator}:${rule.value}`;
+  }
+
+  return `group:${rule.operator}:${rule.conditions.map(ruleKey).join("|")}`;
+}
+
 function listFromInput(value: string): string[] {
   return value
     .split(",")
@@ -286,8 +294,8 @@ function RuleTree({ rule }: { rule: CfpRule }) {
     <li className={styles.ruleGroup}>
       <span className={styles.ruleOperator}>{rule.operator}</span>
       <ul>
-        {rule.conditions.map((child, index) => (
-          <RuleTree key={`${rule.operator}-${index}`} rule={child} />
+        {rule.conditions.map((child) => (
+          <RuleTree key={ruleKey(child)} rule={child} />
         ))}
       </ul>
     </li>
@@ -302,9 +310,8 @@ export function CfpEditor({ eventId }: CfpEditorProps) {
   const [configuration, setConfiguration] = useState<CfpConfiguration>(() =>
     createSeededCfpConfiguration(eventId),
   );
-  const [activeSection, setActiveSection] = useState<(typeof SECTION_LINKS)[number]["id"]>(
-    "event-details",
-  );
+  const [activeSection, setActiveSection] =
+    useState<(typeof SECTION_LINKS)[number]["id"]>("event-details");
   const [saveState, setSaveState] = useState<"idle" | "saved">("idle");
   const [previewResponses, setPreviewResponses] = useState<Record<string, string>>({});
   const [previewSelections, setPreviewSelections] = useState({
@@ -486,7 +493,9 @@ export function CfpEditor({ eventId }: CfpEditorProps) {
                   value={configuration.closesAt}
                   onChange={(event) => updateConfiguration("closesAt", event.target.value)}
                 />
-                <p className={styles.fieldHint}>The close date cannot be earlier than the open date.</p>
+                <p className={styles.fieldHint}>
+                  The close date cannot be earlier than the open date.
+                </p>
               </div>
               <div className={styles.fieldGroup}>
                 <label htmlFor="participant-limit">
@@ -696,7 +705,9 @@ export function CfpEditor({ eventId }: CfpEditorProps) {
                   required
                   value={configuration.formats.join(", ")}
                   onChange={(event) =>
-                    setConfiguration((current) => updateList(current, "formats", event.target.value))
+                    setConfiguration((current) =>
+                      updateList(current, "formats", event.target.value),
+                    )
                   }
                 />
               </div>
@@ -745,7 +756,11 @@ export function CfpEditor({ eventId }: CfpEditorProps) {
             </div>
           </section>
 
-          <section id="fields-rules" className={styles.panel} aria-labelledby="fields-rules-heading">
+          <section
+            id="fields-rules"
+            className={styles.panel}
+            aria-labelledby="fields-rules-heading"
+          >
             <div className={styles.sectionHeading}>
               <div>
                 <p className={styles.sectionKicker}>04 / form logic</p>
@@ -753,8 +768,8 @@ export function CfpEditor({ eventId }: CfpEditorProps) {
               </div>
             </div>
             <p className={styles.sectionDescription}>
-              Built-in speaker identity fields stay required by default. Make optional fields visible
-              only when they help an applicant complete a thoughtful proposal.
+              Built-in speaker identity fields stay required by default. Make optional fields
+              visible only when they help an applicant complete a thoughtful proposal.
             </p>
             <fieldset className={styles.fieldList}>
               <legend>Applicant fields</legend>
@@ -768,7 +783,9 @@ export function CfpEditor({ eventId }: CfpEditorProps) {
                     <input
                       type="checkbox"
                       checked={field.required}
-                      onChange={(event) => updateField(field.id, { required: event.target.checked })}
+                      onChange={(event) =>
+                        updateField(field.id, { required: event.target.checked })
+                      }
                     />
                     Required
                   </label>
@@ -784,11 +801,7 @@ export function CfpEditor({ eventId }: CfpEditorProps) {
               ))}
             </fieldset>
 
-            <div
-              className={styles.rulePreview}
-              role="region"
-              aria-labelledby="condition-preview-heading"
-            >
+            <section className={styles.rulePreview} aria-labelledby="condition-preview-heading">
               <div className={styles.subheadingRow}>
                 <div>
                   <p className={styles.sectionKicker}>Nested condition preview</p>
@@ -806,7 +819,7 @@ export function CfpEditor({ eventId }: CfpEditorProps) {
                 Rules support nested AND / OR groups and are evaluated before the public form is
                 published. Cycles are rejected during validation.
               </p>
-            </div>
+            </section>
 
             <div className={styles.formActions}>
               <button className={styles.primaryButton} type="submit">
@@ -868,7 +881,11 @@ export function CfpEditor({ eventId }: CfpEditorProps) {
         </aside>
       </div>
 
-      <section id="public-preview" className={styles.previewPanel} aria-labelledby="public-preview-heading">
+      <section
+        id="public-preview"
+        className={styles.previewPanel}
+        aria-labelledby="public-preview-heading"
+      >
         <div className={styles.previewPanelHeader}>
           <div>
             <p className={styles.sectionKicker}>05 / applicant view</p>

@@ -71,7 +71,11 @@ function PortalTasksContent() {
           <strong>
             {completed} of {view.tasks.length} complete
           </strong>
-          <p>{view.outstandingTaskCount} tasks still need your attention.</p>
+          <p>
+            {view.outstandingTaskCount}{" "}
+            {view.outstandingTaskCount === 1 ? "task still needs" : "tasks still need"} your
+            attention.
+          </p>
         </div>
         <Progress value={completionPercent} label="Task completion" />
       </section>

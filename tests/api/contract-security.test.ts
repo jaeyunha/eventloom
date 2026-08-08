@@ -1,6 +1,5 @@
-import { apiErrorSchema } from "../../packages/contracts/src";
 import { describe, expect, it } from "vitest";
-import { createApp, type ApiBindings } from "../../apps/api/src/app";
+import { type ApiBindings, createApp } from "../../apps/api/src/app";
 import { RequestAuthenticator } from "../../apps/api/src/features/auth/authenticator";
 import type {
   BetterAuthGateway,
@@ -21,6 +20,7 @@ import type {
   PublicApiUpdateInput,
 } from "../../apps/api/src/features/public-api/routes";
 import { InMemoryWebhookRepository } from "../../apps/api/src/integrations/webhooks/types";
+import { apiErrorSchema } from "../../packages/contracts/src";
 
 const environment: ApiBindings = {
   APP_ENV: "local",
@@ -250,11 +250,7 @@ describe("assembled API contract and security", () => {
       environment,
     );
 
-    const malformedBody = await expectContractError(
-      malformed,
-      401,
-      "AUTHENTICATION_REQUIRED",
-    );
+    const malformedBody = await expectContractError(malformed, 401, "AUTHENTICATION_REQUIRED");
     const revokedBody = await expectContractError(revoked, 401, "AUTHENTICATION_REQUIRED");
     expect(JSON.stringify([malformedBody, revokedBody])).not.toContain("secret-token");
   });
@@ -338,16 +334,8 @@ describe("assembled API contract and security", () => {
       },
       body: JSON.stringify({ name: "Created once" }),
     } as const;
-    const first = await app.request(
-      "/api/v1/organizations/org-1/events",
-      request,
-      environment,
-    );
-    const replay = await app.request(
-      "/api/v1/organizations/org-1/events",
-      request,
-      environment,
-    );
+    const first = await app.request("/api/v1/organizations/org-1/events", request, environment);
+    const replay = await app.request("/api/v1/organizations/org-1/events", request, environment);
     const conflict = await app.request(
       "/api/v1/organizations/org-1/events",
       { ...request, body: JSON.stringify({ name: "Changed" }) },
@@ -386,7 +374,7 @@ describe("assembled API contract and security", () => {
 
     expect(created.status).toBe(201);
     expect(JSON.stringify(body)).not.toContain(signingSecret);
-    expect(JSON.stringify(body)).not.toContain("signingSecret\"");
+    expect(JSON.stringify(body)).not.toContain('signingSecret"');
     await expectContractError(crossTenant, 403, "ACCESS_DENIED");
   });
 });

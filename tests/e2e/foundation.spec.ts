@@ -6,12 +6,11 @@ test("web and API foundations run as independent healthy services", async ({ pag
   await expect(
     page.getByRole("heading", {
       level: 1,
-      name: "A clear path from call for speakers to published agenda.",
+      name: "Move from a call for speakers to a published agenda with care.",
     }),
   ).toBeVisible();
-  await expect(page.getByRole("status")).toContainText("Foundation configured");
-  await expect(page.getByText("Cloudflare Worker", { exact: true })).toBeVisible();
-  await expect(page.locator(".wordmark span")).toHaveCSS("background-color", "rgb(80, 101, 232)");
+  await expect(page.getByRole("link", { name: "Open the CFP" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Visit speaker portal" })).toBeVisible();
 
   const webHealth = await request.get("/health");
   expect(webHealth.status()).toBe(200);

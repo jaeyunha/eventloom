@@ -1,13 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import {
-  filterAgendaEntries,
-  formatPublishedTime,
-  publicAgendaDays,
-  uniqueSorted,
-} from "./model";
 import styles from "./embed.module.css";
+import { filterAgendaEntries, formatPublishedTime, publicAgendaDays, uniqueSorted } from "./model";
 import type { PublishedAgenda } from "./types";
 
 export function PublicAgendaView({

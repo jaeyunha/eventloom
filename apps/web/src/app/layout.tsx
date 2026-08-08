@@ -12,12 +12,7 @@ export const metadata: Metadata = {
   applicationName: "Open Sessionboard",
   category: "conference program operations",
   creator: "Open Sessionboard contributors",
-  keywords: [
-    "conference operations",
-    "call for speakers",
-    "program management",
-    "open source",
-  ],
+  keywords: ["conference operations", "call for speakers", "program management", "open source"],
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {

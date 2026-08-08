@@ -1,7 +1,7 @@
 import { apiErrorSchema } from "@open-sessionboard/contracts";
 import { type Context, Hono } from "hono";
 import { ZodError, z } from "zod";
-import { AgendaEngine, AgendaError, AgendaValidationError } from "../features/agenda/engine";
+import { type AgendaEngine, AgendaError, AgendaValidationError } from "../features/agenda/engine";
 import type { AuthPrincipal, UserPrincipal } from "../features/auth/types";
 import { AuthAccessError } from "../features/auth/types";
 
@@ -140,7 +140,12 @@ function agendaErrorResponse(context: AgendaContext, error: AgendaError): Respon
     case "AGENDA_NOT_FOUND":
     case "REVISION_NOT_FOUND":
     case "WARNING_NOT_FOUND":
-      return errorResponse(context, 404, "NOT_FOUND", "The requested agenda resource was not found.");
+      return errorResponse(
+        context,
+        404,
+        "NOT_FOUND",
+        "The requested agenda resource was not found.",
+      );
     case "AGENDA_ALREADY_EXISTS":
     case "CONCURRENT_MODIFICATION":
     case "PUBLICATION_BLOCKED":
@@ -217,12 +222,16 @@ export function createAgendaAdminRoutes(
 
   routes.get("/draft", async (context) => {
     await organizerForEvent(context, dependencies);
-    return context.json({ data: await dependencies.engine.getDraft(routeParam(context, "eventId")) });
+    return context.json({
+      data: await dependencies.engine.getDraft(routeParam(context, "eventId")),
+    });
   });
 
   routes.get("/preview", async (context) => {
     await organizerForEvent(context, dependencies);
-    return context.json({ data: await dependencies.engine.preview(routeParam(context, "eventId")) });
+    return context.json({
+      data: await dependencies.engine.preview(routeParam(context, "eventId")),
+    });
   });
 
   routes.put("/draft", async (context) => {

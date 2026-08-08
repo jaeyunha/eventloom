@@ -72,12 +72,10 @@ describe("published embed model", () => {
 
     expect(days).toHaveLength(1);
     expect(days[0]?.date).toBe("2026-09-18");
-    expect(days[0]?.entries.map((entry) => entry.id)).toEqual([
-      "entry_morning",
-      "entry_evening",
-    ]);
-    expect(filterAgendaEntries(entries, "2026-09-18", "Build", "America/Los_Angeles"))
-      .toHaveLength(1);
+    expect(days[0]?.entries.map((entry) => entry.id)).toEqual(["entry_morning", "entry_evening"]);
+    expect(filterAgendaEntries(entries, "2026-09-18", "Build", "America/Los_Angeles")).toHaveLength(
+      1,
+    );
   });
 
   it("filters published speaker fields without relying on private records", () => {

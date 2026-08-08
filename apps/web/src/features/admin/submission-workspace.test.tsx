@@ -63,7 +63,7 @@ describe("organizer submission workspace", () => {
     expect(markup).toContain('required=""');
     expect(markup).toContain("I confirm that reopening is necessary and authorized");
     expect(markup).toContain("Reopen and write audit event");
-    expect(markup).toContain("disabled=\"\"");
+    expect(markup).toContain('disabled=""');
     expect(markup).toContain("Every reopen is recorded in the audit log");
     expect(markup).toContain("automated tools cannot reopen a submission or make a final decision");
   });

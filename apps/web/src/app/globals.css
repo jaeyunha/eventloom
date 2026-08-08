@@ -257,7 +257,12 @@
     border: 1px solid var(--color-border);
     border-radius: var(--radius-lg);
     background:
-      linear-gradient(120deg, rgb(255 255 255 / 98%) 0%, rgb(255 255 255 / 92%) 58%, rgb(238 240 255 / 86%) 100%),
+      linear-gradient(
+        120deg,
+        rgb(255 255 255 / 98%) 0%,
+        rgb(255 255 255 / 92%) 58%,
+        rgb(238 240 255 / 86%) 100%
+      ),
       var(--color-surface);
     box-shadow: var(--shadow-surface);
   }

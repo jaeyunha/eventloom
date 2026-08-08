@@ -1,6 +1,5 @@
-import { apiErrorSchema } from "../../packages/contracts/src";
 import { describe, expect, it } from "vitest";
-import { createApp, type ApiBindings } from "../../apps/api/src/app";
+import { type ApiBindings, createApp } from "../../apps/api/src/app";
 import { AgendaEngine } from "../../apps/api/src/features/agenda/engine";
 import {
   InMemoryAgendaMutationLock,
@@ -13,6 +12,7 @@ import type {
   D1ApiKeyGateway,
   StoredApiKey,
 } from "../../apps/api/src/features/auth/types";
+import { apiErrorSchema } from "../../packages/contracts/src";
 
 const environment: ApiBindings = {
   APP_ENV: "local",
@@ -240,11 +240,7 @@ describe("agenda API authorization and publication safety", () => {
       environment,
     );
     const error = await contractError(response, 409, "CONFLICT");
-    const draft = await app.request(
-      `${adminPath}/draft`,
-      { headers: ownerHeaders },
-      environment,
-    );
+    const draft = await app.request(`${adminPath}/draft`, { headers: ownerHeaders }, environment);
     const draftBody = (await draft.json()) as { data: { entries: unknown[]; version: number } };
 
     expect(error.error.details?.map((detail) => detail.code)).toEqual(
@@ -312,7 +308,7 @@ describe("agenda API authorization and publication safety", () => {
 
     const publishedBefore = await app.request(publicPath, {}, environment);
     const publishedBeforeBody = (await publishedBefore.json()) as {
-      data: { sourceDraftVersion: number; entries: typeof entryA[] };
+      data: { sourceDraftVersion: number; entries: (typeof entryA)[] };
     };
     const changedDraft = await app.request(
       `${adminPath}/draft`,

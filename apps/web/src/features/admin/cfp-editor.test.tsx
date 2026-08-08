@@ -8,7 +8,7 @@ describe("CFP editor", () => {
     const markup = renderToStaticMarkup(createElement(CfpEditor, { eventId: "summit-2026" }));
 
     expect(markup).toContain("<h1>Configure your call for proposals</h1>");
-    expect(markup).toContain("<h2 id=\"event-details-heading\">Event details</h2>");
+    expect(markup).toContain('<h2 id="event-details-heading">Event details</h2>');
     expect(markup).toContain('aria-label="Event and CFP configuration"');
     expect(markup).toContain('for="event-name"');
     expect(markup).toContain('for="event-timezone"');
@@ -65,7 +65,7 @@ describe("CFP editor", () => {
   it("renders a semantic public form preview that mirrors seeded copy and options", () => {
     const markup = renderToStaticMarkup(createElement(CfpEditor, { eventId: "summit-2026" }));
 
-    expect(markup).toContain("<h2 id=\"public-preview-heading\">Public form preview</h2>");
+    expect(markup).toContain('<h2 id="public-preview-heading">Public form preview</h2>');
     expect(markup).toContain('aria-label="Public CFP form preview"');
     expect(markup).toContain("Bring your best session to the Summit");
     expect(markup).toContain('id="preview-first-name"');

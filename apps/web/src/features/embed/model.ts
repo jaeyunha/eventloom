@@ -1,8 +1,4 @@
-import type {
-  EmbedTheme,
-  PublishedAgendaEntry,
-  PublishedSpeaker,
-} from "./types";
+import type { EmbedTheme, PublishedAgendaEntry, PublishedSpeaker } from "./types";
 
 export interface PublicAgendaDay {
   date: string;
@@ -90,7 +86,9 @@ export function publicAgendaDays(
     timeZone,
   });
   const byDate = new Map<string, PublishedAgendaEntry[]>();
-  for (const entry of [...entries].sort((left, right) => left.startsAt.localeCompare(right.startsAt))) {
+  for (const entry of [...entries].sort((left, right) =>
+    left.startsAt.localeCompare(right.startsAt),
+  )) {
     const instant = new Date(entry.startsAt);
     if (Number.isNaN(instant.valueOf())) {
       continue;

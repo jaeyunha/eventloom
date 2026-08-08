@@ -45,7 +45,9 @@ describe("review workspace", () => {
     expect(organizerMarkup).toContain("Written reason");
     expect(organizerMarkup).toContain("required");
     expect(organizerMarkup).toContain("Confirm human decision");
-    expect(organizerMarkup).toContain("AI suggestions cannot accept, waitlist, reject, or publish a decision.");
+    expect(organizerMarkup).toContain(
+      "AI suggestions cannot accept, waitlist, reject, or publish a decision.",
+    );
     expect(organizerMarkup).toContain("AI suggestions never count and never decide an outcome");
     expect(organizerMarkup).toContain("until a human");
     expect(evaluatorMarkup).toContain('type="number"');

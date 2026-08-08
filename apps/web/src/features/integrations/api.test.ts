@@ -99,18 +99,20 @@ describe("integration admin API", () => {
   });
 
   it("preserves stable error codes without exposing arbitrary response data", async () => {
-    const api = createIntegrationAdminApi("https://api.example.test", async () =>
-      new Response(
-        JSON.stringify({
-          error: {
-            code: "ACCESS_DENIED",
-            message: "Organizer access is required.",
-            traceId: "trace-1",
-          },
-          internal: { credential: "must-not-surface" },
-        }),
-        { status: 403, headers: { "content-type": "application/json" } },
-      ),
+    const api = createIntegrationAdminApi(
+      "https://api.example.test",
+      async () =>
+        new Response(
+          JSON.stringify({
+            error: {
+              code: "ACCESS_DENIED",
+              message: "Organizer access is required.",
+              traceId: "trace-1",
+            },
+            internal: { credential: "must-not-surface" },
+          }),
+          { status: 403, headers: { "content-type": "application/json" } },
+        ),
     );
 
     const rejection = api.getSnapshot("event-a");

@@ -1,10 +1,11 @@
 import { createApp } from "./app";
-export { createApp };
+
 export type {
   ApiBindings,
   ApiDependencies,
   EvaluationRouteDependencies,
 } from "./app";
+export { createApp };
 
 const app = createApp();
 

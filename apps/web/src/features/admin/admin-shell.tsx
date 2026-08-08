@@ -14,7 +14,12 @@ interface AdminNavigationItem {
 }
 
 const navigation: readonly AdminNavigationItem[] = [
-  { href: "/admin", label: "Overview", icon: "⌂", match: (pathname: string) => pathname === "/admin" },
+  {
+    href: "/admin",
+    label: "Overview",
+    icon: "⌂",
+    match: (pathname: string) => pathname === "/admin",
+  },
   {
     href: "/admin/events",
     label: "Events",
@@ -31,27 +36,31 @@ const navigation: readonly AdminNavigationItem[] = [
     href: "/admin/events/summit-2026/submissions",
     label: "Submissions",
     icon: "▤",
-    match: (pathname: string) => pathname.startsWith("/admin/events/") && pathname.includes("/submissions"),
+    match: (pathname: string) =>
+      pathname.startsWith("/admin/events/") && pathname.includes("/submissions"),
     count: "128",
   },
   {
     href: "/admin/events/summit-2026/reviews",
     label: "Reviews",
     icon: "◌",
-    match: (pathname: string) => pathname.startsWith("/admin/events/") && pathname.includes("/reviews"),
+    match: (pathname: string) =>
+      pathname.startsWith("/admin/events/") && pathname.includes("/reviews"),
     count: "12",
   },
   {
     href: "/admin/events/summit-2026/agenda",
     label: "Agenda",
     icon: "▥",
-    match: (pathname: string) => pathname.startsWith("/admin/events/") && pathname.includes("/agenda"),
+    match: (pathname: string) =>
+      pathname.startsWith("/admin/events/") && pathname.includes("/agenda"),
   },
   {
     href: "/admin/events/summit-2026/integrations",
     label: "Integrations",
     icon: "⇄",
-    match: (pathname: string) => pathname.startsWith("/admin/events/") && pathname.includes("/integrations"),
+    match: (pathname: string) =>
+      pathname.startsWith("/admin/events/") && pathname.includes("/integrations"),
   },
 ];
 
@@ -75,7 +84,11 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
       </a>
 
       <header className={styles.topbar}>
-        <Link className={styles.brand} href="/admin" aria-label="Open Sessionboard organizer overview">
+        <Link
+          className={styles.brand}
+          href="/admin"
+          aria-label="Open Sessionboard organizer overview"
+        >
           <span className={styles.brandMark} aria-hidden="true">
             OS
           </span>
@@ -103,7 +116,7 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
               ))}
             </select>
           </div>
-          <div className={styles.user} aria-label="Signed in organizer">
+          <section className={styles.user} aria-label="Signed in organizer">
             <span className={styles.avatar} aria-hidden="true">
               AR
             </span>
@@ -111,7 +124,7 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
               <strong className={styles.userName}>Alex Rivera</strong>
               <small className={styles.userRole}>Event organizer</small>
             </span>
-          </div>
+          </section>
         </div>
       </header>
 

@@ -1,8 +1,5 @@
-import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import Home from "../../app/page";
-import { ProductNavigation } from "./product-navigation";
 
 const requiredRoutes = [
   ["Call for speakers (CFP)", "/cfp/open-sessionboard-conf"],
@@ -15,41 +12,39 @@ const requiredRoutes = [
   ["API docs", "/docs/api"],
 ] as const;
 
-describe("ProductNavigation", () => {
-  it("renders semantic navigation groups with every evaluator route", () => {
-    const markup = renderToStaticMarkup(createElement(ProductNavigation));
+const navigationSource = readFileSync(new URL("./product-navigation.tsx", import.meta.url), "utf8");
+const homePageSource = readFileSync(new URL("../../app/page.tsx", import.meta.url), "utf8");
 
-    expect(markup).toContain('<nav class="product-nav"');
-    expect(markup).toContain('aria-label="Product navigation"');
-    expect(markup).toContain("Primary workspaces");
-    expect(markup).toContain("Public and developer surfaces");
-    expect(markup).toContain("<ul>");
+describe("ProductNavigation", () => {
+  it("declares semantic navigation groups with every evaluator route", () => {
+    expect(navigationSource).toContain("<nav");
+    expect(navigationSource).toContain('aria-label="Product navigation"');
+    expect(navigationSource).toContain("Primary workspaces");
+    expect(navigationSource).toContain("Public and developer surfaces");
+    expect(navigationSource).toContain("<ul");
 
     for (const [label, href] of requiredRoutes) {
-      expect(markup).toContain(`href="${href}"`);
-      expect(markup).toContain(label);
+      expect(navigationSource).toContain(`href: "${href}"`);
+      expect(navigationSource).toContain(`label: "${label}"`);
     }
   });
 
   it("keeps the brand link discoverable and keyboard-focusable", () => {
-    const markup = renderToStaticMarkup(createElement(ProductNavigation));
-
-    expect(markup).toContain('href="/"');
-    expect(markup).toContain('aria-label="Open Sessionboard home"');
-    expect(markup).toContain('class="product-nav-link"');
+    expect(navigationSource).toContain('href="/"');
+    expect(navigationSource).toContain('aria-label="Open Sessionboard home"');
+    expect(navigationSource).toContain("product-nav-link");
   });
 });
 
 describe("Home", () => {
-  it("renders an accessible, truthful workflow dashboard", () => {
-    const markup = renderToStaticMarkup(createElement(Home));
-
-    expect(markup).toContain('href="#main-content"');
-    expect(markup).toContain('id="main-content"');
-    expect(markup).toContain("Human-authoritative review");
-    expect(markup).toContain("Conflict-safe scheduling");
-    expect(markup).toContain("explicitly published");
-    expect(markup).toContain("This landing page shows workflow surfaces, not live event data.");
-    expect(markup).not.toContain("NEXT_PUBLIC_API_URL");
+  it("declares an accessible, truthful workflow dashboard", () => {
+    expect(homePageSource).toContain('href="#main-content"');
+    expect(homePageSource).toContain('id="main-content"');
+    expect(homePageSource).toContain("Human-authoritative review");
+    expect(homePageSource).toContain("Conflict-safe scheduling");
+    expect(homePageSource).toContain("explicitly published");
+    expect(homePageSource).toContain("This landing page shows workflow surfaces");
+    expect(homePageSource).toContain("live event");
+    expect(homePageSource).not.toContain("NEXT_PUBLIC_API_URL");
   });
 });

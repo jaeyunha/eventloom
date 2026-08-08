@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState, type FormEvent } from "react";
+import { type FormEvent, useMemo, useState } from "react";
 import styles from "./submission-workspace.module.css";
 
 export type SubmissionStatus =
@@ -96,15 +96,34 @@ const seededSubmissions: SubmissionRecord[] = [
     abstract:
       "Teams are adopting AI assistants faster than they are updating the habits that keep decisions accountable. This talk shares a practical trust framework for making human ownership visible without slowing down delivery.",
     answers: [
-      { question: "Who is this session for?", answer: "Product, design, and engineering leads building AI-assisted workflows." },
-      { question: "What will attendees take away?", answer: "A lightweight decision log, review checklist, and a set of prompts for surfacing uncertainty." },
+      {
+        question: "Who is this session for?",
+        answer: "Product, design, and engineering leads building AI-assisted workflows.",
+      },
+      {
+        question: "What will attendees take away?",
+        answer:
+          "A lightweight decision log, review checklist, and a set of prompts for surfacing uncertainty.",
+      },
       { question: "Content level", answer: "Intermediate" },
     ],
     timeline: [
       { label: "Submitted", at: "2026-03-12T14:30:00Z", detail: "Maya Chen submitted version 1." },
-      { label: "Edited", at: "2026-03-20T10:05:00Z", detail: "The abstract and audience answer were updated." },
-      { label: "Edited", at: "2026-03-28T16:40:00Z", detail: "Jordan Williams was added as a co-speaker." },
-      { label: "Review started", at: "2026-04-01T08:00:00Z", detail: "The Product & Design review round was opened." },
+      {
+        label: "Edited",
+        at: "2026-03-20T10:05:00Z",
+        detail: "The abstract and audience answer were updated.",
+      },
+      {
+        label: "Edited",
+        at: "2026-03-28T16:40:00Z",
+        detail: "Jordan Williams was added as a co-speaker.",
+      },
+      {
+        label: "Review started",
+        at: "2026-04-01T08:00:00Z",
+        detail: "The Product & Design review round was opened.",
+      },
     ],
     reviewSummary: {
       completed: 2,
@@ -145,8 +164,14 @@ const seededSubmissions: SubmissionRecord[] = [
     abstract:
       "Observability can help teams learn from production without turning every metric into a performance score. This hands-on workshop maps humane practices to the tools teams already use.",
     answers: [
-      { question: "Who is this session for?", answer: "Engineers and technical program leaders responsible for reliable services." },
-      { question: "What should attendees bring?", answer: "A recent incident retrospective and one dashboard they want to improve." },
+      {
+        question: "Who is this session for?",
+        answer: "Engineers and technical program leaders responsible for reliable services.",
+      },
+      {
+        question: "What should attendees bring?",
+        answer: "A recent incident retrospective and one dashboard they want to improve.",
+      },
       { question: "Content level", answer: "Intermediate" },
     ],
     timeline: [
@@ -164,7 +189,8 @@ const seededSubmissions: SubmissionRecord[] = [
       { reviewer: "Theo Martin", status: "not_started" },
       { reviewer: "Casey Nguyen", status: "not_started" },
     ],
-    organizerNotes: "The workshop needs a room with movable tables and a reliable Wi-Fi connection.",
+    organizerNotes:
+      "The workshop needs a room with movable tables and a reliable Wi-Fi connection.",
     reopenAudit: [],
   },
   {
@@ -197,13 +223,27 @@ const seededSubmissions: SubmissionRecord[] = [
     abstract:
       "Resilience is a practice, not a trait. Elena and Noah share small, repeatable experiments that make team capacity and care visible during periods of change.",
     answers: [
-      { question: "Who is this session for?", answer: "People managers and team leads supporting teams through change." },
-      { question: "What will attendees take away?", answer: "Three experiments that can be run in one week with a small team." },
+      {
+        question: "Who is this session for?",
+        answer: "People managers and team leads supporting teams through change.",
+      },
+      {
+        question: "What will attendees take away?",
+        answer: "Three experiments that can be run in one week with a small team.",
+      },
       { question: "Content level", answer: "Introductory" },
     ],
     timeline: [
-      { label: "Submitted", at: "2026-02-27T17:00:00Z", detail: "Elena Garcia submitted version 1." },
-      { label: "Accepted", at: "2026-03-22T12:00:00Z", detail: "An organizer recorded the final program decision." },
+      {
+        label: "Submitted",
+        at: "2026-02-27T17:00:00Z",
+        detail: "Elena Garcia submitted version 1.",
+      },
+      {
+        label: "Accepted",
+        at: "2026-03-22T12:00:00Z",
+        detail: "An organizer recorded the final program decision.",
+      },
       { label: "Edited", at: "2026-03-30T13:25:00Z", detail: "The speaker bio was updated." },
     ],
     reviewSummary: {
@@ -244,13 +284,24 @@ const seededSubmissions: SubmissionRecord[] = [
     abstract:
       "A panel about the maintenance habits that let design systems grow with the communities that depend on them, from contribution paths to respectful deprecation.",
     answers: [
-      { question: "Who is this session for?", answer: "Design system maintainers, product designers, and frontend engineers." },
+      {
+        question: "Who is this session for?",
+        answer: "Design system maintainers, product designers, and frontend engineers.",
+      },
       { question: "Preferred format", answer: "Panel with moderated audience questions." },
       { question: "Content level", answer: "Intermediate" },
     ],
     timeline: [
-      { label: "Submitted", at: "2026-03-05T08:45:00Z", detail: "Tessa Morgan submitted version 1." },
-      { label: "Waitlisted", at: "2026-03-24T15:10:00Z", detail: "An organizer moved the proposal to the waitlist." },
+      {
+        label: "Submitted",
+        at: "2026-03-05T08:45:00Z",
+        detail: "Tessa Morgan submitted version 1.",
+      },
+      {
+        label: "Waitlisted",
+        at: "2026-03-24T15:10:00Z",
+        detail: "An organizer moved the proposal to the waitlist.",
+      },
     ],
     reviewSummary: {
       completed: 3,
@@ -290,12 +341,19 @@ const seededSubmissions: SubmissionRecord[] = [
     abstract:
       "A case study in making public-interest infrastructure legible, maintainable, and accountable across organizational boundaries.",
     answers: [
-      { question: "Who is this session for?", answer: "People building and maintaining civic technology." },
+      {
+        question: "Who is this session for?",
+        answer: "People building and maintaining civic technology.",
+      },
       { question: "Content level", answer: "Intermediate" },
     ],
     timeline: [
       { label: "Submitted", at: "2025-09-06T12:15:00Z", detail: "Morgan Lee submitted version 1." },
-      { label: "Declined", at: "2025-09-21T10:00:00Z", detail: "An organizer recorded the final decision." },
+      {
+        label: "Declined",
+        at: "2025-09-21T10:00:00Z",
+        detail: "An organizer recorded the final decision.",
+      },
     ],
     reviewSummary: {
       completed: 2,
@@ -306,7 +364,12 @@ const seededSubmissions: SubmissionRecord[] = [
     },
     reviewAssignments: [
       { reviewer: "Robin Ellis", status: "complete", score: 3 },
-      { reviewer: "Drew Park", status: "complete", score: 3, conflict: "Reviewer disclosed a prior collaboration and abstained from the decision." },
+      {
+        reviewer: "Drew Park",
+        status: "complete",
+        score: 3,
+        conflict: "Reviewer disclosed a prior collaboration and abstained from the decision.",
+      },
     ],
     organizerNotes: "Historical seed for event-isolation checks; not part of Summit 2026.",
     reopenAudit: [],
@@ -353,7 +416,10 @@ export function getSeededSubmissionsForEvent(eventId: string): SubmissionRecord[
   return seededSubmissions.filter((submission) => submission.eventId === eventId);
 }
 
-export function getSeededSubmission(eventId: string, submissionId: string): SubmissionRecord | undefined {
+export function getSeededSubmission(
+  eventId: string,
+  submissionId: string,
+): SubmissionRecord | undefined {
   return seededSubmissions.find(
     (submission) => submission.eventId === eventId && submission.id === submissionId,
   );
@@ -427,7 +493,9 @@ function ProgressMeter({
   const value = total === 0 ? 0 : Math.round((completed / total) * 100);
   return (
     <span className={styles.progressCell}>
-      <span className={styles.progressText}>{completed}/{total}</span>
+      <span className={styles.progressText}>
+        {completed}/{total}
+      </span>
       <span
         className={styles.progressTrack}
         role="progressbar"
@@ -451,8 +519,14 @@ export function SubmissionListWorkspace({ eventId }: Readonly<{ eventId: string 
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const submissions = useMemo(() => getSeededSubmissionsForEvent(eventId), [eventId]);
-  const tracks = useMemo(() => [...new Set(submissions.map((submission) => submission.track))].sort(), [submissions]);
-  const formats = useMemo(() => [...new Set(submissions.map((submission) => submission.format))].sort(), [submissions]);
+  const tracks = useMemo(
+    () => [...new Set(submissions.map((submission) => submission.track))].sort(),
+    [submissions],
+  );
+  const formats = useMemo(
+    () => [...new Set(submissions.map((submission) => submission.format))].sort(),
+    [submissions],
+  );
   const filteredSubmissions = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
     return submissions
@@ -461,7 +535,12 @@ export function SubmissionListWorkspace({ eventId }: Readonly<{ eventId: string 
         if (track !== "all" && submission.track !== track) return false;
         if (format !== "all" && submission.format !== format) return false;
         if (!query) return true;
-        return [submission.title, submission.track, submission.format, ...submission.participants.map((participant) => participant.name)]
+        return [
+          submission.title,
+          submission.track,
+          submission.format,
+          ...submission.participants.map((participant) => participant.name),
+        ]
           .join(" ")
           .toLocaleLowerCase()
           .includes(query);
@@ -474,8 +553,11 @@ export function SubmissionListWorkspace({ eventId }: Readonly<{ eventId: string 
       });
   }, [format, search, sortDirection, sortKey, status, submissions, track]);
 
-  const selectedVisibleCount = filteredSubmissions.filter((submission) => selected.has(submission.id)).length;
-  const allVisibleSelected = filteredSubmissions.length > 0 && selectedVisibleCount === filteredSubmissions.length;
+  const selectedVisibleCount = filteredSubmissions.filter((submission) =>
+    selected.has(submission.id),
+  ).length;
+  const allVisibleSelected =
+    filteredSubmissions.length > 0 && selectedVisibleCount === filteredSubmissions.length;
 
   function toggleSort(nextKey: SortKey) {
     if (sortKey === nextKey) {
@@ -499,9 +581,13 @@ export function SubmissionListWorkspace({ eventId }: Readonly<{ eventId: string 
     setSelected((current) => {
       const next = new Set(current);
       if (allVisibleSelected) {
-        filteredSubmissions.forEach((submission) => next.delete(submission.id));
+        filteredSubmissions.forEach((submission) => {
+          next.delete(submission.id);
+        });
       } else {
-        filteredSubmissions.forEach((submission) => next.add(submission.id));
+        filteredSubmissions.forEach((submission) => {
+          next.add(submission.id);
+        });
       }
       return next;
     });
@@ -534,11 +620,15 @@ export function SubmissionListWorkspace({ eventId }: Readonly<{ eventId: string 
             <span>total submissions</span>
           </div>
           <div>
-            <strong>{submissions.filter((submission) => submission.status === "under_review").length}</strong>
+            <strong>
+              {submissions.filter((submission) => submission.status === "under_review").length}
+            </strong>
             <span>in review</span>
           </div>
           <div>
-            <strong>{submissions.filter((submission) => submission.status === "accepted").length}</strong>
+            <strong>
+              {submissions.filter((submission) => submission.status === "accepted").length}
+            </strong>
             <span>accepted</span>
           </div>
           <div className={styles.summaryNote}>
@@ -569,28 +659,52 @@ export function SubmissionListWorkspace({ eventId }: Readonly<{ eventId: string 
             </label>
           </div>
 
-          <div className={styles.filters} aria-label="Submission filters">
+          <fieldset className={styles.filters} aria-label="Submission filters">
             <div className={styles.filterField}>
               <label htmlFor="submission-status">Status</label>
-              <select id="submission-status" value={status} onChange={(event) => setStatus(event.currentTarget.value as SubmissionStatus | "all")}>
+              <select
+                id="submission-status"
+                value={status}
+                onChange={(event) =>
+                  setStatus(event.currentTarget.value as SubmissionStatus | "all")
+                }
+              >
                 <option value="all">All statuses</option>
                 {Object.entries(statusLabels).map(([value, label]) => (
-                  <option key={value} value={value}>{label}</option>
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
                 ))}
               </select>
             </div>
             <div className={styles.filterField}>
               <label htmlFor="submission-track">Track</label>
-              <select id="submission-track" value={track} onChange={(event) => setTrack(event.currentTarget.value)}>
+              <select
+                id="submission-track"
+                value={track}
+                onChange={(event) => setTrack(event.currentTarget.value)}
+              >
                 <option value="all">All tracks</option>
-                {tracks.map((value) => <option key={value} value={value}>{value}</option>)}
+                {tracks.map((value) => (
+                  <option key={value} value={value}>
+                    {value}
+                  </option>
+                ))}
               </select>
             </div>
             <div className={styles.filterField}>
               <label htmlFor="submission-format">Format</label>
-              <select id="submission-format" value={format} onChange={(event) => setFormat(event.currentTarget.value)}>
+              <select
+                id="submission-format"
+                value={format}
+                onChange={(event) => setFormat(event.currentTarget.value)}
+              >
                 <option value="all">All formats</option>
-                {formats.map((value) => <option key={value} value={value}>{value}</option>)}
+                {formats.map((value) => (
+                  <option key={value} value={value}>
+                    {value}
+                  </option>
+                ))}
               </select>
             </div>
             <button
@@ -605,12 +719,15 @@ export function SubmissionListWorkspace({ eventId }: Readonly<{ eventId: string 
             >
               Clear filters
             </button>
-          </div>
+          </fieldset>
 
           {filteredSubmissions.length === 0 ? (
             <div className={styles.emptyState} role="status">
               <h3>No matching submissions</h3>
-              <p>Try a different search or clear the filters to see this event&apos;s seeded submissions.</p>
+              <p>
+                Try a different search or clear the filters to see this event&apos;s seeded
+                submissions.
+              </p>
             </div>
           ) : (
             <div className={styles.tableWrap}>
@@ -629,12 +746,33 @@ export function SubmissionListWorkspace({ eventId }: Readonly<{ eventId: string 
                         <span className={styles.srOnly}>Select all visible submissions</span>
                       </label>
                     </th>
-                    <SortableHeader sortKey="title" activeKey={sortKey} direction={sortDirection} onSort={toggleSort}>Submission</SortableHeader>
-                    <SortableHeader sortKey="status" activeKey={sortKey} direction={sortDirection} onSort={toggleSort}>Status</SortableHeader>
+                    <SortableHeader
+                      sortKey="title"
+                      activeKey={sortKey}
+                      direction={sortDirection}
+                      onSort={toggleSort}
+                    >
+                      Submission
+                    </SortableHeader>
+                    <SortableHeader
+                      sortKey="status"
+                      activeKey={sortKey}
+                      direction={sortDirection}
+                      onSort={toggleSort}
+                    >
+                      Status
+                    </SortableHeader>
                     <th scope="col">Participants</th>
                     <th scope="col">Review progress</th>
                     <th scope="col">Track / format</th>
-                    <SortableHeader sortKey="updatedAt" activeKey={sortKey} direction={sortDirection} onSort={toggleSort}>Updated</SortableHeader>
+                    <SortableHeader
+                      sortKey="updatedAt"
+                      activeKey={sortKey}
+                      direction={sortDirection}
+                      onSort={toggleSort}
+                    >
+                      Updated
+                    </SortableHeader>
                   </tr>
                 </thead>
                 <tbody>
@@ -652,12 +790,19 @@ export function SubmissionListWorkspace({ eventId }: Readonly<{ eventId: string 
                         </label>
                       </td>
                       <th scope="row" className={styles.titleCell}>
-                        <Link className={styles.submissionLink} href={submissionHref(eventId, submission.id)}>
+                        <Link
+                          className={styles.submissionLink}
+                          href={submissionHref(eventId, submission.id)}
+                        >
                           {submission.title}
                         </Link>
-                        <span className={styles.submissionMeta}>{submission.id} · v{submission.version}</span>
+                        <span className={styles.submissionMeta}>
+                          {submission.id} · v{submission.version}
+                        </span>
                       </th>
-                      <td><StatusBadge status={submission.status} /></td>
+                      <td>
+                        <StatusBadge status={submission.status} />
+                      </td>
                       <td>
                         <ProgressMeter
                           completed={submission.participantProgress.completed}
@@ -676,7 +821,11 @@ export function SubmissionListWorkspace({ eventId }: Readonly<{ eventId: string 
                         <span className={styles.trackValue}>{submission.track}</span>
                         <span className={styles.submissionMeta}>{submission.format}</span>
                       </td>
-                      <td><time dateTime={submission.updatedAt}>{formatDate(submission.updatedAt)}</time></td>
+                      <td>
+                        <time dateTime={submission.updatedAt}>
+                          {formatDate(submission.updatedAt)}
+                        </time>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -704,8 +853,16 @@ function SortableHeader({
 }>) {
   const active = activeKey === sortKey;
   return (
-    <th scope="col" aria-sort={active ? (direction === "asc" ? "ascending" : "descending") : "none"}>
-      <button className={styles.sortButton} type="button" onClick={() => onSort(sortKey)} aria-label={`Sort by ${sortLabels[sortKey]}`}>
+    <th
+      scope="col"
+      aria-sort={active ? (direction === "asc" ? "ascending" : "descending") : "none"}
+    >
+      <button
+        className={styles.sortButton}
+        type="button"
+        onClick={() => onSort(sortKey)}
+        aria-label={`Sort by ${sortLabels[sortKey]}`}
+      >
         {children}
         <span aria-hidden="true">{active ? (direction === "asc" ? "↑" : "↓") : "↕"}</span>
       </button>
@@ -725,7 +882,9 @@ export function SubmissionDetailWorkspace({
           <p className={styles.eyebrow}>Organizer workspace</p>
           <h1>Submission not found</h1>
           <p>This submission is not part of the selected event.</p>
-          <Link className={styles.primaryLink} href={submissionListHref(eventId)}>Back to submissions</Link>
+          <Link className={styles.primaryLink} href={submissionListHref(eventId)}>
+            Back to submissions
+          </Link>
         </div>
       </div>
     );
@@ -733,7 +892,9 @@ export function SubmissionDetailWorkspace({
 
   return (
     <div className={styles.workspaceRoot}>
-      <a className={styles.skipLink} href="#submission-detail-content">Skip to submission details</a>
+      <a className={styles.skipLink} href="#submission-detail-content">
+        Skip to submission details
+      </a>
       <header className={styles.workspaceHeader}>
         <div>
           <nav className={styles.breadcrumbs} aria-label="Breadcrumb">
@@ -749,10 +910,13 @@ export function SubmissionDetailWorkspace({
             <StatusBadge status={submission.status} />
           </div>
           <p className={styles.pageDescription}>
-            {submission.id} · version {submission.version} · last updated <time dateTime={submission.updatedAt}>{formatDate(submission.updatedAt)}</time>
+            {submission.id} · version {submission.version} · last updated{" "}
+            <time dateTime={submission.updatedAt}>{formatDate(submission.updatedAt)}</time>
           </p>
         </div>
-        <Link className={styles.backLink} href={submissionListHref(eventId)}>Back to submissions</Link>
+        <Link className={styles.backLink} href={submissionListHref(eventId)}>
+          Back to submissions
+        </Link>
       </header>
 
       <div id="submission-detail-content" className={styles.workspaceMain} tabIndex={-1}>
@@ -809,10 +973,14 @@ export function SubmissionDetailWorkspace({
               <ul className={styles.participantList}>
                 {submission.participants.map((participant) => (
                   <li key={participant.id}>
-                    <span className={styles.avatar} aria-hidden="true">{initials(participant.name)}</span>
+                    <span className={styles.avatar} aria-hidden="true">
+                      {initials(participant.name)}
+                    </span>
                     <div>
                       <strong>{participant.name}</strong>
-                      <span>{participant.role} · {participant.organization}</span>
+                      <span>
+                        {participant.role} · {participant.organization}
+                      </span>
                       <a href={`mailto:${participant.email}`}>{participant.email}</a>
                     </div>
                   </li>
@@ -829,7 +997,11 @@ export function SubmissionDetailWorkspace({
               <p className={styles.eyebrow}>Committee activity</p>
               <h2 id="review-heading">Review score summary</h2>
               <div className={styles.scoreSummary}>
-                <strong>{submission.reviewSummary.averageScore === null ? "—" : `${submission.reviewSummary.averageScore}/${submission.reviewSummary.maxScore}`}</strong>
+                <strong>
+                  {submission.reviewSummary.averageScore === null
+                    ? "—"
+                    : `${submission.reviewSummary.averageScore}/${submission.reviewSummary.maxScore}`}
+                </strong>
                 <span>{submission.reviewSummary.recommendation}</span>
               </div>
               <ProgressMeter
@@ -842,9 +1014,16 @@ export function SubmissionDetailWorkspace({
                   <li key={assignment.reviewer}>
                     <div>
                       <strong>{assignment.reviewer}</strong>
-                      <span>{reviewStatusLabels[assignment.status]}{assignment.score === undefined ? "" : ` · ${assignment.score}/${submission.reviewSummary.maxScore}`}</span>
+                      <span>
+                        {reviewStatusLabels[assignment.status]}
+                        {assignment.score === undefined
+                          ? ""
+                          : ` · ${assignment.score}/${submission.reviewSummary.maxScore}`}
+                      </span>
                     </div>
-                    {assignment.conflict ? <p className={styles.conflictNotice}>Conflict: {assignment.conflict}</p> : null}
+                    {assignment.conflict ? (
+                      <p className={styles.conflictNotice}>Conflict: {assignment.conflict}</p>
+                    ) : null}
                   </li>
                 ))}
               </ul>
@@ -853,13 +1032,22 @@ export function SubmissionDetailWorkspace({
             <section className={styles.detailPanel} aria-labelledby="assignment-heading">
               <p className={styles.eyebrow}>Access controls</p>
               <h2 id="assignment-heading">Assignment &amp; conflicts</h2>
-              <p className={styles.mutedText}>Assignments are event-scoped. A declared conflict removes reviewer access and keeps the submission out of that reviewer&apos;s queue.</p>
+              <p className={styles.mutedText}>
+                Assignments are event-scoped. A declared conflict removes reviewer access and keeps
+                the submission out of that reviewer&apos;s queue.
+              </p>
               <ul className={styles.conflictList}>
-                {submission.reviewAssignments.filter((assignment) => assignment.conflict).map((assignment) => (
-                  <li key={assignment.reviewer}><strong>{assignment.reviewer}</strong> — {assignment.conflict}</li>
-                ))}
+                {submission.reviewAssignments
+                  .filter((assignment) => assignment.conflict)
+                  .map((assignment) => (
+                    <li key={assignment.reviewer}>
+                      <strong>{assignment.reviewer}</strong> — {assignment.conflict}
+                    </li>
+                  ))}
               </ul>
-              {submission.reviewAssignments.every((assignment) => !assignment.conflict) ? <p className={styles.noConflict}>No conflicts recorded for this submission.</p> : null}
+              {submission.reviewAssignments.every((assignment) => !assignment.conflict) ? (
+                <p className={styles.noConflict}>No conflicts recorded for this submission.</p>
+              ) : null}
             </section>
 
             <section className={styles.detailPanel} aria-labelledby="notes-heading">
@@ -887,18 +1075,27 @@ function ReopenControl({ submission }: Readonly<{ submission: SubmissionRecord }
   }
 
   return (
-    <section className={`${styles.detailPanel} ${styles.reopenPanel}`} aria-labelledby="reopen-heading">
+    <section
+      className={`${styles.detailPanel} ${styles.reopenPanel}`}
+      aria-labelledby="reopen-heading"
+    >
       <p className={styles.eyebrow}>Restricted action</p>
       <h2 id="reopen-heading">Reopen submission</h2>
       <p>
-        Organizer-only control for a post-close edit. A human organizer must provide the reason and confirm the action; automated tools cannot reopen a submission or make a final decision.
+        Organizer-only control for a post-close edit. A human organizer must provide the reason and
+        confirm the action; automated tools cannot reopen a submission or make a final decision.
       </p>
       <p className={styles.auditCallout} role="note">
-        Every reopen is recorded in the audit log with the organizer identity, timestamp, and reason.
-        {submission.reopenAudit.length > 0 ? ` ${submission.reopenAudit.length} prior reopen event${submission.reopenAudit.length === 1 ? "" : "s"} recorded.` : " No prior reopen events are recorded."}
+        Every reopen is recorded in the audit log with the organizer identity, timestamp, and
+        reason.
+        {submission.reopenAudit.length > 0
+          ? ` ${submission.reopenAudit.length} prior reopen event${submission.reopenAudit.length === 1 ? "" : "s"} recorded.`
+          : " No prior reopen events are recorded."}
       </p>
       <form onSubmit={handleSubmit}>
-        <label className={styles.textareaLabel} htmlFor="reopen-reason">Human-authored reason</label>
+        <label className={styles.textareaLabel} htmlFor="reopen-reason">
+          Human-authored reason
+        </label>
         <textarea
           id="reopen-reason"
           name="reopenReason"
@@ -913,7 +1110,9 @@ function ReopenControl({ submission }: Readonly<{ submission: SubmissionRecord }
             setSaved(false);
           }}
         />
-        <p className={styles.fieldHelp} id="reopen-reason-help">Use at least 10 characters. This text becomes part of the immutable audit record.</p>
+        <p className={styles.fieldHelp} id="reopen-reason-help">
+          Use at least 10 characters. This text becomes part of the immutable audit record.
+        </p>
         <label className={styles.confirmLabel}>
           <input
             type="checkbox"
@@ -928,7 +1127,11 @@ function ReopenControl({ submission }: Readonly<{ submission: SubmissionRecord }
         <button className={styles.dangerButton} type="submit" disabled={!canSubmit}>
           Reopen and write audit event
         </button>
-        {saved ? <p className={styles.successMessage} role="status">Reopen request recorded for organizer review. The audit event includes your reason.</p> : null}
+        {saved ? (
+          <p className={styles.successMessage} role="status">
+            Reopen request recorded for organizer review. The audit event includes your reason.
+          </p>
+        ) : null}
       </form>
     </section>
   );
