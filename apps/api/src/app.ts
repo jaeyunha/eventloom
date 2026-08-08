@@ -12,6 +12,7 @@ import { z } from "zod";
 import { parseApiEnvironment } from "./env";
 import type { RequestAuthenticator } from "./features/auth/authenticator";
 import { AuthAccessError, type AuthPrincipal } from "./features/auth/types";
+import { createCfpRoutes, type CfpRouteDependencies } from "./features/cfp/routes";
 import { createEvaluationRoutes } from "./features/evaluations/routes";
 import type { EvaluationService } from "./features/evaluations/service";
 import type { EvaluationActor } from "./features/evaluations/types";
@@ -60,6 +61,7 @@ export interface ApiDependencies<
   readonly evaluations?: EvaluationRouteDependencies;
   readonly speaker?: SpeakerRouteDependencies;
   readonly agenda?: AgendaRouteDependencies;
+  readonly cfp?: CfpRouteDependencies;
 }
 
 const requestIdSchema = z.uuid();
@@ -211,7 +213,8 @@ function assertAuthenticationConfigured(
     (dependencies.publicApi !== undefined ||
       dependencies.webhooks !== undefined ||
       dependencies.evaluations !== undefined ||
-      dependencies.agenda !== undefined)
+      dependencies.agenda !== undefined ||
+      dependencies.cfp !== undefined)
   ) {
     throw new TypeError(
       "Authentication must be configured before protected API routes are mounted.",
@@ -271,6 +274,7 @@ export function createApp<
     const authenticate = authenticationMiddleware(dependencies.authenticator);
     app.use("/api/v1/organizations/*", authenticate);
     app.use("/api/admin/*", authenticate);
+    app.use("/api/cfp/*", authenticate);
   }
 
   if (dependencies.evaluations !== undefined) {
@@ -300,6 +304,12 @@ export function createApp<
     app.route(
       "/api/public/events/:eventId/agenda",
       createPublishedAgendaRoutes(dependencies.agenda),
+    );
+  }
+  if (dependencies.cfp !== undefined) {
+    app.route(
+      "/api/cfp/organizations/:organizationId/events/:eventId",
+      createCfpRoutes(dependencies.cfp),
     );
   }
 
