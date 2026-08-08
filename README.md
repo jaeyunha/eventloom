@@ -35,6 +35,7 @@ See [`ARCHITECTURE.md`](ARCHITECTURE.md), [`prd.json`](prd.json), and [`spec/ope
 - [Calendar semantics](docs/calendar-semantics.md) — IANA timezone, DST, RFC 5545, UID, sequence, update, cancellation, and retry rules
 - [Browser and accessibility QA](docs/qa-runbook.md) — seeded Playwright, Ever, and `codex-cua` acceptance evidence
 - [Release and submission runbook](docs/release-runbook.md) — deployment evidence, private-to-public Forge gate, and competition checklist
+- [Deployment readiness preflight](docs/deployment-readiness.md) — sanitized provider, isolation, Cloudflare scope/resource, and Forge privacy checks
 
 ## Evidence
 
@@ -80,6 +81,15 @@ Read [the API guide](docs/api.md) and use the checked-in [OpenAPI 3.1 contract](
 ## Deployment credentials
 
 The implementation expects scoped credentials for Cloudflare, Airtable, OpenSend, Google OAuth, Microsoft OAuth, and Accelevents. Calendar delivery uses standards-based ICS messages and does not require Google or Microsoft Calendar OAuth.
+
+Run the read-only release preflight against separate ignored local, staging, and production environment files before deployment. It checks required provider configuration, rejects shared credentials/resources, inspects the Cloudflare deployment token for the account-restricted Workers Scripts, D1, R2, and Queues Edit permissions, reads the declared Cloudflare resources, and confirms Forge is still private. It never deploys, migrates, or changes repository visibility.
+
+```bash
+node scripts/release/preflight.mjs --help
+node --test scripts/release/preflight.test.mjs
+```
+
+See [Deployment readiness preflight](docs/deployment-readiness.md). Cloudflare **D1 Edit** is mandatory because the guarded deployment applies D1 migrations; successful read access alone is not sufficient.
 
 ## Deployment and release
 
