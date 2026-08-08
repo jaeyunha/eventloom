@@ -1,0 +1,223 @@
+import { conflict } from "./errors";
+import type {
+  EvaluationAssignment,
+  EvaluationConflictDeclaration,
+  EvaluationDecision,
+  EvaluationPlan,
+  EvaluationReview,
+  SubmissionReviewMaterial,
+} from "./types";
+
+export interface EvaluationRepository {
+  getPlan(tenantId: string, planId: string): Promise<EvaluationPlan | null>;
+  putPlan(plan: EvaluationPlan, expectedVersion: number | null): Promise<void>;
+  getAssignment(tenantId: string, assignmentId: string): Promise<EvaluationAssignment | null>;
+  listAssignments(tenantId: string, planId: string): Promise<readonly EvaluationAssignment[]>;
+  putAssignment(assignment: EvaluationAssignment, expectedVersion: number | null): Promise<void>;
+  getReview(tenantId: string, assignmentId: string): Promise<EvaluationReview | null>;
+  listReviews(tenantId: string, planId: string): Promise<readonly EvaluationReview[]>;
+  putReview(review: EvaluationReview, expectedVersion: number | null): Promise<void>;
+  getConflict(
+    tenantId: string,
+    assignmentId: string,
+  ): Promise<EvaluationConflictDeclaration | null>;
+  abstainAssignment(
+    assignment: EvaluationAssignment,
+    expectedAssignmentVersion: number,
+    declaration: EvaluationConflictDeclaration,
+  ): Promise<void>;
+  submitReview(
+    assignment: EvaluationAssignment,
+    expectedAssignmentVersion: number,
+    review: EvaluationReview,
+    expectedReviewVersion: number,
+  ): Promise<void>;
+  getDecision(
+    tenantId: string,
+    planId: string,
+    submissionId: string,
+  ): Promise<EvaluationDecision | null>;
+  putDecision(decision: EvaluationDecision, expectedVersion: number | null): Promise<void>;
+}
+
+export interface SubmissionReviewSource {
+  getSubmissionForReview(
+    tenantId: string,
+    eventId: string,
+    submissionId: string,
+  ): Promise<SubmissionReviewMaterial | null>;
+}
+
+function storageKey(tenantId: string, id: string): string {
+  return `${tenantId}\u0000${id}`;
+}
+
+function decisionKey(tenantId: string, planId: string, submissionId: string): string {
+  return `${tenantId}\u0000${planId}\u0000${submissionId}`;
+}
+
+function clone<T>(value: T): T {
+  return structuredClone(value);
+}
+
+function assertVersion(
+  currentVersion: number | null,
+  expectedVersion: number | null,
+  entityName: string,
+): void {
+  if (currentVersion !== expectedVersion) {
+    throw conflict(`${entityName} changed since it was loaded.`);
+  }
+}
+
+export class InMemoryEvaluationRepository implements EvaluationRepository {
+  readonly #plans = new Map<string, EvaluationPlan>();
+  readonly #assignments = new Map<string, EvaluationAssignment>();
+  readonly #reviews = new Map<string, EvaluationReview>();
+  readonly #conflicts = new Map<string, EvaluationConflictDeclaration>();
+  readonly #decisions = new Map<string, EvaluationDecision>();
+
+  async getPlan(tenantId: string, planId: string): Promise<EvaluationPlan | null> {
+    const plan = this.#plans.get(storageKey(tenantId, planId));
+    return plan === undefined ? null : clone(plan);
+  }
+
+  async putPlan(plan: EvaluationPlan, expectedVersion: number | null): Promise<void> {
+    const key = storageKey(plan.tenantId, plan.id);
+    assertVersion(this.#plans.get(key)?.version ?? null, expectedVersion, "Evaluation plan");
+    this.#plans.set(key, clone(plan));
+  }
+
+  async getAssignment(
+    tenantId: string,
+    assignmentId: string,
+  ): Promise<EvaluationAssignment | null> {
+    const assignment = this.#assignments.get(storageKey(tenantId, assignmentId));
+    return assignment === undefined ? null : clone(assignment);
+  }
+
+  async listAssignments(
+    tenantId: string,
+    planId: string,
+  ): Promise<readonly EvaluationAssignment[]> {
+    return [...this.#assignments.values()]
+      .filter((assignment) => assignment.tenantId === tenantId && assignment.planId === planId)
+      .map(clone);
+  }
+
+  async putAssignment(
+    assignment: EvaluationAssignment,
+    expectedVersion: number | null,
+  ): Promise<void> {
+    const key = storageKey(assignment.tenantId, assignment.id);
+    assertVersion(this.#assignments.get(key)?.version ?? null, expectedVersion, "Assignment");
+    this.#assignments.set(key, clone(assignment));
+  }
+
+  async getReview(tenantId: string, assignmentId: string): Promise<EvaluationReview | null> {
+    const review = this.#reviews.get(storageKey(tenantId, assignmentId));
+    return review === undefined ? null : clone(review);
+  }
+
+  async listReviews(tenantId: string, planId: string): Promise<readonly EvaluationReview[]> {
+    return [...this.#reviews.values()]
+      .filter((review) => review.tenantId === tenantId && review.planId === planId)
+      .map(clone);
+  }
+
+  async putReview(review: EvaluationReview, expectedVersion: number | null): Promise<void> {
+    const key = storageKey(review.tenantId, review.assignmentId);
+    assertVersion(this.#reviews.get(key)?.version ?? null, expectedVersion, "Review");
+    this.#reviews.set(key, clone(review));
+  }
+
+  async getConflict(
+    tenantId: string,
+    assignmentId: string,
+  ): Promise<EvaluationConflictDeclaration | null> {
+    const declaration = this.#conflicts.get(storageKey(tenantId, assignmentId));
+    return declaration === undefined ? null : clone(declaration);
+  }
+
+  async abstainAssignment(
+    assignment: EvaluationAssignment,
+    expectedAssignmentVersion: number,
+    declaration: EvaluationConflictDeclaration,
+  ): Promise<void> {
+    const assignmentStorageKey = storageKey(assignment.tenantId, assignment.id);
+    const conflictStorageKey = storageKey(declaration.tenantId, declaration.assignmentId);
+    assertVersion(
+      this.#assignments.get(assignmentStorageKey)?.version ?? null,
+      expectedAssignmentVersion,
+      "Assignment",
+    );
+    if (this.#conflicts.has(conflictStorageKey)) {
+      throw conflict("A conflict has already been declared for this assignment.");
+    }
+    this.#assignments.set(assignmentStorageKey, clone(assignment));
+    this.#conflicts.set(conflictStorageKey, clone(declaration));
+  }
+
+  async submitReview(
+    assignment: EvaluationAssignment,
+    expectedAssignmentVersion: number,
+    review: EvaluationReview,
+    expectedReviewVersion: number,
+  ): Promise<void> {
+    const assignmentStorageKey = storageKey(assignment.tenantId, assignment.id);
+    const reviewStorageKey = storageKey(review.tenantId, review.assignmentId);
+    assertVersion(
+      this.#assignments.get(assignmentStorageKey)?.version ?? null,
+      expectedAssignmentVersion,
+      "Assignment",
+    );
+    assertVersion(
+      this.#reviews.get(reviewStorageKey)?.version ?? null,
+      expectedReviewVersion,
+      "Review",
+    );
+    this.#assignments.set(assignmentStorageKey, clone(assignment));
+    this.#reviews.set(reviewStorageKey, clone(review));
+  }
+
+  async getDecision(
+    tenantId: string,
+    planId: string,
+    submissionId: string,
+  ): Promise<EvaluationDecision | null> {
+    const decision = this.#decisions.get(decisionKey(tenantId, planId, submissionId));
+    return decision === undefined ? null : clone(decision);
+  }
+
+  async putDecision(decision: EvaluationDecision, expectedVersion: number | null): Promise<void> {
+    const key = decisionKey(decision.tenantId, decision.planId, decision.submissionId);
+    assertVersion(this.#decisions.get(key)?.version ?? null, expectedVersion, "Decision");
+    this.#decisions.set(key, clone(decision));
+  }
+}
+
+export class InMemorySubmissionReviewSource implements SubmissionReviewSource {
+  readonly #submissions = new Map<string, SubmissionReviewMaterial>();
+
+  constructor(submissions: readonly SubmissionReviewMaterial[] = []) {
+    for (const submission of submissions) {
+      this.#submissions.set(storageKey(submission.tenantId, submission.id), clone(submission));
+    }
+  }
+
+  async getSubmissionForReview(
+    tenantId: string,
+    eventId: string,
+    submissionId: string,
+  ): Promise<SubmissionReviewMaterial | null> {
+    const submission = this.#submissions.get(storageKey(tenantId, submissionId));
+    if (submission === undefined || submission.eventId !== eventId) {
+      return null;
+    }
+    return clone(submission);
+  }
+
+  set(submission: SubmissionReviewMaterial): void {
+    this.#submissions.set(storageKey(submission.tenantId, submission.id), clone(submission));
+  }
+}
