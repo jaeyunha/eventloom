@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { apiErrorResponseSchema } from "./domain/common";
 
 export const deploymentEnvironments = ["local", "staging", "production"] as const;
 
@@ -19,12 +20,7 @@ export const healthResponseSchema = z.object({
 
 export type HealthResponse = z.infer<typeof healthResponseSchema>;
 
-export const apiErrorSchema = z.object({
-  error: z.object({
-    code: z.string().regex(/^[A-Z][A-Z0-9_]*$/),
-    message: z.string().min(1),
-    traceId: z.uuid(),
-  }),
-});
+export const apiErrorSchema = apiErrorResponseSchema;
 
 export type ApiError = z.infer<typeof apiErrorSchema>;
+export * from "./domain/index";

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { apiKeyIdSchema, userIdSchema } from "./ids";
 
 export const timestampSchema = z.iso.datetime({ offset: true });
 export const traceIdSchema = z.uuid();
@@ -105,8 +106,8 @@ export const mutationMetadataSchema = z.object({
 export type MutationMetadata = z.infer<typeof mutationMetadataSchema>;
 
 export const auditActorSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("user"), userId: z.string().min(1) }),
-  z.object({ type: z.literal("api_key"), apiKeyId: z.string().min(1) }),
+  z.object({ type: z.literal("user"), userId: userIdSchema }),
+  z.object({ type: z.literal("api_key"), apiKeyId: apiKeyIdSchema }),
   z.object({ type: z.literal("system"), name: z.string().trim().min(1) }),
 ]);
 export type AuditActor = z.infer<typeof auditActorSchema>;

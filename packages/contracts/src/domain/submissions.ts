@@ -69,6 +69,22 @@ export const secondaryContactSchema = z.object({
   updatedAt: timestampSchema,
 });
 export type SecondaryContact = z.infer<typeof secondaryContactSchema>;
+export const submissionParticipantInputSchema = z.object({
+  id: participantIdSchema.optional(),
+  role: participantRoleSchema,
+  firstName: z.string().trim().min(1).max(100),
+  lastName: z.string().trim().min(1).max(100),
+  email: z.email(),
+});
+export type SubmissionParticipantInput = z.infer<typeof submissionParticipantInputSchema>;
+
+export const secondaryContactInputSchema = z.object({
+  id: secondaryContactIdSchema.optional(),
+  firstName: z.string().trim().min(1).max(100),
+  lastName: z.string().trim().min(1).max(100),
+  email: z.email(),
+});
+export type SecondaryContactInput = z.infer<typeof secondaryContactInputSchema>;
 
 export const speakerProfileSchema = z.object({
   id: speakerProfileIdSchema,
@@ -153,8 +169,8 @@ export const updateSubmissionDraftRequestSchema = z.object({
   title: z.string().trim().max(300).optional(),
   abstract: z.string().trim().max(20_000).optional(),
   answers: submissionAnswersSchema.optional(),
-  participants: z.array(submissionParticipantSchema).max(15).optional(),
-  secondaryContacts: z.array(secondaryContactSchema).optional(),
+  participants: z.array(submissionParticipantInputSchema).max(15).optional(),
+  secondaryContacts: z.array(secondaryContactInputSchema).optional(),
 });
 export type UpdateSubmissionDraftRequest = z.infer<typeof updateSubmissionDraftRequestSchema>;
 
