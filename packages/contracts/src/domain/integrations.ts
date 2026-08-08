@@ -13,10 +13,7 @@ import {
   webhookDeliveryIdSchema,
   webhookSubscriptionIdSchema,
 } from "./ids";
-import {
-  integrationPublicationStatusSchema,
-  webhookDeliveryStatusSchema,
-} from "./lifecycle";
+import { integrationPublicationStatusSchema, webhookDeliveryStatusSchema } from "./lifecycle";
 
 export const webhookEventTypes = [
   "submission.created",
@@ -143,9 +140,7 @@ export const acceleventsPublicationPreviewSchema = z.object({
   snapshotHash: z.string().regex(/^[a-f0-9]{64}$/),
   createdAt: timestampSchema,
 });
-export type AcceleventsPublicationPreview = z.infer<
-  typeof acceleventsPublicationPreviewSchema
->;
+export type AcceleventsPublicationPreview = z.infer<typeof acceleventsPublicationPreviewSchema>;
 
 export const publishAcceleventsRequestSchema = z.object({
   publicationId: integrationPublicationIdSchema,

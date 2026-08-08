@@ -25,12 +25,7 @@ export const reviewAssignmentStatuses = [
 export const reviewAssignmentStatusSchema = z.enum(reviewAssignmentStatuses);
 export type ReviewAssignmentStatus = z.infer<typeof reviewAssignmentStatusSchema>;
 
-export const reviewDecisionStatuses = [
-  "pending",
-  "accepted",
-  "waitlisted",
-  "declined",
-] as const;
+export const reviewDecisionStatuses = ["pending", "accepted", "waitlisted", "declined"] as const;
 export const reviewDecisionStatusSchema = z.enum(reviewDecisionStatuses);
 export type ReviewDecisionStatus = z.infer<typeof reviewDecisionStatusSchema>;
 

@@ -99,11 +99,7 @@ export class AirtableRepository<
     return this.#decodeRecord(parseRecord(response.body));
   }
 
-  async update(
-    applicationId: string,
-    input: TUpdate,
-    signal?: AbortSignal,
-  ): Promise<TEntity> {
+  async update(applicationId: string, input: TUpdate, signal?: AbortSignal): Promise<TEntity> {
     const stableId = validateApplicationId(applicationId);
     const existing = await this.#findRecord(stableId, signal);
     if (existing === undefined) {

@@ -1,16 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
+  type AgendaCatalog,
+  type AgendaClock,
   AgendaEngine,
+  type AgendaEntryInput,
   type AgendaError,
+  type AgendaIdGenerator,
   type AgendaTimeZoneError,
   AgendaValidationError,
   InMemoryAgendaMutationLock,
   InMemoryAgendaRepository,
   resolveLocalDateTime,
-  type AgendaCatalog,
-  type AgendaClock,
-  type AgendaEntryInput,
-  type AgendaIdGenerator,
 } from "./index";
 
 const catalog: AgendaCatalog = {
@@ -88,27 +88,15 @@ async function initialize(engine: AgendaEngine): Promise<void> {
 
 describe("agenda time zones", () => {
   it("rejects nonexistent DST wall times and requires fall-back disambiguation", () => {
-    expect(() =>
-      resolveLocalDateTime("2026-03-08T02:30", "America/Los_Angeles"),
-    ).toThrowError(
+    expect(() => resolveLocalDateTime("2026-03-08T02:30", "America/Los_Angeles")).toThrowError(
       expect.objectContaining<Partial<AgendaTimeZoneError>>({ code: "NONEXISTENT_LOCAL_TIME" }),
     );
-    expect(() =>
-      resolveLocalDateTime("2026-11-01T01:30", "America/Los_Angeles"),
-    ).toThrowError(
+    expect(() => resolveLocalDateTime("2026-11-01T01:30", "America/Los_Angeles")).toThrowError(
       expect.objectContaining<Partial<AgendaTimeZoneError>>({ code: "AMBIGUOUS_LOCAL_TIME" }),
     );
 
-    const earlier = resolveLocalDateTime(
-      "2026-11-01T01:30",
-      "America/Los_Angeles",
-      "earlier",
-    );
-    const later = resolveLocalDateTime(
-      "2026-11-01T01:30",
-      "America/Los_Angeles",
-      "later",
-    );
+    const earlier = resolveLocalDateTime("2026-11-01T01:30", "America/Los_Angeles", "earlier");
+    const later = resolveLocalDateTime("2026-11-01T01:30", "America/Los_Angeles", "later");
     expect(Date.parse(later.instant) - Date.parse(earlier.instant)).toBe(60 * 60 * 1000);
   });
 });
@@ -119,27 +107,9 @@ describe("agenda validation", () => {
     await initialize(engine);
 
     const report = await engine.validateEntries("event-1", [
-      entry(
-        "entry-1",
-        "session-1",
-        "room-small",
-        "2026-08-10T09:00",
-        "2026-08-10T10:00",
-      ),
-      entry(
-        "entry-2",
-        "session-2",
-        "room-small",
-        "2026-08-10T09:30",
-        "2026-08-10T10:30",
-      ),
-      entry(
-        "entry-3",
-        "session-3",
-        "room-large",
-        "2026-08-10T09:15",
-        "2026-08-10T09:45",
-      ),
+      entry("entry-1", "session-1", "room-small", "2026-08-10T09:00", "2026-08-10T10:00"),
+      entry("entry-2", "session-2", "room-small", "2026-08-10T09:30", "2026-08-10T10:30"),
+      entry("entry-3", "session-3", "room-large", "2026-08-10T09:15", "2026-08-10T09:45"),
     ]);
 
     expect(new Set(report.conflicts.map((conflict) => conflict.kind))).toEqual(
@@ -151,20 +121,8 @@ describe("agenda validation", () => {
         expectedVersion: 1,
         actorId: "organizer-1",
         entries: [
-          entry(
-            "entry-1",
-            "session-1",
-            "room-small",
-            "2026-08-10T09:00",
-            "2026-08-10T10:00",
-          ),
-          entry(
-            "entry-2",
-            "session-2",
-            "room-small",
-            "2026-08-10T09:30",
-            "2026-08-10T10:30",
-          ),
+          entry("entry-1", "session-1", "room-small", "2026-08-10T09:00", "2026-08-10T10:00"),
+          entry("entry-2", "session-2", "room-small", "2026-08-10T09:30", "2026-08-10T10:30"),
         ],
       }),
     ).rejects.toBeInstanceOf(AgendaValidationError);
@@ -175,38 +133,16 @@ describe("agenda validation", () => {
     await initialize(engine);
 
     const trackReport = await engine.validateEntries("event-1", [
-      entry(
-        "entry-1",
-        "session-1",
-        "room-small",
-        "2026-08-10T09:00",
-        "2026-08-10T10:00",
-        ["track-a"],
-      ),
-      entry(
-        "entry-2",
-        "session-2",
-        "room-large",
-        "2026-08-10T09:30",
-        "2026-08-10T10:30",
-        ["track-a"],
-      ),
+      entry("entry-1", "session-1", "room-small", "2026-08-10T09:00", "2026-08-10T10:00", [
+        "track-a",
+      ]),
+      entry("entry-2", "session-2", "room-large", "2026-08-10T09:30", "2026-08-10T10:30", [
+        "track-a",
+      ]),
     ]);
     const travelReport = await engine.validateEntries("event-1", [
-      entry(
-        "entry-1",
-        "session-1",
-        "room-small",
-        "2026-08-10T09:00",
-        "2026-08-10T10:00",
-      ),
-      entry(
-        "entry-3",
-        "session-3",
-        "room-large",
-        "2026-08-10T10:05",
-        "2026-08-10T11:00",
-      ),
+      entry("entry-1", "session-1", "room-small", "2026-08-10T09:00", "2026-08-10T10:00"),
+      entry("entry-3", "session-3", "room-large", "2026-08-10T10:05", "2026-08-10T11:00"),
     ]);
 
     expect(new Set(trackReport.warnings.map((warning) => warning.kind))).toEqual(
@@ -226,13 +162,7 @@ describe("agenda validation", () => {
       expectedVersion: 1,
       actorId: "organizer-1",
       entries: [
-        entry(
-          "entry-1",
-          "session-1",
-          "room-small",
-          "2026-08-10T09:00",
-          "2026-08-10T10:00",
-        ),
+        entry("entry-1", "session-1", "room-small", "2026-08-10T09:00", "2026-08-10T10:00"),
       ],
     });
 
@@ -288,13 +218,7 @@ describe("agenda concurrency and revisions", () => {
         expectedVersion: 1,
         actorId: "organizer-1",
         entries: [
-          entry(
-            "entry-2",
-            "session-2",
-            "room-large",
-            "2026-08-10T09:00",
-            "2026-08-10T10:00",
-          ),
+          entry("entry-2", "session-2", "room-large", "2026-08-10T09:00", "2026-08-10T10:00"),
         ],
       }),
       engine.updateDraft({
@@ -302,13 +226,7 @@ describe("agenda concurrency and revisions", () => {
         expectedVersion: 1,
         actorId: "organizer-2",
         entries: [
-          entry(
-            "entry-3",
-            "session-3",
-            "room-large",
-            "2026-08-10T11:00",
-            "2026-08-10T12:00",
-          ),
+          entry("entry-3", "session-3", "room-large", "2026-08-10T11:00", "2026-08-10T12:00"),
         ],
       }),
     ]);
@@ -333,13 +251,7 @@ describe("agenda concurrency and revisions", () => {
       expectedVersion: 1,
       actorId: "organizer-1",
       entries: [
-        entry(
-          "entry-2",
-          "session-2",
-          "room-large",
-          "2026-08-10T09:00",
-          "2026-08-10T10:00",
-        ),
+        entry("entry-2", "session-2", "room-large", "2026-08-10T09:00", "2026-08-10T10:00"),
       ],
     });
     const first = await engine.publish({
@@ -352,13 +264,7 @@ describe("agenda concurrency and revisions", () => {
       expectedVersion: firstDraft.version,
       actorId: "organizer-1",
       entries: [
-        entry(
-          "entry-2",
-          "session-2",
-          "room-large",
-          "2026-08-10T11:00",
-          "2026-08-10T12:00",
-        ),
+        entry("entry-2", "session-2", "room-large", "2026-08-10T11:00", "2026-08-10T12:00"),
       ],
     });
 

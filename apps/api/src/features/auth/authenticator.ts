@@ -1,6 +1,6 @@
 import {
-  type AuthClock,
   AuthAccessError,
+  type AuthClock,
   type AuthPrincipal,
   type BetterAuthGateway,
   type D1ApiKeyGateway,
@@ -125,9 +125,7 @@ export class RequestAuthenticator {
   }
 }
 
-export function requireAuthenticated(
-  principal: AuthPrincipal | null | undefined,
-): AuthPrincipal {
+export function requireAuthenticated(principal: AuthPrincipal | null | undefined): AuthPrincipal {
   if (!principal) {
     throw new AuthAccessError("UNAUTHENTICATED", "Authentication is required.");
   }

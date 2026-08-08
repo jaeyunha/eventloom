@@ -94,9 +94,9 @@ export class FakeAirtableTransport implements AirtableTransport {
 
     const start = parseOffset(queryString(request.query?.offset));
     const pageSize = parsePageSize(request.query?.pageSize);
-    const page = records.slice(start, start + pageSize).map((record) =>
-      projectRecord(record, queryStrings(request.query?.["fields[]"])),
-    );
+    const page = records
+      .slice(start, start + pageSize)
+      .map((record) => projectRecord(record, queryStrings(request.query?.["fields[]"])));
     const body: { records: FakeRecord[]; offset?: string } = { records: page };
     if (start + pageSize < records.length) {
       body.offset = `offset:${start + pageSize}`;

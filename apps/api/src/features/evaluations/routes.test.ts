@@ -1,9 +1,6 @@
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
-import {
-  InMemoryEvaluationRepository,
-  InMemorySubmissionReviewSource,
-} from "./repository";
+import { InMemoryEvaluationRepository, InMemorySubmissionReviewSource } from "./repository";
 import { createEvaluationRoutes, type EvaluationRouteEnvironment } from "./routes";
 import { EvaluationService } from "./service";
 import type { EvaluationActor } from "./types";
@@ -111,16 +108,11 @@ describe("evaluation HTTP routes", () => {
     const opened = await jsonRequest(app, "/evaluations/plans/plan-1/open", "POST", {
       expectedVersion: 1,
     });
-    const assigned = await jsonRequest(
-      app,
-      "/evaluations/plans/plan-1/assignments",
-      "POST",
-      {
-        roundId: "round-1",
-        submissionId: "submission-1",
-        reviewerIds: ["reviewer-1"],
-      },
-    );
+    const assigned = await jsonRequest(app, "/evaluations/plans/plan-1/assignments", "POST", {
+      roundId: "round-1",
+      submissionId: "submission-1",
+      reviewerIds: ["reviewer-1"],
+    });
     const assignmentBody = (await assigned.json()) as {
       assignments: Array<{ id: string }>;
     };

@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { z, ZodError } from "zod";
+import { ZodError, z } from "zod";
 import { EvaluationError, forbidden } from "./errors";
 import type { EvaluationService } from "./service";
 import type { EvaluationActor } from "./types";
@@ -90,11 +90,16 @@ function actor(context: { get(name: "evaluationActor"): EvaluationActor }): Eval
   return current;
 }
 
-export function createEvaluationRoutes(service: EvaluationService): Hono<EvaluationRouteEnvironment> {
+export function createEvaluationRoutes(
+  service: EvaluationService,
+): Hono<EvaluationRouteEnvironment> {
   const routes = new Hono<EvaluationRouteEnvironment>();
 
   routes.post("/plans", async (context) => {
-    const plan = await service.createPlan(actor(context), createPlanSchema.parse(await context.req.json()));
+    const plan = await service.createPlan(
+      actor(context),
+      createPlanSchema.parse(await context.req.json()),
+    );
     return context.json(plan, 201);
   });
 
@@ -131,9 +136,7 @@ export function createEvaluationRoutes(service: EvaluationService): Hono<Evaluat
   );
 
   routes.get("/assignments/:assignmentId", async (context) =>
-    context.json(
-      await service.getReviewContext(actor(context), context.req.param("assignmentId")),
-    ),
+    context.json(await service.getReviewContext(actor(context), context.req.param("assignmentId"))),
   );
 
   routes.put("/assignments/:assignmentId/review", async (context) => {
@@ -169,26 +172,20 @@ export function createEvaluationRoutes(service: EvaluationService): Hono<Evaluat
   routes.post("/assignments/:assignmentId/conflict", async (context) => {
     const body = conflictSchema.parse(await context.req.json());
     return context.json(
-      await service.declareConflict(
-        actor(context),
-        context.req.param("assignmentId"),
-        body.reason,
-      ),
+      await service.declareConflict(actor(context), context.req.param("assignmentId"), body.reason),
       201,
     );
   });
 
-  routes.get(
-    "/plans/:planId/rounds/:roundId/submissions/:submissionId/reviews",
-    async (context) =>
-      context.json({
-        reviews: await service.listSubmittedReviews(
-          actor(context),
-          context.req.param("planId"),
-          context.req.param("roundId"),
-          context.req.param("submissionId"),
-        ),
-      }),
+  routes.get("/plans/:planId/rounds/:roundId/submissions/:submissionId/reviews", async (context) =>
+    context.json({
+      reviews: await service.listSubmittedReviews(
+        actor(context),
+        context.req.param("planId"),
+        context.req.param("roundId"),
+        context.req.param("submissionId"),
+      ),
+    }),
   );
   routes.get(
     "/plans/:planId/rounds/:roundId/submissions/:submissionId/aggregate",
@@ -231,10 +228,7 @@ export function createEvaluationRoutes(service: EvaluationService): Hono<Evaluat
       );
     }
     if (error instanceof EvaluationError) {
-      return context.json(
-        { error: { code: error.code, message: error.message } },
-        error.status,
-      );
+      return context.json({ error: { code: error.code, message: error.message } }, error.status);
     }
     throw error;
   });

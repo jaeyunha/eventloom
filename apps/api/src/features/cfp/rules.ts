@@ -111,9 +111,9 @@ function findCycle(graph: Map<string, Set<string>>): string[] | undefined {
   return undefined;
 }
 
-export function validateCfpForm(input: unknown):
-  | { success: true; form: CfpForm }
-  | { success: false; issues: FormValidationIssue[] } {
+export function validateCfpForm(
+  input: unknown,
+): { success: true; form: CfpForm } | { success: false; issues: FormValidationIssue[] } {
   const parsed = cfpFormSchema.safeParse(input);
   if (!parsed.success) {
     return {
@@ -258,7 +258,10 @@ function isEmpty(value: unknown): boolean {
   );
 }
 
-function evaluatePredicate(predicate: ConditionPredicate, answers: Record<string, unknown>): boolean {
+function evaluatePredicate(
+  predicate: ConditionPredicate,
+  answers: Record<string, unknown>,
+): boolean {
   const actual = answers[predicate.fieldKey];
   const expected = predicate.value;
 
@@ -288,7 +291,9 @@ export function evaluateCondition(
   answers: Record<string, unknown>,
 ): boolean {
   const results = condition.conditions.map((child) =>
-    child.type === "predicate" ? evaluatePredicate(child, answers) : evaluateCondition(child, answers),
+    child.type === "predicate"
+      ? evaluatePredicate(child, answers)
+      : evaluateCondition(child, answers),
   );
   return condition.operator === "all" ? results.every(Boolean) : results.some(Boolean);
 }

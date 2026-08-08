@@ -56,6 +56,7 @@ export const apiErrorCodes = [
   "IDEMPOTENCY_CONFLICT",
   "RATE_LIMITED",
   "INTEGRATION_UNAVAILABLE",
+  "CONFIGURATION_ERROR",
   "INTERNAL_ERROR",
 ] as const;
 export const apiErrorCodeSchema = z.enum(apiErrorCodes);

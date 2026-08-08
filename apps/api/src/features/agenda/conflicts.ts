@@ -136,7 +136,10 @@ export function detectAgendaConflicts(input: ConflictDetectionInput): AgendaVali
 }
 
 function overlaps(left: AgendaEntry, right: AgendaEntry): boolean {
-  return Date.parse(left.startsAt) < Date.parse(right.endsAt) && Date.parse(right.startsAt) < Date.parse(left.endsAt);
+  return (
+    Date.parse(left.startsAt) < Date.parse(right.endsAt) &&
+    Date.parse(right.startsAt) < Date.parse(left.endsAt)
+  );
 }
 
 function gapBetween(left: AgendaEntry, right: AgendaEntry): number {

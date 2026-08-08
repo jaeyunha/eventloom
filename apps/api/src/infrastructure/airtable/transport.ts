@@ -85,11 +85,7 @@ function buildRequestUrl(apiOrigin: string, request: AirtableRequest): string {
   return url.toString();
 }
 
-function appendQueryValue(
-  url: URL,
-  key: string,
-  value: AirtableQueryValue | undefined,
-): void {
+function appendQueryValue(url: URL, key: string, value: AirtableQueryValue | undefined): void {
   if (value === undefined) {
     return;
   }

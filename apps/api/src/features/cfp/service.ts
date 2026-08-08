@@ -4,10 +4,10 @@ import {
   type EventCfp,
   eventCfpSchema,
   type Submission,
-  submissionSchema,
   type SubmissionStep,
-  submissionSteps,
   type SubmissionVersion,
+  submissionSchema,
+  submissionSteps,
 } from "./model";
 import { evaluateFormRules, validateCfpForm, validateSubmissionAnswers } from "./rules";
 import { sanitizeForm, sanitizePlainText, sanitizeSubmission } from "./sanitize";

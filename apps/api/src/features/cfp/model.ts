@@ -55,7 +55,12 @@ export type FormFieldKind = z.infer<typeof formFieldKindSchema>;
 export const formFieldSchema = z.object({
   id: identifierSchema,
   sectionId: identifierSchema,
-  key: z.string().trim().min(1).max(100).regex(/^[A-Za-z][A-Za-z0-9_.-]*$/),
+  key: z
+    .string()
+    .trim()
+    .min(1)
+    .max(100)
+    .regex(/^[A-Za-z][A-Za-z0-9_.-]*$/),
   label: z.string().trim().min(1).max(200),
   kind: formFieldKindSchema,
   required: z.boolean().default(false),

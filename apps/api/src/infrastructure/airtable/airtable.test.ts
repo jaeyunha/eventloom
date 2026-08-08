@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  type AirtableMapper,
   AirtableRepository,
   AirtableRepositoryError,
+  type AirtableRequest,
   FakeAirtableTransport,
   FetchAirtableTransport,
   RetryingAirtableTransport,
-  type AirtableMapper,
-  type AirtableRequest,
 } from "./index";
 
 interface EventEntity {
@@ -66,11 +66,7 @@ function createRepository(transport: FakeAirtableTransport | RetryingAirtableTra
   });
 }
 
-function seedEvent(
-  transport: FakeAirtableTransport,
-  event: EventEntity,
-  recordId?: string,
-): void {
+function seedEvent(transport: FakeAirtableTransport, event: EventEntity, recordId?: string): void {
   transport.seed({
     baseId: "app_test",
     table: "Events",

@@ -403,7 +403,8 @@ export class EvaluationService {
     }
 
     return reviewerIds.map((reviewerId) => {
-      const assignment = existingByReviewer.get(reviewerId) ??
+      const assignment =
+        existingByReviewer.get(reviewerId) ??
         created.find((candidate) => candidate.reviewerId === reviewerId);
       if (assignment === undefined) {
         throw conflict("The reviewer assignment could not be created.");
@@ -423,8 +424,7 @@ export class EvaluationService {
     const assignments = await this.#repository.listAssignments(actor.tenantId, plan.id);
     return assignments
       .filter(
-        (assignment) =>
-          assignment.reviewerId === actor.userId && assignment.status !== "abstained",
+        (assignment) => assignment.reviewerId === actor.userId && assignment.status !== "abstained",
       )
       .sort(
         (left, right) =>
@@ -432,10 +432,7 @@ export class EvaluationService {
       );
   }
 
-  async getReviewContext(
-    actor: EvaluationActor,
-    assignmentId: string,
-  ): Promise<ReviewContext> {
+  async getReviewContext(actor: EvaluationActor, assignmentId: string): Promise<ReviewContext> {
     const assignment = await this.#getAssignment(actor.tenantId, assignmentId);
     requireHumanReviewer(actor, assignment);
     if (await this.#repository.getConflict(actor.tenantId, assignment.id)) {
@@ -751,7 +748,9 @@ export class EvaluationService {
     const submittedReviews = assignments
       .map((assignment) => reviewByAssignment.get(assignment.id))
       .filter((review): review is EvaluationReview => review?.submittedAt !== null);
-    const totals = submittedReviews.map((review) => calculateRubricTotal(round.rubric, review.scores));
+    const totals = submittedReviews.map((review) =>
+      calculateRubricTotal(round.rubric, review.scores),
+    );
     const averageWeightedTotal =
       totals.length === 0
         ? null
@@ -820,11 +819,7 @@ export class EvaluationService {
     ) {
       throw notFound("The submission to decide was not found.");
     }
-    const current = await this.#repository.getDecision(
-      actor.tenantId,
-      plan.id,
-      submissionId,
-    );
+    const current = await this.#repository.getDecision(actor.tenantId, plan.id, submissionId);
     const repeated = current?.history.some(
       (transition) => transition.idempotencyKey === idempotencyKey,
     );

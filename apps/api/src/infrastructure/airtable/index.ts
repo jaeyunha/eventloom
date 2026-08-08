@@ -1,12 +1,11 @@
-export { FakeAirtableTransport } from "./fake-transport";
 export type { FakeAirtableSeedRecord } from "./fake-transport";
-export { applicationIdFormula, AirtableRepository, validateApplicationId } from "./repository";
+export { FakeAirtableTransport } from "./fake-transport";
 export type { AirtableRepositoryOptions } from "./repository";
-export { parseRetryAfter, RetryingAirtableTransport } from "./retry";
+export { AirtableRepository, applicationIdFormula, validateApplicationId } from "./repository";
 export type { AirtableRetryOptions } from "./retry";
-export { FetchAirtableTransport } from "./transport";
+export { parseRetryAfter, RetryingAirtableTransport } from "./retry";
 export type { FetchAirtableTransportOptions } from "./transport";
-export { AirtableRepositoryError } from "./types";
+export { FetchAirtableTransport } from "./transport";
 export type {
   AirtableListOptions,
   AirtableMapper,
@@ -21,3 +20,4 @@ export type {
   AirtableSort,
   AirtableTransport,
 } from "./types";
+export { AirtableRepositoryError } from "./types";

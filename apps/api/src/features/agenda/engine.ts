@@ -348,10 +348,7 @@ export class AgendaEngine {
       }
 
       const preview = this.previewState(state);
-      if (
-        preview.validation.conflicts.length > 0 ||
-        preview.unoverriddenWarnings.length > 0
-      ) {
+      if (preview.validation.conflicts.length > 0 || preview.unoverriddenWarnings.length > 0) {
         throw new AgendaValidationError(
           "Publication requires all conflicts to be resolved and warnings to be overridden",
           preview.validation,
@@ -387,7 +384,10 @@ export class AgendaEngine {
       requireNonEmpty(input.actorId, "actorId");
       const target = state.revisions.find((revision) => revision.id === input.revisionId);
       if (target === undefined) {
-        throw new AgendaError("REVISION_NOT_FOUND", `Agenda revision not found: ${input.revisionId}`);
+        throw new AgendaError(
+          "REVISION_NOT_FOUND",
+          `Agenda revision not found: ${input.revisionId}`,
+        );
       }
       if (state.currentPublishedRevisionId === target.id) {
         return { state, result: target, changed: false };
@@ -478,10 +478,7 @@ export class AgendaEngine {
   }
 
   private validationReport(
-    state: Pick<
-      AgendaState,
-      "minimumTravelMinutes" | "rooms" | "sessions" | "tracks"
-    >,
+    state: Pick<AgendaState, "minimumTravelMinutes" | "rooms" | "sessions" | "tracks">,
     entries: readonly AgendaEntry[],
   ): AgendaValidationReport {
     const base = {
@@ -640,10 +637,7 @@ function materializeEntries(
     );
     const end = resolveLocalDateTime(input.endsAtLocal, state.timeZone, input.endDisambiguation);
     if (Date.parse(end.instant) <= Date.parse(start.instant)) {
-      throw new AgendaError(
-        "INVALID_AGENDA",
-        `Entry ${input.id} must end after it starts`,
-      );
+      throw new AgendaError("INVALID_AGENDA", `Entry ${input.id} must end after it starts`);
     }
     return {
       id: input.id,
@@ -701,10 +695,7 @@ function validateUniqueValues(values: readonly string[], message: string): void 
 
 function validateMinimumTravelMinutes(value: number): void {
   if (!Number.isInteger(value) || value < 0) {
-    throw new AgendaError(
-      "INVALID_AGENDA",
-      "minimumTravelMinutes must be a non-negative integer",
-    );
+    throw new AgendaError("INVALID_AGENDA", "minimumTravelMinutes must be a non-negative integer");
   }
 }
 

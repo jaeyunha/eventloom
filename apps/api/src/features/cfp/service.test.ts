@@ -342,9 +342,7 @@ describe("CFP rules and configuration", () => {
           when: {
             type: "group",
             operator: "all",
-            conditions: [
-              { type: "predicate", fieldKey: "title", operator: "is_not_empty" },
-            ],
+            conditions: [{ type: "predicate", fieldKey: "title", operator: "is_not_empty" }],
           },
           actions: [{ type: "show_field", fieldKey: "abstract" }],
         },
@@ -354,9 +352,7 @@ describe("CFP rules and configuration", () => {
           when: {
             type: "group",
             operator: "all",
-            conditions: [
-              { type: "predicate", fieldKey: "abstract", operator: "is_not_empty" },
-            ],
+            conditions: [{ type: "predicate", fieldKey: "abstract", operator: "is_not_empty" }],
           },
           actions: [{ type: "require_field", fieldKey: "title" }],
         },
@@ -374,9 +370,9 @@ describe("CFP rules and configuration", () => {
       repository.forms.set(`form_${index}`, buildForm({ id: `form_${index}` }));
     }
 
-    await expect(
-      service.saveForm(buildForm({ id: "form_21" }), null),
-    ).rejects.toMatchObject({ code: "FORM_LIMIT_REACHED" });
+    await expect(service.saveForm(buildForm({ id: "form_21" }), null)).rejects.toMatchObject({
+      code: "FORM_LIMIT_REACHED",
+    });
 
     const saved = await service.saveForm(
       buildForm({ welcomeContent: "<script>bad()</script> Welcome", version: 2 }),

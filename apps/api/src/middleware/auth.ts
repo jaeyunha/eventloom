@@ -1,12 +1,6 @@
 import type { Context, MiddlewareHandler } from "hono";
-import {
-  requireApiKeyScope,
-  requireOrganizationRole,
-} from "../features/auth/authorization";
-import {
-  RequestAuthenticator,
-  requireAuthenticated,
-} from "../features/auth/authenticator";
+import { type RequestAuthenticator, requireAuthenticated } from "../features/auth/authenticator";
+import { requireApiKeyScope, requireOrganizationRole } from "../features/auth/authorization";
 import {
   type ApiKeyScope,
   AuthAccessError,
@@ -33,10 +27,7 @@ export interface TenantAuthorizationMiddlewareOptions {
   apiKeyScope?: ApiKeyScope;
 }
 
-function authErrorResponse(
-  context: Context<AuthMiddlewareEnvironment>,
-  error: AuthAccessError,
-) {
+function authErrorResponse(context: Context<AuthMiddlewareEnvironment>, error: AuthAccessError) {
   return context.json(
     {
       error: {

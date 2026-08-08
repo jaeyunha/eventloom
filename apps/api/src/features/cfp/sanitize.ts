@@ -1,9 +1,20 @@
 import type { CfpForm, FormField, Submission } from "./model";
 
-const unsafeControlCharacters = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
+function isUnsafeControlCharacter(character: string): boolean {
+  const codePoint = character.codePointAt(0) ?? 0;
+  return (
+    codePoint <= 8 ||
+    (codePoint >= 11 && codePoint <= 12) ||
+    (codePoint >= 14 && codePoint <= 31) ||
+    codePoint === 127
+  );
+}
 
 export function sanitizePlainText(value: string): string {
-  return value.replace(unsafeControlCharacters, "").trim();
+  return [...value]
+    .filter((character) => !isUnsafeControlCharacter(character))
+    .join("")
+    .trim();
 }
 
 export function sanitizeRichText(value: string): string {

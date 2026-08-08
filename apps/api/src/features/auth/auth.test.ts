@@ -1,15 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { RequestAuthenticator } from "./authenticator";
 import {
   requireApiKeyScope,
   requireOrganizationRole,
   requireSpeakerOwnership,
   requireTenantScope,
 } from "./authorization";
-import { RequestAuthenticator } from "./authenticator";
-import {
-  AuthConfigurationError,
-  createBetterAuthRuntimeConfiguration,
-} from "./configuration";
+import { AuthConfigurationError, createBetterAuthRuntimeConfiguration } from "./configuration";
 import type {
   AuthSession,
   BetterAuthGateway,
@@ -58,9 +55,7 @@ function session(overrides: Partial<AuthSession> = {}): AuthSession {
     emailVerified: true,
     expiresAt: new Date("2026-08-08T13:00:00.000Z"),
     memberships: [{ organizationId: "organization-1", role: "admin" }],
-    speakerGrants: [
-      { organizationId: "organization-1", speakerProfileId: "speaker-profile-1" },
-    ],
+    speakerGrants: [{ organizationId: "organization-1", speakerProfileId: "speaker-profile-1" }],
     ...overrides,
   };
 }
@@ -72,9 +67,7 @@ function userPrincipal(overrides: Partial<UserPrincipal> = {}): UserPrincipal {
     userId: "user-1",
     email: "speaker@example.com",
     memberships: [{ organizationId: "organization-1", role: "reviewer" }],
-    speakerGrants: [
-      { organizationId: "organization-1", speakerProfileId: "speaker-profile-1" },
-    ],
+    speakerGrants: [{ organizationId: "organization-1", speakerProfileId: "speaker-profile-1" }],
     ...overrides,
   };
 }
@@ -224,9 +217,7 @@ describe("tenant authorization", () => {
     expect(() =>
       requireOrganizationRole(principal, "organization-1", ["owner", "admin"]),
     ).toThrowError(expect.objectContaining({ code: "FORBIDDEN" }));
-    expect(requireOrganizationRole(principal, "organization-1", ["reviewer"])).toBe(
-      principal,
-    );
+    expect(requireOrganizationRole(principal, "organization-1", ["reviewer"])).toBe(principal);
   });
 
   it("allows exact speaker ownership but denies another profile in the same tenant", () => {

@@ -205,7 +205,9 @@ function profile(participantId: string, eventId = "event-1"): SpeakerProfile {
   };
 }
 
-function task(input: Partial<SpeakerTask> & Pick<SpeakerTask, "id" | "participantId">): SpeakerTask {
+function task(
+  input: Partial<SpeakerTask> & Pick<SpeakerTask, "id" | "participantId">,
+): SpeakerTask {
   return {
     eventId: "event-1",
     submissionId: "submission-1",
@@ -299,16 +301,9 @@ describe("SpeakerService portal access", () => {
 
     const portal = await service.getPortal("event-1", "account-1");
 
-    expect(portal.submissions.map(({ id }) => id)).toEqual([
-      "submission-1",
-      "submission-declined",
-    ]);
+    expect(portal.submissions.map(({ id }) => id)).toEqual(["submission-1", "submission-declined"]);
     expect(portal.profiles.map(({ participantId }) => participantId)).toEqual(["participant-1"]);
-    expect(portal.tasks.map(({ id }) => id)).toEqual([
-      "dependency",
-      "slides-task",
-      "action-task",
-    ]);
+    expect(portal.tasks.map(({ id }) => id)).toEqual(["dependency", "slides-task", "action-task"]);
     expect(portal.outstandingTaskCount).toBe(2);
     expect(JSON.stringify(portal)).not.toContain("organizer-task");
     expect(JSON.stringify(portal)).not.toContain("participant-2");

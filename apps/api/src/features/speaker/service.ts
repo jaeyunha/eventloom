@@ -78,12 +78,7 @@ const uploadPolicies: Record<
   },
   supporting_file: {
     maximumBytes: 25 * 1024 * 1024,
-    contentTypes: new Set([
-      "application/pdf",
-      "image/jpeg",
-      "image/png",
-      "text/plain",
-    ]),
+    contentTypes: new Set(["application/pdf", "image/jpeg", "image/png", "text/plain"]),
     stripMetadata: false,
   },
 };
@@ -170,10 +165,16 @@ function isSpeakerTransitionAllowed(task: SpeakerTask, toStatus: SpeakerTaskStat
     return ["not_started", "needs_changes", "overdue", "reopened"].includes(task.status);
   }
   if (toStatus === "submitted") {
-    return task.type !== "action" && ["in_progress", "needs_changes", "overdue", "reopened"].includes(task.status);
+    return (
+      task.type !== "action" &&
+      ["in_progress", "needs_changes", "overdue", "reopened"].includes(task.status)
+    );
   }
   if (toStatus === "completed") {
-    return task.type === "action" && ["not_started", "in_progress", "overdue", "reopened"].includes(task.status);
+    return (
+      task.type === "action" &&
+      ["not_started", "in_progress", "overdue", "reopened"].includes(task.status)
+    );
   }
   return false;
 }
@@ -261,7 +262,11 @@ export class SpeakerService {
     const scope = await this.getScope(input.eventId, input.accountId);
     this.assertParticipantAccess(scope, input.participantId);
     const profile = await this.repository.getProfile(input.eventId, input.participantId);
-    if (!profile || profile.eventId !== input.eventId || profile.participantId !== input.participantId) {
+    if (
+      !profile ||
+      profile.eventId !== input.eventId ||
+      profile.participantId !== input.participantId
+    ) {
       throw notFound();
     }
     if (profile.version !== input.expectedVersion) {

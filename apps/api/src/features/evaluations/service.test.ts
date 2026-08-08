@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { EvaluationError } from "./errors";
-import {
-  InMemoryEvaluationRepository,
-  InMemorySubmissionReviewSource,
-} from "./repository";
+import type { EvaluationError } from "./errors";
+import { InMemoryEvaluationRepository, InMemorySubmissionReviewSource } from "./repository";
 import { EvaluationService } from "./service";
 import type { EvaluationActor, ReviewRound, SubmissionReviewMaterial } from "./types";
 
@@ -230,12 +227,10 @@ describe("review drafts, AI assistance, and aggregates", () => {
       service.submitReview(actor, assignment.id, draft.version),
       "EVALUATION_INVALID_INPUT",
     );
-    expect((await service.getAggregate(organizer, "plan-1", round.id, submission.id))).toMatchObject(
-      {
-        submittedReviewCount: 0,
-        averageWeightedTotal: null,
-      },
-    );
+    expect(await service.getAggregate(organizer, "plan-1", round.id, submission.id)).toMatchObject({
+      submittedReviewCount: 0,
+      averageWeightedTotal: null,
+    });
 
     const confirmed = await service.confirmAiScores(
       actor,
