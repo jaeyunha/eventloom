@@ -141,7 +141,8 @@ async function requestJson(fetchImplementation, url, token, provider, authorizat
   }
 
   if (!response.ok || payload?.success === false) {
-    const providerCode = payload?.errors?.[0]?.code;
+    const providerCode =
+      typeof payload?.errors?.[0]?.code === "number" ? payload.errors[0].code : undefined;
     const suffix = providerCode === undefined ? "" : `, provider code ${providerCode}`;
     fail("ONLINE_CHECK_FAILED", `${provider} check failed with HTTP ${response.status}${suffix}`);
   }
@@ -247,7 +248,7 @@ export function validateReleaseConfiguration({
 
   for (const provider of requiredProviders) {
     if (!Object.hasOwn(OPTIONAL_PROVIDERS, provider)) {
-      fail("INVALID_ARGUMENT", `Unknown required provider: ${provider}`);
+      fail("INVALID_ARGUMENT", "Unknown required provider");
     }
   }
 

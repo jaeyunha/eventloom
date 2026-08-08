@@ -66,7 +66,7 @@ function parseArguments(argv) {
       process.stdout.write(`${usage()}\n`);
       process.exit(0);
     } else {
-      throw new PreflightError("INVALID_ARGUMENT", `Unknown argument: ${argument}`);
+      throw new PreflightError("INVALID_ARGUMENT", "Unknown preflight argument");
     }
   }
 
