@@ -59,7 +59,7 @@ describe("organizer submission workspace", () => {
     );
 
     expect(markup).toContain('name="reopenReason"');
-    expect(markup).toContain('minlength="10"');
+    expect(markup).toContain('minLength="10"');
     expect(markup).toContain('required=""');
     expect(markup).toContain("I confirm that reopening is necessary and authorized");
     expect(markup).toContain("Reopen and write audit event");

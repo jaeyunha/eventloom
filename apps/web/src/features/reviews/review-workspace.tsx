@@ -244,7 +244,9 @@ function createEvaluatorAssignment(seed: ReviewPlanSeed): EvaluatorAssignment {
 }
 
 function formatPlanStatus(status: PlanStatus): string {
-  return status === "open" ? "Open for review" : status[0].toUpperCase() + status.slice(1);
+  if (status === "open") return "Open for review";
+  if (status === "draft") return "Draft";
+  return "Closed";
 }
 
 function formatRoundStatus(status: RoundStatus): string {
@@ -283,9 +285,8 @@ function AuthorityNotice() {
       <div>
         <h2 id="human-authority-title">Human authority is required</h2>
         <p>
-          AI suggestions never count toward an aggregate score and never decide an outcome. A human
-          reviewer must confirm or edit every score, and a human organizer must confirm each final
-          decision.
+          AI suggestions never count and never decide an outcome; they remain advisory until a human
+          reviewer confirms or edits every score, and a human organizer confirms each final decision.
         </p>
       </div>
     </aside>
@@ -326,7 +327,7 @@ function OrganizerWorkspace({ seed }: Readonly<{ seed: ReviewPlanSeed }>) {
   const criteria = firstRound?.rubric.criteria ?? SEEDED_CRITERIA;
 
   return (
-    <main className={styles.workspace} id="review-workspace">
+    <div className={styles.workspace} id="review-workspace">
       <a className={styles.skipLink} href="#review-content">
         Skip to review workspace content
       </a>
@@ -350,7 +351,7 @@ function OrganizerWorkspace({ seed }: Readonly<{ seed: ReviewPlanSeed }>) {
         </div>
       </header>
 
-      <div id="review-content">
+      <div id="review-content" tabIndex={-1}>
         <AuthorityNotice />
 
         <section className={styles.section} aria-labelledby="plan-status-heading">
@@ -568,7 +569,7 @@ function OrganizerWorkspace({ seed }: Readonly<{ seed: ReviewPlanSeed }>) {
           </div>
         </section>
       </div>
-    </main>
+    </div>
   );
 }
 
@@ -658,7 +659,7 @@ function EvaluatorWorkspace({
       assignment.round.rubric.criteria.map((criterion, index) => [criterion.id, String(3 + (index % 3))]),
     ),
   );
-  const [humanConfirmed, setHumanConfirmed] = useState<Set<string>>(() => new Set());
+  const [humanConfirmed, setHumanConfirmed] = useState<Set<string>>(() => new Set<string>());
   const [comment, setComment] = useState("");
   const [autosaveState, setAutosaveState] = useState("Autosave ready");
   const [submitConfirmation, setSubmitConfirmation] = useState(false);
@@ -741,7 +742,7 @@ function EvaluatorWorkspace({
 
   if (abstained) {
     return (
-      <main className={styles.workspace} id="review-workspace">
+      <div className={styles.workspace} id="review-workspace">
         <a className={styles.skipLink} href="#abstention-result">Skip to abstention result</a>
         <header className={styles.workspaceHeader}>
           <div>
@@ -753,7 +754,7 @@ function EvaluatorWorkspace({
             <ReviewNavigation eventId={eventId} mode="evaluator" />
           </div>
         </header>
-        <section className={styles.abstentionResult} id="abstention-result" role="alert">
+        <section className={styles.abstentionResult} id="abstention-result" role="alert" tabIndex={-1}>
           <span className={styles.noticeIcon} aria-hidden="true">!</span>
           <div>
             <h2>Assignment abstained</h2>
@@ -763,12 +764,12 @@ function EvaluatorWorkspace({
             </p>
           </div>
         </section>
-      </main>
+      </div>
     );
   }
 
   return (
-    <main className={styles.workspace} id="review-workspace">
+    <div className={styles.workspace} id="review-workspace">
       <a className={styles.skipLink} href="#review-content">Skip to review workspace content</a>
       <header className={styles.workspaceHeader}>
         <div>
@@ -788,7 +789,7 @@ function EvaluatorWorkspace({
         </div>
       </header>
 
-      <div id="review-content">
+      <div id="review-content" tabIndex={-1}>
         <AuthorityNotice />
 
         <section className={styles.privacyNotice} role="note" aria-labelledby="blind-review-heading">
@@ -881,6 +882,7 @@ function EvaluatorWorkspace({
                           <span className={styles.aiLabel}>AI suggestion · uncounted</span>
                           <strong>{suggestion.value} / {criterion.maximum}</strong>
                         </div>
+                        <p className={styles.fieldHint}>Cited evidence</p>
                         <ul>
                           {suggestion.evidence.map((evidence) => <li key={evidence}>{evidence}</li>)}
                         </ul>
@@ -991,6 +993,6 @@ function EvaluatorWorkspace({
           </button>
         </section>
       </div>
-    </main>
+    </div>
   );
 }

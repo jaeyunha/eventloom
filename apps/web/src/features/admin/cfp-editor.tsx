@@ -361,7 +361,7 @@ export function CfpEditor({ eventId }: CfpEditorProps) {
   const ruleSummary = summarizeRule(configuration.rule);
 
   return (
-    <main className={styles.viewport}>
+    <div className={styles.viewport}>
       <header className={styles.pageHeader}>
         <div>
           <p className={styles.eyebrow}>Organizer workspace / {eventId}</p>
@@ -1001,6 +1001,6 @@ export function CfpEditor({ eventId }: CfpEditorProps) {
           </aside>
         </div>
       </section>
-    </main>
+    </div>
   );
 }

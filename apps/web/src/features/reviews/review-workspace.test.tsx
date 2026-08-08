@@ -46,6 +46,8 @@ describe("review workspace", () => {
     expect(organizerMarkup).toContain("required");
     expect(organizerMarkup).toContain("Confirm human decision");
     expect(organizerMarkup).toContain("AI suggestions cannot accept, waitlist, reject, or publish a decision.");
+    expect(organizerMarkup).toContain("AI suggestions never count and never decide an outcome");
+    expect(organizerMarkup).toContain("until a human");
     expect(evaluatorMarkup).toContain('type="number"');
     expect(evaluatorMarkup).toContain('min="1"');
     expect(evaluatorMarkup).toContain('max="5"');
@@ -70,8 +72,10 @@ describe("review workspace", () => {
     );
 
     expect(markup).toContain("AI suggestion · uncounted");
+    expect(markup).toContain("Cited evidence");
     expect(markup).toContain("Confirm or edit this suggestion");
     expect(markup).toContain("A confirmation is required before this review is submitted");
+    expect(markup).toContain("Confirm review submission");
     expect(markup).toContain("Conflict of interest");
     expect(markup).toContain('id="abstention-reason"');
     expect(markup).toContain("required");

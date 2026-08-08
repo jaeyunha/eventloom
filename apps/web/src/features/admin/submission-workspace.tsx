@@ -325,12 +325,12 @@ const statusLabels: Record<SubmissionStatus, string> = {
 };
 
 const statusTone: Record<SubmissionStatus, string> = {
-  submitted: styles.toneInfo,
-  under_review: styles.toneWarning,
-  accepted: styles.toneSuccess,
-  waitlisted: styles.toneNeutral,
-  declined: styles.toneDanger,
-  withdrawn: styles.toneNeutral,
+  submitted: styles.toneInfo ?? "",
+  under_review: styles.toneWarning ?? "",
+  accepted: styles.toneSuccess ?? "",
+  waitlisted: styles.toneNeutral ?? "",
+  declined: styles.toneDanger ?? "",
+  withdrawn: styles.toneNeutral ?? "",
 };
 
 const reviewStatusLabels: Record<ReviewAssignment["status"], string> = {
@@ -522,12 +522,12 @@ export function SubmissionListWorkspace({ eventId }: Readonly<{ eventId: string 
             Review and manage proposals for <strong>{eventName}</strong>.
           </p>
         </div>
-        <Link className={styles.backLink} href={`/admin/events/${encodeURIComponent(eventId)}`}>
-          Back to event
+        <Link className={styles.backLink} href="/admin/events">
+          Back to events
         </Link>
       </header>
 
-      <main id="submission-list-content" className={styles.workspaceMain} tabIndex={-1}>
+      <div id="submission-list-content" className={styles.workspaceMain} tabIndex={-1}>
         <section className={styles.summaryBar} aria-label="Submission summary">
           <div>
             <strong>{submissions.length}</strong>
@@ -684,7 +684,7 @@ export function SubmissionListWorkspace({ eventId }: Readonly<{ eventId: string 
             </div>
           )}
         </section>
-      </main>
+      </div>
     </div>
   );
 }
@@ -721,12 +721,12 @@ export function SubmissionDetailWorkspace({
   if (!submission) {
     return (
       <div className={styles.workspaceRoot}>
-        <main className={styles.notFound}>
+        <div className={styles.notFound}>
           <p className={styles.eyebrow}>Organizer workspace</p>
           <h1>Submission not found</h1>
           <p>This submission is not part of the selected event.</p>
           <Link className={styles.primaryLink} href={submissionListHref(eventId)}>Back to submissions</Link>
-        </main>
+        </div>
       </div>
     );
   }
@@ -737,7 +737,7 @@ export function SubmissionDetailWorkspace({
       <header className={styles.workspaceHeader}>
         <div>
           <nav className={styles.breadcrumbs} aria-label="Breadcrumb">
-            <Link href={`/admin/events/${encodeURIComponent(eventId)}`}>{eventTitle(eventId)}</Link>
+            <Link href="/admin/events">{eventTitle(eventId)}</Link>
             <span aria-hidden="true">/</span>
             <Link href={submissionListHref(eventId)}>Submissions</Link>
             <span aria-hidden="true">/</span>
@@ -755,7 +755,7 @@ export function SubmissionDetailWorkspace({
         <Link className={styles.backLink} href={submissionListHref(eventId)}>Back to submissions</Link>
       </header>
 
-      <main id="submission-detail-content" className={styles.workspaceMain} tabIndex={-1}>
+      <div id="submission-detail-content" className={styles.workspaceMain} tabIndex={-1}>
         <div className={styles.detailGrid}>
           <div className={styles.detailPrimary}>
             <section className={styles.detailPanel} aria-labelledby="abstract-heading">
@@ -869,7 +869,7 @@ export function SubmissionDetailWorkspace({
             </section>
           </aside>
         </div>
-      </main>
+      </div>
     </div>
   );
 }
