@@ -1,7 +1,9 @@
-name = "open-sessionboard-api"
-main = "src/index.ts"
+name = "open-sessionboard-api-local"
+main = "src/infrastructure/cloudflare/worker.ts"
+account_id = "7bcb73282d45e4294cc70dd3e2671bfb"
 compatibility_date = "2026-08-08"
-workers_dev = true
+workers_dev = false
+minify = true
 
 [observability]
 enabled = true
@@ -9,3 +11,86 @@ enabled = true
 [vars]
 APP_ENV = "local"
 WEB_ORIGIN = "http://localhost:3015"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "open-sessionboard-local"
+database_id = "00000000-0000-0000-0000-000000000001"
+migrations_dir = "migrations"
+
+[[durable_objects.bindings]]
+name = "AGENDA_COORDINATOR"
+class_name = "AgendaCoordinator"
+
+[[r2_buckets]]
+binding = "PRIVATE_FILES"
+bucket_name = "open-sessionboard-private-files-local"
+preview_bucket_name = "open-sessionboard-private-files-local"
+
+[[queues.producers]]
+binding = "OUTBOX_QUEUE"
+queue = "open-sessionboard-outbox-local"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["AgendaCoordinator"]
+
+[env.staging]
+name = "open-sessionboard-api-staging"
+workers_dev = false
+
+[env.staging.observability]
+enabled = true
+
+[env.staging.vars]
+APP_ENV = "staging"
+WEB_ORIGIN = "https://staging.open-sessionboard.pages.dev"
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "open-sessionboard-staging"
+database_id = "00000000-0000-0000-0000-000000000002"
+migrations_dir = "migrations"
+
+[[env.staging.durable_objects.bindings]]
+name = "AGENDA_COORDINATOR"
+class_name = "AgendaCoordinator"
+
+[[env.staging.r2_buckets]]
+binding = "PRIVATE_FILES"
+bucket_name = "open-sessionboard-private-files-staging"
+preview_bucket_name = "open-sessionboard-private-files-staging"
+
+[[env.staging.queues.producers]]
+binding = "OUTBOX_QUEUE"
+queue = "open-sessionboard-outbox-staging"
+
+[env.production]
+name = "open-sessionboard-api-production"
+workers_dev = false
+
+[env.production.observability]
+enabled = true
+
+[env.production.vars]
+APP_ENV = "production"
+WEB_ORIGIN = "https://open-sessionboard.pages.dev"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "open-sessionboard-production"
+database_id = "00000000-0000-0000-0000-000000000003"
+migrations_dir = "migrations"
+
+[[env.production.durable_objects.bindings]]
+name = "AGENDA_COORDINATOR"
+class_name = "AgendaCoordinator"
+
+[[env.production.r2_buckets]]
+binding = "PRIVATE_FILES"
+bucket_name = "open-sessionboard-private-files-production"
+preview_bucket_name = "open-sessionboard-private-files-production"
+
+[[env.production.queues.producers]]
+binding = "OUTBOX_QUEUE"
+queue = "open-sessionboard-outbox-production"
