@@ -183,6 +183,7 @@ function EntryForm({
 }
 
 interface AgendaBoardProps {
+  organizationId: string;
   data: AgendaWorkspaceData;
   preview: AgendaPreview | null;
   busy: boolean;
@@ -197,6 +198,7 @@ interface AgendaBoardProps {
 }
 
 export function AgendaBoard({
+  organizationId,
   data,
   preview,
   busy,
@@ -227,7 +229,10 @@ export function AgendaBoard({
         </a>
         <nav aria-label="Organizer navigation">
           <a href={`/admin/events/${encodeURIComponent(data.event.id)}`}>Event overview</a>
-          <a aria-current="page" href={`/admin/events/${encodeURIComponent(data.event.id)}/agenda`}>
+          <a
+            aria-current="page"
+            href={`/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(data.event.id)}/agenda`}
+          >
             Agenda
           </a>
         </nav>
@@ -606,19 +611,21 @@ function WarningOverrideForm({
 
 interface AgendaWorkspaceProps {
   eventId: string;
+  organizationId: string;
   api?: AgendaApi;
   appEnvironment?: string;
 }
 
 export function AgendaWorkspace({
   eventId,
+  organizationId,
   api: providedApi,
   appEnvironment = process.env.APP_ENV,
 }: Readonly<AgendaWorkspaceProps>) {
   const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
   const api = useMemo(
-    () => providedApi ?? (apiBaseUrl ? createAgendaApi(apiBaseUrl) : null),
-    [apiBaseUrl, providedApi],
+    () => providedApi ?? (apiBaseUrl ? createAgendaApi(apiBaseUrl, organizationId) : null),
+    [apiBaseUrl, organizationId, providedApi],
   );
   const localDemoApiRef = useRef<{ eventId: string; api: AgendaApi } | null>(null);
   const resolveLocalDemoApi = useCallback(
@@ -731,6 +738,7 @@ export function AgendaWorkspace({
 
   return (
     <AgendaBoard
+      organizationId={organizationId}
       data={data}
       preview={preview}
       busy={busy}

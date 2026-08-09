@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  APPLICATION_ID_FIELD,
   AirtableProvisionError,
-  TABLE_DEFINITIONS,
+  APPLICATION_ID_FIELD,
   parseProvisioningArguments,
   provisionAirtableSchema,
   readAirtableConfiguration,
+  TABLE_DEFINITIONS,
 } from "./provision.mjs";
 
 function jsonResponse(body, status = 200) {
@@ -186,6 +186,24 @@ test("reports missing metadata scope without exposing credentials", async () => 
     },
   );
   assert.equal(error, undefined);
+});
+test("provisions the immutable published speaker projection table", () => {
+  const definition = TABLE_DEFINITIONS.find(
+    (candidate) => candidate.name === "Published Speaker Projections",
+  );
+  assert.ok(definition);
+  assert.deepEqual(
+    definition.fields.map((field) => field.name),
+    [
+      "Application ID",
+      "Organization ID",
+      "Event Slug",
+      "Revision ID",
+      "Revision Number",
+      "Published At",
+      "Projection JSON",
+    ],
+  );
 });
 
 test("validates configuration and command modes", () => {

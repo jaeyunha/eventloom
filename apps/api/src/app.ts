@@ -12,7 +12,11 @@ import { z } from "zod";
 import { parseApiEnvironment } from "./env";
 import type { RequestAuthenticator } from "./features/auth/authenticator";
 import { AuthAccessError, type AuthPrincipal } from "./features/auth/types";
-import { type CfpRouteDependencies, createCfpRoutes } from "./features/cfp/routes";
+import {
+  type CfpRouteDependencies,
+  createCfpPublicRoutes,
+  createCfpRoutes,
+} from "./features/cfp/routes";
 import { createEvaluationRoutes } from "./features/evaluations/routes";
 import type { EvaluationService } from "./features/evaluations/service";
 import type { EvaluationActor } from "./features/evaluations/types";
@@ -25,6 +29,14 @@ import {
   createAgendaAdminRoutes,
   createPublishedAgendaRoutes,
 } from "./routes/agenda";
+import {
+  createOrganizerOverviewRoutes,
+  type OrganizerOverviewRouteDependencies,
+} from "./routes/organizer-overview";
+import {
+  createPublishedSpeakerRoutes,
+  type PublishedSpeakerRouteDependencies,
+} from "./routes/public-speakers";
 
 export interface ApiBindings {
   APP_ENV: string;
@@ -42,6 +54,10 @@ type ApiContext = {
   Variables: ApiVariables;
 };
 
+export interface AuthRouteDependencies {
+  readonly handler: (request: Request) => Promise<Response>;
+}
+
 export interface EvaluationRouteDependencies {
   readonly service: EvaluationService;
   readonly actorFor: (
@@ -56,12 +72,15 @@ export interface ApiDependencies<
   TUpdate = Record<string, unknown>,
 > {
   readonly authenticator?: Pick<RequestAuthenticator, "authenticate">;
+  readonly auth?: AuthRouteDependencies;
   readonly publicApi?: PublicApiRoutesOptions<TRecord, TCreate, TUpdate>;
   readonly webhooks?: WebhookSubscriptionRepository;
   readonly evaluations?: EvaluationRouteDependencies;
   readonly speaker?: SpeakerRouteDependencies;
   readonly agenda?: AgendaRouteDependencies;
+  readonly publishedSpeakers?: PublishedSpeakerRouteDependencies;
   readonly cfp?: CfpRouteDependencies;
+  readonly organizerOverview?: OrganizerOverviewRouteDependencies;
 }
 
 const requestIdSchema = z.uuid();
@@ -141,9 +160,17 @@ async function normalizeErrorResponse(context: Context<ApiContext>): Promise<voi
       : errorCodeForStatus(response.status);
   const headers = new Headers(response.headers);
   headers.set("content-type", "application/json; charset=UTF-8");
+  const authenticationFailure =
+    context.req.path === "/api/auth" || context.req.path.startsWith("/api/auth/");
   context.res = new Response(
     JSON.stringify(
-      createError(context.get("traceId"), code, responseMessage(payload, response.status)),
+      createError(
+        context.get("traceId"),
+        code,
+        authenticationFailure
+          ? "The authentication request could not be completed."
+          : responseMessage(payload, response.status),
+      ),
     ),
     { status: response.status, headers },
   );
@@ -214,7 +241,8 @@ function assertAuthenticationConfigured(
       dependencies.webhooks !== undefined ||
       dependencies.evaluations !== undefined ||
       dependencies.agenda !== undefined ||
-      dependencies.cfp !== undefined)
+      dependencies.cfp !== undefined ||
+      dependencies.organizerOverview !== undefined)
   ) {
     throw new TypeError(
       "Authentication must be configured before protected API routes are mounted.",
@@ -270,6 +298,13 @@ export function createApp<
     }),
   );
 
+  if (dependencies.auth !== undefined) {
+    const authHandler = (context: Context<ApiContext>) =>
+      dependencies.auth!.handler(context.req.raw);
+    app.all("/api/auth", authHandler);
+    app.all("/api/auth/*", authHandler);
+  }
+
   if (dependencies.authenticator !== undefined) {
     const authenticate = authenticationMiddleware(dependencies.authenticator);
     app.use("/api/v1/organizations/*", authenticate);
@@ -293,6 +328,12 @@ export function createApp<
   if (dependencies.evaluations !== undefined) {
     app.route("/api/admin/evaluations", createEvaluationRoutes(dependencies.evaluations.service));
   }
+  if (dependencies.organizerOverview !== undefined) {
+    app.route(
+      "/api/admin/organizations/:organizationId/overview",
+      createOrganizerOverviewRoutes(dependencies.organizerOverview),
+    );
+  }
   if (dependencies.speaker !== undefined) {
     app.route("/api/speaker", createSpeakerRoutes(dependencies.speaker));
   }
@@ -306,11 +347,18 @@ export function createApp<
       createPublishedAgendaRoutes(dependencies.agenda),
     );
   }
+  if (dependencies.publishedSpeakers !== undefined) {
+    app.route(
+      "/api/public/events/:eventSlug/speakers",
+      createPublishedSpeakerRoutes(dependencies.publishedSpeakers),
+    );
+  }
   if (dependencies.cfp !== undefined) {
     app.route(
       "/api/cfp/organizations/:organizationId/events/:eventId",
       createCfpRoutes(dependencies.cfp),
     );
+    app.route("/api/public/cfp", createCfpPublicRoutes(dependencies.cfp));
   }
 
   app.get("/api/health", (context) => {

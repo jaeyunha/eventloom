@@ -1,6 +1,13 @@
 "use client";
 
-import { type ChangeEvent, type FormEvent, useState } from "react";
+import { type ChangeEvent, type FormEvent, useEffect, useMemo, useState } from "react";
+import {
+  type CfpApi,
+  CfpApiError,
+  type CfpEventConfiguration,
+  type CfpFormConfiguration,
+  createCfpApi,
+} from "../cfp/api";
 import styles from "./cfp-editor.module.css";
 
 type FieldType = "text" | "email" | "url" | "textarea";
@@ -53,6 +60,10 @@ export interface CfpConfiguration {
   fields: CfpFormField[];
   rule: CfpRule;
   ruleAction: string;
+  id?: string;
+  status?: "draft" | "published" | "closed";
+  eventVersion?: number;
+  formVersion?: number;
 }
 
 const DEFAULT_EVENT_ID = "summit-2026";
@@ -194,6 +205,177 @@ export function createSeededCfpConfiguration(eventId = DEFAULT_EVENT_ID): CfpCon
   return configuration;
 }
 
+function createEditorInitialConfiguration(eventId: string): CfpConfiguration {
+  if (process.env.NODE_ENV === "test" || process.env.NEXT_PUBLIC_APP_ENV === "local") {
+    return createSeededCfpConfiguration(eventId);
+  }
+  const seeded = createSeededCfpConfiguration(eventId);
+  return {
+    ...seeded,
+    eventName: "",
+    welcomeTitle: "",
+    welcomeBody: "",
+    confirmationTitle: "",
+    confirmationBody: "",
+    successMessage: "",
+    redirectUrl: "",
+    tracks: [],
+    tags: [],
+    formats: [],
+    levels: [],
+    helpfulLinks: [],
+    fields: [],
+    rule: {
+      type: "group",
+      operator: "AND",
+      conditions: [{ type: "condition", field: "title", operator: "is not", value: "" }],
+    },
+    ruleAction: "",
+  };
+}
+function instantFromDate(value: string): string {
+  return value.includes("T") ? value : `${value}T00:00:00.000Z`;
+}
+
+function dateFromInstant(value: string): string {
+  return value.length >= 10 ? value.slice(0, 10) : value;
+}
+
+function toEventConfiguration(
+  configuration: CfpConfiguration,
+  organizationId: string,
+  eventId: string,
+): CfpEventConfiguration {
+  return {
+    id: eventId,
+    tenantId: organizationId,
+    version: configuration.eventVersion ?? 1,
+    slug: configuration.slug,
+    name: configuration.eventName,
+    timezone: configuration.timezone,
+    opensAt: instantFromDate(configuration.opensAt),
+    closesAt: instantFromDate(configuration.closesAt),
+  };
+}
+
+function toFormConfiguration(
+  configuration: CfpConfiguration,
+  organizationId: string,
+  eventId: string,
+): CfpFormConfiguration {
+  const fields = configuration.fields.map((field) => ({
+    id: field.id,
+    sectionId: "session",
+    key: field.id,
+    label: field.label,
+    kind: field.type === "textarea" ? "rich_text" : field.type === "email" ? "email" : "text",
+    required: field.required,
+    options: [],
+  }));
+  const taxonomyFields = [
+    {
+      key: "format",
+      label: "Format",
+      kind: "select",
+      options: configuration.formats,
+    },
+    { key: "tags", label: "Tags", kind: "multi_select", options: configuration.tags },
+    { key: "track", label: "Track", kind: "select", options: configuration.tracks },
+    { key: "level", label: "Level", kind: "select", options: configuration.levels },
+    { key: "language", label: "Language", kind: "select", options: ["English"] },
+  ].map((field) => ({
+    id: `server-${field.key}`,
+    sectionId: "session",
+    required: false,
+    ...field,
+  }));
+  return {
+    id: configuration.id ?? "main-cfp",
+    tenantId: organizationId,
+    eventId,
+    name: configuration.welcomeTitle,
+    version: configuration.formVersion ?? 1,
+    status: configuration.status ?? "draft",
+    welcomeContent: `${configuration.welcomeTitle}\n${configuration.welcomeBody}`,
+    settings: {
+      speakerLimit: configuration.participantLimit,
+      maxSubmissionsPerAccount: configuration.formLimit,
+      remindersEnabled: configuration.reminderEmails,
+      adminNotificationsEnabled: configuration.adminNotifications,
+      confirmationMessage: `${configuration.confirmationTitle}\n${configuration.confirmationBody}`,
+      successContent: configuration.successMessage,
+      ...(configuration.redirectUrl ? { redirectUrl: configuration.redirectUrl } : {}),
+    },
+    sections: [{ id: "session", title: "Proposal", description: configuration.welcomeBody }],
+    submissionFields: [...fields, ...taxonomyFields],
+    participantFields: [],
+    rules: [],
+  } as unknown as CfpFormConfiguration;
+}
+
+function configurationFromServer(
+  current: CfpConfiguration,
+  event: CfpEventConfiguration,
+  form: CfpFormConfiguration,
+): CfpConfiguration {
+  const settings = form.settings;
+  const readString = (key: string, fallback: string): string => {
+    const value = settings[key];
+    return typeof value === "string" ? value : fallback;
+  };
+  const readBoolean = (key: string, fallback: boolean): boolean => {
+    const value = settings[key];
+    return typeof value === "boolean" ? value : fallback;
+  };
+  const readNumber = (key: string, fallback: number): number => {
+    const value = settings[key];
+    return typeof value === "number" ? value : fallback;
+  };
+  const optionsFor = (key: string, fallback: string[]): string[] => {
+    const field = form.submissionFields.find((candidate) => candidate.key === key);
+    return field?.options.length ? [...field.options] : fallback;
+  };
+  const [welcomeTitle = current.welcomeTitle, ...welcomeBody] = form.welcomeContent.split("\n");
+  return {
+    ...current,
+    id: form.id,
+    status: form.status,
+    eventVersion: event.version,
+    formVersion: form.version,
+    eventName: event.name,
+    slug: event.slug,
+    timezone: event.timezone,
+    opensAt: dateFromInstant(event.opensAt),
+    closesAt: dateFromInstant(event.closesAt),
+    participantLimit: readNumber("speakerLimit", current.participantLimit),
+    formLimit: readNumber("maxSubmissionsPerAccount", current.formLimit),
+    tracks: optionsFor("track", current.tracks),
+    tags: optionsFor("tags", current.tags),
+    formats: optionsFor("format", current.formats),
+    levels: optionsFor("level", current.levels),
+    reminderEmails: readBoolean("remindersEnabled", current.reminderEmails),
+    adminNotifications: readBoolean("adminNotificationsEnabled", current.adminNotifications),
+    welcomeTitle,
+    welcomeBody: welcomeBody.join("\n") || current.welcomeBody,
+    confirmationTitle:
+      readString("confirmationMessage", current.confirmationTitle).split("\n")[0] ?? "",
+    confirmationBody: readString("confirmationMessage", current.confirmationBody)
+      .split("\n")
+      .slice(1)
+      .join("\n"),
+    successMessage: readString("successContent", current.successMessage),
+    redirectUrl: readString("redirectUrl", current.redirectUrl),
+    fields: form.submissionFields.map((field) => ({
+      id: field.id,
+      label: field.label,
+      type: field.kind === "email" ? "email" : field.kind === "rich_text" ? "textarea" : "text",
+      required: field.required,
+      visible: true,
+      placeholder: "",
+    })),
+  };
+}
+
 export function summarizeRule(rule: CfpRule): string {
   if (rule.type === "condition") {
     return `${rule.field} ${rule.operator} ${rule.value}`;
@@ -304,15 +486,22 @@ function RuleTree({ rule }: { rule: CfpRule }) {
 
 interface CfpEditorProps {
   eventId: string;
+  organizationId?: string;
+  formId?: string;
+  api?: CfpApi;
 }
 
-export function CfpEditor({ eventId }: CfpEditorProps) {
+export function CfpEditor({ eventId, organizationId, formId, api: providedApi }: CfpEditorProps) {
   const [configuration, setConfiguration] = useState<CfpConfiguration>(() =>
-    createSeededCfpConfiguration(eventId),
+    createEditorInitialConfiguration(eventId),
+  );
+  const api = useMemo(
+    () => providedApi ?? createCfpApi(process.env.NEXT_PUBLIC_API_URL ?? ""),
+    [providedApi],
   );
   const [activeSection, setActiveSection] =
     useState<(typeof SECTION_LINKS)[number]["id"]>("event-details");
-  const [saveState, setSaveState] = useState<"idle" | "saved">("idle");
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [previewResponses, setPreviewResponses] = useState<Record<string, string>>({});
   const [previewSelections, setPreviewSelections] = useState({
     track: "Community systems",
@@ -320,6 +509,60 @@ export function CfpEditor({ eventId }: CfpEditorProps) {
     level: "Introductory",
   });
   const [previewMessage, setPreviewMessage] = useState("");
+
+  const localMode = process.env.NEXT_PUBLIC_APP_ENV === "local" || process.env.APP_ENV === "local";
+  const resolvedOrganizationId =
+    organizationId ??
+    process.env.NEXT_PUBLIC_CFP_ORGANIZATION_ID ??
+    (localMode ? "organization-1" : "");
+  const resolvedFormId =
+    formId ?? configuration.id ?? process.env.NEXT_PUBLIC_CFP_FORM_ID ?? "main-cfp";
+
+  useEffect(() => {
+    if (!resolvedOrganizationId || !resolvedFormId) {
+      setSaveState("error");
+      return;
+    }
+    let active = true;
+    void api
+      .getEvent({ organizationId: resolvedOrganizationId, eventId })
+      .then(async (eventConfiguration) => {
+        try {
+          const formConfiguration = await api.getForm({
+            organizationId: resolvedOrganizationId,
+            eventId,
+            formId: resolvedFormId,
+          });
+          if (!active) return;
+          setConfiguration((current) =>
+            configurationFromServer(current, eventConfiguration, formConfiguration),
+          );
+        } catch (error) {
+          if (!(error instanceof CfpApiError) || error.status !== 404) throw error;
+          if (!active) return;
+          setConfiguration((current) => {
+            const { formVersion: _formVersion, ...withoutFormVersion } = current;
+            return {
+              ...withoutFormVersion,
+              id: resolvedFormId,
+              status: "draft",
+              eventVersion: eventConfiguration.version,
+              eventName: eventConfiguration.name,
+              slug: eventConfiguration.slug,
+              timezone: eventConfiguration.timezone,
+              opensAt: dateFromInstant(eventConfiguration.opensAt),
+              closesAt: dateFromInstant(eventConfiguration.closesAt),
+            };
+          });
+        }
+      })
+      .catch(() => {
+        if (active) setSaveState("error");
+      });
+    return () => {
+      active = false;
+    };
+  }, [api, eventId, resolvedFormId, resolvedOrganizationId]);
 
   function updateConfiguration<K extends keyof CfpConfiguration>(
     key: K,
@@ -349,9 +592,83 @@ export function CfpEditor({ eventId }: CfpEditorProps) {
     setSaveState("idle");
   }
 
-  function handleSave(event: FormEvent<HTMLFormElement>): void {
+  async function handleSave(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
-    setSaveState("saved");
+    if (!resolvedOrganizationId || !resolvedFormId) {
+      setSaveState("error");
+      return;
+    }
+    try {
+      setSaveState("saving");
+      const savedEvent = await api.saveEvent({
+        organizationId: resolvedOrganizationId,
+        eventId,
+        event: toEventConfiguration(
+          {
+            ...configuration,
+            eventVersion:
+              configuration.eventVersion === undefined ? 1 : configuration.eventVersion + 1,
+          },
+          resolvedOrganizationId,
+          eventId,
+        ),
+        expectedVersion: configuration.eventVersion ?? null,
+      });
+      const savedForm =
+        configuration.formVersion === undefined
+          ? await api.createForm({
+              organizationId: resolvedOrganizationId,
+              eventId,
+              form: toFormConfiguration(
+                { ...configuration, id: resolvedFormId, formVersion: 1 },
+                resolvedOrganizationId,
+                eventId,
+              ),
+            })
+          : await api.saveForm({
+              organizationId: resolvedOrganizationId,
+              eventId,
+              form: toFormConfiguration(
+                {
+                  ...configuration,
+                  id: resolvedFormId,
+                  formVersion: configuration.formVersion + 1,
+                },
+                resolvedOrganizationId,
+                eventId,
+              ),
+              expectedVersion: configuration.formVersion,
+            });
+      setConfiguration((current) => configurationFromServer(current, savedEvent, savedForm));
+      setSaveState("saved");
+    } catch {
+      setSaveState("error");
+    }
+  }
+
+  async function handlePublish(): Promise<void> {
+    if (!resolvedOrganizationId || !resolvedFormId || configuration.formVersion === undefined) {
+      setSaveState("error");
+      return;
+    }
+    try {
+      setSaveState("saving");
+      const published = await api.publishForm({
+        organizationId: resolvedOrganizationId,
+        eventId,
+        formId: resolvedFormId,
+        expectedVersion: configuration.formVersion,
+      });
+      setConfiguration((current) => ({
+        ...current,
+        id: published.id,
+        status: published.status,
+        formVersion: published.version,
+      }));
+      setSaveState("saved");
+    } catch {
+      setSaveState("error");
+    }
   }
 
   function openSection(id: (typeof SECTION_LINKS)[number]["id"]): void {
@@ -384,6 +701,13 @@ export function CfpEditor({ eventId }: CfpEditorProps) {
           </a>
           <button className={styles.primaryButton} type="submit" form="cfp-editor-form">
             Save changes
+          </button>
+          <button
+            className={styles.secondaryButton}
+            type="button"
+            onClick={() => void handlePublish()}
+          >
+            Publish form
           </button>
         </div>
       </header>
@@ -420,7 +744,9 @@ export function CfpEditor({ eventId }: CfpEditorProps) {
                 <p className={styles.sectionKicker}>01 / foundation</p>
                 <h2 id="event-details-heading">Event details</h2>
               </div>
-              <span className={styles.statusPill}>Draft</span>
+              <span className={styles.statusPill}>
+                {configuration.status === "published" ? "Published" : "Draft"}
+              </span>
             </div>
             <p className={styles.sectionDescription}>
               Give applicants the context they need and set the dates and limits that protect your
@@ -826,7 +1152,11 @@ export function CfpEditor({ eventId }: CfpEditorProps) {
                 Save CFP configuration
               </button>
               <span className={styles.saveStatus} role="status" aria-live="polite">
+                {saveState === "saving" ? "Saving changes…" : ""}
                 {saveState === "saved" ? "Changes saved. Your draft is ready to publish." : ""}
+                {saveState === "error"
+                  ? "Changes could not be saved. Check your organizer session and try again."
+                  : ""}
               </span>
             </div>
           </section>

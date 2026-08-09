@@ -70,8 +70,16 @@ async function apiError(response: Response): Promise<AgendaApiError> {
   );
 }
 
-export function createAgendaApi(baseUrl: string, fetcher: Fetcher = fetch): AgendaApi {
-  const apiBase = `${baseWithoutTrailingSlash(baseUrl)}/api/admin/events`;
+export function createAgendaApi(
+  baseUrl: string,
+  organizationId: string,
+  fetcher: Fetcher = fetch,
+): AgendaApi {
+  const normalizedOrganizationId = organizationId.trim();
+  if (normalizedOrganizationId.length === 0) {
+    throw new TypeError("An organization ID is required for agenda requests.");
+  }
+  const apiBase = `${baseWithoutTrailingSlash(baseUrl)}/api/admin/organizations/${segment(normalizedOrganizationId)}/events`;
 
   async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const response = await fetcher(`${apiBase}${path}`, {

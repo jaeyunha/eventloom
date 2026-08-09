@@ -64,6 +64,14 @@ async function installAuthenticatedSession(
       sameSite: "Lax",
       secure: false,
     },
+    {
+      name: "better-auth.session_token",
+      value: "local-session",
+      url: "http://127.0.0.1:3015",
+      httpOnly: true,
+      sameSite: "Lax",
+      secure: false,
+    },
   ]);
   await context.addInitScript((authenticatedSession) => {
     window.localStorage.setItem(

@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { IntegrationAdmin } from "./integration-admin";
 import { OneTimeSecretPanel } from "./integration-sections";
-import type { AcceleventsAdminPreview, IntegrationAdminSnapshot } from "./types";
+import type { IntegrationAdminSnapshot } from "./types";
 
 const snapshot: IntegrationAdminSnapshot = {
   event: {
@@ -13,15 +13,10 @@ const snapshot: IntegrationAdminSnapshot = {
     publishedAgendaRevisionId: "agenda-revision-7",
   },
   accelevents: {
-    state: "connected",
-    accountLabel: "Open Web Summit 2026",
-    credentialLastFour: "2048",
-    lastPublication: {
-      publicationId: "publication-1",
-      status: "succeeded",
-      completedAt: "2026-08-08T18:00:00.000Z",
-      errorCount: 0,
-    },
+    state: "not_configured",
+    accountLabel: null,
+    credentialLastFour: null,
+    lastPublication: null,
   },
   delivery: {
     openSend: {
@@ -78,46 +73,8 @@ const snapshot: IntegrationAdminSnapshot = {
   ],
 };
 
-const preview: AcceleventsAdminPreview = {
-  publicationId: "publication-2",
-  agendaRevisionId: "agenda-revision-7",
-  snapshotHash: "a".repeat(64),
-  confirmationToken: "must-not-be-rendered",
-  createdAt: "2026-08-08T19:00:00.000Z",
-  speakers: [{ externalId: "speaker-1", name: "Ada Lovelace", email: "ada@example.test" }],
-  sessions: [
-    {
-      externalId: "session-1",
-      title: "Accessible systems",
-      startsAt: "2026-09-01T17:00:00.000Z",
-      room: "Main hall",
-      track: "Engineering",
-    },
-  ],
-  diff: {
-    summary: { create: 1, update: 1, unchanged: 0 },
-    records: [
-      {
-        kind: "speaker",
-        externalId: "speaker-1",
-        label: "Ada Lovelace",
-        operation: "update",
-        changedFields: ["biography"],
-      },
-      {
-        kind: "session",
-        externalId: "session-1",
-        label: "Accessible systems",
-        operation: "create",
-        changedFields: ["title", "room"],
-      },
-    ],
-  },
-  validationErrors: [],
-};
-
 describe("integration admin UI", () => {
-  it("renders event-scoped navigation and status labels without relying on color", () => {
+  it("renders supported integration navigation and status labels without relying on color", () => {
     const markup = renderToStaticMarkup(
       createElement(IntegrationAdmin, {
         eventId: "event-a",
@@ -129,26 +86,28 @@ describe("integration admin UI", () => {
     expect(markup).toContain("Open Web Summit");
     expect(markup).toContain('aria-label="Integration settings"');
     expect(markup).toContain('aria-current="page"');
-    expect(markup).toContain("Connected");
+    expect(markup).toContain("Email &amp; calendar");
+    expect(markup).toContain("API keys");
+    expect(markup).toContain("Webhooks");
     expect(markup).toContain("Needs attention");
     expect(markup).toContain("Source-of-truth boundary");
+    expect(markup).not.toContain("Accelevents");
+    expect(markup).not.toContain("/accelevents");
   });
 
-  it("requires explicit confirmation after rendering an immutable Accelevents diff", () => {
+  it("renders the scoped API-key surface", () => {
     const markup = renderToStaticMarkup(
       createElement(IntegrationAdmin, {
         eventId: "event-a",
-        section: "accelevents",
+        section: "api-keys",
         initialSnapshot: snapshot,
-        initialPreview: preview,
       }),
     );
 
-    expect(markup).toContain("Review outbound changes");
-    expect(markup).toContain("I reviewed this immutable preview");
-    expect(markup).toMatch(/<button[^>]*disabled=""[^>]*>Confirm and publish<\/button>/);
-    expect(markup).not.toContain("must-not-be-rendered");
-    expect(markup).toContain("Airtable records will not be changed");
+    expect(markup).toContain("Create a scoped API key");
+    expect(markup).toContain("Agenda export");
+    expect(markup).toContain("events:read");
+    expect(markup).toContain("Revoke");
   });
 
   it("uses non-prefilled password controls for replacement credentials", () => {

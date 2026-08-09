@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { createApp } from "../app";
+import { FakeAirtableTransport } from "../infrastructure/airtable";
 import { createLocalCfpService } from "./cfp";
-import type { RuntimeBindings } from "./cloudflare";
+import { inspectProductionRuntime, type RuntimeBindings } from "./cloudflare";
 import { createRuntimeApp, createRuntimeWorker } from "./composition";
 import { LOCAL_API_KEY, LOCAL_ORGANIZATION_ID, LOCAL_SESSION_TOKEN } from "./local";
-import { FakeAirtableTransport } from "../infrastructure/airtable";
 
 const localBindings: RuntimeBindings = {
   APP_ENV: "local",
@@ -18,7 +19,7 @@ function productionD1(digest: string): NonNullable<RuntimeBindings["DB"]> {
     id: "key-production",
     organization_id: LOCAL_ORGANIZATION_ID,
     label: "Production test key",
-    scopes_json: '["events:read","events:write"]',
+    scopes_json: '["events:read","events:write","agenda:read","agenda:write"]',
     expires_at: null,
     revoked_at: null,
   };
@@ -71,7 +72,8 @@ function productionBindings(
   } as unknown as NonNullable<RuntimeBindings["OUTBOX_QUEUE"]>;
   return {
     APP_ENV: "production",
-    WEB_ORIGIN: "https://open-sessionboard.pages.dev",
+    WEB_ORIGIN: "https://open-sessionboard-web-production.ashleyha0317.workers.dev",
+    API_ORIGIN: "https://open-sessionboard-api-production.ashleyha0317.workers.dev",
     DB: database,
     AGENDA_COORDINATOR: coordinator,
     PRIVATE_FILES: bucket,
@@ -79,6 +81,10 @@ function productionBindings(
     AIRTABLE_ACCESS_TOKEN: "test-token",
     AIRTABLE_BASE_ID: "base-test",
     BETTER_AUTH_SECRET: "test-secret-that-is-at-least-32-characters-long",
+    GOOGLE_CLIENT_ID: "google-client-id",
+    GOOGLE_CLIENT_SECRET: "google-client-secret",
+    OPENSEND_API_URL: "https://opensend.namuh.co",
+    OPENSEND_API_KEY: "opensend-test-key",
     AIRTABLE_TRANSPORT: transport,
   };
 }
@@ -102,6 +108,128 @@ describe("local runtime composition", () => {
         outstandingTaskCount: 2,
         submissions: [{ id: "local-submission", status: "accepted" }],
         profiles: [{ participantId: "local-participant", displayName: "Alex Rivera" }],
+      },
+    });
+  });
+  it("serves the organizer overview from local repositories", async () => {
+    const app = createRuntimeApp(localBindings);
+    const response = await app.request(
+      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/overview`,
+      { headers: organizerHeaders() },
+      localBindings,
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      data: {
+        organizationId: LOCAL_ORGANIZATION_ID,
+        metrics: {
+          eventCount: 2,
+          submissionCount: 1,
+          pendingReviewCount: 0,
+          outstandingSpeakerTaskCount: 2,
+          publishedSessionCount: 0,
+        },
+        events: [
+          { id: "demo-event", name: "Open Sessionboard Demo" },
+          { id: "open-sessionboard-conf", name: "Open Sessionboard Conference" },
+        ],
+        actionItems: [
+          { id: "speaker_tasks:demo-event", count: 2 },
+          { id: "agenda:demo-event", count: 2 },
+        ],
+      },
+    });
+  });
+
+  it("denies anonymous, reviewer, and wrong-tenant organizer overview access", async () => {
+    const app = createRuntimeApp(localBindings);
+    const path = `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/overview`;
+    const anonymous = await app.request(path, undefined, localBindings);
+    const wrongTenant = await app.request(
+      "/api/admin/organizations/another-organization/overview",
+      { headers: organizerHeaders() },
+      localBindings,
+    );
+    const reviewerApp = createApp({
+      authenticator: {
+        authenticate: async () => ({
+          kind: "user" as const,
+          sessionId: "reviewer-session",
+          userId: "reviewer",
+          email: "reviewer@example.test",
+          memberships: [{ organizationId: LOCAL_ORGANIZATION_ID, role: "reviewer" as const }],
+          speakerGrants: [],
+        }),
+      },
+      organizerOverview: {
+        getOverview: async (organizationId: string) => ({
+          organizationId,
+          metrics: {
+            eventCount: 0,
+            submissionCount: 0,
+            pendingReviewCount: 0,
+            outstandingSpeakerTaskCount: 0,
+            publishedSessionCount: 0,
+          },
+          events: [],
+          actionItems: [],
+        }),
+      },
+    });
+    const reviewer = await reviewerApp.request(path, undefined, localBindings);
+
+    expect(anonymous.status).toBe(401);
+    expect(wrongTenant.status).toBe(403);
+    expect(reviewer.status).toBe(403);
+  });
+
+  it("returns explicit empty overview data without repository fiction", async () => {
+    const app = createApp({
+      authenticator: {
+        authenticate: async () => ({
+          kind: "user" as const,
+          sessionId: "empty-session",
+          userId: "owner",
+          email: "owner@example.test",
+          memberships: [{ organizationId: "empty-organization", role: "owner" as const }],
+          speakerGrants: [],
+        }),
+      },
+      organizerOverview: {
+        getOverview: async (organizationId: string) => ({
+          organizationId,
+          metrics: {
+            eventCount: 0,
+            submissionCount: 0,
+            pendingReviewCount: 0,
+            outstandingSpeakerTaskCount: 0,
+            publishedSessionCount: 0,
+          },
+          events: [],
+          actionItems: [],
+        }),
+      },
+    });
+    const response = await app.request(
+      "/api/admin/organizations/empty-organization/overview",
+      undefined,
+      localBindings,
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      data: {
+        organizationId: "empty-organization",
+        metrics: {
+          eventCount: 0,
+          submissionCount: 0,
+          pendingReviewCount: 0,
+          outstandingSpeakerTaskCount: 0,
+          publishedSessionCount: 0,
+        },
+        events: [],
+        actionItems: [],
       },
     });
   });
@@ -223,6 +351,82 @@ describe("local runtime composition", () => {
     expect(wrongTenant.status).toBe(403);
     expect(invalidSpeakerCredential.status).toBe(401);
   });
+  it("mounts sessions with scoped list, get, create, and optimistic update access", async () => {
+    const app = createRuntimeApp(localBindings);
+    const base = `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/sessions`;
+    const apiHeaders = { authorization: `Bearer ${LOCAL_API_KEY}` };
+    const anonymous = await app.request(base, undefined, localBindings);
+    const listed = await app.request(base, { headers: apiHeaders }, localBindings);
+    const fetched = await app.request(
+      `${base}/local-session-keynote`,
+      {
+        headers: apiHeaders,
+      },
+      localBindings,
+    );
+    const created = await app.request(
+      base,
+      {
+        method: "POST",
+        headers: {
+          ...apiHeaders,
+          "content-type": "application/json",
+          "idempotency-key": "local-session-create-1",
+        },
+        body: JSON.stringify({
+          id: "local-session-created",
+          eventId: "demo-event",
+          title: "Created local session",
+        }),
+      },
+      localBindings,
+    );
+    const updated = await app.request(
+      `${base}/local-session-created`,
+      {
+        method: "PATCH",
+        headers: {
+          ...apiHeaders,
+          "content-type": "application/json",
+          "idempotency-key": "local-session-update-1",
+        },
+        body: JSON.stringify({ expectedVersion: 1, title: "Updated local session" }),
+      },
+      localBindings,
+    );
+    const wrongTenant = await app.request(
+      "/api/v1/organizations/another-organization/sessions",
+      { headers: apiHeaders },
+      localBindings,
+    );
+
+    expect(anonymous.status).toBe(401);
+    expect(listed.status).toBe(200);
+    await expect(listed.json()).resolves.toMatchObject({
+      data: [
+        { id: "local-session-keynote", title: "Opening keynote: Systems that earn trust" },
+        { id: "local-session-workshop" },
+      ],
+    });
+    expect(fetched.status).toBe(200);
+    await expect(fetched.json()).resolves.toMatchObject({
+      id: "local-session-keynote",
+      eventId: "demo-event",
+    });
+    expect(created.status).toBe(201);
+    await expect(created.json()).resolves.toMatchObject({
+      id: "local-session-created",
+      organizationId: LOCAL_ORGANIZATION_ID,
+      version: 1,
+    });
+    expect(updated.status).toBe(200);
+    await expect(updated.json()).resolves.toMatchObject({
+      id: "local-session-created",
+      title: "Updated local session",
+      version: 2,
+    });
+    expect(wrongTenant.status).toBe(403);
+  });
 
   it("seeds an open CFP with deterministic draft creation", async () => {
     const service = createLocalCfpService();
@@ -270,6 +474,22 @@ describe("local runtime composition", () => {
         }),
       },
     });
+    transport.seed({
+      baseId: "base-test",
+      table: "Sessions",
+      recordId: "rec00000000000002",
+      fields: {
+        "Application ID": "session-airtable",
+        "Metadata JSON": JSON.stringify({
+          id: "session-airtable",
+          organizationId: LOCAL_ORGANIZATION_ID,
+          eventId: "event-airtable",
+          title: "Airtable Session",
+          version: 1,
+          updatedAt: "2026-08-09T00:00:00.000Z",
+        }),
+      },
+    });
     const digestBytes = new Uint8Array(
       await crypto.subtle.digest("SHA-256", new TextEncoder().encode("production-api-key")),
     );
@@ -296,6 +516,28 @@ describe("local runtime composition", () => {
       },
       bindings,
     );
+    const sessionsListed = await app.request(
+      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/sessions`,
+      { headers: { authorization: "Bearer production-api-key" } },
+      bindings,
+    );
+    const sessionsCreated = await app.request(
+      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/sessions`,
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer production-api-key",
+          "content-type": "application/json",
+          "idempotency-key": "production-session-create-1",
+        },
+        body: JSON.stringify({
+          id: "created-session",
+          eventId: "event-airtable",
+          title: "Created Session",
+        }),
+      },
+      bindings,
+    );
 
     expect(listed.status).toBe(200);
     await expect(listed.json()).resolves.toMatchObject({
@@ -313,7 +555,61 @@ describe("local runtime composition", () => {
     expect(
       transport.requests.some((request) => request.method === "POST" && request.table === "Events"),
     ).toBe(true);
+    expect(sessionsListed.status).toBe(200);
+    await expect(sessionsListed.json()).resolves.toMatchObject({
+      data: [{ id: "session-airtable", title: "Airtable Session" }],
+    });
+    expect(sessionsCreated.status).toBe(201);
+    await expect(sessionsCreated.json()).resolves.toMatchObject({
+      id: "created-session",
+      organizationId: LOCAL_ORGANIZATION_ID,
+      version: 1,
+    });
+    expect(
+      transport.requests.some(
+        (request) =>
+          request.method === "POST" &&
+          request.table === "Sessions" &&
+          JSON.stringify(request.body).includes("Metadata JSON"),
+      ),
+    ).toBe(true);
   });
+  it("requires the fixed origin pair and both Google/OpenSend credential pairs", () => {
+    const bindings = productionBindings(new FakeAirtableTransport(), productionD1("unused"));
+    expect(inspectProductionRuntime(bindings).success).toBe(true);
+    const { API_ORIGIN: _apiOrigin, ...withoutApiOrigin } = bindings;
+    expect(inspectProductionRuntime(withoutApiOrigin).success).toBe(true);
+    const { GOOGLE_CLIENT_SECRET: _googleSecret, ...withoutGoogleSecret } = bindings;
+    expect(inspectProductionRuntime(withoutGoogleSecret).success).toBe(false);
+    const {
+      OPENSEND_API_KEY: _openSendKey,
+      OPENSEND_SENDING_API_KEY: _sendingKey,
+      ...withoutOpenSendKey
+    } = bindings;
+    expect(inspectProductionRuntime(withoutOpenSendKey).success).toBe(false);
+    expect(
+      inspectProductionRuntime({
+        ...bindings,
+        API_ORIGIN: "https://attacker.example",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("mounts the live Better Auth callback path through the production app", async () => {
+    const bindings = productionBindings(new FakeAirtableTransport(), productionD1("unused"));
+    const app = createRuntimeApp(bindings);
+    const response = await app.request(
+      `${bindings.API_ORIGIN}/api/auth/callback/google`,
+      { headers: { origin: bindings.WEB_ORIGIN } },
+      bindings,
+    );
+
+    expect(response.status).not.toBe(404);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    const payload = await response.text();
+    expect(payload).not.toContain("google-client-secret");
+  });
+
   it("fails closed without non-local provider configuration and never returns issue details", async () => {
     const worker = createRuntimeWorker();
     const bindings: RuntimeBindings = {

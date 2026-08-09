@@ -21,12 +21,27 @@ export interface CfpRouteEnvironment {
 
 export interface CfpRouteService
   extends Pick<
-    CfpService,
-    "saveEvent" | "saveForm" | "createDraft" | "saveDraft" | "review" | "submit"
-  > {}
+      CfpService,
+      "saveEvent" | "saveForm" | "createDraft" | "saveDraft" | "review" | "submit"
+    >,
+    Partial<
+      Pick<
+        CfpService,
+        | "getEvent"
+        | "getForm"
+        | "getPublishedCfp"
+        | "getReceipt"
+        | "loadDraft"
+        | "createForm"
+        | "publishForm"
+      >
+    > {}
 
 export interface CfpRouteDependencies {
   readonly service: CfpRouteService;
+}
+export interface CfpPublicRouteDependencies {
+  readonly service: Partial<Pick<CfpService, "getPublishedCfp" | "loadDraft" | "getReceipt">>;
 }
 
 const identifierSchema = z.string().trim().min(1).max(128);
@@ -44,6 +59,13 @@ const saveFormSchema = z
     expectedVersion: expectedVersionSchema.nullable(),
   })
   .strict();
+const createFormSchema = z
+  .object({
+    form: cfpFormSchema,
+    expectedVersion: expectedVersionSchema.nullable().optional(),
+  })
+  .strict();
+const publishSchema = z.object({ expectedVersion: expectedVersionSchema }).strict();
 const saveDraftSchema = z
   .object({
     expectedVersion: expectedVersionSchema,
@@ -210,7 +232,11 @@ function assertEventPath(
   if (resourceEventId !== eventId) {
     throw new CfpError("VALIDATION_FAILED", `The ${resourceName} does not match the request path.`);
   }
-  if (resourceName === "form" && resource.id !== routeParam(context, "formId")) {
+  if (
+    resourceName === "form" &&
+    context.req.param("formId") !== undefined &&
+    resource.id !== routeParam(context, "formId")
+  ) {
     throw new CfpError("VALIDATION_FAILED", "The form does not match the request path.");
   }
 }
@@ -221,6 +247,132 @@ export function createCfpRoutes(dependencies: CfpRouteDependencies): Hono<CfpRou
   routes.use("*", async (context, next) => {
     context.header("cache-control", "private, no-store");
     await next();
+  });
+  routes.get("/published", async (context) => {
+    const service = dependencies.service.getPublishedCfp;
+    if (service === undefined) {
+      throw new CfpError("NOT_FOUND", "The published CFP form was not found.");
+    }
+    const data = await service.call(dependencies.service, {
+      tenantId: routeParam(context, "organizationId"),
+      eventId: routeParam(context, "eventId"),
+    });
+    return context.json({ data });
+  });
+
+  routes.get("/forms/:formId/published", async (context) => {
+    const service = dependencies.service.getPublishedCfp;
+    if (service === undefined) {
+      throw new CfpError("NOT_FOUND", "The published CFP form was not found.");
+    }
+    const data = await service.call(dependencies.service, {
+      tenantId: routeParam(context, "organizationId"),
+      eventId: routeParam(context, "eventId"),
+      formId: routeParam(context, "formId"),
+    });
+    return context.json({ data });
+  });
+  routes.get("/config", async (context) => {
+    organizer(context, routeParam(context, "organizationId"));
+    const service = dependencies.service.getEvent;
+    if (service === undefined) {
+      throw new CfpError("NOT_FOUND", "The event CFP configuration was not found.");
+    }
+    const data = await service.call(dependencies.service, {
+      tenantId: routeParam(context, "organizationId"),
+      eventId: routeParam(context, "eventId"),
+    });
+    return context.json({ data });
+  });
+
+  routes.get("/forms/:formId", async (context) => {
+    organizer(context, routeParam(context, "organizationId"));
+    const service = dependencies.service.getForm;
+    if (service === undefined) {
+      throw new CfpError("NOT_FOUND", "The CFP form was not found.");
+    }
+    const data = await service.call(dependencies.service, {
+      tenantId: routeParam(context, "organizationId"),
+      formId: routeParam(context, "formId"),
+    });
+    if (data.eventId !== routeParam(context, "eventId")) {
+      throw new CfpError("FORBIDDEN", "The CFP form does not belong to this event.");
+    }
+    return context.json({ data });
+  });
+
+  routes.get("/submissions/:submissionId", async (context) => {
+    const principal = applicant(context);
+    const service = dependencies.service.loadDraft;
+    if (service === undefined) {
+      throw new CfpError("NOT_FOUND", "The CFP submission was not found.");
+    }
+    const data = await service.call(dependencies.service, {
+      tenantId: routeParam(context, "organizationId"),
+      submissionId: routeParam(context, "submissionId"),
+      ownerAccountId: principal.userId,
+    });
+    return context.json({ data });
+  });
+  routes.get("/submissions/:submissionId/draft", async (context) => {
+    const principal = applicant(context);
+    const service = dependencies.service.loadDraft;
+    if (service === undefined) {
+      throw new CfpError("NOT_FOUND", "The CFP submission was not found.");
+    }
+    const data = await service.call(dependencies.service, {
+      tenantId: routeParam(context, "organizationId"),
+      submissionId: routeParam(context, "submissionId"),
+      ownerAccountId: principal.userId,
+    });
+    return context.json({ data });
+  });
+  routes.get("/submissions/:submissionId/receipt", async (context) => {
+    const principal = applicant(context);
+    const service = dependencies.service.getReceipt;
+    if (service === undefined) {
+      throw new CfpError("NOT_FOUND", "A submission receipt is not available.");
+    }
+    const data = await service.call(dependencies.service, {
+      tenantId: routeParam(context, "organizationId"),
+      submissionId: routeParam(context, "submissionId"),
+      ownerAccountId: principal.userId,
+    });
+    return context.json({ data });
+  });
+
+  routes.post("/forms", async (context) => {
+    const principal = organizer(context, routeParam(context, "organizationId"));
+    const input = await body(context, createFormSchema);
+    assertEventPath(context, input.form, "form");
+    const data = dependencies.service.createForm
+      ? await dependencies.service.createForm({
+          tenantId: routeParam(context, "organizationId"),
+          form: input.form,
+          expectedVersion: input.expectedVersion ?? null,
+          idempotencyKey: idempotencyKey(context),
+        })
+      : await dependencies.service.saveForm(input.form, input.expectedVersion ?? null);
+    void principal;
+    return context.json({ data }, 201);
+  });
+
+  routes.post("/forms/:formId/publish", async (context) => {
+    const principal = organizer(context, routeParam(context, "organizationId"));
+    const input = await body(context, publishSchema);
+    const service = dependencies.service.publishForm;
+    if (service === undefined) {
+      throw new CfpError("INVALID_TRANSITION", "Publishing CFP forms is not configured.");
+    }
+    const data = await service.call(dependencies.service, {
+      tenantId: routeParam(context, "organizationId"),
+      eventId: routeParam(context, "eventId"),
+      formId: routeParam(context, "formId"),
+      organizerId: principal.userId,
+      expectedVersion: input.expectedVersion,
+      idempotencyKey: idempotencyKey(context),
+    });
+    return context.json({ data });
   });
 
   routes.put("/config", async (context) => {
@@ -331,6 +483,143 @@ export function createCfpRoutes(dependencies: CfpRouteDependencies): Hono<CfpRou
     if (error instanceof CfpError) {
       return cfpErrorResponse(context, error);
     }
+    throw error;
+  });
+
+  return routes;
+}
+export const CFP_PUBLIC_ROUTE_PREFIX = "/api/public/cfp";
+
+export function createCfpPublicRoutes(
+  dependencies: CfpPublicRouteDependencies,
+): Hono<CfpRouteEnvironment> {
+  const routes = new Hono<CfpRouteEnvironment>();
+
+  routes.use("*", async (context, next) => {
+    context.header("cache-control", "private, no-store");
+    await next();
+  });
+
+  routes.get("/organizations/:organizationId/events/:eventId/forms/:formId", async (context) => {
+    const service = dependencies.service.getPublishedCfp;
+    if (service === undefined) {
+      throw new CfpError("NOT_FOUND", "The published CFP form was not found.");
+    }
+    const data = await service.call(dependencies.service, {
+      tenantId: routeParam(context, "organizationId"),
+      eventId: routeParam(context, "eventId"),
+      formId: routeParam(context, "formId"),
+    });
+    return context.json({ data });
+  });
+
+  routes.get("/organizations/:organizationId/events/:eventId", async (context) => {
+    const service = dependencies.service.getPublishedCfp;
+    if (service === undefined) {
+      throw new CfpError("NOT_FOUND", "The published CFP form was not found.");
+    }
+    const data = await service.call(dependencies.service, {
+      tenantId: routeParam(context, "organizationId"),
+      eventId: routeParam(context, "eventId"),
+    });
+    return context.json({ data });
+  });
+  routes.get("/organizations/:organizationId/events/:eventId/cfp", async (context) => {
+    const service = dependencies.service.getPublishedCfp;
+    if (service === undefined) {
+      throw new CfpError("NOT_FOUND", "The published CFP form was not found.");
+    }
+    const data = await service.call(dependencies.service, {
+      tenantId: routeParam(context, "organizationId"),
+      eventId: routeParam(context, "eventId"),
+    });
+    return context.json({ data });
+  });
+
+  routes.get(
+    "/organizations/:organizationId/events/:eventId/cfp/forms/:formId",
+    async (context) => {
+      const service = dependencies.service.getPublishedCfp;
+      if (service === undefined) {
+        throw new CfpError("NOT_FOUND", "The published CFP form was not found.");
+      }
+      const data = await service.call(dependencies.service, {
+        tenantId: routeParam(context, "organizationId"),
+        eventId: routeParam(context, "eventId"),
+        formId: routeParam(context, "formId"),
+      });
+      return context.json({ data });
+    },
+  );
+  routes.get(
+    "/organizations/:organizationId/events/:eventId/submissions/:submissionId/draft",
+    async (context) => {
+      const principal = applicant(context);
+      const service = dependencies.service.loadDraft;
+      if (service === undefined) {
+        throw new CfpError("NOT_FOUND", "The CFP submission was not found.");
+      }
+      const data = await service.call(dependencies.service, {
+        tenantId: routeParam(context, "organizationId"),
+        submissionId: routeParam(context, "submissionId"),
+        ownerAccountId: principal.userId,
+      });
+      return context.json({ data });
+    },
+  );
+
+  routes.get(
+    "/organizations/:organizationId/events/:eventId/submissions/:submissionId",
+    async (context) => {
+      const principal = applicant(context);
+      const service = dependencies.service.loadDraft;
+      if (service === undefined) {
+        throw new CfpError("NOT_FOUND", "The CFP submission was not found.");
+      }
+      const data = await service.call(dependencies.service, {
+        tenantId: routeParam(context, "organizationId"),
+        submissionId: routeParam(context, "submissionId"),
+        ownerAccountId: principal.userId,
+      });
+      return context.json({ data });
+    },
+  );
+  routes.get(
+    "/organizations/:organizationId/events/:eventId/submissions/:submissionId/receipt",
+    async (context) => {
+      const principal = applicant(context);
+      const service = dependencies.service.getReceipt;
+      if (service === undefined) {
+        throw new CfpError("NOT_FOUND", "A submission receipt is not available.");
+      }
+      const data = await service.call(dependencies.service, {
+        tenantId: routeParam(context, "organizationId"),
+        submissionId: routeParam(context, "submissionId"),
+        ownerAccountId: principal.userId,
+      });
+      return context.json({ data });
+    },
+  );
+
+  routes.onError((error, context) => {
+    if (error instanceof ZodError) {
+      return errorResponse(
+        context,
+        400,
+        "VALIDATION_FAILED",
+        "The CFP request is invalid.",
+        validationDetails(error),
+      );
+    }
+    if (error instanceof AuthAccessError) {
+      return errorResponse(
+        context,
+        error.status,
+        error.code === "UNAUTHENTICATED" ? "AUTHENTICATION_REQUIRED" : "ACCESS_DENIED",
+        error.message,
+      );
+    }
+    if (error instanceof CfpError) return cfpErrorResponse(context, error);
     throw error;
   });
 

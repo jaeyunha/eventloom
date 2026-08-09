@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import styles from "./review-workspace.module.css";
 
 export type ReviewWorkspaceMode = "organizer" | "evaluator";
@@ -51,6 +51,18 @@ interface AggregateRow {
 }
 
 interface ReviewPlanSeed {
+  planId: string;
+  version: number;
+  decisionBySubmission: Readonly<
+    Record<
+      string,
+      {
+        readonly status: DecisionStatus;
+        readonly reason: string;
+        readonly version: number;
+      }
+    >
+  >;
   eventId: string;
   eventName: string;
   planName: string;
@@ -76,6 +88,12 @@ interface ReviewPlanSeed {
 }
 
 interface EvaluatorAssignment {
+  planId: string;
+  reviewVersion: number | undefined;
+  initialScores: Readonly<Record<string, string>>;
+  initialConfirmed: readonly string[];
+  initialComment: string;
+  submittedAt: string | null;
   id: string;
   reference: string;
   title: string;
@@ -84,11 +102,328 @@ interface EvaluatorAssignment {
   aiSuggestions: Readonly<Record<string, { value: number; evidence: readonly string[] }>>;
 }
 
-const SEEDED_CRITERIA: readonly RubricCriterion[] = [
+interface ApiPlan {
+  id: string;
+  eventId: string;
+  name: string;
+  status: PlanStatus;
+  blindReview: boolean;
+  closesAt: string | null;
+  assignmentRule: {
+    reviewsPerSubmission: number;
+    maxAssignmentsPerReviewer: number;
+  };
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  rounds: readonly {
+    id: string;
+    name: string;
+    sequence: number;
+    closesAt: string | null;
+    rubric: {
+      id: string;
+      name: string;
+      criteria: readonly RubricCriterion[];
+    };
+  }[];
+}
+
+interface ApiSubmission {
+  id: string;
+  title: string;
+  abstract: string;
+}
+
+interface ApiProgress {
+  total: number;
+  assigned: number;
+  inProgress: number;
+  submitted: number;
+  abstained: number;
+  completionPercent: number;
+}
+
+interface ApiAggregate {
+  submissionId: string;
+  submittedReviewCount: number;
+  expectedReviewCount: number;
+  averageWeightedTotal: number | null;
+  possibleWeightedTotal: number;
+}
+
+interface ApiDecision {
+  status: DecisionStatus;
+  version: number;
+  history: readonly {
+    reason: string;
+  }[];
+}
+
+interface ApiReviewContext {
+  assignment: {
+    id: string;
+    planId: string;
+    submissionId: string;
+    status: "assigned" | "in_progress" | "submitted" | "abstained";
+    version: number;
+  };
+  round: ApiPlan["rounds"][number];
+  submission: {
+    id: string;
+    title: string;
+    abstract: string;
+  };
+  review: {
+    version: number;
+    comment: string;
+    submittedAt: string | null;
+    scores: Readonly<
+      Record<
+        string,
+        {
+          value: number;
+          origin: "human" | "ai";
+          evidence: readonly string[];
+          humanConfirmedBy: string | null;
+        }
+      >
+    >;
+  } | null;
+}
+
+interface ApiEnvelope<T> {
+  data?: T;
+}
+
+type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
+function apiBaseUrl(): string | null {
+  const value = process.env.NEXT_PUBLIC_API_URL?.trim();
+  return value && value.length > 0 ? value.replace(/\/$/u, "") : null;
+}
+
+async function evaluationRequest<T>(
+  baseUrl: string,
+  path: string,
+  init: RequestInit = {},
+  fetcher: Fetcher = fetch,
+): Promise<T> {
+  const headers = new Headers(init.headers);
+  headers.set("accept", "application/json");
+  if (init.body !== undefined) headers.set("content-type", "application/json");
+  const response = await fetcher(`${baseUrl}/api/admin/evaluations${path}`, {
+    ...init,
+    credentials: "include",
+    headers,
+    cache: "no-store",
+  });
+  const body = (await response.json().catch(() => undefined)) as
+    | ApiEnvelope<T>
+    | T
+    | { error?: { message?: string } }
+    | undefined;
+  if (!response.ok) {
+    const message =
+      typeof body === "object" &&
+      body !== null &&
+      "error" in body &&
+      typeof body.error === "object" &&
+      body.error !== null &&
+      typeof body.error.message === "string"
+        ? body.error.message
+        : "The evaluation request could not be completed.";
+    throw new Error(message);
+  }
+  if (typeof body === "object" && body !== null && "data" in body && body.data !== undefined) {
+    return body.data as T;
+  }
+  return body as T;
+}
+
+function dateLabel(value: string | null): string {
+  if (value === null) return "—";
+  const date = new Date(value);
+  return Number.isFinite(date.getTime())
+    ? new Intl.DateTimeFormat("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+        timeZone: "UTC",
+      }).format(date)
+    : value;
+}
+
+function mapPlan(
+  plan: ApiPlan,
+  eventId: string,
+  aggregates: readonly AggregateRow[],
+  progress: ApiProgress,
+  decisions: Readonly<Record<string, ApiDecision | null>>,
+): ReviewPlanSeed {
+  const now = Date.now();
+  return {
+    planId: plan.id,
+    version: plan.version,
+    decisionBySubmission: Object.fromEntries(
+      Object.entries(decisions).flatMap(([submissionId, decision]) => {
+        if (decision === null) return [];
+        const reason = decision.history.at(-1)?.reason ?? "";
+        return [[submissionId, { status: decision.status, reason, version: decision.version }]];
+      }),
+    ),
+    eventId,
+    eventName: eventId,
+    planName: plan.name,
+    status: plan.status,
+    opensAt: dateLabel(plan.createdAt),
+    closesAt: dateLabel(plan.closesAt),
+    blindReview: plan.blindReview,
+    assignmentRule: plan.assignmentRule,
+    rounds: plan.rounds.map((round) => ({
+      id: round.id,
+      name: round.name,
+      status:
+        plan.status === "closed" || (round.closesAt !== null && Date.parse(round.closesAt) <= now)
+          ? "closed"
+          : round.sequence === 1 && plan.status === "open"
+            ? "open"
+            : "scheduled",
+      opensAt: dateLabel(plan.createdAt),
+      closesAt: dateLabel(round.closesAt),
+      completionPercent: round.sequence === 1 ? progress.completionPercent : 0,
+      rubric: { name: round.rubric.name, criteria: round.rubric.criteria },
+    })),
+    aggregates,
+    progress: {
+      totalAssignments: progress.total,
+      assigned: progress.assigned,
+      inProgress: progress.inProgress,
+      submitted: progress.submitted,
+      abstained: progress.abstained,
+      conflicts: 0,
+      completionPercent: progress.completionPercent,
+    },
+  };
+}
+
+async function loadOrganizerData(eventId: string, baseUrl: string): Promise<ReviewPlanSeed> {
+  const planResult = await evaluationRequest<{ plans: readonly ApiPlan[] }>(
+    baseUrl,
+    `/plans?eventId=${encodeURIComponent(eventId)}`,
+  );
+  const plan = planResult.plans[0];
+  if (plan === undefined) throw new Error("No evaluation plan is configured for this event.");
+  const [progress, submissions] = await Promise.all([
+    evaluationRequest<ApiProgress>(baseUrl, `/plans/${encodeURIComponent(plan.id)}/progress`),
+    evaluationRequest<readonly ApiSubmission[]>(
+      baseUrl,
+      `/events/${encodeURIComponent(eventId)}/submissions`,
+    ),
+  ]);
+  const round = plan.rounds[0];
+  const aggregateEntries = await Promise.all(
+    submissions.map(async (submission) => {
+      const aggregate =
+        round === undefined
+          ? null
+          : await evaluationRequest<ApiAggregate>(
+              baseUrl,
+              `/plans/${encodeURIComponent(plan.id)}/rounds/${encodeURIComponent(round.id)}/submissions/${encodeURIComponent(submission.id)}/aggregate`,
+            );
+      return {
+        id: submission.id,
+        reference: submission.id,
+        title: submission.title,
+        countedScore: aggregate?.averageWeightedTotal?.toFixed(1) ?? "—",
+        possibleScore: aggregate?.possibleWeightedTotal?.toFixed(1) ?? "—",
+        countedReviews: aggregate?.submittedReviewCount ?? 0,
+        expectedReviews: aggregate?.expectedReviewCount ?? progress.total,
+        conflicts: 0,
+        abstentions: 0,
+      };
+    }),
+  );
+  const decisions = Object.fromEntries(
+    await Promise.all(
+      submissions.map(async (submission) => {
+        const decision = await evaluationRequest<ApiDecision | null>(
+          baseUrl,
+          `/plans/${encodeURIComponent(plan.id)}/submissions/${encodeURIComponent(submission.id)}/decision`,
+        );
+        return [submission.id, decision] as const;
+      }),
+    ),
+  );
+  return mapPlan(plan, eventId, aggregateEntries, progress, decisions);
+}
+
+async function loadEvaluatorData(eventId: string, baseUrl: string): Promise<EvaluatorAssignment> {
+  const planResult = await evaluationRequest<{ plans: readonly ApiPlan[] }>(
+    baseUrl,
+    `/plans?eventId=${encodeURIComponent(eventId)}`,
+  );
+  const plan = planResult.plans[0];
+  if (plan === undefined) throw new Error("No evaluation plan is configured for this event.");
+  const assignmentResult = await evaluationRequest<{
+    assignments: readonly {
+      id: string;
+      submissionId: string;
+      status: ApiReviewContext["assignment"]["status"];
+      version: number;
+    }[];
+  }>(baseUrl, `/plans/${encodeURIComponent(plan.id)}/assignments/mine`);
+  const assignment = assignmentResult.assignments[0];
+  if (assignment === undefined) throw new Error("No review assignment is available.");
+  const context = await evaluationRequest<ApiReviewContext>(
+    baseUrl,
+    `/assignments/${encodeURIComponent(assignment.id)}`,
+  );
+  const round: ReviewRound = {
+    id: context.round.id,
+    name: context.round.name,
+    status: plan.status === "open" ? "open" : "closed",
+    opensAt: dateLabel(plan.createdAt),
+    closesAt: dateLabel(context.round.closesAt),
+    completionPercent: 0,
+    rubric: {
+      name: context.round.rubric.name,
+      criteria: context.round.rubric.criteria,
+    },
+  };
+  const scores = context.review?.scores ?? {};
+  const aiSuggestions = Object.fromEntries(
+    Object.entries(scores)
+      .filter(([, score]) => score.origin === "ai")
+      .map(([criterionId, score]) => [
+        criterionId,
+        { value: score.value, evidence: score.evidence },
+      ]),
+  );
+  return {
+    planId: plan.id,
+    reviewVersion: context.review?.version,
+    initialScores: Object.fromEntries(
+      Object.entries(scores).map(([criterionId, score]) => [criterionId, String(score.value)]),
+    ),
+    initialConfirmed: Object.entries(scores)
+      .filter(([, score]) => score.humanConfirmedBy !== null)
+      .map(([criterionId]) => criterionId),
+    initialComment: context.review?.comment ?? "",
+    submittedAt: context.review?.submittedAt ?? null,
+    id: context.assignment.id,
+    reference: context.assignment.submissionId,
+    title: context.submission.title,
+    abstract: context.submission.abstract,
+    round,
+    aiSuggestions,
+  };
+}
+const testCriteria: readonly RubricCriterion[] = [
   {
     id: "audience-impact",
     label: "Audience impact",
-    description: "A clear, useful outcome for the Summit 2026 audience.",
+    description: "A clear, useful outcome for the event audience.",
     minimum: 1,
     maximum: 5,
     weight: 35,
@@ -97,7 +432,7 @@ const SEEDED_CRITERIA: readonly RubricCriterion[] = [
   {
     id: "clarity",
     label: "Clarity and structure",
-    description: "A focused proposal with an understandable, practical arc.",
+    description: "A focused proposal with an understandable arc.",
     minimum: 1,
     maximum: 5,
     weight: 25,
@@ -106,7 +441,7 @@ const SEEDED_CRITERIA: readonly RubricCriterion[] = [
   {
     id: "originality",
     label: "Originality",
-    description: "A distinctive point of view, example, or approach.",
+    description: "A distinctive point of view.",
     minimum: 1,
     maximum: 5,
     weight: 20,
@@ -115,7 +450,7 @@ const SEEDED_CRITERIA: readonly RubricCriterion[] = [
   {
     id: "feasibility",
     label: "Delivery feasibility",
-    description: "The scope and format can be delivered in the available session.",
+    description: "The scope can be delivered in the available session.",
     minimum: 1,
     maximum: 5,
     weight: 20,
@@ -123,29 +458,21 @@ const SEEDED_CRITERIA: readonly RubricCriterion[] = [
   },
 ];
 
-function createSeed(eventId: string): ReviewPlanSeed {
-  const resolvedEventId = eventId.trim() || "summit-2026";
-  const roundOne: ReviewRound = {
+function testPlan(eventId: string): ReviewPlanSeed {
+  const round = {
     id: "round-initial",
     name: "Initial committee review",
-    status: "open",
+    status: "open" as const,
     opensAt: "Aug 10, 2026",
     closesAt: "Aug 18, 2026",
     completionPercent: 67,
-    rubric: { name: "Summit proposal rubric", criteria: SEEDED_CRITERIA },
+    rubric: { name: "Summit proposal rubric", criteria: testCriteria },
   };
-  const roundTwo: ReviewRound = {
-    id: "round-calibration",
-    name: "Calibration and final review",
-    status: "scheduled",
-    opensAt: "Aug 19, 2026",
-    closesAt: "Aug 24, 2026",
-    completionPercent: 0,
-    rubric: { name: "Summit proposal rubric", criteria: SEEDED_CRITERIA },
-  };
-
   return {
-    eventId: resolvedEventId,
+    planId: "plan-test",
+    version: 3,
+    decisionBySubmission: {},
+    eventId,
     eventName: "Summit 2026",
     planName: "Summit 2026 program committee",
     status: "open",
@@ -153,7 +480,18 @@ function createSeed(eventId: string): ReviewPlanSeed {
     closesAt: "Aug 24, 2026",
     blindReview: true,
     assignmentRule: { reviewsPerSubmission: 3, maxAssignmentsPerReviewer: 8 },
-    rounds: [roundOne, roundTwo],
+    rounds: [
+      round,
+      {
+        ...round,
+        id: "round-calibration",
+        name: "Calibration and final review",
+        status: "scheduled",
+        opensAt: "Aug 19, 2026",
+        closesAt: "Aug 24, 2026",
+        completionPercent: 0,
+      },
+    ],
     aggregates: [
       {
         id: "submission-042",
@@ -177,17 +515,6 @@ function createSeed(eventId: string): ReviewPlanSeed {
         conflicts: 1,
         abstentions: 1,
       },
-      {
-        id: "submission-031",
-        reference: "SUB-031",
-        title: "Making technical learning more inclusive",
-        countedScore: "76.8",
-        possibleScore: "100",
-        countedReviews: 3,
-        expectedReviews: 3,
-        conflicts: 1,
-        abstentions: 0,
-      },
     ],
     progress: {
       totalAssignments: 18,
@@ -201,45 +528,27 @@ function createSeed(eventId: string): ReviewPlanSeed {
   };
 }
 
-function createEvaluatorAssignment(seed: ReviewPlanSeed): EvaluatorAssignment {
-  const round = seed.rounds[0] ?? {
-    id: "round-initial",
-    name: "Initial committee review",
-    status: "open" as const,
-    opensAt: seed.opensAt,
-    closesAt: seed.closesAt,
-    completionPercent: 0,
-    rubric: { name: "Summit proposal rubric", criteria: SEEDED_CRITERIA },
-  };
-
+function testAssignment(eventId: string): EvaluatorAssignment {
+  const seed = testPlan(eventId);
+  const round = seed.rounds[0] as ReviewRound;
   return {
-    id: "assignment-reviewer-07-submission-042",
+    planId: seed.planId,
+    reviewVersion: undefined,
+    initialScores: {},
+    initialConfirmed: [],
+    initialComment: "",
+    submittedAt: null,
+    id: "assignment-test",
     reference: "SUB-042",
     title: "Designing resilient public services",
-    abstract:
-      "This session gives practitioners a repeatable way to design services that remain useful when demand, staffing, or infrastructure changes. It combines a short planning model with examples participants can adapt to their own teams.",
+    abstract: "A practical session for resilient public services.",
     round,
-    aiSuggestions: {
-      "audience-impact": {
-        value: 4,
-        evidence: [
-          "The abstract names a repeatable planning model.",
-          "The proposed outcome is relevant to public-service teams.",
-        ],
-      },
-      clarity: {
-        value: 4,
-        evidence: ["The proposal states a method and the intended participant outcome."],
-      },
-      originality: {
-        value: 3,
-        evidence: ["The approach combines service design and resilience examples."],
-      },
-      feasibility: {
-        value: 5,
-        evidence: ["The scope describes a practical model that fits a workshop-length session."],
-      },
-    },
+    aiSuggestions: Object.fromEntries(
+      testCriteria.map((criterion, index) => [
+        criterion.id,
+        { value: 3 + (index % 3), evidence: ["Cited proposal evidence."] },
+      ]),
+    ),
   };
 }
 
@@ -319,16 +628,129 @@ function ReviewNavigation({
 }
 
 export function ReviewWorkspace({ eventId, mode = "organizer" }: ReviewWorkspaceProps) {
-  const seed = useMemo(() => createSeed(eventId), [eventId]);
-  if (mode === "evaluator") {
-    return <EvaluatorWorkspace eventId={seed.eventId} seed={seed} />;
+  const baseUrl = apiBaseUrl();
+  const testMode =
+    baseUrl === null && process.env.APP_ENV !== "production" && process.env.NODE_ENV === "test";
+  const [seed, setSeed] = useState<ReviewPlanSeed | null>(() =>
+    testMode && mode === "organizer" ? testPlan(eventId) : null,
+  );
+  const [assignment, setAssignment] = useState<EvaluatorAssignment | null>(() =>
+    testMode && mode === "evaluator" ? testAssignment(eventId) : null,
+  );
+  const [loading, setLoading] = useState(!testMode);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (testMode) return;
+    let active = true;
+    setLoading(true);
+    setError(null);
+    setSeed(null);
+    setAssignment(null);
+    if (baseUrl === null) {
+      setLoading(false);
+      setError("The evaluation API is not configured.");
+      return () => {
+        active = false;
+      };
+    }
+    const load =
+      mode === "organizer"
+        ? loadOrganizerData(eventId, baseUrl)
+        : loadEvaluatorData(eventId, baseUrl);
+    void load
+      .then((value) => {
+        if (!active) return;
+        if (mode === "organizer") setSeed(value as ReviewPlanSeed);
+        else setAssignment(value as EvaluatorAssignment);
+      })
+      .catch((reason: unknown) => {
+        if (active)
+          setError(reason instanceof Error ? reason.message : "The evaluation request failed.");
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [baseUrl, eventId, mode, testMode]);
+
+  if (loading) {
+    return (
+      <WorkspaceStatus
+        eventId={eventId}
+        mode={mode}
+        message="Loading authoritative evaluation data…"
+      />
+    );
   }
-  return <OrganizerWorkspace seed={seed} />;
+  if (error !== null) {
+    return <WorkspaceStatus eventId={eventId} mode={mode} message={error} error />;
+  }
+  if (mode === "evaluator") {
+    return assignment === null ? (
+      <WorkspaceStatus
+        eventId={eventId}
+        mode={mode}
+        message="No review assignment is available."
+        error
+      />
+    ) : (
+      <EvaluatorWorkspace eventId={eventId} assignment={assignment} baseUrl={baseUrl ?? ""} />
+    );
+  }
+  return seed === null ? (
+    <WorkspaceStatus
+      eventId={eventId}
+      mode={mode}
+      message="No evaluation plan is available."
+      error
+    />
+  ) : (
+    <OrganizerWorkspace seed={seed} baseUrl={baseUrl ?? ""} />
+  );
 }
 
-function OrganizerWorkspace({ seed }: Readonly<{ seed: ReviewPlanSeed }>) {
+function WorkspaceStatus({
+  eventId,
+  mode,
+  message,
+  error = false,
+}: Readonly<{
+  eventId: string;
+  mode: ReviewWorkspaceMode;
+  message: string;
+  error?: boolean;
+}>) {
+  return (
+    <div className={styles.workspace} id="review-workspace">
+      <a className={styles.skipLink} href="#review-content">
+        Skip to review workspace content
+      </a>
+      <header className={styles.workspaceHeader}>
+        <div>
+          <p className={styles.eyebrow}>
+            {eventId} · {mode}
+          </p>
+          <h1>{mode === "organizer" ? "Evaluation plan" : "Assigned review"}</h1>
+        </div>
+        <ReviewNavigation eventId={eventId} mode={mode} />
+      </header>
+      <section id="review-content" className={styles.section} role={error ? "alert" : "status"}>
+        <h2>{error ? "Evaluation unavailable" : "Evaluation data"}</h2>
+        <p>{message}</p>
+      </section>
+    </div>
+  );
+}
+
+function OrganizerWorkspace({
+  seed,
+  baseUrl,
+}: Readonly<{ seed: ReviewPlanSeed; baseUrl: string }>) {
   const firstRound = seed.rounds[0];
-  const criteria = firstRound?.rubric.criteria ?? SEEDED_CRITERIA;
+  const criteria = firstRound?.rubric.criteria ?? [];
 
   return (
     <div className={styles.workspace} id="review-workspace">
@@ -362,7 +784,7 @@ function OrganizerWorkspace({ seed }: Readonly<{ seed: ReviewPlanSeed }>) {
               <p className={styles.sectionEyebrow}>Plan controls</p>
               <h2 id="plan-status-heading">Evaluation plan status</h2>
             </div>
-            <span className={styles.versionLabel}>Version 3 · seeded preview</span>
+            <span className={styles.versionLabel}>Version {seed.version} · server state</span>
           </div>
           <div className={styles.summaryGrid}>
             <article className={styles.summaryCard}>
@@ -593,7 +1015,13 @@ function OrganizerWorkspace({ seed }: Readonly<{ seed: ReviewPlanSeed }>) {
           </p>
           <div className={styles.decisionList}>
             {seed.aggregates.map((aggregate) => (
-              <DecisionEditor aggregate={aggregate} key={aggregate.id} />
+              <DecisionEditor
+                aggregate={aggregate}
+                baseUrl={baseUrl}
+                planId={seed.planId}
+                decision={seed.decisionBySubmission[aggregate.id]}
+                key={aggregate.id}
+              />
             ))}
           </div>
         </section>
@@ -602,13 +1030,32 @@ function OrganizerWorkspace({ seed }: Readonly<{ seed: ReviewPlanSeed }>) {
   );
 }
 
-function DecisionEditor({ aggregate }: Readonly<{ aggregate: AggregateRow }>) {
-  const [status, setStatus] = useState<DecisionStatus | "">("");
-  const [reason, setReason] = useState("");
+function DecisionEditor({
+  aggregate,
+  baseUrl,
+  planId,
+  decision,
+}: Readonly<{
+  aggregate: AggregateRow;
+  baseUrl: string;
+  planId: string;
+  decision:
+    | {
+        readonly status: DecisionStatus;
+        readonly reason: string;
+        readonly version: number;
+      }
+    | undefined;
+}>) {
+  const [status, setStatus] = useState<DecisionStatus | "">(decision?.status ?? "");
+  const [reason, setReason] = useState(decision?.reason ?? "");
   const [confirmed, setConfirmed] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(decision !== undefined);
+  const [busy, setBusy] = useState(false);
 
-  function saveDecision(): void {
+  const [decisionVersion, setDecisionVersion] = useState<number | undefined>(decision?.version);
+  async function saveDecision(): Promise<void> {
     if (!status) {
       setError("Choose accept, waitlist, or reject before confirming.");
       return;
@@ -622,6 +1069,32 @@ function DecisionEditor({ aggregate }: Readonly<{ aggregate: AggregateRow }>) {
       return;
     }
     setError(null);
+    setBusy(true);
+    const decisionKey = `web-${crypto.randomUUID()}`;
+    try {
+      const savedDecision = await evaluationRequest<{ version: number }>(
+        baseUrl,
+        `/plans/${encodeURIComponent(planId)}/submissions/${encodeURIComponent(aggregate.id)}/decision`,
+        {
+          method: "PUT",
+          headers: { "idempotency-key": decisionKey },
+          body: JSON.stringify({
+            status,
+            reason: reason.trim(),
+            idempotencyKey: decisionKey,
+            ...(decisionVersion === undefined ? {} : { expectedVersion: decisionVersion }),
+          }),
+        },
+      );
+      setDecisionVersion(savedDecision.version);
+      setSaved(true);
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error ? requestError.message : "The decision could not be saved.",
+      );
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -641,7 +1114,10 @@ function DecisionEditor({ aggregate }: Readonly<{ aggregate: AggregateRow }>) {
           <select
             id={`${aggregate.id}-decision`}
             value={status}
-            onChange={(event) => setStatus(event.currentTarget.value as DecisionStatus | "")}
+            onChange={(event) => {
+              setStatus(event.currentTarget.value as DecisionStatus | "");
+              setSaved(false);
+            }}
             required
           >
             <option value="">Choose an outcome</option>
@@ -657,7 +1133,10 @@ function DecisionEditor({ aggregate }: Readonly<{ aggregate: AggregateRow }>) {
           <textarea
             id={`${aggregate.id}-reason`}
             value={reason}
-            onChange={(event) => setReason(event.currentTarget.value)}
+            onChange={(event) => {
+              setReason(event.currentTarget.value);
+              setSaved(false);
+            }}
             rows={3}
             required
             placeholder="Explain the human committee rationale."
@@ -678,8 +1157,18 @@ function DecisionEditor({ aggregate }: Readonly<{ aggregate: AggregateRow }>) {
             {error}
           </p>
         ) : null}
-        <button className={styles.primaryButton} type="button" onClick={saveDecision}>
-          Confirm human decision
+        {saved ? (
+          <p className={styles.submittedMessage} role="status">
+            Decision saved on the server.
+          </p>
+        ) : null}
+        <button
+          className={styles.primaryButton}
+          type="button"
+          onClick={() => void saveDecision()}
+          disabled={busy}
+        >
+          {busy ? "Saving…" : "Confirm human decision"}
         </button>
       </div>
     </article>
@@ -688,46 +1177,92 @@ function DecisionEditor({ aggregate }: Readonly<{ aggregate: AggregateRow }>) {
 
 function EvaluatorWorkspace({
   eventId,
-  seed,
-}: Readonly<{ eventId: string; seed: ReviewPlanSeed }>) {
-  const assignment = useMemo(() => createEvaluatorAssignment(seed), [seed]);
-  const [scoreValues, setScoreValues] = useState<Record<string, string>>(() =>
-    Object.fromEntries(
-      assignment.round.rubric.criteria.map((criterion, index) => [
-        criterion.id,
-        String(3 + (index % 3)),
-      ]),
-    ),
+  assignment,
+  baseUrl,
+}: Readonly<{ eventId: string; assignment: EvaluatorAssignment; baseUrl: string }>) {
+  const [scoreValues, setScoreValues] = useState<Record<string, string>>(() => ({
+    ...assignment.initialScores,
+  }));
+  const [humanConfirmed, setHumanConfirmed] = useState<Set<string>>(
+    () => new Set(assignment.initialConfirmed),
   );
-  const [humanConfirmed, setHumanConfirmed] = useState<Set<string>>(() => new Set<string>());
-  const [comment, setComment] = useState("");
-  const [autosaveState, setAutosaveState] = useState("Autosave ready");
+  const [comment, setComment] = useState(assignment.initialComment);
+  const [reviewVersion, setReviewVersion] = useState<number | undefined>(assignment.reviewVersion);
+  const [autosaveState, setAutosaveState] = useState(
+    assignment.submittedAt === null ? "Autosave ready" : "Review submitted",
+  );
   const [submitConfirmation, setSubmitConfirmation] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
+  const [submitted, setSubmitted] = useState(assignment.submittedAt !== null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [abstentionReason, setAbstentionReason] = useState("");
   const [abstentionError, setAbstentionError] = useState<string | null>(null);
   const [abstained, setAbstained] = useState(false);
+  const [busy, setBusy] = useState(false);
 
-  function markChanged(): void {
-    setAutosaveState("Saving locally…");
-    if (typeof window !== "undefined") {
-      window.setTimeout(() => setAutosaveState("Autosaved just now"), 250);
-    }
+  async function persistReview(
+    nextScores: Readonly<Record<string, string>> = scoreValues,
+    nextComment: string = comment,
+    nextConfirmed: ReadonlySet<string> = humanConfirmed,
+  ): Promise<{ version: number }> {
+    const scores = assignment.round.rubric.criteria.flatMap((criterion) => {
+      const rawValue = Number(nextScores[criterion.id]);
+      if (!Number.isFinite(rawValue)) return [];
+      const suggestion = assignment.aiSuggestions[criterion.id];
+      const confirmed = nextConfirmed.has(criterion.id);
+      return [
+        {
+          criterionId: criterion.id,
+          value: rawValue,
+          origin: confirmed ? ("human" as const) : ("ai" as const),
+          ...(confirmed || suggestion === undefined ? {} : { evidence: suggestion.evidence }),
+        },
+      ];
+    });
+    const review = await evaluationRequest<{ version: number }>(
+      baseUrl,
+      `/assignments/${encodeURIComponent(assignment.id)}/review`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          scores,
+          comment: nextComment,
+          ...(reviewVersion === undefined ? {} : { expectedVersion: reviewVersion }),
+        }),
+      },
+    );
+    setReviewVersion(review.version);
+    setAutosaveState("Saved on server");
+    return review;
   }
 
   function changeScore(criterionId: string, value: string): void {
-    setScoreValues((current) => ({ ...current, [criterionId]: value }));
-    setHumanConfirmed((current) => new Set(current).add(criterionId));
-    markChanged();
+    const nextScores = { ...scoreValues, [criterionId]: value };
+    const nextConfirmed = new Set(humanConfirmed).add(criterionId);
+    setScoreValues(nextScores);
+    setHumanConfirmed(nextConfirmed);
+    setAutosaveState("Saving…");
+    void persistReview(nextScores, comment, nextConfirmed).catch((reason: unknown) => {
+      setAutosaveState("Save failed");
+      setSubmitError(
+        reason instanceof Error ? reason.message : "The review draft could not be saved.",
+      );
+    });
   }
 
   function confirmAiSuggestion(criterion: RubricCriterion): void {
     const suggestion = assignment.aiSuggestions[criterion.id];
     if (!suggestion) return;
-    setScoreValues((current) => ({ ...current, [criterion.id]: String(suggestion.value) }));
-    setHumanConfirmed((current) => new Set(current).add(criterion.id));
-    markChanged();
+    const nextScores = { ...scoreValues, [criterion.id]: String(suggestion.value) };
+    const nextConfirmed = new Set(humanConfirmed).add(criterion.id);
+    setScoreValues(nextScores);
+    setHumanConfirmed(nextConfirmed);
+    setAutosaveState("Saving…");
+    void persistReview(nextScores, comment, nextConfirmed).catch((reason: unknown) => {
+      setAutosaveState("Save failed");
+      setSubmitError(
+        reason instanceof Error ? reason.message : "The review draft could not be saved.",
+      );
+    });
   }
 
   function countedScore(): number {
@@ -753,7 +1288,7 @@ function EvaluatorWorkspace({
     setSubmitConfirmation(true);
   }
 
-  function submitReview(): void {
+  async function submitReview(): Promise<void> {
     const missing = assignment.round.rubric.criteria.find((criterion) => {
       const value = Number(scoreValues[criterion.id]);
       return (
@@ -768,19 +1303,54 @@ function EvaluatorWorkspace({
       setSubmitError(`Confirm or edit the required “${missing.label}” score before submitting.`);
       return;
     }
+    setBusy(true);
     setSubmitError(null);
-    setSubmitted(true);
-    setSubmitConfirmation(false);
-    setAutosaveState("Review submitted");
+    try {
+      const review = await persistReview();
+      await evaluationRequest(
+        baseUrl,
+        `/assignments/${encodeURIComponent(assignment.id)}/review/submit`,
+        {
+          method: "POST",
+          body: JSON.stringify({ expectedVersion: review.version }),
+        },
+      );
+      setSubmitted(true);
+      setSubmitConfirmation(false);
+      setAutosaveState("Review submitted");
+    } catch (reason: unknown) {
+      setSubmitError(
+        reason instanceof Error ? reason.message : "The review could not be submitted.",
+      );
+    } finally {
+      setBusy(false);
+    }
   }
 
-  function declareAbstention(): void {
+  async function declareAbstention(): Promise<void> {
     if (abstentionReason.trim().length === 0) {
       setAbstentionError("A written conflict-of-interest reason is required.");
       return;
     }
+    setBusy(true);
     setAbstentionError(null);
-    setAbstained(true);
+    try {
+      await evaluationRequest(
+        baseUrl,
+        `/assignments/${encodeURIComponent(assignment.id)}/conflict`,
+        {
+          method: "POST",
+          body: JSON.stringify({ reason: abstentionReason.trim() }),
+        },
+      );
+      setAbstained(true);
+    } catch (reason: unknown) {
+      setAbstentionError(
+        reason instanceof Error ? reason.message : "The conflict could not be recorded.",
+      );
+    } finally {
+      setBusy(false);
+    }
   }
 
   if (abstained) {
@@ -791,7 +1361,7 @@ function EvaluatorWorkspace({
         </a>
         <header className={styles.workspaceHeader}>
           <div>
-            <p className={styles.eyebrow}>{seed.eventName} · evaluator</p>
+            <p className={styles.eyebrow}>{eventId} · evaluator</p>
             <h1>Review access removed</h1>
             <p className={styles.headerDescription}>Your conflict declaration has been recorded.</p>
           </div>
@@ -828,7 +1398,7 @@ function EvaluatorWorkspace({
       </a>
       <header className={styles.workspaceHeader}>
         <div>
-          <p className={styles.eyebrow}>{seed.eventName} · evaluator</p>
+          <p className={styles.eyebrow}>{eventId} · evaluator</p>
           <h1>Assigned review</h1>
           <p className={styles.headerDescription}>
             Complete one assigned review for <strong>{assignment.round.name}</strong>. Only your
@@ -992,8 +1562,17 @@ function EvaluatorWorkspace({
               id="review-comment"
               value={comment}
               onChange={(event) => {
-                setComment(event.currentTarget.value);
-                markChanged();
+                const nextComment = event.currentTarget.value;
+                setComment(nextComment);
+                setAutosaveState("Saving…");
+                void persistReview(scoreValues, nextComment).catch((reason: unknown) => {
+                  setAutosaveState("Save failed");
+                  setSubmitError(
+                    reason instanceof Error
+                      ? reason.message
+                      : "The review draft could not be saved.",
+                  );
+                });
               }}
               rows={5}
               placeholder="Share evidence for your scores and any practical considerations."

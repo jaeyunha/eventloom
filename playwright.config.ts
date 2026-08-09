@@ -34,6 +34,7 @@ export default defineConfig({
       env: {
         ...process.env,
         APP_ENV: "local",
+        NEXT_PUBLIC_APP_ENV: "local",
         CLAUDECODE: "",
         CLAUDE_CODE: "",
         NEXT_PUBLIC_APP_URL: webBaseUrl,

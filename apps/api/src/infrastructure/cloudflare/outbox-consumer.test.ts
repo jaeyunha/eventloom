@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   consumeOutboxQueue,
   InMemoryOutboxJobRepository,
-  OutboxDeliveryError,
   type OutboxConsumerBindings,
+  OutboxDeliveryError,
   type OutboxJob,
   type OutboxQueueMessage,
 } from "./outbox-consumer";
@@ -167,7 +167,7 @@ describe("Cloudflare outbox consumer", () => {
     expect(queueMessage.retries).toEqual([]);
   });
 
-  it("acknowledges malformed queue messages without exposing their body", async () => {
+  it("retries malformed queue messages without exposing their body", async () => {
     const repository = new InMemoryOutboxJobRepository([job()]);
     const queueMessage = message({ version: 1, jobId: "job-1", secret: "do-not-log" });
     const logger = { error: vi.fn() };
@@ -179,8 +179,48 @@ describe("Cloudflare outbox consumer", () => {
       { repository, logger, now: () => NOW, leaseOwner: "test-worker" },
     );
 
-    expect(queueMessage.acked).toBe(true);
-    expect(queueMessage.retries).toEqual([]);
+    expect(queueMessage.acked).toBe(false);
+    expect(queueMessage.retries).toEqual([1]);
     expect(JSON.stringify(logger.error.mock.calls)).not.toContain("do-not-log");
   });
+  it("retains missing integration configuration for bounded DLQ replay", async () => {
+    const repository = new InMemoryOutboxJobRepository([job()]);
+    const queueMessage = message(queueBody());
+
+    await run(queueMessage, repository, {});
+
+    expect(queueMessage.acked).toBe(false);
+    expect(queueMessage.retries).toEqual([1]);
+    expect(repository.get("job-1")).toMatchObject({
+      state: "queued",
+      attemptCount: 1,
+    });
+  });
+  it("moves missing integration configuration to the recoverable dead-letter state", async () => {
+    const repository = new InMemoryOutboxJobRepository([job({ attemptCount: 2 })]);
+    const queueMessage = message(queueBody());
+
+    await run(queueMessage, repository, {});
+
+    expect(queueMessage.acked).toBe(false);
+    expect(queueMessage.retries).toEqual([1]);
+    expect(repository.get("job-1")).toMatchObject({
+      state: "dead-letter",
+      attemptCount: 3,
+    });
+  });
+
+  it.each(["accelevents", "file-scan"] as const)(
+    "does not acknowledge disabled %s work",
+    async (topic) => {
+      const repository = new InMemoryOutboxJobRepository([job()]);
+      const queueMessage = message({ ...queueBody(), topic });
+
+      await run(queueMessage, repository, {});
+
+      expect(queueMessage.acked).toBe(false);
+      expect(queueMessage.retries).toEqual([1]);
+      expect(repository.get("job-1")?.state).toBe("pending");
+    },
+  );
 });

@@ -199,8 +199,8 @@ describe("agenda validation", () => {
     expect(revision.revisionNumber).toBe(1);
     expect(await engine.getPublishedAgenda("event-1")).toEqual(revision);
     const outbox = await engine.getOutbox("event-1");
-    expect(outbox).toHaveLength(4);
-    expect(new Set(outbox.map((event) => event.idempotencyKey))).toHaveLength(4);
+    expect(outbox).toHaveLength(3);
+    expect(new Set(outbox.map((event) => event.idempotencyKey))).toHaveLength(3);
     expect((await engine.getAudit("event-1")).map((audit) => audit.action)).toContain(
       "warning.overridden",
     );
@@ -288,7 +288,7 @@ describe("agenda concurrency and revisions", () => {
     expect(rollback.rollbackOfRevisionId).toBe(first.id);
     expect(rollback.entries).toEqual(first.entries);
     expect(await engine.getPublishedAgenda("event-1")).toEqual(rollback);
-    expect(await engine.getOutbox("event-1")).toHaveLength(12);
+    expect(await engine.getOutbox("event-1")).toHaveLength(9);
   });
 
   it("executes a Durable Object lock contract one mutation at a time", async () => {

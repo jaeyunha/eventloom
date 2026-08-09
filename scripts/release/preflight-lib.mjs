@@ -7,6 +7,7 @@ const REQUIRED_CONFIGURATION = [
   "NEXT_PUBLIC_API_URL",
   "API_URL",
   "BETTER_AUTH_SECRET",
+  "BETTER_AUTH_URL",
   "CLOUDFLARE_ACCOUNT_ID",
   "CLOUDFLARE_API_TOKEN",
   "D1_DATABASE_ID",
@@ -23,8 +24,6 @@ const REQUIRED_CONFIGURATION = [
 
 const OPTIONAL_PROVIDERS = {
   google: ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"],
-  microsoft: ["MICROSOFT_CLIENT_ID", "MICROSOFT_CLIENT_SECRET"],
-  accelevents: ["ACCELEVENTS_API_BASE_URL", "ACCELEVENTS_API_KEY"],
 };
 
 const ISOLATED_CONFIGURATION = [
@@ -38,9 +37,6 @@ const ISOLATED_CONFIGURATION = [
   "OPENSEND_API_KEY",
   "GOOGLE_CLIENT_ID",
   "GOOGLE_CLIENT_SECRET",
-  "MICROSOFT_CLIENT_ID",
-  "MICROSOFT_CLIENT_SECRET",
-  "ACCELEVENTS_API_KEY",
 ];
 
 const REQUIRED_CLOUDFLARE_PERMISSIONS = {
@@ -304,17 +300,10 @@ export function validateReleaseConfiguration({
         );
       }
       if (
-        environment === targetEnvironment &&
-        requiredProviders.includes(provider) &&
+        (environment !== "local" || requiredProviders.includes(provider)) &&
         state !== "configured"
       ) {
-        fail(
-          "MISSING_PROVIDER_CONFIGURATION",
-          `${targetEnvironment} requires ${provider} configuration`,
-        );
-      }
-      if (provider === "accelevents" && state === "configured") {
-        assertHttps(configuration, "ACCELEVENTS_API_BASE_URL", environment);
+        fail("MISSING_PROVIDER_CONFIGURATION", `${environment} requires ${provider} configuration`);
       }
     }
 

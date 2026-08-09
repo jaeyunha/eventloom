@@ -105,7 +105,6 @@ const outboxTypes: readonly AgendaOutboxEventType[] = [
   "public-agenda.updated",
   "calendar.agenda-updated",
   "embed-cache.invalidate",
-  "accelevents.agenda-ready",
 ];
 
 export class AgendaEngine {

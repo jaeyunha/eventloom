@@ -111,7 +111,7 @@ describe("local public embed demo projections", () => {
 
     await expect(
       getPublishedAgendaOrLocalDemo(
-        "https://api.example.test",
+        "https://open-sessionboard-api-production.ashleyha0317.workers.dev",
         "open-sessionboard-conf",
         "production",
         notFound,

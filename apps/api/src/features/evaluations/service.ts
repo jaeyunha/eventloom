@@ -7,6 +7,7 @@ import type {
   EvaluationConflictDeclaration,
   EvaluationDecision,
   EvaluationDecisionStatus,
+  EvaluationDecisionTransition,
   EvaluationPlan,
   EvaluationProgress,
   EvaluationReview,
@@ -29,6 +30,60 @@ export interface CreateEvaluationPlanInput {
     maxAssignmentsPerReviewer: number;
   };
   rounds: readonly ReviewRound[];
+}
+
+export interface EvaluationAcceptanceHandoffInput {
+  readonly tenantId: string;
+  readonly eventId: string;
+  readonly planId: string;
+  readonly submissionId: string;
+  readonly decisionId: string;
+  readonly decidedBy: string;
+  readonly decidedAt: string;
+  readonly reason: string;
+  readonly idempotencyKey: string;
+}
+
+export interface EvaluationAcceptanceHandoff {
+  accept(input: EvaluationAcceptanceHandoffInput): Promise<void>;
+}
+
+export interface EvaluationSubmissionRecord {
+  readonly id: string;
+  readonly tenantId: string;
+  readonly eventId: string;
+  readonly title: string;
+  readonly abstract: string;
+  readonly answers: Readonly<Record<string, unknown>>;
+  readonly participants: readonly {
+    readonly id: string;
+    readonly displayName: string;
+    readonly email: string;
+    readonly biography: string;
+  }[];
+  readonly status: string;
+  readonly version: number;
+  readonly submittedAt: string | null;
+  readonly updatedAt: string;
+  readonly reopenedAt: string | null;
+}
+
+export interface EvaluationSubmissionSource {
+  listSubmissionsForOrganizer?(
+    tenantId: string,
+    eventId: string,
+  ): Promise<readonly EvaluationSubmissionRecord[]>;
+  reopenSubmission?(
+    tenantId: string,
+    eventId: string,
+    submissionId: string,
+    input: {
+      readonly organizerId: string;
+      readonly expectedVersion: number;
+      readonly reason: string;
+      readonly idempotencyKey: string;
+    },
+  ): Promise<EvaluationSubmissionRecord>;
 }
 
 export interface AssignReviewersInput {
@@ -62,6 +117,7 @@ export interface RecordDecisionInput {
 
 export interface EvaluationServiceOptions {
   clock?: () => Date;
+  acceptanceHandoff?: EvaluationAcceptanceHandoff;
 }
 
 function requireText(value: string, field: string, maximumLength: number): string {
@@ -208,6 +264,7 @@ export function calculateRubricTotal(
 }
 
 export class EvaluationService {
+  readonly #acceptanceHandoff: EvaluationAcceptanceHandoff | undefined;
   readonly #repository: EvaluationRepository;
   readonly #submissions: SubmissionReviewSource;
   readonly #clock: () => Date;
@@ -220,6 +277,88 @@ export class EvaluationService {
     this.#repository = repository;
     this.#submissions = submissions;
     this.#clock = options.clock ?? (() => new Date());
+    this.#acceptanceHandoff = options.acceptanceHandoff;
+  }
+  async listPlans(actor: EvaluationActor, eventId?: string): Promise<readonly EvaluationPlan[]> {
+    if (actor.kind !== "human") throw forbidden();
+    const repository = this.#repository as EvaluationRepository & {
+      listPlans?: (tenantId: string, eventId?: string) => Promise<readonly EvaluationPlan[]>;
+    };
+    const plans = (await repository.listPlans?.(actor.tenantId, eventId)) ?? [];
+    return plans
+      .filter((plan) => eventId === undefined || plan.eventId === eventId)
+      .filter(
+        (plan) =>
+          hasRole(actor, plan.eventId, "organizer") || hasRole(actor, plan.eventId, "reviewer"),
+      )
+      .sort(
+        (left, right) =>
+          left.updatedAt.localeCompare(right.updatedAt) || left.id.localeCompare(right.id),
+      );
+  }
+
+  async getPlan(actor: EvaluationActor, planId: string): Promise<EvaluationPlan> {
+    const plan = await this.#getPlan(actor.tenantId, planId);
+    if (
+      actor.kind !== "human" ||
+      (!hasRole(actor, plan.eventId, "organizer") && !hasRole(actor, plan.eventId, "reviewer"))
+    ) {
+      throw forbidden();
+    }
+    return plan;
+  }
+
+  async getDecision(
+    actor: EvaluationActor,
+    planId: string,
+    submissionId: string,
+  ): Promise<EvaluationDecision | null> {
+    const plan = await this.#getPlan(actor.tenantId, planId);
+    requireHumanOrganizer(actor, plan.eventId);
+    return this.#repository.getDecision(
+      actor.tenantId,
+      plan.id,
+      requireText(submissionId, "Submission id", 100),
+    );
+  }
+
+  async listOrganizerSubmissions(
+    actor: EvaluationActor,
+    eventId: string,
+  ): Promise<readonly EvaluationSubmissionRecord[]> {
+    requireHumanOrganizer(actor, requireText(eventId, "Event id", 100));
+    const source = this.#submissions as SubmissionReviewSource & EvaluationSubmissionSource;
+    if (source.listSubmissionsForOrganizer === undefined) return [];
+    return source.listSubmissionsForOrganizer(actor.tenantId, eventId);
+  }
+
+  async reopenSubmission(
+    actor: EvaluationActor,
+    eventId: string,
+    submissionId: string,
+    input: {
+      readonly expectedVersion: number;
+      readonly reason: string;
+      readonly idempotencyKey: string;
+    },
+  ): Promise<EvaluationSubmissionRecord> {
+    const normalizedEventId = requireText(eventId, "Event id", 100);
+    requireHumanOrganizer(actor, normalizedEventId);
+    const source = this.#submissions as SubmissionReviewSource & EvaluationSubmissionSource;
+    if (source.reopenSubmission === undefined) {
+      throw notFound("Submission reopen is not configured.");
+    }
+    return source.reopenSubmission(
+      actor.tenantId,
+      normalizedEventId,
+      requireText(submissionId, "Submission id", 100),
+      {
+        organizerId: actor.userId,
+        expectedVersion: input.expectedVersion,
+        reason: input.reason,
+        idempotencyKey: requireText(input.idempotencyKey, "Idempotency key", 200),
+      },
+    );
   }
 
   async createPlan(
@@ -430,6 +569,17 @@ export class EvaluationService {
         (left, right) =>
           left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
       );
+  }
+  async listOrganizerAssignments(
+    actor: EvaluationActor,
+    planId: string,
+  ): Promise<readonly EvaluationAssignment[]> {
+    const plan = await this.#getPlan(actor.tenantId, planId);
+    requireHumanOrganizer(actor, plan.eventId);
+    return [...(await this.#repository.listAssignments(actor.tenantId, plan.id))].sort(
+      (left: EvaluationAssignment, right: EvaluationAssignment) =>
+        left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+    );
   }
 
   async getReviewContext(actor: EvaluationActor, assignmentId: string): Promise<ReviewContext> {
@@ -820,10 +970,17 @@ export class EvaluationService {
       throw notFound("The submission to decide was not found.");
     }
     const current = await this.#repository.getDecision(actor.tenantId, plan.id, submissionId);
-    const repeated = current?.history.some(
+    const repeatedTransition = current?.history.find(
       (transition) => transition.idempotencyKey === idempotencyKey,
     );
-    if (current !== null && repeated) {
+    if (current !== null && repeatedTransition !== undefined) {
+      if (current.status === "accepted") {
+        await this.#runAcceptanceHandoff({
+          decision: current,
+          transition: repeatedTransition,
+          idempotencyKey,
+        });
+      }
       return current;
     }
     if (current === null && input.expectedVersion !== undefined) {
@@ -853,6 +1010,13 @@ export class EvaluationService {
       updatedAt: now,
     };
     await this.#repository.putDecision(decision, current?.version ?? null);
+    if (decision.status === "accepted") {
+      await this.#runAcceptanceHandoff({
+        decision,
+        transition,
+        idempotencyKey,
+      });
+    }
     return decision;
   }
 
@@ -877,6 +1041,25 @@ export class EvaluationService {
       throw notFound("The evaluation plan was not found.");
     }
     return plan;
+  }
+
+  async #runAcceptanceHandoff(input: {
+    readonly decision: EvaluationDecision;
+    readonly transition: EvaluationDecisionTransition;
+    readonly idempotencyKey: string;
+  }): Promise<void> {
+    if (this.#acceptanceHandoff === undefined) return;
+    await this.#acceptanceHandoff.accept({
+      tenantId: input.decision.tenantId,
+      eventId: input.decision.eventId,
+      planId: input.decision.planId,
+      submissionId: input.decision.submissionId,
+      decisionId: input.decision.id,
+      decidedBy: input.transition.decidedBy,
+      decidedAt: input.transition.decidedAt,
+      reason: input.transition.reason,
+      idempotencyKey: input.idempotencyKey,
+    });
   }
 
   async #getAssignment(tenantId: string, assignmentId: string): Promise<EvaluationAssignment> {

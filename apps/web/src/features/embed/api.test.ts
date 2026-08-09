@@ -37,10 +37,14 @@ describe("public embed API", () => {
     };
 
     await expect(
-      getPublishedAgenda("https://api.example.com/", "open/systems", fetcher),
+      getPublishedAgenda(
+        "https://open-sessionboard-api-staging.ashleyha0317.workers.dev/",
+        "open/systems",
+        fetcher,
+      ),
     ).resolves.toEqual(publishedAgenda);
     expect(String(calls[0]?.input)).toBe(
-      "https://api.example.com/api/public/events/open%2Fsystems/agenda",
+      "https://open-sessionboard-api-staging.ashleyha0317.workers.dev/api/public/events/open%2Fsystems/agenda",
     );
     expect(calls[0]?.init).toMatchObject({
       cache: "force-cache",
@@ -63,15 +67,29 @@ describe("public embed API", () => {
         { status: 404, headers: { "content-type": "application/json" } },
       );
 
-    const error = await getPublishedAgenda("https://api.example.com", "open", fetcher).catch(
-      (caught: unknown) => caught,
-    );
+    const error = await getPublishedAgenda(
+      "https://open-sessionboard-api-staging.ashleyha0317.workers.dev",
+      "open",
+      fetcher,
+    ).catch((caught: unknown) => caught);
 
     expect(error).toBeInstanceOf(PublicEmbedApiError);
     expect(error).toMatchObject({
       code: "PUBLICATION_NOT_FOUND",
       status: 404,
       traceId: "trace_public",
+    });
+  });
+  it("rejects unpinned remote API origins before issuing a request", async () => {
+    const fetcher = async () => {
+      throw new Error("fetch must not run");
+    };
+
+    await expect(
+      getPublishedAgenda("https://api.example.com", "open", fetcher),
+    ).rejects.toMatchObject({
+      code: "CONFIGURATION_ERROR",
+      status: 503,
     });
   });
 });

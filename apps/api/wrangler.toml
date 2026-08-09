@@ -2,6 +2,7 @@ name = "open-sessionboard-api-local"
 main = "src/infrastructure/cloudflare/worker.ts"
 account_id = "7bcb73282d45e4294cc70dd3e2671bfb"
 compatibility_date = "2026-08-08"
+compatibility_flags = ["nodejs_compat"]
 workers_dev = false
 minify = true
 
@@ -10,7 +11,7 @@ enabled = true
 
 [vars]
 APP_ENV = "local"
-WEB_ORIGIN = "http://localhost:3015"
+WEB_ORIGIN = "http://127.0.0.1:3015"
 
 [[d1_databases]]
 binding = "DB"
@@ -50,7 +51,10 @@ enabled = true
 
 [env.staging.vars]
 APP_ENV = "staging"
+API_ORIGIN = "https://open-sessionboard-api-staging.ashleyha0317.workers.dev"
 WEB_ORIGIN = "https://open-sessionboard-web-staging.ashleyha0317.workers.dev"
+OPENSEND_API_URL = "https://opensend.namuh.co"
+AUTH_FROM_EMAIL = "auth@foreverbrowsing.com"
 
 [[env.staging.d1_databases]]
 binding = "DB"
@@ -86,7 +90,10 @@ enabled = true
 
 [env.production.vars]
 APP_ENV = "production"
+API_ORIGIN = "https://open-sessionboard-api-production.ashleyha0317.workers.dev"
 WEB_ORIGIN = "https://open-sessionboard-web-production.ashleyha0317.workers.dev"
+OPENSEND_API_URL = "https://opensend.namuh.co"
+AUTH_FROM_EMAIL = "auth@foreverbrowsing.com"
 
 [[env.production.d1_databases]]
 binding = "DB"

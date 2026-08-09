@@ -1,5 +1,10 @@
 import type { ApiBindings, ApiDependencies } from "../app";
 import { RequestAuthenticator } from "../features/auth/authenticator";
+import {
+  AuthConfigurationError,
+  createBetterAuthRuntimeConfiguration,
+} from "../features/auth/configuration";
+import { createBetterAuthRuntime, createOpenSendMagicLinkMessage } from "../features/auth/runtime";
 import type {
   ApiKeyScope,
   AuthSession,
@@ -10,19 +15,27 @@ import type {
   StoredApiKey,
 } from "../features/auth/types";
 import { apiKeyScopes, organizationRoles } from "../features/auth/types";
+import type { AirtableTransport } from "../infrastructure/airtable";
+import { FetchAirtableTransport, RetryingAirtableTransport } from "../infrastructure/airtable";
 import {
   type CloudflareBindings,
   inspectCloudflareBindings,
 } from "../infrastructure/cloudflare/bindings";
+import { OpenSendClient } from "../integrations/opensend/client";
 import { createAirtableDependencies } from "./airtable";
-import { FetchAirtableTransport, RetryingAirtableTransport } from "../infrastructure/airtable";
-import type { AirtableTransport } from "../infrastructure/airtable";
 
 export type RuntimeBindings = ApiBindings &
   Partial<Omit<CloudflareBindings, keyof ApiBindings>> & {
+    readonly API_ORIGIN?: string;
     readonly AIRTABLE_ACCESS_TOKEN?: string;
     readonly AIRTABLE_BASE_ID?: string;
     readonly BETTER_AUTH_SECRET?: string;
+    readonly GOOGLE_CLIENT_ID?: string;
+    readonly GOOGLE_CLIENT_SECRET?: string;
+    readonly OPENSEND_API_KEY?: string;
+    readonly OPENSEND_SENDING_API_KEY?: string;
+    readonly OPENSEND_API_URL?: string;
+    readonly AUTH_FROM_EMAIL?: string;
     readonly AIRTABLE_API_ORIGIN?: string;
     readonly AIRTABLE_TRANSPORT?: AirtableTransport;
   };
@@ -101,8 +114,26 @@ function speakerGrantsFrom(rows: readonly SpeakerGrantRow[]): SpeakerGrant[] {
   );
 }
 
+type MagicLinkOperations = Pick<BetterAuthGateway, "requestMagicLink" | "consumeMagicLink">;
+
+const unavailableMagicLinks: MagicLinkOperations = {
+  async requestMagicLink() {
+    throw new AuthConfigurationError("OpenSend magic-link delivery is not configured.");
+  },
+  async consumeMagicLink() {
+    return null;
+  },
+};
+
 export class D1BetterAuthGateway implements BetterAuthGateway {
-  constructor(private readonly database: D1Database) {}
+  readonly #magicLinks: MagicLinkOperations;
+
+  constructor(
+    private readonly database: D1Database,
+    magicLinks: MagicLinkOperations = unavailableMagicLinks,
+  ) {
+    this.#magicLinks = magicLinks;
+  }
 
   async resolveSession(sessionToken: string): Promise<AuthSession | null> {
     const tokenDigest = await sha256(sessionToken);
@@ -156,12 +187,12 @@ export class D1BetterAuthGateway implements BetterAuthGateway {
     };
   }
 
-  async requestMagicLink(): Promise<void> {
-    throw new Error("Magic-link delivery is not available through the session lookup adapter.");
+  async requestMagicLink(input: { email: string; callbackUrl: string }): Promise<void> {
+    await this.#magicLinks.requestMagicLink(input);
   }
 
-  async consumeMagicLink(): Promise<AuthSession | null> {
-    throw new Error("Magic-link consumption is not available through the session lookup adapter.");
+  async consumeMagicLink(token: string): Promise<AuthSession | null> {
+    return this.#magicLinks.consumeMagicLink(token);
   }
 }
 
@@ -221,12 +252,46 @@ export class D1ApiKeyAuthenticatorGateway implements D1ApiKeyGateway {
   }
 }
 
+const fixedOrigins = {
+  staging: {
+    web: "https://open-sessionboard-web-staging.ashleyha0317.workers.dev",
+    api: "https://open-sessionboard-api-staging.ashleyha0317.workers.dev",
+  },
+  production: {
+    web: "https://open-sessionboard-web-production.ashleyha0317.workers.dev",
+    api: "https://open-sessionboard-api-production.ashleyha0317.workers.dev",
+  },
+} as const;
+
+function authEnvironment(value: string): keyof typeof fixedOrigins | null {
+  return value === "staging" || value === "production" ? value : null;
+}
+
+function configuredApiOrigin(bindings: RuntimeBindings): string | null {
+  const environment = authEnvironment(bindings.APP_ENV);
+  if (environment === null) return null;
+  const expected = fixedOrigins[environment].api;
+  return bindings.API_ORIGIN === undefined ? expected : bindings.API_ORIGIN;
+}
+
 export function inspectProductionRuntime(
   bindings: RuntimeBindings,
 ): RuntimeConfigurationInspection {
   const issues: string[] = [];
   const cloudflare = inspectCloudflareBindings(bindings);
   if (!cloudflare.success) issues.push(...cloudflare.issues);
+
+  const environment = authEnvironment(bindings.APP_ENV);
+  if (environment !== null) {
+    const origins = fixedOrigins[environment];
+    if (bindings.WEB_ORIGIN !== origins.web) {
+      issues.push("WEB_ORIGIN does not match the fixed deployment origin.");
+    }
+    if (bindings.API_ORIGIN !== undefined && bindings.API_ORIGIN !== origins.api) {
+      issues.push("API_ORIGIN does not match the fixed deployment origin.");
+    }
+  }
+
   if (!nonEmpty(bindings.AIRTABLE_ACCESS_TOKEN)) {
     issues.push("AIRTABLE_ACCESS_TOKEN is required outside local development");
   }
@@ -236,13 +301,44 @@ export function inspectProductionRuntime(
   if (!nonEmpty(bindings.BETTER_AUTH_SECRET) || bindings.BETTER_AUTH_SECRET.trim().length < 32) {
     issues.push("BETTER_AUTH_SECRET must contain at least 32 characters outside local development");
   }
+
+  const googleId = bindings.GOOGLE_CLIENT_ID?.trim();
+  const googleSecret = bindings.GOOGLE_CLIENT_SECRET?.trim();
+  if (!googleId || !googleSecret) {
+    issues.push("GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are required outside local development");
+  }
+
+  const openSendKey = (bindings.OPENSEND_API_KEY ?? bindings.OPENSEND_SENDING_API_KEY)?.trim();
+  if (!openSendKey || !nonEmpty(bindings.OPENSEND_API_URL)) {
+    issues.push("OPENSEND_API_URL and OPENSEND_API_KEY are required outside local development");
+  }
+
+  const apiOrigin = configuredApiOrigin(bindings);
+  if (apiOrigin === null || !nonEmpty(bindings.WEB_ORIGIN)) {
+    issues.push("Better Auth web and API origins are required outside local development");
+  } else {
+    try {
+      createBetterAuthRuntimeConfiguration({
+        secret: bindings.BETTER_AUTH_SECRET ?? "",
+        baseUrl: apiOrigin,
+        trustedOrigins: [bindings.WEB_ORIGIN],
+        google: { clientId: googleId ?? "", clientSecret: googleSecret ?? "" },
+      });
+    } catch (error) {
+      if (error instanceof AuthConfigurationError) {
+        issues.push("Better Auth configuration is invalid.");
+      } else {
+        issues.push("Better Auth configuration could not be initialized.");
+      }
+    }
+  }
   return { success: issues.length === 0, issues };
 }
 
 export function createCloudflareDependencies(bindings: RuntimeBindings): ApiDependencies {
-  const inspection = inspectCloudflareBindings(bindings);
+  const inspection = inspectProductionRuntime(bindings);
   if (!inspection.success) {
-    throw new TypeError(`Invalid Cloudflare bindings: ${inspection.issues.join("; ")}`);
+    throw new TypeError("The production runtime is not configured.");
   }
   if (bindings.DB === undefined) {
     throw new TypeError("The D1 binding is required for Cloudflare authentication.");
@@ -256,6 +352,56 @@ export function createCloudflareDependencies(bindings: RuntimeBindings): ApiDepe
   if (bindings.OUTBOX_QUEUE === undefined) {
     throw new TypeError("The outbox queue binding is required outside local development.");
   }
+
+  const authEnvironmentValue = authEnvironment(bindings.APP_ENV);
+  const apiOrigin = configuredApiOrigin(bindings);
+  const googleId = bindings.GOOGLE_CLIENT_ID?.trim();
+  const googleSecret = bindings.GOOGLE_CLIENT_SECRET?.trim();
+  const openSendKey = (bindings.OPENSEND_API_KEY ?? bindings.OPENSEND_SENDING_API_KEY)?.trim();
+  if (
+    authEnvironmentValue === null ||
+    apiOrigin === null ||
+    !nonEmpty(googleId) ||
+    !nonEmpty(googleSecret) ||
+    !nonEmpty(openSendKey) ||
+    !nonEmpty(bindings.OPENSEND_API_URL)
+  ) {
+    throw new TypeError("The production authentication runtime is not configured.");
+  }
+
+  const authConfiguration = createBetterAuthRuntimeConfiguration({
+    secret: bindings.BETTER_AUTH_SECRET ?? "",
+    baseUrl: apiOrigin,
+    trustedOrigins: [bindings.WEB_ORIGIN],
+    google: { clientId: googleId, clientSecret: googleSecret },
+  });
+  const openSend = new OpenSendClient({
+    sendingApiKey: openSendKey,
+    baseUrl: bindings.OPENSEND_API_URL,
+    ...(nonEmpty(bindings.AUTH_FROM_EMAIL)
+      ? { senderAddresses: { auth: bindings.AUTH_FROM_EMAIL } }
+      : {}),
+  });
+  const betterAuthRuntime = createBetterAuthRuntime({
+    database: bindings.DB,
+    configuration: authConfiguration,
+    environment: authEnvironmentValue,
+    sendMagicLink: async (input) => {
+      await openSend.send(
+        createOpenSendMagicLinkMessage({
+          email: input.email,
+          url: input.url,
+          sender: openSend.senderFor("auth"),
+        }),
+      );
+    },
+  });
+
+  const authenticator = new RequestAuthenticator(
+    new D1BetterAuthGateway(bindings.DB, betterAuthRuntime),
+    new D1ApiKeyAuthenticatorGateway(bindings.DB),
+    { sessionCookieName: "__Secure-better-auth.session_token" },
+  );
   const transport =
     bindings.AIRTABLE_TRANSPORT ??
     new RetryingAirtableTransport(
@@ -266,11 +412,7 @@ export function createCloudflareDependencies(bindings: RuntimeBindings): ApiDepe
           : { apiOrigin: bindings.AIRTABLE_API_ORIGIN }),
       }),
     );
-  const authenticator = new RequestAuthenticator(
-    new D1BetterAuthGateway(bindings.DB),
-    new D1ApiKeyAuthenticatorGateway(bindings.DB),
-  );
-  return createAirtableDependencies({
+  const dependencies = createAirtableDependencies({
     authenticator,
     baseId: bindings.AIRTABLE_BASE_ID ?? "",
     transport,
@@ -280,4 +422,5 @@ export function createCloudflareDependencies(bindings: RuntimeBindings): ApiDepe
     outboxQueue: bindings.OUTBOX_QUEUE,
     webOrigin: bindings.WEB_ORIGIN,
   });
+  return { ...dependencies, auth: betterAuthRuntime };
 }

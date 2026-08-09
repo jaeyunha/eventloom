@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { type FormEvent, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useState } from "react";
 import styles from "./submission-workspace.module.css";
 
 export type SubmissionStatus =
@@ -424,6 +424,242 @@ export function getSeededSubmission(
     (submission) => submission.eventId === eventId && submission.id === submissionId,
   );
 }
+function apiBaseUrl(): string | null {
+  const value = process.env.NEXT_PUBLIC_API_URL?.trim();
+  return value && value.length > 0 ? value.replace(/\/$/u, "") : null;
+}
+
+async function submissionRequest<T>(
+  baseUrl: string,
+  path: string,
+  init: RequestInit = {},
+): Promise<T> {
+  const headers = new Headers(init.headers);
+  headers.set("accept", "application/json");
+  if (init.body !== undefined) headers.set("content-type", "application/json");
+  const response = await fetch(`${baseUrl}/api/admin/evaluations${path}`, {
+    ...init,
+    credentials: "include",
+    headers,
+    cache: "no-store",
+  });
+  const body = (await response.json().catch(() => undefined)) as
+    | { data?: T; error?: { message?: string } }
+    | T
+    | undefined;
+  if (!response.ok) {
+    const message =
+      typeof body === "object" &&
+      body !== null &&
+      "error" in body &&
+      typeof body.error === "object" &&
+      body.error !== null &&
+      typeof body.error.message === "string"
+        ? body.error.message
+        : "The submission request could not be completed.";
+    throw new Error(message);
+  }
+  if (typeof body === "object" && body !== null && "data" in body && body.data !== undefined) {
+    return body.data as T;
+  }
+  return body as T;
+}
+
+function localDemoEnabled(): boolean {
+  return (
+    process.env.APP_ENV === "local" ||
+    (process.env.APP_ENV !== "production" && process.env.NODE_ENV === "test")
+  );
+}
+
+interface ServerSubmissionRecord {
+  id: string;
+  tenantId: string;
+  eventId: string;
+  title: string;
+  abstract: string;
+  answers: Readonly<Record<string, unknown>>;
+  participants: readonly {
+    id: string;
+    displayName: string;
+    email: string;
+    biography: string;
+  }[];
+  status: string;
+  version: number;
+  submittedAt: string | null;
+  updatedAt: string;
+  reopenedAt: string | null;
+}
+
+function mapServerSubmission(record: ServerSubmissionRecord): SubmissionRecord {
+  const status: SubmissionStatus =
+    record.status === "accepted" ||
+    record.status === "waitlisted" ||
+    record.status === "declined" ||
+    record.status === "withdrawn" ||
+    record.status === "under_review"
+      ? record.status
+      : record.status === "reopened"
+        ? "under_review"
+        : "submitted";
+  const answers = Object.entries(record.answers).map(([question, answer]) => ({
+    question,
+    answer:
+      typeof answer === "string"
+        ? answer
+        : typeof answer === "number" || typeof answer === "boolean"
+          ? String(answer)
+          : (JSON.stringify(answer) ?? ""),
+  }));
+  const timeline: SubmissionTimelineEntry[] = [];
+  if (record.submittedAt !== null) {
+    timeline.push({
+      label: "Submitted",
+      at: record.submittedAt,
+      detail: "The submission was submitted through the CFP.",
+    });
+  }
+  if (record.reopenedAt !== null) {
+    timeline.push({
+      label: "Reopened",
+      at: record.reopenedAt,
+      detail: "An organizer reopened this submission through the evaluation workspace.",
+    });
+  }
+  return {
+    eventId: record.eventId,
+    id: record.id,
+    title: record.title,
+    status,
+    track: "—",
+    format: "—",
+    version: record.version,
+    submittedAt: record.submittedAt ?? record.updatedAt,
+    updatedAt: record.updatedAt,
+    participants: record.participants.map((participant) => ({
+      id: participant.id,
+      name: participant.displayName,
+      email: participant.email,
+      role: "Speaker",
+      organization: "",
+    })),
+    participantProgress: {
+      completed: record.participants.filter(
+        (participant) => participant.biography.trim().length > 0,
+      ).length,
+      total: record.participants.length,
+    },
+    abstract: record.abstract,
+    answers,
+    timeline,
+    reviewSummary: {
+      completed: 0,
+      total: 0,
+      averageScore: null,
+      maxScore: 0,
+      recommendation: "Evaluation data loads from the plan.",
+    },
+    reviewAssignments: [],
+    organizerNotes:
+      "Authoritative submission record. Review details load from the evaluation plan.",
+    reopenAudit:
+      record.reopenedAt === null
+        ? []
+        : [
+            {
+              at: record.reopenedAt,
+              organizer: "Organizer",
+              reason: "Recorded in the server audit log.",
+            },
+          ],
+  };
+}
+async function enrichServerSubmission(
+  baseUrl: string,
+  record: ServerSubmissionRecord,
+): Promise<SubmissionRecord> {
+  const submission = mapServerSubmission(record);
+  const planResult = await submissionRequest<{
+    plans: readonly { id: string; rounds: readonly { id: string }[] }[];
+  }>(baseUrl, `/plans?eventId=${encodeURIComponent(record.eventId)}`);
+  const plan = planResult.plans[0];
+  if (plan === undefined) return submission;
+  const round = plan.rounds[0];
+  const [assignmentResult, decision, aggregate, reviewResult] = await Promise.all([
+    submissionRequest<{
+      assignments: readonly {
+        reviewerId: string;
+        status: "assigned" | "in_progress" | "submitted" | "abstained";
+      }[];
+    }>(baseUrl, `/plans/${encodeURIComponent(plan.id)}/assignments`),
+    submissionRequest<{
+      status: "accepted" | "waitlisted" | "rejected";
+      version: number;
+      history: readonly { reason: string }[];
+    } | null>(
+      baseUrl,
+      `/plans/${encodeURIComponent(plan.id)}/submissions/${encodeURIComponent(record.id)}/decision`,
+    ),
+    round === undefined
+      ? Promise.resolve(null)
+      : submissionRequest<{
+          submittedReviewCount: number;
+          expectedReviewCount: number;
+          averageWeightedTotal: number | null;
+          possibleWeightedTotal: number;
+        }>(
+          baseUrl,
+          `/plans/${encodeURIComponent(plan.id)}/rounds/${encodeURIComponent(round.id)}/submissions/${encodeURIComponent(record.id)}/aggregate`,
+        ),
+    round === undefined
+      ? Promise.resolve({
+          reviews: [] as readonly { reviewerId: string; submittedAt: string | null }[],
+        })
+      : submissionRequest<{
+          reviews: readonly { reviewerId: string; submittedAt: string | null }[];
+        }>(
+          baseUrl,
+          `/plans/${encodeURIComponent(plan.id)}/rounds/${encodeURIComponent(round.id)}/submissions/${encodeURIComponent(record.id)}/reviews`,
+        ),
+  ]);
+  const assignments = assignmentResult.assignments;
+  return {
+    ...submission,
+    status:
+      decision?.status === "accepted"
+        ? "accepted"
+        : decision?.status === "waitlisted"
+          ? "waitlisted"
+          : decision?.status === "rejected"
+            ? "declined"
+            : submission.status,
+    reviewSummary: {
+      completed: aggregate?.submittedReviewCount ?? 0,
+      total: aggregate?.expectedReviewCount ?? assignments.length,
+      averageScore: aggregate?.averageWeightedTotal ?? null,
+      maxScore: aggregate?.possibleWeightedTotal ?? 0,
+      recommendation: decision?.status
+        ? `${decision.status[0]?.toLocaleUpperCase() ?? ""}${decision.status.slice(1)}`
+        : "Awaiting human decision",
+    },
+    reviewAssignments: assignments.map((assignment) => ({
+      reviewer: assignment.reviewerId,
+      status:
+        assignment.status === "submitted"
+          ? "complete"
+          : assignment.status === "in_progress"
+            ? "in_progress"
+            : assignment.status === "abstained"
+              ? "abstained"
+              : "not_started",
+      ...(assignment.status === "abstained"
+        ? { conflict: "Reviewer declared a conflict and abstained." }
+        : {}),
+    })),
+    organizerNotes: decision?.history.at(-1)?.reason ?? submission.organizerNotes,
+  };
+}
 
 function eventTitle(eventId: string): string {
   if (eventId === "summit-2026") {
@@ -518,7 +754,50 @@ export function SubmissionListWorkspace({ eventId }: Readonly<{ eventId: string 
   const [sortKey, setSortKey] = useState<SortKey>("updatedAt");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
-  const submissions = useMemo(() => getSeededSubmissionsForEvent(eventId), [eventId]);
+  const [submissions, setSubmissions] = useState<SubmissionRecord[]>(() =>
+    localDemoEnabled() ? getSeededSubmissionsForEvent(eventId) : [],
+  );
+  const [loading, setLoading] = useState(!localDemoEnabled());
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const baseUrl = apiBaseUrl();
+
+  useEffect(() => {
+    if (localDemoEnabled()) return;
+    let active = true;
+    if (baseUrl === null) {
+      setLoading(false);
+      setLoadError("The evaluation API is not configured.");
+      return () => {
+        active = false;
+      };
+    }
+    setLoading(true);
+    setLoadError(null);
+    void submissionRequest<readonly ServerSubmissionRecord[]>(
+      baseUrl,
+      `/events/${encodeURIComponent(eventId)}/submissions`,
+    )
+      .then((records) =>
+        Promise.all(records.map((record) => enrichServerSubmission(baseUrl, record))),
+      )
+      .then((mapped) => {
+        if (active) setSubmissions(mapped);
+      })
+      .catch((reason: unknown) => {
+        if (active) {
+          setLoadError(
+            reason instanceof Error ? reason.message : "Submissions could not be loaded.",
+          );
+        }
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [baseUrl, eventId]);
+
   const tracks = useMemo(
     () => [...new Set(submissions.map((submission) => submission.track))].sort(),
     [submissions],
@@ -632,8 +911,10 @@ export function SubmissionListWorkspace({ eventId }: Readonly<{ eventId: string 
             <span>accepted</span>
           </div>
           <div className={styles.summaryNote}>
-            <span>Seeded organizer view</span>
-            <small>No live credentials or API data are used.</small>
+            <span>{loading ? "Loading server submissions…" : "Server-backed organizer view"}</span>
+            <small>
+              {loadError ?? "Review assignments and decisions are read from the evaluation API."}
+            </small>
           </div>
         </section>
 
@@ -725,7 +1006,7 @@ export function SubmissionListWorkspace({ eventId }: Readonly<{ eventId: string 
             <div className={styles.emptyState} role="status">
               <h3>No matching submissions</h3>
               <p>
-                Try a different search or clear the filters to see this event&apos;s seeded
+                Try a different search or clear the filters to see this event&apos;s server
                 submissions.
               </p>
             </div>
@@ -874,14 +1155,67 @@ export function SubmissionDetailWorkspace({
   eventId,
   submissionId,
 }: Readonly<{ eventId: string; submissionId: string }>) {
-  const submission = getSeededSubmission(eventId, submissionId);
+  const baseUrl = apiBaseUrl();
+  const [submission, setSubmission] = useState<SubmissionRecord | null>(() =>
+    localDemoEnabled() ? (getSeededSubmission(eventId, submissionId) ?? null) : null,
+  );
+  const [loading, setLoading] = useState(!localDemoEnabled());
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (localDemoEnabled()) return;
+    let active = true;
+    if (baseUrl === null) {
+      setLoading(false);
+      setLoadError("The evaluation API is not configured.");
+      return () => {
+        active = false;
+      };
+    }
+    void submissionRequest<readonly ServerSubmissionRecord[]>(
+      baseUrl,
+      `/events/${encodeURIComponent(eventId)}/submissions`,
+    )
+      .then((records) => {
+        if (!active) return null;
+        const record = records.find((candidate) => candidate.id === submissionId);
+        return record === undefined ? null : enrichServerSubmission(baseUrl, record);
+      })
+      .then((loaded) => {
+        if (active) setSubmission(loaded);
+      })
+      .catch((reason: unknown) => {
+        if (active)
+          setLoadError(
+            reason instanceof Error ? reason.message : "Submission could not be loaded.",
+          );
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [baseUrl, eventId, submissionId]);
+
+  if (loading) {
+    return (
+      <div className={styles.workspaceRoot}>
+        <div className={styles.notFound} role="status">
+          <p className={styles.eyebrow}>Organizer workspace</p>
+          <h1>Loading submission</h1>
+          <p>Loading the authoritative submission record from the evaluation API.</p>
+        </div>
+      </div>
+    );
+  }
   if (!submission) {
     return (
       <div className={styles.workspaceRoot}>
-        <div className={styles.notFound}>
+        <div className={styles.notFound} role="alert">
           <p className={styles.eyebrow}>Organizer workspace</p>
           <h1>Submission not found</h1>
-          <p>This submission is not part of the selected event.</p>
+          <p>{loadError ?? "This submission is not part of the selected event."}</p>
           <Link className={styles.primaryLink} href={submissionListHref(eventId)}>
             Back to submissions
           </Link>
@@ -963,7 +1297,7 @@ export function SubmissionDetailWorkspace({
               </ol>
             </section>
 
-            <ReopenControl submission={submission} />
+            <ReopenControl submission={submission} baseUrl={baseUrl ?? ""} />
           </div>
 
           <aside className={styles.detailAside} aria-label="Organizer-only submission information">
@@ -1062,16 +1396,45 @@ export function SubmissionDetailWorkspace({
   );
 }
 
-function ReopenControl({ submission }: Readonly<{ submission: SubmissionRecord }>) {
+function ReopenControl({
+  submission,
+  baseUrl,
+}: Readonly<{ submission: SubmissionRecord; baseUrl: string }>) {
   const [reason, setReason] = useState("");
   const [confirmed, setConfirmed] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const canSubmit = reason.trim().length >= 10 && confirmed;
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
-    if (!canSubmit) return;
-    setSaved(true);
+    if (!canSubmit || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await submissionRequest(
+        baseUrl,
+        `/events/${encodeURIComponent(submission.eventId)}/submissions/${encodeURIComponent(submission.id)}/reopen`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            expectedVersion: submission.version,
+            reason: reason.trim(),
+            idempotencyKey: `web-reopen-${crypto.randomUUID()}`,
+          }),
+        },
+      );
+      setSaved(true);
+    } catch (reasonValue: unknown) {
+      setError(
+        reasonValue instanceof Error
+          ? reasonValue.message
+          : "The reopen request could not be saved.",
+      );
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -1124,7 +1487,16 @@ function ReopenControl({ submission }: Readonly<{ submission: SubmissionRecord }
           />
           <span>I confirm that reopening is necessary and authorized for this event.</span>
         </label>
-        <button className={styles.dangerButton} type="submit" disabled={!canSubmit}>
+        {error ? (
+          <p className={styles.formError} role="alert">
+            {error}
+          </p>
+        ) : null}
+        <button
+          className={styles.dangerButton}
+          type="submit"
+          disabled={!canSubmit || busy || saved}
+        >
           Reopen and write audit event
         </button>
         {saved ? (

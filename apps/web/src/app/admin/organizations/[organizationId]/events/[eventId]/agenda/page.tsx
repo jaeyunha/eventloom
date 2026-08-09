@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { AgendaWorkspace } from "../../../../../features/agenda/agenda-workspace";
+import { AgendaWorkspace } from "../../../../../../../features/agenda/agenda-workspace";
 
 export const metadata: Metadata = {
   title: "Agenda workspace",
@@ -7,10 +7,10 @@ export const metadata: Metadata = {
 };
 
 interface AgendaPageProps {
-  params: Promise<{ eventId: string }>;
+  params: Promise<{ organizationId: string; eventId: string }>;
 }
 
 export default async function AgendaPage({ params }: AgendaPageProps) {
-  const { eventId } = await params;
-  return <AgendaWorkspace eventId={eventId} />;
+  const { organizationId, eventId } = await params;
+  return <AgendaWorkspace eventId={eventId} organizationId={organizationId} />;
 }

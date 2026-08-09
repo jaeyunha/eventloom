@@ -95,8 +95,45 @@ export interface SubmissionReview {
   routes: ReturnType<typeof evaluateFormRules>["routes"];
 }
 
+export interface CfpReceipt {
+  id: string;
+  submissionId: string;
+  version: number;
+  submittedAt: string;
+}
+
+export interface PublicCfpEvent {
+  id: EventCfp["id"];
+  slug: EventCfp["slug"];
+  name: EventCfp["name"];
+  timezone: EventCfp["timezone"];
+  opensAt: EventCfp["opensAt"];
+  closesAt: EventCfp["closesAt"];
+}
+
+export type PublicCfpForm = Omit<
+  CfpForm,
+  "tenantId" | "eventId" | "rules" | "settings" | "status"
+> & {
+  status: "published";
+  settings: Pick<
+    CfpForm["settings"],
+    | "speakerLimit"
+    | "maxSubmissionsPerAccount"
+    | "confirmationMessage"
+    | "successContent"
+    | "redirectUrl"
+  >;
+};
+
+export interface PublishedCfp {
+  event: PublicCfpEvent;
+  form: PublicCfpForm;
+}
+
 export interface SubmitResult {
   submission: Submission;
+  receipt?: CfpReceipt;
   confirmationQueued: boolean;
 }
 
@@ -254,6 +291,135 @@ export class CfpService {
     this.#ids =
       dependencies.ids ??
       ({ next: (prefix) => `${prefix}_${crypto.randomUUID()}` } satisfies CfpIdGenerator);
+  }
+  async getEvent(input: { tenantId: string; eventId: string }): Promise<EventCfp> {
+    return this.#getEvent(input.tenantId, input.eventId);
+  }
+
+  async getForm(input: { tenantId: string; formId: string }): Promise<CfpForm> {
+    return this.#getForm(input.tenantId, input.formId);
+  }
+
+  async getPublishedCfp(input: {
+    tenantId: string;
+    eventId: string;
+    formId?: string;
+  }): Promise<PublishedCfp> {
+    const event = await this.#getEvent(input.tenantId, input.eventId);
+    const form = input.formId
+      ? await this.#getForm(input.tenantId, input.formId)
+      : (await this.#repository.listForms(input.tenantId, input.eventId)).find(
+          (candidate) => candidate.status === "published",
+        );
+    if (!form) {
+      throw new CfpError("NOT_FOUND", "The published CFP form was not found.");
+    }
+    ensureEventFormMatch(event, form);
+    if (form.status !== "published") {
+      throw new CfpError("FORM_NOT_PUBLISHED", "The CFP form is not published.");
+    }
+    const sanitizedForm = sanitizeForm(form);
+    const {
+      tenantId: _tenantId,
+      eventId: _eventId,
+      rules: _rules,
+      settings,
+      ...publicForm
+    } = sanitizedForm;
+    return {
+      event: {
+        id: event.id,
+        slug: event.slug,
+        name: event.name,
+        timezone: event.timezone,
+        opensAt: event.opensAt,
+        closesAt: event.closesAt,
+      },
+      form: {
+        ...publicForm,
+        status: "published",
+        settings: {
+          speakerLimit: settings.speakerLimit,
+          maxSubmissionsPerAccount: settings.maxSubmissionsPerAccount,
+          confirmationMessage: settings.confirmationMessage,
+          successContent: settings.successContent,
+          ...(settings.redirectUrl === undefined ? {} : { redirectUrl: settings.redirectUrl }),
+        },
+      },
+    };
+  }
+  async getPublishedForm(input: {
+    tenantId: string;
+    eventId: string;
+    formId?: string;
+  }): Promise<PublishedCfp> {
+    return this.getPublishedCfp(input);
+  }
+  async getReceipt(input: {
+    tenantId: string;
+    submissionId: string;
+    ownerAccountId: string;
+  }): Promise<CfpReceipt> {
+    const submission = await this.#getOwnedSubmission(input);
+    if (submission.status !== "submitted" || submission.submittedAt === undefined) {
+      throw new CfpError("NOT_FOUND", "A submission receipt is not available.");
+    }
+    return {
+      id: submission.id,
+      submissionId: submission.id,
+      version: submission.version,
+      submittedAt: submission.submittedAt,
+    };
+  }
+
+  async loadDraft(input: {
+    tenantId: string;
+    submissionId: string;
+    ownerAccountId: string;
+  }): Promise<Submission> {
+    const submission = await this.#getOwnedSubmission(input);
+    const event = await this.#getEvent(input.tenantId, submission.eventId);
+    const form = await this.#getForm(input.tenantId, submission.formId);
+    ensureEventFormMatch(event, form);
+    return sanitizeSubmission(submission, form);
+  }
+
+  async createForm(input: {
+    tenantId: string;
+    form: unknown;
+    expectedVersion: number | null;
+    idempotencyKey: string;
+  }): Promise<CfpForm> {
+    const key = requireIdempotencyKey(input.idempotencyKey);
+    return this.#idempotency.run(`${input.tenantId}:cfp:create-form`, key, () =>
+      this.saveForm(input.form, input.expectedVersion),
+    );
+  }
+
+  async publishForm(input: {
+    tenantId: string;
+    eventId: string;
+    formId: string;
+    organizerId: string;
+    expectedVersion: number;
+    idempotencyKey: string;
+  }): Promise<CfpForm> {
+    const key = requireIdempotencyKey(input.idempotencyKey);
+    return this.#idempotency.run(`${input.tenantId}:cfp:publish:${input.formId}`, key, async () => {
+      const current = await this.#getForm(input.tenantId, input.formId);
+      ensureEventFormMatch(await this.#getEvent(input.tenantId, input.eventId), current);
+      if (current.version !== input.expectedVersion) {
+        throw new CfpError("CONFLICT", "The CFP form has changed since it was loaded.");
+      }
+      if (current.status === "published") return current;
+      const published = sanitizeForm({
+        ...current,
+        status: "published",
+        version: current.version + 1,
+      });
+      await this.#repository.saveForm(published, current.version);
+      return published;
+    });
   }
 
   async saveEvent(input: unknown, expectedVersion: number | null): Promise<EventCfp> {
@@ -472,7 +638,16 @@ export class CfpService {
             form,
             idempotencyKey: `${current.tenantId}:${current.id}:submission-confirmation`,
           });
-          return { submission: current, confirmationQueued: false };
+          return {
+            submission: current,
+            receipt: {
+              id: current.id,
+              submissionId: current.id,
+              version: current.version,
+              submittedAt: current.submittedAt ?? current.updatedAt,
+            },
+            confirmationQueued: false,
+          };
         }
         if (current.status !== "draft" && current.status !== "reopened") {
           throw new CfpError("INVALID_TRANSITION", "This submission cannot be submitted.");
@@ -520,7 +695,16 @@ export class CfpService {
           form,
           idempotencyKey: `${submitted.tenantId}:${submitted.id}:submission-confirmation`,
         });
-        return { submission: submitted, confirmationQueued: true };
+        return {
+          submission: submitted,
+          receipt: {
+            id: submitted.id,
+            submissionId: submitted.id,
+            version: submitted.version,
+            submittedAt: submitted.submittedAt ?? submitted.updatedAt,
+          },
+          confirmationQueued: true,
+        };
       },
     );
   }

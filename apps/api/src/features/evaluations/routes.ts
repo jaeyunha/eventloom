@@ -30,7 +30,7 @@ const roundSchema = z.object({
   id: z.string(),
   name: z.string(),
   sequence: z.number(),
-  closesAt: z.string().nullable(),
+  closesAt: z.string().nullable().default(null),
   rubric: rubricSchema,
 });
 
@@ -39,7 +39,7 @@ const createPlanSchema = z.object({
   eventId: z.string(),
   name: z.string(),
   blindReview: z.boolean(),
-  closesAt: z.string().nullable(),
+  closesAt: z.string().nullable().default(null),
   assignmentRule: z.object({
     reviewsPerSubmission: z.number(),
     maxAssignmentsPerReviewer: z.number(),
@@ -74,6 +74,11 @@ const confirmScoresSchema = z.object({
 });
 
 const conflictSchema = z.object({ reason: z.string() });
+const reopenSchema = z.object({
+  expectedVersion: z.number().int().positive(),
+  reason: z.string(),
+  idempotencyKey: z.string(),
+});
 
 const decisionSchema = z.object({
   status: z.enum(["accepted", "waitlisted", "rejected"]),
@@ -94,6 +99,15 @@ export function createEvaluationRoutes(
   service: EvaluationService,
 ): Hono<EvaluationRouteEnvironment> {
   const routes = new Hono<EvaluationRouteEnvironment>();
+
+  routes.get("/plans", async (context) => {
+    const eventId = context.req.query("eventId");
+    return context.json({ plans: await service.listPlans(actor(context), eventId) });
+  });
+
+  routes.get("/plans/:planId", async (context) =>
+    context.json(await service.getPlan(actor(context), context.req.param("planId"))),
+  );
 
   routes.post("/plans", async (context) => {
     const plan = await service.createPlan(
@@ -125,6 +139,15 @@ export function createEvaluationRoutes(
     });
     return context.json({ assignments }, 201);
   });
+
+  routes.get("/plans/:planId/assignments", async (context) =>
+    context.json({
+      assignments: await service.listOrganizerAssignments(
+        actor(context),
+        context.req.param("planId"),
+      ),
+    }),
+  );
 
   routes.get("/plans/:planId/assignments/mine", async (context) =>
     context.json({
@@ -187,6 +210,7 @@ export function createEvaluationRoutes(
       ),
     }),
   );
+
   routes.get(
     "/plans/:planId/rounds/:roundId/submissions/:submissionId/aggregate",
     async (context) =>
@@ -202,6 +226,34 @@ export function createEvaluationRoutes(
 
   routes.get("/plans/:planId/progress", async (context) =>
     context.json(await service.getProgress(actor(context), context.req.param("planId"))),
+  );
+
+  routes.get("/events/:eventId/submissions", async (context) =>
+    context.json(
+      await service.listOrganizerSubmissions(actor(context), context.req.param("eventId")),
+    ),
+  );
+
+  routes.post("/events/:eventId/submissions/:submissionId/reopen", async (context) => {
+    const body = reopenSchema.parse(await context.req.json());
+    return context.json(
+      await service.reopenSubmission(
+        actor(context),
+        context.req.param("eventId"),
+        context.req.param("submissionId"),
+        body,
+      ),
+    );
+  });
+
+  routes.get("/plans/:planId/submissions/:submissionId/decision", async (context) =>
+    context.json(
+      await service.getDecision(
+        actor(context),
+        context.req.param("planId"),
+        context.req.param("submissionId"),
+      ),
+    ),
   );
 
   routes.put("/plans/:planId/submissions/:submissionId/decision", async (context) => {

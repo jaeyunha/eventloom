@@ -1,19 +1,17 @@
 import {
+  type CalendarInvitationPayload,
   calendarInvitationPayloadSchema,
   openSendEmailPayloadSchema,
-  publishAcceleventsRequestSchema,
-  type CalendarInvitationPayload,
-  type PublishAcceleventsRequest,
 } from "@open-sessionboard/contracts";
 import { createCalendarInvitation } from "../../integrations/calendar/ical";
-import { createCalendarOpenSendMessage } from "../../integrations/opensend/calendar-email";
 import { OpenSendClient, type OpenSendMessage } from "../../integrations/opensend";
+import { createCalendarOpenSendMessage } from "../../integrations/opensend/calendar-email";
 import { OpenSendError } from "../../integrations/opensend/types";
 import {
-  cloudflareOutboxTopics,
   type CloudflareBindings,
   type CloudflareOutboxMessage,
   type CloudflareOutboxTopic,
+  cloudflareOutboxTopics,
 } from "./bindings";
 
 const DEFAULT_MAX_ATTEMPTS = 5;
@@ -382,12 +380,8 @@ export interface OutboxAdapters {
   readonly webhooks?: TopicAdapter<{ readonly deliveryId: string }>;
   readonly webhook?: TopicAdapter<{ readonly deliveryId: string }>;
   readonly calendar?: TopicAdapter<CalendarInvitationPayload>;
-  readonly accelevents?: TopicAdapter<PublishAcceleventsRequest>;
-  readonly publication?: TopicAdapter<PublishAcceleventsRequest>;
   readonly "cache-invalidation"?: TopicAdapter<{ readonly eventId: string }>;
   readonly cacheInvalidation?: TopicAdapter<{ readonly eventId: string }>;
-  readonly "file-scan"?: TopicAdapter<unknown>;
-  readonly fileScan?: TopicAdapter<unknown>;
 }
 
 export interface OutboxConsumerBindings extends CloudflareBindings {
@@ -475,10 +469,16 @@ function parseQueueMessage(value: unknown): CloudflareOutboxMessage | null {
   }
   return value as unknown as CloudflareOutboxMessage;
 }
+function queueMessageFailureReason(value: unknown): "MALFORMED_MESSAGE" | "UNSUPPORTED_TOPIC" {
+  if (isRecord(value) && typeof value.topic === "string" && !outboxTopicSet.has(value.topic)) {
+    return "UNSUPPORTED_TOPIC";
+  }
+  return "MALFORMED_MESSAGE";
+}
 
 function malformedPayload(topic: CloudflareOutboxTopic): never {
   throw new OutboxDeliveryError("MALFORMED_PAYLOAD", `The ${topic} outbox payload is invalid.`, {
-    retryable: false,
+    retryable: true,
   });
 }
 
@@ -511,12 +511,12 @@ function parseWebhookPayload(value: unknown): { readonly deliveryId: string } {
   return { deliveryId };
 }
 
-function parseAcceleventsPayload(value: unknown): PublishAcceleventsRequest {
-  const candidate =
-    isRecord(value) && value.effect === "publish_accelevents" ? value.payload : value;
-  const result = publishAcceleventsRequestSchema.safeParse(candidate);
-  if (!result.success) malformedPayload("accelevents");
-  return result.data;
+function unsupportedTopic(topic: CloudflareOutboxTopic): never {
+  throw new OutboxDeliveryError(
+    "UNSUPPORTED_TOPIC",
+    `The ${topic} outbox topic is not enabled for production dispatch.`,
+    { retryable: true },
+  );
 }
 
 function parseCachePayload(value: unknown): { readonly eventId: string } {
@@ -592,14 +592,14 @@ function adapterError(topic: CloudflareOutboxTopic): OutboxDeliveryError {
   return new OutboxDeliveryError(
     "ADAPTER_UNAVAILABLE",
     `No configured adapter is available for ${topic}.`,
-    { retryable: false },
+    { retryable: true },
   );
 }
 
 function requireUrl(value: string | undefined, label: string): URL {
   if (value === undefined || value.trim().length === 0) {
     throw new OutboxDeliveryError("CONFIGURATION_ERROR", `${label} is not configured.`, {
-      retryable: false,
+      retryable: true,
     });
   }
   let url: URL;
@@ -607,7 +607,7 @@ function requireUrl(value: string | undefined, label: string): URL {
     url = new URL(value);
   } catch (cause) {
     throw new OutboxDeliveryError("CONFIGURATION_ERROR", `${label} is invalid.`, {
-      retryable: false,
+      retryable: true,
       cause,
     });
   }
@@ -619,7 +619,7 @@ function requireUrl(value: string | undefined, label: string): URL {
     url.hash.length > 0
   ) {
     throw new OutboxDeliveryError("CONFIGURATION_ERROR", `${label} must use HTTPS.`, {
-      retryable: false,
+      retryable: true,
     });
   }
   return url;
@@ -645,7 +645,7 @@ function createConfiguredAdapters(
     const key = bindings.OPENSEND_API_KEY ?? bindings.OPENSEND_SENDING_API_KEY;
     if (key === undefined || key.trim().length === 0) {
       throw new OutboxDeliveryError("CONFIGURATION_ERROR", "OpenSend is not configured.", {
-        retryable: false,
+        retryable: true,
       });
     }
     client = new OpenSendClient({
@@ -768,11 +768,12 @@ export class OutboxConsumer {
     const queueAttempts = queueAttempt(message.attempts);
     const queueMessage = parseQueueMessage(message.body);
     if (queueMessage === null) {
+      const reason = queueMessageFailureReason(message.body);
       log(this.#logger, "error", "outbox message rejected", {
-        reason: "MALFORMED_MESSAGE",
+        reason,
         attempt: queueAttempts,
       });
-      return { action: "ack", reason: "malformed_message" };
+      return this.retryForMessage(message, undefined, reason.toLowerCase(), true);
     }
     const now = this.#now();
     let claim: OutboxJobClaim;
@@ -800,7 +801,7 @@ export class OutboxConsumer {
         jobId: queueMessage.jobId,
         reason: "MISSING_JOB",
       });
-      return { action: "ack", reason: "missing_job" };
+      return this.retryForMessage(message, undefined, "missing_job", true);
     }
     if (claim.outcome === "completed") {
       log(this.#logger, "info", "duplicate outbox delivery acknowledged", {
@@ -837,7 +838,7 @@ export class OutboxConsumer {
     const job = claim.job;
     if (job.tenantId !== queueMessage.tenantId || job.topic !== queueMessage.topic) {
       try {
-        await this.#repository.markFailed(job.id, "MESSAGE_MISMATCH", false);
+        await this.#repository.markFailed(job.id, "MESSAGE_MISMATCH", true);
       } catch (cause) {
         const failure = normalizeFailure(cause);
         log(this.#logger, "error", "outbox message mismatch could not be persisted", {
@@ -852,7 +853,7 @@ export class OutboxConsumer {
         jobId: queueMessage.jobId,
         reason: "MESSAGE_MISMATCH",
       });
-      return { action: "ack", reason: "message_mismatch" };
+      return this.retryForMessage(message, undefined, "message_mismatch", true);
     }
     const context: OutboxDeliveryContext = {
       jobId: job.id,
@@ -982,13 +983,6 @@ export class OutboxConsumer {
         await adapter(payload, context);
         return;
       }
-      case "accelevents": {
-        const payload = parseAcceleventsPayload(job.payload);
-        const adapter = this.#adapters.accelevents ?? this.#adapters.publication;
-        if (adapter === undefined) throw adapterError(job.topic);
-        await adapter(payload, context);
-        return;
-      }
       case "cache-invalidation": {
         const payload = parseCachePayload(job.payload);
         const adapter = this.#adapters["cache-invalidation"] ?? this.#adapters.cacheInvalidation;
@@ -996,15 +990,8 @@ export class OutboxConsumer {
         await adapter(payload, context);
         return;
       }
-      case "file-scan": {
-        const adapter = this.#adapters["file-scan"] ?? this.#adapters.fileScan;
-        if (adapter === undefined) throw adapterError(job.topic);
-        await adapter(job.payload, context);
-        return;
-      }
       default: {
-        const exhaustive: never = job.topic;
-        throw adapterError(exhaustive);
+        throw unsupportedTopic(job.topic);
       }
     }
   }

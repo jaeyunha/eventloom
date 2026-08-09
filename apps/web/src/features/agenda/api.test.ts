@@ -33,7 +33,7 @@ describe("agenda API adapter", () => {
         headers: { "content-type": "application/json" },
       });
     };
-    const api = createAgendaApi("https://api.example.com/", fetcher);
+    const api = createAgendaApi("https://api.example.com/", "org_open", fetcher);
 
     await api.saveEntry({
       eventId: "evt/open",
@@ -49,7 +49,7 @@ describe("agenda API adapter", () => {
 
     expect(calls).toHaveLength(1);
     expect(String(calls[0]?.input)).toBe(
-      "https://api.example.com/api/admin/events/evt%2Fopen/agenda/draft/entries",
+      "https://api.example.com/api/admin/organizations/org_open/events/evt%2Fopen/agenda/draft/entries",
     );
     expect(calls[0]?.init).toMatchObject({
       method: "PUT",
@@ -57,6 +57,11 @@ describe("agenda API adapter", () => {
       headers: { accept: "application/json", "content-type": "application/json" },
     });
     expect(JSON.parse(String(calls[0]?.init?.body))).toMatchObject({ expectedVersion: 2 });
+  });
+  it("rejects missing organization context instead of inferring a tenant", () => {
+    expect(() => createAgendaApi("https://api.example.com", "   ")).toThrow(
+      "An organization ID is required",
+    );
   });
 
   it("preserves structured conflict details from failed mutations", async () => {
@@ -83,7 +88,7 @@ describe("agenda API adapter", () => {
         { status: 409, headers: { "content-type": "application/json" } },
       );
     };
-    const api = createAgendaApi("https://api.example.com", fetcher);
+    const api = createAgendaApi("https://api.example.com", "org_open", fetcher);
 
     const error = await api.preview("evt_open").catch((caught: unknown) => caught);
 

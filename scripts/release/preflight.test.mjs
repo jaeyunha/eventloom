@@ -22,6 +22,7 @@ function configurationFor(environment, index) {
     NEXT_PUBLIC_API_URL: apiOrigin,
     API_URL: apiOrigin,
     BETTER_AUTH_SECRET: `${environment}-${"a".repeat(40)}`,
+    BETTER_AUTH_URL: apiOrigin,
     CLOUDFLARE_ACCOUNT_ID: accountId,
     CLOUDFLARE_API_TOKEN: `cloudflare-token-${environment}`,
     CLOUDFLARE_API_AUDIT_TOKEN: `audit-token-${environment}`,
@@ -38,10 +39,6 @@ function configurationFor(environment, index) {
     CALENDAR_FROM_EMAIL: "calendar@foreverbrowsing.com",
     GOOGLE_CLIENT_ID: `google-client-${environment}`,
     GOOGLE_CLIENT_SECRET: `google-secret-${environment}`,
-    MICROSOFT_CLIENT_ID: `microsoft-client-${environment}`,
-    MICROSOFT_CLIENT_SECRET: `microsoft-secret-${environment}`,
-    ACCELEVENTS_API_BASE_URL: `https://accelevents-${environment}.example.test`,
-    ACCELEVENTS_API_KEY: `accelevents-key-${environment}`,
     FORGE_API_URL: "https://forge.example.test",
     FORGE_REPOSITORY: "jaeyunha/open-sessionboard",
     FORGE_API_TOKEN: "forge-secret-token",
@@ -94,14 +91,29 @@ test("validates provider presence, Wrangler alignment, and three-environment iso
   const result = validateReleaseConfiguration({
     configurations,
     targetEnvironment: "staging",
-    requiredProviders: ["google", "microsoft", "accelevents"],
+    requiredProviders: ["google"],
     wranglerInventory,
   });
   assert.deepEqual(result.providerStates.staging, {
     google: "configured",
-    microsoft: "configured",
-    accelevents: "configured",
   });
+});
+test("requires a complete Google provider in every deployed environment", () => {
+  const { configurations, wranglerInventory } = fixtures();
+  delete configurations.production.GOOGLE_CLIENT_SECRET;
+
+  assert.throws(
+    () =>
+      validateReleaseConfiguration({
+        configurations,
+        targetEnvironment: "staging",
+        wranglerInventory,
+      }),
+    (error) =>
+      error instanceof PreflightError &&
+      error.code === "PARTIAL_PROVIDER_CONFIGURATION" &&
+      error.message.includes("production"),
+  );
 });
 
 test("rejects shared secrets without putting their values in the error", () => {

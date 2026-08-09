@@ -36,9 +36,9 @@ function seededEvent(tenantId: string, eventId: string, name: string): EventCfp 
   };
 }
 
-function seededForm(tenantId: string, eventId: string): CfpForm {
+function seededForm(tenantId: string, eventId: string, formId = "main-cfp"): CfpForm {
   return {
-    id: "main-cfp",
+    id: formId,
     tenantId,
     eventId,
     name: "Main call for speakers",
@@ -84,7 +84,7 @@ function seededForm(tenantId: string, eventId: string): CfpForm {
         label: "Format",
         kind: "select",
         required: true,
-        options: ["talk", "workshop"],
+        options: ["Featured Keynote", "Keynote", "Breakout Session", "Workshop"],
       },
     ],
     participantFields: [
@@ -128,12 +128,24 @@ class LocalCfpRepository implements CfpRepository {
   readonly audits: AuditEntry[] = [];
 
   constructor() {
-    for (const event of [
-      seededEvent(LOCAL_ORGANIZATION_ID, "demo-event", "Open Sessionboard Demo"),
-      seededEvent("organization-1", "summit-2026", "Open Sessionboard Summit 2026"),
-    ]) {
+    for (const [event, formId] of [
+      [seededEvent(LOCAL_ORGANIZATION_ID, "demo-event", "Open Sessionboard Demo"), "main-cfp"],
+      [
+        seededEvent(LOCAL_ORGANIZATION_ID, "evaluator-2026", "Welcome to our event!"),
+        "evaluator-2026-cfp",
+      ],
+      [
+        seededEvent(LOCAL_ORGANIZATION_ID, "resume-check", "Resume Draft Test Event"),
+        "resume-check-cfp",
+      ],
+      [
+        seededEvent(LOCAL_ORGANIZATION_ID, "validation-check", "Validation Test Event"),
+        "validation-check-cfp",
+      ],
+      [seededEvent("organization-1", "summit-2026", "Open Sessionboard Summit 2026"), "main-cfp"],
+    ] as const) {
       this.#events.set(key(event.tenantId, event.id), event);
-      const form = seededForm(event.tenantId, event.id);
+      const form = seededForm(event.tenantId, event.id, formId);
       this.#forms.set(key(form.tenantId, form.id), form);
     }
   }

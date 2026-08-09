@@ -14,8 +14,6 @@ export const cloudflareOutboxTopics = [
   "communications",
   "webhooks",
   "calendar",
-  "accelevents",
-  "file-scan",
   "cache-invalidation",
 ] as const;
 

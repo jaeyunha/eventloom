@@ -75,11 +75,14 @@ test("submitter completes the account-first CFP with two participants", async ({
   ).toBeVisible();
   await expect(page.getByRole("button", { name: "Continue to portal →" })).toBeVisible();
 
-  const persistedReceipt = await page.evaluate(() => {
-    const raw = window.localStorage.getItem("open-sessionboard:cfp-draft:v1:evaluator-2026");
-    return raw ? (JSON.parse(raw) as { receipt?: { id?: string } }).receipt : null;
-  });
-  expect(persistedReceipt?.id).toMatch(/^submission-/);
+  const browserState = await page.evaluate(() => ({
+    pointer: window.localStorage.getItem(
+      "open-sessionboard:cfp-submission:v1:local-organization:evaluator-2026:evaluator-2026-cfp",
+    ),
+    legacyDraft: window.localStorage.getItem("open-sessionboard:cfp-draft:v1:evaluator-2026"),
+  }));
+  expect(browserState.pointer).toMatch(/^submission[_-]/);
+  expect(browserState.legacyDraft).toBeNull();
 });
 
 test("required CFP validation announces errors and focuses the first invalid field", async ({

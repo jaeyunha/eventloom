@@ -1,5 +1,5 @@
-import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const DEFAULT_API_ORIGIN = "https://api.airtable.com";
 const METADATA_READ_SCOPE = "schema.bases:read";
@@ -344,6 +344,20 @@ export const TABLE_DEFINITIONS = [
       json("Conflicts JSON", "Hard conflicts, soft warnings, and approved overrides."),
       dateTime("Created At", "Creation timestamp in ISO 8601 format."),
       dateTime("Published At", "Publication timestamp in ISO 8601 format."),
+    ],
+  },
+  {
+    name: "Published Speaker Projections",
+    description:
+      "Immutable public speaker galleries. Each row is a materialized published revision; never store drafts or private fields.",
+    fields: [
+      applicationId(),
+      text("Organization ID", "Owning organization application ID."),
+      text("Event Slug", "Globally unique public event slug."),
+      text("Revision ID", "Immutable published speaker projection revision ID."),
+      number("Revision Number", "Monotonic published projection revision number.", 0),
+      dateTime("Published At", "Publication timestamp in ISO 8601 format."),
+      json("Projection JSON", "Sanitized public projection payload only."),
     ],
   },
   {

@@ -21,7 +21,7 @@ function usage() {
   return [
     "Usage: node scripts/release/preflight.mjs --environment <local|staging|production>",
     "  --env local=<path|-> --env staging=<path|-> --env production=<path|->",
-    "  [--require-providers google,microsoft,accelevents] [--offline]",
+    "  [--require-providers google] [--offline]",
     "",
     'Use "-" for exactly one environment to read that environment from the current process.',
   ].join("\n");

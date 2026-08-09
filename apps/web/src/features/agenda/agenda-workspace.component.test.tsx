@@ -93,6 +93,7 @@ describe("agenda organizer workspace", () => {
     const markup = renderToStaticMarkup(
       createElement(AgendaBoard, {
         ...actions,
+        organizationId: "organization-1",
         data,
         preview,
         busy: false,
@@ -113,6 +114,7 @@ describe("agenda organizer workspace", () => {
     const markup = renderToStaticMarkup(
       createElement(AgendaBoard, {
         ...actions,
+        organizationId: "organization-1",
         data,
         preview,
         busy: false,

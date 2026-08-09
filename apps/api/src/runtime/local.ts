@@ -46,6 +46,12 @@ import type {
   UpdateBiographyCommand,
 } from "../features/speaker/types";
 import { InMemoryWebhookRepository } from "../integrations/webhooks/types";
+import type {
+  OrganizerOverviewActionItem,
+  OrganizerOverviewData,
+  OrganizerOverviewEvent,
+  OrganizerOverviewRouteDependencies,
+} from "../routes/organizer-overview";
 import { createLocalCfpService } from "./cfp";
 
 export {
@@ -127,6 +133,9 @@ class LocalSpeakerRepository implements SpeakerRepository {
   readonly #profiles = new Map<string, SpeakerProfile[]>();
   readonly #tasks = new Map<string, SpeakerTask[]>();
   readonly #assets = new Map<string, SpeakerAsset[]>();
+  constructor() {
+    this.#seed("demo-event");
+  }
 
   #seed(eventId: string): void {
     if (this.#submissions.has(eventId)) return;
@@ -188,6 +197,13 @@ class LocalSpeakerRepository implements SpeakerRepository {
       },
     ]);
     this.#assets.set(eventId, []);
+  }
+  listStoredSubmissions(eventId: string): SpeakerSubmission[] {
+    return clone(this.#submissions.get(eventId) ?? []);
+  }
+
+  listStoredTasks(eventId: string): SpeakerTask[] {
+    return clone(this.#tasks.get(eventId) ?? []);
   }
 
   async getAccessScope(eventId: string, accountId: string): Promise<SpeakerAccessScope> {
@@ -478,6 +494,26 @@ class LocalPublicApiRepository implements PublicApiRepository {
         publishedAt: SEEDED_AT,
       },
     ]);
+    this.#seed("sessions", [
+      {
+        id: "local-session-keynote",
+        version: 1,
+        organizationId: LOCAL_ORGANIZATION_ID,
+        eventId: "demo-event",
+        title: "Opening keynote: Systems that earn trust",
+        status: "accepted",
+        updatedAt: SEEDED_AT,
+      },
+      {
+        id: "local-session-workshop",
+        version: 1,
+        organizationId: LOCAL_ORGANIZATION_ID,
+        eventId: "demo-event",
+        title: "A practical guide to resilient programs",
+        status: "accepted",
+        updatedAt: SEEDED_AT,
+      },
+    ]);
   }
 
   #seed(resource: string, records: readonly Record<string, unknown>[]): void {
@@ -495,6 +531,9 @@ class LocalPublicApiRepository implements PublicApiRepository {
       this.#records.set(key, collection);
     }
     return collection;
+  }
+  listStored(organizationId: string, resource: string): Record<string, unknown>[] {
+    return clone([...this.#collection(organizationId, resource).values()]);
   }
 
   async list(input: PublicApiListInput): Promise<PublicApiListResult<Record<string, unknown>>> {
@@ -541,6 +580,225 @@ class LocalPublicApiRepository implements PublicApiRepository {
   }
 }
 
+interface LocalOverviewAssignment {
+  readonly id: string;
+  readonly tenantId: string;
+  readonly eventId: string;
+  readonly status: string;
+  readonly dueAt?: string;
+}
+
+class LocalOrganizerOverviewRepository implements OrganizerOverviewRouteDependencies {
+  readonly #publicRepository: LocalPublicApiRepository;
+  readonly #speakerRepository: LocalSpeakerRepository;
+  readonly #assignments: readonly LocalOverviewAssignment[];
+
+  constructor(options: {
+    readonly publicRepository: LocalPublicApiRepository;
+    readonly speakerRepository: LocalSpeakerRepository;
+    readonly assignments?: readonly LocalOverviewAssignment[];
+  }) {
+    this.#publicRepository = options.publicRepository;
+    this.#speakerRepository = options.speakerRepository;
+    this.#assignments = options.assignments ?? [];
+  }
+
+  async getOverview(organizationId: string): Promise<OrganizerOverviewData> {
+    const events = this.#publicRepository
+      .listStored(organizationId, "events")
+      .map((event) => this.eventView(event))
+      .sort((left, right) => left.id.localeCompare(right.id));
+    const eventIds = new Set(events.map((event) => event.id));
+    if (events.length === 0) {
+      return {
+        organizationId,
+        metrics: {
+          eventCount: 0,
+          submissionCount: 0,
+          pendingReviewCount: 0,
+          outstandingSpeakerTaskCount: 0,
+          publishedSessionCount: 0,
+        },
+        events: [],
+        actionItems: [],
+      };
+    }
+
+    const submissions =
+      organizationId === LOCAL_ORGANIZATION_ID
+        ? events.flatMap((event) =>
+            this.#speakerRepository
+              .listStoredSubmissions(event.id)
+              .filter((submission) => submission.status !== "withdrawn"),
+          )
+        : [];
+    const pendingAssignments = this.#assignments.filter(
+      (assignment) =>
+        assignment.tenantId === organizationId &&
+        eventIds.has(assignment.eventId) &&
+        (assignment.status === "assigned" || assignment.status === "in_progress"),
+    );
+    const tasks =
+      organizationId === LOCAL_ORGANIZATION_ID
+        ? events.flatMap((event) =>
+            this.#speakerRepository
+              .listStoredTasks(event.id)
+              .filter((task) => task.status !== "completed" && task.status !== "waived"),
+          )
+        : [];
+    const sessions = this.#publicRepository
+      .listStored(organizationId, "sessions")
+      .filter(
+        (session) =>
+          eventIds.has(textValue(session, "eventId") ?? "") &&
+          textValue(session, "status") !== "cancelled",
+      );
+    const publishedSessionIdsByEvent = new Map(
+      events.map(
+        (event) => [event.id, this.publishedSessionIds(organizationId, event.id)] as const,
+      ),
+    );
+    const publishedSessionCount = [...publishedSessionIdsByEvent.values()].reduce(
+      (total, ids) => total + ids.size,
+      0,
+    );
+    const actionItems: OrganizerOverviewActionItem[] = [];
+
+    for (const event of events) {
+      const eventPendingReviews = pendingAssignments.filter(
+        (assignment) => assignment.eventId === event.id,
+      );
+      if (eventPendingReviews.length > 0) {
+        actionItems.push({
+          id: `reviews:${event.id}`,
+          type: "reviews",
+          eventId: event.id,
+          title:
+            eventPendingReviews.length === 1
+              ? "Complete a pending review"
+              : "Complete pending reviews",
+          description: `${eventPendingReviews.length} review${eventPendingReviews.length === 1 ? "" : "s"} still need organizer attention.`,
+          count: eventPendingReviews.length,
+          priority: 90,
+          dueAt: earliestDueAt(eventPendingReviews.map((assignment) => assignment.dueAt ?? null)),
+          href: hrefFor(organizationId, event.id, "reviews"),
+        });
+      }
+
+      const eventTasks = tasks.filter((task) => task.eventId === event.id);
+      if (eventTasks.length > 0) {
+        actionItems.push({
+          id: `speaker_tasks:${event.id}`,
+          type: "speaker_tasks",
+          eventId: event.id,
+          title: eventTasks.length === 1 ? "Resolve a speaker task" : "Resolve speaker tasks",
+          description: `${eventTasks.length} speaker task${eventTasks.length === 1 ? "" : "s"} remain open.`,
+          count: eventTasks.length,
+          priority: 70,
+          dueAt: earliestDueAt(eventTasks.map((task) => task.dueAt ?? null)),
+          href: hrefFor(organizationId, event.id, "speakers"),
+        });
+      }
+
+      const eventSessions = sessions.filter(
+        (session) => textValue(session, "eventId") === event.id,
+      );
+      const publishedIds = publishedSessionIdsByEvent.get(event.id) ?? new Set<string>();
+      const unpublishedSessionCount = eventSessions.filter(
+        (session) => !publishedIds.has(textValue(session, "id") ?? ""),
+      ).length;
+      if (unpublishedSessionCount > 0) {
+        actionItems.push({
+          id: `agenda:${event.id}`,
+          type: "agenda",
+          eventId: event.id,
+          title:
+            unpublishedSessionCount === 1
+              ? "Publish the remaining session"
+              : "Publish the remaining sessions",
+          description: `${unpublishedSessionCount} session${unpublishedSessionCount === 1 ? "" : "s"} are not in the current published agenda.`,
+          count: unpublishedSessionCount,
+          priority: 50,
+          dueAt: null,
+          href: hrefFor(organizationId, event.id, "agenda"),
+        });
+      }
+    }
+
+    actionItems.sort(
+      (left, right) =>
+        right.priority - left.priority ||
+        compareNullableDates(left.dueAt, right.dueAt) ||
+        left.id.localeCompare(right.id),
+    );
+    return {
+      organizationId,
+      metrics: {
+        eventCount: events.length,
+        submissionCount: submissions.length,
+        pendingReviewCount: pendingAssignments.length,
+        outstandingSpeakerTaskCount: tasks.length,
+        publishedSessionCount,
+      },
+      events,
+      actionItems,
+    };
+  }
+
+  private eventView(record: Record<string, unknown>): OrganizerOverviewEvent {
+    const id = textValue(record, "id") ?? "unknown";
+    return {
+      id,
+      name: textValue(record, "name", "title") ?? id,
+      slug: textValue(record, "slug"),
+      status: textValue(record, "status"),
+      startsAt: textValue(record, "startsAt", "startsOn", "startAt"),
+      endsAt: textValue(record, "endsAt", "endsOn", "endAt"),
+    };
+  }
+
+  private publishedSessionIds(organizationId: string, eventId: string): ReadonlySet<string> {
+    const agenda = this.#publicRepository
+      .listStored(organizationId, "agenda")
+      .find((record) => textValue(record, "id", "eventId") === eventId);
+    if (agenda === undefined) return new Set<string>();
+    const values = agenda.sessionIds ?? agenda.publishedSessionIds;
+    return Array.isArray(values)
+      ? new Set(values.filter((value): value is string => typeof value === "string"))
+      : new Set<string>();
+  }
+}
+
+function textValue(record: Record<string, unknown>, ...keys: readonly string[]): string | null {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim().length > 0) return value.trim();
+  }
+  return null;
+}
+
+function earliestDueAt(values: readonly (string | null)[]): string | null {
+  return (
+    values
+      .filter((value): value is string => value !== null && !Number.isNaN(Date.parse(value)))
+      .sort((left, right) => Date.parse(left) - Date.parse(right))[0] ?? null
+  );
+}
+
+function hrefFor(
+  organizationId: string,
+  eventId: string,
+  suffix: "reviews" | "speakers" | "agenda",
+): string {
+  return `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}/${suffix}`;
+}
+
+function compareNullableDates(left: string | null, right: string | null): number {
+  if (left === null && right === null) return 0;
+  if (left === null) return 1;
+  if (right === null) return -1;
+  return Date.parse(left) - Date.parse(right);
+}
 class LocalIdempotencyCoordinator implements IdempotencyCoordinator {
   readonly #records = new Map<
     string,
@@ -583,17 +841,14 @@ function eventIdFrom(request: Request): string {
 
 export function createLocalDependencies(): ApiDependencies {
   const authenticator = localAuthenticator();
-  const speakerService = new SpeakerService(
-    new LocalSpeakerRepository(),
-    new LocalPrivateAssetGateway(),
-    {
-      now: () => new Date(SEEDED_AT),
-      generateId: (() => {
-        let sequence = 0;
-        return () => `local-speaker-id-${++sequence}`;
-      })(),
-    },
-  );
+  const speakerRepository = new LocalSpeakerRepository();
+  const speakerService = new SpeakerService(speakerRepository, new LocalPrivateAssetGateway(), {
+    now: () => new Date(SEEDED_AT),
+    generateId: (() => {
+      let sequence = 0;
+      return () => `local-speaker-id-${++sequence}`;
+    })(),
+  });
   const publicRepository = new LocalPublicApiRepository();
   const evaluationRepository = new InMemoryEvaluationRepository();
   const evaluationSubmissions = new InMemorySubmissionReviewSource([
@@ -619,10 +874,15 @@ export function createLocalDependencies(): ApiDependencies {
     clock: () => new Date(SEEDED_AT),
   });
   const agendaEngine = localAgendaEngine();
+  const organizerOverview = new LocalOrganizerOverviewRepository({
+    publicRepository,
+    speakerRepository,
+  });
   const webhookIds = { whs: 0, whd: 0 };
 
   return {
     authenticator,
+    organizerOverview,
     speaker: {
       service: speakerService,
       async authenticate(request) {
@@ -694,6 +954,14 @@ export function createLocalDependencies(): ApiDependencies {
           readScope: "agenda:read",
           writeScope: "agenda:write",
           sortFields: ["id", "updatedAt"],
+          defaultSort: "id",
+        },
+        {
+          name: "sessions",
+          repository: publicRepository,
+          readScope: "agenda:read",
+          writeScope: "agenda:write",
+          sortFields: ["id", "title", "updatedAt"],
           defaultSort: "id",
         },
       ],

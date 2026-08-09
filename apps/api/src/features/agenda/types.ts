@@ -3,7 +3,6 @@ export type AgendaConflictKind = "participant" | "resource" | "room";
 export type AgendaWarningKind = "capacity" | "custom" | "track" | "travel";
 
 export type AgendaOutboxEventType =
-  | "accelevents.agenda-ready"
   | "calendar.agenda-updated"
   | "embed-cache.invalidate"
   | "public-agenda.updated";

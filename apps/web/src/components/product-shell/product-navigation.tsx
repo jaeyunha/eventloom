@@ -34,7 +34,7 @@ export const productNavigationSections: readonly ProductNavigationSection[] = [
         description: "Complete assigned, human-led evaluations.",
       },
       {
-        href: "/admin/events/demo-event/agenda",
+        href: "/admin/organizations/local-organization/events/demo-event/agenda",
         label: "Agenda workspace",
         description: "Build a conflict-safe event schedule.",
       },

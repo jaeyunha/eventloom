@@ -6,7 +6,7 @@ const requiredRoutes = [
   ["Speaker portal", "/portal"],
   ["Organizer workspace", "/admin"],
   ["Reviewer workspace", "/review"],
-  ["Agenda workspace", "/admin/events/demo-event/agenda"],
+  ["Agenda workspace", "/admin/organizations/local-organization/events/demo-event/agenda"],
   ["Public speaker gallery", "/embed/open-sessionboard-conf/speakers"],
   ["Public agenda", "/embed/open-sessionboard-conf/agenda"],
   ["API docs", "/docs/api"],

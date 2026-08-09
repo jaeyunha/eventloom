@@ -32,7 +32,7 @@ Keep `.env` local. Do not paste provider secrets into issues, browser code, scre
 | R2 | `open-sessionboard-private-files-local` | `open-sessionboard-private-files-staging` | `open-sessionboard-private-files-production` |
 | Queue | `open-sessionboard-outbox-local` | `open-sessionboard-outbox-staging` | `open-sessionboard-outbox-production` |
 | Worker | Local Wrangler process | `open-sessionboard-api-staging` | `open-sessionboard-api-production` |
-| Web origin | `http://localhost:3015` | Dedicated staging host | Dedicated production host |
+| Web origin | `http://127.0.0.1:3015` | Dedicated staging host | Dedicated production host |
 | API keys/OAuth | Test credentials | Separate non-production credentials | Production credentials |
 | OpenSend | Captured or allowlisted recipients | Sandbox/suppressed delivery to allowlisted recipients | Verified production senders |
 
@@ -44,10 +44,12 @@ Set at least these values in `.env`:
 
 ```dotenv
 APP_ENV=local
-WEB_ORIGIN=http://localhost:3015
-NEXT_PUBLIC_APP_URL=http://localhost:3015
-NEXT_PUBLIC_API_URL=http://localhost:8787
-API_URL=http://localhost:8787
+WEB_ORIGIN=http://127.0.0.1:3015
+NEXT_PUBLIC_APP_ENV=local
+NEXT_PUBLIC_APP_URL=http://127.0.0.1:3015
+NEXT_PUBLIC_API_URL=http://127.0.0.1:8787
+NEXT_PUBLIC_ORGANIZATION_ID=local-organization
+API_URL=http://127.0.0.1:8787
 BETTER_AUTH_SECRET=<at-least-32-random-bytes>
 GOOGLE_CLIENT_ID=<local-google-client-id>
 GOOGLE_CLIENT_SECRET=<local-google-client-secret>
@@ -70,8 +72,8 @@ make dev
 Verify liveness independently:
 
 ```bash
-curl --fail http://localhost:3015/health
-curl --fail http://localhost:8787/api/health
+curl --fail http://127.0.0.1:3015/health
+curl --fail http://127.0.0.1:8787/api/health
 ```
 
 A structured API `503 CONFIGURATION_ERROR` means the Worker is alive but its required environment is invalid. Fix configuration rather than bypassing validation.
@@ -91,9 +93,9 @@ For each non-local environment:
 1. Create the environment's D1 database, private R2 bucket, and outbox Queue using the exact environment-suffixed names in `apps/api/wrangler.toml`.
 2. Replace that environment's placeholder D1 `database_id` with the ID returned by Cloudflare.
 3. Keep `DB`, `AGENDA_COORDINATOR`, `PRIVATE_FILES`, and `OUTBOX_QUEUE` binding names unchanged; application code depends on them.
-4. Keep `workers_dev = false`. The committed Wrangler file intentionally declares no Worker route, so a non-local deploy is not reachable until an operator binds an environment-specific custom domain or route in Cloudflare. Configure that binding in the Cloudflare dashboard (or add and review an environment-specific Wrangler route) before deployment; do not enable `workers.dev` as a workaround.
-5. Record the exact API hostname from that binding and use it for health checks, OAuth callbacks, the frontend's `NEXT_PUBLIC_API_URL`, and release evidence.
-6. Confirm the Worker route's `WEB_ORIGIN` is the exact web origin, with no path or trailing wildcard.
+4. Keep the environment-specific `workers_dev = true` setting for the competition deployment unless a reviewed custom domain is bound. The release scripts pin the exact staging and production `workers.dev` origins and reject mismatches.
+5. Use the exact deployed API hostname for health checks, OAuth callbacks, the frontend's `NEXT_PUBLIC_API_URL`, and release evidence.
+6. Confirm the Worker `WEB_ORIGIN` is the exact deployed web origin, with no path or wildcard, and set `NEXT_PUBLIC_ORGANIZATION_ID` to the explicit Airtable organization application ID.
 
 The committed D1 migrations contain operational state only: identity/access, API keys, idempotency, webhook delivery, publication/audit indexes, and integration coordination. Airtable remains authoritative for program records.
 
@@ -136,7 +138,7 @@ node scripts/cloudflare/deploy.mjs staging open-sessionboard:staging
 
 If Worker deployment fails after migrations succeed, the previous Worker may remain active on the migrated schema. Keep the release private, stop retries, inspect the migration/deploy logs, and execute the preapproved database or Worker recovery path before attempting another deploy. Do not describe the environment as deployed until the bound API hostname passes health checks.
 
-Production uses `production open-sessionboard:production`. This script deploys the API only. Configure and verify the Next.js deployment separately with `NEXT_PUBLIC_API_URL` pointing to the verified Worker origin; do not route provider credentials through Next.js.
+Production uses `production open-sessionboard:production`. The API and web deploy separately; the guarded web deployment requires the pinned `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_APP_URL`, and explicit `NEXT_PUBLIC_ORGANIZATION_ID`, and never receives provider credentials.
 
 ## Airtable
 

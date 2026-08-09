@@ -9,7 +9,6 @@ import {
   IntegrationAdminApiError,
 } from "./api";
 import {
-  AcceleventsSection,
   ApiKeysSection,
   DeliverySection,
   OneTimeSecretPanel,
@@ -17,33 +16,24 @@ import {
   WebhooksSection,
 } from "./integration-sections";
 import styles from "./integrations.module.css";
-import type {
-  AcceleventsAdminPreview,
-  AcceleventsPublishResult,
-  IntegrationAdminSnapshot,
-  IntegrationSection,
-  OneTimeSecret,
-} from "./types";
+import type { IntegrationAdminSnapshot, OneTimeSecret } from "./types";
+
+type SupportedIntegrationSection = "overview" | "api-keys" | "webhooks" | "delivery";
 
 export interface IntegrationAdminProps {
   readonly eventId: string;
-  readonly section: IntegrationSection;
+  readonly section: SupportedIntegrationSection;
   readonly initialSnapshot?: IntegrationAdminSnapshot;
-  readonly initialPreview?: AcceleventsAdminPreview;
   readonly api?: IntegrationAdminApi;
 }
 
 const sectionCopy: Record<
-  IntegrationSection,
+  SupportedIntegrationSection,
   { readonly title: string; readonly description: string }
 > = {
   overview: {
     title: "Integrations",
     description: "Connect distribution services and monitor every outbound program handoff.",
-  },
-  accelevents: {
-    title: "Accelevents publication",
-    description: "Preview immutable agenda changes before an explicit, outbound-only publication.",
   },
   "api-keys": {
     title: "API keys",
@@ -70,7 +60,6 @@ export function IntegrationAdmin({
   eventId,
   section,
   initialSnapshot,
-  initialPreview,
   api: injectedApi,
 }: IntegrationAdminProps) {
   const configuredApiUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
@@ -81,8 +70,6 @@ export function IntegrationAdmin({
   const [snapshot, setSnapshot] = useState<IntegrationAdminSnapshot | null>(
     initialSnapshot ?? null,
   );
-  const [preview, setPreview] = useState<AcceleventsAdminPreview | null>(initialPreview ?? null);
-  const [publishResult, setPublishResult] = useState<AcceleventsPublishResult | null>(null);
   const [loading, setLoading] = useState(initialSnapshot === undefined);
   const [busy, setBusy] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -160,14 +147,14 @@ export function IntegrationAdmin({
 
   const actions = {
     busy,
-    async saveCredential(provider: "opensend" | "accelevents", secret: string) {
+    async saveCredential(provider: "opensend", secret: string) {
       if (!api) {
         setMutationError("The admin API URL is not configured.");
         return false;
       }
       const saved = await mutate(
         () => api.saveCredential({ eventId, provider, secret }),
-        `${provider === "opensend" ? "OpenSend" : "Accelevents"} credential saved.`,
+        "OpenSend credential saved.",
       );
       if (saved === null) {
         return false;
@@ -273,45 +260,6 @@ export function IntegrationAdmin({
       await refreshAfter();
       return true;
     },
-    async previewAccelevents() {
-      if (!api) {
-        setMutationError("The admin API URL is not configured.");
-        return false;
-      }
-      setPublishResult(null);
-      const nextPreview = await mutate(
-        () => api.previewAccelevents(eventId),
-        "Publication preview is ready for review.",
-      );
-      if (!nextPreview) {
-        return false;
-      }
-      setPreview(nextPreview);
-      return true;
-    },
-    async publishAccelevents(currentPreview: AcceleventsAdminPreview) {
-      if (!api) {
-        setMutationError("The admin API URL is not configured.");
-        return false;
-      }
-      const result = await mutate(
-        () =>
-          api.publishAccelevents({
-            eventId,
-            publicationId: currentPreview.publicationId,
-            snapshotHash: currentPreview.snapshotHash,
-            confirmationToken: currentPreview.confirmationToken,
-            idempotencyKey: `accelevents-${crypto.randomUUID()}`,
-          }),
-        "Accelevents publication finished.",
-      );
-      if (!result) {
-        return false;
-      }
-      setPublishResult(result);
-      await refreshAfter();
-      return true;
-    },
     async retryCalendarDelivery(deliveryId: string) {
       if (!api) {
         setMutationError("The admin API URL is not configured.");
@@ -331,12 +279,11 @@ export function IntegrationAdmin({
 
   const base = `/admin/events/${encodeURIComponent(eventId)}/integrations`;
   const tabs: readonly {
-    readonly section: IntegrationSection;
+    readonly section: SupportedIntegrationSection;
     readonly label: string;
     readonly href: string;
   }[] = [
     { section: "overview", label: "Overview", href: base },
-    { section: "accelevents", label: "Accelevents", href: `${base}/accelevents` },
     { section: "api-keys", label: "API keys", href: `${base}/api-keys` },
     { section: "webhooks", label: "Webhooks", href: `${base}/webhooks` },
     { section: "delivery", label: "Email & calendar", href: `${base}/delivery` },
@@ -424,13 +371,6 @@ export function IntegrationAdmin({
         {snapshot ? (
           section === "overview" ? (
             <OverviewSection snapshot={snapshot} />
-          ) : section === "accelevents" ? (
-            <AcceleventsSection
-              snapshot={snapshot}
-              preview={preview}
-              publishResult={publishResult}
-              actions={actions}
-            />
           ) : section === "api-keys" ? (
             <ApiKeysSection keys={snapshot.apiKeys} actions={actions} />
           ) : section === "webhooks" ? (

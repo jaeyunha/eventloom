@@ -1,26 +1,45 @@
+import type {
+  D1Database,
+  DurableObjectNamespace,
+  Queue,
+  R2Bucket,
+} from "@cloudflare/workers-types";
 import type { ApiDependencies, EvaluationRouteDependencies } from "../app";
-import type { RequestAuthenticator } from "../features/auth/authenticator";
 import { AgendaEngine } from "../features/agenda/engine";
 import {
   AgendaRepositoryConflictError,
   type DurableObjectAgendaCoordinator,
 } from "../features/agenda/infrastructure";
 import type { AgendaEntry, AgendaState } from "../features/agenda/types";
+import type { RequestAuthenticator } from "../features/auth/authenticator";
+import type { AuthPrincipal } from "../features/auth/types";
 import type {
   AuditEntry,
   CfpForm,
   EventCfp,
   Submission,
+  SubmissionParticipant,
   SubmissionVersion,
 } from "../features/cfp/model";
 import {
-  CfpError,
   type CfpEffects,
+  CfpError,
   type CfpIdempotencyCoordinator,
   type CfpRepository,
   CfpService,
 } from "../features/cfp/service";
-import type { AuthPrincipal } from "../features/auth/types";
+import { conflict } from "../features/evaluations/errors";
+import type {
+  EvaluationRepository,
+  SubmissionReviewSource,
+} from "../features/evaluations/repository";
+import type {
+  EvaluationAcceptanceHandoff,
+  EvaluationAcceptanceHandoffInput,
+  EvaluationSubmissionRecord,
+  EvaluationSubmissionSource,
+} from "../features/evaluations/service";
+import { EvaluationService } from "../features/evaluations/service";
 import type {
   EvaluationAssignment,
   EvaluationConflictDeclaration,
@@ -30,15 +49,9 @@ import type {
   SubmissionReviewMaterial,
 } from "../features/evaluations/types";
 import type {
-  EvaluationRepository,
-  SubmissionReviewSource,
-} from "../features/evaluations/repository";
-import { conflict } from "../features/evaluations/errors";
-import { EvaluationService } from "../features/evaluations/service";
-import type {
   IdempotencyBeginResult,
-  IdempotencyStoredResponse,
   IdempotencyStore,
+  IdempotencyStoredResponse,
 } from "../features/public-api/idempotency";
 import { createIdempotencyCoordinator } from "../features/public-api/idempotency";
 import type {
@@ -63,6 +76,12 @@ import type {
   TransitionSpeakerTaskCommand,
   UpdateBiographyCommand,
 } from "../features/speaker/types";
+import {
+  type AirtableMapper,
+  AirtableRepository,
+  type AirtableTransport,
+} from "../infrastructure/airtable";
+import type { CloudflareOutboxMessage } from "../infrastructure/cloudflare/bindings";
 import type {
   CreateWebhookDeliveryInput,
   CreateWebhookSubscriptionInput,
@@ -73,18 +92,16 @@ import type {
   WebhookSubscriptionRecord,
 } from "../integrations/webhooks/types";
 import { WebhookRepositoryError } from "../integrations/webhooks/types";
-import {
-  AirtableRepository,
-  type AirtableMapper,
-  type AirtableTransport,
-} from "../infrastructure/airtable";
-import type { CloudflareOutboxMessage } from "../infrastructure/cloudflare/bindings";
 import type {
-  DurableObjectNamespace,
-  D1Database,
-  R2Bucket,
-  Queue,
-} from "@cloudflare/workers-types";
+  OrganizerOverviewActionItem,
+  OrganizerOverviewData,
+  OrganizerOverviewEvent,
+  OrganizerOverviewRouteDependencies,
+} from "../routes/organizer-overview";
+import type {
+  PublishedSpeakerProjection,
+  PublishedSpeakerRouteDependencies,
+} from "../routes/public-speakers";
 
 const APPLICATION_ID = "Application ID";
 const DEFAULT_JSON_FIELD = "Settings JSON";
@@ -100,8 +117,15 @@ function isRecord(value: unknown): value is JsonRecord {
 function clone<T>(value: T): T {
   return structuredClone(value);
 }
+
 function entityType(value: object): string | undefined {
   return isRecord(value) && typeof value.entityType === "string" ? value.entityType : undefined;
+}
+
+function isSpeakerSubmissionRecord(value: object): boolean {
+  const kind = entityType(value);
+  if (kind !== undefined) return kind === "speaker_submission";
+  return !("formId" in value);
 }
 
 function tagged<T extends object>(value: T, kind: string): T {
@@ -126,6 +150,68 @@ function organizationIdOf(value: object): string | undefined {
   return typeof candidate === "string" && candidate.trim().length > 0
     ? candidate.trim()
     : undefined;
+}
+function isEvaluationAssignmentRecord(value: object): boolean {
+  const kind = entityType(value);
+  return (
+    kind === "evaluation_assignment" ||
+    (kind === undefined && "reviewerId" in value && !("scores" in value))
+  );
+}
+
+function isEvaluationReviewRecord(value: object): boolean {
+  const kind = entityType(value);
+  return kind === "evaluation_review" || (kind === undefined && "scores" in value);
+}
+
+function textValue(record: JsonRecord, ...keys: readonly string[]): string | null {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim().length > 0) return value.trim();
+  }
+  return null;
+}
+
+function eventReference(record: JsonRecord): string | null {
+  return textValue(record, "eventId", "eventID", "event");
+}
+
+function belongsToOrganization(
+  record: JsonRecord,
+  organizationId: string,
+  eventIds: ReadonlySet<string>,
+): boolean {
+  const recordOrganizationId = organizationIdOf(record);
+  if (recordOrganizationId !== undefined) return recordOrganizationId === organizationId;
+  const eventId = eventReference(record);
+  return eventId !== null && eventIds.has(eventId);
+}
+
+function dueAtValue(record: JsonRecord): string | null {
+  const candidate = textValue(record, "dueAt", "closesAt", "endsAt", "deadline");
+  return candidate !== null && Number.isNaN(Date.parse(candidate)) === false ? candidate : null;
+}
+
+function earliestDueAt(values: readonly (string | null)[]): string | null {
+  return (
+    values
+      .filter((value): value is string => value !== null)
+      .sort((left, right) => Date.parse(left) - Date.parse(right))[0] ?? null
+  );
+}
+
+function hrefFor(
+  organizationId: string,
+  eventId: string,
+  suffix: "reviews" | "speakers" | "agenda",
+): string {
+  return `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}/${suffix}`;
+}
+
+function actionItem(
+  input: Omit<OrganizerOverviewActionItem, "dueAt"> & { dueAt?: string | null },
+): OrganizerOverviewActionItem {
+  return { ...input, dueAt: input.dueAt ?? null };
 }
 
 const FIELD_ALIASES: Readonly<Record<string, string>> = {
@@ -303,6 +389,69 @@ export class AirtableJsonStore<T extends object> {
       cursor = page.nextCursor;
     } while (cursor !== undefined);
     return values;
+  }
+}
+export const PUBLISHED_SPEAKER_PROJECTIONS_TABLE = "Published Speaker Projections";
+
+interface PublishedSpeakerProjectionRecord extends PublishedSpeakerProjection {
+  readonly id: string;
+  readonly organizationId: string;
+}
+
+/**
+ * Read-only adapter for the materialized publication table. The route never
+ * falls back to Participants, speaker profiles, drafts, or review records.
+ */
+class AirtablePublishedSpeakerProjectionStore implements PublishedSpeakerRouteDependencies {
+  readonly #store: AirtableJsonStore<PublishedSpeakerProjectionRecord>;
+
+  constructor(options: {
+    readonly baseId: string;
+    readonly transport: AirtableTransport;
+  }) {
+    this.#store = new AirtableJsonStore({
+      ...options,
+      table: PUBLISHED_SPEAKER_PROJECTIONS_TABLE,
+      jsonField: "Projection JSON",
+    });
+  }
+
+  async getPublishedSpeakers(eventSlug: string): Promise<PublishedSpeakerProjection | null> {
+    const normalizedSlug = eventSlug.trim();
+    if (normalizedSlug.length === 0) return null;
+    const matches = (await this.#store.list()).filter(
+      (record) => record.event.slug === normalizedSlug && record.organizationId.trim().length > 0,
+    );
+    if (matches.length !== 1) return null;
+    const record = matches[0];
+    if (record === undefined) return null;
+    return {
+      event: {
+        slug: record.event.slug,
+        name: record.event.name,
+        timeZone: record.event.timeZone,
+        startsOn: record.event.startsOn,
+        endsOn: record.event.endsOn,
+        venueName: record.event.venueName,
+      },
+      revision: {
+        id: record.revision.id,
+        number: record.revision.number,
+        publishedAt: record.revision.publishedAt,
+      },
+      speakers: record.speakers.map((speaker) => ({
+        id: speaker.id,
+        displayName: speaker.displayName,
+        pronouns: speaker.pronouns,
+        jobTitle: speaker.jobTitle,
+        organization: speaker.organization,
+        biography: speaker.biography,
+        photoUrl: speaker.photoUrl,
+        sessionIds: [...speaker.sessionIds],
+        sessionTitles: [...speaker.sessionTitles],
+        trackNames: [...speaker.trackNames],
+      })),
+    };
   }
 }
 
@@ -658,6 +807,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     const participantIds = [...new Set(profiles.map((profile) => profile.participantId))];
     const submissions = (await this.#submissions.list()).filter(
       (submission) =>
+        isSpeakerSubmissionRecord(submission) &&
         submission.eventId === eventId &&
         submission.participantIds.some((participantId) => participantIds.includes(participantId)),
     );
@@ -670,13 +820,107 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
   ): Promise<SpeakerSubmission[]> {
     const allowed = new Set(submissionIds);
     return (await this.#submissions.list()).filter(
-      (submission) => submission.eventId === eventId && allowed.has(submission.id),
+      (submission) =>
+        isSpeakerSubmissionRecord(submission) &&
+        submission.eventId === eventId &&
+        allowed.has(submission.id),
     );
   }
 
   async getSubmission(eventId: string, submissionId: string): Promise<SpeakerSubmission | null> {
     const submission = await this.#submissions.find(submissionId);
-    return submission !== undefined && submission.eventId === eventId ? submission : null;
+    return submission !== undefined &&
+      isSpeakerSubmissionRecord(submission) &&
+      submission.eventId === eventId
+      ? submission
+      : null;
+  }
+  async ensureAcceptedSubmission(input: {
+    readonly submission: Submission;
+    readonly updatedAt: string;
+  }): Promise<SpeakerSubmission> {
+    const id = `speaker-submission:${input.submission.id}`;
+    const answers = isRecord(input.submission.answers) ? input.submission.answers : {};
+    const titleCandidate = answers.title ?? answers.sessionTitle;
+    const next: SpeakerSubmission = tagged(
+      {
+        id,
+        eventId: input.submission.eventId,
+        title: typeof titleCandidate === "string" && titleCandidate.trim() ? titleCandidate : id,
+        status: "accepted",
+        participantIds: input.submission.participants.map((participant) => participant.id),
+        updatedAt: input.updatedAt,
+      },
+      "speaker_submission",
+    );
+    const existing = await this.#submissions.find(id);
+    if (existing === undefined) {
+      await this.#submissions.create(next);
+      return clone(next);
+    }
+    if (existing.eventId !== next.eventId) {
+      throw new Error("The accepted speaker submission belongs to another event.");
+    }
+    const updated = { ...existing, ...next };
+    if (existing.status !== "accepted" || existing.updatedAt !== next.updatedAt) {
+      await this.#submissions.update(id, updated);
+    }
+    return clone(updated);
+  }
+
+  async ensureProfile(input: {
+    readonly eventId: string;
+    readonly participant: SubmissionParticipant;
+    readonly updatedAt: string;
+  }): Promise<SpeakerProfile> {
+    const id = `speaker-profile:${input.eventId}:${input.participant.id}`;
+    const existing = await this.getProfile(input.eventId, input.participant.id);
+    if (existing !== null) return existing;
+    const profile = tagged(
+      {
+        id,
+        eventId: input.eventId,
+        participantId: input.participant.id,
+        displayName: `${input.participant.firstName} ${input.participant.lastName}`.trim(),
+        biography: input.participant.biography,
+        version: 1,
+        updatedAt: input.updatedAt,
+      },
+      "speaker_profile",
+    );
+    await this.#profiles.create(profile);
+    return clone(profile);
+  }
+
+  async ensureProfileTask(input: {
+    readonly eventId: string;
+    readonly submissionId: string;
+    readonly participantId: string;
+    readonly updatedAt: string;
+  }): Promise<SpeakerTask> {
+    const id = `speaker-task:${input.eventId}:${input.submissionId}:${input.participantId}:profile`;
+    const existing = await this.#tasks.find(id);
+    if (existing !== undefined) return existing;
+    const task = tagged(
+      {
+        id,
+        eventId: input.eventId,
+        submissionId: `speaker-submission:${input.submissionId}`,
+        participantId: input.participantId,
+        type: "form" as const,
+        owner: "speaker" as const,
+        title: "Complete your speaker profile",
+        description: "Review your public name and biography before the program is published.",
+        status: "not_started" as const,
+        dependencyIds: [],
+        reminderOffsetsMinutes: [10080, 1440],
+        version: 1,
+        updatedAt: input.updatedAt,
+      },
+      "speaker_task",
+    );
+    await this.#tasks.create(task);
+    return clone(task);
   }
 
   async listProfiles(
@@ -868,6 +1112,14 @@ export class AirtableCfpRepository implements CfpRepository {
     const submission = await this.#submissions.find(submissionId);
     return submission !== undefined && submission.tenantId === tenantId ? submission : null;
   }
+  async listSubmissionsForEvent(tenantId: string, eventId: string): Promise<Submission[]> {
+    return (await this.#submissions.list()).filter(
+      (submission) =>
+        submission.formId !== undefined &&
+        submission.tenantId === tenantId &&
+        submission.eventId === eventId,
+    );
+  }
 
   async countOwnedSubmissions(input: {
     tenantId: string;
@@ -950,6 +1202,11 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
   async getPlan(tenantId: string, planId: string): Promise<EvaluationPlan | null> {
     const plan = await this.#plans.find(planId);
     return plan !== undefined && plan.tenantId === tenantId ? plan : null;
+  }
+  async listPlans(tenantId: string, eventId?: string): Promise<readonly EvaluationPlan[]> {
+    return (await this.#plans.list()).filter(
+      (plan) => plan.tenantId === tenantId && (eventId === undefined || plan.eventId === eventId),
+    );
   }
 
   async putPlan(plan: EvaluationPlan, expectedVersion: number | null): Promise<void> {
@@ -1125,11 +1382,15 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
   }
 }
 
-export class AirtableSubmissionReviewSource implements SubmissionReviewSource {
+export class AirtableSubmissionReviewSource
+  implements SubmissionReviewSource, EvaluationSubmissionSource
+{
   readonly #cfp: AirtableCfpRepository;
+  readonly #cfpService: CfpService | undefined;
 
-  constructor(cfp: AirtableCfpRepository) {
+  constructor(cfp: AirtableCfpRepository, cfpService?: CfpService) {
     this.#cfp = cfp;
+    this.#cfpService = cfpService;
   }
 
   async getSubmissionForReview(
@@ -1162,6 +1423,245 @@ export class AirtableSubmissionReviewSource implements SubmissionReviewSource {
         biography: participant.biography,
       })),
     };
+  }
+
+  async listSubmissionsForOrganizer(
+    tenantId: string,
+    eventId: string,
+  ): Promise<readonly EvaluationSubmissionRecord[]> {
+    const submissions = await this.#cfp.listSubmissionsForEvent(tenantId, eventId);
+    return submissions.map((submission) => this.toAdminRecord(submission));
+  }
+
+  async reopenSubmission(
+    tenantId: string,
+    eventId: string,
+    submissionId: string,
+    input: {
+      readonly organizerId: string;
+      readonly expectedVersion: number;
+      readonly reason: string;
+      readonly idempotencyKey: string;
+    },
+  ): Promise<EvaluationSubmissionRecord> {
+    if (this.#cfpService === undefined) {
+      throw new Error("CFP reopen service is not configured.");
+    }
+    const submission = await this.#cfpService.reopen({
+      tenantId,
+      submissionId,
+      organizerId: input.organizerId,
+      expectedVersion: input.expectedVersion,
+      reason: input.reason,
+      idempotencyKey: input.idempotencyKey,
+    });
+    if (submission.eventId !== eventId) {
+      throw new Error("The submission does not belong to the requested event.");
+    }
+    return this.toAdminRecord(submission);
+  }
+
+  private toAdminRecord(submission: Submission): EvaluationSubmissionRecord {
+    const answers = isRecord(submission.answers) ? submission.answers : {};
+    const titleCandidate = answers.title ?? answers.sessionTitle;
+    const abstractCandidate = answers.abstract ?? answers.description;
+    return {
+      id: submission.id,
+      tenantId: submission.tenantId,
+      eventId: submission.eventId,
+      title: typeof titleCandidate === "string" ? titleCandidate : submission.id,
+      abstract: typeof abstractCandidate === "string" ? abstractCandidate : "",
+      answers,
+      participants: submission.participants.map((participant) => ({
+        id: participant.id,
+        displayName: `${participant.firstName} ${participant.lastName}`.trim(),
+        email: participant.email,
+        biography: participant.biography,
+      })),
+      status: submission.status,
+      version: submission.version,
+      submittedAt: submission.submittedAt ?? null,
+      updatedAt: submission.updatedAt,
+      reopenedAt: submission.reopenedAt ?? null,
+    };
+  }
+}
+export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptanceHandoff {
+  readonly #cfp: AirtableCfpRepository;
+  readonly #speakers: AirtableSpeakerRepository;
+  readonly #database: D1Database;
+  readonly #queue: Queue<CloudflareOutboxMessage>;
+
+  constructor(options: {
+    readonly cfp: AirtableCfpRepository;
+    readonly speakers: AirtableSpeakerRepository;
+    readonly database: D1Database;
+    readonly queue: Queue<CloudflareOutboxMessage>;
+  }) {
+    this.#cfp = options.cfp;
+    this.#speakers = options.speakers;
+    this.#database = options.database;
+    this.#queue = options.queue;
+  }
+
+  async accept(input: EvaluationAcceptanceHandoffInput): Promise<void> {
+    const idempotency = new D1IdempotencyStore(this.#database);
+    const scope = `${input.tenantId}:evaluation-acceptance`;
+    const key = `acceptance:${input.submissionId}`;
+    await idempotency.run(scope, key, async () => {
+      const submission = await this.#cfp.getSubmission(input.tenantId, input.submissionId);
+      if (submission === null || submission.eventId !== input.eventId) {
+        throw new Error("The accepted submission was not found for the event.");
+      }
+      if (submission.participants.length === 0) {
+        throw new Error("An accepted submission must contain at least one speaker.");
+      }
+      const recipients = submission.participants
+        .map((participant) => participant.email.trim())
+        .filter((email) => email.length > 0);
+      if (recipients.length !== submission.participants.length) {
+        throw new Error("Every accepted speaker must have a portal email address.");
+      }
+      const users = new Map<string, string>();
+      for (const participant of submission.participants) {
+        const user = await this.#database
+          .prepare(
+            `SELECT id
+               FROM auth_users
+              WHERE LOWER(email) = LOWER(?)
+                AND email_verified = 1
+              LIMIT 1`,
+          )
+          .bind(participant.email.trim())
+          .first<{ id: string }>();
+        if (user === null || user.id.trim().length === 0) {
+          throw new Error(
+            `No verified portal account exists for accepted speaker ${participant.email || participant.id}.`,
+          );
+        }
+        users.set(participant.id, user.id);
+      }
+
+      await this.#speakers.ensureAcceptedSubmission({
+        submission,
+        updatedAt: input.decidedAt,
+      });
+
+      const profiles = [];
+      for (const participant of submission.participants) {
+        const profile = await this.#speakers.ensureProfile({
+          eventId: input.eventId,
+          participant,
+          updatedAt: input.decidedAt,
+        });
+        await this.#speakers.ensureProfileTask({
+          eventId: input.eventId,
+          submissionId: input.submissionId,
+          participantId: participant.id,
+          updatedAt: input.decidedAt,
+        });
+        const userId = users.get(participant.id);
+        if (userId === undefined) {
+          throw new Error(
+            `Portal account lookup disappeared for accepted speaker ${participant.id}.`,
+          );
+        }
+        await this.#database
+          .prepare(
+            `INSERT INTO speaker_grants
+               (organization_id, speaker_profile_id, user_id, created_at, revoked_at)
+             VALUES (?, ?, ?, ?, NULL)
+             ON CONFLICT (organization_id, speaker_profile_id, user_id) DO UPDATE SET revoked_at = NULL`,
+          )
+          .bind(input.tenantId, profile.id, userId, input.decidedAt)
+          .run();
+        profiles.push(profile.id);
+      }
+
+      await this.#database
+        .prepare(
+          `INSERT INTO audit_events
+             (id, tenant_id, actor_type, actor_id, action, resource_type, resource_id,
+              trace_id, details_json, occurred_at)
+           VALUES (?, ?, 'user', ?, 'evaluation_accepted', 'submission', ?, NULL, ?, ?)
+           ON CONFLICT (id) DO NOTHING`,
+        )
+        .bind(
+          `evaluation-accepted:${input.submissionId}`,
+          input.tenantId,
+          input.decidedBy,
+          input.submissionId,
+          JSON.stringify({
+            planId: input.planId,
+            decisionId: input.decisionId,
+            reason: input.reason,
+            idempotencyKey: input.idempotencyKey,
+            profileIds: profiles,
+          }),
+          input.decidedAt,
+        )
+        .run();
+
+      await this.#enqueue(input, "communications", `evaluation-accepted:${input.submissionId}`, {
+        from: "speakers@foreverbrowsing.com",
+        to: recipients,
+        subject: "Your session was accepted",
+        html: "<p>Your session was accepted. Sign in to complete your speaker profile.</p>",
+        text: "Your session was accepted. Sign in to complete your speaker profile.",
+        idempotencyKey: `evaluation-accepted:${input.submissionId}`,
+      });
+      await this.#enqueue(
+        input,
+        "cache-invalidation",
+        `evaluation-projection:${input.eventId}:${input.submissionId}`,
+        { eventId: input.eventId },
+      );
+      return { accepted: true };
+    });
+  }
+
+  async #enqueue(
+    input: EvaluationAcceptanceHandoffInput,
+    topic: "communications" | "cache-invalidation",
+    deduplicationKey: string,
+    payload: unknown,
+  ): Promise<void> {
+    const jobId = `evaluation:${input.tenantId}:${topic}:${deduplicationKey}`;
+    const now = input.decidedAt;
+    const result = await this.#database
+      .prepare(
+        `INSERT INTO outbox_jobs
+           (id, tenant_id, topic, deduplication_key, payload_json, state,
+            attempt_count, available_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
+         ON CONFLICT (tenant_id, topic, deduplication_key) DO NOTHING`,
+      )
+      .bind(jobId, input.tenantId, topic, deduplicationKey, JSON.stringify(payload), now, now, now)
+      .run();
+    const inserted = result.meta === undefined || result.meta.changes > 0;
+    const state = inserted
+      ? "pending"
+      : (
+          await this.#database
+            .prepare("SELECT state FROM outbox_jobs WHERE id = ? LIMIT 1")
+            .bind(jobId)
+            .first<{ state: string }>()
+        )?.state;
+    if (state === "pending") {
+      await this.#queue.send({
+        version: 1,
+        jobId,
+        tenantId: input.tenantId,
+        topic,
+        enqueuedAt: now,
+      });
+      await this.#database
+        .prepare(
+          "UPDATE outbox_jobs SET state = 'queued', updated_at = ? WHERE id = ? AND state = 'pending'",
+        )
+        .bind(now, jobId)
+        .run();
+    }
   }
 }
 
@@ -1239,6 +1739,276 @@ export class AirtableAgendaRepository {
   }
 }
 
+/** Airtable-backed organization dashboard projection assembled from canonical records. */
+export class AirtableOrganizerOverviewRepository implements OrganizerOverviewRouteDependencies {
+  readonly #events: AirtableJsonStore<JsonRecord>;
+  readonly #submissions: AirtableJsonStore<JsonRecord>;
+  readonly #plans: AirtableJsonStore<JsonRecord>;
+  readonly #evaluations: AirtableJsonStore<JsonRecord>;
+  readonly #tasks: AirtableJsonStore<JsonRecord>;
+  readonly #sessions: AirtableJsonStore<JsonRecord>;
+  readonly #agendas: AirtableJsonStore<JsonRecord>;
+
+  constructor(options: { readonly baseId: string; readonly transport: AirtableTransport }) {
+    const shared = { baseId: options.baseId, transport: options.transport };
+    this.#events = new AirtableJsonStore({
+      ...shared,
+      table: "Events",
+      jsonField: "Settings JSON",
+    });
+    this.#submissions = new AirtableJsonStore({
+      ...shared,
+      table: "Submissions",
+      jsonField: "Answers JSON",
+    });
+    this.#plans = new AirtableJsonStore({
+      ...shared,
+      table: "Review Plans",
+      jsonField: "Rounds JSON",
+    });
+    this.#evaluations = new AirtableJsonStore({
+      ...shared,
+      table: "Evaluations",
+      jsonField: "Scores JSON",
+    });
+    this.#tasks = new AirtableJsonStore({
+      ...shared,
+      table: "Speaker Tasks",
+      jsonField: "Owner JSON",
+    });
+    this.#sessions = new AirtableJsonStore({
+      ...shared,
+      table: "Sessions",
+      jsonField: "Metadata JSON",
+    });
+    this.#agendas = new AirtableJsonStore({
+      ...shared,
+      table: "Agenda Versions",
+      jsonField: "Conflicts JSON",
+    });
+  }
+
+  async getOverview(organizationId: string): Promise<OrganizerOverviewData> {
+    const [allEvents, allSubmissions, allPlans, allEvaluations, allTasks, allSessions] =
+      await Promise.all([
+        this.#events.list(),
+        this.#submissions.list(),
+        this.#plans.list(),
+        this.#evaluations.list(),
+        this.#tasks.list(),
+        this.#sessions.list(),
+      ]);
+    const events = allEvents
+      .filter((event) => organizationIdOf(event) === organizationId)
+      .map((event) => this.eventView(event))
+      .sort((left, right) => left.id.localeCompare(right.id));
+    const eventIds = new Set(events.map((event) => event.id));
+    if (events.length === 0) {
+      return {
+        organizationId,
+        metrics: {
+          eventCount: 0,
+          submissionCount: 0,
+          pendingReviewCount: 0,
+          outstandingSpeakerTaskCount: 0,
+          publishedSessionCount: 0,
+        },
+        events: [],
+        actionItems: [],
+      };
+    }
+
+    const submissions = allSubmissions.filter(
+      (submission) =>
+        belongsToOrganization(submission, organizationId, eventIds) &&
+        textValue(submission, "status") !== "withdrawn",
+    );
+    const plans = allPlans.filter(
+      (plan) =>
+        belongsToOrganization(plan, organizationId, eventIds) ||
+        (organizationIdOf(plan) === organizationId && eventIds.has(eventReference(plan) ?? "")),
+    );
+    const planIds = new Set(plans.map((plan) => textValue(plan, "id")).filter(isNonEmpty));
+    const assignments = allEvaluations.filter(
+      (evaluation) =>
+        isEvaluationAssignmentRecord(evaluation) &&
+        belongsToOrganization(evaluation, organizationId, eventIds) &&
+        planIds.has(textValue(evaluation, "planId") ?? "") &&
+        eventIds.has(eventReference(evaluation) ?? ""),
+    );
+    const pendingAssignments = assignments.filter((assignment) => {
+      const status = textValue(assignment, "status");
+      return status === "assigned" || status === "in_progress";
+    });
+    const tasks = allTasks.filter(
+      (task) =>
+        belongsToOrganization(task, organizationId, eventIds) &&
+        eventIds.has(eventReference(task) ?? "") &&
+        !["completed", "waived"].includes(textValue(task, "status") ?? ""),
+    );
+    const sessions = allSessions.filter(
+      (session) =>
+        belongsToOrganization(session, organizationId, eventIds) &&
+        eventIds.has(eventReference(session) ?? "") &&
+        textValue(session, "status") !== "cancelled",
+    );
+    const publishedSessionIdsByEvent = new Map<string, ReadonlySet<string>>(
+      await Promise.all(
+        events.map(async (event) => [event.id, await this.publishedSessionIds(event.id)] as const),
+      ),
+    );
+
+    const pendingReviewsByEvent = groupByEvent(pendingAssignments);
+    const tasksByEvent = groupByEvent(tasks);
+    const sessionsByEvent = groupByEvent(sessions);
+    const publishedSessionCount = [...publishedSessionIdsByEvent.values()].reduce(
+      (total, ids) => total + ids.size,
+      0,
+    );
+    const actionItems: OrganizerOverviewActionItem[] = [];
+
+    for (const event of events) {
+      const pendingReviews = pendingReviewsByEvent.get(event.id) ?? [];
+      if (pendingReviews.length > 0) {
+        const planDueDates = pendingReviews.map((assignment) => {
+          const plan = plans.find(
+            (candidate) => textValue(candidate, "id") === textValue(assignment, "planId"),
+          );
+          return plan === undefined ? null : dueAtValue(plan);
+        });
+        actionItems.push(
+          actionItem({
+            id: `reviews:${event.id}`,
+            type: "reviews",
+            eventId: event.id,
+            title:
+              pendingReviews.length === 1
+                ? "Complete a pending review"
+                : "Complete pending reviews",
+            description: `${pendingReviews.length} review${pendingReviews.length === 1 ? "" : "s"} still need organizer attention.`,
+            count: pendingReviews.length,
+            priority: 90,
+            dueAt: earliestDueAt(planDueDates),
+            href: hrefFor(organizationId, event.id, "reviews"),
+          }),
+        );
+      }
+
+      const outstandingTasks = tasksByEvent.get(event.id) ?? [];
+      if (outstandingTasks.length > 0) {
+        actionItems.push(
+          actionItem({
+            id: `speaker_tasks:${event.id}`,
+            type: "speaker_tasks",
+            eventId: event.id,
+            title:
+              outstandingTasks.length === 1 ? "Resolve a speaker task" : "Resolve speaker tasks",
+            description: `${outstandingTasks.length} speaker task${outstandingTasks.length === 1 ? "" : "s"} remain open.`,
+            count: outstandingTasks.length,
+            priority: 70,
+            dueAt: earliestDueAt(outstandingTasks.map(dueAtValue)),
+            href: hrefFor(organizationId, event.id, "speakers"),
+          }),
+        );
+      }
+
+      const eventSessions = sessionsByEvent.get(event.id) ?? [];
+      const publishedIds = publishedSessionIdsByEvent.get(event.id) ?? new Set<string>();
+      const unpublishedSessionCount = eventSessions.filter(
+        (session) => !publishedIds.has(textValue(session, "id") ?? ""),
+      ).length;
+      if (unpublishedSessionCount > 0) {
+        actionItems.push(
+          actionItem({
+            id: `agenda:${event.id}`,
+            type: "agenda",
+            eventId: event.id,
+            title:
+              unpublishedSessionCount === 1
+                ? "Publish the remaining session"
+                : "Publish the remaining sessions",
+            description: `${unpublishedSessionCount} session${unpublishedSessionCount === 1 ? "" : "s"} are not in the current published agenda.`,
+            count: unpublishedSessionCount,
+            priority: 50,
+            href: hrefFor(organizationId, event.id, "agenda"),
+          }),
+        );
+      }
+    }
+
+    actionItems.sort(
+      (left, right) =>
+        right.priority - left.priority ||
+        compareNullableDates(left.dueAt, right.dueAt) ||
+        left.id.localeCompare(right.id),
+    );
+    return {
+      organizationId,
+      metrics: {
+        eventCount: events.length,
+        submissionCount: submissions.length,
+        pendingReviewCount: pendingAssignments.length,
+        outstandingSpeakerTaskCount: tasks.length,
+        publishedSessionCount,
+      },
+      events,
+      actionItems,
+    };
+  }
+
+  private eventView(record: JsonRecord): OrganizerOverviewEvent {
+    const id = requiredId(record.id);
+    return {
+      id,
+      name: textValue(record, "name", "title") ?? id,
+      slug: textValue(record, "slug"),
+      status: textValue(record, "status"),
+      startsAt: textValue(record, "startsAt", "startsOn", "startAt"),
+      endsAt: textValue(record, "endsAt", "endsOn", "endAt"),
+    };
+  }
+
+  private async publishedSessionIds(eventId: string): Promise<ReadonlySet<string>> {
+    const state = await this.#agendas.find(eventId);
+    if (state === undefined || !isRecord(state)) return new Set<string>();
+    const revisionId = textValue(state, "currentPublishedRevisionId");
+    if (revisionId === null || !Array.isArray(state.revisions)) return new Set<string>();
+    const revision = state.revisions.find(
+      (candidate): candidate is JsonRecord =>
+        isRecord(candidate) && textValue(candidate, "id") === revisionId,
+    );
+    if (revision === undefined || !Array.isArray(revision.entries)) return new Set<string>();
+    return new Set(
+      revision.entries
+        .filter(isRecord)
+        .map((entry) => textValue(entry, "sessionId"))
+        .filter(isNonEmpty),
+    );
+  }
+}
+
+function isNonEmpty(value: string | null): value is string {
+  return value !== null && value.trim().length > 0;
+}
+
+function groupByEvent(records: readonly JsonRecord[]): Map<string, JsonRecord[]> {
+  const grouped = new Map<string, JsonRecord[]>();
+  for (const record of records) {
+    const eventId = eventReference(record);
+    if (eventId === null) continue;
+    const values = grouped.get(eventId);
+    if (values === undefined) grouped.set(eventId, [record]);
+    else values.push(record);
+  }
+  return grouped;
+}
+
+function compareNullableDates(left: string | null, right: string | null): number {
+  if (left === null && right === null) return 0;
+  if (left === null) return 1;
+  if (right === null) return -1;
+  return Date.parse(left) - Date.parse(right);
+}
 /** Durable Object admission plus an in-process tail protects one event's agenda mutations. */
 export class CloudflareAgendaMutationLock implements DurableObjectAgendaCoordinator {
   readonly #namespace: DurableObjectNamespace;
@@ -1688,9 +2458,11 @@ class AirtableAgendaPublicRepository implements PublicApiRepository {
 }
 
 function eventIdFromRequest(request: Request): string | undefined {
-  const bodyPath = /\/events\/([^/]+)/u.exec(new URL(request.url).pathname)?.[1];
-  if (bodyPath !== undefined) return decodeURIComponent(bodyPath);
-  return undefined;
+  const url = new URL(request.url);
+  const pathId = /\/events\/([^/]+)/u.exec(url.pathname)?.[1];
+  if (pathId !== undefined) return decodeURIComponent(pathId);
+  const queryId = url.searchParams.get("eventId")?.trim();
+  return queryId === undefined || queryId.length === 0 ? undefined : queryId;
 }
 
 export function createAirtableDependencies(options: AirtableRuntimeOptions): ApiDependencies {
@@ -1703,11 +2475,25 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
     effects: new CloudflareCfpEffects(options.outboxQueue, options.database),
   });
 
-  const evaluationRepository = new AirtableEvaluationRepository(shared);
-  const evaluationService = new EvaluationService(
-    evaluationRepository,
-    new AirtableSubmissionReviewSource(cfpRepository),
+  const speakerRepository = new AirtableSpeakerRepository({
+    ...shared,
+    database: options.database,
+  });
+  const speakerService = new SpeakerService(
+    speakerRepository,
+    new R2PrivateAssetGateway(options.privateFiles, options.webOrigin),
   );
+  const evaluationRepository = new AirtableEvaluationRepository(shared);
+  const evaluationSource = new AirtableSubmissionReviewSource(cfpRepository, cfpService);
+  const acceptanceHandoff = new AirtableEvaluationAcceptanceHandoff({
+    cfp: cfpRepository,
+    speakers: speakerRepository,
+    database: options.database,
+    queue: options.outboxQueue,
+  });
+  const evaluationService = new EvaluationService(evaluationRepository, evaluationSource, {
+    acceptanceHandoff,
+  });
   const evaluationDependencies: EvaluationRouteDependencies = {
     service: evaluationService,
     async actorFor(principal: AuthPrincipal, request: Request) {
@@ -1776,15 +2562,6 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
       };
     },
   };
-
-  const speakerRepository = new AirtableSpeakerRepository({
-    ...shared,
-    database: options.database,
-  });
-  const speakerService = new SpeakerService(
-    speakerRepository,
-    new R2PrivateAssetGateway(options.privateFiles, options.webOrigin),
-  );
   const authenticator = options.authenticator;
 
   const agendaRepository = new AirtableAgendaRepository(shared);
@@ -1803,6 +2580,11 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
     table: "Events",
     jsonField: "Settings JSON",
   });
+  const sessionsRepository = new AirtablePublicRepository({
+    ...shared,
+    table: "Sessions",
+    jsonField: "Metadata JSON",
+  });
   const speakersRepository = new AirtablePublicRepository({
     ...shared,
     table: "Participants",
@@ -1813,6 +2595,8 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
     events,
   });
   const publicIdempotency = createIdempotencyCoordinator(new D1IdempotencyStore(options.database));
+  const publishedSpeakerProjections = new AirtablePublishedSpeakerProjectionStore(shared);
+  const organizerOverview = new AirtableOrganizerOverviewRepository(shared);
 
   return {
     authenticator,
@@ -1834,6 +2618,8 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
         return typeof organizationId === "string" ? organizationId : null;
       },
     },
+    publishedSpeakers: publishedSpeakerProjections,
+    organizerOverview,
     publicApi: {
       resources: [
         {
@@ -1858,6 +2644,14 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
           readScope: "agenda:read",
           writeScope: "agenda:write",
           sortFields: ["id", "updatedAt"],
+          defaultSort: "id",
+        },
+        {
+          name: "sessions",
+          repository: sessionsRepository,
+          readScope: "agenda:read",
+          writeScope: "agenda:write",
+          sortFields: ["id", "title", "updatedAt"],
           defaultSort: "id",
         },
       ],

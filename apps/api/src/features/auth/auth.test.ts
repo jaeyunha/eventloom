@@ -30,7 +30,9 @@ class FakeBetterAuthGateway implements BetterAuthGateway {
   }
 
   async consumeMagicLink(token: string): Promise<AuthSession | null> {
-    return this.sessions.get(token) ?? null;
+    const session = this.sessions.get(token) ?? null;
+    if (session !== null) this.sessions.delete(token);
+    return session;
   }
 }
 
@@ -176,6 +178,27 @@ describe("request authentication", () => {
         }),
       ),
     ).rejects.toMatchObject({ code: "UNAUTHENTICATED", status: 401 });
+  });
+  it("rejects expired sessions and replays of a consumed magic link", async () => {
+    const { betterAuth, authenticator } = setupAuthenticator();
+    betterAuth.sessions.set(
+      "expired-session",
+      session({ expiresAt: new Date("2026-08-08T11:59:59.999Z") }),
+    );
+
+    await expect(
+      authenticator.authenticate(
+        new Request("https://api.example.com/private", {
+          headers: { cookie: "better-auth.session_token=expired-session" },
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "UNAUTHENTICATED", status: 401 });
+
+    betterAuth.sessions.set("one-time-link", session());
+    await expect(betterAuth.consumeMagicLink("one-time-link")).resolves.toMatchObject({
+      sessionId: "session-1",
+    });
+    await expect(betterAuth.consumeMagicLink("one-time-link")).resolves.toBeNull();
   });
 
   it("authenticates an active scoped API key and records successful use", async () => {
