@@ -281,10 +281,7 @@ export class EvaluationService {
   }
   async listPlans(actor: EvaluationActor, eventId?: string): Promise<readonly EvaluationPlan[]> {
     if (actor.kind !== "human") throw forbidden();
-    const repository = this.#repository as EvaluationRepository & {
-      listPlans?: (tenantId: string, eventId?: string) => Promise<readonly EvaluationPlan[]>;
-    };
-    const plans = (await repository.listPlans?.(actor.tenantId, eventId)) ?? [];
+    const plans = await this.#repository.listPlans(actor.tenantId, eventId);
     return plans
       .filter((plan) => eventId === undefined || plan.eventId === eventId)
       .filter(

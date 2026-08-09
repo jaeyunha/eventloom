@@ -1204,9 +1204,11 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
     return plan !== undefined && plan.tenantId === tenantId ? plan : null;
   }
   async listPlans(tenantId: string, eventId?: string): Promise<readonly EvaluationPlan[]> {
-    return (await this.#plans.list()).filter(
-      (plan) => plan.tenantId === tenantId && (eventId === undefined || plan.eventId === eventId),
-    );
+    return (await this.#plans.list())
+      .filter(
+        (plan) => plan.tenantId === tenantId && (eventId === undefined || plan.eventId === eventId),
+      )
+      .map(clone);
   }
 
   async putPlan(plan: EvaluationPlan, expectedVersion: number | null): Promise<void> {

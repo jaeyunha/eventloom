@@ -10,6 +10,7 @@ import type {
 
 export interface EvaluationRepository {
   getPlan(tenantId: string, planId: string): Promise<EvaluationPlan | null>;
+  listPlans(tenantId: string, eventId?: string): Promise<readonly EvaluationPlan[]>;
   putPlan(plan: EvaluationPlan, expectedVersion: number | null): Promise<void>;
   getAssignment(tenantId: string, assignmentId: string): Promise<EvaluationAssignment | null>;
   listAssignments(tenantId: string, planId: string): Promise<readonly EvaluationAssignment[]>;
@@ -86,6 +87,13 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
   async getPlan(tenantId: string, planId: string): Promise<EvaluationPlan | null> {
     const plan = this.#plans.get(storageKey(tenantId, planId));
     return plan === undefined ? null : clone(plan);
+  }
+  async listPlans(tenantId: string, eventId?: string): Promise<readonly EvaluationPlan[]> {
+    return [...this.#plans.values()]
+      .filter(
+        (plan) => plan.tenantId === tenantId && (eventId === undefined || plan.eventId === eventId),
+      )
+      .map(clone);
   }
 
   async putPlan(plan: EvaluationPlan, expectedVersion: number | null): Promise<void> {
@@ -231,6 +239,18 @@ export class InMemorySubmissionReviewSource implements SubmissionReviewSource {
     for (const submission of submissions) {
       this.#submissions.set(storageKey(submission.tenantId, submission.id), clone(submission));
     }
+  }
+  async listSubmissionsForOrganizer(tenantId: string, eventId: string) {
+    return [...this.#submissions.values()]
+      .filter((submission) => submission.tenantId === tenantId && submission.eventId === eventId)
+      .map((submission) => ({
+        ...clone(submission),
+        status: "submitted",
+        version: 1,
+        submittedAt: "2026-08-08T12:00:00.000Z",
+        updatedAt: "2026-08-08T12:00:00.000Z",
+        reopenedAt: null,
+      }));
   }
 
   async getSubmissionForReview(

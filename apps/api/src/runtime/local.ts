@@ -1,3 +1,4 @@
+import type { ApiScope } from "@open-sessionboard/contracts";
 import type { ApiDependencies } from "../app";
 import { AgendaEngine } from "../features/agenda/engine";
 import {
@@ -45,6 +46,14 @@ import type {
   TransitionSpeakerTaskCommand,
   UpdateBiographyCommand,
 } from "../features/speaker/types";
+import type {
+  IntegrationAdminRouteDependencies,
+  IntegrationApiKeyCreation,
+  IntegrationApiKeySummary,
+  IntegrationDeliveryStatus,
+  IntegrationEvent,
+  IntegrationWebhookDelivery,
+} from "../routes/integrations";
 import { InMemoryWebhookRepository } from "../integrations/webhooks/types";
 import type {
   OrganizerOverviewActionItem,
@@ -460,6 +469,7 @@ class LocalPublicApiRepository implements PublicApiRepository {
         name: "Open Sessionboard Conference",
         slug: "open-sessionboard-conf",
         timeZone: "America/Los_Angeles",
+        publishedAgendaRevisionId: "agenda-local-revision-1",
         status: "published",
         updatedAt: SEEDED_AT,
       },
@@ -470,6 +480,7 @@ class LocalPublicApiRepository implements PublicApiRepository {
         name: "Open Sessionboard Demo",
         slug: "demo-event",
         timeZone: "America/Los_Angeles",
+        publishedAgendaRevisionId: "agenda-local-revision-2",
         status: "published",
         updatedAt: SEEDED_AT,
       },
@@ -577,6 +588,158 @@ class LocalPublicApiRepository implements PublicApiRepository {
     };
     collection.set(input.id, record);
     return clone(record);
+  }
+}
+class LocalIntegrationAdminRepository {
+  readonly #events = new Map<string, IntegrationEvent>();
+  readonly #delivery = new Map<string, IntegrationDeliveryStatus>();
+  readonly #apiKeys = new Map<string, IntegrationApiKeySummary[]>();
+  readonly #webhookLastDelivery = new Map<string, IntegrationWebhookDelivery>();
+  #apiKeySequence = 0;
+
+  constructor(publicRepository: LocalPublicApiRepository) {
+    for (const record of publicRepository.listStored(LOCAL_ORGANIZATION_ID, "events")) {
+      const id = textValue(record, "id");
+      if (id === null) continue;
+      const event: IntegrationEvent = {
+        id,
+        organizationId: LOCAL_ORGANIZATION_ID,
+        name: textValue(record, "name", "title") ?? id,
+        timeZone: textValue(record, "timeZone") ?? "UTC",
+        publishedAgendaRevisionId: textValue(record, "publishedAgendaRevisionId"),
+      };
+      this.#events.set(id, event);
+      this.#delivery.set(id, {
+        openSend: {
+          state: "connected",
+          credentialLastFour: "al-key",
+          senderChecks: [
+            { address: "auth@foreverbrowsing.com", status: "verified" },
+            { address: "speakers@foreverbrowsing.com", status: "verified" },
+            { address: "calendar@foreverbrowsing.com", status: "verified" },
+          ],
+          deliveredLast24Hours: id === "demo-event" ? 18 : 11,
+          failedLast24Hours: id === "demo-event" ? 1 : 0,
+          lastDeliveryAt: SEEDED_AT,
+        },
+        calendar: {
+          state: "degraded",
+          sentLast24Hours: id === "demo-event" ? 7 : 4,
+          failedLast24Hours: 1,
+          lastInvitationAt: SEEDED_AT,
+          lastFailure: {
+            deliveryId: `calendar-local-failure-${id}`,
+            summary: "One invitation needs a retry after its recipient address was corrected.",
+            occurredAt: SEEDED_AT,
+            retryable: true,
+          },
+        },
+      });
+      this.#apiKeys.set(id, [
+        {
+          id: `local-key-${id}`,
+          label: "Local integration client",
+          prefix: "osb_local_",
+          scopes: ["events:read", "agenda:read", "webhooks:read"],
+          createdAt: SEEDED_AT,
+          lastUsedAt: SEEDED_AT,
+          expiresAt: null,
+          revokedAt: null,
+        },
+      ]);
+    }
+    this.#webhookLastDelivery.set("local-webhook-demo", {
+      status: "succeeded",
+      attemptedAt: SEEDED_AT,
+      responseStatus: 202,
+    });
+    this.#webhookLastDelivery.set("local-webhook-conference", {
+      status: "retrying",
+      attemptedAt: SEEDED_AT,
+      responseStatus: 503,
+    });
+  }
+
+  async getEvent(eventId: string): Promise<IntegrationEvent | null> {
+    return clone(this.#events.get(eventId) ?? null);
+  }
+
+  async getDeliveryStatus(eventId: string): Promise<IntegrationDeliveryStatus> {
+    const status = this.#delivery.get(eventId);
+    if (status === undefined) throw new Error("The local integration event was not seeded.");
+    return clone(status);
+  }
+
+  async saveCredential(eventId: string, _provider: "opensend", secret: string): Promise<void> {
+    const status = await this.getDeliveryStatus(eventId);
+    this.#delivery.set(eventId, {
+      ...status,
+      openSend: {
+        ...status.openSend,
+        state: "connected",
+        credentialLastFour: secret.slice(-4),
+      },
+    });
+  }
+
+  async listApiKeys(eventId: string): Promise<readonly IntegrationApiKeySummary[]> {
+    return clone(this.#apiKeys.get(eventId) ?? []);
+  }
+
+  async createApiKey(input: {
+    readonly eventId: string;
+    readonly label: string;
+    readonly scopes: readonly ApiScope[];
+    readonly expiresAt: string | null;
+  }): Promise<IntegrationApiKeyCreation> {
+    const secret = `osb_${crypto.randomUUID().replaceAll("-", "")}${crypto.randomUUID().replaceAll("-", "")}`;
+    const summary: IntegrationApiKeySummary = {
+      id: `local-created-key-${++this.#apiKeySequence}`,
+      label: input.label,
+      prefix: secret.slice(0, 12),
+      scopes: [...new Set(input.scopes)],
+      createdAt: SEEDED_AT,
+      lastUsedAt: null,
+      expiresAt: input.expiresAt?.trim() || null,
+      revokedAt: null,
+    };
+    const keys = this.#apiKeys.get(input.eventId);
+    if (keys === undefined) throw new Error("The local integration event was not seeded.");
+    keys.push(summary);
+    return { summary: clone(summary), secret };
+  }
+
+  async revokeApiKey(eventId: string, apiKeyId: string): Promise<boolean> {
+    const keys = this.#apiKeys.get(eventId);
+    const index = keys?.findIndex((key) => key.id === apiKeyId) ?? -1;
+    if (keys === undefined || index < 0) return false;
+    const key = keys[index];
+    if (key === undefined) return false;
+    keys[index] = { ...key, revokedAt: SEEDED_AT };
+    return true;
+  }
+
+  async getWebhookLastDelivery(
+    eventId: string,
+    subscriptionId: string,
+  ): Promise<IntegrationWebhookDelivery | null> {
+    if (!this.#events.has(eventId)) return null;
+    return clone(this.#webhookLastDelivery.get(subscriptionId) ?? null);
+  }
+
+  async retryCalendarDelivery(eventId: string, deliveryId: string): Promise<boolean> {
+    const status = await this.getDeliveryStatus(eventId);
+    if (status.calendar.lastFailure?.deliveryId !== deliveryId) return false;
+    this.#delivery.set(eventId, {
+      ...status,
+      calendar: {
+        ...status.calendar,
+        state: "connected",
+        lastFailure: null,
+        sentLast24Hours: status.calendar.sentLast24Hours + 1,
+      },
+    });
+    return true;
   }
 }
 
@@ -879,6 +1042,39 @@ export function createLocalDependencies(): ApiDependencies {
     speakerRepository,
   });
   const webhookIds = { whs: 0, whd: 0 };
+  const integrationRepository = new LocalIntegrationAdminRepository(publicRepository);
+  const webhookRepository = new InMemoryWebhookRepository(
+    [
+      {
+        id: "local-webhook-demo",
+        organizationId: LOCAL_ORGANIZATION_ID,
+        eventId: "demo-event",
+        endpointUrl: "https://hooks.local.open-sessionboard.test/demo",
+        events: ["agenda.published", "integration.publication_completed"],
+        active: true,
+        signingSecret: "local-demo-webhook-secret-20260808-000000",
+        signingSecretLastFour: "0000",
+        createdAt: new Date(SEEDED_AT),
+        updatedAt: new Date(SEEDED_AT),
+      },
+      {
+        id: "local-webhook-conference",
+        organizationId: LOCAL_ORGANIZATION_ID,
+        eventId: "open-sessionboard-conf",
+        endpointUrl: "https://hooks.local.open-sessionboard.test/conference",
+        events: ["submission.created", "participant.updated"],
+        active: true,
+        signingSecret: "local-conference-webhook-secret-20260808",
+        signingSecretLastFour: "0808",
+        createdAt: new Date(SEEDED_AT),
+        updatedAt: new Date(SEEDED_AT),
+      },
+    ],
+    {
+      clock: { now: () => new Date(SEEDED_AT) },
+      idFactory: (prefix) => `${prefix}_LOCAL_${String(++webhookIds[prefix]).padStart(4, "0")}`,
+    },
+  );
 
   return {
     authenticator,
@@ -967,10 +1163,20 @@ export function createLocalDependencies(): ApiDependencies {
       ],
       idempotency: new LocalIdempotencyCoordinator(),
     },
-    webhooks: new InMemoryWebhookRepository([], {
-      clock: { now: () => new Date(SEEDED_AT) },
-      idFactory: (prefix) => `${prefix}_LOCAL_${String(++webhookIds[prefix]).padStart(4, "0")}`,
-    }),
+    integrations: {
+      getEvent: integrationRepository.getEvent.bind(integrationRepository),
+      getDeliveryStatus: integrationRepository.getDeliveryStatus.bind(integrationRepository),
+      saveCredential: integrationRepository.saveCredential.bind(integrationRepository),
+      listApiKeys: integrationRepository.listApiKeys.bind(integrationRepository),
+      createApiKey: integrationRepository.createApiKey.bind(integrationRepository),
+      revokeApiKey: integrationRepository.revokeApiKey.bind(integrationRepository),
+      webhooks: webhookRepository,
+      getWebhookLastDelivery:
+        integrationRepository.getWebhookLastDelivery.bind(integrationRepository),
+      retryCalendarDelivery:
+        integrationRepository.retryCalendarDelivery.bind(integrationRepository),
+    } satisfies IntegrationAdminRouteDependencies,
+    webhooks: webhookRepository,
     cfp: { service: createLocalCfpService() },
   } as ApiDependencies & {
     cfp: { service: ReturnType<typeof createLocalCfpService> };

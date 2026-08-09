@@ -73,6 +73,15 @@ async function toApiError(response: Response): Promise<IntegrationAdminApiError>
     body?.error?.traceId,
   );
 }
+type SnapshotPayload = Omit<IntegrationAdminSnapshot, "accelevents"> & {
+  readonly accelevents?: unknown;
+};
+
+function withoutLegacyAccelevents(snapshot: SnapshotPayload): IntegrationAdminSnapshot {
+  const current = { ...snapshot } as SnapshotPayload & { accelevents?: unknown };
+  delete current.accelevents;
+  return current as IntegrationAdminSnapshot;
+}
 
 function idempotencyKey(): string {
   return `web-${crypto.randomUUID()}`;
@@ -112,10 +121,10 @@ export function createIntegrationAdminApi(
 
   return {
     getSnapshot(eventId, signal) {
-      return request<IntegrationAdminSnapshot>(`${eventPath(eventId)}/integrations`, {
+      return request<SnapshotPayload>(`${eventPath(eventId)}/integrations`, {
         cache: "no-store",
         ...(signal === undefined ? {} : { signal }),
-      });
+      }).then(withoutLegacyAccelevents);
     },
 
     saveCredential(input) {

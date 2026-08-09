@@ -9,7 +9,10 @@ const organizer: EvaluationActor = {
   tenantId: "tenant-1",
   userId: "organizer-1",
   kind: "human",
-  grants: [{ eventId: "event-1", role: "organizer" }],
+  grants: [
+    { eventId: "event-1", role: "organizer" },
+    { eventId: "event-2", role: "organizer" },
+  ],
 };
 
 const reviewer: EvaluationActor = {
@@ -17,6 +20,12 @@ const reviewer: EvaluationActor = {
   userId: "reviewer-1",
   kind: "human",
   grants: [{ eventId: "event-1", role: "reviewer" }],
+};
+const otherTenantOrganizer: EvaluationActor = {
+  tenantId: "tenant-2",
+  userId: "organizer-2",
+  kind: "human",
+  grants: [{ eventId: "event-1", role: "organizer" }],
 };
 
 function createTestApp() {
@@ -47,7 +56,11 @@ function createTestApp() {
   app.use("*", async (context, next) => {
     context.set(
       "evaluationActor",
-      context.req.header("x-test-actor") === "reviewer" ? reviewer : organizer,
+      context.req.header("x-test-actor") === "reviewer"
+        ? reviewer
+        : context.req.header("x-test-actor") === "other-tenant"
+          ? otherTenantOrganizer
+          : organizer,
     );
     await next();
   });
@@ -102,6 +115,53 @@ const planRequest = {
 };
 
 describe("evaluation HTTP routes", () => {
+  it("lists plans by event without crossing tenant boundaries", async () => {
+    const app = createTestApp();
+    const eventOne = await jsonRequest(app, "/evaluations/plans", "POST", planRequest);
+    const eventTwo = await jsonRequest(app, "/evaluations/plans", "POST", {
+      ...planRequest,
+      id: "plan-2",
+      eventId: "event-2",
+      name: "Second event",
+    });
+    const otherTenant = await jsonRequest(
+      app,
+      "/evaluations/plans",
+      "POST",
+      { ...planRequest, id: "plan-other-tenant" },
+      "other-tenant",
+    );
+
+    const response = await app.request("/evaluations/plans?eventId=event-1");
+    const body = (await response.json()) as {
+      plans: Array<{ id: string; tenantId: string; eventId: string }>;
+    };
+
+    expect(eventOne.status).toBe(201);
+    expect(eventTwo.status).toBe(201);
+    expect(otherTenant.status).toBe(201);
+    expect(response.status).toBe(200);
+    expect(body.plans).toEqual([
+      expect.objectContaining({
+        id: "plan-1",
+        tenantId: "tenant-1",
+        eventId: "event-1",
+      }),
+    ]);
+  });
+  it("lists seeded submissions for the organizer event", async () => {
+    const response = await createTestApp().request("/evaluations/events/event-1/submissions");
+    const body = (await response.json()) as Array<{ id: string; eventId: string; status: string }>;
+
+    expect(response.status).toBe(200);
+    expect(body).toEqual([
+      expect.objectContaining({
+        id: "submission-1",
+        eventId: "event-1",
+        status: "submitted",
+      }),
+    ]);
+  });
   it("exposes the plan, assignment, and blind reviewer flow", async () => {
     const app = createTestApp();
     const created = await jsonRequest(app, "/evaluations/plans", "POST", planRequest);

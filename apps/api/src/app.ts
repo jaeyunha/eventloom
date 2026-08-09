@@ -25,6 +25,10 @@ import { createSpeakerRoutes, type SpeakerRouteDependencies } from "./features/s
 import { createWebhookSubscriptionRoutes } from "./integrations/webhooks/routes";
 import type { WebhookSubscriptionRepository } from "./integrations/webhooks/types";
 import {
+  createIntegrationAdminRoutes,
+  type IntegrationAdminRouteDependencies,
+} from "./routes/integrations";
+import {
   type AgendaRouteDependencies,
   createAgendaAdminRoutes,
   createPublishedAgendaRoutes,
@@ -75,6 +79,7 @@ export interface ApiDependencies<
   readonly auth?: AuthRouteDependencies;
   readonly publicApi?: PublicApiRoutesOptions<TRecord, TCreate, TUpdate>;
   readonly webhooks?: WebhookSubscriptionRepository;
+  readonly integrations?: IntegrationAdminRouteDependencies;
   readonly evaluations?: EvaluationRouteDependencies;
   readonly speaker?: SpeakerRouteDependencies;
   readonly agenda?: AgendaRouteDependencies;
@@ -238,6 +243,7 @@ function assertAuthenticationConfigured(
   if (
     dependencies.authenticator === undefined &&
     (dependencies.publicApi !== undefined ||
+      dependencies.integrations !== undefined ||
       dependencies.webhooks !== undefined ||
       dependencies.evaluations !== undefined ||
       dependencies.agenda !== undefined ||
@@ -324,6 +330,12 @@ export function createApp<
   }
   if (dependencies.publicApi !== undefined) {
     app.route("/api/v1", createPublicApiV1Routes(dependencies.publicApi));
+  }
+  if (dependencies.integrations !== undefined) {
+    app.route(
+      "/api/admin/events/:eventId",
+      createIntegrationAdminRoutes(dependencies.integrations),
+    );
   }
   if (dependencies.evaluations !== undefined) {
     app.route("/api/admin/evaluations", createEvaluationRoutes(dependencies.evaluations.service));

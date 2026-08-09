@@ -141,6 +141,166 @@ describe("local runtime composition", () => {
       },
     });
   });
+  it("serves seeded integration admin data for the current organizer workspace", async () => {
+    const app = createRuntimeApp(localBindings);
+    const response = await app.request(
+      "/api/admin/events/demo-event/integrations",
+      { headers: organizerHeaders() },
+      localBindings,
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      data: {
+        event: { id: string; name: string; timeZone: string };
+        delivery: {
+          openSend: { state: string; deliveredLast24Hours: number };
+          calendar: { state: string; sentLast24Hours: number };
+        };
+        apiKeys: readonly { id: string }[];
+        webhooks: readonly { id: string; endpointUrl: string }[];
+      };
+    };
+    expect(body.data.event).toEqual({
+      id: "demo-event",
+      name: "Open Sessionboard Demo",
+      timeZone: "America/Los_Angeles",
+      publishedAgendaRevisionId: "agenda-local-revision-2",
+    });
+    expect(body.data.delivery).toMatchObject({
+      openSend: { state: "connected", deliveredLast24Hours: 18 },
+      calendar: { state: "degraded", sentLast24Hours: 7 },
+    });
+    expect(body.data.apiKeys).toEqual([
+      expect.objectContaining({ id: "local-key-demo-event", label: "Local integration client" }),
+    ]);
+    expect(body.data.webhooks).toEqual([
+      expect.objectContaining({
+        id: "local-webhook-demo",
+        endpointUrl: "https://hooks.local.open-sessionboard.test/demo",
+      }),
+    ]);
+    expect(body.data).not.toHaveProperty("accelevents");
+
+    const anonymous = await app.request(
+      "/api/admin/events/demo-event/integrations",
+      undefined,
+      localBindings,
+    );
+    expect(anonymous.status).toBe(401);
+    const credential = await app.request(
+      "/api/admin/events/demo-event/integrations/opensend/credential",
+      {
+        method: "PUT",
+        headers: { ...organizerHeaders(), "content-type": "application/json" },
+        body: JSON.stringify({ secret: "replacement-open-send-key" }),
+      },
+      localBindings,
+    );
+    expect(credential.status).toBe(204);
+
+    const createdKey = await app.request(
+      "/api/admin/events/demo-event/api-keys",
+      {
+        method: "POST",
+        headers: { ...organizerHeaders(), "content-type": "application/json" },
+        body: JSON.stringify({
+          label: "QA client",
+          scopes: ["events:read"],
+          expiresAt: null,
+        }),
+      },
+      localBindings,
+    );
+    expect(createdKey.status).toBe(201);
+    const createdKeyBody = (await createdKey.json()) as { data: { id: string; secret: string } };
+    expect(createdKeyBody.data).toMatchObject({ id: "local-created-key-1" });
+    expect(createdKeyBody.data.secret.length).toBeGreaterThan(32);
+
+    const revokedKey = await app.request(
+      `/api/admin/events/demo-event/api-keys/${createdKeyBody.data.id}`,
+      { method: "DELETE", headers: organizerHeaders() },
+      localBindings,
+    );
+    expect(revokedKey.status).toBe(204);
+
+    const createdWebhook = await app.request(
+      "/api/admin/events/demo-event/webhooks",
+      {
+        method: "POST",
+        headers: { ...organizerHeaders(), "content-type": "application/json" },
+        body: JSON.stringify({
+          endpointUrl: "https://hooks.local.open-sessionboard.test/qa",
+          events: ["agenda.published"],
+        }),
+      },
+      localBindings,
+    );
+    expect(createdWebhook.status).toBe(201);
+    const createdWebhookBody = (await createdWebhook.json()) as {
+      data: { id: string; secret: string };
+    };
+    expect(createdWebhookBody.data.secret.length).toBeGreaterThan(32);
+
+    const pausedWebhook = await app.request(
+      `/api/admin/events/demo-event/webhooks/${createdWebhookBody.data.id}`,
+      {
+        method: "PATCH",
+        headers: { ...organizerHeaders(), "content-type": "application/json" },
+        body: JSON.stringify({ active: false }),
+      },
+      localBindings,
+    );
+    expect(pausedWebhook.status).toBe(204);
+
+    const rotatedWebhook = await app.request(
+      `/api/admin/events/demo-event/webhooks/${createdWebhookBody.data.id}/rotate-secret`,
+      {
+        method: "POST",
+        headers: { ...organizerHeaders(), "content-type": "application/json" },
+        body: JSON.stringify({}),
+      },
+      localBindings,
+    );
+    expect(rotatedWebhook.status).toBe(200);
+
+    const deletedWebhook = await app.request(
+      `/api/admin/events/demo-event/webhooks/${createdWebhookBody.data.id}`,
+      { method: "DELETE", headers: organizerHeaders() },
+      localBindings,
+    );
+    expect(deletedWebhook.status).toBe(204);
+
+    const retry = await app.request(
+      "/api/admin/events/demo-event/integrations/calendar/deliveries/calendar-local-failure-demo-event/retry",
+      {
+        method: "POST",
+        headers: { ...organizerHeaders(), "content-type": "application/json" },
+        body: JSON.stringify({}),
+      },
+      localBindings,
+    );
+    expect(retry.status).toBe(204);
+
+    const refreshed = await app.request(
+      "/api/admin/events/demo-event/integrations",
+      { headers: organizerHeaders() },
+      localBindings,
+    );
+    expect(refreshed.status).toBe(200);
+    await expect(refreshed.json()).resolves.toMatchObject({
+      data: {
+        delivery: {
+          openSend: { credentialLastFour: "-key" },
+          calendar: { state: "connected", lastFailure: null },
+        },
+        apiKeys: expect.arrayContaining([
+          expect.objectContaining({ id: "local-created-key-1", revokedAt: expect.any(String) }),
+        ]),
+        webhooks: [expect.objectContaining({ id: "local-webhook-demo" })],
+      },
+    });
+  });
 
   it("denies anonymous, reviewer, and wrong-tenant organizer overview access", async () => {
     const app = createRuntimeApp(localBindings);

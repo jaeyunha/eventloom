@@ -1,0 +1,492 @@
+import {
+  apiErrorSchema,
+  apiScopes,
+  type ApiScope,
+  webhookEventTypes,
+  type WebhookEventType,
+} from "@open-sessionboard/contracts";
+import { type Context, Hono } from "hono";
+import { ZodError, z } from "zod";
+import { requireOrganizationRole } from "../features/auth/authorization";
+import { AuthAccessError, type AuthPrincipal } from "../features/auth/types";
+import {
+  type WebhookSubscriptionRecord,
+  WebhookRepositoryError,
+  type WebhookSubscriptionRepository,
+} from "../integrations/webhooks/types";
+
+export interface IntegrationEvent {
+  readonly id: string;
+  readonly organizationId: string;
+  readonly name: string;
+  readonly timeZone: string;
+  readonly publishedAgendaRevisionId: string | null;
+}
+
+export type IntegrationConnectionState = "connected" | "degraded" | "not_configured";
+
+export interface IntegrationDeliveryStatus {
+  readonly openSend: {
+    readonly state: IntegrationConnectionState;
+    readonly credentialLastFour: string | null;
+    readonly senderChecks: readonly {
+      readonly address: string;
+      readonly status: "verified" | "pending" | "failed";
+    }[];
+    readonly deliveredLast24Hours: number;
+    readonly failedLast24Hours: number;
+    readonly lastDeliveryAt: string | null;
+  };
+  readonly calendar: {
+    readonly state: IntegrationConnectionState;
+    readonly sentLast24Hours: number;
+    readonly failedLast24Hours: number;
+    readonly lastInvitationAt: string | null;
+    readonly lastFailure: {
+      readonly deliveryId: string;
+      readonly summary: string;
+      readonly occurredAt: string;
+      readonly retryable: boolean;
+    } | null;
+  };
+}
+
+export interface IntegrationApiKeySummary {
+  readonly id: string;
+  readonly label: string;
+  readonly prefix: string;
+  readonly scopes: readonly ApiScope[];
+  readonly createdAt: string;
+  readonly lastUsedAt: string | null;
+  readonly expiresAt: string | null;
+  readonly revokedAt: string | null;
+}
+
+export interface IntegrationApiKeyCreation {
+  readonly summary: IntegrationApiKeySummary;
+  readonly secret: string;
+}
+
+export interface IntegrationWebhookDelivery {
+  readonly status: "pending" | "delivering" | "retrying" | "succeeded" | "failed";
+  readonly attemptedAt: string;
+  readonly responseStatus: number | null;
+}
+
+export interface IntegrationAdminRouteDependencies {
+  readonly getEvent: (eventId: string) => Promise<IntegrationEvent | null>;
+  readonly getDeliveryStatus: (eventId: string) => Promise<IntegrationDeliveryStatus>;
+  readonly saveCredential: (eventId: string, provider: "opensend", secret: string) => Promise<void>;
+  readonly listApiKeys: (eventId: string) => Promise<readonly IntegrationApiKeySummary[]>;
+  readonly createApiKey: (input: {
+    readonly eventId: string;
+    readonly label: string;
+    readonly scopes: readonly ApiScope[];
+    readonly expiresAt: string | null;
+  }) => Promise<IntegrationApiKeyCreation>;
+  readonly revokeApiKey: (eventId: string, apiKeyId: string) => Promise<boolean>;
+  readonly webhooks: WebhookSubscriptionRepository;
+  readonly getWebhookLastDelivery?: (
+    eventId: string,
+    subscriptionId: string,
+  ) => Promise<IntegrationWebhookDelivery | null>;
+  readonly retryCalendarDelivery: (eventId: string, deliveryId: string) => Promise<boolean>;
+}
+
+type IntegrationRouteEnvironment = {
+  Variables: {
+    authPrincipal: AuthPrincipal | null;
+    traceId: string;
+  };
+};
+
+type IntegrationContext = Context<IntegrationRouteEnvironment>;
+
+class IntegrationRouteError extends Error {
+  readonly status: 400 | 404 | 409;
+  readonly code: "VALIDATION_FAILED" | "NOT_FOUND" | "CONFLICT";
+
+  constructor(
+    code: "VALIDATION_FAILED" | "NOT_FOUND" | "CONFLICT",
+    message: string,
+    status: 400 | 404 | 409,
+  ) {
+    super(message);
+    this.name = "IntegrationRouteError";
+    this.code = code;
+    this.status = status;
+  }
+}
+
+const eventIdSchema = z.string().trim().min(1).max(200);
+const providerSchema = z.literal("opensend");
+const credentialSchema = z.object({ secret: z.string().trim().min(1).max(512) }).strict();
+const apiScopeSchema = z.enum(apiScopes);
+const expirationSchema = z
+  .string()
+  .trim()
+  .max(80)
+  .refine((value) => !Number.isNaN(Date.parse(value)), "The expiration date is invalid.")
+  .nullable();
+const webhookEndpointSchema = z
+  .string()
+  .url()
+  .refine((value) => {
+    const endpoint = new URL(value);
+    return (
+      endpoint.protocol === "https:" &&
+      endpoint.username.length === 0 &&
+      endpoint.password.length === 0
+    );
+  }, "Webhook endpoints must use HTTPS and cannot contain credentials.");
+const createApiKeySchema = z
+  .object({
+    label: z.string().trim().min(1).max(100),
+    scopes: z.array(apiScopeSchema).min(1).max(apiScopes.length),
+    expiresAt: expirationSchema,
+  })
+  .strict();
+const createWebhookSchema = z
+  .object({
+    endpointUrl: webhookEndpointSchema,
+    events: z.array(z.enum(webhookEventTypes)).min(1).max(webhookEventTypes.length),
+  })
+  .strict();
+const updateWebhookSchema = z.object({ active: z.boolean() }).strict();
+
+function traceId(context: IntegrationContext): string {
+  return context.get("traceId") ?? crypto.randomUUID();
+}
+
+function errorResponse(
+  context: IntegrationContext,
+  status: 400 | 401 | 403 | 404 | 409,
+  code:
+    | "VALIDATION_FAILED"
+    | "AUTHENTICATION_REQUIRED"
+    | "ACCESS_DENIED"
+    | "NOT_FOUND"
+    | "CONFLICT",
+  message: string,
+): Response {
+  return context.json(
+    apiErrorSchema.parse({ error: { code, message, traceId: traceId(context) } }),
+    status,
+  );
+}
+
+function requiredEventId(context: IntegrationContext): string {
+  const parsed = eventIdSchema.safeParse(context.req.param("eventId"));
+  if (!parsed.success) {
+    throw new IntegrationRouteError(
+      "VALIDATION_FAILED",
+      "The event path parameter is invalid.",
+      400,
+    );
+  }
+  return parsed.data;
+}
+
+function requireOrganizer(context: IntegrationContext): AuthPrincipal {
+  const principal = context.get("authPrincipal");
+  if (principal === null) {
+    throw new AuthAccessError("UNAUTHENTICATED", "Authentication is required.");
+  }
+  return principal;
+}
+
+async function eventFor(
+  context: IntegrationContext,
+  dependencies: IntegrationAdminRouteDependencies,
+): Promise<IntegrationEvent> {
+  const principal = requireOrganizer(context);
+  const event = await dependencies.getEvent(requiredEventId(context));
+  if (event === null) {
+    throw new IntegrationRouteError("NOT_FOUND", "The event was not found.", 404);
+  }
+  requireOrganizationRole(principal, event.organizationId, ["owner", "admin"]);
+  return event;
+}
+
+async function requestBody(context: IntegrationContext): Promise<unknown> {
+  try {
+    return await context.req.json();
+  } catch {
+    return undefined;
+  }
+}
+
+function parseBody<T>(schema: z.ZodType<T>, value: unknown, message: string): T {
+  const parsed = schema.safeParse(value);
+  if (!parsed.success) throw new IntegrationRouteError("VALIDATION_FAILED", message, 400);
+  return parsed.data;
+}
+
+function isoDate(value: Date | string): string {
+  const parsed = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(parsed.valueOf()) ? new Date(0).toISOString() : parsed.toISOString();
+}
+
+function webhookView(
+  subscription: WebhookSubscriptionRecord,
+  lastDelivery: IntegrationWebhookDelivery | null,
+) {
+  return {
+    id: subscription.id,
+    endpointUrl: subscription.endpointUrl,
+    events: subscription.events as readonly WebhookEventType[],
+    active: subscription.active,
+    signingSecretLastFour: subscription.signingSecretLastFour,
+    createdAt: isoDate(subscription.createdAt),
+    lastDelivery,
+  };
+}
+
+function secret(): string {
+  return `osb_${crypto.randomUUID().replaceAll("-", "")}${crypto.randomUUID().replaceAll("-", "")}`;
+}
+
+async function findWebhook(
+  event: IntegrationEvent,
+  subscriptionId: string,
+  repository: WebhookSubscriptionRepository,
+): Promise<WebhookSubscriptionRecord> {
+  const subscription = await repository.getSubscription(event.organizationId, subscriptionId);
+  if (subscription === null || subscription.eventId !== event.id) {
+    throw new IntegrationRouteError("NOT_FOUND", "The webhook endpoint was not found.", 404);
+  }
+  return subscription;
+}
+
+/** Organizer-only event integration settings. Mount at `/api/admin/events/:eventId`. */
+export function createIntegrationAdminRoutes(
+  dependencies: IntegrationAdminRouteDependencies,
+): Hono<IntegrationRouteEnvironment> {
+  const routes = new Hono<IntegrationRouteEnvironment>();
+
+  routes.get("/integrations", async (context) => {
+    const event = await eventFor(context, dependencies);
+    const [delivery, apiKeys, subscriptions] = await Promise.all([
+      dependencies.getDeliveryStatus(event.id),
+      dependencies.listApiKeys(event.id),
+      dependencies.webhooks.listSubscriptions(event.organizationId),
+    ]);
+    const eventSubscriptions = subscriptions.filter(
+      (subscription) => subscription.eventId === event.id,
+    );
+    const webhooks = await Promise.all(
+      eventSubscriptions.map(async (subscription) =>
+        webhookView(
+          subscription,
+          dependencies.getWebhookLastDelivery === undefined
+            ? null
+            : await dependencies.getWebhookLastDelivery(event.id, subscription.id),
+        ),
+      ),
+    );
+    context.header("cache-control", "private, no-store");
+    return context.json({
+      data: {
+        event: {
+          id: event.id,
+          name: event.name,
+          timeZone: event.timeZone,
+          publishedAgendaRevisionId: event.publishedAgendaRevisionId,
+        },
+        delivery,
+        apiKeys,
+        webhooks,
+      },
+    });
+  });
+
+  routes.put("/integrations/:provider/credential", async (context) => {
+    const event = await eventFor(context, dependencies);
+    const provider = parseBody(
+      providerSchema,
+      context.req.param("provider"),
+      "The provider is invalid.",
+    );
+    const body = parseBody(
+      credentialSchema,
+      await requestBody(context),
+      "The credential payload is invalid.",
+    );
+    await dependencies.saveCredential(event.id, provider, body.secret);
+    return context.body(null, 204);
+  });
+
+  routes.post("/api-keys", async (context) => {
+    const event = await eventFor(context, dependencies);
+    const body = parseBody(
+      createApiKeySchema,
+      await requestBody(context),
+      "The API key payload is invalid.",
+    );
+    const created = await dependencies.createApiKey({ eventId: event.id, ...body });
+    return context.json({ data: { id: created.summary.id, secret: created.secret } }, 201);
+  });
+
+  routes.delete("/api-keys/:apiKeyId", async (context) => {
+    const event = await eventFor(context, dependencies);
+    const apiKeyId = context.req.param("apiKeyId")?.trim();
+    if (!apiKeyId)
+      throw new IntegrationRouteError("VALIDATION_FAILED", "The API key id is required.", 400);
+    if (!(await dependencies.revokeApiKey(event.id, apiKeyId))) {
+      throw new IntegrationRouteError("NOT_FOUND", "The API key was not found.", 404);
+    }
+    return context.body(null, 204);
+  });
+
+  routes.post("/webhooks", async (context) => {
+    const event = await eventFor(context, dependencies);
+    const body = parseBody(
+      createWebhookSchema,
+      await requestBody(context),
+      "The webhook payload is invalid.",
+    );
+    let created: WebhookSubscriptionRecord;
+    try {
+      created = await dependencies.webhooks.createSubscription({
+        organizationId: event.organizationId,
+        eventId: event.id,
+        endpointUrl: body.endpointUrl,
+        events: body.events,
+        active: true,
+        signingSecret: secret(),
+      });
+    } catch (error) {
+      throw webhookRouteError(error);
+    }
+    return context.json({ data: { id: created.id, secret: created.signingSecret } }, 201);
+  });
+
+  routes.patch("/webhooks/:subscriptionId", async (context) => {
+    const event = await eventFor(context, dependencies);
+    const subscriptionId = context.req.param("subscriptionId")?.trim();
+    if (!subscriptionId) {
+      throw new IntegrationRouteError("VALIDATION_FAILED", "The webhook id is required.", 400);
+    }
+    const body = parseBody(
+      updateWebhookSchema,
+      await requestBody(context),
+      "The webhook payload is invalid.",
+    );
+    await findWebhook(event, subscriptionId, dependencies.webhooks);
+    try {
+      const updated = await dependencies.webhooks.updateSubscription(
+        event.organizationId,
+        subscriptionId,
+        { active: body.active },
+      );
+      if (updated === null || updated.eventId !== event.id) {
+        throw new IntegrationRouteError("NOT_FOUND", "The webhook endpoint was not found.", 404);
+      }
+    } catch (error) {
+      if (error instanceof IntegrationRouteError) throw error;
+      throw webhookRouteError(error);
+    }
+    return context.body(null, 204);
+  });
+
+  routes.post("/webhooks/:subscriptionId/rotate-secret", async (context) => {
+    const event = await eventFor(context, dependencies);
+    const subscriptionId = context.req.param("subscriptionId")?.trim();
+    if (!subscriptionId) {
+      throw new IntegrationRouteError("VALIDATION_FAILED", "The webhook id is required.", 400);
+    }
+    await findWebhook(event, subscriptionId, dependencies.webhooks);
+    const signingSecret = secret();
+    try {
+      const updated = await dependencies.webhooks.updateSubscription(
+        event.organizationId,
+        subscriptionId,
+        { signingSecret },
+      );
+      if (updated === null || updated.eventId !== event.id) {
+        throw new IntegrationRouteError("NOT_FOUND", "The webhook endpoint was not found.", 404);
+      }
+    } catch (error) {
+      if (error instanceof IntegrationRouteError) throw error;
+      throw webhookRouteError(error);
+    }
+    return context.json({ data: { id: subscriptionId, secret: signingSecret } });
+  });
+
+  routes.delete("/webhooks/:subscriptionId", async (context) => {
+    const event = await eventFor(context, dependencies);
+    const subscriptionId = context.req.param("subscriptionId")?.trim();
+    if (!subscriptionId) {
+      throw new IntegrationRouteError("VALIDATION_FAILED", "The webhook id is required.", 400);
+    }
+    await findWebhook(event, subscriptionId, dependencies.webhooks);
+    try {
+      const deleted = await dependencies.webhooks.deleteSubscription(
+        event.organizationId,
+        subscriptionId,
+      );
+      if (!deleted)
+        throw new IntegrationRouteError("NOT_FOUND", "The webhook endpoint was not found.", 404);
+    } catch (error) {
+      if (error instanceof IntegrationRouteError) throw error;
+      throw webhookRouteError(error);
+    }
+    return context.body(null, 204);
+  });
+
+  routes.post("/integrations/calendar/deliveries/:deliveryId/retry", async (context) => {
+    const event = await eventFor(context, dependencies);
+    const deliveryId = context.req.param("deliveryId")?.trim();
+    if (!deliveryId) {
+      throw new IntegrationRouteError("VALIDATION_FAILED", "The delivery id is required.", 400);
+    }
+    if (!(await dependencies.retryCalendarDelivery(event.id, deliveryId))) {
+      throw new IntegrationRouteError("NOT_FOUND", "The calendar delivery was not found.", 404);
+    }
+    return context.body(null, 204);
+  });
+
+  routes.onError((error, context) => {
+    if (error instanceof AuthAccessError) {
+      return errorResponse(
+        context,
+        error.status,
+        error.code === "UNAUTHENTICATED" ? "AUTHENTICATION_REQUIRED" : "ACCESS_DENIED",
+        error.message,
+      );
+    }
+    if (error instanceof IntegrationRouteError) {
+      return errorResponse(context, error.status, error.code, error.message);
+    }
+    if (error instanceof ZodError) {
+      return errorResponse(
+        context,
+        400,
+        "VALIDATION_FAILED",
+        "The integration request is invalid.",
+      );
+    }
+    throw error;
+  });
+
+  return routes;
+}
+
+function webhookRouteError(error: unknown): IntegrationRouteError {
+  if (error instanceof WebhookRepositoryError) {
+    return new IntegrationRouteError(
+      error.code === "CONFLICT"
+        ? "CONFLICT"
+        : error.code === "NOT_FOUND"
+          ? "NOT_FOUND"
+          : "VALIDATION_FAILED",
+      error.message,
+      error.status,
+    );
+  }
+  return new IntegrationRouteError(
+    "VALIDATION_FAILED",
+    "The webhook request could not be completed.",
+    400,
+  );
+}
