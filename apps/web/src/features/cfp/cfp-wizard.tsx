@@ -121,7 +121,10 @@ function configuredCfpIdentity(
   formId?: string,
 ): { organizationId: string; eventId: string; formId?: string } {
   const resolvedOrganizationId =
-    organizationId ?? process.env.NEXT_PUBLIC_CFP_ORGANIZATION_ID ?? "";
+    organizationId ??
+    process.env.NEXT_PUBLIC_ORGANIZATION_ID ??
+    process.env.NEXT_PUBLIC_CFP_ORGANIZATION_ID ??
+    "";
   const resolvedFormId = formId ?? process.env.NEXT_PUBLIC_CFP_FORM_ID ?? undefined;
   if (!resolvedOrganizationId) {
     const localMode =
@@ -134,7 +137,7 @@ function configuredCfpIdentity(
       };
     }
     throw new Error(
-      `CFP identity is not configured for '${eventSlug}'. Set NEXT_PUBLIC_CFP_ORGANIZATION_ID.`,
+      `CFP identity is not configured for '${eventSlug}'. Set NEXT_PUBLIC_ORGANIZATION_ID.`,
     );
   }
   return {

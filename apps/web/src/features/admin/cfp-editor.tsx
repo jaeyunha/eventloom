@@ -513,6 +513,7 @@ export function CfpEditor({ eventId, organizationId, formId, api: providedApi }:
   const localMode = process.env.NEXT_PUBLIC_APP_ENV === "local" || process.env.APP_ENV === "local";
   const resolvedOrganizationId =
     organizationId ??
+    process.env.NEXT_PUBLIC_ORGANIZATION_ID ??
     process.env.NEXT_PUBLIC_CFP_ORGANIZATION_ID ??
     (localMode ? "organization-1" : "");
   const resolvedFormId =
