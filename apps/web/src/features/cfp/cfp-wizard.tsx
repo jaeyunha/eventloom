@@ -9,6 +9,7 @@ import { SearchableSelect } from "../../components/ui/searchable-select";
 import { Stepper } from "../../components/ui/stepper";
 import {
   type CfpApi,
+  CfpApiError,
   type CfpPublishedForm,
   type CfpServerSubmission,
   createCfpApi,
@@ -317,15 +318,23 @@ export function CfpWizard({
         );
         const pointer = window.localStorage.getItem(pointerKey);
         if (pointer) {
-          const saved = await api.loadDraft({
-            organizationId: identity.organizationId,
-            eventId: identity.eventId,
-            submissionId: pointer,
-          });
-          if (!active) return;
-          submissionIdRef.current = saved.id;
-          versionRef.current = saved.version;
-          setDraft(draftFromSubmission(eventSlug, saved));
+          try {
+            const saved = await api.loadDraft({
+              organizationId: identity.organizationId,
+              eventId: identity.eventId,
+              submissionId: pointer,
+            });
+            if (!active) return;
+            submissionIdRef.current = saved.id;
+            versionRef.current = saved.version;
+            setDraft(draftFromSubmission(eventSlug, saved));
+          } catch (error) {
+            if (!(error instanceof CfpApiError) || (error.status !== 401 && error.status !== 404)) {
+              throw error;
+            }
+            window.localStorage.removeItem(pointerKey);
+            setDraft(initialDraft);
+          }
         } else {
           setDraft(initialDraft);
         }

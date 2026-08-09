@@ -318,9 +318,54 @@ describe("local runtime composition", () => {
     expect(updated.status).toBe(200);
     await expect(updated.json()).resolves.toMatchObject({ data: { version: 3 } });
     expect(published.status).toBe(200);
-    await expect(published.json()).resolves.toMatchObject({
-      data: { eventId: "demo-event", revisionNumber: 1, entries: expect.any(Array) },
+    const publishedBody = (await published.json()) as {
+      data: Record<string, unknown> & { revision: Record<string, unknown> };
+    };
+    expect(publishedBody).toEqual({
+      data: {
+        event: {
+          slug: "demo-event",
+          name: "Demo Event",
+          timeZone: "America/Los_Angeles",
+          startsOn: "2026-09-18",
+          endsOn: "2026-09-18",
+          venueName: null,
+        },
+        revision: {
+          id: "revision_local_3",
+          number: 1,
+          publishedAt: "2026-08-08T12:00:00.000Z",
+        },
+        entries: [
+          {
+            id: "local-entry-keynote",
+            title: "Local Session Keynote",
+            summary: "",
+            format: "Session",
+            speakerNames: [],
+            roomName: "Local Room Main",
+            trackNames: ["Local Track Main"],
+            startsAt: expect.any(String),
+            endsAt: expect.any(String),
+          },
+          {
+            id: "local-entry-workshop",
+            title: "Local Session Workshop",
+            summary: "",
+            format: "Session",
+            speakerNames: [],
+            roomName: "Local Room Studio",
+            trackNames: ["Local Track Practice"],
+            startsAt: expect.any(String),
+            endsAt: expect.any(String),
+          },
+        ],
+      },
     });
+    expect(publishedBody.data).not.toHaveProperty("eventId");
+    expect(publishedBody.data).not.toHaveProperty("sourceDraftVersion");
+    expect(publishedBody.data.revision).not.toHaveProperty("sourceDraftVersion");
+    expect(publishedBody.data.revision).not.toHaveProperty("publishedBy");
   });
 
   it("preserves authentication and tenant boundaries for scoped APIs", async () => {

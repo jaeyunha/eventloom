@@ -328,17 +328,178 @@ export function createAgendaAdminRoutes(
 
   return routes;
 }
-function publishedAgendaView(
-  revision: NonNullable<Awaited<ReturnType<AgendaEngine["getPublishedAgenda"]>>>,
-) {
+type PublishedAgendaRevision = NonNullable<Awaited<ReturnType<AgendaEngine["getPublishedAgenda"]>>>;
+type JsonRecord = Record<string, unknown>;
+
+function asRecord(value: unknown): JsonRecord | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as JsonRecord)
+    : null;
+}
+
+function textValue(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  return normalized.length === 0 ? null : normalized;
+}
+
+function firstTextValue(
+  sources: readonly (JsonRecord | null)[],
+  keys: readonly string[],
+): string | null {
+  for (const source of sources) {
+    if (source === null) continue;
+    for (const key of keys) {
+      const value = textValue(source[key]);
+      if (value !== null) return value;
+    }
+  }
+  return null;
+}
+
+function stringArrayValue(value: unknown): readonly string[] | null {
+  if (!Array.isArray(value)) return null;
+  const values: string[] = [];
+  for (const item of value) {
+    const normalized = textValue(item);
+    if (normalized === null) return null;
+    values.push(normalized);
+  }
+  return values;
+}
+
+function firstStringArrayValue(
+  sources: readonly (JsonRecord | null)[],
+  keys: readonly string[],
+): readonly string[] | null {
+  for (const source of sources) {
+    if (source === null) continue;
+    for (const key of keys) {
+      const value = stringArrayValue(source[key]);
+      if (value !== null) return value;
+    }
+  }
+  return null;
+}
+
+function humanizeIdentifier(value: string): string {
+  const words = value
+    .trim()
+    .split(/[-_.\s]+/u)
+    .filter((word) => word.length > 0)
+    .map((word) => word.toLowerCase());
+  if (words.length === 0) return "Unknown";
+  return words.map((word) => `${word.slice(0, 1).toUpperCase()}${word.slice(1)}`).join(" ");
+}
+
+function dateValue(value: unknown): string | null {
+  const normalized = textValue(value);
+  if (normalized === null) return null;
+  const datePrefix = /^(\d{4}-\d{2}-\d{2})/u.exec(normalized)?.[1];
+  if (datePrefix !== undefined) {
+    const [year, month, day] = datePrefix.split("-").map(Number);
+    const date = new Date(Date.UTC(year ?? 0, (month ?? 1) - 1, day ?? 0));
+    if (
+      date.getUTCFullYear() === year &&
+      date.getUTCMonth() === (month ?? 1) - 1 &&
+      date.getUTCDate() === day
+    ) {
+      return datePrefix;
+    }
+    return null;
+  }
+  const timestamp = Date.parse(normalized);
+  return Number.isNaN(timestamp) ? null : new Date(timestamp).toISOString().slice(0, 10);
+}
+
+function entryDate(
+  entries: readonly { readonly startsAt: unknown; readonly endsAt: unknown }[],
+  field: "startsAt" | "endsAt",
+  direction: "first" | "last",
+): string | null {
+  const dates = entries
+    .map((entry) => dateValue(entry[field]))
+    .filter((date): date is string => date !== null)
+    .sort((left, right) => left.localeCompare(right));
+  return direction === "first" ? (dates[0] ?? null) : (dates.at(-1) ?? null);
+}
+
+function entryMetadataSources(entry: PublishedAgendaRevision["entries"][number]): JsonRecord[] {
+  const record = asRecord(entry);
+  return record === null ? [] : [record, asRecord(record.metadata)].filter(isRecord);
+}
+
+function isRecord(value: JsonRecord | null): value is JsonRecord {
+  return value !== null;
+}
+
+function eventMetadataSources(revision: PublishedAgendaRevision): JsonRecord[] {
+  const record = asRecord(revision);
+  if (record === null) return [];
+  const metadata = asRecord(record.metadata);
+  return [
+    asRecord(record.event),
+    asRecord(record.eventMetadata),
+    asRecord(record.publicEvent),
+    asRecord(metadata?.event),
+    asRecord(metadata?.eventMetadata),
+    asRecord(metadata?.publicEvent),
+    metadata,
+    record,
+  ].filter(isRecord);
+}
+
+function publishedEntryView(entry: PublishedAgendaRevision["entries"][number]) {
+  const metadata = entryMetadataSources(entry);
+  const speakerNames = firstStringArrayValue(metadata, ["speakerNames"]) ?? [];
+  const trackNames =
+    firstStringArrayValue(metadata, ["trackNames"]) ??
+    entry.trackIds.map((trackId) => humanizeIdentifier(trackId));
   return {
-    revisionId: revision.id,
-    eventId: revision.eventId,
-    revisionNumber: revision.revisionNumber,
-    sourceDraftVersion: revision.sourceDraftVersion,
-    timeZone: revision.timeZone,
-    entries: revision.entries,
-    publishedAt: revision.publishedAt,
+    id: entry.id,
+    title: firstTextValue(metadata, ["title"]) ?? humanizeIdentifier(entry.sessionId),
+    summary: firstTextValue(metadata, ["summary"]) ?? "",
+    format: firstTextValue(metadata, ["format"]) ?? "Session",
+    speakerNames,
+    roomName: firstTextValue(metadata, ["roomName"]) ?? humanizeIdentifier(entry.roomId),
+    trackNames,
+    startsAt: entry.startsAt,
+    endsAt: entry.endsAt,
+  };
+}
+
+function publishedAgendaView(revision: PublishedAgendaRevision) {
+  const eventMetadata = eventMetadataSources(revision);
+  const entries = revision.entries.map(publishedEntryView);
+  const publishedDate = dateValue(revision.publishedAt);
+  return {
+    event: {
+      slug: firstTextValue(eventMetadata, ["slug", "eventSlug"]) ?? revision.eventId,
+      name:
+        firstTextValue(eventMetadata, ["name", "eventName"]) ??
+        humanizeIdentifier(revision.eventId),
+      timeZone:
+        firstTextValue(eventMetadata, ["timeZone", "eventTimeZone"]) ??
+        textValue(revision.timeZone) ??
+        "UTC",
+      startsOn:
+        dateValue(firstTextValue(eventMetadata, ["startsOn", "eventStartsOn"])) ??
+        entryDate(entries, "startsAt", "first") ??
+        publishedDate ??
+        "",
+      endsOn:
+        dateValue(firstTextValue(eventMetadata, ["endsOn", "eventEndsOn"])) ??
+        entryDate(entries, "endsAt", "last") ??
+        publishedDate ??
+        "",
+      venueName: firstTextValue(eventMetadata, ["venueName", "eventVenueName"]),
+    },
+    revision: {
+      id: revision.id,
+      number: revision.revisionNumber,
+      publishedAt: revision.publishedAt,
+    },
+    entries,
   };
 }
 
