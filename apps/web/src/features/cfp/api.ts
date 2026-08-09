@@ -208,6 +208,7 @@ export interface CfpApi {
     name: string;
     verificationCallbackUrl?: string;
   }): Promise<CfpAccountAuthentication>;
+  startGoogleSignIn(input: { callbackURL: string }): Promise<string>;
   loadDraft(input: {
     organizationId: string;
     eventId: string;
@@ -510,6 +511,35 @@ export function createCfpApi(baseUrl: string, fetcher: Fetcher = fetch): CfpApi 
       }
       if (hasAuthSession(signUp.body)) return { status: "authenticated" };
       return { status: "verification_required" };
+    },
+    startGoogleSignIn: async (input) => {
+      const result = await authRequest(fetcher, authBase, "/sign-in/social", {
+        provider: "google",
+        callbackURL: input.callbackURL,
+      });
+      if (!result.response.ok) {
+        throw authError(
+          result.response,
+          result.body,
+          "GOOGLE_SIGN_IN_FAILED",
+          "We could not start Google sign-in.",
+        );
+      }
+      if (
+        typeof result.body !== "object" ||
+        result.body === null ||
+        Array.isArray(result.body) ||
+        !("url" in result.body) ||
+        typeof result.body.url !== "string" ||
+        !result.body.url.startsWith("https://accounts.google.com/")
+      ) {
+        throw new CfpApiError(
+          "GOOGLE_SIGN_IN_FAILED",
+          "Google sign-in did not return a valid authorization URL.",
+          502,
+        );
+      }
+      return result.body.url;
     },
 
     loadDraft(input) {

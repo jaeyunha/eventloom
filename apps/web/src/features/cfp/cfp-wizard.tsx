@@ -553,6 +553,20 @@ export function CfpWizard({
     if (previous) router.push(getCfpStepRoute(eventSlug, previous));
   }
 
+  async function startGoogleSignIn(): Promise<void> {
+    if (!identity) {
+      setErrors({ "account.auth": "Google sign-in is not configured for this event." });
+      return;
+    }
+    try {
+      const callbackURL = `${window.location.origin}${getCfpStepRoute(eventSlug, "account")}`;
+      const authorizationURL = await api.startGoogleSignIn({ callbackURL });
+      window.location.assign(authorizationURL);
+    } catch {
+      setErrors({ "account.auth": "Google sign-in could not be started. Try again." });
+    }
+  }
+
   if (!hydrated) {
     return (
       <main className={styles.viewport}>
@@ -613,6 +627,11 @@ export function CfpWizard({
               <span />
             )}
             <div className={styles.forwardActions}>
+              {step === "account" ? (
+                <Button onClick={() => void startGoogleSignIn()} type="button" variant="secondary">
+                  Continue with Google
+                </Button>
+              ) : null}
               {step !== "welcome" &&
               (step !== "account" || process.env.NEXT_PUBLIC_APP_ENV === "local") ? (
                 <Button
