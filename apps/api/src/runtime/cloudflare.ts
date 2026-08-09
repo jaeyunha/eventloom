@@ -14,12 +14,17 @@ import {
   type CloudflareBindings,
   inspectCloudflareBindings,
 } from "../infrastructure/cloudflare/bindings";
+import { createAirtableDependencies } from "./airtable";
+import { FetchAirtableTransport, RetryingAirtableTransport } from "../infrastructure/airtable";
+import type { AirtableTransport } from "../infrastructure/airtable";
 
 export type RuntimeBindings = ApiBindings &
   Partial<Omit<CloudflareBindings, keyof ApiBindings>> & {
     readonly AIRTABLE_ACCESS_TOKEN?: string;
     readonly AIRTABLE_BASE_ID?: string;
     readonly BETTER_AUTH_SECRET?: string;
+    readonly AIRTABLE_API_ORIGIN?: string;
+    readonly AIRTABLE_TRANSPORT?: AirtableTransport;
   };
 
 export interface RuntimeConfigurationInspection {
@@ -235,13 +240,44 @@ export function inspectProductionRuntime(
 }
 
 export function createCloudflareDependencies(bindings: RuntimeBindings): ApiDependencies {
+  const inspection = inspectCloudflareBindings(bindings);
+  if (!inspection.success) {
+    throw new TypeError(`Invalid Cloudflare bindings: ${inspection.issues.join("; ")}`);
+  }
   if (bindings.DB === undefined) {
     throw new TypeError("The D1 binding is required for Cloudflare authentication.");
   }
-  return {
-    authenticator: new RequestAuthenticator(
-      new D1BetterAuthGateway(bindings.DB),
-      new D1ApiKeyAuthenticatorGateway(bindings.DB),
-    ),
-  };
+  if (bindings.AGENDA_COORDINATOR === undefined) {
+    throw new TypeError("The agenda coordinator binding is required outside local development.");
+  }
+  if (bindings.PRIVATE_FILES === undefined) {
+    throw new TypeError("The private files binding is required outside local development.");
+  }
+  if (bindings.OUTBOX_QUEUE === undefined) {
+    throw new TypeError("The outbox queue binding is required outside local development.");
+  }
+  const transport =
+    bindings.AIRTABLE_TRANSPORT ??
+    new RetryingAirtableTransport(
+      new FetchAirtableTransport({
+        token: bindings.AIRTABLE_ACCESS_TOKEN ?? "",
+        ...(bindings.AIRTABLE_API_ORIGIN === undefined
+          ? {}
+          : { apiOrigin: bindings.AIRTABLE_API_ORIGIN }),
+      }),
+    );
+  const authenticator = new RequestAuthenticator(
+    new D1BetterAuthGateway(bindings.DB),
+    new D1ApiKeyAuthenticatorGateway(bindings.DB),
+  );
+  return createAirtableDependencies({
+    authenticator,
+    baseId: bindings.AIRTABLE_BASE_ID ?? "",
+    transport,
+    database: bindings.DB,
+    agendaCoordinator: bindings.AGENDA_COORDINATOR,
+    privateFiles: bindings.PRIVATE_FILES,
+    outboxQueue: bindings.OUTBOX_QUEUE,
+    webOrigin: bindings.WEB_ORIGIN,
+  });
 }

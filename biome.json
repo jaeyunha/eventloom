@@ -4,6 +4,8 @@
     "includes": [
       "**",
       "!!**/.next",
+      "!!**/.gjc",
+      "!!**/.open-next",
       "!!**/.wrangler",
       "!!**/dist",
       "!!**/coverage",

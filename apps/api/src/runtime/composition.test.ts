@@ -3,6 +3,7 @@ import { createLocalCfpService } from "./cfp";
 import type { RuntimeBindings } from "./cloudflare";
 import { createRuntimeApp, createRuntimeWorker } from "./composition";
 import { LOCAL_API_KEY, LOCAL_ORGANIZATION_ID, LOCAL_SESSION_TOKEN } from "./local";
+import { FakeAirtableTransport } from "../infrastructure/airtable";
 
 const localBindings: RuntimeBindings = {
   APP_ENV: "local",
@@ -11,6 +12,75 @@ const localBindings: RuntimeBindings = {
 
 function organizerHeaders(): HeadersInit {
   return { cookie: `better-auth.session_token=${LOCAL_SESSION_TOKEN}` };
+}
+function productionD1(digest: string): NonNullable<RuntimeBindings["DB"]> {
+  const row = {
+    id: "key-production",
+    organization_id: LOCAL_ORGANIZATION_ID,
+    label: "Production test key",
+    scopes_json: '["events:read","events:write"]',
+    expires_at: null,
+    revoked_at: null,
+  };
+  return {
+    prepare(query: string) {
+      return {
+        bind(...values: unknown[]) {
+          return {
+            async first<T>() {
+              return query.includes("FROM api_keys") && values[0] === digest ? (row as T) : null;
+            },
+            async all<T>() {
+              return { results: [] as T[] };
+            },
+            async run() {
+              return { success: true, meta: { changes: 1 } };
+            },
+          };
+        },
+      };
+    },
+    async batch() {
+      return [];
+    },
+  } as unknown as NonNullable<RuntimeBindings["DB"]>;
+}
+
+function productionBindings(
+  transport: FakeAirtableTransport,
+  database: NonNullable<RuntimeBindings["DB"]>,
+): RuntimeBindings {
+  const coordinator = {
+    idFromName(name: string) {
+      return name;
+    },
+    get() {
+      return {
+        async fetch() {
+          return Response.json({ revision: 0 });
+        },
+      };
+    },
+  } as unknown as NonNullable<RuntimeBindings["AGENDA_COORDINATOR"]>;
+  const bucket = {
+    get: async () => null,
+    put: async () => undefined,
+  } as unknown as NonNullable<RuntimeBindings["PRIVATE_FILES"]>;
+  const queue = {
+    async send() {},
+  } as unknown as NonNullable<RuntimeBindings["OUTBOX_QUEUE"]>;
+  return {
+    APP_ENV: "production",
+    WEB_ORIGIN: "https://open-sessionboard.pages.dev",
+    DB: database,
+    AGENDA_COORDINATOR: coordinator,
+    PRIVATE_FILES: bucket,
+    OUTBOX_QUEUE: queue,
+    AIRTABLE_ACCESS_TOKEN: "test-token",
+    AIRTABLE_BASE_ID: "base-test",
+    BETTER_AUTH_SECRET: "test-secret-that-is-at-least-32-characters-long",
+    AIRTABLE_TRANSPORT: transport,
+  };
 }
 
 describe("local runtime composition", () => {
@@ -183,6 +253,67 @@ describe("local runtime composition", () => {
     expect(replay).toEqual(draft);
   });
 
+  it("mounts production Airtable reads and writes without exposing record ids", async () => {
+    const transport = new FakeAirtableTransport();
+    transport.seed({
+      baseId: "base-test",
+      table: "Events",
+      recordId: "rec00000000000001",
+      fields: {
+        "Application ID": "event-airtable",
+        Payload: JSON.stringify({
+          id: "event-airtable",
+          organizationId: LOCAL_ORGANIZATION_ID,
+          name: "Airtable Event",
+          version: 1,
+          updatedAt: "2026-08-09T00:00:00.000Z",
+        }),
+      },
+    });
+    const digestBytes = new Uint8Array(
+      await crypto.subtle.digest("SHA-256", new TextEncoder().encode("production-api-key")),
+    );
+    const digest = [...digestBytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    const database = productionD1(digest);
+    const bindings = productionBindings(transport, database);
+    const app = createRuntimeApp(bindings);
+
+    const listed = await app.request(
+      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/events`,
+      { headers: { authorization: "Bearer production-api-key" } },
+      bindings,
+    );
+    const created = await app.request(
+      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/events`,
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer production-api-key",
+          "content-type": "application/json",
+          "idempotency-key": "production-create-1",
+        },
+        body: JSON.stringify({ id: "created-event", name: "Created Event" }),
+      },
+      bindings,
+    );
+
+    expect(listed.status).toBe(200);
+    await expect(listed.json()).resolves.toMatchObject({
+      data: [{ id: "event-airtable", name: "Airtable Event" }],
+    });
+    expect(created.status).toBe(201);
+    const createdPayload = await created.json();
+    expect(createdPayload).toMatchObject({
+      id: "created-event",
+      name: "Created Event",
+      organizationId: LOCAL_ORGANIZATION_ID,
+      version: 1,
+    });
+    expect(JSON.stringify(createdPayload)).not.toContain("rec00000000000001");
+    expect(
+      transport.requests.some((request) => request.method === "POST" && request.table === "Events"),
+    ).toBe(true);
+  });
   it("fails closed without non-local provider configuration and never returns issue details", async () => {
     const worker = createRuntimeWorker();
     const bindings: RuntimeBindings = {

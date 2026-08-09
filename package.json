@@ -11,6 +11,8 @@
   "scripts": {
     "dev": "bun run --filter @open-sessionboard/contracts build && bun run --parallel --filter './apps/*' dev",
     "build": "bun run --filter '*' build",
+    "cloudflare:web:build": "bun run --filter @open-sessionboard/web cloudflare:build",
+    "cloudflare:web:deploy": "node scripts/cloudflare/deploy-web.mjs",
     "check": "bun run typecheck && bun run lint && bun run format:check",
     "typecheck": "bun run --filter '*' typecheck",
     "lint": "biome lint .",

@@ -1,4 +1,4 @@
-import { openSendEmailPayloadSchema } from "@open-sessionboard/contracts";
+import { openSendEmailPayloadSchema, openSendSenderSchema } from "@open-sessionboard/contracts";
 import {
   OpenSendError,
   type OpenSendErrorCode,
@@ -6,6 +6,18 @@ import {
   type OpenSendSender,
   type OpenSendSendResult,
 } from "./types";
+
+export type OpenSendSenderPurpose = "auth" | "speakers" | "calendar";
+export type OpenSendSenderAddress = OpenSendMessage["from"];
+export type OpenSendSenderAddresses = Readonly<
+  Record<OpenSendSenderPurpose, OpenSendSenderAddress>
+>;
+
+export const DEFAULT_OPEN_SEND_SENDERS: OpenSendSenderAddresses = {
+  auth: "auth@foreverbrowsing.com",
+  speakers: "speakers@foreverbrowsing.com",
+  calendar: "calendar@foreverbrowsing.com",
+};
 
 const DEFAULT_BASE_URL = "https://opensend.namuh.co";
 const MAX_ATTACHMENT_BASE64_BYTES = 40 * 1024 * 1024;
@@ -15,6 +27,7 @@ export interface OpenSendClientOptions {
   readonly baseUrl?: string;
   readonly fetch?: typeof globalThis.fetch;
   readonly now?: () => Date;
+  readonly senderAddresses?: Partial<Record<OpenSendSenderPurpose, string>>;
 }
 
 export class OpenSendClient implements OpenSendSender {
@@ -22,6 +35,7 @@ export class OpenSendClient implements OpenSendSender {
   readonly #baseUrl: string;
   readonly #fetch: typeof globalThis.fetch;
   readonly #now: () => Date;
+  readonly #senderAddresses: OpenSendSenderAddresses;
 
   constructor(options: OpenSendClientOptions) {
     const apiKey = options.sendingApiKey.trim();
@@ -35,10 +49,16 @@ export class OpenSendClient implements OpenSendSender {
     this.#baseUrl = normalizeBaseUrl(options.baseUrl ?? DEFAULT_BASE_URL);
     this.#fetch = options.fetch ?? globalThis.fetch;
     this.#now = options.now ?? (() => new Date());
+    this.#senderAddresses = resolveSenderAddresses(options.senderAddresses);
   }
 
-  async send(message: OpenSendMessage): Promise<OpenSendSendResult> {
-    assertMessage(message);
+  async send(
+    message: OpenSendMessage,
+    purpose?: OpenSendSenderPurpose,
+  ): Promise<OpenSendSendResult> {
+    const selectedMessage =
+      purpose === undefined ? message : { ...message, from: this.senderFor(purpose) };
+    assertMessage(selectedMessage);
 
     let response: Response;
     try {
@@ -48,9 +68,9 @@ export class OpenSendClient implements OpenSendSender {
           Accept: "application/json",
           Authorization: `Bearer ${this.#apiKey}`,
           "Content-Type": "application/json",
-          "Idempotency-Key": message.idempotencyKey,
+          "Idempotency-Key": selectedMessage.idempotencyKey,
         },
-        body: JSON.stringify(toRequestBody(message)),
+        body: JSON.stringify(toRequestBody(selectedMessage)),
       });
     } catch (cause) {
       throw new OpenSendError("NETWORK_ERROR", "OpenSend could not be reached.", {
@@ -74,8 +94,12 @@ export class OpenSendClient implements OpenSendSender {
 
     return {
       providerMessageId: body.id,
-      idempotencyKey: message.idempotencyKey,
+      idempotencyKey: selectedMessage.idempotencyKey,
     };
+  }
+
+  senderFor(purpose: OpenSendSenderPurpose): OpenSendSenderAddress {
+    return this.#senderAddresses[purpose];
   }
 }
 
@@ -108,6 +132,27 @@ function normalizeBaseUrl(value: string): string {
   }
 
   return url.toString().replace(/\/$/, "");
+}
+
+function resolveSenderAddresses(
+  overrides: Partial<Record<OpenSendSenderPurpose, string>> | undefined,
+): OpenSendSenderAddresses {
+  const configured = { ...DEFAULT_OPEN_SEND_SENDERS };
+  for (const [purpose, address] of Object.entries(overrides ?? {})) {
+    if (address !== undefined) {
+      configured[purpose as OpenSendSenderPurpose] = address.trim() as OpenSendSenderAddress;
+    }
+  }
+  for (const [purpose, address] of Object.entries(configured)) {
+    if (!openSendSenderSchema.safeParse(address).success) {
+      throw new OpenSendError(
+        "CONFIGURATION_ERROR",
+        `OpenSend ${purpose} sender is not a verified sender address.`,
+        { retryable: false },
+      );
+    }
+  }
+  return configured;
 }
 
 function assertMessage(message: OpenSendMessage): void {
@@ -211,7 +256,12 @@ function parseRetryAfter(value: string | null, now: Date): number | undefined {
 }
 
 async function readJson(response: Response): Promise<unknown> {
-  const text = await response.text();
+  let text: string;
+  try {
+    text = await response.text();
+  } catch {
+    return null;
+  }
   if (text.length === 0) {
     return null;
   }

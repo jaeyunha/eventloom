@@ -19,7 +19,7 @@
   {
     "id": "auth-tenant-access",
     "name": "Authentication and tenant authorization",
-    "description": "Implement Better Auth on Hono/D1 with magic links, optional Google and Microsoft OAuth, organization roles, speaker ownership checks, API keys, and strict tenant isolation.",
+    "description": "Implement Better Auth on Hono/D1 with magic links, Google OAuth, organization roles, speaker ownership checks, API keys, and strict tenant isolation.",
     "priority": "P0",
     "category": "auth",
     "build_pass": false,
@@ -27,7 +27,7 @@
     "dependencies": ["platform-foundation"],
     "steps": [
       "Magic-link login works",
-      "Google and Microsoft providers can be configured",
+      "Google OAuth can be configured",
       "Unauthorized requests return 401",
       "Cross-tenant access is denied",
       "API keys are scoped and revocable"
@@ -220,23 +220,6 @@
     "pages": ["/docs/api"]
   },
   {
-    "id": "accelevents-publish",
-    "name": "Controlled Accelevents publication",
-    "description": "Provide an outbound-only Accelevents adapter that previews diffs and requires explicit organizer confirmation before publishing selected program data.",
-    "priority": "P1",
-    "category": "integration",
-    "build_pass": false,
-    "qa_pass": false,
-    "dependencies": ["agenda-scheduling"],
-    "steps": [
-      "Preview shows deterministic changes",
-      "No outbound write occurs without confirmation",
-      "Retries are idempotent",
-      "Provider failures preserve local state"
-    ],
-    "pages": ["/admin/events/[eventId]/integrations/accelevents"]
-  },
-  {
     "id": "audit-security",
     "name": "Audit, security, and privacy controls",
     "description": "Implement audit events, secure rich-text handling, CORS/CSRF protections, rate limiting, secret hygiene, private files, data minimization, and safe error responses.",
@@ -274,7 +257,7 @@
   {
     "id": "accessibility-performance",
     "name": "Accessibility and performance",
-    "description": "Meet WCAG 2.1 AA on primary flows and deliver a fast evaluator experience with responsive layouts, optimized bundles, caching, and measured performance budgets.",
+    "description": "Meet WCAG 2.1 AA on primary flows and deliver a fast, polished experience that nontechnical event-production professionals can use without code or CLI knowledge.",
     "priority": "P1",
     "category": "quality",
     "build_pass": false,
@@ -289,7 +272,8 @@
       "axe has no critical violations",
       "Primary flows are keyboard operable",
       "Labels and errors are announced",
-      "Core pages meet defined Web Vitals and API latency budgets"
+      "Core pages meet defined Web Vitals and API latency budgets",
+      "Organizer workflows use plain language and task-oriented navigation"
     ],
     "pages": ["/cfp/[eventSlug]", "/portal", "/admin", "/embed/[eventSlug]/agenda"]
   },
@@ -306,7 +290,6 @@
       "calendar-delivery",
       "public-embeds",
       "public-api-webhooks",
-      "accelevents-publish",
       "accessibility-performance"
     ],
     "steps": [
@@ -314,6 +297,7 @@
       "Ever walkthrough passes",
       "codex-cua visual and interaction checks pass",
       "Deployed smoke test passes",
+      "Representative nontechnical event operators can complete CFP, review, speaker-task, and agenda workflows without technical assistance",
       "Forge remains private until every gate passes"
     ],
     "pages": []

@@ -6,6 +6,7 @@
 # Dependencies and builds
 node_modules/
 .next/
+.open-next/
 dist/
 build/
 coverage/

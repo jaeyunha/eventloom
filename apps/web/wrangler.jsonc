@@ -1,0 +1,94 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "open-sessionboard-web-local",
+  "main": ".open-next/worker.js",
+  "account_id": "7bcb73282d45e4294cc70dd3e2671bfb",
+  "compatibility_date": "2026-08-08",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "workers_dev": true,
+  "minify": true,
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "APP_ENV": "local",
+    "NEXT_PUBLIC_APP_URL": "http://localhost:3015",
+    "NEXT_PUBLIC_API_URL": "http://localhost:8787"
+  },
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "services": [
+    {
+      "binding": "WORKER_SELF_REFERENCE",
+      "service": "open-sessionboard-web-local"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "NEXT_INC_CACHE_R2_BUCKET",
+      "bucket_name": "open-sessionboard-web-cache-local"
+    }
+  ],
+  "env": {
+    "staging": {
+      "name": "open-sessionboard-web-staging",
+      "workers_dev": true,
+      "observability": {
+        "enabled": true
+      },
+      "vars": {
+        "APP_ENV": "staging",
+        // These are intentionally empty; deploy-web.mjs injects verified origins.
+        "NEXT_PUBLIC_APP_URL": "",
+        "NEXT_PUBLIC_API_URL": ""
+      },
+      "assets": {
+        "directory": ".open-next/assets",
+        "binding": "ASSETS"
+      },
+      "services": [
+        {
+          "binding": "WORKER_SELF_REFERENCE",
+          "service": "open-sessionboard-web-staging"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "NEXT_INC_CACHE_R2_BUCKET",
+          "bucket_name": "open-sessionboard-web-cache-staging"
+        }
+      ]
+    },
+    "production": {
+      "name": "open-sessionboard-web-production",
+      "workers_dev": true,
+      "observability": {
+        "enabled": true
+      },
+      "vars": {
+        "APP_ENV": "production",
+        // These are intentionally empty; deploy-web.mjs injects verified origins.
+        "NEXT_PUBLIC_APP_URL": "",
+        "NEXT_PUBLIC_API_URL": ""
+      },
+      "assets": {
+        "directory": ".open-next/assets",
+        "binding": "ASSETS"
+      },
+      "services": [
+        {
+          "binding": "WORKER_SELF_REFERENCE",
+          "service": "open-sessionboard-web-production"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "NEXT_INC_CACHE_R2_BUCKET",
+          "bucket_name": "open-sessionboard-web-cache-production"
+        }
+      ]
+    }
+  }
+}

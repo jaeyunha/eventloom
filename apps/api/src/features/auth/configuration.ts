@@ -1,4 +1,4 @@
-export type OAuthProviderName = "google" | "microsoft";
+export type OAuthProviderName = "google";
 
 export interface OAuthProviderCredentials {
   clientId: string;
@@ -15,13 +15,20 @@ export interface AuthProviderConfigurationInput {
   baseUrl: string;
   trustedOrigins: readonly string[];
   google?: OAuthProviderEnvironment;
+  /**
+   * Microsoft OAuth is intentionally not supported. The field remains accepted
+   * so deployment configuration can be ignored safely without activating it.
+   */
   microsoft?: OAuthProviderEnvironment;
 }
+
+export const BETTER_AUTH_GOOGLE_CALLBACK_PATH = "/api/auth/callback/google";
 
 export interface BetterAuthRuntimeConfiguration {
   secret: string;
   baseUrl: string;
   trustedOrigins: readonly string[];
+  googleCallbackUrl: string;
   emailVerification: {
     required: true;
   };
@@ -62,8 +69,7 @@ function validatedUrl(value: string, name: string): string {
   return parsed.origin;
 }
 
-function optionalProvider(
-  name: OAuthProviderName,
+function optionalGoogle(
   environment: OAuthProviderEnvironment | undefined,
 ): OAuthProviderCredentials | undefined {
   const clientId = environment?.clientId?.trim();
@@ -74,32 +80,40 @@ function optionalProvider(
   }
   if (!clientId || !clientSecret) {
     throw new AuthConfigurationError(
-      `${name} OAuth requires both a client ID and a client secret when enabled.`,
+      "google OAuth requires both a client ID and a client secret when enabled.",
     );
   }
   return { clientId, clientSecret };
 }
 
+function trustedOrigins(
+  apiOrigin: string,
+  configuredOrigins: readonly string[],
+): readonly string[] {
+  const origins = [
+    ...configuredOrigins.map((origin) => validatedUrl(origin, "Better Auth trusted origin")),
+    apiOrigin,
+  ];
+  return [...new Set(origins)];
+}
+
 export function createBetterAuthRuntimeConfiguration(
   input: AuthProviderConfigurationInput,
 ): BetterAuthRuntimeConfiguration {
+  const secret = requiredNonEmpty(input.secret, "Better Auth secret");
+  const baseUrl = validatedUrl(input.baseUrl, "Better Auth base URL");
   const oauthProviders: BetterAuthRuntimeConfiguration["oauthProviders"] = {};
-  const google = optionalProvider("google", input.google);
-  const microsoft = optionalProvider("microsoft", input.microsoft);
+  const google = optionalGoogle(input.google);
 
   if (google) {
     oauthProviders.google = google;
   }
-  if (microsoft) {
-    oauthProviders.microsoft = microsoft;
-  }
 
   return {
-    secret: requiredNonEmpty(input.secret, "Better Auth secret"),
-    baseUrl: validatedUrl(input.baseUrl, "Better Auth base URL"),
-    trustedOrigins: input.trustedOrigins.map((origin) =>
-      validatedUrl(origin, "Better Auth trusted origin"),
-    ),
+    secret,
+    baseUrl,
+    trustedOrigins: trustedOrigins(baseUrl, input.trustedOrigins),
+    googleCallbackUrl: `${baseUrl}${BETTER_AUTH_GOOGLE_CALLBACK_PATH}`,
     emailVerification: { required: true },
     magicLink: { enabled: true, expiresInSeconds: 15 * 60 },
     oauthProviders,

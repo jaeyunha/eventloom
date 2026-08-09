@@ -17,7 +17,7 @@
 - Lateral Panel Failures: 0
 - Refined Rounds: 0, 2, 3, 4, 6, 10, 17, 25, 27
 - Closure Overrides: 1, resolved in Round 24
-- Restated Goal: Deliver an evidence-driven, production-grade, public-at-submission open-source program-side Sessionboard alternative—not its CRM/marketing suite or a pixel-for-pixel replica—that covers configurable submissions, secure speaker operations, human-authoritative review/communications, conflict-safe versioned scheduling, and Cloudflare/Airtable/Forge/OpenSend/API/Accelevents/public-embed distribution; execute it exclusively through GJC-native workflows, remove all legacy orchestration and inherited Git history, start from one clean private-Forge baseline commit, verify real interactions with Ever and the `codex-cua` skill, rewrite `README.md` for the resulting project, and make the repository public only when the mandatory end-to-end release gate passes for submission.
+- Restated Goal: Deliver an evidence-driven, production-grade, public-at-submission open-source program-side Sessionboard alternative—not its CRM/marketing suite or a pixel-for-pixel replica—that covers configurable submissions, secure speaker operations, human-authoritative review/communications, conflict-safe versioned scheduling, and Cloudflare/Airtable/Forge/OpenSend/API/public-embed distribution; execute it exclusively through GJC-native workflows, remove all legacy orchestration and inherited Git history, start from one clean private-Forge baseline commit, verify real interactions with Ever and the `codex-cua` skill, rewrite `README.md` for the resulting project, and make the repository public only when the mandatory end-to-end release gate passes for submission.
 
 ## Clarity Breakdown
 | Dimension | Score | Weight | Weighted |
@@ -45,9 +45,9 @@ Every Round 0 locked intent item is preserved.
 - surface:public-embeds — public speaker gallery and itinerary embeds.
 
 ### Integrations
-- integration:accelevents — controlled one-way outbound publication to Accelevents.
-- integration:calendar — Gmail, Outlook, Apple Calendar, and generic iCal delivery.
+- integration:calendar — provider-neutral RFC 5545 REQUEST/UPDATE/CANCEL delivery through OpenSend for Gmail, Outlook, Apple Calendar, and generic iCal clients, including room and video details when present.
 - integration:gjc — GJC owns onboarding and PRD creation.
+Microsoft OAuth and Accelevents are intentionally not part of this build. No Microsoft OAuth or Accelevents credentials, setup, runtime adapter, dependency, or release gate is required.
 
 ### Constraints
 - constraint:pdf-authority — the PDF and its images are primary evidence.
@@ -63,7 +63,7 @@ Every Round 0 locked intent item is preserved.
 | Speaker operations | active | Speaker profiles, files, tasks, forms, status, and organizer visibility. | Covered by per-participant authorization, private assets, comprehensive task lifecycle, portal views, and real-time dashboard. |
 | Review and communications | active | Multi-round review, human-approved AI assistance, templates, reminders, and calendar lifecycle. | Covered by rubrics, assignments, blind review, abstention, human confirmation, OpenSend, and RFC 5545 updates/cancellations. |
 | Program scheduling | active | Conflict-aware draft agenda, publication, views, timezone handling, and rollback. | Covered by conflict matrix, five views, versioned private drafts, atomic publication, outbox delivery, and IANA timezone invariants. |
-| Distribution and integrations | active | Public embeds/API, Accelevents, Cloudflare/Airtable/OpenSend, Forge, and performance. | Covered by controlled outbound sync, public projections, scoped API, infrastructure ownership, environment isolation, and release budgets. |
+| Distribution and integrations | active | Public embeds/API, Cloudflare/Airtable/OpenSend, Forge, and performance. | Covered by public projections, scoped API, infrastructure ownership, environment isolation, and release budgets. |
 
 ## Established Facts
 - Round 0: `kill-my-saas-brief.pdf` is the primary product-scope source; the host transcript and focused public research supplement it.
@@ -78,18 +78,18 @@ Every Round 0 locked intent item is preserved.
 - Round 6: Every competition bonus is mandatory: Cloudflare, Airtable, Forge, performance, and public API.
 - Round 7: Airtable is authoritative for business/program records; D1 and Durable Objects own identity, tokens, idempotency, locks, job state, and delivery audit state.
 - Round 8: AI may prefill rubric scores and rankings, but only a human-confirmed or edited score counts.
-- Round 8: Magic-link/verified-email access is required; Google and Microsoft login OAuth are optional conveniences and are separate from calendar delivery.
+- Round 8 (historical auth discussion; superseded for this build): Magic-link/verified-email access is required; Google and Microsoft login OAuth were discussed as optional conveniences, but the current auth contract requires Google OAuth plus magic links/verified email and intentionally excludes Microsoft OAuth.
 - Round 9: Room and participant overlap are hard scheduling blockers. Track, capacity, travel-time, and custom-rule conflicts are warnings with audited overrides.
 - Round 10: Preserve the observed account-first CFP wizard: Welcome → Account → Submission → Participant → Review, followed by confirmation and portal access.
 - Round 11: Use OpenSend at `https://opensend.namuh.co` with sending-scoped credentials and `auth@`, `speakers@`, and `calendar@foreverbrowsing.com` sender identities.
 - Round 12: Cloudflare production/staging owner is account `7bcb73282d45e4294cc70dd3e2671bfb`; the current token still needs D1 Edit.
 - Round 12: Forge repository is `https://forge.smol.ai/jaeyunha/open-sessionboard` with Git URL `https://forge.smol.ai/jaeyunha/open-sessionboard.git`, public visibility, and AGPL-3.0-or-later.
 - Round 13: Performance budgets are release gates.
-- Round 14: Accelevents is controlled one-way outbound with preview, explicit publish, idempotent upserts, visible failures, and retries.
+- Round 14 (historical integration decision; superseded for this build): Accelevents was discussed as controlled one-way outbound with preview, explicit publish, idempotent upserts, visible failures, and retries; the user later explicitly disabled it after confirming it is not required by the brief.
 - Round 15: CFP rules support nested AND/OR logic, field/section actions, rich routing inputs, preview, and cycle detection.
 - Round 16: Speaker tasks support configurable types, owners, due dates, dependencies, reminders, complete workflow states, and audit history.
 - Round 17: Focused public research is mandatory whenever primary evidence is vague; citations are required.
-- Round 18: OpenSend delivers provider-neutral RFC 5545 REQUEST/UPDATE/CANCEL with stable UID, increasing SEQUENCE, and TZID.
+- Round 18: OpenSend delivers provider-neutral RFC 5545 REQUEST/UPDATE/CANCEL with stable UID, increasing SEQUENCE, IANA TZID, and room/video details when present.
 - Round 19: Agenda uses a private versioned draft, preview/revalidation, atomic immutable publication, outbox delivery, and rollback.
 - Round 20: Public widgets support accessible iframe/script modes, JSON/iCal feeds, themes, ≤60-second invalidation, CSP/sandboxing, and no private fields.
 - Round 21: Events use canonical IANA timezones, stored instants, event-time defaults, optional viewer-local display, and DST validation.
@@ -97,6 +97,7 @@ Every Round 0 locked intent item is preserved.
 - Round 23: The full seeded end-to-end scenario is the mandatory release gate.
 - Round 24: Local, staging, and production use isolated data, stateful services, credentials, and delivery behavior; staging uses synthetic data only.
 
+- Host clarification (`discord-messages.md:798-802`): target users are nontechnical event-production professionals. Release validation must prove representative organizer tasks are understandable without code or CLI knowledge; this usability requirement supplements the technical release gates.
 ## Trigger Metadata
 - Round 4 — A direct contradiction, resolved: YouTube was removed from the evidence set and the earlier evidence policy was superseded.
 - Round 6 — D scope expansion: every competition bonus became mandatory, temporarily increasing ambiguity from 34.75% to 44.5%.
@@ -106,7 +107,7 @@ Every Round 0 locked intent item is preserved.
 ## Lateral Review Panel
 - Round 1, initial→progress: researcher, contrarian, and simplifier reviewed stack choices. Findings established that the repository’s Next.js defaults were not product-derived and that real speaker identity, storage, communications, and integration boundaries mattered more than hosting shorthand.
 - Round 5, pre-auto-answer: the panel recommended per-participant grants, verified claims, private assets, safe public projections, and acceptance-gated tasks. Later direct screenshots superseded only the public-before-account ordering.
-- Round 13, progress→refined: the panel identified the calendar lifecycle and Accelevents direction/trigger as the remaining integration gaps.
+- Round 13, progress→refined: the panel identified the calendar lifecycle and Accelevents direction/trigger as the remaining integration gaps; the Accelevents gap is historical and the integration is intentionally excluded from the current build.
 - Round 19, pre-auto-answer: all reviewers selected versioned private drafts with preview/revalidation, atomic immutable publication, idempotent outbox effects, and rollback.
 - Round 23, refined→ready: researcher and simplifier returned READY. The contrarian’s material new environment-isolation concern produced the Round 24 closure override; all other claims repeated already-resolved gaps.
 
@@ -120,8 +121,8 @@ Deliver a production-grade, public, open-source alternative for the Sessionboard
 - Current Cloudflare token must gain D1 Edit before implementation.
 - Airtable is the sole writable authority for business/program records; D1 is not a second business database.
 - Use R2 private objects for uploads, short-lived authorized access, type/size checks, metadata stripping, and malware scanning.
-- Use Better Auth with D1/Drizzle for account/session state; verified email and magic links are required. Google/Microsoft login OAuth are optional.
-- Use OpenSend sending-scoped keys. Calendar delivery does not require Google/Microsoft OAuth.
+- Use Better Auth with D1/Drizzle for account/session state; verified email and magic links plus Google OAuth are required. Microsoft OAuth is intentionally not part of this build.
+- Use OpenSend sending-scoped keys. Calendar delivery is provider-neutral RFC 5545 REQUEST/UPDATE/CANCEL through OpenSend and does not require calendar-provider OAuth.
 - All environments are isolated; staging uses synthetic data and suppressed/sandboxed email recipients.
 - UI layout, styling, state presentation, and interaction patterns follow PDF and user-supplied Sessionboard screenshots while improving performance and accessibility.
 - WCAG 2.1 AA applies to every touched page.
@@ -135,10 +136,10 @@ Deliver a production-grade, public, open-source alternative for the Sessionboard
 - Multilingual support; English only.
 - Pixel-for-pixel reproduction.
 - Sponsors, exhibitors, transcriptions, media-AI, SbQL, and unrelated AI insights.
-- Google/Microsoft OAuth as a launch requirement.
-- Direct Google Calendar or Microsoft Graph writes.
+- Microsoft OAuth; it is intentionally not part of this build.
+- Direct provider calendar writes or calendar-provider OAuth; OpenSend's provider-neutral RFC 5545 lifecycle remains required.
 - Multiple alternative agenda scenarios.
-- Two-way Accelevents synchronization.
+- Accelevents publication or synchronization; it is intentionally not part of this build.
 - Shared staging/production data or secrets.
 
 ## Acceptance Criteria
@@ -170,7 +171,7 @@ Deliver a production-grade, public, open-source alternative for the Sessionboard
 - [ ] AI may prefill scores/rankings with cited rubric evidence, but no score counts until a human confirms or edits it.
 - [ ] OpenSend uses `auth@foreverbrowsing.com`, `speakers@foreverbrowsing.com`, and `calendar@foreverbrowsing.com` with verified SPF, DKIM, and DMARC.
 - [ ] Templates cover account verification, submission confirmation, reminders, review decisions, tasks, schedule publication, updates, and cancellation.
-- [ ] RFC 5545 REQUEST/UPDATE/CANCEL uses stable UID, increasing SEQUENCE, IANA TZID, and correct room/time; Gmail, Outlook, Apple Calendar, and generic iCal update one event without duplication.
+- [ ] OpenSend delivers provider-neutral RFC 5545 REQUEST/UPDATE/CANCEL messages with stable UID, increasing SEQUENCE, IANA TZID, correct room/time, and room/video details when present; Gmail, Outlook, Apple Calendar, and generic iCal clients update one event without duplication.
 - [ ] Delivery, bounce, complaint, and webhook state is observable and retryable.
 
 ### Program scheduling
@@ -180,7 +181,7 @@ Deliver a production-grade, public, open-source alternative for the Sessionboard
 - [ ] Each event has an IANA timezone; DST-invalid times are rejected; event-time display is default and viewer-local display is optional.
 - [ ] Organizers edit one private versioned draft, preview diffs and conflicts, and atomically publish an immutable revision.
 - [ ] Public surfaces never read draft state.
-- [ ] Publication creates an idempotent outbox for embeds, calendar updates, cache invalidation, and Accelevents.
+- [ ] Publication creates an idempotent outbox for embeds, calendar updates, and cache invalidation.
 - [ ] Rollback restores a prior revision and sends corrective downstream updates.
 
 ### Distribution, API, and integrations
@@ -189,9 +190,6 @@ Deliver a production-grade, public, open-source alternative for the Sessionboard
 - [ ] Public API has OpenAPI documentation, versioned routes, scoped API tokens, pagination, filtering, sorting, stable errors, rate limits, optimistic concurrency, bulk operations, and signed retryable webhooks.
 - [ ] API scope includes events, forms/fields, submissions, participants/speakers, reviews/plans/rubrics, tasks, agenda drafts/revisions/rules, rooms/tracks/tags/formats/statuses, files, embeds, publications, and integration status.
 - [ ] API excludes CRM, sponsors, exhibitors, transcriptions, and unrelated AI-insights surfaces.
-- [ ] Accelevents publication previews mapped accepted speakers and agenda entries, then idempotently upserts them outbound on explicit admin publish.
-- [ ] Accelevents mappings include external IDs, speaker identity/profile fields, session title/description/time/location/room/track/tags, assignments, errors, retry, and reconciliation.
-- [ ] Accelevents never overwrites Airtable-authoritative source records.
 
 ### Platform, performance, and delivery
 - [ ] Next.js frontend and Hono/Cloudflare Workers API are independent deployables with explicit same-parent-domain cookie/CORS policy.
@@ -210,8 +208,9 @@ Deliver a production-grade, public, open-source alternative for the Sessionboard
 - [ ] Error rate, webhook delivery, queues, outbox lag, Airtable retries, and external integration failures are monitored.
 
 ### Mandatory end-to-end release gate
-- [ ] A seeded event proves: conditional CFP creation and publication → account and draft → multi-participant submission → routing → multi-round human-authoritative AI-assisted review → acceptance → speaker tasks/files/forms → conflict-checked private agenda → immutable publication → OpenSend email and updateable calendar event → public widgets/API → controlled Accelevents publication.
+- [ ] A seeded event proves: conditional CFP creation and publication → account and draft → multi-participant submission → routing → multi-round human-authoritative AI-assisted review → acceptance → speaker tasks/files/forms → conflict-checked private agenda → immutable publication → OpenSend email and updateable calendar event → public widgets/API.
 - [ ] Ever and the `codex-cua` skill verify the complete flow against supplied screenshots with real browser/GUI interactions during implementation and QA.
+- [ ] Representative event-production professionals can complete representative organizer tasks and explain the outcomes without code or CLI knowledge; this usability evidence supplements, and does not replace, Ever, `codex-cua`, and automated technical gates.
 - [ ] Unit, API-contract, security, accessibility, performance, and E2E tests pass without weakened assertions.
 - [ ] Production URL, Forge repository, source license, demo accounts, and evaluator walkthrough are ready before the competition deadline.
 
@@ -235,7 +234,7 @@ Deliver a production-grade, public, open-source alternative for the Sessionboard
 
 ## Deferrals
 - No active topology component is deferred.
-- Google/Microsoft social login and direct provider calendar writes are deferred enhancements.
+- Microsoft OAuth and Accelevents are intentionally excluded from this build, not deferred. Direct provider calendar writes remain out of scope; OpenSend provider-neutral delivery is required.
 - Multiple parallel agenda scenarios are deferred.
 - Convergence pacing: no minimum-round floor, score-drop cap, or confidence dampening was used; bidirectional scoring was the pacing mechanism.
 
@@ -244,10 +243,10 @@ Deliver a production-grade, public, open-source alternative for the Sessionboard
 |------------|-----------|------------|
 | Existing template defaults were a valid stack | They were template defaults, not product-derived. | Separate Next.js frontend and Hono/Cloudflare API; Airtable authority with Cloudflare sidecars. |
 | Public CFP meant submit-before-account | Direct screenshots showed Account as step 2 before Submission. | Preserve the account-first five-step wizard while keeping per-participant least privilege. |
-| Calendar support required Google/Microsoft OAuth | Email and calendar identity are separate. | Provider-neutral RFC 5545 through OpenSend; provider OAuth is optional. |
+| Calendar support required Google/Microsoft OAuth (historical assumption) | Email and calendar identity are separate. | Provider-neutral RFC 5545 through OpenSend; no calendar-provider OAuth is required. |
 | Airtable alone could safely own all state | Auth, locks, idempotency, and outbox semantics require transactional operational state. | Airtable owns business records; D1/Durable Objects own named operational state only. |
 | Agenda edits could be live | Live edits would leak drafts and spam external systems. | Versioned private draft with atomic immutable publication and rollback. |
-| Accelevents “one-way” was self-explanatory | Direction, records, and trigger were absent. | Controlled outbound preview/publish of approved speakers and agenda entries. |
+| Accelevents “one-way” was self-explanatory (historical assumption) | Direction, records, and trigger were absent. | The user later explicitly disabled Accelevents after confirming it was not required by the brief; it is intentionally excluded from current scope. |
 | Optional competition bonuses could be deferred | User required all bonus points. | Cloudflare, Airtable, Forge, performance, and API are mandatory. |
 | Staging could reuse production resources | Private data and side effects would leak. | Fully isolated environments with synthetic staging data. |
 
@@ -267,6 +266,7 @@ Deliver a production-grade, public, open-source alternative for the Sessionboard
 - Frontend: Next.js, frontend-only, separately deployed on Cloudflare.
 - API: Hono on Cloudflare Workers.
 - Auth: Better Auth on Hono, D1 via Drizzle SQLite adapter, magic links and verified-email flows.
+- Auth: Better Auth on Hono, D1 via Drizzle SQLite adapter, magic links, verified-email flows, and Google OAuth.
 - Business authority: Airtable.
 - Operational state: D1 + Durable Objects.
 - Files: private R2.
@@ -283,7 +283,7 @@ Deliver a production-grade, public, open-source alternative for the Sessionboard
 - Sessionboard authentication: https://apidocs.sessionboard.com/authentication
 - Sessionboard integrations: https://apidocs.sessionboard.com/integrations
 - Sessionboard webhooks: https://apidocs.sessionboard.com/webhooks
-- Accelevents Sessionboard integration: https://support.accelevents.com/en/articles/9049978-sessionboard-integration
+- Historical research reference (not a current dependency): Accelevents Sessionboard integration: https://support.accelevents.com/en/articles/9049978-sessionboard-integration
 - Better Auth Hono integration: https://better-auth.com/docs/integrations/hono
 - Better Auth Drizzle adapter: https://better-auth.com/llms.txt/docs/adapters/drizzle.md
 
@@ -301,7 +301,6 @@ The final ontology contains 64 stable entities. Core groupings:
 | HardConflict, SoftWarning, ScheduleOverride, ZonedScheduleTime | core domain | overlaps, warning type, reason, zone | Conflicts and time invariants gate publication. |
 | SenderIdentity, EmailMessage, CalendarInvitation, CalendarDeliveryState | core domain | template, UID, SEQUENCE, method | OpenSend delivers workflow and calendar messages. |
 | PublicProjection, PublicWidget, EmbedFeed, ApiToken, WebhookSubscription | core domain | published fields, theme, scope, events | Public/API surfaces expose only approved revision data. |
-| AcceleventsPublication, IntegrationFieldMapping, SyncAttempt | core domain | snapshot, mapping, idempotency | Controlled outbound publication syncs approved data. |
 | AirtableBase, OperationalState, AuditDelivery, PublicationOutbox | system boundary | records, locks, attempts | Airtable owns business data; Cloudflare owns operational coordination. |
 | DeploymentEnvironment, EnvironmentBoundary, PerformanceBudget, ReleaseScenario | supporting | resources, isolation, thresholds | Deployment and release evidence are explicit gates. |
 
@@ -355,7 +354,7 @@ The final ontology contains 64 stable entities. Core groupings:
 11. **OpenSend identities:** Separate auth@, speakers@, and calendar@ senders. Ambiguity 32.7%.
 12. **Cloudflare account:** Use Ashleyha account `7bcb...`; Forge repository confirmed. Ambiguity 30.25%.
 13. **Performance:** Strict browser and API percentile budgets. Ambiguity 27%.
-14. **Accelevents:** Controlled outbound preview/publish with idempotent upserts. Ambiguity 27%.
+14. **Accelevents (historical, later explicitly disabled):** Controlled outbound preview/publish with idempotent upserts was discussed, but it is not part of the current build. Ambiguity 27%.
 15. **CFP rules:** Nested production-grade conditions/routing with preview and cycle validation. Ambiguity 18.25%.
 16. **Speaker tasks:** Comprehensive audited workflow with owners, deadlines, dependencies, and reminders. Ambiguity 17.5%.
 17. **Research policy:** Focused cited Sessionboard research fills vague evidence without expanding scope. Ambiguity 16.25%.

@@ -82,7 +82,7 @@ function setupAuthenticator() {
 }
 
 describe("Better Auth runtime configuration", () => {
-  it("always enables verified-email magic links and leaves OAuth optional", () => {
+  it("requires the exact web and API origins and exposes the Google callback contract", () => {
     const configuration = createBetterAuthRuntimeConfiguration({
       secret: "test-secret",
       baseUrl: "https://api.example.com/auth/callback",
@@ -91,33 +91,52 @@ describe("Better Auth runtime configuration", () => {
 
     expect(configuration).toMatchObject({
       baseUrl: "https://api.example.com",
-      trustedOrigins: ["https://app.example.com"],
+      trustedOrigins: ["https://app.example.com", "https://api.example.com"],
+      googleCallbackUrl: "https://api.example.com/api/auth/callback/google",
       emailVerification: { required: true },
       magicLink: { enabled: true, expiresInSeconds: 900 },
       oauthProviders: {},
     });
   });
 
-  it("configures complete optional OAuth providers and rejects partial credentials", () => {
+  it("enables Google only with a complete credential pair", () => {
     const configuration = createBetterAuthRuntimeConfiguration({
       secret: "test-secret",
       baseUrl: "https://api.example.com",
-      trustedOrigins: [],
-      google: { clientId: "google-id", clientSecret: "google-secret" },
+      trustedOrigins: ["https://app.example.com", "https://api.example.com/"],
+      google: { clientId: " google-id ", clientSecret: " google-secret " },
     });
 
-    expect(configuration.oauthProviders.google).toEqual({
-      clientId: "google-id",
-      clientSecret: "google-secret",
+    expect(configuration.oauthProviders).toEqual({
+      google: {
+        clientId: "google-id",
+        clientSecret: "google-secret",
+      },
     });
+    expect(configuration.trustedOrigins).toEqual([
+      "https://app.example.com",
+      "https://api.example.com",
+    ]);
+  });
+
+  it("fails closed for partial Google credentials and never enables Microsoft", () => {
     expect(() =>
       createBetterAuthRuntimeConfiguration({
         secret: "test-secret",
         baseUrl: "https://api.example.com",
         trustedOrigins: [],
-        microsoft: { clientId: "microsoft-id" },
+        google: { clientId: "google-id" },
       }),
     ).toThrow(AuthConfigurationError);
+
+    const configuration = createBetterAuthRuntimeConfiguration({
+      secret: "test-secret",
+      baseUrl: "https://api.example.com",
+      trustedOrigins: [],
+      microsoft: { clientId: "microsoft-id", clientSecret: "microsoft-secret" },
+    });
+    expect(configuration.oauthProviders).toEqual({});
+    expect("microsoft" in configuration.oauthProviders).toBe(false);
   });
 });
 

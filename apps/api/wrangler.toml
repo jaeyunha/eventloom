@@ -30,6 +30,12 @@ preview_bucket_name = "open-sessionboard-private-files-local"
 [[queues.producers]]
 binding = "OUTBOX_QUEUE"
 queue = "open-sessionboard-outbox-local"
+[[queues.consumers]]
+queue = "open-sessionboard-outbox-local"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 5
+dead_letter_queue = "open-sessionboard-outbox-local-dlq"
 
 [[migrations]]
 tag = "v1"
@@ -37,19 +43,19 @@ new_sqlite_classes = ["AgendaCoordinator"]
 
 [env.staging]
 name = "open-sessionboard-api-staging"
-workers_dev = false
+workers_dev = true
 
 [env.staging.observability]
 enabled = true
 
 [env.staging.vars]
 APP_ENV = "staging"
-WEB_ORIGIN = "https://staging.open-sessionboard.pages.dev"
+WEB_ORIGIN = "https://open-sessionboard-web-staging.ashleyha0317.workers.dev"
 
 [[env.staging.d1_databases]]
 binding = "DB"
 database_name = "open-sessionboard-staging"
-database_id = "00000000-0000-0000-0000-000000000002"
+database_id = "2e219e9b-05e4-45de-b49b-a7f823e28db8"
 migrations_dir = "migrations"
 
 [[env.staging.durable_objects.bindings]]
@@ -64,22 +70,28 @@ preview_bucket_name = "open-sessionboard-private-files-staging"
 [[env.staging.queues.producers]]
 binding = "OUTBOX_QUEUE"
 queue = "open-sessionboard-outbox-staging"
+[[env.staging.queues.consumers]]
+queue = "open-sessionboard-outbox-staging"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 5
+dead_letter_queue = "open-sessionboard-outbox-staging-dlq"
 
 [env.production]
 name = "open-sessionboard-api-production"
-workers_dev = false
+workers_dev = true
 
 [env.production.observability]
 enabled = true
 
 [env.production.vars]
 APP_ENV = "production"
-WEB_ORIGIN = "https://open-sessionboard.pages.dev"
+WEB_ORIGIN = "https://open-sessionboard-web-production.ashleyha0317.workers.dev"
 
 [[env.production.d1_databases]]
 binding = "DB"
 database_name = "open-sessionboard-production"
-database_id = "00000000-0000-0000-0000-000000000003"
+database_id = "d7b70fee-52cb-4548-ace9-41375016640f"
 migrations_dir = "migrations"
 
 [[env.production.durable_objects.bindings]]
@@ -94,3 +106,9 @@ preview_bucket_name = "open-sessionboard-private-files-production"
 [[env.production.queues.producers]]
 binding = "OUTBOX_QUEUE"
 queue = "open-sessionboard-outbox-production"
+[[env.production.queues.consumers]]
+queue = "open-sessionboard-outbox-production"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 5
+dead_letter_queue = "open-sessionboard-outbox-production-dlq"

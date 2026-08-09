@@ -8,8 +8,8 @@ This guide configures the separately deployed Next.js web application and Hono W
 - A Cloudflare account with Workers, D1, Durable Objects, R2, and Queues enabled
 - One Airtable base and restricted personal access token per environment
 - An OpenSend sending-scoped key and verified `foreverbrowsing.com` sender identities
-- Optional Google and Microsoft OAuth applications
-- Optional Accelevents sandbox/production credentials
+- A Google OAuth web application per environment
+- Microsoft OAuth and Accelevents are intentionally not part of this build; do not provision their applications, credentials, callbacks, or adapter configuration.
 - Forge access to `jaeyunha/open-sessionboard`
 
 Install dependencies and create the local environment file:
@@ -35,9 +35,8 @@ Keep `.env` local. Do not paste provider secrets into issues, browser code, scre
 | Web origin | `http://localhost:3015` | Dedicated staging host | Dedicated production host |
 | API keys/OAuth | Test credentials | Separate non-production credentials | Production credentials |
 | OpenSend | Captured or allowlisted recipients | Sandbox/suppressed delivery to allowlisted recipients | Verified production senders |
-| Accelevents | Fake adapter | Sandbox event and key | Explicitly approved production event and key |
 
-Never copy a D1 database, R2 bucket, Airtable base, API key, webhook secret, OAuth secret, OpenSend key, or Accelevents key between staging and production. Durable Object state is isolated by the environment-specific Worker deployment. Staging must not address production recipients or Accelevents events.
+Never copy a D1 database, R2 bucket, Airtable base, API key, webhook secret, OAuth secret, or OpenSend key between staging and production. Durable Object state is isolated by the environment-specific Worker deployment. Staging must not address production recipients.
 
 ## Local application
 
@@ -50,6 +49,8 @@ NEXT_PUBLIC_APP_URL=http://localhost:3015
 NEXT_PUBLIC_API_URL=http://localhost:8787
 API_URL=http://localhost:8787
 BETTER_AUTH_SECRET=<at-least-32-random-bytes>
+GOOGLE_CLIENT_ID=<local-google-client-id>
+GOOGLE_CLIENT_SECRET=<local-google-client-secret>
 AIRTABLE_ACCESS_TOKEN=<local-base-token>
 AIRTABLE_BASE_ID=<local-base-id>
 OPENSEND_API_URL=https://opensend.namuh.co
@@ -106,11 +107,9 @@ bunx wrangler secret put AIRTABLE_ACCESS_TOKEN --cwd apps/api --env staging
 bunx wrangler secret put AIRTABLE_BASE_ID --cwd apps/api --env staging
 bunx wrangler secret put OPENSEND_API_KEY --cwd apps/api --env staging
 bunx wrangler secret put GOOGLE_CLIENT_SECRET --cwd apps/api --env staging
-bunx wrangler secret put MICROSOFT_CLIENT_SECRET --cwd apps/api --env staging
-bunx wrangler secret put ACCELEVENTS_API_KEY --cwd apps/api --env staging
 ```
 
-Upload the corresponding non-secret provider IDs/URLs through the deployment platform's environment configuration. Repeat for production with production-specific values only. Optional provider secrets may be omitted when that adapter is disabled.
+Upload the corresponding non-secret provider IDs/URLs through the deployment platform's environment configuration. Repeat for production with production-specific values only. Google OAuth client IDs and secrets are required per environment; do not add disabled-provider credentials or settings.
 
 ### Validate and deploy the API
 
@@ -141,13 +140,22 @@ Production uses `production open-sessionboard:production`. This script deploys t
 
 ## Airtable
 
-Create a dedicated base for each environment. Restrict each personal access token to its one base and to the minimum record read/write plus schema-read capabilities required by the adapter.
+Create a dedicated base for each environment. Restrict each personal access token to its one base. The runtime adapter needs record read/write access; the schema provisioner additionally needs the `schema.bases:write` scope (which includes schema reads). A token without that scope fails clearly before any schema mutation.
 
-The base is the sole writable authority for organizations, events, forms and fields, submissions, participants and profiles, evaluation plans/reviews/decisions, tasks, sessions, rooms, tracks, and agenda versions. D1 must not duplicate these records.
+The base is the sole writable authority for organizations, events, forms and fields, submissions, participants and profiles, evaluation plans/reviews/decisions, tasks, sessions, rooms, tracks, agenda versions/entries, publication outbox, and audit records. D1 must not duplicate these records.
+
+Provision the additive schema from the repository root after loading the target environment's variables:
+
+```bash
+node scripts/airtable/provision.mjs --dry-run
+node scripts/airtable/provision.mjs --apply
+```
+
+Dry-run is the safe default and performs only a metadata read. Apply is explicit, creates or reconciles the approved tables and fields, and is safe to repeat. It never deletes or renames tables/fields and leaves unmanaged tables (including an initial `Table 1`) untouched. Run against local, then staging, then production; inspect the dry-run output at each boundary and never provision production first.
 
 For every table:
 
-- Include a dedicated application-owned ID field used by the mapper.
+- Include a dedicated application-owned ID field used by the mapper. Application IDs must be unique; Airtable record IDs remain internal.
 - Keep Airtable record IDs internal; they must never appear in public URLs or API records.
 - Preserve version fields used for optimistic concurrency.
 - Use linked records only where the typed adapter expects them.
@@ -166,10 +174,11 @@ Verify SPF, DKIM, and DMARC for these identities before enabling production deli
 - `calendar@foreverbrowsing.com` — RFC 5545 invitation mail and organizer identity
 
 Staging delivery must be suppressed, sandboxed, or recipient-allowlisted. Confirm bounce, complaint, and provider webhook visibility without sending to real program participants. Messages and calendar attachments carry idempotency keys so retries do not intentionally create duplicate sends.
+Calendar delivery remains provider-neutral: send RFC 5545 REQUEST, UPDATE, and CANCEL messages through OpenSend with stable UID, increasing SEQUENCE, and explicit IANA TZID. Include room and video details when present; no calendar-provider OAuth is required.
 
-## Google OAuth (optional)
+## Google OAuth (required)
 
-Magic links and verified email remain required; Google is only a login convenience. Create a separate OAuth web application for each enabled environment.
+Magic links and verified email remain required; Google OAuth is the supported social login and is required for each enabled environment. Create a separate OAuth web application for each environment.
 
 Use the web origin as an authorized browser origin and the API origin callback:
 
@@ -177,31 +186,7 @@ Use the web origin as an authorized browser origin and the API origin callback:
 https://<api-host>/api/auth/callback/google
 ```
 
-Set both `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` or neither. Partial credentials fail closed. Restrict consent scopes to identity (`openid`, email, and profile); calendar scopes are not required.
-
-## Microsoft OAuth (optional)
-
-Create a separate Microsoft Entra web application per environment and register:
-
-```text
-https://<api-host>/api/auth/callback/microsoft
-```
-
-Set both `MICROSOFT_CLIENT_ID` and `MICROSOFT_CLIENT_SECRET` or neither. Choose the narrowest supported account tenancy for the product and request identity scopes only. Open Sessionboard does not write through Microsoft Graph Calendar.
-
-## Accelevents (optional outbound publication)
-
-Create a distinct sandbox key/event for staging and a production key/event for production. Restrict the key to the event, speaker, and agenda/session capabilities required for outbound upserts when the provider supports such scoping.
-
-Configure `ACCELEVENTS_API_BASE_URL` and `ACCELEVENTS_API_KEY` only in the API environment. Publication is intentionally one way:
-
-1. Open Sessionboard reads an immutable published agenda revision and accepted speaker projections.
-2. The integration creates a mapped preview and diff.
-3. An organizer explicitly confirms the exact snapshot and confirmation token.
-4. The service performs idempotent speaker and session upserts.
-5. Operators inspect per-record failures and reconciliation state before retrying.
-
-Never import Accelevents changes into Airtable and never allow an automatic agenda publish to bypass preview/confirmation. Rotating a key must not alter saved source records or idempotency receipts.
+Set both `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in every enabled environment; partial credentials fail closed. Restrict consent scopes to identity (`openid`, email, and profile); calendar scopes are not required.
 
 ## Post-configuration checks
 
@@ -213,7 +198,7 @@ Before considering an environment usable:
 - A test API key cannot cross its organization or exceed its scopes.
 - A private upload cannot be fetched without an authorized, expiring grant.
 - Airtable program records never appear in D1.
-- Staging email and Accelevents actions cannot reach production recipients/events.
+- Staging email actions cannot reach production recipients.
 - Logs, error responses, admin status pages, and screenshots expose no secret values.
 
 Calendar lifecycle behavior is specified in [Calendar semantics](calendar-semantics.md). Release approval is specified in [Release runbook](release-runbook.md).

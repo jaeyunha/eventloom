@@ -1,6 +1,6 @@
 # Open Sessionboard
 
-Open Sessionboard is an open-source, program-side alternative to Sessionboard for conference teams. It focuses on the workflow from call-for-proposals through speaker operations, review, scheduling, publication, and integrations.
+Open Sessionboard is an open-source, program-side alternative to Sessionboard for conference teams. Its target users are nontechnical event-production professionals who need software that makes their work easier. It focuses on the workflow from call-for-proposals through speaker operations, review, scheduling, publication, and integrations.
 
 ## Scope
 
@@ -8,8 +8,8 @@ Open Sessionboard is an open-source, program-side alternative to Sessionboard fo
 - Speaker portal with submissions, profile, acceptance state, and post-acceptance tasks
 - Committee assignment, rubric scoring, comments, conflicts, and human-authoritative decisions
 - Conflict-safe, versioned agenda scheduling and public speaker/agenda embeds
-- Transactional email and RFC 5545 calendar invitations
-- Public API, signed webhooks, and controlled Accelevents publication
+- Transactional email and provider-neutral RFC 5545 REQUEST/UPDATE/CANCEL calendar invitations, including room/video details when present
+- Public API and signed webhooks
 - Cloudflare deployment with Airtable as the authoritative program data store
 
 CRM, marketing automation, payments, sponsorship/exhibitor management, transcription, and multilingual workflows are intentionally out of scope.
@@ -21,7 +21,7 @@ CRM, marketing automation, payments, sponsorship/exhibitor management, transcrip
 - **Business data:** Airtable
 - **Application state:** Cloudflare D1 and Durable Objects
 - **Files and jobs:** R2 and Cloudflare Queues
-- **Authentication:** Better Auth with magic links plus optional Google and Microsoft OAuth
+- **Authentication:** Better Auth with required magic links/verified email plus Google OAuth
 - **Email:** OpenSend using `foreverbrowsing.com` sender addresses
 - **Repository:** Forge, private during development and public for submission
 
@@ -29,7 +29,7 @@ See [`ARCHITECTURE.md`](ARCHITECTURE.md), [`prd.json`](prd.json), and [`spec/ope
 
 ## Documentation
 
-- [Environment and provider setup](docs/setup.md) — isolated Cloudflare, Airtable, OpenSend, OAuth, and Accelevents configuration
+- [Environment and provider setup](docs/setup.md) — isolated Cloudflare, Airtable, OpenSend, and Google OAuth configuration
 - [Public API and webhooks](docs/api.md) — authentication, scopes, pagination, idempotency, concurrency, errors, and signatures
 - [OpenAPI 3.1 contract](openapi/openapi.yaml) — checked-in stable API contract; deployed Workers expose their enabled resource contract at `/api/v1/openapi.json`
 - [Calendar semantics](docs/calendar-semantics.md) — IANA timezone, DST, RFC 5545, UID, sequence, update, cancellation, and retry rules
@@ -43,7 +43,7 @@ The visual and product evidence used to derive the implementation is preserved u
 
 ## Local development
 
-Prerequisites: Bun, a Cloudflare account, an Airtable base, and an OpenSend API key.
+Prerequisites: Bun, a Cloudflare account, an Airtable base, an OpenSend API key, and a Google OAuth application.
 
 ```bash
 bun install
@@ -55,7 +55,7 @@ The Next.js web application runs on port `3015`; the standalone Hono Worker runs
 
 ## Environment isolation
 
-Local, staging, and production must use separate Airtable bases, D1 databases, R2 buckets, Queues, secrets, API keys, OAuth applications, and integration credentials. Verify those boundaries from provider inventories before release. Staging must contain synthetic data and use suppressed/sandboxed email recipients and an Accelevents sandbox event. See [the setup guide](docs/setup.md); do not share production data or credentials with another environment.
+Local, staging, and production must use separate Airtable bases, D1 databases, R2 buckets, Queues, secrets, API keys, Google OAuth applications, and OpenSend credentials. Verify those boundaries from provider inventories before release. Staging must contain synthetic data and use suppressed or sandboxed email recipients. See [the setup guide](docs/setup.md); do not share production data or credentials with another environment.
 
 ## Quality gates
 
@@ -70,7 +70,7 @@ Interaction acceptance is verified with Ever and the `codex-cua` skill against t
 
 Release candidates also run `make build`; `make all` covers checks and tests but does not build deployables.
 
-Release QA runs the complete authenticated, seeded workflow rather than only smoke navigation. It includes CFP/draft/submission, speaker ownership, multi-round human-authoritative review, agenda conflict/publish/rollback, accessible embeds, API/webhooks, calendar updates, and controlled Accelevents preview/confirm.
+Release QA runs the complete authenticated, seeded workflow rather than only smoke navigation. It includes CFP/draft/submission, speaker ownership, multi-round human-authoritative review, agenda conflict/publish/rollback, accessible embeds, API/webhooks, calendar updates, and representative organizer-task usability validation with nontechnical event-production professionals, proving tasks are understandable without code or CLI knowledge.
 
 ## API contract
 
@@ -80,7 +80,7 @@ Read [the API guide](docs/api.md) and use the checked-in [OpenAPI 3.1 contract](
 
 ## Deployment credentials
 
-The implementation expects scoped credentials for Cloudflare, Airtable, OpenSend, Google OAuth, Microsoft OAuth, and Accelevents. Calendar delivery uses standards-based ICS messages and does not require Google or Microsoft Calendar OAuth.
+The implementation expects scoped credentials for Cloudflare, Airtable, OpenSend, and Google OAuth. Microsoft OAuth and Accelevents are intentionally not part of this build and must not be configured. Calendar delivery uses provider-neutral RFC 5545 REQUEST/UPDATE/CANCEL messages through OpenSend, including room/video details when present; it does not require calendar-provider OAuth.
 
 Run the read-only release preflight against separate ignored local, staging, and production environment files before deployment. It checks required provider configuration, rejects shared credentials/resources, inspects the Cloudflare deployment token for the account-restricted Workers Scripts, D1, R2, and Queues Edit permissions, reads the declared Cloudflare resources, and confirms Forge is still private. It never deploys, migrates, or changes repository visibility.
 
