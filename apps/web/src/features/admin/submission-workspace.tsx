@@ -467,8 +467,8 @@ async function submissionRequest<T>(
 
 function localDemoEnabled(): boolean {
   return (
-    process.env.APP_ENV === "local" ||
-    (process.env.APP_ENV !== "production" && process.env.NODE_ENV === "test")
+    process.env.NEXT_PUBLIC_APP_ENV === "local" ||
+    (process.env.NEXT_PUBLIC_APP_ENV !== "production" && process.env.NODE_ENV === "test")
   );
 }
 
