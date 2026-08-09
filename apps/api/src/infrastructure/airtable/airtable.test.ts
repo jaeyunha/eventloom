@@ -259,4 +259,24 @@ describe("FetchAirtableTransport", () => {
       body: { records: [] },
     });
   });
+  it("invokes the runtime fetch through globalThis in strict worker runtimes", async () => {
+    const originalFetch = globalThis.fetch;
+    let observedThis: unknown;
+    globalThis.fetch = async function runtimeFetch(this: unknown) {
+      observedThis = this;
+      return new Response(JSON.stringify({ records: [] }), { status: 200 });
+    };
+
+    try {
+      const transport = new FetchAirtableTransport({ token: "secret-token" });
+      await transport.request({
+        method: "GET",
+        baseId: "app_test",
+        table: "Events",
+      });
+      expect(observedThis).toBe(globalThis);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });

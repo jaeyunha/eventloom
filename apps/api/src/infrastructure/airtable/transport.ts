@@ -26,7 +26,7 @@ export class FetchAirtableTransport implements AirtableTransport {
 
     this.#token = token;
     this.#apiOrigin = (options.apiOrigin ?? DEFAULT_API_ORIGIN).replace(/\/$/, "");
-    this.#fetch = options.fetch ?? globalThis.fetch;
+    this.#fetch = options.fetch ?? ((input, init) => globalThis.fetch(input, init));
   }
 
   async request<TBody = unknown>(request: AirtableRequest): Promise<AirtableResponse<TBody>> {
