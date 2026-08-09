@@ -96,4 +96,20 @@ describe("OpenSendClient production configuration", () => {
       /provider-internal-secret|provider-key-that-must-not-leak/,
     );
   });
+  it("invokes the runtime fetch through globalThis in strict worker runtimes", async () => {
+    const originalFetch = globalThis.fetch;
+    let observedThis: unknown;
+    globalThis.fetch = async function runtimeFetch(this: unknown) {
+      observedThis = this;
+      return Response.json({ id: "provider-message-runtime" }, { status: 201 });
+    };
+
+    try {
+      const client = new OpenSendClient({ sendingApiKey: "test-sending-key" });
+      await client.send(message);
+      expect(observedThis).toBe(globalThis);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });

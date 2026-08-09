@@ -47,7 +47,7 @@ export class OpenSendClient implements OpenSendSender {
 
     this.#apiKey = apiKey;
     this.#baseUrl = normalizeBaseUrl(options.baseUrl ?? DEFAULT_BASE_URL);
-    this.#fetch = options.fetch ?? globalThis.fetch;
+    this.#fetch = options.fetch ?? ((input, init) => globalThis.fetch(input, init));
     this.#now = options.now ?? (() => new Date());
     this.#senderAddresses = resolveSenderAddresses(options.senderAddresses);
   }
