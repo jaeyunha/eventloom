@@ -1,4 +1,5 @@
 import type {
+  PortalAsset,
   PortalContext,
   PortalProfile,
   PortalSubmission,
@@ -175,13 +176,148 @@ export function findProfileForTask(task: PortalTask, profiles: readonly PortalPr
 export function findSubmissionForTask(task: PortalTask, submissions: readonly PortalSubmission[]) {
   return submissions.find((submission) => submission.id === task.submissionId);
 }
+export function scopePortalContextToPrimaryParticipant(
+  context: PortalContext,
+  submissionIds: readonly string[] = [],
+): PortalContext {
+  const primaryParticipantId = context.primaryParticipantId?.trim();
+  const hasValidPrimaryParticipant =
+    context.eventId.length > 0 &&
+    primaryParticipantId !== undefined &&
+    primaryParticipantId.length > 0 &&
+    context.participantIds.includes(primaryParticipantId);
+  const {
+    participantIds: _participantIds,
+    submissionIds: _submissionIds,
+    primaryParticipantId: _primaryParticipantId,
+    ...contextWithoutParticipants
+  } = context;
+  return hasValidPrimaryParticipant
+    ? {
+        ...contextWithoutParticipants,
+        participantIds: [primaryParticipantId],
+        submissionIds: [...submissionIds],
+        primaryParticipantId,
+      }
+    : { ...contextWithoutParticipants, participantIds: [], submissionIds: [] };
+}
+
+export function scopePortalViewToPrimaryParticipant(
+  view: PortalView | null | undefined,
+  context: PortalContext | null | undefined,
+): PortalView {
+  const scopedContext =
+    context === null || context === undefined
+      ? undefined
+      : scopePortalContextToPrimaryParticipant(context);
+  const primaryParticipantId = scopedContext?.primaryParticipantId;
+  const validPrimaryParticipant = primaryParticipantId !== undefined;
+
+  const capabilities = view?.capabilities === undefined ? undefined : [...view.capabilities];
+  if (!validPrimaryParticipant || view === null || view === undefined || context === null || context === undefined) {
+    return {
+      submissions: [],
+      profiles: [],
+      tasks: [],
+      outstandingTaskCount: 0,
+      assets: [],
+      ...(capabilities === undefined ? {} : { capabilities }),
+      ...(scopedContext === undefined ? {} : { context: scopedContext }),
+    };
+  }
+
+  const eventId = context.eventId;
+  const submissions = view.submissions
+    .filter(
+      (submission) =>
+        submission.eventId === eventId &&
+        submission.participantIds.includes(primaryParticipantId),
+    )
+    .map((submission) => ({ ...submission, participantIds: [primaryParticipantId] }));
+  const submissionIds = new Set(submissions.map((submission) => submission.id));
+  const tasks = view.tasks.filter(
+    (task) =>
+      task.eventId === eventId &&
+      task.owner === "speaker" &&
+      task.participantId === primaryParticipantId &&
+      submissionIds.has(task.submissionId),
+  );
+  const taskIds = new Set(tasks.map((task) => task.id));
+  const assets = (view.assets ?? []).filter(
+    (asset) =>
+      asset.eventId === eventId &&
+      asset.participantId === primaryParticipantId &&
+      (asset.taskId === undefined || taskIds.has(asset.taskId)) &&
+      (asset.submissionId === undefined || submissionIds.has(asset.submissionId)),
+  );
+
+  return {
+    submissions,
+    profiles: view.profiles.filter(
+      (profile) => profile.eventId === eventId && profile.participantId === primaryParticipantId,
+    ),
+    tasks,
+    outstandingTaskCount: tasks.filter((task) => !isTaskFinished(task)).length,
+    assets,
+    ...(capabilities === undefined ? {} : { capabilities }),
+    context: scopePortalContextToPrimaryParticipant(context, [...submissionIds]),
+  };
+}
+
+export function portalProfileHeadshot(
+  profile: PortalProfile,
+  assets: readonly PortalAsset[],
+): PortalAsset | undefined {
+  const linkedAssetId = profile.headshotAssetId;
+  if (linkedAssetId === undefined || linkedAssetId === null) {
+    return undefined;
+  }
+  return assets.find(
+    (asset) =>
+      asset.id === linkedAssetId &&
+      asset.eventId === profile.eventId &&
+      asset.participantId === profile.participantId &&
+      asset.kind === "headshot",
+  );
+}
+
+export function portalTaskAsset(
+  task: PortalTask,
+  assets: readonly PortalAsset[],
+): PortalAsset | undefined {
+  return assets
+    .filter(
+      (asset) =>
+        asset.taskId === task.id &&
+        asset.eventId === task.eventId &&
+        asset.participantId === task.participantId,
+    )
+    .reduce<PortalAsset | undefined>((latest, candidate) => {
+      if (latest === undefined) {
+        return candidate;
+      }
+      const versionDifference = (candidate.version ?? 0) - (latest.version ?? 0);
+      if (versionDifference !== 0) {
+        return versionDifference > 0 ? candidate : latest;
+      }
+      if (candidate.createdAt !== latest.createdAt) {
+        return candidate.createdAt > latest.createdAt ? candidate : latest;
+      }
+      return candidate.id > latest.id ? candidate : latest;
+    }, undefined);
+}
+
 export function portalIdentityProfile(
   view: PortalView | null | undefined,
   context: PortalContext | null,
 ): PortalProfile | undefined {
-  return (
-    view?.profiles.find((candidate) => candidate.participantId === context?.primaryParticipantId) ??
-    view?.profiles[0]
+  const primaryParticipantId = context?.primaryParticipantId;
+  if (!primaryParticipantId) {
+    return undefined;
+  }
+  return view?.profiles.find(
+    (candidate) =>
+      candidate.participantId === primaryParticipantId && candidate.eventId === context.eventId,
   );
 }
 export function portalSubmissionEditTarget(

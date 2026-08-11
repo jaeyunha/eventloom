@@ -4,8 +4,11 @@ import { describe, expect, it, vi } from "vitest";
 import { createPortalApi, type PortalApi, validatePortalSocialUrl } from "./api";
 import { isPortalGenerationCurrent, PortalProvider } from "./portal-provider";
 import {
+  formatPortalFileSize,
   NoParticipantWorkspaceState,
   PageHeading,
+  portalAssetStateLabel,
+  portalNavigation,
   PortalFrame,
   Progress,
   SubmissionStatusBadge,
@@ -78,6 +81,7 @@ describe("speaker portal UI components", () => {
       expectedVersion: 1,
     });
     expect(validatePortalSocialUrl("https://x.com/priya", "twitter")).toBeNull();
+    expect(validatePortalSocialUrl("@priya", "twitter")).toBeNull();
     expect(validatePortalSocialUrl("https://www.linkedin.com/in/priya", "linkedin")).toBeNull();
     expect(validatePortalSocialUrl("javascript:alert(1)", "twitter")).toContain("HTTP or HTTPS");
     expect(validatePortalSocialUrl("https://example.com/priya", "linkedin")).toContain(
@@ -210,12 +214,35 @@ describe("speaker portal UI components", () => {
     expect(markup).toContain('aria-valuenow="60"');
     expect(markup).toContain('aria-label="Speaker readiness"');
   });
+
+  it("limits the visible lane to home, sessions, tasks, and profile", () => {
+    expect(portalNavigation.map(({ label }) => label)).toEqual([
+      "Home",
+      "Sessions",
+      "Tasks",
+      "Profile",
+    ]);
+    expect(portalNavigation.map(({ href }) => href)).toEqual([
+      "/portal",
+      "/portal/submissions",
+      "/portal/tasks",
+      "/portal/profile",
+    ]);
+  });
+
+  it("formats truthful private-asset metadata and states", () => {
+    expect(formatPortalFileSize(1_536)).toBe("1.5 KiB");
+    expect(formatPortalFileSize(-1)).toBe("Unknown size");
+    expect(portalAssetStateLabel("pending_upload")).toBe("Upload pending");
+    expect(portalAssetStateLabel("ready")).toBe("Ready");
+    expect(portalAssetStateLabel("rejected")).toBe("Rejected");
+  });
   it("renders the honest empty participant workspace state", () => {
     const markup = renderToStaticMarkup(createElement(NoParticipantWorkspaceState));
 
     expect(markup).toContain("<h1>No participant workspace</h1>");
-    expect(markup).toContain("A submitted proposal will appear here.");
-    expect(markup).toContain("Accepted proposals unlock your profile, tasks, and files.");
+    expect(markup).toContain("Your sessions, profile, and tasks will appear here");
+    expect(markup).not.toContain("files");
   });
 
   it("does not render event navigation before an authorized context exists", () => {

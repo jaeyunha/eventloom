@@ -46,20 +46,20 @@ function PortalSubmissionsContent() {
   return (
     <>
       <PageHeading
-        eyebrow="Your proposals"
-        title="Submissions"
-        description="Follow each proposal from submission through the final program decision."
+        eyebrow="Your sessions"
+        title="Sessions"
+        description="Follow each proposal as it becomes a session or reaches a final program decision."
       />
-      <section className={styles.panel} aria-labelledby="submissions-heading">
+      <section className={styles.panel} aria-labelledby="sessions-heading">
         <div className={styles.listToolbar}>
           <div>
-            <h2 id="submissions-heading">All submissions</h2>
+            <h2 id="sessions-heading">All sessions</h2>
             <p className={styles.toolbarDescription}>
               {view.submissions.length} {view.submissions.length === 1 ? "proposal" : "proposals"}
             </p>
           </div>
           <label className={styles.searchField}>
-            <span className={styles.srOnly}>Search submissions</span>
+            <span className={styles.srOnly}>Search sessions</span>
             <span aria-hidden="true">⌕</span>
             <input
               type="search"
@@ -72,12 +72,12 @@ function PortalSubmissionsContent() {
 
         {view.submissions.length === 0 ? (
           <EmptyState
-            title="No submissions yet"
-            description="When you submit a proposal, its status will appear here."
+            title="No sessions yet"
+            description="When you submit a proposal, its session status will appear here."
           />
         ) : submissions.length === 0 ? (
           <EmptyState
-            title="No matching submissions"
+            title="No matching sessions"
             description="Try a different title or clear your search."
             action={
               <button
@@ -102,7 +102,7 @@ function PortalSubmissionsContent() {
                     <SubmissionStatusBadge status={submission.status} />
                   </div>
                   <div>
-                    <p className={styles.submissionId}>Submission {submission.id}</p>
+                    <p className={styles.submissionId}>Session {submission.id}</p>
                     <h3>{submission.title}</h3>
                     <p>{presentation.description}</p>
                   </div>
@@ -110,9 +110,9 @@ function PortalSubmissionsContent() {
                     <span>Updated {formatPortalDate(submission.updatedAt) ?? "recently"}</span>
                     <Link
                       href={`/portal/submissions/${encodeURIComponent(submission.id)}${eventQuery}`}
-                      aria-label={`View status for ${submission.title}`}
+                      aria-label={`View session status for ${submission.title}`}
                     >
-                      View status <span aria-hidden="true">→</span>
+                      View session status <span aria-hidden="true">→</span>
                     </Link>
                   </footer>
                 </article>

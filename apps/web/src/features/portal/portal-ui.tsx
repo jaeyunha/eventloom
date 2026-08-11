@@ -1,31 +1,24 @@
 "use client";
 
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
 import { type ReactNode, useState } from "react";
 import {
-  portalIdentityProfile,
   submissionStatusPresentation,
   taskStatusPresentation,
 } from "./model";
 import styles from "./portal.module.css";
 import { portalContextLabel, usePortal } from "./portal-provider";
-import { PortalWorkspace, type PortalWorkspaceSection } from "./portal-workspace";
-import type { PortalSubmissionStatus, PortalTaskStatus } from "./types";
+import type { PortalAssetState, PortalSubmissionStatus, PortalTaskStatus } from "./types";
 
-const navigation = [
+export const portalNavigation = [
   { href: "/portal", label: "Home", icon: "⌂" },
-  { href: "/portal/submissions", label: "Submissions", icon: "▤" },
-  { href: "/portal/profile", label: "Profile", icon: "◉" },
+  { href: "/portal/submissions", label: "Sessions", icon: "▤" },
   { href: "/portal/tasks", label: "Tasks", icon: "✓" },
-  { href: "/portal?workspace=co-speakers", label: "Co-speakers", icon: "♧" },
-  { href: "/portal?workspace=files", label: "Files", icon: "▧" },
-  { href: "/portal?workspace=resources", label: "Resources", icon: "◇" },
-  { href: "/portal?workspace=wiki", label: "Wiki", icon: "▥" },
+  { href: "/portal/profile", label: "Profile", icon: "◉" },
 ] as const;
 
 const noParticipantWorkspaceDescription =
-  "A submitted proposal will appear here. Accepted proposals unlock your profile, tasks, and files.";
+  "Your sessions, profile, and tasks will appear here after you are added as an event participant.";
 
 export async function signOutAndRedirect(
   navigate: (path: string) => void = (path) => window.location.assign(path),
@@ -40,19 +33,12 @@ export async function signOutAndRedirect(
 }
 
 export function PortalFrame({ children }: Readonly<{ children: ReactNode }>) {
-  const searchParams = useSearchParams();
-  const workspaceParam = searchParams.get("workspace");
-  const workspaceSection: PortalWorkspaceSection | null =
-    workspaceParam === "co-speakers" ||
-    workspaceParam === "files" ||
-    workspaceParam === "tasks" ||
-    workspaceParam === "resources" ||
-    workspaceParam === "wiki"
-      ? workspaceParam
-      : null;
-  const { eventQuery, view, contexts, context, switchContext, workspaceLoading } = usePortal();
+  const { eventQuery, view, contexts, context, switchContext, loading } = usePortal();
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
-  const displayName = portalIdentityProfile(view, context)?.displayName ?? "Speaker";
+  const displayName =
+    view?.profiles.find(
+      (candidate) => candidate.participantId === context?.primaryParticipantId,
+    )?.displayName ?? "Speaker";
   const initials = displayName
     .split(/\s+/)
     .slice(0, 2)
@@ -111,7 +97,7 @@ export function PortalFrame({ children }: Readonly<{ children: ReactNode }>) {
                     type="button"
                     role="menuitem"
                     aria-current={candidate.id === context?.id ? "true" : undefined}
-                    disabled={workspaceLoading}
+                    disabled={loading}
                     onClick={() => void selectContext(candidate.id)}
                   >
                     {portalContextLabel(candidate)}
@@ -126,7 +112,7 @@ export function PortalFrame({ children }: Readonly<{ children: ReactNode }>) {
         {context ? (
           <nav className={styles.portalNav} aria-label="Speaker portal">
             <p className={styles.navLabel}>Your event</p>
-            {navigation.map((item) => (
+            {portalNavigation.map((item) => (
               <Link key={item.href} className={styles.navItem} href={`${item.href}${eventQuery}`}>
                 <span aria-hidden="true">{item.icon}</span>
                 {item.label}
@@ -141,7 +127,7 @@ export function PortalFrame({ children }: Readonly<{ children: ReactNode }>) {
           </nav>
         ) : null}
         <main id="portal-content" className={styles.portalMain} tabIndex={-1}>
-          {workspaceSection ? <PortalWorkspace section={workspaceSection} /> : children}
+          {children}
         </main>
       </div>
     </div>
@@ -190,7 +176,7 @@ export function PortalContentState({ children }: Readonly<{ children: ReactNode 
       <div className={styles.statePanel} role="status" aria-live="polite">
         <span className={styles.spinner} aria-hidden="true" />
         <h1>Loading your speaker portal</h1>
-        <p>Retrieving your submissions, profile, and tasks.</p>
+        <p>Retrieving your sessions, profile, and tasks.</p>
       </div>
     );
   }
@@ -298,4 +284,26 @@ export function formatPortalDate(value: string | undefined): string | null {
     day: "numeric",
     year: "numeric",
   }).format(date);
+}
+
+export function formatPortalFileSize(sizeBytes: number): string {
+  if (!Number.isFinite(sizeBytes) || sizeBytes < 0) return "Unknown size";
+  if (sizeBytes < 1_024) return `${sizeBytes.toLocaleString()} B`;
+  const units = ["KiB", "MiB", "GiB"] as const;
+  let value = sizeBytes;
+  let unit: (typeof units)[number] = units[0];
+  for (const candidate of units) {
+    unit = candidate;
+    value /= 1_024;
+    if (value < 1_024 || candidate === units.at(-1)) break;
+  }
+  return `${value.toLocaleString(undefined, { maximumFractionDigits: 1 })} ${unit}`;
+}
+
+export function portalAssetStateLabel(state: PortalAssetState): string {
+  return {
+    pending_upload: "Upload pending",
+    ready: "Ready",
+    rejected: "Rejected",
+  }[state];
 }

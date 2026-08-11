@@ -2,29 +2,26 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { type FormEvent, useEffect, useMemo, useState } from "react";
-import {
-  createPortalApi,
-  PortalApiError,
-  type PortalProfileDto,
-  validatePortalSocialUrl,
-} from "./api";
-import { validateBiography } from "./model";
+import { type FormEvent, useEffect, useState } from "react";
+import { validatePortalSocialUrl } from "./api";
+import { portalProfileHeadshot, validateBiography } from "./model";
 import styles from "./portal.module.css";
 import { usePortal } from "./portal-provider";
 import {
   EmptyState,
   formatPortalDate,
+  formatPortalFileSize,
   InlineMutationError,
   PageHeading,
+  portalAssetStateLabel,
   PortalContentState,
 } from "./portal-ui";
-import type { PortalAsset, PortalProfile } from "./types";
+import type { PortalDownloadGrant, PortalProfile } from "./types";
 
-const maxProfileTextLength = 200;
+const maxJobTitleLength = 160;
+const maxCompanyLength = 200;
 const maxHeadshotBytes = 5 * 1024 * 1024;
-
-type EditablePortalProfile = PortalProfileDto;
+const allowedHeadshotTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 type ProfileDraft = {
   biography: string;
@@ -34,18 +31,13 @@ type ProfileDraft = {
   linkedin: string;
 };
 
-function editableProfile(profile: PortalProfile): EditablePortalProfile {
-  return profile as EditablePortalProfile;
-}
-
 function profileDraftFor(profile: PortalProfile): ProfileDraft {
-  const details = editableProfile(profile);
   return {
     biography: profile.biography,
-    jobTitle: details.jobTitle ?? "",
-    company: details.company ?? "",
-    twitter: details.socialLinks?.twitter ?? "",
-    linkedin: details.socialLinks?.linkedin ?? "",
+    jobTitle: profile.jobTitle ?? "",
+    company: profile.company ?? "",
+    twitter: profile.socialLinks?.twitter ?? "",
+    linkedin: profile.socialLinks?.linkedin ?? "",
   };
 }
 
@@ -54,8 +46,7 @@ function profileSocialLinksFor(
   twitter: string,
   linkedin: string,
 ): Record<string, string> {
-  const current = editableProfile(profile).socialLinks ?? {};
-  const socialLinks: Record<string, string> = { ...current };
+  const socialLinks: Record<string, string> = { ...profile.socialLinks };
   const cleanTwitter = twitter.trim();
   const cleanLinkedin = linkedin.trim();
   if (cleanTwitter) socialLinks.twitter = cleanTwitter;
@@ -65,10 +56,10 @@ function profileSocialLinksFor(
   return socialLinks;
 }
 
-function validProfileText(value: string, label: string): string | null {
+function validProfileText(value: string, label: string, maxLength: number): string | null {
   const normalized = value.trim();
-  if (normalized.length > maxProfileTextLength) {
-    return `${label} must be ${maxProfileTextLength} characters or fewer.`;
+  if (normalized.length > maxLength) {
+    return `${label} must be ${maxLength} characters or fewer.`;
   }
   if (
     [...normalized].some((character) => {
@@ -77,25 +68,6 @@ function validProfileText(value: string, label: string): string | null {
     })
   ) {
     return `${label} contains an unsupported control character.`;
-  }
-  return null;
-}
-
-function profileAssetMismatch(
-  asset: PortalAsset,
-  eventId: string,
-  participantId: string,
-): PortalApiError | null {
-  if (
-    asset.eventId !== eventId ||
-    asset.participantId !== participantId ||
-    asset.kind !== "headshot"
-  ) {
-    return new PortalApiError(
-      "CONTEXT_MISMATCH",
-      "The headshot response belongs to a different event or participant.",
-      409,
-    );
   }
   return null;
 }
@@ -109,25 +81,35 @@ export function PortalProfilePage() {
 }
 
 function PortalProfileContent() {
-  const { context, eventQuery, can, view } = usePortal();
-  const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
-  const profileApi = useMemo(() => (apiBaseUrl ? createPortalApi(apiBaseUrl) : null), [apiBaseUrl]);
-  const profile =
-    view?.profiles.find((candidate) => candidate.participantId === context?.primaryParticipantId) ??
-    view?.profiles[0];
-  const details = profile ? editableProfile(profile) : undefined;
+  const {
+    can,
+    context,
+    downloadAsset,
+    eventQuery,
+    saveProfile,
+    savingProfile,
+    view,
+  } = usePortal();
+  const profile = view?.profiles.find(
+    (candidate) => candidate.participantId === context?.primaryParticipantId,
+  );
+  const headshot = profile ? portalProfileHeadshot(profile, view?.assets ?? []) : undefined;
   const [biography, setBiography] = useState(profile?.biography ?? "");
-  const [jobTitle, setJobTitle] = useState(details?.jobTitle ?? "");
-  const [company, setCompany] = useState(details?.company ?? "");
-  const [twitter, setTwitter] = useState(details?.socialLinks?.twitter ?? "");
-  const [linkedin, setLinkedin] = useState(details?.socialLinks?.linkedin ?? "");
+  const [jobTitle, setJobTitle] = useState(profile?.jobTitle ?? "");
+  const [company, setCompany] = useState(profile?.company ?? "");
+  const [twitter, setTwitter] = useState(profile?.socialLinks?.twitter ?? "");
+  const [linkedin, setLinkedin] = useState(profile?.socialLinks?.linkedin ?? "");
   const [selectedHeadshot, setSelectedHeadshot] = useState<File | null>(null);
-  const [headshotUrl, setHeadshotUrl] = useState<string | null>(null);
+  const [headshotGrant, setHeadshotGrant] = useState<{
+    assetId: string;
+    grant: PortalDownloadGrant;
+  } | null>(null);
+  const [headshotLoading, setHeadshotLoading] = useState(false);
+  const [headshotDownloading, setHeadshotDownloading] = useState(false);
+  const [headshotError, setHeadshotError] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [profileVersion, setProfileVersion] = useState(profile?.version ?? 0);
   const selectedContextId = context?.id;
 
   useEffect(() => {
@@ -138,7 +120,6 @@ function PortalProfileContent() {
     setCompany(next.company);
     setTwitter(next.twitter);
     setLinkedin(next.linkedin);
-    setProfileVersion(profile.version);
     setSelectedHeadshot(null);
     setValidationError(null);
     setSaveError(null);
@@ -150,49 +131,39 @@ function PortalProfileContent() {
 
   useEffect(() => {
     let cancelled = false;
-    async function loadHeadshotGrant() {
-      if (
-        !profile ||
-        !details?.headshotAssetId ||
-        !context ||
-        profile.eventId !== context.eventId ||
-        !context.participantIds.includes(profile.participantId) ||
-        !profileApi?.getDownloadGrant ||
-        !can("asset-read")
-      ) {
-        setHeadshotUrl(null);
-        return;
-      }
-      try {
-        const grant = await profileApi.getDownloadGrant(context.eventId, details.headshotAssetId);
-        if (!cancelled) setHeadshotUrl(grant.url);
-      } catch {
-        if (!cancelled) setHeadshotUrl(null);
-      }
+    setHeadshotGrant(null);
+    setHeadshotError(null);
+    if (!headshot || headshot.state !== "ready" || !can("asset-read")) {
+      setHeadshotLoading(false);
+      return;
     }
-    void loadHeadshotGrant();
+
+    setHeadshotLoading(true);
+    void downloadAsset(headshot.id).then((grant) => {
+      if (cancelled) return;
+      setHeadshotLoading(false);
+      setHeadshotGrant(grant ? { assetId: headshot.id, grant } : null);
+      if (!grant) setHeadshotError("A secure preview is not available right now.");
+    });
     return () => {
       cancelled = true;
     };
-  }, [can, context, details?.headshotAssetId, profile, profileApi]);
+  }, [can, downloadAsset, headshot]);
 
-  if (!view) {
-    return null;
-  }
+  if (!view) return null;
   if (!profile) {
     return (
       <EmptyState
         title="No speaker profile available"
-        description="A profile will appear after you are added as a participant."
+        description="Your profile will appear after the event links this account to a participant."
       />
     );
   }
 
   const loadedProfile = profile;
-  const profileDetails = editableProfile(loadedProfile);
   const profileContextIsValid =
     context?.eventId === loadedProfile.eventId &&
-    context.participantIds.includes(loadedProfile.participantId);
+    context.primaryParticipantId === loadedProfile.participantId;
   const canEditProfile = can("profile-self") && profileContextIsValid;
   const initials = loadedProfile.displayName
     .split(/\s+/)
@@ -200,7 +171,10 @@ function PortalProfileContent() {
     .map((part) => part[0]?.toLocaleUpperCase())
     .join("");
   const headshotTask = view.tasks.find(
-    (task) => task.type === "upload" && task.acceptedAssetKinds?.includes("headshot"),
+    (task) =>
+      task.participantId === loadedProfile.participantId &&
+      task.type === "upload" &&
+      task.acceptedAssetKinds?.includes("headshot"),
   );
   const initialDraft = profileDraftFor(loadedProfile);
   const hasChanges =
@@ -210,6 +184,12 @@ function PortalProfileContent() {
     twitter !== initialDraft.twitter ||
     linkedin !== initialDraft.linkedin ||
     selectedHeadshot !== null;
+  const headshotStatus =
+    !loadedProfile.headshotAssetId
+      ? "Not uploaded"
+      : headshot
+        ? portalAssetStateLabel(headshot.state)
+        : "Metadata unavailable";
 
   function updateDraft(field: keyof ProfileDraft, value: string) {
     if (field === "biography") setBiography(value);
@@ -239,7 +219,7 @@ function PortalProfileContent() {
     event.preventDefault();
     setSaved(false);
     setSaveError(null);
-    if (!canEditProfile || !context) {
+    if (!canEditProfile) {
       setSaveError("You do not have permission to edit this profile in the selected event.");
       return;
     }
@@ -248,12 +228,12 @@ function PortalProfileContent() {
       setValidationError(biographyValidation.message);
       return;
     }
-    const jobTitleError = validProfileText(jobTitle, "Job title");
+    const jobTitleError = validProfileText(jobTitle, "Job title", maxJobTitleLength);
     if (jobTitleError) {
       setValidationError(jobTitleError);
       return;
     }
-    const companyError = validProfileText(company, "Company");
+    const companyError = validProfileText(company, "Company", maxCompanyLength);
     if (companyError) {
       setValidationError(companyError);
       return;
@@ -268,109 +248,46 @@ function PortalProfileContent() {
       setValidationError(linkedinError);
       return;
     }
+    if (selectedHeadshot?.size === 0) {
+      setValidationError("Headshot cannot be empty.");
+      return;
+    }
     if (selectedHeadshot && selectedHeadshot.size > maxHeadshotBytes) {
       setValidationError("Headshot must be 5 MiB or smaller.");
+      return;
+    }
+    if (selectedHeadshot && !allowedHeadshotTypes.has(selectedHeadshot.type)) {
+      setValidationError("Headshot must be a JPEG, PNG, or WebP image.");
       return;
     }
     if (selectedHeadshot && !can("asset-write")) {
       setSaveError("You do not have permission to upload a headshot in this event.");
       return;
     }
-    if (!profileApi?.updateProfile) {
-      setSaveError("The speaker portal profile API is not available yet.");
-      return;
-    }
-    const updateProfile = profileApi.updateProfile;
-    if (selectedHeadshot && (!profileApi.uploadFile || !profileApi.finalizeAsset)) {
-      setSaveError("Private headshot uploads are not available yet.");
-      return;
-    }
 
     setValidationError(null);
-    setSaving(true);
-    try {
-      let headshotAssetId: string | undefined;
-      if (selectedHeadshot && profileApi.uploadFile && profileApi.finalizeAsset) {
-        const pending = await profileApi.uploadFile({
-          eventId: context.eventId,
-          participantId: loadedProfile.participantId,
-          kind: "headshot",
-          file: selectedHeadshot,
-          ...(profileDetails.headshotAssetId
-            ? { supersedesAssetId: profileDetails.headshotAssetId }
-            : {}),
-        });
-        const uploadMismatch = profileAssetMismatch(
-          pending,
-          context.eventId,
-          loadedProfile.participantId,
-        );
-        if (uploadMismatch) throw uploadMismatch;
-        const finalized = await profileApi.finalizeAsset({
-          eventId: context.eventId,
-          assetId: pending.id,
-          state: "ready",
-        });
-        const finalizeMismatch = profileAssetMismatch(
-          finalized,
-          context.eventId,
-          loadedProfile.participantId,
-        );
-        if (finalizeMismatch || finalized.state !== "ready") {
-          throw (
-            finalizeMismatch ??
-            new PortalApiError(
-              "UPLOAD_NOT_READY",
-              "The headshot could not be finalized. Try again.",
-              409,
-            )
-          );
-        }
-        headshotAssetId = finalized.id;
-      }
-
-      const updated = await updateProfile({
-        eventId: context.eventId,
-        participantId: loadedProfile.participantId,
-        biography: biographyValidation.biography,
-        jobTitle: jobTitle.trim(),
-        company: company.trim(),
-        socialLinks: profileSocialLinksFor(loadedProfile, twitter, linkedin),
-        ...(headshotAssetId === undefined ? {} : { headshotAssetId }),
-        expectedVersion: profileVersion,
-      });
-      if (
-        updated.eventId !== context.eventId ||
-        updated.participantId !== loadedProfile.participantId
-      ) {
-        throw new PortalApiError(
-          "CONTEXT_MISMATCH",
-          "The profile response belongs to a different event or participant.",
-          409,
-        );
-      }
-      setBiography(updated.biography);
-      setProfileVersion(updated.version);
-      setJobTitle(updated.jobTitle ?? jobTitle.trim());
-      setCompany(updated.company ?? company.trim());
-      setTwitter(updated.socialLinks?.twitter ?? twitter.trim());
-      setLinkedin(updated.socialLinks?.linkedin ?? linkedin.trim());
+    const didSave = await saveProfile({
+      profile: loadedProfile,
+      biography: biographyValidation.biography,
+      jobTitle: jobTitle.trim(),
+      company: company.trim(),
+      socialLinks: profileSocialLinksFor(loadedProfile, twitter, linkedin),
+      ...(selectedHeadshot ? { headshot: selectedHeadshot } : {}),
+    });
+    if (didSave) {
       setSelectedHeadshot(null);
-      if (updated.headshotAssetId && can("asset-read") && profileApi.getDownloadGrant) {
-        const grant = await profileApi.getDownloadGrant(context.eventId, updated.headshotAssetId);
-        setHeadshotUrl(grant.url);
-      } else {
-        setHeadshotUrl(null);
-      }
       setSaved(true);
-    } catch (profileError) {
-      setSaveError(
-        profileError instanceof PortalApiError || profileError instanceof Error
-          ? profileError.message
-          : "The profile could not be saved. Try again.",
-      );
+    }
+  }
+
+  async function handleHeadshotDownload() {
+    if (!headshot || headshot.state !== "ready") return;
+    setHeadshotDownloading(true);
+    try {
+      const grant = await downloadAsset(headshot.id);
+      if (grant) window.location.assign(grant.url);
     } finally {
-      setSaving(false);
+      setHeadshotDownloading(false);
     }
   }
 
@@ -385,10 +302,13 @@ function PortalProfileContent() {
       <div className={styles.profileLayout}>
         <aside className={styles.panel} aria-labelledby="profile-preview-heading">
           <div className={styles.profileIdentity}>
-            {headshotUrl ? (
+            {headshotGrant &&
+            headshot &&
+            headshotGrant.assetId === headshot.id &&
+            headshot.state === "ready" ? (
               <Image
                 className={styles.profileAvatar}
-                src={headshotUrl}
+                src={headshotGrant.grant.url}
                 alt={`${loadedProfile.displayName} headshot`}
                 width={68}
                 height={68}
@@ -408,14 +328,59 @@ function PortalProfileContent() {
           </div>
           <dl className={styles.profileFacts}>
             <div>
-              <dt>Headshot</dt>
-              <dd>{profileDetails.headshotAssetId ? "Uploaded" : "Not uploaded"}</dd>
+              <dt>Headshot status</dt>
+              <dd>{headshotStatus}</dd>
             </div>
+            {headshot ? (
+              <>
+                <div>
+                  <dt>File</dt>
+                  <dd>{headshot.fileName}</dd>
+                </div>
+                <div>
+                  <dt>Format and size</dt>
+                  <dd>
+                    {headshot.contentType} · {formatPortalFileSize(headshot.sizeBytes)}
+                  </dd>
+                </div>
+                {headshot.version === undefined ? null : (
+                  <div>
+                    <dt>Version</dt>
+                    <dd>{headshot.version}</dd>
+                  </div>
+                )}
+                <div>
+                  <dt>Asset updated</dt>
+                  <dd>{formatPortalDate(headshot.finalizedAt ?? headshot.createdAt) ?? "Recently"}</dd>
+                </div>
+              </>
+            ) : null}
             <div>
-              <dt>Last updated</dt>
+              <dt>Profile updated</dt>
               <dd>{formatPortalDate(loadedProfile.updatedAt) ?? "Recently"}</dd>
             </div>
           </dl>
+          {headshot?.state === "rejected" && headshot.rejectionReason ? (
+            <p className={styles.fieldError} role="status">
+              {headshot.rejectionReason}
+            </p>
+          ) : null}
+          {headshotLoading ? <p role="status">Preparing secure headshot access…</p> : null}
+          {headshotError ? (
+            <p className={styles.fieldError} role="status">
+              {headshotError}
+            </p>
+          ) : null}
+          {headshot?.state === "ready" && can("asset-read") ? (
+            <button
+              className={styles.secondaryButton}
+              type="button"
+              disabled={headshotDownloading}
+              onClick={() => void handleHeadshotDownload()}
+            >
+              {headshotDownloading ? "Preparing download…" : "Download headshot"}
+            </button>
+          ) : null}
           {headshotTask ? (
             <Link className={styles.secondaryButton} href={`/portal/tasks${eventQuery}`}>
               Manage headshot task
@@ -432,6 +397,7 @@ function PortalProfileContent() {
           </div>
           <form
             className={styles.profileForm}
+            aria-busy={savingProfile}
             onSubmit={(event) => void submitProfile(event)}
             noValidate
           >
@@ -444,7 +410,8 @@ function PortalProfileContent() {
               <span>Job title</span>
               <input
                 value={jobTitle}
-                maxLength={maxProfileTextLength}
+                disabled={savingProfile || !canEditProfile}
+                maxLength={maxJobTitleLength}
                 aria-invalid={validationError ? true : undefined}
                 onChange={(event) => updateDraft("jobTitle", event.currentTarget.value)}
               />
@@ -453,7 +420,8 @@ function PortalProfileContent() {
               <span>Company</span>
               <input
                 value={company}
-                maxLength={maxProfileTextLength}
+                disabled={savingProfile || !canEditProfile}
+                maxLength={maxCompanyLength}
                 aria-invalid={validationError ? true : undefined}
                 onChange={(event) => updateDraft("company", event.currentTarget.value)}
               />
@@ -462,6 +430,7 @@ function PortalProfileContent() {
               <span>Biography</span>
               <textarea
                 value={biography}
+                disabled={savingProfile || !canEditProfile}
                 rows={10}
                 maxLength={5_000}
                 aria-describedby="biography-help biography-count"
@@ -478,22 +447,22 @@ function PortalProfileContent() {
               </span>
             </label>
             <label className={styles.readOnlyField}>
-              <span>Twitter / X URL</span>
+              <span>Twitter / X URL or handle</span>
               <input
-                type="url"
                 value={twitter}
-                placeholder="https://x.com/…"
+                disabled={savingProfile || !canEditProfile}
+                placeholder="https://x.com/priya or @priya"
                 maxLength={2_000}
                 aria-invalid={validationError ? true : undefined}
                 onChange={(event) => updateDraft("twitter", event.currentTarget.value)}
               />
             </label>
             <label className={styles.readOnlyField}>
-              <span>LinkedIn URL</span>
+              <span>LinkedIn URL or handle</span>
               <input
-                type="url"
                 value={linkedin}
-                placeholder="https://linkedin.com/in/…"
+                disabled={savingProfile || !canEditProfile}
+                placeholder="https://linkedin.com/in/priya"
                 maxLength={2_000}
                 aria-invalid={validationError ? true : undefined}
                 onChange={(event) => updateDraft("linkedin", event.currentTarget.value)}
@@ -504,6 +473,7 @@ function PortalProfileContent() {
               <input
                 type="file"
                 accept="image/jpeg,image/png,image/webp"
+                disabled={savingProfile || !canEditProfile}
                 onChange={(event) => {
                   setSelectedHeadshot(event.currentTarget.files?.[0] ?? null);
                   setSaved(false);
@@ -512,8 +482,8 @@ function PortalProfileContent() {
               />
               <small>
                 {selectedHeadshot?.name ??
-                  (profileDetails.headshotAssetId
-                    ? "Choose a new image to upload a new version."
+                  (loadedProfile.headshotAssetId
+                    ? "Choose a new image to upload a new immutable version."
                     : "JPEG, PNG, or WebP up to 5 MiB.")}
               </small>
             </label>
@@ -536,14 +506,14 @@ function PortalProfileContent() {
               <button
                 className={styles.primaryButton}
                 type="submit"
-                disabled={saving || !canEditProfile || !hasChanges}
+                disabled={savingProfile || !canEditProfile || !hasChanges}
               >
-                {saving ? "Saving…" : "Save profile"}
+                {savingProfile ? "Saving…" : "Save profile"}
               </button>
               <button
                 className={styles.tertiaryButton}
                 type="button"
-                disabled={saving || !hasChanges}
+                disabled={savingProfile || !hasChanges}
                 onClick={resetDraft}
               >
                 Discard changes
