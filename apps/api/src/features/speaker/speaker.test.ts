@@ -399,6 +399,20 @@ class CountingOrganizerReadModelRepository extends OrganizerSpeakerRepository {
     return super.listRosterForEvent(eventId);
   }
 }
+class DelayedOrganizerReadModelRepository extends CountingOrganizerReadModelRepository {
+  constructor(private readonly delayMs = 700) {
+    super();
+  }
+
+  override async getOrganizerReadModel(
+    eventId: string,
+    accountId: string,
+    resources: SpeakerOrganizerReadResources,
+  ): Promise<SpeakerOrganizerReadModel | null> {
+    await new Promise((resolve) => setTimeout(resolve, this.delayMs));
+    return super.getOrganizerReadModel(eventId, accountId, resources);
+  }
+}
 class ConcurrentOrganizerRepository extends OrganizerSpeakerRepository {
   submissionReads = 0;
   readonly started = new Set<string>();
@@ -1072,6 +1086,277 @@ describe("SpeakerService organizer aggregate reads", () => {
     expect(repository.profileReads).toBe(0);
     expect(repository.taskReads).toBe(0);
     expect(repository.assetReads).toBe(0);
+  });
+});
+describe("SpeakerService organizer roster read model", () => {
+  it("uses one delayed read-model wave for the complete authorized roster", async () => {
+    const repository = new DelayedOrganizerReadModelRepository();
+    repository.organizerScopes.set("event-1:account-1", {
+      tenantId: "org-1",
+      eventId: "event-1",
+      role: "owner",
+      submissionIds: ["submission-1", "submission-2", "submission-declined"],
+      participantIds: ["participant-1", "participant-2"],
+    });
+    repository.submissions.push(
+      { ...submission("submission-1", "participant-1"), title: "Shared session" },
+      { ...submission("submission-2", "participant-2"), title: "Shared session" },
+      submission("submission-declined", "participant-1", "declined"),
+    );
+    repository.profiles.push(
+      { ...profile("participant-1"), displayName: "Shared Speaker", email: "shared@example.test" },
+      { ...profile("participant-2"), displayName: "Shared Speaker", email: "SHARED@example.test" },
+      { ...profile("participant-manual"), displayName: "Manual Speaker" },
+    );
+    repository.roster.push(
+      {
+        id: "roster-1",
+        eventId: "event-1",
+        submissionId: "speaker-submission:submission-1",
+        participantId: "participant-1",
+        displayName: "Shared Speaker",
+        email: "shared@example.test",
+        role: "primary",
+        status: "active",
+        version: 1,
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        id: "roster-2",
+        eventId: "event-1",
+        submissionId: "speaker-submission:submission-2",
+        participantId: "participant-2",
+        displayName: "Shared Speaker",
+        email: "SHARED@example.test",
+        role: "primary",
+        status: "active",
+        version: 2,
+        createdAt: now,
+        updatedAt: "2026-08-08T12:01:00.000Z",
+      },
+      {
+        id: "roster-manual",
+        eventId: "event-1",
+        submissionId: "speaker-submission:crm-contact:manual",
+        participantId: "participant-manual",
+        displayName: "Manual Speaker",
+        workflowStatus: "crm-prospect",
+        organizerStatus: "pending",
+        role: "primary",
+        status: "pending",
+        version: 1,
+        createdAt: now,
+        updatedAt: now,
+      },
+    );
+    repository.tasks.push(
+      task({
+        id: "task-complete",
+        participantId: "participant-1",
+        type: "action",
+        status: "completed",
+      }),
+      task({
+        id: "task-pending",
+        participantId: "participant-1",
+        type: "action",
+      }),
+      task({
+        id: "task-second",
+        participantId: "participant-2",
+        submissionId: "submission-2",
+        type: "action",
+      }),
+      task({
+        id: "task-upload",
+        participantId: "participant-1",
+      }),
+      task({
+        id: "task-manual",
+        participantId: "participant-manual",
+        submissionId: "speaker-submission:crm-contact:manual",
+        type: "action",
+      }),
+      task({
+        id: "task-organizer-owned",
+        participantId: "participant-1",
+        owner: "organizer",
+        type: "action",
+      }),
+      task({
+        id: "task-declined",
+        participantId: "participant-1",
+        submissionId: "submission-declined",
+      }),
+      task({
+        id: "task-other-event",
+        participantId: "participant-1",
+        eventId: "event-2",
+      }),
+    );
+    repository.assets.push(
+      {
+        id: "asset-accepted",
+        tenantId: "org-1",
+        eventId: "event-1",
+        submissionId: "submission-1",
+        participantId: "participant-1",
+        taskId: "task-upload",
+        kind: "slides",
+        objectKey: "events/event-1/accepted",
+        fileName: "accepted.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 10,
+        state: "ready",
+        createdAt: now,
+      },
+      {
+        id: "asset-manual",
+        tenantId: "org-1",
+        eventId: "event-1",
+        submissionId: "speaker-submission:crm-contact:manual",
+        participantId: "participant-manual",
+        taskId: "task-manual",
+        kind: "slides",
+        objectKey: "events/event-1/manual",
+        fileName: "manual.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 10,
+        state: "ready",
+        createdAt: now,
+      },
+      {
+        id: "asset-foreign-tenant",
+        tenantId: "org-2",
+        eventId: "event-1",
+        submissionId: "submission-1",
+        participantId: "participant-1",
+        kind: "slides",
+        objectKey: "events/event-1/foreign",
+        fileName: "foreign.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 10,
+        state: "ready",
+        createdAt: now,
+      },
+      {
+        id: "asset-declined",
+        tenantId: "org-1",
+        eventId: "event-1",
+        submissionId: "submission-declined",
+        participantId: "participant-1",
+        kind: "slides",
+        objectKey: "events/event-1/declined",
+        fileName: "declined.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 10,
+        state: "ready",
+        createdAt: now,
+      },
+    );
+    const fallbackRepository = new OrganizerSpeakerRepository();
+    const organizerScope = repository.organizerScopes.get("event-1:account-1");
+    if (organizerScope === undefined) throw new Error("Expected an organizer scope fixture.");
+    fallbackRepository.organizerScopes.set("event-1:account-1", structuredClone(organizerScope));
+    fallbackRepository.submissions.push(...structuredClone(repository.submissions));
+    fallbackRepository.profiles.push(...structuredClone(repository.profiles));
+    fallbackRepository.roster.push(...structuredClone(repository.roster));
+    fallbackRepository.tasks.push(...structuredClone(repository.tasks));
+    fallbackRepository.assets.push(...structuredClone(repository.assets));
+    const fallbackService = new SpeakerService(fallbackRepository, new FakePrivateAssetGateway(), {
+      now: () => new Date(now),
+    });
+    const service = new SpeakerService(repository, new FakePrivateAssetGateway(), {
+      now: () => new Date(now),
+    });
+
+    const startedAt = Date.now();
+    const roster = await service.listOrganizerSpeakerRoster("org-1", "event-1", "account-1");
+
+    expect(Date.now() - startedAt).toBeLessThan(1_300);
+    expect(repository.readModelReads).toBe(1);
+    expect(repository.readModelResources).toEqual([{ profiles: true, tasks: true, assets: true }]);
+    expect(repository.organizerScopeReads).toBe(0);
+    expect(repository.submissionReads).toBe(0);
+    expect(repository.rosterReads).toBe(0);
+    expect(repository.profileReads).toBe(0);
+    expect(repository.taskReads).toBe(0);
+    expect(repository.assetReads).toBe(0);
+    expect(roster.organizationId).toBe("org-1");
+    expect(roster.speakers).toHaveLength(2);
+    expect(roster.speakers.map((speaker) => speaker.participantId)).toEqual([
+      "participant-manual",
+      "participant-2",
+    ]);
+    const shared = roster.speakers.find((speaker) => speaker.participantId === "participant-2");
+    expect(shared).toMatchObject({
+      displayName: "Shared Speaker",
+      sessions: [{ submissionId: "speaker-submission:submission-1", title: "Shared session" }],
+      taskSummary: { total: 3, completed: 1, overdue: 0 },
+      assets: [expect.objectContaining({ assetId: "asset-accepted" })],
+    });
+    expect(shared?.assets.map((asset) => asset.assetId)).toEqual(["asset-accepted"]);
+    const manual = roster.speakers.find(
+      (speaker) => speaker.participantId === "participant-manual",
+    );
+    expect(manual).toMatchObject({
+      status: "pending",
+      sessions: [],
+      taskSummary: { total: 1, completed: 0, overdue: 0 },
+      assets: [expect.objectContaining({ assetId: "asset-manual" })],
+    });
+    await expect(
+      fallbackService.listOrganizerSpeakerRoster("org-1", "event-1", "account-1"),
+    ).resolves.toEqual(roster);
+  });
+
+  it("denies a wrong-tenant or reviewer read-model scope without fallback reads", async () => {
+    const repository = new DelayedOrganizerReadModelRepository(1);
+    repository.organizerScopes.set("event-1:account-1", {
+      tenantId: "other-org",
+      eventId: "event-1",
+      role: "owner",
+      submissionIds: ["submission-1"],
+      participantIds: ["participant-1"],
+    });
+    const service = new SpeakerService(repository, new FakePrivateAssetGateway());
+    await expect(
+      service.listOrganizerSpeakerRoster("org-1", "event-1", "account-1"),
+    ).rejects.toSatisfy((error: unknown) => {
+      expectServiceError(error, "NOT_FOUND");
+      return true;
+    });
+    expect(repository.readModelReads).toBe(1);
+    expect(repository.organizerScopeReads).toBe(0);
+    expect(repository.submissionReads).toBe(0);
+    expect(repository.rosterReads).toBe(0);
+    expect(repository.profileReads).toBe(0);
+    expect(repository.taskReads).toBe(0);
+    expect(repository.assetReads).toBe(0);
+
+    const reviewerRepository = new DelayedOrganizerReadModelRepository(1);
+    reviewerRepository.organizerScopes.set("event-1:account-1", {
+      tenantId: "org-1",
+      eventId: "event-1",
+      role: "reviewer" as unknown as "owner",
+      submissionIds: ["submission-1"],
+      participantIds: ["participant-1"],
+    });
+    const reviewerService = new SpeakerService(reviewerRepository, new FakePrivateAssetGateway());
+    await expect(
+      reviewerService.listOrganizerSpeakerRoster("org-1", "event-1", "account-1"),
+    ).rejects.toSatisfy((error: unknown) => {
+      expectServiceError(error, "NOT_FOUND");
+      return true;
+    });
+    expect(reviewerRepository.readModelReads).toBe(1);
+    expect(reviewerRepository.organizerScopeReads).toBe(0);
+    expect(reviewerRepository.submissionReads).toBe(0);
+    expect(reviewerRepository.rosterReads).toBe(0);
+    expect(reviewerRepository.profileReads).toBe(0);
+    expect(reviewerRepository.taskReads).toBe(0);
+    expect(reviewerRepository.assetReads).toBe(0);
   });
 });
 describe("SpeakerService organizer asset reads", () => {

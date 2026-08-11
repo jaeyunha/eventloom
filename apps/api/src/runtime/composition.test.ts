@@ -4824,9 +4824,84 @@ describe("production organizer speaker composition", () => {
       transport.requests.find((request) => request.table === "Sessions")?.query?.filterByFormula,
     ).toBe('FIND("event-speaker",{Metadata JSON})>0');
 
+    const production = productionBindings(transport, database);
+    const agendaCoordinator = production.AGENDA_COORDINATOR;
+    const privateFiles = production.PRIVATE_FILES;
+    const outboxQueue = production.OUTBOX_QUEUE;
+    if (
+      agendaCoordinator === undefined ||
+      privateFiles === undefined ||
+      outboxQueue === undefined
+    ) {
+      throw new Error("Expected production speaker bindings.");
+    }
+    const dependencies = createAirtableDependencies({
+      authenticator: { authenticate: async () => null },
+      baseId: "base-test",
+      transport,
+      database,
+      agendaCoordinator,
+      privateFiles,
+      outboxQueue,
+      webOrigin: "https://example.test",
+    });
+    const speaker = dependencies.speaker;
+    if (speaker === undefined) throw new Error("Production speaker dependencies are not mounted.");
+    transport.requests.length = 0;
+    const rosterStartedAt = performance.now();
+    await expect(
+      speaker.service.listOrganizerSpeakerRoster(
+        "ai-engineer",
+        "event-speaker",
+        "organizer-speaker",
+      ),
+    ).resolves.toMatchObject({
+      organizationId: "ai-engineer",
+      eventId: "event-speaker",
+      speakers: [
+        expect.objectContaining({
+          participantId: "participant-speaker",
+          displayName: "Verified Speaker",
+          sessions: [
+            expect.objectContaining({
+              submissionId: "speaker-submission:submission-speaker",
+            }),
+          ],
+          assets: [expect.objectContaining({ assetId: "asset-speaker-read" })],
+        }),
+      ],
+    });
+    expect(performance.now() - rosterStartedAt).toBeLessThan(1_300);
+    expect(transport.requests.map((request) => request.table)).toEqual([
+      "Events",
+      "Submissions",
+      "Session Roster",
+      "Decisions",
+      "Speaker Profiles",
+      "Speaker Tasks",
+      "File Assets",
+    ]);
+
     const membership = state.memberships[0];
     if (membership === undefined) throw new Error("Expected an organizer membership.");
     membership.role = "reviewer";
+    transport.requests.length = 0;
+    await expect(
+      speaker.service.listOrganizerSpeakerRoster(
+        "ai-engineer",
+        "event-speaker",
+        "organizer-speaker",
+      ),
+    ).rejects.toMatchObject({ code: "NOT_FOUND", status: 404 });
+    expect(transport.requests.map((request) => request.table)).toEqual([
+      "Events",
+      "Submissions",
+      "Session Roster",
+      "Decisions",
+      "Speaker Profiles",
+      "Speaker Tasks",
+      "File Assets",
+    ]);
     transport.requests.length = 0;
     await expect(
       repository.getOrganizerReadModel("event-speaker", "organizer-speaker", {

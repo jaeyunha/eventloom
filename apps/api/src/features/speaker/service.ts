@@ -1330,6 +1330,14 @@ function isCrmRosterEntry(entry: SpeakerRosterEntry): boolean {
 function isOrganizerManagedRosterEntry(entry: SpeakerRosterEntry): boolean {
   return isCrmRosterEntry(entry) && entry.organizerStatus !== undefined;
 }
+function organizerRecordTenantMatches(value: unknown, tenantId: string): boolean {
+  if (value === null || typeof value !== "object") return false;
+  const candidate = value as { tenantId?: unknown; organizationId?: unknown };
+  return (
+    (candidate.tenantId === undefined || candidate.tenantId === tenantId) &&
+    (candidate.organizationId === undefined || candidate.organizationId === tenantId)
+  );
+}
 function speakerSubmissionAllowed(
   allowedSubmissionIds: readonly string[],
   submissionId: string | undefined,
@@ -6090,11 +6098,73 @@ export class SpeakerService {
     eventId: string,
     accountId: string,
   ): Promise<SpeakerWorkspaceRoster> {
-    const scope = await this.requireOrganizerOrganizationScope(organizationId, eventId, accountId);
-    const [acceptedSubmissions, rosterProjection] = await Promise.all([
-      this.acceptedOrganizerSubmissions(eventId, scope),
-      this.organizerRosterProjection(organizationId, eventId, scope, accountId),
-    ]);
+    const getOrganizerReadModel = this.repository.getOrganizerReadModel;
+    let scope: SpeakerAccessScope & { tenantId: string; organizer: true };
+    let acceptedSubmissions: readonly SpeakerSubmission[];
+    let rosterProjection: { entries: SpeakerRosterEntry[]; profiles: SpeakerProfile[] };
+    let readModel: SpeakerOrganizerReadModel | undefined;
+
+    if (getOrganizerReadModel !== undefined) {
+      const model = await getOrganizerReadModel.call(this.repository, eventId, accountId, {
+        profiles: true,
+        tasks: true,
+        assets: true,
+      });
+      const isReadModelCollection = (value: unknown): value is readonly object[] =>
+        Array.isArray(value) &&
+        value.every((candidate) => candidate !== null && typeof candidate === "object");
+      if (
+        model === null ||
+        typeof model !== "object" ||
+        !isReadModelCollection(model.submissions) ||
+        !isReadModelCollection(model.roster) ||
+        !isReadModelCollection(model.profiles) ||
+        !isReadModelCollection(model.tasks) ||
+        !isReadModelCollection(model.assets)
+      ) {
+        throw notFound();
+      }
+      scope = this.readModelScope(model, eventId);
+      if (scope.tenantId !== organizationId) throw notFound();
+      readModel = model;
+      const submissions = model.submissions.filter((candidate) =>
+        organizerRecordTenantMatches(candidate, scope.tenantId),
+      );
+      const modelRoster = model.roster.filter((candidate) =>
+        organizerRecordTenantMatches(candidate, scope.tenantId),
+      );
+      const cachedRoster =
+        this.organizerSpeakerCache.get(this.organizerSpeakerCacheKey(organizationId, eventId)) ??
+        [];
+      const roster = [
+        ...modelRoster,
+        ...cachedRoster.filter(
+          (entry) =>
+            entry.eventId === eventId &&
+            entry.authorAccountId === accountId &&
+            organizerRecordTenantMatches(entry, scope.tenantId) &&
+            !modelRoster.some((candidate) => candidate.id === entry.id),
+        ),
+      ];
+      const profiles = model.profiles.filter(
+        (candidate) =>
+          organizerRecordTenantMatches(candidate, scope.tenantId) &&
+          candidate.eventId === eventId &&
+          scope.participantIds.includes(candidate.participantId),
+      );
+      acceptedSubmissions = this.acceptedOrganizerSubmissionsFrom(eventId, scope, submissions);
+      rosterProjection = {
+        entries: this.organizerRosterEntriesFromReadModel(eventId, scope, roster, profiles),
+        profiles,
+      };
+    } else {
+      scope = await this.requireOrganizerOrganizationScope(organizationId, eventId, accountId);
+      [acceptedSubmissions, rosterProjection] = await Promise.all([
+        this.acceptedOrganizerSubmissions(eventId, scope),
+        this.organizerRosterProjection(organizationId, eventId, scope, accountId),
+      ]);
+    }
+
     const acceptedParticipantIds = new Set(
       acceptedSubmissions.flatMap((submission) =>
         submission.participantIds.filter((participantId) =>
@@ -6108,7 +6178,12 @@ export class SpeakerService {
     const crmParticipantIds = entries.filter(isCrmRosterEntry).map((entry) => entry.participantId);
     const participantIds = unique([...acceptedParticipantIds, ...crmParticipantIds]);
     const profileByParticipant = new Map(
-      rosterProjection.profiles.map((profile) => [profile.participantId, profile]),
+      rosterProjection.profiles
+        .filter(
+          (profile) =>
+            profile.eventId === eventId && participantIds.includes(profile.participantId),
+        )
+        .map((profile) => [profile.participantId, profile]),
     );
     const acceptedSubmissionIds = new Set(
       acceptedSubmissions.map((submission) => canonicalSpeakerSubmissionId(submission.id)),
@@ -6116,38 +6191,48 @@ export class SpeakerService {
     const manualByParticipant = new Map(
       entries.filter(isOrganizerManagedRosterEntry).map((entry) => [entry.participantId, entry]),
     );
-    const [tasks, assets] = await Promise.all([
-      this.repository
-        .listTasks(eventId, participantIds)
-        .then((candidates) =>
-          candidates.filter(
-            (task) =>
-              task.eventId === eventId &&
-              task.owner === "speaker" &&
-              (acceptedSubmissionIds.has(canonicalSpeakerSubmissionId(task.submissionId)) ||
-                (manualByParticipant.get(task.participantId) !== undefined &&
-                  sameSpeakerSubmission(
-                    manualByParticipant.get(task.participantId)?.submissionId ?? "",
-                    task.submissionId,
-                  ))),
-          ),
-        ),
-      this.assetsForParticipants(eventId, participantIds).then((candidates) =>
-        candidates.filter(
-          (asset) =>
-            (asset.tenantId === undefined || asset.tenantId === scope.tenantId) &&
-            ((asset.submissionId === undefined &&
-              acceptedParticipantIds.has(asset.participantId)) ||
-              acceptedSubmissionIds.has(canonicalSpeakerSubmissionId(asset.submissionId ?? "")) ||
-              (asset.submissionId !== undefined &&
-                manualByParticipant.get(asset.participantId) !== undefined &&
-                sameSpeakerSubmission(
-                  manualByParticipant.get(asset.participantId)?.submissionId ?? "",
-                  asset.submissionId,
-                ))),
-        ),
-      ),
-    ]);
+
+    let taskCandidates: readonly SpeakerTask[];
+    let assetCandidates: readonly SpeakerAsset[];
+    if (readModel === undefined) {
+      [taskCandidates, assetCandidates] = await Promise.all([
+        this.repository.listTasks(eventId, participantIds),
+        this.assetsForParticipants(eventId, participantIds),
+      ]);
+    } else {
+      taskCandidates = readModel.tasks.filter((candidate) =>
+        organizerRecordTenantMatches(candidate, scope.tenantId),
+      );
+      assetCandidates = readModel.assets.filter((candidate) =>
+        organizerRecordTenantMatches(candidate, scope.tenantId),
+      );
+    }
+    const tasks = taskCandidates.filter(
+      (task) =>
+        task.eventId === eventId &&
+        participantIds.includes(task.participantId) &&
+        task.owner === "speaker" &&
+        (acceptedSubmissionIds.has(canonicalSpeakerSubmissionId(task.submissionId)) ||
+          (manualByParticipant.get(task.participantId) !== undefined &&
+            sameSpeakerSubmission(
+              manualByParticipant.get(task.participantId)?.submissionId ?? "",
+              task.submissionId,
+            ))),
+    );
+    const assets = assetCandidates.filter(
+      (asset) =>
+        asset.eventId === eventId &&
+        participantIds.includes(asset.participantId) &&
+        (asset.tenantId === undefined || asset.tenantId === scope.tenantId) &&
+        ((asset.submissionId === undefined && acceptedParticipantIds.has(asset.participantId)) ||
+          acceptedSubmissionIds.has(canonicalSpeakerSubmissionId(asset.submissionId ?? "")) ||
+          (asset.submissionId !== undefined &&
+            manualByParticipant.get(asset.participantId) !== undefined &&
+            sameSpeakerSubmission(
+              manualByParticipant.get(asset.participantId)?.submissionId ?? "",
+              asset.submissionId,
+            ))),
+    );
     const records = await Promise.all(
       entries.map((entry) =>
         this.organizerSpeakerRecord(
@@ -7752,15 +7837,20 @@ export class SpeakerService {
     model: SpeakerOrganizerReadModel,
     eventId: string,
   ): SpeakerAccessScope & { tenantId: string; organizer: true } {
+    if (model === null || typeof model !== "object") throw notFound();
     const scope = model.scope;
     if (
+      scope === null ||
+      typeof scope !== "object" ||
       typeof scope.eventId !== "string" ||
       scope.eventId !== eventId ||
       (scope.role !== "owner" && scope.role !== "admin") ||
       typeof scope.tenantId !== "string" ||
       scope.tenantId.trim().length === 0 ||
       !Array.isArray(scope.submissionIds) ||
-      !Array.isArray(scope.participantIds)
+      !scope.submissionIds.every((submissionId) => typeof submissionId === "string") ||
+      !Array.isArray(scope.participantIds) ||
+      !scope.participantIds.every((participantId) => typeof participantId === "string")
     ) {
       throw notFound();
     }
