@@ -342,7 +342,10 @@ function WorkspaceMutationError() {
 }
 
 export function PortalWorkspace({ section }: Readonly<{ section: PortalWorkspaceSection }>) {
-  const { context, view, loading, error, workspaceLoading, reload } = usePortal();
+  const { context, view, loading, error, workspaceLoading, loadWorkspace, reload } = usePortal();
+  useEffect(() => {
+    if (context && view) void loadWorkspace();
+  }, [context, loadWorkspace, view]);
   if (loading && !view) {
     return (
       <WorkspaceState

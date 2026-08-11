@@ -273,8 +273,42 @@ describe("speaker portal view model", () => {
           eventId: "event-1",
           submissionId: "session-priya",
           capabilities: { manage: true, invite: true },
-          members: [],
+          members: [
+            {
+              participantId: priyaParticipantId,
+              displayName: "Priya Shah",
+              email: "priya@example.test",
+              role: "primary",
+              status: "active",
+              capabilities: { edit: true, remove: false },
+            },
+            {
+              participantId: marcusParticipantId,
+              displayName: "Marcus Okafor",
+              email: "marcus@example.test",
+              role: "co_speaker",
+              status: "active",
+              capabilities: { edit: true, remove: true },
+            },
+          ],
         },
+        resources: [
+          {
+            id: "resource-1",
+            title: "Speaker guide",
+            order: 1,
+            updatedAt: "2026-08-09T00:00:00.000Z",
+          },
+        ],
+        wiki: [
+          {
+            id: "wiki-1",
+            title: "Travel",
+            slug: "travel",
+            order: 1,
+            updatedAt: "2026-08-09T00:00:00.000Z",
+          },
+        ],
       },
       context,
     );
@@ -300,7 +334,16 @@ describe("speaker portal view model", () => {
       primaryParticipantId: priyaParticipantId,
     });
     expect(scoped.outstandingTaskCount).toBe(1);
-    expect(scoped.roster).toBeUndefined();
+    expect(scoped.roster).toMatchObject({
+      eventId: "event-1",
+      submissionId: "session-priya",
+      members: [
+        { participantId: priyaParticipantId, role: "primary" },
+        { participantId: marcusParticipantId, role: "co_speaker" },
+      ],
+    });
+    expect(scoped.resources).toEqual([expect.objectContaining({ id: "resource-1" })]);
+    expect(scoped.wiki).toEqual([expect.objectContaining({ id: "wiki-1" })]);
     expect(portalProfileHeadshot(priyaProfile, scoped.assets ?? [])?.id).toBe(
       "asset-headshot",
     );

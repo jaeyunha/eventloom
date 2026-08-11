@@ -20,6 +20,7 @@ export class PublicEmbedApiError extends Error {
 }
 
 type PublicFetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+type PublicEmbedEnvironment = "local" | "staging" | "production" | undefined;
 const PUBLIC_PROJECTION_REVALIDATE_SECONDS = 60;
 export const PUBLIC_PROGRAM_CACHE_TAG = "public-programs";
 const REMOTE_API_ORIGINS = {
@@ -33,12 +34,17 @@ const REMOTE_API_ORIGINS = {
   ],
 } as const;
 
-function configuredEnvironment(): "local" | "staging" | "production" | undefined {
-  const value = process.env.APP_ENV?.trim();
-  return value === "local" || value === "staging" || value === "production" ? value : undefined;
+function configuredEnvironment(value: string | undefined = process.env.APP_ENV): PublicEmbedEnvironment {
+  const normalized = value?.trim();
+  return normalized === "local" || normalized === "staging" || normalized === "production"
+    ? normalized
+    : undefined;
 }
 
-function normalizeApiOrigin(value: string): string {
+function normalizeApiOrigin(
+  value: string,
+  configuredAppEnvironment: string | undefined = process.env.APP_ENV,
+): string {
   let origin: URL;
   try {
     origin = new URL(value);
@@ -61,7 +67,7 @@ function normalizeApiOrigin(value: string): string {
     );
   }
 
-  const environment = configuredEnvironment();
+  const environment = configuredEnvironment(configuredAppEnvironment);
   if (environment === "local") {
     if (
       (origin.hostname !== "localhost" && origin.hostname !== "127.0.0.1") ||
@@ -108,18 +114,25 @@ async function getPublishedProjection<T>(
   eventSlug: string,
   projection: "agenda" | "speakers",
   fetcher: PublicFetcher,
+  appEnvironment?: string,
+  bypassCache = false,
 ): Promise<T> {
-  const apiOrigin = normalizeApiOrigin(baseUrl);
+  const apiOrigin = normalizeApiOrigin(baseUrl, appEnvironment);
   const response = await fetcher(
     `${apiOrigin}/api/public/events/${encodeURIComponent(eventSlug)}/${projection}`,
-    {
-      headers: { accept: "application/json" },
-      cache: "force-cache",
-      next: {
-        revalidate: PUBLIC_PROJECTION_REVALIDATE_SECONDS,
-        tags: [PUBLIC_PROGRAM_CACHE_TAG],
-      },
-    },
+    bypassCache
+      ? {
+          headers: { accept: "application/json" },
+          cache: "no-store",
+        }
+      : {
+          headers: { accept: "application/json" },
+          cache: "force-cache",
+          next: {
+            revalidate: PUBLIC_PROJECTION_REVALIDATE_SECONDS,
+            tags: [PUBLIC_PROGRAM_CACHE_TAG],
+          },
+        },
   );
   if (!response.ok) {
     const body = (await response.json().catch(() => undefined)) as
@@ -140,16 +153,18 @@ export function getPublishedAgenda(
   baseUrl: string,
   eventSlug: string,
   fetcher: PublicFetcher = fetch,
+  appEnvironment?: string,
 ): Promise<PublishedAgenda> {
-  return getPublishedProjection(baseUrl, eventSlug, "agenda", fetcher);
+  return getPublishedProjection(baseUrl, eventSlug, "agenda", fetcher, appEnvironment);
 }
 
 export function getPublishedSpeakers(
   baseUrl: string,
   eventSlug: string,
   fetcher: PublicFetcher = fetch,
+  appEnvironment?: string,
 ): Promise<PublishedSpeakerGallery> {
-  return getPublishedProjection(baseUrl, eventSlug, "speakers", fetcher);
+  return getPublishedProjection(baseUrl, eventSlug, "speakers", fetcher, appEnvironment);
 }
 
 export function publishedProjectionsMatch(
@@ -186,9 +201,31 @@ export function getPublishedProgram(
   baseUrl: string,
   eventSlug: string,
   fetcher: PublicFetcher = fetch,
+  appEnvironment?: string,
 ): Promise<PublishedProgram> {
-  return Promise.all([
-    getPublishedAgenda(baseUrl, eventSlug, fetcher),
-    getPublishedSpeakers(baseUrl, eventSlug, fetcher),
-  ]).then(([agenda, speakers]) => publishedProgramFromProjections(agenda, speakers));
+  const loadPair = (bypassCache: boolean) =>
+    Promise.all([
+      getPublishedProjection<PublishedAgenda>(
+        baseUrl,
+        eventSlug,
+        "agenda",
+        fetcher,
+        appEnvironment,
+        bypassCache,
+      ),
+      getPublishedProjection<PublishedSpeakerGallery>(
+        baseUrl,
+        eventSlug,
+        "speakers",
+        fetcher,
+        appEnvironment,
+        bypassCache,
+      ),
+    ]);
+  return loadPair(false).then(([agenda, speakers]) => {
+    if (publishedProjectionsMatch(agenda, speakers)) return { agenda, speakers };
+    return loadPair(true).then(([refreshedAgenda, refreshedSpeakers]) =>
+      publishedProgramFromProjections(refreshedAgenda, refreshedSpeakers),
+    );
+  });
 }

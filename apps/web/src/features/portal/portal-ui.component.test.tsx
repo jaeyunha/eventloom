@@ -215,18 +215,26 @@ describe("speaker portal UI components", () => {
     expect(markup).toContain('aria-label="Speaker readiness"');
   });
 
-  it("limits the visible lane to home, sessions, tasks, and profile", () => {
+  it("keeps primary portal pages and restored operational workspaces visible", () => {
     expect(portalNavigation.map(({ label }) => label)).toEqual([
       "Home",
       "Sessions",
       "Tasks",
       "Profile",
+      "Co-speakers",
+      "Files",
+      "Resources",
+      "Wiki",
     ]);
     expect(portalNavigation.map(({ href }) => href)).toEqual([
       "/portal",
       "/portal/submissions",
       "/portal/tasks",
       "/portal/profile",
+      "/portal?workspace=co-speakers",
+      "/portal?workspace=files",
+      "/portal?workspace=resources",
+      "/portal?workspace=wiki",
     ]);
   });
 

@@ -3632,10 +3632,14 @@ describe("production organizer speaker composition", () => {
       templateId: "speaker-invitation",
       idempotencyKey: "speaker-invitation-key",
     });
-    expect(first).toEqual(second);
     expect(first).toMatchObject({
       status: "queued",
-      recipientEmail: "speaker@example.test",
+      recipients: [{ recipientEmail: "speaker@example.test", status: "queued" }],
+    });
+    expect(second).toMatchObject({
+      status: "duplicate",
+      duplicate: true,
+      recipients: [{ recipientEmail: "speaker@example.test", status: "duplicate" }],
     });
     expect(state.outbox.size).toBe(1);
     expect(state.queueMessages).toHaveLength(1);

@@ -506,7 +506,7 @@ async function installDynamicCfpApi(
   };
   let draftPatchCount = 0;
 
-  await page.route("http://127.0.0.1:8787/**", async (route) => {
+  await page.route("**/api/**", async (route) => {
     const request = route.request();
     requests.push(request);
     const url = new URL(request.url());

@@ -156,7 +156,7 @@ export async function installCfpApi(
   const apiPath = `/api/cfp/organizations/${DEFAULT_ORGANIZATION_ID}/events/${options.eventId}`;
   const draftPath = `${apiPath}/submissions/${submission.id}/draft`;
 
-  await page.route("http://127.0.0.1:8787/**", async (route) => {
+  await page.route("**/api/**", async (route) => {
     const request = route.request();
     requests.push(request);
     const url = new URL(request.url());

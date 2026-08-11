@@ -259,6 +259,24 @@ export function scopePortalViewToPrimaryParticipant(
     tasks,
     outstandingTaskCount: tasks.filter((task) => !isTaskFinished(task)).length,
     assets,
+    ...(view.roster !== undefined &&
+    view.roster.eventId === eventId &&
+    submissionIds.has(view.roster.submissionId)
+      ? {
+          roster: {
+            ...view.roster,
+            capabilities: { ...view.roster.capabilities },
+            members: view.roster.members.map((member) => ({
+              ...member,
+              capabilities: { ...member.capabilities },
+            })),
+          },
+        }
+      : {}),
+    ...(view.resources === undefined
+      ? {}
+      : { resources: view.resources.map((resource) => ({ ...resource })) }),
+    ...(view.wiki === undefined ? {} : { wiki: view.wiki.map((page) => ({ ...page })) }),
     ...(capabilities === undefined ? {} : { capabilities }),
     context: scopePortalContextToPrimaryParticipant(context, [...submissionIds]),
   };

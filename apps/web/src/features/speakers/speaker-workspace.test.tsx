@@ -181,7 +181,7 @@ describe("speaker API adapter", () => {
 
     expect(grant.url).toBe("https://downloads.example.test/grant");
     expect(String(calls[0]?.input)).toBe(
-      "https://api.example.test/api/admin/organizations/org%2F1/events/event%2F1/organizer/assets/asset%2F1/download",
+      "https://api.example.test/api/speaker/events/event%2F1/organizer/assets/asset%2F1/download",
     );
     expect(calls[0]?.init).toMatchObject({
       method: "POST",
@@ -264,7 +264,23 @@ describe("speaker API adapter", () => {
       }
       if (path.endsWith("/invitations/send")) {
         return new Response(
-          JSON.stringify({ data: { status: "queued", recipientEmail: speaker.email } }),
+          JSON.stringify({
+            data: {
+              organizationId: "org-1",
+              eventId: "event-1",
+              idempotencyKey: "invite-once",
+              status: "queued",
+              duplicate: false,
+              recipients: [
+                {
+                  participantId: "participant-1",
+                  recipientEmail: speaker.email,
+                  status: "queued",
+                  receiptId: null,
+                },
+              ],
+            },
+          }),
           { status: 200 },
         );
       }
@@ -331,6 +347,34 @@ describe("speaker API adapter", () => {
     });
   });
 
+  it("rejects invitation receipts without recipient delivery results", async () => {
+    const api = createSpeakerApi(
+      "https://api.example.test",
+      "org-1",
+      "event-1",
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: {
+              organizationId: "org-1",
+              eventId: "event-1",
+              idempotencyKey: "invite-invalid",
+              status: "queued",
+              duplicate: false,
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+
+    await expect(
+      api.sendInvitations({
+        participantIds: ["participant-1"],
+        templateId: "speaker-welcome",
+        idempotencyKey: "invite-invalid",
+      }),
+    ).rejects.toThrow("The invitation result is invalid.");
+  });
   it("surfaces server conflicts and rejects missing tenant scope", async () => {
     const api = createSpeakerApi(
       "https://api.example.test",
@@ -528,13 +572,41 @@ describe("speaker workspace contracts", () => {
     const first = retainInvitationHistory(
       [],
       preview,
-      { status: "sent", recipientEmail: "priya@example.test" },
+      {
+        organizationId: "org-1",
+        eventId: "event-1",
+        idempotencyKey: "invite-1",
+        status: "sent",
+        duplicate: false,
+        recipients: [
+          {
+            participantId: "participant-1",
+            recipientEmail: "priya@example.test",
+            status: "sent",
+            receiptId: "receipt-1",
+          },
+        ],
+      },
       "2026-08-11T10:00:00.000Z",
     );
     const second = retainInvitationHistory(
       first,
       preview,
-      { status: "failed", recipientEmail: "priya@example.test" },
+      {
+        organizationId: "org-1",
+        eventId: "event-1",
+        idempotencyKey: "invite-2",
+        status: "failed",
+        duplicate: false,
+        recipients: [
+          {
+            participantId: "participant-1",
+            recipientEmail: "priya@example.test",
+            status: "failed",
+            receiptId: null,
+          },
+        ],
+      },
       "2026-08-11T11:00:00.000Z",
     );
 

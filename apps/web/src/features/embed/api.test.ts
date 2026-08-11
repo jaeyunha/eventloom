@@ -85,6 +85,40 @@ describe("public embed API", () => {
     ).resolves.toEqual({ agenda: publishedAgenda, speakers: publishedSpeakers });
   });
 
+  it("recovers once from normal post-publication cache skew with a no-store pair", async () => {
+    const staleSpeakers: PublishedSpeakerGallery = {
+      ...publishedSpeakers,
+      revision: { ...publishedSpeakers.revision, id: "revision_2", number: 2 },
+    };
+    const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+    let speakerReads = 0;
+    const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      const speakers = String(input).endsWith("/speakers");
+      if (speakers) speakerReads += 1;
+      return new Response(
+        JSON.stringify({
+          data: speakers && speakerReads === 1 ? staleSpeakers : speakers ? publishedSpeakers : publishedAgenda,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    };
+
+    await expect(
+      getPublishedProgram(
+        "https://open-sessionboard-web-staging.ashleyha0317.workers.dev",
+        "open-systems",
+        fetcher,
+      ),
+    ).resolves.toEqual({ agenda: publishedAgenda, speakers: publishedSpeakers });
+    expect(calls).toHaveLength(4);
+    expect(calls.slice(0, 2).map(({ init }) => init?.cache)).toEqual([
+      "force-cache",
+      "force-cache",
+    ]);
+    expect(calls.slice(2).map(({ init }) => init?.cache)).toEqual(["no-store", "no-store"]);
+    expect(calls.slice(2).every(({ init }) => init?.next === undefined)).toBe(true);
+  });
   it("rejects cross-widget data from different publication revisions", async () => {
     const staleSpeakers: PublishedSpeakerGallery = {
       ...publishedSpeakers,

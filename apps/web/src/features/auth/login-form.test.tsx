@@ -146,20 +146,25 @@ describe("organizer login", () => {
   });
 
   it("rejects non-swyx organizer signup addresses before making a request", async () => {
-    let requestCount = 0;
-    const api = createLoginApi(API_ORIGIN, (async () => {
-      requestCount += 1;
-      return response(200, {});
-    }) as typeof fetch);
+    vi.stubEnv("NEXT_PUBLIC_APP_ENV", "staging");
+    try {
+      let requestCount = 0;
+      const api = createLoginApi(API_ORIGIN, (async () => {
+        requestCount += 1;
+        return response(200, {});
+      }) as typeof fetch);
 
-    for (const email of ["host@example.com", "host@sub.swyx.io", "host@swyx.io.attacker"]) {
-      const failure = await api
-        .signUpWithEmail({ name: "Host", email, password: "Passw0rd!" })
-        .catch((error: unknown) => error);
-      expect(failure).toMatchObject({ kind: "organization-domain" });
-      expect((failure as Error).message).toContain("swyx.io");
+      for (const email of ["host@example.com", "host@sub.swyx.io", "host@swyx.io.attacker"]) {
+        const failure = await api
+          .signUpWithEmail({ name: "Host", email, password: "Passw0rd!" })
+          .catch((error: unknown) => error);
+        expect(failure).toMatchObject({ kind: "organization-domain" });
+        expect((failure as Error).message).toContain("swyx.io");
+      }
+      expect(requestCount).toBe(0);
+    } finally {
+      vi.unstubAllEnvs();
     }
-    expect(requestCount).toBe(0);
   });
 
   it("distinguishes invalid credentials, unverified email, and server failures", async () => {
