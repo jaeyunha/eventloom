@@ -3,8 +3,10 @@ import {
   embedTheme,
   filterAgendaEntries,
   filterSpeakers,
+  formatPublishedDateTimeRange,
   publicAgendaDays,
   publicPhotoUrl,
+  publishedEntryPresenters,
   sortSpeakersBySurname,
   speakerInitials,
   speakerSurname,
@@ -154,11 +156,46 @@ describe("published embed model", () => {
     expect(speakerSurname("Alex Rivera Jr.")).toBe("Rivera");
     expect(speakerSurname("Rivera, Alex")).toBe("Rivera");
     expect(speakerSurname("Ana de la Cruz")).toBe("de la Cruz");
+    expect(speakerSurname("Alex Rivera PhD")).toBe("Rivera");
     expect(sortSpeakersBySurname(variants).map((speaker) => speaker.id)).toEqual([
       "speaker_3",
       "speaker_2",
       "speaker_1",
     ]);
+  });
+
+  it("preserves canonical speakers that share a display name", () => {
+    const entry = entries[0]!;
+    const sameNameSpeaker: PublishedSpeaker = {
+      ...speakers[0]!,
+      id: "speaker_morgan_2",
+      jobTitle: "Principal Engineer",
+    };
+
+    expect(publishedEntryPresenters(entry, [speakers[0]!, sameNameSpeaker])).toMatchObject([
+      {
+        key: "speaker:speaker_morgan",
+        displayName: "Morgan Lee",
+        speaker: { id: "speaker_morgan", jobTitle: "Staff Engineer" },
+      },
+      {
+        key: "speaker:speaker_morgan_2",
+        displayName: "Morgan Lee",
+        speaker: { id: "speaker_morgan_2", jobTitle: "Principal Engineer" },
+      },
+    ]);
+  });
+
+  it("shows the end day for a published range that crosses midnight", () => {
+    expect(
+      formatPublishedDateTimeRange(
+        "2026-09-18T23:30:00.000Z",
+        "2026-09-19T00:30:00.000Z",
+        "UTC",
+      ),
+    ).toBe(
+      "Friday, September 18, 2026: 11:30 PM – Saturday, September 19, 2026: 12:30 AM",
+    );
   });
 
   it("accepts only stable public HTTPS headshot URLs", () => {

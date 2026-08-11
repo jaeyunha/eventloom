@@ -37,18 +37,48 @@ export function publishedEntrySpeakers(
   return speakers.filter((speaker) => speaker.sessionIds.includes(entry.sessionId));
 }
 
-export function publishedEntrySpeakerNames(
-  entry: PublishedAgendaEntry,
-  speakers: readonly PublishedSpeaker[],
-): readonly string[] {
-  const linkedNames = publishedEntrySpeakers(entry, speakers).map((speaker) => speaker.displayName);
-  const names = linkedNames.length > 0 ? linkedNames : entry.speakerNames;
-  return names
-    .map((name) => name.trim())
-    .filter((name, index, values) => name.length > 0 && values.indexOf(name) === index);
+export interface PublishedEntryPresenter {
+  readonly key: string;
+  readonly displayName: string;
+  readonly speaker: PublishedSpeaker | null;
 }
 
-const surnameSuffixes = new Set(["jr", "sr", "ii", "iii", "iv", "v"]);
+export function publishedEntryPresenters(
+  entry: PublishedAgendaEntry,
+  speakers: readonly PublishedSpeaker[],
+): readonly PublishedEntryPresenter[] {
+  const linkedSpeakers = publishedEntrySpeakers(entry, speakers);
+  if (linkedSpeakers.length > 0) {
+    return linkedSpeakers.map((speaker) => ({
+      key: `speaker:${speaker.id}`,
+      displayName: speaker.displayName,
+      speaker,
+    }));
+  }
+  return entry.speakerNames
+    .map((displayName, index) => ({
+      key: `published-name:${entry.id}:${index}`,
+      displayName: displayName.trim(),
+      speaker: null,
+    }))
+    .filter((presenter) => presenter.displayName.length > 0);
+}
+
+const surnameSuffixes = new Set([
+  "jr",
+  "sr",
+  "ii",
+  "iii",
+  "iv",
+  "v",
+  "esq",
+  "jd",
+  "mba",
+  "md",
+  "pe",
+  "phd",
+  "rn",
+]);
 const surnamePrefixes = new Set(["da", "de", "del", "den", "der", "di", "dos", "la", "van", "von"]);
 
 function surnameToken(value: string): string {
@@ -293,17 +323,20 @@ export function formatPublishedDateTimeRange(
   if (Number.isNaN(start.valueOf()) || Number.isNaN(end.valueOf())) {
     return `${startsAt} – ${endsAt}`;
   }
-  const date = new Intl.DateTimeFormat("en-US", {
+  const dateFormatter = new Intl.DateTimeFormat("en-US", {
     weekday: "long",
     month: "long",
     day: "numeric",
     year: "numeric",
     timeZone,
-  }).format(start);
-  return `${date}: ${formatPublishedTime(startsAt, timeZone)} – ${formatPublishedTime(
-    endsAt,
-    timeZone,
-  )}`;
+  });
+  const startDate = dateFormatter.format(start);
+  const startTime = formatPublishedTime(startsAt, timeZone);
+  const endTime = formatPublishedTime(endsAt, timeZone);
+  if (eventDateKey(startsAt, timeZone) === eventDateKey(endsAt, timeZone)) {
+    return `${startDate}: ${startTime} – ${endTime}`;
+  }
+  return `${startDate}: ${startTime} – ${dateFormatter.format(end)}: ${endTime}`;
 }
 
 export function uniqueSorted(values: readonly (readonly string[])[]): readonly string[] {

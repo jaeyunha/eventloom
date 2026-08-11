@@ -338,6 +338,7 @@ describe("public embeds", () => {
     expect(markup).toContain("<strong>Company:</strong> Open Works");
     expect(markup).toContain("Title not published");
     expect(markup).toContain("border-radius:50%");
+    expect(markup).toContain('id="speaker-list-trigger-speaker_morgan"');
     expect(markup).not.toContain("private@example.test");
     expect(markup).toContain('href="/embed/open-systems/speakers-list?theme=light"');
     expect(markup).toContain('href="/embed/open-systems/speakers?theme=light"');
@@ -366,6 +367,30 @@ describe("public embeds", () => {
     expect(markup).toContain('aria-controls="speaker-list-biography-speaker_morgan"');
     expect(markup).toContain('aria-expanded="false"');
     expect(markup).toContain("Show more");
+  });
+  it("renders distinct canonical speakers that share a display name", () => {
+    const duplicateNameProgram: PublishedProgram = {
+      agenda,
+      speakers: {
+        ...gallery,
+        speakers: [
+          gallery.speakers[0]!,
+          {
+            ...gallery.speakers[0]!,
+            id: "speaker_morgan_2",
+            jobTitle: "Principal Engineer",
+          },
+        ],
+      },
+    };
+
+    const markup = renderToStaticMarkup(
+      createElement(PublicSessionsView, { program: duplicateNameProgram }),
+    );
+
+    expect(markup).toContain("Staff Engineer");
+    expect(markup).toContain("Principal Engineer");
+    expect(markup.match(/Morgan Lee/gu)).toHaveLength(2);
   });
   it("sorts speakers by surname, narrows search, and keeps detail controls keyboard accessible", () => {
     const orderedNames = sortSpeakersBySurname(galleryWithDetails.speakers).map(
