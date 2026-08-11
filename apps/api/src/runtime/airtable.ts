@@ -320,9 +320,9 @@ function speakerProfileScoped(
 ): boolean {
   const record = profile as unknown as JsonRecord;
   if (eventReference(record) !== eventId || eventOrganizationId !== tenantId) return false;
-  const profileOrganizationId = authoritativeOrganizationId(record);
-  if (profileOrganizationId !== undefined) return profileOrganizationId === tenantId;
-  return !Object.hasOwn(record, "organizationId") && !Object.hasOwn(record, "tenantId");
+  const profileScope = resolveOrganizationScope(record);
+  if (profileScope.status === "resolved") return profileScope.organizationId === tenantId;
+  return profileScope.status === "missing";
 }
 
 function belongsToOrganization(
@@ -1922,8 +1922,12 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
   }): Promise<SpeakerProfile> {
     const id = `speaker-profile:${input.eventId}:${input.participant.id}`;
     const event = await this.#events.find(input.eventId);
+    const eventScope = resolveOrganizationScope(event);
+    if (eventScope.status === "conflict") {
+      throw new Error("The speaker profile event has conflicting tenant data.");
+    }
     const eventOrganizationId =
-      event === undefined ? undefined : authoritativeOrganizationId(event);
+      eventScope.status === "resolved" ? eventScope.organizationId : undefined;
     const organizationId =
       typeof input.organizationId === "string" && input.organizationId.trim().length > 0
         ? input.organizationId.trim()
@@ -1938,7 +1942,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     const displayName = `${input.participant.firstName} ${input.participant.lastName}`.trim();
     const email = input.participant.email.trim().toLowerCase();
     if (existing !== null) {
-      const existingOrganizationId = authoritativeOrganizationId(existing);
+      const existingOrganizationId = resolvedOrganizationId(existing);
       if (
         existingOrganizationId === undefined &&
         (Object.hasOwn(existing, "organizationId") || Object.hasOwn(existing, "tenantId"))
@@ -2135,7 +2139,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     participantIds: readonly string[],
   ): Promise<SpeakerProfile[]> {
     const event = await this.#events.find(eventId);
-    const organizationId = event === undefined ? undefined : authoritativeOrganizationId(event);
+    const organizationId = event === undefined ? undefined : resolvedOrganizationId(event);
     if (organizationId === undefined) return [];
     const profileIds = participantIds.map(
       (participantId) => `speaker-profile:${eventId}:${participantId}`,
@@ -2163,8 +2167,10 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       return null;
     }
     const event = await this.#events.find(eventId);
+    const eventScope = resolveOrganizationScope(event);
+    if (eventScope.status === "conflict") return null;
     const eventOrganizationId =
-      event === undefined ? undefined : authoritativeOrganizationId(event);
+      eventScope.status === "resolved" ? eventScope.organizationId : undefined;
     const expectedOrganizationId =
       typeof organizationId === "string" && organizationId.trim().length > 0
         ? organizationId.trim()
@@ -2184,7 +2190,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     command: UpdateBiographyCommand,
   ): Promise<RepositoryResult<SpeakerProfile>> {
     const event = await this.#events.find(command.eventId);
-    const organizationId = event === undefined ? undefined : authoritativeOrganizationId(event);
+    const organizationId = event === undefined ? undefined : resolvedOrganizationId(event);
     if (organizationId === undefined) return { ok: false, reason: "not_found" };
     const profile = await this.getProfile(command.eventId, command.participantId, organizationId);
     if (profile === null) return { ok: false, reason: "not_found" };
@@ -2204,7 +2210,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     command: UpdateSpeakerProfileCommand,
   ): Promise<RepositoryResult<SpeakerProfile>> {
     const event = await this.#events.find(command.eventId);
-    const organizationId = event === undefined ? undefined : authoritativeOrganizationId(event);
+    const organizationId = event === undefined ? undefined : resolvedOrganizationId(event);
     if (organizationId === undefined) return { ok: false, reason: "not_found" };
     const profile = await this.getProfile(command.eventId, command.participantId, organizationId);
     if (profile === null) return { ok: false, reason: "not_found" };
@@ -2326,7 +2332,9 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       this.#assets.find(assetId),
       this.#events.find(eventId),
     ]);
-    const tenantId = event === undefined ? undefined : authoritativeOrganizationId(event);
+    const eventScope = resolveOrganizationScope(event);
+    if (eventScope.status === "conflict") return null;
+    const tenantId = eventScope.status === "resolved" ? eventScope.organizationId : undefined;
     return asset !== undefined &&
       entityType(asset) === "speaker_asset" &&
       asset.eventId === eventId &&
@@ -6943,7 +6951,8 @@ export class AirtableCrmRepository implements CrmRepository {
     };
     const profileChanged =
       profile === undefined ||
-      profileOrganization !== organizationId ||
+      profileScope.status !== "resolved" ||
+      profileScope.organizationId !== organizationId ||
       profile.displayName !== contact.displayName ||
       (profile.email ?? null) !== contact.email ||
       (profile.jobTitle ?? null) !== contact.title ||
@@ -7530,8 +7539,7 @@ export class AirtableRemixContentGateway implements RemixContentGateway {
     filter?: RemixRecordFilter;
   }): Promise<readonly RemixSpeakerRecord[]> {
     const event = await this.#events.find(input.eventId);
-    const eventOrganizationId =
-      event === undefined ? undefined : authoritativeOrganizationId(event);
+    const eventOrganizationId = resolvedOrganizationId(event);
     return (await this.#profiles.list())
       .filter((profile) =>
         speakerProfileScoped(profile, input.tenantId, input.eventId, eventOrganizationId),
@@ -7579,8 +7587,7 @@ export class AirtableRemixContentGateway implements RemixContentGateway {
     sourceId: string;
   }): Promise<RemixSpeakerRecord | null> {
     const event = await this.#events.find(input.eventId);
-    const eventOrganizationId =
-      event === undefined ? undefined : authoritativeOrganizationId(event);
+    const eventOrganizationId = resolvedOrganizationId(event);
     const profile = (await this.#profiles.list()).find(
       (candidate) =>
         speakerProfileScoped(candidate, input.tenantId, input.eventId, eventOrganizationId) &&
@@ -7671,8 +7678,7 @@ export class AirtableRemixContentGateway implements RemixContentGateway {
     }
 
     const event = await this.#events.find(input.eventId);
-    const eventOrganizationId =
-      event === undefined ? undefined : authoritativeOrganizationId(event);
+    const eventOrganizationId = resolvedOrganizationId(event);
     const profiles = await this.#profiles.list();
     const profile = profiles.find(
       (candidate) =>
