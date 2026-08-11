@@ -1,4 +1,5 @@
-import { expect, test } from "./fixtures/auth";
+import { E2E_SESSION_COOKIE, type E2eAuthSession, expect, test } from "./fixtures/auth";
+import { installCfpApi } from "./fixtures/cfp-api";
 
 test.use({ authRole: "submitter" });
 
@@ -13,7 +14,14 @@ async function selectSearchable(
   await expect(combobox).toHaveValue(option);
 }
 
-test("submitter completes the account-first CFP with two participants", async ({ page }) => {
+test("submitter completes the account-first CFP with two participants", async ({
+  page,
+  authSession,
+}) => {
+  await installCfpApi(page, authSession, {
+    eventId: "evaluator-2026",
+    formId: "evaluator-2026-cfp",
+  });
   await page.goto("/cfp/evaluator-2026");
 
   await expect(
@@ -25,11 +33,11 @@ test("submitter completes the account-first CFP with two participants", async ({
   await expect(page).toHaveURL(/\/cfp\/evaluator-2026\/account$/);
 
   await page.getByLabel("Your Email Address:").fill("ada@example.test");
-  await page.getByLabel("Create a password:").fill("CalmSystems!26");
+  await page.getByLabel("Password:").fill("CalmSystems!26");
   await page.getByLabel("First Name").fill("Ada");
   await page.getByLabel("Last Name").fill("Speaker");
   await page.getByRole("checkbox", { name: /I agree to the Terms of Service/ }).check();
-  await page.getByRole("button", { name: "Create account →" }).click();
+  await page.getByRole("button", { name: "Continue with email →" }).click();
   await expect(page).toHaveURL(/\/cfp\/evaluator-2026\/submission$/);
 
   await page.getByLabel("Title").fill("Designing calm incident response");
@@ -55,8 +63,10 @@ test("submitter completes the account-first CFP with two participants", async ({
   await page.getByLabel("Last Name").nth(1).fill("Cooper");
   await page.getByLabel("Email").nth(1).fill("grace@example.test");
   await page.getByLabel("Biography").nth(1).fill("Engineering leader and incident facilitator.");
-  await page.getByRole("button", { name: "Continue to review →" }).click();
-  await expect(page).toHaveURL(/\/cfp\/evaluator-2026\/review$/);
+  await Promise.all([
+    page.waitForURL(/\/cfp\/evaluator-2026\/review$/, { timeout: 15_000 }),
+    page.getByRole("button", { name: "Continue to review →" }).click(),
+  ]);
 
   await expect(
     page.getByRole("heading", { level: 1, name: "Review your submission" }),
@@ -70,26 +80,41 @@ test("submitter completes the account-first CFP with two participants", async ({
   await expect(
     page.getByRole("heading", {
       level: 1,
-      name: "Thank you for submitting to present at our event!",
+      name: "Submission received: Designing calm incident response",
     }),
+  ).toBeVisible();
+  await expect(page.getByText("Your proposal has been received.", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("Thank you for contributing to the program.", { exact: true }),
   ).toBeVisible();
   await expect(page.getByRole("button", { name: "Continue to portal →" })).toBeVisible();
 
   const browserState = await page.evaluate(() => ({
     pointer: window.localStorage.getItem(
-      "open-sessionboard:cfp-submission:v1:local-organization:evaluator-2026:evaluator-2026-cfp",
+      "open-sessionboard:cfp-submission:v1:ai-engineer:evaluator-2026:evaluator-2026-cfp",
     ),
     legacyDraft: window.localStorage.getItem("open-sessionboard:cfp-draft:v1:evaluator-2026"),
   }));
   expect(browserState.pointer).toMatch(/^submission[_-]/);
   expect(browserState.legacyDraft).toBeNull();
+  await page.getByRole("button", { name: "Submit another session" }).click();
+  await expect(page).toHaveURL(/\/cfp\/evaluator-2026$/);
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        window.localStorage.getItem(
+          "open-sessionboard:cfp-submission:v1:ai-engineer:evaluator-2026:evaluator-2026-cfp",
+        ),
+      ),
+    )
+    .toBeNull();
 });
 
 test("required CFP validation announces errors and focuses the first invalid field", async ({
   page,
 }) => {
   await page.goto("/cfp/validation-check/account");
-  await page.getByRole("button", { name: "Create account →" }).click();
+  await page.getByRole("button", { name: "Continue with email →" }).click();
 
   const errorSummary = page.getByRole("alert").filter({ hasText: "Check the highlighted fields." });
   await expect(errorSummary).toBeVisible();
@@ -98,7 +123,12 @@ test("required CFP validation announces errors and focuses the first invalid fie
   await expect(page.getByLabel("Your Email Address:")).toHaveAttribute("aria-invalid", "true");
 });
 
-test("CFP draft survives a reload without submitting", async ({ page }) => {
+test("CFP draft survives a reload without submitting", async ({ page, authSession }) => {
+  await installCfpApi(page, authSession, {
+    eventId: "resume-check",
+    formId: "resume-check-cfp",
+    eventName: "Resume Draft Test Event",
+  });
   await page.goto("/cfp/resume-check/account");
   await page.getByLabel("Your Email Address:").fill("resume@example.test");
   await page.getByLabel("First Name").fill("Resilient");
@@ -108,4 +138,817 @@ test("CFP draft survives a reload without submitting", async ({ page }) => {
   await page.reload();
   await expect(page.getByLabel("Your Email Address:")).toHaveValue("resume@example.test");
   await expect(page.getByLabel("First Name")).toHaveValue("Resilient");
+});
+const CFP_ORGANIZATION_ID = "ai-engineer";
+const CFP_EVENT_ID = "open-sessionboard-conf";
+const CFP_FORM_ID = "main-cfp";
+const CFP_FORM_VERSION = 4;
+const CFP_SUBMISSION_ID = "submission-cfp-e2e";
+const CFP_UPDATED_AT = "2026-08-08T12:00:00.000Z";
+
+const CFP_EVENT = {
+  id: CFP_EVENT_ID,
+  slug: CFP_EVENT_ID,
+  name: "Open Sessionboard Conference",
+  timezone: "America/Los_Angeles",
+  opensAt: "2026-08-01T07:00:00.000Z",
+  closesAt: "2026-09-15T07:00:00.000Z",
+} as const;
+
+const CFP_FORM = {
+  id: CFP_FORM_ID,
+  name: "Conference call for speakers",
+  version: CFP_FORM_VERSION,
+  status: "published",
+  welcomeContent: "Share the session you want to bring to our community.",
+  settings: {
+    speakerLimit: 3,
+    maxSubmissionsPerAccount: 3,
+    confirmationMessage: "Your proposal has been received.",
+    successContent: "Thank you for contributing to the program.",
+  },
+  sections: [
+    {
+      id: "session",
+      title: "Session proposal",
+      description: "Tell us about the proposed session.",
+    },
+    {
+      id: "workshop",
+      title: "Workshop details",
+      description: "These details are shown for workshop proposals.",
+    },
+    {
+      id: "people",
+      title: "Speakers",
+      description: "Add the people presenting the session.",
+    },
+  ],
+  submissionFields: [
+    {
+      id: "field-title",
+      sectionId: "session",
+      key: "title",
+      label: "Session title",
+      kind: "text",
+      required: true,
+      options: [],
+      fieldRef: { id: "shared-session-title", version: 3 },
+    },
+    {
+      id: "field-abstract",
+      sectionId: "session",
+      key: "abstract",
+      label: "Abstract",
+      kind: "rich_text",
+      required: true,
+      options: [],
+    },
+    {
+      id: "field-format",
+      sectionId: "session",
+      key: "format",
+      label: "Session format",
+      kind: "select",
+      required: true,
+      options: ["Talk", "Workshop", "Panel"],
+    },
+    {
+      id: "field-track",
+      sectionId: "session",
+      key: "track",
+      label: "Track",
+      kind: "select",
+      required: true,
+      options: ["Platform", "Community", "Operations"],
+    },
+    {
+      id: "field-topics",
+      sectionId: "session",
+      key: "topics",
+      label: "Topics",
+      kind: "multi_select",
+      required: false,
+      options: ["Reliability", "Accessibility", "Leadership"],
+    },
+    {
+      id: "field-audience",
+      sectionId: "workshop",
+      key: "audience",
+      label: "Workshop audience",
+      kind: "text",
+      required: true,
+      options: [],
+    },
+    {
+      id: "field-slides",
+      sectionId: "workshop",
+      key: "slides",
+      label: "Final slides",
+      kind: "file_request",
+      required: true,
+      options: [],
+      fileRequest: {
+        allowedMimeTypes: ["application/pdf"],
+        maxBytes: 1_048_576,
+        required: true,
+        owner: "submission",
+      },
+    },
+  ],
+  participantFields: [
+    {
+      id: "participant-first-name",
+      sectionId: "people",
+      key: "firstName",
+      label: "First name",
+      kind: "text",
+      required: true,
+      options: [],
+    },
+    {
+      id: "participant-last-name",
+      sectionId: "people",
+      key: "lastName",
+      label: "Last name",
+      kind: "text",
+      required: true,
+      options: [],
+    },
+    {
+      id: "participant-email",
+      sectionId: "people",
+      key: "email",
+      label: "Email",
+      kind: "email",
+      required: true,
+      options: [],
+    },
+    {
+      id: "participant-type",
+      sectionId: "people",
+      key: "participantType",
+      label: "Participant type",
+      kind: "select",
+      required: true,
+      options: ["Individual", "Company"],
+    },
+    {
+      id: "participant-company",
+      sectionId: "people",
+      key: "participantCompany",
+      label: "Company",
+      kind: "text",
+      required: false,
+      options: [],
+    },
+    {
+      id: "participant-biography",
+      sectionId: "people",
+      key: "biography",
+      label: "Biography",
+      kind: "rich_text",
+      required: false,
+      options: [],
+    },
+  ],
+  rules: [
+    {
+      id: "hide-workshop",
+      priority: 1,
+      when: {
+        type: "group",
+        operator: "all",
+        conditions: [
+          { type: "predicate", fieldKey: "format", operator: "not_equals", value: "Workshop" },
+        ],
+      },
+      actions: [
+        { type: "hide_section", sectionId: "workshop" },
+        { type: "hide_field", fieldKey: "audience" },
+        { type: "hide_field", fieldKey: "slides" },
+      ],
+    },
+    {
+      id: "show-workshop",
+      priority: 2,
+      when: {
+        type: "group",
+        operator: "all",
+        conditions: [
+          { type: "predicate", fieldKey: "format", operator: "equals", value: "Workshop" },
+        ],
+      },
+      actions: [
+        { type: "show_section", sectionId: "workshop" },
+        { type: "show_field", fieldKey: "audience" },
+        { type: "show_field", fieldKey: "slides" },
+      ],
+    },
+    {
+      id: "hide-company",
+      priority: 1,
+      when: {
+        type: "group",
+        operator: "all",
+        conditions: [
+          {
+            type: "predicate",
+            fieldKey: "participantType",
+            operator: "not_equals",
+            value: "Company",
+          },
+        ],
+      },
+      actions: [{ type: "hide_field", fieldKey: "participantCompany" }],
+    },
+    {
+      id: "show-company",
+      priority: 2,
+      when: {
+        type: "group",
+        operator: "all",
+        conditions: [
+          {
+            type: "predicate",
+            fieldKey: "participantType",
+            operator: "equals",
+            value: "Company",
+          },
+        ],
+      },
+      actions: [{ type: "show_field", fieldKey: "participantCompany" }],
+    },
+  ],
+} as const;
+
+interface DynamicCfpParticipant {
+  id: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  role: "primary" | "co_speaker";
+  biography: string;
+  answers: Record<string, unknown>;
+}
+
+interface DynamicCfpSubmission {
+  id: string;
+  tenantId: string;
+  eventId: string;
+  formId: string;
+  ownerAccountId: string;
+  formVersion: number;
+  version: number;
+  status: "draft" | "submitted";
+  completedSteps: string[];
+  answers: Record<string, unknown>;
+  participants: DynamicCfpParticipant[];
+  secondaryContacts: Array<{ id: string; name: string; email: string }>;
+  createdAt: string;
+  updatedAt: string;
+  submittedAt?: string;
+}
+
+interface DynamicCfpHarness {
+  requests: Array<import("@playwright/test").Request>;
+  publishedResponses: Array<{
+    event: typeof CFP_EVENT;
+    form: typeof CFP_FORM;
+  }>;
+  submission: DynamicCfpSubmission;
+  receiptRequests: Array<import("@playwright/test").Request>;
+  draftLoads: Array<import("@playwright/test").Request>;
+}
+
+interface DynamicCfpHarnessOptions {
+  stalePointer?: boolean;
+  conflictOnDraftPatch?: number;
+  initialAnswers?: Record<string, unknown>;
+}
+
+function cfpRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function cloneCfp<T>(value: T): T {
+  return structuredClone(value);
+}
+
+async function fulfillCfpJson(
+  route: import("@playwright/test").Route,
+  data: unknown,
+  status = 200,
+): Promise<void> {
+  await route.fulfill({
+    status,
+    contentType: "application/json",
+    headers: {
+      "access-control-allow-credentials": "true",
+      "access-control-allow-headers": "content-type,idempotency-key",
+      "access-control-allow-methods": "GET,PATCH,POST,PUT,OPTIONS",
+      "access-control-allow-origin": "http://127.0.0.1:3015",
+    },
+    body: JSON.stringify({ data }),
+  });
+}
+
+function cfpErrorBody(code: string, message: string): string {
+  return JSON.stringify({ error: { code, message, traceId: "trace-cfp-e2e" } });
+}
+async function fulfillCfpConflict(
+  route: import("@playwright/test").Route,
+  message = "The CFP submission has changed.",
+): Promise<void> {
+  await route.fulfill({
+    status: 409,
+    contentType: "application/json",
+    headers: {
+      "access-control-allow-credentials": "true",
+      "access-control-allow-headers": "content-type,idempotency-key",
+      "access-control-allow-methods": "GET,PATCH,POST,PUT,OPTIONS",
+      "access-control-allow-origin": "http://127.0.0.1:3015",
+    },
+    body: cfpErrorBody("CONFLICT", message),
+  });
+}
+
+async function installDynamicCfpApi(
+  page: import("@playwright/test").Page,
+  session: E2eAuthSession,
+  options: DynamicCfpHarnessOptions = {},
+): Promise<DynamicCfpHarness> {
+  const requests: Array<import("@playwright/test").Request> = [];
+  const publishedResponses: DynamicCfpHarness["publishedResponses"] = [];
+  const receiptRequests: Array<import("@playwright/test").Request> = [];
+  const draftLoads: Array<import("@playwright/test").Request> = [];
+  const submission: DynamicCfpSubmission = {
+    id: CFP_SUBMISSION_ID,
+    tenantId: CFP_ORGANIZATION_ID,
+    eventId: CFP_EVENT_ID,
+    formId: CFP_FORM_ID,
+    ownerAccountId: session.userId,
+    formVersion: CFP_FORM_VERSION,
+    version: 1,
+    status: "draft",
+    completedSteps: ["welcome"],
+    answers: cloneCfp(
+      options.initialAnswers ?? {
+        slides: { assetId: "asset-finalized-slides" },
+      },
+    ),
+    participants: [],
+    secondaryContacts: [],
+    createdAt: CFP_UPDATED_AT,
+    updatedAt: CFP_UPDATED_AT,
+  };
+  let draftPatchCount = 0;
+
+  await page.route("http://127.0.0.1:8787/**", async (route) => {
+    const request = route.request();
+    requests.push(request);
+    const url = new URL(request.url());
+
+    if (request.method() === "OPTIONS") {
+      await route.fulfill({
+        status: 204,
+        headers: {
+          "access-control-allow-credentials": "true",
+          "access-control-allow-headers": "content-type,idempotency-key",
+          "access-control-allow-methods": "GET,PATCH,POST,PUT,OPTIONS",
+          "access-control-allow-origin": "http://127.0.0.1:3015",
+        },
+      });
+      return;
+    }
+    expect(request.headers().cookie).toContain(`${E2E_SESSION_COOKIE}=${session.token}`);
+
+    const publicPath = `/api/public/cfp/organizations/${CFP_ORGANIZATION_ID}/events/${CFP_EVENT_ID}`;
+    const apiPath = `/api/cfp/organizations/${CFP_ORGANIZATION_ID}/events/${CFP_EVENT_ID}`;
+    if (
+      request.method() === "GET" &&
+      (url.pathname === publicPath || url.pathname === `${publicPath}/forms/${CFP_FORM_ID}`)
+    ) {
+      const response = { event: cloneCfp(CFP_EVENT), form: cloneCfp(CFP_FORM) };
+      publishedResponses.push(response);
+      await fulfillCfpJson(route, response);
+      return;
+    }
+
+    if (
+      request.method() === "GET" &&
+      url.pathname.startsWith(`${apiPath}/`) &&
+      url.pathname.endsWith(`/submissions/${CFP_SUBMISSION_ID}/draft`)
+    ) {
+      draftLoads.push(request);
+      if (options.stalePointer) {
+        await route.fulfill({
+          status: 404,
+          contentType: "application/json",
+          headers: {
+            "access-control-allow-credentials": "true",
+            "access-control-allow-headers": "content-type,idempotency-key",
+            "access-control-allow-methods": "GET,PATCH,POST,PUT,OPTIONS",
+            "access-control-allow-origin": "http://127.0.0.1:3015",
+          },
+          body: cfpErrorBody("NOT_FOUND", "The CFP submission was not found."),
+        });
+        return;
+      }
+      await fulfillCfpJson(route, cloneCfp(submission));
+      return;
+    }
+
+    if (request.method() === "POST" && url.pathname === `${apiPath}/forms/${CFP_FORM_ID}/drafts`) {
+      submission.version = 1;
+      await fulfillCfpJson(route, cloneCfp(submission), 201);
+      return;
+    }
+
+    if (
+      request.method() === "PATCH" &&
+      url.pathname.startsWith(`${apiPath}/`) &&
+      url.pathname.endsWith(`/submissions/${CFP_SUBMISSION_ID}/draft`)
+    ) {
+      draftPatchCount += 1;
+      const body = request.postDataJSON() as Record<string, unknown>;
+      if (body.formVersion !== CFP_FORM_VERSION || body.expectedVersion !== submission.version) {
+        await fulfillCfpConflict(route);
+        return;
+      }
+      if (options.conflictOnDraftPatch === draftPatchCount) {
+        await route.fulfill({
+          status: 409,
+          contentType: "application/json",
+          headers: {
+            "access-control-allow-credentials": "true",
+            "access-control-allow-headers": "content-type,idempotency-key",
+            "access-control-allow-methods": "GET,PATCH,POST,PUT,OPTIONS",
+            "access-control-allow-origin": "http://127.0.0.1:3015",
+          },
+          body: cfpErrorBody("CONFLICT", "The CFP submission has changed."),
+        });
+        return;
+      }
+      const answers = cfpRecord(body.answers);
+      if (answers !== null) submission.answers = { ...submission.answers, ...cloneCfp(answers) };
+      if (
+        typeof body.completedStep === "string" &&
+        !submission.completedSteps.includes(body.completedStep)
+      ) {
+        submission.completedSteps = [...submission.completedSteps, body.completedStep];
+      }
+      submission.version += 1;
+      submission.updatedAt = "2026-08-08T13:00:00.000Z";
+      await fulfillCfpJson(route, cloneCfp(submission));
+      return;
+    }
+
+    if (
+      request.method() === "PUT" &&
+      url.pathname.startsWith(`${apiPath}/`) &&
+      url.pathname.endsWith(`/submissions/${CFP_SUBMISSION_ID}/participants`)
+    ) {
+      const body = request.postDataJSON() as Record<string, unknown>;
+      if (body.formVersion !== CFP_FORM_VERSION || body.expectedVersion !== submission.version) {
+        await fulfillCfpConflict(route);
+        return;
+      }
+      if (Array.isArray(body.participants)) {
+        submission.participants = cloneCfp(body.participants) as DynamicCfpParticipant[];
+      }
+      if (Array.isArray(body.secondaryContacts)) {
+        submission.secondaryContacts = cloneCfp(body.secondaryContacts) as Array<{
+          id: string;
+          name: string;
+          email: string;
+        }>;
+      }
+      submission.version += 1;
+      submission.updatedAt = "2026-08-08T13:00:00.000Z";
+      await fulfillCfpJson(route, cloneCfp(submission));
+      return;
+    }
+
+    if (
+      request.method() === "POST" &&
+      url.pathname.startsWith(`${apiPath}/`) &&
+      url.pathname.endsWith(`/submissions/${CFP_SUBMISSION_ID}/review`)
+    ) {
+      await fulfillCfpJson(route, {
+        submissionId: submission.id,
+        version: submission.version,
+        canSubmit: true,
+        issues: [],
+        matchedRuleIds: ["show-workshop", "show-company"],
+        routes: [],
+      });
+      return;
+    }
+
+    if (
+      request.method() === "POST" &&
+      url.pathname.startsWith(`${apiPath}/`) &&
+      url.pathname.endsWith(`/submissions/${CFP_SUBMISSION_ID}/submit`)
+    ) {
+      const body = request.postDataJSON() as Record<string, unknown>;
+      if (body.formVersion !== CFP_FORM_VERSION || body.expectedVersion !== submission.version) {
+        await fulfillCfpConflict(route);
+        return;
+      }
+      submission.version += 1;
+      submission.status = "submitted";
+      submission.updatedAt = "2026-08-08T13:00:00.000Z";
+      submission.submittedAt = "2026-08-08T13:05:00.000Z";
+      const receipt = {
+        id: "receipt-cfp-e2e",
+        submissionId: submission.id,
+        version: submission.version,
+        submittedAt: submission.submittedAt,
+      };
+      await fulfillCfpJson(route, {
+        submission: cloneCfp(submission),
+        receipt,
+        confirmationQueued: true,
+      });
+      return;
+    }
+
+    if (
+      request.method() === "GET" &&
+      url.pathname.startsWith(`${apiPath}/`) &&
+      url.pathname.endsWith(`/submissions/${CFP_SUBMISSION_ID}/receipt`)
+    ) {
+      receiptRequests.push(request);
+      await fulfillCfpJson(route, {
+        id: "receipt-cfp-e2e",
+        submissionId: submission.id,
+        version: submission.version,
+        submittedAt: submission.submittedAt ?? "2026-08-08T13:05:00.000Z",
+      });
+      return;
+    }
+
+    await route.fulfill({
+      status: 404,
+      contentType: "application/json",
+      headers: {
+        "access-control-allow-credentials": "true",
+        "access-control-allow-headers": "content-type,idempotency-key",
+        "access-control-allow-methods": "GET,PATCH,POST,PUT,OPTIONS",
+        "access-control-allow-origin": "http://127.0.0.1:3015",
+      },
+      body: cfpErrorBody("E2E_ROUTE_NOT_FOUND", `No E2E route for ${url.pathname}`),
+    });
+  });
+
+  return { requests, publishedResponses, submission, receiptRequests, draftLoads };
+}
+
+function pointerKey(): string {
+  return `open-sessionboard:cfp-submission:v1:${encodeURIComponent(CFP_ORGANIZATION_ID)}:${encodeURIComponent(CFP_EVENT_ID)}:${encodeURIComponent(CFP_FORM_ID)}`;
+}
+
+function cfpMutationBody(request: import("@playwright/test").Request): Record<string, unknown> {
+  const body = request.postDataJSON();
+  return cfpRecord(body) ?? {};
+}
+
+test("published dynamic CFP keeps conditional sections, custom answers, and schema references through submission", async ({
+  authSession,
+  page,
+}) => {
+  const harness = await installDynamicCfpApi(page, authSession);
+  await page.goto(`/cfp/${CFP_EVENT_ID}`);
+
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Open Sessionboard Conference" }),
+  ).toBeVisible();
+  await expect(page.getByText(CFP_FORM.welcomeContent, { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Continue →" }).click();
+  await expect(page).toHaveURL(new RegExp(`/cfp/${CFP_EVENT_ID}/account$`));
+
+  await page.getByLabel("Your Email Address:").fill("cfp-e2e@example.test");
+  await page.getByLabel("Password:").fill("CalmSystems!26");
+  await page.getByLabel("First Name").fill("Ada");
+  await page.getByLabel("Last Name").fill("Speaker");
+  await page.getByRole("checkbox", { name: /I agree to the Terms of Service/ }).check();
+  await page.getByRole("button", { name: "Continue with email →" }).click();
+  await expect(page).toHaveURL(new RegExp(`/cfp/${CFP_EVENT_ID}/submission$`));
+
+  await expect(page.getByRole("heading", { level: 2, name: "Session proposal" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 2, name: "Workshop details" })).toHaveCount(0);
+  await expect(page.getByLabel("Final slides")).toHaveCount(0);
+  await page.getByLabel("Session title").fill("Designing calm incident response");
+  const abstract = page.getByLabel("Abstract");
+  await abstract.fill("A practical, evidence-led approach to resilient teams.");
+  await abstract.selectText();
+  await page.getByRole("button", { name: "Bold" }).click();
+  await expect(abstract).toHaveValue("**A practical, evidence-led approach to resilient teams.**");
+  await selectSearchable(page, "Session format", "Workshop");
+  await selectSearchable(page, "Track", "Platform");
+  const topicsSearch = page.getByPlaceholder("Search options…");
+  await topicsSearch.fill("Access");
+  await page.getByLabel("Accessibility", { exact: true }).check();
+  await expect(page.getByRole("heading", { level: 2, name: "Workshop details" })).toBeVisible();
+  await page.getByLabel("Workshop audience").fill("Staff engineers and platform teams.");
+  await expect(page.getByLabel("Final slides")).toBeVisible();
+  await page.getByRole("button", { name: "Next step →" }).click();
+  await expect(page).toHaveURL(new RegExp(`/cfp/${CFP_EVENT_ID}/participants$`));
+
+  await expect(page.getByRole("heading", { level: 2, name: "Participant 1 of 1" })).toBeVisible();
+  await expect(page.getByLabel("Company", { exact: true })).toHaveCount(0);
+  const firstParticipantType = page.getByRole("combobox", { name: "Participant type" }).first();
+  await firstParticipantType.fill("Company");
+  await page.getByRole("option", { name: "Company", exact: true }).click();
+  await expect(page.getByLabel("Company", { exact: true }).first()).toBeVisible();
+  await page.getByLabel("Company", { exact: true }).first().fill("Calm Systems, Inc.");
+  const firstBiography = page.getByLabel("Biography").first();
+  await firstBiography.fill("Staff engineer and resilient-systems educator.");
+  await page.getByRole("button", { name: "＋ Add participant" }).click();
+  await page.getByLabel("First name").nth(1).fill("Grace");
+  await page.getByLabel("Last name").nth(1).fill("Cooper");
+  await page.getByLabel("Email").nth(1).fill("grace@example.test");
+  const secondParticipantType = page.getByRole("combobox", { name: "Participant type" }).nth(1);
+  await secondParticipantType.fill("Individual");
+  await page.getByRole("option", { name: "Individual", exact: true }).click();
+  await page.getByLabel("Role for this participant").nth(1).selectOption({ label: "Co-speaker" });
+  await expect(page.getByLabel("Company", { exact: true })).toHaveCount(1);
+  await page.getByRole("button", { name: "Continue to review →" }).click();
+  await expect(page).toHaveURL(new RegExp(`/cfp/${CFP_EVENT_ID}/review$`));
+  await expect(page.getByRole("heading", { level: 3, name: /Ada Speaker/ })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 3, name: /Grace Cooper/ })).toContainText(
+    "Co-speaker",
+  );
+  await page.getByRole("button", { name: "Submit", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/cfp/${CFP_EVENT_ID}/complete$`));
+  await expect(
+    page.getByRole("heading", {
+      level: 1,
+      name: "Submission received: Designing calm incident response",
+    }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(CFP_FORM.settings.confirmationMessage, { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText(CFP_FORM.settings.successContent, { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Continue to portal →" })).toBeVisible();
+  await expect(
+    page.getByText(/Open Sessionboard Conference received your proposal\./),
+  ).toBeVisible();
+  await expect(page.getByRole("link", { name: "View submission status dashboard" })).toBeVisible();
+
+  expect(harness.publishedResponses.length).toBeGreaterThan(0);
+  expect(harness.submission.formVersion).toBe(CFP_FORM_VERSION);
+  expect(harness.publishedResponses[0]?.form.sections).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ id: "session", title: "Session proposal" }),
+      expect.objectContaining({ id: "workshop", title: "Workshop details" }),
+    ]),
+  );
+  expect(harness.publishedResponses[0]?.form.submissionFields[0]).toMatchObject({
+    key: "title",
+    fieldRef: { id: "shared-session-title", version: 3 },
+  });
+  const draftWrites = harness.requests.filter(
+    (request) =>
+      request.method() === "PATCH" &&
+      request.url().includes(`/submissions/${CFP_SUBMISSION_ID}/draft`),
+  );
+  const participantWrites = harness.requests.filter(
+    (request) =>
+      request.method() === "PUT" &&
+      request.url().includes(`/submissions/${CFP_SUBMISSION_ID}/participants`),
+  );
+  const submitWrites = harness.requests.filter(
+    (request) =>
+      request.method() === "POST" &&
+      request.url().includes(`/submissions/${CFP_SUBMISSION_ID}/submit`),
+  );
+  expect(draftWrites.length).toBeGreaterThan(0);
+  expect(draftWrites.map((request) => cfpMutationBody(request).completedStep)).toEqual([
+    "account",
+    "submission",
+    "participant",
+    "review",
+  ]);
+  expect(participantWrites).toHaveLength(1);
+  expect(submitWrites).toHaveLength(1);
+  for (const request of [...draftWrites, ...participantWrites, ...submitWrites]) {
+    expect(cfpMutationBody(request)).toMatchObject({
+      expectedVersion: expect.any(Number),
+      formVersion: CFP_FORM_VERSION,
+    });
+    expect(new URL(request.url()).pathname).toContain(
+      `/api/cfp/organizations/${CFP_ORGANIZATION_ID}/events/${CFP_EVENT_ID}/`,
+    );
+  }
+
+  const submissionWrite = draftWrites
+    .map(cfpMutationBody)
+    .find((body) => cfpRecord(body.answers)?.format === "Workshop");
+  expect(submissionWrite).toBeDefined();
+  const answers = cfpRecord(submissionWrite?.answers);
+  expect(answers).toMatchObject({
+    title: "Designing calm incident response",
+    abstract: "**A practical, evidence-led approach to resilient teams.**",
+    format: "Workshop",
+    track: "Platform",
+    topics: ["Accessibility"],
+    slides: { assetId: "asset-finalized-slides" },
+  });
+  expect(cfpRecord(answers?.slides)).toEqual({ assetId: "asset-finalized-slides" });
+
+  const participantBody = cfpMutationBody(
+    participantWrites[0] as import("@playwright/test").Request,
+  );
+  expect(participantBody).toMatchObject({
+    formVersion: CFP_FORM_VERSION,
+    participants: [
+      {
+        role: "primary",
+        answers: {
+          participantType: "Company",
+          participantCompany: "Calm Systems, Inc.",
+        },
+      },
+      {
+        role: "co_speaker",
+        answers: { participantType: "Individual" },
+      },
+    ],
+  });
+  expect(harness.receiptRequests.length).toBeGreaterThan(0);
+  expect(new Set(harness.receiptRequests.map((request) => request.url()))).toHaveProperty(
+    "size",
+    1,
+  );
+  expect(harness.submission.status).toBe("submitted");
+  expect(harness.submission.submittedAt).toBe("2026-08-08T13:05:00.000Z");
+  expect(harness.receiptRequests[0]?.url()).toContain(
+    `/api/cfp/organizations/${CFP_ORGANIZATION_ID}/events/${CFP_EVENT_ID}/`,
+  );
+});
+
+test("CFP rejects a stale draft version without abandoning the five-step session", async ({
+  authSession,
+  page,
+}) => {
+  const harness = await installDynamicCfpApi(page, authSession, { conflictOnDraftPatch: 1 });
+  await page.goto(`/cfp/${CFP_EVENT_ID}/account`);
+  await page.getByLabel("Your Email Address:").fill("stale-cfp@example.test");
+  await page.getByLabel("Password:").fill("CalmSystems!26");
+  await page.getByLabel("First Name").fill("Stale");
+  await page.getByLabel("Last Name").fill("Writer");
+  await page.getByRole("checkbox", { name: /I agree to the Terms of Service/ }).check();
+  await page.getByRole("button", { name: "Continue with email →" }).click();
+
+  await expect(page.getByText("The CFP submission has changed.", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Your Email Address:")).toHaveValue("stale-cfp@example.test");
+  await expect(page.getByLabel("First Name")).toHaveValue("Stale");
+  await expect(page.getByLabel("Last Name")).toHaveValue("Writer");
+  await expect(
+    page.getByRole("checkbox", { name: /I agree to the Terms of Service/ }),
+  ).toBeChecked();
+  await expect(page).toHaveURL(new RegExp(`/cfp/${CFP_EVENT_ID}/account$`));
+  const conflictedWrite = harness.requests.find(
+    (request) =>
+      request.method() === "PATCH" &&
+      request.url().includes(`/submissions/${CFP_SUBMISSION_ID}/draft`) &&
+      cfpMutationBody(request).completedStep === "account",
+  );
+  expect(conflictedWrite).toBeDefined();
+  expect(cfpMutationBody(conflictedWrite as import("@playwright/test").Request)).toMatchObject({
+    expectedVersion: 1,
+    formVersion: CFP_FORM_VERSION,
+    completedStep: "account",
+  });
+  expect(harness.submission.formVersion).toBe(CFP_FORM_VERSION);
+});
+
+test("CFP clears a stale saved pointer and starts a fresh account step", async ({
+  authSession,
+  page,
+}) => {
+  const harness = await installDynamicCfpApi(page, authSession, { stalePointer: true });
+  const key = pointerKey();
+  await page.addInitScript(
+    (pointer) => {
+      window.localStorage.setItem(pointer.key, pointer.value);
+    },
+    { key, value: CFP_SUBMISSION_ID },
+  );
+  await page.goto(`/cfp/${CFP_EVENT_ID}/account`);
+  await expect(page.getByRole("heading", { level: 1, name: "Create account" })).toBeVisible();
+  await expect(page.getByLabel("Your Email Address:")).toHaveValue("");
+  await expect(page.getByLabel("First Name")).toHaveValue("");
+  expect(
+    await page.evaluate((storageKey) => window.localStorage.getItem(storageKey), key),
+  ).toBeNull();
+  expect(harness.draftLoads).toHaveLength(1);
+  expect(harness.draftLoads[0]?.url()).toContain(
+    `/api/cfp/organizations/${CFP_ORGANIZATION_ID}/events/${CFP_EVENT_ID}/submissions/${CFP_SUBMISSION_ID}/draft`,
+  );
 });

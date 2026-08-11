@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { type ApiBindings, createApp } from "../../apps/api/src/app";
 import { RequestAuthenticator } from "../../apps/api/src/features/auth/authenticator";
@@ -27,6 +28,25 @@ const environment: ApiBindings = {
   WEB_ORIGIN: "https://app.example.test",
 };
 const traceId = "56d37199-bbc7-4a49-b06b-25717e95b78e";
+const openApiContract = readFileSync(
+  new URL("../../openapi/openapi.yaml", import.meta.url),
+  "utf8",
+);
+
+function escapedRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function openApiPathSection(path: string): string {
+  const match = new RegExp(
+    `^  ${escapedRegExp(path)}:\\n([\\s\\S]*?)(?=^  /|^components:)`,
+    "m",
+  ).exec(openApiContract);
+  if (match === null) {
+    throw new Error(`OpenAPI path is missing: ${path}`);
+  }
+  return match[1] ?? "";
+}
 
 interface EventRecord {
   readonly id: string;
@@ -376,5 +396,103 @@ describe("assembled API contract and security", () => {
     expect(JSON.stringify(body)).not.toContain(signingSecret);
     expect(JSON.stringify(body)).not.toContain('signingSecret"');
     await expectContractError(crossTenant, 403, "ACCESS_DENIED");
+  });
+});
+describe("checked-in OpenAPI contract security", () => {
+  const canonicalPaths = [
+    "/api/admin/organizations/{organizationId}/events",
+    "/api/admin/organizations/{organizationId}/events/{eventId}",
+    "/api/admin/organizations/{organizationId}/events/{eventId}/archive",
+    "/api/admin/organizations/{organizationId}/events/{eventId}/sessions",
+    "/api/admin/organizations/{organizationId}/events/{eventId}/sessions/settings",
+    "/api/admin/organizations/{organizationId}/events/{eventId}/sessions/rooms",
+    "/api/admin/organizations/{organizationId}/events/{eventId}/sessions/tracks",
+    "/api/admin/organizations/{organizationId}/events/{eventId}/sessions/formats",
+    "/api/admin/organizations/{organizationId}/events/{eventId}/sessions/levels",
+    "/api/admin/organizations/{organizationId}/events/{eventId}/sessions/tags",
+    "/api/admin/organizations/{organizationId}/events/{eventId}/communications/templates",
+    "/api/admin/organizations/{organizationId}/events/{eventId}/communications/templates/{templateId}/approve",
+    "/api/admin/organizations/{organizationId}/events/{eventId}/communications/previews",
+    "/api/admin/organizations/{organizationId}/events/{eventId}/communications/sends",
+    "/api/admin/organizations/{organizationId}/events/{eventId}/communications/sends/{sendId}/history",
+    "/api/admin/organizations/{organizationId}/events/{eventId}/reports/definitions",
+    "/api/admin/organizations/{organizationId}/events/{eventId}/reports/runs",
+    "/api/admin/organizations/{organizationId}/events/{eventId}/reports/runs/{runId}/download",
+    "/api/admin/organizations/{organizationId}/events/{eventId}/remix/candidates",
+    "/api/admin/organizations/{organizationId}/events/{eventId}/remix/candidates/{candidateId}/apply",
+    "/api/admin/organizations/{organizationId}/events/{eventId}/agenda/suggestions",
+    "/api/speaker/portal/contexts",
+    "/api/speaker/events/{eventId}/portal",
+    "/api/speaker/events/{eventId}/submissions/{submissionId}/roster",
+    "/api/speaker/events/{eventId}/assets",
+    "/api/speaker/events/{eventId}/tasks",
+    "/api/speaker/events/{eventId}/resources",
+    "/api/speaker/events/{eventId}/wiki",
+  ] as const;
+
+  it("lists canonical tenant-qualified event surfaces with explicit operation security", () => {
+    for (const path of canonicalPaths) {
+      const section = openApiPathSection(path);
+      expect(section).toContain("security:");
+      expect(section).not.toContain("security: []");
+    }
+
+    const adminPaths = [...openApiContract.matchAll(/^ {2}(\/api\/admin\/[^:]+):$/gm)].map(
+      ([, path]) => path ?? "",
+    );
+    expect(adminPaths.length).toBeGreaterThan(0);
+    for (const path of adminPaths) {
+      expect(path).toMatch(/^\/api\/admin\/organizations\/\{organizationId\}\/events(?:\/|$)/);
+    }
+
+    expect(openApiContract).not.toContain("/api/admin/events/");
+    expect(openApiContract).not.toContain("/api/v1/organizations/{organizationId}/{resource}");
+    expect(openApiContract).not.toContain("/templates/{templateId}/versions/{version}/approve");
+    expect(openApiContract).not.toContain("tenantId:");
+  });
+
+  it("keeps public projections unauthenticated and private AI records protected", () => {
+    const publicAgenda = openApiPathSection("/api/public/events/{eventId}/agenda");
+    const publicSpeakers = openApiPathSection("/api/public/events/{eventSlug}/speakers");
+    expect(publicAgenda).toContain("security: []");
+    expect(publicSpeakers).toContain("security: []");
+    expect(publicAgenda).not.toMatch(/candidate|suggestion/i);
+    expect(publicSpeakers).not.toMatch(/candidate|suggestion/i);
+
+    const remixCandidates = openApiPathSection(
+      "/api/admin/organizations/{organizationId}/events/{eventId}/remix/candidates",
+    );
+    const agendaSuggestions = openApiPathSection(
+      "/api/admin/organizations/{organizationId}/events/{eventId}/agenda/suggestions",
+    );
+    expect(remixCandidates).toContain("sessionAuth");
+    expect(agendaSuggestions).toContain("sessionAuth");
+    expect(remixCandidates).toContain("RemixCandidate");
+    expect(agendaSuggestions).toContain("AgendaSuggestion");
+    expect(openApiContract).not.toMatch(/\bobjectKey\b/);
+  });
+
+  it("uses exact request, version, error, and Sessionboard sender identities", () => {
+    expect(openApiContract).toContain("name: Idempotency-Key");
+    expect(openApiContract).toContain("name: If-Match");
+    expect(openApiContract).toContain("X-Request-ID");
+    expect(openApiContract).toContain("ETag:");
+    expect(openApiContract).toContain("AuthenticationError:");
+    expect(openApiContract).toContain("TENANT_SCOPE_VIOLATION");
+    expect(openApiContract).toContain("example: ai-engineer");
+    expect(openApiContract).toContain("Retry-After");
+    expect(openApiContract).toContain("Cache-Control");
+    expect(openApiContract).toContain("Authorization bearer");
+    for (const sender of [
+      "auth@sessionboard.namuh.co",
+      "speakers@sessionboard.namuh.co",
+      "calendar@sessionboard.namuh.co",
+    ]) {
+      expect(openApiContract).toContain(sender);
+    }
+    expect(openApiContract).not.toMatch(/foreverbrowsing\.com|Accelevents|noreply@/i);
+    expect(openApiContract).not.toMatch(/\/events\/\{eventId\}.*\/events\/\{eventId\}/);
+    expect(openApiContract).not.toContain("/reports/events/");
+    expect(openApiContract).not.toContain("/remix/events/");
   });
 });

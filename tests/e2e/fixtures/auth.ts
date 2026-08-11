@@ -22,7 +22,7 @@ function sessionFor(role: E2eRole): E2eAuthSession {
   const identities: Record<E2eRole, Pick<E2eAuthSession, "userId" | "email" | "displayName">> = {
     organizer: {
       userId: "user-organizer-e2e",
-      email: "organizer.e2e@example.test",
+      email: "jaeyunha0317@gmail.com",
       displayName: "Olivia Organizer",
     },
     reviewer: {
@@ -43,11 +43,12 @@ function sessionFor(role: E2eRole): E2eAuthSession {
   };
   const identity = identities[role];
 
+  const eventScope = role === "organizer" ? "open-sessionboard-conf" : "event-evaluator";
   return {
     ...identity,
     role,
-    eventIds: ["event-evaluator"],
-    token: `e2e-session-${role}-event-evaluator`,
+    eventIds: [eventScope],
+    token: `e2e-session-${role}-${eventScope}`,
   };
 }
 
@@ -73,6 +74,27 @@ async function installAuthenticatedSession(
       secure: false,
     },
   ]);
+  await context.route("**/api/auth/get-session", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        session: { id: session.token, userId: session.userId },
+        user: {
+          id: session.userId,
+          email: session.email,
+          name: session.displayName,
+        },
+        memberships:
+          session.role === "organizer"
+            ? [{ organizationId: "ai-engineer", role: "owner" }]
+            : session.role === "reviewer"
+              ? [{ organizationId: "ai-engineer", role: "reviewer" }]
+              : [],
+        speakerGrants: [],
+      }),
+    });
+  });
   await context.addInitScript((authenticatedSession) => {
     window.localStorage.setItem(
       "open-sessionboard:e2e-auth:v1",
