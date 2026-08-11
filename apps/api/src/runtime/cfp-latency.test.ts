@@ -133,10 +133,7 @@ class DelayedTransport implements AirtableTransport {
     this.activeReads += 1;
     if (isFormRead) {
       this.activeFormReads += 1;
-      this.maxConcurrentFormReads = Math.max(
-        this.maxConcurrentFormReads,
-        this.activeFormReads,
-      );
+      this.maxConcurrentFormReads = Math.max(this.maxConcurrentFormReads, this.activeFormReads);
     }
     this.maxConcurrentReads = Math.max(this.maxConcurrentReads, this.activeReads);
     try {
@@ -246,9 +243,7 @@ describe("organizer CFP submission latency", () => {
       ({ submission: record }) => record.id === indexedEvent.id,
     )?.submission;
     expect(indexedRecord).toEqual(indexedEvent);
-    const flatRecord = records.find(
-      ({ submission: record }) => record.id === flat.id,
-    )?.submission;
+    const flatRecord = records.find(({ submission: record }) => record.id === flat.id)?.submission;
     expect(flatRecord).toEqual(flat);
 
     const reads = fake.requests.filter((request) => request.method === "GET");
