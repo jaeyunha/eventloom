@@ -1,60 +1,114 @@
 # Open Sessionboard Architecture
 
-## System shape
+## Boundary diagram
 
-Open Sessionboard is a multi-tenant program-management SaaS with three delivery surfaces: organizer administration, speaker self-service, and public embeds. A Next.js application consumes a single Hono API deployed on Cloudflare Workers.
+The browser uses the Next.js application as its same-origin transport. Requests flow through the Next.js `/api/*` gateway to a separately deployed Hono Worker:
 
-## Responsibilities
+```text
+browser
+  -> Next.js web + same-origin /api/* gateway
+  -> Hono API Worker
+  -> Airtable business authority
+     + D1 operational state/outbox/audit
+     + Durable Object coordination
+     + R2 private files
+     + one multiplexed Cloudflare Queue
+     + Workers AI advisory provider
+```
+
+The gateway is the canonical browser path. API clients and provider callbacks may address the Worker API origin directly; the web application does not become a second backend.
+
+## Deployable responsibilities
 
 ### Next.js web
 
-Renders the Sessionboard-inspired interface, manages accessible browser interactions, and calls the Worker API. It contains no direct Airtable, D1, R2, or provider credentials.
+Next.js renders the accessible organizer, speaker, and public-embed surfaces. Its `/api/[...path]` route forwards the browser method, query, cookies, and body to `API_UPSTREAM_ORIGIN`. The web deployment has no Airtable, D1, Durable Object, R2, Queue, or provider credentials.
 
-### Hono API worker
+### Hono API Worker
 
-Owns authentication enforcement, tenant authorization, validation, business workflows, public API contracts, webhook delivery, and integration orchestration. All write endpoints support idempotency where retries are plausible.
+The Hono Worker is an independent Cloudflare deployment. It owns authentication, tenant authorization, request validation, business workflows, versioned API resources, webhooks, and integration orchestration. It exports three Cloudflare ingress handlers:
 
-### Airtable
+- `fetch` handles HTTP API requests, health checks, and callbacks.
+- `queue` consumes the single multiplexed outbox Queue.
+- `scheduled` runs production Cron Trigger work; production is configured for `0 * * * *` scheduled reminders.
 
-Authoritative store for organizations, events, forms and fields, submissions, participants and profiles, review plans/evaluations/decisions, speaker tasks, sessions, rooms, tracks, formats, levels, tags and session statuses/settings, agenda versions/entries, portal contexts and session rosters, task forms/responses, portal resources/wiki pages, file assets/versions/comments, email templates/send snapshots, report definitions/runs, remix candidates/audit, reusable fields, publication outbox, and business audit records. Stable application IDs are stored independently of Airtable record IDs.
+## Data and coordination boundaries
 
-### Cloudflare state
+### Airtable business authority
 
-- **D1:** Better Auth tables, API keys, idempotency keys, webhook registrations/deliveries, publication receipts, audit indexes, and integration configuration metadata.
-- **Durable Objects:** tenant/event mutation serialization, schedule locks, conflict checks, and monotonically increasing calendar sequence allocation.
-- **R2:** private uploads and export artifacts exposed only through authorized, expiring access.
-- **Queues:** transactional email, calendar delivery, webhook delivery, exports, and controlled outbound publication.
+Airtable is authoritative for tenant and program business records: organizations, events, forms and fields, submissions, participants and speaker profiles, reviews and decisions, tasks, sessions, rooms, tracks, agenda revisions, portal resources, file metadata, message templates, report definitions/runs, and publication-facing business records. Airtable record IDs are provider details; stable application IDs remain part of the application contract.
 
-## Authentication and authorization
+### D1 operational state
 
-Better Auth runs in the Hono API and persists to D1. Magic-link login and verified email are required, with Google OAuth as the supported social-login path; Microsoft OAuth is not part of this build. Roles are organization-scoped (`owner`, `admin`, `reviewer`) while speakers access only their own profile, submissions, participants, and tasks. Public embeds use explicitly published projections.
+Cloudflare D1 stores operational state that needs transactional, retryable, or local coordination semantics rather than business authority:
 
-## Core workflow
+- Better Auth accounts, sessions, verification tokens, and identity state
+- organization/API credentials, idempotency keys, and request receipts
+- durable outbox jobs, delivery attempts, retry/dead-letter state, and integration receipts
+- private-upload lifecycle metadata and audit events
 
-1. An organizer configures an event and its CFP form.
-2. A speaker creates an account, saves drafts, adds participants, reviews, and submits.
-3. Organizers assign reviewers through evaluation plans; reviewers submit rubric scores and comments.
-4. Human organizers make final decisions and trigger transactional communications.
-5. Accepted submissions create speaker tasks and schedulable sessions.
-6. Schedule mutations are conflict-checked and versioned before publication.
-7. Publication updates public embeds, calendar messages, webhooks, and queued delivery records.
+D1 does not replace Airtable as the source of program truth.
 
-## Integration contracts
+### Durable Objects
 
-- **OpenSend:** uses `auth@sessionboard.namuh.co`, `speakers@sessionboard.namuh.co`, and `calendar@sessionboard.namuh.co`; queue-backed retries and delivery auditing apply. Provider-side sender verification is a release prerequisite and is not claimed by this repository.
-- **Calendar:** RFC 5545 `REQUEST`, `UPDATE`, and `CANCEL` messages with stable UID, incrementing SEQUENCE, explicit TZID, and deterministic attendee identity. Calendar-provider OAuth is not required.
-- **Public API:** versioned REST resources, scoped API keys, OpenAPI documentation, cursor pagination, idempotent writes, consistent errors, and signed retrying webhooks.
+The `AgendaCoordinator` Durable Object serializes tenant/event mutations, agenda revisions, schedule locks, conflict checks, and monotonic calendar sequence allocation. It coordinates concurrent writes; it is not a business-record store.
 
-## Reliability and security invariants
+### R2 private files
 
-- Every protected query is tenant-scoped and authorization-tested.
-- Secrets are encrypted or kept in provider secret stores and are never returned by APIs.
-- Rich text is sanitized before persistence and rendering.
-- Schedule conflicts cannot be bypassed by concurrent writes.
-- Human decisions remain authoritative; AI may summarize or assist but may not accept or reject submissions.
-- External side effects are queued, idempotent, observable, and auditable.
-- Public projections contain only explicitly published fields.
+R2 stores private uploads and export artifacts. Objects are addressed through authorized, expiring access and never become public merely because they exist in a bucket. File lifecycle and audit metadata remain operational state in D1 and business references remain in Airtable.
 
-## Delivery model
+### One multiplexed Queue
 
-The repository begins with one evidence/specification root commit. Implementation proceeds in focused commits. The Forge repository remains private until the complete automated, Ever, and `codex-cua` release gate passes.
+Each environment binds one `OUTBOX_QUEUE`. Typed messages multiplex communications, calendar delivery, webhook delivery, and cache invalidation through that queue. D1 outbox records provide deduplication, leases, retry state, delivery attempts, and auditability; a provider side effect is not considered complete until its receipt is recorded.
+
+## Authentication and product scope
+
+Better Auth runs inside the Hono Worker and persists operational identity state in D1. Supported sign-in and identity flows are:
+
+- email/password
+- verified email
+- email magic links
+
+Google, Microsoft, and all other social OAuth providers are unsupported. Speaker and organizer permissions are tenant- and event-scoped; public embeds and feeds read only explicitly published projections.
+
+The built-in Speaker CRM is an organization-scoped first-party contact system with search, import, tags/custom fields, segments, pipeline stages, notes/history, duplicate handling, explicit merges, and outreach through the shared communications boundary. Speaker portal profiles, rosters, files, and tasks remain separate event-scoped program records. Accelevents is a separate external event-platform integration and is not a supported current feature, dependency, or release gate.
+
+## Integrations and advisory AI
+
+- **OpenSend:** The API sends through `https://opensend.namuh.co` using `auth@sessionboard.namuh.co`, `speakers@sessionboard.namuh.co`, and `calendar@sessionboard.namuh.co`. Provider verification and environment-specific credentials are deployment concerns.
+- **Calendar:** RFC 5545 `REQUEST`, `UPDATE`, and `CANCEL` messages use stable UIDs, increasing `SEQUENCE`, explicit IANA time zones, and `calendar@sessionboard.namuh.co`. Calendar-provider OAuth is not required.
+- **Public API and webhooks:** Versioned REST resources, scoped API keys, cursor pagination, idempotent writes, optimistic concurrency, and signed retryable webhooks expose only authorized or published data.
+- **Workers AI:** Cloudflare Workers AI may produce private, typed evaluation suggestions, agenda proposals, or content-remix candidates. It never scores, decides, schedules, publishes, sends, exports, or overwrites source content without an explicit human action followed by normal authorization and conflict checks.
+
+## Current hosting
+
+The current staging Workers origins are:
+
+- Web: `https://open-sessionboard-web-staging.ashleyha0317.workers.dev`
+- API: `https://open-sessionboard-api-staging.ashleyha0317.workers.dev`
+
+The current production Workers origins are:
+
+- Web: `https://open-sessionboard-web-production.ashleyha0317.workers.dev`
+- API: `https://open-sessionboard-api-production.ashleyha0317.workers.dev`
+
+These pinned `workers.dev` origins are the current hosts. `https://sessionboard.namuh.co` for web and `https://api.sessionboard.namuh.co` for API are recommended stable custom domains, but they remain pending and unconfigured. Sender and calendar identities already use `sessionboard.namuh.co`, independently of web/API hosting.
+
+## Repository policy
+
+Forge and GitHub are intentional dual private mirrors:
+
+- Forge: `https://forge.smol.ai/jaeyunha/open-sessionboard`
+- GitHub: `https://github.com/jaeyunha/open-sessionboard`
+
+Both remain private until the release gate passes. Forge is retained for competition-bonus eligibility. Neither mirror is the sole repository mirror or public before that gate.
+
+## Invariants and status pointers
+
+- Every protected query and mutation is tenant-scoped and authorization-checked.
+- Human decisions and explicit publication remain authoritative; advisory AI output is never consequential by itself.
+- Side effects are idempotent, queued, retryable, observable, and auditable.
+- Public projections contain only explicitly published fields; private files require fresh authorization.
+- Secrets stay in environment/provider secret stores and never appear in API responses or evidence.
+
+For supported scope and current status, read [`spec/open-sessionboard.md`](spec/open-sessionboard.md). For executable procedures, use [`docs/setup.md`](docs/setup.md), [`docs/deployment-readiness.md`](docs/deployment-readiness.md), [`docs/qa-runbook.md`](docs/qa-runbook.md), and [`docs/release-runbook.md`](docs/release-runbook.md). Evaluator outcomes and limitations are recorded in [`docs/llm-judge-runs.md`](docs/llm-judge-runs.md); this architecture document does not claim release verification.

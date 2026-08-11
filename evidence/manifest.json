@@ -17,6 +17,11 @@
       "path": "evidence/sources/sessionboard-and-forge-llms.txt",
       "kind": "documentation research snapshot",
       "authority": "supporting"
+    },
+    {
+      "path": "evidence/source/discord-messages.md",
+      "kind": "competition Discord export",
+      "authority": "supporting"
     }
   ],
   "cfp_screenshots": [

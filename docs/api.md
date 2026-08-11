@@ -1,6 +1,10 @@
 # Public API and webhooks
 
-The tenant-scoped public API is mounted at `/api/v1`. The **live canonical discovery document** is [`https://sessionboard.namuh.co/api/v1/openapi.json`](https://sessionboard.namuh.co/api/v1/openapi.json) (replace the origin for another deployment). The checked-in [`openapi/openapi.yaml`](../openapi/openapi.yaml) is the stable client-generation contract; discovery and its checked-in public-v1 resource paths describe the same four resources and operations, while the checked-in document also includes the separately mounted webhook routes.
+The tenant-scoped public API is mounted at `/api/v1` on the production API Worker. The **live canonical discovery document** is [`https://open-sessionboard-api-production.ashleyha0317.workers.dev/api/v1/openapi.json`](https://open-sessionboard-api-production.ashleyha0317.workers.dev/api/v1/openapi.json); use that Worker origin for direct API clients (replace it only for a verified deployment).
+
+Browser traffic may use the production web app's same-origin `/api/*` proxy at [`https://open-sessionboard-web-production.ashleyha0317.workers.dev`](https://open-sessionboard-web-production.ashleyha0317.workers.dev). The proxy forwards to the API Worker without changing the API contract and is not a second API origin. A custom `api.sessionboard.namuh.co` hostname is recommended but pending/unconfigured, so it is not canonical.
+
+The checked-in [`openapi/openapi.yaml`](../openapi/openapi.yaml) is the stable client-generation contract; its public-v1 resource paths describe the same four resources and operations, while the checked-in document also includes separately mounted webhook routes and broader internal application paths that are not part of public-v1.
 
 ## Authentication and scopes
 

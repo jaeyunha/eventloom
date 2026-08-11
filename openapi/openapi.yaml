@@ -4,13 +4,26 @@ info:
   version: 1.0.0
   summary: Organization-scoped event operations, public-v1 resources, and published projections.
   description: |
-    This is the canonical first-party contract for sessionboard.namuh.co. Organizer routes are
-    qualified by organizationId and eventId and require an authenticated organizer session.
-    Participant routes require the authenticated account's event grant. The `/api/v1` public
-    resource surface is API-key authenticated and tenant-bound by organizationId. Separate public
-    embeds and feeds expose immutable published projections only; they never expose organizer
-    drafts, private assets, recipient data, evaluation notes, advisory candidates, or internal
-    storage coordinates.
+    The production API Worker is the canonical direct API origin:
+    `https://open-sessionboard-api-production.ashleyha0317.workers.dev`. Browser traffic may use the
+    production web app's same-origin `/api/*` proxy at
+    `https://open-sessionboard-web-production.ashleyha0317.workers.dev`; it forwards to this Worker
+    and is not a separate API origin. A custom `api.sessionboard.namuh.co` hostname is recommended
+    but pending/unconfigured, so it is not canonical.
+
+    The checked-in document intentionally combines the broader internal application API paths
+    (`/api/admin/...`, `/api/speaker/...`, and `/api/public/...`) with the public-v1 contract.
+    Public-v1 is limited to four resource families—events, speakers, agenda, and sessions—under
+    `/api/v1/organizations/{organizationId}`; webhook administration is separately mounted under
+    that prefix. Internal routes may require organizer or participant session authentication and
+    are not public-v1 guarantees.
+
+    Organizer routes are qualified by organizationId and eventId and require an authenticated
+    organizer session. Participant routes require the authenticated account's event grant. The
+    `/api/v1` public resource surface is API-key authenticated and tenant-bound by organizationId.
+    Separate public embeds and feeds expose immutable published projections only; they never expose
+    organizer drafts, private assets, recipient data, evaluation notes, advisory candidates, or
+    internal storage coordinates.
 
     Generic public-v1 mutations require Idempotency-Key and updates require If-Match. Webhook
     subscription administration is the exception: its implemented POST/PATCH/PUT/DELETE routes
@@ -20,9 +33,9 @@ info:
     name: AGPL-3.0-or-later
     identifier: AGPL-3.0-or-later
 servers:
-  - url: https://sessionboard.namuh.co
-    description: Sessionboard production API origin
-  - url: http://localhost:8787
+  - url: https://open-sessionboard-api-production.ashleyha0317.workers.dev
+    description: Canonical production API Worker origin
+  - url: http://127.0.0.1:8787
     description: Local API origin
 tags:
   - name: System
