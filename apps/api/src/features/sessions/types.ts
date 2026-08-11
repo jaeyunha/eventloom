@@ -63,6 +63,7 @@ export interface PublishedSessionContent {
   readonly trackIds: readonly string[];
   readonly formatId?: string;
   readonly speakerIds: readonly string[];
+  readonly speakerNames: readonly string[];
   readonly resourceIds: readonly string[];
   readonly version: number;
   readonly updatedAt: string;
@@ -131,6 +132,7 @@ export interface SessionAuditEntry {
 
 export interface SessionSpeakerReference {
   id: string;
+  displayName?: string;
   role?: string;
 }
 
