@@ -251,7 +251,7 @@ describe("deliverables API", () => {
     const approved = await api.updateSession({
       sessionId: second.id,
       expectedVersion: second.version,
-      status: "Approved",
+      contentStatus: "Approved",
     });
 
     expect(first).toMatchObject({ title: "Prefixed title", version: 2, updatedBy: "organizer-1" });
@@ -271,7 +271,7 @@ describe("deliverables API", () => {
         title: "Prefixed title",
         description: "Original abstract with appended detail",
       },
-      { expectedVersion: 3, status: "Approved" },
+      { expectedVersion: 3, contentStatus: "Approved" },
     ]);
   });
 
