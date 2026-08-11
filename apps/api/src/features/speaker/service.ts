@@ -1419,6 +1419,52 @@ function portalCapabilitiesForSubmissions(
   }
   return projected;
 }
+function portalPrimaryParticipantId(
+  scope: SpeakerAccessScope,
+  fallback?: string,
+): string | undefined {
+  const candidate =
+    scope.primaryParticipantId?.trim() ||
+    fallback?.trim() ||
+    (scope.participantIds.length === 1 ? scope.participantIds[0] : undefined);
+  return candidate !== undefined &&
+    candidate.length > 0 &&
+    scope.participantIds.includes(candidate)
+    ? candidate
+    : undefined;
+}
+
+function portalSubmissionBelongsToParticipant(
+  submission: SpeakerSubmission,
+  participantId: string,
+): boolean {
+  return (
+    submission.participantIds.includes(participantId) ||
+    submission.primaryParticipantId === participantId
+  );
+}
+
+function portalScopeForPrimary(
+  scope: SpeakerAccessScope,
+  participantId: string,
+  submissionIds: readonly string[],
+): SpeakerAccessScope {
+  const participantCapabilities = scope.capabilitiesByParticipant?.[participantId];
+  return {
+    ...scope,
+    submissionIds: unique(submissionIds),
+    participantIds: [participantId],
+    primaryParticipantId: participantId,
+    ...(scope.capabilitiesByParticipant === undefined
+      ? {}
+      : {
+          capabilitiesByParticipant:
+            participantCapabilities === undefined
+              ? {}
+              : { [participantId]: [...participantCapabilities] },
+        }),
+  };
+}
 
 export class SpeakerService {
   private readonly now: () => Date;
@@ -1457,53 +1503,45 @@ export class SpeakerService {
       if (context.eventId.trim().length === 0) continue;
       const scope = await this.getScope(context.eventId, accountId);
       if (scope.submissionIds.length === 0 || scope.participantIds.length === 0) continue;
-      const submissionIds = unique(
+      const primaryParticipantId = portalPrimaryParticipantId(
+        scope,
+        context.primaryParticipantId,
+      );
+      if (primaryParticipantId === undefined) continue;
+      const candidateSubmissionIds = unique(
         context.submissionIds.length === 0
           ? scope.submissionIds
           : context.submissionIds.filter((id) =>
               scope.submissionIds.some((allowed) => sameSpeakerSubmission(allowed, id)),
             ),
       );
-      const participantIds = unique(
-        context.participantIds.length === 0
-          ? scope.participantIds
-          : context.participantIds.filter((id) => scope.participantIds.includes(id)),
-      );
-      if (
-        (context.submissionIds.length > 0 && submissionIds.length === 0) ||
-        (context.participantIds.length > 0 && participantIds.length === 0)
-      ) {
-        continue;
-      }
       const visibleSubmissions = (
         await this.repository.listSubmissions(
           context.eventId,
-          submissionIds.length === 0 ? scope.submissionIds : submissionIds,
+          candidateSubmissionIds.length === 0 ? scope.submissionIds : candidateSubmissionIds,
         )
       ).filter(
         (submission) =>
           submission.eventId === context.eventId &&
-          (submissionIds.length === 0 ||
-            submissionIds.some((allowed) => sameSpeakerSubmission(allowed, submission.id))),
+          portalSubmissionBelongsToParticipant(submission, primaryParticipantId) &&
+          (candidateSubmissionIds.length === 0 ||
+            candidateSubmissionIds.some((allowed) =>
+              sameSpeakerSubmission(allowed, submission.id),
+            )),
       );
-      const resolvedSubmissionIds = unique([
-        ...submissionIds,
-        ...visibleSubmissions.map((submission) => submission.id),
-      ]);
-      const capabilities = portalCapabilitiesForSubmissions(
+      const submissionIds = unique(visibleSubmissions.map((submission) => submission.id));
+      if (submissionIds.length === 0) continue;
+      const primaryScope = portalScopeForPrimary(
         scope,
+        primaryParticipantId,
+        submissionIds,
+      );
+      const capabilities = portalCapabilitiesForSubmissions(
+        primaryScope,
         context.capabilities,
-        participantIds,
+        [primaryParticipantId],
         visibleSubmissions,
       );
-      const primaryParticipantId =
-        context.primaryParticipantId !== undefined &&
-        participantIds.includes(context.primaryParticipantId)
-          ? context.primaryParticipantId
-          : scope.primaryParticipantId !== undefined &&
-              participantIds.includes(scope.primaryParticipantId)
-            ? scope.primaryParticipantId
-            : undefined;
       projected.push({
         id: context.id,
         eventId: context.eventId,
@@ -1511,9 +1549,9 @@ export class SpeakerService {
         ...(context.slug === undefined ? {} : { slug: context.slug }),
         ...(context.status === undefined ? {} : { status: context.status }),
         capabilities,
-        submissionIds: resolvedSubmissionIds,
-        participantIds,
-        ...(primaryParticipantId === undefined ? {} : { primaryParticipantId }),
+        submissionIds,
+        participantIds: [primaryParticipantId],
+        primaryParticipantId,
       });
     }
     return projected.sort(
@@ -1525,71 +1563,27 @@ export class SpeakerService {
   async getPortalContext(eventId: string, accountId: string): Promise<SpeakerPortalContext> {
     const scope = await this.getScope(eventId, accountId);
     if (scope.submissionIds.length === 0 || scope.participantIds.length === 0) throw notFound();
-    const contexts = await this.listPortalContexts(accountId);
-    const discovered = contexts.find(
-      (context) =>
-        context.eventId === eventId &&
-        (context.submissionIds.length === 0 ||
-          context.submissionIds.some((submissionId) =>
-            scope.submissionIds.some((allowed) => sameSpeakerSubmission(allowed, submissionId)),
-          )),
+    const discovered = (await this.listPortalContexts(accountId)).find(
+      (context) => context.eventId === eventId,
     );
-    if (discovered !== undefined) {
-      const submissionIds = discovered.submissionIds.filter((id) =>
-        scope.submissionIds.some((allowed) => sameSpeakerSubmission(allowed, id)),
-      );
-      const participantIds = discovered.participantIds.filter((id) =>
-        scope.participantIds.includes(id),
-      );
-      const visibleSubmissions = (
-        await this.repository.listSubmissions(
-          eventId,
-          submissionIds.length === 0 ? scope.submissionIds : submissionIds,
-        )
-      ).filter(
-        (submission) =>
-          submission.eventId === eventId &&
-          (submissionIds.length === 0 ||
-            submissionIds.some((allowed) => sameSpeakerSubmission(allowed, submission.id))),
-      );
-      const resolvedSubmissionIds = unique([
-        ...submissionIds,
-        ...visibleSubmissions.map((submission) => submission.id),
-      ]);
-      const resolvedParticipantIds =
-        participantIds.length === 0 && discovered.participantIds.length === 0
-          ? unique(scope.participantIds)
-          : unique(participantIds);
-      const capabilities = portalCapabilitiesForSubmissions(
-        scope,
-        discovered.capabilities,
-        resolvedParticipantIds,
-        visibleSubmissions,
-      );
-      return {
-        ...discovered,
-        submissionIds:
-          resolvedSubmissionIds.length === 0 && discovered.submissionIds.length === 0
-            ? unique(scope.submissionIds)
-            : resolvedSubmissionIds,
-        participantIds: resolvedParticipantIds,
-        capabilities: [...capabilities],
-        ...(discovered.primaryParticipantId === undefined ||
-        !scope.participantIds.includes(discovered.primaryParticipantId)
-          ? {}
-          : { primaryParticipantId: discovered.primaryParticipantId }),
-      };
-    }
-    if (scope.submissionIds.length === 0 || scope.participantIds.length === 0) throw notFound();
-    const submissions = await this.repository.listSubmissions(eventId, scope.submissionIds);
-    const accepted = submissions.find(
-      (submission) => submission.eventId === eventId && submission.status === "accepted",
-    );
-    if (accepted === undefined) throw notFound();
-    const capabilities = portalCapabilitiesForSubmissions(
+    if (discovered !== undefined) return discovered;
+
+    const primaryParticipantId = portalPrimaryParticipantId(scope);
+    if (primaryParticipantId === undefined) throw notFound();
+    const submissions = this.projectSubmissions(
+      eventId,
       scope,
+      await this.repository.listSubmissions(eventId, scope.submissionIds),
+    ).filter((submission) =>
+      portalSubmissionBelongsToParticipant(submission, primaryParticipantId),
+    );
+    if (!submissions.some((submission) => submission.status === "accepted")) throw notFound();
+    const submissionIds = submissions.map((submission) => submission.id);
+    const primaryScope = portalScopeForPrimary(scope, primaryParticipantId, submissionIds);
+    const capabilities = portalCapabilitiesForSubmissions(
+      primaryScope,
       Array.isArray(scope.capabilities) ? scope.capabilities : [],
-      scope.participantIds,
+      [primaryParticipantId],
       submissions,
     );
     return {
@@ -1597,43 +1591,40 @@ export class SpeakerService {
       eventId,
       name: eventId,
       capabilities,
-      submissionIds: unique([
-        ...scope.submissionIds,
-        ...submissions.map((submission) => submission.id),
-      ]),
-      participantIds: unique(scope.participantIds),
-      ...(scope.primaryParticipantId === undefined
-        ? {}
-        : { primaryParticipantId: scope.primaryParticipantId }),
+      submissionIds: unique(submissionIds),
+      participantIds: [primaryParticipantId],
+      primaryParticipantId,
     };
   }
 
   async getPortal(eventId: string, accountId: string): Promise<SpeakerPortalView> {
     const scope = await this.getScope(eventId, accountId);
     if (scope.submissionIds.length === 0 || scope.participantIds.length === 0) throw notFound();
+    const primaryParticipantId = portalPrimaryParticipantId(scope);
+    if (primaryParticipantId === undefined) throw notFound();
 
     const rawSubmissionsPromise = this.repository.listSubmissions(eventId, scope.submissionIds);
-    const rawProfilesPromise = this.repository.listProfiles(eventId, scope.participantIds);
-    const rawTasksPromise = this.repository.listTasks(eventId, scope.participantIds);
+    const rawProfilesPromise = this.repository.listProfiles(eventId, [primaryParticipantId]);
+    const rawTasksPromise = this.repository.listTasks(eventId, [primaryParticipantId]);
     const contextsPromise: Promise<readonly SpeakerPortalContext[]> =
       this.repository.listPortalContexts === undefined
         ? Promise.resolve([])
         : this.repository.listPortalContexts(accountId);
     const assetsPromise: Promise<readonly SpeakerAsset[] | undefined> =
-      contextCapabilityAllows(scope, "asset-read", scope.participantIds) &&
+      contextCapabilityAllows(scope, "asset-read", [primaryParticipantId]) &&
       this.repository.listAssets !== undefined
-        ? this.repository.listAssets(eventId, scope.participantIds)
+        ? this.repository.listAssets(eventId, [primaryParticipantId])
         : Promise.resolve(undefined);
     const resourcesPromise: Promise<readonly SpeakerEventResource[] | undefined> =
       this.repository.listEventResources === undefined
         ? Promise.resolve(undefined)
-        : contextCapabilityAllows(scope, "resource-read", scope.participantIds)
+        : contextCapabilityAllows(scope, "resource-read", [primaryParticipantId])
           ? this.repository.listEventResources(eventId)
           : Promise.resolve(undefined);
     const wikiPromise: Promise<readonly SpeakerWikiPage[] | undefined> =
       this.repository.listWikiPages === undefined
         ? Promise.resolve(undefined)
-        : contextCapabilityAllows(scope, "resource-read", scope.participantIds)
+        : contextCapabilityAllows(scope, "resource-read", [primaryParticipantId])
           ? this.repository.listWikiPages(eventId)
           : Promise.resolve(undefined);
 
@@ -1647,21 +1638,49 @@ export class SpeakerService {
         resourcesPromise,
         wikiPromise,
       ]);
-    const submissions = this.projectSubmissions(eventId, scope, rawSubmissions);
-    const profiles = this.projectProfiles(eventId, scope, rawProfiles);
-    const tasks = this.projectTasks(eventId, scope, rawTasks, submissions);
-    const context = this.projectPortalContext(eventId, scope, submissions, contexts);
+    const submissions = this.projectSubmissions(eventId, scope, rawSubmissions)
+      .filter((submission) =>
+        portalSubmissionBelongsToParticipant(submission, primaryParticipantId),
+      )
+      .map((submission) => ({
+        ...structuredClone(submission),
+        participantIds: [primaryParticipantId],
+        primaryParticipantId,
+      }));
+    if (submissions.length === 0) throw notFound();
+    const primaryScope = portalScopeForPrimary(
+      scope,
+      primaryParticipantId,
+      submissions.map((submission) => submission.id),
+    );
+    const profiles = this.projectProfiles(eventId, primaryScope, rawProfiles);
+    const tasks = this.projectTasks(eventId, primaryScope, rawTasks, submissions);
+    const context = this.projectPortalContext(eventId, primaryScope, submissions, contexts);
     const rosterSubmission = submissions.find((submission) => submission.status === "accepted");
-    const roster =
+    const rawRoster =
       rosterSubmission === undefined ||
       this.repository.listRoster === undefined ||
-      !submissionIsVisibleToSpeaker(scope, rosterSubmission)
+      !submissionIsVisibleToSpeaker(primaryScope, rosterSubmission)
         ? undefined
-        : await this.rosterForScope(eventId, scope, rosterSubmission, profiles);
+        : await this.rosterForScope(
+            eventId,
+            primaryScope,
+            rosterSubmission,
+            profiles,
+          );
+    const roster =
+      rawRoster === undefined
+        ? undefined
+        : {
+            ...rawRoster,
+            members: rawRoster.members.filter(
+              (member) => member.participantId === primaryParticipantId,
+            ),
+          };
     const portalCapabilities = portalCapabilitiesForSubmissions(
-      scope,
+      primaryScope,
       context.capabilities,
-      context.participantIds,
+      [primaryParticipantId],
       submissions,
     );
     const assets =
@@ -1671,11 +1690,11 @@ export class SpeakerService {
             .filter(
               (asset) =>
                 asset.eventId === eventId &&
-                scope.participantIds.includes(asset.participantId) &&
+                asset.participantId === primaryParticipantId &&
                 (asset.tenantId === undefined ||
-                  scope.tenantId === undefined ||
-                  asset.tenantId === scope.tenantId) &&
-                speakerSubmissionAllowed(scope.submissionIds, asset.submissionId),
+                  primaryScope.tenantId === undefined ||
+                  asset.tenantId === primaryScope.tenantId) &&
+                speakerSubmissionAllowed(primaryScope.submissionIds, asset.submissionId),
             )
             .map((asset) => ({ ...asset }));
     const resources =
@@ -1700,7 +1719,12 @@ export class SpeakerService {
       outstandingTaskCount: tasks.filter(
         (task) => task.status !== "completed" && task.status !== "waived",
       ).length,
-      context,
+      context: {
+        ...context,
+        submissionIds: unique(submissions.map((submission) => submission.id)),
+        participantIds: [primaryParticipantId],
+        primaryParticipantId,
+      },
       capabilities: portalCapabilities,
       ...(roster === undefined ? {} : { roster }),
       ...(assets === undefined ? {} : { assets }),
@@ -4797,12 +4821,14 @@ export class SpeakerService {
     assetId: string;
   }): Promise<PrivateDownloadGrant> {
     const scope = await this.getScope(input.eventId, input.accountId);
+    const primaryParticipantId = portalPrimaryParticipantId(scope);
     const asset = await this.repository.getAsset(input.eventId, input.assetId);
     if (
+      primaryParticipantId === undefined ||
       !asset ||
       asset.eventId !== input.eventId ||
       asset.state !== "ready" ||
-      !scope.participantIds.includes(asset.participantId) ||
+      asset.participantId !== primaryParticipantId ||
       (asset.tenantId !== undefined &&
         scope.tenantId !== undefined &&
         asset.tenantId !== scope.tenantId) ||
@@ -4810,18 +4836,23 @@ export class SpeakerService {
     ) {
       throw notFound();
     }
-    assertCapability(scope, "asset-read", asset.participantId);
+    assertCapability(scope, "asset-read", primaryParticipantId);
 
     const expiresAt = new Date(this.now().getTime() + downloadGrantLifetimeMs).toISOString();
     const submissionId =
       asset.submissionId ??
-      (await this.resolveSubmissionId(input.eventId, scope, asset.participantId, undefined));
+      (await this.resolveSubmissionId(
+        input.eventId,
+        scope,
+        primaryParticipantId,
+        undefined,
+      ));
     const binding: PrivateAssetCapabilityBinding = {
       capabilityId: asset.id,
       tenantId: asset.tenantId ?? scope.tenantId ?? input.eventId,
       eventId: input.eventId,
       submissionId,
-      participantId: asset.participantId,
+      participantId: primaryParticipantId,
       ...(asset.taskId === undefined ? {} : { taskId: asset.taskId }),
       objectKey: asset.objectKey,
       contentType: asset.contentType,
@@ -4845,14 +4876,19 @@ export class SpeakerService {
     versionFamilyId?: string,
   ): Promise<SpeakerAsset[]> {
     const scope = await this.getScope(eventId, accountId);
-    assertCapability(scope, "asset-read", participantId);
-    if (participantId !== undefined) this.assertParticipantAccess(scope, participantId);
-    const participantIds = participantId === undefined ? scope.participantIds : [participantId];
-    const assets = await this.assetsForParticipants(eventId, participantIds);
+    const primaryParticipantId = portalPrimaryParticipantId(scope);
+    if (
+      primaryParticipantId === undefined ||
+      (participantId !== undefined && participantId !== primaryParticipantId)
+    ) {
+      throw notFound();
+    }
+    assertCapability(scope, "asset-read", primaryParticipantId);
+    const assets = await this.assetsForParticipants(eventId, [primaryParticipantId]);
     return assets.filter(
       (asset) =>
         asset.eventId === eventId &&
-        participantIds.includes(asset.participantId) &&
+        asset.participantId === primaryParticipantId &&
         (versionFamilyId === undefined || asset.versionFamilyId === versionFamilyId) &&
         (asset.tenantId === undefined ||
           scope.tenantId === undefined ||
