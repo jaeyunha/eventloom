@@ -2,21 +2,21 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { createPortalApi, type PortalApi, validatePortalSocialUrl } from "./api";
-import { isPortalGenerationCurrent, PortalProvider } from "./portal-provider";
+import { isPortalGenerationCurrent, loadPortalStartup, PortalProvider } from "./portal-provider";
 import {
   formatPortalFileSize,
   NoParticipantWorkspaceState,
   PageHeading,
-  portalAssetStateLabel,
-  portalNavigation,
   PortalFrame,
   Progress,
+  portalAssetStateLabel,
+  portalNavigation,
   SubmissionStatusBadge,
   signOutAndRedirect,
   TaskStatusBadge,
 } from "./portal-ui";
 import { groupPortalAssetVersions } from "./portal-workspace";
-import type { PortalAsset, PortalProfile } from "./types";
+import type { PortalAsset, PortalContext, PortalProfile, PortalView } from "./types";
 
 vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(),
@@ -27,6 +27,28 @@ function jsonResponse(body: unknown, status = 200): Response {
     status,
     headers: { "content-type": "application/json" },
   });
+}
+
+function portalStartupContext(eventId: string): PortalContext {
+  return {
+    id: `portal:${eventId}`,
+    eventId,
+    name: eventId,
+    capabilities: [],
+    submissionIds: [],
+    participantIds: ["participant-1"],
+    primaryParticipantId: "participant-1",
+  };
+}
+
+function portalStartupView(context: PortalContext): PortalView {
+  return {
+    submissions: [],
+    profiles: [],
+    tasks: [],
+    outstandingTaskCount: 0,
+    context,
+  };
 }
 
 describe("speaker portal UI components", () => {
@@ -303,5 +325,131 @@ describe("speaker portal UI components", () => {
 
     await expect(staleCompletion).resolves.toBe(false);
     expect(isPortalGenerationCurrent(activeGeneration, activeGeneration)).toBe(true);
+  });
+  it("starts contexts and the configured workspace request together and consumes one matching view", async () => {
+    let resolveContexts!: (contexts: PortalContext[]) => void;
+    const contexts = new Promise<PortalContext[]>((resolve) => {
+      resolveContexts = resolve;
+    });
+    const matchingContext = portalStartupContext("event-1");
+    const requests: string[] = [];
+    const api = {
+      listPortalContexts: () => {
+        requests.push("contexts");
+        return contexts;
+      },
+      getPortal: async (eventId: string) => {
+        requests.push(`workspace:${eventId}`);
+        return portalStartupView(matchingContext);
+      },
+    };
+
+    const startup = loadPortalStartup(api, "event-1");
+    expect(requests).toEqual(["contexts", "workspace:event-1"]);
+
+    resolveContexts([matchingContext]);
+    const result = await startup;
+    expect(requests).toEqual(["contexts", "workspace:event-1"]);
+    expect(result.preferredContext?.eventId).toBe("event-1");
+    expect(result.prefetchedView).toMatchObject({ status: "fulfilled" });
+  });
+  it("treats a configured context id as a selection hint without a duplicate workspace prefetch", async () => {
+    const context = portalStartupContext("event-1");
+    const requests: string[] = [];
+    const api = {
+      listPortalContexts: async () => {
+        requests.push("contexts");
+        return [context];
+      },
+      getPortal: async (eventId: string) => {
+        requests.push(`workspace:${eventId}`);
+        return portalStartupView(context);
+      },
+    };
+
+    const result = await loadPortalStartup(api, context.id);
+    expect(result.preferredContext?.id).toBe(context.id);
+    expect(result.prefetchedView).toBeUndefined();
+    expect(requests).toEqual(["contexts"]);
+
+    await api.getPortal(result.preferredContext?.eventId ?? "");
+    expect(requests).toEqual(["contexts", "workspace:event-1"]);
+  });
+
+  it("does not consume a concurrent workspace prefetch after abort", async () => {
+    const context = portalStartupContext("event-1");
+    const controller = new AbortController();
+    let resolveContexts!: (contexts: PortalContext[]) => void;
+    let resolveView!: (view: PortalView) => void;
+    const requests: string[] = [];
+    const api = {
+      listPortalContexts: () => {
+        requests.push("contexts");
+        return new Promise<PortalContext[]>((resolve) => {
+          resolveContexts = resolve;
+        });
+      },
+      getPortal: (eventId: string) => {
+        requests.push(`workspace:${eventId}`);
+        return new Promise<PortalView>((resolve) => {
+          resolveView = resolve;
+        });
+      },
+    };
+
+    const startup = loadPortalStartup(api, context.eventId, controller.signal);
+    expect(requests).toEqual(["contexts", "workspace:event-1"]);
+    controller.abort();
+    resolveView(portalStartupView(context));
+    resolveContexts([context]);
+
+    const result = await startup;
+    expect(result.prefetchedView).toBeUndefined();
+    expect(requests).toEqual(["contexts", "workspace:event-1"]);
+  });
+
+  it("does not consume a stale configured workspace view for an authorized context", async () => {
+    const authorizedContext = portalStartupContext("event-authorized");
+    const staleContext = portalStartupContext("event-stale");
+    const requests: string[] = [];
+    const api = {
+      listPortalContexts: async () => [authorizedContext],
+      getPortal: async (eventId: string) => {
+        requests.push(eventId);
+        return portalStartupView(
+          eventId === staleContext.eventId ? staleContext : authorizedContext,
+        );
+      },
+    };
+
+    const result = await loadPortalStartup(api, staleContext.eventId);
+    expect(result.preferredContext?.eventId).toBe(authorizedContext.eventId);
+    expect(result.prefetchedView).toBeUndefined();
+    if (result.preferredContext === null) throw new Error("Expected an authorized portal context.");
+
+    const fallbackView = await api.getPortal(result.preferredContext.eventId);
+    expect(fallbackView.context?.eventId).toBe(authorizedContext.eventId);
+    expect(requests).toEqual([staleContext.eventId, authorizedContext.eventId]);
+  });
+
+  it("completes delayed production-equivalent startup under one second", async () => {
+    const context = portalStartupContext("event-1");
+    const startedAt = Date.now();
+    const result = await loadPortalStartup(
+      {
+        listPortalContexts: () =>
+          new Promise<PortalContext[]>((resolve) => {
+            setTimeout(() => resolve([context]), 450);
+          }),
+        getPortal: () =>
+          new Promise<PortalView>((resolve) => {
+            setTimeout(() => resolve(portalStartupView(context)), 450);
+          }),
+      },
+      context.eventId,
+    );
+
+    expect(Date.now() - startedAt).toBeLessThan(1000);
+    expect(result.prefetchedView).toMatchObject({ status: "fulfilled" });
   });
 });

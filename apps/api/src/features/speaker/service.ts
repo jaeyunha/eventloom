@@ -1498,58 +1498,139 @@ export class SpeakerService {
   }
   async listPortalContexts(accountId: string): Promise<SpeakerPortalContext[]> {
     if (accountId.trim().length === 0) throw notFound();
-    if (this.repository.listPortalContexts === undefined) return [];
-    const contexts = await this.repository.listPortalContexts(accountId);
-    const projected: SpeakerPortalContext[] = [];
-    for (const context of contexts) {
-      if (context.eventId.trim().length === 0) continue;
-      const scope = await this.getScope(context.eventId, accountId);
-      if (scope.submissionIds.length === 0 || scope.participantIds.length === 0) continue;
-      const primaryParticipantId = portalPrimaryParticipantId(scope, context.primaryParticipantId);
-      if (primaryParticipantId === undefined) continue;
-      const candidateSubmissionIds = unique(
-        context.submissionIds.length === 0
-          ? scope.submissionIds
-          : context.submissionIds.filter((id) =>
-              scope.submissionIds.some((allowed) => sameSpeakerSubmission(allowed, id)),
-            ),
+    const listContextScopes = this.repository.listPortalContextScopes;
+    let contextScopes: readonly {
+      context: SpeakerPortalContext;
+      scope: SpeakerAccessScope;
+    }[];
+    if (listContextScopes !== undefined) {
+      contextScopes = await listContextScopes.call(this.repository, accountId);
+    } else {
+      const listContexts = this.repository.listPortalContexts;
+      if (listContexts === undefined) return [];
+      const contexts = await listContexts.call(this.repository, accountId);
+      const scopesByEvent = new Map<string, Promise<SpeakerAccessScope>>();
+      for (const context of contexts) {
+        if (context.eventId.trim().length === 0 || scopesByEvent.has(context.eventId)) continue;
+        scopesByEvent.set(context.eventId, this.getScope(context.eventId, accountId));
+      }
+      contextScopes = await Promise.all(
+        contexts.map(async (context) => ({
+          context,
+          scope: (await scopesByEvent.get(context.eventId)) ?? {
+            submissionIds: [],
+            participantIds: [],
+          },
+        })),
       );
-      const visibleSubmissions = (
-        await this.repository.listSubmissions(
-          context.eventId,
-          candidateSubmissionIds.length === 0 ? scope.submissionIds : candidateSubmissionIds,
-        )
-      ).filter(
-        (submission) =>
-          submission.eventId === context.eventId &&
-          portalSubmissionBelongsToParticipant(submission, primaryParticipantId) &&
-          (candidateSubmissionIds.length === 0 ||
-            candidateSubmissionIds.some((allowed) =>
-              sameSpeakerSubmission(allowed, submission.id),
-            )),
-      );
-      const submissionIds = unique(visibleSubmissions.map((submission) => submission.id));
-      if (submissionIds.length === 0) continue;
-      const primaryScope = portalScopeForPrimary(scope, primaryParticipantId, submissionIds);
-      const capabilities = portalCapabilitiesForSubmissions(
-        primaryScope,
-        context.capabilities,
-        [primaryParticipantId],
-        visibleSubmissions,
-      );
-      projected.push({
-        id: context.id,
-        eventId: context.eventId,
-        name: context.name,
-        ...(context.slug === undefined ? {} : { slug: context.slug }),
-        ...(context.status === undefined ? {} : { status: context.status }),
-        capabilities,
-        submissionIds,
-        participantIds: [primaryParticipantId],
-        primaryParticipantId,
-      });
     }
-    return projected.sort(
+    const candidates = contextScopes.flatMap(({ context, scope }) => {
+      const participantIds = unique(
+        context.participantIds.filter((participantId) =>
+          scope.participantIds.includes(participantId),
+        ),
+      );
+      const contextSubmissionIds = unique(
+        (context.submissionIds.length === 0 ? scope.submissionIds : context.submissionIds).filter(
+          (submissionId) =>
+            scope.submissionIds.some((allowed) => sameSpeakerSubmission(allowed, submissionId)),
+        ),
+      );
+      if (
+        context.eventId.trim().length === 0 ||
+        contextSubmissionIds.length === 0 ||
+        participantIds.length === 0
+      ) {
+        return [];
+      }
+      const contextScope: SpeakerAccessScope = {
+        ...scope,
+        submissionIds: contextSubmissionIds,
+        participantIds,
+      };
+      const primaryParticipantId = portalPrimaryParticipantId(
+        contextScope,
+        context.primaryParticipantId,
+      );
+      if (primaryParticipantId === undefined) return [];
+      return [
+        {
+          context,
+          contextSubmissionIds,
+          contextScope,
+          primaryParticipantId,
+        },
+      ];
+    });
+    const submissionIdsByEvent = new Map<string, Set<string>>();
+    for (const { context, contextSubmissionIds } of candidates) {
+      const ids = submissionIdsByEvent.get(context.eventId) ?? new Set<string>();
+      for (const submissionId of contextSubmissionIds) {
+        ids.add(submissionId);
+      }
+      submissionIdsByEvent.set(context.eventId, ids);
+    }
+    const submissionsByEvent = new Map<string, Promise<readonly SpeakerSubmission[]>>();
+    for (const [eventId, submissionIds] of submissionIdsByEvent) {
+      submissionsByEvent.set(eventId, this.repository.listSubmissions(eventId, [...submissionIds]));
+    }
+    const projected = await Promise.all(
+      candidates.map(
+        async ({
+          context,
+          contextSubmissionIds,
+          contextScope,
+          primaryParticipantId,
+        }): Promise<SpeakerPortalContext | undefined> => {
+          const submissions = (await submissionsByEvent.get(context.eventId)) ?? [];
+          const visibleById = new Map<string, SpeakerSubmission>();
+          for (const requestedId of contextSubmissionIds) {
+            const matches = submissions.filter(
+              (submission) =>
+                submission.eventId === context.eventId &&
+                portalSubmissionBelongsToParticipant(submission, primaryParticipantId) &&
+                sameSpeakerSubmission(requestedId, submission.id),
+            );
+            const selected =
+              matches.find((submission) => submission.id === requestedId) ??
+              matches.find(
+                (submission) => submission.id === canonicalSpeakerSubmissionId(requestedId),
+              ) ??
+              matches[0];
+            if (selected !== undefined) visibleById.set(selected.id, selected);
+          }
+          const visibleSubmissions = [...visibleById.values()];
+          const submissionIds = unique(visibleSubmissions.map((submission) => submission.id));
+          if (submissionIds.length === 0) return undefined;
+          const primaryScope = portalScopeForPrimary(
+            contextScope,
+            primaryParticipantId,
+            submissionIds,
+          );
+          const capabilities = portalCapabilitiesForSubmissions(
+            primaryScope,
+            context.capabilities,
+            [primaryParticipantId],
+            visibleSubmissions,
+          );
+          return {
+            id: context.id,
+            eventId: context.eventId,
+            name: context.name,
+            ...(context.slug === undefined ? {} : { slug: context.slug }),
+            ...(context.status === undefined ? {} : { status: context.status }),
+            capabilities,
+            submissionIds,
+            participantIds: [primaryParticipantId],
+            primaryParticipantId,
+          };
+        },
+      ),
+    );
+    const projectedContexts = projected.flatMap((context) =>
+      context === undefined ? [] : [context],
+    );
+    return projectedContexts.sort(
       (left, right) =>
         left.name.localeCompare(right.name) || left.eventId.localeCompare(right.eventId),
     );
@@ -1597,6 +1678,11 @@ export class SpeakerService {
     if (scope.submissionIds.length === 0 || scope.participantIds.length === 0) throw notFound();
     const primaryParticipantId = portalPrimaryParticipantId(scope);
     if (primaryParticipantId === undefined) throw notFound();
+    const listRosterForEvent = this.repository.listRosterForEvent;
+    const prefetchedRosterPromise: Promise<readonly SpeakerRosterEntry[] | undefined> =
+      listRosterForEvent === undefined
+        ? Promise.resolve(undefined)
+        : listRosterForEvent.call(this.repository, eventId);
 
     const rawSubmissionsPromise = this.repository.listSubmissions(eventId, scope.submissionIds);
     const rawProfilesPromise = this.repository.listProfiles(eventId, [primaryParticipantId]);
@@ -1623,16 +1709,25 @@ export class SpeakerService {
           ? this.repository.listWikiPages(eventId)
           : Promise.resolve(undefined);
 
-    const [rawSubmissions, rawProfiles, rawTasks, contexts, rawAssets, rawResources, rawWiki] =
-      await Promise.all([
-        rawSubmissionsPromise,
-        rawProfilesPromise,
-        rawTasksPromise,
-        contextsPromise,
-        assetsPromise,
-        resourcesPromise,
-        wikiPromise,
-      ]);
+    const [
+      rawSubmissions,
+      rawProfiles,
+      rawTasks,
+      contexts,
+      rawAssets,
+      rawResources,
+      rawWiki,
+      prefetchedRoster,
+    ] = await Promise.all([
+      rawSubmissionsPromise,
+      rawProfilesPromise,
+      rawTasksPromise,
+      contextsPromise,
+      assetsPromise,
+      resourcesPromise,
+      wikiPromise,
+      prefetchedRosterPromise,
+    ]);
     const submissions = this.projectSubmissions(eventId, scope, rawSubmissions)
       .filter((submission) =>
         portalSubmissionBelongsToParticipant(submission, primaryParticipantId),
@@ -1654,10 +1749,16 @@ export class SpeakerService {
     const rosterSubmission = submissions.find((submission) => submission.status === "accepted");
     const rawRoster =
       rosterSubmission === undefined ||
-      this.repository.listRoster === undefined ||
-      !submissionIsVisibleToSpeaker(primaryScope, rosterSubmission)
+      !submissionIsVisibleToSpeaker(primaryScope, rosterSubmission) ||
+      (prefetchedRoster === undefined && this.repository.listRoster === undefined)
         ? undefined
-        : await this.rosterForScope(eventId, primaryScope, rosterSubmission, profiles);
+        : await this.rosterForScope(
+            eventId,
+            primaryScope,
+            rosterSubmission,
+            profiles,
+            prefetchedRoster,
+          );
     const roster =
       rawRoster === undefined
         ? undefined
@@ -1921,15 +2022,21 @@ export class SpeakerService {
     scope: SpeakerAccessScope,
     submission: SpeakerSubmission,
     profiles: readonly SpeakerProfile[],
+    prefetchedRoster?: readonly SpeakerRosterEntry[],
   ): Promise<SpeakerRosterEnvelope> {
-    if (
-      this.repository.listRoster === undefined ||
-      !submissionIsVisibleToSpeaker(scope, submission)
-    ) {
+    if (!submissionIsVisibleToSpeaker(scope, submission)) {
       throw notFound();
     }
     const canonicalSubmissionId = canonicalSpeakerSubmissionId(submission.id);
-    const stored = (await this.repository.listRoster(eventId, canonicalSubmissionId)).filter(
+    let rosterEntries: readonly SpeakerRosterEntry[];
+    if (prefetchedRoster !== undefined) {
+      rosterEntries = prefetchedRoster;
+    } else {
+      const listRoster = this.repository.listRoster;
+      if (listRoster === undefined) throw notFound();
+      rosterEntries = await listRoster.call(this.repository, eventId, canonicalSubmissionId);
+    }
+    const stored = rosterEntries.filter(
       (entry) =>
         entry.eventId === eventId &&
         sameSpeakerSubmission(entry.submissionId, canonicalSubmissionId),
@@ -5764,46 +5871,63 @@ export class SpeakerService {
     accountId: string,
   ): Promise<SpeakerWorkspaceRoster> {
     const scope = await this.requireOrganizerOrganizationScope(organizationId, eventId, accountId);
-    const acceptedParticipantIds = await this.acceptedOrganizerParticipantIds(eventId, scope);
-    const entries = (
-      await this.organizerRosterEntries(organizationId, eventId, scope, accountId)
-    ).filter((entry) => acceptedParticipantIds.has(entry.participantId) || isCrmRosterEntry(entry));
+    const [acceptedSubmissions, rosterProjection] = await Promise.all([
+      this.acceptedOrganizerSubmissions(eventId, scope),
+      this.organizerRosterProjection(organizationId, eventId, scope, accountId),
+    ]);
+    const acceptedParticipantIds = new Set(
+      acceptedSubmissions.flatMap((submission) =>
+        submission.participantIds.filter((participantId) =>
+          scope.participantIds.includes(participantId),
+        ),
+      ),
+    );
+    const entries = rosterProjection.entries.filter(
+      (entry) => acceptedParticipantIds.has(entry.participantId) || isCrmRosterEntry(entry),
+    );
     const crmParticipantIds = entries.filter(isCrmRosterEntry).map((entry) => entry.participantId);
     const participantIds = unique([...acceptedParticipantIds, ...crmParticipantIds]);
-    const profiles = await this.repository.listProfiles(eventId, participantIds);
     const profileByParticipant = new Map(
-      profiles.map((profile) => [profile.participantId, profile]),
+      rosterProjection.profiles.map((profile) => [profile.participantId, profile]),
     );
-    const acceptedSubmissions = await this.acceptedOrganizerSubmissions(eventId, scope);
     const acceptedSubmissionIds = new Set(
       acceptedSubmissions.map((submission) => canonicalSpeakerSubmissionId(submission.id)),
     );
     const manualByParticipant = new Map(
       entries.filter(isOrganizerManagedRosterEntry).map((entry) => [entry.participantId, entry]),
     );
-    const tasks = (await this.repository.listTasks(eventId, participantIds)).filter(
-      (task) =>
-        task.eventId === eventId &&
-        task.owner === "speaker" &&
-        (acceptedSubmissionIds.has(canonicalSpeakerSubmissionId(task.submissionId)) ||
-          (manualByParticipant.get(task.participantId) !== undefined &&
-            sameSpeakerSubmission(
-              manualByParticipant.get(task.participantId)?.submissionId ?? "",
-              task.submissionId,
-            ))),
-    );
-    const assets = (await this.assetsForParticipants(eventId, participantIds)).filter(
-      (asset) =>
-        (asset.tenantId === undefined || asset.tenantId === scope.tenantId) &&
-        ((asset.submissionId === undefined && acceptedParticipantIds.has(asset.participantId)) ||
-          acceptedSubmissionIds.has(canonicalSpeakerSubmissionId(asset.submissionId ?? "")) ||
-          (asset.submissionId !== undefined &&
-            manualByParticipant.get(asset.participantId) !== undefined &&
-            sameSpeakerSubmission(
-              manualByParticipant.get(asset.participantId)?.submissionId ?? "",
-              asset.submissionId,
-            ))),
-    );
+    const [tasks, assets] = await Promise.all([
+      this.repository
+        .listTasks(eventId, participantIds)
+        .then((candidates) =>
+          candidates.filter(
+            (task) =>
+              task.eventId === eventId &&
+              task.owner === "speaker" &&
+              (acceptedSubmissionIds.has(canonicalSpeakerSubmissionId(task.submissionId)) ||
+                (manualByParticipant.get(task.participantId) !== undefined &&
+                  sameSpeakerSubmission(
+                    manualByParticipant.get(task.participantId)?.submissionId ?? "",
+                    task.submissionId,
+                  ))),
+          ),
+        ),
+      this.assetsForParticipants(eventId, participantIds).then((candidates) =>
+        candidates.filter(
+          (asset) =>
+            (asset.tenantId === undefined || asset.tenantId === scope.tenantId) &&
+            ((asset.submissionId === undefined &&
+              acceptedParticipantIds.has(asset.participantId)) ||
+              acceptedSubmissionIds.has(canonicalSpeakerSubmissionId(asset.submissionId ?? "")) ||
+              (asset.submissionId !== undefined &&
+                manualByParticipant.get(asset.participantId) !== undefined &&
+                sameSpeakerSubmission(
+                  manualByParticipant.get(asset.participantId)?.submissionId ?? "",
+                  asset.submissionId,
+                ))),
+        ),
+      ),
+    ]);
     const records = await Promise.all(
       entries.map((entry) =>
         this.organizerSpeakerRecord(
@@ -6692,8 +6816,11 @@ export class SpeakerService {
       const manual = manualByParticipant.get(task.participantId);
       return manual !== undefined && sameSpeakerSubmission(manual.submissionId, task.submissionId);
     };
-    const tasks = await this.repository.listTasks(eventId, requested);
-    const assets = (await this.assetsForParticipants(eventId, requested)).filter((asset) => {
+    const [tasks, rawAssets] = await Promise.all([
+      this.repository.listTasks(eventId, requested),
+      this.assetsForParticipants(eventId, requested),
+    ]);
+    const assets = rawAssets.filter((asset) => {
       if (asset.tenantId !== undefined && asset.tenantId !== scope.tenantId) return false;
       if (speakerSubmissionAllowed(scope.submissionIds, asset.submissionId)) return true;
       const manual = manualByParticipant.get(asset.participantId);
@@ -7058,24 +7185,34 @@ export class SpeakerService {
     scope: SpeakerAccessScope,
     accountId: string,
   ): Promise<SpeakerRosterEntry[]> {
+    return (await this.organizerRosterProjection(organizationId, eventId, scope, accountId))
+      .entries;
+  }
+
+  private async organizerRosterProjection(
+    organizationId: string,
+    eventId: string,
+    scope: SpeakerAccessScope,
+    accountId: string,
+  ): Promise<{ entries: SpeakerRosterEntry[]; profiles: SpeakerProfile[] }> {
     const allowedSubmissions = new Set(scope.submissionIds.map(canonicalSpeakerSubmissionId));
     const isAllowedSubmission = (submissionId: string): boolean =>
       [...allowedSubmissions].some((allowed) => sameSpeakerSubmission(allowed, submissionId));
-    const entries: SpeakerRosterEntry[] = [];
     const listRosterForEvent = this.repository.listRosterForEvent;
     const listRoster = this.repository.listRoster;
-    const storedEntries =
+    const storedEntriesPromise =
       listRosterForEvent !== undefined
-        ? await listRosterForEvent.call(this.repository, eventId)
+        ? listRosterForEvent.call(this.repository, eventId)
         : listRoster === undefined
-          ? []
-          : (
-              await Promise.all(
-                unique(scope.submissionIds.map(canonicalSpeakerSubmissionId)).map((submissionId) =>
-                  listRoster.call(this.repository, eventId, submissionId),
-                ),
-              )
-            ).flat();
+          ? Promise.resolve([])
+          : Promise.all(
+              unique(scope.submissionIds.map(canonicalSpeakerSubmissionId)).map((submissionId) =>
+                listRoster.call(this.repository, eventId, submissionId),
+              ),
+            ).then((batches) => batches.flat());
+    const profilesPromise = this.repository.listProfiles(eventId, scope.participantIds);
+    const [storedEntries, profiles] = await Promise.all([storedEntriesPromise, profilesPromise]);
+    const entries: SpeakerRosterEntry[] = [];
     entries.push(
       ...storedEntries.filter(
         (entry) =>
@@ -7104,7 +7241,6 @@ export class SpeakerService {
         entries.push(entry);
       }
     }
-    const profiles = await this.repository.listProfiles(eventId, scope.participantIds);
     for (const profile of profiles) {
       if (!entries.some((entry) => entry.participantId === profile.participantId)) {
         const submissionId = canonicalSpeakerSubmissionId(
@@ -7151,7 +7287,7 @@ export class SpeakerService {
         byParticipant.set(entry.participantId, entry);
       }
     }
-    return [...byParticipant.values()];
+    return { entries: [...byParticipant.values()], profiles };
   }
 
   private organizerSpeakerRecord(

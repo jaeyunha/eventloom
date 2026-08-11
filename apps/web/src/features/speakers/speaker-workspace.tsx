@@ -24,7 +24,6 @@ import {
   type SpeakerStatus,
   type SpeakerTask,
   type SpeakerTaskAssignmentInput,
-  type SpeakerTaskEnvelope,
   type SpeakerTravelLogistics,
   type SpeakerUpdateInput,
 } from "./api";
@@ -480,39 +479,50 @@ export function duplicateEmailConflicts(
     .filter(([, entries]) => entries.length > 1)
     .map(([email, entries]) => ({ email, speakers: entries }));
 }
-async function progressFor(
-  api: SpeakerApi,
+export async function speakerProgressFor(
+  api: Pick<SpeakerApi, "listTasks">,
   speakers: readonly SpeakerRecord[],
   organizationId: string,
   eventId: string,
   signal?: AbortSignal,
 ): Promise<SpeakerProgressEnvelope> {
-  const envelopes: SpeakerTaskEnvelope[] = [];
-  for (const speaker of speakers) {
-    const envelope = await api.listTasks(speaker.participantId, signal);
-    if (envelope.tasks.some((task) => task.participantId !== speaker.participantId)) {
+  if (speakers.length === 0) {
+    return { organizationId, eventId, rows: [] };
+  }
+  const envelope = await api.listTasks(signal);
+  if (
+    envelope.organizationId !== organizationId ||
+    envelope.eventId !== eventId ||
+    envelope.speakerProfileId !== ""
+  ) {
+    throw new TypeError(
+      "The speaker task response belongs to a different organization, event, or profile.",
+    );
+  }
+
+  const rosterParticipantIds = new Set(speakers.map((speaker) => speaker.participantId));
+  const tasksByParticipant = new Map<string, SpeakerTask[]>();
+  for (const task of envelope.tasks) {
+    if (!rosterParticipantIds.has(task.participantId)) {
       throw new TypeError(
         "The speaker task response contains a task for a different speaker profile.",
       );
     }
-    if (
-      envelope.organizationId !== organizationId ||
-      envelope.eventId !== eventId ||
-      envelope.speakerProfileId !== speaker.participantId
-    ) {
-      throw new TypeError(
-        "The speaker task response belongs to a different organization, event, or profile.",
-      );
+    const tasks = tasksByParticipant.get(task.participantId);
+    if (tasks === undefined) {
+      tasksByParticipant.set(task.participantId, [task]);
+    } else {
+      tasks.push(task);
     }
-    envelopes.push(envelope);
   }
+
   return {
     organizationId,
     eventId,
-    rows: speakers.map((speaker, index) => ({
+    rows: speakers.map((speaker) => ({
       participantId: speaker.participantId,
       displayName: speaker.displayName,
-      tasks: envelopes[index]?.tasks ?? [],
+      tasks: tasksByParticipant.get(speaker.participantId) ?? [],
     })),
   };
 }
@@ -1025,7 +1035,7 @@ export function SpeakerWorkspace({
           progressTimedOut = true;
           nextProgressController.abort();
         }, ASYNC_ACTION_TIMEOUT_MS);
-        void progressFor(
+        void speakerProgressFor(
           api,
           normalizedRoster.speakers,
           organizationId,
@@ -1264,7 +1274,7 @@ export function SpeakerWorkspace({
           progressTimedOut = true;
           progressController.abort();
         }, ASYNC_ACTION_TIMEOUT_MS);
-        void progressFor(
+        void speakerProgressFor(
           api,
           normalizedRoster.speakers,
           organizationId,
@@ -1343,7 +1353,13 @@ export function SpeakerWorkspace({
         progressTimedOut = true;
         progressController.abort();
       }, ASYNC_ACTION_TIMEOUT_MS);
-      void progressFor(api, nextRoster.speakers, organizationId, eventId, progressController.signal)
+      void speakerProgressFor(
+        api,
+        nextRoster.speakers,
+        organizationId,
+        eventId,
+        progressController.signal,
+      )
         .then((nextProgress) => {
           if (requestId !== rosterRequestRef.current) return;
           setProgress(nextProgress);
@@ -1574,7 +1590,7 @@ export function SpeakerWorkspace({
     try {
       const latest = await withTimeout(async (signal) => {
         const latestRoster = normalizeRoster(await api.list(signal), organizationId, eventId);
-        const latestProgress = await progressFor(
+        const latestProgress = await speakerProgressFor(
           api,
           latestRoster.speakers,
           organizationId,

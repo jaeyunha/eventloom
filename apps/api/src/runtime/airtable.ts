@@ -1488,20 +1488,35 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     accountId: string,
   ): Promise<SpeakerOrganizerAccessScope | null> {
     if (eventId.trim().length === 0 || accountId.trim().length === 0) return null;
-    const event = await this.#events.find(eventId);
-    if (event === undefined || event.id !== eventId) return null;
-    const tenantId = resolvedOrganizationId(event);
-    if (tenantId === undefined) return null;
-
-    const membership = await this.#database
-      .prepare(
-        `SELECT organization_id, role
-           FROM organization_memberships
-          WHERE organization_id = ? AND user_id = ?
-          LIMIT 1`,
-      )
-      .bind(tenantId, accountId)
-      .first<{ organization_id?: unknown; role?: unknown }>();
+    const eventPromise = this.#events.find(eventId);
+    const submissionRecordsPromise = listEventScopedJson(
+      this.#submissions,
+      "Answers JSON",
+      eventId,
+    );
+    const rosterRecordsPromise = listEventScopedJson(this.#roster, "Members JSON", eventId);
+    const membershipPromise = eventPromise.then(async (event) => {
+      if (event === undefined || event.id !== eventId) return null;
+      const tenantId = resolvedOrganizationId(event);
+      if (tenantId === undefined) return null;
+      const membership = await this.#database
+        .prepare(
+          `SELECT organization_id, role
+             FROM organization_memberships
+            WHERE organization_id = ? AND user_id = ?
+            LIMIT 1`,
+        )
+        .bind(tenantId, accountId)
+        .first<{ organization_id?: unknown; role?: unknown }>();
+      return { tenantId, membership };
+    });
+    const [membershipResult, submissionRecords, rosterRecordsForEvent] = await Promise.all([
+      membershipPromise,
+      submissionRecordsPromise,
+      rosterRecordsPromise,
+    ]);
+    if (membershipResult === null) return null;
+    const { tenantId, membership } = membershipResult;
     const role =
       membership?.role === "owner" ? "owner" : membership?.role === "admin" ? "admin" : null;
     if (
@@ -1512,11 +1527,6 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     ) {
       return null;
     }
-
-    const [submissionRecords, rosterRecordsForEvent] = await Promise.all([
-      listEventScopedJson(this.#submissions, "Answers JSON", eventId),
-      listEventScopedJson(this.#roster, "Members JSON", eventId),
-    ]);
     const records = submissionRecords as unknown as JsonRecord[];
     const sourceRecords = records.filter(
       (record) =>
@@ -1565,27 +1575,31 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
   }
 
   async getAccessScope(eventId: string, accountId: string): Promise<SpeakerAccessScope> {
-    const [result, account, event] = await Promise.all([
-      this.#database
-        .prepare(
-          `SELECT organization_id, speaker_profile_id
-             FROM speaker_grants
-            WHERE user_id = ? AND revoked_at IS NULL
-            ORDER BY organization_id, speaker_profile_id`,
-        )
-        .bind(accountId)
-        .all<{ organization_id: string; speaker_profile_id: string }>(),
-      this.#database
-        .prepare(
-          `SELECT email
-             FROM auth_users
-            WHERE id = ? AND email_verified = 1
-            LIMIT 1`,
-        )
-        .bind(accountId)
-        .first<{ email?: unknown }>(),
-      this.#events.find(eventId),
-    ]);
+    const [result, account, event, submissionRecords, decisionRecords, profileRecords] =
+      await Promise.all([
+        this.#database
+          .prepare(
+            `SELECT organization_id, speaker_profile_id
+               FROM speaker_grants
+              WHERE user_id = ? AND revoked_at IS NULL
+              ORDER BY organization_id, speaker_profile_id`,
+          )
+          .bind(accountId)
+          .all<{ organization_id: string; speaker_profile_id: string }>(),
+        this.#database
+          .prepare(
+            `SELECT email
+               FROM auth_users
+              WHERE id = ? AND email_verified = 1
+              LIMIT 1`,
+          )
+          .bind(accountId)
+          .first<{ email?: unknown }>(),
+        this.#events.find(eventId),
+        this.#submissions.list(),
+        this.#decisions.list(),
+        this.#profiles.list(),
+      ]);
     const accountEmail =
       typeof account?.email === "string" ? account.email.trim().toLowerCase() : undefined;
     const eventScope = resolveOrganizationScope(event);
@@ -1601,11 +1615,6 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
         .map((row) => row.speaker_profile_id)
         .filter((id): id is string => typeof id === "string" && id.length > 0),
     );
-    const [submissionRecords, decisionRecords, profileRecords] = await Promise.all([
-      this.#submissions.list(),
-      this.#decisions.list(),
-      this.#profiles.list(),
-    ]);
     const records = submissionRecords as unknown as JsonRecord[];
     const decisions = portalDecisionProjections(decisionRecords);
     const ownedRecords = records.filter((record) => {
@@ -1724,6 +1733,12 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
   }
 
   async listPortalContexts(accountId: string): Promise<SpeakerPortalContext[]> {
+    return (await this.listPortalContextScopes(accountId)).map(({ context }) => context);
+  }
+
+  async listPortalContextScopes(
+    accountId: string,
+  ): Promise<readonly { context: SpeakerPortalContext; scope: SpeakerAccessScope }[]> {
     const [grants, account, profiles, submissionRecords, decisionRecords, events] =
       await Promise.all([
         this.#database
@@ -1753,7 +1768,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       typeof account?.email === "string" ? account.email.trim().toLowerCase() : undefined;
     const records = submissionRecords as unknown as JsonRecord[];
     const decisions = portalDecisionProjections(decisionRecords);
-    const contexts: SpeakerPortalContext[] = [];
+    const contextScopes: Array<{ context: SpeakerPortalContext; scope: SpeakerAccessScope }> = [];
     for (const event of events) {
       const eventId = typeof event.id === "string" ? event.id : null;
       if (eventId === null) continue;
@@ -1776,6 +1791,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
           ? resolveOrganizationScope(record).status !== "conflict"
           : matchesOrganizationScope(record, organizationId, true);
       });
+      if (accountEmail === undefined) continue;
       const eventProfiles = profiles.filter(
         (profile) =>
           profile.eventId === eventId &&
@@ -1785,7 +1801,10 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
               grant.speaker_profile_id === profile.participantId,
           ),
       );
-      const grantParticipantIds = new Set(eventProfiles.map((profile) => profile.participantId));
+      const accountProfiles = eventProfiles.filter(
+        (profile) => profile.email?.trim().toLowerCase() === accountEmail,
+      );
+      const grantParticipantIds = new Set(accountProfiles.map((profile) => profile.participantId));
       const grantSubmissions = records.filter(
         (record) =>
           isSpeakerSubmissionRecord(record) &&
@@ -1808,11 +1827,24 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       ];
       const participantIds = [
         ...new Set([
-          ...ownerRecords.flatMap(portalParticipantIds),
-          ...eventProfiles.map((profile) => profile.participantId),
+          ...ownerRecords.flatMap((record) => portalParticipantIdsForEmail(record, accountEmail)),
+          ...accountProfiles.map((profile) => profile.participantId),
         ]),
       ];
       if (submissionIds.length === 0 || participantIds.length === 0) continue;
+      const eventProfileIds = new Set(
+        eventProfiles.flatMap((profile) => [profile.id, profile.participantId]),
+      );
+      const tenantIds = [
+        ...new Set([
+          ...eventGrants
+            .filter((grant) => eventProfileIds.has(grant.speaker_profile_id))
+            .map((grant) => grant.organization_id),
+          ...(organizationId === undefined ? [] : [organizationId]),
+        ]),
+      ];
+      if (tenantIds.length > 1) continue;
+      const tenantId = tenantIds[0];
       const acceptedOwnerRecords = ownerRecords.filter(
         (record) => portalRecordStatus(record, decisions) === "accepted",
       );
@@ -1830,20 +1862,25 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
         ...(acceptedParticipants.size > 0 ? ACCEPTED_PORTAL_CAPABILITIES : []),
         ...(submissionEditingAllowed ? (["submission-edit"] as const) : []),
       ];
-      const accountParticipantId =
-        accountEmail === undefined
-          ? undefined
-          : eventProfiles.find((profile) => profile.email?.trim().toLowerCase() === accountEmail)
-              ?.participantId;
       const primaryParticipantId =
-        accountParticipantId ??
         ownerRecords.map(portalPrimaryParticipantId).find(isDefinedString) ??
         grantSubmissions.map(portalPrimaryParticipantId).find(isDefinedString) ??
         participantIds[0];
+      const capabilitiesByParticipant = Object.fromEntries(
+        participantIds.map((participantId) => [
+          participantId,
+          acceptedParticipants.has(participantId)
+            ? [
+                ...capabilities,
+                ...(participantId === primaryParticipantId ? (["roster-manage"] as const) : []),
+              ]
+            : [],
+        ]),
+      );
       const slug = textValue(event, "slug");
       const status = textValue(event, "status");
-      contexts.push({
-        id: `portal:${organizationId ?? eventGrants[0]?.organization_id ?? eventId}:${eventId}`,
+      const context: SpeakerPortalContext = {
+        id: `portal:${tenantId ?? eventId}:${eventId}`,
         eventId,
         name: textValue(event, "name", "title") ?? eventId,
         ...(slug === null ? {} : { slug }),
@@ -1852,9 +1889,20 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
         submissionIds: [...new Set(submissionIds)],
         participantIds,
         ...(primaryParticipantId === undefined ? {} : { primaryParticipantId }),
+      };
+      contextScopes.push({
+        context,
+        scope: {
+          ...(tenantId === undefined ? {} : { tenantId }),
+          submissionIds: context.submissionIds,
+          participantIds,
+          capabilities,
+          capabilitiesByParticipant,
+          ...(primaryParticipantId === undefined ? {} : { primaryParticipantId }),
+        },
       });
     }
-    return contexts;
+    return contextScopes;
   }
 
   async listSubmissions(
@@ -2202,13 +2250,16 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     eventId: string,
     participantIds: readonly string[],
   ): Promise<SpeakerProfile[]> {
-    const event = await this.#events.find(eventId);
-    const organizationId = event === undefined ? undefined : resolvedOrganizationId(event);
-    if (organizationId === undefined) return [];
     const profileIds = participantIds.map(
       (participantId) => `speaker-profile:${eventId}:${participantId}`,
     );
-    return (await this.#profiles.listByIds(profileIds))
+    const [event, profiles] = await Promise.all([
+      this.#events.find(eventId),
+      this.#profiles.listByIds(profileIds),
+    ]);
+    const organizationId = event === undefined ? undefined : resolvedOrganizationId(event);
+    if (organizationId === undefined) return [];
+    return profiles
       .filter(
         (profile) =>
           speakerProfileScoped(profile, organizationId, eventId, organizationId) &&

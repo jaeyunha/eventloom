@@ -402,7 +402,7 @@ export interface SpeakerApi {
     input: SpeakerImportCommitInput,
     signal?: AbortSignal,
   ): Promise<SpeakerRosterEnvelope>;
-  listTasks(participantId: string, signal?: AbortSignal): Promise<SpeakerTaskEnvelope>;
+  listTasks(signal?: AbortSignal): Promise<SpeakerTaskEnvelope>;
   assignTasks(input: SpeakerTaskAssignmentInput): Promise<SpeakerTaskEnvelope>;
   previewInvitations(
     input: SpeakerInvitationPreviewInput,
@@ -576,10 +576,9 @@ export function createSpeakerApi(
     commitImport(input, signal) {
       return jsonRequest<SpeakerRosterEnvelope>("/imports", "POST", input, signal);
     },
-    listTasks(participantId, signal) {
-      const query = new URLSearchParams({ participantId });
+    listTasks(signal) {
       return eventRequest<SpeakerTaskEnvelope>(
-        `/speaker-tasks?${query.toString()}`,
+        "/speaker-tasks",
         signal === undefined ? undefined : { signal },
       );
     },

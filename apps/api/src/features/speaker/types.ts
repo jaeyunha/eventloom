@@ -924,6 +924,9 @@ export interface SpeakerRepository {
   appendAssetAudit?(entry: SpeakerAssetAuditEntry): Promise<void>;
   listAssetAudit?(eventId: string, assetId: string): Promise<SpeakerAssetAuditEntry[]>;
   listPortalContexts?(accountId: string): Promise<SpeakerPortalContext[]>;
+  listPortalContextScopes?(
+    accountId: string,
+  ): Promise<readonly { context: SpeakerPortalContext; scope: SpeakerAccessScope }[]>;
   listRoster?(eventId: string, submissionId: string): Promise<SpeakerRosterEntry[]>;
   /** Efficient event-wide roster projection used by organizer workspaces. */
   listRosterForEvent?(eventId: string): Promise<SpeakerRosterEntry[]>;

@@ -425,6 +425,127 @@ class CountingPortalRepository extends OrganizerSpeakerRepository {
     return Promise.resolve(this.wiki.filter((page) => page.eventId === eventId));
   }
 }
+class DelayedOrganizerRosterRepository extends OrganizerSpeakerRepository {
+  readonly started: string[] = [];
+  submissionReads = 0;
+  profileReads = 0;
+  taskReads = 0;
+  assetReads = 0;
+
+  private async delayed<T>(name: string, read: () => Promise<T>): Promise<T> {
+    this.started.push(name);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    return read();
+  }
+
+  override getOrganizerAccessScope(
+    eventId: string,
+    accountId: string,
+  ): Promise<SpeakerOrganizerAccessScope | null> {
+    return this.delayed("scope", () => super.getOrganizerAccessScope(eventId, accountId));
+  }
+
+  override listSubmissions(
+    eventId: string,
+    submissionIds: readonly string[],
+  ): Promise<SpeakerSubmission[]> {
+    this.submissionReads += 1;
+    return this.delayed("submissions", () => super.listSubmissions(eventId, submissionIds));
+  }
+
+  override listProfiles(
+    eventId: string,
+    participantIds: readonly string[],
+  ): Promise<SpeakerProfile[]> {
+    this.profileReads += 1;
+    return this.delayed("profiles", () => super.listProfiles(eventId, participantIds));
+  }
+
+  override listTasks(eventId: string, participantIds: readonly string[]): Promise<SpeakerTask[]> {
+    this.taskReads += 1;
+    return this.delayed("tasks", () => super.listTasks(eventId, participantIds));
+  }
+
+  listAssets(eventId: string, participantIds: readonly string[]): Promise<SpeakerAsset[]> {
+    this.assetReads += 1;
+    return this.delayed("assets", () =>
+      Promise.resolve(
+        this.assets.filter(
+          (asset) => asset.eventId === eventId && participantIds.includes(asset.participantId),
+        ),
+      ),
+    );
+  }
+
+  override listRosterForEvent(eventId: string): Promise<SpeakerRosterEntry[]> {
+    return this.delayed("roster", () => super.listRosterForEvent(eventId));
+  }
+}
+
+class DelayedPortalContextRepository extends CountingPortalRepository {
+  readonly started: string[] = [];
+
+  private async delayed<T>(name: string, read: () => Promise<T>): Promise<T> {
+    this.started.push(name);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    return read();
+  }
+
+  override listPortalContexts(accountId: string): Promise<SpeakerPortalContext[]> {
+    return this.delayed("contexts", () => super.listPortalContexts(accountId));
+  }
+
+  override listSubmissions(
+    eventId: string,
+    submissionIds: readonly string[],
+  ): Promise<SpeakerSubmission[]> {
+    return this.delayed("submissions", () => super.listSubmissions(eventId, submissionIds));
+  }
+}
+class DelayedPortalWorkspaceRepository extends CountingPortalRepository {
+  private async delayed<T>(read: () => Promise<T>): Promise<T> {
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    return read();
+  }
+
+  override getAccessScope(eventId: string, accountId: string): Promise<SpeakerAccessScope> {
+    return this.delayed(() => super.getAccessScope(eventId, accountId));
+  }
+
+  override listSubmissions(
+    eventId: string,
+    submissionIds: readonly string[],
+  ): Promise<SpeakerSubmission[]> {
+    return this.delayed(() => super.listSubmissions(eventId, submissionIds));
+  }
+
+  override listProfiles(
+    eventId: string,
+    participantIds: readonly string[],
+  ): Promise<SpeakerProfile[]> {
+    return this.delayed(() => super.listProfiles(eventId, participantIds));
+  }
+
+  override listTasks(eventId: string, participantIds: readonly string[]): Promise<SpeakerTask[]> {
+    return this.delayed(() => super.listTasks(eventId, participantIds));
+  }
+
+  override listPortalContexts(accountId: string): Promise<SpeakerPortalContext[]> {
+    return this.delayed(() => super.listPortalContexts(accountId));
+  }
+
+  override listAssets(eventId: string, participantIds: readonly string[]): Promise<SpeakerAsset[]> {
+    return this.delayed(() => super.listAssets(eventId, participantIds));
+  }
+
+  override listRoster(eventId: string, submissionId: string): Promise<SpeakerRosterEntry[]> {
+    return this.delayed(() => super.listRoster(eventId, submissionId));
+  }
+
+  override listRosterForEvent(eventId: string): Promise<SpeakerRosterEntry[]> {
+    return this.delayed(() => super.listRosterForEvent(eventId));
+  }
+}
 
 class FakePrivateAssetGateway implements PrivateAssetGateway {
   readonly uploads: CreatePrivateUploadGrantCommand[] = [];
@@ -715,6 +836,75 @@ function createDualRoleFixture() {
   return { repository, service };
 }
 describe("SpeakerService organizer asset reads", () => {
+  it("settles organizer roster projections in parallel waves with one read per projection", async () => {
+    const repository = new DelayedOrganizerRosterRepository();
+    repository.organizerScopes.set("event-1:account-1", {
+      tenantId: "org-1",
+      eventId: "event-1",
+      role: "owner",
+      submissionIds: ["submission-1"],
+      participantIds: ["participant-1"],
+    });
+    repository.submissions.push(submission("submission-1", "participant-1"));
+    repository.profiles.push(profile("participant-1"));
+    repository.roster.push({
+      id: "roster:event-1:speaker-submission:submission-1:participant-1",
+      eventId: "event-1",
+      submissionId: "speaker-submission:submission-1",
+      participantId: "participant-1",
+      displayName: "Roster participant-1",
+      role: "primary",
+      status: "active",
+      version: 1,
+      createdAt: now,
+      updatedAt: now,
+    });
+    repository.tasks.push(task({ id: "roster-task", participantId: "participant-1" }));
+    repository.assets.push({
+      id: "roster-asset",
+      tenantId: "org-1",
+      eventId: "event-1",
+      submissionId: "speaker-submission:submission-1",
+      participantId: "participant-1",
+      kind: "slides",
+      objectKey: "events/event-1/participants/participant-1/slides/roster-asset",
+      fileName: "slides.pdf",
+      contentType: "application/pdf",
+      sizeBytes: 1_024,
+      state: "ready",
+      createdAt: now,
+    });
+    const service = new SpeakerService(repository, new FakePrivateAssetGateway(), {
+      now: () => new Date(now),
+    });
+
+    const startedAt = Date.now();
+    const roster = await service.listOrganizerSpeakerRoster("org-1", "event-1", "account-1");
+
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    expect(repository.started.slice(0, 4)).toEqual(["scope", "submissions", "roster", "profiles"]);
+    expect(repository.started.slice(4).sort()).toEqual(["assets", "tasks"]);
+    expect({
+      submissions: repository.submissionReads,
+      profiles: repository.profileReads,
+      tasks: repository.taskReads,
+      assets: repository.assetReads,
+      roster: repository.rosterEventReads,
+    }).toEqual({
+      submissions: 1,
+      profiles: 1,
+      tasks: 1,
+      assets: 1,
+      roster: 1,
+    });
+    expect(roster.speakers).toEqual([
+      expect.objectContaining({
+        participantId: "participant-1",
+        displayName: "Roster participant-1",
+        sessions: [expect.objectContaining({ submissionId: "speaker-submission:submission-1" })],
+      }),
+    ]);
+  });
   it("starts asset, profile, and roster reads together and preserves canonical metadata", async () => {
     const { repository, service } = createConcurrentOrganizerFixture();
     const pending = service.listOrganizerAssets("event-1", "account-1");
@@ -1434,6 +1624,235 @@ function expectServiceError(error: unknown, code: string): void {
 }
 
 describe("SpeakerService portal access", () => {
+  it("projects authorized portal contexts in one parallel submission wave", async () => {
+    const repository = new DelayedPortalContextRepository();
+    repository.scopes.set("event-1:account-1", {
+      tenantId: "org-1",
+      submissionIds: ["submission-primary", "submission-co"],
+      participantIds: ["participant-primary"],
+      primaryParticipantId: "participant-primary",
+      capabilities: ["profile-self", "roster-manage", "task-response"],
+    });
+    repository.submissions.push(
+      {
+        ...submission("submission-primary", "participant-primary"),
+        participantIds: ["participant-primary", "participant-co"],
+        primaryParticipantId: "participant-primary",
+      },
+      submission("submission-co", "participant-co"),
+    );
+    repository.portalContexts.push(
+      {
+        id: "portal:org-1:event-1",
+        eventId: "event-1",
+        name: "Primary event",
+        capabilities: ["profile-self", "roster-manage", "task-response"],
+        submissionIds: ["submission-primary", "submission-co"],
+        participantIds: ["participant-primary", "participant-co"],
+        primaryParticipantId: "participant-primary",
+      },
+      {
+        id: "portal:org-1:event-1:co",
+        eventId: "event-1",
+        name: "Co-only projection",
+        capabilities: ["profile-self"],
+        submissionIds: ["submission-co"],
+        participantIds: ["participant-primary", "participant-co"],
+        primaryParticipantId: "participant-primary",
+      },
+    );
+    const service = new SpeakerService(repository, new FakePrivateAssetGateway(), {
+      now: () => new Date(now),
+    });
+
+    const startedAt = Date.now();
+    const contexts = await service.listPortalContexts("account-1");
+
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    expect(repository.started).toEqual(["contexts", "submissions"]);
+    expect({
+      accessScope: repository.accessScopeReads,
+      contexts: repository.contextReads,
+      submissions: repository.submissionReads,
+    }).toEqual({
+      accessScope: 1,
+      contexts: 1,
+      submissions: 1,
+    });
+    expect(contexts).toEqual([
+      expect.objectContaining({
+        id: "portal:org-1:event-1",
+        submissionIds: ["submission-primary"],
+        participantIds: ["participant-primary"],
+        primaryParticipantId: "participant-primary",
+        capabilities: expect.arrayContaining(["profile-self", "roster-manage"]),
+      }),
+    ]);
+    expect(JSON.stringify(contexts)).not.toContain("participant-co");
+  });
+  it("rejects a discovered co-speaker context when canonical scope resolves another primary", async () => {
+    const repository = new CountingPortalRepository();
+    repository.scopes.set("event-1:account-1", {
+      tenantId: "org-1",
+      submissionIds: ["speaker-submission:submission-1"],
+      participantIds: ["participant-co"],
+      primaryParticipantId: "participant-primary",
+      capabilities: ["profile-self", "task-response"],
+    });
+    repository.portalContexts.push({
+      id: "portal:org-1:event-1",
+      eventId: "event-1",
+      name: "Mismatched co-speaker context",
+      capabilities: ["profile-self", "task-response"],
+      submissionIds: ["speaker-submission:submission-1"],
+      participantIds: ["participant-co"],
+      primaryParticipantId: "participant-co",
+    });
+
+    const service = new SpeakerService(repository, new FakePrivateAssetGateway(), {
+      now: () => new Date(now),
+    });
+    await expect(service.listPortalContexts("account-1")).resolves.toEqual([]);
+    expect({
+      accessScope: repository.accessScopeReads,
+      contexts: repository.contextReads,
+      submissions: repository.submissionReads,
+    }).toEqual({ accessScope: 1, contexts: 1, submissions: 0 });
+  });
+  it("keeps raw and canonical submission aliases scoped to their discovered contexts", async () => {
+    const repository = new CountingPortalRepository();
+    repository.scopes.set("event-1:account-1", {
+      tenantId: "org-1",
+      submissionIds: ["submission-1", "speaker-submission:submission-1"],
+      participantIds: ["participant-1"],
+      primaryParticipantId: "participant-1",
+      capabilities: ["profile-self", "task-response"],
+    });
+    repository.submissions.push(
+      submission("submission-1", "participant-1"),
+      submission("speaker-submission:submission-1", "participant-1"),
+    );
+    repository.portalContexts.push(
+      {
+        id: "portal:raw",
+        eventId: "event-1",
+        name: "Raw context",
+        capabilities: ["profile-self", "task-response"],
+        submissionIds: ["submission-1"],
+        participantIds: ["participant-1"],
+        primaryParticipantId: "participant-1",
+      },
+      {
+        id: "portal:canonical",
+        eventId: "event-1",
+        name: "Canonical context",
+        capabilities: ["profile-self", "task-response"],
+        submissionIds: ["speaker-submission:submission-1"],
+        participantIds: ["participant-1"],
+        primaryParticipantId: "participant-1",
+      },
+    );
+    const service = new SpeakerService(repository, new FakePrivateAssetGateway(), {
+      now: () => new Date(now),
+    });
+
+    const contexts = await service.listPortalContexts("account-1");
+
+    expect(contexts).toEqual([
+      expect.objectContaining({
+        id: "portal:canonical",
+        submissionIds: ["speaker-submission:submission-1"],
+      }),
+      expect.objectContaining({
+        id: "portal:raw",
+        submissionIds: ["submission-1"],
+      }),
+    ]);
+    expect(repository.accessScopeReads).toBe(1);
+    expect(repository.submissionReads).toBe(1);
+  });
+  it("hydrates the delayed portal workspace in two parallel waves", async () => {
+    const repository = new DelayedPortalWorkspaceRepository();
+    repository.scopes.set("event-1:account-1", {
+      tenantId: "org-1",
+      submissionIds: ["speaker-submission:submission-1"],
+      participantIds: ["participant-1"],
+      primaryParticipantId: "participant-1",
+      capabilities: ["profile-self", "task-response", "asset-read"],
+    });
+    repository.submissions.push(submission("speaker-submission:submission-1", "participant-1"));
+    repository.profiles.push(profile("participant-1"));
+    repository.tasks.push(task({ id: "portal-task", participantId: "participant-1" }));
+    repository.assets.push({
+      id: "portal-asset",
+      tenantId: "org-1",
+      eventId: "event-1",
+      submissionId: "speaker-submission:submission-1",
+      participantId: "participant-1",
+      kind: "slides",
+      objectKey: "events/event-1/participants/participant-1/slides/portal-asset",
+      fileName: "slides.pdf",
+      contentType: "application/pdf",
+      sizeBytes: 1_024,
+      state: "ready",
+      createdAt: now,
+    });
+    repository.portalContexts.push({
+      id: "portal:org-1:event-1",
+      eventId: "event-1",
+      name: "Portal event",
+      capabilities: ["profile-self", "task-response", "asset-read"],
+      submissionIds: ["speaker-submission:submission-1"],
+      participantIds: ["participant-1"],
+      primaryParticipantId: "participant-1",
+    });
+    repository.roster.push({
+      id: "roster:event-1:speaker-submission:submission-1:participant-1",
+      eventId: "event-1",
+      submissionId: "speaker-submission:submission-1",
+      participantId: "participant-1",
+      displayName: "Speaker participant-1",
+      role: "primary",
+      status: "active",
+      version: 1,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const service = new SpeakerService(repository, new FakePrivateAssetGateway(), {
+      now: () => new Date(now),
+    });
+
+    const startedAt = performance.now();
+    const portal = await service.getPortal("event-1", "account-1");
+
+    expect(performance.now() - startedAt).toBeLessThan(1_000);
+    expect({
+      accessScope: repository.accessScopeReads,
+      submissions: repository.submissionReads,
+      profiles: repository.profileReads,
+      tasks: repository.taskReads,
+      contexts: repository.contextReads,
+      assets: repository.assetReads,
+      roster: repository.rosterReads,
+      rosterEvent: repository.rosterEventReads,
+    }).toEqual({
+      accessScope: 1,
+      submissions: 1,
+      profiles: 1,
+      tasks: 1,
+      contexts: 1,
+      assets: 1,
+      roster: 0,
+      rosterEvent: 1,
+    });
+    expect(portal).toMatchObject({
+      tasks: [expect.objectContaining({ id: "portal-task" })],
+      assets: [expect.objectContaining({ id: "portal-asset" })],
+      roster: {
+        members: [expect.objectContaining({ participantId: "participant-1" })],
+      },
+    });
+  });
   it("hydrates the portal with one scope and one parallel read per projection", async () => {
     const repository = new CountingPortalRepository();
     repository.scopes.set("event-1:account-1", {
@@ -1529,6 +1948,7 @@ describe("SpeakerService portal access", () => {
       contexts: repository.contextReads,
       assets: repository.assetReads,
       roster: repository.rosterReads,
+      rosterEvent: repository.rosterEventReads,
       resources: repository.resourceReads,
       wiki: repository.wikiReads,
     }).toEqual({
@@ -1538,7 +1958,8 @@ describe("SpeakerService portal access", () => {
       tasks: 1,
       contexts: 1,
       assets: 1,
-      roster: 1,
+      roster: 0,
+      rosterEvent: 1,
       resources: 1,
       wiki: 1,
     });

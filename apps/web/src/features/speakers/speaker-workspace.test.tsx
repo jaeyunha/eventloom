@@ -20,6 +20,7 @@ import {
   SpeakerWorkspace,
   speakerInvitationReady,
   speakerOnboardingTaskDefinitions,
+  speakerProgressFor,
   speakerProgressMatches,
   travelLogisticsFor,
   validateSpeakerTaskAssignment,
@@ -258,7 +259,7 @@ describe("speaker API adapter", () => {
             data: {
               organizationId: "org-1",
               eventId: "event-1",
-              speakerProfileId: "participant-1",
+              speakerProfileId: "",
               tasks: [task],
             },
           }),
@@ -326,7 +327,7 @@ describe("speaker API adapter", () => {
       dueAt: task.dueAt ?? "",
       participantIds: ["participant-1", "participant-2"],
     });
-    await api.listTasks("participant-1");
+    await api.listTasks();
     await api.previewInvitations({ participantIds: ["participant-1"] });
     await api.sendInvitations({
       participantIds: ["participant-1"],
@@ -352,12 +353,86 @@ describe("speaker API adapter", () => {
       dueAt: task.dueAt,
       participantIds: ["participant-1", "participant-2"],
     });
-    expect(String(calls[2]?.input)).toContain("/speaker-tasks?participantId=participant-1");
+    expect(String(calls[2]?.input)).toBe(
+      "https://api.example.test/api/admin/organizations/org-1/events/event-1/speaker-tasks",
+    );
     expect(String(calls[3]?.input)).toContain("/speakers/invitations/preview");
     expect(JSON.parse(String(calls[4]?.init?.body))).toMatchObject({
       templateId: "speaker-welcome",
       idempotencyKey: "invite-once",
     });
+  });
+  it("loads multi-speaker progress with one batch task request and groups tasks in roster order", async () => {
+    const multiSpeakerRoster: SpeakerRosterEnvelope = {
+      ...roster,
+      speakers: [
+        speaker,
+        {
+          ...speaker,
+          participantId: "participant-2",
+          displayName: "Marcus Chen",
+          email: "marcus@example.test",
+        },
+        {
+          ...speaker,
+          participantId: "participant-3",
+          displayName: "Amina Yusuf",
+          email: "amina@example.test",
+        },
+      ],
+    };
+    const tasks: SpeakerTask[] = [
+      task,
+      { ...task, taskId: "task-2", participantId: "participant-2" },
+      { ...task, taskId: "task-3", participantId: "participant-3" },
+    ];
+    const requests: string[] = [];
+    const fetcher = async (input: RequestInfo | URL) => {
+      const path = String(input);
+      requests.push(path);
+      if (path.endsWith("/speakers")) {
+        return new Response(JSON.stringify({ data: multiSpeakerRoster }), { status: 200 });
+      }
+      if (path.endsWith("/speaker-tasks")) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              organizationId: "org-1",
+              eventId: "event-1",
+              speakerProfileId: "",
+              tasks,
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    };
+    const api = createSpeakerApi("https://api.example.test", "org-1", "event-1", fetcher);
+    const loadedRoster = await api.list();
+    const progress = await speakerProgressFor(
+      api,
+      loadedRoster.speakers,
+      loadedRoster.organizationId,
+      loadedRoster.eventId,
+    );
+
+    expect(requests.filter((path) => path.endsWith("/speakers"))).toHaveLength(1);
+    expect(requests.filter((path) => path.endsWith("/speaker-tasks"))).toHaveLength(1);
+    expect(requests[1]).toBe(
+      "https://api.example.test/api/admin/organizations/org-1/events/event-1/speaker-tasks",
+    );
+    expect(requests[1]).not.toContain("participantId=");
+    expect(
+      progress.rows.map((row) => ({
+        participantId: row.participantId,
+        taskIds: row.tasks.map((candidate) => candidate.taskId),
+      })),
+    ).toEqual([
+      { participantId: "participant-1", taskIds: ["task-1"] },
+      { participantId: "participant-2", taskIds: ["task-2"] },
+      { participantId: "participant-3", taskIds: ["task-3"] },
+    ]);
   });
 
   it("rejects invitation receipts without recipient delivery results", async () => {
@@ -420,6 +495,83 @@ describe("speaker API adapter", () => {
 });
 
 describe("speaker workspace contracts", () => {
+  it("skips the batch task request for an empty roster", async () => {
+    let taskCalls = 0;
+    const progress = await speakerProgressFor(
+      {
+        listTasks: async () => {
+          taskCalls += 1;
+          throw new Error("An empty roster must not request tasks.");
+        },
+      },
+      [],
+      "org-1",
+      "event-1",
+    );
+
+    expect(taskCalls).toBe(0);
+    expect(progress).toEqual({
+      organizationId: "org-1",
+      eventId: "event-1",
+      rows: [],
+    });
+  });
+  it("resolves a delayed multi-speaker batch without serial N+1 waits", async () => {
+    const speakers = Array.from({ length: 6 }, (_, index) => ({
+      ...speaker,
+      participantId: `participant-${index + 1}`,
+      displayName: `Speaker ${index + 1}`,
+      email: `speaker-${index + 1}@example.test`,
+    }));
+    const tasks: SpeakerTask[] = speakers.map((candidate, index) => ({
+      ...task,
+      taskId: `task-${index + 1}`,
+      participantId: candidate.participantId,
+    }));
+    let taskCalls = 0;
+    const startedAt = performance.now();
+    const progressPromise = speakerProgressFor(
+      {
+        listTasks: async () => {
+          taskCalls += 1;
+          await new Promise<void>((resolve) => setTimeout(resolve, 200));
+          return {
+            organizationId: "org-1",
+            eventId: "event-1",
+            speakerProfileId: "",
+            tasks,
+          };
+        },
+      },
+      speakers,
+      "org-1",
+      "event-1",
+    );
+
+    expect(taskCalls).toBe(1);
+    const progress = await progressPromise;
+
+    expect(taskCalls).toBe(1);
+    expect(performance.now() - startedAt).toBeLessThan(1_000);
+    expect(progress.rows.map((row) => row.tasks.length)).toEqual([1, 1, 1, 1, 1, 1]);
+  });
+  it("rejects a profile-scoped task envelope on the batch path", async () => {
+    await expect(
+      speakerProgressFor(
+        {
+          listTasks: async () => ({
+            organizationId: "org-1",
+            eventId: "event-1",
+            speakerProfileId: "participant-1",
+            tasks: [task],
+          }),
+        },
+        roster.speakers,
+        roster.organizationId,
+        roster.eventId,
+      ),
+    ).rejects.toThrow("different organization, event, or profile");
+  });
   it("applies exact roster and progress filters, including zero-task speakers as incomplete", () => {
     const secondSpeaker: SpeakerRecord = {
       ...speaker,

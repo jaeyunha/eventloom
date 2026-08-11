@@ -211,6 +211,74 @@ function normalizeCapabilities(value: readonly PortalCapability[] | undefined): 
   return value.filter((capability): capability is PortalCapability => allowed.has(capability));
 }
 
+type PortalPrefetchResult =
+  | { status: "fulfilled"; value: PortalView }
+  | { status: "rejected"; reason: unknown };
+
+export interface PortalStartupResult {
+  authorizedContexts: PortalContext[];
+  preferredContext: PortalContext | null;
+  prefetchedView?: PortalPrefetchResult;
+}
+
+function invokePortalRequest<T>(request: () => Promise<T>): Promise<T> {
+  try {
+    return Promise.resolve(request());
+  } catch (error) {
+    return Promise.reject(error);
+  }
+}
+
+export async function loadPortalStartup(
+  api: Pick<PortalApi, "getPortal"> & {
+    listPortalContexts?: PortalApi["listPortalContexts"];
+  },
+  configuredEventId?: string,
+  signal?: AbortSignal,
+): Promise<PortalStartupResult> {
+  const listPortalContexts = api.listPortalContexts;
+  if (!listPortalContexts) {
+    throw new PortalApiError("NO_PORTAL_CONTEXT", "No authorized event context is available.", 403);
+  }
+
+  const normalizedConfiguredEventId = configuredEventId?.trim() || undefined;
+  const prefetchEventId = normalizedConfiguredEventId?.startsWith("portal:")
+    ? undefined
+    : normalizedConfiguredEventId;
+  const contextsRequest = invokePortalRequest(() => listPortalContexts(signal));
+  const prefetchedViewRequest =
+    prefetchEventId === undefined
+      ? undefined
+      : invokePortalRequest(() => api.getPortal(prefetchEventId, signal)).then(
+          (value) => ({ status: "fulfilled", value }) as const,
+          (reason) => ({ status: "rejected", reason }) as const,
+        );
+
+  const authorizedContexts = (await contextsRequest)
+    .map((candidate) => scopePortalContextToPrimaryParticipant(candidate))
+    .filter((candidate) => candidate.primaryParticipantId !== undefined);
+  const preferredContext =
+    authorizedContexts.find((candidate) => candidate.id === normalizedConfiguredEventId) ??
+    authorizedContexts.find((candidate) => candidate.eventId === normalizedConfiguredEventId) ??
+    authorizedContexts[0] ??
+    null;
+
+  if (
+    signal?.aborted ||
+    prefetchEventId === undefined ||
+    preferredContext?.eventId !== prefetchEventId ||
+    prefetchedViewRequest === undefined
+  ) {
+    return { authorizedContexts, preferredContext };
+  }
+
+  return {
+    authorizedContexts,
+    preferredContext,
+    prefetchedView: await prefetchedViewRequest,
+  };
+}
+
 function contextName(context: PortalContext): string {
   return context.name.trim() || "Event";
 }
@@ -487,7 +555,11 @@ export function PortalProvider({
   );
 
   const hydrate = useCallback(
-    async (target: PortalContext, signal?: AbortSignal): Promise<boolean> => {
+    async (
+      target: PortalContext,
+      signal?: AbortSignal,
+      prefetchedView?: PortalPrefetchResult,
+    ): Promise<boolean> => {
       const generation = ++loadGeneration.current;
       setContext(target);
       setCapabilities(normalizeCapabilities(target.capabilities));
@@ -498,7 +570,16 @@ export function PortalProvider({
       setLoading(true);
       setError(null);
       try {
-        const nextView = await api.getPortal(target.eventId, signal);
+        if (prefetchedView?.status === "rejected") {
+          if (signal?.aborted || generation !== loadGeneration.current) {
+            return false;
+          }
+          throw prefetchedView.reason;
+        }
+        const nextView =
+          prefetchedView?.status === "fulfilled"
+            ? prefetchedView.value
+            : await api.getPortal(target.eventId, signal);
         if (signal?.aborted || generation !== loadGeneration.current) {
           return false;
         }
@@ -559,24 +640,16 @@ export function PortalProvider({
 
   const loadInitial = useCallback(
     async (signal?: AbortSignal): Promise<void> => {
+      const generation = loadGeneration.current;
       setLoading(true);
       setError(null);
       try {
-        if (!api.listPortalContexts) {
-          throw new PortalApiError(
-            "NO_PORTAL_CONTEXT",
-            "No authorized event context is available.",
-            403,
-          );
-        }
-        const authorizedContexts = (await api.listPortalContexts(signal))
-          .map((candidate) => scopePortalContextToPrimaryParticipant(candidate))
-          .filter((candidate) => candidate.primaryParticipantId !== undefined);
-        if (signal?.aborted) {
+        const startup = await loadPortalStartup(api, configuredEventId, signal);
+        if (signal?.aborted || generation !== loadGeneration.current) {
           return;
         }
-        setContexts(authorizedContexts);
-        if (authorizedContexts.length === 0) {
+        setContexts(startup.authorizedContexts);
+        if (startup.authorizedContexts.length === 0) {
           setContext(null);
           setCapabilities([]);
           setView(null);
@@ -586,10 +659,7 @@ export function PortalProvider({
           setLoading(false);
           return;
         }
-        const preferred =
-          authorizedContexts.find((candidate) => candidate.id === configuredEventId) ??
-          authorizedContexts.find((candidate) => candidate.eventId === configuredEventId) ??
-          authorizedContexts[0];
+        const preferred = startup.preferredContext;
         if (!preferred) {
           throw new PortalApiError(
             "NO_PORTAL_CONTEXT",
@@ -597,9 +667,9 @@ export function PortalProvider({
             403,
           );
         }
-        await hydrate(preferred, signal);
+        await hydrate(preferred, signal, startup.prefetchedView);
       } catch (loadError) {
-        if (!isAbort(loadError)) {
+        if (!isAbort(loadError) && generation === loadGeneration.current) {
           setContext(null);
           setView(null);
           clearWorkspace();
