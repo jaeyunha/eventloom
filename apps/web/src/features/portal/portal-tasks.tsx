@@ -193,9 +193,7 @@ function TaskCard({ task }: Readonly<{ task: PortalTask }>) {
           {task.type === "upload" ? "↑" : task.type === "form" ? "▤" : "✓"}
         </div>
         <div className={styles.taskTitle}>
-          <p>
-            {submission?.title ?? "Accepted session"}
-          </p>
+          <p>{submission?.title ?? "Accepted session"}</p>
           <h3 id={`task-${task.id}`}>{task.title}</h3>
         </div>
         <TaskStatusBadge status={task.status} />
@@ -211,7 +209,7 @@ function TaskCard({ task }: Readonly<{ task: PortalTask }>) {
       </div>
 
       {asset ? (
-        <div className={styles.taskActionArea} aria-label={`File details for ${task.title}`}>
+        <div className={styles.taskActionArea}>
           <div className={styles.taskMetadata}>
             <span>
               <strong>File</strong> {asset.fileName}

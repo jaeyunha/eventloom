@@ -281,9 +281,9 @@ function sessionSpeakerNames(session: Session): string[] {
     }),
   );
   const storedNames = Array.isArray((session as Session & { speakerNames?: unknown }).speakerNames)
-    ? ((session as Session & { speakerNames: unknown[] }).speakerNames.filter(
+    ? (session as Session & { speakerNames: unknown[] }).speakerNames.filter(
         (value): value is string => typeof value === "string" && value.trim().length > 0,
-      ))
+      )
     : [];
   return session.speakerIds.map(
     (participantId, index) => rosterNames.get(participantId) ?? storedNames[index] ?? participantId,
@@ -344,7 +344,6 @@ type SessionContentHistory = Partial<
 function sessionContentStatus(session: Session): SessionContentStatus | undefined {
   return session.contentStatus;
 }
-
 
 function sessionIsPubliclyApproved(session: Session): boolean {
   return sessionContentStatus(session) === "Approved";
@@ -1615,9 +1614,7 @@ export class SessionService {
         ...(session.roomId === undefined
           ? {}
           : { roomName: roomById.get(session.roomId)?.name ?? session.roomId }),
-        trackNames: session.trackIds.map(
-          (trackId) => trackById.get(trackId)?.name ?? trackId,
-        ),
+        trackNames: session.trackIds.map((trackId) => trackById.get(trackId)?.name ?? trackId),
       })),
       rooms: [...roomById.values()].map((room) => ({
         id: room.id,

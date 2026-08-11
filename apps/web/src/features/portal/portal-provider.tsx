@@ -756,16 +756,13 @@ export function PortalProvider({
           jobTitle: input.jobTitle,
           company: input.company,
           socialLinks: input.socialLinks,
-          ...(finalizedHeadshot === undefined
-            ? {}
-            : { headshotAssetId: finalizedHeadshot.id }),
+          ...(finalizedHeadshot === undefined ? {} : { headshotAssetId: finalizedHeadshot.id }),
           expectedVersion: input.profile.version,
         });
         if (
           updated.eventId !== targetContext.eventId ||
           updated.participantId !== input.profile.participantId ||
-          (finalizedHeadshot !== undefined &&
-            updated.headshotAssetId !== finalizedHeadshot.id)
+          (finalizedHeadshot !== undefined && updated.headshotAssetId !== finalizedHeadshot.id)
         ) {
           throw new PortalApiError(
             "CONTEXT_MISMATCH",

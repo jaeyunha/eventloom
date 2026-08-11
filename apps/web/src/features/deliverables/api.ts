@@ -84,10 +84,7 @@ export interface DeliverableTask {
  * `pending` or `uploaded` from task and asset projections.
  */
 export type DeliverableMatrixStatus = DeliverableTaskStatus | "pending" | "uploaded";
-export type DeliverableMatrixFilterStatus =
-  | DeliverableMatrixStatus
-  | "incomplete"
-  | "all";
+export type DeliverableMatrixFilterStatus = DeliverableMatrixStatus | "incomplete" | "all";
 
 export interface DeliverableMatrixQuery {
   readonly participantId?: string;
@@ -405,12 +402,8 @@ function publicAsset(value: unknown): DeliverableAsset {
     sizeBytes: typeof candidate.sizeBytes === "number" ? candidate.sizeBytes : 0,
     state: candidate.state as DeliverableAssetState,
     createdAt: typeof candidate.createdAt === "string" ? candidate.createdAt : "",
-    ...(typeof candidate.submissionId === "string"
-      ? { submissionId: candidate.submissionId }
-      : {}),
-    ...(typeof candidate.sessionTitle === "string"
-      ? { sessionTitle: candidate.sessionTitle }
-      : {}),
+    ...(typeof candidate.submissionId === "string" ? { submissionId: candidate.submissionId } : {}),
+    ...(typeof candidate.sessionTitle === "string" ? { sessionTitle: candidate.sessionTitle } : {}),
     ...(typeof candidate.participantName === "string"
       ? { participantName: candidate.participantName }
       : {}),
@@ -563,7 +556,9 @@ function normalizeMatrixItem(value: unknown): DeliverableMatrixItem {
   return {
     task: normalizeTask(value.task),
     participantId: value.participantId,
-    ...(typeof value.participantName === "string" ? { participantName: value.participantName } : {}),
+    ...(typeof value.participantName === "string"
+      ? { participantName: value.participantName }
+      : {}),
     assets: value.assets.map(publicAsset),
     ...(currentAsset === undefined ? {} : { currentAsset }),
     status: value.status as DeliverableMatrixStatus,
@@ -634,9 +629,7 @@ function normalizeProfile(value: unknown): DeliverableSpeakerProfile {
             arrivalAt: typeof travel.arrivalAt === "string" ? travel.arrivalAt : null,
             departureAt: typeof travel.departureAt === "string" ? travel.departureAt : null,
             ...(typeof travel.origin === "string" ? { origin: travel.origin } : {}),
-            ...(typeof travel.destination === "string"
-              ? { destination: travel.destination }
-              : {}),
+            ...(typeof travel.destination === "string" ? { destination: travel.destination } : {}),
           },
         }),
     ...(typeof candidate.headshotAssetId === "string"

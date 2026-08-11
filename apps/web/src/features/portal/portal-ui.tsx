@@ -2,10 +2,7 @@
 
 import Link from "next/link";
 import { type ReactNode, useState } from "react";
-import {
-  submissionStatusPresentation,
-  taskStatusPresentation,
-} from "./model";
+import { submissionStatusPresentation, taskStatusPresentation } from "./model";
 import styles from "./portal.module.css";
 import { portalContextLabel, usePortal } from "./portal-provider";
 import type { PortalAssetState, PortalSubmissionStatus, PortalTaskStatus } from "./types";
@@ -45,9 +42,8 @@ export function PortalFrame({ children }: Readonly<{ children: ReactNode }>) {
   const { eventQuery, view, contexts, context, switchContext, loading } = usePortal();
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const displayName =
-    view?.profiles.find(
-      (candidate) => candidate.participantId === context?.primaryParticipantId,
-    )?.displayName ?? "Speaker";
+    view?.profiles.find((candidate) => candidate.participantId === context?.primaryParticipantId)
+      ?.displayName ?? "Speaker";
   const initials = displayName
     .split(/\s+/)
     .slice(0, 2)

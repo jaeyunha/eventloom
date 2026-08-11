@@ -667,11 +667,7 @@ export class CfpService {
     if (listSubmissions === undefined) {
       throw new CfpError("NOT_FOUND", "The CFP submissions were not found.");
     }
-    const submissions = await listSubmissions.call(
-      this.#repository,
-      input.tenantId,
-      input.eventId,
-    );
+    const submissions = await listSubmissions.call(this.#repository, input.tenantId, input.eventId);
 
     const records: CfpOrganizerSubmission[] = [];
     for (const submission of submissions) {

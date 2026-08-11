@@ -188,14 +188,8 @@ describe("published embed model", () => {
 
   it("shows the end day for a published range that crosses midnight", () => {
     expect(
-      formatPublishedDateTimeRange(
-        "2026-09-18T23:30:00.000Z",
-        "2026-09-19T00:30:00.000Z",
-        "UTC",
-      ),
-    ).toBe(
-      "Friday, September 18, 2026: 11:30 PM – Saturday, September 19, 2026: 12:30 AM",
-    );
+      formatPublishedDateTimeRange("2026-09-18T23:30:00.000Z", "2026-09-19T00:30:00.000Z", "UTC"),
+    ).toBe("Friday, September 18, 2026: 11:30 PM – Saturday, September 19, 2026: 12:30 AM");
   });
 
   it("accepts only stable public HTTPS headshot URLs", () => {

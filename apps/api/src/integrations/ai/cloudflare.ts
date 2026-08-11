@@ -93,8 +93,7 @@ export type CloudflareEvaluationSuggestionProducer = (
   input: EvaluationSuggestionProviderInput,
 ) => Promise<CloudflareEvaluationSuggestionProviderResult>;
 
-export interface CloudflareEvaluationAiSuggestionProvider
-  extends EvaluationAiSuggestionProvider {
+export interface CloudflareEvaluationAiSuggestionProvider extends EvaluationAiSuggestionProvider {
   readonly generate: CloudflareEvaluationSuggestionProducer;
   readonly suggest: CloudflareEvaluationSuggestionProducer;
   readonly produce: CloudflareEvaluationSuggestionProducer;

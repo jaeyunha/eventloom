@@ -347,9 +347,7 @@ describe("agenda organizer workspace", () => {
   it("routes organizers to durable room settings before scheduling without a room", () => {
     const markup = renderBoard({ ...data, rooms: [] }, undefined, null);
 
-    expect(markup).toContain(
-      'href="/admin/organizations/organization-1/events/evt_open/settings"',
-    );
+    expect(markup).toContain('href="/admin/organizations/organization-1/events/evt_open/settings"');
     expect(markup).toContain("Scheduling is unavailable until you create a room.");
     expect(markup).toMatch(/<button[^>]*disabled=""[^>]*>Add accepted session<\/button>/);
     expect(markup).not.toContain("Generate private suggestions");

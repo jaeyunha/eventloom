@@ -81,15 +81,7 @@ export function PortalProfilePage() {
 }
 
 function PortalProfileContent() {
-  const {
-    can,
-    context,
-    downloadAsset,
-    eventQuery,
-    saveProfile,
-    savingProfile,
-    view,
-  } = usePortal();
+  const { can, context, downloadAsset, eventQuery, saveProfile, savingProfile, view } = usePortal();
   const profile = view?.profiles.find(
     (candidate) => candidate.participantId === context?.primaryParticipantId,
   );
@@ -184,12 +176,11 @@ function PortalProfileContent() {
     twitter !== initialDraft.twitter ||
     linkedin !== initialDraft.linkedin ||
     selectedHeadshot !== null;
-  const headshotStatus =
-    !loadedProfile.headshotAssetId
-      ? "Not uploaded"
-      : headshot
-        ? portalAssetStateLabel(headshot.state)
-        : "Metadata unavailable";
+  const headshotStatus = !loadedProfile.headshotAssetId
+    ? "Not uploaded"
+    : headshot
+      ? portalAssetStateLabel(headshot.state)
+      : "Metadata unavailable";
 
   function updateDraft(field: keyof ProfileDraft, value: string) {
     if (field === "biography") setBiography(value);
@@ -351,7 +342,9 @@ function PortalProfileContent() {
                 )}
                 <div>
                   <dt>Asset updated</dt>
-                  <dd>{formatPortalDate(headshot.finalizedAt ?? headshot.createdAt) ?? "Recently"}</dd>
+                  <dd>
+                    {formatPortalDate(headshot.finalizedAt ?? headshot.createdAt) ?? "Recently"}
+                  </dd>
                 </div>
               </>
             ) : null}

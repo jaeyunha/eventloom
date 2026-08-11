@@ -2800,8 +2800,9 @@ export function CrmWorkspaceView({
                 <h3 id="crm-outreach-result-title">Outreach delivery result</h3>
                 <p className={styles.resultCount}>
                   {outreachResults.reduce((count, result) => count + result.sentCount, 0)} sent ·{" "}
-                  {outreachResults.reduce((count, result) => count + result.queuedCount, 0)} queued ·{" "}
-                  {outreachResults.reduce((count, result) => count + result.failedCount, 0)} failed
+                  {outreachResults.reduce((count, result) => count + result.queuedCount, 0)} queued
+                  · {outreachResults.reduce((count, result) => count + result.failedCount, 0)}{" "}
+                  failed
                 </p>
                 <ol className={styles.historyList}>
                   {outreachResults.map((result) => (
@@ -3016,8 +3017,7 @@ export function CrmWorkspace({
     setBusy(true);
     setError(null);
     const existingIdentity = importIdentityRef.current;
-    const key =
-      existingIdentity?.csv === csv ? existingIdentity.key : idempotencyKey("crm-import");
+    const key = existingIdentity?.csv === csv ? existingIdentity.key : idempotencyKey("crm-import");
     importIdentityRef.current = { csv, key };
     try {
       const result = await api.importContacts(csv, key);
@@ -3308,7 +3308,9 @@ export function CrmWorkspace({
       ...(input.segmentId ? { segmentId: input.segmentId } : {}),
       ...(input.eventId ? { eventId: input.eventId } : {}),
     });
-    const issueCount = recipientPreviews.filter((recipient) => recipient.unknownTags.length > 0).length;
+    const issueCount = recipientPreviews.filter(
+      (recipient) => recipient.unknownTags.length > 0,
+    ).length;
     setStatusMessage(
       issueCount === 0
         ? `Preview ready for ${recipients.length} personalized recipient${recipients.length === 1 ? "" : "s"}.`

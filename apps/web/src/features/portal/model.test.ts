@@ -319,9 +319,7 @@ describe("speaker portal view model", () => {
         participantIds: [priyaParticipantId],
       }),
     ]);
-    expect(scoped.profiles.map(({ participantId }) => participantId)).toEqual([
-      priyaParticipantId,
-    ]);
+    expect(scoped.profiles.map(({ participantId }) => participantId)).toEqual([priyaParticipantId]);
     expect(scoped.tasks.map(({ id }) => id)).toEqual([priyaTask.id]);
     expect(scoped.assets?.map(({ id }) => id)).toEqual([
       "asset-headshot",
@@ -344,9 +342,7 @@ describe("speaker portal view model", () => {
     });
     expect(scoped.resources).toEqual([expect.objectContaining({ id: "resource-1" })]);
     expect(scoped.wiki).toEqual([expect.objectContaining({ id: "wiki-1" })]);
-    expect(portalProfileHeadshot(priyaProfile, scoped.assets ?? [])?.id).toBe(
-      "asset-headshot",
-    );
+    expect(portalProfileHeadshot(priyaProfile, scoped.assets ?? [])?.id).toBe("asset-headshot");
     expect(portalTaskAsset(priyaTask, scoped.assets ?? [])?.id).toBe("asset-slides-v2");
   });
 

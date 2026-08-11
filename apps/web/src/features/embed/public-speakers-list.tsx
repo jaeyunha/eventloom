@@ -13,7 +13,6 @@ import type { PublishedProgram, PublishedSpeaker } from "./types";
 
 const BIOGRAPHY_LIMIT = 320;
 
-
 function speakerTitle(speaker: PublishedSpeaker): string {
   return speaker.jobTitle?.trim() || "Title not published";
 }
@@ -35,7 +34,6 @@ function biographyText(speaker: PublishedSpeaker, expanded: boolean): string {
   if (expanded || biography.length <= BIOGRAPHY_LIMIT) return biography;
   return `${biography.slice(0, BIOGRAPHY_LIMIT).trimEnd()}…`;
 }
-
 
 function SpeakerHeadshot({ speaker }: Readonly<{ speaker: PublishedSpeaker }>) {
   const photoUrl = publicPhotoUrl(speaker.photoUrl);
@@ -184,9 +182,7 @@ function SpeakerEntry({
                     <br />
                     <span>Room: {session.roomName || "Room not published"}</span>
                     <br />
-                    <span>
-                      Track: {session.trackNames.join(", ") || "Track not published"}
-                    </span>
+                    <span>Track: {session.trackNames.join(", ") || "Track not published"}</span>
                     <br />
                     <span>Roles: speaker</span>
                   </li>

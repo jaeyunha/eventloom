@@ -157,8 +157,7 @@ describe("organizer submission workspace", () => {
       },
     ]);
 
-    const editedAbstract =
-      "Updated: the session now includes the canonical 2027 benchmark data.";
+    const editedAbstract = "Updated: the session now includes the canonical 2027 benchmark data.";
     const editedRecord = mapCanonicalSubmission({
       ...canonicalEnvelope,
       submission: {

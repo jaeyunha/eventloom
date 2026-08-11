@@ -451,16 +451,11 @@ describe("evaluation HTTP routes", () => {
     });
 
     for (const submission of submissions) {
-      const assigned = await jsonRequest(
-        app,
-        "/evaluations/plans/plan-1/assignments",
-        "POST",
-        {
-          roundId: "round-1",
-          submissionId: submission.id,
-          reviewerIds: [samReviewer.userId],
-        },
-      );
+      const assigned = await jsonRequest(app, "/evaluations/plans/plan-1/assignments", "POST", {
+        roundId: "round-1",
+        submissionId: submission.id,
+        reviewerIds: [samReviewer.userId],
+      });
       expect(assigned.status).toBe(201);
     }
 
@@ -500,10 +495,9 @@ describe("evaluation HTTP routes", () => {
       }),
     ]);
 
-    const reviewerWorkspace = await app.request(
-      "/evaluations/reviewer/workspace?eventId=event-1",
-      { headers: { "x-test-actor": "sam" } },
-    );
+    const reviewerWorkspace = await app.request("/evaluations/reviewer/workspace?eventId=event-1", {
+      headers: { "x-test-actor": "sam" },
+    });
     const reviewerWorkspaceBody = (await reviewerWorkspace.json()) as {
       data: {
         assignments: Array<{

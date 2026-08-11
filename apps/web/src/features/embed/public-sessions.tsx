@@ -29,7 +29,6 @@ function compareStarts(left: PublishedAgendaEntry, right: PublishedAgendaEntry):
   return left.startsAt.localeCompare(right.startsAt);
 }
 
-
 function entrySearchText(
   entry: PublishedAgendaEntry,
   speakers: readonly PublishedSpeaker[],
@@ -214,10 +213,7 @@ export function PublicSessionsView({ program }: Readonly<{ program: PublishedPro
             const hasDescription = entry.summary.trim().length > 0;
             return (
               <li key={entry.id}>
-                <article
-                  id={`session-${entry.sessionId}`}
-                  className={styles.publicSessionCard}
-                >
+                <article id={`session-${entry.sessionId}`} className={styles.publicSessionCard}>
                   <div className={styles.publicSessionTime}>
                     <time dateTime={entry.startsAt}>
                       {formatPublishedDateTimeRange(

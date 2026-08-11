@@ -120,9 +120,7 @@ export function SpeakerProfileDetail({
                     <br />
                     <span>Room: {session.roomName || "Room not published"}</span>
                     <br />
-                    <span>
-                      Track: {session.trackNames.join(", ") || "Track not published"}
-                    </span>
+                    <span>Track: {session.trackNames.join(", ") || "Track not published"}</span>
                   </li>
                 ))}
               </ul>
@@ -176,7 +174,6 @@ export function SpeakerGallery({
     }
     returnFocusRef.current = null;
   }, [selectedSpeaker]);
-
 
   const openSpeaker = (speakerId: string, target: HTMLElement) => {
     returnFocusRef.current = target;

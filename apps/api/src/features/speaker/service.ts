@@ -1431,9 +1431,7 @@ function portalPrimaryParticipantId(
     scope.primaryParticipantId?.trim() ||
     fallback?.trim() ||
     (scope.participantIds.length === 1 ? scope.participantIds[0] : undefined);
-  return candidate !== undefined &&
-    candidate.length > 0 &&
-    scope.participantIds.includes(candidate)
+  return candidate !== undefined && candidate.length > 0 && scope.participantIds.includes(candidate)
     ? candidate
     : undefined;
 }
@@ -1507,10 +1505,7 @@ export class SpeakerService {
       if (context.eventId.trim().length === 0) continue;
       const scope = await this.getScope(context.eventId, accountId);
       if (scope.submissionIds.length === 0 || scope.participantIds.length === 0) continue;
-      const primaryParticipantId = portalPrimaryParticipantId(
-        scope,
-        context.primaryParticipantId,
-      );
+      const primaryParticipantId = portalPrimaryParticipantId(scope, context.primaryParticipantId);
       if (primaryParticipantId === undefined) continue;
       const candidateSubmissionIds = unique(
         context.submissionIds.length === 0
@@ -1535,11 +1530,7 @@ export class SpeakerService {
       );
       const submissionIds = unique(visibleSubmissions.map((submission) => submission.id));
       if (submissionIds.length === 0) continue;
-      const primaryScope = portalScopeForPrimary(
-        scope,
-        primaryParticipantId,
-        submissionIds,
-      );
+      const primaryScope = portalScopeForPrimary(scope, primaryParticipantId, submissionIds);
       const capabilities = portalCapabilitiesForSubmissions(
         primaryScope,
         context.capabilities,
@@ -1666,12 +1657,7 @@ export class SpeakerService {
       this.repository.listRoster === undefined ||
       !submissionIsVisibleToSpeaker(primaryScope, rosterSubmission)
         ? undefined
-        : await this.rosterForScope(
-            eventId,
-            primaryScope,
-            rosterSubmission,
-            profiles,
-          );
+        : await this.rosterForScope(eventId, primaryScope, rosterSubmission, profiles);
     const roster =
       rawRoster === undefined
         ? undefined
@@ -2022,18 +2008,20 @@ export class SpeakerService {
         ),
       ),
     );
-    const participantIds = unique([
-      ...acceptedParticipantIds,
-      ...manualByParticipant.keys(),
-    ]);
-    const participantNames = new Map(roster.map((entry) => [entry.participantId, entry.displayName]));
+    const participantIds = unique([...acceptedParticipantIds, ...manualByParticipant.keys()]);
+    const participantNames = new Map(
+      roster.map((entry) => [entry.participantId, entry.displayName]),
+    );
     const tasks = await this.repository.listTasks(eventId, participantIds);
     return tasks
       .filter((task) => {
         if (task.eventId !== eventId || !participantIds.includes(task.participantId)) return false;
-        if (acceptedSubmissionsById.has(canonicalSpeakerSubmissionId(task.submissionId))) return true;
+        if (acceptedSubmissionsById.has(canonicalSpeakerSubmissionId(task.submissionId)))
+          return true;
         const manual = manualByParticipant.get(task.participantId);
-        return manual !== undefined && sameSpeakerSubmission(manual.submissionId, task.submissionId);
+        return (
+          manual !== undefined && sameSpeakerSubmission(manual.submissionId, task.submissionId)
+        );
       })
       .map((task) => {
         const participantName = participantNames.get(task.participantId);
@@ -2065,9 +2053,7 @@ export class SpeakerService {
     );
     if (
       assigneeIds.length === 0 ||
-      assigneeIds.some(
-        (id) => !scope.participantIds.includes(id) && !manualByParticipant.has(id),
-      )
+      assigneeIds.some((id) => !scope.participantIds.includes(id) && !manualByParticipant.has(id))
     ) {
       throw notFound();
     }
@@ -4097,12 +4083,15 @@ export class SpeakerService {
     const cached = this.reminderCache.get(cacheKey);
     if (cached !== undefined) {
       const receipts = cached.receipts.map((receipt) =>
-        receipt.status === "failed" ? structuredClone(receipt) : { ...receipt, status: "duplicate" as const },
+        receipt.status === "failed"
+          ? structuredClone(receipt)
+          : { ...receipt, status: "duplicate" as const },
       );
       return {
         ...structuredClone(cached),
         queued: false,
-        duplicate: receipts.length > 0 && receipts.every((receipt) => receipt.status === "duplicate"),
+        duplicate:
+          receipts.length > 0 && receipts.every((receipt) => receipt.status === "duplicate"),
         sentCount: 0,
         failedCount: receipts.filter((receipt) => receipt.status === "failed").length,
         duplicateCount: receipts.filter((receipt) => receipt.status === "duplicate").length,
@@ -4845,12 +4834,7 @@ export class SpeakerService {
     const expiresAt = new Date(this.now().getTime() + downloadGrantLifetimeMs).toISOString();
     const submissionId =
       asset.submissionId ??
-      (await this.resolveSubmissionId(
-        input.eventId,
-        scope,
-        primaryParticipantId,
-        undefined,
-      ));
+      (await this.resolveSubmissionId(input.eventId, scope, primaryParticipantId, undefined));
     const binding: PrivateAssetCapabilityBinding = {
       capabilityId: asset.id,
       tenantId: asset.tenantId ?? scope.tenantId ?? input.eventId,
@@ -5795,9 +5779,7 @@ export class SpeakerService {
       acceptedSubmissions.map((submission) => canonicalSpeakerSubmissionId(submission.id)),
     );
     const manualByParticipant = new Map(
-      entries
-        .filter(isOrganizerManagedRosterEntry)
-        .map((entry) => [entry.participantId, entry]),
+      entries.filter(isOrganizerManagedRosterEntry).map((entry) => [entry.participantId, entry]),
     );
     const tasks = (await this.repository.listTasks(eventId, participantIds)).filter(
       (task) =>
@@ -5813,8 +5795,7 @@ export class SpeakerService {
     const assets = (await this.assetsForParticipants(eventId, participantIds)).filter(
       (asset) =>
         (asset.tenantId === undefined || asset.tenantId === scope.tenantId) &&
-        ((asset.submissionId === undefined &&
-          acceptedParticipantIds.has(asset.participantId)) ||
+        ((asset.submissionId === undefined && acceptedParticipantIds.has(asset.participantId)) ||
           acceptedSubmissionIds.has(canonicalSpeakerSubmissionId(asset.submissionId ?? "")) ||
           (asset.submissionId !== undefined &&
             manualByParticipant.get(asset.participantId) !== undefined &&
@@ -5973,12 +5954,7 @@ export class SpeakerService {
     const canonicalLookup = this.repository.findAcceptedParticipantByEmail;
     const canonicalResult =
       existingIdentity === undefined && canonicalLookup !== undefined
-        ? await canonicalLookup.call(
-            this.repository,
-            input.eventId,
-            scope.submissionIds,
-            email,
-          )
+        ? await canonicalLookup.call(this.repository, input.eventId, scope.submissionIds, email)
         : null;
     if (canonicalResult !== null && "ambiguous" in canonicalResult) {
       throw new SpeakerServiceError(
@@ -5995,11 +5971,7 @@ export class SpeakerService {
       `participant:${this.generateId()}`;
     const canonicalEmail = canonical === null ? email : importEmail(canonical.email);
     if (participantId.length === 0 || canonicalEmail !== email) {
-      throw new SpeakerServiceError(
-        "VALIDATION_ERROR",
-        400,
-        "The speaker identity is invalid.",
-      );
+      throw new SpeakerServiceError("VALIDATION_ERROR", 400, "The speaker identity is invalid.");
     }
     const canonicalSubmissionId =
       existingIdentity?.submissionId === undefined
@@ -6007,10 +5979,7 @@ export class SpeakerService {
           ? canonicalSpeakerSubmissionId(`crm-contact:${participantId}`)
           : canonicalSpeakerSubmissionId(canonical.submissionId)
         : canonicalSpeakerSubmissionId(existingIdentity.submissionId);
-    if (
-      !manual &&
-      !(existingIdentity !== undefined && isCrmRosterEntry(existingIdentity))
-    ) {
+    if (!manual && !(existingIdentity !== undefined && isCrmRosterEntry(existingIdentity))) {
       const submissions = await this.repository.listSubmissions(input.eventId, scope.submissionIds);
       const submission = submissions.find(
         (candidate) =>
@@ -6332,7 +6301,8 @@ export class SpeakerService {
           updatedAt: result.value.updatedAt,
         });
       } else {
-        if (currentProfile === null || this.repository.updateProfile === undefined) throw notFound();
+        if (currentProfile === null || this.repository.updateProfile === undefined)
+          throw notFound();
         const profileResult = await this.repository.updateProfile({
           eventId: input.eventId,
           participantId: input.participantId,
@@ -6635,9 +6605,7 @@ export class SpeakerService {
     const scope = await this.requireOrganizerOrganizationScope(organizationId, eventId, accountId);
     const roster = await this.organizerRosterEntries(organizationId, eventId, scope, accountId);
     const manualByParticipant = new Map(
-      roster
-        .filter(isOrganizerManagedRosterEntry)
-        .map((entry) => [entry.participantId, entry]),
+      roster.filter(isOrganizerManagedRosterEntry).map((entry) => [entry.participantId, entry]),
     );
     if (
       participantId !== undefined &&
@@ -6713,14 +6681,15 @@ export class SpeakerService {
       scope,
       input.accountId,
     );
-    const manualParticipantIds = new Set(roster.filter(isCrmRosterEntry).map((entry) => entry.participantId));
+    const manualParticipantIds = new Set(
+      roster.filter(isCrmRosterEntry).map((entry) => entry.participantId),
+    );
     const participantIds = unique(input.participantIds);
     if (
       participantIds.length === 0 ||
       participantIds.some(
         (participantId) =>
-          !scope.participantIds.includes(participantId) &&
-          !manualParticipantIds.has(participantId),
+          !scope.participantIds.includes(participantId) && !manualParticipantIds.has(participantId),
       )
     ) {
       throw notFound();
@@ -6775,15 +6744,9 @@ export class SpeakerService {
     participantId: string,
   ): Promise<SpeakerWorkspaceSession[]> {
     const scope = await this.requireOrganizerOrganizationScope(organizationId, eventId, accountId);
-    const roster = await this.organizerRosterEntries(
-      organizationId,
-      eventId,
-      scope,
-      accountId,
-    );
+    const roster = await this.organizerRosterEntries(organizationId, eventId, scope, accountId);
     const manual = roster.some(
-      (entry) =>
-        entry.participantId === participantId && isOrganizerManagedRosterEntry(entry),
+      (entry) => entry.participantId === participantId && isOrganizerManagedRosterEntry(entry),
     );
     if (!scope.participantIds.includes(participantId) && !manual) throw notFound();
     const submissions = await this.repository.listSubmissions(eventId, scope.submissionIds);
@@ -6808,15 +6771,9 @@ export class SpeakerService {
     participantId: string,
   ): Promise<SpeakerWorkspaceAsset[]> {
     const scope = await this.requireOrganizerOrganizationScope(organizationId, eventId, accountId);
-    const entries = await this.organizerRosterEntries(
-      organizationId,
-      eventId,
-      scope,
-      accountId,
-    );
+    const entries = await this.organizerRosterEntries(organizationId, eventId, scope, accountId);
     const rosterEntry = entries.find(
-      (entry) =>
-        entry.participantId === participantId && isOrganizerManagedRosterEntry(entry),
+      (entry) => entry.participantId === participantId && isOrganizerManagedRosterEntry(entry),
     );
     if (!scope.participantIds.includes(participantId) && rosterEntry === undefined) {
       throw notFound();
@@ -7016,12 +6973,7 @@ export class SpeakerService {
       scope.participantIds.includes(asset.participantId) &&
       speakerSubmissionAllowed(scope.submissionIds, asset.submissionId);
     if (accepted) return;
-    const roster = await this.organizerRosterEntries(
-      scope.tenantId,
-      eventId,
-      scope,
-      accountId,
-    );
+    const roster = await this.organizerRosterEntries(scope.tenantId, eventId, scope, accountId);
     const manual = roster.find(
       (entry) =>
         entry.participantId === asset.participantId &&

@@ -38,16 +38,8 @@ export default async function SpeakerGalleryPage({
     ]);
     const program = publishedProgramFromProjections(agenda, gallery);
     return (
-      <EmbedFrame
-        event={program.agenda.event}
-        eventSlug={eventSlug}
-        theme={theme}
-        view="speakers"
-      >
-        <SpeakerGallery
-          gallery={program.speakers}
-          agenda={{ entries: program.agenda.entries }}
-        />
+      <EmbedFrame event={program.agenda.event} eventSlug={eventSlug} theme={theme} view="speakers">
+        <SpeakerGallery gallery={program.speakers} agenda={{ entries: program.agenda.entries }} />
       </EmbedFrame>
     );
   } catch {

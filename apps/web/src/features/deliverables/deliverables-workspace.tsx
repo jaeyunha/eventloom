@@ -103,17 +103,16 @@ export const deliverablesExportStatusLabels: Readonly<Record<DeliverablesExportU
     "download-started": "The browser download has started.",
     failure: "The authorized ZIP request failed.",
   };
-export const deliverablesExportActionLabels: Readonly<
-  Record<DeliverablesExportUiStatus, string>
-> = {
-  idle: "Download selected files ZIP",
-  queued: "ZIP export queued",
-  preparing: "Preparing ZIP…",
-  generating: "Generating ZIP…",
-  ready: "Download ready ZIP",
-  "download-started": "Download started",
-  failure: "Retry ZIP export",
-};
+export const deliverablesExportActionLabels: Readonly<Record<DeliverablesExportUiStatus, string>> =
+  {
+    idle: "Download selected files ZIP",
+    queued: "ZIP export queued",
+    preparing: "Preparing ZIP…",
+    generating: "Generating ZIP…",
+    ready: "Download ready ZIP",
+    "download-started": "Download started",
+    failure: "Retry ZIP export",
+  };
 
 export type DeliverablesOperationKey =
   | "task-create"
@@ -1281,7 +1280,8 @@ function FileLibrary({
                     {current.fileName}
                     <br />
                     <small style={mutedStyle}>
-                      {formatStatus(current.kind)} · {current.contentType} · {current.sizeBytes} bytes
+                      {formatStatus(current.kind)} · {current.contentType} · {current.sizeBytes}{" "}
+                      bytes
                       <br />
                       Asset {current.id} · family {current.versionFamilyId ?? current.id}
                     </small>
@@ -1982,7 +1982,9 @@ function SpeakerEditor({
               </div>
               <div>
                 <dt>Profile status</dt>
-                <dd>{selected.status === undefined ? "Not recorded" : formatStatus(selected.status)}</dd>
+                <dd>
+                  {selected.status === undefined ? "Not recorded" : formatStatus(selected.status)}
+                </dd>
               </div>
               <div>
                 <dt>Email</dt>
@@ -2071,9 +2073,9 @@ function SpeakerEditor({
             Current headshot: {headshot?.fileName ?? "No headshot returned"}
             {headshot === undefined
               ? ""
-              : ` · ${formatStatus(headshot.kind)} · ${headshot.contentType} · ${headshot.sizeBytes} bytes · v${headshot.version ?? 1}`}.
-            Biography history and restore are unavailable until the profile version-history endpoint is
-            provisioned.
+              : ` · ${formatStatus(headshot.kind)} · ${headshot.contentType} · ${headshot.sizeBytes} bytes · v${headshot.version ?? 1}`}
+            . Biography history and restore are unavailable until the profile version-history
+            endpoint is provisioned.
           </p>
         </>
       )}
@@ -2340,8 +2342,7 @@ export function DeliverablesWorkspaceView({
               sendAvailable={onSendBulkReminder !== undefined}
               onSend={() => {
                 const selected = rows.filter(
-                  (row) =>
-                    selectedTaskIds.includes(row.task.id) && isOutstanding(row.status),
+                  (row) => selectedTaskIds.includes(row.task.id) && isOutstanding(row.status),
                 );
                 const effective =
                   selectedTaskIds.length > 0
@@ -2364,8 +2365,7 @@ export function DeliverablesWorkspaceView({
                     : matrixItems
                         ?.filter((item) =>
                           item.assets.some(
-                            (candidate) =>
-                              assetFamily(candidate) === assetFamily(selectedAsset),
+                            (candidate) => assetFamily(candidate) === assetFamily(selectedAsset),
                           ),
                         )
                         .flatMap((item) =>
@@ -2564,7 +2564,9 @@ export function DeliverablesWorkspace({
             }
             setAssets([...matrixAssets.values()]);
           } else {
-            messages.push(`Exact deliverables matrix unavailable: ${messageFromError(result.reason)}`);
+            messages.push(
+              `Exact deliverables matrix unavailable: ${messageFromError(result.reason)}`,
+            );
           }
         }
         if (api.listAssets === undefined)
@@ -2748,7 +2750,12 @@ export function DeliverablesWorkspace({
     }
     setBusy(true);
     setError(null);
-    recordOperation("asset-download", "Download asset version", "pending", "Capability request in progress.");
+    recordOperation(
+      "asset-download",
+      "Download asset version",
+      "pending",
+      "Capability request in progress.",
+    );
     try {
       const grant: DeliverableDownloadGrant = await api.getDownloadGrant(assetId);
       const safeUrl = safeDownloadUrl(grant.url);
@@ -2797,7 +2804,12 @@ export function DeliverablesWorkspace({
     setBusy(true);
     setError(null);
     setStatusMessage(null);
-    recordOperation("deliverables-export", "Export deliverables ZIP", "pending", "ZIP request in progress.");
+    recordOperation(
+      "deliverables-export",
+      "Export deliverables ZIP",
+      "pending",
+      "ZIP request in progress.",
+    );
     try {
       const download = await requestExport(input);
       triggerDeliverablesDownload(download);
@@ -2904,7 +2916,12 @@ export function DeliverablesWorkspace({
     setBusy(true);
     setError(null);
     setStatusMessage(null);
-    recordOperation("biography-save", "Save speaker biography", "pending", "Profile update in progress.");
+    recordOperation(
+      "biography-save",
+      "Save speaker biography",
+      "pending",
+      "Profile update in progress.",
+    );
     try {
       const next = await api.updateBiography(input);
       setProfiles((current) =>
@@ -2946,7 +2963,12 @@ export function DeliverablesWorkspace({
     setBusy(true);
     setError(null);
     setStatusMessage(null);
-    recordOperation("headshot-replace", "Replace speaker headshot", "pending", "Private upload in progress.");
+    recordOperation(
+      "headshot-replace",
+      "Replace speaker headshot",
+      "pending",
+      "Private upload in progress.",
+    );
     try {
       const next = await api.replaceHeadshot({
         ...input,
@@ -2992,7 +3014,12 @@ export function DeliverablesWorkspace({
     setBusy(true);
     setError(null);
     setStatusMessage(null);
-    recordOperation("reminder-send", "Send outstanding reminders", "pending", "Confirmed send in progress.");
+    recordOperation(
+      "reminder-send",
+      "Send outstanding reminders",
+      "pending",
+      "Confirmed send in progress.",
+    );
     try {
       const result = await api.sendBulkReminder(input);
       setStatusMessage(
@@ -3043,7 +3070,12 @@ export function DeliverablesWorkspace({
       : async (input: DeliverableReviewInput): Promise<void> => {
           setBusy(true);
           setError(null);
-          recordOperation("asset-review", "Review current asset", "pending", "Review update in progress.");
+          recordOperation(
+            "asset-review",
+            "Review current asset",
+            "pending",
+            "Review update in progress.",
+          );
           try {
             const next = await reviewAsset(input);
             setAssets((current) => current.map((asset) => (asset.id === next.id ? next : asset)));

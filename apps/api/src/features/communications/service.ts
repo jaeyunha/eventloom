@@ -380,14 +380,13 @@ function summarizeDeliveries(
     }
   }
   const terminal = queuedCount === 0;
-  const status: CommunicationSendStatus =
-    !terminal
-      ? "queued"
-      : normalizedRecipientCount > 0 && deliveredCount === normalizedRecipientCount
-        ? "delivered"
-        : normalizedRecipientCount > 0 && failedCount === normalizedRecipientCount
-          ? "failed"
-          : "partial";
+  const status: CommunicationSendStatus = !terminal
+    ? "queued"
+    : normalizedRecipientCount > 0 && deliveredCount === normalizedRecipientCount
+      ? "delivered"
+      : normalizedRecipientCount > 0 && failedCount === normalizedRecipientCount
+        ? "failed"
+        : "partial";
   return {
     status,
     recipientCount: normalizedRecipientCount,

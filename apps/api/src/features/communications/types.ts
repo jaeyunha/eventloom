@@ -135,7 +135,6 @@ export interface CommunicationRecipientPreview {
   text: string;
 }
 
-
 export interface CommunicationDelivery {
   recipientId: string;
   email: string;

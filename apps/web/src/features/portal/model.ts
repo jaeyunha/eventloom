@@ -214,7 +214,13 @@ export function scopePortalViewToPrimaryParticipant(
   const validPrimaryParticipant = primaryParticipantId !== undefined;
 
   const capabilities = view?.capabilities === undefined ? undefined : [...view.capabilities];
-  if (!validPrimaryParticipant || view === null || view === undefined || context === null || context === undefined) {
+  if (
+    !validPrimaryParticipant ||
+    view === null ||
+    view === undefined ||
+    context === null ||
+    context === undefined
+  ) {
     return {
       submissions: [],
       profiles: [],
@@ -230,8 +236,7 @@ export function scopePortalViewToPrimaryParticipant(
   const submissions = view.submissions
     .filter(
       (submission) =>
-        submission.eventId === eventId &&
-        submission.participantIds.includes(primaryParticipantId),
+        submission.eventId === eventId && submission.participantIds.includes(primaryParticipantId),
     )
     .map((submission) => ({ ...submission, participantIds: [primaryParticipantId] }));
   const submissionIds = new Set(submissions.map((submission) => submission.id));
