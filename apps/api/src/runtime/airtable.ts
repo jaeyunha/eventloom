@@ -1582,36 +1582,71 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
   ): Promise<SpeakerOrganizerReadModel | null> {
     if (eventId.trim().length === 0 || accountId.trim().length === 0) return null;
 
-    const event = await this.#events.find(eventId);
-    if (event === undefined || event.id !== eventId) return null;
-    const tenantId = resolvedOrganizationId(event);
-    if (tenantId === undefined) return null;
-
-    const membership = await this.#database
+    const eventPromise = this.#events.find(eventId);
+    const membershipPromise = this.#database
       .prepare(
         `SELECT organization_id, role
            FROM organization_memberships
-          WHERE organization_id = ? AND user_id = ?
-          LIMIT 1`,
+          WHERE user_id = ?
+          ORDER BY organization_id`,
       )
-      .bind(tenantId, accountId)
-      .first<{ organization_id?: unknown; role?: unknown }>();
+      .bind(accountId)
+      .all<{ organization_id?: unknown; role?: unknown }>();
+    const submissionRecordsPromise = listEventScopedJson(
+      this.#submissions,
+      "Answers JSON",
+      eventId,
+    );
+    const rosterRecordsPromise = listEventScopedJson(this.#roster, "Members JSON", eventId);
+    const decisionRecordsPromise = listEventScopedJson(this.#decisions, "Metadata JSON", eventId);
+    const profileRecordsPromise =
+      resources.profiles === true
+        ? listEventScopedJson(this.#profiles, "Biography", eventId)
+        : Promise.resolve([]);
+    const taskRecordsPromise =
+      resources.tasks === true
+        ? listEventScopedJson(this.#tasks, "Owner JSON", eventId)
+        : Promise.resolve([]);
+    const assetRecordsPromise =
+      resources.assets === true
+        ? listEventScopedJson(this.#assets, "Settings JSON", eventId)
+        : Promise.resolve([]);
+
+    const [
+      event,
+      membershipResult,
+      submissionRecords,
+      rosterRecordsForEvent,
+      decisionRecords,
+      profileRecords,
+      taskRecords,
+      assetRecords,
+    ] = await Promise.all([
+      eventPromise,
+      membershipPromise,
+      submissionRecordsPromise,
+      rosterRecordsPromise,
+      decisionRecordsPromise,
+      profileRecordsPromise,
+      taskRecordsPromise,
+      assetRecordsPromise,
+    ]);
+    if (event === undefined || event.id !== eventId) return null;
+    const tenantId = resolvedOrganizationId(event);
+    if (tenantId === undefined) return null;
+    const membershipRows = Array.isArray(membershipResult.results) ? membershipResult.results : [];
+    const membership = membershipRows.find(
+      (candidate) =>
+        candidate.organization_id === tenantId &&
+        (candidate.role === "owner" || candidate.role === "admin"),
+    );
+
     const role =
       membership?.role === "owner" ? "owner" : membership?.role === "admin" ? "admin" : null;
-    if (
-      membership === null ||
-      membership === undefined ||
-      membership.organization_id !== tenantId ||
-      role === null
-    ) {
+    if (membership === undefined || membership.organization_id !== tenantId || role === null) {
       return null;
     }
 
-    const [submissionRecords, rosterRecordsForEvent, decisionRecords] = await Promise.all([
-      listEventScopedJson(this.#submissions, "Answers JSON", eventId),
-      listEventScopedJson(this.#roster, "Members JSON", eventId),
-      listEventScopedJson(this.#decisions, "Metadata JSON", eventId),
-    ] as const);
     const records = submissionRecords as unknown as JsonRecord[];
     const sourceRecords = records.filter(
       (record) =>
@@ -1657,11 +1692,16 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     };
 
     const recordsById = new Map(
-      records
+      validRecords
         .map((record) => [textValue(record, "id", APPLICATION_ID), record] as const)
         .filter((entry): entry is readonly [string, JsonRecord] => entry[0] !== null),
     );
-    const decisions = portalDecisionProjections(decisionRecords);
+    const decisions = portalDecisionProjections(
+      decisionRecords.filter(
+        (record) =>
+          eventReference(record) === eventId && matchesOrganizationScope(record, tenantId, true),
+      ),
+    );
     const submissions: SpeakerSubmission[] = [];
     for (const requestedId of scope.submissionIds) {
       const sourceId = originalCfpSubmissionId(requestedId) ?? requestedId;
@@ -1701,24 +1741,11 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       ]),
     ];
     const allowedParticipants = new Set(participantIds);
-    const profileIds = participantIds.map(
-      (participantId) => `speaker-profile:${eventId}:${participantId}`,
-    );
 
-    const [profileRecords, taskRecords, assetRecords] = await Promise.all([
-      resources.profiles === true
-        ? listApplicationIdsInBatches(this.#profiles, profileIds)
-        : Promise.resolve([]),
-      resources.tasks === true && participantIds.length > 0
-        ? listEventScopedJson(this.#tasks, "Owner JSON", eventId)
-        : Promise.resolve([]),
-      resources.assets === true && participantIds.length > 0
-        ? listEventScopedJson(this.#assets, "Settings JSON", eventId)
-        : Promise.resolve([]),
-    ]);
     const profiles = profileRecords
       .filter(
         (profile) =>
+          profile.id === `speaker-profile:${eventId}:${profile.participantId}` &&
           speakerProfileScoped(profile, tenantId, eventId, tenantId) &&
           allowedParticipants.has(profile.participantId),
       )

@@ -4447,11 +4447,13 @@ interface SpeakerOrganizerDatabaseState {
     speaker_profile_id: string;
     user_id: string;
   }>;
+  readonly starts: string[];
 }
 
 function speakerOrganizerDatabase(input: {
   readonly memberships?: readonly { organization_id: string; role: string }[];
   readonly verifiedEmails?: readonly string[];
+  readonly delayMs?: number;
 }): {
   readonly database: NonNullable<RuntimeBindings["DB"]>;
   readonly state: SpeakerOrganizerDatabaseState;
@@ -4464,7 +4466,9 @@ function speakerOrganizerDatabase(input: {
     outbox: new Map(),
     queueMessages: [],
     grants: [],
+    starts: [],
   };
+  const delayMs = input.delayMs ?? 0;
   const database = {
     prepare(query: string) {
       return {
@@ -4494,6 +4498,13 @@ function speakerOrganizerDatabase(input: {
               return null;
             },
             async all<T>() {
+              if (query.includes("FROM organization_memberships")) {
+                state.starts.push("d1:membership");
+                if (delayMs > 0) {
+                  await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+                }
+                return { results: state.memberships as T[] };
+              }
               if (query.includes("FROM auth_users") && query.includes("SELECT id")) {
                 const email = state.verifiedEmails.get(String(values[0]).toLowerCase());
                 return {
@@ -4683,8 +4694,8 @@ describe("production organizer speaker composition", () => {
       repository.getOrganizerAccessScope("event-speaker", "organizer-speaker"),
     ).resolves.toBeNull();
   });
-  it("loads organizer deliverables in three scoped Airtable dependency waves", async () => {
-    const transport = new FormulaRecordingTransport(20);
+  it("loads organizer deliverables in one 650 ms dependency wave", async () => {
+    const transport = new FormulaRecordingTransport(650);
     seedSpeakerOrganizerFixture(transport);
     transport.seed({
       baseId: "base-test",
@@ -4734,6 +4745,7 @@ describe("production organizer speaker composition", () => {
     });
     const { database, state } = speakerOrganizerDatabase({
       memberships: [{ organization_id: "ai-engineer", role: "owner" }],
+      delayMs: 650,
     });
     const repository = new AirtableSpeakerRepository({
       baseId: "base-test",
@@ -4741,13 +4753,22 @@ describe("production organizer speaker composition", () => {
       database,
     });
 
+    const startedAt = performance.now();
     const pending = repository.getOrganizerReadModel("event-speaker", "organizer-speaker", {
       profiles: true,
       tasks: true,
       assets: true,
     });
     await Promise.resolve();
-    expect(transport.requests.map((request) => request.table)).toEqual(["Events"]);
+    expect(transport.requests.map((request) => request.table)).toEqual([
+      "Events",
+      "Submissions",
+      "Session Roster",
+      "Decisions",
+      "Speaker Profiles",
+      "Speaker Tasks",
+      "File Assets",
+    ]);
 
     await expect(pending).resolves.toMatchObject({
       scope: {
@@ -4760,6 +4781,8 @@ describe("production organizer speaker composition", () => {
       tasks: [{ id: "task-speaker-read" }],
       assets: [{ id: "asset-speaker-read" }],
     });
+    expect(performance.now() - startedAt).toBeLessThan(1_300);
+    expect(state.starts).toEqual(["d1:membership"]);
     const readsByTable = transport.requests.reduce<Record<string, number>>((counts, request) => {
       if (request.method === "GET") counts[request.table] = (counts[request.table] ?? 0) + 1;
       return counts;
@@ -4780,6 +4803,10 @@ describe("production organizer speaker composition", () => {
     expect(
       transport.requests.find((request) => request.table === "File Assets")?.query?.filterByFormula,
     ).toBe('FIND("event-speaker",{Settings JSON})>0');
+    expect(
+      transport.requests.find((request) => request.table === "Speaker Profiles")?.query
+        ?.filterByFormula,
+    ).toBe('FIND("event-speaker",{Biography})>0');
 
     transport.requests.length = 0;
     await repository.listAssetHistory("event-speaker", "slides-family");
@@ -4808,7 +4835,15 @@ describe("production organizer speaker composition", () => {
         assets: true,
       }),
     ).resolves.toBeNull();
-    expect(transport.requests.map((request) => request.table)).toEqual(["Events"]);
+    expect(transport.requests.map((request) => request.table)).toEqual([
+      "Events",
+      "Submissions",
+      "Session Roster",
+      "Decisions",
+      "Speaker Profiles",
+      "Speaker Tasks",
+      "File Assets",
+    ]);
   });
 
   it("persists organizer-created speaker tasks with optimistic updates", async () => {
