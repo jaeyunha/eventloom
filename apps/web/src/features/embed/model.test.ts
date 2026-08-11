@@ -147,10 +147,14 @@ describe("published embed model", () => {
   });
 
   it("sorts surnames deterministically without confusing suffixes or comma notation", () => {
+    const firstSpeaker = speakers[0];
+    if (!firstSpeaker) {
+      throw new Error("Expected the first speaker fixture.");
+    }
     const variants: readonly PublishedSpeaker[] = [
-      { ...speakers[0]!, id: "speaker_2", displayName: "Alex Rivera Jr." },
-      { ...speakers[0]!, id: "speaker_1", displayName: "Rivera, Alex" },
-      { ...speakers[0]!, id: "speaker_3", displayName: "Ana de la Cruz" },
+      { ...firstSpeaker, id: "speaker_2", displayName: "Alex Rivera Jr." },
+      { ...firstSpeaker, id: "speaker_1", displayName: "Rivera, Alex" },
+      { ...firstSpeaker, id: "speaker_3", displayName: "Ana de la Cruz" },
     ];
 
     expect(speakerSurname("Alex Rivera Jr.")).toBe("Rivera");
@@ -165,14 +169,21 @@ describe("published embed model", () => {
   });
 
   it("preserves canonical speakers that share a display name", () => {
-    const entry = entries[0]!;
+    const entry = entries[0];
+    if (!entry) {
+      throw new Error("Expected the first agenda entry fixture.");
+    }
+    const firstSpeaker = speakers[0];
+    if (!firstSpeaker) {
+      throw new Error("Expected the first speaker fixture.");
+    }
     const sameNameSpeaker: PublishedSpeaker = {
-      ...speakers[0]!,
+      ...firstSpeaker,
       id: "speaker_morgan_2",
       jobTitle: "Principal Engineer",
     };
 
-    expect(publishedEntryPresenters(entry, [speakers[0]!, sameNameSpeaker])).toMatchObject([
+    expect(publishedEntryPresenters(entry, [firstSpeaker, sameNameSpeaker])).toMatchObject([
       {
         key: "speaker:speaker_morgan",
         displayName: "Morgan Lee",

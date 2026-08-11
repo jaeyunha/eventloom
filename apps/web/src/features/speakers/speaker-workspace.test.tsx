@@ -17,10 +17,10 @@ import {
   SpeakerAssetDownload,
   SpeakerAssetMetadata,
   SpeakerInvitationControls,
-  speakerOnboardingTaskDefinitions,
-  speakerInvitationReady,
-  speakerProgressMatches,
   SpeakerWorkspace,
+  speakerInvitationReady,
+  speakerOnboardingTaskDefinitions,
+  speakerProgressMatches,
   travelLogisticsFor,
   validateSpeakerTaskAssignment,
 } from "./speaker-workspace";
@@ -122,9 +122,7 @@ describe("speaker API adapter", () => {
 
     await expect(api.list()).resolves.toEqual(roster);
 
-    expect(String(calls[0]?.input)).toBe(
-      "/api/admin/organizations/org-1/events/event-1/speakers",
-    );
+    expect(String(calls[0]?.input)).toBe("/api/admin/organizations/org-1/events/event-1/speakers");
     expect(calls[0]?.init).toMatchObject({ credentials: "include" });
   });
   it("posts an idempotent manual speaker with status and logistics metadata", async () => {
@@ -584,11 +582,15 @@ describe("speaker workspace contracts", () => {
         state: "ready" as const,
       },
     ];
+    const firstPreview = preview[0];
+    if (!firstPreview) {
+      throw new Error("Expected the first invitation preview record fixture.");
+    }
     expect(speakerInvitationReady(preview, speaker)).toBe(true);
     expect(speakerInvitationReady(preview, { ...speaker, email: "changed@example.test" })).toBe(
       false,
     );
-    expect(speakerInvitationReady([{ ...preview[0]!, state: "blocked" }], speaker)).toBe(false);
+    expect(speakerInvitationReady([{ ...firstPreview, state: "blocked" }], speaker)).toBe(false);
     expect(speakerInvitationReady(preview, { ...speaker, status: "revoked" })).toBe(false);
     const first = retainInvitationHistory(
       [],
