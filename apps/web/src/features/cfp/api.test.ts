@@ -1,43 +1,368 @@
-import { describe, expect, it } from "vitest";
-import { CfpApiError, createCfpApi } from "./api";
+import { describe, expect, it, vi } from "vitest";
+import {
+  CFP_REQUEST_TIMEOUT_MS,
+  CfpApiError,
+  createCfpApi,
+  isCfpSchemaVersionConflict,
+} from "./api";
 
-describe("CFP Google sign-in", () => {
-  it("starts Google OAuth with the exact callback URL", async () => {
+describe("CFP authenticated session", () => {
+  it("loads the verified same-origin session without sending credentials again", async () => {
     let requestUrl = "";
     let requestInit: RequestInit | undefined;
-    const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const api = createCfpApi("https://web.example.com", (async (input, init) => {
       requestUrl = String(input);
       requestInit = init;
       return Response.json({
-        url: "https://accounts.google.com/o/oauth2/v2/auth?state=verified",
-        redirect: true,
+        session: { id: "session-1" },
+        user: {
+          email: "Priya@Example.com",
+          name: "Priya Raman",
+          emailVerified: true,
+        },
       });
+    }) as typeof fetch);
+
+    await expect(api.getSession()).resolves.toEqual({
+      email: "priya@example.com",
+      name: "Priya Raman",
+      firstName: "Priya",
+      lastName: "Raman",
+    });
+    expect(requestUrl).toBe("https://web.example.com/api/auth/get-session");
+    expect(requestInit?.method).toBe("GET");
+    expect(requestInit?.credentials).toBe("include");
+  });
+
+  it("treats an anonymous session response as unauthenticated", async () => {
+    const api = createCfpApi("https://web.example.com", (async () =>
+      Response.json(null)) as typeof fetch);
+
+    await expect(api.getSession()).resolves.toBeNull();
+  });
+});
+it("parses the published dynamic schema without dropping rules or reusable metadata", async () => {
+  const fetcher = (async () =>
+    Response.json({
+      data: {
+        event: {
+          id: "event-1",
+          slug: "event-1",
+          name: "Dynamic Event",
+          timezone: "UTC",
+          opensAt: "2026-01-01T00:00:00.000Z",
+          closesAt: "2026-02-01T00:00:00.000Z",
+        },
+        form: {
+          id: "form-1",
+          name: "Dynamic CFP",
+          version: 7,
+          status: "published",
+          welcomeContent: "Welcome",
+          settings: {
+            speakerLimit: 3,
+            maxSubmissionsPerAccount: 2,
+            confirmationMessage: "Received",
+            successContent: "Done",
+            remindersEnabled: false,
+            adminNotificationsEnabled: true,
+          },
+          sections: [
+            { id: "proposal", title: "Proposal", description: "Session details" },
+            { id: "files", title: "Files", description: "Optional materials" },
+          ],
+          submissionFields: [
+            {
+              id: "format",
+              sectionId: "proposal",
+              key: "format",
+              label: "Format",
+              kind: "select",
+              required: true,
+              options: [{ value: "workshop", label: "Workshop", description: "Hands-on" }, "Talk"],
+              fieldRef: { id: "tenant.format", version: 3 },
+              fieldVersion: 3,
+            },
+            {
+              id: "deck",
+              sectionId: "files",
+              key: "deck",
+              label: "Slide deck",
+              kind: "file_request",
+              required: false,
+              options: [],
+              fileRequest: {
+                allowedMimeTypes: ["application/pdf"],
+                maxBytes: 1000000,
+                owner: "submission",
+              },
+            },
+          ],
+          participantFields: [
+            {
+              id: "participant-pronouns",
+              sectionId: "proposal",
+              key: "pronouns",
+              label: "Pronouns",
+              kind: "select",
+              required: false,
+              options: ["she/her", "they/them"],
+              fieldRef: "tenant.pronouns",
+              fieldVersion: 2,
+            },
+          ],
+          rules: [
+            {
+              id: "show-deck",
+              priority: 1,
+              when: {
+                type: "group",
+                operator: "all",
+                conditions: [
+                  {
+                    type: "predicate",
+                    fieldKey: "format",
+                    operator: "equals",
+                    value: "workshop",
+                  },
+                ],
+              },
+              actions: [{ type: "show_field", fieldKey: "deck" }],
+            },
+          ],
+        },
+      },
+    })) as typeof fetch;
+  const api = createCfpApi("https://api.example.com", fetcher);
+  const published = await api.getPublished({
+    organizationId: "org-1",
+    eventId: "event-1",
+  });
+
+  expect(published.form.sections).toHaveLength(2);
+  expect(published.form.submissionFields[0]).toMatchObject({
+    fieldRef: { id: "tenant.format", version: 3 },
+    fieldVersion: 3,
+  });
+  expect(published.form.submissionFields[1]?.fileRequest).toMatchObject({
+    allowedMimeTypes: ["application/pdf"],
+    maxBytes: 1000000,
+  });
+  expect(published.form.participantFields[0]?.key).toBe("pronouns");
+  expect(published.form.rules[0]).toMatchObject({ id: "show-deck" });
+});
+describe("CFP mutation schema versions", () => {
+  const submission = {
+    id: "submission-1",
+    tenantId: "org-1",
+    eventId: "event-1",
+    formId: "form-1",
+    ownerAccountId: "account-1",
+    formVersion: 7,
+    version: 1,
+    status: "draft" as const,
+    completedSteps: [],
+    answers: { slides: { assetId: "asset-finalized" } },
+    participants: [
+      {
+        id: "participant-1",
+        firstName: "Ada",
+        lastName: "Speaker",
+        email: "ada@example.test",
+        role: "primary" as const,
+        biography: "",
+        answers: { portfolio: { assetId: "asset-portfolio" } },
+      },
+    ],
+    secondaryContacts: [],
+    createdAt: "2026-08-09T00:00:00.000Z",
+    updatedAt: "2026-08-09T00:00:00.000Z",
+  };
+
+  it("includes the immutable formVersion in draft, participant, and submit bodies", async () => {
+    const mutationBodies: Array<Record<string, unknown>> = [];
+    const mutationUrls: string[] = [];
+    const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      mutationUrls.push(String(input));
+      if (init?.body === undefined) {
+        return Response.json({ data: submission });
+      }
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      mutationBodies.push(body);
+      if (init?.method === "POST" && String(input).endsWith("/submit")) {
+        return Response.json({
+          data: {
+            submission: {
+              ...submission,
+              status: "submitted",
+              version: 4,
+              submittedAt: "2026-08-09T00:01:00.000Z",
+            },
+            receipt: {
+              id: "receipt-1",
+              submissionId: submission.id,
+              version: 4,
+              submittedAt: "2026-08-09T00:01:00.000Z",
+            },
+            confirmationQueued: true,
+          },
+        });
+      }
+      const version = mutationBodies.length + 1;
+      return Response.json({ data: { ...submission, version } });
+    }) as typeof fetch;
+    const api = createCfpApi("https://api.example.com", fetcher);
+    const created = await api.createDraft({
+      organizationId: "org-1",
+      eventId: "event-1",
+      formId: "form-1",
+      idempotencyKey: "create-1",
+    });
+
+    const draft = await api.saveDraft({
+      organizationId: "org-1",
+      eventId: "event-1",
+      submissionId: submission.id,
+      expectedVersion: created.version,
+      formVersion: submission.formVersion,
+      idempotencyKey: "draft-1",
+      completedStep: "submission",
+      answers: {
+        topics: ["Accessibility"],
+        slides: { assetId: "asset-finalized" },
+      },
+    });
+    const participants = await api.saveDraft({
+      organizationId: "org-1",
+      eventId: "event-1",
+      submissionId: submission.id,
+      expectedVersion: draft.version,
+      formVersion: submission.formVersion,
+      idempotencyKey: "participants-1",
+      participants: submission.participants,
+      secondaryContacts: [],
+    });
+    await api.submit({
+      organizationId: "org-1",
+      eventId: "event-1",
+      submissionId: submission.id,
+      expectedVersion: participants.version,
+      formVersion: submission.formVersion,
+      idempotencyKey: "submit-1",
+    });
+
+    expect(mutationBodies).toHaveLength(3);
+    expect(mutationUrls[0]).toBe(
+      "https://api.example.com/api/cfp/organizations/org-1/events/event-1/forms/form-1/drafts",
+    );
+    expect(mutationBodies.every((body) => body.formVersion === submission.formVersion)).toBe(true);
+    expect(mutationBodies[0]?.answers).toEqual({
+      topics: ["Accessibility"],
+      slides: { assetId: "asset-finalized" },
+    });
+    expect(mutationBodies[1]?.participants).toEqual(submission.participants);
+    expect(mutationBodies[2]).toMatchObject({
+      expectedVersion: participants.version,
+      formVersion: submission.formVersion,
+    });
+  });
+  it("keeps answer and participant writes distinct when one logical save supplies a key", async () => {
+    const requests: Array<{ url: string; init: RequestInit | undefined }> = [];
+    const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      requests.push({ url, init });
+      const version = url.endsWith("/participants") ? 3 : 2;
+      return Response.json({ data: { ...submission, version } });
     }) as typeof fetch;
     const api = createCfpApi("https://api.example.com", fetcher);
 
     await expect(
-      api.startGoogleSignIn({ callbackURL: "https://app.example.com/cfp/event/account" }),
-    ).resolves.toBe("https://accounts.google.com/o/oauth2/v2/auth?state=verified");
-    expect(requestUrl).toBe("https://api.example.com/api/auth/sign-in/social");
-    expect(requestInit?.method).toBe("POST");
-    expect(requestInit?.credentials).toBe("include");
-    expect(JSON.parse(String(requestInit?.body))).toEqual({
-      provider: "google",
-      callbackURL: "https://app.example.com/cfp/event/account",
+      api.saveDraft({
+        organizationId: "org-1",
+        eventId: "event-1",
+        submissionId: submission.id,
+        expectedVersion: 1,
+        formVersion: submission.formVersion,
+        idempotencyKey: "operation-1",
+        answers: { title: "A durable title" },
+        participants: submission.participants,
+        secondaryContacts: [],
+      }),
+    ).resolves.toMatchObject({ version: 3 });
+
+    expect(requests).toHaveLength(2);
+    const firstHeaders = new Headers(requests[0]?.init?.headers);
+    const secondHeaders = new Headers(requests[1]?.init?.headers);
+    expect(firstHeaders.get("idempotency-key")).toBe("operation-1");
+    expect(secondHeaders.get("idempotency-key")).toBe("operation-1:participants");
+    expect(secondHeaders.get("idempotency-key")).not.toBe(firstHeaders.get("idempotency-key"));
+    expect(JSON.parse(String(requests[1]?.init?.body))).toMatchObject({
+      expectedVersion: 2,
+      formVersion: submission.formVersion,
     });
   });
 
-  it("rejects a non-Google authorization URL", async () => {
-    const api = createCfpApi("https://api.example.com", (async () =>
-      Response.json({ url: "https://evil.example/authorize" })) as typeof fetch);
+  it("settles a mutation that never produces a response with an actionable timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = createCfpApi(
+        "https://api.example.com",
+        (async () => new Promise<Response>(() => undefined)) as typeof fetch,
+      );
+      const pending = api.saveDraft({
+        organizationId: "org-1",
+        eventId: "event-1",
+        submissionId: submission.id,
+        expectedVersion: 1,
+        formVersion: submission.formVersion,
+        answers: { title: "A timeout-safe title" },
+      });
 
-    const error = await api
-      .startGoogleSignIn({ callbackURL: "https://app.example.com/cfp/event/account" })
-      .catch((failure: unknown) => failure);
-    expect(error).toBeInstanceOf(CfpApiError);
-    expect(error).toMatchObject({
-      code: "GOOGLE_SIGN_IN_FAILED",
-      status: 502,
-    });
+      const rejection = expect(pending).rejects.toMatchObject({
+        code: "CFP_REQUEST_TIMEOUT",
+        status: 504,
+      });
+      await vi.advanceTimersByTimeAsync(CFP_REQUEST_TIMEOUT_MS);
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("settles account authentication when the auth response never completes", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = createCfpApi(
+        "https://api.example.com",
+        (async () => new Promise<Response>(() => undefined)) as typeof fetch,
+      );
+      const pending = api.authenticateAccount({
+        email: "speaker@example.com",
+        password: "Password1!",
+        name: "Fresh Speaker",
+      });
+
+      const rejection = expect(pending).rejects.toMatchObject({
+        code: "CFP_REQUEST_TIMEOUT",
+        status: 504,
+      });
+      await vi.advanceTimersByTimeAsync(CFP_REQUEST_TIMEOUT_MS);
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("identifies only schema-version conflicts as stale-form errors", () => {
+    expect(
+      isCfpSchemaVersionConflict(
+        new CfpApiError("CONFLICT", "The submission schema version is stale.", 409),
+      ),
+    ).toBe(true);
+    expect(
+      isCfpSchemaVersionConflict(new CfpApiError("CONFLICT", "The submission has changed.", 409)),
+    ).toBe(false);
+    expect(
+      isCfpSchemaVersionConflict(new CfpApiError("CONFLICT", "The form version is stale.", 400)),
+    ).toBe(false);
   });
 });

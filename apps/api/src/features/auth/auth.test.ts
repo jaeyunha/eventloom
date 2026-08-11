@@ -6,7 +6,7 @@ import {
   requireSpeakerOwnership,
   requireTenantScope,
 } from "./authorization";
-import { AuthConfigurationError, createBetterAuthRuntimeConfiguration } from "./configuration";
+import { createBetterAuthRuntimeConfiguration } from "./configuration";
 import type {
   AuthSession,
   BetterAuthGateway,
@@ -84,61 +84,32 @@ function setupAuthenticator() {
 }
 
 describe("Better Auth runtime configuration", () => {
-  it("requires the exact web and API origins and exposes the Google callback contract", () => {
+  it("normalizes origins and enables email/password and magic-link authentication", () => {
     const configuration = createBetterAuthRuntimeConfiguration({
       secret: "test-secret",
       baseUrl: "https://api.example.com/auth/callback",
       trustedOrigins: ["https://app.example.com/login"],
     });
 
-    expect(configuration).toMatchObject({
-      baseUrl: "https://api.example.com",
-      trustedOrigins: ["https://app.example.com", "https://api.example.com"],
-      googleCallbackUrl: "https://api.example.com/api/auth/callback/google",
-      emailVerification: { required: true },
-      magicLink: { enabled: true, expiresInSeconds: 900 },
-      oauthProviders: {},
-    });
-  });
-
-  it("enables Google only with a complete credential pair", () => {
-    const configuration = createBetterAuthRuntimeConfiguration({
+    expect(configuration).toEqual({
       secret: "test-secret",
       baseUrl: "https://api.example.com",
-      trustedOrigins: ["https://app.example.com", "https://api.example.com/"],
-      google: { clientId: " google-id ", clientSecret: " google-secret " },
+      trustedOrigins: ["https://app.example.com", "https://api.example.com"],
+      emailVerification: { required: true },
+      magicLink: { enabled: true, expiresInSeconds: 900 },
     });
-
-    expect(configuration.oauthProviders).toEqual({
-      google: {
-        clientId: "google-id",
-        clientSecret: "google-secret",
-      },
-    });
-    expect(configuration.trustedOrigins).toEqual([
-      "https://app.example.com",
-      "https://api.example.com",
-    ]);
   });
 
-  it("fails closed for partial Google credentials and never enables Microsoft", () => {
-    expect(() =>
-      createBetterAuthRuntimeConfiguration({
-        secret: "test-secret",
-        baseUrl: "https://api.example.com",
-        trustedOrigins: [],
-        google: { clientId: "google-id" },
-      }),
-    ).toThrow(AuthConfigurationError);
-
+  it("does not require or expose OAuth provider configuration", () => {
     const configuration = createBetterAuthRuntimeConfiguration({
       secret: "test-secret",
       baseUrl: "https://api.example.com",
       trustedOrigins: [],
-      microsoft: { clientId: "microsoft-id", clientSecret: "microsoft-secret" },
     });
-    expect(configuration.oauthProviders).toEqual({});
-    expect("microsoft" in configuration.oauthProviders).toBe(false);
+
+    expect(configuration).not.toHaveProperty("googleCallbackUrl");
+    expect(configuration).not.toHaveProperty("oauthProviders");
+    expect(configuration).not.toHaveProperty("socialProviders");
   });
 });
 
@@ -150,6 +121,25 @@ describe("request authentication", () => {
     const principal = await authenticator.authenticate(
       new Request("https://api.example.com/private", {
         headers: { cookie: "better-auth.session_token=valid-session" },
+      }),
+    );
+
+    expect(principal).toMatchObject({ kind: "user", userId: "user-1" });
+  });
+  it("resolves the raw session token from a Better Auth signed cookie", async () => {
+    const { betterAuth, apiKeys } = setupAuthenticator();
+    betterAuth.sessions.set("valid-session", session());
+    const authenticator = new RequestAuthenticator(betterAuth, apiKeys, {
+      sessionCookieName: "__Secure-better-auth.session_token",
+      clock: { now: () => now },
+    });
+
+    const principal = await authenticator.authenticate(
+      new Request("https://api.example.com/private", {
+        headers: {
+          cookie:
+            "__Secure-better-auth.session_token=valid-session.abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH",
+        },
       }),
     );
 

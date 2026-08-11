@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   ENVIRONMENTS,
+  inspectOrganizationIdMigrationReadiness,
   PreflightError,
   parseDotEnv,
   parseWranglerInventory,
@@ -21,7 +22,7 @@ function usage() {
   return [
     "Usage: node scripts/release/preflight.mjs --environment <local|staging|production>",
     "  --env local=<path|-> --env staging=<path|-> --env production=<path|->",
-    "  [--require-providers google] [--offline]",
+    "  [--require-providers accelevents] [--offline]",
     "",
     'Use "-" for exactly one environment to read that environment from the current process.',
   ].join("\n");
@@ -130,11 +131,16 @@ async function run() {
     requiredProviders: options.requiredProviders,
     wranglerInventory,
   });
+  const migrationReadiness = inspectOrganizationIdMigrationReadiness({
+    configurations,
+    wranglerInventory,
+  });
 
   const checks = [
     { name: "provider-configuration", status: "passed" },
     { name: "environment-isolation", status: "passed" },
     { name: "wrangler-resources", status: "passed" },
+    { name: "organization-id-migration-readiness", status: migrationReadiness.status },
   ];
 
   if (options.offline) {
@@ -148,6 +154,7 @@ async function run() {
       environment: options.environment,
       online: false,
       providerStates: validation.providerStates[options.environment],
+      migrationReadiness,
       checks,
     };
   }
@@ -162,11 +169,12 @@ async function run() {
   checks.push({ name: "forge-privacy", status: "passed" });
 
   return {
-    ready: true,
+    ready: migrationReadiness.ready,
     configurationValid: true,
     environment: options.environment,
     online: true,
     providerStates: validation.providerStates[options.environment],
+    migrationReadiness,
     checks,
   };
 }
@@ -174,6 +182,7 @@ async function run() {
 try {
   const result = await run();
   process.stdout.write(`${JSON.stringify(result)}\n`);
+  if (!result.ready && result.online) process.exitCode = 1;
 } catch (error) {
   const knownError = error instanceof PreflightError;
   process.stderr.write(

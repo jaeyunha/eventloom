@@ -7,7 +7,6 @@ const configuration = createBetterAuthRuntimeConfiguration({
   secret: "a-secret-long-enough-for-better-auth-tests",
   baseUrl: "https://api.example.com",
   trustedOrigins: ["https://web.example.com"],
-  google: { clientId: "google-client", clientSecret: "google-secret" },
 });
 
 function recordingDatabase() {

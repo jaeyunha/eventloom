@@ -59,11 +59,11 @@ Microsoft OAuth and Accelevents are intentionally not part of this build. No Mic
 ## Topology
 | Component | Status | Description | Coverage / Deferral Note |
 |-----------|--------|-------------|--------------------------|
-| Submission intake | active | Configurable CFP forms, conditional logic, routing, public/account workflow, drafts, and submission lifecycle. | Covered by the five-step CFP wizard, rule engine, limits, validation, routing, versioned edits, and golden-path tests. |
-| Speaker operations | active | Speaker profiles, files, tasks, forms, status, and organizer visibility. | Covered by per-participant authorization, private assets, comprehensive task lifecycle, portal views, and real-time dashboard. |
-| Review and communications | active | Multi-round review, human-approved AI assistance, templates, reminders, and calendar lifecycle. | Covered by rubrics, assignments, blind review, abstention, human confirmation, OpenSend, and RFC 5545 updates/cancellations. |
-| Program scheduling | active | Conflict-aware draft agenda, publication, views, timezone handling, and rollback. | Covered by conflict matrix, five views, versioned private drafts, atomic publication, outbox delivery, and IANA timezone invariants. |
-| Distribution and integrations | active | Public embeds/API, Cloudflare/Airtable/OpenSend, Forge, and performance. | Covered by public projections, scoped API, infrastructure ownership, environment isolation, and release budgets. |
+| Submission intake | active | Configurable CFP forms, conditional logic, routing, public/account workflow, drafts, and submission lifecycle. | Requires the five-step CFP wizard, dynamic published schemas, reusable/versioned tenant fields, file requests, rule validation/routing, versioned edits, and golden-path tests. |
+| Speaker operations | active | Speaker profiles, files, tasks, forms, status, and organizer visibility. | Requires per-participant authorization, portal context switching, autosave/editing, co-speaker roster control, private asset finalization/history/comments/downloads, form tasks, wiki/resources, and task lifecycle. |
+| Review and communications | active | Multi-round review, human-approved AI assistance, templates, reminders, decisions, reports, and calendar lifecycle. | Requires authorable/versioned evaluation plans and visibility projections, human-applied advisory AI suggestions, accept/waitlist/reject delivery, template-managed event email, grade/report exports, OpenSend, and RFC 5545 updates/cancellations. |
+| Program scheduling | active | Conflict-aware draft agenda, publication, views, timezone handling, rooms/tracks/settings, and rollback. | Requires first-party session/settings management, agenda eligibility, conflict matrix, five views, advisory AI proposals, versioned private drafts, atomic publication, outbox delivery, and IANA timezone invariants. |
+| Distribution and integrations | active | Public embeds/API, Cloudflare/Airtable/OpenSend, Forge, and performance. | Requires public projections, scoped API, privacy-safe CSV/XLSX exports, infrastructure ownership, environment isolation, and release budgets. |
 
 ## Established Facts
 - Round 0: `kill-my-saas-brief.pdf` is the primary product-scope source; the host transcript and focused public research supplement it.
@@ -78,7 +78,7 @@ Microsoft OAuth and Accelevents are intentionally not part of this build. No Mic
 - Round 6: Every competition bonus is mandatory: Cloudflare, Airtable, Forge, performance, and public API.
 - Round 7: Airtable is authoritative for business/program records; D1 and Durable Objects own identity, tokens, idempotency, locks, job state, and delivery audit state.
 - Round 8: AI may prefill rubric scores and rankings, but only a human-confirmed or edited score counts.
-- Round 8 (historical auth discussion; superseded for this build): Magic-link/verified-email access is required; Google and Microsoft login OAuth were discussed as optional conveniences, but the current auth contract requires Google OAuth plus magic links/verified email and intentionally excludes Microsoft OAuth.
+- Round 8: Magic-link/verified-email and password access are required; social OAuth providers are intentionally excluded.
 - Round 9: Room and participant overlap are hard scheduling blockers. Track, capacity, travel-time, and custom-rule conflicts are warnings with audited overrides.
 - Round 10: Preserve the observed account-first CFP wizard: Welcome → Account → Submission → Participant → Review, followed by confirmation and portal access.
 - Round 11: Use OpenSend at `https://opensend.namuh.co` with sending-scoped credentials and `auth@`, `speakers@`, and `calendar@foreverbrowsing.com` sender identities.
@@ -121,7 +121,7 @@ Deliver a production-grade, public, open-source alternative for the Sessionboard
 - Current Cloudflare token must gain D1 Edit before implementation.
 - Airtable is the sole writable authority for business/program records; D1 is not a second business database.
 - Use R2 private objects for uploads, short-lived authorized access, type/size checks, metadata stripping, and malware scanning.
-- Use Better Auth with D1/Drizzle for account/session state; verified email and magic links plus Google OAuth are required. Microsoft OAuth is intentionally not part of this build.
+- Use Better Auth with D1/Drizzle for account/session state; verified email, email/password, and magic-link sign-in are required. Social OAuth providers are intentionally excluded.
 - Use OpenSend sending-scoped keys. Calendar delivery is provider-neutral RFC 5545 REQUEST/UPDATE/CANCEL through OpenSend and does not require calendar-provider OAuth.
 - All environments are isolated; staging uses synthetic data and suppressed/sandboxed email recipients.
 - UI layout, styling, state presentation, and interaction patterns follow PDF and user-supplied Sessionboard screenshots while improving performance and accessibility.
@@ -132,6 +132,7 @@ Deliver a production-grade, public, open-source alternative for the Sessionboard
 
 ## Non-Goals
 - CRM and marketing suite.
+- SMS messaging and campaigns.
 - Payment workflows.
 - Multilingual support; English only.
 - Pixel-for-pixel reproduction.
@@ -141,6 +142,49 @@ Deliver a production-grade, public, open-source alternative for the Sessionboard
 - Multiple alternative agenda scenarios.
 - Accelevents publication or synchronization; it is intentionally not part of this build.
 - Shared staging/production data or secrets.
+
+## Competition-relevant workflow expansion
+
+Topology status describes required scope, not delivery status. No workflow below is a completion claim; implementation remains incomplete until its PRD `build_pass` and `qa_pass` gates pass.
+
+The competition-relevant product surface is program operations, not a CRM or marketing suite. The following first-party workflows are explicitly in scope:
+
+- **Organizer event and CFP control plane:** Organizers manage event/session settings, rooms, tracks, tags, formats, statuses, and agenda eligibility from first-party surfaces rather than generic resource CRUD. The default agenda-eligible status is Accepted, with event-scoped, audited changes. CFP authors can create and publish up to 20 forms with sections, built-in and custom fields, conditional questions/routing, validation, and explicit file-request fields. A field may be event-local or tenant-reusable; reusable definitions expose references and impact and are versioned so changing a definition never silently reinterprets submitted answers. Sources: https://learn.sessionboard.com/get-started/overview, https://learn.sessionboard.com/videos/overview, https://learn.sessionboard.com/sessions/agenda, https://learn.sessionboard.com/sessions/submission-forms.
+- **Participant portal workspace:** An authenticated account receives a server-derived list of authorized event portals and can switch between them from an account-menu control; a query parameter can preserve selection but never grants access. Within the selected event, the portal supports draft autosave/resume, pre-close submission editing and audited post-close reopen, co-speaker roster add/edit/remove with explicit capabilities, profile updates, session files and file requests, allowed type/version selection, immutable file history, comments, authorized downloads, validated form tasks, task feedback/reopen, published wiki/resources, and stale-context clearing when switching events. Sources: https://learn.sessionboard.com/participants/overview, https://learn.sessionboard.com/participants/edit-submission, https://learn.sessionboard.com/participants/how-to-add-of-edit-speaker-information-for-an-accepted-session, https://learn.sessionboard.com/participants/upload-files, https://learn.sessionboard.com/participants/updated-portals.
+- **Evaluation authoring and human authority:** Organizers author evaluation plans, rounds, rubrics, assignments, blind-review settings, evaluator-visible session/speaker fields, and optional authorized uploaded-file projections. A plan's grading configuration is locked or versioned when it opens or receives scores, and historical scores retain their exact plan/rubric revision. AI evaluation output is advisory only: it is a pending, event/evaluator/submission-scoped suggestion with cited evidence, never a counted score, rank, decision, message, export value, or public value until an authorized human explicitly accepts, edits, or rejects it. Stale or invalidated suggestions remain excluded server-side. Sources: https://learn.sessionboard.com/evaluations/evaluation-plans, https://learn.sessionboard.com/videos/video-ai-evaluations.
+- **Decisions and event communications:** Authorized organizers record human accept, waitlist, or reject outcomes. Each outcome projects to the participant portal and can enqueue an auditable, idempotent message. Transactional templates cover account verification, submission confirmation, reminders, decisions, tasks, schedule publication, updates, and cancellation. Separately, an organizer can compose an event-scoped message to an explicitly selected participant group, preview the approved template version and recipient count, snapshot recipients, send through OpenSend, and inspect per-recipient delivery/history; this is operational event email, not SMS, CRM, or marketing automation. Source: https://learn.sessionboard.com/get-started/overview and https://learn.sessionboard.com/videos/overview.
+- **Reports and grade exports:** Organizers save, name, describe, edit, delete, and run program-scoped report definitions over allowlisted sessions, participants/speakers, and evaluation-plan progress. Definitions select permitted relationships, fields, order, filters, and ascending/descending sorting. Runs produce audited CSV or XLSX downloads with spreadsheet-safe serialization and authorization checks; evaluation plans additionally provide reproducible individual and cumulative grade exports from a selected plan version without exposing blind-review notes, private files, or unauthorized personal data. Sources: https://learn.sessionboard.com/videos/video-reports and https://learn.sessionboard.com/evaluations/evaluation-plans.
+- **Advisory AI agenda and content remix:** An AI agenda run snapshots organizer-selected dates, eligible statuses, rooms, day windows, ordered rules, base agenda revision, and ignore-existing-times/rooms choice, then creates a private proposed schedule and human-readable diff. Organizers may reject, regenerate, or selectively accept changes; deterministic conflict validation, current-revision checks, and atomic publication remain authoritative, and AI never publishes or overrides hard conflicts. An AI content-remix run may propose revisions for selected session titles/descriptions, optional existing tags/tracks, or speaker bios with bounded tone/guidance; organizers compare original and candidate, regenerate, and explicitly save each accepted candidate as an auditable revision. Unconfirmed candidates never enter public projections, exports, or automated communications. Sources: https://learn.sessionboard.com/videos/video-ai-agenda-builder, https://learn.sessionboard.com/videos/video-ai-content-remix, https://learn.sessionboard.com/sessions/agenda.
+- **Verified identity:** Account identity changes are separate from event-scoped profile edits. Changing an email or username requires reauthentication and verification of the new address, preserves grants by stable account ID, prevents duplicate verified identities, and exposes pending, failed, and completed states. Event display-name and profile changes remain separately authorized and versioned. Source: https://learn.sessionboard.com/participants/overview.
+
+AI is advisory everywhere in this product. Model output may create private candidates or suggestions only; a human must apply, accept, edit, or reject every consequential change before it can affect scores, rankings, decisions, schedule records, content revisions, messages, exports, or public projections.
+### Expanded acceptance criteria
+
+- [ ] Dynamic CFP forms render the published schema (including custom fields, conditional sections/routing, validation, and file requests) in the first-party public and organizer surfaces; reusable tenant fields expose references/impact and immutable answer/schema versions.
+- [ ] First-party organizer surfaces create and edit event/session settings, rooms, tracks, and agenda-eligible statuses; Accepted is the default and settings changes are tenant/event-scoped and audited.
+- [ ] Portal context discovery returns only authorized event/role contexts; switching clears prior-event data and revalidates every read and mutation.
+- [ ] Portal drafts autosave with visible state and optimistic-concurrency recovery; eligible submissions expose edit until close, audited reopen restores edit after close, and co-speaker roster changes use explicit capabilities.
+- [ ] The portal Files workspace supports request type, upload/finalization state, immutable version history, comments, and fresh authorized downloads; task completion is blocked until required file finalization succeeds.
+- [ ] Portal form tasks render organizer-configured fields with server validation, preserve response history, and support needs-changes/reopen; published wiki/resources are event-scoped and read-only to participants.
+- [ ] Evaluation authoring supports plan/round/rubric/assignment configuration, evaluator-visible field/file projections, and locked or versioned grading configuration; historical results retain their plan revision.
+- [ ] Pending AI evaluation suggestions carry rubric/submission revisions and evidence, are excluded from all aggregates and downstream surfaces, and require per-suggestion human accept/edit/reject with audit history.
+- [ ] Accept, waitlist, and reject decisions update participant-visible state and use versioned/idempotent template-backed delivery with recipient and delivery audit.
+- [ ] Organizer event email supports explicit recipient groups, template preview/version, recipient snapshot, idempotency, per-recipient delivery state, and send history; SMS, CRM, and marketing automation remain excluded.
+- [ ] Report definitions/runs are program-only, allowlisted, access-checked at definition and run time, auditable, and export CSV/XLSX safely; grade exports support reproducible individual and cumulative output for a selected evaluation-plan version.
+- [ ] Advisory AI agenda runs and content-remix runs remain private candidates until explicit human application; every commit reruns deterministic authorization/conflict/current-revision validation and cannot auto-publish or override hard blockers.
+- [ ] Verified email/profile identity changes require reauthentication/new-address verification, preserve event grants by stable account ID, and expose clear pending/failure/completion states.
+
+### Competition evidence sources
+
+- Organizer overview and capability index: https://learn.sessionboard.com/get-started/overview and https://learn.sessionboard.com/videos/overview
+- Forms, fields, and file requests: https://learn.sessionboard.com/sessions/submission-forms
+- Agenda and rooms/settings: https://learn.sessionboard.com/sessions/agenda
+- Evaluation plans and grade exports: https://learn.sessionboard.com/evaluations/evaluation-plans
+- Participant portal, editing, speakers, files, and portal switching: https://learn.sessionboard.com/participants/overview, https://learn.sessionboard.com/participants/edit-submission, https://learn.sessionboard.com/participants/how-to-add-of-edit-speaker-information-for-an-accepted-session, https://learn.sessionboard.com/participants/upload-files, https://learn.sessionboard.com/participants/updated-portals
+- Reports, advisory agenda, and content remix: https://learn.sessionboard.com/videos/video-reports, https://learn.sessionboard.com/videos/video-ai-agenda-builder, https://learn.sessionboard.com/videos/video-ai-content-remix
+- AI evaluation walkthrough (feature existence only; human-confirmation policy is repository intent): https://learn.sessionboard.com/videos/video-ai-evaluations
+
+These sources clarify competition-relevant workflows only; they do not add CRM, marketing automation, SMS, payment, multilingual, Microsoft OAuth, or Accelevents scope.
 
 ## Acceptance Criteria
 ### Evidence and onboarding
@@ -265,8 +309,7 @@ Deliver a production-grade, public, open-source alternative for the Sessionboard
 ### Selected architecture
 - Frontend: Next.js, frontend-only, separately deployed on Cloudflare.
 - API: Hono on Cloudflare Workers.
-- Auth: Better Auth on Hono, D1 via Drizzle SQLite adapter, magic links and verified-email flows.
-- Auth: Better Auth on Hono, D1 via Drizzle SQLite adapter, magic links, verified-email flows, and Google OAuth.
+- Auth: Better Auth on Hono, D1 via Drizzle SQLite adapter, email/password, magic links, and verified-email flows.
 - Business authority: Airtable.
 - Operational state: D1 + Durable Objects.
 - Files: private R2.
@@ -288,7 +331,7 @@ Deliver a production-grade, public, open-source alternative for the Sessionboard
 - Better Auth Drizzle adapter: https://better-auth.com/llms.txt/docs/adapters/drizzle.md
 
 ## Ontology (Key Entities)
-The final ontology contains 64 stable entities. Core groupings:
+The target ontology includes the stable entities below; these are requirement boundaries, not claims that the corresponding implementation is complete.
 
 | Entity group | Type | Representative fields | Relationships |
 |--------------|------|-----------------------|---------------|
@@ -296,9 +339,15 @@ The final ontology contains 64 stable entities. Core groupings:
 | SubmissionForm, Field, ConditionGroup, FormRule, ReviewRouting | core domain | settings, questions, conditions, actions | Forms create versioned submissions and route them to review queues. |
 | Submission, SubmissionDraft, SubmissionVersion, SubmissionParticipant, SecondaryContact | core domain | status, answers, version, role, grants | Account owns drafts; participants retain individual profile/task authority. |
 | SpeakerProfile, Asset, TaskAssignment, TaskDependency, TaskTransition | core domain | bio, files, task states, deadlines | Accepted participants receive tasks and private asset access. |
+| TenantFieldDefinition, FieldSchemaVersion, TaskForm, TaskResponse | core domain | reusable field scope, impact, response version, validation | Tenant reuse cannot mutate stored answers; portal form-task responses remain owner-scoped and auditable. |
+| PortalContext, WikiPage, PortalResource | core domain | event context, publication, ordering, visibility | Switcher and resources are server-derived and event-scoped. |
+| AssetVersion, AssetComment, UploadCapability, DownloadCapability | core domain | version family, scan/finalization, comment, expiry | Files are private, immutable by version, and downloaded only through fresh authorization. |
 | EvaluationPlan, ReviewRound, Rubric, Score, AISuggestion, BlindReview, ConflictAbstention | core domain | rounds, criteria, score, evidence | Humans confirm all counted scores. |
+| EvaluationPlanVersion, EvaluationProjection, ReportDefinition, ReportRun | core domain | locked rubric, visible fields/files, filters, export format | Historical scores and reports use reproducible plan/configuration snapshots. |
 | Session, Agenda, AgendaDraft, PublishedAgendaRevision, EventRule | core domain | schedule, revision, rules | Accepted sessions enter private drafts and immutable publications. |
+| MessageTemplate, RecipientSnapshot, DeliveryAudit | core domain | template version, selected audience, per-recipient state | Event messages are idempotent, auditable, and separate from CRM/marketing. |
 | HardConflict, SoftWarning, ScheduleOverride, ZonedScheduleTime | core domain | overlaps, warning type, reason, zone | Conflicts and time invariants gate publication. |
+| AgendaSuggestionRun, ContentRemixCandidate, ContentRevision, IdentityVerification | core domain | criteria snapshot, candidate provenance, human application, verification state | AI candidates are advisory/private; identity changes require verified email and stable account grants. |
 | SenderIdentity, EmailMessage, CalendarInvitation, CalendarDeliveryState | core domain | template, UID, SEQUENCE, method | OpenSend delivers workflow and calendar messages. |
 | PublicProjection, PublicWidget, EmbedFeed, ApiToken, WebhookSubscription | core domain | published fields, theme, scope, events | Public/API surfaces expose only approved revision data. |
 | AirtableBase, OperationalState, AuditDelivery, PublicationOutbox | system boundary | records, locks, attempts | Airtable owns business data; Cloudflare owns operational coordination. |

@@ -1,18 +1,23 @@
 # Open Sessionboard
 
-Open Sessionboard is an open-source, program-side alternative to Sessionboard for conference teams. Its target users are nontechnical event-production professionals who need software that makes their work easier. It focuses on the workflow from call-for-proposals through speaker operations, review, scheduling, publication, and integrations.
+Open Sessionboard is an open-source project for the program-side Sessionboard workflow. Its target users are nontechnical event-production professionals who need a clear path from call-for-proposals through speaker operations, review, scheduling, publication, and integrations. This README describes the target scope; `prd.json` is the source of build and QA status, and the scope bullets do not claim that unbuilt work is complete.
 
-## Scope
+## Target scope
 
-- Configurable CFP forms with drafts, co-speakers, validation, and review
-- Speaker portal with submissions, profile, acceptance state, and post-acceptance tasks
-- Committee assignment, rubric scoring, comments, conflicts, and human-authoritative decisions
-- Conflict-safe, versioned agenda scheduling and public speaker/agenda embeds
-- Transactional email and provider-neutral RFC 5545 REQUEST/UPDATE/CANCEL calendar invitations, including room/video details when present
-- Public API and signed webhooks
-- Cloudflare deployment with Airtable as the authoritative program data store
+- **Organizer control plane:** First-party event/session settings, rooms, tracks, statuses, agenda eligibility, and dynamic CFP forms with custom fields, conditional logic, validation, and file requests; tenant-reusable fields are versioned with visible impact.
+- **Participant portal:** Authorized multi-event portal switcher; autosave/resume and pre-close submission editing; audited reopen; co-speaker management; session files with type requests, immutable history, comments, and authorized downloads; validated form tasks; published wiki/resources.
+- **Evaluation and decisions:** Evaluation-plan authoring, evaluator-visible field/file projections, locked/versioned rubrics, blind review, comments, reproducible scores, and human accept/waitlist/reject decisions.
+- **Communications:** Versioned OpenSend templates for account verification, confirmations, reminders, decisions, tasks, and schedule lifecycle, plus event-scoped recipient-group email with preview, snapshots, delivery state, and send history.
+- **Reports and exports:** Program-only saved report definitions/runs and audited CSV/XLSX output, including individual and cumulative grade exports for a selected evaluation-plan version.
+- **Scheduling and distribution:** Conflict-safe, versioned agenda scheduling across rooms/tracks with public speaker and agenda embeds, API, webhooks, and RFC 5545 calendar delivery.
+- **Advisory AI:** Human-applied evaluation suggestions, private agenda proposals, and content-remix candidates for program text. AI never independently scores, decides, schedules, publishes, sends, exports, or overwrites source content.
+- **Verified identity:** Reauthenticated, verified email/profile identity changes that preserve event grants by stable account identity.
 
-CRM, marketing automation, payments, sponsorship/exhibitor management, transcription, and multilingual workflows are intentionally out of scope.
+CRM, marketing automation, SMS, payment, multilingual workflows, Microsoft OAuth, and Accelevents are intentionally out of scope. Sponsorship/exhibitor management, transcription/media AI, and unrelated AI insights are also excluded.
+
+## Evidence basis
+
+The target workflows are grounded in the cited Sessionboard pages: [overview and capability index](https://learn.sessionboard.com/get-started/overview), [forms and fields](https://learn.sessionboard.com/sessions/submission-forms), [participant portal workflows](https://learn.sessionboard.com/participants/overview), [evaluation plans](https://learn.sessionboard.com/evaluations/evaluation-plans), [reports](https://learn.sessionboard.com/videos/video-reports), [AI agenda](https://learn.sessionboard.com/videos/video-ai-agenda-builder), and [AI content remix](https://learn.sessionboard.com/videos/video-ai-content-remix).
 
 ## Architecture
 
@@ -21,7 +26,7 @@ CRM, marketing automation, payments, sponsorship/exhibitor management, transcrip
 - **Business data:** Airtable
 - **Application state:** Cloudflare D1 and Durable Objects
 - **Files and jobs:** R2 and Cloudflare Queues
-- **Authentication:** Better Auth with required magic links/verified email plus Google OAuth
+- **Authentication:** Better Auth with verified email, password, and email magic-link sign-in
 - **Email:** OpenSend using `foreverbrowsing.com` sender addresses
 - **Repository:** Forge, private during development and public for submission
 
@@ -29,7 +34,7 @@ See [`ARCHITECTURE.md`](ARCHITECTURE.md), [`prd.json`](prd.json), and [`spec/ope
 
 ## Documentation
 
-- [Environment and provider setup](docs/setup.md) — isolated Cloudflare, Airtable, OpenSend, and Google OAuth configuration
+- [Environment and provider setup](docs/setup.md) — isolated Cloudflare, Airtable, OpenSend, and authentication configuration
 - [Public API and webhooks](docs/api.md) — authentication, scopes, pagination, idempotency, concurrency, errors, and signatures
 - [OpenAPI 3.1 contract](openapi/openapi.yaml) — checked-in stable API contract; deployed Workers expose their enabled resource contract at `/api/v1/openapi.json`
 - [Calendar semantics](docs/calendar-semantics.md) — IANA timezone, DST, RFC 5545, UID, sequence, update, cancellation, and retry rules
@@ -43,7 +48,7 @@ The visual and product evidence used to derive the implementation is preserved u
 
 ## Local development
 
-Prerequisites: Bun, a Cloudflare account, an Airtable base, an OpenSend API key, and a Google OAuth application.
+Prerequisites: Bun, a Cloudflare account, an Airtable base, and an OpenSend API key.
 
 ```bash
 bun install
@@ -55,7 +60,7 @@ The Next.js web application runs on port `3015`; the standalone Hono Worker runs
 
 ## Environment isolation
 
-Local, staging, and production must use separate Airtable bases, D1 databases, R2 buckets, Queues, secrets, API keys, Google OAuth applications, and OpenSend credentials. Verify those boundaries from provider inventories before release. Staging must contain synthetic data and use suppressed or sandboxed email recipients. See [the setup guide](docs/setup.md); do not share production data or credentials with another environment.
+Local, staging, and production must use separate Airtable bases, D1 databases, R2 buckets, Queues, secrets, API keys, and OpenSend credentials. Verify those boundaries from provider inventories before release. Staging must contain synthetic data and use suppressed or sandboxed email recipients. See [the setup guide](docs/setup.md); do not share production data or credentials with another environment.
 
 ## Quality gates
 
@@ -80,7 +85,7 @@ Read [the API guide](docs/api.md) and use the checked-in [OpenAPI 3.1 contract](
 
 ## Deployment credentials
 
-The implementation expects scoped credentials for Cloudflare, Airtable, OpenSend, and Google OAuth. Microsoft OAuth and Accelevents are intentionally not part of this build and must not be configured. Calendar delivery uses provider-neutral RFC 5545 REQUEST/UPDATE/CANCEL messages through OpenSend, including room/video details when present; it does not require calendar-provider OAuth.
+The implementation expects scoped credentials for Cloudflare, Airtable, and OpenSend. Interactive authentication uses verified email/password and email magic links; social OAuth providers and Accelevents are intentionally not part of this build. Calendar delivery uses provider-neutral RFC 5545 REQUEST/UPDATE/CANCEL messages through OpenSend, including room/video details when present; it does not require calendar-provider OAuth.
 
 Run the read-only release preflight against separate ignored local, staging, and production environment files before deployment. It checks required provider configuration, rejects shared credentials/resources, inspects the Cloudflare deployment token for the account-restricted Workers Scripts, D1, R2, and Queues Edit permissions, reads the declared Cloudflare resources, and confirms Forge is still private. It never deploys, migrates, or changes repository visibility.
 

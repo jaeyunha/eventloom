@@ -2,6 +2,13 @@ import { type Context, Hono } from "hono";
 import { ZodError, type ZodType } from "zod";
 import { type ApiKeyScope, AuthAccessError, type AuthPrincipal } from "../auth/types";
 import {
+  publicApiResourceContract,
+  publicApiV1Contract,
+  type PublicApiOperation,
+  type PublicApiResourceContract,
+  type PublicApiV1Contract,
+} from "./contract";
+import {
   type CursorDirection,
   CursorError,
   type CursorPayload,
@@ -122,6 +129,11 @@ export interface PublicApiResourceDefinition<
   readonly name?: string;
   readonly path?: string;
   readonly repository: PublicApiRepository<TRecord, TCreate, TUpdate>;
+  /**
+   * Optional per-resource override for callers that do not provide a public-v1 contract.
+   * Production adapters use the shared contract descriptor on route options.
+   */
+  readonly operations?: readonly PublicApiOperation[];
   readonly readScope?: ApiKeyScope;
   readonly writeScope?: ApiKeyScope;
   readonly scope?: ApiKeyScope;
@@ -156,6 +168,7 @@ export interface PublicApiRoutesOptions<
   TUpdate = Record<string, unknown>,
 > {
   readonly resources: readonly PublicApiResourceDefinition<TRecord, TCreate, TUpdate>[];
+  readonly contract?: PublicApiV1Contract;
   readonly idempotency?: IdempotencyCoordinator;
   readonly idempotencyStore?: IdempotencyStore;
   readonly authorize?: PublicApiAuthorizationHook;
@@ -204,10 +217,42 @@ function resourceDisplayName<TRecord, TCreate, TUpdate>(
 ): string {
   return resource.name ?? resource.path ?? resourceSegment(resource);
 }
+function resourceContract<TRecord, TCreate, TUpdate>(
+  resource: PublicApiResourceDefinition<TRecord, TCreate, TUpdate>,
+  contract: PublicApiV1Contract,
+): PublicApiResourceContract | undefined {
+  return publicApiResourceContract(contract, resourceSegment(resource));
+}
+
+function operationEnabled<TRecord, TCreate, TUpdate>(
+  resource: PublicApiResourceDefinition<TRecord, TCreate, TUpdate>,
+  operation: PublicApiOperation,
+  contract: PublicApiV1Contract,
+): boolean {
+  if (resource.operations !== undefined) {
+    return resource.operations.includes(operation);
+  }
+  return resourceContract(resource, contract)?.operations.includes(operation) ?? true;
+}
+
+function allowedSorts<TRecord, TCreate, TUpdate>(
+  resource: PublicApiResourceDefinition<TRecord, TCreate, TUpdate>,
+  contractResource: PublicApiResourceContract | undefined,
+): readonly string[] | undefined {
+  return resource.sortFields ?? contractResource?.allowedSorts;
+}
+
+function defaultSortFor<TRecord, TCreate, TUpdate>(
+  resource: PublicApiResourceDefinition<TRecord, TCreate, TUpdate>,
+  contractResource: PublicApiResourceContract | undefined,
+): string {
+  return resource.defaultSort ?? contractResource?.defaultSort ?? resource.idField ?? "id";
+}
 
 function scopeFor<TRecord, TCreate, TUpdate>(
   resource: PublicApiResourceDefinition<TRecord, TCreate, TUpdate>,
   action: PublicApiAction,
+  contractResource?: PublicApiResourceContract,
 ): ApiKeyScope | undefined {
   const explicit = action === "read" ? resource.readScope : resource.writeScope;
   if (explicit !== undefined) {
@@ -215,6 +260,11 @@ function scopeFor<TRecord, TCreate, TUpdate>(
   }
   if (resource.scope !== undefined) {
     return resource.scope;
+  }
+  if (contractResource !== undefined) {
+    return action === "read"
+      ? contractResource.security.readScope
+      : contractResource.security.writeScope;
   }
   const candidate = `${resourceSegment(resource)}:${action}`;
   return apiKeyScopes.has(candidate as ApiKeyScope) ? (candidate as ApiKeyScope) : undefined;
@@ -332,6 +382,7 @@ function filterValues(query: Record<string, string | undefined>): Record<string,
 function parseListQuery<TRecord, TCreate, TUpdate>(
   context: Context<PublicApiRouteEnvironment>,
   resource: PublicApiResourceDefinition<TRecord, TCreate, TUpdate>,
+  contractResource?: PublicApiResourceContract,
 ): ListQuery {
   const query = context.req.query();
   const cursor = query.cursor;
@@ -344,19 +395,25 @@ function parseListQuery<TRecord, TCreate, TUpdate>(
     throw validationError("The sort direction is invalid.");
   }
 
-  const sort = query.sort ?? resource.defaultSort ?? resource.idField ?? "id";
+  const sort = query.sort ?? defaultSortFor(resource, contractResource);
   if (sort.trim().length === 0 || sort.length > 100) {
     throw validationError("The sort field is invalid.");
   }
-  if (resource.sortFields !== undefined && !resource.sortFields.includes(sort)) {
+  const sortFields = allowedSorts(resource, contractResource);
+  if (sortFields !== undefined && !sortFields.includes(sort)) {
     throw validationError("The sort field is not supported.");
   }
 
   const filters = filterValues(query);
   const filterHash = stableStringify(filters);
+  const pagination = contractResource?.pagination;
   return {
     ...(cursor === undefined ? {} : { cursor }),
-    limit: parsePositiveInteger(query.limit, 25, 100),
+    limit: parsePositiveInteger(
+      query.limit,
+      pagination?.limit.default ?? 25,
+      pagination?.limit.maximum ?? 100,
+    ),
     sort,
     direction,
     filters,
@@ -676,100 +733,295 @@ function resourceSchema<TRecord, TCreate, TUpdate>(
     : (resource.updateSchema ?? resource.schemas?.update);
 }
 
+function toSchemaName(value: string, suffix: string): string {
+  const words = value
+    .replace(/([a-z0-9])([A-Z])/gu, "$1 $2")
+    .split(/[^A-Za-z0-9]+/u)
+    .filter((word) => word.length > 0)
+    .map((word) => `${word[0]?.toUpperCase() ?? ""}${word.slice(1)}`)
+    .join("");
+  return `PublicApi${words || "Resource"}${suffix}`;
+}
+
+function schemaRef(name: string): Record<string, unknown> {
+  return { $ref: `#/components/schemas/${name}` };
+}
+
+function openApiErrorResponse(
+  schemaName: string,
+  description: string,
+  retryAfter = false,
+): Record<string, unknown> {
+  return {
+    description,
+    ...(retryAfter
+      ? {
+          headers: {
+            "Retry-After": {
+              description: "Seconds until the client should retry.",
+              schema: { type: "integer", minimum: 1 },
+            },
+          },
+        }
+      : {}),
+    content: { "application/json": { schema: schemaRef(schemaName) } },
+  };
+}
+
 function openApiDocument<TRecord, TCreate, TUpdate>(
   resources: readonly PublicApiResourceDefinition<TRecord, TCreate, TUpdate>[],
   options: PublicApiOpenApiOptions | undefined,
+  contract: PublicApiV1Contract,
 ): Record<string, unknown> {
   const paths: Record<string, unknown> = {};
+  const resourceSchemas: Record<string, unknown> = {};
+  const errorSchemaName = "PublicApiError";
+  const rateLimitSchemaName = "PublicApiRateLimit";
   for (const resource of resources) {
     const segment = resourceSegment(resource);
-    const collection = `/organizations/{organizationId}/${segment}`;
+    const descriptor = resourceContract(resource, contract);
+    const displayName = resourceDisplayName(resource);
+    const collection = `${contract.basePath}/organizations/{organizationId}/${segment}`;
     const item = `${collection}/{id}`;
-    const operationBase = {
-      tags: [resourceDisplayName(resource)],
-      security: [{ bearerAuth: [] }],
-      parameters: [
-        {
-          name: "organizationId",
-          in: "path",
-          required: true,
-          schema: { type: "string" },
+    const recordSchemaName = toSchemaName(displayName, "Record");
+    const createSchemaName = toSchemaName(displayName, "Create");
+    const updateSchemaName = toSchemaName(displayName, "Update");
+    const pageSchemaName = toSchemaName(displayName, "Page");
+    const recordSchema = descriptor?.schemas.record ?? {
+      type: "object",
+      additionalProperties: true,
+    };
+    const createSchema = descriptor?.schemas.create ?? {
+      type: "object",
+      additionalProperties: true,
+    };
+    const updateSchema = descriptor?.schemas.update ?? {
+      type: "object",
+      additionalProperties: true,
+    };
+    resourceSchemas[recordSchemaName] = recordSchema;
+    if (operationEnabled(resource, "create", contract)) {
+      resourceSchemas[createSchemaName] = createSchema;
+    }
+    if (operationEnabled(resource, "update", contract)) {
+      resourceSchemas[updateSchemaName] = updateSchema;
+    }
+    resourceSchemas[pageSchemaName] = {
+      ...contract.schemas.page,
+      properties: {
+        ...(contract.schemas.page.properties as Record<string, unknown> | undefined),
+        data: { type: "array", items: schemaRef(recordSchemaName) },
+      },
+    };
+
+    const readScope = scopeFor(resource, "read", descriptor);
+    const writeScope = scopeFor(resource, "write", descriptor);
+    const securitySchemeName = descriptor?.security.scheme ?? contract.securityScheme.name;
+    const readSecurity = { [securitySchemeName]: readScope === undefined ? [] : [readScope] };
+    const writeSecurity = { [securitySchemeName]: writeScope === undefined ? [] : [writeScope] };
+    const pathParameters = [
+      {
+        name: "organizationId",
+        in: "path",
+        required: true,
+        schema: { type: "string", minLength: 1, maxLength: 200 },
+      },
+    ];
+    const pagination = descriptor?.pagination;
+    const filter = descriptor?.filters;
+    const listParameters = [
+      ...pathParameters,
+      {
+        name: "cursor",
+        in: "query",
+        required: false,
+        description: "Opaque cursor returned by the previous page.",
+        schema: { type: "string", minLength: 1 },
+      },
+      {
+        name: "limit",
+        in: "query",
+        required: false,
+        schema: {
+          type: "integer",
+          minimum: pagination?.limit.minimum ?? 1,
+          maximum: pagination?.limit.maximum ?? 100,
+          default: pagination?.limit.default ?? 25,
         },
-      ],
-      responses: {
-        "401": { description: "Authentication required" },
-        "403": { description: "Access denied" },
       },
+      {
+        name: "sort",
+        in: "query",
+        required: false,
+        schema: {
+          type: "string",
+          ...(descriptor === undefined
+            ? {}
+            : { enum: [...(descriptor.allowedSorts as readonly string[])] }),
+        },
+      },
+      {
+        name: "direction",
+        in: "query",
+        required: false,
+        schema: { type: "string", enum: ["asc", "desc"] },
+      },
+      {
+        name: "filter",
+        in: "query",
+        required: false,
+        description:
+          filter === undefined
+            ? "JSON object filter. Dotted and bracketed filter keys are also accepted."
+            : `JSON object filter; dotted (filter.field) and bracketed (filter[field]) forms are accepted for ${filter.fields.join(", ")}.`,
+        schema: { type: "string" },
+      },
+    ];
+    const commonResponses = {
+      "400": openApiErrorResponse(errorSchemaName, "The request is invalid."),
+      "401": openApiErrorResponse(errorSchemaName, "Authentication is required."),
+      "403": openApiErrorResponse(errorSchemaName, "The API key lacks the required scope."),
+      "429": openApiErrorResponse(rateLimitSchemaName, "Rate limit exceeded.", true),
+      "500": openApiErrorResponse(errorSchemaName, "The request could not be completed."),
+      "503": openApiErrorResponse(errorSchemaName, "The public API configuration is unavailable."),
     };
-    paths[collection] = {
-      get: {
-        ...operationBase,
-        operationId: `list${resourceDisplayName(resource)}`,
-        parameters: [
-          ...operationBase.parameters,
-          { name: "cursor", in: "query", schema: { type: "string" } },
-          { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100 } },
-          { name: "sort", in: "query", schema: { type: "string" } },
-          { name: "direction", in: "query", schema: { type: "string", enum: ["asc", "desc"] } },
-        ],
-        responses: { ...operationBase.responses, "200": { description: "A stable page" } },
-      },
-      post: {
-        ...operationBase,
-        operationId: `create${resourceDisplayName(resource)}`,
-        parameters: [
-          ...operationBase.parameters,
-          { name: "Idempotency-Key", in: "header", required: true, schema: { type: "string" } },
-        ],
-        responses: { ...operationBase.responses, "201": { description: "Created" } },
-      },
+    const mutationResponses = {
+      ...commonResponses,
+      "409": openApiErrorResponse(
+        errorSchemaName,
+        "The mutation conflicts with existing state or idempotency.",
+      ),
     };
-    paths[item] = {
-      get: {
-        ...operationBase,
-        operationId: `get${resourceDisplayName(resource)}`,
-        parameters: [
-          ...operationBase.parameters,
-          { name: "id", in: "path", required: true, schema: { type: "string" } },
-        ],
+    const collectionOperations: Record<string, unknown> = {};
+    if (operationEnabled(resource, "list", contract)) {
+      collectionOperations.get = {
+        tags: [displayName],
+        operationId: `list${toSchemaName(displayName, "").replace(/^PublicApi/u, "")}`,
+        summary: `List ${displayName.toLowerCase()}`,
+        security: [readSecurity],
+        parameters: listParameters,
         responses: {
-          ...operationBase.responses,
-          "200": { description: "The resource" },
-          "404": { description: "Not found" },
+          ...commonResponses,
+          "200": {
+            description: "A stable tenant-scoped cursor page.",
+            content: { "application/json": { schema: schemaRef(pageSchemaName) } },
+          },
         },
-      },
-      patch: {
-        ...operationBase,
-        operationId: `update${resourceDisplayName(resource)}`,
-        parameters: [
-          ...operationBase.parameters,
-          { name: "id", in: "path", required: true, schema: { type: "string" } },
-          { name: "Idempotency-Key", in: "header", required: true, schema: { type: "string" } },
-          { name: "If-Match", in: "header", required: true, schema: { type: "string" } },
-        ],
-        responses: {
-          ...operationBase.responses,
-          "200": { description: "Updated" },
-          "412": { description: "The version has changed" },
-        },
-      },
-      put: {
-        ...operationBase,
-        operationId: `replace${resourceDisplayName(resource)}`,
-        parameters: [
-          ...operationBase.parameters,
-          { name: "id", in: "path", required: true, schema: { type: "string" } },
-          { name: "Idempotency-Key", in: "header", required: true, schema: { type: "string" } },
-          { name: "If-Match", in: "header", required: true, schema: { type: "string" } },
-        ],
-        responses: { ...operationBase.responses, "200": { description: "Updated" } },
-      },
-    };
-    if (resource.openApi !== undefined) {
-      paths[collection] = {
-        ...(paths[collection] as Record<string, unknown>),
-        ...resource.openApi,
       };
+    }
+    if (operationEnabled(resource, "create", contract)) {
+      const mutation = descriptor?.mutations?.create;
+      collectionOperations.post = {
+        tags: [displayName],
+        operationId: `create${toSchemaName(displayName, "").replace(/^PublicApi/u, "")}`,
+        summary: `Create ${displayName.toLowerCase()}`,
+        security: [writeSecurity],
+        parameters: [
+          ...pathParameters,
+          ...(mutation?.idempotencyKey === false
+            ? []
+            : [
+                {
+                  name: "Idempotency-Key",
+                  in: "header",
+                  required: true,
+                  schema: { type: "string", minLength: 8, maxLength: 128 },
+                },
+              ]),
+        ],
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: schemaRef(createSchemaName) } },
+        },
+        responses: {
+          ...mutationResponses,
+          "201": {
+            description: "Created.",
+            content: { "application/json": { schema: schemaRef(recordSchemaName) } },
+          },
+        },
+      };
+    }
+    if (Object.keys(collectionOperations).length > 0) {
+      paths[collection] = collectionOperations;
+    }
+
+    const itemOperations: Record<string, unknown> = {};
+    if (operationEnabled(resource, "get", contract)) {
+      itemOperations.get = {
+        tags: [displayName],
+        operationId: `get${toSchemaName(displayName, "").replace(/^PublicApi/u, "")}`,
+        summary: `Get a ${displayName.toLowerCase().replace(/s$/u, "")}`,
+        security: [readSecurity],
+        parameters: [
+          ...pathParameters,
+          { name: "id", in: "path", required: true, schema: { type: "string", minLength: 1 } },
+        ],
+        responses: {
+          ...commonResponses,
+          "200": {
+            description: "The tenant-scoped resource.",
+            content: { "application/json": { schema: schemaRef(recordSchemaName) } },
+          },
+          "404": openApiErrorResponse(errorSchemaName, "The resource was not found."),
+        },
+      };
+    }
+    if (operationEnabled(resource, "update", contract)) {
+      const mutation = descriptor?.mutations?.update;
+      const mutationParameters = [
+        ...pathParameters,
+        { name: "id", in: "path", required: true, schema: { type: "string", minLength: 1 } },
+        ...(mutation?.idempotencyKey === false
+          ? []
+          : [
+              {
+                name: "Idempotency-Key",
+                in: "header",
+                required: true,
+                schema: { type: "string", minLength: 8, maxLength: 128 },
+              },
+            ]),
+        ...(mutation?.ifMatch === false
+          ? []
+          : [
+              {
+                name: "If-Match",
+                in: "header",
+                required: true,
+                schema: { type: "string", pattern: '^(W/)?"?[1-9][0-9]*"?$' },
+              },
+            ]),
+      ];
+      const updateOperation = (operationId: string) => ({
+        tags: [displayName],
+        operationId,
+        summary: `Update a ${displayName.toLowerCase().replace(/s$/u, "")}`,
+        security: [writeSecurity],
+        parameters: mutationParameters,
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: schemaRef(updateSchemaName) } },
+        },
+        responses: {
+          ...mutationResponses,
+          "200": {
+            description: "Updated.",
+            content: { "application/json": { schema: schemaRef(recordSchemaName) } },
+          },
+          "404": openApiErrorResponse(errorSchemaName, "The resource was not found."),
+          "412": openApiErrorResponse(errorSchemaName, "The resource version is stale or missing."),
+        },
+      });
+      itemOperations.patch = updateOperation(
+        `update${toSchemaName(displayName, "").replace(/^PublicApi/u, "")}`,
+      );
+      itemOperations.put = updateOperation(
+        `replace${toSchemaName(displayName, "").replace(/^PublicApi/u, "")}`,
+      );
+    }
+    if (Object.keys(itemOperations).length > 0) {
+      paths[item] = itemOperations;
     }
   }
   return {
@@ -777,26 +1029,44 @@ function openApiDocument<TRecord, TCreate, TUpdate>(
     info: {
       title: options?.title ?? "Open Sessionboard Public API",
       version: options?.version ?? "1.0.0",
-      ...(options?.description === undefined ? {} : { description: options.description }),
+      description:
+        options?.description ??
+        "Tenant-scoped public-v1 resources. See the checked-in OpenAPI contract for stable client generation.",
     },
+    servers: [{ url: "/", description: "API origin" }],
     components: {
       securitySchemes: {
-        bearerAuth: {
-          type: "http",
-          scheme: "bearer",
-        },
+        [contract.securityScheme.name]: contract.securityScheme,
+      },
+      schemas: {
+        PublicApiPage: contract.schemas.page,
+        PublicApiError: contract.schemas.error,
+        PublicApiRateLimit: contract.schemas.rateLimited,
+        ...resourceSchemas,
       },
     },
+    security: [{ [contract.securityScheme.name]: [] }],
     paths,
   };
 }
 
+function publicApiErrorResult(
+  context: Context<PublicApiRouteEnvironment>,
+  error: PublicApiError,
+): Response {
+  const response = publicApiErrorResponse(context, error);
+  if (error.status === 429) {
+    response.headers.set("Retry-After", "60");
+  }
+  return response;
+}
+
 function routeError(context: Context<PublicApiRouteEnvironment>, error: unknown): Response {
   if (error instanceof PublicApiError) {
-    return publicApiErrorResponse(context, error);
+    return publicApiErrorResult(context, error);
   }
   if (error instanceof AuthAccessError) {
-    return publicApiErrorResponse(
+    return publicApiErrorResult(
       context,
       new PublicApiError(
         error.code === "UNAUTHENTICATED" ? "AUTHENTICATION_REQUIRED" : "ACCESS_DENIED",
@@ -805,9 +1075,9 @@ function routeError(context: Context<PublicApiRouteEnvironment>, error: unknown)
     );
   }
   if (error instanceof CursorError || error instanceof ZodError) {
-    return publicApiErrorResponse(context, validationError());
+    return publicApiErrorResult(context, validationError());
   }
-  return publicApiErrorResponse(context, internalError());
+  return publicApiErrorResult(context, internalError());
 }
 
 export function createPublicApiV1Routes<
@@ -816,6 +1086,7 @@ export function createPublicApiV1Routes<
   TUpdate = Record<string, unknown>,
 >(options: PublicApiRoutesOptions<TRecord, TCreate, TUpdate>): Hono<PublicApiRouteEnvironment> {
   const resources = options.resources;
+  const contract = options.contract ?? publicApiV1Contract;
   const idempotency =
     options.idempotency ??
     (options.idempotencyStore === undefined
@@ -828,7 +1099,7 @@ export function createPublicApiV1Routes<
     organizationId: string,
     action: PublicApiAction,
   ): Promise<AuthPrincipal> => {
-    const scope = scopeFor(resource, action);
+    const scope = scopeFor(resource, action, resourceContract(resource, contract));
     const principal =
       action === "read"
         ? requirePublicApiRead(
@@ -856,123 +1127,129 @@ export function createPublicApiV1Routes<
   };
 
   routes.get("/openapi.json", (context) =>
-    context.json(openApiDocument(resources, options.openApi)),
+    context.json(openApiDocument(resources, options.openApi, contract)),
   );
 
   for (const resource of resources) {
     const segment = resourceSegment(resource);
-    const displayName = resourceDisplayName(resource);
+    const descriptor = resourceContract(resource, contract);
     const collectionPath = `/organizations/:organizationId/${segment}`;
     const itemPath = `${collectionPath}/:id`;
     const idField = resource.idField ?? "id";
     const versionField = resource.versionField ?? "version";
 
-    routes.get(collectionPath, async (context) => {
-      const organizationId = requiredRouteParam(context, "organizationId");
-      const principal = await authorize(context, resource, organizationId, "read");
-      const query = parseListQuery(context, resource);
-      let cursorData: CursorPayload | undefined;
-      if (query.cursor !== undefined) {
-        try {
-          cursorData = decodeCursor(query.cursor);
-        } catch {
-          throw validationError("The cursor is invalid.");
-        }
-        validateCursor(cursorData, {
-          tenantId: organizationId,
-          resource: segment,
-          sort: query.sort,
-          direction: query.direction,
-          filterHash: query.filterHash,
-        });
-      }
-      const listInput: PublicApiListInput = {
-        tenantId: organizationId,
-        organizationId,
-        resource: segment,
-        limit: query.limit,
-        pageSize: query.limit,
-        ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
-        ...(cursorData === undefined ? {} : { cursorData }),
-        sort: query.sort,
-        direction: query.direction,
-        filters: query.filters,
-        principal,
-      };
-      const listed = normalizeListResult<TRecord>(await resource.repository.list(listInput));
-      const sorted = sortItems(listed.items, query.sort, query.direction, idField);
-      const hasOverflow = sorted.length > query.limit;
-      const data = hasOverflow ? sorted.slice(0, query.limit) : sorted;
-      const hasMore =
-        listed.hasMore === true ||
-        (listed.nextCursor !== undefined && listed.nextCursor !== null) ||
-        hasOverflow;
-      const nextCursor = hasMore
-        ? nextCursorFromResult(listed.nextCursor, data[data.length - 1], {
+    if (operationEnabled(resource, "list", contract)) {
+      routes.get(collectionPath, async (context) => {
+        const organizationId = requiredRouteParam(context, "organizationId");
+        const principal = await authorize(context, resource, organizationId, "read");
+        const query = parseListQuery(context, resource, descriptor);
+        let cursorData: CursorPayload | undefined;
+        if (query.cursor !== undefined) {
+          try {
+            cursorData = decodeCursor(query.cursor);
+          } catch {
+            throw validationError("The cursor is invalid.");
+          }
+          validateCursor(cursorData, {
             tenantId: organizationId,
             resource: segment,
             sort: query.sort,
             direction: query.direction,
-            idField,
             filterHash: query.filterHash,
-          })
-        : null;
-      return context.json(cursorPage(data, nextCursor, hasMore && nextCursor !== null));
-    });
-
-    routes.get(itemPath, async (context) => {
-      const organizationId = requiredRouteParam(context, "organizationId");
-      const principal = await authorize(context, resource, organizationId, "read");
-      const id = requiredRouteParam(context, "id");
-      const record = await resource.repository.get({
-        tenantId: organizationId,
-        organizationId,
-        resource: segment,
-        id,
-        principal,
-      });
-      if (record === null || record === undefined) {
-        throw new PublicApiError("NOT_FOUND", "The requested resource was not found.");
-      }
-      return context.json(record);
-    });
-
-    routes.post(collectionPath, async (context) => {
-      const organizationId = requiredRouteParam(context, "organizationId");
-      const principal = await authorize(context, resource, organizationId, "write");
-      const key = idempotencyKey(context);
-      const rawBody = await requestBody(context);
-      const data = parseMutationBody(rawBody, resourceSchema(resource, "create"));
-      if (idempotency === undefined) {
-        throw new PublicApiError(
-          "CONFIGURATION_ERROR",
-          "An atomic idempotency store is required for public API writes.",
-        );
-      }
-      const operation = async (): Promise<MutationResult> => ({
-        status: 201,
-        body: await resource.repository.create({
+          });
+        }
+        const listInput: PublicApiListInput = {
           tenantId: organizationId,
           organizationId,
           resource: segment,
-          data,
-          idempotencyKey: key,
+          limit: query.limit,
+          pageSize: query.limit,
+          ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+          ...(cursorData === undefined ? {} : { cursorData }),
+          sort: query.sort,
+          direction: query.direction,
+          filters: query.filters,
           principal,
-        }),
+        };
+        const listed = normalizeListResult<TRecord>(await resource.repository.list(listInput));
+        const sorted = sortItems(listed.items, query.sort, query.direction, idField);
+        const hasOverflow = sorted.length > query.limit;
+        const data = hasOverflow ? sorted.slice(0, query.limit) : sorted;
+        const hasMore =
+          listed.hasMore === true ||
+          (listed.nextCursor !== undefined && listed.nextCursor !== null) ||
+          hasOverflow;
+        const nextCursor = hasMore
+          ? nextCursorFromResult(listed.nextCursor, data[data.length - 1], {
+              tenantId: organizationId,
+              resource: segment,
+              sort: query.sort,
+              direction: query.direction,
+              idField,
+              filterHash: query.filterHash,
+            })
+          : null;
+        return context.json(cursorPage(data, nextCursor, hasMore && nextCursor !== null));
       });
-      const outcome = await runIdempotent(idempotency, {
-        scope: `${organizationId}:${segment}:create:${principalIdentity(principal)}:${key}`,
-        key,
-        fingerprint: requestFingerprint({
-          method: "POST",
-          path: context.req.path,
-          body: data,
-        }),
-        operation,
+    }
+
+    if (operationEnabled(resource, "get", contract)) {
+      routes.get(itemPath, async (context) => {
+        const organizationId = requiredRouteParam(context, "organizationId");
+        const principal = await authorize(context, resource, organizationId, "read");
+        const id = requiredRouteParam(context, "id");
+        const record = await resource.repository.get({
+          tenantId: organizationId,
+          organizationId,
+          resource: segment,
+          id,
+          principal,
+        });
+        if (record === null || record === undefined) {
+          throw new PublicApiError("NOT_FOUND", "The requested resource was not found.");
+        }
+        return context.json(record);
       });
-      const response = mutationResponse(outcome.value);
-      return context.json(response.body, response.status);
-    });
+    }
+
+    if (operationEnabled(resource, "create", contract)) {
+      routes.post(collectionPath, async (context) => {
+        const organizationId = requiredRouteParam(context, "organizationId");
+        const principal = await authorize(context, resource, organizationId, "write");
+        const key = idempotencyKey(context);
+        const rawBody = await requestBody(context);
+        const data = parseMutationBody(rawBody, resourceSchema(resource, "create"));
+        if (idempotency === undefined) {
+          throw new PublicApiError(
+            "CONFIGURATION_ERROR",
+            "An atomic idempotency store is required for public API writes.",
+          );
+        }
+        const operation = async (): Promise<MutationResult> => ({
+          status: 201,
+          body: await resource.repository.create({
+            tenantId: organizationId,
+            organizationId,
+            resource: segment,
+            data,
+            idempotencyKey: key,
+            principal,
+          }),
+        });
+        const outcome = await runIdempotent(idempotency, {
+          scope: `${organizationId}:${segment}:create:${principalIdentity(principal)}:${key}`,
+          key,
+          fingerprint: requestFingerprint({
+            method: "POST",
+            path: context.req.path,
+            body: data,
+          }),
+          operation,
+        });
+        const response = mutationResponse(outcome.value);
+        return context.json(response.body, response.status);
+      });
+    }
 
     const updateHandler = async (context: Context<PublicApiRouteEnvironment>) => {
       const organizationId = requiredRouteParam(context, "organizationId");
@@ -1041,8 +1318,10 @@ export function createPublicApiV1Routes<
       return context.json(response.body, response.status);
     };
 
-    routes.patch(itemPath, updateHandler);
-    routes.put(itemPath, updateHandler);
+    if (operationEnabled(resource, "update", contract)) {
+      routes.patch(itemPath, updateHandler);
+      routes.put(itemPath, updateHandler);
+    }
   }
 
   routes.notFound((context) =>

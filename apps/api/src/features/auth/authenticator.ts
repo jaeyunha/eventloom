@@ -36,6 +36,13 @@ function readCookie(request: Request, name: string): string | null {
   }
   return null;
 }
+function sessionTokenValue(cookieValue: string): string {
+  const segments = cookieValue.split(".");
+  if (segments.length > 2 || !segments[0]) {
+    throw new AuthAccessError("UNAUTHENTICATED", "The session credential is invalid.");
+  }
+  return segments[0];
+}
 
 function readBearerToken(request: Request): string | null {
   const authorization = request.headers.get("authorization");
@@ -79,7 +86,7 @@ export class RequestAuthenticator {
     }
 
     if (sessionToken) {
-      return this.#authenticateSession(sessionToken);
+      return this.#authenticateSession(sessionTokenValue(sessionToken));
     }
     if (apiKeyToken) {
       return this.#authenticateApiKey(apiKeyToken);
@@ -90,7 +97,7 @@ export class RequestAuthenticator {
   async #authenticateSession(sessionToken: string): Promise<AuthPrincipal> {
     const session = await this.#betterAuth.resolveSession(sessionToken);
     const now = this.#clock.now();
-    if (!session || !session.emailVerified || session.expiresAt.getTime() <= now.getTime()) {
+    if (session?.emailVerified !== true || session.expiresAt.getTime() <= now.getTime()) {
       throw new AuthAccessError("UNAUTHENTICATED", "The session is invalid or expired.");
     }
 

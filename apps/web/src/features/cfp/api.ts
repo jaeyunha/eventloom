@@ -33,6 +33,69 @@ export class CfpApiError extends Error {
     this.details = details;
   }
 }
+export interface CfpMutationLease {
+  sequence: number;
+}
+
+export class CfpMutationGate {
+  #activeSequence: number | null = null;
+  #nextSequence = 0;
+
+  begin(): CfpMutationLease | null {
+    if (this.#activeSequence !== null) return null;
+    const sequence = ++this.#nextSequence;
+    this.#activeSequence = sequence;
+    return { sequence };
+  }
+
+  isActive(): boolean {
+    return this.#activeSequence !== null;
+  }
+
+  isCurrent(lease: CfpMutationLease): boolean {
+    return this.#activeSequence === lease.sequence;
+  }
+
+  finish(lease: CfpMutationLease): void {
+    if (this.isCurrent(lease)) this.#activeSequence = null;
+  }
+
+  invalidate(): void {
+    this.#activeSequence = null;
+    this.#nextSequence += 1;
+  }
+}
+export function isCfpSchemaVersionConflict(error: unknown): error is CfpApiError {
+  if (!(error instanceof CfpApiError) || error.status !== 409) return false;
+  const code = error.code.toLowerCase().replaceAll("-", "_");
+  if (
+    code.includes("form_version") ||
+    code.includes("schema_version") ||
+    code.includes("stale_form") ||
+    (code.includes("schema") && (code.includes("conflict") || code.includes("stale")))
+  ) {
+    return true;
+  }
+  const message = error.message.toLowerCase();
+  const details =
+    error.details === undefined
+      ? ""
+      : (() => {
+          try {
+            return JSON.stringify(error.details).toLowerCase();
+          } catch {
+            return "";
+          }
+        })();
+  return (
+    message.includes("schema version") ||
+    message.includes("form version") ||
+    (message.includes("form") &&
+      (message.includes("stale") || message.includes("no longer available"))) ||
+    details.includes("formversion") ||
+    details.includes("schemaversion")
+  );
+}
 
 const participantSchema = z
   .object({
@@ -87,6 +150,66 @@ const publicEventSchema = z.object({
   closesAt: z.string(),
 });
 
+const formFieldOptionSchema = z.union([
+  z.string(),
+  z
+    .object({
+      value: z.string(),
+      label: z.string().optional(),
+      description: z.string().optional(),
+      disabled: z.boolean().optional(),
+    })
+    .passthrough(),
+]);
+const formFieldReferenceSchema = z.union([
+  z.string(),
+  z
+    .object({
+      id: z.string(),
+      version: z.number().int().positive(),
+    })
+    .passthrough(),
+]);
+
+const fileRequestSchema = z
+  .object({
+    allowedMimeTypes: z.array(z.string()).optional(),
+    mimeTypes: z.array(z.string()).optional(),
+    maxBytes: z.number().int().positive().optional(),
+    required: z.boolean().optional(),
+    owner: z.string().optional(),
+  })
+  .passthrough();
+
+export const cfpFormFieldSchema = z
+  .object({
+    id: z.string(),
+    sectionId: z.string(),
+    key: z.string(),
+    label: z.string(),
+    kind: z.string(),
+    description: z.string().optional(),
+    placeholder: z.string().optional(),
+    required: z.boolean().default(false),
+    options: z.array(formFieldOptionSchema).default([]),
+    fieldRef: formFieldReferenceSchema.optional(),
+    fieldVersion: z.number().int().positive().optional(),
+    fileRequest: fileRequestSchema.optional(),
+    config: z.record(z.string(), z.unknown()).optional(),
+  })
+  .passthrough();
+export type CfpFormField = z.infer<typeof cfpFormFieldSchema>;
+
+const formSectionSchema = z
+  .object({
+    id: z.string(),
+    title: z.string(),
+    description: z.string().default(""),
+  })
+  .passthrough();
+
+const formRulesSchema = z.array(z.record(z.string(), z.unknown()));
+
 const publicFormSchema = z
   .object({
     id: z.string(),
@@ -94,32 +217,19 @@ const publicFormSchema = z
     version: z.number().int().positive(),
     status: z.literal("published"),
     welcomeContent: z.string(),
-    settings: z.object({
-      speakerLimit: z.number().int().positive(),
-      maxSubmissionsPerAccount: z.number().int().positive(),
-      confirmationMessage: z.string(),
-      successContent: z.string(),
-      redirectUrl: z.string().optional(),
-    }),
-    sections: z.array(
-      z.object({
-        id: z.string(),
-        title: z.string(),
-        description: z.string(),
-      }),
-    ),
-    submissionFields: z.array(
-      z.object({
-        id: z.string(),
-        sectionId: z.string(),
-        key: z.string(),
-        label: z.string(),
-        kind: z.string(),
-        required: z.boolean(),
-        options: z.array(z.string()),
-      }),
-    ),
-    participantFields: z.array(z.record(z.string(), z.unknown())),
+    settings: z
+      .object({
+        speakerLimit: z.number().int().positive(),
+        maxSubmissionsPerAccount: z.number().int().positive(),
+        confirmationMessage: z.string(),
+        successContent: z.string(),
+        redirectUrl: z.string().optional(),
+      })
+      .passthrough(),
+    sections: z.array(formSectionSchema),
+    submissionFields: z.array(cfpFormFieldSchema),
+    participantFields: z.array(cfpFormFieldSchema),
+    rules: formRulesSchema.default([]),
   })
   .passthrough();
 
@@ -167,26 +277,10 @@ const formSchema = z
     status: z.enum(["draft", "published", "closed"]),
     welcomeContent: z.string(),
     settings: z.record(z.string(), z.unknown()),
-    sections: z.array(
-      z.object({
-        id: z.string(),
-        title: z.string(),
-        description: z.string(),
-      }),
-    ),
-    submissionFields: z.array(
-      z.object({
-        id: z.string(),
-        sectionId: z.string(),
-        key: z.string(),
-        label: z.string(),
-        kind: z.string(),
-        required: z.boolean(),
-        options: z.array(z.string()),
-      }),
-    ),
-    participantFields: z.array(z.record(z.string(), z.unknown())),
-    rules: z.array(z.record(z.string(), z.unknown())),
+    sections: z.array(formSectionSchema),
+    submissionFields: z.array(cfpFormFieldSchema),
+    participantFields: z.array(cfpFormFieldSchema),
+    rules: formRulesSchema.default([]),
   })
   .passthrough();
 export type CfpEventConfiguration = z.infer<typeof eventSchema>;
@@ -195,7 +289,14 @@ export type CfpFormConfiguration = z.infer<typeof formSchema>;
 export interface CfpAccountAuthentication {
   status: "authenticated" | "verification_required";
 }
+export interface CfpAuthenticatedSession {
+  email: string;
+  name: string;
+  firstName: string;
+  lastName: string;
+}
 export interface CfpApi {
+  getSession(input?: { signal?: AbortSignal }): Promise<CfpAuthenticatedSession | null>;
   getPublished(input: {
     organizationId: string;
     eventId: string;
@@ -208,7 +309,6 @@ export interface CfpApi {
     name: string;
     verificationCallbackUrl?: string;
   }): Promise<CfpAccountAuthentication>;
-  startGoogleSignIn(input: { callbackURL: string }): Promise<string>;
   loadDraft(input: {
     organizationId: string;
     eventId: string;
@@ -232,6 +332,7 @@ export interface CfpApi {
     eventId: string;
     submissionId: string;
     expectedVersion: number;
+    formVersion: number;
     idempotencyKey?: string;
     completedStep?: CfpSubmissionStep;
     answers?: Record<string, unknown>;
@@ -256,6 +357,7 @@ export interface CfpApi {
     eventId: string;
     submissionId: string;
     expectedVersion: number;
+    formVersion: number;
     idempotencyKey?: string;
   }): Promise<CfpSubmitResult>;
   getEvent(input: {
@@ -269,6 +371,11 @@ export interface CfpApi {
     formId: string;
     signal?: AbortSignal;
   }): Promise<CfpFormConfiguration>;
+  listForms(input: {
+    organizationId: string;
+    eventId: string;
+    signal?: AbortSignal;
+  }): Promise<CfpFormConfiguration[]>;
   saveEvent(input: {
     organizationId: string;
     eventId: string;
@@ -408,26 +515,151 @@ function isInvalidCredentialsError(response: Response, body: unknown): boolean {
   );
 }
 
-function hasAuthSession(body: unknown): boolean {
-  if (typeof body !== "object" || body === null || Array.isArray(body)) return false;
-  const token = (body as AuthResponseBody).token;
-  return typeof token === "string" && token.trim().length > 0;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function hasAuthSession(body: unknown): boolean {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return false;
+  const responseBody = body as AuthResponseBody;
+  const token = responseBody.token;
+  if (typeof token === "string" && token.trim().length > 0) return true;
+  const payload = isRecord(body) && Object.hasOwn(body, "data") ? body.data : body;
+  if (isRecord(payload) && typeof payload.token === "string" && payload.token.trim().length > 0) {
+    return true;
+  }
+  return isRecord(payload) && isRecord(payload.user) && isRecord(payload.session);
+}
+export const CFP_REQUEST_TIMEOUT_MS = 20_000;
+
+async function withCfpRequestTimeout<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+  callerSignal: AbortSignal | undefined,
+  message: string,
+): Promise<T> {
+  const controller = new AbortController();
+  let timedOut = false;
+  let timeout!: ReturnType<typeof setTimeout>;
+  let rejectCaller: ((reason?: unknown) => void) | undefined;
+  const callerAbortError =
+    callerSignal === undefined
+      ? null
+      : new Promise<never>((_, reject) => {
+          rejectCaller = reject;
+        });
+  const abortCaller = () => {
+    controller.abort();
+    rejectCaller?.(new DOMException("The CFP request was aborted.", "AbortError"));
+  };
+  if (callerSignal?.aborted) {
+    abortCaller();
+  } else {
+    callerSignal?.addEventListener("abort", abortCaller, { once: true });
+  }
+  const timeoutError = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+      reject(new CfpApiError("CFP_REQUEST_TIMEOUT", message, 504));
+    }, CFP_REQUEST_TIMEOUT_MS);
+  });
+  const operationPromise = Promise.resolve().then(() => operation(controller.signal));
+  try {
+    return await Promise.race(
+      callerSignal === undefined
+        ? [operationPromise, timeoutError]
+        : [operationPromise, timeoutError, callerAbortError as Promise<never>],
+    );
+  } catch (error) {
+    if (timedOut) {
+      throw new CfpApiError("CFP_REQUEST_TIMEOUT", message, 504);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    callerSignal?.removeEventListener("abort", abortCaller);
+  }
+}
+
+function authenticatedSessionFrom(body: unknown): CfpAuthenticatedSession | null {
+  const payload = isRecord(body) && Object.hasOwn(body, "data") ? body.data : body;
+  if (payload === null || payload === undefined) return null;
+  if (!isRecord(payload)) return null;
+  if (payload.session === null || payload.user === null) return null;
+
+  const user = isRecord(payload.user) ? payload.user : payload;
+  if (user.emailVerified === false) return null;
+  const email = typeof user.email === "string" ? user.email.trim().toLowerCase() : "";
+  if (!email) return null;
+
+  const explicitFirstName =
+    typeof user.firstName === "string"
+      ? user.firstName.trim()
+      : typeof user.givenName === "string"
+        ? user.givenName.trim()
+        : "";
+  const explicitLastName =
+    typeof user.lastName === "string"
+      ? user.lastName.trim()
+      : typeof user.familyName === "string"
+        ? user.familyName.trim()
+        : "";
+  const name = typeof user.name === "string" ? user.name.trim() : "";
+  const nameParts = name.split(/\s+/u).filter(Boolean);
+  const firstName = explicitFirstName || nameParts[0] || "";
+  const lastName = explicitLastName || nameParts.slice(1).join(" ");
+  return {
+    email,
+    name: name || [firstName, lastName].filter(Boolean).join(" ") || email,
+    firstName,
+    lastName,
+  };
+}
+
+async function authSessionRequest(
+  fetcher: Fetcher,
+  authBase: string,
+  signal?: AbortSignal,
+): Promise<{ response: Response; body: unknown }> {
+  return withCfpRequestTimeout(
+    async (requestSignal) => {
+      const response = await fetcher(`${authBase}/get-session`, {
+        method: "GET",
+        credentials: "include",
+        headers: new Headers({ accept: "application/json" }),
+        cache: "no-store",
+        signal: requestSignal,
+      });
+      return { response, body: await response.json().catch(() => undefined) };
+    },
+    signal,
+    "The CFP session lookup timed out. Try again.",
+  );
+}
 async function authRequest(
   fetcher: Fetcher,
   authBase: string,
   path: string,
   body: Record<string, unknown>,
 ): Promise<{ response: Response; body: unknown }> {
-  const headers = new Headers({ accept: "application/json", "content-type": "application/json" });
-  const response = await fetcher(`${authBase}${path}`, {
-    method: "POST",
-    credentials: "include",
-    headers,
-    body: JSON.stringify(body),
-  });
-  return { response, body: await response.json().catch(() => undefined) };
+  return withCfpRequestTimeout(
+    async (requestSignal) => {
+      const headers = new Headers({
+        accept: "application/json",
+        "content-type": "application/json",
+      });
+      const response = await fetcher(`${authBase}${path}`, {
+        method: "POST",
+        credentials: "include",
+        headers,
+        body: JSON.stringify(body),
+        signal: requestSignal,
+      });
+      return { response, body: await response.json().catch(() => undefined) };
+    },
+    undefined,
+    "The account request timed out. Check your connection and try again.",
+  );
 }
 
 export function createCfpApi(baseUrl: string, fetcher: Fetcher = fetch): CfpApi {
@@ -439,15 +671,22 @@ export function createCfpApi(baseUrl: string, fetcher: Fetcher = fetch): CfpApi 
     const headers = new Headers(init.headers);
     headers.set("accept", "application/json");
     if (init.body !== undefined) headers.set("content-type", "application/json");
-    const response = await fetcher(url, {
-      ...init,
-      credentials: "include",
-      headers,
-    });
-    if (!response.ok) throw await parseError(response);
-    if (response.status === 204) return undefined as T;
-    const payload = (await response.json()) as { data?: unknown };
-    return schema.parse(payload.data);
+    return withCfpRequestTimeout(
+      async (requestSignal) => {
+        const response = await fetcher(url, {
+          ...init,
+          credentials: "include",
+          headers,
+          signal: requestSignal,
+        });
+        if (!response.ok) throw await parseError(response);
+        if (response.status === 204) return undefined as T;
+        const payload = (await response.json()) as { data?: unknown };
+        return schema.parse(payload.data);
+      },
+      init.signal ?? undefined,
+      "The CFP request timed out. Check your connection and try again.",
+    );
   }
 
   function resourcePath(organizationId: string, eventId: string): string {
@@ -459,6 +698,19 @@ export function createCfpApi(baseUrl: string, fetcher: Fetcher = fetch): CfpApi 
   }
 
   return {
+    getSession: async (input) => {
+      const result = await authSessionRequest(fetcher, authBase, input?.signal);
+      if (result.response.status === 401 || result.response.status === 403) return null;
+      if (!result.response.ok) {
+        throw authError(
+          result.response,
+          result.body,
+          "AUTH_SESSION_LOOKUP_FAILED",
+          "We could not check your sign-in session.",
+        );
+      }
+      return authenticatedSessionFrom(result.body);
+    },
     getPublished(input) {
       const formPath = input.formId === undefined ? "" : `/forms/${segment(input.formId)}`;
       return request(
@@ -512,35 +764,6 @@ export function createCfpApi(baseUrl: string, fetcher: Fetcher = fetch): CfpApi 
       if (hasAuthSession(signUp.body)) return { status: "authenticated" };
       return { status: "verification_required" };
     },
-    startGoogleSignIn: async (input) => {
-      const result = await authRequest(fetcher, authBase, "/sign-in/social", {
-        provider: "google",
-        callbackURL: input.callbackURL,
-      });
-      if (!result.response.ok) {
-        throw authError(
-          result.response,
-          result.body,
-          "GOOGLE_SIGN_IN_FAILED",
-          "We could not start Google sign-in.",
-        );
-      }
-      if (
-        typeof result.body !== "object" ||
-        result.body === null ||
-        Array.isArray(result.body) ||
-        !("url" in result.body) ||
-        typeof result.body.url !== "string" ||
-        !result.body.url.startsWith("https://accounts.google.com/")
-      ) {
-        throw new CfpApiError(
-          "GOOGLE_SIGN_IN_FAILED",
-          "Google sign-in did not return a valid authorization URL.",
-          502,
-        );
-      }
-      return result.body.url;
-    },
 
     loadDraft(input) {
       return request(
@@ -566,10 +789,22 @@ export function createCfpApi(baseUrl: string, fetcher: Fetcher = fetch): CfpApi 
     },
 
     async saveDraft(input) {
-      const idempotencyKey = key("cfp-save", input.idempotencyKey);
+      const providedIdempotencyKey = input.idempotencyKey?.trim();
+      const hasDraftMutation = input.answers !== undefined || input.completedStep !== undefined;
+      const hasParticipantMutation =
+        input.participants !== undefined || input.secondaryContacts !== undefined;
+      const idempotencyKey = key("cfp-save", providedIdempotencyKey);
+      const participantsIdempotencyKey = hasParticipantMutation
+        ? key(
+            "cfp-participants",
+            hasDraftMutation && providedIdempotencyKey
+              ? `${providedIdempotencyKey}:participants`
+              : providedIdempotencyKey,
+          )
+        : undefined;
       let version = input.expectedVersion;
       let latest: CfpServerSubmission | undefined;
-      if (input.answers !== undefined || input.completedStep !== undefined) {
+      if (hasDraftMutation) {
         latest = await request(
           `${apiBase}${resourcePath(input.organizationId, input.eventId)}/submissions/${segment(input.submissionId)}/draft`,
           cfpSubmissionSchema,
@@ -578,6 +813,7 @@ export function createCfpApi(baseUrl: string, fetcher: Fetcher = fetch): CfpApi 
             headers: { "idempotency-key": idempotencyKey },
             body: JSON.stringify({
               expectedVersion: version,
+              formVersion: input.formVersion,
               ...(input.completedStep === undefined ? {} : { completedStep: input.completedStep }),
               ...(input.answers === undefined ? {} : { answers: input.answers }),
             }),
@@ -585,15 +821,16 @@ export function createCfpApi(baseUrl: string, fetcher: Fetcher = fetch): CfpApi 
         );
         version = latest.version;
       }
-      if (input.participants !== undefined || input.secondaryContacts !== undefined) {
+      if (hasParticipantMutation) {
         latest = await request(
           `${apiBase}${resourcePath(input.organizationId, input.eventId)}/submissions/${segment(input.submissionId)}/participants`,
           cfpSubmissionSchema,
           {
             method: "PUT",
-            headers: { "idempotency-key": key("cfp-participants", input.idempotencyKey) },
+            headers: { "idempotency-key": participantsIdempotencyKey as string },
             body: JSON.stringify({
               expectedVersion: version,
+              formVersion: input.formVersion,
               participants: input.participants ?? latest?.participants ?? [],
               ...(input.secondaryContacts === undefined
                 ? {}
@@ -635,7 +872,10 @@ export function createCfpApi(baseUrl: string, fetcher: Fetcher = fetch): CfpApi 
         {
           method: "POST",
           headers: { "idempotency-key": key("cfp-submit", input.idempotencyKey) },
-          body: JSON.stringify({ expectedVersion: input.expectedVersion }),
+          body: JSON.stringify({
+            expectedVersion: input.expectedVersion,
+            formVersion: input.formVersion,
+          }),
         },
       );
     },
@@ -652,6 +892,13 @@ export function createCfpApi(baseUrl: string, fetcher: Fetcher = fetch): CfpApi 
       return request(
         `${apiBase}${resourcePath(input.organizationId, input.eventId)}/forms/${segment(input.formId)}`,
         formSchema,
+        { cache: "no-store", ...(input.signal === undefined ? {} : { signal: input.signal }) },
+      );
+    },
+    listForms(input) {
+      return request(
+        `${apiBase}${resourcePath(input.organizationId, input.eventId)}/forms`,
+        z.array(formSchema),
         { cache: "no-store", ...(input.signal === undefined ? {} : { signal: input.signal }) },
       );
     },

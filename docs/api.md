@@ -1,141 +1,114 @@
 # Public API and webhooks
 
-The Hono Worker exposes a tenant-scoped REST API under `/api/v1`. Use the checked-in [`openapi/openapi.yaml`](../openapi/openapi.yaml) for detailed request/response semantics and client generation. A configured Worker also serves `/api/v1/openapi.json` to enumerate mounted resource adapters. That runtime discovery document omits the `/api/v1` mount from its path keys, so prepend `/api/v1` when interpreting them and do not use it for client generation.
+The tenant-scoped public API is mounted at `/api/v1`. The **live canonical discovery document** is [`https://sessionboard.namuh.co/api/v1/openapi.json`](https://sessionboard.namuh.co/api/v1/openapi.json) (replace the origin for another deployment). The checked-in [`openapi/openapi.yaml`](../openapi/openapi.yaml) is the stable client-generation contract; discovery and its checked-in public-v1 resource paths describe the same four resources and operations, while the checked-in document also includes the separately mounted webhook routes.
 
-## Authentication and tenant scope
+## Authentication and scopes
 
-Present an organization-scoped API key as a bearer token:
+Send an organization-scoped API key as a bearer token:
 
 ```http
 Authorization: Bearer <api-key>
 ```
 
-Every protected route includes `/organizations/{organizationId}`. The path organization must match the key's organization. A browser/user session is not accepted in place of a scoped API key.
+Every public resource path contains `/organizations/{organizationId}`. The path organization must equal the API key organization. Browser/user sessions are not accepted, and a path value never grants access to another tenant.
 
-The product contract reserves these scopes:
+Enabled scopes are:
 
-```text
-events:read          events:write
-forms:read           forms:write
-submissions:read     submissions:write
-participants:read    participants:write
-reviews:read         reviews:write
-tasks:read           tasks:write
-agenda:read          agenda:write
-files:read           files:write
-publications:read    publications:write
-integrations:read    integrations:write
-webhooks:read        webhooks:write
-```
+| Surface | Read | Write |
+| --- | --- | --- |
+| `events` | `events:read` | `events:write` |
+| `speakers` | `submissions:read` | — |
+| `agenda` | `agenda:read` | — |
+| `sessions` | `agenda:read` | `agenda:write` |
+| webhooks | `webhooks:read` | `webhooks:write` |
 
-A deployment exposes only scopes recognized by its mounted authenticator, key issuer, and resource adapters. Use the live admin key form and adapter configuration as the availability source; do not assume a reserved scope is enabled.
+Use the smallest set required. Keep keys server-side, rotate them after operator changes, and revoke suspected keys. Responses never return API-key material or webhook signing secrets.
 
-Issue the smallest set needed, keep keys server-side, rotate them on operator changes, and revoke suspected keys. API responses and admin status surfaces must never return key material or provider secrets.
+## Existing resource operations
 
-## Resource routes
-
-Enabled resource families use a common shape:
+The currently mounted public-v1 resource families are exactly these four:
 
 ```text
-GET   /api/v1/organizations/{organizationId}/{resource}
-POST  /api/v1/organizations/{organizationId}/{resource}
-GET   /api/v1/organizations/{organizationId}/{resource}/{id}
-PATCH /api/v1/organizations/{organizationId}/{resource}/{id}
-PUT   /api/v1/organizations/{organizationId}/{resource}/{id}
+GET   /api/v1/organizations/{organizationId}/events
+POST  /api/v1/organizations/{organizationId}/events
+GET   /api/v1/organizations/{organizationId}/events/{id}
+PATCH /api/v1/organizations/{organizationId}/events/{id}
+PUT   /api/v1/organizations/{organizationId}/events/{id}
+
+GET   /api/v1/organizations/{organizationId}/speakers
+GET   /api/v1/organizations/{organizationId}/speakers/{id}
+
+GET   /api/v1/organizations/{organizationId}/agenda
+GET   /api/v1/organizations/{organizationId}/agenda/{id}
+
+GET   /api/v1/organizations/{organizationId}/sessions
+POST  /api/v1/organizations/{organizationId}/sessions
+GET   /api/v1/organizations/{organizationId}/sessions/{id}
+PATCH /api/v1/organizations/{organizationId}/sessions/{id}
+PUT   /api/v1/organizations/{organizationId}/sessions/{id}
 ```
 
-The intended contract covers events, forms/fields, submissions, participants/speakers, review plans/rubrics/reviews, tasks, agenda drafts/revisions/rules, rooms/tracks/tags/formats/statuses, files, embeds, publications, and integration status. Use the runtime document only to discover mounted resource path keys, interpreted relative to `/api/v1`; do not assume that every adapter is enabled.
+Resource bodies are JSON records with stable application IDs. The `agenda` resource is a read-only published/projection view; generic agenda writes are intentionally neither mounted nor advertised. `speakers` is read-only because a generic participant write is not a safe public projection. Event and session writes use the generic adapter contract and do not replace the first-party organizer workflows or their richer validation/audit semantics.
 
-Stable application IDs appear in routes and responses. Airtable record IDs are internal and are never API identifiers.
+No other CRUD families are enabled by this public-v1 surface.
 
-## Pagination, sort, and filters
+## Pagination, sorting, and filters
 
-Collections use cursor pagination:
-
-```bash
-curl --fail-with-body \
-  -H 'Authorization: Bearer <api-key>' \
-  'https://<api-host>/api/v1/organizations/<organization-id>/submissions?limit=25&sort=updatedAt&direction=desc&filter.status=accepted'
-```
-
-A page response is:
+Collection GETs use cursor pagination. `limit` is an integer from 1 through 100 (default 25); `cursor` is opaque; `direction` is `asc` or `desc` (default `asc`). A page has this shape:
 
 ```json
 {
-  "data": [{ "id": "sub_...", "version": 3 }],
-  "page": { "nextCursor": "<opaque-cursor-or-null>", "hasMore": true }
+  "data": [{ "id": "...", "version": 3 }],
+  "page": { "nextCursor": "c1...", "hasMore": true }
 }
 ```
 
-Treat `nextCursor` as opaque. It is bound to the tenant, resource, sort, direction, and filters. Changing any of those inputs requires starting without a cursor. Limits range from 1 to 100 and default to 25. Supported sort/filter fields are resource-specific.
+The cursor is bound to the organization, resource, sort, direction, and filters. Start a new query when any of those values changes. Allowed sort fields are:
 
-## Idempotent resource writes
+| Resource | Allowed sorts (default first) |
+| --- | --- |
+| `events` | `id`, `name`, `updatedAt` (`id`) |
+| `speakers` | `id`, `displayName`, `updatedAt` (`id`) |
+| `agenda` | `id`, `updatedAt` (`id`) |
+| `sessions` | `id`, `title`, `updatedAt` (`id`) |
 
-Generic resource `POST`, `PATCH`, and `PUT` operations require an `Idempotency-Key` between 8 and 128 characters:
+Filters may be supplied as a JSON object in `filter`, or as `filter.field=value` / `filter[field]=value`. The enabled contract identifies common fields (`status`/`slug` for events, `eventId`/`displayName` for speakers, `revision` for agenda, and `eventId`/`status` for sessions); filter values are compared as strings by the adapter.
 
-```bash
-curl --fail-with-body \
-  -X POST \
-  -H 'Authorization: Bearer <api-key>' \
-  -H 'Content-Type: application/json' \
-  -H 'Idempotency-Key: submission-import-0001' \
-  --data '{"title":"A durable session"}' \
-  'https://<api-host>/api/v1/organizations/<organization-id>/submissions'
-```
+## Idempotency and concurrency
 
-Retry the exact same mutation with the same key. Within one tenant/resource/action (and item ID for updates), the server returns the original result without running the mutation twice; reusing that scoped key with a different body returns `409 IDEMPOTENCY_CONFLICT`. Keys may be independently scoped across resources and item IDs, but clients should still generate a fresh globally unique key for each intended mutation.
+Public resource `POST`, `PATCH`, and `PUT` mutations require an `Idempotency-Key` header containing 8–128 characters. Replaying the same key with the same method, path, and body returns the stored result. Reusing it for a different request returns `409 IDEMPOTENCY_CONFLICT`. Use a fresh key for every intended mutation.
 
-Webhook-subscription administration does not accept `Idempotency-Key`. After an ambiguous network result, read and reconcile subscription state before retrying; never assume a repeated create was deduplicated.
+`PATCH` and `PUT` also require `If-Match` with the positive resource version last read (quoted or unquoted, with an optional weak `W/` prefix). A missing, malformed, or stale version returns `412 PRECONDITION_FAILED`; reread and reconcile instead of blindly retrying. `Idempotency-Key` and `If-Match` do not apply to read-only speakers or agenda routes.
 
-## Optimistic concurrency
+## Errors, tracing, and rate limits
 
-`PATCH` and `PUT` require the version last read from the resource:
-
-```bash
-curl --fail-with-body \
-  -X PATCH \
-  -H 'Authorization: Bearer <api-key>' \
-  -H 'Content-Type: application/json' \
-  -H 'Idempotency-Key: submission-update-0001' \
-  -H 'If-Match: "3"' \
-  --data '{"title":"A durable session, revised"}' \
-  'https://<api-host>/api/v1/organizations/<organization-id>/submissions/<submission-id>'
-```
-
-A missing or stale version returns `412 PRECONDITION_FAILED`. Read the latest record, reconcile the intended change, and retry with a new idempotency key. Do not blind-retry a stale write.
-
-## Errors and request tracing
-
-Errors have one safe envelope:
+Errors use one stable envelope:
 
 ```json
 {
   "error": {
     "code": "VALIDATION_FAILED",
     "message": "The request body is invalid.",
-    "traceId": "98dd6d63-68ca-44a9-a463-69c720f228fd",
-    "details": []
+    "traceId": "request-trace-id"
   }
 }
 ```
 
-Send a UUID `X-Request-ID` to correlate a request; otherwise the Worker creates one. The response echoes the accepted/generated ID in `X-Request-ID`. Log the trace ID, not secrets or full private payloads.
+Send `X-Request-ID` to correlate a request; otherwise the API generates a trace ID. Log the trace ID without secrets or private payloads. Clients should handle:
 
-Clients must handle:
-
-- `400` invalid path/query/header/body
-- `401` missing or invalid authentication
+- `400` invalid path, query, header, or JSON body
+- `401` missing authentication
 - `403` cross-tenant access, browser principal, or missing scope
 - `404` absent or tenant-hidden resource
-- `409` state/idempotency conflict
-- `412` missing or stale optimistic-concurrency version
-- `429` rate limit; honor `Retry-After`
+- `409` state or idempotency conflict
+- `412` missing or stale `If-Match`
+- `429` rate limited; honor the numeric `Retry-After` header
 - `503` unavailable integration or invalid runtime configuration
 - `500` safe internal error
 
 ## Webhook subscriptions
 
-Webhook administration uses dedicated routes and `webhooks:read`/`webhooks:write`:
+Webhook administration is a separate mounted surface under `/api/v1/organizations/{organizationId}/webhooks`:
 
 ```text
 GET    /api/v1/organizations/{organizationId}/webhooks
@@ -146,26 +119,10 @@ PUT    /api/v1/organizations/{organizationId}/webhooks/{subscriptionId}
 DELETE /api/v1/organizations/{organizationId}/webhooks/{subscriptionId}
 ```
 
-Endpoints must be HTTPS and cannot contain embedded credentials. A subscription may be organization-wide or restricted to one event. Supply a signing secret of at least 32 characters or let the repository generate one. The complete secret is never returned; reads expose only its last four characters. Store the full secret in the receiving service's secret manager and rotate it by updating the subscription.
+Webhook routes require `webhooks:read` for GET and `webhooks:write` for POST/PATCH/PUT/DELETE. They currently do **not** accept or enforce `Idempotency-Key` or `If-Match`; updates are partial and both PATCH and PUT call the same adapter. DELETE returns `200` with `{ "data": { "deleted": true } }`. After an ambiguous create/update response, read and reconcile subscription state before retrying.
 
-Each outbound request includes:
+Endpoints must use HTTPS without embedded credentials. A subscription can be organization-wide or restricted to one event. The full signing secret is never returned; reads expose only its last four characters. Outbound deliveries include `webhook-id`, `webhook-timestamp`, and an HMAC-SHA256 `webhook-signature` over canonical JSON. Verify the signature before parsing or acting and deduplicate by delivery ID.
 
-```text
-webhook-id: <delivery-id>
-webhook-timestamp: <unix-seconds>
-webhook-signature: v1,<base64-hmac>
-```
+## Explicit limitations
 
-The signed message is:
-
-```text
-<webhook-id>.<webhook-timestamp>.<canonical-json-body>
-```
-
-where the signature is HMAC-SHA256 with the subscription secret. Canonical JSON sorts every object's keys lexicographically. Verify the signature against the raw/canonical bytes before parsing or acting, compare in constant time, enforce a timestamp replay window, and deduplicate by `webhook-id`. Return any 2xx response only after safely accepting the event. Delivery retries reuse the delivery identity.
-
-Webhook bodies contain the organization ID, event type, occurrence time, optional event/resource coordinates, and event data. Subscribers must still authorize the event against their configured tenant; never trust a body organization without a valid signature.
-
-## Public projections are different
-
-Speaker galleries, agenda embeds, JSON feeds, and iCal feeds expose only an immutable published revision and approved public fields. They do not accept API keys and never expose draft schedules, evaluator notes, email addresses, task status, private files, or unapproved profiles/sessions. Do not use public feeds as a substitute for authenticated API access.
+This contract does not expose forms, submissions, reviews, tasks, files, publications, CRM, sponsors, exhibitors, transcription/media, insights/SbQL, OAuth management, or any other unlisted resource family. Public embeds and feeds are separate published projections and do not grant API-key access or parity with these tenant-scoped routes.

@@ -23,7 +23,7 @@ const REQUIRED_CONFIGURATION = [
 ];
 
 const OPTIONAL_PROVIDERS = {
-  google: ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"],
+  accelevents: ["ACCELEVENTS_API_BASE_URL", "ACCELEVENTS_API_KEY"],
 };
 
 const ISOLATED_CONFIGURATION = [
@@ -35,8 +35,7 @@ const ISOLATED_CONFIGURATION = [
   "AIRTABLE_ACCESS_TOKEN",
   "AIRTABLE_BASE_ID",
   "OPENSEND_API_KEY",
-  "GOOGLE_CLIENT_ID",
-  "GOOGLE_CLIENT_SECRET",
+  "ACCELEVENTS_API_KEY",
 ];
 
 const REQUIRED_CLOUDFLARE_PERMISSIONS = {
@@ -48,6 +47,28 @@ const REQUIRED_CLOUDFLARE_PERMISSIONS = {
 
 const PLACEHOLDER_D1_ID = /^00000000-0000-0000-0000-00000000000\d$/;
 const PLACEHOLDER_VALUE = /^(?:<[^>]+>|change[-_ ]?me|replace[-_ ]?me|todo)$/i;
+const ORGANIZATION_ID_MIGRATION = Object.freeze({
+  sourceId: "foreverbrowsing",
+  targetId: "ai-engineer",
+  protectedBoundaries: Object.freeze([
+    "official evaluator specs",
+    "official evaluator fixtures",
+    "official evaluator docs",
+    "official evaluator scenarios",
+  ]),
+});
+const ORGANIZATION_ID_KEYS = Object.freeze([
+  "ORGANIZATION_ID",
+  "NEXT_PUBLIC_ORGANIZATION_ID",
+  "ORGANIZER_AUTOJOIN_ORGANIZATION_ID",
+  "EVAL_ORGANIZATION_ID",
+]);
+const MIGRATION_RESOURCE_KEYS = Object.freeze([
+  ["d1", "D1_DATABASE_ID", "databaseId"],
+  ["airtable", "AIRTABLE_BASE_ID", "baseId"],
+  ["r2", "R2_BUCKET_NAME", "bucketName"],
+  ["queue", "QUEUE_NAME", "queueName"],
+]);
 
 export class PreflightError extends Error {
   constructor(code, message) {
@@ -99,6 +120,9 @@ function normalizePermissionName(value) {
 function collectWranglerValues(source, key) {
   const pattern = new RegExp(`^${key}\\s*=\\s*"([^"]+)"$`, "gm");
   return [...source.matchAll(pattern)].map((match) => match[1]);
+}
+function collapseConsecutiveDuplicates(values) {
+  return values.filter((value, index) => index === 0 || value !== values[index - 1]);
 }
 
 function accountIsRestricted(resources, accountId) {
@@ -199,7 +223,7 @@ export function parseWranglerInventory(source) {
   const databaseNames = collectWranglerValues(source, "database_name");
   const databaseIds = collectWranglerValues(source, "database_id");
   const bucketNames = collectWranglerValues(source, "bucket_name");
-  const queueNames = collectWranglerValues(source, "queue");
+  const queueNames = collapseConsecutiveDuplicates(collectWranglerValues(source, "queue"));
 
   for (const [label, values] of [
     ["APP_ENV", appEnvironments],
@@ -299,10 +323,7 @@ export function validateReleaseConfiguration({
           `${environment} has partial ${provider} configuration`,
         );
       }
-      if (
-        (environment !== "local" || requiredProviders.includes(provider)) &&
-        state !== "configured"
-      ) {
+      if (requiredProviders.includes(provider) && state !== "configured") {
         fail("MISSING_PROVIDER_CONFIGURATION", `${environment} requires ${provider} configuration`);
       }
     }
@@ -359,6 +380,105 @@ export function validateReleaseConfiguration({
   }
 
   return { providerStates };
+}
+export function inspectOrganizationIdMigrationReadiness({
+  configurations = {},
+  wranglerInventory = {},
+} = {}) {
+  const namespaces = {
+    d1: [],
+    airtable: [],
+    r2: [],
+    queue: [],
+  };
+  const blockers = [
+    {
+      code: "MIGRATION_REMOTE_INVENTORY_REQUIRED",
+      message: "Run the organization ID migration tool dry run before applying changes",
+    },
+  ];
+  const seenResources = new Map();
+
+  for (const environment of ENVIRONMENTS) {
+    const configuration = configurations?.[environment];
+    const wrangler = wranglerInventory?.[environment];
+    if (!configuration || !wrangler) {
+      blockers.push({
+        code: "MIGRATION_NAMESPACE_UNCONFIGURED",
+        environment,
+        message: `${environment} migration namespaces are not fully configured`,
+      });
+      continue;
+    }
+
+    for (const key of ORGANIZATION_ID_KEYS) {
+      const value = configValue(configuration, key);
+      if (!value) continue;
+      if (value === ORGANIZATION_ID_MIGRATION.sourceId) {
+        blockers.push({
+          code: "LEGACY_ORGANIZATION_ID_CONFIGURATION",
+          environment,
+          key,
+          message: `${environment} still declares the legacy organization identity`,
+        });
+      } else if (value !== ORGANIZATION_ID_MIGRATION.targetId) {
+        blockers.push({
+          code: "AMBIGUOUS_ORGANIZATION_ID_CONFIGURATION",
+          environment,
+          key,
+          message: `${environment} declares an unsupported organization identity`,
+        });
+      }
+    }
+
+    for (const [kind, configurationKey, wranglerKey] of MIGRATION_RESOURCE_KEYS) {
+      const configuredValue = configValue(configuration, configurationKey);
+      const inventoryValue =
+        typeof wrangler[wranglerKey] === "string" ? wrangler[wranglerKey].trim() : "";
+      const value = configuredValue || inventoryValue;
+      if (!value || (configuredValue && inventoryValue && configuredValue !== inventoryValue)) {
+        blockers.push({
+          code: "MIGRATION_NAMESPACE_UNCONFIGURED",
+          environment,
+          namespace: kind,
+          message: `${environment} ${kind} namespace is missing or disagrees with Wrangler`,
+        });
+        continue;
+      }
+      if (value.includes(ORGANIZATION_ID_MIGRATION.sourceId)) {
+        blockers.push({
+          code: "LEGACY_NAMESPACE_ID",
+          environment,
+          namespace: kind,
+          message: `${environment} ${kind} namespace embeds the legacy organization identity`,
+        });
+      }
+      const resourceKey = `${kind}:${value}`;
+      const priorEnvironment = seenResources.get(resourceKey);
+      if (priorEnvironment) {
+        blockers.push({
+          code: "MIGRATION_NAMESPACE_COLLISION",
+          environment,
+          namespace: kind,
+          message: `${kind} namespace is shared by ${priorEnvironment} and ${environment}`,
+        });
+      } else {
+        seenResources.set(resourceKey, environment);
+      }
+      namespaces[kind].push({ environment, value });
+    }
+  }
+
+  return {
+    sourceId: ORGANIZATION_ID_MIGRATION.sourceId,
+    targetId: ORGANIZATION_ID_MIGRATION.targetId,
+    mode: "dry-run",
+    status: blockers.length === 1 ? "requires-dry-run" : "blocked",
+    ready: false,
+    namespaces,
+    blockers,
+    protectedBoundaries: [...ORGANIZATION_ID_MIGRATION.protectedBoundaries],
+  };
 }
 
 export async function verifyCloudflare({ configuration, wrangler, fetchImplementation = fetch }) {
@@ -490,4 +610,4 @@ export async function verifyForgePrivacy({ configuration, fetchImplementation = 
   return { private: true };
 }
 
-export { ENVIRONMENTS };
+export { ENVIRONMENTS, ORGANIZATION_ID_MIGRATION };

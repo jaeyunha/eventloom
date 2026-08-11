@@ -4,7 +4,8 @@ import type {
   Queue,
   R2Bucket,
 } from "@cloudflare/workers-types";
-import type { ApiDependencies, EvaluationRouteDependencies } from "../app";
+import type { ApiDependencies } from "../app";
+import { AgendaCatalogSynchronizer } from "../features/agenda/catalog-sync";
 import { AgendaEngine } from "../features/agenda/engine";
 import {
   AgendaRepositoryConflictError,
@@ -28,19 +29,52 @@ import {
   type CfpRepository,
   CfpService,
 } from "../features/cfp/service";
+import { CommunicationError, CommunicationService } from "../features/communications/service";
+import type {
+  CommunicationActor,
+  CommunicationAudience,
+  CommunicationDeliveryAdapter,
+  CommunicationDeliveryRequest,
+  CommunicationPreview,
+  CommunicationRecipient,
+  CommunicationRepository,
+  CommunicationSend,
+  CommunicationTemplate,
+  CommunicationTemplatePurpose,
+} from "../features/communications/types";
+import { CrmRepositoryConflictError, CrmService } from "../features/crm/service";
+import type {
+  CrmContact,
+  CrmEventProjection,
+  CrmHistoryEntry,
+  CrmImportResult,
+  CrmNote,
+  CrmOutreachBoundary,
+  CrmOutreachCommand,
+  CrmPipelineEntry,
+  CrmRepository,
+  CrmRepositoryFilter,
+  CrmSegment,
+} from "../features/crm/types";
 import { conflict } from "../features/evaluations/errors";
 import type {
   EvaluationRepository,
   SubmissionReviewSource,
 } from "../features/evaluations/repository";
 import type {
+  EvaluationReminderBoundary,
+  EvaluationReviewerIdentityBoundary,
+} from "../features/evaluations/routes";
+import type {
   EvaluationAcceptanceHandoff,
   EvaluationAcceptanceHandoffInput,
+  EvaluationDecisionProjectionInput,
   EvaluationSubmissionRecord,
   EvaluationSubmissionSource,
 } from "../features/evaluations/service";
 import { EvaluationService } from "../features/evaluations/service";
 import type {
+  EvaluationActor,
   EvaluationAssignment,
   EvaluationConflictDeclaration,
   EvaluationDecision,
@@ -48,12 +82,20 @@ import type {
   EvaluationReview,
   SubmissionReviewMaterial,
 } from "../features/evaluations/types";
+import { EventService } from "../features/events/service";
+import {
+  type Event,
+  type EventAuditEntry,
+  type EventRepository,
+  EventRepositoryConflictError,
+} from "../features/events/types";
 import type {
   IdempotencyBeginResult,
   IdempotencyStore,
   IdempotencyStoredResponse,
 } from "../features/public-api/idempotency";
 import { createIdempotencyCoordinator } from "../features/public-api/idempotency";
+import { publicApiV1Contract } from "../features/public-api/contract";
 import type {
   PublicApiCreateInput,
   PublicApiGetInput,
@@ -62,26 +104,91 @@ import type {
   PublicApiRepository,
   PublicApiUpdateInput,
 } from "../features/public-api/routes";
+import { RemixService } from "../features/remix/service";
+import type {
+  ContentRemixCandidate,
+  ContentRevision,
+  RemixAuditEntry,
+  RemixCandidateFilter,
+  RemixContent,
+  RemixContentGateway,
+  RemixField,
+  RemixRecordFilter,
+  RemixRepository,
+  RemixSessionRecord,
+  RemixSpeakerRecord,
+} from "../features/remix/types";
+import { ReportError, ReportService, SafeReportExporter } from "../features/reports/service";
+import type {
+  ReportActor,
+  ReportDefinition,
+  ReportProgramRecord,
+  ReportRepository,
+  ReportRepositoryScope,
+  ReportRun,
+} from "../features/reports/types";
+import { SessionService } from "../features/sessions/service";
+import type {
+  Format,
+  Level,
+  Room,
+  Session,
+  SessionAuditEntry,
+  SessionRepository,
+  SessionSettings,
+  SessionSpeakerReference,
+  Tag,
+  Track,
+} from "../features/sessions/types";
+import { SessionRepositoryConflictError } from "../features/sessions/types";
 import { SpeakerService } from "../features/speaker/service";
 import type {
   CreatePrivateUploadGrantCommand,
+  FinalizeSpeakerAssetCommand,
+  PrivateAssetCapabilityBinding,
   PrivateAssetGateway,
+  PrivateDownloadGrant,
+  PrivateDownloadObject,
+  PrivateUploadGrant,
+  PrivateUploadReceipt,
   RepositoryResult,
   SpeakerAccessScope,
   SpeakerAsset,
+  SpeakerAssetComment,
+  SpeakerEventResource,
+  SpeakerInvitationDeliveryInput,
+  SpeakerInvitationDeliveryReceipt,
+  SpeakerOrganizerAccessScope,
+  SpeakerPortalCapability,
+  SpeakerPortalContext,
   SpeakerProfile,
+  SpeakerReminderDelivery,
+  SpeakerReminderDeliveryInput,
+  SpeakerReminderDeliveryReceipt,
   SpeakerRepository,
+  SpeakerRosterEntry,
   SpeakerSubmission,
+  SpeakerSubmissionStatus,
   SpeakerTask,
+  SpeakerTaskFormDefinition,
+  SpeakerTaskRepositoryCommand,
+  SpeakerTaskResponseRecord,
+  SpeakerWikiPage,
   TransitionSpeakerTaskCommand,
   UpdateBiographyCommand,
+  UpdateSpeakerProfileCommand,
 } from "../features/speaker/types";
 import {
+  type AirtableListOptions,
   type AirtableMapper,
   AirtableRepository,
+  AirtableRepositoryError,
   type AirtableTransport,
+  applicationIdFormula,
 } from "../infrastructure/airtable";
 import type { CloudflareOutboxMessage } from "../infrastructure/cloudflare/bindings";
+import type { CloudflareAiProviders } from "../integrations/ai";
+import { DEFAULT_OPEN_SEND_SENDERS } from "../integrations/opensend/client";
 import type {
   CreateWebhookDeliveryInput,
   CreateWebhookSubscriptionInput,
@@ -125,11 +232,24 @@ function entityType(value: object): string | undefined {
 function isSpeakerSubmissionRecord(value: object): boolean {
   const kind = entityType(value);
   if (kind !== undefined) return kind === "speaker_submission";
-  return !("formId" in value);
+  const id = isRecord(value) && typeof value.id === "string" ? value.id : "";
+  return (
+    id.startsWith("speaker-submission:") ||
+    ("primaryParticipantId" in value && "participantIds" in value) ||
+    !("formId" in value)
+  );
 }
 
 function tagged<T extends object>(value: T, kind: string): T {
   return { ...value, entityType: kind } as T;
+}
+function untagged<T extends object>(value: T): T {
+  if (!isRecord(value)) return value;
+  const { entityType: _kind, ...rest } = value;
+  if (typeof rest.tenantId === "string" && typeof rest.organizationId === "string") {
+    delete rest.organizationId;
+  }
+  return rest as T;
 }
 
 function requiredId(value: unknown, label = "id"): string {
@@ -151,11 +271,28 @@ function organizationIdOf(value: object): string | undefined {
     ? candidate.trim()
     : undefined;
 }
+function authoritativeOrganizationId(value: object): string | undefined {
+  if (!isRecord(value)) return undefined;
+  const organization =
+    typeof value.organizationId === "string" && value.organizationId.trim().length > 0
+      ? value.organizationId.trim()
+      : undefined;
+  const tenant =
+    typeof value.tenantId === "string" && value.tenantId.trim().length > 0
+      ? value.tenantId.trim()
+      : undefined;
+  if (organization !== undefined && tenant !== undefined && organization !== tenant)
+    return undefined;
+  return organization ?? tenant;
+}
 function isEvaluationAssignmentRecord(value: object): boolean {
   const kind = entityType(value);
   return (
     kind === "evaluation_assignment" ||
-    (kind === undefined && "reviewerId" in value && !("scores" in value))
+    (kind === undefined &&
+      "reviewerId" in value &&
+      !("scores" in value) &&
+      !("assignmentId" in value))
   );
 }
 
@@ -170,6 +307,13 @@ function textValue(record: JsonRecord, ...keys: readonly string[]): string | nul
     if (typeof value === "string" && value.trim().length > 0) return value.trim();
   }
   return null;
+}
+function isCrmRosterAdmission(value: object): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    textValue(value, "workflowStatus") === "crm-prospect" &&
+    textValue(value, "submissionId")?.startsWith("speaker-submission:crm-contact:") === true
+  );
 }
 
 function eventReference(record: JsonRecord): string | null {
@@ -246,6 +390,11 @@ const FIELD_ALIASES: Readonly<Record<string, string>> = {
   "Content Type": "contentType",
   "Size Bytes": "sizeBytes",
   State: "state",
+  "Version Family ID": "versionFamilyId",
+  "Supersedes Asset ID": "supersedesAssetId",
+  "Comment Thread ID": "commentThreadId",
+  "Rejection Reason": "rejectionReason",
+  "Finalized At": "finalizedAt",
   "Owner Account ID": "ownerAccountId",
   "Endpoint URL": "endpointUrl",
   Events: "events",
@@ -253,10 +402,39 @@ const FIELD_ALIASES: Readonly<Record<string, string>> = {
   "Signing Secret": "signingSecret",
   "Signing Secret Last Four": "signingSecretLastFour",
 };
-function encodeJson(value: object, jsonField: string): AirtableFields {
+function encodeJson(
+  value: object,
+  jsonField: string,
+  scopeFields: { readonly eventId?: boolean; readonly organizationId?: boolean } = {},
+  indexedFields: Readonly<Record<string, string>> = {},
+): AirtableFields {
+  const record = value as JsonRecord;
   const id = recordId(value);
+  const organizationId =
+    typeof record.organizationId === "string"
+      ? record.organizationId
+      : typeof record.tenantId === "string"
+        ? record.tenantId
+        : undefined;
+  const indexed = Object.fromEntries(
+    Object.entries(indexedFields).flatMap(([field, property]) => {
+      const indexedValue = record[property];
+      return typeof indexedValue === "string" ||
+        typeof indexedValue === "number" ||
+        typeof indexedValue === "boolean"
+        ? [[field, indexedValue]]
+        : [];
+    }),
+  );
   return {
     [APPLICATION_ID]: id,
+    ...(scopeFields.organizationId && organizationId !== undefined
+      ? { "Organization ID": organizationId }
+      : {}),
+    ...(scopeFields.eventId && typeof record.eventId === "string"
+      ? { "Event ID": record.eventId }
+      : {}),
+    ...indexed,
     [jsonField]: JSON.stringify(value),
   };
 }
@@ -326,16 +504,56 @@ function decodeJson<T extends object>(fields: Readonly<AirtableFields>, jsonFiel
   return result as T;
 }
 
+function decodeCfpSubmission(fields: Readonly<AirtableFields>): Submission {
+  const submission = decodeJson<Submission>(fields, "Answers JSON") as Submission & JsonRecord;
+  const title = textValue(fields as JsonRecord, "Title");
+  const abstract = textValue(fields as JsonRecord, "Abstract");
+  return {
+    ...submission,
+    ...(title === null ? {} : { title }),
+    ...(abstract === null ? {} : { abstract }),
+  } as Submission;
+}
 function jsonMapper<T extends object>(
   jsonField: string,
+  decode: (fields: Readonly<AirtableFields>) => T = (fields) => decodeJson<T>(fields, jsonField),
+  scopeFields: { readonly eventId?: boolean; readonly organizationId?: boolean } = {},
+  indexedFields: Readonly<Record<string, string>> = {},
 ): AirtableMapper<T, T, Partial<T>, AirtableFields> {
   return {
     applicationIdField: APPLICATION_ID,
     applicationIdOf: (input) => recordId(input),
-    encodeCreate: (input) => encodeJson(input, jsonField),
-    encodeUpdate: (input) => encodeJson(input as T, jsonField),
-    decode: (fields) => decodeJson<T>(fields, jsonField),
+    encodeCreate: (input) => encodeJson(input, jsonField, scopeFields, indexedFields),
+    encodeUpdate: (input) => encodeJson(input as T, jsonField, scopeFields, indexedFields),
+    decode,
   };
+}
+
+function applicationIdsFormula(ids: readonly string[]): string {
+  const formulas = ids.map((id) => applicationIdFormula(APPLICATION_ID, id));
+  if (formulas.length === 0) {
+    throw new TypeError("At least one application ID is required.");
+  }
+  return formulas.length === 1 ? (formulas[0] as string) : `OR(${formulas.join(",")})`;
+}
+function eventFilterFormula(jsonField: string, eventId: string): string {
+  return `FIND(${JSON.stringify(eventId)},{${jsonField}})>0`;
+}
+/**
+ * Matches records whose JSON payload names the organization or any of the
+ * organization's event ids. Plain-substring FIND needles intentionally
+ * over-match (whitespace-insensitive, substring collisions); callers still
+ * apply the exact parsed-JSON filter afterwards, so the formula only needs
+ * to be a guaranteed superset of the client-side filter.
+ */
+function organizationScopeFormula(
+  jsonField: string,
+  organizationId: string,
+  eventIds: readonly string[],
+): string {
+  const needles = [organizationId, ...eventIds];
+  const clauses = needles.map((needle) => `FIND(${JSON.stringify(needle)},{${jsonField}})>0`);
+  return clauses.length === 1 ? (clauses[0] as string) : `OR(${clauses.join(",")})`;
 }
 
 /** A typed Airtable repository whose only opaque identifier is Airtable's internal record id. */
@@ -347,18 +565,30 @@ export class AirtableJsonStore<T extends object> {
     readonly table: string;
     readonly transport: AirtableTransport;
     readonly jsonField?: string;
+    readonly decode?: (fields: Readonly<AirtableFields>) => T;
+    readonly scopeFields?: {
+      readonly eventId?: boolean;
+      readonly organizationId?: boolean;
+    };
+    readonly indexedFields?: Readonly<Record<string, string>>;
   }) {
     const jsonField = options.jsonField ?? DEFAULT_JSON_FIELD;
     this.#repository = new AirtableRepository({
       baseId: options.baseId,
       table: options.table,
-      mapper: jsonMapper<T>(jsonField),
+      mapper: jsonMapper<T>(jsonField, options.decode, options.scopeFields, options.indexedFields),
       transport: options.transport,
     });
   }
 
   find(id: string): Promise<T | undefined> {
     return this.#repository.find(requiredId(id));
+  }
+
+  findWithRecordId(
+    id: string,
+  ): Promise<{ readonly recordId: string; readonly entity: T } | undefined> {
+    return this.#repository.findWithRecordId(requiredId(id));
   }
 
   get(id: string): Promise<T> {
@@ -373,22 +603,66 @@ export class AirtableJsonStore<T extends object> {
     return this.#repository.update(requiredId(id), clone(value));
   }
 
+  updateByRecordId(id: string, recordId: string, value: T): Promise<T> {
+    return this.#repository.updateByRecordId(requiredId(id), recordId, clone(value));
+  }
+
   delete(id: string): Promise<boolean> {
     return this.#repository.delete(requiredId(id));
   }
 
-  async list(): Promise<T[]> {
+  deleteByRecordId(recordId: string): Promise<boolean> {
+    return this.#repository.deleteByRecordId(recordId);
+  }
+
+  async list(options: Omit<AirtableListOptions, "cursor"> = {}): Promise<T[]> {
     const values: T[] = [];
     let cursor: string | undefined;
     do {
       const page = await this.#repository.list({
+        ...options,
         ...(cursor === undefined ? {} : { cursor }),
-        pageSize: 100,
+        pageSize: options.pageSize ?? 100,
       });
       values.push(...page.items);
       cursor = page.nextCursor;
     } while (cursor !== undefined);
     return values;
+  }
+
+  async listWithRecordIds(
+    options: Omit<AirtableListOptions, "cursor"> = {},
+  ): Promise<Array<{ readonly recordId: string; readonly entity: T }>> {
+    const values: Array<{ readonly recordId: string; readonly entity: T }> = [];
+    let cursor: string | undefined;
+    do {
+      const page = await this.#repository.listWithRecordIds({
+        ...options,
+        ...(cursor === undefined ? {} : { cursor }),
+        pageSize: options.pageSize ?? 100,
+      });
+      values.push(...page.items);
+      cursor = page.nextCursor;
+    } while (cursor !== undefined);
+    return values;
+  }
+
+  async listByIds(ids: readonly string[]): Promise<T[]> {
+    const uniqueIds = [...new Set(ids.map((id) => requiredId(id)))];
+    if (uniqueIds.length === 0) return [];
+    return this.list({ filterByFormula: applicationIdsFormula(uniqueIds) });
+  }
+}
+async function listEventScopedJson<T extends object>(
+  store: AirtableJsonStore<T>,
+  jsonField: string,
+  eventId: string,
+): Promise<T[]> {
+  try {
+    return await store.list({ filterByFormula: eventFilterFormula(jsonField, eventId) });
+  } catch (error) {
+    if (!(error instanceof TypeError)) throw error;
+    return store.list();
   }
 }
 export const PUBLISHED_SPEAKER_PROJECTIONS_TABLE = "Published Speaker Projections";
@@ -414,6 +688,14 @@ class AirtablePublishedSpeakerProjectionStore implements PublishedSpeakerRouteDe
       table: PUBLISHED_SPEAKER_PROJECTIONS_TABLE,
       jsonField: "Projection JSON",
     });
+  }
+  async putPublishedSpeakers(record: PublishedSpeakerProjectionRecord): Promise<void> {
+    const existing = await this.#store.findWithRecordId(record.id);
+    if (existing === undefined) {
+      await this.#store.create(record);
+      return;
+    }
+    await this.#store.updateByRecordId(record.id, existing.recordId, record);
   }
 
   async getPublishedSpeakers(eventSlug: string): Promise<PublishedSpeakerProjection | null> {
@@ -524,13 +806,238 @@ function secretLastFour(secret: string): string {
 function randomResourceId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID()}`;
 }
+const ACCEPTED_PORTAL_CAPABILITIES: readonly SpeakerPortalCapability[] = [
+  "profile-self",
+  "task-response",
+  "asset-read",
+  "asset-write",
+  "asset-comment",
+];
+
+interface PortalDecisionProjection {
+  readonly status: string;
+  readonly reason?: string;
+}
+
+function portalDecisionProjections(
+  records: readonly JsonRecord[],
+): Map<string, PortalDecisionProjection> {
+  const projections = new Map<string, PortalDecisionProjection>();
+  for (const record of records) {
+    const submissionId = textValue(record, "submissionId", "Submission ID");
+    const status = textValue(record, "status", "decision", "Decision");
+    if (submissionId === null || status === null) continue;
+    const history = Array.isArray(record.history) ? record.history.filter(isRecord) : [];
+    const transition = [...history]
+      .reverse()
+      .find((entry) => textValue(entry, "to", "status") === status);
+    const reason =
+      (transition === undefined ? null : textValue(transition, "reason", "Reason")) ??
+      textValue(record, "reason", "Reason");
+    projections.set(submissionId, {
+      status,
+      ...(reason === null ? {} : { reason }),
+    });
+  }
+  return projections;
+}
+
+function portalRecordStatus(
+  record: JsonRecord,
+  decisions: ReadonlyMap<string, PortalDecisionProjection>,
+): string | null {
+  const id = textValue(record, "id", APPLICATION_ID);
+  const originalId = id === null ? null : originalCfpSubmissionId(id);
+  const projected =
+    id === null
+      ? undefined
+      : (decisions.get(id) ?? (originalId === null ? undefined : decisions.get(originalId)));
+  return projected?.status ?? textValue(record, "status", "Status");
+}
+
+function portalParticipantIds(record: JsonRecord): string[] {
+  if (Array.isArray(record.participantIds)) {
+    return record.participantIds.filter(
+      (participantId): participantId is string =>
+        typeof participantId === "string" && participantId.trim().length > 0,
+    );
+  }
+  if (!Array.isArray(record.participants)) return [];
+  return record.participants.flatMap((participant) => {
+    if (!isRecord(participant) || typeof participant.id !== "string") return [];
+    const id = participant.id.trim();
+    return id.length === 0 ? [] : [id];
+  });
+}
+function portalParticipantIdsForEmail(record: JsonRecord, email: string): string[] {
+  if (!Array.isArray(record.participants)) return [];
+  const normalizedEmail = email.trim().toLowerCase();
+  return record.participants.flatMap((participant) => {
+    if (
+      !isRecord(participant) ||
+      typeof participant.id !== "string" ||
+      typeof participant.email !== "string" ||
+      participant.email.trim().toLowerCase() !== normalizedEmail
+    ) {
+      return [];
+    }
+    const participantId = participant.id.trim();
+    return participantId.length === 0 ? [] : [participantId];
+  });
+}
+
+function portalPrimaryParticipantId(record: JsonRecord): string | undefined {
+  if (
+    typeof record.primaryParticipantId === "string" &&
+    record.primaryParticipantId.trim().length > 0
+  ) {
+    return record.primaryParticipantId.trim();
+  }
+  if (!Array.isArray(record.participants)) return undefined;
+  const primary = record.participants.find(
+    (participant) => isRecord(participant) && participant.role === "primary",
+  );
+  if (isRecord(primary) && typeof primary.id === "string" && primary.id.trim().length > 0) {
+    return primary.id.trim();
+  }
+  const first = record.participants.find(
+    (participant) => isRecord(participant) && typeof participant.id === "string",
+  );
+  return isRecord(first) && typeof first.id === "string" && first.id.trim().length > 0
+    ? first.id.trim()
+    : undefined;
+}
+
+function portalAnswerText(record: JsonRecord, ...keys: readonly string[]): string | null {
+  const answers = isRecord(record.answers) ? record.answers : {};
+  for (const key of keys) {
+    const value = answers[key] ?? record[key];
+    if (typeof value === "string" && value.trim().length > 0) return value.trim();
+  }
+  return null;
+}
+function isSpeakerSubmissionStatus(value: string): value is SpeakerSubmissionStatus {
+  return (
+    value === "draft" ||
+    value === "submitted" ||
+    value === "under_review" ||
+    value === "accepted" ||
+    value === "declined" ||
+    value === "withdrawn"
+  );
+}
+
+function speakerSubmissionFromRecord(record: JsonRecord): SpeakerSubmission | null {
+  const id = textValue(record, "id", APPLICATION_ID);
+  const eventId = textValue(record, "eventId", "Event ID");
+  const title = portalAnswerText(record, "title", "sessionTitle", "name");
+  const rawStatus = textValue(record, "status", "Status");
+  const updatedAt = textValue(record, "updatedAt", "Updated At");
+  if (
+    id === null ||
+    eventId === null ||
+    title === null ||
+    rawStatus === null ||
+    updatedAt === null ||
+    !isSpeakerSubmissionStatus(rawStatus)
+  ) {
+    return null;
+  }
+  const version =
+    typeof record.version === "number" &&
+    Number.isSafeInteger(record.version) &&
+    record.version >= 1
+      ? record.version
+      : undefined;
+  const primaryParticipantId = portalPrimaryParticipantId(record);
+  const formId = textValue(record, "formId", "Form ID");
+  return {
+    id,
+    eventId,
+    title,
+    status: rawStatus,
+    participantIds: portalParticipantIds(record),
+    updatedAt,
+    ...(version === undefined ? {} : { version }),
+    ...(primaryParticipantId === undefined ? {} : { primaryParticipantId }),
+    ...(formId === null ? {} : { formId }),
+    ...(typeof record.closeAt === "string" && record.closeAt.trim().length > 0
+      ? { closeAt: record.closeAt.trim() }
+      : {}),
+    ...(isRecord(record.answers) ? { answers: clone(record.answers) } : {}),
+  };
+}
+function speakerStatusFromPortalStatus(value: string): SpeakerSubmissionStatus {
+  switch (value) {
+    case "draft":
+    case "submitted":
+    case "under_review":
+    case "accepted":
+    case "withdrawn":
+      return value;
+    case "declined":
+    case "rejected":
+      return "declined";
+    default:
+      return "submitted";
+  }
+}
+
+function portalSubmissionFromRecord(
+  record: JsonRecord,
+  requestedId: string,
+  decisions: ReadonlyMap<string, PortalDecisionProjection>,
+): SpeakerSubmission | null {
+  const sourceId = textValue(record, "id", APPLICATION_ID);
+  const eventId = textValue(record, "eventId", "Event ID");
+  if (sourceId === null || eventId === null) return null;
+  const decision = decisions.get(sourceId);
+  const status = decision?.status ?? textValue(record, "status", "Status") ?? "submitted";
+  const updatedAt =
+    textValue(record, "updatedAt", "Updated At") ??
+    textValue(record, "createdAt", "Created At") ??
+    new Date(0).toISOString();
+  const title = portalAnswerText(record, "title", "sessionTitle", "name") ?? sourceId;
+  const primaryParticipantId = portalPrimaryParticipantId(record);
+  const formId = textValue(record, "formId", "Form ID");
+  const version =
+    typeof record.version === "number" &&
+    Number.isSafeInteger(record.version) &&
+    record.version >= 1
+      ? record.version
+      : undefined;
+  const projected: SpeakerSubmission & { readonly reason?: string } = {
+    id: requestedId,
+    eventId,
+    title,
+    status: speakerStatusFromPortalStatus(status),
+    participantIds: portalParticipantIds(record),
+    updatedAt,
+    ...(version === undefined ? {} : { version }),
+    ...(primaryParticipantId === undefined ? {} : { primaryParticipantId }),
+    ...(formId === null ? {} : { formId }),
+    ...(isRecord(record.answers) ? { answers: clone(record.answers) } : {}),
+    ...(decision?.reason === undefined ? {} : { reason: decision.reason }),
+  };
+  return projected;
+}
+
+function originalCfpSubmissionId(value: string): string | null {
+  const prefix = "speaker-submission:";
+  return value.startsWith(prefix) && value.length > prefix.length
+    ? value.slice(prefix.length)
+    : null;
+}
 
 /** Airtable-backed webhook subscriptions and durable delivery records. */
 export class AirtableWebhookRepository implements WebhookRepository {
   readonly #subscriptions: AirtableJsonStore<WebhookSubscriptionRecord>;
   readonly #deliveries: AirtableJsonStore<WebhookDelivery>;
 
-  constructor(options: { readonly baseId: string; readonly transport: AirtableTransport }) {
+  constructor(options: {
+    readonly baseId: string;
+    readonly transport: AirtableTransport;
+  }) {
     this.#subscriptions = new AirtableJsonStore({
       baseId: options.baseId,
       table: "Publication Outbox",
@@ -676,7 +1183,11 @@ export class AirtableWebhookRepository implements WebhookRepository {
       )
       .sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime())[0];
     if (candidate === undefined) return null;
-    const claimed = { ...candidate, status: "delivering" as const, nextAttemptAt: null };
+    const claimed = {
+      ...candidate,
+      status: "delivering" as const,
+      nextAttemptAt: null,
+    };
     await this.#deliveries.update(claimed.id, tagged(claimed, "webhook_delivery"));
     return datesFromDelivery(claimed);
   }
@@ -753,6 +1264,14 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
   readonly #tasks: AirtableJsonStore<SpeakerTask>;
   readonly #assets: AirtableJsonStore<SpeakerAsset>;
   readonly #database: D1Database;
+  readonly #events: AirtableJsonStore<JsonRecord>;
+  readonly #roster: AirtableJsonStore<SpeakerRosterEntry & { tenantId?: string }>;
+  readonly #taskForms: AirtableJsonStore<SpeakerTaskFormDefinition & { tenantId?: string }>;
+  readonly #taskResponses: AirtableJsonStore<SpeakerTaskResponseRecord & { tenantId?: string }>;
+  readonly #assetComments: AirtableJsonStore<SpeakerAssetComment & { tenantId?: string }>;
+  readonly #resources: AirtableJsonStore<SpeakerEventResource & { tenantId?: string }>;
+  readonly #wikiPages: AirtableJsonStore<SpeakerWikiPage & { tenantId?: string }>;
+  readonly #decisions: AirtableJsonStore<JsonRecord>;
 
   constructor(options: {
     readonly baseId: string;
@@ -760,10 +1279,51 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     readonly database: D1Database;
   }) {
     const shared = { baseId: options.baseId, transport: options.transport };
+    this.#events = new AirtableJsonStore({
+      ...shared,
+      table: "Events",
+      jsonField: "Settings JSON",
+    });
+    this.#roster = new AirtableJsonStore({
+      ...shared,
+      table: "Session Roster",
+      jsonField: "Members JSON",
+      scopeFields: { eventId: true, organizationId: true },
+    });
+    this.#taskForms = new AirtableJsonStore({
+      ...shared,
+      table: "Task Forms",
+      jsonField: "Definition JSON",
+    });
+    this.#taskResponses = new AirtableJsonStore({
+      ...shared,
+      table: "Task Responses",
+      jsonField: "Answers JSON",
+    });
+    this.#assetComments = new AirtableJsonStore({
+      ...shared,
+      table: "File Comments",
+      jsonField: "Settings JSON",
+    });
+    this.#resources = new AirtableJsonStore({
+      ...shared,
+      table: "Portal Resources",
+      jsonField: "Settings JSON",
+    });
+    this.#wikiPages = new AirtableJsonStore({
+      ...shared,
+      table: "Wiki Pages",
+      jsonField: "Settings JSON",
+    });
     this.#submissions = new AirtableJsonStore({
       ...shared,
       table: "Submissions",
       jsonField: "Answers JSON",
+    });
+    this.#decisions = new AirtableJsonStore({
+      ...shared,
+      table: "Decisions",
+      jsonField: "Metadata JSON",
     });
     this.#profiles = new AirtableJsonStore({
       ...shared,
@@ -777,41 +1337,437 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     });
     this.#assets = new AirtableJsonStore({
       ...shared,
-      table: "Audit Records",
-      jsonField: "Changes JSON",
+      table: "File Assets",
+      jsonField: "Settings JSON",
+      scopeFields: { eventId: true, organizationId: true },
     });
     this.#database = options.database;
   }
+  async findAcceptedParticipantByEmail(
+    eventId: string,
+    submissionIds: readonly string[],
+    email: string,
+  ): Promise<{
+    participantId: string;
+    submissionId: string;
+    email: string;
+  } | null> {
+    const normalizedEmail = email.trim().toLowerCase();
+    if (eventId.trim().length === 0 || normalizedEmail.length === 0) return null;
+    const event = await this.#events.find(eventId);
+    const tenantId = event === undefined ? undefined : authoritativeOrganizationId(event);
+    if (tenantId === undefined) return null;
+    const [decisions, submissionRecords] = await Promise.all([
+      this.#decisions.list().then(portalDecisionProjections),
+      this.#submissions.list(),
+    ]);
+    const records = submissionRecords as unknown as JsonRecord[];
+    const byId = new Map(
+      records
+        .map((record) => [textValue(record, "id", APPLICATION_ID), record] as const)
+        .filter((entry): entry is readonly [string, JsonRecord] => entry[0] !== null),
+    );
+    const requestedBySource = new Map<string, string>();
+    for (const submissionId of submissionIds) {
+      const sourceId = originalCfpSubmissionId(submissionId) ?? submissionId;
+      if (submissionId === sourceId || !requestedBySource.has(sourceId)) {
+        requestedBySource.set(sourceId, submissionId);
+      }
+    }
+    const matches: Array<{
+      participantId: string;
+      submissionId: string;
+      email: string;
+    }> = [];
+    for (const [sourceId, submissionId] of requestedBySource) {
+      const record = byId.get(sourceId);
+      if (
+        record === undefined ||
+        isSpeakerSubmissionRecord(record) ||
+        eventReference(record) !== eventId ||
+        authoritativeOrganizationId(record) !== tenantId ||
+        portalRecordStatus(record, decisions) !== "accepted"
+      ) {
+        continue;
+      }
+      if (!Array.isArray(record.participants)) continue;
+      for (const participant of record.participants) {
+        if (!isRecord(participant)) continue;
+        const participantId = typeof participant.id === "string" ? participant.id.trim() : "";
+        const participantEmail =
+          typeof participant.email === "string" ? participant.email.trim().toLowerCase() : "";
+        if (participantId.length > 0 && participantEmail === normalizedEmail) {
+          matches.push({
+            participantId,
+            submissionId,
+            email: participantEmail,
+          });
+        }
+      }
+    }
+    return matches.length === 1 ? (matches[0] ?? null) : null;
+  }
+  async getOrganizerAccessScope(
+    eventId: string,
+    accountId: string,
+  ): Promise<SpeakerOrganizerAccessScope | null> {
+    if (eventId.trim().length === 0 || accountId.trim().length === 0) return null;
+    const event = await this.#events.find(eventId);
+    if (event === undefined || event.id !== eventId) return null;
+    const tenantId = authoritativeOrganizationId(event);
+    if (tenantId === undefined) return null;
+
+    const membership = await this.#database
+      .prepare(
+        `SELECT organization_id, role
+           FROM organization_memberships
+          WHERE organization_id = ? AND user_id = ?
+          LIMIT 1`,
+      )
+      .bind(tenantId, accountId)
+      .first<{ organization_id?: unknown; role?: unknown }>();
+    const role =
+      membership?.role === "owner" ? "owner" : membership?.role === "admin" ? "admin" : null;
+    if (
+      membership === null ||
+      membership === undefined ||
+      membership.organization_id !== tenantId ||
+      role === null
+    ) {
+      return null;
+    }
+
+    const [submissionRecords, rosterRecordsForEvent] = await Promise.all([
+      listEventScopedJson(this.#submissions, "Answers JSON", eventId),
+      listEventScopedJson(this.#roster, "Members JSON", eventId),
+    ]);
+    const records = submissionRecords as unknown as JsonRecord[];
+    const sourceRecords = records.filter(
+      (record) =>
+        !isSpeakerSubmissionRecord(record) &&
+        eventReference(record) === eventId &&
+        authoritativeOrganizationId(record) === tenantId,
+    );
+    const sourceIds = new Set(
+      sourceRecords.map((record) => textValue(record, "id", APPLICATION_ID)).filter(isNonEmpty),
+    );
+    const linkedSpeakerRecords = records.filter((record) => {
+      if (!isSpeakerSubmissionRecord(record) || eventReference(record) !== eventId) return false;
+      const id = textValue(record, "id", APPLICATION_ID);
+      if (id === null) return false;
+      const sourceId = originalCfpSubmissionId(id);
+      if (sourceId !== null) return sourceIds.has(sourceId);
+      return authoritativeOrganizationId(record) === tenantId;
+    });
+    const rosterRecords = rosterRecordsForEvent.filter((record) => {
+      const recordTenantId = authoritativeOrganizationId(record);
+      return (
+        record.eventId === eventId && (recordTenantId === undefined || recordTenantId === tenantId)
+      );
+    });
+    const organizerRosterRecords = rosterRecords.filter((record) => !isCrmRosterAdmission(record));
+    const validRecords = [...sourceRecords, ...linkedSpeakerRecords];
+    const sourceParticipantIds = new Set(
+      sourceRecords.flatMap((record) => portalParticipantIds(record)),
+    );
+    const submissionIds = [
+      ...new Set([
+        ...validRecords.map((record) => textValue(record, "id", APPLICATION_ID)).filter(isNonEmpty),
+        ...organizerRosterRecords.map((record) => record.submissionId).filter(isNonEmpty),
+      ]),
+    ];
+    const participantIds = [
+      ...new Set([
+        ...sourceParticipantIds,
+        ...organizerRosterRecords.map((record) => record.participantId).filter(isNonEmpty),
+      ]),
+    ];
+    return {
+      tenantId,
+      eventId,
+      role,
+      submissionIds,
+      participantIds,
+    };
+  }
 
   async getAccessScope(eventId: string, accountId: string): Promise<SpeakerAccessScope> {
-    const result = await this.#database
-      .prepare(
-        `SELECT speaker_profile_id
-           FROM speaker_grants
-          WHERE user_id = ? AND revoked_at IS NULL
-          ORDER BY speaker_profile_id`,
-      )
-      .bind(accountId)
-      .all<{ speaker_profile_id: string }>();
+    const [result, account, event] = await Promise.all([
+      this.#database
+        .prepare(
+          `SELECT organization_id, speaker_profile_id
+             FROM speaker_grants
+            WHERE user_id = ? AND revoked_at IS NULL
+            ORDER BY organization_id, speaker_profile_id`,
+        )
+        .bind(accountId)
+        .all<{ organization_id: string; speaker_profile_id: string }>(),
+      this.#database
+        .prepare(
+          `SELECT email
+             FROM auth_users
+            WHERE id = ? AND email_verified = 1
+            LIMIT 1`,
+        )
+        .bind(accountId)
+        .first<{ email?: unknown }>(),
+      this.#events.find(eventId),
+    ]);
+    const accountEmail =
+      typeof account?.email === "string" ? account.email.trim().toLowerCase() : undefined;
+    const eventOrganizationId = event === undefined ? undefined : organizationIdOf(event);
+    const scopedGrants = result.results.filter(
+      (row) => eventOrganizationId === undefined || row.organization_id === eventOrganizationId,
+    );
     const grants = new Set(
-      result.results
+      scopedGrants
         .map((row) => row.speaker_profile_id)
         .filter((id): id is string => typeof id === "string" && id.length > 0),
     );
-    if (grants.size === 0) return { submissionIds: [], participantIds: [] };
-    const profiles = (await this.#profiles.list()).filter(
+    const [submissionRecords, decisionRecords, profileRecords] = await Promise.all([
+      this.#submissions.list(),
+      this.#decisions.list(),
+      this.#profiles.list(),
+    ]);
+    const records = submissionRecords as unknown as JsonRecord[];
+    const decisions = portalDecisionProjections(decisionRecords);
+    const ownedRecords = records.filter(
+      (record) =>
+        !isSpeakerSubmissionRecord(record) &&
+        textValue(record, "eventId", "Event ID") === eventId &&
+        textValue(record, "ownerAccountId", "Owner Account ID") === accountId &&
+        (eventOrganizationId === undefined ||
+          recordTenantId(record) === undefined ||
+          recordTenantId(record) === eventOrganizationId),
+    );
+    const profiles = profileRecords.filter(
       (profile) =>
         profile.eventId === eventId &&
         (grants.has(profile.id) || grants.has(profile.participantId)),
     );
-    const participantIds = [...new Set(profiles.map((profile) => profile.participantId))];
-    const submissions = (await this.#submissions.list()).filter(
-      (submission) =>
-        isSpeakerSubmissionRecord(submission) &&
-        submission.eventId === eventId &&
-        submission.participantIds.some((participantId) => participantIds.includes(participantId)),
+    const accountProfiles =
+      accountEmail === undefined
+        ? []
+        : profiles.filter((profile) => profile.email?.trim().toLowerCase() === accountEmail);
+    const participantIds =
+      accountEmail === undefined
+        ? []
+        : [
+            ...new Set([
+              ...ownedRecords.flatMap((record) =>
+                portalParticipantIdsForEmail(record, accountEmail),
+              ),
+              ...accountProfiles.map((profile) => profile.participantId),
+            ]),
+          ];
+    const acceptedGrantRecords = records.filter(
+      (record) =>
+        isSpeakerSubmissionRecord(record) &&
+        textValue(record, "eventId", "Event ID") === eventId &&
+        portalRecordStatus(record, decisions) === "accepted" &&
+        portalParticipantIds(record).some((participantId) =>
+          accountProfiles.some(
+            (profile) =>
+              profile.participantId === participantId &&
+              (grants.has(profile.id) || grants.has(profile.participantId)),
+          ),
+        ),
     );
-    return { participantIds, submissionIds: submissions.map((submission) => submission.id) };
+    const acceptedOwnerRecords = ownedRecords.filter(
+      (record) => portalRecordStatus(record, decisions) === "accepted",
+    );
+    const acceptedRecords = [...acceptedOwnerRecords, ...acceptedGrantRecords];
+    const ownerIds = new Set(
+      ownedRecords.map((record) => textValue(record, "id", APPLICATION_ID)).filter(isNonEmpty),
+    );
+    const submissionIds = [
+      ...ownerIds,
+      ...acceptedGrantRecords
+        .map((record) => textValue(record, "id", APPLICATION_ID))
+        .filter(
+          (id): id is string => id !== null && !ownerIds.has(originalCfpSubmissionId(id) ?? id),
+        ),
+    ];
+    if (submissionIds.length === 0 || participantIds.length === 0) {
+      return { submissionIds: [], participantIds: [] };
+    }
+    const acceptedParticipants = new Set(acceptedRecords.flatMap(portalParticipantIds));
+    const submissionEditingAllowed = ownedRecords.some((record) => {
+      const status = portalRecordStatus(record, decisions);
+      return status === "draft" || status === "submitted" || status === "under_review";
+    });
+    const capabilities: readonly SpeakerPortalCapability[] = [
+      ...(acceptedParticipants.size > 0 ? ACCEPTED_PORTAL_CAPABILITIES : []),
+      ...(submissionEditingAllowed ? (["submission-edit"] as const) : []),
+    ];
+    const primaryParticipantId =
+      ownedRecords.map(portalPrimaryParticipantId).find(isDefinedString) ??
+      acceptedGrantRecords.map(portalPrimaryParticipantId).find(isDefinedString) ??
+      participantIds[0];
+    const capabilitiesByParticipant = Object.fromEntries(
+      participantIds.map((participantId) => [
+        participantId,
+        acceptedParticipants.has(participantId)
+          ? [
+              ...capabilities,
+              ...(participantId === primaryParticipantId ? (["roster-manage"] as const) : []),
+            ]
+          : [],
+      ]),
+    );
+    const tenantIds = [
+      ...new Set(
+        scopedGrants
+          .filter((row) =>
+            profiles.some(
+              (profile) =>
+                profile.id === row.speaker_profile_id ||
+                profile.participantId === row.speaker_profile_id,
+            ),
+          )
+          .map((row) => row.organization_id)
+          .filter((value) => typeof value === "string" && value.trim().length > 0),
+      ),
+    ];
+    if (eventOrganizationId !== undefined) tenantIds.push(eventOrganizationId);
+    const uniqueTenantIds = [...new Set(tenantIds)];
+    if (uniqueTenantIds.length > 1) return { submissionIds: [], participantIds: [] };
+    return {
+      ...(uniqueTenantIds[0] === undefined ? {} : { tenantId: uniqueTenantIds[0] }),
+      participantIds,
+      submissionIds: [...new Set(submissionIds)],
+      capabilities,
+      capabilitiesByParticipant,
+      ...(primaryParticipantId === undefined ? {} : { primaryParticipantId }),
+    };
+  }
+
+  async listPortalContexts(accountId: string): Promise<SpeakerPortalContext[]> {
+    const [grants, account, profiles, submissionRecords, decisionRecords, events] =
+      await Promise.all([
+        this.#database
+          .prepare(
+            `SELECT organization_id, speaker_profile_id
+               FROM speaker_grants
+              WHERE user_id = ? AND revoked_at IS NULL
+              ORDER BY organization_id, speaker_profile_id`,
+          )
+          .bind(accountId)
+          .all<{ organization_id: string; speaker_profile_id: string }>(),
+        this.#database
+          .prepare(
+            `SELECT email
+               FROM auth_users
+              WHERE id = ? AND email_verified = 1
+              LIMIT 1`,
+          )
+          .bind(accountId)
+          .first<{ email?: unknown }>(),
+        this.#profiles.list(),
+        this.#submissions.list(),
+        this.#decisions.list(),
+        this.#events.list(),
+      ]);
+    const accountEmail =
+      typeof account?.email === "string" ? account.email.trim().toLowerCase() : undefined;
+    const records = submissionRecords as unknown as JsonRecord[];
+    const decisions = portalDecisionProjections(decisionRecords);
+    const contexts: SpeakerPortalContext[] = [];
+    for (const event of events) {
+      const eventId = typeof event.id === "string" ? event.id : null;
+      if (eventId === null) continue;
+      const organizationId = organizationIdOf(event);
+      const eventGrants = grants.results.filter(
+        (grant) => organizationId === undefined || organizationId === grant.organization_id,
+      );
+      const ownerRecords = records.filter(
+        (record) =>
+          !isSpeakerSubmissionRecord(record) &&
+          textValue(record, "eventId", "Event ID") === eventId &&
+          textValue(record, "ownerAccountId", "Owner Account ID") === accountId &&
+          (organizationId === undefined ||
+            recordTenantId(record) === undefined ||
+            recordTenantId(record) === organizationId),
+      );
+      const eventProfiles = profiles.filter(
+        (profile) =>
+          profile.eventId === eventId &&
+          eventGrants.some(
+            (grant) =>
+              grant.speaker_profile_id === profile.id ||
+              grant.speaker_profile_id === profile.participantId,
+          ),
+      );
+      const grantParticipantIds = new Set(eventProfiles.map((profile) => profile.participantId));
+      const grantSubmissions = records.filter(
+        (record) =>
+          isSpeakerSubmissionRecord(record) &&
+          textValue(record, "eventId", "Event ID") === eventId &&
+          portalRecordStatus(record, decisions) === "accepted" &&
+          portalParticipantIds(record).some((participantId) =>
+            grantParticipantIds.has(participantId),
+          ),
+      );
+      const ownerIds = new Set(
+        ownerRecords.map((record) => textValue(record, "id", APPLICATION_ID)).filter(isNonEmpty),
+      );
+      const submissionIds = [
+        ...ownerIds,
+        ...grantSubmissions
+          .map((record) => textValue(record, "id", APPLICATION_ID))
+          .filter(
+            (id): id is string => id !== null && !ownerIds.has(originalCfpSubmissionId(id) ?? id),
+          ),
+      ];
+      const participantIds = [
+        ...new Set([
+          ...ownerRecords.flatMap(portalParticipantIds),
+          ...eventProfiles.map((profile) => profile.participantId),
+        ]),
+      ];
+      if (submissionIds.length === 0 || participantIds.length === 0) continue;
+      const acceptedOwnerRecords = ownerRecords.filter(
+        (record) => portalRecordStatus(record, decisions) === "accepted",
+      );
+      const acceptedRecords = [...acceptedOwnerRecords, ...grantSubmissions];
+      const acceptedParticipants = new Set(acceptedRecords.flatMap(portalParticipantIds));
+      const submissionEditingAllowed = ownerRecords.some((record) => {
+        const recordStatus = portalRecordStatus(record, decisions);
+        return (
+          recordStatus === "draft" ||
+          recordStatus === "submitted" ||
+          recordStatus === "under_review"
+        );
+      });
+      const capabilities: readonly SpeakerPortalCapability[] = [
+        ...(acceptedParticipants.size > 0 ? ACCEPTED_PORTAL_CAPABILITIES : []),
+        ...(submissionEditingAllowed ? (["submission-edit"] as const) : []),
+      ];
+      const accountParticipantId =
+        accountEmail === undefined
+          ? undefined
+          : eventProfiles.find((profile) => profile.email?.trim().toLowerCase() === accountEmail)
+              ?.participantId;
+      const primaryParticipantId =
+        accountParticipantId ??
+        ownerRecords.map(portalPrimaryParticipantId).find(isDefinedString) ??
+        grantSubmissions.map(portalPrimaryParticipantId).find(isDefinedString) ??
+        participantIds[0];
+      const slug = textValue(event, "slug");
+      const status = textValue(event, "status");
+      contexts.push({
+        id: `portal:${organizationId ?? eventGrants[0]?.organization_id ?? eventId}:${eventId}`,
+        eventId,
+        name: textValue(event, "name", "title") ?? eventId,
+        ...(slug === null ? {} : { slug }),
+        ...(status === null ? {} : { status }),
+        capabilities,
+        submissionIds: [...new Set(submissionIds)],
+        participantIds,
+        ...(primaryParticipantId === undefined ? {} : { primaryParticipantId }),
+      });
+    }
+    return contexts;
   }
 
   async listSubmissions(
@@ -819,21 +1775,45 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     submissionIds: readonly string[],
   ): Promise<SpeakerSubmission[]> {
     const allowed = new Set(submissionIds);
-    return (await this.#submissions.list()).filter(
-      (submission) =>
-        isSpeakerSubmissionRecord(submission) &&
-        submission.eventId === eventId &&
-        allowed.has(submission.id),
+    const [submissionRecords, decisionRecords] = await Promise.all([
+      this.#submissions.listByIds([
+        ...new Set(submissionIds.flatMap((id) => [id, originalCfpSubmissionId(id) ?? id])),
+      ]),
+      listEventScopedJson(this.#decisions, "Metadata JSON", eventId),
+    ]);
+    const records = submissionRecords as unknown as JsonRecord[];
+    const byId = new Map(
+      records
+        .map((record) => [textValue(record, "id", APPLICATION_ID), record] as const)
+        .filter((entry): entry is readonly [string, JsonRecord] => entry[0] !== null),
     );
+    const decisions = portalDecisionProjections(decisionRecords);
+    const result: SpeakerSubmission[] = [];
+    for (const requestedId of submissionIds) {
+      if (!allowed.has(requestedId)) continue;
+      const sourceId = originalCfpSubmissionId(requestedId) ?? requestedId;
+      const source = byId.get(sourceId);
+      if (source !== undefined && !isSpeakerSubmissionRecord(source)) {
+        const projected = portalSubmissionFromRecord(source, requestedId, decisions);
+        if (projected !== null && projected.eventId === eventId) result.push(projected);
+        continue;
+      }
+      const speaker = byId.get(requestedId);
+      if (
+        speaker !== undefined &&
+        isSpeakerSubmissionRecord(speaker) &&
+        textValue(speaker, "eventId", "Event ID") === eventId
+      ) {
+        const validated = speakerSubmissionFromRecord(speaker);
+        if (validated !== null) result.push(validated);
+      }
+    }
+    return result;
   }
 
   async getSubmission(eventId: string, submissionId: string): Promise<SpeakerSubmission | null> {
-    const submission = await this.#submissions.find(submissionId);
-    return submission !== undefined &&
-      isSpeakerSubmissionRecord(submission) &&
-      submission.eventId === eventId
-      ? submission
-      : null;
+    const submissions = await this.listSubmissions(eventId, [submissionId]);
+    return submissions[0] ?? null;
   }
   async ensureAcceptedSubmission(input: {
     readonly submission: Submission;
@@ -842,13 +1822,19 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     const id = `speaker-submission:${input.submission.id}`;
     const answers = isRecord(input.submission.answers) ? input.submission.answers : {};
     const titleCandidate = answers.title ?? answers.sessionTitle;
+    const primaryParticipantId =
+      input.submission.participants.find((participant) => participant.role === "primary")?.id ??
+      input.submission.participants[0]?.id;
     const next: SpeakerSubmission = tagged(
       {
         id,
         eventId: input.submission.eventId,
+        formId: input.submission.formId,
         title: typeof titleCandidate === "string" && titleCandidate.trim() ? titleCandidate : id,
         status: "accepted",
         participantIds: input.submission.participants.map((participant) => participant.id),
+        version: input.submission.version,
+        ...(primaryParticipantId === undefined ? {} : { primaryParticipantId }),
         updatedAt: input.updatedAt,
       },
       "speaker_submission",
@@ -856,7 +1842,8 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     const existing = await this.#submissions.find(id);
     if (existing === undefined) {
       await this.#submissions.create(next);
-      return clone(next);
+      await this.ensureRosterForAcceptedSubmission(input.submission, input.updatedAt);
+      return clone(untagged(next));
     }
     if (existing.eventId !== next.eventId) {
       throw new Error("The accepted speaker submission belongs to another event.");
@@ -865,7 +1852,38 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     if (existing.status !== "accepted" || existing.updatedAt !== next.updatedAt) {
       await this.#submissions.update(id, updated);
     }
-    return clone(updated);
+    await this.ensureRosterForAcceptedSubmission(input.submission, input.updatedAt);
+    return clone(untagged(updated));
+  }
+  private async ensureRosterForAcceptedSubmission(
+    submission: Submission,
+    updatedAt: string,
+  ): Promise<void> {
+    const existing = await this.#roster.list();
+    const primaryParticipantId =
+      submission.participants.find((participant) => participant.role === "primary")?.id ??
+      submission.participants[0]?.id;
+    for (const participant of submission.participants) {
+      const id = `roster:${submission.eventId}:speaker-submission:${submission.id}:${participant.id}`;
+      if (existing.some((entry) => entry.id === id)) continue;
+      const entry: SpeakerRosterEntry & { tenantId?: string } = {
+        id,
+        tenantId: submission.tenantId,
+        eventId: submission.eventId,
+        submissionId: `speaker-submission:${submission.id}`,
+        participantId: participant.id,
+        displayName: `${participant.firstName} ${participant.lastName}`.trim() || participant.id,
+        ...(participant.email.trim().length === 0
+          ? {}
+          : { email: participant.email.trim().toLowerCase() }),
+        role: participant.id === primaryParticipantId ? "primary" : "co_speaker",
+        status: "active",
+        version: 1,
+        createdAt: updatedAt,
+        updatedAt,
+      };
+      await this.#roster.create(entry);
+    }
   }
 
   async ensureProfile(input: {
@@ -875,21 +1893,150 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
   }): Promise<SpeakerProfile> {
     const id = `speaker-profile:${input.eventId}:${input.participant.id}`;
     const existing = await this.getProfile(input.eventId, input.participant.id);
-    if (existing !== null) return existing;
+    const displayName = `${input.participant.firstName} ${input.participant.lastName}`.trim();
+    const email = input.participant.email.trim().toLowerCase();
+    if (existing !== null) {
+      const updated: SpeakerProfile = {
+        ...existing,
+        ...(displayName.length === 0 || existing.displayName === displayName
+          ? {}
+          : { displayName }),
+        ...(email.length === 0 || existing.email === email ? {} : { email }),
+        ...(existing.status === "accepted" ? {} : { status: "accepted" }),
+      };
+      if (
+        updated.displayName === existing.displayName &&
+        updated.email === existing.email &&
+        updated.status === existing.status
+      ) {
+        return existing;
+      }
+      const persisted = {
+        ...updated,
+        version: existing.version + 1,
+        updatedAt: input.updatedAt,
+      };
+      await this.#profiles.update(existing.id, tagged(persisted, "speaker_profile"));
+      return clone(persisted);
+    }
     const profile = tagged(
       {
         id,
         eventId: input.eventId,
         participantId: input.participant.id,
-        displayName: `${input.participant.firstName} ${input.participant.lastName}`.trim(),
+        displayName,
+        ...(email.length === 0 ? {} : { email }),
         biography: input.participant.biography,
+        status: "accepted",
         version: 1,
         updatedAt: input.updatedAt,
       },
       "speaker_profile",
     );
     await this.#profiles.create(profile);
+    return clone(untagged(profile));
+  }
+  async ensureOrganizerSpeakerProfile(input: {
+    readonly organizationId: string;
+    readonly eventId: string;
+    readonly participantId: string;
+    readonly displayName: string;
+    readonly email: string;
+    readonly jobTitle: string;
+    readonly company: string;
+    readonly biography: string;
+    readonly socialLinks: Readonly<Record<string, string>>;
+    readonly status: string;
+    readonly updatedAt: string;
+  }): Promise<SpeakerProfile> {
+    const existing = await this.getProfile(input.eventId, input.participantId);
+    const profile: SpeakerProfile = {
+      id: existing?.id ?? `speaker-profile:${input.eventId}:${input.participantId}`,
+      eventId: input.eventId,
+      participantId: input.participantId,
+      displayName: input.displayName,
+      email: input.email.trim().toLowerCase(),
+      jobTitle: input.jobTitle,
+      company: input.company,
+      biography: input.biography,
+      socialLinks: { ...input.socialLinks },
+      status: input.status,
+      version: existing?.version ?? 1,
+      updatedAt: input.updatedAt,
+    };
+    if (existing === null) {
+      await this.#profiles.create(tagged(profile, "speaker_profile"));
+    } else {
+      await this.#profiles.update(
+        existing.id,
+        tagged({ ...profile, version: existing.version + 1 }, "speaker_profile"),
+      );
+      profile.version = existing.version + 1;
+    }
+    await this.ensureVerifiedSpeakerGrant({
+      organizationId: input.organizationId,
+      eventId: input.eventId,
+      participantId: input.participantId,
+      email: input.email,
+      createdAt: input.updatedAt,
+    });
     return clone(profile);
+  }
+  async ensureVerifiedSpeakerGrant(input: {
+    readonly organizationId: string;
+    readonly eventId: string;
+    readonly participantId: string;
+    readonly email: string;
+    readonly createdAt: string;
+  }): Promise<boolean> {
+    const email = input.email.trim().toLowerCase();
+    if (
+      input.organizationId.trim().length === 0 ||
+      input.eventId.trim().length === 0 ||
+      input.participantId.trim().length === 0 ||
+      email.length === 0
+    ) {
+      return false;
+    }
+    const profile = await this.getProfile(input.eventId, input.participantId);
+    if (profile === null || profile.email?.trim().toLowerCase() !== email) return false;
+    const result = await this.#database
+      .prepare(
+        `SELECT id
+           FROM auth_users
+          WHERE LOWER(email) = LOWER(?) AND email_verified = 1
+          ORDER BY id
+          LIMIT 2`,
+      )
+      .bind(email)
+      .all<{ id?: unknown }>();
+    let userIds = result.results
+      .map((row) => (typeof row.id === "string" ? row.id.trim() : ""))
+      .filter((id) => id.length > 0);
+    if (userIds.length === 0) {
+      const user = await this.#database
+        .prepare(
+          `SELECT id
+             FROM auth_users
+            WHERE LOWER(email) = LOWER(?) AND email_verified = 1
+            LIMIT 1`,
+        )
+        .bind(email)
+        .first<{ id?: unknown }>();
+      const id = typeof user?.id === "string" ? user.id.trim() : "";
+      if (id.length > 0) userIds = [id];
+    }
+    if (userIds.length !== 1) return false;
+    await this.#database
+      .prepare(
+        `INSERT INTO speaker_grants
+           (organization_id, speaker_profile_id, user_id, created_at, revoked_at)
+         VALUES (?, ?, ?, ?, NULL)
+         ON CONFLICT (organization_id, speaker_profile_id, user_id) DO UPDATE SET revoked_at = NULL`,
+      )
+      .bind(input.organizationId, profile.id, userIds[0], input.createdAt)
+      .run();
+    return true;
   }
 
   async ensureProfileTask(input: {
@@ -900,7 +2047,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
   }): Promise<SpeakerTask> {
     const id = `speaker-task:${input.eventId}:${input.submissionId}:${input.participantId}:profile`;
     const existing = await this.#tasks.find(id);
-    if (existing !== undefined) return existing;
+    if (existing !== undefined) return untagged(existing);
     const task = tagged(
       {
         id,
@@ -920,25 +2067,30 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       "speaker_task",
     );
     await this.#tasks.create(task);
-    return clone(task);
+    return clone(untagged(task));
   }
 
   async listProfiles(
     eventId: string,
     participantIds: readonly string[],
   ): Promise<SpeakerProfile[]> {
-    const allowed = new Set(participantIds);
-    return (await this.#profiles.list()).filter(
-      (profile) => profile.eventId === eventId && allowed.has(profile.participantId),
+    const profileIds = participantIds.map(
+      (participantId) => `speaker-profile:${eventId}:${participantId}`,
     );
+    return (await this.#profiles.listByIds(profileIds))
+      .filter(
+        (profile) => profile.eventId === eventId && participantIds.includes(profile.participantId),
+      )
+      .map((profile) => untagged(profile));
   }
 
   async getProfile(eventId: string, participantId: string): Promise<SpeakerProfile | null> {
-    return (
-      (await this.#profiles.list()).find(
-        (profile) => profile.eventId === eventId && profile.participantId === participantId,
-      ) ?? null
-    );
+    const profile = await this.#profiles.find(`speaker-profile:${eventId}:${participantId}`);
+    return profile !== undefined &&
+      profile.eventId === eventId &&
+      profile.participantId === participantId
+      ? untagged(profile)
+      : null;
   }
 
   async updateBiography(
@@ -957,24 +2109,93 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     await this.#profiles.update(profile.id, updated);
     return { ok: true, value: updated };
   }
+  async updateProfile(
+    command: UpdateSpeakerProfileCommand,
+  ): Promise<RepositoryResult<SpeakerProfile>> {
+    const profile = await this.getProfile(command.eventId, command.participantId);
+    if (profile === null) return { ok: false, reason: "not_found" };
+    if (profile.version !== command.expectedVersion) {
+      return { ok: false, reason: "version_conflict" };
+    }
+    if (command.headshotAssetId !== undefined && command.headshotAssetId !== null) {
+      const asset = await this.getAsset(command.eventId, command.headshotAssetId);
+      if (
+        asset === null ||
+        asset.eventId !== command.eventId ||
+        asset.participantId !== command.participantId ||
+        asset.kind !== "headshot" ||
+        asset.state !== "ready"
+      ) {
+        return { ok: false, reason: "not_found" };
+      }
+    }
+    const updated: SpeakerProfile = {
+      ...profile,
+      ...(command.displayName === undefined ? {} : { displayName: command.displayName }),
+      ...(command.email === undefined ? {} : { email: command.email }),
+      ...(command.jobTitle === undefined ? {} : { jobTitle: command.jobTitle }),
+      ...(command.company === undefined ? {} : { company: command.company }),
+      ...(command.status === undefined ? {} : { status: command.status }),
+      ...(command.biography === undefined ? {} : { biography: command.biography }),
+      ...(command.socialLinks === undefined ? {} : { socialLinks: command.socialLinks }),
+      version: profile.version + 1,
+      updatedAt: command.updatedAt,
+    };
+    if (command.headshotAssetId === null) {
+      delete updated.headshotAssetId;
+    } else if (command.headshotAssetId !== undefined) {
+      updated.headshotAssetId = command.headshotAssetId;
+    }
+    await this.#profiles.update(profile.id, tagged(updated, "speaker_profile"));
+    return { ok: true, value: clone(updated) };
+  }
 
   async listTasks(eventId: string, participantIds: readonly string[]): Promise<SpeakerTask[]> {
     const allowed = new Set(participantIds);
-    return (await this.#tasks.list()).filter(
-      (task) => task.eventId === eventId && allowed.has(task.participantId),
-    );
+    return (await this.#tasks.list())
+      .filter((task) => task.eventId === eventId && allowed.has(task.participantId))
+      .map((task) => untagged(task));
+  }
+
+  async createTask(command: SpeakerTaskRepositoryCommand): Promise<RepositoryResult<SpeakerTask>> {
+    if (command.expectedVersion !== null) {
+      return { ok: false, reason: "version_conflict" };
+    }
+    const existing = await this.#tasks.find(command.task.id);
+    if (existing !== undefined) {
+      return { ok: false, reason: "version_conflict" };
+    }
+    const stored = tagged(command.task, "speaker_task");
+    await this.#tasks.create(stored);
+    return { ok: true, value: clone(untagged(stored)) };
+  }
+
+  async updateTask(command: SpeakerTaskRepositoryCommand): Promise<RepositoryResult<SpeakerTask>> {
+    if (command.expectedVersion === null) {
+      return { ok: false, reason: "version_conflict" };
+    }
+    const existing = await this.#tasks.find(command.task.id);
+    if (existing === undefined || existing.eventId !== command.task.eventId) {
+      return { ok: false, reason: "not_found" };
+    }
+    if (existing.version !== command.expectedVersion) {
+      return { ok: false, reason: "version_conflict" };
+    }
+    const stored = tagged(command.task, "speaker_task");
+    await this.#tasks.update(command.task.id, stored);
+    return { ok: true, value: clone(untagged(stored)) };
   }
 
   async getTask(eventId: string, taskId: string): Promise<SpeakerTask | null> {
     const task = await this.#tasks.find(taskId);
-    return task !== undefined && task.eventId === eventId ? task : null;
+    return task !== undefined && task.eventId === eventId ? untagged(task) : null;
   }
 
   async getTasksByIds(eventId: string, taskIds: readonly string[]): Promise<SpeakerTask[]> {
     const allowed = new Set(taskIds);
-    return (await this.#tasks.list()).filter(
-      (task) => task.eventId === eventId && allowed.has(task.id),
-    );
+    return (await this.#tasks.listByIds([...allowed]))
+      .filter((task) => task.eventId === eventId && allowed.has(task.id))
+      .map((task) => untagged(task));
   }
 
   async transitionTask(command: TransitionSpeakerTaskCommand): Promise<
@@ -995,47 +2216,851 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       updatedAt: command.transition.occurredAt,
     };
     await this.#tasks.update(task.id, updated);
-    return { ok: true, value: { task: updated, transition: clone(command.transition) } };
+    return {
+      ok: true,
+      value: { task: updated, transition: clone(command.transition) },
+    };
   }
 
   async createPendingAsset(asset: SpeakerAsset): Promise<SpeakerAsset> {
     await this.#assets.create(tagged(asset, "speaker_asset"));
     return clone(asset);
   }
-
   async getAsset(eventId: string, assetId: string): Promise<SpeakerAsset | null> {
     const asset = await this.#assets.find(assetId);
-    return asset !== undefined && asset.eventId === eventId ? asset : null;
+    return asset !== undefined && entityType(asset) === "speaker_asset" && asset.eventId === eventId
+      ? clone(untagged(asset))
+      : null;
+  }
+
+  async listAssets(eventId: string, participantIds: readonly string[]): Promise<SpeakerAsset[]> {
+    const allowed = new Set(participantIds);
+    if (participantIds.length === 0) return [];
+    const assets = await listEventScopedJson(this.#assets, "Settings JSON", eventId);
+    return assets
+      .filter(
+        (asset) =>
+          entityType(asset) === "speaker_asset" &&
+          asset.eventId === eventId &&
+          allowed.has(asset.participantId),
+      )
+      .map((asset) => clone(untagged(asset)));
+  }
+
+  async finalizeAsset(
+    command: FinalizeSpeakerAssetCommand,
+  ): Promise<RepositoryResult<SpeakerAsset>> {
+    const current = await this.getAsset(command.eventId, command.assetId);
+    if (current === null) return { ok: false, reason: "not_found" };
+    if (current.state !== "pending_upload") return { ok: false, reason: "invalid_state" };
+    const updated: SpeakerAsset = {
+      ...current,
+      state: command.state,
+      finalizedAt: command.finalizedAt,
+      ...(command.rejectionReason === undefined
+        ? {}
+        : { rejectionReason: command.rejectionReason }),
+    };
+    await this.#assets.update(command.assetId, tagged(updated, "speaker_asset"));
+    return { ok: true, value: clone(updated) };
+  }
+
+  async listRosterForEvent(eventId: string): Promise<SpeakerRosterEntry[]> {
+    const [event, roster] = await Promise.all([
+      this.#events.find(eventId),
+      listEventScopedJson(this.#roster, "Members JSON", eventId),
+    ]);
+    const tenantId = event === undefined ? undefined : authoritativeOrganizationId(event);
+    return roster
+      .filter((entry) => {
+        const recordTenantId = authoritativeOrganizationId(entry);
+        const crmRoster = isCrmRosterAdmission(entry);
+        return (
+          entry.eventId === eventId &&
+          (crmRoster
+            ? tenantId !== undefined && recordTenantId === tenantId
+            : tenantId === undefined || recordTenantId === undefined || recordTenantId === tenantId)
+        );
+      })
+      .map(({ tenantId: _tenantId, authorAccountId: _authorAccountId, ...entry }) => clone(entry));
+  }
+
+  async listRoster(eventId: string, submissionId: string): Promise<SpeakerRosterEntry[]> {
+    const canonicalSubmissionId = submissionId.startsWith("speaker-submission:")
+      ? submissionId
+      : `speaker-submission:${submissionId}`;
+    return (await this.listRosterForEvent(eventId)).filter(
+      (entry) => entry.submissionId === canonicalSubmissionId,
+    );
+  }
+
+  async saveRoster(
+    entry: SpeakerRosterEntry,
+    expectedVersion: number | null,
+  ): Promise<RepositoryResult<SpeakerRosterEntry>> {
+    const event = await this.#events.find(entry.eventId);
+    const tenantId = event === undefined ? undefined : authoritativeOrganizationId(event);
+    const persistedEntry = {
+      ...entry,
+      ...(tenantId === undefined ? {} : { tenantId }),
+    };
+    const existing = await this.#roster.find(entry.id);
+    if (expectedVersion === null) {
+      if (existing !== undefined) return { ok: false, reason: "version_conflict" };
+      await this.#roster.create(clone(persistedEntry));
+      return { ok: true, value: clone(entry) };
+    }
+    if (
+      existing === undefined ||
+      existing.eventId !== entry.eventId ||
+      existing.submissionId !== entry.submissionId
+    ) {
+      return { ok: false, reason: "not_found" };
+    }
+    if (existing.version !== expectedVersion) return { ok: false, reason: "version_conflict" };
+    await this.#roster.update(entry.id, clone(persistedEntry));
+    return { ok: true, value: clone(entry) };
+  }
+
+  async revokeRoster(
+    eventId: string,
+    submissionId: string,
+    participantId: string,
+    expectedVersion: number,
+    updatedAt: string,
+  ): Promise<RepositoryResult<SpeakerRosterEntry>> {
+    const entry = (await this.listRoster(eventId, submissionId)).find(
+      (candidate) => candidate.participantId === participantId,
+    );
+    if (entry === undefined) return { ok: false, reason: "not_found" };
+    return this.saveRoster(
+      { ...entry, status: "revoked", version: entry.version + 1, updatedAt },
+      expectedVersion,
+    );
+  }
+
+  async getTaskForm(eventId: string, taskId: string): Promise<SpeakerTaskFormDefinition | null> {
+    const definition = (await this.#taskForms.list()).find(
+      (candidate) =>
+        candidate.eventId === eventId &&
+        candidate.taskId === taskId &&
+        candidate.published === true,
+    );
+    return definition === undefined ? null : clone(definition);
+  }
+
+  async listTaskResponses(
+    eventId: string,
+    taskId: string,
+    participantId: string,
+  ): Promise<SpeakerTaskResponseRecord[]> {
+    return (await this.#taskResponses.list())
+      .filter(
+        (response) =>
+          response.eventId === eventId &&
+          response.taskId === taskId &&
+          response.participantId === participantId,
+      )
+      .map(({ tenantId: _tenantId, ...response }) => clone(response));
+  }
+
+  async saveTaskResponse(
+    response: SpeakerTaskResponseRecord,
+    expectedVersion: number | null,
+  ): Promise<RepositoryResult<SpeakerTaskResponseRecord>> {
+    const existing = await this.#taskResponses.find(response.id);
+    if (existing !== undefined) return { ok: false, reason: "version_conflict" };
+    const matching = (await this.#taskResponses.list()).filter(
+      (candidate) =>
+        candidate.eventId === response.eventId &&
+        candidate.taskId === response.taskId &&
+        candidate.participantId === response.participantId,
+    );
+    const latestVersion = matching.reduce(
+      (latest, candidate) => Math.max(latest, candidate.version),
+      0,
+    );
+    if (expectedVersion === null ? matching.length > 0 : latestVersion !== expectedVersion) {
+      return { ok: false, reason: "version_conflict" };
+    }
+    await this.#taskResponses.create(clone(response));
+    return { ok: true, value: clone(response) };
+  }
+
+  async listAssetHistory(eventId: string, versionFamilyId: string): Promise<SpeakerAsset[]> {
+    return (await this.#assets.list())
+      .filter(
+        (asset) =>
+          entityType(asset) === "speaker_asset" &&
+          asset.eventId === eventId &&
+          (asset.versionFamilyId ?? asset.id) === versionFamilyId,
+      )
+      .map((asset) => clone(untagged(asset)))
+      .sort((left, right) => (left.version ?? 0) - (right.version ?? 0));
+  }
+
+  async listAssetComments(eventId: string, assetId: string): Promise<SpeakerAssetComment[]> {
+    return (await this.#assetComments.list())
+      .filter((comment) => comment.eventId === eventId && comment.assetId === assetId)
+      .map(({ tenantId: _tenantId, authorAccountId: _authorAccountId, ...comment }) =>
+        clone(comment),
+      );
+  }
+
+  async createAssetComment(comment: SpeakerAssetComment): Promise<SpeakerAssetComment> {
+    await this.#assetComments.create(clone(comment));
+    return clone(comment);
+  }
+
+  async listEventResources(eventId: string): Promise<SpeakerEventResource[]> {
+    return (await this.#resources.list())
+      .filter((resource) => {
+        if (resource.eventId !== eventId) return false;
+        const record: unknown = resource;
+        return !isRecord(record) || (record.published !== false && record.status !== "draft");
+      })
+      .map(({ tenantId: _tenantId, ...resource }) => clone(resource))
+      .sort((left, right) => left.order - right.order || left.id.localeCompare(right.id));
+  }
+
+  async listWikiPages(eventId: string): Promise<SpeakerWikiPage[]> {
+    return (await this.#wikiPages.list())
+      .filter((page) => {
+        if (page.eventId !== eventId) return false;
+        const record: unknown = page;
+        return !isRecord(record) || (record.published !== false && record.status !== "draft");
+      })
+      .map(({ tenantId: _tenantId, ...page }) => clone(page))
+      .sort((left, right) => left.order - right.order || left.id.localeCompare(right.id));
   }
 }
 
-/** R2 does not expose provider presigning in Workers; grants target the API's private-file endpoint. */
+interface StoredPrivateCapability {
+  kind: "upload" | "download";
+  capabilityHash: string;
+  tenantId: string;
+  eventId: string;
+  submissionId: string;
+  participantId: string;
+  taskId?: string;
+  objectKey: string;
+  contentType: string;
+  sizeBytes: number;
+  fileName: string;
+  expiresAt: string;
+}
+
+interface PrivateUploadRow {
+  object_key: string;
+  content_type: string;
+  byte_size: number;
+  state: string;
+  scan_result_code: string | null;
+}
+
+function capabilityPayload(capability: StoredPrivateCapability): string {
+  return JSON.stringify(capability);
+}
+
+function parseStoredCapability(value: string | null): StoredPrivateCapability | null {
+  if (value === null) return null;
+  try {
+    const candidate: unknown = JSON.parse(value);
+    if (!isRecord(candidate)) return null;
+    if (
+      (candidate.kind !== "upload" && candidate.kind !== "download") ||
+      typeof candidate.capabilityHash !== "string" ||
+      typeof candidate.tenantId !== "string" ||
+      typeof candidate.eventId !== "string" ||
+      typeof candidate.submissionId !== "string" ||
+      typeof candidate.participantId !== "string" ||
+      typeof candidate.objectKey !== "string" ||
+      typeof candidate.contentType !== "string" ||
+      typeof candidate.sizeBytes !== "number" ||
+      !Number.isSafeInteger(candidate.sizeBytes) ||
+      typeof candidate.fileName !== "string" ||
+      typeof candidate.expiresAt !== "string"
+    ) {
+      return null;
+    }
+    return candidate as unknown as StoredPrivateCapability;
+  } catch {
+    return null;
+  }
+}
+
+function capabilityToken(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+}
+
+async function capabilityHash(token: string): Promise<string> {
+  const bytes = new TextEncoder().encode(token);
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/** R2 private bytes are reachable only through database-backed opaque capabilities. */
 export class R2PrivateAssetGateway implements PrivateAssetGateway {
-  readonly #origin: string;
   readonly #bucket: R2Bucket;
+  readonly #database: D1Database | undefined;
+  readonly #memory = new Map<
+    string,
+    {
+      capability: StoredPrivateCapability;
+      state: "pending" | "uploaded" | "consumed";
+    }
+  >();
 
-  constructor(bucket: R2Bucket, origin: string) {
+  constructor(bucket: R2Bucket, _origin: string, database?: D1Database) {
     this.#bucket = bucket;
-    this.#origin = origin.replace(/\/$/u, "");
+    this.#database = database;
   }
 
-  async createUploadGrant(command: CreatePrivateUploadGrantCommand) {
-    if (command.objectKey.trim().length === 0) throw new TypeError("An object key is required.");
+  async createUploadGrant(_command: CreatePrivateUploadGrantCommand): Promise<PrivateUploadGrant> {
+    throw new Error("A fully bound upload capability is required.");
+  }
+
+  async createDownloadGrant(_command: {
+    objectKey: string;
+    fileName: string;
+    expiresAt: string;
+  }): Promise<PrivateDownloadGrant> {
+    throw new Error("A fully bound download capability is required.");
+  }
+
+  async registerUploadCapability(
+    binding: PrivateAssetCapabilityBinding,
+  ): Promise<PrivateUploadGrant> {
+    const token = capabilityToken();
+    const capability: StoredPrivateCapability = {
+      kind: "upload",
+      capabilityHash: await capabilityHash(token),
+      tenantId: binding.tenantId,
+      eventId: binding.eventId,
+      submissionId: binding.submissionId,
+      participantId: binding.participantId,
+      ...(binding.taskId === undefined ? {} : { taskId: binding.taskId }),
+      objectKey: binding.objectKey,
+      contentType: binding.contentType,
+      sizeBytes: binding.sizeBytes,
+      fileName: binding.fileName,
+      expiresAt: binding.expiresAt,
+    };
+    await this.storeCapability(binding.capabilityId, capability, "pending");
     return {
-      method: "PUT" as const,
-      url: `${this.#origin}/api/speaker/assets/upload?objectKey=${encodeURIComponent(command.objectKey)}`,
-      headers: { "content-type": command.contentType },
-      expiresAt: command.expiresAt,
+      method: "PUT",
+      url: `/api/speaker/assets/capabilities/upload/${encodeURIComponent(binding.capabilityId)}/${token}`,
+      headers: {
+        "content-type": binding.contentType,
+        "content-length": String(binding.sizeBytes),
+      },
+      expiresAt: binding.expiresAt,
     };
   }
 
-  async createDownloadGrant(command: { objectKey: string; fileName: string; expiresAt: string }) {
+  async registerDownloadCapability(
+    binding: PrivateAssetCapabilityBinding,
+  ): Promise<PrivateDownloadGrant> {
+    const object = await this.#bucket.head(binding.objectKey);
+    if (
+      object === null ||
+      object.size !== binding.sizeBytes ||
+      (object.httpMetadata?.contentType ?? "").trim().toLowerCase() !==
+        binding.contentType.trim().toLowerCase()
+    ) {
+      throw new Error("The requested private asset is not available.");
+    }
+    const token = capabilityToken();
+    const capability: StoredPrivateCapability = {
+      kind: "download",
+      capabilityHash: await capabilityHash(token),
+      tenantId: binding.tenantId,
+      eventId: binding.eventId,
+      submissionId: binding.submissionId,
+      participantId: binding.participantId,
+      ...(binding.taskId === undefined ? {} : { taskId: binding.taskId }),
+      objectKey: binding.objectKey,
+      contentType: binding.contentType,
+      sizeBytes: binding.sizeBytes,
+      fileName: binding.fileName,
+      expiresAt: binding.expiresAt,
+    };
+    const existing = await this.readRow(binding.capabilityId);
+    await this.storeCapability(
+      binding.capabilityId,
+      capability,
+      existing?.state === "pending" ? "pending" : "uploaded",
+    );
+    return {
+      method: "GET",
+      url: `/api/speaker/assets/capabilities/download/${encodeURIComponent(binding.capabilityId)}/${token}`,
+      expiresAt: binding.expiresAt,
+    };
+  }
+
+  async consumeUploadCapability(
+    capabilityId: string,
+    token: string,
+    request: Request,
+  ): Promise<PrivateUploadReceipt> {
+    if (request.method !== "PUT") throw new Error("The upload capability requires PUT.");
+    const row = await this.readRow(capabilityId);
+    const capability = parseStoredCapability(row?.scan_result_code ?? null);
+    if (row === null || capability === null || capability.kind !== "upload") {
+      throw new Error("The upload capability is invalid.");
+    }
+    await this.assertToken(capability, token);
+    if (row.state !== "pending") throw new Error("The upload capability has already been used.");
+    if (Date.parse(capability.expiresAt) <= Date.now()) {
+      throw new Error("The upload capability has expired.");
+    }
+    const contentType = request.headers.get("content-type")?.trim().toLowerCase() ?? "";
+    const declaredLength = request.headers.get("content-length");
+    if (
+      contentType !== capability.contentType.trim().toLowerCase() ||
+      (declaredLength !== null &&
+        (!/^\d+$/u.test(declaredLength) || Number(declaredLength) !== capability.sizeBytes))
+    ) {
+      throw new Error("The uploaded object metadata is not allowed.");
+    }
+    const body = await request.arrayBuffer();
+    if (body.byteLength !== capability.sizeBytes) {
+      throw new Error("The uploaded object size does not match the capability.");
+    }
+    await this.claim(capabilityId, row.scan_result_code ?? "", "uploaded");
+    try {
+      await this.#bucket.put(capability.objectKey, body, {
+        httpMetadata: { contentType: capability.contentType },
+      });
+    } catch (error) {
+      await this.releaseClaim(capabilityId, capabilityPayload(capability));
+      throw error;
+    }
+    return {
+      contentType: capability.contentType,
+      sizeBytes: capability.sizeBytes,
+      uploadedAt: new Date().toISOString(),
+    };
+  }
+
+  async consumeDownloadCapability(
+    capabilityId: string,
+    token: string,
+  ): Promise<PrivateDownloadObject> {
+    const row = await this.readRow(capabilityId);
+    const capability = parseStoredCapability(row?.scan_result_code ?? null);
+    if (row === null || capability === null || capability.kind !== "download") {
+      throw new Error("The download capability is invalid.");
+    }
+    await this.assertToken(capability, token);
+    if (Date.parse(capability.expiresAt) <= Date.now()) {
+      throw new Error("The download capability has expired.");
+    }
+    if (row.state !== "uploaded") throw new Error("The download capability has already been used.");
+    await this.claim(capabilityId, row.scan_result_code ?? "", "download-consumed", "uploaded");
+    const object = await this.#bucket.get(capability.objectKey);
+    if (object === null || object.body === null) {
+      throw new Error("The requested private asset is not available.");
+    }
+    const contentType = object.httpMetadata?.contentType ?? capability.contentType;
+    if (object.size !== capability.sizeBytes) {
+      throw new Error("The private asset no longer matches its immutable metadata.");
+    }
+    return {
+      body: object.body,
+      contentType,
+      sizeBytes: object.size,
+      fileName: capability.fileName,
+    };
+  }
+
+  async inspectObject(
+    command: Pick<PrivateAssetCapabilityBinding, "objectKey" | "contentType" | "sizeBytes">,
+  ) {
     const object = await this.#bucket.head(command.objectKey);
-    if (object === null) throw new Error("The requested private asset is not available.");
+    if (object === null || object.size !== command.sizeBytes) return null;
+    const contentType = object.httpMetadata?.contentType ?? "";
+    return contentType.trim().toLowerCase() === command.contentType.trim().toLowerCase()
+      ? { contentType, sizeBytes: object.size }
+      : null;
+  }
+
+  async readObject(binding: PrivateAssetCapabilityBinding): Promise<PrivateDownloadObject | null> {
+    const object = await this.#bucket.get(binding.objectKey);
+    if (object === null || object.body === null || object.size !== binding.sizeBytes) return null;
+    const contentType = object.httpMetadata?.contentType?.trim().toLowerCase() ?? "";
+    if (contentType !== binding.contentType.trim().toLowerCase()) return null;
     return {
-      url: `${this.#origin}/api/speaker/assets/download?objectKey=${encodeURIComponent(command.objectKey)}&fileName=${encodeURIComponent(command.fileName)}`,
-      expiresAt: command.expiresAt,
+      body: object.body,
+      contentType: object.httpMetadata?.contentType ?? binding.contentType,
+      sizeBytes: object.size,
+      fileName: binding.fileName,
     };
+  }
+
+  private async assertToken(capability: StoredPrivateCapability, token: string): Promise<void> {
+    if (token.length < 32 || (await capabilityHash(token)) !== capability.capabilityHash) {
+      throw new Error("The capability token is invalid.");
+    }
+  }
+
+  private async readRow(capabilityId: string): Promise<PrivateUploadRow | null> {
+    if (this.#database !== undefined) {
+      return this.#database
+        .prepare(
+          `SELECT object_key, content_type, byte_size, state, scan_result_code
+             FROM private_uploads
+            WHERE id = ?
+            LIMIT 1`,
+        )
+        .bind(capabilityId)
+        .first<PrivateUploadRow>();
+    }
+    const stored = this.#memory.get(capabilityId);
+    return stored === undefined
+      ? null
+      : {
+          object_key: stored.capability.objectKey,
+          content_type: stored.capability.contentType,
+          byte_size: stored.capability.sizeBytes,
+          state: stored.state,
+          scan_result_code: capabilityPayload(stored.capability),
+        };
+  }
+
+  private async storeCapability(
+    capabilityId: string,
+    capability: StoredPrivateCapability,
+    state: "pending" | "uploaded",
+  ): Promise<void> {
+    const payload = capabilityPayload(capability);
+    if (this.#database === undefined) {
+      this.#memory.set(capabilityId, { capability, state });
+      return;
+    }
+    const existing = await this.readRow(capabilityId);
+    if (existing === null) {
+      await this.#database
+        .prepare(
+          `INSERT INTO private_uploads
+             (id, tenant_id, object_key, content_type, byte_size, checksum_sha256,
+              state, scan_result_code, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, 'not-computed', ?, ?, ?, ?)`,
+        )
+        .bind(
+          capabilityId,
+          capability.tenantId,
+          capability.objectKey,
+          capability.contentType,
+          capability.sizeBytes,
+          state,
+          payload,
+          new Date().toISOString(),
+          new Date().toISOString(),
+        )
+        .run();
+      return;
+    }
+    if (
+      existing.object_key !== capability.objectKey ||
+      existing.content_type !== capability.contentType ||
+      existing.byte_size !== capability.sizeBytes
+    ) {
+      throw new Error("The private asset capability binding is immutable.");
+    }
+    await this.#database
+      .prepare(
+        `UPDATE private_uploads
+            SET state = ?, scan_result_code = ?, updated_at = ?
+          WHERE id = ?`,
+      )
+      .bind(state, payload, new Date().toISOString(), capabilityId)
+      .run();
+  }
+
+  private async claim(
+    capabilityId: string,
+    expectedPayload: string,
+    nextState: string,
+    expectedState: "pending" | "uploaded" = "pending",
+  ): Promise<void> {
+    if (this.#database === undefined) {
+      const stored = this.#memory.get(capabilityId);
+      if (
+        stored === undefined ||
+        stored.state !== expectedState ||
+        capabilityPayload(stored.capability) !== expectedPayload
+      ) {
+        throw new Error("The capability has already been used.");
+      }
+      stored.state = nextState === "download-consumed" ? "consumed" : "uploaded";
+      return;
+    }
+    const databaseState = nextState === "download-consumed" ? expectedState : nextState;
+    const result = await this.#database
+      .prepare(
+        `UPDATE private_uploads
+            SET state = ?, scan_result_code = ?, updated_at = ?
+          WHERE id = ? AND state = ? AND scan_result_code = ?`,
+      )
+      .bind(
+        databaseState,
+        nextState,
+        new Date().toISOString(),
+        capabilityId,
+        expectedState,
+        expectedPayload,
+      )
+      .run();
+    if ((result.meta?.changes ?? 0) !== 1) {
+      throw new Error("The capability has already been used.");
+    }
+  }
+
+  private async releaseClaim(capabilityId: string, payload: string): Promise<void> {
+    if (this.#database === undefined) {
+      const stored = this.#memory.get(capabilityId);
+      if (stored !== undefined) stored.state = "pending";
+      return;
+    }
+    await this.#database
+      .prepare(
+        `UPDATE private_uploads
+            SET state = 'pending', scan_result_code = ?, updated_at = ?
+          WHERE id = ? AND state = 'uploaded'`,
+      )
+      .bind(payload, new Date().toISOString(), capabilityId)
+      .run();
+  }
+}
+
+function eventStatusFromRecord(value: unknown): Event["status"] {
+  if (value === "draft") return "draft";
+  if (value === "archived") return "archived";
+  return "active";
+}
+
+function eventInstantFromRecord(value: unknown, fallback: string): string {
+  if (typeof value !== "string") return fallback;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : fallback;
+}
+
+function eventInstantOrNull(value: unknown): string | null {
+  if (value === null || value === undefined || typeof value !== "string") return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
+}
+function eventDateOnly(value: string, timeZone: string): string | null {
+  const timestamp = Date.parse(value);
+  if (Number.isNaN(timestamp)) return null;
+  try {
+    const parts = new Intl.DateTimeFormat("en", {
+      calendar: "iso8601",
+      day: "2-digit",
+      month: "2-digit",
+      numberingSystem: "latn",
+      timeZone,
+      year: "numeric",
+    }).formatToParts(new Date(timestamp));
+    const valueFor = (type: Intl.DateTimeFormatPartTypes) =>
+      parts.find((part) => part.type === type)?.value ?? "";
+    const date = `${valueFor("year")}-${valueFor("month")}-${valueFor("day")}`;
+    return /^\d{4}-\d{2}-\d{2}$/u.test(date) ? date : null;
+  } catch {
+    return null;
+  }
+}
+
+function eventRecord(value: JsonRecord): Event {
+  const id = requiredId(value.id);
+  const organizationId = organizationIdOf(value);
+  if (organizationId === undefined) {
+    throw new TypeError("An Airtable event record must contain an organization id.");
+  }
+  const name = textValue(value, "name", "title") ?? id;
+  const slug = textValue(value, "slug") ?? id;
+  const timeZone = textValue(value, "timeZone", "timezone") ?? "UTC";
+  const startsAt = eventInstantFromRecord(
+    textValue(value, "startsAt", "startAt"),
+    "1970-01-01T00:00:00.000Z",
+  );
+  const endsFallback = new Date(Date.parse(startsAt) + 30 * 60_000).toISOString();
+  const endsCandidate = eventInstantFromRecord(textValue(value, "endsAt", "endAt"), endsFallback);
+  const endsAt = Date.parse(endsCandidate) > Date.parse(startsAt) ? endsCandidate : endsFallback;
+  const rawCfp = isRecord(value.cfpSettings) ? value.cfpSettings : {};
+  const opensAt = eventInstantOrNull(rawCfp.opensAt ?? value.opensAt);
+  const closesAt = eventInstantOrNull(rawCfp.closesAt ?? value.closesAt);
+  const rawCalendar = isRecord(value.defaultCalendarSettings) ? value.defaultCalendarSettings : {};
+  const durationMinutes =
+    typeof rawCalendar.durationMinutes === "number" &&
+    Number.isSafeInteger(rawCalendar.durationMinutes) &&
+    rawCalendar.durationMinutes >= 1 &&
+    rawCalendar.durationMinutes <= 1_440
+      ? rawCalendar.durationMinutes
+      : 30;
+  const calendarTimeZone =
+    typeof rawCalendar.timeZone === "string" && rawCalendar.timeZone.trim().length > 0
+      ? rawCalendar.timeZone.trim()
+      : timeZone;
+  const location =
+    rawCalendar.location === null
+      ? null
+      : typeof rawCalendar.location === "string"
+        ? rawCalendar.location
+        : textValue(value, "venue");
+  const version =
+    typeof value.version === "number" && Number.isSafeInteger(value.version) && value.version >= 1
+      ? value.version
+      : 1;
+  const createdAt = eventInstantFromRecord(
+    textValue(value, "createdAt"),
+    eventInstantFromRecord(textValue(value, "updatedAt"), "1970-01-01T00:00:00.000Z"),
+  );
+  const updatedAt = eventInstantFromRecord(textValue(value, "updatedAt"), createdAt);
+  return {
+    id,
+    organizationId,
+    slug,
+    name,
+    status: eventStatusFromRecord(value.status),
+    timeZone,
+    startsAt,
+    endsAt,
+    venue: textValue(value, "venue"),
+    cfpSettings: {
+      enabled:
+        typeof rawCfp.enabled === "boolean"
+          ? rawCfp.enabled
+          : opensAt !== null && closesAt !== null,
+      opensAt,
+      closesAt,
+    },
+    defaultCalendarSettings: {
+      durationMinutes,
+      timeZone: calendarTimeZone,
+      location,
+    },
+    embedConfigurations: Array.isArray(value.embedConfigurations)
+      ? (clone(value.embedConfigurations) as readonly Event["embedConfigurations"][number][])
+      : [],
+    version,
+    createdAt,
+    updatedAt,
+    createdBy: textValue(value, "createdBy") ?? "system",
+    updatedBy: textValue(value, "updatedBy") ?? "system",
+  };
+}
+function cfpEventFromRecord(value: JsonRecord): EventCfp {
+  const id = requiredId(value.id);
+  const tenantId = organizationIdOf(value);
+  if (tenantId === undefined) {
+    throw new TypeError("An Airtable CFP event record must contain an organization id.");
+  }
+  const startsAt = eventInstantFromRecord(
+    textValue(value, "startsAt", "startAt"),
+    "1970-01-01T00:00:00.000Z",
+  );
+  const endsFallback = new Date(Date.parse(startsAt) + 30 * 60_000).toISOString();
+  const rawCfp = isRecord(value.cfpSettings) ? value.cfpSettings : {};
+  const opensAt = eventInstantOrNull(rawCfp.opensAt ?? value.opensAt) ?? startsAt;
+  const closesAt = eventInstantOrNull(rawCfp.closesAt ?? value.closesAt) ?? endsFallback;
+  return {
+    id,
+    tenantId,
+    version:
+      typeof value.version === "number" && Number.isSafeInteger(value.version) && value.version >= 1
+        ? value.version
+        : 1,
+    slug: textValue(value, "slug") ?? id,
+    name: textValue(value, "name", "title") ?? id,
+    timezone: textValue(value, "timezone", "timeZone") ?? "UTC",
+    opensAt,
+    closesAt: Date.parse(closesAt) > Date.parse(opensAt) ? closesAt : endsFallback,
+  };
+}
+function isCanonicalEventRecord(value: JsonRecord): boolean {
+  return (
+    typeof value.timeZone === "string" ||
+    isRecord(value.cfpSettings) ||
+    isRecord(value.defaultCalendarSettings)
+  );
+}
+
+export class AirtableEventRepository implements EventRepository {
+  readonly #events: AirtableJsonStore<JsonRecord>;
+  readonly #audit: AirtableJsonStore<JsonRecord>;
+
+  constructor(options: {
+    readonly baseId: string;
+    readonly transport: AirtableTransport;
+  }) {
+    const shared = { baseId: options.baseId, transport: options.transport };
+    this.#events = jsonStore(shared, "Events", "Settings JSON");
+    this.#audit = jsonStore(shared, "Audit Records", "Changes JSON");
+  }
+
+  async getEvent(organizationId: string, eventId: string): Promise<Event | null> {
+    const raw = await this.#events.find(eventId);
+    if (raw === undefined) return null;
+    const event = eventRecord(raw);
+    return event.organizationId === organizationId ? clone(event) : null;
+  }
+
+  async listEvents(organizationId: string): Promise<readonly Event[]> {
+    return (await this.#events.list())
+      .map(eventRecord)
+      .filter((event) => event.organizationId === organizationId)
+      .map(clone);
+  }
+
+  async findEventBySlug(organizationId: string, slug: string): Promise<Event | null> {
+    const normalizedSlug = slug.trim().toLowerCase();
+    const event = (await this.listEvents(organizationId)).find(
+      (candidate) => candidate.slug.toLowerCase() === normalizedSlug,
+    );
+    return event === undefined ? null : clone(event);
+  }
+
+  async saveEvent(event: Event, expectedVersion: number | null): Promise<void> {
+    const existingRaw = await this.#events.find(event.id);
+    const existing = existingRaw === undefined ? undefined : eventRecord(existingRaw);
+    if (
+      (existing?.version ?? null) !== expectedVersion ||
+      (existing !== undefined && existing.organizationId !== event.organizationId)
+    ) {
+      throw new EventRepositoryConflictError();
+    }
+    if (existing === undefined) {
+      await this.#events.create(clone(event) as unknown as JsonRecord);
+    } else {
+      await this.#events.update(event.id, clone(event) as unknown as JsonRecord);
+    }
+  }
+
+  async appendAudit(entry: EventAuditEntry): Promise<void> {
+    const stored = tagged(clone(entry) as unknown as JsonRecord, "event_audit");
+    const existing = await this.#audit.find(entry.id);
+    if (existing === undefined) await this.#audit.create(stored);
+    else await this.#audit.update(entry.id, stored);
+  }
+
+  async listAudit(organizationId: string, eventId: string): Promise<readonly EventAuditEntry[]> {
+    return (await this.#audit.list())
+      .filter(
+        (entry) =>
+          entityType(entry) === "event_audit" &&
+          organizationIdOf(entry) === organizationId &&
+          eventReference(entry) === eventId,
+      )
+      .map((entry) => {
+        const { entityType: _kind, ...audit } = entry;
+        return clone(audit as unknown as EventAuditEntry);
+      });
   }
 }
 
@@ -1044,7 +3069,10 @@ export class AirtableCfpRepository implements CfpRepository {
   readonly #forms: AirtableJsonStore<CfpForm>;
   readonly #submissions: AirtableJsonStore<Submission>;
   readonly #audits: AirtableJsonStore<AuditEntry & { id: string }>;
-  constructor(options: { readonly baseId: string; readonly transport: AirtableTransport }) {
+  constructor(options: {
+    readonly baseId: string;
+    readonly transport: AirtableTransport;
+  }) {
     const shared = { baseId: options.baseId, transport: options.transport };
     this.#events = new AirtableJsonStore({
       ...shared,
@@ -1060,6 +3088,7 @@ export class AirtableCfpRepository implements CfpRepository {
       ...shared,
       table: "Submissions",
       jsonField: "Answers JSON",
+      decode: decodeCfpSubmission,
     });
     this.#audits = new AirtableJsonStore({
       ...shared,
@@ -1069,31 +3098,53 @@ export class AirtableCfpRepository implements CfpRepository {
   }
 
   async getEvent(tenantId: string, eventId: string): Promise<EventCfp | null> {
-    const event = await this.#events.find(eventId);
-    return event !== undefined && event.tenantId === tenantId ? event : null;
+    const raw = await this.#events.find(eventId);
+    if (raw === undefined) return null;
+    const event = cfpEventFromRecord(raw as unknown as JsonRecord);
+    return event.tenantId === tenantId ? event : null;
   }
 
   async saveEvent(event: EventCfp, expectedVersion: number | null): Promise<void> {
-    const existing = await this.#events.find(event.id);
+    const existingRaw = await this.#events.find(event.id);
+    const existing =
+      existingRaw === undefined
+        ? undefined
+        : cfpEventFromRecord(existingRaw as unknown as JsonRecord);
     if (
       (existing?.version ?? null) !== expectedVersion ||
-      (existing && existing.tenantId !== event.tenantId)
+      (existing !== undefined && existing.tenantId !== event.tenantId)
     ) {
       throw new CfpError("CONFLICT", "The event CFP configuration has changed.");
     }
-    if (existing === undefined) await this.#events.create(event);
-    else await this.#events.update(event.id, event);
+    if (existingRaw !== undefined && isCanonicalEventRecord(existingRaw as unknown as JsonRecord)) {
+      const canonical = eventRecord(existingRaw as unknown as JsonRecord);
+      const updated: Event = {
+        ...canonical,
+        version: event.version,
+        cfpSettings: {
+          ...canonical.cfpSettings,
+          enabled: true,
+          opensAt: event.opensAt,
+          closesAt: event.closesAt,
+        },
+      };
+      await this.#events.update(event.id, updated as unknown as EventCfp);
+    } else if (existing === undefined) {
+      await this.#events.create(clone(event));
+    } else {
+      await this.#events.update(event.id, clone(event));
+    }
   }
 
   async getForm(tenantId: string, formId: string): Promise<CfpForm | null> {
     const form = await this.#forms.find(formId);
-    return form !== undefined && form.tenantId === tenantId ? form : null;
+    return form !== undefined && form.tenantId === tenantId ? untagged(form) : null;
   }
 
   async listForms(tenantId: string, eventId: string): Promise<CfpForm[]> {
-    return (await this.#forms.list()).filter(
-      (form) => form.tenantId === tenantId && form.eventId === eventId,
-    );
+    return (await this.#forms.list())
+      .filter((form) => form.tenantId === tenantId && form.eventId === eventId)
+      .map((form) => untagged(form));
   }
 
   async saveForm(form: CfpForm, expectedVersion: number | null): Promise<void> {
@@ -1110,15 +3161,34 @@ export class AirtableCfpRepository implements CfpRepository {
 
   async getSubmission(tenantId: string, submissionId: string): Promise<Submission | null> {
     const submission = await this.#submissions.find(submissionId);
-    return submission !== undefined && submission.tenantId === tenantId ? submission : null;
+    return submission !== undefined &&
+      !isSpeakerSubmissionRecord(submission) &&
+      submission.tenantId === tenantId
+      ? untagged(submission)
+      : null;
   }
   async listSubmissionsForEvent(tenantId: string, eventId: string): Promise<Submission[]> {
-    return (await this.#submissions.list()).filter(
-      (submission) =>
-        submission.formId !== undefined &&
-        submission.tenantId === tenantId &&
-        submission.eventId === eventId,
-    );
+    const byId = new Map<string, Submission>();
+    for (const submission of await this.#submissions.list()) {
+      if (
+        submission.formId === undefined ||
+        submission.tenantId !== tenantId ||
+        submission.eventId !== eventId ||
+        isSpeakerSubmissionRecord(submission)
+      ) {
+        continue;
+      }
+      const current = byId.get(submission.id);
+      if (
+        current === undefined ||
+        submission.version > current.version ||
+        (submission.version === current.version &&
+          (submission.updatedAt ?? "").localeCompare(current.updatedAt ?? "") > 0)
+      ) {
+        byId.set(submission.id, submission);
+      }
+    }
+    return [...byId.values()].map((submission) => untagged(submission));
   }
 
   async countOwnedSubmissions(input: {
@@ -1170,7 +3240,10 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
   readonly #conflicts: AirtableJsonStore<EvaluationConflictDeclaration>;
   readonly #decisions: AirtableJsonStore<EvaluationDecision>;
 
-  constructor(options: { readonly baseId: string; readonly transport: AirtableTransport }) {
+  constructor(options: {
+    readonly baseId: string;
+    readonly transport: AirtableTransport;
+  }) {
     const shared = { baseId: options.baseId, transport: options.transport };
     this.#plans = new AirtableJsonStore({
       ...shared,
@@ -1201,14 +3274,14 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
 
   async getPlan(tenantId: string, planId: string): Promise<EvaluationPlan | null> {
     const plan = await this.#plans.find(planId);
-    return plan !== undefined && plan.tenantId === tenantId ? plan : null;
+    return plan !== undefined && plan.tenantId === tenantId ? untagged(plan) : null;
   }
   async listPlans(tenantId: string, eventId?: string): Promise<readonly EvaluationPlan[]> {
     return (await this.#plans.list())
       .filter(
         (plan) => plan.tenantId === tenantId && (eventId === undefined || plan.eventId === eventId),
       )
-      .map(clone);
+      .map((plan) => clone(untagged(plan)));
   }
 
   async putPlan(plan: EvaluationPlan, expectedVersion: number | null): Promise<void> {
@@ -1228,31 +3301,41 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
     assignmentId: string,
   ): Promise<EvaluationAssignment | null> {
     const assignment = await this.#assignments.find(assignmentId);
-    return assignment !== undefined && assignment.tenantId === tenantId ? assignment : null;
+    return assignment !== undefined &&
+      isEvaluationAssignmentRecord(assignment) &&
+      assignment.tenantId === tenantId
+      ? untagged(assignment)
+      : null;
   }
 
   async listAssignments(
     tenantId: string,
     planId: string,
   ): Promise<readonly EvaluationAssignment[]> {
-    return (await this.#assignments.list()).filter(
-      (assignment) =>
-        (entityType(assignment) === undefined
-          ? "reviewerId" in assignment && !("scores" in assignment)
-          : entityType(assignment) === "evaluation_assignment") &&
-        assignment.tenantId === tenantId &&
-        assignment.planId === planId,
-    );
+    const byId = new Map<string, EvaluationAssignment>();
+    for (const assignment of await this.#assignments.list()) {
+      if (
+        !isEvaluationAssignmentRecord(assignment) ||
+        assignment.tenantId !== tenantId ||
+        assignment.planId !== planId
+      ) {
+        continue;
+      }
+      const current = byId.get(assignment.id);
+      if (
+        current === undefined ||
+        assignment.version > current.version ||
+        (assignment.version === current.version &&
+          (assignment.updatedAt ?? "").localeCompare(current.updatedAt ?? "") > 0)
+      ) {
+        byId.set(assignment.id, assignment);
+      }
+    }
+    return [...byId.values()].map((assignment) => untagged(assignment));
   }
 
   async putAssignments(assignments: readonly EvaluationAssignment[]): Promise<void> {
-    const existing = (await this.#assignments.list()).filter(
-      (assignment) =>
-        entityType(assignment) === "evaluation_assignment" ||
-        (entityType(assignment) === undefined &&
-          "reviewerId" in assignment &&
-          !("scores" in assignment)),
-    );
+    const existing = (await this.#assignments.list()).filter(isEvaluationAssignmentRecord);
     const existingIds = new Set(
       existing.map((assignment) => `${assignment.tenantId}\u0000${assignment.id}`),
     );
@@ -1269,18 +3352,20 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
 
   async getReview(tenantId: string, assignmentId: string): Promise<EvaluationReview | null> {
     const review = await this.#reviews.find(`review:${assignmentId}`);
-    return review !== undefined && review.tenantId === tenantId ? review : null;
+    return review !== undefined && isEvaluationReviewRecord(review) && review.tenantId === tenantId
+      ? untagged(review)
+      : null;
   }
 
   async listReviews(tenantId: string, planId: string): Promise<readonly EvaluationReview[]> {
-    return (await this.#reviews.list()).filter(
-      (review) =>
-        (entityType(review) === undefined
-          ? "scores" in review
-          : entityType(review) === "evaluation_review") &&
-        review.tenantId === tenantId &&
-        review.planId === planId,
-    );
+    return (await this.#reviews.list())
+      .filter(
+        (review) =>
+          isEvaluationReviewRecord(review) &&
+          review.tenantId === tenantId &&
+          review.planId === planId,
+      )
+      .map((review) => untagged(review));
   }
 
   async putReview(review: EvaluationReview, expectedVersion: number | null): Promise<void> {
@@ -1316,7 +3401,9 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
     assignmentId: string,
   ): Promise<EvaluationConflictDeclaration | null> {
     const declaration = await this.#conflicts.find(`conflict:${assignmentId}`);
-    return declaration !== undefined && declaration.tenantId === tenantId ? declaration : null;
+    return declaration !== undefined && declaration.tenantId === tenantId
+      ? untagged(declaration)
+      : null;
   }
 
   async abstainAssignment(
@@ -1356,7 +3443,7 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
   ): Promise<EvaluationDecision | null> {
     const id = `decision:${planId}:${submissionId}`;
     const decision = await this.#decisions.find(id);
-    return decision !== undefined && decision.tenantId === tenantId ? decision : null;
+    return decision !== undefined && decision.tenantId === tenantId ? untagged(decision) : null;
   }
 
   async putDecision(decision: EvaluationDecision, expectedVersion: number | null): Promise<void> {
@@ -1384,6 +3471,29 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
   }
 }
 
+function submissionText(submission: Submission, ...keys: readonly string[]): string | null {
+  const record = submission as unknown as JsonRecord;
+  const answers = isRecord(record.answers) ? record.answers : {};
+  for (const key of keys) {
+    const answer = answers[key] ?? record[key];
+    if (typeof answer === "string" && answer.trim().length > 0) return answer.trim();
+  }
+  return null;
+}
+
+function submissionParticipants(submission: Submission): readonly SubmissionParticipant[] {
+  return Array.isArray(submission.participants) ? submission.participants : [];
+}
+
+function submissionTitle(submission: Submission): string {
+  return (
+    submissionText(submission, "title", "sessionTitle", "field-title", "Title") ?? submission.id
+  );
+}
+
+function submissionAbstract(submission: Submission): string {
+  return submissionText(submission, "abstract", "description", "field-abstract", "Abstract") ?? "";
+}
 export class AirtableSubmissionReviewSource
   implements SubmissionReviewSource, EvaluationSubmissionSource
 {
@@ -1404,8 +3514,6 @@ export class AirtableSubmissionReviewSource
     if (submission === null || submission.eventId !== eventId) return null;
     const form = await this.#cfp.getForm(tenantId, submission.formId);
     const answers = isRecord(submission.answers) ? submission.answers : {};
-    const titleCandidate = answers.title ?? answers.sessionTitle;
-    const abstractCandidate = answers.abstract ?? answers.description;
     const identityFieldIds =
       form?.submissionFields
         .filter((field) => field.kind === "email" || /email|name/iu.test(field.key))
@@ -1414,11 +3522,11 @@ export class AirtableSubmissionReviewSource
       id: submission.id,
       tenantId,
       eventId,
-      title: typeof titleCandidate === "string" ? titleCandidate : submission.id,
-      abstract: typeof abstractCandidate === "string" ? abstractCandidate : "",
+      title: submissionTitle(submission),
+      abstract: submissionAbstract(submission),
       answers,
       identityFieldIds,
-      participants: submission.participants.map((participant) => ({
+      participants: submissionParticipants(submission).map((participant) => ({
         id: participant.id,
         displayName: `${participant.firstName} ${participant.lastName}`.trim(),
         email: participant.email,
@@ -1465,16 +3573,14 @@ export class AirtableSubmissionReviewSource
 
   private toAdminRecord(submission: Submission): EvaluationSubmissionRecord {
     const answers = isRecord(submission.answers) ? submission.answers : {};
-    const titleCandidate = answers.title ?? answers.sessionTitle;
-    const abstractCandidate = answers.abstract ?? answers.description;
     return {
       id: submission.id,
       tenantId: submission.tenantId,
       eventId: submission.eventId,
-      title: typeof titleCandidate === "string" ? titleCandidate : submission.id,
-      abstract: typeof abstractCandidate === "string" ? abstractCandidate : "",
+      title: submissionTitle(submission),
+      abstract: submissionAbstract(submission),
       answers,
-      participants: submission.participants.map((participant) => ({
+      participants: submissionParticipants(submission).map((participant) => ({
         id: participant.id,
         displayName: `${participant.firstName} ${participant.lastName}`.trim(),
         email: participant.email,
@@ -1488,28 +3594,107 @@ export class AirtableSubmissionReviewSource
     };
   }
 }
+function submissionAnswerValue(submission: Submission, ...keys: readonly string[]): unknown {
+  const answers = isRecord(submission.answers) ? submission.answers : {};
+  for (const key of keys) {
+    if (answers[key] !== undefined) return answers[key];
+  }
+  return undefined;
+}
+
+function submissionAnswerText(submission: Submission, ...keys: readonly string[]): string {
+  const value = submissionAnswerValue(submission, ...keys);
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function submissionAnswerIds(submission: Submission, ...keys: readonly string[]): string[] {
+  const values: unknown[] = [];
+  for (const key of keys) {
+    const value = submissionAnswerValue(submission, key);
+    if (Array.isArray(value)) values.push(...value);
+    else if (value !== undefined) values.push(value);
+  }
+  return [
+    ...new Set(
+      values.flatMap((value) => {
+        if (typeof value === "string") {
+          const normalized = value.trim();
+          return normalized.length === 0 ? [] : [normalized];
+        }
+        if (!isRecord(value)) return [];
+        const id = value.id ?? value.value;
+        return typeof id === "string" && id.trim().length > 0 ? [id.trim()] : [];
+      }),
+    ),
+  ];
+}
+
+function submissionDurationMinutes(submission: Submission): number {
+  const value = submissionAnswerValue(
+    submission,
+    "durationMinutes",
+    "duration",
+    "sessionDuration",
+    "length",
+  );
+  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= 1_440) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const match = /(\d{1,4})/u.exec(value);
+    const parsed = match === null ? NaN : Number(match[1]);
+    if (Number.isSafeInteger(parsed) && parsed > 0 && parsed <= 1_440) return parsed;
+  }
+  return 30;
+}
+
+function sessionsDiffer(left: Session, right: Session): boolean {
+  return (
+    left.title !== right.title ||
+    left.description !== right.description ||
+    left.status !== right.status ||
+    left.durationMinutes !== right.durationMinutes ||
+    left.capacityRequired !== right.capacityRequired ||
+    left.roomId !== right.roomId ||
+    left.formatId !== right.formatId ||
+    left.levelId !== right.levelId ||
+    left.trackId !== right.trackId ||
+    JSON.stringify(left.trackIds) !== JSON.stringify(right.trackIds) ||
+    JSON.stringify(left.tagIds) !== JSON.stringify(right.tagIds) ||
+    JSON.stringify(left.speakerIds) !== JSON.stringify(right.speakerIds) ||
+    JSON.stringify(left.speakerRoster) !== JSON.stringify(right.speakerRoster) ||
+    JSON.stringify(left.resourceIds) !== JSON.stringify(right.resourceIds)
+  );
+}
 export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptanceHandoff {
   readonly #cfp: AirtableCfpRepository;
   readonly #speakers: AirtableSpeakerRepository;
   readonly #database: D1Database;
+  readonly #sessions: SessionRepository;
+  readonly #sessionService: SessionService | undefined;
   readonly #queue: Queue<CloudflareOutboxMessage>;
 
   constructor(options: {
     readonly cfp: AirtableCfpRepository;
     readonly speakers: AirtableSpeakerRepository;
+    readonly sessions: SessionRepository;
     readonly database: D1Database;
+    readonly sessionService?: SessionService;
     readonly queue: Queue<CloudflareOutboxMessage>;
   }) {
     this.#cfp = options.cfp;
     this.#speakers = options.speakers;
     this.#database = options.database;
     this.#queue = options.queue;
+    this.#sessions = options.sessions;
+    this.#sessionService = options.sessionService;
   }
 
   async accept(input: EvaluationAcceptanceHandoffInput): Promise<void> {
     const idempotency = new D1IdempotencyStore(this.#database);
     const scope = `${input.tenantId}:evaluation-acceptance`;
-    const key = `acceptance:${input.submissionId}`;
+    const transitionKey = input.idempotencyKey.trim();
+    const key = `acceptance:${input.submissionId}:${transitionKey}`;
     await idempotency.run(scope, key, async () => {
       const submission = await this.#cfp.getSubmission(input.tenantId, input.submissionId);
       if (submission === null || submission.eventId !== input.eventId) {
@@ -1518,38 +3703,13 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
       if (submission.participants.length === 0) {
         throw new Error("An accepted submission must contain at least one speaker.");
       }
-      const recipients = submission.participants
-        .map((participant) => participant.email.trim())
-        .filter((email) => email.length > 0);
-      if (recipients.length !== submission.participants.length) {
-        throw new Error("Every accepted speaker must have a portal email address.");
-      }
-      const users = new Map<string, string>();
-      for (const participant of submission.participants) {
-        const user = await this.#database
-          .prepare(
-            `SELECT id
-               FROM auth_users
-              WHERE LOWER(email) = LOWER(?)
-                AND email_verified = 1
-              LIMIT 1`,
-          )
-          .bind(participant.email.trim())
-          .first<{ id: string }>();
-        if (user === null || user.id.trim().length === 0) {
-          throw new Error(
-            `No verified portal account exists for accepted speaker ${participant.email || participant.id}.`,
-          );
-        }
-        users.set(participant.id, user.id);
-      }
-
+      const session = await this.#ensureCanonicalSession(input, submission);
       await this.#speakers.ensureAcceptedSubmission({
         submission,
         updatedAt: input.decidedAt,
       });
 
-      const profiles = [];
+      const profiles: string[] = [];
       for (const participant of submission.participants) {
         const profile = await this.#speakers.ensureProfile({
           eventId: input.eventId,
@@ -1562,21 +3722,6 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
           participantId: participant.id,
           updatedAt: input.decidedAt,
         });
-        const userId = users.get(participant.id);
-        if (userId === undefined) {
-          throw new Error(
-            `Portal account lookup disappeared for accepted speaker ${participant.id}.`,
-          );
-        }
-        await this.#database
-          .prepare(
-            `INSERT INTO speaker_grants
-               (organization_id, speaker_profile_id, user_id, created_at, revoked_at)
-             VALUES (?, ?, ?, ?, NULL)
-             ON CONFLICT (organization_id, speaker_profile_id, user_id) DO UPDATE SET revoked_at = NULL`,
-          )
-          .bind(input.tenantId, profile.id, userId, input.decidedAt)
-          .run();
         profiles.push(profile.id);
       }
 
@@ -1589,7 +3734,7 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
            ON CONFLICT (id) DO NOTHING`,
         )
         .bind(
-          `evaluation-accepted:${input.submissionId}`,
+          `evaluation-accepted:${input.submissionId}:${transitionKey}`,
           input.tenantId,
           input.decidedBy,
           input.submissionId,
@@ -1599,27 +3744,214 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
             reason: input.reason,
             idempotencyKey: input.idempotencyKey,
             profileIds: profiles,
+            sessionId: session.id,
           }),
           input.decidedAt,
         )
         .run();
 
-      await this.#enqueue(input, "communications", `evaluation-accepted:${input.submissionId}`, {
-        from: "speakers@foreverbrowsing.com",
-        to: recipients,
-        subject: "Your session was accepted",
-        html: "<p>Your session was accepted. Sign in to complete your speaker profile.</p>",
-        text: "Your session was accepted. Sign in to complete your speaker profile.",
-        idempotencyKey: `evaluation-accepted:${input.submissionId}`,
-      });
+      const recipients = submission.participants
+        .map((participant) => participant.email.trim())
+        .filter((email) => email.length > 0);
+      if (recipients.length > 0) {
+        await this.#enqueue(
+          input,
+          "communications",
+          `evaluation-accepted:${input.submissionId}:${transitionKey}`,
+          {
+            from: DEFAULT_OPEN_SEND_SENDERS.speakers,
+            to: recipients,
+            subject: "Your session was accepted",
+            html: "<p>Your session was accepted. Sign in to complete your speaker profile.</p>",
+            text: "Your session was accepted. Sign in to complete your speaker profile.",
+            idempotencyKey: `evaluation-accepted:${input.submissionId}:${transitionKey}`,
+          },
+        );
+      }
       await this.#enqueue(
         input,
         "cache-invalidation",
-        `evaluation-projection:${input.eventId}:${input.submissionId}`,
+        `evaluation-projection:${input.eventId}:${input.submissionId}:${transitionKey}`,
         { eventId: input.eventId },
       );
       return { accepted: true };
     });
+
+    const submission = await this.#cfp.getSubmission(input.tenantId, input.submissionId);
+    if (submission === null || submission.eventId !== input.eventId) return;
+    await this.#ensureSpeakerGrants(input, submission);
+  }
+
+  async #ensureCanonicalSession(
+    input: EvaluationAcceptanceHandoffInput,
+    submission: Submission,
+  ): Promise<Session> {
+    const id = `session-${submission.id}`;
+    const current = await this.#sessions.getSession(input.tenantId, input.eventId, id);
+    const formatIds = submissionAnswerIds(submission, "formatId", "format");
+    const trackIdsFromAnswers = submissionAnswerIds(
+      submission,
+      "trackIds",
+      "tracks",
+      "trackId",
+      "track",
+    );
+    const tagIdsFromAnswers = submissionAnswerIds(submission, "tagIds", "tags", "tag");
+    const trackIds =
+      trackIdsFromAnswers.length > 0
+        ? trackIdsFromAnswers
+        : [...(current?.trackIds ?? (current?.trackId === undefined ? [] : [current.trackId]))];
+    const tagIds = tagIdsFromAnswers.length > 0 ? tagIdsFromAnswers : [...(current?.tagIds ?? [])];
+    const formatId = formatIds[0] ?? current?.formatId;
+    const durationAnswer = submissionAnswerValue(
+      submission,
+      "durationMinutes",
+      "duration",
+      "sessionDuration",
+      "length",
+    );
+    const durationMinutes =
+      durationAnswer === undefined
+        ? (current?.durationMinutes ?? 30)
+        : submissionDurationMinutes(submission);
+    const title =
+      submissionAnswerText(submission, "title", "sessionTitle", "name") || current?.title || id;
+    const description =
+      submissionAnswerText(submission, "abstract", "description", "sessionAbstract", "summary") ||
+      current?.description ||
+      "";
+    const speakerIds = submission.participants.map((participant) => participant.id);
+    const speakerRoster: readonly SessionSpeakerReference[] = submission.participants.map(
+      (participant) => ({
+        id: participant.id,
+        role: participant.role,
+      }),
+    );
+    const base: Session = {
+      id,
+      tenantId: input.tenantId,
+      eventId: input.eventId,
+      title,
+      description,
+      status: "Accepted",
+      durationMinutes,
+      capacityRequired: current?.capacityRequired ?? 0,
+      ...(current?.roomId === undefined ? {} : { roomId: current.roomId }),
+      ...(trackIds[0] === undefined ? {} : { trackId: trackIds[0] }),
+      trackIds,
+      ...(formatId === undefined ? {} : { formatId }),
+      ...(current?.levelId === undefined ? {} : { levelId: current.levelId }),
+      tagIds,
+      speakerIds,
+      speakerRoster,
+      resourceIds: [...(current?.resourceIds ?? [])],
+      version: current?.version ?? 1,
+      createdAt: current?.createdAt ?? input.decidedAt,
+      updatedAt: input.decidedAt,
+      createdBy: current?.createdBy ?? input.decidedBy,
+      updatedBy: current?.updatedBy ?? input.decidedBy,
+      history: [...(current?.history ?? [])],
+    };
+    if (this.#sessionService !== undefined) {
+      return this.#sessionService.upsertAcceptedSession({
+        session: base,
+        actorId: input.decidedBy,
+      });
+    }
+    if (current === null) {
+      const created: Session = {
+        ...base,
+        version: 1,
+        createdAt: input.decidedAt,
+        updatedAt: input.decidedAt,
+        createdBy: input.decidedBy,
+        updatedBy: input.decidedBy,
+        history: [
+          {
+            id: `${id}:v1`,
+            action: "created",
+            version: 1,
+            actorId: input.decidedBy,
+            occurredAt: input.decidedAt,
+          },
+        ],
+      };
+      await this.#sessions.putSession(created, null);
+      await this.#sessions.appendAudit({
+        id: `${id}:v1`,
+        tenantId: input.tenantId,
+        eventId: input.eventId,
+        entityType: "session",
+        entityId: id,
+        action: "created",
+        version: 1,
+        actorId: input.decidedBy,
+        occurredAt: input.decidedAt,
+        after: clone(created),
+      });
+      return created;
+    }
+    if (!sessionsDiffer(current, base)) return current;
+    const nextVersion = current.version + 1;
+    const updated: Session = {
+      ...base,
+      version: nextVersion,
+      createdAt: current.createdAt,
+      createdBy: current.createdBy,
+      updatedAt: input.decidedAt,
+      updatedBy: input.decidedBy,
+      history: [
+        ...current.history,
+        {
+          id: `${id}:v${nextVersion}`,
+          action: "updated",
+          version: nextVersion,
+          actorId: input.decidedBy,
+          occurredAt: input.decidedAt,
+        },
+      ],
+    };
+    await this.#sessions.putSession(updated, current.version);
+    await this.#sessions.appendAudit({
+      id: `${id}:v${nextVersion}`,
+      tenantId: input.tenantId,
+      eventId: input.eventId,
+      entityType: "session",
+      entityId: id,
+      action: "updated",
+      version: nextVersion,
+      actorId: input.decidedBy,
+      occurredAt: input.decidedAt,
+      before: clone(current),
+      after: clone(updated),
+    });
+    return updated;
+  }
+
+  async #ensureSpeakerGrants(
+    input: EvaluationAcceptanceHandoffInput,
+    submission: Submission,
+  ): Promise<void> {
+    for (const participant of submission.participants) {
+      const email = participant.email.trim();
+      if (email.length === 0) continue;
+      try {
+        await this.#speakers.ensureProfile({
+          eventId: input.eventId,
+          participant,
+          updatedAt: input.decidedAt,
+        });
+        await this.#speakers.ensureVerifiedSpeakerGrant({
+          organizationId: input.tenantId,
+          eventId: input.eventId,
+          participantId: participant.id,
+          email,
+          createdAt: input.decidedAt,
+        });
+      } catch {
+        // Account provisioning is retried on a later acceptance handoff; it cannot block the session.
+      }
+    }
   }
 
   async #enqueue(
@@ -1667,16 +3999,26 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
   }
 }
 
+interface StoredAgendaState extends AgendaState {
+  id: string;
+}
 interface StoredAgendaEntry {
   id: string;
   eventId: string;
   entry: AgendaEntry;
 }
 export class AirtableAgendaRepository {
-  readonly #store: AirtableJsonStore<AgendaState>;
+  readonly #store: AirtableJsonStore<StoredAgendaState>;
   readonly #entries: AirtableJsonStore<StoredAgendaEntry>;
+  readonly #loadedRecords = new Map<
+    string,
+    { readonly recordId: string | null; readonly stateVersion: number | null }
+  >();
 
-  constructor(options: { readonly baseId: string; readonly transport: AirtableTransport }) {
+  constructor(options: {
+    readonly baseId: string;
+    readonly transport: AirtableTransport;
+  }) {
     this.#store = new AirtableJsonStore({
       baseId: options.baseId,
       table: "Agenda Versions",
@@ -1692,18 +4034,17 @@ export class AirtableAgendaRepository {
   }
 
   async load(eventId: string): Promise<AgendaState | null> {
-    const state = await this.#store.find(eventId);
-    if (state === undefined || state.eventId !== eventId) return null;
-    const entries = (await this.#entries.list()).filter((entry) => entry.eventId === eventId);
-    return entries.length === 0
-      ? state
-      : {
-          ...state,
-          draft: {
-            ...state.draft,
-            entries: entries.map((entry) => entry.entry),
-          },
-        };
+    const stored = await this.#store.findWithRecordId(eventId);
+    if (stored === undefined || stored.entity.eventId !== eventId) {
+      this.#loadedRecords.set(eventId, { recordId: null, stateVersion: null });
+      return null;
+    }
+    this.#loadedRecords.set(eventId, {
+      recordId: stored.recordId,
+      stateVersion: stored.entity.stateVersion,
+    });
+    const { id: _id, ...state } = stored.entity;
+    return state;
   }
 
   async compareAndSwap(
@@ -1711,33 +4052,67 @@ export class AirtableAgendaRepository {
     expectedStateVersion: number | null,
     nextState: AgendaState,
   ): Promise<void> {
-    const current = await this.#store.find(eventId);
-    if ((current?.stateVersion ?? null) !== expectedStateVersion) {
+    const cached = this.#loadedRecords.get(eventId);
+    const current =
+      cached?.stateVersion === expectedStateVersion
+        ? cached
+        : await this.#store.findWithRecordId(eventId).then((record) =>
+            record === undefined
+              ? { recordId: null, stateVersion: null }
+              : {
+                  recordId: record.recordId,
+                  stateVersion: record.entity.stateVersion,
+                },
+          );
+    if (current.stateVersion !== expectedStateVersion) {
       throw new AgendaRepositoryConflictError(eventId);
     }
     if (nextState.eventId !== eventId) {
       throw new TypeError(`Cannot save agenda ${nextState.eventId} under event ${eventId}.`);
     }
-    if (current === undefined) await this.#store.create(nextState);
-    else await this.#store.update(eventId, nextState);
+    const stored: StoredAgendaState = { ...nextState, id: eventId };
+    await Promise.all([
+      current.recordId === null
+        ? this.#store.create(stored)
+        : this.#store.updateByRecordId(eventId, current.recordId, stored),
+      this.#synchronizeEntries(eventId, nextState.draft.entries),
+    ]);
+    if (current.recordId === null) {
+      this.#loadedRecords.delete(eventId);
+    } else {
+      this.#loadedRecords.set(eventId, {
+        recordId: current.recordId,
+        stateVersion: nextState.stateVersion,
+      });
+    }
+  }
 
-    const existingEntries = (await this.#entries.list()).filter(
-      (entry) => entry.eventId === eventId,
+  async #synchronizeEntries(eventId: string, entries: readonly AgendaEntry[]): Promise<void> {
+    const existingEntries = (await this.#entries.listWithRecordIds()).filter(
+      (entry) => entry.entity.eventId === eventId,
     );
     const nextEntries = new Map(
-      nextState.draft.entries.map((entry) => [
+      entries.map((entry) => [
         `${eventId}:${entry.id}`,
         { id: `${eventId}:${entry.id}`, eventId, entry },
       ]),
     );
-    for (const entry of existingEntries) {
-      if (!nextEntries.has(entry.id)) await this.#entries.delete(entry.id);
+    const mutations: Array<Promise<unknown>> = [];
+
+    for (const existing of existingEntries) {
+      if (!nextEntries.has(existing.entity.id)) {
+        mutations.push(this.#entries.deleteByRecordId(existing.recordId));
+      }
     }
     for (const [id, entry] of nextEntries) {
-      const existing = existingEntries.find((candidate) => candidate.id === id);
-      if (existing === undefined) await this.#entries.create(entry);
-      else await this.#entries.update(id, entry);
+      const existing = existingEntries.find((candidate) => candidate.entity.id === id);
+      if (existing === undefined) {
+        mutations.push(this.#entries.create(entry));
+      } else if (JSON.stringify(existing.entity.entry) !== JSON.stringify(entry.entry)) {
+        mutations.push(this.#entries.updateByRecordId(id, existing.recordId, entry));
+      }
     }
+    await Promise.all(mutations);
   }
 }
 
@@ -1751,7 +4126,10 @@ export class AirtableOrganizerOverviewRepository implements OrganizerOverviewRou
   readonly #sessions: AirtableJsonStore<JsonRecord>;
   readonly #agendas: AirtableJsonStore<JsonRecord>;
 
-  constructor(options: { readonly baseId: string; readonly transport: AirtableTransport }) {
+  constructor(options: {
+    readonly baseId: string;
+    readonly transport: AirtableTransport;
+  }) {
     const shared = { baseId: options.baseId, transport: options.transport };
     this.#events = new AirtableJsonStore({
       ...shared,
@@ -1791,15 +4169,9 @@ export class AirtableOrganizerOverviewRepository implements OrganizerOverviewRou
   }
 
   async getOverview(organizationId: string): Promise<OrganizerOverviewData> {
-    const [allEvents, allSubmissions, allPlans, allEvaluations, allTasks, allSessions] =
-      await Promise.all([
-        this.#events.list(),
-        this.#submissions.list(),
-        this.#plans.list(),
-        this.#evaluations.list(),
-        this.#tasks.list(),
-        this.#sessions.list(),
-      ]);
+    const allEvents = await this.#events.list({
+      filterByFormula: organizationScopeFormula("Settings JSON", organizationId, []),
+    });
     const events = allEvents
       .filter((event) => organizationIdOf(event) === organizationId)
       .map((event) => this.eventView(event))
@@ -1820,6 +4192,17 @@ export class AirtableOrganizerOverviewRepository implements OrganizerOverviewRou
       };
     }
 
+    const scoped = (jsonField: string) =>
+      organizationScopeFormula(jsonField, organizationId, [...eventIds]);
+    const [allSubmissions, allPlans, allEvaluations, allTasks, allSessions, agendaStates] =
+      await Promise.all([
+        this.#submissions.list({ filterByFormula: scoped("Answers JSON") }),
+        this.#plans.list({ filterByFormula: scoped("Rounds JSON") }),
+        this.#evaluations.list({ filterByFormula: scoped("Scores JSON") }),
+        this.#tasks.list({ filterByFormula: scoped("Owner JSON") }),
+        this.#sessions.list({ filterByFormula: scoped("Metadata JSON") }),
+        this.#agendas.listByIds(events.map((event) => event.id)),
+      ]);
     const submissions = allSubmissions.filter(
       (submission) =>
         belongsToOrganization(submission, organizationId, eventIds) &&
@@ -1854,9 +4237,15 @@ export class AirtableOrganizerOverviewRepository implements OrganizerOverviewRou
         eventIds.has(eventReference(session) ?? "") &&
         textValue(session, "status") !== "cancelled",
     );
+    const agendaByEvent = new Map<string, JsonRecord>(
+      agendaStates.flatMap((state) => {
+        const eventId = textValue(state, "eventId", "id");
+        return eventId === null ? [] : [[eventId, state] as const];
+      }),
+    );
     const publishedSessionIdsByEvent = new Map<string, ReadonlySet<string>>(
-      await Promise.all(
-        events.map(async (event) => [event.id, await this.publishedSessionIds(event.id)] as const),
+      events.map(
+        (event) => [event.id, this.publishedSessionIds(agendaByEvent.get(event.id))] as const,
       ),
     );
 
@@ -1964,15 +4353,14 @@ export class AirtableOrganizerOverviewRepository implements OrganizerOverviewRou
       id,
       name: textValue(record, "name", "title") ?? id,
       slug: textValue(record, "slug"),
-      status: textValue(record, "status"),
+      status: eventStatusFromRecord(record.status),
       startsAt: textValue(record, "startsAt", "startsOn", "startAt"),
       endsAt: textValue(record, "endsAt", "endsOn", "endAt"),
     };
   }
 
-  private async publishedSessionIds(eventId: string): Promise<ReadonlySet<string>> {
-    const state = await this.#agendas.find(eventId);
-    if (state === undefined || !isRecord(state)) return new Set<string>();
+  private publishedSessionIds(state: JsonRecord | undefined): ReadonlySet<string> {
+    if (state === undefined) return new Set<string>();
     const revisionId = textValue(state, "currentPublishedRevisionId");
     if (revisionId === null || !Array.isArray(state.revisions)) return new Set<string>();
     const revision = state.revisions.find(
@@ -1989,6 +4377,9 @@ export class AirtableOrganizerOverviewRepository implements OrganizerOverviewRou
   }
 }
 
+function isDefinedString(value: string | undefined): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
 function isNonEmpty(value: string | null): value is string {
   return value !== null && value.trim().length > 0;
 }
@@ -2198,7 +4589,12 @@ export class D1IdempotencyStore implements IdempotencyStore, CfpIdempotencyCoord
     if (claim.status === "pending") return (await claim.wait()).body as T;
     try {
       const value = await operation();
-      await this.complete({ scope, key, fingerprint, response: { status: 200, body: value } });
+      await this.complete({
+        scope,
+        key,
+        fingerprint,
+        response: { status: 200, body: value },
+      });
       return value;
     } catch (error) {
       await this.release({ scope, key, fingerprint });
@@ -2231,7 +4627,10 @@ export class D1IdempotencyStore implements IdempotencyStore, CfpIdempotencyCoord
           "The idempotency key was already used with a different request.",
         );
       if (row.state === "completed" && row.response_json !== null) {
-        return { status: row.response_status ?? 200, body: parseStoredJson(row.response_json) };
+        return {
+          status: row.response_status ?? 200,
+          body: parseStoredJson(row.response_json),
+        };
       }
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
@@ -2251,6 +4650,14 @@ function parseStoredJson(value: string): unknown {
     throw new Error("Stored idempotency response is invalid.");
   }
 }
+function escapeCfpReceiptHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
 
 export class CloudflareCfpEffects implements CfpEffects {
   readonly #queue: Queue<CloudflareOutboxMessage>;
@@ -2264,48 +4671,2492 @@ export class CloudflareCfpEffects implements CfpEffects {
   async enqueueSubmissionConfirmation(input: {
     submission: Submission;
     form: CfpForm;
+    event: EventCfp;
+    submissionTitle: string;
     idempotencyKey: string;
   }): Promise<void> {
-    const jobId = `submission-confirmation:${input.idempotencyKey}`;
-    const now = new Date().toISOString();
-    const payload = {
-      from: "speakers@foreverbrowsing.com" as const,
-      to: input.submission.participants
-        .map((participant) => participant.email)
-        .filter((email) => email.trim().length > 0),
-      subject: "Your Open Sessionboard submission was received",
-      html: "<p>Your submission was received and is now available to the event team.</p>",
-      text: "Your submission was received and is now available to the event team.",
-      idempotencyKey: input.idempotencyKey,
-    };
-    await this.#database
+    const recipient = await this.#database
       .prepare(
-        `INSERT INTO outbox_jobs
-           (id, tenant_id, topic, deduplication_key, payload_json, state,
-            attempt_count, available_at, created_at, updated_at)
-         VALUES (?, ?, 'communications', ?, ?, 'pending', 0, ?, ?, ?)
-         ON CONFLICT (tenant_id, topic, deduplication_key) DO NOTHING`,
+        `SELECT email
+           FROM auth_users
+          WHERE id = ? AND email_verified = 1
+          LIMIT 1`,
       )
-      .bind(
-        jobId,
-        input.submission.tenantId,
-        input.idempotencyKey,
-        JSON.stringify(payload),
-        now,
-        now,
-        now,
-      )
-      .run();
-    await this.#queue.send({
-      version: 1,
-      jobId,
+      .bind(input.submission.ownerAccountId)
+      .first<{ email: string }>();
+    const email = recipient?.email.trim();
+    if (email === undefined || email.length === 0) {
+      throw new Error("The CFP submitter does not have a verified account email.");
+    }
+
+    const idempotencyKey = `cfp-receipt:${input.submission.id}:v${input.submission.version}`;
+    const eventName = input.event.name.trim();
+    const submissionTitle = input.submissionTitle.trim();
+    const escapedEventName = escapeCfpReceiptHtml(eventName);
+    const escapedSubmissionTitle = escapeCfpReceiptHtml(submissionTitle);
+    await enqueueCloudflareOutbox({
+      database: this.#database,
+      queue: this.#queue,
       tenantId: input.submission.tenantId,
       topic: "communications",
-      enqueuedAt: now,
+      deduplicationKey: idempotencyKey,
+      payload: {
+        from: "speakers@sessionboard.namuh.co",
+        to: [email],
+        subject: `Submission received: ${submissionTitle} — ${eventName}`,
+        html: `<p>Your submission <strong>${escapedSubmissionTitle}</strong> for <strong>${escapedEventName}</strong> was received.</p>`,
+        text: `Your submission "${submissionTitle}" for ${eventName} was received.`,
+        idempotencyKey,
+      },
     });
   }
 }
 
+function scopedRecord(value: object, tenantId: string, eventId: string): boolean {
+  return (
+    organizationIdOf(value) === tenantId && eventReference(isRecord(value) ? value : {}) === eventId
+  );
+}
+
+function recordTenantId(value: object): string | undefined {
+  return organizationIdOf(value);
+}
+
+function asStringArray(value: unknown): readonly string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
+}
+
+function jsonStore<T extends object>(
+  shared: { readonly baseId: string; readonly transport: AirtableTransport },
+  table: string,
+  jsonField: string,
+): AirtableJsonStore<T> {
+  return new AirtableJsonStore<T>({ ...shared, table, jsonField });
+}
+
+function decodeRoom(fields: Readonly<AirtableFields>): Room {
+  const settings = fields["Settings JSON"];
+  const room =
+    typeof settings === "string" && settings.trim().length > 0
+      ? decodeJson<Room>(fields, "Settings JSON")
+      : decodeJson<Room>(fields, "Metadata JSON");
+  return Object.hasOwn(fields, "Capacity")
+    ? { ...room, capacity: fields.Capacity as number }
+    : room;
+}
+/** Session business resources are persisted in their provisioned Airtable tables. */
+export class AirtableSessionRepository implements SessionRepository {
+  readonly #sessions: AirtableJsonStore<Session>;
+  readonly #rooms: AirtableJsonStore<Room>;
+  readonly #tracks: AirtableJsonStore<Track>;
+  readonly #formats: AirtableJsonStore<Format>;
+  readonly #levels: AirtableJsonStore<Level>;
+  readonly #tags: AirtableJsonStore<Tag>;
+  readonly #settings: AirtableJsonStore<SessionSettings>;
+  readonly #audits: AirtableJsonStore<SessionAuditEntry>;
+  readonly #participants: AirtableJsonStore<JsonRecord>;
+  readonly #submissions: AirtableJsonStore<JsonRecord>;
+  private static decodeSession(fields: Readonly<AirtableFields>): Session {
+    const parsed = decodeJson<Session>(fields, "Metadata JSON") as Session & JsonRecord;
+    const scalarText = (...keys: readonly string[]): string | undefined =>
+      textValue(fields as JsonRecord, ...keys) ?? undefined;
+    const jsonArray = (key: string, fallback: readonly string[]): readonly string[] => {
+      const raw = fields[key];
+      if (typeof raw !== "string" || raw.trim().length === 0) return fallback;
+      try {
+        return asStringArray(JSON.parse(raw) as unknown);
+      } catch {
+        return fallback;
+      }
+    };
+    const settings = (() => {
+      const raw = fields["Settings JSON"];
+      if (typeof raw !== "string" || raw.trim().length === 0) return {} as JsonRecord;
+      try {
+        const value = JSON.parse(raw) as unknown;
+        return isRecord(value) ? value : ({} as JsonRecord);
+      } catch {
+        return {} as JsonRecord;
+      }
+    })();
+    const id = scalarText(APPLICATION_ID) ?? parsed.id;
+    const tenantId = scalarText("Organization ID") ?? parsed.tenantId;
+    const eventId = scalarText("Event ID") ?? parsed.eventId;
+    const canonicalPayload =
+      typeof parsed.tenantId === "string" &&
+      parsed.tenantId.trim().length > 0 &&
+      typeof parsed.eventId === "string" &&
+      parsed.eventId.trim().length > 0;
+    const title = canonicalPayload ? parsed.title : (scalarText("Title") ?? parsed.title);
+    const description = canonicalPayload
+      ? parsed.description
+      : (scalarText("Description") ?? parsed.description);
+    const status = canonicalPayload ? parsed.status : (scalarText("Status") ?? parsed.status);
+    const version =
+      canonicalPayload ||
+      typeof fields.Version !== "number" ||
+      !Number.isSafeInteger(fields.Version)
+        ? parsed.version
+        : fields.Version;
+    const durationMinutes =
+      canonicalPayload || typeof fields["Duration Minutes"] !== "number"
+        ? parsed.durationMinutes
+        : fields["Duration Minutes"];
+    const capacityRequired =
+      canonicalPayload || typeof fields["Capacity Required"] !== "number"
+        ? parsed.capacityRequired
+        : fields["Capacity Required"];
+    const trackIds = canonicalPayload
+      ? asStringArray(parsed.trackIds)
+      : jsonArray("Track IDs JSON", asStringArray(parsed.trackIds));
+    const tagIds = canonicalPayload
+      ? asStringArray(parsed.tagIds)
+      : jsonArray("Tag IDs JSON", asStringArray(parsed.tagIds));
+    const speakerIds = canonicalPayload
+      ? asStringArray(parsed.speakerIds)
+      : jsonArray(
+          "Speaker IDs JSON",
+          asStringArray(parsed.speakerIds ?? parsed.speakerProfileIds ?? parsed.participantIds),
+        );
+    const resourceIds = canonicalPayload
+      ? asStringArray(parsed.resourceIds)
+      : jsonArray("Resource IDs JSON", asStringArray(parsed.resourceIds));
+    const roomId = canonicalPayload
+      ? parsed.roomId
+      : (textValue(settings, "roomId") ?? parsed.roomId);
+    const trackId = canonicalPayload
+      ? (parsed.trackId ?? trackIds[0])
+      : (textValue(settings, "trackId") ?? parsed.trackId ?? trackIds[0]);
+    const formatId = canonicalPayload
+      ? parsed.formatId
+      : (scalarText("Format ID") ?? textValue(settings, "formatId") ?? parsed.formatId);
+    const publicationStatus = textValue(settings, "publicationStatus")?.toLowerCase();
+    const contentStatus =
+      parsed.contentStatus ??
+      (publicationStatus === "published"
+        ? "Approved"
+        : publicationStatus === "needs_changes"
+          ? "Needs changes"
+          : undefined);
+
+    requiredId(id);
+    return {
+      ...parsed,
+      id,
+      ...(tenantId === undefined ? {} : { tenantId }),
+      ...(eventId === undefined ? {} : { eventId }),
+      title,
+      description,
+      status,
+      version,
+      durationMinutes,
+      capacityRequired,
+      ...(roomId === undefined ? {} : { roomId }),
+      ...(trackId === undefined ? {} : { trackId }),
+      trackIds,
+      ...(formatId === undefined ? {} : { formatId }),
+      tagIds,
+      speakerIds,
+      resourceIds,
+      ...(contentStatus === undefined ? {} : { contentStatus }),
+    };
+  }
+  private static decodeTaxonomy<T extends Track | Format | Level | Tag>(
+    fields: Readonly<AirtableFields>,
+  ): T {
+    const parsed = decodeJson<T>(fields, "Metadata JSON") as T & JsonRecord;
+    const textField = (key: string): string | undefined => {
+      const value = fields[key];
+      return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+    };
+    const descriptionField = fields.Description;
+    const id = textField(APPLICATION_ID) ?? (typeof parsed.id === "string" ? parsed.id : undefined);
+    const organizationId =
+      textField("Organization ID") ??
+      (typeof parsed.organizationId === "string"
+        ? parsed.organizationId
+        : typeof parsed.tenantId === "string"
+          ? parsed.tenantId
+          : undefined);
+    const eventId =
+      textField("Event ID") ?? (typeof parsed.eventId === "string" ? parsed.eventId : undefined);
+    const name = textField("Name") ?? (typeof parsed.name === "string" ? parsed.name : undefined);
+    const description =
+      typeof descriptionField === "string"
+        ? descriptionField
+        : typeof parsed.description === "string"
+          ? parsed.description
+          : undefined;
+    const version =
+      typeof fields.Version === "number" && Number.isSafeInteger(fields.Version)
+        ? fields.Version
+        : typeof parsed.version === "number"
+          ? parsed.version
+          : undefined;
+    requiredId(id);
+    return {
+      ...parsed,
+      id,
+      ...(organizationId === undefined ? {} : { organizationId, tenantId: organizationId }),
+      ...(eventId === undefined ? {} : { eventId }),
+      ...(name === undefined ? {} : { name }),
+      ...(description === undefined ? {} : { description }),
+      ...(version === undefined ? {} : { version }),
+    } as T;
+  }
+  constructor(options: {
+    readonly baseId: string;
+    readonly transport: AirtableTransport;
+  }) {
+    const shared = { baseId: options.baseId, transport: options.transport };
+    this.#sessions = new AirtableJsonStore({
+      ...shared,
+      table: "Sessions",
+      jsonField: "Metadata JSON",
+      decode: AirtableSessionRepository.decodeSession,
+    });
+    this.#rooms = new AirtableJsonStore({
+      ...shared,
+      table: "Rooms",
+      jsonField: "Settings JSON",
+      decode: decodeRoom,
+    });
+    this.#tracks = new AirtableJsonStore({
+      ...shared,
+      table: "Tracks",
+      jsonField: "Metadata JSON",
+      decode: (fields) => AirtableSessionRepository.decodeTaxonomy<Track>(fields),
+    });
+    this.#formats = new AirtableJsonStore({
+      ...shared,
+      table: "Formats",
+      jsonField: "Metadata JSON",
+      decode: (fields) => AirtableSessionRepository.decodeTaxonomy<Format>(fields),
+    });
+    this.#levels = new AirtableJsonStore({
+      ...shared,
+      table: "Levels",
+      jsonField: "Metadata JSON",
+      decode: (fields) => AirtableSessionRepository.decodeTaxonomy<Level>(fields),
+    });
+    this.#tags = new AirtableJsonStore({
+      ...shared,
+      table: "Tags",
+      jsonField: "Metadata JSON",
+      decode: (fields) => AirtableSessionRepository.decodeTaxonomy<Tag>(fields),
+    });
+    this.#settings = jsonStore(shared, "Session Settings", "Settings JSON");
+    this.#audits = jsonStore(shared, "Audit Records", "Changes JSON");
+    this.#participants = jsonStore(shared, "Participants", "Metadata JSON");
+    this.#submissions = jsonStore(shared, "Submissions", "Answers JSON");
+  }
+
+  async getSession(tenantId: string, eventId: string, sessionId: string): Promise<Session | null> {
+    return this.scopedFind(this.#sessions, tenantId, eventId, sessionId);
+  }
+
+  async listSessions(tenantId: string, eventId: string): Promise<readonly Session[]> {
+    return this.scopedList(this.#sessions, tenantId, eventId);
+  }
+
+  async putSession(session: Session, expectedVersion: number | null): Promise<void> {
+    await this.putVersioned(this.#sessions, session, expectedVersion);
+  }
+
+  async deleteSession(
+    tenantId: string,
+    eventId: string,
+    sessionId: string,
+    expectedVersion: number,
+  ): Promise<void> {
+    await this.deleteVersioned(this.#sessions, tenantId, eventId, sessionId, expectedVersion);
+  }
+
+  async getRoom(tenantId: string, eventId: string, roomId: string): Promise<Room | null> {
+    return this.scopedFind(this.#rooms, tenantId, eventId, roomId);
+  }
+
+  async listRooms(tenantId: string, eventId: string): Promise<readonly Room[]> {
+    return this.scopedList(this.#rooms, tenantId, eventId);
+  }
+
+  async putRoom(room: Room, expectedVersion: number | null): Promise<void> {
+    await this.putVersioned(this.#rooms, room, expectedVersion);
+  }
+
+  async deleteRoom(
+    tenantId: string,
+    eventId: string,
+    roomId: string,
+    expectedVersion: number,
+  ): Promise<void> {
+    await this.deleteVersioned(this.#rooms, tenantId, eventId, roomId, expectedVersion);
+  }
+
+  async getTrack(tenantId: string, eventId: string, trackId: string): Promise<Track | null> {
+    return this.scopedFind(this.#tracks, tenantId, eventId, trackId);
+  }
+
+  async listTracks(tenantId: string, eventId: string): Promise<readonly Track[]> {
+    return this.scopedList(this.#tracks, tenantId, eventId);
+  }
+
+  async putTrack(track: Track, expectedVersion: number | null): Promise<void> {
+    await this.putVersioned(this.#tracks, track, expectedVersion);
+  }
+
+  async deleteTrack(
+    tenantId: string,
+    eventId: string,
+    trackId: string,
+    expectedVersion: number,
+  ): Promise<void> {
+    await this.deleteVersioned(this.#tracks, tenantId, eventId, trackId, expectedVersion);
+  }
+
+  async getFormat(tenantId: string, eventId: string, formatId: string): Promise<Format | null> {
+    return this.scopedFind(this.#formats, tenantId, eventId, formatId);
+  }
+
+  async listFormats(tenantId: string, eventId: string): Promise<readonly Format[]> {
+    return this.scopedList(this.#formats, tenantId, eventId);
+  }
+
+  async putFormat(format: Format, expectedVersion: number | null): Promise<void> {
+    await this.putVersioned(this.#formats, format, expectedVersion);
+  }
+
+  async deleteFormat(
+    tenantId: string,
+    eventId: string,
+    formatId: string,
+    expectedVersion: number,
+  ): Promise<void> {
+    await this.deleteVersioned(this.#formats, tenantId, eventId, formatId, expectedVersion);
+  }
+
+  async getLevel(tenantId: string, eventId: string, levelId: string): Promise<Level | null> {
+    return this.scopedFind(this.#levels, tenantId, eventId, levelId);
+  }
+
+  async listLevels(tenantId: string, eventId: string): Promise<readonly Level[]> {
+    return this.scopedList(this.#levels, tenantId, eventId);
+  }
+
+  async putLevel(level: Level, expectedVersion: number | null): Promise<void> {
+    await this.putVersioned(this.#levels, level, expectedVersion);
+  }
+
+  async deleteLevel(
+    tenantId: string,
+    eventId: string,
+    levelId: string,
+    expectedVersion: number,
+  ): Promise<void> {
+    await this.deleteVersioned(this.#levels, tenantId, eventId, levelId, expectedVersion);
+  }
+
+  async getTag(tenantId: string, eventId: string, tagId: string): Promise<Tag | null> {
+    return this.scopedFind(this.#tags, tenantId, eventId, tagId);
+  }
+
+  async listTags(tenantId: string, eventId: string): Promise<readonly Tag[]> {
+    return this.scopedList(this.#tags, tenantId, eventId);
+  }
+
+  async putTag(tag: Tag, expectedVersion: number | null): Promise<void> {
+    await this.putVersioned(this.#tags, tag, expectedVersion);
+  }
+
+  async deleteTag(
+    tenantId: string,
+    eventId: string,
+    tagId: string,
+    expectedVersion: number,
+  ): Promise<void> {
+    await this.deleteVersioned(this.#tags, tenantId, eventId, tagId, expectedVersion);
+  }
+
+  async getSettings(tenantId: string, eventId: string): Promise<SessionSettings | null> {
+    const id = `settings:${eventId}`;
+    return this.scopedFind(this.#settings, tenantId, eventId, id);
+  }
+
+  async putSettings(settings: SessionSettings, expectedVersion: number | null): Promise<void> {
+    await this.putVersioned(this.#settings, settings, expectedVersion);
+  }
+
+  async appendAudit(entry: SessionAuditEntry): Promise<void> {
+    const stored = tagged(entry, "session_audit");
+    const existing = await this.#audits.find(entry.id);
+    if (existing === undefined) await this.#audits.create(stored);
+    else await this.#audits.update(entry.id, stored);
+  }
+
+  async listAudit(
+    tenantId: string,
+    eventId: string,
+    entityId?: string,
+  ): Promise<readonly SessionAuditEntry[]> {
+    return (await this.#audits.list())
+      .filter(
+        (entry) =>
+          scopedRecord(entry, tenantId, eventId) &&
+          (entityType(entry) === "session_audit" || entityType(entry) === undefined) &&
+          (entityId === undefined || entry.entityId === entityId),
+      )
+      .map((entry) => untagged(entry) as SessionAuditEntry);
+  }
+
+  async listSpeakerIds(tenantId: string, eventId: string): Promise<readonly string[] | undefined> {
+    const participants = (await this.#participants.list()).filter((record) =>
+      scopedRecord(record, tenantId, eventId),
+    );
+    const ids = new Set<string>();
+    for (const participant of participants) {
+      const id = typeof participant.id === "string" ? participant.id : undefined;
+      if (id !== undefined) ids.add(id);
+    }
+    if (ids.size > 0) return [...ids];
+    const submissions = (await this.#submissions.list()).filter((record) =>
+      scopedRecord(record, tenantId, eventId),
+    );
+    for (const submission of submissions) {
+      const participants = submission.participants;
+      if (!Array.isArray(participants)) continue;
+      for (const participant of participants) {
+        if (isRecord(participant) && typeof participant.id === "string") ids.add(participant.id);
+      }
+    }
+    return ids.size === 0 ? undefined : [...ids];
+  }
+
+  private async scopedFind<T extends object>(
+    store: AirtableJsonStore<T>,
+    tenantId: string,
+    eventId: string,
+    id: string,
+  ): Promise<T | null> {
+    const value = await store.find(id);
+    return value !== undefined && scopedRecord(value, tenantId, eventId) ? untagged(value) : null;
+  }
+
+  private async scopedList<T extends object>(
+    store: AirtableJsonStore<T>,
+    tenantId: string,
+    eventId: string,
+  ): Promise<readonly T[]> {
+    return (await store.list())
+      .filter((value) => scopedRecord(value, tenantId, eventId))
+      .map((value) => untagged(value));
+  }
+
+  private async putVersioned<
+    T extends {
+      id: string;
+      tenantId: string;
+      eventId: string;
+      version: number;
+    },
+  >(store: AirtableJsonStore<T>, value: T, expectedVersion: number | null): Promise<void> {
+    const existing = await store.find(value.id);
+    if (
+      (existing?.version ?? null) !== expectedVersion ||
+      (existing !== undefined &&
+        (existing.tenantId !== value.tenantId || existing.eventId !== value.eventId))
+    ) {
+      throw new SessionRepositoryConflictError();
+    }
+    if (existing === undefined) await store.create(tagged(value, `session_${value.id}`));
+    else await store.update(value.id, tagged(value, `session_${value.id}`));
+  }
+
+  private async deleteVersioned<
+    T extends {
+      id: string;
+      tenantId: string;
+      eventId: string;
+      version: number;
+    },
+  >(
+    store: AirtableJsonStore<T>,
+    tenantId: string,
+    eventId: string,
+    id: string,
+    expectedVersion: number,
+  ): Promise<void> {
+    const existing = await store.find(id);
+    if (
+      existing === undefined ||
+      existing.tenantId !== tenantId ||
+      existing.eventId !== eventId ||
+      existing.version !== expectedVersion
+    ) {
+      throw new SessionRepositoryConflictError();
+    }
+    await store.delete(id);
+  }
+}
+function communicationEntity(value: object, kind: string): boolean {
+  const tag = entityType(value);
+  return tag === undefined || tag === kind;
+}
+
+function templateLogicalId(id: string): string {
+  const match = /^template:(.*):v\d+$/u.exec(id);
+  return match?.[1] ?? id;
+}
+
+function templatePhysicalId(id: string, version: number): string {
+  return `template:${id}:v${version}`;
+}
+
+function communicationIndexedFilterFormula(
+  tenantId: string,
+  eventId: string,
+  purpose?: CommunicationTemplatePurpose,
+): string {
+  const clauses = [
+    applicationIdFormula("Organization ID", tenantId),
+    applicationIdFormula("Event ID", eventId),
+    ...(purpose === undefined ? [] : [applicationIdFormula("Purpose", purpose)]),
+  ];
+  return clauses.length === 1 ? (clauses[0] as string) : `AND(${clauses.join(",")})`;
+}
+
+function normalizeTemplate(value: JsonRecord): CommunicationTemplate {
+  const clean = untagged(value) as unknown as CommunicationTemplate;
+  return {
+    ...clean,
+    id: templateLogicalId(requiredId(value.id)),
+  };
+}
+
+function normalizeCommunicationAudience(value: unknown): CommunicationAudience[] {
+  const known = new Set<CommunicationAudience>([
+    "all_participants",
+    "accepted_participants",
+    "waitlisted_participants",
+    "rejected_participants",
+    "task_assignees",
+    "scheduled_participants",
+  ]);
+  return asStringArray(value).filter((entry): entry is CommunicationAudience =>
+    known.has(entry as CommunicationAudience),
+  );
+}
+
+function participantRecipient(
+  value: JsonRecord,
+  tenantId: string,
+  eventId: string,
+  fallbackAudience: CommunicationAudience[] = ["all_participants"],
+): CommunicationRecipient | null {
+  const email = textValue(value, "email", "Email");
+  const id = textValue(value, "id", APPLICATION_ID);
+  if (email === null || id === null) return null;
+  const displayName =
+    textValue(value, "displayName", "name", "Name") ??
+    [textValue(value, "firstName", "First Name"), textValue(value, "lastName", "Last Name")]
+      .filter((part): part is string => part !== null)
+      .join(" ");
+  const audiences = normalizeCommunicationAudience(value.audiences ?? value.Audiences);
+  return {
+    id,
+    participantId: textValue(value, "participantId", "Participant ID") ?? id,
+    tenantId,
+    eventId,
+    email,
+    displayName: displayName || id,
+    audiences: audiences.length === 0 ? fallbackAudience : audiences,
+    data: isRecord(value.data) ? clone(value.data) : {},
+  };
+}
+
+/** Email templates, recipient snapshots, and sends are durable Airtable business records. */
+export class AirtableCommunicationRepository implements CommunicationRepository {
+  readonly #templates: AirtableJsonStore<JsonRecord>;
+  readonly #snapshots: AirtableJsonStore<JsonRecord>;
+  readonly #participants: AirtableJsonStore<JsonRecord>;
+  readonly #submissions: AirtableJsonStore<JsonRecord>;
+  readonly #decisions: AirtableJsonStore<JsonRecord>;
+
+  constructor(options: {
+    readonly baseId: string;
+    readonly transport: AirtableTransport;
+  }) {
+    const shared = { baseId: options.baseId, transport: options.transport };
+    this.#templates = new AirtableJsonStore({
+      ...shared,
+      table: "Email Templates",
+      jsonField: "Settings JSON",
+      scopeFields: { eventId: true, organizationId: true },
+      indexedFields: {
+        Purpose: "purpose",
+        Status: "status",
+        Sender: "sender",
+      },
+    });
+    this.#snapshots = new AirtableJsonStore({
+      ...shared,
+      table: "Email Send Snapshots",
+      jsonField: "Data JSON",
+      scopeFields: { eventId: true, organizationId: true },
+      indexedFields: {
+        Purpose: "purpose",
+        Status: "status",
+      },
+    });
+    this.#participants = jsonStore(shared, "Participants", "Metadata JSON");
+    this.#submissions = jsonStore(shared, "Submissions", "Answers JSON");
+    this.#decisions = jsonStore(shared, "Decisions", "Metadata JSON");
+  }
+
+  async listTemplates(
+    tenantId: string,
+    eventId: string,
+    purpose?: CommunicationTemplatePurpose,
+  ): Promise<readonly CommunicationTemplate[]> {
+    return (
+      await this.#templates.list({
+        filterByFormula: eventFilterFormula("Settings JSON", eventId),
+      })
+    )
+      .filter(
+        (value) =>
+          communicationEntity(value, "communication_template") &&
+          scopedRecord(value, tenantId, eventId) &&
+          (purpose === undefined || value.purpose === purpose),
+      )
+      .map(normalizeTemplate)
+      .sort((left, right) => left.id.localeCompare(right.id) || left.version - right.version);
+  }
+
+  async getTemplate(
+    tenantId: string,
+    eventId: string,
+    templateId: string,
+    version?: number,
+  ): Promise<CommunicationTemplate | undefined> {
+    const templates = await this.listTemplates(tenantId, eventId);
+    const matches = templates.filter(
+      (template) =>
+        template.id === templateId && (version === undefined || template.version === version),
+    );
+    return matches.reduce<CommunicationTemplate | undefined>(
+      (current, candidate) =>
+        current === undefined || candidate.version > current.version ? candidate : current,
+      undefined,
+    );
+  }
+
+  async saveTemplate(template: CommunicationTemplate): Promise<CommunicationTemplate> {
+    const id = templatePhysicalId(template.id, template.version);
+    const stored = tagged({ ...clone(template), id }, "communication_template");
+    const existing = await this.#templates.find(id);
+    if (existing === undefined) await this.#templates.create(stored);
+    else await this.#templates.update(id, stored);
+    return clone(template);
+  }
+
+  async listRecipients(
+    tenantId: string,
+    eventId: string,
+    audience: CommunicationAudience,
+  ): Promise<readonly CommunicationRecipient[]> {
+    const [decisionRecords, participantRecords, submissionRecords] = await Promise.all([
+      listEventScopedJson(this.#decisions, "Metadata JSON", eventId),
+      this.#participants.list({ filterByFormula: applicationIdFormula("Event", eventId) }),
+      listEventScopedJson(this.#submissions, "Answers JSON", eventId),
+    ]);
+    const decisions = decisionRecords.filter((value) => scopedRecord(value, tenantId, eventId));
+    const decisionBySubmission = new Map<string, string>();
+    for (const decision of decisions) {
+      const submissionId = textValue(decision, "submissionId", "Submission ID");
+      const status = textValue(decision, "status", "decision", "Decision");
+      if (submissionId !== null && status !== null) decisionBySubmission.set(submissionId, status);
+    }
+    const recipients = new Map<string, CommunicationRecipient>();
+    for (const record of participantRecords) {
+      const outcome = textValue(record, "outcome", "decision", "status");
+      const fallback: CommunicationAudience[] =
+        outcome === "accepted" || outcome === "waitlisted" || outcome === "rejected"
+          ? ["all_participants", `${outcome}_participants` as CommunicationAudience]
+          : ["all_participants"];
+      const recipient = participantRecipient(record, tenantId, eventId, fallback);
+      if (recipient !== null) recipients.set(recipient.id, recipient);
+    }
+    for (const submission of submissionRecords.filter((value) =>
+      scopedRecord(value, tenantId, eventId),
+    )) {
+      const submissionId = textValue(submission, "id", APPLICATION_ID);
+      const outcome = submissionId === null ? undefined : decisionBySubmission.get(submissionId);
+      const fallback: CommunicationAudience[] =
+        outcome === "accepted" || outcome === "waitlisted" || outcome === "rejected"
+          ? ["all_participants", `${outcome}_participants` as CommunicationAudience]
+          : ["all_participants"];
+      const participants = submission.participants;
+      if (!Array.isArray(participants)) continue;
+      for (const entry of participants) {
+        if (!isRecord(entry)) continue;
+        const recipient = participantRecipient(entry, tenantId, eventId, fallback);
+        if (recipient !== null && !recipients.has(recipient.id))
+          recipients.set(recipient.id, recipient);
+      }
+    }
+    return [...recipients.values()].filter((recipient) => recipient.audiences.includes(audience));
+  }
+
+  async getRecipientsByIds(
+    tenantId: string,
+    eventId: string,
+    recipientIds: readonly string[],
+  ): Promise<readonly CommunicationRecipient[]> {
+    const all = await Promise.all(
+      (
+        [
+          "all_participants",
+          "accepted_participants",
+          "waitlisted_participants",
+          "rejected_participants",
+          "task_assignees",
+          "scheduled_participants",
+        ] as const
+      ).map((audience) => this.listRecipients(tenantId, eventId, audience)),
+    );
+    const byId = new Map<string, CommunicationRecipient>();
+    for (const list of all) for (const recipient of list) byId.set(recipient.id, recipient);
+    return recipientIds.flatMap((id) => {
+      const recipient = byId.get(id);
+      return recipient === undefined ? [] : [recipient];
+    });
+  }
+
+  async isAudienceAuthorized(
+    tenantId: string,
+    eventId: string,
+    _audience: CommunicationAudience,
+  ): Promise<boolean> {
+    const [submissions, participants] = await Promise.all([
+      listEventScopedJson(this.#submissions, "Answers JSON", eventId),
+      this.#participants.list({ filterByFormula: applicationIdFormula("Event", eventId) }),
+    ]);
+    return (
+      submissions.some((value) => scopedRecord(value, tenantId, eventId)) || participants.length > 0
+    );
+  }
+
+  async getPreview(
+    tenantId: string,
+    eventId: string,
+    previewId: string,
+  ): Promise<CommunicationPreview | undefined> {
+    const value = await this.#snapshots.find(previewId);
+    return value !== undefined &&
+      communicationEntity(value, "communication_preview") &&
+      scopedRecord(value, tenantId, eventId)
+      ? (untagged(value) as unknown as CommunicationPreview)
+      : undefined;
+  }
+
+  async savePreview(preview: CommunicationPreview): Promise<CommunicationPreview> {
+    const stored = tagged(clone(preview) as unknown as JsonRecord, "communication_preview");
+    try {
+      await this.#snapshots.create(stored);
+    } catch (error) {
+      if (
+        !(error instanceof AirtableRepositoryError) ||
+        error.code !== "DUPLICATE_APPLICATION_ID"
+      ) {
+        throw error;
+      }
+      await this.#snapshots.update(preview.id, stored);
+    }
+    return clone(preview);
+  }
+
+  async findSendByIdempotency(
+    tenantId: string,
+    eventId: string,
+    idempotencyKey: string,
+  ): Promise<CommunicationSend | undefined> {
+    const value = (
+      await this.#snapshots.list({
+        filterByFormula: communicationIndexedFilterFormula(tenantId, eventId),
+      })
+    ).find(
+      (candidate) =>
+        communicationEntity(candidate, "communication_send") &&
+        scopedRecord(candidate, tenantId, eventId) &&
+        candidate.idempotencyKey === idempotencyKey,
+    );
+    return value === undefined ? undefined : (untagged(value) as unknown as CommunicationSend);
+  }
+
+  async getSend(
+    tenantId: string,
+    eventId: string,
+    sendId: string,
+  ): Promise<CommunicationSend | undefined> {
+    const value = await this.#snapshots.find(sendId);
+    return value !== undefined &&
+      communicationEntity(value, "communication_send") &&
+      scopedRecord(value, tenantId, eventId)
+      ? (untagged(value) as unknown as CommunicationSend)
+      : undefined;
+  }
+
+  async saveSend(send: CommunicationSend): Promise<CommunicationSend> {
+    const duplicate = await this.findSendByIdempotency(
+      send.tenantId,
+      send.eventId,
+      send.idempotencyKey,
+    );
+    if (duplicate !== undefined && duplicate.id !== send.id) {
+      throw new CommunicationError(
+        "COMMUNICATION_CONFLICT",
+        409,
+        "The communication idempotency key is already in use.",
+      );
+    }
+    const stored = tagged(clone(send) as unknown as JsonRecord, "communication_send");
+    const existing = await this.#snapshots.find(send.id);
+    if (existing === undefined) await this.#snapshots.create(stored);
+    else await this.#snapshots.update(send.id, stored);
+    return clone(send);
+  }
+}
+function reportScoped(value: object, scope: ReportRepositoryScope): boolean {
+  return scopedRecord(value, scope.tenantId, scope.eventId);
+}
+
+function reportConflictError(message: string): ReportError {
+  return new ReportError("REPORT_CONFLICT", message, 409);
+}
+
+/** Reports persist definitions and immutable run artifacts; source rows are a narrow program projection. */
+export class AirtableReportRepository implements ReportRepository {
+  readonly #definitions: AirtableJsonStore<JsonRecord>;
+  readonly #runs: AirtableJsonStore<JsonRecord>;
+  readonly #sessions: AirtableJsonStore<Session>;
+  readonly #participants: AirtableJsonStore<JsonRecord>;
+  readonly #profiles: AirtableJsonStore<JsonRecord>;
+  readonly #plans: AirtableJsonStore<EvaluationPlan>;
+  readonly #assignments: AirtableJsonStore<EvaluationAssignment>;
+
+  constructor(options: {
+    readonly baseId: string;
+    readonly transport: AirtableTransport;
+  }) {
+    const shared = { baseId: options.baseId, transport: options.transport };
+    this.#definitions = jsonStore(shared, "Report Definitions", "Settings JSON");
+    this.#runs = jsonStore(shared, "Report Runs", "Output JSON");
+    this.#sessions = jsonStore(shared, "Sessions", "Metadata JSON");
+    this.#participants = jsonStore(shared, "Participants", "Metadata JSON");
+    this.#profiles = jsonStore(shared, "Speaker Profiles", "Biography");
+    this.#plans = jsonStore(shared, "Review Plans", "Rounds JSON");
+    this.#assignments = jsonStore(shared, "Evaluations", "Scores JSON");
+  }
+
+  async listDefinitions(scope: ReportRepositoryScope): Promise<readonly ReportDefinition[]> {
+    return (await this.#definitions.list())
+      .filter((value) => reportScoped(value, scope))
+      .map((value) => clone(untagged(value) as unknown as ReportDefinition))
+      .sort((left, right) => left.id.localeCompare(right.id));
+  }
+
+  async getDefinition(
+    scope: ReportRepositoryScope,
+    definitionId: string,
+  ): Promise<ReportDefinition | null> {
+    const value = await this.#definitions.find(definitionId);
+    return value !== undefined && reportScoped(value, scope)
+      ? clone(untagged(value) as unknown as ReportDefinition)
+      : null;
+  }
+
+  async findDefinition(tenantId: string, definitionId: string): Promise<ReportDefinition | null> {
+    const values = (await this.#definitions.list()).filter(
+      (value) => recordTenantId(value) === tenantId && value.id === definitionId,
+    );
+    if (values.length !== 1) return null;
+    const [value] = values;
+    if (value === undefined) return null;
+    return clone(untagged(value) as unknown as ReportDefinition);
+  }
+
+  async createDefinition(definition: ReportDefinition): Promise<ReportDefinition> {
+    const existing = await this.#definitions.find(definition.id);
+    if (existing !== undefined) {
+      throw reportConflictError("A report with this id already exists.");
+    }
+    await this.#definitions.create(
+      tagged(clone(definition) as unknown as JsonRecord, "report_definition"),
+    );
+    return clone(definition);
+  }
+
+  async updateDefinition(
+    scope: ReportRepositoryScope,
+    definitionId: string,
+    expectedVersion: number,
+    definition: ReportDefinition,
+  ): Promise<ReportDefinition> {
+    const existing = await this.getDefinition(scope, definitionId);
+    if (existing === null)
+      throw new ReportError("REPORT_NOT_FOUND", "The report was not found.", 404);
+    if (existing.version !== expectedVersion) {
+      throw reportConflictError("The report was modified by another requester.");
+    }
+    await this.#definitions.update(
+      definitionId,
+      tagged(clone(definition) as unknown as JsonRecord, "report_definition"),
+    );
+    return clone(definition);
+  }
+
+  async deleteDefinition(
+    scope: ReportRepositoryScope,
+    definitionId: string,
+    expectedVersion: number,
+  ): Promise<void> {
+    const existing = await this.getDefinition(scope, definitionId);
+    if (existing === null)
+      throw new ReportError("REPORT_NOT_FOUND", "The report was not found.", 404);
+    if (existing.version !== expectedVersion) {
+      throw reportConflictError("The report was modified by another requester.");
+    }
+    await this.#definitions.delete(definitionId);
+  }
+
+  async recordRun(run: ReportRun): Promise<ReportRun> {
+    if (await this.#runs.find(run.id)) {
+      throw reportConflictError("A report run with this id already exists.");
+    }
+    await this.#runs.create(tagged(clone(run) as unknown as JsonRecord, "report_run"));
+    return clone(run);
+  }
+
+  async getRun(scope: ReportRepositoryScope, runId: string): Promise<ReportRun | null> {
+    const value = await this.#runs.find(runId);
+    return value !== undefined && reportScoped(value, scope)
+      ? clone(untagged(value) as unknown as ReportRun)
+      : null;
+  }
+
+  async listRuns(
+    scope: ReportRepositoryScope,
+    definitionId?: string,
+  ): Promise<readonly ReportRun[]> {
+    return (await this.#runs.list())
+      .filter(
+        (value) =>
+          reportScoped(value, scope) &&
+          (definitionId === undefined || value.definitionId === definitionId),
+      )
+      .map((value) => clone(untagged(value) as unknown as ReportRun))
+      .sort(
+        (left, right) =>
+          left.requestedAt.localeCompare(right.requestedAt) || left.id.localeCompare(right.id),
+      );
+  }
+
+  async listProgramRecords(input: {
+    readonly tenantId: string;
+    readonly eventId: string;
+    readonly requesterId: string;
+    readonly relationships: readonly string[];
+    readonly fields: readonly string[];
+    readonly includePersonalData: boolean;
+  }): Promise<readonly ReportProgramRecord[]> {
+    const sessions = (await this.#sessions.list()).filter((session) =>
+      scopedRecord(session, input.tenantId, input.eventId),
+    );
+    const participants = (await this.#participants.list()).filter((record) =>
+      scopedRecord(record, input.tenantId, input.eventId),
+    );
+    const profiles = (await this.#profiles.list()).filter((record) =>
+      scopedRecord(record, input.tenantId, input.eventId),
+    );
+    const plans = (await this.#plans.list()).filter((plan) =>
+      scopedRecord(plan, input.tenantId, input.eventId),
+    );
+    const records: ReportProgramRecord[] = [];
+    for (const session of sessions) {
+      const sessionRecord: ReportProgramRecord["session"] = {
+        id: session.id,
+        title: session.title,
+        description: session.description,
+        status: session.status,
+        ...(isRecord(session) && typeof session.startsAt === "string"
+          ? { startsAt: session.startsAt }
+          : {}),
+        ...(isRecord(session) && typeof session.endsAt === "string"
+          ? { endsAt: session.endsAt }
+          : {}),
+        ...(isRecord(session) && typeof session.roomId === "string"
+          ? { room: session.roomId }
+          : {}),
+        ...(isRecord(session) && typeof session.trackId === "string"
+          ? { track: session.trackId }
+          : {}),
+      };
+      const speakerIds = new Set(session.speakerIds);
+      const people = participants
+        .filter((record) => {
+          const id = textValue(record, "id", APPLICATION_ID);
+          return id !== null && speakerIds.has(id);
+        })
+        .map((record) => {
+          const person: {
+            id: string;
+            displayName?: string;
+            biography?: string;
+            email?: string;
+            [key: string]: unknown;
+          } = {
+            id: textValue(record, "id", APPLICATION_ID) ?? "",
+            displayName:
+              textValue(record, "displayName", "name", "Name") ??
+              [
+                textValue(record, "firstName", "First Name"),
+                textValue(record, "lastName", "Last Name"),
+              ]
+                .filter((part): part is string => part !== null)
+                .join(" "),
+          };
+          const biography = textValue(record, "biography", "Biography");
+          if (biography !== null) person.biography = biography;
+          if (input.includePersonalData) {
+            const email = textValue(record, "email", "Email");
+            if (email !== null) person.email = email;
+          }
+          return person;
+        });
+      const speakers = profiles
+        .filter((record) => {
+          const profileId = textValue(record, "participantId", "Participant ID", "id");
+          return profileId !== null && speakerIds.has(profileId);
+        })
+        .map((record) => {
+          const person: {
+            id: string;
+            displayName?: string;
+            biography?: string;
+            email?: string;
+            [key: string]: unknown;
+          } = {
+            id: textValue(record, "participantId", "Participant ID", "id") ?? "",
+            displayName: textValue(record, "displayName", "name", "Name") ?? "",
+          };
+          const biography = textValue(record, "biography", "Biography");
+          if (biography !== null) person.biography = biography;
+          if (input.includePersonalData) {
+            const email = textValue(record, "email", "Email");
+            if (email !== null) person.email = email;
+          }
+          return person;
+        });
+      const progress = [];
+      for (const plan of plans) {
+        const assignments = (await this.#assignments.list()).filter(
+          (value) =>
+            isEvaluationAssignmentRecord(value) &&
+            value.tenantId === input.tenantId &&
+            value.eventId === input.eventId &&
+            value.planId === plan.id,
+        ) as readonly EvaluationAssignment[];
+        const counts = {
+          assigned: assignments.filter((entry) => entry.status === "assigned").length,
+          inProgress: assignments.filter((entry) => entry.status === "in_progress").length,
+          submitted: assignments.filter((entry) => entry.status === "submitted").length,
+          abstained: assignments.filter((entry) => entry.status === "abstained").length,
+        };
+        const total = assignments.length;
+        progress.push({
+          planId: plan.id,
+          planName: plan.name,
+          planVersion: plan.version,
+          total,
+          ...counts,
+          completionPercent: total === 0 ? 0 : Math.round((counts.submitted / total) * 100),
+        });
+      }
+      records.push({
+        tenantId: input.tenantId,
+        eventId: input.eventId,
+        session: sessionRecord,
+        ...(people.length === 0 ? {} : { participants: people }),
+        ...(speakers.length === 0 ? {} : { speakers }),
+        ...(progress.length === 0 ? {} : { evaluationProgress: progress }),
+      });
+    }
+    return records;
+  }
+}
+/**
+ * Airtable-authoritative CRM records. CRM data is deliberately kept in
+ * dedicated tables rather than D1; D1 remains only the coordination/outbox
+ * boundary used by integrations.
+ */
+export class AirtableCrmRepository implements CrmRepository {
+  readonly #contacts: AirtableJsonStore<CrmContact>;
+  readonly #segments: AirtableJsonStore<CrmSegment>;
+  readonly #history: AirtableJsonStore<CrmHistoryEntry>;
+  readonly #pipeline: AirtableJsonStore<CrmPipelineEntry>;
+  readonly #notes: AirtableJsonStore<CrmNote>;
+  readonly #projections: AirtableJsonStore<CrmEventProjection>;
+  readonly #outreach: AirtableJsonStore<CrmOutreachCommand>;
+  readonly #imports: AirtableJsonStore<CrmImportResult>;
+  readonly #commands: AirtableJsonStore<JsonRecord>;
+  readonly #speakerProfiles: AirtableJsonStore<SpeakerProfile & JsonRecord>;
+  readonly #speakerRoster: AirtableJsonStore<SpeakerRosterEntry & { readonly tenantId?: string }>;
+  readonly #events: AirtableEventRepository | undefined;
+
+  constructor(options: {
+    readonly baseId: string;
+    readonly transport: AirtableTransport;
+    readonly events?: AirtableEventRepository;
+  }) {
+    const shared = { baseId: options.baseId, transport: options.transport };
+    this.#contacts = jsonStore(shared, "CRM Contacts", "Contact JSON");
+    this.#segments = jsonStore(shared, "CRM Segments", "Segment JSON");
+    this.#history = jsonStore(shared, "CRM History", "History JSON");
+    this.#pipeline = jsonStore(shared, "CRM Pipeline", "Pipeline JSON");
+    this.#notes = jsonStore(shared, "CRM Notes", "Note JSON");
+    this.#projections = jsonStore(shared, "CRM Event Projections", "Projection JSON");
+    this.#outreach = jsonStore(shared, "CRM Outreach", "Outreach JSON");
+    this.#imports = jsonStore(shared, "CRM Imports", "Import JSON");
+    this.#commands = jsonStore(shared, "CRM Commands", "Result JSON");
+    this.#speakerProfiles = jsonStore(shared, "Speaker Profiles", "Biography");
+    this.#speakerRoster = jsonStore(shared, "Session Roster", "Members JSON");
+    this.#events = options.events;
+  }
+
+  async listContacts(
+    organizationId: string,
+    filter: CrmRepositoryFilter = {},
+  ): Promise<readonly CrmContact[]> {
+    const organization = crmOrganization(organizationId);
+    if (filter.organizationId !== undefined && filter.organizationId !== organization) return [];
+    const query = filter.query?.trim().toLowerCase();
+    const email = filter.email?.trim().toLowerCase();
+    const tags = filter.tags?.map((tag) => tag.trim().toLowerCase());
+    return (await this.#contacts.list())
+      .filter((contact) => {
+        if (contact.organizationId !== organization) return false;
+        if (email !== undefined && contact.email?.toLowerCase() !== email) return false;
+        if (filter.status !== undefined && contact.status !== filter.status) return false;
+        if (filter.pipelineStage !== undefined && contact.pipelineStage !== filter.pipelineStage)
+          return false;
+        if (
+          filter.company !== undefined &&
+          !(contact.company ?? "").toLowerCase().includes(filter.company.toLowerCase())
+        ) {
+          return false;
+        }
+        if (tags !== undefined && !tags.every((tag) => contact.tags.includes(tag))) return false;
+        if (
+          query !== undefined &&
+          ![
+            contact.displayName,
+            contact.email ?? "",
+            contact.company ?? "",
+            contact.title ?? "",
+            contact.phone ?? "",
+            contact.notes ?? "",
+          ].some((value) => value.toLowerCase().includes(query))
+        ) {
+          return false;
+        }
+        return true;
+      })
+      .sort(
+        (left, right) =>
+          left.displayName.localeCompare(right.displayName) || left.id.localeCompare(right.id),
+      )
+      .map(clone);
+  }
+
+  async getContact(organizationId: string, contactId: string): Promise<CrmContact | null> {
+    const organization = crmOrganization(organizationId);
+    const contact = await this.#contacts.find(requiredId(contactId, "contactId"));
+    return contact !== undefined && contact.organizationId === organization ? clone(contact) : null;
+  }
+
+  async findContactByEmail(organizationId: string, email: string): Promise<CrmContact | null> {
+    const organization = crmOrganization(organizationId);
+    const normalized = email.trim().toLowerCase();
+    const contacts = await this.listContacts(organization, { email: normalized, status: "active" });
+    return contacts[0] ?? null;
+  }
+
+  async saveContact(contact: CrmContact, expectedVersion: number | null): Promise<CrmContact> {
+    const organization = crmOrganization(contact.organizationId);
+    const existing = await this.#contacts.find(requiredId(contact.id, "contactId"));
+    if (existing !== undefined && existing.organizationId !== organization) {
+      throw new CrmRepositoryConflictError("The contact belongs to another organization.");
+    }
+    if (
+      expectedVersion === null
+        ? existing !== undefined
+        : existing === undefined || existing.version !== expectedVersion
+    ) {
+      throw new CrmRepositoryConflictError("The contact changed before it could be saved.");
+    }
+    const next: CrmContact = {
+      ...clone(contact),
+      organizationId: organization,
+      version: existing === undefined ? 1 : existing.version + 1,
+      createdAt: existing?.createdAt ?? contact.createdAt,
+      updatedAt: contact.updatedAt,
+    };
+    try {
+      if (existing === undefined) await this.#contacts.create(next);
+      else await this.#contacts.update(next.id, next);
+    } catch (error) {
+      throw new CrmRepositoryConflictError(
+        error instanceof Error ? error.message : "The contact could not be saved.",
+      );
+    }
+    const projections = (await this.#projections.list()).filter(
+      (projection) =>
+        projection.organizationId === organization && projection.contactId === next.id,
+    );
+    for (const projection of projections)
+      await this.#projectCanonicalSpeaker(organization, projection);
+    return clone(next);
+  }
+
+  async listSegments(organizationId: string): Promise<readonly CrmSegment[]> {
+    const organization = crmOrganization(organizationId);
+    return (await this.#segments.list())
+      .filter((segment) => segment.organizationId === organization)
+      .sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id))
+      .map(clone);
+  }
+
+  async getSegment(organizationId: string, segmentId: string): Promise<CrmSegment | null> {
+    const organization = crmOrganization(organizationId);
+    const segment = await this.#segments.find(requiredId(segmentId, "segmentId"));
+    return segment !== undefined && segment.organizationId === organization ? clone(segment) : null;
+  }
+
+  async saveSegment(segment: CrmSegment, expectedVersion: number | null): Promise<CrmSegment> {
+    const organization = crmOrganization(segment.organizationId);
+    const existing = await this.#segments.find(requiredId(segment.id, "segmentId"));
+    if (existing !== undefined && existing.organizationId !== organization) {
+      throw new CrmRepositoryConflictError("The segment belongs to another organization.");
+    }
+    if (
+      expectedVersion === null
+        ? existing !== undefined
+        : existing === undefined || existing.version !== expectedVersion
+    ) {
+      throw new CrmRepositoryConflictError("The segment changed before it could be saved.");
+    }
+    const next: CrmSegment = {
+      ...clone(segment),
+      organizationId: organization,
+      version: existing === undefined ? 1 : existing.version + 1,
+      createdAt: existing?.createdAt ?? segment.createdAt,
+      updatedAt: segment.updatedAt,
+    };
+    try {
+      if (existing === undefined) await this.#segments.create(next);
+      else await this.#segments.update(next.id, next);
+    } catch (error) {
+      throw new CrmRepositoryConflictError(
+        error instanceof Error ? error.message : "The segment could not be saved.",
+      );
+    }
+    return clone(next);
+  }
+
+  async deleteSegment(
+    organizationId: string,
+    segmentId: string,
+    expectedVersion: number,
+  ): Promise<void> {
+    const organization = crmOrganization(organizationId);
+    const existing = await this.#segments.find(requiredId(segmentId, "segmentId"));
+    if (
+      existing === undefined ||
+      existing.organizationId !== organization ||
+      existing.version !== expectedVersion
+    ) {
+      throw new CrmRepositoryConflictError("The segment changed before it could be deleted.");
+    }
+    const deleted = await this.#segments.delete(existing.id);
+    if (!deleted) throw new CrmRepositoryConflictError("The segment could not be deleted.");
+  }
+
+  async listHistory(
+    organizationId: string,
+    contactId: string,
+  ): Promise<readonly CrmHistoryEntry[]> {
+    const organization = crmOrganization(organizationId);
+    const contact = requiredId(contactId, "contactId");
+    return (await this.#history.list())
+      .filter((entry) => entry.organizationId === organization && entry.contactId === contact)
+      .sort((left, right) => right.occurredAt.localeCompare(left.occurredAt))
+      .map(clone);
+  }
+
+  async appendHistory(entry: CrmHistoryEntry): Promise<CrmHistoryEntry> {
+    const organization = crmOrganization(entry.organizationId);
+    if (entry.organizationId !== organization || entry.contactId.trim().length === 0) {
+      throw new CrmRepositoryConflictError("History entry tenant data is invalid.");
+    }
+    if ((await this.getContact(organization, entry.contactId)) === null) {
+      throw new CrmRepositoryConflictError(
+        "The history contact does not belong to this organization.",
+      );
+    }
+    const existing = await this.#history.find(requiredId(entry.id, "historyId"));
+    if (existing !== undefined) {
+      if (existing.organizationId !== organization) {
+        throw new CrmRepositoryConflictError("The history entry belongs to another organization.");
+      }
+      return clone(existing);
+    }
+    try {
+      await this.#history.create(clone(entry));
+    } catch (error) {
+      throw new CrmRepositoryConflictError(
+        error instanceof Error ? error.message : "The history entry could not be saved.",
+      );
+    }
+    return clone(entry);
+  }
+
+  async listPipelineHistory(
+    organizationId: string,
+    contactId: string,
+  ): Promise<readonly CrmPipelineEntry[]> {
+    const organization = crmOrganization(organizationId);
+    const contact = requiredId(contactId, "contactId");
+    return (await this.#pipeline.list())
+      .filter((entry) => entry.organizationId === organization && entry.contactId === contact)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+      .map(clone);
+  }
+
+  async appendPipeline(entry: CrmPipelineEntry): Promise<CrmPipelineEntry> {
+    const organization = crmOrganization(entry.organizationId);
+    if (entry.organizationId !== organization || entry.contactId.trim().length === 0) {
+      throw new CrmRepositoryConflictError("Pipeline entry tenant data is invalid.");
+    }
+    if ((await this.getContact(organization, entry.contactId)) === null) {
+      throw new CrmRepositoryConflictError(
+        "The pipeline contact does not belong to this organization.",
+      );
+    }
+    const existing = await this.#pipeline.find(requiredId(entry.id, "pipelineId"));
+    if (existing !== undefined) {
+      if (existing.organizationId !== organization) {
+        throw new CrmRepositoryConflictError("The pipeline entry belongs to another organization.");
+      }
+      return clone(existing);
+    }
+    try {
+      await this.#pipeline.create(clone(entry));
+    } catch (error) {
+      throw new CrmRepositoryConflictError(
+        error instanceof Error ? error.message : "The pipeline entry could not be saved.",
+      );
+    }
+    return clone(entry);
+  }
+
+  async listNotes(organizationId: string, contactId: string): Promise<readonly CrmNote[]> {
+    const organization = crmOrganization(organizationId);
+    const contact = requiredId(contactId, "contactId");
+    return (await this.#notes.list())
+      .filter((note) => note.organizationId === organization && note.contactId === contact)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+      .map(clone);
+  }
+
+  async appendNote(note: CrmNote): Promise<CrmNote> {
+    const organization = crmOrganization(note.organizationId);
+    if (note.organizationId !== organization || note.contactId.trim().length === 0) {
+      throw new CrmRepositoryConflictError("Note tenant data is invalid.");
+    }
+    if ((await this.getContact(organization, note.contactId)) === null) {
+      throw new CrmRepositoryConflictError(
+        "The note contact does not belong to this organization.",
+      );
+    }
+    const existing = await this.#notes.find(requiredId(note.id, "noteId"));
+    if (existing !== undefined) {
+      if (existing.organizationId !== organization) {
+        throw new CrmRepositoryConflictError("The note belongs to another organization.");
+      }
+      return clone(existing);
+    }
+    try {
+      await this.#notes.create(clone(note));
+    } catch (error) {
+      throw new CrmRepositoryConflictError(
+        error instanceof Error ? error.message : "The note could not be saved.",
+      );
+    }
+    return clone(note);
+  }
+
+  async getProjection(
+    organizationId: string,
+    eventId: string,
+    contactId: string,
+  ): Promise<CrmEventProjection | null> {
+    const organization = crmOrganization(organizationId);
+    const event = requiredId(eventId, "eventId");
+    const contact = requiredId(contactId, "contactId");
+    const projection = (await this.#projections.list()).find(
+      (candidate) =>
+        candidate.organizationId === organization &&
+        candidate.eventId === event &&
+        candidate.contactId === contact,
+    );
+    return projection === undefined ? null : clone(projection);
+  }
+
+  async saveProjection(projection: CrmEventProjection): Promise<CrmEventProjection> {
+    const organization = crmOrganization(projection.organizationId);
+    const eventId = requiredId(projection.eventId, "eventId");
+    const contactId = requiredId(projection.contactId, "contactId");
+    if (projection.organizationId !== organization) {
+      throw new CrmRepositoryConflictError("The projection tenant data is invalid.");
+    }
+    if ((await this.getContact(organization, contactId)) === null) {
+      throw new CrmRepositoryConflictError(
+        "The projected contact does not belong to this organization.",
+      );
+    }
+    if (this.#events !== undefined) {
+      const event = await this.#events.getEvent(organization, eventId);
+      if (event === null) {
+        throw new CrmRepositoryConflictError("The event does not belong to this organization.");
+      }
+    }
+    const existing = await this.getProjection(organization, eventId, contactId);
+    if (existing !== null) {
+      await this.#projectCanonicalSpeaker(organization, existing);
+      return clone(existing);
+    }
+    const stored: CrmEventProjection = {
+      ...clone(projection),
+      organizationId: organization,
+      eventId,
+      contactId,
+    };
+    try {
+      await this.#projections.create(stored);
+    } catch (error) {
+      const concurrent = await this.getProjection(organization, eventId, contactId);
+      if (concurrent !== null) {
+        await this.#projectCanonicalSpeaker(organization, concurrent);
+        return clone(concurrent);
+      }
+      throw new CrmRepositoryConflictError(
+        error instanceof Error ? error.message : "The event projection could not be saved.",
+      );
+    }
+    await this.#projectCanonicalSpeaker(organization, stored);
+    return clone(stored);
+  }
+
+  async listProjections(organizationId: string): Promise<readonly CrmEventProjection[]> {
+    const organization = crmOrganization(organizationId);
+    return (await this.#projections.list())
+      .filter((projection) => projection.organizationId === organization)
+      .sort(
+        (left, right) =>
+          left.eventId.localeCompare(right.eventId) ||
+          left.contactId.localeCompare(right.contactId),
+      )
+      .map(clone);
+  }
+
+  async saveOutreach(command: CrmOutreachCommand): Promise<CrmOutreachCommand> {
+    const organization = crmOrganization(command.organizationId);
+    const key = requiredId(command.idempotencyKey, "idempotencyKey");
+    if (command.organizationId !== organization) {
+      throw new CrmRepositoryConflictError("The outreach tenant data is invalid.");
+    }
+    if ((await this.getContact(organization, command.contactId)) === null) {
+      throw new CrmRepositoryConflictError(
+        "The outreach contact does not belong to this organization.",
+      );
+    }
+    if (
+      command.eventId !== null &&
+      this.#events !== undefined &&
+      (await this.#events.getEvent(organization, requiredId(command.eventId, "eventId"))) === null
+    ) {
+      throw new CrmRepositoryConflictError(
+        "The outreach event does not belong to this organization.",
+      );
+    }
+    const existing = await this.getOutreachByIdempotencyKey(organization, key);
+    if (existing !== null) return clone(existing);
+    const stored = { ...clone(command), organizationId: organization, idempotencyKey: key };
+    try {
+      await this.#outreach.create(stored);
+    } catch (error) {
+      const concurrent = await this.getOutreachByIdempotencyKey(organization, key);
+      if (concurrent !== null) return clone(concurrent);
+      throw new CrmRepositoryConflictError(
+        error instanceof Error ? error.message : "The outreach could not be saved.",
+      );
+    }
+    return clone(stored);
+  }
+
+  async getOutreachByIdempotencyKey(
+    organizationId: string,
+    idempotencyKey: string,
+  ): Promise<CrmOutreachCommand | null> {
+    const organization = crmOrganization(organizationId);
+    const key = requiredId(idempotencyKey, "idempotencyKey");
+    const command = (await this.#outreach.list()).find(
+      (candidate) => candidate.organizationId === organization && candidate.idempotencyKey === key,
+    );
+    if (command === undefined) return null;
+    if (
+      command.eventId !== null &&
+      this.#events !== undefined &&
+      (await this.#events.getEvent(organization, requiredId(command.eventId, "eventId"))) === null
+    ) {
+      throw new CrmRepositoryConflictError(
+        "The outreach event does not belong to this organization.",
+      );
+    }
+    return clone(command);
+  }
+
+  async listOutreach(organizationId: string): Promise<readonly CrmOutreachCommand[]> {
+    const organization = crmOrganization(organizationId);
+    return (await this.#outreach.list())
+      .filter((command) => command.organizationId === organization)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+      .map(clone);
+  }
+
+  async saveImport(result: CrmImportResult): Promise<CrmImportResult> {
+    const organization = crmOrganization(result.organizationId);
+    if (result.organizationId !== organization) {
+      throw new CrmRepositoryConflictError("The import tenant data is invalid.");
+    }
+    const importId = requiredId(result.id, "importId");
+    const key =
+      result.idempotencyKey === undefined
+        ? undefined
+        : requiredId(result.idempotencyKey, "idempotencyKey");
+    const stored: CrmImportResult = {
+      ...clone(result),
+      id: importId,
+      organizationId: organization,
+      ...(key === undefined ? {} : { idempotencyKey: key }),
+    };
+    crmNestedTenant(stored, organization);
+    if (key === undefined) {
+      const existing = await this.#imports.find(importId);
+      if (existing !== undefined && existing.organizationId !== organization) {
+        throw new CrmRepositoryConflictError("The import belongs to another organization.");
+      }
+      if (existing !== undefined) crmNestedTenant(existing, organization);
+      if (existing === undefined) await this.#imports.create(stored);
+      return clone(existing ?? stored);
+    }
+    const existing = await this.getImportByIdempotencyKey(organization, key);
+    if (existing !== null) return clone(existing);
+    try {
+      await this.#imports.create(stored);
+    } catch (error) {
+      const concurrent = await this.getImportByIdempotencyKey(organization, key);
+      if (concurrent !== null) return clone(concurrent);
+      throw new CrmRepositoryConflictError(
+        error instanceof Error ? error.message : "The import could not be saved.",
+      );
+    }
+    return clone(stored);
+  }
+
+  async getImportByIdempotencyKey(
+    organizationId: string,
+    idempotencyKey: string,
+  ): Promise<CrmImportResult | null> {
+    const organization = crmOrganization(organizationId);
+    const key = requiredId(idempotencyKey, "idempotencyKey");
+    const result = (await this.#imports.list()).find(
+      (candidate) => candidate.organizationId === organization && candidate.idempotencyKey === key,
+    );
+    if (result === undefined) return null;
+    crmNestedTenant(result, organization);
+    return clone(result);
+  }
+
+  async getCommandResult<T>(
+    organizationId: string,
+    command: string,
+    key: string,
+  ): Promise<T | null> {
+    const organization = crmOrganization(organizationId);
+    const commandValue = requiredId(command, "command");
+    const keyValue = requiredId(key, "idempotencyKey");
+    const id = crmCommandId(organization, commandValue, keyValue);
+    const record = await this.#commands.find(id);
+    if (record === undefined) return null;
+    if (record.organizationId !== organization) return null;
+    if (record.command !== commandValue || record.idempotencyKey !== keyValue) return null;
+    crmNestedTenant(record.value, organization);
+    return clone(record.value as T);
+  }
+
+  async saveCommandResult<T>(
+    organizationId: string,
+    command: string,
+    key: string,
+    value: T,
+  ): Promise<void> {
+    const organization = crmOrganization(organizationId);
+    const commandValue = requiredId(command, "command");
+    const keyValue = requiredId(key, "idempotencyKey");
+    const id = crmCommandId(organization, commandValue, keyValue);
+    crmNestedTenant(value, organization);
+    const existing = await this.#commands.find(id);
+    if (existing !== undefined) {
+      if (existing.organizationId !== organization) {
+        throw new CrmRepositoryConflictError("The command result belongs to another organization.");
+      }
+      if (existing.command !== commandValue || existing.idempotencyKey !== keyValue) {
+        throw new CrmRepositoryConflictError("The command result key is inconsistent.");
+      }
+      crmNestedTenant(existing.value, organization);
+      return;
+    }
+    const stored: JsonRecord = {
+      id,
+      organizationId: organization,
+      command: commandValue,
+      idempotencyKey: keyValue,
+      createdAt:
+        isRecord(value) && typeof value.createdAt === "string"
+          ? value.createdAt
+          : new Date().toISOString(),
+      value: clone(value),
+    };
+    await this.#commands.create(stored);
+  }
+
+  async #projectCanonicalSpeaker(
+    organizationId: string,
+    projection: CrmEventProjection,
+  ): Promise<void> {
+    const contact = await this.getContact(organizationId, projection.contactId);
+    if (contact === null)
+      throw new CrmRepositoryConflictError("The projected contact was not found.");
+    if (this.#events !== undefined) {
+      const event = await this.#events.getEvent(organizationId, projection.eventId);
+      if (event === null)
+        throw new CrmRepositoryConflictError("The event does not belong to this organization.");
+    }
+    const canonicalSubmissionId = `speaker-submission:crm-contact:${contact.id}`;
+    const profileId = `speaker-profile:${projection.eventId}:${contact.id}`;
+    const rosterId = `roster:${projection.eventId}:${canonicalSubmissionId}:${contact.id}`;
+    const profile = await this.#speakerProfiles.find(profileId);
+    const profileOrganization =
+      profile === undefined ? undefined : authoritativeOrganizationId(profile);
+    if (
+      profile !== undefined &&
+      profileOrganization === undefined &&
+      (Object.hasOwn(profile, "organizationId") || Object.hasOwn(profile, "tenantId"))
+    ) {
+      throw new CrmRepositoryConflictError("The speaker profile has conflicting tenant data.");
+    }
+    if (profileOrganization !== undefined && profileOrganization !== organizationId) {
+      throw new CrmRepositoryConflictError("The speaker profile belongs to another organization.");
+    }
+    const socialLinks = {
+      ...crmSocialLinks(contact.customFields?.socialLinks),
+      ...(contact.website === null ? {} : { website: contact.website }),
+      ...(contact.linkedinUrl === null ? {} : { linkedin: contact.linkedinUrl }),
+    };
+    const profileChanged =
+      profile === undefined ||
+      profile.displayName !== contact.displayName ||
+      (profile.email ?? null) !== contact.email ||
+      (profile.jobTitle ?? null) !== contact.title ||
+      (profile.company ?? null) !== contact.company ||
+      profile.biography !== (contact.notes ?? "") ||
+      JSON.stringify(profile.socialLinks ?? profile.social ?? {}) !== JSON.stringify(socialLinks) ||
+      profile.status !== "active";
+    if (profileChanged) {
+      const profileBase: JsonRecord = profile === undefined ? {} : { ...profile };
+      delete profileBase.email;
+      delete profileBase.jobTitle;
+      delete profileBase.company;
+      delete profileBase.social;
+      delete profileBase.socialLinks;
+      const profileValue: SpeakerProfile & JsonRecord = {
+        ...profileBase,
+        id: profileId,
+        eventId: projection.eventId,
+        participantId: contact.id,
+        displayName: contact.displayName,
+        ...(contact.email === null ? {} : { email: contact.email }),
+        ...(contact.title === null ? {} : { jobTitle: contact.title }),
+        ...(contact.company === null ? {} : { company: contact.company }),
+        biography: contact.notes ?? "",
+        socialLinks,
+        status: "active",
+        version: profile?.version === undefined ? 1 : profile.version + 1,
+        updatedAt: contact.updatedAt,
+      };
+      if (profile === undefined)
+        await this.#speakerProfiles.create(tagged(profileValue, "speaker_profile"));
+      else await this.#speakerProfiles.update(profileId, tagged(profileValue, "speaker_profile"));
+    }
+
+    const storedRoster = await this.#speakerRoster.find(rosterId);
+    const rosterOrganization =
+      storedRoster === undefined ? undefined : authoritativeOrganizationId(storedRoster);
+    if (
+      storedRoster !== undefined &&
+      rosterOrganization === undefined &&
+      (Object.hasOwn(storedRoster, "organizationId") || Object.hasOwn(storedRoster, "tenantId"))
+    ) {
+      throw new CrmRepositoryConflictError("The speaker roster has conflicting tenant data.");
+    }
+    if (rosterOrganization !== undefined && rosterOrganization !== organizationId) {
+      throw new CrmRepositoryConflictError("The speaker roster belongs to another organization.");
+    }
+    const rosterChanged =
+      storedRoster === undefined ||
+      storedRoster.tenantId !== organizationId ||
+      storedRoster.eventId !== projection.eventId ||
+      storedRoster.submissionId !== canonicalSubmissionId ||
+      storedRoster.participantId !== contact.id ||
+      storedRoster.displayName !== contact.displayName ||
+      (storedRoster.email ?? null) !== contact.email ||
+      (storedRoster.jobTitle ?? null) !== contact.title ||
+      (storedRoster.company ?? null) !== contact.company ||
+      (storedRoster.biography ?? null) !== contact.notes ||
+      JSON.stringify(storedRoster.socialLinks ?? {}) !== JSON.stringify(socialLinks) ||
+      storedRoster.workflowStatus !== "crm-prospect" ||
+      storedRoster.status !== "active" ||
+      storedRoster.role !== "primary";
+    if (rosterChanged) {
+      const rosterBase: JsonRecord = storedRoster === undefined ? {} : { ...storedRoster };
+      delete rosterBase.email;
+      delete rosterBase.jobTitle;
+      delete rosterBase.company;
+      delete rosterBase.biography;
+      delete rosterBase.socialLinks;
+      const rosterValue: SpeakerRosterEntry & { readonly tenantId: string } = {
+        ...rosterBase,
+        id: rosterId,
+        tenantId: organizationId,
+        eventId: projection.eventId,
+        submissionId: canonicalSubmissionId,
+        participantId: contact.id,
+        displayName: contact.displayName,
+        ...(contact.email === null ? {} : { email: contact.email }),
+        ...(contact.title === null ? {} : { jobTitle: contact.title }),
+        ...(contact.company === null ? {} : { company: contact.company }),
+        ...(contact.notes === null ? {} : { biography: contact.notes }),
+        socialLinks,
+        role: "primary",
+        status: "active",
+        workflowStatus: "crm-prospect",
+        version: storedRoster?.version === undefined ? 1 : storedRoster.version + 1,
+        createdAt: storedRoster?.createdAt ?? projection.createdAt,
+        updatedAt: contact.updatedAt,
+      };
+      if (storedRoster === undefined) await this.#speakerRoster.create(clone(rosterValue));
+      else await this.#speakerRoster.update(rosterId, clone(rosterValue));
+    }
+  }
+}
+
+function crmOrganization(value: string): string {
+  const normalized = value.trim();
+  if (normalized.length === 0) throw new TypeError("organizationId must be a non-empty string.");
+  return normalized;
+}
+
+function crmCommandId(organizationId: string, command: string, key: string): string {
+  const organization = crmOrganization(organizationId);
+  const commandValue = requiredId(command, "command");
+  const keyValue = requiredId(key, "idempotencyKey");
+  return `crm-command:${organization}:${commandValue}:${keyValue}`;
+}
+
+function crmSocialLinks(value: unknown): Readonly<Record<string, string>> {
+  if (!isRecord(value)) return {};
+  const entries: Array<readonly [string, string]> = [];
+  for (const [key, candidate] of Object.entries(value)) {
+    if (key.trim().length > 0 && typeof candidate === "string" && candidate.trim().length > 0) {
+      entries.push([key, candidate]);
+    }
+  }
+  return Object.fromEntries(entries);
+}
+function crmNestedTenant(value: unknown, organizationId: string): void {
+  const visited = new Set<object>();
+  const visit = (candidate: unknown): void => {
+    if (candidate === null || typeof candidate !== "object" || visited.has(candidate)) return;
+    visited.add(candidate);
+    if (isRecord(candidate)) {
+      const directOrganization =
+        typeof candidate.organizationId === "string" ? candidate.organizationId.trim() : undefined;
+      const directTenant =
+        typeof candidate.tenantId === "string" ? candidate.tenantId.trim() : undefined;
+      if (
+        directOrganization !== undefined &&
+        directTenant !== undefined &&
+        directOrganization !== directTenant
+      ) {
+        throw new CrmRepositoryConflictError("The command result contains conflicting tenants.");
+      }
+      const candidateOrganization = authoritativeOrganizationId(candidate);
+      if (candidateOrganization !== undefined && candidateOrganization !== organizationId) {
+        throw new CrmRepositoryConflictError("The command result contains another organization.");
+      }
+      for (const nested of Object.values(candidate)) visit(nested);
+      return;
+    }
+    if (Array.isArray(candidate)) {
+      for (const nested of candidate) visit(nested);
+    }
+  };
+  visit(value);
+}
+
+/** Durable CRM outreach boundary. The command is persisted in Airtable while the
+ * D1-backed outbox is used solely for delivery coordination. */
+export class AirtableCrmOutreachBoundary implements CrmOutreachBoundary {
+  constructor(
+    private readonly repository: Pick<CrmRepository, "getContact">,
+    private readonly database: D1Database,
+    private readonly outboxQueue: Queue<CloudflareOutboxMessage>,
+    private readonly events?: Pick<EventRepository, "getEvent">,
+  ) {}
+
+  async send(command: CrmOutreachCommand): Promise<CrmOutreachCommand | undefined> {
+    const contact = await this.repository.getContact(command.organizationId, command.contactId);
+    if (
+      command.eventId !== null &&
+      this.events !== undefined &&
+      (await this.events.getEvent(
+        command.organizationId,
+        requiredId(command.eventId, "eventId"),
+      )) === null
+    ) {
+      return { ...clone(command), status: "failed" };
+    }
+    const recipient =
+      contact?.status === "active" ? contact.email?.trim().toLowerCase() : undefined;
+    if (
+      recipient === undefined ||
+      recipient.length === 0 ||
+      speakerDeliverySenderAddress(recipient)
+    ) {
+      return { ...clone(command), status: "failed" };
+    }
+    const idempotencyKey = `crm-outreach:${command.organizationId}:${command.idempotencyKey}`;
+    const escapedBody = speakerDeliveryHtml(command.renderedBody).replaceAll("\n", "<br />");
+    const result = await enqueueCloudflareOutbox({
+      database: this.database,
+      queue: this.outboxQueue,
+      tenantId: command.organizationId,
+      topic: "communications",
+      deduplicationKey: idempotencyKey,
+      payload: {
+        from: DEFAULT_OPEN_SEND_SENDERS.speakers,
+        to: [recipient],
+        subject: command.subject,
+        html: `<p>${escapedBody}</p>`,
+        text: command.renderedBody,
+        idempotencyKey,
+        contactId: command.contactId,
+        eventId: command.eventId,
+      },
+      now: command.createdAt,
+    });
+    return {
+      ...clone(command),
+      status: result.inserted ? "queued" : "sent",
+    };
+  }
+}
+async function enqueueCloudflareOutbox(input: {
+  readonly database: D1Database;
+  readonly queue: Queue<CloudflareOutboxMessage>;
+  readonly tenantId: string;
+  readonly topic: CloudflareOutboxMessage["topic"];
+  readonly deduplicationKey: string;
+  readonly payload: unknown;
+  readonly now?: string;
+}): Promise<{ readonly inserted: boolean; readonly queued: boolean }> {
+  const now = input.now ?? new Date().toISOString();
+  const jobId = `runtime:${input.tenantId}:${input.topic}:${input.deduplicationKey}`;
+  const result = await input.database
+    .prepare(
+      `INSERT INTO outbox_jobs
+         (id, tenant_id, topic, deduplication_key, payload_json, state,
+          attempt_count, available_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
+       ON CONFLICT (tenant_id, topic, deduplication_key) DO NOTHING`,
+    )
+    .bind(
+      jobId,
+      input.tenantId,
+      input.topic,
+      input.deduplicationKey,
+      JSON.stringify(input.payload),
+      now,
+      now,
+      now,
+    )
+    .run();
+  const changes = result.meta?.changes;
+  const inserted = changes === undefined || changes > 0;
+  const state = inserted
+    ? "pending"
+    : (
+        await input.database
+          .prepare("SELECT state FROM outbox_jobs WHERE id = ? LIMIT 1")
+          .bind(jobId)
+          .first<{ state: string }>()
+      )?.state;
+  if (state !== "pending") return { inserted, queued: false };
+  await input.queue.send({
+    version: 1,
+    jobId,
+    tenantId: input.tenantId,
+    topic: input.topic,
+    enqueuedAt: now,
+  });
+  await input.database
+    .prepare(
+      "UPDATE outbox_jobs SET state = 'queued', updated_at = ? WHERE id = ? AND state = 'pending'",
+    )
+    .bind(now, jobId)
+    .run();
+  return { inserted, queued: true };
+}
+
+function speakerDeliverySenderAddress(email: string): boolean {
+  const normalized = email.trim().toLowerCase();
+  return Object.values(DEFAULT_OPEN_SEND_SENDERS).some(
+    (sender) => sender.trim().toLowerCase() === normalized,
+  );
+}
+
+function speakerDeliveryHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+async function speakerDeliveryKey(
+  kind: "invitation" | "reminder",
+  organizationId: string,
+  eventId: string,
+  idempotencyKey: string,
+  participantId: string,
+): Promise<string> {
+  const raw = `speaker-${kind}:${organizationId}:${eventId}:${idempotencyKey}:${participantId}`;
+  if (raw.length <= 128) return raw;
+  const digest = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(raw)),
+  );
+  return `speaker-${kind}:${[...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
+export class AirtableSpeakerReminderDeliveryAdapter implements SpeakerReminderDelivery {
+  constructor(
+    private readonly database: D1Database,
+    private readonly outboxQueue: Queue<CloudflareOutboxMessage>,
+  ) {}
+
+  enqueue(input: SpeakerReminderDeliveryInput): Promise<SpeakerReminderDeliveryReceipt> {
+    return this.enqueueReminder(input);
+  }
+
+  queue(input: SpeakerReminderDeliveryInput): Promise<SpeakerReminderDeliveryReceipt> {
+    return this.enqueueReminder(input);
+  }
+
+  enqueueReminder(input: SpeakerReminderDeliveryInput): Promise<SpeakerReminderDeliveryReceipt> {
+    return this.#enqueueReminder(input);
+  }
+
+  enqueueDeliverableReminder(
+    input: SpeakerReminderDeliveryInput,
+  ): Promise<SpeakerReminderDeliveryReceipt> {
+    return this.#enqueueReminder(input);
+  }
+
+  async enqueueInvitation(
+    input: SpeakerInvitationDeliveryInput,
+  ): Promise<SpeakerInvitationDeliveryReceipt> {
+    const recipientEmail = await this.verifiedRecipientEmail(input.recipientEmail);
+    if (recipientEmail === null) return { status: "failed" };
+    const deliveryKey = await speakerDeliveryKey(
+      "invitation",
+      input.organizationId,
+      input.eventId,
+      input.idempotencyKey,
+      input.participantId,
+    );
+    const result = await enqueueCloudflareOutbox({
+      database: this.database,
+      queue: this.outboxQueue,
+      tenantId: input.organizationId,
+      topic: "communications",
+      deduplicationKey: deliveryKey,
+      payload: {
+        from: DEFAULT_OPEN_SEND_SENDERS.speakers,
+        to: [recipientEmail],
+        subject: `Speaker invitation for ${input.eventId}`,
+        html: `<p>You are invited to participate as a speaker.</p><p>Template: <strong>${speakerDeliveryHtml(input.templateId)}</strong></p>`,
+        text: `You are invited to participate as a speaker for ${input.eventId}. Template: ${input.templateId}`,
+        idempotencyKey: deliveryKey,
+        eventId: input.eventId,
+        participantId: input.participantId,
+        templateId: input.templateId,
+        actorAccountId: input.actorAccountId,
+      },
+    });
+    return {
+      status: result.inserted ? "queued" : "sent",
+      duplicate: !result.inserted,
+    };
+  }
+
+  queueInvitation(
+    input: SpeakerInvitationDeliveryInput,
+  ): Promise<SpeakerInvitationDeliveryReceipt> {
+    return this.enqueueInvitation(input);
+  }
+
+  async #enqueueReminder(
+    input: SpeakerReminderDeliveryInput,
+  ): Promise<SpeakerReminderDeliveryReceipt> {
+    const recipientEmail = await this.verifiedRecipientEmail(input.recipient.email);
+    if (recipientEmail === null) return { queued: false, duplicate: true };
+    const deliveryKey = await speakerDeliveryKey(
+      "reminder",
+      input.organizationId,
+      input.eventId,
+      input.idempotencyKey,
+      input.recipient.participantId,
+    );
+    const titles = input.recipient.tasks
+      .map((task) => task.title.trim())
+      .filter((title) => title.length > 0);
+    const taskSummary = titles.length === 0 ? "your outstanding speaker tasks" : titles.join(", ");
+    const escapedSummary = speakerDeliveryHtml(taskSummary);
+    const result = await enqueueCloudflareOutbox({
+      database: this.database,
+      queue: this.outboxQueue,
+      tenantId: input.organizationId,
+      topic: "communications",
+      deduplicationKey: deliveryKey,
+      payload: {
+        from: DEFAULT_OPEN_SEND_SENDERS.speakers,
+        to: [recipientEmail],
+        subject: `Reminder: ${taskSummary}`,
+        html: `<p>Please complete ${escapedSummary}.</p>`,
+        text: `Please complete ${taskSummary}.`,
+        idempotencyKey: deliveryKey,
+        eventId: input.eventId,
+        participantId: input.recipient.participantId,
+        taskIds: [...input.recipient.taskIds],
+        actorAccountId: input.actorAccountId,
+      },
+    });
+    return {
+      queued: result.queued,
+      duplicate: !result.inserted,
+    };
+  }
+
+  private async verifiedRecipientEmail(candidate: string | undefined): Promise<string | null> {
+    const email = candidate?.trim().toLowerCase() ?? "";
+    if (email.length === 0 || speakerDeliverySenderAddress(email)) return null;
+    const row = await this.database
+      .prepare(
+        `SELECT email
+           FROM auth_users
+          WHERE LOWER(email) = LOWER(?)
+            AND email_verified = 1
+          LIMIT 1`,
+      )
+      .bind(email)
+      .first<{ email?: unknown }>();
+    const verifiedEmail =
+      row !== null && row !== undefined && typeof row.email === "string"
+        ? row.email.trim().toLowerCase()
+        : "";
+    return verifiedEmail.length > 0 && !speakerDeliverySenderAddress(verifiedEmail)
+      ? verifiedEmail
+      : null;
+  }
+}
+class AirtableCommunicationDeliveryAdapter implements CommunicationDeliveryAdapter {
+  constructor(
+    private readonly database: D1Database,
+    private readonly queue: Queue<CloudflareOutboxMessage>,
+  ) {}
+
+  async send(request: CommunicationDeliveryRequest) {
+    await enqueueCloudflareOutbox({
+      database: this.database,
+      queue: this.queue,
+      tenantId: request.tenantId,
+      topic: "communications",
+      deduplicationKey: request.idempotencyKey,
+      payload: {
+        from: request.from,
+        to: [request.to],
+        subject: request.subject,
+        html: request.html,
+        text: request.text,
+        idempotencyKey: request.idempotencyKey,
+      },
+    });
+    return { status: "queued" as const };
+  }
+}
+function remixScoped(value: object, tenantId: string, eventId: string): boolean {
+  return scopedRecord(value, tenantId, eventId);
+}
+
+function remixCandidateTag(value: object): boolean {
+  return entityType(value) === undefined || entityType(value) === "remix_candidate";
+}
+
+function remixAuditTag(value: object): boolean {
+  return entityType(value) === undefined || entityType(value) === "remix_audit";
+}
+
+export class AirtableRemixRepository implements RemixRepository {
+  readonly #candidates: AirtableJsonStore<ContentRemixCandidate>;
+  readonly #audit: AirtableJsonStore<RemixAuditEntry>;
+
+  constructor(options: {
+    readonly baseId: string;
+    readonly transport: AirtableTransport;
+  }) {
+    const shared = { baseId: options.baseId, transport: options.transport };
+    this.#candidates = jsonStore(shared, "Remix Candidates", "Candidate JSON");
+    this.#audit = jsonStore(shared, "Remix Audit", "Details JSON");
+  }
+
+  async getCandidateById(
+    tenantId: string,
+    candidateId: string,
+  ): Promise<ContentRemixCandidate | null> {
+    const candidate = await this.#candidates.find(candidateId);
+    return candidate !== undefined &&
+      candidate.tenantId === tenantId &&
+      remixCandidateTag(candidate)
+      ? clone(untagged(candidate))
+      : null;
+  }
+
+  async getCandidate(
+    tenantId: string,
+    eventId: string,
+    candidateId: string,
+  ): Promise<ContentRemixCandidate | null> {
+    const candidate = await this.getCandidateById(tenantId, candidateId);
+    return candidate !== null && candidate.eventId === eventId ? candidate : null;
+  }
+
+  async listCandidates(
+    tenantId: string,
+    eventId: string,
+    filter?: RemixCandidateFilter,
+  ): Promise<readonly ContentRemixCandidate[]> {
+    return (await this.#candidates.list())
+      .filter(
+        (candidate) =>
+          remixCandidateTag(candidate) &&
+          remixScoped(candidate, tenantId, eventId) &&
+          (filter?.status === undefined || candidate.status === filter.status) &&
+          (filter?.sourceType === undefined || candidate.sourceType === filter.sourceType) &&
+          (filter?.sourceId === undefined || candidate.sourceId === filter.sourceId),
+      )
+      .map((candidate) => clone(untagged(candidate)));
+  }
+
+  async saveCandidate(
+    candidate: ContentRemixCandidate,
+    expectedVersion: number | null,
+  ): Promise<void> {
+    const existing = await this.#candidates.find(candidate.id);
+    if (
+      (existing?.version ?? null) !== expectedVersion ||
+      (existing !== undefined &&
+        (existing.tenantId !== candidate.tenantId || existing.eventId !== candidate.eventId))
+    ) {
+      throw new Error("The remix candidate changed since it was loaded.");
+    }
+    const stored = tagged(clone(candidate), "remix_candidate");
+    if (existing === undefined) await this.#candidates.create(stored);
+    else await this.#candidates.update(candidate.id, stored);
+  }
+
+  async appendAudit(entry: RemixAuditEntry): Promise<void> {
+    const stored = tagged(clone(entry), "remix_audit");
+    const existing = await this.#audit.find(entry.id);
+    if (existing === undefined) await this.#audit.create(stored);
+    else await this.#audit.update(entry.id, stored);
+  }
+
+  async listAudit(tenantId: string, eventId: string): Promise<readonly RemixAuditEntry[]> {
+    return (await this.#audit.list())
+      .filter((entry) => remixAuditTag(entry) && remixScoped(entry, tenantId, eventId))
+      .map((entry) => untagged(entry) as RemixAuditEntry);
+  }
+}
+
+export class AirtableRemixContentGateway implements RemixContentGateway {
+  readonly #sessions: AirtableJsonStore<Session>;
+  readonly #profiles: AirtableJsonStore<JsonRecord>;
+  readonly #database: D1Database;
+  readonly #queue: Queue<CloudflareOutboxMessage>;
+
+  constructor(options: {
+    readonly baseId: string;
+    readonly transport: AirtableTransport;
+    readonly database: D1Database;
+    readonly queue: Queue<CloudflareOutboxMessage>;
+  }) {
+    const shared = { baseId: options.baseId, transport: options.transport };
+    this.#sessions = jsonStore(shared, "Sessions", "Metadata JSON");
+    this.#profiles = jsonStore(shared, "Speaker Profiles", "Biography");
+    this.#database = options.database;
+    this.#queue = options.queue;
+  }
+
+  async listSessions(input: {
+    tenantId: string;
+    eventId: string;
+    filter?: RemixRecordFilter;
+  }): Promise<readonly RemixSessionRecord[]> {
+    return (await this.#sessions.list())
+      .filter((session) => remixScoped(session, input.tenantId, input.eventId))
+      .map((session) => ({
+        kind: "session" as const,
+        id: session.id,
+        eventId: session.eventId,
+        revision: session.version,
+        title: session.title,
+        description: session.description,
+        tags: [...session.tagIds],
+        tracks: [...session.trackIds],
+      }));
+  }
+
+  async listSpeakers(input: {
+    tenantId: string;
+    eventId: string;
+    filter?: RemixRecordFilter;
+  }): Promise<readonly RemixSpeakerRecord[]> {
+    return (await this.#profiles.list())
+      .filter((profile) => remixScoped(profile, input.tenantId, input.eventId))
+      .flatMap((profile) => {
+        const id = textValue(profile, "participantId", "Participant ID", "id");
+        const biography = textValue(profile, "biography", "Biography");
+        return id === null || biography === null
+          ? []
+          : [
+              {
+                kind: "speaker" as const,
+                id,
+                eventId: input.eventId,
+                revision: typeof profile.version === "number" ? profile.version : 1,
+                biography,
+              },
+            ];
+      });
+  }
+
+  async getSession(input: {
+    tenantId: string;
+    eventId: string;
+    sourceId: string;
+  }): Promise<RemixSessionRecord | null> {
+    const session = await this.#sessions.find(input.sourceId);
+    return session !== undefined && remixScoped(session, input.tenantId, input.eventId)
+      ? {
+          kind: "session",
+          id: session.id,
+          eventId: session.eventId,
+          revision: session.version,
+          title: session.title,
+          description: session.description,
+          tags: [...session.tagIds],
+          tracks: [...session.trackIds],
+        }
+      : null;
+  }
+
+  async getSpeaker(input: {
+    tenantId: string;
+    eventId: string;
+    sourceId: string;
+  }): Promise<RemixSpeakerRecord | null> {
+    const profile = (await this.#profiles.list()).find(
+      (candidate) =>
+        remixScoped(candidate, input.tenantId, input.eventId) &&
+        textValue(candidate, "participantId", "Participant ID", "id") === input.sourceId,
+    );
+    if (profile === undefined) return null;
+    const biography = textValue(profile, "biography", "Biography");
+    if (biography === null) return null;
+    return {
+      kind: "speaker",
+      id: input.sourceId,
+      eventId: input.eventId,
+      revision: typeof profile.version === "number" ? profile.version : 1,
+      biography,
+    };
+  }
+
+  async applyRevision(input: {
+    tenantId: string;
+    eventId: string;
+    sourceType: "session" | "speaker";
+    sourceId: string;
+    expectedSourceRevision: number;
+    fields: readonly RemixField[];
+    content: RemixContent;
+    candidateId: string;
+    actorId: string;
+    appliedAt: string;
+  }): Promise<ContentRevision> {
+    if (input.sourceType === "session") {
+      const current = await this.#sessions.find(input.sourceId);
+      if (
+        current === undefined ||
+        !remixScoped(current, input.tenantId, input.eventId) ||
+        current.version !== input.expectedSourceRevision
+      ) {
+        throw new Error("The session content changed since remix generation.");
+      }
+      const content = input.content as Extract<RemixContent, { title: string }>;
+      const next: Session = {
+        ...current,
+        title: content.title,
+        description: content.description,
+        tagIds: [...(content.tags ?? [])],
+        trackIds: [...(content.tracks ?? [])],
+        version: current.version + 1,
+        updatedAt: input.appliedAt,
+        updatedBy: input.actorId,
+        history: [
+          ...current.history,
+          {
+            id: `remix:${input.candidateId}`,
+            action: "updated",
+            version: current.version + 1,
+            actorId: input.actorId,
+            occurredAt: input.appliedAt,
+          },
+        ],
+      };
+      await this.#sessions.update(current.id, tagged(next, "session_remix_applied"));
+      await enqueueCloudflareOutbox({
+        database: this.#database,
+        queue: this.#queue,
+        tenantId: input.tenantId,
+        topic: "cache-invalidation",
+        deduplicationKey: `remix:${input.eventId}:session:${input.sourceId}:v${next.version}`,
+        payload: {
+          eventId: input.eventId,
+          sourceType: input.sourceType,
+          sourceId: input.sourceId,
+          revision: next.version,
+        },
+        now: input.appliedAt,
+      });
+      return {
+        id: `revision:${input.candidateId}`,
+        tenantId: input.tenantId,
+        eventId: input.eventId,
+        sourceType: input.sourceType,
+        sourceId: input.sourceId,
+        sourceRevision: next.version,
+        fields: [...input.fields],
+        content: clone(content),
+        candidateId: input.candidateId,
+        appliedBy: input.actorId,
+        appliedAt: input.appliedAt,
+      };
+    }
+
+    const profiles = await this.#profiles.list();
+    const profile = profiles.find(
+      (candidate) =>
+        remixScoped(candidate, input.tenantId, input.eventId) &&
+        textValue(candidate, "participantId", "Participant ID", "id") === input.sourceId,
+    );
+    if (
+      profile === undefined ||
+      typeof profile.version !== "number" ||
+      profile.version !== input.expectedSourceRevision
+    ) {
+      throw new Error("The speaker content changed since remix generation.");
+    }
+    const content = input.content as Extract<RemixContent, { biography: string }>;
+    const next = {
+      ...profile,
+      biography: content.biography,
+      version: profile.version + 1,
+      updatedAt: input.appliedAt,
+    };
+    await this.#profiles.update(requiredId(profile.id), tagged(next, "speaker_remix_applied"));
+    await enqueueCloudflareOutbox({
+      database: this.#database,
+      queue: this.#queue,
+      tenantId: input.tenantId,
+      topic: "cache-invalidation",
+      deduplicationKey: `remix:${input.eventId}:speaker:${input.sourceId}:v${next.version}`,
+      payload: {
+        eventId: input.eventId,
+        sourceType: input.sourceType,
+        sourceId: input.sourceId,
+        revision: next.version,
+      },
+      now: input.appliedAt,
+    });
+    return {
+      id: `revision:${input.candidateId}`,
+      tenantId: input.tenantId,
+      eventId: input.eventId,
+      sourceType: input.sourceType,
+      sourceId: input.sourceId,
+      sourceRevision: next.version,
+      fields: [...input.fields],
+      content: clone(content),
+      candidateId: input.candidateId,
+      appliedBy: input.actorId,
+      appliedAt: input.appliedAt,
+    };
+  }
+}
 export interface AirtableRuntimeOptions {
   readonly authenticator: Pick<RequestAuthenticator, "authenticate">;
   readonly baseId: string;
@@ -2315,10 +7166,12 @@ export interface AirtableRuntimeOptions {
   readonly privateFiles: R2Bucket;
   readonly outboxQueue: Queue<CloudflareOutboxMessage>;
   readonly webOrigin: string;
+  readonly aiProviders?: CloudflareAiProviders;
 }
 
 class AirtablePublicRepository implements PublicApiRepository {
   readonly #store: AirtableJsonStore<JsonRecord>;
+  readonly #jsonField: string;
 
   constructor(options: {
     readonly baseId: string;
@@ -2326,21 +7179,37 @@ class AirtablePublicRepository implements PublicApiRepository {
     readonly transport: AirtableTransport;
     readonly jsonField?: string;
   }) {
+    this.#jsonField = options.jsonField ?? DEFAULT_JSON_FIELD;
     this.#store = new AirtableJsonStore(options);
   }
 
   async list(input: PublicApiListInput): Promise<PublicApiListResult<JsonRecord>> {
-    const records = (await this.#store.list()).filter((record) => {
-      const tenant = record.organizationId ?? record.tenantId;
-      return (
-        tenant === input.organizationId &&
-        Object.entries(input.filters).every(
-          ([key, value]) => String(record[key] ?? "") === value,
-        ) &&
-        isAfterCursor(record, input)
-      );
-    });
-    return { items: records.map(publicRecord), hasMore: false, nextCursor: null };
+    const records = (
+      await this.#store.list({
+        filterByFormula: organizationScopeFormula(this.#jsonField, input.organizationId, []),
+      })
+    )
+      .filter((record) => {
+        const tenant = record.organizationId ?? record.tenantId;
+        return (
+          tenant === input.organizationId &&
+          Object.entries(input.filters).every(
+            ([key, value]) => String(record[key] ?? "") === value,
+          ) &&
+          isAfterCursor(record, input)
+        );
+      })
+      .sort((left, right) => {
+        const primary = scalarCompare(left[input.sort], right[input.sort]);
+        const byId = scalarCompare(left.id, right.id);
+        const comparison = primary === 0 ? byId : primary;
+        return input.direction === "asc" ? comparison : -comparison;
+      });
+    return {
+      items: records.slice(0, input.limit + 1).map(publicRecord),
+      hasMore: records.length > input.limit,
+      nextCursor: null,
+    };
   }
 
   async get(input: PublicApiGetInput): Promise<JsonRecord | null> {
@@ -2467,38 +7336,310 @@ function eventIdFromRequest(request: Request): string | undefined {
   return queryId === undefined || queryId.length === 0 ? undefined : queryId;
 }
 
+class AirtableEvaluationDecisionProjection {
+  constructor(
+    private readonly cfp: AirtableCfpRepository,
+    private readonly database: D1Database,
+    private readonly queue: Queue<CloudflareOutboxMessage>,
+  ) {}
+
+  async projectDecision(input: EvaluationDecisionProjectionInput): Promise<void> {
+    const submission = await this.cfp.getSubmission(input.tenantId, input.submissionId);
+    if (submission === null || submission.eventId !== input.eventId) return;
+    const recipients = submission.participants
+      .map((participant) => participant.email.trim())
+      .filter((email) => email.length > 0);
+    if (recipients.length === 0) return;
+    const templatePurpose = input.communication.templatePurpose;
+    const idempotencyKey = `decision:${input.idempotencyKey}`;
+    await enqueueCloudflareOutbox({
+      database: this.database,
+      queue: this.queue,
+      tenantId: input.tenantId,
+      topic: "communications",
+      deduplicationKey: idempotencyKey,
+      payload: {
+        from: DEFAULT_OPEN_SEND_SENDERS.speakers,
+        to: recipients,
+        subject: `Session application ${input.status}`,
+        html: `<p>Your session application was ${input.status}.</p>`,
+        text: `Your session application was ${input.status}.`,
+        idempotencyKey,
+        purpose: "decision",
+        templatePurpose,
+        status: input.status,
+      },
+      now: input.decidedAt,
+    });
+  }
+}
+export class D1EvaluationReviewerIdentityBoundary implements EvaluationReviewerIdentityBoundary {
+  constructor(private readonly database: D1Database) {}
+
+  async resolveReviewerIds(
+    actor: EvaluationActor,
+    input: {
+      readonly eventId: string;
+      readonly reviewerIds: readonly string[];
+    },
+  ): Promise<readonly string[] | null> {
+    if (
+      actor.kind !== "human" ||
+      !actor.grants.some((grant) => grant.eventId === input.eventId && grant.role === "organizer")
+    ) {
+      return null;
+    }
+
+    const resolved: string[] = [];
+    for (const candidate of input.reviewerIds) {
+      const identifier = candidate.trim();
+      if (identifier.length === 0) return null;
+      const result = await this.database
+        .prepare(
+          `SELECT u.id
+             FROM auth_users AS u
+             INNER JOIN organization_memberships AS m ON m.user_id = u.id
+            WHERE m.organization_id = ?
+              AND m.role = 'reviewer'
+              AND u.email_verified = 1
+              AND u.id = ?
+            ORDER BY u.id
+            LIMIT 2`,
+        )
+        .bind(actor.tenantId, identifier)
+        .all<{ id: string }>();
+      const matches = (result.results ?? []).filter(
+        (row): row is { id: string } => typeof row.id === "string" && row.id.trim().length > 0,
+      );
+      if (matches.length !== 1) return null;
+      const [match] = matches;
+      if (match === undefined || resolved.includes(match.id)) return null;
+      resolved.push(match.id);
+    }
+    return resolved;
+  }
+}
+
+export class AirtableEvaluationReminderBoundary implements EvaluationReminderBoundary {
+  constructor(
+    private readonly plans: AirtableEvaluationRepository,
+    private readonly database: D1Database,
+    private readonly queue: Queue<CloudflareOutboxMessage>,
+  ) {}
+
+  async sendOutstandingReviewerReminders(
+    actor: EvaluationActor,
+    input: {
+      readonly planId: string;
+      readonly roundId?: string | undefined;
+      readonly reviewerIds: readonly string[];
+      readonly assignmentIds: readonly string[];
+    },
+  ): Promise<{
+    readonly queued: number;
+    readonly reviewerIds: readonly string[];
+  }> {
+    const plan = await this.plans.getPlan(actor.tenantId, input.planId);
+    if (plan === null) return { queued: 0, reviewerIds: [] };
+    const requestedAssignmentIds = [...new Set(input.assignmentIds)].sort();
+    const storedAssignments = await this.plans.listAssignments(actor.tenantId, plan.id);
+    const matchingAssignments = storedAssignments.filter(
+      (assignment) =>
+        requestedAssignmentIds.includes(assignment.id) &&
+        input.reviewerIds.includes(assignment.reviewerId) &&
+        (input.roundId === undefined || assignment.roundId === input.roundId) &&
+        (assignment.status === "assigned" || assignment.status === "in_progress"),
+    );
+    const assignmentIdsByReviewer = new Map<string, string[]>();
+    for (const assignment of matchingAssignments) {
+      const ids = assignmentIdsByReviewer.get(assignment.reviewerId) ?? [];
+      ids.push(assignment.id);
+      assignmentIdsByReviewer.set(assignment.reviewerId, ids);
+    }
+    const reviewerIds =
+      storedAssignments.length === 0
+        ? [...new Set(input.reviewerIds)].sort()
+        : [...assignmentIdsByReviewer.keys()].sort();
+    if (storedAssignments.length > 0 && assignmentIdsByReviewer.size === 0) {
+      return { queued: 0, reviewerIds: [] };
+    }
+    let queued = 0;
+    for (const reviewerId of reviewerIds) {
+      const assignmentIds =
+        storedAssignments.length === 0
+          ? requestedAssignmentIds
+          : (assignmentIdsByReviewer.get(reviewerId) ?? []).sort();
+      if (assignmentIds.length === 0) continue;
+      const recipient = await this.database
+        .prepare(
+          `SELECT email
+             FROM auth_users
+            WHERE id = ? AND email_verified = 1
+            LIMIT 1`,
+        )
+        .bind(reviewerId)
+        .first<{ email: string }>();
+      const email = recipient?.email.trim();
+      if (email === undefined || email.length === 0) continue;
+      const round = input.roundId === undefined ? "all rounds" : `round ${input.roundId}`;
+      const idempotencyKey = `evaluation-reminder:${input.planId}:${input.roundId ?? "all"}:${reviewerId}`;
+      const result = await enqueueCloudflareOutbox({
+        database: this.database,
+        queue: this.queue,
+        tenantId: actor.tenantId,
+        topic: "communications",
+        deduplicationKey: idempotencyKey,
+        payload: {
+          from: DEFAULT_OPEN_SEND_SENDERS.speakers,
+          to: [email],
+          subject: `Review reminder: ${plan.name}`,
+          html: `<p>You have outstanding reviews for <strong>${plan.name}</strong> (${round}).</p>`,
+          text: `You have outstanding reviews for ${plan.name} (${round}).`,
+          idempotencyKey,
+          planId: input.planId,
+          eventId: plan.eventId,
+          roundId: input.roundId ?? null,
+          assignmentIds,
+        },
+      });
+      if (result.queued) queued += assignmentIds.length;
+    }
+    return { queued, reviewerIds };
+  }
+}
 export function createAirtableDependencies(options: AirtableRuntimeOptions): ApiDependencies {
   const shared = { baseId: options.baseId, transport: options.transport };
   const cfpRepository = new AirtableCfpRepository(shared);
+  const eventRepository = new AirtableEventRepository(shared);
+  const eventService = new EventService(eventRepository);
   const cfpIdempotency = new D1IdempotencyStore(options.database);
   const cfpService = new CfpService({
     repository: cfpRepository,
     idempotency: cfpIdempotency,
     effects: new CloudflareCfpEffects(options.outboxQueue, options.database),
   });
-
+  const crmRepository = new AirtableCrmRepository({
+    ...shared,
+    events: eventRepository,
+  });
+  const crmService = new CrmService({
+    repository: crmRepository,
+    outreach: new AirtableCrmOutreachBoundary(
+      crmRepository,
+      options.database,
+      options.outboxQueue,
+      eventRepository,
+    ),
+  });
   const speakerRepository = new AirtableSpeakerRepository({
     ...shared,
     database: options.database,
   });
   const speakerService = new SpeakerService(
     speakerRepository,
-    new R2PrivateAssetGateway(options.privateFiles, options.webOrigin),
+    new R2PrivateAssetGateway(options.privateFiles, options.webOrigin, options.database),
+    {
+      delivery: new AirtableSpeakerReminderDeliveryAdapter(options.database, options.outboxQueue),
+    },
+  );
+  const sessionRepository = new AirtableSessionRepository(shared);
+  let sessionService!: SessionService;
+  const agendaRepository = new AirtableAgendaRepository(shared);
+  const agendaEngine = new AgendaEngine(
+    agendaRepository,
+    new CloudflareAgendaMutationLock(options.agendaCoordinator),
+    options.aiProviders?.agenda === undefined
+      ? {}
+      : { suggestionProvider: options.aiProviders.agenda },
+  );
+  const agendaCatalogSynchronizer = new AgendaCatalogSynchronizer({
+    engine: agendaEngine,
+    catalogReader: {
+      getAgendaCatalog: (tenantId, eventId) => sessionService.getAgendaCatalog(tenantId, eventId),
+    },
+    eventTimeZone: (tenantId, eventId) =>
+      eventRepository.getEvent(tenantId, eventId).then((event) => event?.timeZone ?? "UTC"),
+  });
+  const cacheInvalidatingAgendaCatalogSynchronizer = {
+    ensureInitialized: agendaCatalogSynchronizer.ensureInitialized.bind(agendaCatalogSynchronizer),
+    async synchronize(input: {
+      readonly tenantId: string;
+      readonly eventId: string;
+      readonly actorId?: string;
+      readonly timeZone?: string;
+      readonly minimumTravelMinutes?: number;
+    }) {
+      const draft = await agendaCatalogSynchronizer.synchronize(input);
+      await enqueueCloudflareOutbox({
+        database: options.database,
+        queue: options.outboxQueue,
+        tenantId: input.tenantId,
+        topic: "cache-invalidation",
+        deduplicationKey: `agenda-catalog:${input.eventId}:draft:${draft.version}`,
+        payload: {
+          eventId: input.eventId,
+          draftVersion: draft.version,
+        },
+        now: draft.updatedAt,
+      });
+      return draft;
+    },
+  };
+  sessionService = new SessionService(sessionRepository, {
+    agendaCatalogSynchronizer: cacheInvalidatingAgendaCatalogSynchronizer,
+  });
+  const communicationRepository = new AirtableCommunicationRepository(shared);
+  const communicationService = new CommunicationService(
+    communicationRepository,
+    new AirtableCommunicationDeliveryAdapter(options.database, options.outboxQueue),
+  );
+  const reportRepository = new AirtableReportRepository(shared);
+  const reportService = new ReportService(
+    reportRepository,
+    reportRepository,
+    new SafeReportExporter(),
+  );
+  const remixRepository = new AirtableRemixRepository(shared);
+  const remixContentGateway = new AirtableRemixContentGateway({
+    ...shared,
+    database: options.database,
+    queue: options.outboxQueue,
+  });
+  const remixService = new RemixService(
+    remixRepository,
+    remixContentGateway,
+    options.aiProviders?.remix,
   );
   const evaluationRepository = new AirtableEvaluationRepository(shared);
   const evaluationSource = new AirtableSubmissionReviewSource(cfpRepository, cfpService);
   const acceptanceHandoff = new AirtableEvaluationAcceptanceHandoff({
     cfp: cfpRepository,
     speakers: speakerRepository,
+    sessions: sessionRepository,
+    sessionService,
     database: options.database,
     queue: options.outboxQueue,
   });
   const evaluationService = new EvaluationService(evaluationRepository, evaluationSource, {
     acceptanceHandoff,
+    decisionProjection: new AirtableEvaluationDecisionProjection(
+      cfpRepository,
+      options.database,
+      options.outboxQueue,
+    ),
+    ...(options.aiProviders?.evaluations === undefined
+      ? {}
+      : { aiSuggestionProvider: options.aiProviders.evaluations }),
   });
-  const evaluationDependencies: EvaluationRouteDependencies = {
+  const evaluationDependencies = {
     service: evaluationService,
-    async actorFor(principal: AuthPrincipal, request: Request) {
+    reminders: new AirtableEvaluationReminderBoundary(
+      evaluationRepository,
+      options.database,
+      options.outboxQueue,
+    ),
+    reviewerIdentity: new D1EvaluationReviewerIdentityBoundary(options.database),
+    async actorFor(principal: AuthPrincipal, request: Request): Promise<EvaluationActor | null> {
       if (principal.kind !== "user") return null;
       const body = await request
         .clone()
@@ -2538,7 +7679,25 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
           }
         }
       }
-      if (eventId === undefined || eventId.trim().length === 0) return null;
+
+      if (eventId === undefined || eventId.trim().length === 0) {
+        const memberships = principal.memberships.filter((candidate) =>
+          ["owner", "admin", "reviewer"].includes(candidate.role),
+        );
+        if (memberships.length !== 1) return null;
+        const [membership] = memberships;
+        if (membership === undefined) return null;
+        const plans = await evaluationRepository.listPlans(membership.organizationId);
+        const role =
+          membership.role === "owner" || membership.role === "admin" ? "organizer" : "reviewer";
+        return {
+          tenantId: membership.organizationId,
+          userId: principal.userId,
+          kind: "human",
+          grants: plans.map((plan) => ({ eventId: plan.eventId, role })),
+        };
+      }
+
       let membership = principal.memberships.length === 1 ? principal.memberships[0] : undefined;
       if (membership === undefined) {
         for (const candidate of principal.memberships) {
@@ -2557,20 +7716,13 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
         kind: "human",
         grants: [
           ...(organizer ? [{ eventId, role: "organizer" as const }] : []),
-          ...(organizer || membership.role === "reviewer"
-            ? [{ eventId, role: "reviewer" as const }]
-            : []),
+          ...(membership.role === "reviewer" ? [{ eventId, role: "reviewer" as const }] : []),
         ],
       };
     },
   };
   const authenticator = options.authenticator;
 
-  const agendaRepository = new AirtableAgendaRepository(shared);
-  const agendaEngine = new AgendaEngine(
-    agendaRepository,
-    new CloudflareAgendaMutationLock(options.agendaCoordinator),
-  );
   const events = new AirtableJsonStore<EventCfp>({
     ...shared,
     table: "Events",
@@ -2600,7 +7752,69 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
   const publishedSpeakerProjections = new AirtablePublishedSpeakerProjectionStore(shared);
   const organizerOverview = new AirtableOrganizerOverviewRepository(shared);
 
+  const organizerMembership = async (
+    principal: AuthPrincipal,
+    organizationId: string,
+    eventId: string,
+  ) => {
+    if (principal.kind !== "user") return null;
+    const membership = principal.memberships.find(
+      (candidate) =>
+        candidate.organizationId === organizationId &&
+        (candidate.role === "owner" || candidate.role === "admin"),
+    );
+    if (membership === undefined) return null;
+    const event = await cfpRepository.getEvent(organizationId, eventId);
+    return event === null ? null : membership;
+  };
+  const communicationActorFor = async (
+    principal: AuthPrincipal,
+    organizationId: string,
+    eventId: string,
+  ): Promise<CommunicationActor | null> => {
+    const membership = await organizerMembership(principal, organizationId, eventId);
+    return membership === null
+      ? null
+      : {
+          tenantId: organizationId,
+          userId: principal.kind === "user" ? principal.userId : "",
+          kind: "human",
+          grants: [{ eventId, role: "organizer" }],
+        };
+  };
+  const reportActorFor = async (
+    principal: AuthPrincipal,
+    organizationId: string,
+    eventId: string,
+  ): Promise<ReportActor | null> => {
+    const membership = await organizerMembership(principal, organizationId, eventId);
+    return membership === null
+      ? null
+      : {
+          tenantId: organizationId,
+          userId: principal.kind === "user" ? principal.userId : "",
+          kind: "human",
+          grants: [{ eventId, role: "organizer", canViewPersonalData: false }],
+        };
+  };
+  const remixActorFor = async (
+    principal: AuthPrincipal,
+    organizationId: string,
+    eventId: string,
+  ) => {
+    const membership = await organizerMembership(principal, organizationId, eventId);
+    return membership === null
+      ? null
+      : {
+          tenantId: organizationId,
+          userId: principal.kind === "user" ? principal.userId : "",
+          kind: "human" as const,
+          grants: [{ eventId, role: "organizer" as const }],
+        };
+  };
+
   return {
+    events: { service: eventService },
     authenticator,
     speaker: {
       service: speakerService,
@@ -2610,6 +7824,20 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
       },
     },
     evaluations: evaluationDependencies,
+    sessions: { service: sessionService },
+    crm: { service: crmService },
+    communications: {
+      service: communicationService,
+      actorFor: communicationActorFor,
+    },
+    reports: {
+      service: reportService,
+      actorFor: reportActorFor,
+    },
+    remix: {
+      service: remixService,
+      actorFor: remixActorFor,
+    },
     agenda: {
       engine: agendaEngine,
       async organizationIdForEvent(eventId: string) {
@@ -2619,10 +7847,131 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
           event?.tenantId ?? (isRecord(eventRecord) ? eventRecord.organizationId : undefined);
         return typeof organizationId === "string" ? organizationId : null;
       },
+      async eventMetadataForEvent(eventId: string) {
+        const rawEvent = await events.find(eventId);
+        if (rawEvent === undefined || !isRecord(rawEvent)) return null;
+        const startsAt = textValue(rawEvent, "startsAt", "startAt");
+        const endsAt = textValue(rawEvent, "endsAt", "endAt");
+        if (startsAt === null || endsAt === null) return null;
+        const event = eventRecord(rawEvent);
+        const startsOn = eventDateOnly(startsAt, event.timeZone);
+        const endsOn = eventDateOnly(endsAt, event.timeZone);
+        if (startsOn === null || endsOn === null) return null;
+        return {
+          slug: event.slug,
+          name: event.name,
+          timeZone: event.timeZone,
+          startsOn,
+          endsOn,
+          venueName: event.venue,
+        };
+      },
+      async afterPublish(eventId, revision) {
+        const [rawEvent, agendaState] = await Promise.all([
+          events.find(eventId),
+          agendaRepository.load(eventId),
+        ]);
+        const rawEventRecord: unknown = rawEvent;
+        const rawEventView: JsonRecord = isRecord(rawEventRecord) ? rawEventRecord : {};
+        const organizationId =
+          rawEvent?.tenantId ??
+          (isRecord(rawEventRecord) ? rawEventRecord.organizationId : undefined);
+        if (typeof organizationId !== "string" || organizationId.trim().length === 0) {
+          throw new Error("The published event organization could not be resolved.");
+        }
+        if (rawEvent === undefined || agendaState === null) {
+          throw new Error("The published event projection could not be loaded.");
+        }
+
+        const trackNameById = new Map(agendaState.tracks.map((track) => [track.id, track.name]));
+        const publishedSessionIds = new Set(revision.entries.map((entry) => entry.sessionId));
+        const sessions = agendaState.sessions.filter((session) =>
+          publishedSessionIds.has(session.id),
+        );
+        const participantIds = [...new Set(sessions.flatMap((session) => session.participantIds))];
+        const profiles = await speakerRepository.listProfiles(eventId, participantIds);
+        const entriesBySessionId = new Map(
+          revision.entries.map((entry) => [entry.sessionId, entry]),
+        );
+        const sessionsByParticipantId = new Map<
+          string,
+          Array<{ id: string; title: string; trackNames: readonly string[] }>
+        >();
+        for (const session of sessions) {
+          const entry = entriesBySessionId.get(session.id);
+          if (entry === undefined) continue;
+          const trackNames = entry.trackIds.flatMap((trackId) => {
+            const name = trackNameById.get(trackId);
+            return name === undefined ? [] : [name];
+          });
+          for (const participantId of session.participantIds) {
+            const values = sessionsByParticipantId.get(participantId) ?? [];
+            values.push({ id: session.id, title: session.title, trackNames });
+            sessionsByParticipantId.set(participantId, values);
+          }
+        }
+
+        await publishedSpeakerProjections.putPublishedSpeakers({
+          id: `published-speakers:${rawEvent.slug}`,
+          organizationId,
+          event: {
+            slug: rawEvent.slug,
+            name: rawEvent.name,
+            timeZone: textValue(rawEventView, "timeZone", "timezone") ?? rawEvent.timezone,
+            startsOn: (textValue(rawEventView, "startsAt", "opensAt") ?? rawEvent.opensAt).slice(
+              0,
+              10,
+            ),
+            endsOn: (textValue(rawEventView, "endsAt", "closesAt") ?? rawEvent.closesAt).slice(
+              0,
+              10,
+            ),
+            venueName: textValue(rawEventView, "venue"),
+          },
+          revision: {
+            id: revision.id,
+            number: revision.revisionNumber,
+            publishedAt: revision.publishedAt,
+          },
+          speakers: profiles
+            .map((profile) => {
+              const speakerSessions = sessionsByParticipantId.get(profile.participantId) ?? [];
+              return {
+                id: profile.participantId,
+                displayName: profile.displayName,
+                pronouns: null,
+                jobTitle: profile.jobTitle ?? null,
+                organization: profile.company ?? null,
+                biography: profile.biography,
+                photoUrl: null,
+                sessionIds: speakerSessions.map((session) => session.id),
+                sessionTitles: speakerSessions.map((session) => session.title),
+                trackNames: [
+                  ...new Set(speakerSessions.flatMap((session) => session.trackNames)),
+                ].sort(),
+              };
+            })
+            .sort((left, right) => left.displayName.localeCompare(right.displayName)),
+        });
+        await enqueueCloudflareOutbox({
+          database: options.database,
+          queue: options.outboxQueue,
+          tenantId: organizationId,
+          topic: "cache-invalidation",
+          deduplicationKey: `agenda-publish:${eventId}:revision:${revision.id}`,
+          payload: {
+            eventId,
+            revisionId: revision.id,
+            revisionNumber: revision.revisionNumber,
+          },
+          now: revision.publishedAt,
+        });
+      },
     },
     publishedSpeakers: publishedSpeakerProjections,
     organizerOverview,
     publicApi: {
+      contract: publicApiV1Contract,
       resources: [
         {
           name: "events",
@@ -2636,7 +7985,6 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
           name: "speakers",
           repository: speakersRepository,
           readScope: "submissions:read",
-          writeScope: "submissions:write",
           sortFields: ["id", "displayName", "updatedAt"],
           defaultSort: "id",
         },
@@ -2644,7 +7992,6 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
           name: "agenda",
           repository: agendaPublicRepository,
           readScope: "agenda:read",
-          writeScope: "agenda:write",
           sortFields: ["id", "updatedAt"],
           defaultSort: "id",
         },

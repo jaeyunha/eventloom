@@ -7,9 +7,8 @@ This guide configures the separately deployed Next.js web application and Hono W
 - Bun 1.3.14 (the version pinned by `packageManager`)
 - A Cloudflare account with Workers, D1, Durable Objects, R2, and Queues enabled
 - One Airtable base and restricted personal access token per environment
-- An OpenSend sending-scoped key and verified `foreverbrowsing.com` sender identities
-- A Google OAuth web application per environment
-- Microsoft OAuth and Accelevents are intentionally not part of this build; do not provision their applications, credentials, callbacks, or adapter configuration.
+- An OpenSend sending-scoped key. Provider-side sender verification is a release prerequisite; this repository does not claim that verification.
+- No social OAuth application is required; interactive access uses verified email/password and email magic links.
 - Forge access to `jaeyunha/open-sessionboard`
 
 Install dependencies and create the local environment file:
@@ -33,10 +32,10 @@ Keep `.env` local. Do not paste provider secrets into issues, browser code, scre
 | Queue | `open-sessionboard-outbox-local` | `open-sessionboard-outbox-staging` | `open-sessionboard-outbox-production` |
 | Worker | Local Wrangler process | `open-sessionboard-api-staging` | `open-sessionboard-api-production` |
 | Web origin | `http://127.0.0.1:3015` | Dedicated staging host | Dedicated production host |
-| API keys/OAuth | Test credentials | Separate non-production credentials | Production credentials |
-| OpenSend | Captured or allowlisted recipients | Sandbox/suppressed delivery to allowlisted recipients | Verified production senders |
+| API keys/session auth | Test credentials | Separate non-production credentials | Production credentials |
+| OpenSend | Captured or allowlisted recipients | Sandbox/suppressed delivery to allowlisted recipients | Release-gated provider-verified senders |
 
-Never copy a D1 database, R2 bucket, Airtable base, API key, webhook secret, OAuth secret, or OpenSend key between staging and production. Durable Object state is isolated by the environment-specific Worker deployment. Staging must not address production recipients.
+Never copy a D1 database, R2 bucket, Airtable base, API key, webhook secret, Better Auth secret, or OpenSend key between staging and production. Durable Object state is isolated by the environment-specific Worker deployment. Staging must not address production recipients.
 
 ## Local application
 
@@ -44,22 +43,21 @@ Set at least these values in `.env`:
 
 ```dotenv
 APP_ENV=local
-WEB_ORIGIN=http://127.0.0.1:3015
+WEB_ORIGIN=http://localhost:3015
 NEXT_PUBLIC_APP_ENV=local
-NEXT_PUBLIC_APP_URL=http://127.0.0.1:3015
-NEXT_PUBLIC_API_URL=http://127.0.0.1:8787
+NEXT_PUBLIC_APP_URL=http://localhost:3015
+NEXT_PUBLIC_API_URL=http://localhost:8787
 NEXT_PUBLIC_ORGANIZATION_ID=local-organization
-API_URL=http://127.0.0.1:8787
+API_URL=http://localhost:8787
+API_UPSTREAM_ORIGIN=http://localhost:8787
 BETTER_AUTH_SECRET=<at-least-32-random-bytes>
-GOOGLE_CLIENT_ID=<local-google-client-id>
-GOOGLE_CLIENT_SECRET=<local-google-client-secret>
 AIRTABLE_ACCESS_TOKEN=<local-base-token>
 AIRTABLE_BASE_ID=<local-base-id>
 OPENSEND_API_URL=https://opensend.namuh.co
 OPENSEND_API_KEY=<test-or-suppressed-sending-key>
-AUTH_FROM_EMAIL=auth@foreverbrowsing.com
-SPEAKERS_FROM_EMAIL=speakers@foreverbrowsing.com
-CALENDAR_FROM_EMAIL=calendar@foreverbrowsing.com
+AUTH_FROM_EMAIL=auth@sessionboard.namuh.co
+SPEAKERS_FROM_EMAIL=speakers@sessionboard.namuh.co
+CALENDAR_FROM_EMAIL=calendar@sessionboard.namuh.co
 ```
 
 Apply D1 migrations to the local Wrangler database from the API workspace, then start both deployables from the repository root:
@@ -94,7 +92,7 @@ For each non-local environment:
 2. Replace that environment's placeholder D1 `database_id` with the ID returned by Cloudflare.
 3. Keep `DB`, `AGENDA_COORDINATOR`, `PRIVATE_FILES`, and `OUTBOX_QUEUE` binding names unchanged; application code depends on them.
 4. Keep the environment-specific `workers_dev = true` setting for the competition deployment unless a reviewed custom domain is bound. The release scripts pin the exact staging and production `workers.dev` origins and reject mismatches.
-5. Use the exact deployed API hostname for health checks, OAuth callbacks, the frontend's `NEXT_PUBLIC_API_URL`, and release evidence.
+5. Use the exact deployed API hostname for health checks, authentication and magic-link callbacks, the frontend's `NEXT_PUBLIC_API_URL`, and release evidence.
 6. Confirm the Worker `WEB_ORIGIN` is the exact deployed web origin, with no path or wildcard, and set `NEXT_PUBLIC_ORGANIZATION_ID` to the explicit Airtable organization application ID.
 
 The committed D1 migrations contain operational state only: identity/access, API keys, idempotency, webhook delivery, publication/audit indexes, and integration coordination. Airtable remains authoritative for program records.
@@ -108,10 +106,9 @@ bunx wrangler secret put BETTER_AUTH_SECRET --cwd apps/api --env staging
 bunx wrangler secret put AIRTABLE_ACCESS_TOKEN --cwd apps/api --env staging
 bunx wrangler secret put AIRTABLE_BASE_ID --cwd apps/api --env staging
 bunx wrangler secret put OPENSEND_API_KEY --cwd apps/api --env staging
-bunx wrangler secret put GOOGLE_CLIENT_SECRET --cwd apps/api --env staging
 ```
 
-Upload the corresponding non-secret provider IDs/URLs through the deployment platform's environment configuration. Repeat for production with production-specific values only. Google OAuth client IDs and secrets are required per environment; do not add disabled-provider credentials or settings.
+Repeat the secret and origin configuration for production with production-specific values only; do not share D1 session state or OpenSend credentials between environments.
 
 ### Validate and deploy the API
 
@@ -144,7 +141,7 @@ Production uses `production open-sessionboard:production`. The API and web deplo
 
 Create a dedicated base for each environment. Restrict each personal access token to its one base. The runtime adapter needs record read/write access; the schema provisioner additionally needs the `schema.bases:write` scope (which includes schema reads). A token without that scope fails clearly before any schema mutation.
 
-The base is the sole writable authority for organizations, events, forms and fields, submissions, participants and profiles, evaluation plans/reviews/decisions, tasks, sessions, rooms, tracks, agenda versions/entries, publication outbox, and audit records. D1 must not duplicate these records.
+The base is the sole writable authority for organizations, events, forms and fields, submissions, participants and profiles, evaluation plans/reviews/decisions, tasks, sessions, rooms, tracks, formats, levels, tags and statuses, session settings, agenda versions/entries, portal contexts and rosters, task forms and responses, portal resources and wiki pages, file assets/versions/comments, email templates and send snapshots, report definitions/runs, remix candidates/audit, reusable fields, publication outbox, and audit records. D1 must not duplicate these records.
 
 Provision the additive schema from the repository root after loading the target environment's variables:
 
@@ -167,28 +164,22 @@ Use synthetic email addresses and profiles in staging. Validate pagination, rate
 
 ## OpenSend
 
-OpenSend is configured at `https://opensend.namuh.co`. Create separate sending-scoped keys for staging and production. Do not use an account-administration key in the Worker.
+OpenSend is configured at `https://opensend.namuh.co`. Create separate sending-scoped keys for staging and production. Do not use an account-administration key in the Worker. Provider-side SPF, DKIM, DMARC, and sender verification are release prerequisites; this repository does not claim that any provider verification has completed.
 
-Verify SPF, DKIM, and DMARC for these identities before enabling production delivery:
+Verify SPF, DKIM, DMARC, and provider verification for these identities before enabling production delivery:
 
-- `auth@foreverbrowsing.com` — magic links and account verification
-- `speakers@foreverbrowsing.com` — CFP, decision, reminder, and task mail
-- `calendar@foreverbrowsing.com` — RFC 5545 invitation mail and organizer identity
+- `auth@sessionboard.namuh.co` — magic links and account verification
+- `speakers@sessionboard.namuh.co` — CFP, decision, reminder, and task mail
+- `calendar@sessionboard.namuh.co` — RFC 5545 invitation mail and organizer identity
 
 Staging delivery must be suppressed, sandboxed, or recipient-allowlisted. Confirm bounce, complaint, and provider webhook visibility without sending to real program participants. Messages and calendar attachments carry idempotency keys so retries do not intentionally create duplicate sends.
 Calendar delivery remains provider-neutral: send RFC 5545 REQUEST, UPDATE, and CANCEL messages through OpenSend with stable UID, increasing SEQUENCE, and explicit IANA TZID. Include room and video details when present; no calendar-provider OAuth is required.
 
-## Google OAuth (required)
+## Interactive authentication
 
-Magic links and verified email remain required; Google OAuth is the supported social login and is required for each enabled environment. Create a separate OAuth web application for each environment.
+Better Auth provides verified email/password and email magic-link sign-in. Configure `BETTER_AUTH_SECRET`, the web/API origins, and OpenSend delivery in every enabled environment. No social OAuth client, secret, callback, or provider consent scope is required.
 
-Use the web origin as an authorized browser origin and the API origin callback:
-
-```text
-https://<api-host>/api/auth/callback/google
-```
-
-Set both `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in every enabled environment; partial credentials fail closed. Restrict consent scopes to identity (`openid`, email, and profile); calendar scopes are not required.
+Email verification and magic-link URLs return to the configured web origin. Verify delivery, expiry, one-time consumption, logout, and tenant membership behavior in staging before production.
 
 ## Post-configuration checks
 

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  inspectOrganizationIdMigrationReadiness,
   PreflightError,
   parseDotEnv,
   validateReleaseConfiguration,
@@ -37,8 +38,8 @@ function configurationFor(environment, index) {
     AUTH_FROM_EMAIL: "auth@foreverbrowsing.com",
     SPEAKERS_FROM_EMAIL: "speakers@foreverbrowsing.com",
     CALENDAR_FROM_EMAIL: "calendar@foreverbrowsing.com",
-    GOOGLE_CLIENT_ID: `google-client-${environment}`,
-    GOOGLE_CLIENT_SECRET: `google-secret-${environment}`,
+    ACCELEVENTS_API_BASE_URL: `https://api-${environment}.accelevents.example`,
+    ACCELEVENTS_API_KEY: `accelevents-key-${environment}`,
     FORGE_API_URL: "https://forge.example.test",
     FORGE_REPOSITORY: "jaeyunha/open-sessionboard",
     FORGE_API_TOKEN: "forge-secret-token",
@@ -91,16 +92,16 @@ test("validates provider presence, Wrangler alignment, and three-environment iso
   const result = validateReleaseConfiguration({
     configurations,
     targetEnvironment: "staging",
-    requiredProviders: ["google"],
+    requiredProviders: ["accelevents"],
     wranglerInventory,
   });
   assert.deepEqual(result.providerStates.staging, {
-    google: "configured",
+    accelevents: "configured",
   });
 });
-test("requires a complete Google provider in every deployed environment", () => {
+test("rejects a partial optional integration provider", () => {
   const { configurations, wranglerInventory } = fixtures();
-  delete configurations.production.GOOGLE_CLIENT_SECRET;
+  delete configurations.production.ACCELEVENTS_API_KEY;
 
   assert.throws(
     () =>
@@ -241,5 +242,34 @@ test("requires Forge to report the exact repository as private", async () => {
         jsonResponse({ private: false, full_name: configuration.FORGE_REPOSITORY }),
     }),
     (error) => error.code === "FORGE_NOT_PRIVATE",
+  );
+});
+test("exposes bounded organization migration readiness without configuration values", () => {
+  const { configurations, wranglerInventory } = fixtures();
+  configurations.production.ORGANIZER_AUTOJOIN_ORGANIZATION_ID = "foreverbrowsing";
+  const readiness = inspectOrganizationIdMigrationReadiness({
+    configurations,
+    wranglerInventory,
+  });
+
+  assert.equal(readiness.sourceId, "foreverbrowsing");
+  assert.equal(readiness.targetId, "ai-engineer");
+  assert.equal(readiness.ready, false);
+  assert.equal(readiness.status, "blocked");
+  assert.equal(readiness.namespaces.d1.length, environments.length);
+  assert.equal(readiness.namespaces.airtable.length, environments.length);
+  assert.equal(readiness.namespaces.r2.length, environments.length);
+  assert.equal(readiness.namespaces.queue.length, environments.length);
+  assert.equal(
+    readiness.blockers.some((blocker) => blocker.code === "LEGACY_ORGANIZATION_ID_CONFIGURATION"),
+    true,
+  );
+  assert.equal(
+    JSON.stringify(readiness).includes(configurations.production.CLOUDFLARE_API_TOKEN),
+    false,
+  );
+  assert.equal(
+    JSON.stringify(readiness).includes(configurations.production.AIRTABLE_ACCESS_TOKEN),
+    false,
   );
 });

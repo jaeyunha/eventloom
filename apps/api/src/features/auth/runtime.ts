@@ -224,7 +224,7 @@ function toModel(model: ModelName, row: DatabaseRow): DatabaseData {
 }
 
 async function toDatabaseData(
-  database: D1Database,
+  _database: D1Database,
   model: ModelName,
   input: DatabaseData,
 ): Promise<Record<string, unknown>> {
@@ -242,7 +242,7 @@ function whereColumn(model: ModelName, field: string): string | null {
 }
 
 async function whereClause(
-  database: D1Database,
+  _database: D1Database,
   model: ModelName,
   where: readonly Where[] | undefined,
 ): Promise<{ sql: string; values: unknown[] } | null> {
@@ -607,17 +607,13 @@ function sessionFromPayload(payload: unknown): AuthSession | null {
   };
 }
 
-function genericResponseError(response: Response): Error {
-  void response;
+function genericResponseError(): Error {
   return new Error("The authentication request could not be completed.");
 }
 
 export function createBetterAuthRuntime(options: BetterAuthRuntimeOptions): BetterAuthRuntime {
   const { configuration } = options;
-  const google = configuration.oauthProviders.google;
-  if (google === undefined) {
-    throw new Error("Google OAuth is required for the authentication runtime.");
-  }
+  const secureCookies = new URL(configuration.baseUrl).protocol === "https:";
   const authOptions: BetterAuthOptions = {
     appName: "Open Sessionboard",
     baseURL: configuration.baseUrl,
@@ -625,12 +621,6 @@ export function createBetterAuthRuntime(options: BetterAuthRuntimeOptions): Bett
     secret: configuration.secret,
     database: () => createD1AuthAdapter(options.database),
     trustedOrigins: [...configuration.trustedOrigins],
-    socialProviders: {
-      google: {
-        clientId: google.clientId,
-        clientSecret: google.clientSecret,
-      },
-    },
     emailAndPassword: {
       enabled: true,
       minPasswordLength: 8,
@@ -661,19 +651,13 @@ export function createBetterAuthRuntime(options: BetterAuthRuntimeOptions): Bett
       expiresIn: 7 * 24 * 60 * 60,
       updateAge: 24 * 60 * 60,
     },
-    account: {
-      encryptOAuthTokens: true,
-      accountLinking: {
-        trustedProviders: ["google"],
-      },
-    },
     logger: { disabled: true },
     advanced: {
-      useSecureCookies: true,
+      useSecureCookies: secureCookies,
       defaultCookieAttributes: {
         httpOnly: true,
         sameSite: "lax",
-        secure: true,
+        secure: secureCookies,
       },
       database: {
         generateId: "uuid",
@@ -716,7 +700,7 @@ export function createBetterAuthRuntime(options: BetterAuthRuntimeOptions): Bett
           body: JSON.stringify({ email: input.email, callbackURL: input.callbackUrl }),
         }),
       );
-      if (!response.ok) throw genericResponseError(response);
+      if (!response.ok) throw genericResponseError();
     },
     async consumeMagicLink(token) {
       const response = await handler(

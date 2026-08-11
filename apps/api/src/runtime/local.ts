@@ -38,6 +38,7 @@ import type {
   PrivateAssetGateway,
   RepositoryResult,
   SpeakerAccessScope,
+  SpeakerPortalCapability,
   SpeakerAsset,
   SpeakerProfile,
   SpeakerRepository,
@@ -45,7 +46,9 @@ import type {
   SpeakerTask,
   TransitionSpeakerTaskCommand,
   UpdateBiographyCommand,
+  UpdateSpeakerProfileCommand,
 } from "../features/speaker/types";
+import { InMemoryWebhookRepository } from "../integrations/webhooks/types";
 import type {
   IntegrationAdminRouteDependencies,
   IntegrationApiKeyCreation,
@@ -54,7 +57,6 @@ import type {
   IntegrationEvent,
   IntegrationWebhookDelivery,
 } from "../routes/integrations";
-import { InMemoryWebhookRepository } from "../integrations/webhooks/types";
 import type {
   OrganizerOverviewActionItem,
   OrganizerOverviewData,
@@ -89,6 +91,16 @@ const LOCAL_API_KEY_SCOPES: readonly ApiKeyScope[] = [
   "webhooks:read",
   "webhooks:write",
 ];
+const LOCAL_SPEAKER_CAPABILITIES = [
+  "profile-self",
+  "submission-edit",
+  "roster-manage",
+  "task-response",
+  "asset-read",
+  "asset-write",
+  "asset-comment",
+  "resource-read",
+] as const satisfies readonly SpeakerPortalCapability[];
 
 function clone<T>(value: T): T {
   return structuredClone(value);
@@ -135,6 +147,93 @@ function localAuthenticator(): RequestAuthenticator {
   return new RequestAuthenticator(sessions, apiKeys, {
     clock: { now: () => new Date(SEEDED_AT) },
   });
+}
+
+const LOCAL_SESSION_COOKIE = "better-auth.session_token";
+
+function localSessionPayload(): Record<string, unknown> {
+  return {
+    session: {
+      id: "local-session-id",
+      userId: LOCAL_SPEAKER_ACCOUNT_ID,
+      expiresAt: FAR_FUTURE.toISOString(),
+    },
+    user: {
+      id: LOCAL_SPEAKER_ACCOUNT_ID,
+      email: "speaker@local.open-sessionboard.test",
+      name: "Local Organizer",
+      emailVerified: true,
+    },
+    memberships: [{ organizationId: LOCAL_ORGANIZATION_ID, role: "owner" }],
+    speakerGrants: [
+      { organizationId: LOCAL_ORGANIZATION_ID, speakerProfileId: "local-participant" },
+    ],
+  };
+}
+
+function localAuthCookieHeader(): string {
+  return `${LOCAL_SESSION_COOKIE}=${LOCAL_SESSION_TOKEN}; Path=/; HttpOnly; SameSite=Lax`;
+}
+
+function localAuthJson(payload: unknown, init: ResponseInit = {}): Response {
+  const headers = new Headers(init.headers);
+  headers.set("content-type", "application/json; charset=utf-8");
+  return new Response(JSON.stringify(payload), { ...init, headers });
+}
+
+function hasLocalSessionCookie(request: Request): boolean {
+  return (
+    request.headers
+      .get("cookie")
+      ?.split(";")
+      .map((part) => part.trim())
+      .includes(`${LOCAL_SESSION_COOKIE}=${LOCAL_SESSION_TOKEN}`) ?? false
+  );
+}
+
+/**
+ * Email/password sign-in for local development only. Local mode has no
+ * better-auth instance or user database; any credentials issue the fixed
+ * local organizer session so the real login form works end to end.
+ */
+function localAuthRoutes(): { handler: (request: Request) => Promise<Response> } {
+  return {
+    async handler(request) {
+      const path = new URL(request.url).pathname;
+      if (
+        (path === "/api/auth/sign-in/email" || path === "/api/auth/sign-up/email") &&
+        request.method === "POST"
+      ) {
+        return localAuthJson(
+          { token: LOCAL_SESSION_TOKEN, ...localSessionPayload() },
+          { headers: { "set-cookie": localAuthCookieHeader() } },
+        );
+      }
+      if (path === "/api/auth/sign-in/magic-link" && request.method === "POST") {
+        return localAuthJson({ status: true });
+      }
+      if (path === "/api/auth/get-session" && request.method === "GET") {
+        if (!hasLocalSessionCookie(request)) {
+          return localAuthJson(null, { status: 401 });
+        }
+        return localAuthJson(localSessionPayload());
+      }
+      if (path === "/api/auth/sign-out" && request.method === "POST") {
+        return localAuthJson(
+          { success: true },
+          {
+            headers: {
+              "set-cookie": `${LOCAL_SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`,
+            },
+          },
+        );
+      }
+      return localAuthJson(
+        { code: "LOCAL_AUTH_UNSUPPORTED", message: "This auth route is not available locally." },
+        { status: 404 },
+      );
+    },
+  };
 }
 
 class LocalSpeakerRepository implements SpeakerRepository {
@@ -223,6 +322,11 @@ class LocalSpeakerRepository implements SpeakerRepository {
     return {
       submissionIds: ["local-submission"],
       participantIds: ["local-participant"],
+      capabilities: LOCAL_SPEAKER_CAPABILITIES,
+      capabilitiesByParticipant: {
+        "local-participant": LOCAL_SPEAKER_CAPABILITIES,
+      },
+      primaryParticipantId: "local-participant",
     };
   }
 
@@ -272,6 +376,38 @@ class LocalSpeakerRepository implements SpeakerRepository {
       version: profile.version + 1,
       updatedAt: command.updatedAt,
     };
+    profiles[index] = updated;
+    return { ok: true, value: clone(updated) };
+  }
+  async updateProfile(
+    command: UpdateSpeakerProfileCommand,
+  ): Promise<RepositoryResult<SpeakerProfile>> {
+    this.#seed(command.eventId);
+    const profiles = this.#profiles.get(command.eventId) ?? [];
+    const index = profiles.findIndex(
+      ({ participantId }) => participantId === command.participantId,
+    );
+    const profile = profiles[index];
+    if (profile === undefined) return { ok: false, reason: "not_found" };
+    if (profile.version !== command.expectedVersion) {
+      return { ok: false, reason: "version_conflict" };
+    }
+    const updated: SpeakerProfile = {
+      ...profile,
+      ...(command.displayName === undefined ? {} : { displayName: command.displayName }),
+      ...(command.email === undefined ? {} : { email: command.email }),
+      ...(command.jobTitle === undefined ? {} : { jobTitle: command.jobTitle }),
+      ...(command.company === undefined ? {} : { company: command.company }),
+      ...(command.status === undefined ? {} : { status: command.status }),
+      ...(command.biography === undefined ? {} : { biography: command.biography }),
+      ...(command.socialLinks === undefined ? {} : { socialLinks: clone(command.socialLinks) }),
+      ...(command.headshotAssetId === undefined || command.headshotAssetId === null
+        ? {}
+        : { headshotAssetId: command.headshotAssetId }),
+      version: profile.version + 1,
+      updatedAt: command.updatedAt,
+    };
+    if (command.headshotAssetId === null) delete updated.headshotAssetId;
     profiles[index] = updated;
     return { ok: true, value: clone(updated) };
   }
@@ -1078,6 +1214,7 @@ export function createLocalDependencies(): ApiDependencies {
 
   return {
     authenticator,
+    auth: localAuthRoutes(),
     organizerOverview,
     speaker: {
       service: speakerService,

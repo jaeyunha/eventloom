@@ -18,7 +18,7 @@ Each file must contain the core application and provider keys represented in `.e
 - Cloudflare account, deployment token, D1 database ID, R2 bucket, and Queue
 - one Airtable token/base pair
 - OpenSend URL, sending key, and the three sender addresses
-- complete Google, Microsoft, and Accelevents pairs when those optional adapters are enabled
+- complete Accelevents URL/key pair when that optional adapter is enabled
 
 The preflight compares values in memory and reports only key names and environment names. It never writes or prints a configured value. Local, staging, and production must have distinct Better Auth secrets, Cloudflare deployment tokens, D1 IDs, R2 buckets, Queues, Airtable tokens/bases, OpenSend keys, and enabled provider credentials. Origins must also be distinct, and non-local origins must use HTTPS. The Cloudflare account and provider API base URLs may be shared when the provider intentionally hosts every isolated resource in one account or endpoint.
 
@@ -26,15 +26,13 @@ The selected environment is checked against `apps/api/wrangler.toml`. `WEB_ORIGI
 
 ### Optional provider decision
 
-An optional provider must be either absent or configured as a complete pair:
+An optional integration provider must be either absent or configured as a complete pair:
 
 | Provider | Complete pair |
 | --- | --- |
-| Google OAuth | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` |
-| Microsoft OAuth | `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET` |
 | Accelevents | `ACCELEVENTS_API_BASE_URL`, `ACCELEVENTS_API_KEY` |
 
-Pass `--require-providers google,microsoft,accelevents` with the exact adapters enabled for the release. A named provider then fails when disabled. The script validates presence, pair completeness, HTTPS, and cross-environment credential isolation. Operators must still retain provider-side evidence for OAuth callback/scopes, OpenSend sender verification and suppression mode, and the staging Accelevents sandbox event; those facts cannot be proven from configuration presence alone.
+Pass `--require-providers accelevents` when that adapter is enabled for the release. A named provider then fails when disabled. The script validates presence, pair completeness, HTTPS, and cross-environment credential isolation. Operators must still retain provider-side evidence for OpenSend sender verification/suppression mode and the staging Accelevents sandbox event; those facts cannot be proven from configuration presence alone.
 
 ## Cloudflare credentials and permissions
 
