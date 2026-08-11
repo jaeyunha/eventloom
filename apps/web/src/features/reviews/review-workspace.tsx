@@ -700,7 +700,7 @@ function selectApiPlan(plans: readonly ApiPlan[], preferredPlanId?: string): Api
       right.id.localeCompare(left.id),
   )[0];
 }
-async function loadOrganizerData(
+export async function loadOrganizerData(
   eventId: string,
   baseUrl: string,
   preferredPlanId?: string,
@@ -775,46 +775,40 @@ async function loadOrganizerData(
     });
     return mapPlan(plan, eventId, pendingAggregates, mappedProgress, {});
   }
-  const aggregateEntries = await Promise.all(
-    uniqueSubmissions.map(async (submission) => {
-      let aggregate: ApiAggregate | null = null;
-      if (round !== undefined) {
-        try {
-          aggregate = await evaluationRequest<ApiAggregate>(
+  const aggregates =
+    round === undefined
+      ? []
+      : (
+          await evaluationRequest<{ aggregates: readonly ApiAggregate[] }>(
             baseUrl,
-            `/plans/${encodeURIComponent(plan.id)}/rounds/${encodeURIComponent(round.id)}/submissions/${encodeURIComponent(submission.id)}/aggregate`,
-          );
-        } catch (reason: unknown) {
-          if (
-            !(reason instanceof EvaluationRequestError) ||
-            (reason.status !== 404 && reason.status !== 409)
-          ) {
-            throw reason;
-          }
-        }
-      }
-      const submissionAssignments = assignments.filter(
-        (assignment) =>
-          assignment.submissionId === submission.id && assignment.roundId === round?.id,
-      );
-      return {
-        id: submission.id,
-        reference: submission.id,
-        title: submission.title,
-        countedScore: aggregate?.averageWeightedTotal?.toFixed(1) ?? "—",
-        possibleScore: aggregate?.possibleWeightedTotal?.toFixed(1) ?? "—",
-        countedReviews: aggregate?.submittedReviewCount ?? 0,
-        expectedReviews:
-          aggregate?.expectedReviewCount ??
-          submissionAssignments.filter((assignment) => assignment.status !== "abstained").length,
-        conflicts: submissionAssignments.filter((assignment) => assignment.status === "abstained")
-          .length,
-        abstentions: submissionAssignments.filter((assignment) => assignment.status === "abstained")
-          .length,
-        participants: submission.participants ?? [],
-      };
-    }),
+            `/plans/${encodeURIComponent(plan.id)}/rounds/${encodeURIComponent(round.id)}/aggregates`,
+          )
+        ).aggregates;
+  const aggregateBySubmissionId = new Map(
+    aggregates.map((aggregate) => [aggregate.submissionId, aggregate] as const),
   );
+  const aggregateEntries = uniqueSubmissions.map((submission) => {
+    const aggregate = aggregateBySubmissionId.get(submission.id);
+    const submissionAssignments = assignments.filter(
+      (assignment) => assignment.submissionId === submission.id && assignment.roundId === round?.id,
+    );
+    return {
+      id: submission.id,
+      reference: submission.id,
+      title: submission.title,
+      countedScore: aggregate?.averageWeightedTotal?.toFixed(1) ?? "—",
+      possibleScore: aggregate?.possibleWeightedTotal?.toFixed(1) ?? "—",
+      countedReviews: aggregate?.submittedReviewCount ?? 0,
+      expectedReviews:
+        aggregate?.expectedReviewCount ??
+        submissionAssignments.filter((assignment) => assignment.status !== "abstained").length,
+      conflicts: submissionAssignments.filter((assignment) => assignment.status === "abstained")
+        .length,
+      abstentions: submissionAssignments.filter((assignment) => assignment.status === "abstained")
+        .length,
+      participants: submission.participants ?? [],
+    };
+  });
   const decisions = Object.fromEntries(
     await Promise.all(
       uniqueSubmissions.map(async (submission) => {

@@ -6,11 +6,12 @@ import {
   buildEvaluationPlanCreateDto,
   createEvaluationPlan,
   type EvaluatorAssignment,
+  loadEvaluatorQueue,
+  loadOrganizerData,
   parseNumericAuthoringValue,
   type ReviewPlanSeed,
   type ReviewRound,
   ReviewWorkspace,
-  loadEvaluatorQueue,
   type RubricCriterion,
   validateCreateEvaluationPlanForm,
 } from "./review-workspace";
@@ -766,6 +767,160 @@ describe("review workspace", () => {
     expect(evaluatorMarkup).toContain("Declare conflict and abstain");
   });
 
+  it("loads organizer aggregates once per round and joins them by submission", async () => {
+    const requests: string[] = [];
+    const plan = {
+      id: "plan-batch",
+      eventId: "summit-2026",
+      name: "Batch review",
+      status: "open",
+      blindReview: false,
+      closesAt: "2099-08-20T00:00:00.000Z",
+      assignmentRule: { reviewsPerSubmission: 1, maxAssignmentsPerReviewer: 5 },
+      version: 1,
+      createdAt: "2026-08-10T00:00:00.000Z",
+      updatedAt: "2026-08-10T01:00:00.000Z",
+      rounds: [
+        {
+          id: "round-batch",
+          name: "Batch round",
+          sequence: 1,
+          opensAt: null,
+          closesAt: "2099-08-18T00:00:00.000Z",
+          rubric: { id: "rubric-batch", name: "Batch rubric", criteria: testCriteria },
+        },
+      ],
+    };
+    const assignments = [
+      {
+        id: "assignment-a",
+        eventId: "summit-2026",
+        planId: plan.id,
+        roundId: "round-batch",
+        submissionId: "submission-a",
+        reviewerId: "reviewer-1",
+        status: "submitted",
+        version: 1,
+      },
+      {
+        id: "assignment-b",
+        eventId: "summit-2026",
+        planId: plan.id,
+        roundId: "round-batch",
+        submissionId: "submission-b",
+        reviewerId: "reviewer-2",
+        status: "in_progress",
+        version: 1,
+      },
+      {
+        id: "assignment-c",
+        eventId: "summit-2026",
+        planId: plan.id,
+        roundId: "round-batch",
+        submissionId: "submission-c",
+        reviewerId: "reviewer-3",
+        status: "assigned",
+        version: 1,
+      },
+    ];
+    const json = (body: unknown) =>
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = new URL(String(input));
+        requests.push(url.toString());
+        const path = url.pathname.replace("/api/admin/evaluations", "");
+        if (path === "/plans") return json({ plans: [plan] });
+        if (path === `/plans/${plan.id}/progress`) {
+          return json({
+            total: 3,
+            assigned: 3,
+            inProgress: 1,
+            submitted: 1,
+            abstained: 0,
+            completionPercent: 33,
+            reviewers: [],
+          });
+        }
+        if (path === "/events/summit-2026/submissions") {
+          return json([
+            { id: "submission-a", title: "Submission A", abstract: "A" },
+            { id: "submission-b", title: "Submission B", abstract: "B" },
+            { id: "submission-c", title: "Submission C", abstract: "C" },
+          ]);
+        }
+        if (path === `/plans/${plan.id}/assignments`) return json({ assignments });
+        if (path === `/plans/${plan.id}/rounds/round-batch/aggregates`) {
+          return json({
+            aggregates: [
+              {
+                submissionId: "submission-b",
+                submittedReviewCount: 2,
+                expectedReviewCount: 3,
+                averageWeightedTotal: 3,
+                possibleWeightedTotal: 5,
+              },
+              {
+                submissionId: "submission-a",
+                submittedReviewCount: 1,
+                expectedReviewCount: 1,
+                averageWeightedTotal: 4.5,
+                possibleWeightedTotal: 5,
+              },
+            ],
+          });
+        }
+        if (/^\/plans\/plan-batch\/submissions\/[^/]+\/decision$/u.test(path)) {
+          return json(null);
+        }
+        throw new Error(`Unexpected evaluation request: ${url.toString()}`);
+      }),
+    );
+
+    try {
+      const seed = await loadOrganizerData("summit-2026", "https://api.example");
+      const aggregateRequests = requests.filter((request) =>
+        new URL(request).pathname.endsWith("/aggregates"),
+      );
+      const singularAggregateRequests = requests.filter((request) =>
+        /\/submissions\/[^/]+\/aggregate$/u.test(new URL(request).pathname),
+      );
+
+      expect(aggregateRequests).toHaveLength(1);
+      expect(singularAggregateRequests).toHaveLength(0);
+      expect(seed.aggregates).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "submission-a",
+            countedScore: "4.5",
+            possibleScore: "5.0",
+            countedReviews: 1,
+            expectedReviews: 1,
+          }),
+          expect.objectContaining({
+            id: "submission-b",
+            countedScore: "3.0",
+            possibleScore: "5.0",
+            countedReviews: 2,
+            expectedReviews: 3,
+          }),
+          expect.objectContaining({
+            id: "submission-c",
+            countedScore: "—",
+            possibleScore: "—",
+            countedReviews: 0,
+            expectedReviews: 1,
+          }),
+        ]),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
   it("hydrates the reviewer queue from one batch context request with canonical titles and statuses", async () => {
     const requests: string[] = [];
     vi.stubGlobal(
