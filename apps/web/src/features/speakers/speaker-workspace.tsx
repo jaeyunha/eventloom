@@ -457,8 +457,10 @@ export function speakerSecondaryLoadKey(
   organizationId: string,
   eventId: string,
   loading: boolean,
+  visible = true,
 ): string | null {
   if (
+    !visible ||
     loading ||
     roster === null ||
     roster.organizationId !== organizationId ||
@@ -946,6 +948,7 @@ export function SpeakerWorkspace({
   const [emailNotice, setEmailNotice] = useState<string | null>(null);
   const [reminderEligibility, setReminderEligibility] =
     useState<SpeakerReminderEligibilityEnvelope | null>(null);
+  const [visibleSecondaryContext, setVisibleSecondaryContext] = useState<string | null>(null);
   const [sessionFilter, setSessionFilter] = useState("all");
   const [progressFilter, setProgressFilter] = useState<ProgressFilter>("all");
   const [showAdd, setShowAdd] = useState(false);
@@ -987,6 +990,8 @@ export function SpeakerWorkspace({
   const rosterRequestRef = useRef(0);
   const importRequestRef = useRef(0);
   const secondaryLoadRef = useRef<{ api: SpeakerApi; key: string } | null>(null);
+  const emailSectionRef = useRef<HTMLElement | null>(null);
+  const reminderSectionRef = useRef<HTMLElement | null>(null);
   const importBusy = importPreviewBusy || importCommitBusy;
 
   useEffect(() => {
@@ -1096,7 +1101,36 @@ export function SpeakerWorkspace({
       progressController?.abort();
     };
   }, [api, eventId, organizationId]);
-  const currentSecondaryLoadKey = speakerSecondaryLoadKey(roster, organizationId, eventId, loading);
+  const secondaryContextKey = `${organizationId}:${eventId}`;
+  const secondarySectionsVisible = visibleSecondaryContext === secondaryContextKey;
+  useEffect(() => {
+    if (secondarySectionsVisible) return;
+    const sections = [emailSectionRef.current, reminderSectionRef.current].filter(
+      (section): section is HTMLElement => section !== null,
+    );
+    if (sections.length === 0) return;
+    if (typeof IntersectionObserver === "undefined") {
+      setVisibleSecondaryContext(secondaryContextKey);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+        setVisibleSecondaryContext(secondaryContextKey);
+        observer.disconnect();
+      },
+      { rootMargin: "240px" },
+    );
+    for (const section of sections) observer.observe(section);
+    return () => observer.disconnect();
+  }, [secondaryContextKey, secondarySectionsVisible]);
+  const currentSecondaryLoadKey = speakerSecondaryLoadKey(
+    roster,
+    organizationId,
+    eventId,
+    loading,
+    secondarySectionsVisible,
+  );
   useEffect(() => {
     const loadKey = currentSecondaryLoadKey;
     if (api === null || loadKey === null) return;
@@ -2724,6 +2758,7 @@ export function SpeakerWorkspace({
       </section>
 
       <section
+        ref={emailSectionRef}
         style={{ ...panelStyle, marginBottom: "1rem" }}
         aria-labelledby="bulk-email-heading"
         aria-busy={emailAnyBusy}
@@ -3054,6 +3089,7 @@ export function SpeakerWorkspace({
         ) : null}
       </section>
       <section
+        ref={reminderSectionRef}
         style={{ ...panelStyle, marginBottom: "1rem" }}
         aria-labelledby="reminder-eligibility-heading"
       >

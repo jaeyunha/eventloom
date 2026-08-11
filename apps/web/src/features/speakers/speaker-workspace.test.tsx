@@ -899,6 +899,7 @@ describe("speaker workspace", () => {
     expect(speakerSecondaryLoadKey(roster, "org-1", "event-1", true)).toBeNull();
     expect(speakerSecondaryLoadKey(roster, "org-2", "event-1", false)).toBeNull();
     expect(speakerSecondaryLoadKey(roster, "org-1", "event-2", false)).toBeNull();
+    expect(speakerSecondaryLoadKey(roster, "org-1", "event-1", false, false)).toBeNull();
     expect(speakerSecondaryLoadKey(roster, "org-1", "event-1", false)).toBe("org-1:event-1");
   });
 
