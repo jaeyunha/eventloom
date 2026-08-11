@@ -1337,6 +1337,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       ...shared,
       table: "Submissions",
       jsonField: "Answers JSON",
+      decode: (fields) => decodeCfpSubmission(fields) as unknown as SpeakerSubmission,
     });
     this.#decisions = new AirtableJsonStore({
       ...shared,
@@ -1347,7 +1348,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       ...shared,
       table: "Speaker Profiles",
       jsonField: "Biography",
-      scopeFields: { eventId: true, organizationId: true },
+      indexedFields: { Version: "version" },
     });
     this.#tasks = new AirtableJsonStore({
       ...shared,
@@ -1850,8 +1851,13 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     readonly updatedAt: string;
   }): Promise<SpeakerSubmission> {
     const id = `speaker-submission:${input.submission.id}`;
-    const answers = isRecord(input.submission.answers) ? input.submission.answers : {};
-    const titleCandidate = answers.title ?? answers.sessionTitle;
+    const title =
+      portalAnswerText(
+        input.submission as unknown as JsonRecord,
+        "title",
+        "sessionTitle",
+        "name",
+      ) ?? id;
     const primaryParticipantId =
       input.submission.participants.find((participant) => participant.role === "primary")?.id ??
       input.submission.participants[0]?.id;
@@ -1860,7 +1866,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
         id,
         eventId: input.submission.eventId,
         formId: input.submission.formId,
-        title: typeof titleCandidate === "string" && titleCandidate.trim() ? titleCandidate : id,
+        title,
         status: "accepted",
         participantIds: input.submission.participants.map((participant) => participant.id),
         version: input.submission.version,
@@ -4385,7 +4391,9 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
         ? (current?.durationMinutes ?? 30)
         : submissionDurationMinutes(submission);
     const title =
-      submissionAnswerText(submission, "title", "sessionTitle", "name") || current?.title || id;
+      submissionText(submission, "title", "sessionTitle", "name", "field-title", "Title") ??
+      current?.title ??
+      id;
     const description =
       submissionAnswerText(submission, "abstract", "description", "sessionAbstract", "summary") ||
       current?.description ||
@@ -6422,7 +6430,7 @@ export class AirtableCrmRepository implements CrmRepository {
       ...shared,
       table: "Speaker Profiles",
       jsonField: "Biography",
-      scopeFields: { eventId: true, organizationId: true },
+      indexedFields: { Version: "version" },
     });
     this.#speakerRoster = jsonStore(shared, "Session Roster", "Members JSON");
     this.#events = options.events;
@@ -7559,7 +7567,7 @@ export class AirtableRemixContentGateway implements RemixContentGateway {
       ...shared,
       table: "Speaker Profiles",
       jsonField: "Biography",
-      scopeFields: { eventId: true, organizationId: true },
+      indexedFields: { Version: "version" },
     });
     this.#database = options.database;
     this.#queue = options.queue;

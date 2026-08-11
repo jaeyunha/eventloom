@@ -2417,6 +2417,148 @@ function acceptanceTransport(events: string[]): {
 }
 
 describe("production agenda, portal, acceptance, and reminder boundaries", () => {
+  it("stores new speaker profile scope in Biography without nonexistent physical scope fields", async () => {
+    const transport = new FakeAirtableTransport();
+    const organizationId = "tenant-profile-create";
+    const eventId = "event-profile-create";
+    const participantId = "participant-profile-create";
+    const profileId = `speaker-profile:${eventId}:${participantId}`;
+    transport.seed({
+      baseId: "base-test",
+      table: "Events",
+      fields: {
+        "Application ID": eventId,
+        "Settings JSON": JSON.stringify({
+          id: eventId,
+          organizationId,
+          name: "Profile create event",
+        }),
+      },
+    });
+    const repository = new AirtableSpeakerRepository({
+      baseId: "base-test",
+      transport,
+      database: productionD1("unused"),
+    });
+
+    await repository.ensureProfile({
+      organizationId,
+      eventId,
+      participant: {
+        id: participantId,
+        firstName: "Priya",
+        lastName: "Raman",
+        email: "priya@example.test",
+        role: "primary",
+        biography: "Original biography.",
+        answers: {},
+      },
+      updatedAt: "2026-08-11T01:00:00.000Z",
+    });
+
+    const create = transport.requests.find(
+      (request) => request.method === "POST" && request.table === "Speaker Profiles",
+    );
+    const fields = (
+      create?.body as { readonly fields?: Readonly<Record<string, unknown>> } | undefined
+    )?.fields;
+    expect(fields).toEqual({
+      "Application ID": profileId,
+      Version: 1,
+      Biography: expect.any(String),
+    });
+    expect(JSON.parse(String(fields?.Biography))).toMatchObject({
+      id: profileId,
+      tenantId: organizationId,
+      eventId,
+      participantId,
+      biography: "Original biography.",
+      version: 1,
+    });
+  });
+
+  it("updates Biography JSON and its physical Version atomically from the JSON version", async () => {
+    const transport = new FakeAirtableTransport();
+    const organizationId = "tenant-profile-update";
+    const eventId = "event-profile-update";
+    const participantId = "participant-profile-update";
+    const profileId = `speaker-profile:${eventId}:${participantId}`;
+    transport.seed({
+      baseId: "base-test",
+      table: "Events",
+      fields: {
+        "Application ID": eventId,
+        "Settings JSON": JSON.stringify({
+          id: eventId,
+          organizationId,
+          name: "Profile update event",
+        }),
+      },
+    });
+    transport.seed({
+      baseId: "base-test",
+      table: "Speaker Profiles",
+      fields: {
+        "Application ID": profileId,
+        Version: 2,
+        Biography: JSON.stringify({
+          id: profileId,
+          tenantId: organizationId,
+          eventId,
+          participantId,
+          displayName: "Priya Raman",
+          biography: "Original biography.",
+          status: "accepted",
+          version: 1,
+          updatedAt: "2026-08-11T01:00:00.000Z",
+        }),
+      },
+    });
+    const repository = new AirtableSpeakerRepository({
+      baseId: "base-test",
+      transport,
+      database: productionD1("unused"),
+    });
+
+    await expect(
+      repository.updateBiography({
+        eventId,
+        participantId,
+        biography: "Updated biography.",
+        expectedVersion: 1,
+        updatedAt: "2026-08-11T02:00:00.000Z",
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        tenantId: organizationId,
+        eventId,
+        participantId,
+        biography: "Updated biography.",
+        version: 2,
+      },
+    });
+
+    const update = transport.requests.find(
+      (request) => request.method === "PATCH" && request.table === "Speaker Profiles",
+    );
+    const fields = (
+      update?.body as { readonly fields?: Readonly<Record<string, unknown>> } | undefined
+    )?.fields;
+    expect(fields).toEqual({
+      "Application ID": profileId,
+      Version: 2,
+      Biography: expect.any(String),
+    });
+    expect(JSON.parse(String(fields?.Biography))).toMatchObject({
+      id: profileId,
+      tenantId: organizationId,
+      eventId,
+      participantId,
+      biography: "Updated biography.",
+      version: 2,
+    });
+  });
   it("initializes and synchronizes the production agenda on first session access without publishing", async () => {
     const transport = new FakeAirtableTransport();
     transport.seed({
@@ -2872,7 +3014,6 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       status: "submitted",
       completedSteps: ["welcome", "account", "submission", "participant", "review"],
       answers: {
-        title: "Canonical session",
         abstract: "Preserve this taxonomy.",
         formatId: "format-talk",
         trackIds: ["track-main"],
@@ -2908,6 +3049,7 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       table: "Submissions",
       fields: {
         "Application ID": submission.id,
+        Title: "Canonical session",
         "Answers JSON": JSON.stringify(submission),
       },
     });
@@ -2963,6 +3105,11 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
     };
     await handoff.accept(input);
     await handoff.accept(input);
+    await expect(
+      speakers.getSubmission(submission.eventId, `speaker-submission:${submission.id}`),
+    ).resolves.toMatchObject({
+      title: "Canonical session",
+    });
     const acceptedActor = {
       tenantId: submission.tenantId,
       userId: input.decidedBy,
@@ -3217,11 +3364,20 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
     const profilePatch = fake.requests.find(
       (request) => request.method === "PATCH" && request.table === "Speaker Profiles",
     );
-    expect(profilePatch?.body).toEqual(
-      expect.objectContaining({
-        fields: expect.objectContaining({ "Organization ID": tenantId }),
-      }),
-    );
+    const profilePatchFields = (
+      profilePatch?.body as { readonly fields?: Readonly<Record<string, unknown>> } | undefined
+    )?.fields;
+    expect(profilePatchFields).toEqual({
+      "Application ID": `speaker-profile:${eventId}:organizer`,
+      Version: 2,
+      Biography: expect.any(String),
+    });
+    expect(JSON.parse(String(profilePatchFields?.Biography))).toMatchObject({
+      tenantId,
+      eventId,
+      version: 2,
+      biography: "Updated organizer biography",
+    });
     await expect(gateway.getSpeaker({ tenantId, eventId, sourceId: "organizer" })).resolves.toEqual(
       expect.objectContaining({ biography: "Updated organizer biography", revision: 2 }),
     );
