@@ -1473,7 +1473,7 @@ function ScopedAgendaWorkspace({
   api: providedApi,
   appEnvironment = process.env.APP_ENV,
 }: Readonly<ScopedAgendaWorkspaceProps>) {
-  const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
+
   const api = useMemo(
     () => providedApi ?? createAgendaApi("", organizationId),
     [organizationId, providedApi],
@@ -1551,13 +1551,7 @@ function ScopedAgendaWorkspace({
         mountedRef.current &&
         !signal?.aborted &&
         isAgendaAsyncScopeTokenCurrent(token, scopeKey, loadGenerationRef.current);
-      if (!api) {
-        if (loadIsCurrent()) {
-          setError("The organizer API URL is not configured.");
-          setLoading(false);
-        }
-        return;
-      }
+
       if (loadIsCurrent()) {
         setLoading(true);
         setError(null);
