@@ -430,6 +430,14 @@ export function reviewerNavigationDisabled(
   return !destinationAvailable || autosavePending || draftBusy || submitBusy;
 }
 
+export function reviewerSelectionBlocked(
+  pendingAssignmentId: string | null,
+  selectedAssignmentId: string | null,
+  nextAssignmentId: string | null,
+): boolean {
+  return pendingAssignmentId !== null && nextAssignmentId !== selectedAssignmentId;
+}
+
 function apiBaseUrl(): string {
   const configured = process.env.NEXT_PUBLIC_API_URL?.trim();
   return configured ? configured.replace(/\/+$/u, "") : "";
@@ -3401,6 +3409,10 @@ function ReviewerQueueWorkspace({
   baseUrl: string;
 }>) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const pendingAutosaveAssignmentRef = useRef<string | null>(null);
+  const [pendingAutosaveAssignmentId, setPendingAutosaveAssignmentId] = useState<string | null>(
+    null,
+  );
   const [recusedIds, setRecusedIds] = useState<ReadonlySet<string>>(() => new Set());
   const [submittedAtById, setSubmittedAtById] = useState<Readonly<Record<string, string>>>({});
   const [draftsById, setDraftsById] = useState<Readonly<Record<string, EvaluatorDraftSnapshot>>>(
@@ -3428,6 +3440,27 @@ function ReviewerQueueWorkspace({
     selectedBase === null
       ? -1
       : visibleEntries.findIndex((entry) => entry.assignment.id === selectedBase.id);
+  function updateAutosavePending(assignmentId: string, pending: boolean): void {
+    if (pending) {
+      pendingAutosaveAssignmentRef.current = assignmentId;
+      setPendingAutosaveAssignmentId(assignmentId);
+      return;
+    }
+    if (pendingAutosaveAssignmentRef.current === assignmentId) {
+      pendingAutosaveAssignmentRef.current = null;
+    }
+    setPendingAutosaveAssignmentId((current) => (current === assignmentId ? null : current));
+  }
+
+  function selectAssignment(nextAssignmentId: string | null): boolean {
+    if (
+      reviewerSelectionBlocked(pendingAutosaveAssignmentRef.current, selectedId, nextAssignmentId)
+    ) {
+      return false;
+    }
+    setSelectedId(nextAssignmentId);
+    return true;
+  }
 
   return (
     <div className={styles.workspace} id="review-workspace">
@@ -3513,9 +3546,18 @@ function ReviewerQueueWorkspace({
                   <Link
                     className={styles.primaryButton}
                     href={`#scorecard-${encodeURIComponent(assignment.id)}`}
-                    onClick={() => setSelectedId(assignment.id)}
+                    onClick={(event) => {
+                      if (!selectAssignment(assignment.id)) event.preventDefault();
+                    }}
                     aria-label={`Open scorecard for ${assignment.title}`}
                     aria-current={isSelected ? "location" : undefined}
+                    aria-disabled={
+                      reviewerSelectionBlocked(
+                        pendingAutosaveAssignmentId,
+                        selectedId,
+                        assignment.id,
+                      ) || undefined
+                    }
                   >
                     {isSelected ? "Scorecard open" : "Open scorecard"}
                   </Link>
@@ -3540,7 +3582,10 @@ function ReviewerQueueWorkspace({
             <button
               className={styles.secondaryButton}
               type="button"
-              onClick={() => setSelectedId(null)}
+              onClick={() => {
+                selectAssignment(null);
+              }}
+              disabled={reviewerSelectionBlocked(pendingAutosaveAssignmentId, selectedId, null)}
             >
               Back to reviewer queue
             </button>
@@ -3553,17 +3598,22 @@ function ReviewerQueueWorkspace({
             queuePosition={{ position: selectedIndex + 1, total: visibleEntries.length }}
             onPrevious={
               selectedIndex > 0
-                ? () => setSelectedId(visibleEntries[selectedIndex - 1]?.assignment.id ?? null)
+                ? () => {
+                    selectAssignment(visibleEntries[selectedIndex - 1]?.assignment.id ?? null);
+                  }
                 : undefined
             }
             onNext={
               selectedIndex >= 0 && selectedIndex < visibleEntries.length - 1
-                ? () => setSelectedId(visibleEntries[selectedIndex + 1]?.assignment.id ?? null)
+                ? () => {
+                    selectAssignment(visibleEntries[selectedIndex + 1]?.assignment.id ?? null);
+                  }
                 : undefined
             }
             onDraftChange={(snapshot) =>
               setDraftsById((current) => ({ ...current, [selected.id]: snapshot }))
             }
+            onAutosavePendingChange={(pending) => updateAutosavePending(selected.id, pending)}
             onAbstain={() => {
               setRecusedIds((current) => new Set([...current, selected.id]));
               setSelectedId(null);
@@ -3593,6 +3643,7 @@ function EvaluatorWorkspace({
   onPrevious,
   onNext,
   onDraftChange,
+  onAutosavePendingChange,
 }: Readonly<{
   assignment: EvaluatorAssignment;
   baseUrl: string;
@@ -3603,6 +3654,7 @@ function EvaluatorWorkspace({
   onPrevious?: (() => void) | undefined;
   onNext?: (() => void) | undefined;
   onDraftChange?: ((snapshot: EvaluatorDraftSnapshot) => void) | undefined;
+  onAutosavePendingChange?: ((pending: boolean) => void) | undefined;
 }>) {
   const initiallySubmitted =
     assignment.submittedAt !== null ||
@@ -3623,7 +3675,12 @@ function EvaluatorWorkspace({
   const criterionRefs = useRef<Record<string, HTMLElement | null>>({});
   const [showValidation, setShowValidation] = useState(false);
   const [autosavePending, setAutosavePending] = useState(false);
-  const [autosaveQueue] = useState(() => createReviewAutosaveQueue(setAutosavePending));
+  const [autosaveQueue] = useState(() =>
+    createReviewAutosaveQueue((pending) => {
+      setAutosavePending(pending);
+      onAutosavePendingChange?.(pending);
+    }),
+  );
   const [autosaveState, setAutosaveState] = useState(
     initiallySubmitted ? "Review submitted" : "Autosave ready",
   );

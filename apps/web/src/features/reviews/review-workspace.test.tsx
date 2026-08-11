@@ -16,6 +16,7 @@ import {
   reviewerDisplayLabel,
   type RubricCriterion,
   reviewerNavigationDisabled,
+  reviewerSelectionBlocked,
   validateCreateEvaluationPlanForm,
 } from "./review-workspace";
 
@@ -286,6 +287,9 @@ describe("review workspace", () => {
 
     expect(queue.isPending()).toBe(true);
     expect(reviewerNavigationDisabled(true, queue.isPending(), false, false)).toBe(true);
+    expect(reviewerSelectionBlocked("assignment-a", "assignment-a", "assignment-b")).toBe(true);
+    expect(reviewerSelectionBlocked("assignment-a", "assignment-a", null)).toBe(true);
+    expect(reviewerSelectionBlocked("assignment-a", "assignment-a", "assignment-a")).toBe(false);
 
     if (resolveSave === undefined) throw new Error("Expected a deferred autosave resolver.");
     resolveSave();
@@ -294,6 +298,7 @@ describe("review workspace", () => {
     expect(queue.isPending()).toBe(false);
     expect(reviewerNavigationDisabled(true, queue.isPending(), false, false)).toBe(false);
     expect(reviewerNavigationDisabled(false, queue.isPending(), false, false)).toBe(true);
+    expect(reviewerSelectionBlocked(null, "assignment-a", "assignment-b")).toBe(false);
     expect(pendingStates).toEqual([true, false]);
   });
   it("renders an accessible first-plan form for an organizer event with no plans", () => {
