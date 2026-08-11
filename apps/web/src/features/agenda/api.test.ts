@@ -254,6 +254,19 @@ describe("agenda API adapter", () => {
       "An organization ID is required",
     );
   });
+  it("uses the same-origin gateway when no public API origin is configured", async () => {
+    let requestedUrl = "";
+    const api = createAgendaApi("", " org/a ", async (input) => {
+      requestedUrl = String(input);
+      return new Response(JSON.stringify({ data: workspace }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+
+    await expect(api.getWorkspace("event/a")).resolves.toStrictEqual(workspace);
+    expect(requestedUrl).toBe("/api/admin/organizations/org%2Fa/events/event%2Fa/agenda");
+  });
 
   it("uses GET preview and publishes through the canonical route before reloading the workspace", async () => {
     const calls: Array<{ input: RequestInfo | URL; init: RequestInit | undefined }> = [];

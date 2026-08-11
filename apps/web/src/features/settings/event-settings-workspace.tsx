@@ -169,6 +169,19 @@ function messageFrom(error: unknown): string {
   return "The event settings request could not be completed.";
 }
 
+export async function persistEventSettingsMutation(
+  operation: () => Promise<void>,
+  refresh: () => Promise<void>,
+): Promise<"refreshed" | "refresh-failed"> {
+  await operation();
+  try {
+    await refresh();
+    return "refreshed";
+  } catch {
+    return "refresh-failed";
+  }
+}
+
 function resourceTitle(kind: EventSettingsResourceKind): string {
   return `${kind.charAt(0).toUpperCase()}${kind.slice(1)}s`;
 }
@@ -1248,10 +1261,8 @@ export function EventSettingsWorkspace({
 
   const api = useMemo(() => {
     if (providedApi) return providedApi;
-    const baseUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
-    if (!baseUrl) return null;
     try {
-      return createEventSettingsApi(baseUrl, organizationId);
+      return createEventSettingsApi("", organizationId);
     } catch {
       return null;
     }
@@ -1326,9 +1337,12 @@ export function EventSettingsWorkspace({
     setBusy(true);
     setNotice(null);
     try {
-      await operation();
-      await refresh();
-      setNotice(successMessage);
+      const outcome = await persistEventSettingsMutation(operation, refresh);
+      setNotice(
+        outcome === "refreshed"
+          ? successMessage
+          : `${successMessage} The saved change could not be refreshed; reload to see the latest settings.`,
+      );
     } catch (error) {
       const message =
         error instanceof EventSettingsApiError && error.code === "VERSION_CONFLICT"

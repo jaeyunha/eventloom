@@ -22,6 +22,7 @@ const catalog: AgendaCatalog = {
       title: "Opening",
       status: "accepted",
       participantIds: ["speaker-1"],
+      speakerNames: ["Ada Lovelace"],
       resourceIds: ["projector-1"],
       capacityRequired: 120,
     },
@@ -132,6 +133,12 @@ describe("agenda validation", () => {
 
     expect(new Set(report.conflicts.map((conflict) => conflict.kind))).toEqual(
       new Set(["room", "participant", "resource"]),
+    );
+    expect(report.conflicts.map((conflict) => conflict.message)).toEqual(
+      expect.arrayContaining([
+        'Sessions "Opening" and "Panel" overlap in room "Small room"',
+        'Speaker "Ada Lovelace" is scheduled in overlapping sessions "Opening" and "Deep dive"',
+      ]),
     );
     await expect(
       engine.updateDraft({

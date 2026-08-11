@@ -14,7 +14,11 @@ import {
   type SessionSettingsRecord,
   validateRoomInput,
 } from "./api";
-import { EventSettingsWorkspaceView, validateRoomForm } from "./event-settings-workspace";
+import {
+  EventSettingsWorkspaceView,
+  persistEventSettingsMutation,
+  validateRoomForm,
+} from "./event-settings-workspace";
 
 const settings: SessionSettingsRecord = {
   id: "settings_event-a",
@@ -94,6 +98,38 @@ function response<T>(data: T, status = 200): Response {
   });
 }
 
+describe("event settings mutation persistence", () => {
+  it("keeps a durable write successful when its authoritative refresh fails", async () => {
+    let writes = 0;
+    const outcome = await persistEventSettingsMutation(
+      async () => {
+        writes += 1;
+      },
+      async () => {
+        throw new Error("refresh unavailable");
+      },
+    );
+
+    expect(outcome).toBe("refresh-failed");
+    expect(writes).toBe(1);
+  });
+
+  it("propagates a failed write without attempting a refresh", async () => {
+    let refreshed = false;
+    await expect(
+      persistEventSettingsMutation(
+        async () => {
+          throw new Error("write failed");
+        },
+        async () => {
+          refreshed = true;
+        },
+      ),
+    ).rejects.toThrow("write failed");
+    expect(refreshed).toBe(false);
+  });
+});
+
 describe("event settings API", () => {
   it("reads organization/event-qualified settings and library resources", async () => {
     const calls: Array<{ url: string; init: RequestInit | undefined }> = [];
@@ -121,6 +157,56 @@ describe("event settings API", () => {
       ),
     ).toBe(true);
     expect(calls.every((call) => call.init?.credentials === "include")).toBe(true);
+  });
+
+  it("uses the same-origin gateway for durable room and track creation", async () => {
+    const calls: Array<{ url: string; init: RequestInit | undefined }> = [];
+    const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, init });
+      if (url.endsWith("/sessions/rooms")) return response(rooms[0]);
+      if (url.endsWith("/sessions/tracks")) return response(resource("track"));
+      throw new Error(`Unexpected request ${url}`);
+    };
+    const api = createEventSettingsApi("", " org/a ", fetcher);
+
+    await api.createRoom(" event/a ", {
+      id: " room-side ",
+      name: " Side room ",
+      capacity: 25,
+      resources: [" Whiteboard ", "Microphones "],
+    });
+    await api.createTrack(" event/a ", {
+      name: " Web ",
+      description: " Durable description ",
+    });
+
+    expect(
+      calls.map((call) => ({
+        url: call.url,
+        method: call.init?.method,
+        credentials: call.init?.credentials,
+        body: JSON.parse(String(call.init?.body)),
+      })),
+    ).toEqual([
+      {
+        url: "/api/admin/organizations/org%2Fa/events/event%2Fa/sessions/rooms",
+        method: "POST",
+        credentials: "include",
+        body: {
+          id: "room-side",
+          name: "Side room",
+          capacity: 25,
+          resources: ["Whiteboard", "Microphones"],
+        },
+      },
+      {
+        url: "/api/admin/organizations/org%2Fa/events/event%2Fa/sessions/tracks",
+        method: "POST",
+        credentials: "include",
+        body: { name: "Web", description: "Durable description" },
+      },
+    ]);
   });
 
   it("creates and edits rooms with optimistic versions", async () => {

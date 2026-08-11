@@ -448,7 +448,7 @@ describe("canonical agenda draft routes", () => {
       entries: [{ startsAt: "2026-08-10T11:00:00.000Z" }],
     });
   });
-  it("excludes a session that becomes ineligible after publication", async () => {
+  it("keeps the published revision immutable when a session later becomes ineligible", async () => {
     const engine = createEngine();
     await initialize(engine);
     const app = appForWithPublic(engine);
@@ -491,17 +491,26 @@ describe("canonical agenda draft routes", () => {
     const publicResponse = await app.request("/api/public/events/event-a/agenda.json");
     expect(publicResponse.status).toBe(200);
     expect(
-      await responseData<{ entries: readonly unknown[]; revision: { number: number } }>(
-        publicResponse,
-      ),
-    ).toMatchObject({ entries: [], revision: { number: 1 } });
+      await responseData<{
+        entries: readonly { sessionId?: string }[];
+        revision: { number: number };
+      }>(publicResponse),
+    ).toMatchObject({
+      entries: [{ sessionId: "session-1" }],
+      revision: { number: 1 },
+    });
   });
-  it("reports projection failures instead of claiming publication success", async () => {
+  it("reports projection failures and retries the handoff without duplicating publication", async () => {
     const engine = createEngine();
     await initialize(engine);
-    const app = appFor(engine, principal(), "org-a", async () => {
-      throw new Error("speaker projection write failed");
+    let failHandoff = true;
+    const afterPublish = vi.fn(async () => {
+      if (failHandoff) {
+        failHandoff = false;
+        throw new Error("speaker projection write failed");
+      }
     });
+    const app = appFor(engine, principal(), "org-a", afterPublish);
     const root = "/api/admin/organizations/org-a/events/event-a/agenda";
     const entry = {
       id: "entry-1",
@@ -528,6 +537,14 @@ describe("canonical agenda draft routes", () => {
       code: "INTEGRATION_UNAVAILABLE",
     });
     expect((await engine.getPublishedAgenda("event-a"))?.revisionNumber).toBe(1);
+    const retried = await app.request(`${root}/publish`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ expectedVersion: 2 }),
+    });
+    expect(retried.status).toBe(200);
+    expect(afterPublish).toHaveBeenCalledTimes(2);
+    expect((await engine.repository.load("event-a"))?.revisions).toHaveLength(1);
   });
 
   it("maps full-draft hard conflicts to 409 without changing the version", async () => {
@@ -574,7 +591,13 @@ describe("canonical agenda draft routes", () => {
       ...catalog,
       sessions: [
         ...catalog.sessions.map((session) =>
-          session.id === "session-2" ? { ...session, participantIds: ["participant-1"] } : session,
+          session.id === "session-2"
+            ? {
+                ...session,
+                participantIds: ["participant-1"],
+                speakerNames: ["Grace Hopper"],
+              }
+            : session,
         ),
         {
           id: "session-rejected",
@@ -614,8 +637,8 @@ describe("canonical agenda draft routes", () => {
     expect(rejected.status).toBe(409);
     expect((await responseError(rejected)).details?.map(({ message }) => message)).toEqual(
       expect.arrayContaining([
-        expect.stringContaining("same room"),
-        expect.stringContaining("Participants"),
+        'Sessions "Opening" and "Panel" overlap in room "Large room"',
+        'Speaker "Grace Hopper" is scheduled in overlapping sessions "Opening" and "Panel"',
       ]),
     );
     expect((await engine.getDraft("event-a")).version).toBe(1);

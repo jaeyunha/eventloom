@@ -140,6 +140,19 @@ function publicationProjectionFailure(error: unknown): AgendaPublicationProjecti
   );
 }
 
+async function completePublicationHandoff(
+  dependencies: Pick<AgendaRouteDependencies, "afterPublish" | "engine">,
+  eventId: string,
+  revision: AgendaPublishedRevision,
+): Promise<void> {
+  await invalidatePublishedAgendaCache(dependencies.engine, eventId, revision);
+  try {
+    await dependencies.afterPublish?.(eventId, revision);
+  } catch (error) {
+    throw publicationProjectionFailure(error);
+  }
+}
+
 function traceId(context: AgendaContext): string {
   return context.get("traceId") ?? crypto.randomUUID();
 }
@@ -636,6 +649,7 @@ export function createAgendaAdminRoutes(
         : (state.revisions.find((revision) => revision.id === state.currentPublishedRevisionId) ??
           null);
     if (current?.sourceDraftVersion === input.expectedVersion) {
+      await completePublicationHandoff(dependencies, eventId, current);
       return context.json({ data: current });
     }
     const data = await dependencies.engine.publish({
@@ -643,12 +657,7 @@ export function createAgendaAdminRoutes(
       actorId: principal.userId,
       ...input,
     });
-    await invalidatePublishedAgendaCache(dependencies.engine, eventId, data);
-    try {
-      await dependencies.afterPublish?.(eventId, data);
-    } catch (error) {
-      throw publicationProjectionFailure(error);
-    }
+    await completePublicationHandoff(dependencies, eventId, data);
     return context.json({ data });
   });
 
@@ -670,12 +679,7 @@ export function createAgendaAdminRoutes(
       actorId: principal.userId,
       ...input,
     });
-    await invalidatePublishedAgendaCache(dependencies.engine, eventId, data);
-    try {
-      await dependencies.afterPublish?.(eventId, data);
-    } catch (error) {
-      throw publicationProjectionFailure(error);
-    }
+    await completePublicationHandoff(dependencies, eventId, data);
     return context.json({ data });
   });
 
@@ -1231,10 +1235,9 @@ function publishedAgendaWithEventMetadata(
 function publicProjectionForSlug(
   revision: PublishedAgendaRevision,
   eventSlug: string,
-  state?: AgendaState,
   eventMetadata?: AgendaEventMetadata,
 ): PublishedAgendaProjection | null {
-  const baseProjection = publishedAgendaView(revision, state);
+  const baseProjection = publishedAgendaView(revision);
   const projection =
     eventMetadata === undefined
       ? baseProjection
@@ -1426,14 +1429,10 @@ async function publishedProjection(
     if (resolved === null || resolved === undefined) return null;
     eventMetadata = resolved;
   }
-  const projection = publicProjectionForSlug(
-    revision,
-    eventSlug,
-    state ?? undefined,
-    eventMetadata,
-  );
+  const projection = publicProjectionForSlug(revision, eventSlug, eventMetadata);
   return projection === null ? null : { eventId: revision.eventId, eventSlug, projection };
 }
+
 /** Anonymous routes expose only the immutable current publication, never a draft. */
 export function createPublishedAgendaRoutes(
   dependencies: Pick<AgendaRouteDependencies, "engine" | "eventMetadataForEvent">,
