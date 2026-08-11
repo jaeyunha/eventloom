@@ -6,12 +6,16 @@ import { describe, expect, it, vi } from "vitest";
 import {
   AGENDA_VIEW_MODES,
   AgendaBoard,
-  serializeAgendaSuggestionOptions,
   type AgendaBusyOperation,
   AgendaSuggestionPanel,
   type AgendaSuggestionRunView,
   type AgendaViewMode,
+  AgendaWorkspace,
+  agendaWorkspaceDataMatchesEvent,
+  agendaWorkspaceScopeKey,
   deriveAgendaViewGroups,
+  isAgendaAsyncScopeTokenCurrent,
+  serializeAgendaSuggestionOptions,
 } from "./agenda-workspace";
 import type { AgendaPreview, AgendaWorkspaceData } from "./types";
 
@@ -253,6 +257,44 @@ function renderBoard(
 }
 
 describe("agenda organizer workspace", () => {
+  it("invalidates deferred work when the organization-event scope changes", async () => {
+    const scopeA = agendaWorkspaceScopeKey("organization-1", "event-a");
+    const scopeB = agendaWorkspaceScopeKey("organization-1", "event-b");
+    const workspaceA = AgendaWorkspace({
+      organizationId: "organization-1",
+      eventId: "event-a",
+    });
+    const workspaceB = AgendaWorkspace({
+      organizationId: "organization-1",
+      eventId: "event-b",
+    });
+    const token = { scopeKey: scopeA, generation: 1 };
+    let currentScope = scopeA;
+    let currentGeneration = 1;
+    let commit: string | null = null;
+    let resolveDeferred: ((value: string) => void) | undefined;
+    const deferred = new Promise<string>((resolve) => {
+      resolveDeferred = resolve;
+    });
+    const completion = deferred.then((value) => {
+      if (isAgendaAsyncScopeTokenCurrent(token, currentScope, currentGeneration)) {
+        commit = value;
+      }
+    });
+
+    currentScope = scopeB;
+    currentGeneration += 1;
+    resolveDeferred?.("event-a");
+    await completion;
+
+    expect(scopeA).not.toBe(scopeB);
+    expect(workspaceA.key).toBe(scopeA);
+    expect(workspaceB.key).toBe(scopeB);
+    expect(commit).toBeNull();
+    expect(isAgendaAsyncScopeTokenCurrent(token, currentScope, currentGeneration)).toBe(false);
+    expect(agendaWorkspaceDataMatchesEvent(data, data.event.id)).toBe(true);
+    expect(agendaWorkspaceDataMatchesEvent(data, "event-b")).toBe(false);
+  });
   it("presents private draft context and structured conflicts", () => {
     const markup = renderToStaticMarkup(
       createElement(AgendaBoard, {
@@ -393,9 +435,11 @@ describe("agenda organizer workspace", () => {
     expect(markup).toMatch(/actionRail/u);
     expect(workspaceStyles).toMatch(/\.actionRail[\s\S]*position:\s*sticky/u);
     expect(workspaceStyles).toMatch(/\.actionRail[\s\S]*scroll-padding/u);
-    expect(workspaceSource).toContain("endBusy(busyKind)");
+    expect(workspaceSource).toContain("endOperation(token)");
     expect(workspaceSource).toContain("expectedVersion: current.draft.version");
     expect(workspaceSource).toContain("acceptedChangeIds: changeIds");
+    expect(workspaceSource).toContain("key={scopeKey}");
+    expect(workspaceSource).toContain("agendaWorkspaceDataMatchesEvent(nextData, eventId)");
   });
 
   it("renders an honest empty state when no eligible sessions are available for suggestions", () => {

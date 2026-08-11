@@ -1411,12 +1411,52 @@ interface AgendaWorkspaceProps {
   appEnvironment?: string;
 }
 
-export function AgendaWorkspace({
+export interface AgendaAsyncScopeToken {
+  readonly scopeKey: string;
+  readonly generation: number;
+}
+
+export function agendaWorkspaceScopeKey(organizationId: string, eventId: string): string {
+  return `${organizationId}\u0000${eventId}`;
+}
+
+export function isAgendaAsyncScopeTokenCurrent(
+  token: AgendaAsyncScopeToken,
+  scopeKey: string,
+  generation: number,
+): boolean {
+  return token.scopeKey === scopeKey && token.generation === generation;
+}
+
+export function agendaWorkspaceDataMatchesEvent(
+  data: AgendaWorkspaceData,
+  eventId: string,
+): boolean {
+  return data.event.id === eventId;
+}
+
+interface ScopedAgendaSnapshot {
+  readonly scopeKey: string;
+  readonly api: AgendaApi;
+  readonly data: AgendaWorkspaceData;
+}
+
+interface ScopedAgendaWorkspaceProps extends AgendaWorkspaceProps {
+  readonly scopeKey: string;
+}
+
+export function AgendaWorkspace(props: Readonly<AgendaWorkspaceProps>) {
+  const scopeKey = agendaWorkspaceScopeKey(props.organizationId, props.eventId);
+  return <ScopedAgendaWorkspace key={scopeKey} {...props} scopeKey={scopeKey} />;
+}
+
+function ScopedAgendaWorkspace({
   eventId,
   organizationId,
+  scopeKey,
   api: providedApi,
   appEnvironment = process.env.APP_ENV,
-}: Readonly<AgendaWorkspaceProps>) {
+}: Readonly<ScopedAgendaWorkspaceProps>) {
   const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
   const api = useMemo(
     () => providedApi ?? (apiBaseUrl ? createAgendaApi(apiBaseUrl, organizationId) : null),
@@ -1437,55 +1477,104 @@ export function AgendaWorkspace({
     },
     [appEnvironment, eventId],
   );
-  const [activeApi, setActiveApi] = useState<AgendaApi | null>(api);
-  const [data, setData] = useState<AgendaWorkspaceData | null>(null);
+  const [snapshot, setSnapshot] = useState<ScopedAgendaSnapshot | null>(null);
   const [preview, setPreview] = useState<AgendaPreview | null>(null);
   const [loading, setLoading] = useState(true);
   const [busyOperation, setBusyOperation] = useState<AgendaBusyOperation | null>(null);
+  const busyOperationRef = useRef<AgendaBusyOperation | null>(null);
+  const loadGenerationRef = useRef(0);
+  const operationGenerationRef = useRef(0);
+  const mountedRef = useRef(true);
   const busy = busyOperation !== null;
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [suggestionRun, setSuggestionRun] = useState<AgendaSuggestionRunView | null>(null);
+  const activeApi = snapshot?.api ?? null;
+  const data = snapshot?.data ?? null;
   const suggestionApi = suggestionApiFor(activeApi);
-  function beginBusy(operation: AgendaBusyOperation) {
-    setBusyOperation(operation);
+
+  function operationIsCurrent(token: AgendaAsyncScopeToken): boolean {
+    return (
+      mountedRef.current &&
+      isAgendaAsyncScopeTokenCurrent(token, scopeKey, operationGenerationRef.current)
+    );
   }
 
-  function endBusy(operation: AgendaBusyOperation) {
-    setBusyOperation((current) => (current === operation ? null : current));
+  function beginOperation(operation: AgendaBusyOperation): AgendaAsyncScopeToken | null {
+    if (!mountedRef.current || busyOperationRef.current !== null) return null;
+    const token = { scopeKey, generation: operationGenerationRef.current + 1 };
+    operationGenerationRef.current = token.generation;
+    busyOperationRef.current = operation;
+    setBusyOperation(operation);
+    setError(null);
+    setStatusMessage(null);
+    return token;
   }
+
+  function endOperation(token: AgendaAsyncScopeToken): void {
+    if (!operationIsCurrent(token)) return;
+    busyOperationRef.current = null;
+    setBusyOperation(null);
+  }
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      loadGenerationRef.current += 1;
+      operationGenerationRef.current += 1;
+      busyOperationRef.current = null;
+    };
+  }, []);
 
   const load = useCallback(
     async (signal?: AbortSignal) => {
+      const token = { scopeKey, generation: loadGenerationRef.current + 1 };
+      loadGenerationRef.current = token.generation;
+      const loadIsCurrent = () =>
+        mountedRef.current &&
+        !signal?.aborted &&
+        isAgendaAsyncScopeTokenCurrent(token, scopeKey, loadGenerationRef.current);
       if (!api) {
-        setError("The organizer API URL is not configured.");
-        setLoading(false);
+        if (loadIsCurrent()) {
+          setError("The organizer API URL is not configured.");
+          setLoading(false);
+        }
         return;
       }
-      setLoading(true);
-      setError(null);
-      setStatusMessage(null);
+      if (loadIsCurrent()) {
+        setLoading(true);
+        setError(null);
+        setStatusMessage(null);
+      }
       try {
         const loaded = await loadAgendaWorkspace(api, resolveLocalDemoApi, eventId, signal);
-        setActiveApi(loaded.api);
-        setData(loaded.data);
-        setSuggestionRun(null);
-        if (loaded.usingLocalDemo) {
-          setStatusMessage(
-            "Showing the deterministic local demo agenda because the local API has no agenda data.",
-          );
+        if (!agendaWorkspaceDataMatchesEvent(loaded.data, eventId)) {
+          throw new Error("The agenda response belongs to another event.");
         }
+        if (!loadIsCurrent()) return;
+        setSnapshot({ scopeKey, api: loaded.api, data: loaded.data });
+        setPreview(null);
+        setSuggestionRun(null);
+        setStatusMessage(
+          loaded.usingLocalDemo
+            ? "Showing the deterministic local demo agenda because the local API has no agenda data."
+            : null,
+        );
       } catch (loadError) {
-        if (!(loadError instanceof DOMException && loadError.name === "AbortError")) {
+        if (
+          loadIsCurrent() &&
+          !(loadError instanceof DOMException && loadError.name === "AbortError")
+        ) {
           setError(messageFrom(loadError));
         }
       } finally {
-        if (!signal?.aborted) {
+        if (loadIsCurrent()) {
           setLoading(false);
         }
       }
     },
-    [api, eventId, resolveLocalDemoApi],
+    [api, eventId, resolveLocalDemoApi, scopeKey],
   );
 
   useEffect(() => {
@@ -1500,23 +1589,36 @@ export function AgendaWorkspace({
     refreshPreview = false,
     busyKind: AgendaBusyOperation = "save",
   ): Promise<boolean> {
-    const currentApi = activeApi;
-    const currentData = data;
-    if (!currentApi || !currentData) {
+    const currentSnapshot = snapshot;
+    if (
+      currentSnapshot === null ||
+      currentSnapshot.scopeKey !== scopeKey ||
+      !agendaWorkspaceDataMatchesEvent(currentSnapshot.data, eventId)
+    ) {
       return false;
     }
-    let authoritativeData = currentData;
-    beginBusy(busyKind);
-    setError(null);
-    setStatusMessage(null);
+    const token = beginOperation(busyKind);
+    if (token === null) return false;
+    let authoritativeData = currentSnapshot.data;
     try {
-      const nextData = await operation(currentApi, currentData);
+      const nextData = await operation(currentSnapshot.api, currentSnapshot.data);
+      if (!agendaWorkspaceDataMatchesEvent(nextData, eventId)) {
+        throw new Error("The agenda mutation returned data for another event.");
+      }
+      if (!operationIsCurrent(token)) return false;
       authoritativeData = nextData;
-      setData(nextData);
-      setPreview(refreshPreview ? await currentApi.preview(eventId) : null);
+      setSnapshot({ ...currentSnapshot, data: nextData });
+      if (refreshPreview) {
+        const nextPreview = await currentSnapshot.api.preview(eventId);
+        if (!operationIsCurrent(token)) return false;
+        setPreview(nextPreview);
+      } else {
+        setPreview(null);
+      }
       setStatusMessage(successMessage);
       return true;
     } catch (mutationError) {
+      if (!operationIsCurrent(token)) return false;
       setError(messageFrom(mutationError));
       if (mutationError instanceof AgendaApiError) {
         const failurePreview = previewFromError(mutationError, authoritativeData.draft.version);
@@ -1524,100 +1626,153 @@ export function AgendaWorkspace({
       }
       return false;
     } finally {
-      endBusy(busyKind);
+      endOperation(token);
     }
   }
 
   async function generateSuggestion(options: AgendaSuggestionOptions) {
-    if (!data || !activeApi) return;
-    const busyKind: AgendaBusyOperation = "generate-suggestion";
-    beginBusy(busyKind);
-    setError(null);
-    setStatusMessage(null);
+    const currentSnapshot = snapshot;
+    if (
+      currentSnapshot === null ||
+      currentSnapshot.scopeKey !== scopeKey ||
+      !agendaWorkspaceDataMatchesEvent(currentSnapshot.data, eventId)
+    ) {
+      return;
+    }
+    const token = beginOperation("generate-suggestion");
+    if (token === null) return;
     try {
-      if (!suggestionApi) {
+      const currentSuggestionApi = suggestionApiFor(currentSnapshot.api);
+      if (!currentSuggestionApi) {
         throw new Error("Private suggestion generation is unavailable for this agenda.");
       }
-      const dates = eventDates(data.event.startsOn, data.event.endsOn);
-      const run = await suggestionApi.generateSuggestion({
+      const dates = eventDates(
+        currentSnapshot.data.event.startsOn,
+        currentSnapshot.data.event.endsOn,
+      );
+      const run = await currentSuggestionApi.generateSuggestion({
         eventId,
-        baseDraftVersion: data.draft.version,
+        baseDraftVersion: currentSnapshot.data.draft.version,
         dates,
         eligibleStatuses: ["accepted"],
-        roomIds: data.rooms.map((room) => room.id),
-        dayWindows: dates.map((date) => ({ date, startLocal: "09:00", endLocal: "17:00" })),
+        roomIds: currentSnapshot.data.rooms.map((room) => room.id),
+        dayWindows: dates.map((date) => ({
+          date,
+          startLocal: "09:00",
+          endLocal: "17:00",
+        })),
         orderedRules: [],
         ignoreExistingTimes: options.ignoreExistingTimes,
         ignoreExistingRooms: options.ignoreExistingRooms,
       });
+      if (!operationIsCurrent(token)) return;
       setSuggestionRun(run);
       setStatusMessage(
         `Private advisory suggestion run v${run.version} is ready for human review.`,
       );
     } catch (suggestionError) {
-      setError(messageFrom(suggestionError));
+      if (operationIsCurrent(token)) setError(messageFrom(suggestionError));
     } finally {
-      endBusy(busyKind);
+      endOperation(token);
     }
   }
 
   async function regenerateSuggestion() {
-    if (!suggestionApi || !data || !suggestionRun) return;
-    const busyKind: AgendaBusyOperation = "regenerate-suggestion";
-    beginBusy(busyKind);
-    setError(null);
-    setStatusMessage(null);
+    const currentSnapshot = snapshot;
+    const currentRun = suggestionRun;
+    if (
+      currentSnapshot === null ||
+      currentRun === null ||
+      currentSnapshot.scopeKey !== scopeKey ||
+      !agendaWorkspaceDataMatchesEvent(currentSnapshot.data, eventId)
+    ) {
+      return;
+    }
+    const token = beginOperation("regenerate-suggestion");
+    if (token === null) return;
     try {
-      const run = await suggestionApi.regenerateSuggestion({
+      const currentSuggestionApi = suggestionApiFor(currentSnapshot.api);
+      if (!currentSuggestionApi) {
+        throw new Error("Private suggestion regeneration is unavailable for this agenda.");
+      }
+      const run = await currentSuggestionApi.regenerateSuggestion({
         eventId,
-        runId: suggestionRun.id,
-        baseDraftVersion: data.draft.version,
+        runId: currentRun.id,
+        baseDraftVersion: currentSnapshot.data.draft.version,
       });
+      if (!operationIsCurrent(token)) return;
       setSuggestionRun(run);
       setStatusMessage(`Private advisory suggestion regenerated as run v${run.version}.`);
     } catch (suggestionError) {
-      setError(messageFrom(suggestionError));
+      if (operationIsCurrent(token)) setError(messageFrom(suggestionError));
     } finally {
-      endBusy(busyKind);
+      endOperation(token);
     }
   }
 
   async function rejectSuggestion() {
-    if (!suggestionApi || !suggestionRun) return;
-    const busyKind: AgendaBusyOperation = "reject-suggestion";
-    beginBusy(busyKind);
-    setError(null);
-    setStatusMessage(null);
+    const currentSnapshot = snapshot;
+    const currentRun = suggestionRun;
+    if (
+      currentSnapshot === null ||
+      currentRun === null ||
+      currentSnapshot.scopeKey !== scopeKey ||
+      !agendaWorkspaceDataMatchesEvent(currentSnapshot.data, eventId)
+    ) {
+      return;
+    }
+    const token = beginOperation("reject-suggestion");
+    if (token === null) return;
     try {
-      const run = await suggestionApi.rejectSuggestion({
+      const currentSuggestionApi = suggestionApiFor(currentSnapshot.api);
+      if (!currentSuggestionApi) {
+        throw new Error("Private suggestion rejection is unavailable for this agenda.");
+      }
+      const run = await currentSuggestionApi.rejectSuggestion({
         eventId,
-        runId: suggestionRun.id,
+        runId: currentRun.id,
       });
+      if (!operationIsCurrent(token)) return;
       setSuggestionRun(run);
       setStatusMessage("Advisory suggestion rejected. The private draft was not changed.");
     } catch (suggestionError) {
-      setError(messageFrom(suggestionError));
+      if (operationIsCurrent(token)) setError(messageFrom(suggestionError));
     } finally {
-      endBusy(busyKind);
+      endOperation(token);
     }
   }
 
   async function applySuggestion(changeIds: readonly string[]) {
-    if (!suggestionApi || !suggestionRun) return;
-    const busyKind: AgendaBusyOperation = "apply-suggestion";
-    beginBusy(busyKind);
-    setError(null);
-    setStatusMessage(null);
+    const currentSnapshot = snapshot;
+    const currentRun = suggestionRun;
+    if (
+      currentSnapshot === null ||
+      currentRun === null ||
+      currentSnapshot.scopeKey !== scopeKey ||
+      !agendaWorkspaceDataMatchesEvent(currentSnapshot.data, eventId)
+    ) {
+      return;
+    }
+    const token = beginOperation("apply-suggestion");
+    if (token === null) return;
     try {
-      const nextData = await suggestionApi.applySuggestion({
+      const currentSuggestionApi = suggestionApiFor(currentSnapshot.api);
+      if (!currentSuggestionApi) {
+        throw new Error("Private suggestion application is unavailable for this agenda.");
+      }
+      const nextData = await currentSuggestionApi.applySuggestion({
         eventId,
-        runId: suggestionRun.id,
+        runId: currentRun.id,
         acceptedChangeIds: changeIds,
       });
-      setData(nextData);
+      if (!agendaWorkspaceDataMatchesEvent(nextData, eventId)) {
+        throw new Error("The agenda suggestion returned data for another event.");
+      }
+      if (!operationIsCurrent(token)) return;
+      setSnapshot({ ...currentSnapshot, data: nextData });
       setPreview(null);
       setSuggestionRun({
-        ...suggestionRun,
+        ...currentRun,
         status: "applied",
         acceptedChangeIds: [...changeIds],
       });
@@ -1625,9 +1780,41 @@ export function AgendaWorkspace({
         "Selected advisory changes were applied to the private draft. Nothing was published.",
       );
     } catch (suggestionError) {
-      setError(messageFrom(suggestionError));
+      if (operationIsCurrent(token)) setError(messageFrom(suggestionError));
     } finally {
-      endBusy(busyKind);
+      endOperation(token);
+    }
+  }
+
+  async function previewAgenda() {
+    const currentSnapshot = snapshot;
+    if (
+      currentSnapshot === null ||
+      currentSnapshot.scopeKey !== scopeKey ||
+      !agendaWorkspaceDataMatchesEvent(currentSnapshot.data, eventId)
+    ) {
+      return;
+    }
+    const token = beginOperation("validate");
+    if (token === null) return;
+    try {
+      const result = await currentSnapshot.api.preview(eventId);
+      if (!operationIsCurrent(token)) return;
+      setPreview(result);
+      setStatusMessage(
+        result.conflicts.length === 0
+          ? "Agenda validation completed."
+          : "Agenda validation found hard conflicts.",
+      );
+    } catch (previewError) {
+      if (!operationIsCurrent(token)) return;
+      setError(messageFrom(previewError));
+      if (previewError instanceof AgendaApiError) {
+        const failurePreview = previewFromError(previewError, currentSnapshot.data.draft.version);
+        if (failurePreview) setPreview(failurePreview);
+      }
+    } finally {
+      endOperation(token);
     }
   }
 
@@ -1698,30 +1885,7 @@ export function AgendaWorkspace({
           "remove",
         )
       }
-      onPreview={async () => {
-        if (!activeApi) return;
-        const busyKind: AgendaBusyOperation = "validate";
-        beginBusy(busyKind);
-        setError(null);
-        setStatusMessage(null);
-        try {
-          const result = await activeApi.preview(eventId);
-          setPreview(result);
-          setStatusMessage(
-            result.conflicts.length === 0
-              ? "Agenda validation completed."
-              : "Agenda validation found hard conflicts.",
-          );
-        } catch (previewError) {
-          setError(messageFrom(previewError));
-          if (previewError instanceof AgendaApiError && data) {
-            const failurePreview = previewFromError(previewError, data.draft.version);
-            if (failurePreview) setPreview(failurePreview);
-          }
-        } finally {
-          endBusy(busyKind);
-        }
-      }}
+      onPreview={previewAgenda}
       onOverrideWarning={(warningId, reason) =>
         mutate(
           (activeApi, current) =>
