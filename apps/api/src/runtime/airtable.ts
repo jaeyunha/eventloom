@@ -204,7 +204,8 @@ import type {
 import { WebhookRepositoryError } from "../integrations/webhooks/types";
 import type {
   OrganizerOverviewActionItem,
-  OrganizerOverviewData,
+  OrganizerOverviewActivityData,
+  OrganizerOverviewCoreData,
   OrganizerOverviewEvent,
   OrganizerOverviewRouteDependencies,
 } from "../routes/organizer-overview";
@@ -4739,26 +4740,26 @@ export class AirtableOrganizerOverviewRepository implements OrganizerOverviewRou
     });
   }
 
-  async getOverview(organizationId: string): Promise<OrganizerOverviewData> {
-    const allEvents = await this.#events.list({
-      filterByFormula: organizationScopeFormula("Settings JSON", organizationId, []),
-    });
-    const events = allEvents
-      .filter((event) => resolvedOrganizationId(event) === organizationId)
-      .map((event) => this.eventView(event))
-      .sort((left, right) => left.id.localeCompare(right.id));
-    const eventIds = new Set(events.map((event) => event.id));
+  async getOverviewCore(organizationId: string): Promise<OrganizerOverviewCoreData> {
+    const { events } = await this.loadScopedEvents(organizationId);
+    return {
+      organizationId,
+      metrics: { eventCount: events.length },
+      events,
+    };
+  }
+
+  async getOverviewActivity(organizationId: string): Promise<OrganizerOverviewActivityData> {
+    const { events, eventIds } = await this.loadScopedEvents(organizationId);
     if (events.length === 0) {
       return {
         organizationId,
         metrics: {
-          eventCount: 0,
           submissionCount: 0,
           pendingReviewCount: 0,
           outstandingSpeakerTaskCount: 0,
           publishedSessionCount: 0,
         },
-        events: [],
         actionItems: [],
       };
     }
@@ -4908,17 +4909,30 @@ export class AirtableOrganizerOverviewRepository implements OrganizerOverviewRou
     return {
       organizationId,
       metrics: {
-        eventCount: events.length,
         submissionCount: submissions.length,
         pendingReviewCount: pendingAssignments.length,
         outstandingSpeakerTaskCount: tasks.length,
         publishedSessionCount,
       },
-      events,
       actionItems,
     };
   }
 
+  private async loadScopedEvents(
+    organizationId: string,
+  ): Promise<{
+    readonly events: OrganizerOverviewEvent[];
+    readonly eventIds: ReadonlySet<string>;
+  }> {
+    const allEvents = await this.#events.list({
+      filterByFormula: organizationScopeFormula("Settings JSON", organizationId, []),
+    });
+    const events = allEvents
+      .filter((event) => resolvedOrganizationId(event) === organizationId)
+      .map((event) => this.eventView(event))
+      .sort((left, right) => left.id.localeCompare(right.id));
+    return { events, eventIds: new Set(events.map((event) => event.id)) };
+  }
   private eventView(record: JsonRecord): OrganizerOverviewEvent {
     const id = requiredId(record.id);
     return {

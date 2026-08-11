@@ -891,25 +891,29 @@ describe("local runtime composition", () => {
       },
     });
   });
-  it("serves the organizer overview from local repositories", async () => {
+  it("serves the organizer overview core and activity from local repositories", async () => {
     const app = createRuntimeApp(localBindings);
-    const response = await app.request(
-      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/overview`,
+    const coreResponse = await app.request(
+      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/overview/core`,
+      { headers: organizerHeaders() },
+      localBindings,
+    );
+    const activityResponse = await app.request(
+      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/overview/activity`,
       { headers: organizerHeaders() },
       localBindings,
     );
 
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
+    expect(coreResponse.status).toBe(200);
+    expect(activityResponse.status).toBe(200);
+    expect(coreResponse.headers.get("cache-control")).toBe("private, no-store");
+    expect(activityResponse.headers.get("cache-control")).toBe("private, no-store");
+
+    const coreBody = (await coreResponse.json()) as { data: Record<string, unknown> };
+    expect(coreBody).toMatchObject({
       data: {
         organizationId: LOCAL_ORGANIZATION_ID,
-        metrics: {
-          eventCount: 2,
-          submissionCount: 1,
-          pendingReviewCount: 0,
-          outstandingSpeakerTaskCount: 2,
-          publishedSessionCount: 0,
-        },
+        metrics: { eventCount: 2 },
         events: [
           { id: "demo-event", name: "Open Sessionboard Demo" },
           {
@@ -917,12 +921,36 @@ describe("local runtime composition", () => {
             name: "Open Sessionboard Conference",
           },
         ],
+      },
+    });
+    expect(coreBody.data).not.toHaveProperty("actionItems");
+    expect(coreBody.data.metrics).not.toHaveProperty("submissionCount");
+
+    const activityBody = (await activityResponse.json()) as { data: Record<string, unknown> };
+    expect(activityBody).toMatchObject({
+      data: {
+        organizationId: LOCAL_ORGANIZATION_ID,
+        metrics: {
+          submissionCount: 1,
+          pendingReviewCount: 0,
+          outstandingSpeakerTaskCount: 2,
+          publishedSessionCount: 0,
+        },
         actionItems: [
           { id: "speaker_tasks:demo-event", count: 2 },
           { id: "agenda:demo-event", count: 2 },
         ],
       },
     });
+    expect(activityBody.data).not.toHaveProperty("events");
+    expect(activityBody.data.metrics).not.toHaveProperty("eventCount");
+
+    const legacyResponse = await app.request(
+      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/overview`,
+      { headers: organizerHeaders() },
+      localBindings,
+    );
+    expect(legacyResponse.status).toBe(404);
   });
   it("serves seeded integration admin data for the current organizer workspace", async () => {
     const app = createRuntimeApp(localBindings);
@@ -1095,12 +1123,19 @@ describe("local runtime composition", () => {
 
   it("denies anonymous, reviewer, and wrong-tenant organizer overview access", async () => {
     const app = createRuntimeApp(localBindings);
-    const path = `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/overview`;
-    const anonymous = await app.request(path, undefined, localBindings);
-    const wrongTenant = await app.request(
-      "/api/admin/organizations/another-organization/overview",
-      { headers: organizerHeaders() },
-      localBindings,
+    const suffixes = ["core", "activity"] as const;
+    const basePath = `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/overview`;
+    const anonymous = await Promise.all(
+      suffixes.map((suffix) => app.request(`${basePath}/${suffix}`, undefined, localBindings)),
+    );
+    const wrongTenant = await Promise.all(
+      suffixes.map((suffix) =>
+        app.request(
+          `/api/admin/organizations/another-organization/overview/${suffix}`,
+          { headers: organizerHeaders() },
+          localBindings,
+        ),
+      ),
     );
     const reviewerApp = createApp({
       authenticator: {
@@ -1119,28 +1154,91 @@ describe("local runtime composition", () => {
         }),
       },
       organizerOverview: {
-        getOverview: async (organizationId: string) => ({
+        getOverviewCore: async (organizationId: string) => ({
+          organizationId,
+          metrics: { eventCount: 0 },
+          events: [],
+        }),
+        getOverviewActivity: async (organizationId: string) => ({
           organizationId,
           metrics: {
-            eventCount: 0,
             submissionCount: 0,
             pendingReviewCount: 0,
             outstandingSpeakerTaskCount: 0,
             publishedSessionCount: 0,
           },
-          events: [],
           actionItems: [],
         }),
       },
     });
-    const reviewer = await reviewerApp.request(path, undefined, localBindings);
+    const reviewer = await Promise.all(
+      suffixes.map((suffix) => reviewerApp.request(`${basePath}/${suffix}`, undefined, localBindings)),
+    );
 
-    expect(anonymous.status).toBe(401);
-    expect(wrongTenant.status).toBe(403);
-    expect(reviewer.status).toBe(403);
+    expect(anonymous.map((response) => response.status)).toEqual([401, 401]);
+    expect(wrongTenant.map((response) => response.status)).toEqual([403, 403]);
+    expect(reviewer.map((response) => response.status)).toEqual([403, 403]);
   });
 
-  it("returns explicit empty overview data without repository fiction", async () => {
+  it("keeps core overview independent from activity failures", async () => {
+    let coreCalls = 0;
+    let activityCalls = 0;
+    const app = createApp({
+      authenticator: {
+        authenticate: async () => ({
+          kind: "user" as const,
+          sessionId: "overview-session",
+          userId: "owner",
+          email: "owner@example.test",
+          memberships: [{ organizationId: "organization-1", role: "owner" as const }],
+          speakerGrants: [],
+        }),
+      },
+      organizerOverview: {
+        getOverviewCore: async (organizationId: string) => {
+          coreCalls += 1;
+          return {
+            organizationId,
+            metrics: { eventCount: 1 },
+            events: [
+              {
+                id: "event-1",
+                name: "Event",
+                slug: null,
+                status: "active",
+                startsAt: null,
+                endsAt: null,
+              },
+            ],
+          };
+        },
+        getOverviewActivity: async () => {
+          activityCalls += 1;
+          throw new Error("activity unavailable");
+        },
+      },
+    });
+
+    const core = await app.request(
+      "/api/admin/organizations/organization-1/overview/core",
+      undefined,
+      localBindings,
+    );
+    expect(core.status).toBe(200);
+    expect(coreCalls).toBe(1);
+    expect(activityCalls).toBe(0);
+
+    const activity = await app.request(
+      "/api/admin/organizations/organization-1/overview/activity",
+      undefined,
+      localBindings,
+    );
+    expect(activity.status).toBe(500);
+    expect(coreCalls).toBe(1);
+    expect(activityCalls).toBe(1);
+  });
+
+  it("returns explicit empty split overview data without repository fiction", async () => {
     const app = createApp({
       authenticator: {
         authenticate: async () => ({
@@ -1153,38 +1251,52 @@ describe("local runtime composition", () => {
         }),
       },
       organizerOverview: {
-        getOverview: async (organizationId: string) => ({
+        getOverviewCore: async (organizationId: string) => ({
+          organizationId,
+          metrics: { eventCount: 0 },
+          events: [],
+        }),
+        getOverviewActivity: async (organizationId: string) => ({
           organizationId,
           metrics: {
-            eventCount: 0,
             submissionCount: 0,
             pendingReviewCount: 0,
             outstandingSpeakerTaskCount: 0,
             publishedSessionCount: 0,
           },
-          events: [],
           actionItems: [],
         }),
       },
     });
-    const response = await app.request(
-      "/api/admin/organizations/empty-organization/overview",
+    const core = await app.request(
+      "/api/admin/organizations/empty-organization/overview/core",
+      undefined,
+      localBindings,
+    );
+    const activity = await app.request(
+      "/api/admin/organizations/empty-organization/overview/activity",
       undefined,
       localBindings,
     );
 
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({
+    expect(core.status).toBe(200);
+    await expect(core.json()).resolves.toEqual({
+      data: {
+        organizationId: "empty-organization",
+        metrics: { eventCount: 0 },
+        events: [],
+      },
+    });
+    expect(activity.status).toBe(200);
+    await expect(activity.json()).resolves.toEqual({
       data: {
         organizationId: "empty-organization",
         metrics: {
-          eventCount: 0,
           submissionCount: 0,
           pendingReviewCount: 0,
           outstandingSpeakerTaskCount: 0,
           publishedSessionCount: 0,
         },
-        events: [],
         actionItems: [],
       },
     });
@@ -1402,6 +1514,7 @@ describe("local runtime composition", () => {
           ...apiHeaders,
           "content-type": "application/json",
           "idempotency-key": "local-session-update-1",
+          "if-match": "1",
         },
         body: JSON.stringify({
           expectedVersion: 1,

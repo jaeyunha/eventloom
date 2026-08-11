@@ -60,7 +60,8 @@ import type {
 } from "../routes/integrations";
 import type {
   OrganizerOverviewActionItem,
-  OrganizerOverviewData,
+  OrganizerOverviewActivityData,
+  OrganizerOverviewCoreData,
   OrganizerOverviewEvent,
   OrganizerOverviewRouteDependencies,
 } from "../routes/organizer-overview";
@@ -914,23 +915,26 @@ class LocalOrganizerOverviewRepository implements OrganizerOverviewRouteDependen
     this.#assignments = options.assignments ?? [];
   }
 
-  async getOverview(organizationId: string): Promise<OrganizerOverviewData> {
-    const events = this.#publicRepository
-      .listStored(organizationId, "events")
-      .map((event) => this.eventView(event))
-      .sort((left, right) => left.id.localeCompare(right.id));
-    const eventIds = new Set(events.map((event) => event.id));
+  async getOverviewCore(organizationId: string): Promise<OrganizerOverviewCoreData> {
+    const { events } = this.scopedEvents(organizationId);
+    return {
+      organizationId,
+      metrics: { eventCount: events.length },
+      events,
+    };
+  }
+
+  async getOverviewActivity(organizationId: string): Promise<OrganizerOverviewActivityData> {
+    const { events, eventIds } = this.scopedEvents(organizationId);
     if (events.length === 0) {
       return {
         organizationId,
         metrics: {
-          eventCount: 0,
           submissionCount: 0,
           pendingReviewCount: 0,
           outstandingSpeakerTaskCount: 0,
           publishedSessionCount: 0,
         },
-        events: [],
         actionItems: [],
       };
     }
@@ -1045,17 +1049,25 @@ class LocalOrganizerOverviewRepository implements OrganizerOverviewRouteDependen
     return {
       organizationId,
       metrics: {
-        eventCount: events.length,
         submissionCount: submissions.length,
         pendingReviewCount: pendingAssignments.length,
         outstandingSpeakerTaskCount: tasks.length,
         publishedSessionCount,
       },
-      events,
       actionItems,
     };
   }
 
+  private scopedEvents(organizationId: string): {
+    readonly events: OrganizerOverviewEvent[];
+    readonly eventIds: ReadonlySet<string>;
+  } {
+    const events = this.#publicRepository
+      .listStored(organizationId, "events")
+      .map((event) => this.eventView(event))
+      .sort((left, right) => left.id.localeCompare(right.id));
+    return { events, eventIds: new Set(events.map((event) => event.id)) };
+  }
   private eventView(record: Record<string, unknown>): OrganizerOverviewEvent {
     const id = textValue(record, "id") ?? "unknown";
     return {
