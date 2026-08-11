@@ -474,6 +474,13 @@ export function createSpeakerApi(
       return request<readonly SpeakerAsset[]>(
         `/${pathSegment(participantId)}/assets`,
         signal === undefined ? undefined : { signal },
+      ).then((assets) =>
+        assets.map((asset) => ({
+          ...asset,
+          // The list endpoint may include a short-lived grant for legacy callers. Keep it out of
+          // the browser-facing workspace until the organizer explicitly requests a download.
+          downloadUrl: null,
+        })),
       );
     },
     getDownloadGrant(assetId, signal) {
