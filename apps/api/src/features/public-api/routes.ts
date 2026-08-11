@@ -576,10 +576,7 @@ function nextCursorFromResult<TRecord>(
     readonly filterHash: string;
   },
 ): string | null {
-  if (nextCursor === null) {
-    return null;
-  }
-  if (typeof nextCursor === "object") {
+  if (nextCursor !== null && typeof nextCursor === "object") {
     const candidate = nextCursor as Partial<CursorPayload>;
     const id =
       candidate.id ?? (last === undefined ? undefined : String(recordValue(last, input.idField)));

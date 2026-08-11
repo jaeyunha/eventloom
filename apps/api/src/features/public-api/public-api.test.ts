@@ -90,6 +90,7 @@ class EventRepository implements PublicApiRepository<EventRecord, EventMutation,
     return {
       items: rows.slice(start, start + input.limit + 1),
       hasMore: start + input.limit < rows.length,
+      nextCursor: null,
     };
   }
 
