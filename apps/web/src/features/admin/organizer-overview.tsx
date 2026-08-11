@@ -7,12 +7,16 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import styles from "./admin-shell.module.css";
 
-export interface OrganizerOverviewMetrics {
+export interface OrganizerOverviewCoreMetrics {
   readonly eventCount: number;
+}
+
+export interface OrganizerOverviewActivityMetrics {
   readonly submissionCount: number;
   readonly pendingReviewCount: number;
   readonly outstandingSpeakerTaskCount: number;
@@ -42,15 +46,21 @@ export interface OrganizerOverviewActionItem {
   readonly href: string;
 }
 
-export interface OrganizerOverviewData {
+export interface OrganizerOverviewCoreData {
   readonly organizationId: string;
-  readonly metrics: OrganizerOverviewMetrics;
+  readonly metrics: OrganizerOverviewCoreMetrics;
   readonly events: readonly OrganizerOverviewEvent[];
+}
+
+export interface OrganizerOverviewActivityData {
+  readonly organizationId: string;
+  readonly metrics: OrganizerOverviewActivityMetrics;
   readonly actionItems: readonly OrganizerOverviewActionItem[];
 }
 
 export interface OrganizerOverviewApi {
-  getOverview(): Promise<OrganizerOverviewData>;
+  getCore(): Promise<OrganizerOverviewCoreData>;
+  getActivity(): Promise<OrganizerOverviewActivityData>;
 }
 
 export interface OrganizerOverviewConfig {
@@ -60,11 +70,32 @@ export interface OrganizerOverviewConfig {
 
 export type OrganizerOverviewConfigResult = OrganizerOverviewConfig | { readonly error: string };
 
+export type OrganizerOverviewRequestState<T> =
+  | { readonly status: "loading"; readonly data: T | null }
+  | { readonly status: "loaded"; readonly data: T }
+  | { readonly status: "error"; readonly data: T | null; readonly message: string };
+
 export type OrganizerOverviewViewState =
-  | { readonly status: "loading" }
-  | { readonly status: "config-error"; readonly message: string }
-  | { readonly status: "error"; readonly message: string }
-  | { readonly status: "loaded"; readonly data: OrganizerOverviewData };
+  | {
+      readonly status: "loading";
+      readonly core: OrganizerOverviewRequestState<OrganizerOverviewCoreData>;
+      readonly activity: OrganizerOverviewRequestState<OrganizerOverviewActivityData>;
+    }
+  | {
+      readonly status: "config-error";
+      readonly message: string;
+    }
+  | {
+      readonly status: "error";
+      readonly message: string;
+      readonly core: OrganizerOverviewRequestState<OrganizerOverviewCoreData>;
+      readonly activity: OrganizerOverviewRequestState<OrganizerOverviewActivityData>;
+    }
+  | {
+      readonly status: "loaded";
+      readonly core: OrganizerOverviewRequestState<OrganizerOverviewCoreData>;
+      readonly activity: OrganizerOverviewRequestState<OrganizerOverviewActivityData>;
+    };
 
 type OrganizerOverviewEnvironment = {
   readonly NEXT_PUBLIC_API_URL?: string | undefined;
@@ -80,13 +111,19 @@ const actionTypeLabels: Record<OrganizerOverviewActionType, string> = {
   agenda: "Agenda",
 };
 
-const metricDefinitions: readonly {
+const coreMetricDefinition = {
+  label: "Events",
+  key: "eventCount" as const,
+  icon: "▦",
+  detail: "Live event records",
+};
+
+const activityMetricDefinitions: readonly {
   readonly label: string;
-  readonly key: keyof OrganizerOverviewMetrics;
+  readonly key: keyof OrganizerOverviewActivityMetrics;
   readonly icon: string;
   readonly detail: string;
 }[] = [
-  { label: "Events", key: "eventCount", icon: "▦", detail: "Live event records" },
   { label: "Submissions", key: "submissionCount", icon: "▤", detail: "Across this organization" },
   {
     label: "Pending reviews",
@@ -143,61 +180,91 @@ function integer(value: unknown, field: string): number {
   return value;
 }
 
-/** Parse the API envelope instead of trusting unvalidated client data. */
-export function parseOrganizerOverviewResponse(payload: unknown): OrganizerOverviewData {
+function responseData(payload: unknown): UnknownRecord {
   if (!isRecord(payload) || !isRecord(payload.data)) {
     throw new Error("The organizer overview response was not valid.");
   }
+  return payload.data;
+}
 
-  const data = payload.data;
-  if (!isRecord(data.metrics) || !Array.isArray(data.events) || !Array.isArray(data.actionItems)) {
-    throw new Error("The organizer overview response was not valid.");
+function responseOrganizationId(data: UnknownRecord, expectedOrganizationId?: string): string {
+  const organizationId = requiredString(data.organizationId, "organizationId");
+  if (expectedOrganizationId !== undefined && organizationId !== expectedOrganizationId) {
+    throw new Error("The organizer overview returned data for another organization.");
   }
+  return organizationId;
+}
 
-  const events = data.events.map((event, index) => {
-    if (!isRecord(event)) {
-      throw new Error(
-        `The organizer overview response contains an invalid event at index ${index}.`,
-      );
-    }
-    return {
-      id: requiredString(event.id, `events[${index}].id`),
-      name: requiredString(event.name, `events[${index}].name`),
-      slug: nullableString(event.slug, `events[${index}].slug`),
-      status: nullableString(event.status, `events[${index}].status`),
-      startsAt: nullableString(event.startsAt, `events[${index}].startsAt`),
-      endsAt: nullableString(event.endsAt, `events[${index}].endsAt`),
-    };
-  });
-
-  const actionItems = data.actionItems.map((item, index) => {
-    if (!isRecord(item)) {
-      throw new Error(
-        `The organizer overview response contains an invalid action item at index ${index}.`,
-      );
-    }
-    const type = requiredString(item.type, `actionItems[${index}].type`);
-    if (type !== "reviews" && type !== "speaker_tasks" && type !== "agenda") {
-      throw new Error(`The organizer overview response contains an invalid action item type.`);
-    }
-    const actionType = type as OrganizerOverviewActionType;
-    return {
-      id: requiredString(item.id, `actionItems[${index}].id`),
-      type: actionType,
-      eventId: requiredString(item.eventId, `actionItems[${index}].eventId`),
-      title: requiredString(item.title, `actionItems[${index}].title`),
-      description: requiredString(item.description, `actionItems[${index}].description`),
-      count: nonNegativeInteger(item.count, `actionItems[${index}].count`),
-      priority: integer(item.priority, `actionItems[${index}].priority`),
-      dueAt: nullableString(item.dueAt, `actionItems[${index}].dueAt`),
-      href: requiredString(item.href, `actionItems[${index}].href`),
-    };
-  });
-
+function parseOrganizerOverviewEvent(event: unknown, index: number): OrganizerOverviewEvent {
+  if (!isRecord(event)) {
+    throw new Error(`The organizer overview response contains an invalid event at index ${index}.`);
+  }
   return {
-    organizationId: requiredString(data.organizationId, "organizationId"),
+    id: requiredString(event.id, `events[${index}].id`),
+    name: requiredString(event.name, `events[${index}].name`),
+    slug: nullableString(event.slug, `events[${index}].slug`),
+    status: nullableString(event.status, `events[${index}].status`),
+    startsAt: nullableString(event.startsAt, `events[${index}].startsAt`),
+    endsAt: nullableString(event.endsAt, `events[${index}].endsAt`),
+  };
+}
+
+function parseOrganizerOverviewActionItem(
+  item: unknown,
+  index: number,
+): OrganizerOverviewActionItem {
+  if (!isRecord(item)) {
+    throw new Error(
+      `The organizer overview response contains an invalid action item at index ${index}.`,
+    );
+  }
+  const type = requiredString(item.type, `actionItems[${index}].type`);
+  if (type !== "reviews" && type !== "speaker_tasks" && type !== "agenda") {
+    throw new Error(`The organizer overview response contains an invalid action item type.`);
+  }
+  return {
+    id: requiredString(item.id, `actionItems[${index}].id`),
+    type,
+    eventId: requiredString(item.eventId, `actionItems[${index}].eventId`),
+    title: requiredString(item.title, `actionItems[${index}].title`),
+    description: requiredString(item.description, `actionItems[${index}].description`),
+    count: nonNegativeInteger(item.count, `actionItems[${index}].count`),
+    priority: integer(item.priority, `actionItems[${index}].priority`),
+    dueAt: nullableString(item.dueAt, `actionItems[${index}].dueAt`),
+    href: requiredString(item.href, `actionItems[${index}].href`),
+  };
+}
+
+/** Parse and validate the organization-scoped core response envelope. */
+export function parseOrganizerOverviewCoreResponse(
+  payload: unknown,
+  expectedOrganizationId?: string,
+): OrganizerOverviewCoreData {
+  const data = responseData(payload);
+  if (!isRecord(data.metrics) || !Array.isArray(data.events)) {
+    throw new Error("The organizer overview core response was not valid.");
+  }
+  return {
+    organizationId: responseOrganizationId(data, expectedOrganizationId),
     metrics: {
       eventCount: nonNegativeInteger(data.metrics.eventCount, "metrics.eventCount"),
+    },
+    events: data.events.map(parseOrganizerOverviewEvent),
+  };
+}
+
+/** Parse and validate the organization-scoped activity response envelope. */
+export function parseOrganizerOverviewActivityResponse(
+  payload: unknown,
+  expectedOrganizationId?: string,
+): OrganizerOverviewActivityData {
+  const data = responseData(payload);
+  if (!isRecord(data.metrics) || !Array.isArray(data.actionItems)) {
+    throw new Error("The organizer overview activity response was not valid.");
+  }
+  return {
+    organizationId: responseOrganizationId(data, expectedOrganizationId),
+    metrics: {
       submissionCount: nonNegativeInteger(data.metrics.submissionCount, "metrics.submissionCount"),
       pendingReviewCount: nonNegativeInteger(
         data.metrics.pendingReviewCount,
@@ -212,8 +279,7 @@ export function parseOrganizerOverviewResponse(payload: unknown): OrganizerOverv
         "metrics.publishedSessionCount",
       ),
     },
-    events,
-    actionItems,
+    actionItems: data.actionItems.map(parseOrganizerOverviewActionItem),
   };
 }
 
@@ -270,27 +336,43 @@ export function createOrganizerOverviewApi(
   fetcher: typeof fetch = globalThis.fetch,
 ): OrganizerOverviewApi {
   const endpoint = `${apiBaseUrl.replace(/\/+$/u, "")}/api/admin/organizations/${encodeURIComponent(organizationId)}/overview`;
-  let inFlight: Promise<OrganizerOverviewData> | null = null;
+  let coreInFlight: Promise<OrganizerOverviewCoreData> | null = null;
+  let activityInFlight: Promise<OrganizerOverviewActivityData> | null = null;
+
+  const request = async <T,>(
+    path: string,
+    parser: (payload: unknown, expectedOrganizationId: string) => T,
+  ): Promise<T> => {
+    const response = await fetcher(`${endpoint}${path}`, {
+      method: "GET",
+      credentials: "include",
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) {
+      throw new Error(await responseErrorMessage(response));
+    }
+    return parser(await response.json(), organizationId);
+  };
+
   return {
-    getOverview() {
-      if (inFlight !== null) {
-        return inFlight;
+    getCore() {
+      if (coreInFlight !== null) {
+        return coreInFlight;
       }
-      inFlight = (async () => {
-        const response = await fetcher(endpoint, {
-          method: "GET",
-          credentials: "include",
-          cache: "no-store",
-          headers: { Accept: "application/json" },
-        });
-        if (!response.ok) {
-          throw new Error(await responseErrorMessage(response));
-        }
-        return parseOrganizerOverviewResponse(await response.json());
-      })().finally(() => {
-        inFlight = null;
+      coreInFlight = request("/core", parseOrganizerOverviewCoreResponse).finally(() => {
+        coreInFlight = null;
       });
-      return inFlight;
+      return coreInFlight;
+    },
+    getActivity() {
+      if (activityInFlight !== null) {
+        return activityInFlight;
+      }
+      activityInFlight = request("/activity", parseOrganizerOverviewActivityResponse).finally(() => {
+        activityInFlight = null;
+      });
+      return activityInFlight;
     },
   };
 }
@@ -373,7 +455,10 @@ function LoadingState() {
       </header>
 
       <section className={styles.metricsGrid} aria-label="Loading organization metrics">
-        {metricDefinitions.map((metric) => (
+        {[
+          coreMetricDefinition,
+          ...activityMetricDefinitions,
+        ].map((metric) => (
           <article className={styles.metricCard} key={metric.key}>
             <div className={styles.metricTop}>
               <span
@@ -492,11 +577,13 @@ function MessageState({
   message,
   title,
   onRetry,
+  retryLabel = "Try again",
   role,
 }: Readonly<{
   message: string;
   title: string;
   onRetry?: (() => void) | undefined;
+  retryLabel?: string | undefined;
   role: "alert" | "status";
 }>) {
   return (
@@ -514,7 +601,7 @@ function MessageState({
               void onRetry();
             }}
           >
-            Try again
+            {retryLabel}
           </button>
         ) : null}
       </div>
@@ -522,20 +609,99 @@ function MessageState({
   );
 }
 
-function ActionItems({ data }: Readonly<{ data: OrganizerOverviewData }>) {
-  const actionItems = [...data.actionItems].sort((left, right) => {
-    const priorityDifference = right.priority - left.priority;
-    if (priorityDifference !== 0) {
-      return priorityDifference;
-    }
-    if (left.dueAt && !right.dueAt) {
-      return -1;
-    }
-    if (!left.dueAt && right.dueAt) {
-      return 1;
-    }
-    return 0;
-  });
+function ActivityMetricCards({
+  state,
+  onRetry,
+}: Readonly<{
+  state: OrganizerOverviewRequestState<OrganizerOverviewActivityData>;
+  onRetry?: (() => void) | undefined;
+}>) {
+  return (
+    <>
+      {activityMetricDefinitions.map((metric, index) => {
+        const data = state.data;
+        const value = data?.metrics[metric.key];
+        const hasError = state.status === "error";
+        const isLoading = state.status === "loading";
+        return (
+          <article className={styles.metricCard} key={metric.key}>
+            <div className={styles.metricTop}>
+              <span className={styles.metricIcon} aria-hidden="true">
+                {metric.icon}
+              </span>
+            </div>
+            <div>
+              <span className={styles.metricLabel}>{metric.label}</span>
+              {value === undefined ? (
+                <strong
+                  className={styles.metricValue}
+                  role={hasError ? "alert" : "status"}
+                >
+                  {hasError ? "Unavailable" : "Loading…"}
+                </strong>
+              ) : (
+                <strong className={styles.metricValue}>{value}</strong>
+              )}
+              {data && isLoading ? (
+                <p className={styles.metricDetail} role="status">
+                  Refreshing secondary metrics…
+                </p>
+              ) : null}
+              {data && hasError ? (
+                <p className={styles.metricDetail} role="alert">
+                  Stale data. {state.message}
+                </p>
+              ) : null}
+              {!data && state.status === "error" ? (
+                <p className={styles.metricDetail} role="alert">
+                  {state.message}
+                </p>
+              ) : null}
+              {index === 0 && hasError && onRetry ? (
+                <button
+                  className={styles.secondaryButton}
+                  type="button"
+                  onClick={() => {
+                    void onRetry();
+                  }}
+                >
+                  Retry activity
+                </button>
+              ) : null}
+              {value !== undefined && !isLoading && !hasError ? (
+                <p className={styles.metricDetail}>{metric.detail}</p>
+              ) : null}
+            </div>
+          </article>
+        );
+      })}
+    </>
+  );
+}
+
+function ActionItems({
+  state,
+  onRetry,
+}: Readonly<{
+  state: OrganizerOverviewRequestState<OrganizerOverviewActivityData>;
+  onRetry?: (() => void) | undefined;
+}>) {
+  const data = state.data;
+  const actionItems = data
+    ? [...data.actionItems].sort((left, right) => {
+        const priorityDifference = right.priority - left.priority;
+        if (priorityDifference !== 0) {
+          return priorityDifference;
+        }
+        if (left.dueAt && !right.dueAt) {
+          return -1;
+        }
+        if (!left.dueAt && right.dueAt) {
+          return 1;
+        }
+        return 0;
+      })
+    : [];
 
   return (
     <section className={styles.panel} aria-labelledby="action-items-title">
@@ -548,7 +714,11 @@ function ActionItems({ data }: Readonly<{ data: OrganizerOverviewData }>) {
         </div>
         <div className={styles.panelHeaderActions}>
           <span className={styles.panelCount}>
-            {data.actionItems.length} {data.actionItems.length === 1 ? "task" : "tasks"}
+            {data
+              ? `${data.actionItems.length} ${data.actionItems.length === 1 ? "task" : "tasks"}`
+              : state.status === "loading"
+                ? "Loading…"
+                : "Unavailable"}
           </span>
           <Link className={styles.panelLink} href="/admin/events">
             View events <span aria-hidden="true">→</span>
@@ -556,58 +726,107 @@ function ActionItems({ data }: Readonly<{ data: OrganizerOverviewData }>) {
         </div>
       </div>
       <div className={styles.panelContent}>
-        {actionItems.length === 0 ? (
-          <div className={styles.emptyState}>
-            <p className={styles.emptyStateTitle}>You&apos;re all caught up</p>
-            <p className={styles.muted} role="status">
-              No action items are waiting for this organization.
-            </p>
+        {!data && state.status === "loading" ? (
+          <p className={styles.muted} role="status" aria-live="polite">
+            Loading action items…
+          </p>
+        ) : !data && state.status === "error" ? (
+          <div className={styles.emptyState} role="alert">
+            <p className={styles.emptyStateTitle}>Action items unavailable</p>
+            <p className={styles.muted}>{state.message}</p>
+            {onRetry ? (
+              <button
+                className={styles.secondaryButton}
+                type="button"
+                onClick={() => {
+                  void onRetry();
+                }}
+              >
+                Retry activity
+              </button>
+            ) : null}
           </div>
         ) : (
-          <ul className={styles.taskList} aria-label="Prioritized organizer tasks">
-            {actionItems.map((item) => {
-              const dueDate = formatDueDate(item.dueAt);
-              const critical = item.priority >= 80;
-              return (
-                <li
-                  className={`${styles.taskItem} ${critical ? styles.taskItemCritical : ""}`}
-                  key={item.id}
+          <>
+            {state.status === "loading" ? (
+              <p className={styles.muted} role="status" aria-live="polite">
+                Refreshing action items…
+              </p>
+            ) : null}
+            {state.status === "error" && onRetry ? (
+              <div role="alert">
+                <p className={styles.muted}>
+                  Stale action items. {state.message}
+                </p>
+                <button
+                  className={styles.secondaryButton}
+                  type="button"
+                  onClick={() => {
+                    void onRetry();
+                  }}
                 >
-                  <span className={styles.taskIcon} aria-hidden="true">
-                    {critical ? "!" : "·"}
-                  </span>
-                  <div className={styles.taskContent}>
-                    <h3 className={styles.taskTitle}>{item.title}</h3>
-                    <p className={styles.taskDescription}>{item.description}</p>
-                    <p className={styles.taskMeta}>
-                      <span className={styles.taskPriority}>
-                        {critical ? "High priority" : "Priority queued"}
+                  Retry activity
+                </button>
+              </div>
+            ) : state.status === "error" ? (
+              <p className={styles.muted} role="alert">
+                Stale action items. {state.message}
+              </p>
+            ) : null}
+            {actionItems.length === 0 ? (
+              <div className={styles.emptyState}>
+                <p className={styles.emptyStateTitle}>You&apos;re all caught up</p>
+                <p className={styles.muted} role="status">
+                  No action items are waiting for this organization.
+                </p>
+              </div>
+            ) : (
+              <ul className={styles.taskList} aria-label="Prioritized organizer tasks">
+                {actionItems.map((item) => {
+                  const dueDate = formatDueDate(item.dueAt);
+                  const critical = item.priority >= 80;
+                  return (
+                    <li
+                      className={`${styles.taskItem} ${critical ? styles.taskItemCritical : ""}`}
+                      key={item.id}
+                    >
+                      <span className={styles.taskIcon} aria-hidden="true">
+                        {critical ? "!" : "·"}
                       </span>
-                      <span aria-hidden="true"> · </span>
-                      {actionTypeLabels[item.type]} · {item.count}{" "}
-                      {item.count === 1 ? "item" : "items"}
-                      {dueDate ? ` · ${dueDate}` : ""}
-                    </p>
-                  </div>
-                  <Link
-                    aria-label={`Open ${item.title}`}
-                    className={`${styles.alertTag} ${critical ? styles.alertTagCritical : ""}`}
-                    href={item.href}
-                  >
-                    Open
-                    <span className={styles.srOnly}> {item.title}</span>
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
+                      <div className={styles.taskContent}>
+                        <h3 className={styles.taskTitle}>{item.title}</h3>
+                        <p className={styles.taskDescription}>{item.description}</p>
+                        <p className={styles.taskMeta}>
+                          <span className={styles.taskPriority}>
+                            {critical ? "High priority" : "Priority queued"}
+                          </span>
+                          <span aria-hidden="true"> · </span>
+                          {actionTypeLabels[item.type]} · {item.count}{" "}
+                          {item.count === 1 ? "item" : "items"}
+                          {dueDate ? ` · ${dueDate}` : ""}
+                        </p>
+                      </div>
+                      <Link
+                        aria-label={`Open ${item.title}`}
+                        className={`${styles.alertTag} ${critical ? styles.alertTagCritical : ""}`}
+                        href={item.href}
+                      >
+                        Open
+                        <span className={styles.srOnly}> {item.title}</span>
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </>
         )}
       </div>
     </section>
   );
 }
 
-function EventsTable({ data }: Readonly<{ data: OrganizerOverviewData }>) {
+function EventsTable({ data }: Readonly<{ data: OrganizerOverviewCoreData }>) {
   if (data.events.length === 0) {
     return (
       <div className={styles.panelContent}>
@@ -715,16 +934,51 @@ function EventsTable({ data }: Readonly<{ data: OrganizerOverviewData }>) {
   );
 }
 
+function stateWithCore(
+  previous: OrganizerOverviewViewState,
+  core: OrganizerOverviewRequestState<OrganizerOverviewCoreData>,
+): OrganizerOverviewViewState {
+  if (previous.status === "config-error") {
+    return previous;
+  }
+  if (core.data === null) {
+    if (core.status === "error") {
+      return {
+        status: "error",
+        message: core.message,
+        core,
+        activity: previous.activity,
+      };
+    }
+    return { status: "loading", core, activity: previous.activity };
+  }
+  return { status: "loaded", core, activity: previous.activity };
+}
+
+function stateWithActivity(
+  previous: OrganizerOverviewViewState,
+  activity: OrganizerOverviewRequestState<OrganizerOverviewActivityData>,
+): OrganizerOverviewViewState {
+  if (previous.status === "config-error") {
+    return previous;
+  }
+  if (previous.core.data === null) {
+    return previous.status === "error"
+      ? { ...previous, activity }
+      : { status: "loading", core: previous.core, activity };
+  }
+  return { status: "loaded", core: previous.core, activity };
+}
+
 export function OrganizerOverviewView({
   state,
-  onRetry,
+  onRetryCore,
+  onRetryActivity,
 }: Readonly<{
   state: OrganizerOverviewViewState;
-  onRetry?: (() => void) | undefined;
+  onRetryCore?: (() => void) | undefined;
+  onRetryActivity?: (() => void) | undefined;
 }>) {
-  if (state.status === "loading") {
-    return <LoadingState />;
-  }
   if (state.status === "config-error") {
     return (
       <MessageState
@@ -734,18 +988,34 @@ export function OrganizerOverviewView({
       />
     );
   }
-  if (state.status === "error") {
+  if (state.status === "loading" && state.core.data === null) {
+    return <LoadingState />;
+  }
+  if (state.status === "error" || state.core.data === null) {
     return (
       <MessageState
-        message={state.message}
+        message={state.status === "error" ? state.message : "The core overview data was not loaded."}
         title="Unable to load organizer overview"
-        onRetry={onRetry}
+        onRetry={onRetryCore}
+        retryLabel="Retry core"
         role="alert"
       />
     );
   }
 
-  const { data } = state;
+  const core = state.core.data;
+  if (core === null) {
+    return (
+      <MessageState
+        message="The core overview data was not loaded."
+        title="Unable to load organizer overview"
+        onRetry={onRetryCore}
+        retryLabel="Retry core"
+        role="alert"
+      />
+    );
+  }
+  const activity = state.activity;
   return (
     <>
       <header className={styles.pageHeader}>
@@ -756,6 +1026,29 @@ export function OrganizerOverviewView({
             Live operational data for your organization, including events, submissions, reviews, and
             speaker work.
           </p>
+          {state.core.status === "loading" ? (
+            <p className={styles.taskMeta} role="status" aria-live="polite">
+              Refreshing core event data…
+            </p>
+          ) : null}
+          {state.core.status === "error" ? (
+            <div role="alert">
+              <p className={styles.taskMeta}>
+                Showing previous event data. {state.core.message}
+              </p>
+              {onRetryCore ? (
+                <button
+                  className={styles.secondaryButton}
+                  type="button"
+                  onClick={() => {
+                    void onRetryCore();
+                  }}
+                >
+                  Retry core
+                </button>
+              ) : null}
+            </div>
+          ) : null}
         </div>
         <div className={styles.headerActions}>
           <Link className={styles.primaryButton} href="/admin/events">
@@ -768,24 +1061,23 @@ export function OrganizerOverviewView({
         <h2 className={styles.srOnly} id="overview-metrics-title">
           Live organization metrics
         </h2>
-        {metricDefinitions.map((metric) => (
-          <article className={styles.metricCard} key={metric.key}>
-            <div className={styles.metricTop}>
-              <span className={styles.metricIcon} aria-hidden="true">
-                {metric.icon}
-              </span>
-            </div>
-            <div>
-              <span className={styles.metricLabel}>{metric.label}</span>
-              <strong className={styles.metricValue}>{data.metrics[metric.key]}</strong>
-              <p className={styles.metricDetail}>{metric.detail}</p>
-            </div>
-          </article>
-        ))}
+        <article className={styles.metricCard} key={coreMetricDefinition.key}>
+          <div className={styles.metricTop}>
+            <span className={styles.metricIcon} aria-hidden="true">
+              {coreMetricDefinition.icon}
+            </span>
+          </div>
+          <div>
+            <span className={styles.metricLabel}>{coreMetricDefinition.label}</span>
+            <strong className={styles.metricValue}>{core.metrics.eventCount}</strong>
+            <p className={styles.metricDetail}>{coreMetricDefinition.detail}</p>
+          </div>
+        </article>
+        <ActivityMetricCards state={activity} onRetry={onRetryActivity} />
       </section>
 
       <div className={styles.dashboardGrid}>
-        <ActionItems data={data} />
+        <ActionItems state={activity} onRetry={onRetryActivity} />
         <section
           className={`${styles.panel} ${styles.guidancePanel}`}
           aria-labelledby="overview-guidance-title"
@@ -817,9 +1109,9 @@ export function OrganizerOverviewView({
                 Events
               </h2>
             </div>
-            <span className={styles.panelCount}>{data.events.length} total</span>
+            <span className={styles.panelCount}>{core.events.length} total</span>
           </div>
-          <EventsTable data={data} />
+          <EventsTable data={core} />
         </section>
       </div>
     </>
@@ -854,32 +1146,126 @@ export function OrganizerOverview({
     return createOrganizerOverviewApi(config.apiBaseUrl, config.organizationId);
   }, [config, providedApi]);
   const [state, setState] = useState<OrganizerOverviewViewState>(() =>
-    "error" in config ? { status: "config-error", message: config.error } : { status: "loading" },
+    "error" in config
+      ? { status: "config-error", message: config.error }
+      : {
+          status: "loading",
+          core: { status: "loading", data: null },
+          activity: { status: "loading", data: null },
+        },
   );
+  const generationRef = useRef(0);
 
-  const load = useCallback(async () => {
+  const loadCore = useCallback(async () => {
     if (!api || "error" in config) {
       return;
     }
-    setState({ status: "loading" });
+    const generation = generationRef.current;
+    setState((previous) => {
+      if (previous.status === "config-error") {
+        return previous;
+      }
+      return stateWithCore(previous, {
+        status: "loading",
+        data: previous.core.data,
+      });
+    });
     try {
-      const data = await api.getOverview();
+      const data = await api.getCore();
+      if (generationRef.current !== generation) {
+        return;
+      }
       if (data.organizationId !== config.organizationId) {
         throw new Error("The organizer overview returned data for another organization.");
       }
-      setState({ status: "loaded", data });
+      setState((previous) =>
+        stateWithCore(previous, {
+          status: "loaded",
+          data,
+        }),
+      );
     } catch (error) {
-      setState({ status: "error", message: errorMessage(error) });
+      if (generationRef.current !== generation) {
+        return;
+      }
+      setState((previous) =>
+        stateWithCore(previous, {
+          status: "error",
+          data: previous.status === "config-error" ? null : previous.core.data,
+          message: errorMessage(error),
+        }),
+      );
+    }
+  }, [api, config]);
+
+  const loadActivity = useCallback(async () => {
+    if (!api || "error" in config) {
+      return;
+    }
+    const generation = generationRef.current;
+    setState((previous) => {
+      if (previous.status === "config-error") {
+        return previous;
+      }
+      return stateWithActivity(previous, {
+        status: "loading",
+        data: previous.activity.data,
+      });
+    });
+    try {
+      const data = await api.getActivity();
+      if (generationRef.current !== generation) {
+        return;
+      }
+      if (data.organizationId !== config.organizationId) {
+        throw new Error("The organizer overview returned data for another organization.");
+      }
+      setState((previous) =>
+        stateWithActivity(previous, {
+          status: "loaded",
+          data,
+        }),
+      );
+    } catch (error) {
+      if (generationRef.current !== generation) {
+        return;
+      }
+      setState((previous) =>
+        stateWithActivity(previous, {
+          status: "error",
+          data: previous.status === "config-error" ? null : previous.activity.data,
+          message: errorMessage(error),
+        }),
+      );
     }
   }, [api, config]);
 
   useEffect(() => {
-    if (api && !("error" in config)) {
-      void load();
+    generationRef.current += 1;
+    if (!api || "error" in config) {
+      setState(
+        "error" in config
+          ? { status: "config-error", message: config.error }
+          : { status: "config-error", message: "Organizer overview is not configured." },
+      );
+      return;
     }
-  }, [api, config, load]);
+    setState({
+      status: "loading",
+      core: { status: "loading", data: null },
+      activity: { status: "loading", data: null },
+    });
+    void loadCore();
+    void loadActivity();
+  }, [api, config, loadActivity, loadCore]);
 
-  return <OrganizerOverviewView state={state} onRetry={api ? load : undefined} />;
+  return (
+    <OrganizerOverviewView
+      state={state}
+      onRetryCore={api ? loadCore : undefined}
+      onRetryActivity={api ? loadActivity : undefined}
+    />
+  );
 }
 const organizerEventStatuses = ["draft", "active", "archived"] as const;
 
