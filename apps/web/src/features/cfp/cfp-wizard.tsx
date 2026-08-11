@@ -787,7 +787,7 @@ export function CfpWizard({
     }
   }, [eventSlug, organizationId, formId]);
   const api = useMemo(
-    () => providedApi ?? createCfpApi(process.env.NEXT_PUBLIC_API_URL ?? ""),
+    () => providedApi ?? createCfpApi(""),
     [providedApi],
   );
   const [draft, setDraft] = useState<CfpDraft>(initialDraft);
@@ -3141,7 +3141,7 @@ export function CfpComplete({
     canEdit: boolean;
   } | null>(null);
   const api = useMemo(
-    () => providedApi ?? createCfpApi(process.env.NEXT_PUBLIC_API_URL ?? ""),
+    () => providedApi ?? createCfpApi(""),
     [providedApi],
   );
 

@@ -1051,7 +1051,7 @@ export function CfpEditor({ eventId, organizationId, formId, api: providedApi }:
     createEditorInitialConfiguration(eventId),
   );
   const api = useMemo(
-    () => providedApi ?? createCfpApi(process.env.NEXT_PUBLIC_API_URL ?? ""),
+    () => providedApi ?? createCfpApi(""),
     [providedApi],
   );
   const [activeSection, setActiveSection] =
