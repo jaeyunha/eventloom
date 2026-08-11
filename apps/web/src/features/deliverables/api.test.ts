@@ -319,6 +319,96 @@ describe("deliverables API", () => {
     ]);
   });
 
+  it("uses the exact organizer matrix query and keeps server status/current asset authoritative", async () => {
+    const requests: string[] = [];
+    const currentAsset = {
+      id: "asset-2",
+      eventId: "event-1",
+      submissionId: "submission-1",
+      participantId: "participant-1",
+      taskId: "task-1",
+      kind: "slides",
+      fileName: "current.pdf",
+      contentType: "application/pdf",
+      sizeBytes: 2048,
+      state: "ready",
+      createdAt: "2026-08-11T12:00:00.000Z",
+      version: 2,
+      versionFamilyId: "family-1",
+      objectKey: "private/object-key",
+      tenantId: "private-tenant",
+      capabilityToken: "private-capability",
+      signedDownloadUrl: "https://private.example.test/file",
+    };
+    const task = {
+      id: "task-1",
+      eventId: "event-1",
+      submissionId: "submission-1",
+      participantId: "participant-1",
+      type: "upload",
+      owner: "speaker",
+      title: "Upload slides",
+      status: "submitted",
+      dependencyIds: [],
+      reminderOffsetsMinutes: [],
+      version: 1,
+      updatedAt: "2026-08-11T12:00:00.000Z",
+    };
+    const api = createDeliverablesApi(
+      "https://api.example.test",
+      "org-1",
+      "event-1",
+      async (input) => {
+        requests.push(String(input));
+        return Response.json({
+          data: {
+            organizationId: "org-1",
+            eventId: "event-1",
+            total: 1,
+            filters: {
+              participantId: "participant-1",
+              taskId: "task-1",
+              status: "incomplete",
+              objectKey: "must-not-cross-boundary",
+            },
+            items: [
+              {
+                task,
+                participantId: "participant-1",
+                participantName: "Priya Raman",
+                assets: [currentAsset],
+                currentAsset,
+                status: "needs_changes",
+              },
+            ],
+          },
+        });
+      },
+    );
+
+    const matrix = await api.listDeliverableMatrix?.({
+      participantId: "participant-1",
+      taskId: "task-1",
+      status: "incomplete",
+    });
+
+    expect(requests).toEqual([
+      "https://api.example.test/api/speaker/events/event-1/organizer/deliverables?participantId=participant-1&taskId=task-1&status=incomplete",
+    ]);
+    expect(matrix?.filters).toEqual({
+      participantId: "participant-1",
+      taskId: "task-1",
+      status: "incomplete",
+    });
+    expect(matrix?.items[0]).toMatchObject({
+      status: "needs_changes",
+      currentAsset: { id: "asset-2", version: 2 },
+    });
+    expect(matrix?.items[0]?.currentAsset).not.toHaveProperty("objectKey");
+    expect(matrix?.items[0]?.currentAsset).not.toHaveProperty("tenantId");
+    expect(matrix?.items[0]?.currentAsset).not.toHaveProperty("capabilityToken");
+    expect(matrix?.items[0]?.currentAsset).not.toHaveProperty("signedDownloadUrl");
+  });
   it("surfaces optimistic concurrency conflicts without hiding the server error", async () => {
     const api = createDeliverablesApi("https://api.example.test", "org-1", "event-1", async () =>
       Response.json(
