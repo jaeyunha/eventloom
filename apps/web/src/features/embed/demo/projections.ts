@@ -27,6 +27,7 @@ export function createLocalDemoAgenda(eventSlug: string): PublishedAgenda {
     entries: [
       {
         id: "entry_keynote",
+        sessionId: "session_keynote",
         title: "Systems that stay understandable",
         summary: "Build program operations that teams can reason about as they grow.",
         format: "Keynote",
@@ -38,6 +39,7 @@ export function createLocalDemoAgenda(eventSlug: string): PublishedAgenda {
       },
       {
         id: "entry_workshop",
+        sessionId: "session_workshop",
         title: "Designing conflict-safe schedules",
         summary: "Practice the constraints and review habits behind a resilient event agenda.",
         format: "Workshop",
@@ -49,6 +51,7 @@ export function createLocalDemoAgenda(eventSlug: string): PublishedAgenda {
       },
       {
         id: "entry_panel",
+        sessionId: "session_panel",
         title: "Human decisions, dependable delivery",
         summary:
           "Program leaders share how they keep review, communication, and publication accountable.",
@@ -61,6 +64,7 @@ export function createLocalDemoAgenda(eventSlug: string): PublishedAgenda {
       },
       {
         id: "entry_clinic",
+        sessionId: "session_clinic",
         title: "Accessible speaker operations clinic",
         summary: "Turn common portal and publishing friction into clear, inclusive workflows.",
         format: "Clinic",

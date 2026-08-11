@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { publishedProgramFromProjections } from "@/features/embed/api";
 import {
   getPublishedAgendaOrLocalDemo,
   getPublishedSpeakersOrLocalDemo,
@@ -35,9 +36,18 @@ export default async function SpeakerGalleryPage({
       getPublishedSpeakersOrLocalDemo(apiBaseUrl, eventSlug, process.env.APP_ENV),
       getPublishedAgendaOrLocalDemo(apiBaseUrl, eventSlug, process.env.APP_ENV),
     ]);
+    const program = publishedProgramFromProjections(agenda, gallery);
     return (
-      <EmbedFrame event={gallery.event} eventSlug={eventSlug} theme={theme} view="speakers">
-        <SpeakerGallery gallery={gallery} agenda={{ entries: agenda.entries }} />
+      <EmbedFrame
+        event={program.agenda.event}
+        eventSlug={eventSlug}
+        theme={theme}
+        view="speakers"
+      >
+        <SpeakerGallery
+          gallery={program.speakers}
+          agenda={{ entries: program.agenda.entries }}
+        />
       </EmbedFrame>
     );
   } catch {

@@ -2,7 +2,11 @@
 
 import { useMemo, useState } from "react";
 import styles from "./embed.module.css";
-import { formatPublishedTime } from "./model";
+import {
+  formatPublishedTime,
+  publishedEntrySpeakerNames,
+  publishedEntrySpeakers,
+} from "./model";
 import type { PublishedAgendaEntry, PublishedProgram, PublishedSpeaker } from "./types";
 
 const DESCRIPTION_LIMIT = 190;
@@ -43,43 +47,27 @@ function compareStarts(left: PublishedAgendaEntry, right: PublishedAgendaEntry):
   return left.startsAt.localeCompare(right.startsAt);
 }
 
-function speakerForName(
+function speakerForEntryName(
+  entry: PublishedAgendaEntry,
   name: string,
   speakers: readonly PublishedSpeaker[],
 ): PublishedSpeaker | undefined {
   const normalizedName = name.trim().toLocaleLowerCase();
-  return speakers.find(
+  return publishedEntrySpeakers(entry, speakers).find(
     (speaker) => speaker.displayName.trim().toLocaleLowerCase() === normalizedName,
   );
-}
-
-function entrySpeakerNames(
-  entry: PublishedAgendaEntry,
-  speakers: readonly PublishedSpeaker[],
-): readonly string[] {
-  const publishedNames = entry.speakerNames
-    .filter((name) => name.trim().length > 0)
-    .filter((name, index, names) => names.indexOf(name) === index)
-    .map((name) => {
-      const speaker =
-        speakerForName(name, speakers) ?? speakers.find((candidate) => candidate.id === name);
-      return speaker?.displayName ?? name;
-    });
-  if (publishedNames.length > 0) return publishedNames;
-  return speakers
-    .filter((speaker) => speaker.sessionIds.includes(entry.id))
-    .map((speaker) => speaker.displayName);
 }
 
 function entrySearchText(
   entry: PublishedAgendaEntry,
   speakers: readonly PublishedSpeaker[],
 ): string {
-  const names = entrySpeakerNames(entry, speakers);
-  const speakerDetails = names.flatMap((name) => {
-    const speaker = speakerForName(name, speakers);
-    return speaker ? [speaker.jobTitle, speaker.organization, speaker.biography] : [];
-  });
+  const names = publishedEntrySpeakerNames(entry, speakers);
+  const speakerDetails = publishedEntrySpeakers(entry, speakers).flatMap((speaker) => [
+    speaker.jobTitle,
+    speaker.organization,
+    speaker.biography,
+  ]);
   return [entry.title, ...names, ...speakerDetails]
     .filter((value): value is string => Boolean(value))
     .join(" ")
@@ -249,13 +237,16 @@ export function PublicSessionsView({ program }: Readonly<{ program: PublishedPro
       ) : (
         <ol className={styles.publicSessionList}>
           {entries.map((entry) => {
-            const names = entrySpeakerNames(entry, speakers.speakers);
+            const names = publishedEntrySpeakerNames(entry, speakers.speakers);
             const isExpanded = expanded.has(entry.id);
             const hasLongDescription = entry.summary.length > DESCRIPTION_LIMIT;
             const hasDescription = entry.summary.trim().length > 0;
             return (
               <li key={entry.id}>
-                <article className={styles.publicSessionCard}>
+                <article
+                  id={`session-${entry.sessionId}`}
+                  className={styles.publicSessionCard}
+                >
                   <div className={styles.publicSessionTime}>
                     <time dateTime={entry.startsAt}>
                       {formatDateTime(entry.startsAt, agenda.event.timeZone)}
@@ -280,7 +271,7 @@ export function PublicSessionsView({ program }: Readonly<{ program: PublishedPro
                         <strong>Speakers</strong>
                         <ul>
                           {names.map((name) => {
-                            const speaker = speakerForName(name, speakers.speakers);
+                            const speaker = speakerForEntryName(entry, name, speakers.speakers);
                             return (
                               <li key={name}>
                                 {speaker ? (

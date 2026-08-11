@@ -4,13 +4,17 @@ import {
   filterAgendaEntries,
   filterSpeakers,
   publicAgendaDays,
+  publicPhotoUrl,
+  sortSpeakersBySurname,
   speakerInitials,
+  speakerSurname,
 } from "./model";
 import type { PublishedAgendaEntry, PublishedSpeaker } from "./types";
 
 const entries: readonly PublishedAgendaEntry[] = [
   {
     id: "entry_evening",
+    sessionId: "session_lab",
     title: "Evening systems lab",
     summary: "Hands-on collaboration.",
     format: "Workshop",
@@ -22,6 +26,7 @@ const entries: readonly PublishedAgendaEntry[] = [
   },
   {
     id: "entry_morning",
+    sessionId: "session_keynote",
     title: "Opening keynote",
     summary: "A practical opening.",
     format: "Keynote",
@@ -137,5 +142,32 @@ describe("published embed model", () => {
       "speaker_sam",
     ]);
     expect(speakerInitials("Morgan Lee")).toBe("ML");
+  });
+
+  it("sorts surnames deterministically without confusing suffixes or comma notation", () => {
+    const variants: readonly PublishedSpeaker[] = [
+      { ...speakers[0]!, id: "speaker_2", displayName: "Alex Rivera Jr." },
+      { ...speakers[0]!, id: "speaker_1", displayName: "Rivera, Alex" },
+      { ...speakers[0]!, id: "speaker_3", displayName: "Ana de la Cruz" },
+    ];
+
+    expect(speakerSurname("Alex Rivera Jr.")).toBe("Rivera");
+    expect(speakerSurname("Rivera, Alex")).toBe("Rivera");
+    expect(speakerSurname("Ana de la Cruz")).toBe("de la Cruz");
+    expect(sortSpeakersBySurname(variants).map((speaker) => speaker.id)).toEqual([
+      "speaker_3",
+      "speaker_2",
+      "speaker_1",
+    ]);
+  });
+
+  it("accepts only stable public HTTPS headshot URLs", () => {
+    expect(publicPhotoUrl("https://assets.example.test/public/speaker.webp")).toBe(
+      "https://assets.example.test/public/speaker.webp",
+    );
+    expect(
+      publicPhotoUrl("https://assets.example.test/private/speaker.webp?signature=secret"),
+    ).toBeNull();
+    expect(publicPhotoUrl("http://assets.example.test/public/speaker.webp")).toBeNull();
   });
 });

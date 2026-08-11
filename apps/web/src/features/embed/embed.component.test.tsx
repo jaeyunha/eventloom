@@ -39,6 +39,7 @@ const agenda: PublishedAgenda = {
   entries: [
     {
       id: "entry_keynote",
+      sessionId: "session_keynote",
       title: "Systems that stay understandable",
       summary: "Build operations that teams can reason about.",
       format: "Keynote",
@@ -69,9 +70,6 @@ const gallery: PublishedSpeakerGallery = {
     },
   ],
 };
-type PublishedAgendaEntryWithSessionId = PublishedAgenda["entries"][number] & {
-  readonly sessionId?: string;
-};
 
 const priyaSpeaker: PublishedSpeaker = {
   id: "speaker_priya",
@@ -86,7 +84,7 @@ const priyaSpeaker: PublishedSpeaker = {
   trackNames: ["Main stage"],
 };
 
-const priyaAgendaEntries: readonly PublishedAgendaEntryWithSessionId[] = [
+const priyaAgendaEntries: PublishedAgenda["entries"] = [
   {
     id: "entry_priya",
     sessionId: "session_priya",
@@ -186,6 +184,7 @@ const multiDayAgenda: PublishedAgenda = {
     ...agenda.entries,
     {
       id: "entry_second_day",
+      sessionId: "session_zoe",
       title: "Reliable systems in practice",
       summary: "A second-day session for testing day navigation.",
       format: "Workshop",
@@ -230,8 +229,7 @@ describe("public embeds", () => {
           view: "agenda",
         },
         createElement(PublicAgendaView, {
-          agenda,
-          apiBaseUrl: "https://api.example.com",
+          program: { agenda, speakers: gallery },
         }),
       ),
     );
@@ -243,12 +241,23 @@ describe("public embeds", () => {
     expect(markup).toContain('dateTime="2026-09-18T16:00:00.000Z"');
     expect(markup).toContain("agenda.json");
     expect(markup).toContain("agenda.ics");
-    expect(markup).toContain(
-      'href="https://api.example.com/api/public/events/open-systems/agenda.json"',
+    expect(markup).toContain('href="/api/public/events/open-systems/agenda.json"');
+    expect(markup).toContain('href="/api/public/events/open-systems/agenda.ics"');
+  });
+  it("does not enrich an agenda with speakers from another revision", () => {
+    const staleGallery: PublishedSpeakerGallery = {
+      ...gallery,
+      revision: { ...gallery.revision, id: "revision_2", number: 2 },
+    };
+    const markup = renderToStaticMarkup(
+      createElement(PublicAgendaView, {
+        program: { agenda, speakers: staleGallery },
+      }),
     );
-    expect(markup).toContain(
-      'href="https://api.example.com/api/public/events/open-systems/agenda.ics"',
-    );
+
+    expect(markup).toContain("Morgan Lee");
+    expect(markup).not.toContain("Staff Engineer");
+    expect(markup).not.toContain("Open Works");
   });
   it("hides feed links that the published projection marks unavailable", () => {
     const unavailableAgenda = {
@@ -257,8 +266,7 @@ describe("public embeds", () => {
     } as PublishedAgenda & { readonly feeds: { json: boolean; ics: boolean } };
     const markup = renderToStaticMarkup(
       createElement(PublicAgendaView, {
-        agenda: unavailableAgenda,
-        apiBaseUrl: "https://api.example.com",
+        program: { agenda: unavailableAgenda, speakers: gallery },
       }),
     );
 
@@ -296,7 +304,9 @@ describe("public embeds", () => {
   });
 
   it("renders speaker information with text alternatives to photos and color", () => {
-    const markup = renderToStaticMarkup(createElement(SpeakerGallery, { gallery }));
+    const markup = renderToStaticMarkup(
+      createElement(SpeakerGallery, { gallery, agenda: { entries: agenda.entries } }),
+    );
 
     expect(markup).toContain("<search>");
     expect(markup).toContain("Search speakers or sessions");
@@ -338,6 +348,25 @@ describe("public embeds", () => {
     expect(firstBrown).toBeGreaterThan(firstAdams);
     expect(firstLee).toBeGreaterThan(firstBrown);
   });
+  it("connects long biographies to an accessible expansion control", () => {
+    const longBiography = "Published biography details. ".repeat(20);
+    const longBiographyProgram: PublishedProgram = {
+      agenda,
+      speakers: {
+        ...gallery,
+        speakers: [{ ...gallery.speakers[0]!, biography: longBiography }],
+      },
+    };
+
+    const markup = renderToStaticMarkup(
+      createElement(PublicSpeakersListView, { program: longBiographyProgram }),
+    );
+
+    expect(markup).toContain('id="speaker-list-biography-speaker_morgan"');
+    expect(markup).toContain('aria-controls="speaker-list-biography-speaker_morgan"');
+    expect(markup).toContain('aria-expanded="false"');
+    expect(markup).toContain("Show more");
+  });
   it("sorts speakers by surname, narrows search, and keeps detail controls keyboard accessible", () => {
     const orderedNames = sortSpeakersBySurname(galleryWithDetails.speakers).map(
       (speaker) => speaker.displayName,
@@ -359,12 +388,29 @@ describe("public embeds", () => {
     if (!speaker) {
       throw new Error("Expected a speaker with session details");
     }
-    expect(publishedSpeakerSessions(speaker, galleryWithDetails)).toMatchObject([
+    expect(
+      publishedSpeakerSessions(speaker, [
+        {
+          id: "entry_zoe",
+          sessionId: "session_zoe",
+          title: "Reliable systems for scientific teams",
+          summary: "A published session.",
+          format: "Talk",
+          speakerNames: ["A different speaker"],
+          roomName: "Room 306",
+          trackNames: ["Main stage"],
+          startsAt: "2026-09-18T18:00:00.000Z",
+          endsAt: "2026-09-18T19:00:00.000Z",
+        },
+      ]),
+    ).toMatchObject([
       {
+        id: "session_zoe",
         title: "Reliable systems for scientific teams",
         startsAt: "2026-09-18T18:00:00.000Z",
         endsAt: "2026-09-18T19:00:00.000Z",
         roomName: "Room 306",
+        trackNames: ["Main stage"],
       },
     ]);
 
@@ -377,6 +423,7 @@ describe("public embeds", () => {
             entries: [
               {
                 id: "entry_zoe",
+                sessionId: "session_zoe",
                 title: "Reliable systems for scientific teams",
                 summary: "A published session.",
                 format: "Talk",
@@ -412,11 +459,11 @@ describe("public embeds", () => {
     );
 
     expect(detailMarkup).toContain("Priya Shah");
-    expect(detailMarkup).toContain("Sessions (2)");
+    expect(detailMarkup).toContain("Sessions (1)");
     expect(detailMarkup).toContain("Friday, September 18, 2026");
     expect(detailMarkup).toContain("11:00 AM");
     expect(detailMarkup).toContain("Room: Room 201");
-    expect(detailMarkup).toContain("Room: Room 202");
+    expect(detailMarkup).not.toContain("Room: Room 202");
     expect(detailMarkup).not.toContain("Date and time not published");
     expect(detailMarkup).not.toContain("Room not published");
   });
@@ -434,9 +481,8 @@ describe("public embeds", () => {
       }),
     );
 
-    expect(detailMarkup).toContain("Date and time not published");
-    expect(detailMarkup).toContain("Room: Room not published");
-    expect(detailMarkup).not.toContain("Friday, September 18, 2026");
+    expect(detailMarkup).toContain("Sessions (0)");
+    expect(detailMarkup).not.toContain("Date and time not published");
     expect(detailMarkup).not.toContain("Room: Room 306");
     expect(detailMarkup).not.toContain("private@example.test");
   });
@@ -444,8 +490,7 @@ describe("public embeds", () => {
   it("opens agenda blocks with complete details and exposes a back control", () => {
     const markup = renderToStaticMarkup(
       createElement(PublicAgendaView, {
-        agenda: multiDayAgenda,
-        apiBaseUrl: "https://api.example.com",
+        program: { agenda: multiDayAgenda, speakers: gallery },
       }),
     );
     expect(

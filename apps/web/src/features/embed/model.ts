@@ -3,171 +3,91 @@ import type { EmbedTheme, PublishedAgendaEntry, PublishedEvent, PublishedSpeaker
 export interface PublishedSpeakerSession {
   id: string;
   title: string;
-  startsAt: string | null;
-  endsAt: string | null;
-  roomName: string | null;
-}
-
-type SpeakerSessionMetadata = {
-  readonly sessions?: readonly unknown[];
-  readonly sessionDetails?: readonly unknown[];
-};
-
-type GallerySessionMetadata = {
-  readonly sessions?: readonly unknown[];
-  readonly sessionDetails?: readonly unknown[];
-  readonly entries?: readonly unknown[];
-  readonly agenda?: {
-    readonly entries?: readonly unknown[];
-  };
-};
-
-function speakerSessionMetadata(value: PublishedSpeaker): SpeakerSessionMetadata {
-  return value as PublishedSpeaker & SpeakerSessionMetadata;
-}
-
-function gallerySessionMetadata(value: unknown): GallerySessionMetadata {
-  if (typeof value !== "object" || value === null) {
-    return {};
-  }
-  return value as GallerySessionMetadata;
-}
-
-function readString(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value : null;
-}
-
-function normalizeSpeakerSession(
-  value: unknown,
-  fallbackId: string,
-): PublishedSpeakerSession | null {
-  if (typeof value !== "object" || value === null) {
-    return null;
-  }
-  const record = value as Record<string, unknown>;
-  const title = readString(record.title) ?? readString(record.name);
-  if (!title) {
-    return null;
-  }
-  const date = readString(record.date) ?? readString(record.day);
-  const startsAt =
-    readString(record.startsAt) ??
-    readString(record.startAt) ??
-    readString(record.startDateTime) ??
-    readString(record.startsOn) ??
-    readString(record.dateTime) ??
-    (date && readString(record.startTime) ? `${date} ${readString(record.startTime)}` : null);
-  const endsAt =
-    readString(record.endsAt) ??
-    readString(record.endAt) ??
-    readString(record.endDateTime) ??
-    readString(record.endsOn) ??
-    (date && readString(record.endTime) ? `${date} ${readString(record.endTime)}` : null);
-  return {
-    id: readString(record.id) ?? fallbackId,
-    title,
-    startsAt,
-    endsAt,
-    roomName: readString(record.roomName) ?? readString(record.room) ?? readString(record.location),
-  };
+  startsAt: string;
+  endsAt: string;
+  roomName: string;
+  trackNames: readonly string[];
 }
 
 export function publishedSpeakerSessions(
   speaker: PublishedSpeaker,
-  gallery?: unknown,
+  entries: readonly PublishedAgendaEntry[],
 ): readonly PublishedSpeakerSession[] {
-  const speakerMetadata = speakerSessionMetadata(speaker);
-  const ownValues = speakerMetadata.sessions ?? speakerMetadata.sessionDetails ?? [];
-  const galleryMetadata = gallerySessionMetadata(gallery);
-  const galleryValues =
-    galleryMetadata.sessions ??
-    galleryMetadata.sessionDetails ??
-    galleryMetadata.entries ??
-    galleryMetadata.agenda?.entries ??
-    [];
-  const sourceValues = ownValues.length > 0 ? ownValues : galleryValues;
-  const speakerIds = new Set(speaker.sessionIds);
-  const speakerTitles = new Set(
-    speaker.sessionTitles.map((title) => title.trim().toLocaleLowerCase()),
-  );
-  const sessions: PublishedSpeakerSession[] = [];
-
-  for (const [index, value] of sourceValues.entries()) {
-    const session = normalizeSpeakerSession(value, speaker.sessionIds[index] ?? `session-${index}`);
-    if (!session) {
-      continue;
-    }
-    const record = value as Record<string, unknown>;
-    const speakerNames = Array.isArray(record.speakerNames)
-      ? record.speakerNames.filter((name): name is string => typeof name === "string")
-      : [];
-    const normalizedDisplayName = speaker.displayName.trim().toLocaleLowerCase();
-    const belongsToSpeaker =
-      sourceValues === ownValues ||
-      speakerIds.has(session.id) ||
-      speakerTitles.has(session.title.trim().toLocaleLowerCase()) ||
-      speakerIds.has(readString(record.sessionId) ?? "") ||
-      speakerNames.some((name) => name.trim().toLocaleLowerCase() === normalizedDisplayName);
-    if (belongsToSpeaker) {
-      sessions.push(session);
-    }
-  }
-
-  for (const [index, title] of speaker.sessionTitles.entries()) {
-    if (!sessions.some((session) => session.title === title)) {
-      sessions.push({
-        id: speaker.sessionIds[index] ?? `session-${index}`,
-        title,
-        startsAt: null,
-        endsAt: null,
-        roomName: null,
-      });
-    }
-  }
-
-  return sessions.sort((left, right) => {
-    if (left.startsAt && right.startsAt) {
+  const sessionIds = new Set(speaker.sessionIds);
+  return entries
+    .filter((entry) => sessionIds.has(entry.sessionId))
+    .map((entry) => ({
+      id: entry.sessionId,
+      title: entry.title,
+      startsAt: entry.startsAt,
+      endsAt: entry.endsAt,
+      roomName: entry.roomName,
+      trackNames: entry.trackNames,
+    }))
+    .sort((left, right) => {
       const startComparison = left.startsAt.localeCompare(right.startsAt);
-      if (startComparison !== 0) {
-        return startComparison;
-      }
-    } else if (left.startsAt) {
-      return -1;
-    } else if (right.startsAt) {
-      return 1;
-    }
-    return left.title.localeCompare(right.title);
-  });
+      return startComparison !== 0 ? startComparison : left.id.localeCompare(right.id);
+    });
+}
+
+export function publishedEntrySpeakers(
+  entry: PublishedAgendaEntry,
+  speakers: readonly PublishedSpeaker[],
+): readonly PublishedSpeaker[] {
+  return speakers.filter((speaker) => speaker.sessionIds.includes(entry.sessionId));
+}
+
+export function publishedEntrySpeakerNames(
+  entry: PublishedAgendaEntry,
+  speakers: readonly PublishedSpeaker[],
+): readonly string[] {
+  const linkedNames = publishedEntrySpeakers(entry, speakers).map((speaker) => speaker.displayName);
+  const names = linkedNames.length > 0 ? linkedNames : entry.speakerNames;
+  return names
+    .map((name) => name.trim())
+    .filter((name, index, values) => name.length > 0 && values.indexOf(name) === index);
+}
+
+const surnameSuffixes = new Set(["jr", "sr", "ii", "iii", "iv", "v"]);
+const surnamePrefixes = new Set(["da", "de", "del", "den", "der", "di", "dos", "la", "van", "von"]);
+
+function surnameToken(value: string): string {
+  return value.toLocaleLowerCase("en").replace(/[.,]+$/gu, "");
 }
 
 export function speakerSurname(displayName: string): string {
-  const normalized = displayName.trim().replace(/\s+/gu, " ");
-  if (!normalized) {
-    return "";
-  }
+  const normalized = displayName.normalize("NFKC").trim().replace(/\s+/gu, " ");
+  if (!normalized) return "";
   const commaIndex = normalized.indexOf(",");
-  if (commaIndex > 0) {
-    return normalized.slice(0, commaIndex).trim();
+  if (commaIndex > 0) return normalized.slice(0, commaIndex).trim();
+
+  const parts = normalized.split(" ");
+  while (parts.length > 1 && surnameSuffixes.has(surnameToken(parts.at(-1) ?? ""))) {
+    parts.pop();
   }
-  return normalized.split(" ").at(-1) ?? normalized;
+  let surnameStart = parts.length - 1;
+  while (surnameStart > 0 && surnamePrefixes.has(surnameToken(parts[surnameStart - 1] ?? ""))) {
+    surnameStart -= 1;
+  }
+  return parts.slice(surnameStart).join(" ");
 }
+
+const baseNameCollator = new Intl.Collator("en", { sensitivity: "base" });
+const exactNameCollator = new Intl.Collator("en", { sensitivity: "variant" });
 
 export function sortSpeakersBySurname(
   speakers: readonly PublishedSpeaker[],
 ): readonly PublishedSpeaker[] {
   return [...speakers].sort((left, right) => {
-    const surnameComparison = speakerSurname(left.displayName).localeCompare(
-      speakerSurname(right.displayName),
-      undefined,
-      { sensitivity: "base" },
+    const leftSurname = speakerSurname(left.displayName);
+    const rightSurname = speakerSurname(right.displayName);
+    return (
+      baseNameCollator.compare(leftSurname, rightSurname) ||
+      exactNameCollator.compare(leftSurname, rightSurname) ||
+      baseNameCollator.compare(left.displayName, right.displayName) ||
+      exactNameCollator.compare(left.displayName, right.displayName) ||
+      left.id.localeCompare(right.id)
     );
-    if (surnameComparison !== 0) {
-      return surnameComparison;
-    }
-    const nameComparison = left.displayName.localeCompare(right.displayName, undefined, {
-      sensitivity: "base",
-    });
-    return nameComparison !== 0 ? nameComparison : left.id.localeCompare(right.id);
   });
 }
 
@@ -189,6 +109,25 @@ export function speakerInitials(displayName: string): string {
     .slice(0, 2)
     .map((part) => part[0]?.toLocaleUpperCase() ?? "")
     .join("");
+}
+
+export function publicPhotoUrl(value: string | null): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    if (
+      url.protocol !== "https:" ||
+      url.username.length > 0 ||
+      url.password.length > 0 ||
+      url.search.length > 0 ||
+      url.hash.length > 0
+    ) {
+      return null;
+    }
+    return url.toString();
+  } catch {
+    return null;
+  }
 }
 
 export function filterSpeakers(

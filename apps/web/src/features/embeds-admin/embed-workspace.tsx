@@ -397,6 +397,20 @@ export function publicEmbedUrl(settings: EmbedSnippetSettings): string {
   return `${origin}/embed/${slug}/${settings.widget.publicView}${queryForSettings(settings)}`;
 }
 
+export function publicAgendaCalendarUrl(settings: EmbedSnippetSettings): string {
+  const origin = configuredPublicOrigin(settings.publicOrigin);
+  const slug = encodeURIComponent(settings.eventSlug.trim());
+  if (!origin || !slug) return "";
+  return `${origin}/api/public/events/${slug}/agenda.ics`;
+}
+
+function iframeSandbox(widget: EmbedWidgetDefinition): string {
+  if (widget.id === "itinerary") {
+    return "allow-downloads allow-same-origin allow-scripts";
+  }
+  return widget.id === "agenda" ? "allow-downloads allow-scripts" : "allow-scripts";
+}
+
 export function iframeSnippet(settings: EmbedSnippetSettings): string {
   const src = publicEmbedUrl(settings);
   if (!src) return "";
@@ -407,8 +421,8 @@ export function iframeSnippet(settings: EmbedSnippetSettings): string {
     `  title="Open Sessionboard ${widget.label}"`,
     '  loading="lazy"',
     '  referrerpolicy="no-referrer"',
-    '  sandbox="allow-scripts"',
-    '  style="width:100%;min-height:720px;border:0;display:block"',
+    `  sandbox="${iframeSandbox(widget)}"`,
+    `  style="width:100%;min-height:${widget.minHeight};border:0;display:block"`,
     "></iframe>",
   ].join("\n");
 }
@@ -481,12 +495,14 @@ function embedCodePreview(settings: EmbedSnippetSettings): string {
         `  <display-fields>${fields.join(", ")}</display-fields>`,
         "</embed>",
       ].join("\n");
-    case "ical":
+    case "ical": {
+      const calendarSource = publicAgendaCalendarUrl(settings);
       return [
         `# ${outputFormatLabel(format)} source preview`,
-        "# Use the published agenda calendar link when that feed is enabled.",
-        source,
+        "# Published calendar feed for the current agenda revision.",
+        calendarSource,
       ].join("\n");
+    }
   }
 }
 
@@ -1682,7 +1698,7 @@ export function EmbedWorkspaceView({
                   title={`Live preview: ${widget.label}`}
                   loading="lazy"
                   referrerPolicy="no-referrer"
-                  sandbox="allow-scripts"
+                  sandbox={iframeSandbox(widget)}
                   style={{
                     display: "block",
                     width: "100%",
@@ -1778,7 +1794,7 @@ export function EmbedWorkspace({
             "The organizer event response does not match this organization and event context.",
           );
         }
-        const resolvedSlug = normalizeEmbedSlug(event.slug, suppliedSlug ?? eventId);
+        const resolvedSlug = normalizeEmbedSlug(event.slug, suppliedSlug ?? undefined);
         if (!resolvedSlug) throw new Error("The organizer event has no public slug.");
         setState({ status: "loaded", event, eventSlug: resolvedSlug, eventName: event.name });
       } catch (error) {

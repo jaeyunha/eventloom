@@ -2,16 +2,23 @@
 
 import type { RefObject } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { getPublishedSpeakers } from "./api";
+import { publishedProjectionsMatch } from "./api";
 import styles from "./embed.module.css";
 import {
   filterAgendaEntries,
   formatPublishedDateTimeRange,
   formatPublishedTime,
   publicAgendaDays,
+  publishedEntrySpeakerNames,
+  publishedEntrySpeakers,
   uniqueSorted,
 } from "./model";
-import type { PublishedAgenda, PublishedAgendaEntry, PublishedSpeaker } from "./types";
+import type {
+  PublishedAgenda,
+  PublishedAgendaEntry,
+  PublishedProgram,
+  PublishedSpeaker,
+} from "./types";
 
 function uniqueValues(values: readonly string[]): readonly string[] {
   return [...new Set(values.filter((value) => value.trim().length > 0))].sort((left, right) =>
@@ -19,12 +26,13 @@ function uniqueValues(values: readonly string[]): readonly string[] {
   );
 }
 
-function speakerForName(
+function speakerForEntryName(
+  entry: PublishedAgendaEntry,
   name: string,
   speakers: readonly PublishedSpeaker[],
 ): PublishedSpeaker | undefined {
   const normalizedName = name.trim().toLocaleLowerCase();
-  return speakers.find(
+  return publishedEntrySpeakers(entry, speakers).find(
     (speaker) => speaker.displayName.trim().toLocaleLowerCase() === normalizedName,
   );
 }
@@ -33,18 +41,7 @@ function entrySpeakerNames(
   entry: PublishedAgendaEntry,
   speakers: readonly PublishedSpeaker[],
 ): readonly string[] {
-  const publishedNames = entry.speakerNames
-    .filter((name) => name.trim().length > 0)
-    .filter((name, index, names) => names.indexOf(name) === index)
-    .map((name) => {
-      const speaker =
-        speakerForName(name, speakers) ?? speakers.find((candidate) => candidate.id === name);
-      return speaker?.displayName ?? name;
-    });
-  if (publishedNames.length > 0) return publishedNames;
-  return speakers
-    .filter((speaker) => speaker.sessionIds.includes(entry.id))
-    .map((speaker) => speaker.displayName);
+  return publishedEntrySpeakerNames(entry, speakers);
 }
 
 function speakerRole(speaker: PublishedSpeaker): string {
@@ -58,10 +55,11 @@ function entrySearchText(
   speakers: readonly PublishedSpeaker[],
 ): string {
   const names = entrySpeakerNames(entry, speakers);
-  const speakerDetails = names.flatMap((name) => {
-    const speaker = speakerForName(name, speakers);
-    return speaker ? [speaker.jobTitle, speaker.organization, speaker.biography] : [];
-  });
+  const speakerDetails = publishedEntrySpeakers(entry, speakers).flatMap((speaker) => [
+    speaker.jobTitle,
+    speaker.organization,
+    speaker.biography,
+  ]);
   return [entry.title, ...names, ...speakerDetails]
     .filter((value): value is string => Boolean(value))
     .join(" ")
@@ -141,7 +139,7 @@ export function PublicAgendaSessionDetail({
               <strong>Speakers</strong>
               <ul>
                 {names.map((name) => {
-                  const speaker = speakerForName(name, speakers);
+                  const speaker = speakerForEntryName(entry, name, speakers);
                   return (
                     <li key={name}>
                       {speaker ? (
@@ -189,13 +187,11 @@ function publishedFeedAvailable(
   return value !== false;
 }
 
-export function PublicAgendaView({
-  agenda,
-  apiBaseUrl,
-}: Readonly<{ agenda: PublishedAgenda; apiBaseUrl: string }>) {
-  const initialPublishedSpeakers =
-    (agenda as PublishedAgenda & { readonly speakers?: readonly PublishedSpeaker[] }).speakers ??
-    [];
+export function PublicAgendaView({ program }: Readonly<{ program: PublishedProgram }>) {
+  const { agenda } = program;
+  const speakers = publishedProjectionsMatch(program.agenda, program.speakers)
+    ? program.speakers.speakers
+    : [];
   const [day, setDay] = useState("");
   const [query, setQuery] = useState("");
   const [track, setTrack] = useState("");
@@ -203,8 +199,6 @@ export function PublicAgendaView({
   const [room, setRoom] = useState("");
   const [viewerLocal, setViewerLocal] = useState(false);
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
-  const [publishedSpeakers, setPublishedSpeakers] =
-    useState<readonly PublishedSpeaker[]>(initialPublishedSpeakers);
   const backButtonRef = useRef<HTMLButtonElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const eventDays = useMemo(
@@ -233,7 +227,7 @@ export function PublicAgendaView({
         (entry) =>
           (!format || entry.format === format) &&
           (!room || entry.roomName === room) &&
-          (!normalizedQuery || entrySearchText(entry, publishedSpeakers).includes(normalizedQuery)),
+          (!normalizedQuery || entrySearchText(entry, speakers).includes(normalizedQuery)),
       ),
     [
       agenda.entries,
@@ -241,7 +235,7 @@ export function PublicAgendaView({
       day,
       format,
       normalizedQuery,
-      publishedSpeakers,
+      speakers,
       room,
       track,
     ],
@@ -253,28 +247,12 @@ export function PublicAgendaView({
   }, [agenda.event, day, visibleEntries]);
   const viewerTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const displayTimeZone = viewerLocal ? viewerTimeZone : agenda.event.timeZone;
-  const publicBase = `${apiBaseUrl.replace(/\/$/, "")}/api/public/events/${encodeURIComponent(agenda.event.slug)}`;
+  const publicBase = `/api/public/events/${encodeURIComponent(agenda.event.slug)}`;
   const jsonFeedAvailable = publishedFeedAvailable(agenda, "json");
   const icsFeedAvailable = publishedFeedAvailable(agenda, "ics");
   const selectedEntry = selectedEntryId
     ? agenda.entries.find((entry) => entry.id === selectedEntryId)
     : undefined;
-  useEffect(() => {
-    if (initialPublishedSpeakers.length > 0) {
-      return;
-    }
-    let cancelled = false;
-    getPublishedSpeakers(apiBaseUrl, agenda.event.slug)
-      .then((gallery) => {
-        if (!cancelled) setPublishedSpeakers(gallery.speakers);
-      })
-      .catch(() => {
-        // The agenda remains usable with names from its own published projection.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [agenda.event.slug, apiBaseUrl, initialPublishedSpeakers.length]);
 
   useEffect(() => {
     if (selectedEntryId !== null && selectedEntry) {
@@ -317,7 +295,7 @@ export function PublicAgendaView({
         displayTimeZone={displayTimeZone}
         onBack={closeEntry}
         backButtonRef={backButtonRef}
-        speakers={publishedSpeakers}
+        speakers={speakers}
       />
     );
   }
@@ -490,11 +468,11 @@ export function PublicAgendaView({
                                 ))}
                             </div>
                             <h4 id={`agenda-entry-${entry.id}`}>{entry.title}</h4>
-                            {entrySpeakerNames(entry, publishedSpeakers).length > 0 ? (
+                            {entrySpeakerNames(entry, speakers).length > 0 ? (
                               <p className={styles.publicSpeakers}>
                                 Presented by{" "}
-                                {entrySpeakerNames(entry, publishedSpeakers).map((name, index) => {
-                                  const speaker = speakerForName(name, publishedSpeakers);
+                                {entrySpeakerNames(entry, speakers).map((name, index) => {
+                                  const speaker = speakerForEntryName(entry, name, speakers);
                                   return (
                                     <span key={name}>
                                       {index > 0 ? ", " : null}

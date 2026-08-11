@@ -22,7 +22,7 @@ export interface PublishedSpeaker {
 
 export interface PublishedAgendaEntry {
   id: string;
-  sessionId?: string;
+  sessionId: string;
   title: string;
   summary: string;
   format: string;

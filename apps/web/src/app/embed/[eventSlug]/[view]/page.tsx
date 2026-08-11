@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { getPublishedProgram } from "@/features/embed/api";
+import { getPublishedProgram, publishedProgramFromProjections } from "@/features/embed/api";
 import {
   getPublishedAgendaOrLocalDemo,
   getPublishedSpeakersOrLocalDemo,
@@ -34,7 +34,7 @@ async function loadProgram(
       getPublishedAgendaOrLocalDemo(apiBaseUrl, eventSlug, appEnv),
       getPublishedSpeakersOrLocalDemo(apiBaseUrl, eventSlug, appEnv),
     ]);
-    return { agenda, speakers };
+    return publishedProgramFromProjections(agenda, speakers);
   }
 }
 

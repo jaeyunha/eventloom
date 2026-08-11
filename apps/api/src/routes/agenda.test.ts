@@ -484,7 +484,12 @@ describe("canonical agenda draft routes", () => {
       ...state,
       stateVersion: state.stateVersion + 1,
       sessions: state.sessions.map((session) =>
-        session.id === "session-1" ? { ...session, status: "ineligible" } : session,
+        session.id === "session-1"
+          ? { ...session, status: "ineligible", title: "Mutable replacement title" }
+          : session,
+      ),
+      rooms: state.rooms.map((room) =>
+        room.id === "room-large" ? { ...room, name: "Mutable replacement room" } : room,
       ),
     });
 
@@ -492,11 +497,11 @@ describe("canonical agenda draft routes", () => {
     expect(publicResponse.status).toBe(200);
     expect(
       await responseData<{
-        entries: readonly { sessionId?: string }[];
+        entries: readonly { sessionId?: string; title: string; roomName: string }[];
         revision: { number: number };
       }>(publicResponse),
     ).toMatchObject({
-      entries: [{ sessionId: "session-1" }],
+      entries: [{ sessionId: "session-1", title: "Opening", roomName: "Large room" }],
       revision: { number: 1 },
     });
   });
@@ -991,6 +996,25 @@ describe("anonymous published agenda feeds", () => {
     expect((await app.request("/api/public/events/open-systems/agenda.ics")).status).toBe(200);
     expect(getPublishedAgenda).toHaveBeenCalledTimes(2);
   });
+  it("never reads mutable agenda state while serving the published projection", async () => {
+    const revision = publicRevision();
+    const load = vi.fn(async () => {
+      throw new Error("draft state must not be read");
+    });
+    const getPublishedAgenda = vi.fn(async () => revision);
+    const engine = {
+      repository: { load },
+      getPublishedAgenda,
+    } as unknown as AgendaEngine;
+
+    const response = await publicAppFor(engine).request(
+      "/api/public/events/open-systems/agenda.json",
+    );
+
+    expect(response.status).toBe(200);
+    expect(load).not.toHaveBeenCalled();
+    expect(getPublishedAgenda).toHaveBeenCalledWith("open-systems");
+  });
   it("avoids repeated repository reads for the same anonymous format and slug", async () => {
     const revision = publicRevision();
     const getPublishedAgenda = vi.fn(async (eventSlug: string) =>
@@ -1060,6 +1084,8 @@ describe("anonymous published agenda feeds", () => {
     expect(ical).toContain("LOCATION:Main hall\\, level 2");
     expect(ical).toContain("Morgan Lee");
     expect(ical).toContain("@calendar.sessionboard.namuh.co");
+    expect(ical).toContain("UID:open-systems.session-public-1@calendar.sessionboard.namuh.co");
+    expect(ical).not.toContain("open-systems.entry-public-1@");
     expect(ical).not.toContain("private@example.test");
     expect(ical).not.toContain("Private event metadata.");
     expect(ical).not.toMatch(/(^|\r\n)(participantEmails|privateNote):/u);
