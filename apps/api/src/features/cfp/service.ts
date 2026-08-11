@@ -752,7 +752,6 @@ export class CfpService {
       if (form.eventId !== input.eventId) {
         continue;
       }
-      ensureSubmissionSchemaVersion(submission, form);
       records.push({
         submission,
         submissionFields: form.submissionFields,

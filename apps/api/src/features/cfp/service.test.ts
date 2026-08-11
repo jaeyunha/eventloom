@@ -1301,7 +1301,7 @@ describe("CFP submission lifecycle", () => {
     expect(repository.formReadIds).toEqual(["form_1", "form_2"]);
     expect(repository.maxConcurrentFormReads).toBe(2);
   });
-  it("lists canonical organizer submissions with scoped forms and schema versions", async () => {
+  it("lists canonical organizer submissions with scoped forms and current schema metadata", async () => {
     const { service, repository } = createFixture();
     const organizerForm = buildForm();
     repository.forms.set(organizerForm.id, structuredClone(organizerForm));
@@ -1367,23 +1367,98 @@ describe("CFP submission lifecycle", () => {
       },
     ]);
     expect(records[0]?.submission.participants).toEqual(canonicalSubmission.participants);
-
-    repository.submissions.set(
-      "submission_stale_schema",
+  });
+  it("lists submitted records against the current schema after a form revision", async () => {
+    const { service, repository } = createFixture();
+    const previousForm = buildForm();
+    const currentForm = buildForm({
+      version: previousForm.version + 1,
+      submissionFields: previousForm.submissionFields.map((field) => ({
+        ...field,
+        label: `Current ${field.label}`,
+      })),
+      participantFields: previousForm.participantFields.map((field) => ({
+        ...field,
+        label: `Current ${field.label}`,
+      })),
+    });
+    repository.forms.set(currentForm.id, structuredClone(currentForm));
+    repository.events.set(
+      event.id,
       structuredClone({
-        ...canonicalSubmission,
-        id: "submission_stale_schema",
-        formVersion: organizerForm.version + 1,
+        ...event,
+        closesAt: "2026-08-12T07:00:00.000Z",
       }),
     );
+
+    const originalSubmission = buildOrganizerSubmission();
+    const primaryParticipant = originalSubmission.participants.at(0);
+    if (primaryParticipant === undefined) {
+      throw new Error("The organizer submission fixture requires a primary participant.");
+    }
+    const storedSubmission = structuredClone({
+      ...originalSubmission,
+      id: "submission_old_schema",
+      formVersion: previousForm.version,
+      answers: {
+        title: "Legacy title",
+        format: "talk",
+        legacyAnswer: "preserve exactly",
+      },
+      participants: [
+        primaryParticipant,
+        {
+          ...primaryParticipant,
+          id: "participant_2",
+          firstName: "Grace",
+          lastName: "Hopper",
+          email: "grace@example.com",
+          answers: { firstName: "Grace", legacyRole: "co-speaker" },
+        },
+      ],
+    });
+    repository.submissions.set(storedSubmission.id, storedSubmission);
+
+    const records = await service.listOrganizerSubmissions({
+      tenantId: "tenant_1",
+      eventId: "event_1",
+    });
+
+    expect(records).toEqual([
+      {
+        submission: storedSubmission,
+        submissionFields: currentForm.submissionFields,
+        participantFields: currentForm.participantFields,
+      },
+    ]);
+    expect(records[0]?.submission.answers).toEqual(storedSubmission.answers);
+    expect(records[0]?.submission.participants).toEqual(storedSubmission.participants);
+    expect(records[0]?.submissionFields.map(({ id }) => id)).toEqual(
+      previousForm.submissionFields.map(({ id }) => id),
+    );
+    expect(records[0]?.participantFields.map(({ id }) => id)).toEqual(
+      previousForm.participantFields.map(({ id }) => id),
+    );
+
     await expect(
-      service.listOrganizerSubmissions({ tenantId: "tenant_1", eventId: "event_1" }),
+      service.saveDraft({
+        tenantId: "tenant_1",
+        eventId: "event_1",
+        submissionId: storedSubmission.id,
+        ownerAccountId: storedSubmission.ownerAccountId,
+        expectedVersion: storedSubmission.version,
+        formVersion: storedSubmission.formVersion,
+        idempotencyKey: "stale-form-revision-write",
+        answers: { title: "Rejected stale update" },
+      }),
     ).rejects.toMatchObject({
       code: "CONFLICT",
+      message: "The CFP form schema version is no longer available for this submission.",
       details: {
-        submissionFormVersion: organizerForm.version + 1,
-        currentFormVersion: organizerForm.version,
+        submissionFormVersion: previousForm.version,
+        currentFormVersion: currentForm.version,
       },
     });
+    expect(repository.submissions.get(storedSubmission.id)).toEqual(storedSubmission);
   });
 });
