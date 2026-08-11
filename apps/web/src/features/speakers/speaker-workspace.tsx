@@ -994,7 +994,6 @@ export function SpeakerWorkspace({
   const progressLoadRef = useRef<{ api: SpeakerApi; key: string; requestId: number } | null>(null);
   const emailSectionRef = useRef<HTMLElement | null>(null);
   const reminderSectionRef = useRef<HTMLElement | null>(null);
-  const progressSectionRef = useRef<HTMLElement | null>(null);
   const importBusy = importPreviewBusy || importCommitBusy;
 
   useEffect(() => {
@@ -1071,23 +1070,6 @@ export function SpeakerWorkspace({
   }, [api, eventId, organizationId]);
   const secondaryContextKey = `${organizationId}:${eventId}`;
   const progressSectionVisible = visibleProgressContext === secondaryContextKey;
-  useEffect(() => {
-    if (progressSectionVisible || progressSectionRef.current === null) return;
-    if (typeof IntersectionObserver === "undefined") {
-      setVisibleProgressContext(secondaryContextKey);
-      return;
-    }
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (!entries.some((entry) => entry.isIntersecting)) return;
-        setVisibleProgressContext(secondaryContextKey);
-        observer.disconnect();
-      },
-      { rootMargin: "240px" },
-    );
-    observer.observe(progressSectionRef.current);
-    return () => observer.disconnect();
-  }, [progressSectionVisible, secondaryContextKey]);
   useEffect(() => {
     if (
       api === null ||
@@ -2613,11 +2595,7 @@ export function SpeakerWorkspace({
         ) : null}
       </section>
 
-      <section
-        ref={progressSectionRef}
-        style={{ ...panelStyle, marginBottom: "1rem" }}
-        aria-labelledby="tasks-heading"
-      >
+      <section style={{ ...panelStyle, marginBottom: "1rem" }} aria-labelledby="tasks-heading">
         <div>
           <h2 id="tasks-heading" style={{ margin: 0, fontSize: "1.05rem" }}>
             General speaker tasks
@@ -2632,6 +2610,18 @@ export function SpeakerWorkspace({
             after a roster refresh.
           </p>
         </div>
+        {!progressSectionVisible ? (
+          <button
+            className={styles.secondaryButton}
+            type="button"
+            onClick={() => setVisibleProgressContext(secondaryContextKey)}
+            disabled={api === null || loading || roster === null}
+          >
+            Load task progress
+          </button>
+        ) : progress === null && progressError === null ? (
+          <FormMessage message="Loading task progress…" />
+        ) : null}
         <form
           onSubmit={(event) => void assignTask(event)}
           style={{ display: "grid", gap: "0.85rem" }}

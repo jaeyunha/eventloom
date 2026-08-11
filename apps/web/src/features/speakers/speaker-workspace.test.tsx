@@ -891,6 +891,7 @@ describe("speaker workspace", () => {
     expect(markup).toContain("Add speaker");
     expect(markup).toContain("Import speakers from CSV");
     expect(markup).toContain("General speaker tasks");
+    expect(markup).toContain("Load task progress");
     expect(markup).toContain("Onboarding progress");
     expect(markup).not.toContain("objectKey");
   });
