@@ -9,6 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { createScopedReadFlightCoordinator } from "@/lib/scoped-read-flight";
 import {
   approvedSenderForPurpose,
   COMMUNICATION_AUDIENCES,
@@ -190,6 +191,52 @@ function messageFromError(error: unknown): string {
   return error instanceof Error
     ? error.message
     : "The communication request could not be completed.";
+}
+export async function loadCommunicationTemplates({
+  read,
+  signal,
+  isCurrent,
+  onLoaded,
+  onError,
+  onSettled,
+}: Readonly<{
+  read: () => Promise<readonly CommunicationTemplate[]>;
+  signal: AbortSignal | undefined;
+  isCurrent: () => boolean;
+  onLoaded: (templates: readonly CommunicationTemplate[]) => void;
+  onError: (message: string) => void;
+  onSettled: () => void;
+}>): Promise<void> {
+  const canCommit = () => !signal?.aborted && isCurrent();
+  try {
+    const loaded = await read();
+    if (canCommit()) onLoaded(loaded);
+  } catch (reason) {
+    if (canCommit() && !(reason instanceof DOMException && reason.name === "AbortError")) {
+      onError(messageFromError(reason));
+    }
+  } finally {
+    if (canCommit()) onSettled();
+  }
+}
+export interface CommunicationTemplateReadKey {
+  readonly api: CommunicationApi;
+  readonly organizationId: string;
+  readonly eventId: string;
+}
+
+export function createCommunicationTemplateReadCoordinator() {
+  const coordinator = createScopedReadFlightCoordinator<
+    CommunicationTemplateReadKey,
+    readonly CommunicationTemplate[]
+  >();
+  return {
+    acquire(key: CommunicationTemplateReadKey) {
+      return coordinator.acquire(key, (signal) =>
+        key.api.listTemplates(key.eventId, undefined, signal),
+      );
+    },
+  };
 }
 
 function stateFromError(error: unknown): CommunicationProviderState | undefined {
@@ -925,33 +972,66 @@ export function CommunicationsWorkspace({
     useState<CommunicationProviderState>(initialProviderState);
   const [sendConfirmationOpen, setSendConfirmationOpen] = useState(false);
   const idempotencyKeyRef = useRef<string | null>(null);
+  const templateLoadGenerationRef = useRef(0);
+  const initialReadKey = useMemo(
+    () => ({ api, organizationId, eventId }),
+    [api, eventId, organizationId],
+  );
+  const initialReadCoordinatorRef = useRef<ReturnType<
+    typeof createCommunicationTemplateReadCoordinator
+  > | null>(null);
+  if (initialReadCoordinatorRef.current === null) {
+    initialReadCoordinatorRef.current = createCommunicationTemplateReadCoordinator();
+  }
+  const initialReadCoordinator = initialReadCoordinatorRef.current;
 
   const loadTemplates = useCallback(
-    async (signal?: AbortSignal) => {
+    async (
+      signal: AbortSignal | undefined,
+      initialRead?: Promise<readonly CommunicationTemplate[]>,
+    ) => {
+      const generation = templateLoadGenerationRef.current + 1;
+      templateLoadGenerationRef.current = generation;
       setLoading(true);
       setError(null);
-      try {
-        const loaded = await api.listTemplates(eventId, undefined, signal);
-        setTemplates(loaded);
-        setSelectedTemplateId((current) =>
-          loaded.some((template) => template.id === current) ? current : (loaded[0]?.id ?? ""),
-        );
-      } catch (reason) {
-        if (!(reason instanceof DOMException && reason.name === "AbortError"))
-          setError(messageFromError(reason));
-      } finally {
-        if (!signal?.aborted) setLoading(false);
-      }
+      await loadCommunicationTemplates({
+        read: () =>
+          initialRead ??
+          initialReadKey.api.listTemplates(initialReadKey.eventId, undefined, signal),
+        signal,
+        isCurrent: () => templateLoadGenerationRef.current === generation,
+        onLoaded: (loaded) => {
+          setTemplates(loaded);
+          setSelectedTemplateId((current) =>
+            loaded.some((template) => template.id === current) ? current : (loaded[0]?.id ?? ""),
+          );
+        },
+        onError: setError,
+        onSettled: () => setLoading(false),
+      });
     },
-    [api, eventId],
+    [initialReadKey],
   );
 
   useEffect(() => {
     if (initialTemplates !== undefined) return;
-    const controller = new AbortController();
-    void loadTemplates(controller.signal);
-    return () => controller.abort();
-  }, [initialTemplates, loadTemplates]);
+    setTemplates([]);
+    setPreview(null);
+    setSend(null);
+    setSelectedTemplateId("");
+    setCreatingTemplate(false);
+    setSelectedAudience("all_participants");
+    setStatusMessage(null);
+    setSendConfirmationOpen(false);
+    idempotencyKeyRef.current = null;
+
+    const lease = initialReadCoordinator.acquire(initialReadKey);
+    void loadTemplates(lease.signal, lease.promise);
+    return () => {
+      templateLoadGenerationRef.current += 1;
+      lease.release();
+    };
+  }, [initialReadCoordinator, initialReadKey, initialTemplates, loadTemplates]);
 
   function replaceTemplate(next: CommunicationTemplate): void {
     setTemplates((current) => {

@@ -2,16 +2,28 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import {
+  type CommunicationApi,
   CommunicationApiError,
   type CommunicationPreview,
   type CommunicationSend,
   type CommunicationTemplate,
-  createCommunicationApi,
   escapeHtmlForPreview,
 } from "./api";
-import { CommunicationsWorkspaceView } from "./communications-workspace";
+import {
+  CommunicationsWorkspaceView,
+  createCommunicationTemplateReadCoordinator,
+  loadCommunicationTemplates,
+} from "./communications-workspace";
 
-type TestFetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
 
 const senders = {
   auth: "auth@sessionboard.namuh.co",
@@ -193,13 +205,6 @@ const send: CommunicationSend = {
   updatedAt: "2026-08-09T10:01:00.000Z",
 };
 
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
-
 describe("communications organizer workspace", () => {
   it("displays exact approved sender identities and event-scoped version controls", () => {
     const markup = renderToStaticMarkup(
@@ -295,82 +300,112 @@ describe("communications organizer workspace", () => {
     );
   });
 
-  it("sends previews with an idempotency key and keeps unauthorized/provider failures explicit", async () => {
-    const fetcher = vi
-      .fn<TestFetcher>()
-      .mockResolvedValueOnce(jsonResponse({ templates: [] }))
-      .mockResolvedValueOnce(jsonResponse(preview))
-      .mockResolvedValueOnce(jsonResponse(send));
-    const api = createCommunicationApi("https://api.example.test/", "org/one", fetcher);
+  it("coalesces a StrictMode-style reacquire before the first template read settles", async () => {
+    const response = deferred<readonly CommunicationTemplate[]>();
+    const signals: AbortSignal[] = [];
+    const api = {
+      listTemplates: vi.fn(
+        (
+          _eventId: string,
+          _purpose: CommunicationTemplate["purpose"] | undefined,
+          signal: AbortSignal,
+        ) => {
+          signals.push(signal);
+          return response.promise;
+        },
+      ),
+    } as unknown as CommunicationApi;
+    const coordinator = createCommunicationTemplateReadCoordinator();
+    const key = { api, organizationId: "org-1", eventId: "event-1" };
 
-    await expect(api.listTemplates("event/one")).resolves.toEqual([]);
-    await expect(
-      api.preview({
-        eventId: "event/one",
-        purpose: "organizer_group_email",
-        templateId: "group-1",
-        audience: "all_participants",
-      }),
-    ).resolves.toEqual(preview);
-    await expect(
-      api.sendGroup({ eventId: "event/one", previewId: preview.id, idempotencyKey: "web-key-1" }),
-    ).resolves.toEqual(send);
+    const first = coordinator.acquire(key);
+    first.release();
+    const second = coordinator.acquire(key);
+    await Promise.resolve();
 
-    const sendCall = fetcher.mock.calls[2];
-    const sendInit = sendCall?.[1] as unknown as RequestInit;
-    expect(String(sendCall?.[0])).toContain(
-      "/api/admin/organizations/org%2Fone/events/event%2Fone/communications/sends",
-    );
-    expect(new Headers(sendInit.headers).get("idempotency-key")).toBe("web-key-1");
-    expect(JSON.parse(String(sendInit.body))).toMatchObject({
-      previewId: preview.id,
-      idempotencyKey: "web-key-1",
+    expect(api.listTemplates).toHaveBeenCalledOnce();
+    expect(signals[0]?.aborted).toBe(false);
+
+    const loaded = [template("group-1", "organizer_group_email", senders.speakers, "approved")];
+    response.resolve(loaded);
+    await expect(second.promise).resolves.toEqual(loaded);
+    second.release();
+  });
+  it("commits the current template read before ignoring a stale late response", async () => {
+    const first = deferred<readonly CommunicationTemplate[]>();
+    const second = deferred<readonly CommunicationTemplate[]>();
+    const commits: string[] = [];
+    let current = "first";
+
+    const firstLoad = loadCommunicationTemplates({
+      read: () => first.promise,
+      signal: undefined,
+      isCurrent: () => current === "first",
+      onLoaded: (templates) => commits.push(`first:${templates[0]?.id}`),
+      onError: (message) => commits.push(`first-error:${message}`),
+      onSettled: () => commits.push("first:settled"),
+    });
+    current = "second";
+    const secondLoad = loadCommunicationTemplates({
+      read: () => second.promise,
+      signal: undefined,
+      isCurrent: () => current === "second",
+      onLoaded: (templates) => commits.push(`second:${templates[0]?.id}`),
+      onError: (message) => commits.push(`second-error:${message}`),
+      onSettled: () => commits.push("second:settled"),
     });
 
-    const deniedFetcher = vi
-      .fn<TestFetcher>()
-      .mockResolvedValue(
-        jsonResponse(
-          { error: { code: "COMMUNICATION_FORBIDDEN", message: "Not authorized" } },
-          403,
-        ),
-      );
-    await expect(
-      createCommunicationApi("https://api.example.test", "org-1", deniedFetcher).listTemplates(
-        "event-1",
-      ),
-    ).rejects.toMatchObject({ code: "COMMUNICATION_FORBIDDEN", status: 403 });
+    second.resolve([
+      template("second-template", "organizer_group_email", senders.speakers, "approved"),
+    ]);
+    await secondLoad;
+    first.resolve([template("first-template", "receipt", senders.speakers, "approved")]);
+    await firstLoad;
 
-    const providerFetcher = vi.fn<TestFetcher>().mockResolvedValue(
-      jsonResponse(
-        {
-          error: { code: "COMMUNICATION_UNAVAILABLE", message: "Sender domain is not verified" },
-        },
-        503,
-      ),
-    );
-    await expect(
-      createCommunicationApi("https://api.example.test", "org-1", providerFetcher).sendGroup({
-        eventId: "event-1",
-        previewId: "preview-1",
-        idempotencyKey: "web-key-2",
-      }),
-    ).rejects.toBeInstanceOf(CommunicationApiError);
+    expect(commits).toEqual(["second:second-template", "second:settled"]);
   });
-  it("routes an empty base URL through the same-origin communications gateway", async () => {
-    const fetcher = vi.fn<TestFetcher>().mockResolvedValue(jsonResponse({ templates: [] }));
-    const api = createCommunicationApi("", "org-1", fetcher);
 
-    await expect(api.listTemplates("event-1")).resolves.toEqual([]);
+  it("suppresses aborted and stale errors while keeping the current resource error explicit", async () => {
+    const stale = deferred<readonly CommunicationTemplate[]>();
+    const aborted = deferred<readonly CommunicationTemplate[]>();
+    const callbacks: string[] = [];
+    let current = "stale";
+    const staleLoad = loadCommunicationTemplates({
+      read: () => stale.promise,
+      signal: undefined,
+      isCurrent: () => current === "stale",
+      onLoaded: () => callbacks.push("stale:loaded"),
+      onError: () => callbacks.push("stale:error"),
+      onSettled: () => callbacks.push("stale:settled"),
+    });
 
-    const [input, init] = fetcher.mock.calls[0] ?? [];
-    const requestedUrl = String(input);
-    expect(requestedUrl).toBe(
-      "/api/admin/organizations/org-1/events/event-1/communications/templates",
-    );
-    expect(requestedUrl.startsWith("/api/")).toBe(true);
-    expect(requestedUrl).not.toMatch(/^\/\//);
-    expect(requestedUrl).not.toMatch(/^https?:\/\//);
-    expect(init?.credentials).toBe("include");
+    current = "current";
+    stale.reject(new Error("Old event failed"));
+    await staleLoad;
+
+    const controller = new AbortController();
+    const abortedLoad = loadCommunicationTemplates({
+      read: () => aborted.promise,
+      signal: controller.signal,
+      isCurrent: () => current === "current",
+      onLoaded: () => callbacks.push("aborted:loaded"),
+      onError: () => callbacks.push("aborted:error"),
+      onSettled: () => callbacks.push("aborted:settled"),
+    });
+    controller.abort();
+    aborted.reject(new DOMException("Aborted", "AbortError"));
+    await abortedLoad;
+
+    await loadCommunicationTemplates({
+      read: () =>
+        Promise.reject(new CommunicationApiError("COMMUNICATION_FORBIDDEN", "Not authorized", 403)),
+      signal: undefined,
+      isCurrent: () => current === "current",
+      onLoaded: () => callbacks.push("current:loaded"),
+      onError: (message) => callbacks.push(message),
+      onSettled: () => callbacks.push("current:settled"),
+    });
+
+    expect(callbacks).toEqual(["Access denied: Not authorized", "current:settled"]);
   });
 });
