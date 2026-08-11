@@ -395,7 +395,7 @@ function parseListQuery<TRecord, TCreate, TUpdate>(
 ): ListQuery {
   const query = context.req.query();
   const cursor = query.cursor;
-  if (cursor !== undefined && cursor.trim().length === 0) {
+  if (cursor !== undefined && (cursor.trim().length === 0 || cursor.length > 2_048)) {
     throw validationError("The cursor is invalid.");
   }
 
@@ -432,7 +432,7 @@ function parseListQuery<TRecord, TCreate, TUpdate>(
 
 function requiredRouteParam(context: Context<PublicApiRouteEnvironment>, name: string): string {
   const value = context.req.param(name);
-  if (value === undefined || value.trim().length === 0) {
+  if (value === undefined || value.trim().length === 0 || value.length > 200) {
     throw validationError(`The ${name} path parameter is required.`);
   }
   return value;
@@ -833,7 +833,7 @@ function openApiDocument<TRecord, TCreate, TUpdate>(
         in: "query",
         required: false,
         description: "Opaque cursor returned by the previous page.",
-        schema: { type: "string", minLength: 1 },
+        schema: { type: "string", minLength: 1, maxLength: 2_048 },
       },
       {
         name: "limit",
@@ -852,6 +852,7 @@ function openApiDocument<TRecord, TCreate, TUpdate>(
         required: false,
         schema: {
           type: "string",
+          default: defaultSortFor(resource, descriptor),
           ...(descriptor === undefined
             ? {}
             : { enum: [...(descriptor.allowedSorts as readonly string[])] }),
@@ -861,7 +862,7 @@ function openApiDocument<TRecord, TCreate, TUpdate>(
         name: "direction",
         in: "query",
         required: false,
-        schema: { type: "string", enum: ["asc", "desc"] },
+        schema: { type: "string", enum: ["asc", "desc"], default: "asc" },
       },
       {
         name: "filter",
@@ -952,7 +953,12 @@ function openApiDocument<TRecord, TCreate, TUpdate>(
         security: [readSecurity],
         parameters: [
           ...pathParameters,
-          { name: "id", in: "path", required: true, schema: { type: "string", minLength: 1 } },
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string", minLength: 1, maxLength: 200 },
+          },
         ],
         responses: {
           ...commonResponses,
@@ -968,7 +974,12 @@ function openApiDocument<TRecord, TCreate, TUpdate>(
       const mutation = descriptor?.mutations?.update;
       const mutationParameters = [
         ...pathParameters,
-        { name: "id", in: "path", required: true, schema: { type: "string", minLength: 1 } },
+        {
+          name: "id",
+          in: "path",
+          required: true,
+          schema: { type: "string", minLength: 1, maxLength: 200 },
+        },
         ...(mutation?.idempotencyKey === false
           ? []
           : [

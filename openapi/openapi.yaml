@@ -3417,7 +3417,7 @@ paths:
       operationId: listWebhookSubscriptions
       summary: List event webhook subscriptions
       security:
-        - apiKey: []
+        - apiKey: ["webhooks:read"]
       responses:
         "200":
           description: Subscriptions without signing secrets.
@@ -3440,7 +3440,7 @@ paths:
       operationId: createWebhookSubscription
       summary: Create an event webhook subscription
       security:
-        - apiKey: []
+        - apiKey: ["webhooks:write"]
       requestBody:
         required: true
         content:
@@ -3468,7 +3468,7 @@ paths:
       operationId: getWebhookSubscription
       summary: Read a webhook subscription without its secret
       security:
-        - apiKey: []
+        - apiKey: ["webhooks:read"]
       responses:
         "200":
           description: Subscription metadata.
@@ -3485,7 +3485,7 @@ paths:
       operationId: updateWebhookSubscription
       summary: Update a webhook subscription
       security:
-        - apiKey: []
+        - apiKey: ["webhooks:write"]
       requestBody:
         required: true
         content:
@@ -3509,7 +3509,7 @@ paths:
       operationId: putWebhookSubscription
       summary: Update a webhook subscription through the PUT alias
       security:
-        - apiKey: []
+        - apiKey: ["webhooks:write"]
       requestBody:
         required: true
         content:
@@ -3533,7 +3533,7 @@ paths:
       operationId: deleteWebhookSubscription
       summary: Delete a webhook subscription
       security:
-        - apiKey: []
+        - apiKey: ["webhooks:write"]
       responses:
         "200":
           description: Subscription deleted.

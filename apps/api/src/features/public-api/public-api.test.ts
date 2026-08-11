@@ -334,6 +334,18 @@ describe("public API v1", () => {
     expect(repository.updates).toBe(1);
     expect(put.status).toBe(404);
   });
+  it("rejects identifiers and cursors beyond the documented bounds", async () => {
+    const { app } = fixture();
+    const cursor = await app.request(
+      `/api/v1/organizations/org-1/events?cursor=${"x".repeat(2_049)}`,
+    );
+    const identifier = await app.request(
+      `/api/v1/organizations/org-1/events/${"x".repeat(201)}`,
+    );
+
+    expect(cursor.status).toBe(400);
+    expect(identifier.status).toBe(400);
+  });
 
   it("returns safe trace-bearing errors and a small OpenAPI document", async () => {
     const { app } = fixture(apiKey);
@@ -344,12 +356,32 @@ describe("public API v1", () => {
     const body = (await malformed.json()) as {
       error: { code: string; message: string; traceId: string };
     };
-    const document = (await openapi.json()) as { openapi: string; paths: Record<string, unknown> };
+    const document = (await openapi.json()) as {
+      openapi: string;
+      paths: Record<string, unknown>;
+    };
     expect(malformed.status).toBe(400);
     expect(body.error.traceId).toBe("trace-test");
     expect(body.error.message).not.toContain("base64");
     expect(document.openapi).toBe("3.1.0");
     expect(document.paths["/api/v1/organizations/{organizationId}/events"]).toBeDefined();
+    const collectionPath = document.paths[
+      "/api/v1/organizations/{organizationId}/events"
+    ] as {
+      get: {
+        parameters: Array<{ name: string; schema: Record<string, unknown> }>;
+      };
+    };
+    expect(collectionPath.get.parameters.find(({ name }) => name === "cursor")?.schema).toMatchObject(
+      { minLength: 1, maxLength: 2_048 },
+    );
+    expect(collectionPath.get.parameters.find(({ name }) => name === "sort")?.schema).toMatchObject({
+      enum: ["id", "name", "updatedAt"],
+      default: "id",
+    });
+    expect(
+      collectionPath.get.parameters.find(({ name }) => name === "direction")?.schema,
+    ).toMatchObject({ enum: ["asc", "desc"], default: "asc" });
     const updatePath = document.paths[
       "/api/v1/organizations/{organizationId}/events/{id}"
     ] as { patch?: unknown; put?: unknown };

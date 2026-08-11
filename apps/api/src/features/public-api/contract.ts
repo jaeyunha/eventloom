@@ -114,7 +114,7 @@ const publicApiErrorSchema = {
           ],
         },
         message: { type: "string" },
-        traceId: { type: "string" },
+        traceId: { type: "string", format: "uuid" },
         details: { type: "array", items: { type: "object" } },
       },
       additionalProperties: false,
