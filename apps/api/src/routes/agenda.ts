@@ -369,7 +369,7 @@ function adminAgendaPreviewView(
   };
 }
 function adminAgendaWorkspaceView(state: AgendaState, published: PublishedAgendaRevision | null) {
-  const publicEvent = published === null ? null : publishedAgendaView(published, state).event;
+  const publicEvent = published === null ? null : publishedAgendaView(published).event;
   const sessionById = new Map(state.sessions.map((session) => [session.id, session]));
   const roomById = new Map(state.rooms.map((room) => [room.id, room]));
   const trackById = new Map(state.tracks.map((track) => [track.id, track]));
@@ -857,17 +857,8 @@ function entryDate(
 }
 
 function entryMetadataSources(entry: PublishedAgendaRevision["entries"][number]): JsonRecord[] {
-  const record = asRecord(entry);
-  if (record === null) return [];
-  const metadata = asRecord(record.metadata);
-  return [
-    record,
-    metadata,
-    asRecord(record.public),
-    asRecord(record.publicMetadata),
-    asRecord(metadata?.public),
-    asRecord(metadata?.publicMetadata),
-  ].filter(isRecord);
+  const metadata = asRecord(entry.metadata);
+  return metadata === null ? [] : [metadata];
 }
 
 function isRecord(value: JsonRecord | null): value is JsonRecord {
@@ -890,74 +881,25 @@ function eventMetadataSources(revision: PublishedAgendaRevision): JsonRecord[] {
   ].filter(isRecord);
 }
 
-interface PublishedEntryFallback {
-  readonly session?: unknown;
-  readonly roomName?: string;
-  readonly trackNames?: readonly string[];
-}
-
-function sessionMetadataSources(session: unknown): JsonRecord[] {
-  const record = asRecord(session);
-  if (record === null) return [];
-  const metadata = asRecord(record.metadata);
-  return [record, metadata, asRecord(record.public), asRecord(metadata?.public)].filter(isRecord);
-}
-
-function publishedEntryView(
-  entry: PublishedAgendaRevision["entries"][number],
-  fallback: PublishedEntryFallback = {},
-) {
-  const metadata = [...entryMetadataSources(entry), ...sessionMetadataSources(fallback.session)];
-  const speakerNames =
-    firstSpeakerNamesValue(metadata, ["speakerNames", "presenters", "speakers"]) ?? [];
-  const sessionFormat = firstTextValue(metadata, ["format", "formatName", "formatId"]);
-  const entryFormat = firstTextValue(entryMetadataSources(entry), ["format", "formatName"]);
-  const format =
-    entryFormat !== null && entryFormat !== "Session" ? entryFormat : (sessionFormat ?? "Session");
-  const fallbackTrackNames = fallback.trackNames ?? [];
-  const trackNames =
-    firstStringArrayValue(metadata, ["trackNames"]) ??
-    (fallbackTrackNames.length > 0
-      ? fallbackTrackNames
-      : entry.trackIds.map((trackId) => humanizeIdentifier(trackId)));
+function publishedEntryView(entry: PublishedAgendaRevision["entries"][number]) {
+  const metadata = entryMetadataSources(entry);
   return {
     id: entry.id,
     sessionId: entry.sessionId,
-    title: firstTextValue(metadata, ["title", "name"]) ?? humanizeIdentifier(entry.sessionId),
-    summary: firstTextValue(metadata, ["summary", "description"]) ?? "",
-    format,
-    speakerNames,
-    roomName:
-      firstTextValue(metadata, ["roomName", "room", "location"]) ??
-      fallback.roomName ??
-      humanizeIdentifier(entry.roomId),
-    trackNames,
+    title: firstTextValue(metadata, ["title"]) ?? "",
+    summary: firstTextValue(metadata, ["summary"]) ?? "",
+    format: firstTextValue(metadata, ["format"]) ?? "Session",
+    speakerNames: firstSpeakerNamesValue(metadata, ["speakerNames"]) ?? [],
+    roomName: firstTextValue(metadata, ["roomName"]) ?? "",
+    trackNames: firstStringArrayValue(metadata, ["trackNames"]) ?? [],
     startsAt: entry.startsAt,
     endsAt: entry.endsAt,
   };
 }
 
-function publishedAgendaView(revision: PublishedAgendaRevision, state?: AgendaState) {
+function publishedAgendaView(revision: PublishedAgendaRevision) {
   const eventMetadata = eventMetadataSources(revision);
-  const sessionById = new Map(state?.sessions.map((session) => [session.id, session]));
-  const roomById = new Map(state?.rooms.map((room) => [room.id, room]));
-  const trackById = new Map(state?.tracks.map((track) => [track.id, track]));
-  const eligibleEntries =
-    state === undefined
-      ? revision.entries
-      : revision.entries.filter((entry) => {
-          const session = sessionById.get(entry.sessionId);
-          return session !== undefined && isAcceptedAgendaSession(session);
-        });
-  const entries = eligibleEntries.map((entry) => {
-    const session = sessionById.get(entry.sessionId);
-    const roomName = roomById.get(entry.roomId)?.name;
-    return publishedEntryView(entry, {
-      ...(session === undefined ? {} : { session }),
-      ...(roomName === undefined ? {} : { roomName }),
-      trackNames: entry.trackIds.flatMap((trackId) => trackById.get(trackId)?.name ?? []),
-    });
-  });
+  const entries = revision.entries.map((entry) => publishedEntryView(entry));
   const publishedDate = dateValue(revision.publishedAt);
   const timeZone =
     firstTextValue(eventMetadata, ["timeZone", "eventTimeZone"]) ??
@@ -1388,7 +1330,7 @@ function publicAgendaCalendar(projection: PublishedAgendaProjection, eventSlug: 
     const endsAt = formatCalendarDateTime(calendarDateTimeParts(entry.endsAt, timeZone));
     lines.push(
       "BEGIN:VEVENT",
-      `UID:${publicCalendarUid(eventSlug, entry.id)}`,
+      `UID:${publicCalendarUid(eventSlug, entry.sessionId)}`,
       `DTSTAMP:${formatCalendarUtcDateTime(projection.revision.publishedAt)}`,
       `DTSTART;TZID=${timeZone}:${startsAt}`,
       `DTEND;TZID=${timeZone}:${endsAt}`,
@@ -1411,17 +1353,7 @@ async function publishedProjection(
 ): Promise<PublishedAgendaProjectionValue | null> {
   const eventSlug = publicEventSlug(context);
   if (eventSlug === null) return null;
-  const state =
-    dependencies.engine.repository === undefined
-      ? null
-      : await dependencies.engine.repository.load(eventSlug);
-  const revision =
-    state === null
-      ? await dependencies.engine.getPublishedAgenda(eventSlug)
-      : state.currentPublishedRevisionId === null
-        ? null
-        : (state.revisions.find((candidate) => candidate.id === state.currentPublishedRevisionId) ??
-          null);
+  const revision = await dependencies.engine.getPublishedAgenda(eventSlug);
   if (revision === null) return null;
   let eventMetadata: AgendaEventMetadata | undefined;
   if (dependencies.eventMetadataForEvent !== undefined) {

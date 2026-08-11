@@ -9,6 +9,7 @@ export interface PublishedSpeaker {
   readonly jobTitle: string | null;
   readonly organization: string | null;
   readonly biography: string;
+  /** Stable URL for an approved public rendition; never a private or signed asset URL. */
   readonly photoUrl: string | null;
   readonly sessionIds: readonly string[];
   readonly sessionTitles: readonly string[];
@@ -48,10 +49,60 @@ interface PublishedSpeakerRouteEnvironment {
 
 type PublishedSpeakerContext = Context<PublishedSpeakerRouteEnvironment>;
 const eventSlugSchema = z.string().trim().min(1).max(200);
-const PUBLIC_SPEAKER_CACHE_CONTROL = "public, max-age=60, stale-while-revalidate=30";
-const PUBLIC_SPEAKER_CACHE_ORIGIN = "https://sessionboard-public-cache.invalid";
+const PUBLIC_SPEAKER_CACHE_CONTROL =
+  "public, max-age=0, s-maxage=60, stale-while-revalidate=30, must-revalidate";
+const PUBLIC_SPEAKER_CACHE_ORIGIN = "https://sessionboard-public-cache.invalid/v2";
 const PUBLIC_SPEAKER_CACHE_TTL_MS = 60_000;
 const PUBLIC_SPEAKER_CACHE_MAX_ENTRIES = 128;
+
+function stablePublicPhotoUrl(value: unknown): string | null {
+  if (typeof value !== "string" || value.trim().length === 0) return null;
+  try {
+    const url = new URL(value.trim());
+    if (
+      url.protocol !== "https:" ||
+      url.username.length > 0 ||
+      url.password.length > 0 ||
+      url.search.length > 0 ||
+      url.hash.length > 0
+    ) {
+      return null;
+    }
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+const publishedSpeakerProjectionSchema = z.object({
+  event: z.object({
+    slug: z.string().trim().min(1),
+    name: z.string(),
+    timeZone: z.string().trim().min(1),
+    startsOn: z.string(),
+    endsOn: z.string(),
+    venueName: z.string().nullable(),
+  }),
+  revision: z.object({
+    id: z.string().trim().min(1),
+    number: z.number().int().positive(),
+    publishedAt: z.string(),
+  }),
+  speakers: z.array(
+    z.object({
+      id: z.string().trim().min(1),
+      displayName: z.string().trim().min(1),
+      pronouns: z.string().nullable(),
+      jobTitle: z.string().nullable(),
+      organization: z.string().nullable(),
+      biography: z.string(),
+      photoUrl: z.unknown().transform(stablePublicPhotoUrl),
+      sessionIds: z.array(z.string().trim().min(1)),
+      sessionTitles: z.array(z.string()),
+      trackNames: z.array(z.string()),
+    }),
+  ),
+});
 
 interface SpeakerResponseCache {
   match(request: Request): Promise<Response | undefined>;
@@ -200,10 +251,14 @@ export function createPublishedSpeakerRoutes(
       const cached = await readSpeakerCache(cacheState, path);
       if (cached !== null) return speakerCacheResponse(cached);
     }
-    const data = await dependencies.getPublishedSpeakers(parsedSlug.data);
-    if (data === null) {
+    const projection = await dependencies.getPublishedSpeakers(parsedSlug.data);
+    if (
+      projection === null ||
+      projection.event.slug.toLocaleLowerCase() !== parsedSlug.data.toLocaleLowerCase()
+    ) {
       return errorResponse(context, 404, "NOT_FOUND", "The published event was not found.");
     }
+    const data = publishedSpeakerProjectionSchema.parse(projection);
     context.header("cache-control", PUBLIC_SPEAKER_CACHE_CONTROL);
     const response = context.json({ data });
     if (cacheable) {

@@ -2,7 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import styles from "./embed.module.css";
-import { formatPublishedTime, publicAgendaDays } from "./model";
+import {
+  formatPublishedTime,
+  publicAgendaDays,
+  publishedEntrySpeakerNames,
+  publishedEntrySpeakers,
+} from "./model";
 import type { PublishedAgendaEntry, PublishedProgram, PublishedSpeaker } from "./types";
 
 const DESCRIPTION_LIMIT = 190;
@@ -103,12 +108,13 @@ function publicEventDays(
   return days.sort((left, right) => left.date.localeCompare(right.date));
 }
 
-function speakerForName(
+function speakerForEntryName(
+  entry: PublishedAgendaEntry,
   name: string,
   speakers: readonly PublishedSpeaker[],
 ): PublishedSpeaker | undefined {
   const normalizedName = name.trim().toLocaleLowerCase();
-  return speakers.find(
+  return publishedEntrySpeakers(entry, speakers).find(
     (speaker) => speaker.displayName.trim().toLocaleLowerCase() === normalizedName,
   );
 }
@@ -119,35 +125,18 @@ function speakerRole(speaker: PublishedSpeaker): string {
   return [jobTitle, organization].filter(Boolean).join(" · ") || "Speaker";
 }
 
-function speakerNames(
-  entry: PublishedAgendaEntry,
-  speakers: readonly PublishedSpeaker[],
-): readonly string[] {
-  const publishedNames = entry.speakerNames
-    .filter((name) => name.trim().length > 0)
-    .filter((name, index, names) => names.indexOf(name) === index)
-    .map((name) => {
-      const speaker =
-        speakerForName(name, speakers) ?? speakers.find((candidate) => candidate.id === name);
-      return speaker?.displayName ?? name;
-    });
-  if (publishedNames.length > 0) return publishedNames;
-  return speakers
-    .filter((speaker) => speaker.sessionIds.includes(entry.id))
-    .map((speaker) => speaker.displayName);
-}
-
 function entryMatchesQuery(
   entry: PublishedAgendaEntry,
   speakers: readonly PublishedSpeaker[],
   query: string,
 ): boolean {
   if (!query) return true;
-  const names = speakerNames(entry, speakers);
-  const speakerDetails = names.flatMap((name) => {
-    const speaker = speakerForName(name, speakers);
-    return speaker ? [speaker.jobTitle, speaker.organization, speaker.biography] : [];
-  });
+  const names = publishedEntrySpeakerNames(entry, speakers);
+  const speakerDetails = publishedEntrySpeakers(entry, speakers).flatMap((speaker) => [
+    speaker.jobTitle,
+    speaker.organization,
+    speaker.biography,
+  ]);
   return [entry.title, ...names, ...speakerDetails]
     .filter((value): value is string => Boolean(value))
     .join(" ")
@@ -172,7 +161,11 @@ function icsTimestamp(value: string): string {
     .replace(/\.\d{3}Z$/u, "Z");
 }
 
-function createCalendar(eventName: string, entries: readonly PublishedAgendaEntry[]): string {
+function createCalendar(
+  eventName: string,
+  eventSlug: string,
+  entries: readonly PublishedAgendaEntry[],
+): string {
   const lines = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
@@ -187,7 +180,7 @@ function createCalendar(eventName: string, entries: readonly PublishedAgendaEntr
     if (!startsAt || !endsAt) continue;
     lines.push(
       "BEGIN:VEVENT",
-      `UID:${icsEscape(`${entry.id}@${eventName}`)}`,
+      `UID:${icsEscape(`${entry.sessionId}@${eventSlug}`)}`,
       `DTSTAMP:${icsTimestamp(new Date().toISOString())}`,
       `DTSTART:${startsAt}`,
       `DTEND:${endsAt}`,
@@ -347,7 +340,7 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
       setExportMessage("Calendar downloads are not supported in this browser.");
       return;
     }
-    const blob = new Blob([createCalendar(agenda.event.name, entries)], {
+    const blob = new Blob([createCalendar(agenda.event.name, agenda.event.slug, entries)], {
       type: "text/calendar;charset=utf-8",
     });
     const url = URL.createObjectURL(blob);
@@ -565,7 +558,10 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
                       <h4 id={`itinerary-time-${day.date}-${time}`}>{time}</h4>
                       <ol className={styles.publicSessionList}>
                         {entries.map((entry) => {
-                          const names = speakerNames(entry, program.speakers.speakers);
+                          const names = publishedEntrySpeakerNames(
+                            entry,
+                            program.speakers.speakers,
+                          );
                           const isDescriptionExpanded = expandedDescriptions.has(entry.id);
                           const isDetailsExpanded = expandedDetails.has(entry.id);
                           const isSelected = selectedSet.has(entry.id);
@@ -624,7 +620,11 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
                                   {names.length > 0 ? (
                                     <ul>
                                       {names.map((name) => {
-                                        const speaker = speakerForName(name, speakers.speakers);
+                                        const speaker = speakerForEntryName(
+                                          entry,
+                                          name,
+                                          speakers.speakers,
+                                        );
                                         return (
                                           <li key={name}>
                                             {speaker

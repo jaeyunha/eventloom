@@ -151,6 +151,37 @@ export function getPublishedSpeakers(
 ): Promise<PublishedSpeakerGallery> {
   return getPublishedProjection(baseUrl, eventSlug, "speakers", fetcher);
 }
+
+export function publishedProjectionsMatch(
+  agenda: PublishedAgenda,
+  speakers: PublishedSpeakerGallery,
+): boolean {
+  return (
+    agenda.revision.id === speakers.revision.id &&
+    agenda.revision.number === speakers.revision.number &&
+    agenda.revision.publishedAt === speakers.revision.publishedAt &&
+    agenda.event.slug.toLowerCase() === speakers.event.slug.toLowerCase() &&
+    agenda.event.name === speakers.event.name &&
+    agenda.event.timeZone === speakers.event.timeZone &&
+    agenda.event.startsOn === speakers.event.startsOn &&
+    agenda.event.endsOn === speakers.event.endsOn &&
+    agenda.event.venueName === speakers.event.venueName
+  );
+}
+
+export function publishedProgramFromProjections(
+  agenda: PublishedAgenda,
+  speakers: PublishedSpeakerGallery,
+): PublishedProgram {
+  if (!publishedProjectionsMatch(agenda, speakers)) {
+    throw new PublicEmbedApiError(
+      "PUBLICATION_REVISION_MISMATCH",
+      "The published agenda and speaker views are not from the same revision.",
+      409,
+    );
+  }
+  return { agenda, speakers };
+}
 export function getPublishedProgram(
   baseUrl: string,
   eventSlug: string,
@@ -159,5 +190,5 @@ export function getPublishedProgram(
   return Promise.all([
     getPublishedAgenda(baseUrl, eventSlug, fetcher),
     getPublishedSpeakers(baseUrl, eventSlug, fetcher),
-  ]).then(([agenda, speakers]) => ({ agenda, speakers }));
+  ]).then(([agenda, speakers]) => publishedProgramFromProjections(agenda, speakers));
 }

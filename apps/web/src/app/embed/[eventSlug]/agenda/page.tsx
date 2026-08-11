@@ -1,5 +1,9 @@
 import type { Metadata } from "next";
-import { getPublishedAgendaOrLocalDemo } from "@/features/embed/demo/projections";
+import { publishedProgramFromProjections } from "@/features/embed/api";
+import {
+  getPublishedAgendaOrLocalDemo,
+  getPublishedSpeakersOrLocalDemo,
+} from "@/features/embed/demo/projections";
 import { EmbedFrame, EmbedUnavailable } from "@/features/embed/embed-frame";
 import { embedTheme } from "@/features/embed/model";
 import { PublicAgendaView } from "@/features/embed/public-agenda";
@@ -25,10 +29,14 @@ export default async function PublicAgendaPage({ params, searchParams }: PublicA
 
   const theme = embedTheme(query.theme);
   try {
-    const agenda = await getPublishedAgendaOrLocalDemo(apiBaseUrl, eventSlug, process.env.APP_ENV);
+    const [agenda, speakers] = await Promise.all([
+      getPublishedAgendaOrLocalDemo(apiBaseUrl, eventSlug, process.env.APP_ENV),
+      getPublishedSpeakersOrLocalDemo(apiBaseUrl, eventSlug, process.env.APP_ENV),
+    ]);
+    const program = publishedProgramFromProjections(agenda, speakers);
     return (
-      <EmbedFrame event={agenda.event} eventSlug={eventSlug} theme={theme} view="agenda">
-        <PublicAgendaView agenda={agenda} apiBaseUrl={apiBaseUrl} />
+      <EmbedFrame event={program.agenda.event} eventSlug={eventSlug} theme={theme} view="agenda">
+        <PublicAgendaView program={program} />
       </EmbedFrame>
     );
   } catch {

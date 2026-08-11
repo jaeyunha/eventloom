@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import styles from "./embed.module.css";
 import {
   formatPublishedDateTimeRange,
+  publicPhotoUrl,
   publishedSpeakerSessions,
   sortSpeakersBySurname,
   speakerInitials,
@@ -12,15 +13,6 @@ import type { PublishedProgram, PublishedSpeaker } from "./types";
 
 const BIOGRAPHY_LIMIT = 320;
 
-function safePhotoUrl(value: string | null): string | null {
-  if (!value) return null;
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" ? url.toString() : null;
-  } catch {
-    return null;
-  }
-}
 
 function speakerTitle(speaker: PublishedSpeaker): string {
   return speaker.jobTitle?.trim() || "Title not published";
@@ -44,23 +36,9 @@ function biographyText(speaker: PublishedSpeaker, expanded: boolean): string {
   return `${biography.slice(0, BIOGRAPHY_LIMIT).trimEnd()}…`;
 }
 
-function sessionEntryBelongsToSpeaker(
-  entry: PublishedProgram["agenda"]["entries"][number],
-  speaker: PublishedSpeaker,
-): boolean {
-  const normalizedName = speaker.displayName.trim().toLocaleLowerCase();
-  const normalizedId = speaker.id.trim().toLocaleLowerCase();
-  return (
-    speaker.sessionIds.includes(entry.id) ||
-    entry.speakerNames.some((name) => {
-      const normalizedNameValue = name.trim().toLocaleLowerCase();
-      return normalizedNameValue === normalizedName || normalizedNameValue === normalizedId;
-    })
-  );
-}
 
 function SpeakerHeadshot({ speaker }: Readonly<{ speaker: PublishedSpeaker }>) {
-  const photoUrl = safePhotoUrl(speaker.photoUrl);
+  const photoUrl = publicPhotoUrl(speaker.photoUrl);
   const initials = speakerInitials(speaker.displayName) || "?";
   return (
     <div
@@ -115,21 +93,10 @@ function SpeakerEntry({
   const [biographyExpanded, setBiographyExpanded] = useState(false);
   const biography = speaker.biography.trim();
   const hasLongBiography = biography.length > BIOGRAPHY_LIMIT;
-  const sessions = useMemo(() => {
-    const agendaSessions = program.agenda.entries.filter((entry) =>
-      sessionEntryBelongsToSpeaker(entry, speaker),
-    );
-    if (agendaSessions.length > 0) {
-      return agendaSessions.map((entry) => ({
-        id: entry.id,
-        title: entry.title,
-        startsAt: entry.startsAt || null,
-        endsAt: entry.endsAt || null,
-        roomName: entry.roomName || null,
-      }));
-    }
-    return publishedSpeakerSessions(speaker, program.speakers);
-  }, [program.agenda.entries, program.speakers, speaker]);
+  const sessions = useMemo(
+    () => publishedSpeakerSessions(speaker, program.agenda.entries),
+    [program.agenda.entries, speaker],
+  );
 
   return (
     <li>
@@ -206,19 +173,19 @@ function SpeakerEntry({
                       {session.title}
                     </a>
                     <br />
-                    {session.startsAt && session.endsAt ? (
-                      <time dateTime={session.startsAt}>
-                        {formatPublishedDateTimeRange(
-                          session.startsAt,
-                          session.endsAt,
-                          program.agenda.event.timeZone,
-                        )}
-                      </time>
-                    ) : (
-                      <span>Date and time not published</span>
-                    )}
+                    <time dateTime={session.startsAt}>
+                      {formatPublishedDateTimeRange(
+                        session.startsAt,
+                        session.endsAt,
+                        program.agenda.event.timeZone,
+                      )}
+                    </time>
                     <br />
                     <span>Room: {session.roomName || "Room not published"}</span>
+                    <br />
+                    <span>
+                      Track: {session.trackNames.join(", ") || "Track not published"}
+                    </span>
                     <br />
                     <span>Roles: speaker</span>
                   </li>

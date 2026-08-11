@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { getPublishedAgenda, PublicEmbedApiError } from "./api";
-import type { PublishedAgenda } from "./types";
+import {
+  getPublishedAgenda,
+  getPublishedProgram,
+  PublicEmbedApiError,
+} from "./api";
+import type { PublishedAgenda, PublishedSpeakerGallery } from "./types";
 
 const publishedAgenda: PublishedAgenda = {
   event: {
@@ -17,6 +21,12 @@ const publishedAgenda: PublishedAgenda = {
     publishedAt: "2026-08-08T12:00:00.000Z",
   },
   entries: [],
+};
+
+const publishedSpeakers: PublishedSpeakerGallery = {
+  event: publishedAgenda.event,
+  revision: publishedAgenda.revision,
+  speakers: [],
 };
 
 describe("public embed API", () => {
@@ -49,6 +59,49 @@ describe("public embed API", () => {
       next: { revalidate: 60, tags: ["public-programs"] },
     });
     expect(calls[0]?.init.credentials).toBeUndefined();
+  });
+
+  it("returns a program only when both public widgets share one revision and event", async () => {
+    const fetcher = async (input: RequestInfo | URL) =>
+      new Response(
+        JSON.stringify({
+          data: String(input).endsWith("/agenda") ? publishedAgenda : publishedSpeakers,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+
+    await expect(
+      getPublishedProgram(
+        "https://open-sessionboard-web-staging.ashleyha0317.workers.dev",
+        "open-systems",
+        fetcher,
+      ),
+    ).resolves.toEqual({ agenda: publishedAgenda, speakers: publishedSpeakers });
+  });
+
+  it("rejects cross-widget data from different publication revisions", async () => {
+    const staleSpeakers: PublishedSpeakerGallery = {
+      ...publishedSpeakers,
+      revision: { ...publishedSpeakers.revision, id: "revision_2", number: 2 },
+    };
+    const fetcher = async (input: RequestInfo | URL) =>
+      new Response(
+        JSON.stringify({
+          data: String(input).endsWith("/agenda") ? publishedAgenda : staleSpeakers,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+
+    await expect(
+      getPublishedProgram(
+        "https://open-sessionboard-web-staging.ashleyha0317.workers.dev",
+        "open-systems",
+        fetcher,
+      ),
+    ).rejects.toMatchObject({
+      code: "PUBLICATION_REVISION_MISMATCH",
+      status: 409,
+    });
   });
 
   it("returns a stable public error without assuming draft data exists", async () => {

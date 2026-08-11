@@ -7,13 +7,15 @@ import {
   EMBED_WIDGETS,
   EmbedWorkspaceView,
   iframeSnippet,
+  publicAgendaCalendarUrl,
   publicEmbedUrl,
   scriptSnippet,
 } from "./embed-workspace";
 
 const agenda = EMBED_WIDGETS.find((widget) => widget.id === "agenda");
 const gallery = EMBED_WIDGETS.find((widget) => widget.id === "gallery");
-if (!agenda || !gallery) {
+const itinerary = EMBED_WIDGETS.find((widget) => widget.id === "itinerary");
+if (!agenda || !gallery || !itinerary) {
   throw new Error("Embed widget definitions are incomplete.");
 }
 
@@ -138,6 +140,17 @@ describe("safe live embed URLs", () => {
     expect(url.toString()).not.toContain("color%3A");
   });
 
+  it("uses the real same-origin agenda feed for iCal output", () => {
+    expect(
+      publicAgendaCalendarUrl({
+        widget: itinerary,
+        eventSlug: "summit / 2026",
+        publicOrigin: "https://sessionboard.example/",
+        theme: "auto",
+      }),
+    ).toBe("https://sessionboard.example/api/public/events/summit%20%2F%202026/agenda.ics");
+  });
+
   it("uses the same safe query on copied iframe and script sources", () => {
     const settings = {
       widget: agenda,
@@ -158,6 +171,26 @@ describe("safe live embed URLs", () => {
     expect(iframe).toContain("outputFormat=styled-html");
     expect(script).toContain('src="https://sessionboard.example/embed/summit-2026/script?');
     expect(script).toContain("displayFields=title%2Cdate-time");
+  });
+
+  it("grants schedule storage and downloads only to the itinerary iframe", () => {
+    const base = {
+      eventSlug: "summit-2026",
+      publicOrigin: "https://sessionboard.example",
+      theme: "light" as const,
+      outputFormat: "styled-html" as const,
+      accent: DEFAULT_EMBED_ACCENT,
+    };
+
+    expect(iframeSnippet({ ...base, widget: itinerary })).toContain(
+      'sandbox="allow-downloads allow-same-origin allow-scripts"',
+    );
+    expect(iframeSnippet({ ...base, widget: itinerary })).toContain("min-height:720px");
+    expect(iframeSnippet({ ...base, widget: agenda })).toContain(
+      'sandbox="allow-downloads allow-scripts"',
+    );
+    expect(iframeSnippet({ ...base, widget: gallery })).toContain('sandbox="allow-scripts"');
+    expect(iframeSnippet({ ...base, widget: gallery })).toContain("min-height:760px");
   });
   it("keeps the gallery alias on the speakers route and never emits private fields", () => {
     const settings = {
@@ -205,5 +238,25 @@ describe("embed workspace view", () => {
     expect(markup).not.toContain("browser-local");
     expect(markup).not.toContain("privateDraft");
     expect(markup).not.toContain("objectKey");
+  });
+
+  it("renders the published calendar feed for saved iCal configurations", () => {
+    const markup = renderToStaticMarkup(
+      createElement(EmbedWorkspaceView, {
+        organizationId: "org-1",
+        eventId: "event-1",
+        eventSlug: "summit-2026",
+        eventVersion: eventRecord.version,
+        initialConfigurations: [{ ...configuration, outputFormat: "ical" }],
+        publicOrigin: "https://sessionboard.example",
+      }),
+    );
+
+    expect(markup).toContain(
+      "https://sessionboard.example/api/public/events/summit-2026/agenda.ics",
+    );
+    expect(markup).not.toContain(
+      "# Use the published agenda calendar link when that feed is enabled.",
+    );
   });
 });
