@@ -427,9 +427,9 @@ export function getSeededSubmission(
     (submission) => submission.eventId === eventId && submission.id === submissionId,
   );
 }
-function apiBaseUrl(): string | null {
+function apiBaseUrl(): string {
   const value = process.env.NEXT_PUBLIC_API_URL?.trim();
-  return value && value.length > 0 ? value.replace(/\/$/u, "") : null;
+  return value ? value.replace(/\/+$/u, "") : "";
 }
 
 async function submissionRequest<T>(
@@ -703,13 +703,18 @@ export async function enrichServerSubmission(
 ): Promise<SubmissionRecord> {
   const submission = mapServerSubmission(record);
   const planResult = await submissionRequest<{
-    plans: readonly { id: string; rounds: readonly { id: string }[] }[];
+    plans: readonly {
+      id: string;
+      rounds: readonly { id: string; sequence?: number | undefined }[];
+    }[];
   }>(baseUrl, `/plans?eventId=${encodeURIComponent(record.eventId)}`).catch(() => ({
     plans: [],
   }));
   const plan = planResult.plans[0];
   if (plan === undefined) return submission;
-  const round = plan.rounds[0];
+  const round = [...plan.rounds].sort(
+    (left, right) => (right.sequence ?? 0) - (left.sequence ?? 0),
+  )[0];
   const [assignmentResult, decision, aggregate] = await Promise.all([
     submissionRequest<{
       assignments: readonly {
@@ -901,13 +906,6 @@ export function SubmissionListWorkspace({
   useEffect(() => {
     if (localDemoEnabled()) return;
     let active = true;
-    if (baseUrl === null) {
-      setLoading(false);
-      setLoadError("The evaluation API is not configured.");
-      return () => {
-        active = false;
-      };
-    }
     setLoading(true);
     setLoadError(null);
     void submissionRequest<readonly ServerSubmissionRecord[]>(
@@ -1314,7 +1312,7 @@ function DecisionControl({
   const [notificationState, setNotificationState] = useState<"idle" | "queued" | "confirmed">(
     submission.decision === undefined ? "idle" : "confirmed",
   );
-  const hasDecisionApi = baseUrl.trim().length > 0 && submission.evaluationPlanId !== undefined;
+  const hasDecisionApi = submission.evaluationPlanId !== undefined;
   const decisionHistory = submission.decision?.history ?? [];
   const canSubmit = hasDecisionApi && reason.trim().length >= 5 && !busy;
 
@@ -1531,13 +1529,6 @@ export function SubmissionDetailWorkspace({
   useEffect(() => {
     if (localDemoEnabled()) return;
     let active = true;
-    if (baseUrl === null) {
-      setLoading(false);
-      setLoadError("The evaluation API is not configured.");
-      return () => {
-        active = false;
-      };
-    }
     void submissionRequest<readonly ServerSubmissionRecord[]>(
       baseUrl,
       `/events/${encodeURIComponent(eventId)}/submissions`,
@@ -1665,7 +1656,7 @@ export function SubmissionDetailWorkspace({
 
             <DecisionControl
               submission={submission}
-              baseUrl={baseUrl ?? ""}
+              baseUrl={baseUrl}
               onSaved={(decision) => {
                 setSubmission((current) =>
                   current === null
@@ -1683,7 +1674,7 @@ export function SubmissionDetailWorkspace({
               }}
             />
             <AcceptedHandoffSummary submission={submission} />
-            <ReopenControl submission={submission} baseUrl={baseUrl ?? ""} />
+            <ReopenControl submission={submission} baseUrl={baseUrl} />
           </div>
 
           <aside className={styles.detailAside} aria-label="Organizer-only submission information">

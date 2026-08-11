@@ -2061,6 +2061,9 @@ export class EvaluationService {
       (transition) => transition.idempotencyKey === idempotencyKey,
     );
     if (current !== null && repeatedTransition !== undefined) {
+      if (repeatedTransition.to !== input.status || repeatedTransition.reason !== reason) {
+        throw conflict("The decision idempotency key was already used with a different request.");
+      }
       const repeatedVersion =
         current.history.findIndex((transition) => transition.idempotencyKey === idempotencyKey) + 1;
       await this.#runDecisionProjection({

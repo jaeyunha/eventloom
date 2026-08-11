@@ -389,14 +389,25 @@ interface ApiEnvelope<T> {
 
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
-function apiBaseUrl(): string | null {
+function apiBaseUrl(): string {
   const configured = process.env.NEXT_PUBLIC_API_URL?.trim();
-  return configured ? configured.replace(/\/+$/u, "") : null;
+  return configured ? configured.replace(/\/+$/u, "") : "";
+}
+
+function browserSameOrigin(): string {
+  return typeof window === "undefined" ? "" : window.location.origin;
 }
 
 function configuredOrganizationId(explicit: string | undefined): string | null {
   const value = (explicit ?? process.env.NEXT_PUBLIC_ORGANIZATION_ID)?.trim() ?? "";
   return value.length > 0 ? value : null;
+}
+export function reviewerDisplayLabel(
+  reviewerId: string,
+  members: readonly OrganizationMember[],
+): string {
+  const member = members.find((candidate) => candidate.userId === reviewerId);
+  return member?.name?.trim() || member?.email || reviewerId;
 }
 
 export function parseNumericAuthoringValue(current: number, rawValue: string): number {
@@ -1038,29 +1049,6 @@ async function loadReviewerWorkspace(
   }
 }
 
-async function loadEvaluatorData(eventId: string, baseUrl: string): Promise<EvaluatorAssignment> {
-  const entries = await loadReviewerWorkspace(eventId, baseUrl);
-  const plans = [...new Map(entries.map((entry) => [entry.plan.id, entry.plan] as const)).values()];
-  const plan = [...plans].sort(
-    (left, right) =>
-      (right.status === "open" ? 1 : 0) - (left.status === "open" ? 1 : 0) ||
-      (right.updatedAt ?? right.createdAt).localeCompare(left.updatedAt ?? left.createdAt) ||
-      right.id.localeCompare(left.id),
-  )[0];
-  const entry =
-    plan === undefined
-      ? undefined
-      : [...entries]
-          .filter((candidate) => candidate.plan.id === plan.id)
-          .sort(
-            (left, right) =>
-              (left.assignment.createdAt ?? left.assignment.updatedAt ?? "").localeCompare(
-                right.assignment.createdAt ?? right.assignment.updatedAt ?? "",
-              ) || left.assignment.id.localeCompare(right.assignment.id),
-          )[0];
-  if (entry === undefined) throw new Error("No review assignment is available.");
-  return mapEvaluatorAssignment(entry.plan, entry);
-}
 
 export async function loadEvaluatorQueue(
   eventId: string | undefined,
@@ -1180,7 +1168,9 @@ export function ReviewWorkspace({
   const baseUrl = apiBaseUrl();
   const reviewerOrganizationId = configuredOrganizationId(explicitOrganizationId);
   const initialStateProvided = initialState !== undefined;
-  const reviewerQueueMode = mode === "evaluator" && eventId === undefined;
+  const reviewerQueueMode =
+    mode === "evaluator" &&
+    (eventId === undefined || initialState?.queue !== undefined || !initialStateProvided);
   const [seed, setSeed] = useState<ReviewPlanSeed | null>(() =>
     mode === "organizer" ? (initialState?.organizer ?? null) : null,
   );
@@ -1212,7 +1202,7 @@ export function ReviewWorkspace({
     setReviewerMembers([]);
     let memberApi = providedMemberApi;
     if (memberApi === undefined) {
-      if (baseUrl === null || reviewerOrganizationId === null) {
+      if (reviewerOrganizationId === null) {
         setReviewerMembersLoading(false);
         setReviewerMembersError("The organization member API is not configured.");
         return () => {
@@ -1220,7 +1210,7 @@ export function ReviewWorkspace({
         };
       }
       try {
-        memberApi = createMemberApi(baseUrl, reviewerOrganizationId);
+        memberApi = createMemberApi(baseUrl || browserSameOrigin(), reviewerOrganizationId);
       } catch (reason: unknown) {
         setReviewerMembersLoading(false);
         setReviewerMembersError(
@@ -1269,23 +1259,12 @@ export function ReviewWorkspace({
     setSeed(null);
     setAssignment(null);
     setQueue(null);
-    if (baseUrl === null) {
-      setLoading(false);
-      setError("The evaluation API is not configured.");
-      return () => {
-        active = false;
-      };
-    }
     const load =
       mode === "organizer"
         ? eventId === undefined
           ? Promise.reject(new Error("An event is required for organizer review plans."))
           : loadOrganizerData(eventId, baseUrl, undefined, false)
-        : reviewerQueueMode
-          ? loadEvaluatorQueue(eventId, baseUrl)
-          : eventId === undefined
-            ? Promise.reject(new Error("An event is required for assigned review."))
-            : loadEvaluatorData(eventId, baseUrl);
+        : loadEvaluatorQueue(eventId, baseUrl);
     void load
       .then((value) => {
         if (!active) return;
@@ -1301,8 +1280,7 @@ export function ReviewWorkspace({
                 // The fast authoritative plan remains usable when optional score hydration is slow.
               });
           }
-        } else if (reviewerQueueMode) setQueue(value as readonly ReviewerQueueEntry[]);
-        else setAssignment(value as EvaluatorAssignment);
+        } else setQueue(value as readonly ReviewerQueueEntry[]);
       })
       .catch((reason: unknown) => {
         if (!active) return;
@@ -1343,7 +1321,7 @@ export function ReviewWorkspace({
   }
   if (mode === "evaluator") {
     if (reviewerQueueMode) {
-      return <ReviewerQueueWorkspace entries={queue ?? []} baseUrl={baseUrl ?? ""} />;
+      return <ReviewerQueueWorkspace entries={queue ?? []} baseUrl={baseUrl} />;
     }
     return assignment === null ? (
       <WorkspaceStatus
@@ -1354,7 +1332,7 @@ export function ReviewWorkspace({
         error
       />
     ) : (
-      <EvaluatorWorkspace assignment={assignment} baseUrl={baseUrl ?? ""} />
+      <EvaluatorWorkspace assignment={assignment} baseUrl={baseUrl} />
     );
   }
   if (missingPlan && eventId !== undefined) {
@@ -1362,17 +1340,15 @@ export function ReviewWorkspace({
       <OrganizerPlanCreation
         eventId={eventId}
         organizationId={explicitOrganizationId}
-        baseUrl={baseUrl ?? ""}
+        baseUrl={baseUrl}
         onCreated={(plan) => {
           setMissingPlan(false);
           setSeed(seedFromCreatedPlan(plan, eventId));
-          if (baseUrl !== null) {
-            void loadOrganizerData(eventId, baseUrl, plan.id)
-              .then((authoritative) => setSeed(authoritative))
-              .catch(() => {
-                // Keep the created plan visible if the follow-up snapshot is unavailable.
-              });
-          }
+          void loadOrganizerData(eventId, baseUrl, plan.id)
+            .then((authoritative) => setSeed(authoritative))
+            .catch(() => {
+              // Keep the created plan visible if the follow-up snapshot is unavailable.
+            });
         }}
       />
     );
@@ -1388,7 +1364,7 @@ export function ReviewWorkspace({
   ) : (
     <OrganizerWorkspace
       seed={seed}
-      baseUrl={baseUrl ?? ""}
+      baseUrl={baseUrl}
       organizationId={explicitOrganizationId}
       reviewerMembers={activeVerifiedReviewers(reviewerMembers)}
       reviewerMembersLoading={reviewerMembersLoading}
@@ -1525,10 +1501,6 @@ function OrganizerPlanCreation({
       firstCriterionTitle,
       blindReview,
     };
-    if (baseUrl.length === 0) {
-      setMessage("The evaluation API is not configured.");
-      return;
-    }
     const validationMessage = validateCreateEvaluationPlanForm(input);
     if (validationMessage !== null) {
       setMessage(validationMessage);
@@ -1845,10 +1817,6 @@ function OrganizerAuthoring({
   }
 
   async function saveDraft(): Promise<void> {
-    if (baseUrl.length === 0) {
-      setMessage("The evaluation API is not configured.");
-      return;
-    }
     const poolsConfigured = rounds.some(
       (round) => (round.reviewerPool?.reviewerIds.length ?? 0) > 0,
     );
@@ -1952,10 +1920,6 @@ function OrganizerAuthoring({
   async function assignReviewers(): Promise<void> {
     const round = rounds.find((candidate) => candidate.id === assignmentRoundId);
     const reviewerIds = [...assignmentReviewerIds];
-    if (baseUrl.length === 0) {
-      setMessage("The evaluation API is not configured.");
-      return;
-    }
     if (
       round === undefined ||
       assignmentSubmissionId.trim().length === 0 ||
@@ -2013,10 +1977,6 @@ function OrganizerAuthoring({
   }
 
   async function transition(action: "open" | "close"): Promise<void> {
-    if (baseUrl.length === 0) {
-      setMessage("The evaluation API is not configured.");
-      return;
-    }
     setBusy(true);
     setMessage(null);
     try {
@@ -2698,10 +2658,6 @@ function OrganizerWorkspaceView({
   });
 
   async function exportResults(): Promise<void> {
-    if (baseUrl.length === 0) {
-      setExportMessage("The evaluation API is not configured.");
-      return;
-    }
     setExportMessage(`Preparing evaluation-${seed.planId}.csv…`);
     try {
       const response = await fetch(
@@ -3108,10 +3064,8 @@ function ReviewerProgressDashboard({
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const outstanding = seed.progress.reviewers.filter((reviewer) => reviewer.outstanding > 0);
-  const reviewerLabel = (reviewerId: string): string => {
-    const member = reviewerMembers.find((candidate) => candidate.userId === reviewerId);
-    return member?.name?.trim() || member?.email || reviewerId;
-  };
+  const reviewerLabel = (reviewerId: string): string =>
+    reviewerDisplayLabel(reviewerId, reviewerMembers);
   const selectedOutstanding = outstanding.filter((reviewer) =>
     selected.has(`${reviewer.reviewerId}\u0000${reviewer.roundId}`),
   );
@@ -3127,10 +3081,6 @@ function ReviewerProgressDashboard({
   }
 
   async function sendReminders(): Promise<void> {
-    if (baseUrl.length === 0) {
-      setMessage("The evaluation API is not configured.");
-      return;
-    }
     if (selectedOutstanding.length === 0) {
       setMessage("Select at least one reviewer with outstanding assignments.");
       return;

@@ -223,7 +223,9 @@ async function canonicalizeRoundPools(
 }
 function csvCell(value: unknown): string {
   const text = value === null || value === undefined ? "" : String(value);
-  return /[",\r\n]/u.test(text) ? `"${text.replace(/"/gu, '""')}"` : text;
+  const safeText =
+    typeof value === "string" && /^[\t\r\n ]*[=+\-@]/u.test(text) ? `'${text}` : text;
+  return /[",\r\n]/u.test(safeText) ? `"${safeText.replace(/"/gu, '""')}"` : safeText;
 }
 
 function reviewerScoreValue(

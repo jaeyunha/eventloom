@@ -532,10 +532,20 @@ describe("conflicts, progress, and decisions", () => {
     const replay = await service.recordDecision(organizer, {
       planId: "plan-1",
       submissionId: submission.id,
-      status: "rejected",
-      reason: "This replay must not alter the outcome",
+      status: "accepted",
+      reason: "  Committee consensus  ",
       idempotencyKey: "decision-1",
     });
+    await expectEvaluationError(
+      service.recordDecision(organizer, {
+        planId: "plan-1",
+        submissionId: submission.id,
+        status: "rejected",
+        reason: "A different request must not reuse the key",
+        idempotencyKey: "decision-1",
+      }),
+      "EVALUATION_CONFLICT",
+    );
     const waitlisted = await service.recordDecision(organizer, {
       planId: "plan-1",
       submissionId: submission.id,
@@ -583,8 +593,8 @@ describe("decision outcome projection", () => {
     const replay = await service.recordDecision(organizer, {
       planId: "plan-1",
       submissionId: submission.id,
-      status: "rejected",
-      reason: "Replay must not change the outcome",
+      status: "accepted",
+      reason: "Committee consensus",
       idempotencyKey: "decision-1",
     });
     const waitlisted = await service.recordDecision(organizer, {
