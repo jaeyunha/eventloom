@@ -1,0 +1,34 @@
+{
+  "url": "https://staging.example.com",
+  "areas": [],
+  "includeOptional": false,
+  "personaEmails": {
+    "organizer": "organizer@example.test",
+    "reviewer": "reviewer@example.test",
+    "speaker": "speaker@example.test",
+    "submitter": "submitter@example.test"
+  },
+  "credentials": {
+    "organizer": {
+      "email": "organizer@example.test",
+      "password": "replace-with-EVAL_ORGANIZER_PASSWORD"
+    },
+    "reviewer": {
+      "email": "reviewer@example.test",
+      "password": "replace-with-EVAL_REVIEWER_PASSWORD"
+    },
+    "speaker": {
+      "email": "speaker@example.test",
+      "password": "replace-with-EVAL_SPEAKER_PASSWORD"
+    },
+    "submitter": {
+      "email": "submitter@example.test",
+      "password": "replace-with-EVAL_SUBMITTER_PASSWORD"
+    }
+  },
+  "headless": true,
+  "agentModel": "claude-sonnet-5",
+  "judgeModel": "claude-opus-5",
+  "maxTurnsPerScenario": 70,
+  "submissionNotes": "Copy this shape only. Generate the private evaluator config with provision-personas.mjs; do not commit credentials."
+}

@@ -69,6 +69,40 @@ const MIGRATION_RESOURCE_KEYS = Object.freeze([
   ["r2", "R2_BUCKET_NAME", "bucketName"],
   ["queue", "QUEUE_NAME", "queueName"],
 ]);
+const MIGRATION_REPORT_MAX_BYTES = 256 * 1024;
+const MIGRATION_REPORT_ALLOWED_KEYS = new Set([
+  "sourceId",
+  "targetId",
+  "mode",
+  "status",
+  "ready",
+  "readyForApply",
+  "namespaces",
+  "counts",
+  "blockers",
+  "protectedBoundaries",
+]);
+const MIGRATION_REPORT_NAMESPACE_KEYS = Object.freeze({
+  d1: new Set(["environment", "databaseId", "databaseName", "tables"]),
+  airtable: new Set(["environment", "baseId", "tables"]),
+  r2: new Set(["environment", "bucketName", "objectInventoryComplete"]),
+  queue: new Set([
+    "environment",
+    "queueName",
+    "deadLetterQueueName",
+    "messagesInspectable",
+    "drainConfirmed",
+  ]),
+});
+const MIGRATION_REPORT_COUNT_KEYS = Object.freeze({
+  d1: new Set(["sourceRows", "targetRows", "rewritableRows"]),
+  airtable: new Set(["sourceRecords", "targetRecords", "rewritableRecords"]),
+  r2: new Set(["legacyKeys", "targetCollisions"]),
+  queue: new Set(["queues", "deadLetterQueues", "messages"]),
+});
+const MIGRATION_REPORT_SECRET_KEY =
+  /(?:token|secret|password|credential|private[_-]?key|api[_-]?key|authorization|bearer)/i;
+const MIGRATION_REPORT_ENVIRONMENTS = new Set(ENVIRONMENTS);
 
 export class PreflightError extends Error {
   constructor(code, message) {
@@ -381,22 +415,255 @@ export function validateReleaseConfiguration({
 
   return { providerStates };
 }
+function isPlainObject(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function migrationReportFailure(code, message) {
+  return { valid: false, code, message };
+}
+
+function reportHasSensitiveKey(value, seen = new Set()) {
+  if (value === null || typeof value !== "object") return false;
+  if (seen.has(value)) return false;
+  seen.add(value);
+  if (Array.isArray(value)) return value.some((entry) => reportHasSensitiveKey(entry, seen));
+  return Object.entries(value).some(
+    ([key, entry]) => MIGRATION_REPORT_SECRET_KEY.test(key) || reportHasSensitiveKey(entry, seen),
+  );
+}
+
+function reportContainsKnownSecret(value, secretValues, seen = new Set()) {
+  if (typeof value === "string") {
+    return secretValues.some((secret) => secret && value.includes(secret));
+  }
+  if (value === null || typeof value !== "object" || seen.has(value)) return false;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.some((entry) => reportContainsKnownSecret(entry, secretValues, seen));
+  }
+  return Object.values(value).some((entry) => reportContainsKnownSecret(entry, secretValues, seen));
+}
+
+function reportObjectShapeFailure(value, allowedKeys) {
+  if (!isPlainObject(value)) return "Migration report contains an invalid structure";
+  for (const key of Object.keys(value)) {
+    if (MIGRATION_REPORT_SECRET_KEY.test(key)) return "Migration report contains secret material";
+    if (!allowedKeys.has(key)) return "Migration report contains an unsupported field";
+  }
+  return undefined;
+}
+
+function migrationSecretValues(configurations) {
+  const values = [];
+  for (const configuration of Object.values(configurations ?? {})) {
+    for (const [key, value] of Object.entries(configuration ?? {})) {
+      if (
+        /(?:secret|token|password|credential|private[_-]?key|api[_-]?key)/i.test(key) &&
+        !/_TOKEN_KIND$/i.test(key) &&
+        typeof value === "string" &&
+        value.trim()
+      ) {
+        values.push(value.trim());
+      }
+    }
+  }
+  return values;
+}
+
+export function validateOrganizationIdMigrationReport(report, { secretValues = [] } = {}) {
+  if (report === undefined || report === null) {
+    return migrationReportFailure(
+      "MIGRATION_REPORT_REQUIRED",
+      "Supply the organization ID migration dry-run report",
+    );
+  }
+  if (!isPlainObject(report)) {
+    return migrationReportFailure(
+      "INVALID_MIGRATION_REPORT",
+      "Migration report must be a JSON object",
+    );
+  }
+
+  let serialized;
+  try {
+    serialized = JSON.stringify(report);
+  } catch {
+    return migrationReportFailure(
+      "INVALID_MIGRATION_REPORT",
+      "Migration report must be finite JSON",
+    );
+  }
+  if (typeof serialized !== "string") {
+    return migrationReportFailure(
+      "INVALID_MIGRATION_REPORT",
+      "Migration report must be finite JSON",
+    );
+  }
+  if (Buffer.byteLength(serialized, "utf8") > MIGRATION_REPORT_MAX_BYTES) {
+    return migrationReportFailure(
+      "INVALID_MIGRATION_REPORT",
+      "Migration report exceeds the bounded evidence limit",
+    );
+  }
+  if (reportHasSensitiveKey(report)) {
+    return migrationReportFailure(
+      "INVALID_MIGRATION_REPORT",
+      "Migration report contains secret material",
+    );
+  }
+  if (reportContainsKnownSecret(report, secretValues)) {
+    return migrationReportFailure(
+      "INVALID_MIGRATION_REPORT",
+      "Migration report contains secret material",
+    );
+  }
+  const topLevelFailure = reportObjectShapeFailure(report, MIGRATION_REPORT_ALLOWED_KEYS);
+  if (topLevelFailure) {
+    return migrationReportFailure("INVALID_MIGRATION_REPORT", topLevelFailure);
+  }
+  if (
+    report.sourceId !== ORGANIZATION_ID_MIGRATION.sourceId ||
+    report.targetId !== ORGANIZATION_ID_MIGRATION.targetId
+  ) {
+    return migrationReportFailure(
+      "INVALID_MIGRATION_REPORT",
+      "Migration report does not match the approved identity change",
+    );
+  }
+  if (report.mode !== "dry-run") {
+    return migrationReportFailure(
+      "INVALID_MIGRATION_REPORT",
+      "Migration report must be a dry-run report",
+    );
+  }
+  if (report.status !== "ready") {
+    return migrationReportFailure("MIGRATION_REPORT_BLOCKED", "Migration report is not ready");
+  }
+  if (report.ready !== undefined && report.ready !== true) {
+    return migrationReportFailure("MIGRATION_REPORT_BLOCKED", "Migration report is not ready");
+  }
+  if (report.readyForApply !== undefined && report.readyForApply !== true) {
+    return migrationReportFailure(
+      "MIGRATION_REPORT_BLOCKED",
+      "Migration report is not ready for apply",
+    );
+  }
+  if (!Array.isArray(report.blockers)) {
+    return migrationReportFailure(
+      "INVALID_MIGRATION_REPORT",
+      "Migration report blockers must be an array",
+    );
+  }
+  if (report.blockers.length > 0) {
+    return migrationReportFailure(
+      "MIGRATION_REPORT_BLOCKED",
+      "Migration report contains blocking findings",
+    );
+  }
+  if (report.protectedBoundaries !== undefined) {
+    if (
+      !Array.isArray(report.protectedBoundaries) ||
+      JSON.stringify(report.protectedBoundaries) !==
+        JSON.stringify(ORGANIZATION_ID_MIGRATION.protectedBoundaries)
+    ) {
+      return migrationReportFailure(
+        "INVALID_MIGRATION_REPORT",
+        "Migration report protected boundaries are not approved",
+      );
+    }
+  }
+  if (report.namespaces !== undefined) {
+    if (!isPlainObject(report.namespaces)) {
+      return migrationReportFailure(
+        "INVALID_MIGRATION_REPORT",
+        "Migration report namespaces are not bounded",
+      );
+    }
+    for (const [kind, entries] of Object.entries(report.namespaces)) {
+      const allowedKeys = Object.hasOwn(MIGRATION_REPORT_NAMESPACE_KEYS, kind)
+        ? MIGRATION_REPORT_NAMESPACE_KEYS[kind]
+        : undefined;
+      if (!allowedKeys || !Array.isArray(entries) || entries.length > ENVIRONMENTS.length) {
+        return migrationReportFailure(
+          "INVALID_MIGRATION_REPORT",
+          "Migration report namespaces are not bounded",
+        );
+      }
+      const seenEnvironments = new Set();
+      for (const entry of entries) {
+        const failure = reportObjectShapeFailure(entry, allowedKeys);
+        if (failure) return migrationReportFailure("INVALID_MIGRATION_REPORT", failure);
+        if (
+          entry.environment !== undefined &&
+          (!MIGRATION_REPORT_ENVIRONMENTS.has(entry.environment) ||
+            seenEnvironments.has(entry.environment))
+        ) {
+          return migrationReportFailure(
+            "INVALID_MIGRATION_REPORT",
+            "Migration report namespaces are not bounded",
+          );
+        }
+        if (entry.environment !== undefined) seenEnvironments.add(entry.environment);
+      }
+    }
+  }
+  if (report.counts !== undefined) {
+    if (!isPlainObject(report.counts)) {
+      return migrationReportFailure(
+        "INVALID_MIGRATION_REPORT",
+        "Migration report counts are not bounded",
+      );
+    }
+    for (const [kind, counts] of Object.entries(report.counts)) {
+      const allowedKeys = Object.hasOwn(MIGRATION_REPORT_COUNT_KEYS, kind)
+        ? MIGRATION_REPORT_COUNT_KEYS[kind]
+        : undefined;
+      if (!allowedKeys || !isPlainObject(counts)) {
+        return migrationReportFailure(
+          "INVALID_MIGRATION_REPORT",
+          "Migration report counts are not bounded",
+        );
+      }
+      const failure = reportObjectShapeFailure(counts, allowedKeys);
+      if (failure) return migrationReportFailure("INVALID_MIGRATION_REPORT", failure);
+      for (const [key, value] of Object.entries(counts)) {
+        if (kind === "queue" && key === "messages" && value === null) continue;
+        if (!Number.isSafeInteger(value) || value < 0 || value > 10_000) {
+          return migrationReportFailure(
+            "INVALID_MIGRATION_REPORT",
+            "Migration report counts are not bounded",
+          );
+        }
+      }
+    }
+  }
+
+  return { valid: true };
+}
 export function inspectOrganizationIdMigrationReadiness({
   configurations = {},
   wranglerInventory = {},
+  migrationReport,
 } = {}) {
+  const reportValidation = validateOrganizationIdMigrationReport(migrationReport, {
+    secretValues: migrationSecretValues(configurations),
+  });
   const namespaces = {
     d1: [],
     airtable: [],
     r2: [],
     queue: [],
   };
-  const blockers = [
-    {
-      code: "MIGRATION_REMOTE_INVENTORY_REQUIRED",
-      message: "Run the organization ID migration tool dry run before applying changes",
-    },
-  ];
+  const blockers = [];
+  if (!reportValidation.valid) {
+    blockers.push({
+      code: reportValidation.code,
+      message: reportValidation.message,
+    });
+  }
   const seenResources = new Map();
 
   for (const environment of ENVIRONMENTS) {
@@ -469,12 +736,22 @@ export function inspectOrganizationIdMigrationReadiness({
     }
   }
 
+  const status =
+    blockers.length === 0
+      ? "ready"
+      : reportValidation.code === "MIGRATION_REPORT_REQUIRED" && blockers.length === 1
+        ? "requires-dry-run"
+        : "blocked";
   return {
     sourceId: ORGANIZATION_ID_MIGRATION.sourceId,
     targetId: ORGANIZATION_ID_MIGRATION.targetId,
     mode: "dry-run",
-    status: blockers.length === 1 ? "requires-dry-run" : "blocked",
-    ready: false,
+    status,
+    ready: blockers.length === 0,
+    evidence: {
+      supplied: migrationReport !== undefined && migrationReport !== null,
+      valid: reportValidation.valid,
+    },
     namespaces,
     blockers,
     protectedBoundaries: [...ORGANIZATION_ID_MIGRATION.protectedBoundaries],

@@ -1,0 +1,829 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  applyRepair,
+  applyWorkflowReset,
+  buildRepairManifest,
+  DevflowRepairError,
+  parseArguments,
+  prepareRepair,
+  prepareWorkflowReset,
+  REPAIR_CONFIRMATION,
+  RESET_WORKFLOW_CONFIRMATION,
+  readRepairInvariantReport,
+  resumeRepair,
+  resumeWorkflowReset,
+  runRepair,
+} from "./repair-devflow-production.mjs";
+
+const IDS = {
+  "organizer-agenda": "user-organizer-agenda",
+  "organizer-fixture": "user-organizer-fixture",
+  "reviewer-sam": "user-reviewer-sam",
+  "speaker-priya": "user-speaker-priya",
+  "speaker-marcus": "user-speaker-marcus",
+  submitter: "user-submitter",
+};
+const PARTICIPANT_IDS = {
+  "speaker-priya": "devflow-conf-2027-participant-speaker-priya",
+  "speaker-marcus": "devflow-conf-2027-participant-speaker-marcus",
+};
+const PROFILE_IDS = {
+  "speaker-priya": `speaker-profile:devflow-conf-2027:${PARTICIPANT_IDS["speaker-priya"]}`,
+  "speaker-marcus": `speaker-profile:devflow-conf-2027:${PARTICIPANT_IDS["speaker-marcus"]}`,
+};
+
+function identities() {
+  return Object.fromEntries(
+    Object.entries(IDS).map(([identityKey, userId]) => [
+      identityKey,
+      {
+        email: `${identityKey.replaceAll("-", ".")}@repair.example.test`,
+        userId,
+        verified: true,
+      },
+    ]),
+  );
+}
+
+function fakeTransport({ duplicateKey, driftKey, omitBlankFields = false } = {}) {
+  const records = new Map();
+  const writes = [];
+  const commands = [];
+  let failWrites = false;
+  const key = (operation) => `${operation.table ?? operation.kind}:${operation.id}`;
+  return {
+    records,
+    writes,
+    commands,
+    setFailWrites(value) {
+      failWrites = value;
+    },
+    async read(operation) {
+      if (operation.key === duplicateKey)
+        return [
+          { id: "a", fields: operation.fields },
+          { id: "b", fields: operation.fields },
+        ];
+      const record = records.get(key(operation));
+      if (record === undefined) return [];
+      if (operation.key === driftKey)
+        return [{ ...record, fields: { ...record.fields, Version: 2 } }];
+      return [record];
+    },
+    storedFields(fields) {
+      if (!omitBlankFields) return fields;
+      return Object.fromEntries(
+        Object.entries(fields).filter(
+          ([, value]) =>
+            value !== undefined &&
+            value !== null &&
+            value !== "" &&
+            (!Array.isArray(value) || value.length > 0),
+        ),
+      );
+    },
+    async write(input) {
+      if (failWrites) throw new Error("injected transport failure");
+      writes.push(input);
+      if (input.store === "airtable") {
+        const current = records.get(key(input));
+        records.set(key(input), {
+          id: current?.id ?? `rec-${records.size + 1}`,
+          fields:
+            current === undefined
+              ? this.storedFields(input.fields)
+              : this.storedFields({ ...current.fields, ...input.fields }),
+        });
+      }
+    },
+    async execute(command) {
+      if (failWrites) throw new Error("injected command failure");
+      commands.push(command);
+    },
+    async verifyIdentity() {},
+    async recordLedger() {},
+  };
+}
+
+function build() {
+  return buildRepairManifest({ identities: identities() });
+}
+function resetTransport() {
+  const transport = fakeTransport();
+  const discovered = [];
+  const deletes = [];
+  transport.discovered = discovered;
+  transport.deletes = deletes;
+  transport.add = (table, id, fields, recordId = `${table}-${id}`) => {
+    const record = { id: recordId, fields: { ...fields } };
+    transport.records.set(`${table}:${id}`, record);
+    discovered.push({ store: "airtable", table, applicationId: id, ...record });
+    return record;
+  };
+  transport.discoverWorkflowRecords = async () => discovered.slice();
+  transport.delete = async (operation) => {
+    deletes.push(operation);
+    transport.records.delete(`${operation.table}:${operation.id}`);
+    const index = discovered.findIndex(
+      (record) => record.table === operation.table && record.id === operation.recordId,
+    );
+    if (index >= 0) discovered.splice(index, 1);
+  };
+  return transport;
+}
+
+function addWorkflowRecords(transport, manifest) {
+  for (const operation of manifest.operations) {
+    if (operation.store !== "airtable") continue;
+    transport.add(operation.table, operation.id, {
+      ...operation.fields,
+      "Organization ID": "ai-engineer",
+      "Event ID": "devflow-conf-2027",
+    });
+  }
+  const unknownId = "evaluator-created-unknown";
+  transport.add("Task Responses", unknownId, {
+    "Application ID": unknownId,
+    "Organization ID": "ai-engineer",
+    "Event ID": "devflow-conf-2027",
+    "Response JSON": JSON.stringify({
+      tenantId: "ai-engineer",
+      eventId: "devflow-conf-2027",
+      id: unknownId,
+    }),
+  });
+  transport.add("Sessions", "foreign-event-session", {
+    "Application ID": "foreign-event-session",
+    "Organization ID": "ai-engineer",
+    "Event ID": "other-event",
+  });
+  transport.add("Sessions", "foreign-org-session", {
+    "Application ID": "foreign-org-session",
+    "Organization ID": "other-org",
+    "Event ID": "devflow-conf-2027",
+  });
+  transport.add("Memberships", "membership:keep", {
+    "Application ID": "membership:keep",
+    "Organization ID": "ai-engineer",
+    "Event ID": "devflow-conf-2027",
+  });
+}
+
+test("builds the strict six-identity ledger and exact canonical graph", () => {
+  const manifest = build();
+  assert.deepEqual(
+    manifest.identityLedger.map((identity) => identity.identityKey),
+    [
+      "organizer-agenda",
+      "organizer-fixture",
+      "reviewer-sam",
+      "speaker-priya",
+      "speaker-marcus",
+      "submitter",
+    ],
+  );
+  assert.equal(new Set(manifest.identityLedger.map((identity) => identity.emailDigest)).size, 6);
+  const speakerLedger = manifest.identityLedger.filter((identity) =>
+    identity.identityKey.startsWith("speaker-"),
+  );
+  assert.deepEqual(
+    speakerLedger.map((identity) => [
+      identity.identityKey,
+      identity.participantId,
+      identity.speakerProfileId,
+    ]),
+    [
+      ["speaker-priya", PARTICIPANT_IDS["speaker-priya"], PROFILE_IDS["speaker-priya"]],
+      ["speaker-marcus", PARTICIPANT_IDS["speaker-marcus"], PROFILE_IDS["speaker-marcus"]],
+    ],
+  );
+  assert.equal(JSON.stringify(manifest).includes("devflow-conf-2027-speaker-"), false);
+  assert.equal(
+    manifest.graph.sessions.every(
+      (session) =>
+        !Object.hasOwn(session, "speakerProfileIds") &&
+        session.speakerIds.every((id) => Object.values(PARTICIPANT_IDS).includes(id)) &&
+        session.speakerRoster.every((reference) =>
+          Object.values(PARTICIPANT_IDS).includes(reference.id),
+        ),
+    ),
+    true,
+  );
+  const projectionOperation = manifest.operations.find(
+    (operation) => operation.table === "Published Speaker Projections",
+  );
+  assert.equal(projectionOperation.applicationId, `published-speakers:${manifest.eventId}`);
+  const profileOperations = manifest.operations.filter(
+    (operation) => operation.table === "Speaker Profiles",
+  );
+  assert.deepEqual(
+    profileOperations.map((operation) => [
+      operation.applicationId,
+      JSON.parse(operation.fields.Biography).participantId,
+      operation.fields.Participant,
+    ]),
+    [
+      [
+        PROFILE_IDS["speaker-priya"],
+        PARTICIPANT_IDS["speaker-priya"],
+        PARTICIPANT_IDS["speaker-priya"],
+      ],
+      [
+        PROFILE_IDS["speaker-marcus"],
+        PARTICIPANT_IDS["speaker-marcus"],
+        PARTICIPANT_IDS["speaker-marcus"],
+      ],
+    ],
+  );
+  const sessionOperations = manifest.operations.filter(
+    (operation) => operation.table === "Sessions",
+  );
+  assert.equal(
+    sessionOperations.every((operation) =>
+      JSON.parse(operation.fields["Speaker IDs JSON"]).every((id) =>
+        Object.values(PARTICIPANT_IDS).includes(id),
+      ),
+    ),
+    true,
+  );
+  const scheduledParticipantIds = [
+    ...new Set(
+      manifest.graph.sessions
+        .filter((session) => session.roomId !== null)
+        .flatMap((session) => session.speakerIds),
+    ),
+  ];
+  const profilesByParticipant = new Map(
+    profileOperations.map((operation) => {
+      const profile = JSON.parse(operation.fields.Biography);
+      return [profile.participantId, profile];
+    }),
+  );
+  assert.deepEqual(scheduledParticipantIds.sort(), Object.values(PARTICIPANT_IDS).sort());
+  assert.deepEqual(
+    scheduledParticipantIds.map(
+      (participantId) => profilesByParticipant.get(participantId)?.displayName,
+    ),
+    ["Marcus Okafor", "Priya Raman"],
+  );
+  assert.equal(manifest.graph.proposals.length, 3);
+  assert.equal(manifest.graph.sessions.filter((session) => session.roomId !== null).length, 3);
+  assert.equal(manifest.graph.sessions.filter((session) => session.roomId === null).length, 1);
+  assert.equal(manifest.graph.tasks.length, 10);
+  assert.equal(
+    manifest.graph.tasks.every(
+      (task) =>
+        task.id.includes(`:${task.participantId}:`) &&
+        task.profileId === PROFILE_IDS[task.identityKey],
+    ),
+    true,
+  );
+  assert.equal(
+    manifest.graph.communication.activities.every((activity) => activity.sentAt === null),
+    true,
+  );
+  assert.deepEqual(
+    manifest.graph.projection.speakers.find((speaker) => speaker.displayName === "Marcus Okafor")
+      .sessionIds,
+    [manifest.graph.sessions[2].id],
+  );
+  assert.deepEqual(
+    manifest.graph.projection.speakers.find((speaker) => speaker.displayName === "Priya Raman")
+      .sessionIds,
+    [manifest.graph.sessions[0].id, manifest.graph.sessions[1].id],
+  );
+  assert.deepEqual(
+    manifest.graph.projection.speakers.map((speaker) => speaker.id),
+    [PROFILE_IDS["speaker-priya"], PROFILE_IDS["speaker-marcus"]],
+  );
+  assert.equal(
+    manifest.graph.projection.speakers.find((speaker) => speaker.displayName === "Priya Raman")
+      .organization,
+    "Latticework Systems",
+  );
+  const evaluation = manifest.operations.find((operation) => operation.table === "Evaluations");
+  assert.equal(evaluation.applicationId, evaluation.id);
+  const storedEvaluation = JSON.parse(evaluation.fields["Scores JSON"]);
+  assert.equal(storedEvaluation.id, evaluation.id);
+  assert.equal(storedEvaluation.tenantId, manifest.organizationId);
+  assert.equal(storedEvaluation.eventId, manifest.eventId);
+  assert.equal(storedEvaluation.reviewerId, IDS["reviewer-sam"]);
+  assert.equal(storedEvaluation.status, "assigned");
+  const reviewPlan = manifest.operations.find((operation) => operation.table === "Review Plans");
+  assert.equal(JSON.parse(reviewPlan.fields["Rounds JSON"]).status, "open");
+  const storedSubmissions = manifest.operations.filter(
+    (operation) =>
+      operation.table === "Submissions" && !operation.id.startsWith("speaker-submission:"),
+  );
+  assert.equal(
+    storedSubmissions.every((operation) => {
+      const payload = JSON.parse(operation.fields["Answers JSON"]);
+      return (
+        payload.id === operation.id &&
+        payload.tenantId === manifest.organizationId &&
+        payload.eventId === manifest.eventId &&
+        payload.status === "submitted" &&
+        payload.participants.length === 1
+      );
+    }),
+    true,
+  );
+  const speakerSubmissions = manifest.operations.filter(
+    (operation) =>
+      operation.table === "Submissions" && operation.id.startsWith("speaker-submission:"),
+  );
+  assert.equal(speakerSubmissions.length, 3);
+  assert.equal(
+    speakerSubmissions.every((operation) => {
+      const payload = JSON.parse(operation.fields["Answers JSON"]);
+      return (
+        payload.id === operation.id &&
+        payload.entityType === "speaker_submission" &&
+        payload.status === "accepted" &&
+        payload.participantIds.length === 1
+      );
+    }),
+    true,
+  );
+  const rosterEntries = manifest.operations.filter(
+    (operation) => operation.table === "Session Roster",
+  );
+  assert.equal(rosterEntries.length, 3);
+  assert.equal(
+    rosterEntries.every((operation) => {
+      const payload = JSON.parse(operation.fields["Members JSON"]);
+      return (
+        operation.fields.Participant === payload.participantId &&
+        operation.fields["Participant ID"] === payload.participantId &&
+        Object.values(PARTICIPANT_IDS).includes(payload.participantId) &&
+        payload.id === operation.id &&
+        payload.tenantId === manifest.organizationId &&
+        payload.submissionId.startsWith("speaker-submission:") &&
+        payload.status === "active"
+      );
+    }),
+    true,
+  );
+  const speakerTasks = manifest.operations.filter(
+    (operation) => operation.table === "Speaker Tasks",
+  );
+  assert.equal(speakerTasks.length, 10);
+  assert.equal(
+    speakerTasks.every((operation) => {
+      const payload = JSON.parse(operation.fields["Owner JSON"]);
+      return (
+        operation.fields.Participant === payload.participantId &&
+        Object.values(PARTICIPANT_IDS).includes(payload.participantId) &&
+        payload.profileId === PROFILE_IDS[payload.identityKey] &&
+        payload.eventId === manifest.eventId &&
+        payload.submissionId.startsWith("speaker-submission:") &&
+        payload.owner === "speaker" &&
+        payload.participantId.length > 0 &&
+        payload.dependencyIds.length === 0 &&
+        payload.reminderOffsetsMinutes.length === 2 &&
+        typeof payload.updatedAt === "string"
+      );
+    }),
+    true,
+  );
+  const uploadTasks = speakerTasks
+    .map((operation) => JSON.parse(operation.fields["Owner JSON"]))
+    .filter((task) => task.type === "upload");
+  assert.deepEqual(uploadTasks.map((task) => task.acceptedAssetKinds[0]).sort(), [
+    "headshot",
+    "headshot",
+    "slides",
+    "slides",
+  ]);
+  const storedDecisions = manifest.operations.filter(
+    (operation) => operation.table === "Decisions",
+  );
+  assert.equal(
+    storedDecisions.every((operation) => {
+      const payload = JSON.parse(operation.fields["Metadata JSON"]);
+      return (
+        payload.id === operation.id &&
+        payload.status === "accepted" &&
+        payload.history[0]?.decidedBy === IDS["organizer-agenda"]
+      );
+    }),
+    true,
+  );
+  const agendaOperation = manifest.operations.find(
+    (operation) => operation.table === "Agenda Versions",
+  );
+  const storedAgenda = JSON.parse(agendaOperation.fields["Conflicts JSON"]);
+  assert.equal(storedAgenda.draft.entries.length, 3);
+  assert.equal(
+    storedAgenda.sessions.every((session) => session.status === "accepted"),
+    true,
+  );
+  assert.equal(storedAgenda.revisions[0].entries.length, 3);
+  assert.equal(storedAgenda.currentPublishedRevisionId, storedAgenda.revisions[0].id);
+  assert.equal(storedAgenda.revisions[0].publishedBy, IDS["organizer-agenda"]);
+  const storedEntries = manifest.operations.filter(
+    (operation) => operation.table === "Agenda Entries",
+  );
+  assert.equal(storedEntries.length, 3);
+  assert.equal(
+    storedEntries.every((operation) => {
+      const payload = JSON.parse(operation.fields["Metadata JSON"]);
+      return (
+        operation.applicationId === `${manifest.eventId}:${payload.entry.id}` &&
+        operation.fields["Agenda Version"] === manifest.eventId &&
+        payload.eventId === manifest.eventId
+      );
+    }),
+    true,
+  );
+});
+
+test("prepare is read-only and plans all writes", async () => {
+  const manifest = build();
+  const transport = fakeTransport();
+  const result = await prepareRepair({
+    manifest,
+    transport,
+    now: "2026-08-09T12:00:00.000Z",
+    writeManifest: false,
+  });
+  assert.equal(result.prepared.dryRun, true);
+  assert.equal(result.prepared.writes, 0);
+  assert.equal(transport.writes.length, 0);
+  assert.equal(transport.commands.length, 0);
+  assert.equal(
+    result.prepared.plan.some((action) => action.action === "create"),
+    true,
+  );
+});
+
+test("duplicate and optimistic drift are hard stops", async () => {
+  const manifest = build();
+  const first = manifest.operations[0];
+  await assert.rejects(
+    prepareRepair({
+      manifest,
+      transport: fakeTransport({ duplicateKey: first.key }),
+      writeManifest: false,
+    }),
+    (error) => error instanceof DevflowRepairError && error.code === "DUPLICATE_OBJECT",
+  );
+  const transport = fakeTransport();
+  transport.records.set(`${first.table}:${first.id}`, {
+    id: "existing-foundation",
+    fields: first.fields,
+  });
+  const prepared = await prepareRepair({ manifest, transport, writeManifest: false });
+  const drifted = fakeTransport({ driftKey: first.key });
+  drifted.records.set(`${first.table}:${first.id}`, {
+    id: "existing-foundation",
+    fields: first.fields,
+  });
+  await assert.rejects(
+    applyRepair({
+      manifest,
+      prepared,
+      transport: drifted,
+      confirm: REPAIR_CONFIRMATION,
+      options: { environment: "production" },
+    }),
+    (error) => error instanceof DevflowRepairError && error.code === "VERSION_CONFLICT",
+  );
+});
+
+test("partial failure can resume from the durable run ledger", async () => {
+  const manifest = build();
+  const transport = fakeTransport();
+  const prepared = await prepareRepair({ manifest, transport, writeManifest: false });
+  await assert.rejects(
+    applyRepair({ manifest, prepared, transport, confirm: REPAIR_CONFIRMATION, failureAfter: 1 }),
+    (error) => error instanceof DevflowRepairError && error.code === "PARTIAL_REPAIR",
+  );
+  const resumed = await resumeRepair({
+    manifest,
+    transport,
+    confirm: REPAIR_CONFIRMATION,
+    writeManifest: false,
+  });
+  assert.equal(resumed.status, "applied");
+  assert.equal(
+    Object.values(manifest.runLedger).every((entry) => entry.state === "complete"),
+    true,
+  );
+});
+
+test("apply verifies Airtable records when blank cells are omitted", async () => {
+  const manifest = build();
+  const transport = fakeTransport({ omitBlankFields: true });
+  const prepared = await prepareRepair({ manifest, transport, writeManifest: false });
+  const result = await applyRepair({
+    manifest,
+    prepared,
+    transport,
+    confirm: REPAIR_CONFIRMATION,
+  });
+  assert.equal(result.status, "applied");
+});
+
+test("prepare treats equivalent ISO-offset timestamps as unchanged", async () => {
+  const manifest = build();
+  const transport = fakeTransport();
+  const operation = manifest.operations.find((candidate) => candidate.table === "Speaker Tasks");
+  transport.records.set(`${operation.table}:${operation.id}`, {
+    id: "existing-speaker-task",
+    fields: {
+      ...operation.fields,
+      "Due At": new Date(operation.fields["Due At"]).toISOString(),
+    },
+  });
+  const prepared = await prepareRepair({ manifest, transport, writeManifest: false });
+  assert.equal(prepared.prepared.plan.find((item) => item.key === operation.key).action, "skip");
+});
+
+test("apply records unchanged operations without rewriting them", async () => {
+  const manifest = build();
+  const transport = fakeTransport();
+  const operation = manifest.operations.find((candidate) => candidate.table === "Events");
+  transport.records.set(`${operation.table}:${operation.id}`, {
+    id: "existing-event",
+    fields: operation.fields,
+  });
+  const prepared = await prepareRepair({ manifest, transport, writeManifest: false });
+  const result = await applyRepair({
+    manifest,
+    prepared,
+    transport,
+    confirm: REPAIR_CONFIRMATION,
+  });
+  assert.equal(result.status, "applied");
+  assert.equal(
+    transport.writes.some((write) => write.key === operation.key),
+    false,
+  );
+  assert.equal(manifest.runLedger[operation.key].skipped, true);
+});
+
+test("apply creates an unresolved identity before dependent writes", async () => {
+  const unresolved = identities();
+  delete unresolved["organizer-fixture"].userId;
+  unresolved["organizer-fixture"].verified = false;
+  const manifest = buildRepairManifest({ identities: unresolved });
+  const transport = fakeTransport();
+  const prepared = await prepareRepair({ manifest, transport, writeManifest: false });
+  let signupName;
+  const result = await applyRepair({
+    manifest,
+    prepared,
+    transport,
+    credentials: {
+      "organizer-fixture": {
+        password: "A-strong-test-password-2027",
+      },
+    },
+    options: {
+      apiOrigin: "https://api.example.test",
+      webOrigin: "https://web.example.test",
+      fetchImplementation: async (_url, init) => {
+        signupName = JSON.parse(init.body).name;
+        return new Response(JSON.stringify({ user: { id: IDS["organizer-fixture"] } }), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    },
+    confirm: REPAIR_CONFIRMATION,
+  });
+  assert.equal(result.status, "applied");
+  assert.equal(
+    manifest.identityLedger.find((identity) => identity.identityKey === "organizer-fixture")
+      ?.userId,
+    IDS["organizer-fixture"],
+  );
+  assert.equal(signupName, "Jordan Alvarez");
+});
+
+test("runRepair forwards production account origins to identity resolution", async () => {
+  const unresolved = identities();
+  delete unresolved["organizer-fixture"].userId;
+  unresolved["organizer-fixture"].verified = false;
+  const manifest = buildRepairManifest({ identities: unresolved });
+  const transport = fakeTransport();
+  let signupUrl;
+  const result = await runRepair({
+    phase: "apply",
+    manifest,
+    transport,
+    credentials: {
+      "organizer-fixture": {
+        password: "A-strong-test-password-2027",
+      },
+    },
+    environment: "production",
+    apiOrigin: "https://api.example.test",
+    webOrigin: "https://web.example.test",
+    fetchImplementation: async (url) => {
+      signupUrl = String(url);
+      return new Response(JSON.stringify({ user: { id: IDS["organizer-fixture"] } }), {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      });
+    },
+    confirm: REPAIR_CONFIRMATION,
+  });
+
+  assert.equal(result.status, "applied");
+  assert.equal(signupUrl, "https://api.example.test/api/auth/sign-up/email");
+});
+
+test("identity email collisions never merge by name or alias", () => {
+  const duplicate = identities();
+  duplicate["organizer-agenda"].email = duplicate["organizer-fixture"].email;
+  assert.throws(
+    () => buildRepairManifest({ identities: duplicate }),
+    (error) => error instanceof DevflowRepairError && error.code === "DUPLICATE_IDENTITY",
+  );
+});
+
+test("invariant report is read-only and seals the public graph", async () => {
+  const manifest = build();
+  const report = await readRepairInvariantReport({ manifest });
+  assert.equal(report.ok, true);
+  assert.equal(report.checks.publicGraph, true);
+  assert.equal(report.counts.publishedSessions, 3);
+  assert.equal(report.counts.unscheduledSessions, 1);
+});
+test("workflow reset plans without writes, removes unknown scoped records, and preserves protected records", async () => {
+  const manifest = build();
+  const transport = resetTransport();
+  addWorkflowRecords(transport, manifest);
+  const prepared = await prepareWorkflowReset({
+    manifest,
+    transport,
+    writeManifest: false,
+    now: "2026-08-09T12:00:00.000Z",
+  });
+  assert.equal(transport.writes.length, 0);
+  assert.equal(transport.commands.length, 0);
+  assert.ok(
+    prepared.prepared.plan.deletes.some((entry) => entry.id === "evaluator-created-unknown"),
+  );
+  assert.ok(
+    prepared.prepared.plan.deletes.some(
+      (entry) => entry.table === "Agenda Versions" && entry.id === "devflow-conf-2027",
+    ),
+  );
+  assert.ok(
+    prepared.prepared.plan.deletes.some(
+      (entry) =>
+        entry.table === "Published Speaker Projections" &&
+        entry.id === "published-speakers:devflow-conf-2027",
+    ),
+  );
+  const result = await applyWorkflowReset({
+    manifest,
+    prepared,
+    transport,
+    confirm: RESET_WORKFLOW_CONFIRMATION,
+    writeManifest: false,
+  });
+  assert.equal(result.status, "applied");
+  assert.ok(transport.deletes.some((operation) => operation.id === "evaluator-created-unknown"));
+  assert.ok(
+    transport.deletes.some(
+      (operation) => operation.table === "Agenda Versions" && operation.id === "devflow-conf-2027",
+    ),
+  );
+  assert.ok(
+    transport.deletes.some(
+      (operation) =>
+        operation.table === "Published Speaker Projections" &&
+        operation.id === "published-speakers:devflow-conf-2027",
+    ),
+  );
+  assert.equal(transport.records.has("Events:devflow-conf-2027"), true);
+  assert.equal(transport.records.has("Memberships:membership:keep"), true);
+  assert.equal(transport.records.has("Sessions:foreign-event-session"), true);
+  assert.equal(transport.records.has("Sessions:foreign-org-session"), true);
+  assert.equal(transport.writes.length, 0);
+  const second = await applyWorkflowReset({
+    manifest,
+    transport,
+    confirm: RESET_WORKFLOW_CONFIRMATION,
+    writeManifest: false,
+  });
+  assert.equal(second.writes, 0);
+  assert.equal(second.deletes, 0);
+});
+test("workflow reset persists legacy speaker-profile deletions across manifest roundtrip", async () => {
+  const manifest = build();
+  const transport = resetTransport();
+  addWorkflowRecords(transport, manifest);
+  const legacyId = "devflow-conf-2027-speaker-priya-raman";
+  transport.add(
+    "Speaker Profiles",
+    legacyId,
+    {
+      "Application ID": legacyId,
+      "Organization ID": "ai-engineer",
+      "Event ID": "devflow-conf-2027",
+      Participant: PARTICIPANT_IDS["speaker-priya"],
+    },
+    "legacy-speaker-profile-record",
+  );
+
+  const first = await prepareWorkflowReset({
+    manifest,
+    transport,
+    writeManifest: false,
+    now: "2026-08-09T12:00:00.000Z",
+  });
+  const persistedManifest = JSON.parse(JSON.stringify(first.manifest));
+  assert.ok(
+    persistedManifest.resetWorkflow.deletions.some(
+      (entry) => entry.table === "Speaker Profiles" && entry.id === legacyId,
+    ),
+  );
+
+  const prepared = await prepareWorkflowReset({
+    manifest: persistedManifest,
+    transport,
+    writeManifest: false,
+    now: "2026-08-09T12:00:00.000Z",
+  });
+  const result = await applyWorkflowReset({
+    manifest: persistedManifest,
+    prepared,
+    transport,
+    confirm: RESET_WORKFLOW_CONFIRMATION,
+    writeManifest: false,
+  });
+
+  assert.equal(result.status, "applied");
+  assert.ok(
+    transport.deletes.some(
+      (operation) => operation.table === "Speaker Profiles" && operation.id === legacyId,
+    ),
+  );
+  assert.equal(transport.records.has(`Speaker Profiles:${legacyId}`), false);
+  assert.ok(transport.deletes.some((operation) => operation.id === "evaluator-created-unknown"));
+  assert.equal(transport.records.has("Events:devflow-conf-2027"), true);
+  assert.equal(transport.records.has("Memberships:membership:keep"), true);
+  assert.equal(transport.records.has("Sessions:foreign-event-session"), true);
+  assert.equal(transport.records.has("Sessions:foreign-org-session"), true);
+});
+
+test("workflow reset resumes after a partial delete and rejects unsafe confirmation", async () => {
+  const manifest = build();
+  const transport = resetTransport();
+  addWorkflowRecords(transport, manifest);
+  const prepared = await prepareWorkflowReset({ manifest, transport, writeManifest: false });
+  await assert.rejects(
+    applyWorkflowReset({
+      manifest,
+      prepared,
+      transport,
+      confirm: "wrong",
+      writeManifest: false,
+    }),
+    (error) => error instanceof DevflowRepairError && error.code === "RESET_CONFIRMATION_REQUIRED",
+  );
+  await assert.rejects(
+    applyWorkflowReset({
+      manifest,
+      prepared,
+      transport,
+      confirm: RESET_WORKFLOW_CONFIRMATION,
+      failureAfter: 1,
+      writeManifest: false,
+    }),
+    (error) => error instanceof DevflowRepairError && error.code === "PARTIAL_RESET",
+  );
+  const resumed = await resumeWorkflowReset({
+    manifest,
+    transport,
+    confirm: RESET_WORKFLOW_CONFIRMATION,
+    writeManifest: false,
+  });
+  assert.equal(resumed.status, "applied");
+  assert.equal(
+    Object.values(manifest.resetLedger).every((entry) => entry.state === "complete"),
+    true,
+  );
+});
+
+test("reset CLI requires exact confirmation only for destructive mode", () => {
+  const plan = parseArguments(["--reset-workflow"]);
+  assert.equal(plan.phase, "reset-workflow");
+  assert.equal(plan.dryRun, true);
+  assert.throws(
+    () => parseArguments(["--reset-workflow", "--apply"]),
+    (error) => error instanceof DevflowRepairError && error.code === "RESET_CONFIRMATION_REQUIRED",
+  );
+  assert.throws(
+    () => parseArguments(["--reset-workflow", "--confirm", "no"]),
+    (error) => error instanceof DevflowRepairError && error.code === "RESET_CONFIRMATION_REQUIRED",
+  );
+  const apply = parseArguments(["--reset-workflow", "--confirm", "ai-engineer"]);
+  assert.equal(apply.dryRun, false);
+});

@@ -12,6 +12,7 @@ build/
 coverage/
 .turbo/
 *.tsbuildinfo
+Kill-My-SaaS-Competition-Brief/
 
 # Cloudflare and workflow runtime
 .wrangler/

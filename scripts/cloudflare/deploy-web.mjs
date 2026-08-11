@@ -146,14 +146,11 @@ function resolveOrigins(environment) {
     };
   }
 
-  const appOrigin = parseOrigin(process.env.NEXT_PUBLIC_APP_URL, "NEXT_PUBLIC_APP_URL", {
-    cloudflareWorker: true,
-    workerName: defaults.workerName,
-  });
+  const appOrigin = parseOrigin(process.env.NEXT_PUBLIC_APP_URL, "NEXT_PUBLIC_APP_URL");
   const apiOrigin = parseOrigin(process.env.NEXT_PUBLIC_API_URL, "NEXT_PUBLIC_API_URL");
   if (appOrigin !== defaults.appOrigin || apiOrigin !== defaults.apiOrigin) {
     throw new Error(
-      "NEXT_PUBLIC_APP_URL and NEXT_PUBLIC_API_URL must match the pinned web/API workers.dev origins for this environment.",
+      "NEXT_PUBLIC_APP_URL and NEXT_PUBLIC_API_URL must match the pinned web/API origins for this environment.",
     );
   }
   return { appOrigin, apiOrigin };
@@ -207,26 +204,31 @@ function containsWorkerArtifact(directory) {
 }
 
 function deploymentEnvironment(environment, origins, organizationId) {
+  const publicApiOrigin = environment === "local" ? origins.apiOrigin : origins.appOrigin;
   return {
     ...process.env,
     APP_ENV: environment,
+    API_UPSTREAM_ORIGIN: origins.apiOrigin,
     NEXT_PUBLIC_APP_ENV: environment,
     NEXT_PUBLIC_APP_URL: origins.appOrigin,
-    NEXT_PUBLIC_API_URL: origins.apiOrigin,
+    NEXT_PUBLIC_API_URL: publicApiOrigin,
     NEXT_PUBLIC_ORGANIZATION_ID: organizationId,
   };
 }
 
 function wranglerVariables(environment, origins, organizationId) {
+  const publicApiOrigin = environment === "local" ? origins.apiOrigin : origins.appOrigin;
   return [
     "--var",
     `APP_ENV:${environment}`,
+    "--var",
+    `API_UPSTREAM_ORIGIN:${origins.apiOrigin}`,
     "--var",
     `NEXT_PUBLIC_APP_ENV:${environment}`,
     "--var",
     `NEXT_PUBLIC_APP_URL:${origins.appOrigin}`,
     "--var",
-    `NEXT_PUBLIC_API_URL:${origins.apiOrigin}`,
+    `NEXT_PUBLIC_API_URL:${publicApiOrigin}`,
     "--var",
     `NEXT_PUBLIC_ORGANIZATION_ID:${organizationId}`,
   ];

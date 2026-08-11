@@ -8,6 +8,7 @@ const wranglerPath = join(repositoryRoot, "apps/api/wrangler.toml");
 const migrationsDirectory = join(repositoryRoot, "apps/api/migrations");
 const environments = ["local", "staging", "production"];
 const placeholderIdPattern = /^00000000-0000-0000-0000-00000000000\d$/;
+const CANONICAL_ORGANIZATION_ID = "ai-engineer";
 
 function parseArguments(argv) {
   let environment = "local";
@@ -104,6 +105,15 @@ function validateWrangler(source, options) {
   ) {
     throw new Error("Only local may use HTTP; staging and production origins must use HTTPS");
   }
+  const organizerOrganizationIds = collectValues(source, "ORGANIZER_AUTOJOIN_ORGANIZATION_ID");
+  if (
+    organizerOrganizationIds.length !== 2 ||
+    organizerOrganizationIds.some((value) => value !== CANONICAL_ORGANIZATION_ID)
+  ) {
+    throw new Error(
+      `ORGANIZER_AUTOJOIN_ORGANIZATION_ID must be ${CANONICAL_ORGANIZATION_ID} in staging and production`,
+    );
+  }
 
   for (const binding of ["DB", "AGENDA_COORDINATOR", "PRIVATE_FILES", "OUTBOX_QUEUE"]) {
     const count = collectValues(
@@ -117,7 +127,7 @@ function validateWrangler(source, options) {
 
   const databaseNames = collectValues(source, "database_name");
   const bucketNames = collectValues(source, "bucket_name");
-  const queueNames = collectValues(source, "queue");
+  const queueNames = [...new Set(collectValues(source, "queue"))];
   const databaseIds = collectValues(source, "database_id");
 
   for (const [label, values] of [

@@ -1,0 +1,91 @@
+{
+  "title": "Official evaluator manual verification",
+  "scope": {
+    "organizationId": "<EVAL_ORGANIZATION_ID>",
+    "eventId": "<EVAL_EVENT_ID>",
+    "targetUrl": "<EVAL_WEB_ORIGIN>",
+    "evidenceDirectory": "<run-directory>/manual"
+  },
+  "instructions": "Use only the explicitly provisioned evaluator personas. Record the target URL, persona, timestamp, exact action, observed result, and screenshot or message evidence for every check. Do not paste passwords or private inbox contents into evidence.",
+  "checks": [
+    {
+      "id": "receipt",
+      "label": "Submission receipt and status",
+      "personas": ["submitter", "organizer"],
+      "steps": [
+        "As submitter, submit a complete proposal for the configured event.",
+        "Capture the confirmation or receipt identifier and verify the submitted status appears after reload.",
+        "As organizer, confirm the same proposal is present under the exact configured organization and event.",
+        "As submitter, confirm the proposal is visible only in the submitter's own dashboard."
+      ],
+      "evidence": [],
+      "status": "pending"
+    },
+    {
+      "id": "reminder",
+      "label": "Outstanding-task and reviewer reminders",
+      "personas": ["organizer", "reviewer", "speaker"],
+      "steps": [
+        "Create or locate one incomplete speaker deliverable and one outstanding reviewer assignment.",
+        "Preview each reminder and confirm recipients are scoped to the selected event.",
+        "Send only through the evaluator's visible, explicit send control; record queued or sent state and idempotency behavior.",
+        "Verify no reminder is emitted merely by opening a record or adding a comment."
+      ],
+      "evidence": [],
+      "status": "pending"
+    },
+    {
+      "id": "calendar",
+      "label": "Calendar invitation, update, and cancellation",
+      "personas": ["organizer", "speaker"],
+      "steps": [
+        "Schedule a published session with a room, timezone, start, and end time.",
+        "Download or inspect the calendar artifact and verify UID, DTSTART/DTEND timezone semantics, room, and session title.",
+        "Move the session once and confirm the same UID is updated rather than duplicated.",
+        "Cancel or remove the session and verify the cancellation state is represented without changing another event."
+      ],
+      "evidence": [],
+      "status": "pending"
+    },
+    {
+      "id": "file",
+      "label": "File receipt, versioning, comments, and access",
+      "personas": ["speaker", "organizer"],
+      "steps": [
+        "As speaker, upload the requested headshot or presentation file and confirm the task receipt.",
+        "Upload a second version and verify the first version remains in immutable history.",
+        "Add a file comment, then confirm author and timestamp attribution.",
+        "As organizer, inspect the same event-scoped file and confirm download access; verify another speaker cannot see it."
+      ],
+      "evidence": [],
+      "status": "pending"
+    },
+    {
+      "id": "export",
+      "label": "Organizer export and latest-file selection",
+      "personas": ["organizer"],
+      "steps": [
+        "Generate the available submission, reviewer, agenda, or deliverables export for the configured event.",
+        "Verify the export is scoped to the exact organization and event and includes expected headers and records.",
+        "For a file archive, verify only the latest version is included unless history was explicitly selected.",
+        "Download or open the result and record readiness, filename, and any asynchronous notification without recording secrets."
+      ],
+      "evidence": [],
+      "status": "pending"
+    },
+    {
+      "id": "multi-user",
+      "label": "Multi-user isolation and role separation",
+      "personas": ["organizer", "reviewer", "speaker", "submitter"],
+      "steps": [
+        "Keep separate browser contexts or saved evaluator sessions for all four personas.",
+        "Confirm organizer can configure the event, reviewer sees only assigned review work, speaker sees only their portal records, and submitter sees only owned submissions.",
+        "Attempt organizer-only and cross-user record URLs from reviewer, speaker, and submitter contexts; record the explicit forbidden or not-found result.",
+        "Repeat one read and one mutation after signing out and back in to prove the session identity is not the host account.",
+        "Repeat the checks with the exact configured tenant and event IDs and confirm no data crosses either scope."
+      ],
+      "evidence": [],
+      "status": "pending"
+    }
+  ]
+}

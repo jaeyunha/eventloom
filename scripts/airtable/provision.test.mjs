@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   AirtableProvisionError,
@@ -102,6 +103,10 @@ test("creates the complete schema and is idempotent on a repeated apply", async 
   assert.deepEqual(second.updatedTables, []);
   assert.equal(mock.requests.length, requestsAfterFirstApply + 2);
   assert.equal(mock.requests.at(-1).method, "GET");
+  assert.equal(
+    mock.requests.some((request) => request.method === "DELETE" || request.method === "PUT"),
+    false,
+  );
 });
 
 test("dry-run reads metadata and emits a mutation plan without writing", async () => {
@@ -204,6 +209,104 @@ test("provisions the immutable published speaker projection table", () => {
       "Projection JSON",
     ],
   );
+});
+test("covers the expanded business-authority schema and sender identities", () => {
+  const requiredTables = [
+    "Sessions",
+    "Rooms",
+    "Tracks",
+    "Formats",
+    "Levels",
+    "Tags",
+    "Session Statuses",
+    "Session Settings",
+    "Portal Contexts",
+    "Session Roster",
+    "Task Forms",
+    "Task Responses",
+    "Portal Resources",
+    "Wiki Pages",
+    "File Assets",
+    "File Versions",
+    "File Comments",
+    "Email Templates",
+    "Email Send Snapshots",
+    "Report Definitions",
+    "Report Runs",
+    "Remix Candidates",
+    "Remix Audit",
+    "Reusable Fields",
+  ];
+  const definitions = new Map(TABLE_DEFINITIONS.map((definition) => [definition.name, definition]));
+  for (const tableName of requiredTables) {
+    const definition = definitions.get(tableName);
+    assert.ok(definition, `missing Airtable table definition: ${tableName}`);
+    const fieldNames = new Set(definition.fields.map((field) => field.name));
+    for (const fieldName of [
+      APPLICATION_ID_FIELD,
+      "Organization ID",
+      "Event ID",
+      "Version",
+      "Status",
+      "Settings JSON",
+      "Audit JSON",
+      "Provenance JSON",
+    ]) {
+      assert.equal(
+        fieldNames.has(fieldName),
+        true,
+        `${tableName} is missing required ${fieldName} field`,
+      );
+    }
+  }
+
+  const emailTemplate = definitions.get("Email Templates");
+  const senderField = emailTemplate?.fields.find((field) => field.name === "Sender");
+  assert.deepEqual(
+    senderField?.options?.choices?.map((choice) => choice.name),
+    [
+      "auth@sessionboard.namuh.co",
+      "speakers@sessionboard.namuh.co",
+      "calendar@sessionboard.namuh.co",
+    ],
+  );
+
+  const expectedSenders = [
+    "auth@sessionboard.namuh.co",
+    "speakers@sessionboard.namuh.co",
+    "calendar@sessionboard.namuh.co",
+  ];
+  const envExample = readFileSync(".env.example", "utf8");
+  const setupGuide = readFileSync("docs/setup.md", "utf8");
+  for (const sender of expectedSenders) {
+    assert.equal(envExample.includes(sender), true);
+    assert.equal(setupGuide.includes(sender), true);
+  }
+  assert.equal(envExample.includes("foreverbrowsing.com"), false);
+  assert.equal(setupGuide.includes("foreverbrowsing.com"), false);
+  assert.equal(readFileSync("ARCHITECTURE.md", "utf8").includes("Accelevents"), false);
+});
+test("declares dedicated CRM authority tables and payload fields", () => {
+  const definitions = new Map(TABLE_DEFINITIONS.map((definition) => [definition.name, definition]));
+  const payloadFields = new Map([
+    ["CRM Contacts", "Contact JSON"],
+    ["CRM Segments", "Segment JSON"],
+    ["CRM History", "History JSON"],
+    ["CRM Pipeline", "Pipeline JSON"],
+    ["CRM Notes", "Note JSON"],
+    ["CRM Event Projections", "Projection JSON"],
+    ["CRM Outreach", "Outreach JSON"],
+    ["CRM Imports", "Import JSON"],
+    ["CRM Commands", "Result JSON"],
+  ]);
+  for (const [tableName, payloadField] of payloadFields) {
+    const definition = definitions.get(tableName);
+    assert.ok(definition, `missing CRM table definition: ${tableName}`);
+    const fields = new Set(definition.fields.map((field) => field.name));
+    assert.equal(fields.has(APPLICATION_ID_FIELD), true);
+    assert.equal(fields.has("Organization ID"), true);
+    assert.equal(fields.has(payloadField), true);
+  }
 });
 
 test("validates configuration and command modes", () => {

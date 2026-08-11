@@ -22,7 +22,7 @@ function usage() {
   return [
     "Usage: node scripts/release/preflight.mjs --environment <local|staging|production>",
     "  --env local=<path|-> --env staging=<path|-> --env production=<path|->",
-    "  [--require-providers accelevents] [--offline]",
+    "  [--require-providers accelevents] [--migration-report <path|->] [--offline]",
     "",
     'Use "-" for exactly one environment to read that environment from the current process.',
   ].join("\n");
@@ -34,6 +34,7 @@ function parseArguments(argv) {
     environmentSources: {},
     offline: false,
     requiredProviders: [],
+    migrationReportSource: "",
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -65,6 +66,19 @@ function parseArguments(argv) {
         .map((provider) => provider.trim())
         .filter(Boolean);
       index += 1;
+    } else if (argument === "--migration-report") {
+      const source = argv[index + 1] ?? "";
+      index += 1;
+      if (!source) {
+        throw new PreflightError(
+          "INVALID_ARGUMENT",
+          "--migration-report must name a JSON file or '-'",
+        );
+      }
+      if (options.migrationReportSource) {
+        throw new PreflightError("INVALID_ARGUMENT", "Duplicate --migration-report");
+      }
+      options.migrationReportSource = source;
     } else if (argument === "--offline") {
       options.offline = true;
     } else if (argument === "--help" || argument === "-h") {
@@ -101,6 +115,29 @@ function loadConfiguration(environment, source) {
     );
   }
 }
+function loadMigrationReport(source) {
+  if (!source) return undefined;
+  let serialized;
+  try {
+    serialized = source === "-" ? readFileSync(0, "utf8") : readFileSync(resolve(source), "utf8");
+  } catch {
+    throw new PreflightError(
+      "MIGRATION_REPORT_UNREADABLE",
+      "Could not read the organization ID migration report",
+    );
+  }
+  if (Buffer.byteLength(serialized, "utf8") > 256 * 1024) {
+    throw new PreflightError(
+      "INVALID_MIGRATION_REPORT",
+      "Migration report exceeds the bounded evidence limit",
+    );
+  }
+  try {
+    return JSON.parse(serialized);
+  } catch {
+    throw new PreflightError("INVALID_MIGRATION_REPORT", "Migration report must be valid JSON");
+  }
+}
 
 function addRuntimeCredentials(configuration) {
   const merged = { ...configuration };
@@ -124,6 +161,7 @@ async function run() {
       loadConfiguration(environment, options.environmentSources[environment]),
     ]),
   );
+  const migrationReport = loadMigrationReport(options.migrationReportSource);
   const wranglerInventory = parseWranglerInventory(readFileSync(wranglerPath, "utf8"));
   const validation = validateReleaseConfiguration({
     configurations,
@@ -134,6 +172,7 @@ async function run() {
   const migrationReadiness = inspectOrganizationIdMigrationReadiness({
     configurations,
     wranglerInventory,
+    migrationReport,
   });
 
   const checks = [

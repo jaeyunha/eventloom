@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   inspectOrganizationIdMigrationReadiness,
+  ORGANIZATION_ID_MIGRATION,
   PreflightError,
   parseDotEnv,
+  validateOrganizationIdMigrationReport,
   validateReleaseConfiguration,
   verifyCloudflare,
   verifyForgePrivacy,
@@ -67,6 +69,50 @@ function fixtures() {
     ]),
   );
   return { configurations, wranglerInventory };
+}
+function migrationReport(overrides = {}) {
+  return {
+    sourceId: ORGANIZATION_ID_MIGRATION.sourceId,
+    targetId: ORGANIZATION_ID_MIGRATION.targetId,
+    mode: "dry-run",
+    status: "ready",
+    ready: true,
+    readyForApply: true,
+    namespaces: {
+      d1: environments.map((environment, index) => ({
+        environment,
+        databaseId: `migration-d1-${index + 1}`,
+        databaseName: `migration-${environment}`,
+        tables: 1,
+      })),
+      airtable: environments.map((environment) => ({
+        environment,
+        baseId: `migration-base-${environment}`,
+        tables: 1,
+      })),
+      r2: environments.map((environment) => ({
+        environment,
+        bucketName: `migration-bucket-${environment}`,
+        objectInventoryComplete: true,
+      })),
+      queue: environments.map((environment) => ({
+        environment,
+        queueName: `migration-queue-${environment}`,
+        deadLetterQueueName: `migration-dlq-${environment}`,
+        messagesInspectable: true,
+        drainConfirmed: true,
+      })),
+    },
+    counts: {
+      d1: { sourceRows: 0, targetRows: 0, rewritableRows: 0 },
+      airtable: { sourceRecords: 0, targetRecords: 0, rewritableRecords: 0 },
+      r2: { legacyKeys: 0, targetCollisions: 0 },
+      queue: { queues: 3, deadLetterQueues: 0, messages: 0 },
+    },
+    blockers: [],
+    protectedBoundaries: [...ORGANIZATION_ID_MIGRATION.protectedBoundaries],
+    ...overrides,
+  };
 }
 
 function jsonResponse(payload, status = 200) {
@@ -272,4 +318,113 @@ test("exposes bounded organization migration readiness without configuration val
     JSON.stringify(readiness).includes(configurations.production.AIRTABLE_ACCESS_TOKEN),
     false,
   );
+});
+test("requires bounded dry-run evidence before online migration readiness", () => {
+  const { configurations, wranglerInventory } = fixtures();
+  const validation = validateOrganizationIdMigrationReport(undefined);
+  assert.equal(validation.valid, false);
+  assert.equal(validation.code, "MIGRATION_REPORT_REQUIRED");
+
+  const readiness = inspectOrganizationIdMigrationReadiness({
+    configurations,
+    wranglerInventory,
+  });
+  assert.equal(readiness.ready, false);
+  assert.equal(readiness.status, "requires-dry-run");
+  assert.equal(readiness.evidence.supplied, false);
+  assert.equal(readiness.evidence.valid, false);
+  assert.equal(readiness.blockers[0].code, "MIGRATION_REPORT_REQUIRED");
+});
+
+test("rejects migration evidence with an unapproved identity target", () => {
+  const { configurations, wranglerInventory } = fixtures();
+  const report = migrationReport({ targetId: "unexpected-organization" });
+  const validation = validateOrganizationIdMigrationReport(report);
+  assert.equal(validation.valid, false);
+  assert.equal(validation.code, "INVALID_MIGRATION_REPORT");
+
+  const readiness = inspectOrganizationIdMigrationReadiness({
+    configurations,
+    wranglerInventory,
+    migrationReport: report,
+  });
+  assert.equal(readiness.ready, false);
+  assert.equal(readiness.status, "blocked");
+  assert.equal(readiness.blockers[0].code, "INVALID_MIGRATION_REPORT");
+});
+
+test("rejects migration evidence that reports blocking findings", () => {
+  const { configurations, wranglerInventory } = fixtures();
+  const report = migrationReport({
+    status: "blocked",
+    blockers: [{ code: "TARGET_COLLISION", message: "target collision" }],
+  });
+  const validation = validateOrganizationIdMigrationReport(report);
+  assert.equal(validation.valid, false);
+  assert.equal(validation.code, "MIGRATION_REPORT_BLOCKED");
+
+  const readiness = inspectOrganizationIdMigrationReadiness({
+    configurations,
+    wranglerInventory,
+    migrationReport: report,
+  });
+  assert.equal(readiness.ready, false);
+  assert.equal(readiness.status, "blocked");
+  assert.equal(readiness.blockers[0].code, "MIGRATION_REPORT_BLOCKED");
+});
+
+test("accepts only a ready, bounded dry-run report", () => {
+  const { configurations, wranglerInventory } = fixtures();
+  const report = migrationReport();
+  const validation = validateOrganizationIdMigrationReport(report);
+  assert.equal(validation.valid, true);
+
+  const readiness = inspectOrganizationIdMigrationReadiness({
+    configurations,
+    wranglerInventory,
+    migrationReport: report,
+  });
+  assert.equal(readiness.ready, true);
+  assert.equal(readiness.status, "ready");
+  assert.equal(readiness.evidence.supplied, true);
+  assert.equal(readiness.evidence.valid, true);
+  assert.deepEqual(readiness.blockers, []);
+  assert.equal(
+    JSON.stringify(readiness).includes(configurations.production.CLOUDFLARE_API_TOKEN),
+    false,
+  );
+});
+
+test("keeps static organization blockers authoritative over valid migration evidence", () => {
+  const { configurations, wranglerInventory } = fixtures();
+  configurations.production.ORGANIZER_AUTOJOIN_ORGANIZATION_ID = ORGANIZATION_ID_MIGRATION.sourceId;
+
+  const readiness = inspectOrganizationIdMigrationReadiness({
+    configurations,
+    wranglerInventory,
+    migrationReport: migrationReport(),
+  });
+  assert.equal(readiness.ready, false);
+  assert.equal(readiness.status, "blocked");
+  assert.equal(
+    readiness.blockers.some((blocker) => blocker.code === "LEGACY_ORGANIZATION_ID_CONFIGURATION"),
+    true,
+  );
+});
+
+test("rejects secret-bearing migration evidence without exposing its value", () => {
+  const { configurations, wranglerInventory } = fixtures();
+  const secret = "migration-report-secret";
+  const report = migrationReport({ credentials: { token: secret } });
+  const validation = validateOrganizationIdMigrationReport(report);
+  assert.equal(validation.valid, false);
+  assert.equal(validation.code, "INVALID_MIGRATION_REPORT");
+
+  const readiness = inspectOrganizationIdMigrationReadiness({
+    configurations,
+    wranglerInventory,
+    migrationReport: report,
+  });
+  assert.equal(readiness.ready, false);
+  assert.equal(JSON.stringify(readiness).includes(secret), false);
 });

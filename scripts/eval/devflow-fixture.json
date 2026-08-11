@@ -1,0 +1,61 @@
+{
+  "source": "/tmp/killmysaas-evals/fixtures/sample-data.json",
+  "organizationId": "ai-engineer",
+  "eventId": "devflow-conf-2027",
+  "timezone": "America/Los_Angeles",
+  "event": {
+    "startsAt": "2027-05-12T07:00:00.000Z",
+    "endsAt": "2027-05-14T23:59:59.999Z"
+  },
+  "cfp": {
+    "formId": "devflow-conf-2027-cfp",
+    "closeAt": "2027-04-30T23:59:59-07:00",
+    "closeDate": "2027-04-30",
+    "opensAt": "2026-08-01T00:00:00.000Z",
+    "keyTakeawayFieldId": "field-key-takeaway",
+    "audienceLevelFieldId": "field-audience-level",
+    "workshopPrerequisitesFieldId": "field-workshop-prerequisites",
+    "workshopRuleId": "rule-workshop-prerequisites",
+    "maxSubmissionsPerAccount": 10
+  },
+  "settings": {
+    "id": "settings:devflow-conf-2027",
+    "statuses": ["draft", "confirmed", "cancelled"],
+    "agendaEligibleStatuses": ["confirmed"]
+  },
+  "subsetFallback": {
+    "reviewPlanId": "devflow-conf-2027-initial-review",
+    "agendaRevisionId": "devflow-conf-2027-agenda-revision-1",
+    "speakerProjectionRevisionId": "devflow-conf-2027-speakers-revision-1",
+    "publishedAt": "2026-08-09T12:00:00.000Z",
+    "marcusSessionTitle": "Lightning: Agents in Production Q&A"
+  },
+  "repair": {
+    "manifestVersion": "repair:v5",
+    "identityKeys": [
+      "organizer-agenda",
+      "organizer-fixture",
+      "reviewer-sam",
+      "speaker-priya",
+      "speaker-marcus",
+      "submitter"
+    ],
+    "reviewWindow": {
+      "opensAt": "2026-08-01T00:00:00.000Z",
+      "closesAt": "2027-04-30T23:59:59.000Z"
+    },
+    "publishedAt": "2026-08-09T12:00:00.000Z",
+    "keyTakeaways": {
+      "taming-40-minute-ci-incremental-builds-at-monorepo-scale": "Design incremental-build investments around repository size, cache correctness, and measurable CI feedback time.",
+      "your-ai-pair-programmer-is-lying-to-you-verification-patterns-that-scale": "Use layered verification, mutation evidence, and explicit CI gates before trusting generated code.",
+      "docs-that-answer-back-retrieval-grounded-documentation-sites": "Build retrieval-grounded docs that cite sources, admit uncertainty, and stay inexpensive to operate."
+    },
+    "taskPolicy": {
+      "defaultDueAt": "2027-04-01T23:59:59-07:00",
+      "slidesDueAt": "2027-05-01T23:59:59-07:00"
+    },
+    "communication": {
+      "templateId": "devflow-conf-2027:communication:acceptance"
+    }
+  }
+}

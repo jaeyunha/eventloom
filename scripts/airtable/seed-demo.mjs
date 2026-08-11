@@ -3,7 +3,7 @@ import {
   createLocalDemoSpeakerGallery,
 } from "../../apps/web/src/features/embed/demo/projections.ts";
 
-const organizationId = process.env.NEXT_PUBLIC_ORGANIZATION_ID?.trim() || "foreverbrowsing";
+const organizationId = process.env.NEXT_PUBLIC_ORGANIZATION_ID?.trim() || "ai-engineer";
 const eventId = "open-sessionboard-conf";
 const formId = "main-cfp";
 const token = process.env.AIRTABLE_ACCESS_TOKEN?.trim();
@@ -23,6 +23,9 @@ const event = {
   slug: eventId,
   name: agenda.event.name,
   timezone: agenda.event.timeZone,
+  status: "published",
+  startsAt: "2026-09-18T16:00:00.000Z",
+  endsAt: "2026-09-20T00:00:00.000Z",
   opensAt: "2026-08-01T07:00:00.000Z",
   closesAt: "2026-09-15T07:00:00.000Z",
 };
