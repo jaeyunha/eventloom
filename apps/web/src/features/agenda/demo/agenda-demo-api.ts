@@ -1,4 +1,10 @@
-import { type AgendaApi, AgendaApiError } from "../api";
+import {
+  type AgendaApi,
+  AgendaApiError,
+  type AgendaSuggestionChange,
+  type AgendaSuggestionRule,
+  type AgendaSuggestionRun,
+} from "../api";
 import type {
   AgendaConflict,
   AgendaEntry,
@@ -171,6 +177,179 @@ function demoError(code: string, message: string, status: number): AgendaApiErro
   return new AgendaApiError(code, message, status);
 }
 
+interface SuggestionCriteria {
+  readonly dates: readonly string[];
+  readonly eligibleStatuses: readonly string[];
+  readonly roomIds: readonly string[];
+  readonly dayWindows: readonly {
+    readonly date: string;
+    readonly startLocal: string;
+    readonly endLocal: string;
+  }[];
+  readonly orderedRules: readonly AgendaSuggestionRule[];
+  readonly ignoreExistingTimes: boolean;
+  readonly ignoreExistingRooms: boolean;
+}
+
+interface StoredSuggestionChange extends AgendaSuggestionChange {
+  readonly before: AgendaEntry | null;
+  readonly after: AgendaEntry | null;
+}
+
+interface StoredSuggestionRun {
+  readonly run: AgendaSuggestionRun;
+  readonly criteria: SuggestionCriteria;
+  readonly changes: readonly StoredSuggestionChange[];
+}
+
+function localClockMinutes(value: string): number | null {
+  const match = /^(\d{2}):(\d{2})$/.exec(value);
+  if (!match?.[1] || !match[2]) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  return hours <= 23 && minutes <= 59 ? hours * 60 + minutes : null;
+}
+
+function localDateTime(date: string, minutes: number): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isInteger(minutes)) return null;
+  const timestamp = Date.parse(`${date}T00:00:00.000Z`);
+  if (Number.isNaN(timestamp)) return null;
+  return new Date(timestamp + minutes * 60_000).toISOString().slice(0, 16);
+}
+
+function suggestionCriteria(input: {
+  readonly dates: readonly string[];
+  readonly eligibleStatuses: readonly string[];
+  readonly roomIds: readonly string[];
+  readonly dayWindows: readonly {
+    readonly date: string;
+    readonly startLocal: string;
+    readonly endLocal: string;
+  }[];
+  readonly orderedRules: readonly AgendaSuggestionRule[];
+  readonly ignoreExistingTimes: boolean;
+  readonly ignoreExistingRooms: boolean;
+}): SuggestionCriteria {
+  return {
+    dates: [...input.dates],
+    eligibleStatuses: [...input.eligibleStatuses],
+    roomIds: [...input.roomIds],
+    dayWindows: input.dayWindows.map((window) => ({ ...window })),
+    orderedRules: clone(input.orderedRules),
+    ignoreExistingTimes: input.ignoreExistingTimes,
+    ignoreExistingRooms: input.ignoreExistingRooms,
+  };
+}
+
+function suggestionEntry(
+  session: AgendaSession,
+  room: (typeof rooms)[number],
+  track: (typeof tracks)[number],
+  date: string,
+  startMinutes: number,
+): AgendaEntry | null {
+  const startsAtLocal = localDateTime(date, startMinutes);
+  const endsAtLocal = localDateTime(date, startMinutes + session.durationMinutes);
+  if (!startsAtLocal || !endsAtLocal) return null;
+  return {
+    id: `entry_${session.id}`,
+    sessionId: session.id,
+    title: session.title,
+    format: session.format,
+    speakerNames: [...session.speakerNames],
+    roomId: room.id,
+    roomName: room.name,
+    trackIds: [track.id],
+    trackNames: [track.name],
+    startsAtLocal,
+    endsAtLocal,
+  };
+}
+
+function findSuggestionPlacement(
+  session: AgendaSession,
+  scheduledEntries: readonly AgendaEntry[],
+  criteria: SuggestionCriteria,
+): AgendaEntry | null {
+  const track = tracks.find((candidate) => candidate.id === "track_practice") ?? tracks[0];
+  if (!track) return null;
+  for (const window of criteria.dayWindows) {
+    if (!criteria.dates.includes(window.date)) continue;
+    const windowStart = localClockMinutes(window.startLocal);
+    const windowEnd = localClockMinutes(window.endLocal);
+    if (windowStart === null || windowEnd === null || windowEnd <= windowStart) continue;
+    for (
+      let startMinutes = windowStart;
+      startMinutes + session.durationMinutes <= windowEnd;
+      startMinutes += 15
+    ) {
+      for (const roomId of criteria.roomIds) {
+        const room = rooms.find((candidate) => candidate.id === roomId);
+        if (!room) continue;
+        const candidate = suggestionEntry(session, room, track, window.date, startMinutes);
+        if (!candidate || conflictsFor([...scheduledEntries, candidate]).length > 0) continue;
+        return candidate;
+      }
+    }
+  }
+  return null;
+}
+
+function buildSuggestion(
+  id: string,
+  version: number,
+  baseDraftVersion: number,
+  entries: readonly AgendaEntry[],
+  criteria: SuggestionCriteria,
+): StoredSuggestionRun {
+  const scheduledSessionIds = new Set(entries.map((entry) => entry.sessionId));
+  const proposedEntries = [...entries];
+  const changes: StoredSuggestionChange[] = [];
+  for (const session of sessions) {
+    if (scheduledSessionIds.has(session.id)) continue;
+    const placement = findSuggestionPlacement(session, proposedEntries, criteria);
+    if (!placement) continue;
+    proposedEntries.push(placement);
+    scheduledSessionIds.add(session.id);
+    changes.push({
+      id: `change_${version}_${changes.length + 1}`,
+      kind: "add",
+      entryId: placement.id,
+      sessionId: placement.sessionId,
+      summary: `Add ${placement.title} to ${placement.roomName} at ${placement.startsAtLocal}.`,
+      before: null,
+      after: placement,
+    });
+  }
+  const publicChanges: readonly AgendaSuggestionChange[] = changes.map(
+    ({ before: _before, after: _after, ...change }) => change,
+  );
+  const conflicts = conflictsFor(proposedEntries).map(({ id: conflictId, kind, message }) => ({
+    id: conflictId,
+    kind,
+    message,
+  }));
+  return {
+    run: {
+      id,
+      version,
+      status: "pending",
+      baseDraftVersion,
+      diff: {
+        summary:
+          publicChanges.length === 0
+            ? "No deterministic placements are available for the selected criteria."
+            : `${publicChanges.length} deterministic placement${publicChanges.length === 1 ? "" : "s"} are ready for human review.`,
+        changes: publicChanges,
+      },
+      validation: { conflicts },
+      acceptedChangeIds: [],
+    },
+    criteria,
+    changes,
+  };
+}
+
 export function createAgendaDemoApi(eventId: string): AgendaApi {
   let version = 3;
   let mutationCount = 0;
@@ -187,6 +366,8 @@ export function createAgendaDemoApi(eventId: string): AgendaApi {
       current: true,
     },
   ];
+  let suggestionSequence = 0;
+  const suggestionRuns = new Map<string, StoredSuggestionRun>();
 
   function timestamp(): string {
     return new Date(Date.parse(INITIAL_TIMESTAMP) + mutationCount * 60_000).toISOString();
@@ -284,6 +465,140 @@ export function createAgendaDemoApi(eventId: string): AgendaApi {
       endsAtLocal: input.endsAtLocal,
     };
   }
+  function requireSuggestion(runId: string): StoredSuggestionRun {
+    const stored = suggestionRuns.get(runId);
+    if (!stored) {
+      throw demoError("SUGGESTION_NOT_FOUND", "The local agenda suggestion was not found.", 404);
+    }
+    return stored;
+  }
+
+  function validateSuggestionInput(input: {
+    readonly dates: readonly string[];
+    readonly eligibleStatuses: readonly string[];
+    readonly roomIds: readonly string[];
+    readonly dayWindows: readonly {
+      readonly date: string;
+      readonly startLocal: string;
+      readonly endLocal: string;
+    }[];
+    readonly orderedRules: readonly AgendaSuggestionRule[];
+    readonly ignoreExistingTimes: boolean;
+    readonly ignoreExistingRooms: boolean;
+  }): SuggestionCriteria {
+    if (
+      input.dates.length === 0 ||
+      input.eligibleStatuses.length === 0 ||
+      input.roomIds.length === 0 ||
+      input.dayWindows.length === 0
+    ) {
+      throw demoError(
+        "SUGGESTION_INVALID",
+        "Provide dates, eligible statuses, rooms, and day windows for the suggestion.",
+        400,
+      );
+    }
+    if (new Set(input.dates).size !== input.dates.length) {
+      throw demoError("SUGGESTION_INVALID", "Suggestion dates must be unique.", 400);
+    }
+    if (new Set(input.roomIds).size !== input.roomIds.length) {
+      throw demoError("SUGGESTION_INVALID", "Suggestion rooms must be unique.", 400);
+    }
+    if (input.roomIds.some((roomId) => !rooms.some((room) => room.id === roomId))) {
+      throw demoError("SUGGESTION_INVALID", "Choose valid rooms for the suggestion.", 400);
+    }
+    if (
+      input.dates.some((date) => !/^\d{4}-\d{2}-\d{2}$/.test(date)) ||
+      input.dayWindows.some(
+        (window) =>
+          !input.dates.includes(window.date) ||
+          localClockMinutes(window.startLocal) === null ||
+          localClockMinutes(window.endLocal) === null,
+      )
+    ) {
+      throw demoError("SUGGESTION_INVALID", "Suggestion dates and windows are invalid.", 400);
+    }
+    return suggestionCriteria(input);
+  }
+
+  function nextSuggestionId(): string {
+    suggestionSequence += 1;
+    return `suggestion_${suggestionSequence}`;
+  }
+
+  function pendingSuggestion(stored: StoredSuggestionRun): void {
+    if (stored.run.status !== "pending") {
+      throw demoError(
+        "SUGGESTION_STATE_INVALID",
+        `The local agenda suggestion is already ${stored.run.status}.`,
+        409,
+      );
+    }
+  }
+  function applySuggestionChanges(
+    stored: StoredSuggestionRun,
+    acceptedChangeIds: readonly string[],
+  ): readonly AgendaEntry[] {
+    if (acceptedChangeIds.length === 0) {
+      throw demoError("SUGGESTION_INVALID", "Choose at least one suggestion change to apply.", 400);
+    }
+    if (new Set(acceptedChangeIds).size !== acceptedChangeIds.length) {
+      throw demoError("SUGGESTION_INVALID", "A suggestion change cannot be selected twice.", 400);
+    }
+    const selected = acceptedChangeIds.map((changeId) => {
+      const change = stored.changes.find((candidate) => candidate.id === changeId);
+      if (!change) {
+        throw demoError("SUGGESTION_INVALID", `Suggestion change not found: ${changeId}.`, 400);
+      }
+      return change;
+    });
+    let nextEntries = [...entries];
+    for (const change of selected) {
+      const index = nextEntries.findIndex((entry) => entry.id === change.entryId);
+      if (change.kind === "add") {
+        if (change.after === null || index >= 0) {
+          throw demoError(
+            "SUGGESTION_CONFLICT",
+            "The selected suggestion no longer matches the private draft.",
+            409,
+          );
+        }
+        nextEntries.push(clone(change.after));
+      } else if (change.kind === "remove") {
+        if (index < 0) {
+          throw demoError(
+            "SUGGESTION_CONFLICT",
+            "The selected suggestion no longer matches the private draft.",
+            409,
+          );
+        }
+        nextEntries = nextEntries.filter((entry) => entry.id !== change.entryId);
+      } else {
+        const after = change.after;
+        if (after === null || index < 0) {
+          throw demoError(
+            "SUGGESTION_CONFLICT",
+            "The selected suggestion no longer matches the private draft.",
+            409,
+          );
+        }
+        nextEntries = nextEntries.map((entry) =>
+          entry.id === change.entryId ? clone(after) : entry,
+        );
+      }
+    }
+    const conflicts = conflictsFor(nextEntries);
+    if (conflicts.length > 0) {
+      throw new AgendaApiError(
+        "SUGGESTION_CONFLICT",
+        "The selected suggestion introduces hard agenda conflicts.",
+        409,
+        undefined,
+        { conflicts },
+      );
+    }
+    return nextEntries;
+  }
 
   return {
     async getWorkspace(requestedEventId, signal) {
@@ -372,6 +687,82 @@ export function createAgendaDemoApi(eventId: string): AgendaApi {
         ...revisions,
       ];
       return workspace();
+    },
+    async generateSuggestion(input) {
+      assertEvent(input.eventId);
+      assertVersion(input.baseDraftVersion);
+      const criteria = validateSuggestionInput(input);
+      const stored = buildSuggestion(
+        nextSuggestionId(),
+        1,
+        input.baseDraftVersion,
+        entries,
+        criteria,
+      );
+      suggestionRuns.set(stored.run.id, stored);
+      return clone(stored.run);
+    },
+    async regenerateSuggestion(input) {
+      assertEvent(input.eventId);
+      const previous = requireSuggestion(input.runId);
+      if (previous.run.status === "applied" || previous.run.status === "superseded") {
+        throw demoError(
+          "SUGGESTION_STATE_INVALID",
+          `The local agenda suggestion is already ${previous.run.status}.`,
+          409,
+        );
+      }
+      assertVersion(input.baseDraftVersion);
+      if (previous.run.status === "pending") {
+        suggestionRuns.set(previous.run.id, {
+          ...previous,
+          run: { ...previous.run, status: "superseded" },
+        });
+      }
+      const stored = buildSuggestion(
+        nextSuggestionId(),
+        previous.run.version + 1,
+        input.baseDraftVersion,
+        entries,
+        previous.criteria,
+      );
+      suggestionRuns.set(stored.run.id, stored);
+      return clone(stored.run);
+    },
+    async rejectSuggestion(input) {
+      assertEvent(input.eventId);
+      const stored = requireSuggestion(input.runId);
+      pendingSuggestion(stored);
+      const rejected: StoredSuggestionRun = {
+        ...stored,
+        run: { ...stored.run, status: "rejected" },
+      };
+      suggestionRuns.set(input.runId, rejected);
+      return clone(rejected.run);
+    },
+    async applySuggestion(input) {
+      assertEvent(input.eventId);
+      const stored = requireSuggestion(input.runId);
+      pendingSuggestion(stored);
+      assertVersion(stored.run.baseDraftVersion);
+      const nextEntries = applySuggestionChanges(stored, input.acceptedChangeIds);
+      entries = nextEntries;
+      overrides = new Map();
+      touch();
+      const applied: StoredSuggestionRun = {
+        ...stored,
+        run: {
+          ...stored.run,
+          status: "applied",
+          acceptedChangeIds: [...input.acceptedChangeIds],
+        },
+      };
+      suggestionRuns.set(input.runId, applied);
+      return workspace();
+    },
+    async getSuggestion(input) {
+      assertEvent(input.eventId);
+      return clone(requireSuggestion(input.runId).run);
     },
   };
 }

@@ -15,7 +15,7 @@ export interface ReviewWorkspaceProps {
   eventId?: string;
   mode?: ReviewWorkspaceMode;
   initialState?: ReviewWorkspaceInitialState;
-  organizationId?: string;
+  organizationId?: string | undefined;
   memberApi?: MemberApi;
 }
 
@@ -200,6 +200,7 @@ export interface EvaluatorAssignment {
   readonly assignmentStatus?: ApiAssignment["status"] | undefined;
   readonly track?: string | null | undefined;
   readonly participants?: readonly AggregateParticipant[] | undefined;
+  readonly identityRedacted?: boolean | undefined;
   readonly submissionFields?:
     | readonly {
         readonly id?: string | undefined;
@@ -327,6 +328,7 @@ interface ApiReviewContext {
       readonly role?: string | undefined;
     }[];
     answers?: Readonly<Record<string, unknown>>;
+    identityRedacted?: boolean;
   };
   review: {
     version: number;
@@ -834,20 +836,32 @@ function readableSubmissionFieldLabel(fieldId: string): string {
     .trim();
   return label.length === 0 ? "Submission detail" : label.charAt(0).toUpperCase() + label.slice(1);
 }
+function isAccountIdentityField(fieldId: string): boolean {
+  const normalizedId = fieldId.toLowerCase().replace(/[^a-z0-9]/gu, "");
+  return (
+    normalizedId.includes("email") ||
+    normalizedId.includes("name") ||
+    normalizedId === "first" ||
+    normalizedId === "last"
+  );
+}
 
 function submissionFields(
   answers: Readonly<Record<string, unknown>> | undefined,
+  redactIdentity = false,
 ): readonly { id: string; label: string; value: string }[] {
   if (answers === undefined) return [];
-  return Object.entries(answers).flatMap(([id, value]) => {
-    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-      return [{ id, label: readableSubmissionFieldLabel(id), value: String(value) }];
-    }
-    if (Array.isArray(value) && value.every((entry) => typeof entry === "string")) {
-      return [{ id, label: readableSubmissionFieldLabel(id), value: value.join(", ") }];
-    }
-    return [];
-  });
+  return Object.entries(answers)
+    .filter(([id]) => !redactIdentity || !isAccountIdentityField(id))
+    .flatMap(([id, value]) => {
+      if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+        return [{ id, label: readableSubmissionFieldLabel(id), value: String(value) }];
+      }
+      if (Array.isArray(value) && value.every((entry) => typeof entry === "string")) {
+        return [{ id, label: readableSubmissionFieldLabel(id), value: value.join(", ") }];
+      }
+      return [];
+    });
 }
 
 function submissionTrack(
@@ -983,7 +997,11 @@ function mapEvaluatorAssignment(
     assignmentStatus: context.assignment.status,
     track: submissionTrack(round, context.submission.answers),
     participants: context.submission.participants ?? [],
-    submissionFields: submissionFields(context.submission.answers),
+    identityRedacted: context.submission.identityRedacted === true,
+    submissionFields: submissionFields(
+      context.submission.answers,
+      round.blindReview === true || context.submission.identityRedacted === true,
+    ),
     round,
     aiSuggestions,
     suggestions,
@@ -1000,13 +1018,15 @@ async function loadReviewerWorkspace(
       : `/reviewer/workspace?eventId=${encodeURIComponent(eventId)}`;
   try {
     const result = await evaluationRequest<ApiReviewerWorkspaceResponse>(baseUrl, path);
-    return result.assignments.map((entry) => ({
-      ...entry,
-      plan: {
-        ...entry.plan,
-        ...((entry.plan.status as string) === "active" ? { status: "open" as const } : {}),
-      },
-    }));
+    return result.assignments
+      .filter((entry) => entry.assignment.status !== "abstained")
+      .map((entry) => ({
+        ...entry,
+        plan: {
+          ...entry.plan,
+          ...((entry.plan.status as string) === "active" ? { status: "open" as const } : {}),
+        },
+      }));
   } catch (reason: unknown) {
     if (
       reason instanceof EvaluationRequestError &&
@@ -1122,7 +1142,7 @@ function ReviewNavigation({
   eventId,
   mode,
   organizationId,
-}: Readonly<{ eventId?: string; mode: ReviewWorkspaceMode; organizationId?: string }>) {
+}: Readonly<{ eventId?: string; mode: ReviewWorkspaceMode; organizationId?: string | undefined }>) {
   if (mode === "evaluator") {
     return (
       <nav className={styles.reviewNavigation} aria-label="Reviewer navigation">
@@ -1305,6 +1325,7 @@ export function ReviewWorkspace({
       <WorkspaceStatus
         {...(eventId === undefined ? {} : { eventId })}
         mode={mode}
+        organizationId={explicitOrganizationId}
         message="Loading authoritative evaluation data…"
       />
     );
@@ -1314,6 +1335,7 @@ export function ReviewWorkspace({
       <WorkspaceStatus
         {...(eventId === undefined ? {} : { eventId })}
         mode={mode}
+        organizationId={explicitOrganizationId}
         message={error}
         error
       />
@@ -1327,6 +1349,7 @@ export function ReviewWorkspace({
       <WorkspaceStatus
         {...(eventId === undefined ? {} : { eventId })}
         mode={mode}
+        organizationId={explicitOrganizationId}
         message="No review assignment is available."
         error
       />
@@ -1338,6 +1361,7 @@ export function ReviewWorkspace({
     return (
       <OrganizerPlanCreation
         eventId={eventId}
+        organizationId={explicitOrganizationId}
         baseUrl={baseUrl ?? ""}
         onCreated={(plan) => {
           setMissingPlan(false);
@@ -1357,6 +1381,7 @@ export function ReviewWorkspace({
     <WorkspaceStatus
       {...(eventId === undefined ? {} : { eventId })}
       mode={mode}
+      organizationId={explicitOrganizationId}
       message="No evaluation plan is available."
       error
     />
@@ -1364,6 +1389,7 @@ export function ReviewWorkspace({
     <OrganizerWorkspace
       seed={seed}
       baseUrl={baseUrl ?? ""}
+      organizationId={explicitOrganizationId}
       reviewerMembers={activeVerifiedReviewers(reviewerMembers)}
       reviewerMembersLoading={reviewerMembersLoading}
       reviewerMembersError={reviewerMembersError}
@@ -1471,9 +1497,11 @@ export async function createEvaluationPlan(
 function OrganizerPlanCreation({
   eventId,
   baseUrl,
+  organizationId,
   onCreated,
 }: Readonly<{
   eventId: string;
+  organizationId?: string | undefined;
   baseUrl: string;
   onCreated: (plan: ApiPlan) => void;
 }>) {
@@ -1531,7 +1559,7 @@ function OrganizerPlanCreation({
           <p className={styles.eyebrow}>{eventId} · organizer</p>
           <h1>Create evaluation plan</h1>
         </div>
-        <ReviewNavigation eventId={eventId} mode="organizer" />
+        <ReviewNavigation eventId={eventId} mode="organizer" organizationId={organizationId} />
       </header>
       <section id="review-content" className={styles.section} aria-labelledby="create-plan-heading">
         <div className={styles.sectionHeading}>
@@ -1634,10 +1662,12 @@ function OrganizerPlanCreation({
 function WorkspaceStatus({
   eventId,
   mode,
+  organizationId,
   message,
   error = false,
 }: Readonly<{
   eventId?: string;
+  organizationId?: string | undefined;
   mode: ReviewWorkspaceMode;
   message: string;
   error?: boolean;
@@ -1655,7 +1685,11 @@ function WorkspaceStatus({
           </p>
           <h1>{reviewer ? "Reviewer queue" : "Evaluation plan"}</h1>
         </div>
-        <ReviewNavigation {...(eventId === undefined ? {} : { eventId })} mode={mode} />
+        <ReviewNavigation
+          {...(eventId === undefined ? {} : { eventId })}
+          mode={mode}
+          organizationId={organizationId}
+        />
       </header>
       <section id="review-content" className={styles.section} role={error ? "alert" : "status"}>
         <h2>{error ? "Evaluation unavailable" : "Evaluation data"}</h2>
@@ -2577,12 +2611,14 @@ function OrganizerAuthoring({
 function OrganizerWorkspace({
   seed,
   baseUrl,
+  organizationId,
   reviewerMembers,
   reviewerMembersLoading,
   reviewerMembersError,
 }: Readonly<{
   seed: ReviewPlanSeed;
   baseUrl: string;
+  organizationId?: string | undefined;
   reviewerMembers: readonly OrganizationMember[];
   reviewerMembersLoading: boolean;
   reviewerMembersError: string | null;
@@ -2610,6 +2646,7 @@ function OrganizerWorkspace({
     <OrganizerWorkspaceView
       seed={authoritativeSeed}
       baseUrl={baseUrl}
+      organizationId={organizationId}
       reviewerMembers={reviewerMembers}
       reviewerMembersLoading={reviewerMembersLoading}
       reviewerMembersError={reviewerMembersError}
@@ -2624,6 +2661,7 @@ function OrganizerWorkspace({
 function OrganizerWorkspaceView({
   seed,
   baseUrl,
+  organizationId,
   reviewerMembers,
   reviewerMembersLoading,
   reviewerMembersError,
@@ -2632,6 +2670,7 @@ function OrganizerWorkspaceView({
 }: Readonly<{
   seed: ReviewPlanSeed;
   baseUrl: string;
+  organizationId?: string | undefined;
   reviewerMembers: readonly OrganizationMember[];
   reviewerMembersLoading: boolean;
   reviewerMembersError: string | null;
@@ -2709,7 +2748,11 @@ function OrganizerWorkspaceView({
           </p>
         </div>
         <div className={styles.headerSide}>
-          <ReviewNavigation eventId={seed.eventId} mode="organizer" />
+          <ReviewNavigation
+            eventId={seed.eventId}
+            mode="organizer"
+            organizationId={organizationId}
+          />
           <span className={`${styles.statusBadge} ${styles.statusOpen}`}>
             <span aria-hidden="true" />
             {formatPlanStatus(seed.status)}
@@ -3379,7 +3422,10 @@ function ReviewerQueueWorkspace({
   const [draftsById, setDraftsById] = useState<Readonly<Record<string, EvaluatorDraftSnapshot>>>(
     {},
   );
-  const visibleEntries = entries.filter((entry) => !recusedIds.has(entry.assignment.id));
+  const visibleEntries = entries.filter(
+    (entry) =>
+      entry.assignment.assignmentStatus !== "abstained" && !recusedIds.has(entry.assignment.id),
+  );
   const selectedBase =
     visibleEntries.find((entry) => entry.assignment.id === selectedId)?.assignment ?? null;
   const selectedDraft = selectedBase === null ? undefined : draftsById[selectedBase.id];
@@ -3598,14 +3644,15 @@ function EvaluatorWorkspace({
   );
   const [submitConfirmation, setSubmitConfirmation] = useState(false);
   const [submitted, setSubmitted] = useState(initiallySubmitted);
-  const reviewLocked = submitted || assignment.round.status !== "open";
+  const reviewLocked =
+    submitted || assignment.assignmentStatus === "abstained" || assignment.round.status !== "open";
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [draftBusy, setDraftBusy] = useState(false);
   const [submitBusy, setSubmitBusy] = useState(false);
   const submitBusyRef = useRef(false);
   const [abstentionReason, setAbstentionReason] = useState("");
   const [abstentionError, setAbstentionError] = useState<string | null>(null);
-  const [abstained, setAbstained] = useState(false);
+  const [abstained, setAbstained] = useState(() => assignment.assignmentStatus === "abstained");
   const [abstentionBusy, setAbstentionBusy] = useState(false);
   const [suggestions, setSuggestions] = useState<readonly ApiSuggestion[]>(assignment.suggestions);
   const [suggestionBusy, setSuggestionBusy] = useState(false);
@@ -4050,6 +4097,15 @@ function EvaluatorWorkspace({
   }
 
   const rubricCriteria = assignment.round.rubric.criteria;
+  const identityRedacted = assignment.round.blindReview || assignment.identityRedacted === true;
+  const visibleSubmissionFields =
+    assignment.submissionFields?.filter(
+      (field) =>
+        !identityRedacted ||
+        ![field.id, field.label].some(
+          (candidate) => candidate !== undefined && isAccountIdentityField(candidate),
+        ),
+    ) ?? [];
   const completedCriteria = rubricCriteria.filter(criterionComplete).length;
   const reviewProgress =
     rubricCriteria.length === 0 ? 0 : Math.round((completedCriteria / rubricCriteria.length) * 100);
@@ -4139,10 +4195,10 @@ function EvaluatorWorkspace({
           </span>
           <div>
             <h2 id="blind-review-heading">
-              {assignment.round.blindReview ? "Blind review is on" : "Blind review is off"}
+              {identityRedacted ? "Blind review is on" : "Blind review is off"}
             </h2>
             <p>
-              {assignment.round.blindReview
+              {identityRedacted
                 ? "Author identity is hidden from reviewers. Names, email addresses, and biographies are not shown in this workspace; evaluate the content only."
                 : "This round permits organizer-configured identity fields; reviewer access remains limited to the assigned submission."}
             </p>
@@ -4185,7 +4241,7 @@ function EvaluatorWorkspace({
                 <div>
                   <dt>Identity</dt>
                   <dd>
-                    {assignment.round.blindReview
+                    {identityRedacted
                       ? "Redacted for blind review"
                       : "Visible per round projection"}
                   </dd>
@@ -4195,7 +4251,7 @@ function EvaluatorWorkspace({
                 <h3>Speaker / participants</h3>
                 {assignment.participants &&
                 assignment.participants.length > 0 &&
-                !assignment.round.blindReview ? (
+                !identityRedacted ? (
                   <ul className={styles.participantList}>
                     {assignment.participants.map((participant) => (
                       <li key={participant.id}>
@@ -4206,7 +4262,7 @@ function EvaluatorWorkspace({
                   </ul>
                 ) : (
                   <p className={styles.fieldHint}>
-                    {assignment.round.blindReview
+                    {identityRedacted
                       ? "Participant identities are hidden for this blind review."
                       : "No participant details were shared with reviewers."}
                   </p>
@@ -4214,9 +4270,9 @@ function EvaluatorWorkspace({
               </div>
             </div>
           </div>
-          {assignment.submissionFields && assignment.submissionFields.length > 0 ? (
+          {visibleSubmissionFields.length > 0 ? (
             <dl className={styles.submissionFields}>
-              {assignment.submissionFields.map((field) => (
+              {visibleSubmissionFields.map((field) => (
                 <div key={field.id ?? field.label}>
                   <dt>{field.label}</dt>
                   <dd>{field.value}</dd>

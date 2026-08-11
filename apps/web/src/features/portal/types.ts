@@ -23,6 +23,21 @@ export const portalTaskStatuses = [
 export type PortalTaskStatus = (typeof portalTaskStatuses)[number];
 export type PortalTaskType = "form" | "upload" | "action";
 export type PortalAssetKind = "headshot" | "slides" | "supporting_file";
+export type PortalAssetState = "pending_upload" | "ready" | "rejected";
+
+/** Capabilities are an allow-list from the server; unknown values are ignored by the UI. */
+export const portalCapabilities = [
+  "profile-self",
+  "submission-edit",
+  "roster-manage",
+  "task-response",
+  "asset-read",
+  "asset-write",
+  "asset-comment",
+  "resource-read",
+] as const;
+
+export type PortalCapability = (typeof portalCapabilities)[number];
 
 export interface PortalSubmission {
   id: string;
@@ -31,6 +46,7 @@ export interface PortalSubmission {
   status: PortalSubmissionStatus;
   participantIds: readonly string[];
   updatedAt: string;
+  formId?: string;
 }
 
 export interface PortalProfile {
@@ -62,17 +78,167 @@ export interface PortalTask {
   updatedAt: string;
 }
 
+export interface PortalContext {
+  id: string;
+  eventId: string;
+  name: string;
+  slug?: string;
+  status?: string;
+  capabilities: readonly PortalCapability[];
+  submissionIds: readonly string[];
+  participantIds: readonly string[];
+  primaryParticipantId?: string;
+}
+
+export interface PortalRosterMember {
+  participantId: string;
+  displayName: string;
+  email: string | null;
+  role: "primary" | "co_speaker";
+  status: "pending" | "active" | "revoked";
+  capabilities: {
+    edit: boolean;
+    remove: boolean;
+  };
+}
+
+export interface PortalRosterEnvelope {
+  organizationId: string;
+  eventId: string;
+  submissionId: string;
+  capabilities: {
+    manage: boolean;
+    invite: boolean;
+  };
+  members: readonly PortalRosterMember[];
+}
+
+export interface PortalAsset {
+  id: string;
+  eventId: string;
+  submissionId?: string;
+  participantId: string;
+  taskId?: string;
+  kind: PortalAssetKind;
+  fileName: string;
+  contentType: string;
+  sizeBytes: number;
+  state: PortalAssetState;
+  createdAt: string;
+  version?: number;
+  versionFamilyId?: string;
+  supersedesAssetId?: string;
+  commentThreadId?: string;
+  rejectionReason?: string;
+  finalizedAt?: string;
+}
+
+export type PortalAssetHistoryEntry = PortalAsset;
+
+export interface PortalAssetComment {
+  id: string;
+  assetId: string;
+  body: string;
+  authorLabel: string;
+  createdAt: string;
+  updatedAt?: string;
+  version?: number;
+}
+
+export interface PortalDownloadGrant {
+  method?: "GET";
+  url: string;
+  expiresAt: string;
+}
+
+export interface PortalFormOption {
+  value: string;
+  label: string;
+}
+
+export type PortalFormFieldType =
+  | "text"
+  | "textarea"
+  | "rich_text"
+  | "email"
+  | "url"
+  | "number"
+  | "date"
+  | "select"
+  | "multiselect"
+  | "checkbox"
+  | "boolean"
+  | "file_request";
+
+export interface PortalFormField {
+  id: string;
+  label: string;
+  type: PortalFormFieldType;
+  required: boolean;
+  options: readonly PortalFormOption[];
+}
+
+export type PortalFormAnswer = string | number | boolean | readonly string[] | null;
+
+export type PortalTaskResponseStatus = "draft" | "submitted" | "needs_changes" | "reopened";
+
+export interface PortalTaskResponse {
+  responseId: string;
+  definitionVersion: number;
+  answers: Readonly<Record<string, PortalFormAnswer>>;
+  submittedAt: string | null;
+  status: PortalTaskResponseStatus;
+  organizerFeedback: string | null;
+}
+
+export interface PortalTaskForm {
+  taskId: string;
+  definitionVersion: number;
+  title: string;
+  description: string;
+  status: PortalTaskStatus;
+  fields: readonly PortalFormField[];
+  latestResponse: PortalTaskResponse | null;
+}
+
+export interface PortalTaskResponseEnvelope {
+  organizationId: string;
+  eventId: string;
+  taskId: string;
+  participantId: string;
+  latestResponse: PortalTaskResponse | null;
+  history: readonly PortalTaskResponse[];
+}
+
+export interface PortalResource {
+  id: string;
+  title: string;
+  summary?: string;
+  html?: string;
+  url?: string;
+  order: number;
+  updatedAt: string;
+}
+
+export interface PortalWikiPage extends PortalResource {
+  slug?: string;
+}
+
 export interface PortalView {
   submissions: PortalSubmission[];
   profiles: PortalProfile[];
   tasks: PortalTask[];
   outstandingTaskCount: number;
+  context?: PortalContext;
+  capabilities?: readonly PortalCapability[];
+  roster?: PortalRosterEnvelope;
+  assets?: PortalAsset[];
+  resources?: PortalResource[];
+  wiki?: PortalWikiPage[];
 }
 
 export interface PortalUploadAuthorization {
-  asset: {
-    id: string;
-  };
+  asset: PortalAsset;
   grant: {
     method: "PUT";
     url: string;

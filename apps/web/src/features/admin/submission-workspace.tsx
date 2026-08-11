@@ -18,6 +18,7 @@ export interface SubmissionParticipant {
   email: string;
   role: string;
   organization: string;
+  answers?: Readonly<Record<string, unknown>>;
 }
 
 export interface SubmissionAnswer {
@@ -63,6 +64,8 @@ export interface SubmissionRecord {
   reviewAssignments: ReviewAssignment[];
   organizerNotes: string;
   reopenAudit: { at: string; organizer: string; reason: string }[];
+  evaluationPlanId?: string;
+  decision?: EvaluationDecisionRecord;
 }
 
 const seededSubmissions: SubmissionRecord[] = [
@@ -472,18 +475,63 @@ function localDemoEnabled(): boolean {
   );
 }
 
-interface ServerSubmissionRecord {
+interface SubmissionFieldOption {
+  readonly value: string;
+  readonly label?: string;
+}
+
+export interface SubmissionFieldDefinition {
+  readonly key: string;
+  readonly label?: string;
+  readonly options?: readonly (string | SubmissionFieldOption)[];
+}
+
+export type EvaluationDecisionStatus = "accepted" | "waitlisted" | "rejected";
+
+export interface EvaluationDecisionTransition {
+  readonly from: EvaluationDecisionStatus | null;
+  readonly to: EvaluationDecisionStatus;
+  readonly reason: string;
+  readonly decidedBy: string;
+  readonly decidedAt: string;
+  readonly idempotencyKey: string;
+}
+
+export interface EvaluationDecisionRecord {
+  readonly id: string;
+  readonly tenantId: string;
+  readonly eventId: string;
+  readonly planId: string;
+  readonly submissionId: string;
+  readonly status: EvaluationDecisionStatus;
+  readonly version: number;
+  readonly history: readonly EvaluationDecisionTransition[];
+  readonly updatedAt: string;
+}
+
+export interface AcceptedHandoffMetadata {
+  readonly title: string;
+  readonly track: string;
+  readonly version: number;
+  readonly primarySpeaker: SubmissionParticipant | null;
+  readonly coSpeakers: readonly SubmissionParticipant[];
+}
+export interface ServerSubmissionRecord {
   id: string;
   tenantId: string;
   eventId: string;
   title: string;
   abstract: string;
   answers: Readonly<Record<string, unknown>>;
+  fieldDefinitions?: readonly SubmissionFieldDefinition[];
   participants: readonly {
     id: string;
     displayName: string;
     email: string;
     biography: string;
+    role?: string;
+    organization?: string;
+    answers?: Readonly<Record<string, unknown>>;
   }[];
   status: string;
   version: number;
@@ -492,7 +540,81 @@ interface ServerSubmissionRecord {
   reopenedAt: string | null;
 }
 
-function mapServerSubmission(record: ServerSubmissionRecord): SubmissionRecord {
+function answerText(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value === "string") return value.trim().length === 0 ? null : value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  const serialized = JSON.stringify(value);
+  return serialized === undefined ? null : serialized;
+}
+
+function optionValue(value: unknown): string | null {
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "value" in value &&
+    typeof value.value === "string"
+  ) {
+    return value.value;
+  }
+  return answerText(value);
+}
+
+function fieldAnswer(value: unknown, definition: SubmissionFieldDefinition | undefined): string {
+  const raw = answerText(value);
+  if (raw === null) return "—";
+  const comparable = optionValue(value) ?? raw;
+  const option = definition?.options?.find((candidate) => optionValue(candidate) === comparable);
+  if (typeof option === "string") return option;
+  if (
+    typeof option === "object" &&
+    option !== null &&
+    typeof option.label === "string" &&
+    option.label.trim().length > 0
+  ) {
+    return option.label;
+  }
+  if (
+    definition !== undefined &&
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "label" in value &&
+    typeof value.label === "string" &&
+    value.label.trim().length > 0
+  ) {
+    return value.label;
+  }
+  return raw;
+}
+
+function participantRole(role: string | undefined): string {
+  const normalized = role?.trim();
+  if (normalized === "primary") return "Speaker";
+  if (normalized === "co_speaker") return "Co-speaker";
+  return normalized || "Speaker";
+}
+export function getAcceptedHandoffMetadata(
+  submission: Pick<SubmissionRecord, "title" | "track" | "version" | "participants">,
+): AcceptedHandoffMetadata {
+  const primarySpeaker =
+    submission.participants.find((participant) => participant.role === "Speaker") ??
+    submission.participants[0] ??
+    null;
+  const coSpeakers = submission.participants.filter(
+    (participant) => participant.id !== primarySpeaker?.id && participant.role === "Co-speaker",
+  );
+  return {
+    title: submission.title,
+    track: submission.track,
+    version: submission.version,
+    primarySpeaker,
+    coSpeakers,
+  };
+}
+
+export function mapServerSubmission(record: ServerSubmissionRecord): SubmissionRecord {
   const status: SubmissionStatus =
     record.status === "accepted" ||
     record.status === "waitlisted" ||
@@ -503,15 +625,14 @@ function mapServerSubmission(record: ServerSubmissionRecord): SubmissionRecord {
       : record.status === "reopened"
         ? "under_review"
         : "submitted";
+  const definitions = new Map(
+    (record.fieldDefinitions ?? []).map((definition) => [definition.key, definition]),
+  );
   const answers = Object.entries(record.answers).map(([question, answer]) => ({
-    question,
-    answer:
-      typeof answer === "string"
-        ? answer
-        : typeof answer === "number" || typeof answer === "boolean"
-          ? String(answer)
-          : (JSON.stringify(answer) ?? ""),
+    question: definitions.get(question)?.label?.trim() || question,
+    answer: fieldAnswer(answer, definitions.get(question)),
   }));
+  const abstract = answerText(record.answers.abstract) ?? record.abstract;
   const timeline: SubmissionTimelineEntry[] = [];
   if (record.submittedAt !== null) {
     timeline.push({
@@ -532,8 +653,8 @@ function mapServerSubmission(record: ServerSubmissionRecord): SubmissionRecord {
     id: record.id,
     title: record.title,
     status,
-    track: "—",
-    format: "—",
+    track: fieldAnswer(record.answers.track, definitions.get("track")),
+    format: fieldAnswer(record.answers.format, definitions.get("format")),
     version: record.version,
     submittedAt: record.submittedAt ?? record.updatedAt,
     updatedAt: record.updatedAt,
@@ -541,8 +662,9 @@ function mapServerSubmission(record: ServerSubmissionRecord): SubmissionRecord {
       id: participant.id,
       name: participant.displayName,
       email: participant.email,
-      role: "Speaker",
-      organization: "",
+      role: participantRole(participant.role),
+      organization: participant.organization ?? "",
+      answers: participant.answers ?? {},
     })),
     participantProgress: {
       completed: record.participants.filter(
@@ -550,7 +672,7 @@ function mapServerSubmission(record: ServerSubmissionRecord): SubmissionRecord {
       ).length,
       total: record.participants.length,
     },
-    abstract: record.abstract,
+    abstract,
     answers,
     timeline,
     reviewSummary: {
@@ -575,32 +697,33 @@ function mapServerSubmission(record: ServerSubmissionRecord): SubmissionRecord {
           ],
   };
 }
-async function enrichServerSubmission(
+export async function enrichServerSubmission(
   baseUrl: string,
   record: ServerSubmissionRecord,
 ): Promise<SubmissionRecord> {
   const submission = mapServerSubmission(record);
   const planResult = await submissionRequest<{
     plans: readonly { id: string; rounds: readonly { id: string }[] }[];
-  }>(baseUrl, `/plans?eventId=${encodeURIComponent(record.eventId)}`);
+  }>(baseUrl, `/plans?eventId=${encodeURIComponent(record.eventId)}`).catch(() => ({
+    plans: [],
+  }));
   const plan = planResult.plans[0];
   if (plan === undefined) return submission;
   const round = plan.rounds[0];
-  const [assignmentResult, decision, aggregate, reviewResult] = await Promise.all([
+  const [assignmentResult, decision, aggregate] = await Promise.all([
     submissionRequest<{
       assignments: readonly {
         reviewerId: string;
+        submissionId: string;
         status: "assigned" | "in_progress" | "submitted" | "abstained";
       }[];
-    }>(baseUrl, `/plans/${encodeURIComponent(plan.id)}/assignments`),
-    submissionRequest<{
-      status: "accepted" | "waitlisted" | "rejected";
-      version: number;
-      history: readonly { reason: string }[];
-    } | null>(
+    }>(baseUrl, `/plans/${encodeURIComponent(plan.id)}/assignments`).catch(() => ({
+      assignments: [],
+    })),
+    submissionRequest<EvaluationDecisionRecord | null>(
       baseUrl,
       `/plans/${encodeURIComponent(plan.id)}/submissions/${encodeURIComponent(record.id)}/decision`,
-    ),
+    ).catch(() => null),
     round === undefined
       ? Promise.resolve(null)
       : submissionRequest<{
@@ -611,21 +734,29 @@ async function enrichServerSubmission(
         }>(
           baseUrl,
           `/plans/${encodeURIComponent(plan.id)}/rounds/${encodeURIComponent(round.id)}/submissions/${encodeURIComponent(record.id)}/aggregate`,
-        ),
-    round === undefined
-      ? Promise.resolve({
-          reviews: [] as readonly { reviewerId: string; submittedAt: string | null }[],
-        })
-      : submissionRequest<{
-          reviews: readonly { reviewerId: string; submittedAt: string | null }[];
-        }>(
-          baseUrl,
-          `/plans/${encodeURIComponent(plan.id)}/rounds/${encodeURIComponent(round.id)}/submissions/${encodeURIComponent(record.id)}/reviews`,
-        ),
+        ).catch(() => null),
   ]);
-  const assignments = assignmentResult.assignments;
+  const assignments = assignmentResult.assignments.filter(
+    (assignment) => assignment.submissionId === record.id,
+  );
+  const decisionTimeline =
+    decision === null
+      ? []
+      : decision.history.map((transition) => ({
+          label:
+            transition.to === "accepted"
+              ? "Accepted"
+              : transition.to === "rejected"
+                ? "Rejected"
+                : "Waitlisted",
+          at: transition.decidedAt,
+          detail: `${transition.reason} (organizer ${transition.decidedBy}).`,
+        }));
   return {
     ...submission,
+    ...(decision === null ? {} : { decision }),
+    evaluationPlanId: plan.id,
+    timeline: [...submission.timeline, ...decisionTimeline],
     status:
       decision?.status === "accepted"
         ? "accepted"
@@ -675,12 +806,15 @@ function eventTitle(eventId: string): string {
     .join(" ");
 }
 
-function submissionHref(eventId: string, submissionId: string): string {
-  return `/admin/events/${encodeURIComponent(eventId)}/submissions/${encodeURIComponent(submissionId)}`;
+function submissionListHref(eventId: string, organizationId?: string): string {
+  if (organizationId !== undefined) {
+    return `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}/submissions`;
+  }
+  return `/admin/events/${encodeURIComponent(eventId)}/submissions`;
 }
 
-function submissionListHref(eventId: string): string {
-  return `/admin/events/${encodeURIComponent(eventId)}/submissions`;
+function submissionHref(eventId: string, submissionId: string, organizationId?: string): string {
+  return `${submissionListHref(eventId, organizationId)}/${encodeURIComponent(submissionId)}`;
 }
 
 function formatDate(value: string): string {
@@ -746,7 +880,10 @@ function ProgressMeter({
   );
 }
 
-export function SubmissionListWorkspace({ eventId }: Readonly<{ eventId: string }>) {
+export function SubmissionListWorkspace({
+  eventId,
+  organizationId,
+}: Readonly<{ eventId: string; organizationId?: string }>) {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<SubmissionStatus | "all">("all");
   const [track, setTrack] = useState("all");
@@ -777,11 +914,8 @@ export function SubmissionListWorkspace({ eventId }: Readonly<{ eventId: string 
       baseUrl,
       `/events/${encodeURIComponent(eventId)}/submissions`,
     )
-      .then((records) =>
-        Promise.all(records.map((record) => enrichServerSubmission(baseUrl, record))),
-      )
-      .then((mapped) => {
-        if (active) setSubmissions(mapped);
+      .then((records) => {
+        if (active) setSubmissions(records.map(mapServerSubmission));
       })
       .catch((reason: unknown) => {
         if (active) {
@@ -1073,7 +1207,7 @@ export function SubmissionListWorkspace({ eventId }: Readonly<{ eventId: string 
                       <th scope="row" className={styles.titleCell}>
                         <Link
                           className={styles.submissionLink}
-                          href={submissionHref(eventId, submission.id)}
+                          href={submissionHref(eventId, submission.id, organizationId)}
                         >
                           {submission.title}
                         </Link>
@@ -1151,10 +1285,242 @@ function SortableHeader({
   );
 }
 
+function decisionSubmissionStatus(status: EvaluationDecisionStatus): SubmissionStatus {
+  return status === "accepted" ? "accepted" : status === "waitlisted" ? "waitlisted" : "declined";
+}
+
+function DecisionControl({
+  submission,
+  baseUrl,
+  onSaved,
+}: Readonly<{
+  submission: SubmissionRecord;
+  baseUrl: string;
+  onSaved: (decision: EvaluationDecisionRecord) => void;
+}>) {
+  const initialStatus =
+    submission.decision?.status ??
+    (submission.status === "accepted"
+      ? "accepted"
+      : submission.status === "waitlisted"
+        ? "waitlisted"
+        : submission.status === "declined"
+          ? "rejected"
+          : "accepted");
+  const [status, setStatus] = useState<EvaluationDecisionStatus>(initialStatus);
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notificationState, setNotificationState] = useState<"idle" | "queued" | "confirmed">(
+    submission.decision === undefined ? "idle" : "confirmed",
+  );
+  const hasDecisionApi = baseUrl.trim().length > 0 && submission.evaluationPlanId !== undefined;
+  const decisionHistory = submission.decision?.history ?? [];
+  const canSubmit = hasDecisionApi && reason.trim().length >= 5 && !busy;
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    if (!canSubmit || submission.evaluationPlanId === undefined) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const decision = await submissionRequest<EvaluationDecisionRecord>(
+        baseUrl,
+        `/plans/${encodeURIComponent(submission.evaluationPlanId)}/submissions/${encodeURIComponent(submission.id)}/decision`,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            status,
+            reason: reason.trim(),
+            ...(submission.decision === undefined
+              ? {}
+              : { expectedVersion: submission.decision.version }),
+            idempotencyKey: `web-decision-${crypto.randomUUID()}`,
+          }),
+        },
+      );
+      onSaved(decision);
+      setNotificationState("queued");
+      setReason("");
+    } catch (reasonValue: unknown) {
+      setError(
+        reasonValue instanceof Error ? reasonValue.message : "The decision could not be saved.",
+      );
+      setNotificationState("idle");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className={styles.detailPanel} aria-labelledby="decision-heading">
+      <p className={styles.eyebrow}>Human organizer decision</p>
+      <h2 id="decision-heading">Accept or reject</h2>
+      <p className={styles.mutedText}>
+        Decisions are versioned on the evaluation server. Saving waits for the decision notification
+        projection; accepted outcomes also wait for the canonical session handoff to be queued by
+        the existing APIs.
+      </p>
+      <form onSubmit={handleSubmit}>
+        <div className={styles.formGrid}>
+          <div className={styles.filterField}>
+            <label htmlFor="decision-status">Decision outcome</label>
+            <select
+              id="decision-status"
+              value={status}
+              disabled={!hasDecisionApi || busy}
+              onChange={(event) => setStatus(event.currentTarget.value as EvaluationDecisionStatus)}
+            >
+              <option value="accepted">Accept</option>
+              <option value="waitlisted">Waitlist</option>
+              <option value="rejected">Reject</option>
+            </select>
+          </div>
+          <div className={styles.decisionActions}>
+            <button
+              className={styles.clearButton}
+              type="button"
+              aria-pressed={status === "accepted"}
+              disabled={!hasDecisionApi || busy}
+              onClick={() => setStatus("accepted")}
+            >
+              Accept submission
+            </button>
+            <button
+              className={styles.dangerButton}
+              type="button"
+              aria-pressed={status === "rejected"}
+              disabled={!hasDecisionApi || busy}
+              onClick={() => setStatus("rejected")}
+            >
+              Reject submission
+            </button>
+          </div>
+        </div>
+        <label className={styles.textareaLabel} htmlFor="decision-reason">
+          Human-authored decision reason
+        </label>
+        <textarea
+          id="decision-reason"
+          name="decisionReason"
+          value={reason}
+          minLength={5}
+          required
+          rows={3}
+          placeholder="Explain the program decision for the audit history."
+          disabled={!hasDecisionApi || busy}
+          onChange={(event) => setReason(event.currentTarget.value)}
+        />
+        <p className={styles.fieldHelp}>
+          The reason and server decision version are retained in the immutable decision history.
+        </p>
+        {!hasDecisionApi ? (
+          <p className={styles.auditCallout} role="note">
+            Decision controls are read-only until the server evaluation plan is available.
+          </p>
+        ) : null}
+        {error ? (
+          <p className={styles.formError} role="alert">
+            {error}
+          </p>
+        ) : null}
+        <button className={styles.primaryLink} type="submit" disabled={!canSubmit}>
+          Save {status === "accepted" ? "accept" : status === "rejected" ? "reject" : "waitlist"}{" "}
+          decision and queue notifications
+        </button>
+      </form>
+      <section aria-labelledby="decision-history-heading">
+        <h3 id="decision-history-heading">Decision and notification history</h3>
+        {decisionHistory.length ? (
+          <ol className={styles.timeline}>
+            {decisionHistory.map((transition) => (
+              <li key={`${transition.idempotencyKey}-${transition.decidedAt}`}>
+                <span className={styles.timelineMarker} aria-hidden="true" />
+                <div>
+                  <h4>
+                    {transition.to === "accepted"
+                      ? "Accepted"
+                      : transition.to === "rejected"
+                        ? "Rejected"
+                        : "Waitlisted"}
+                  </h4>
+                  <time dateTime={transition.decidedAt}>
+                    {formatDateTime(transition.decidedAt)}
+                  </time>
+                  <p>
+                    {transition.reason} · organizer {transition.decidedBy} · decision version{" "}
+                    {decisionHistory.indexOf(transition) + 1}
+                  </p>
+                </div>
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <p className={styles.mutedText}>No decision has been recorded.</p>
+        )}
+        {notificationState === "queued" ? (
+          <p className={styles.successMessage} role="status">
+            Decision notification queued for the all_participants audience.
+            {status === "accepted"
+              ? " Accepted-speaker handoff notification queued for the accepted_participants audience too."
+              : " No accepted-speaker handoff is required for this outcome."}
+          </p>
+        ) : notificationState === "confirmed" ? (
+          <p className={styles.successMessage} role="status">
+            Notification projection confirmed for the recorded decision.
+          </p>
+        ) : null}
+      </section>
+    </section>
+  );
+}
+
+function AcceptedHandoffSummary({ submission }: Readonly<{ submission: SubmissionRecord }>) {
+  const accepted = submission.status === "accepted" || submission.decision?.status === "accepted";
+  if (!accepted) return null;
+  const metadata = getAcceptedHandoffMetadata(submission);
+  return (
+    <section className={styles.detailPanel} aria-labelledby="accepted-handoff-heading">
+      <p className={styles.eyebrow}>Session and agenda handoff</p>
+      <h2 id="accepted-handoff-heading">Accepted session handoff</h2>
+      <p className={styles.mutedText}>
+        The canonical acceptance handoff is ready. These values come from the persisted submission
+        and are carried into the organizer session record without re-entry.
+      </p>
+      <dl className={styles.answerList}>
+        <div>
+          <dt>Session title</dt>
+          <dd>{metadata.title}</dd>
+        </div>
+        <div>
+          <dt>Primary speaker</dt>
+          <dd>{metadata.primarySpeaker?.name ?? "—"}</dd>
+        </div>
+        <div>
+          <dt>Co-speaker(s)</dt>
+          <dd>
+            {metadata.coSpeakers.length === 0
+              ? "—"
+              : metadata.coSpeakers.map((speaker) => speaker.name).join(", ")}
+          </dd>
+        </div>
+        <div>
+          <dt>Track</dt>
+          <dd>{metadata.track}</dd>
+        </div>
+        <div>
+          <dt>Submission version</dt>
+          <dd>{metadata.version}</dd>
+        </div>
+      </dl>
+    </section>
+  );
+}
 export function SubmissionDetailWorkspace({
   eventId,
   submissionId,
-}: Readonly<{ eventId: string; submissionId: string }>) {
+  organizationId,
+}: Readonly<{ eventId: string; submissionId: string; organizationId?: string }>) {
   const baseUrl = apiBaseUrl();
   const [submission, setSubmission] = useState<SubmissionRecord | null>(() =>
     localDemoEnabled() ? (getSeededSubmission(eventId, submissionId) ?? null) : null,
@@ -1216,7 +1582,7 @@ export function SubmissionDetailWorkspace({
           <p className={styles.eyebrow}>Organizer workspace</p>
           <h1>Submission not found</h1>
           <p>{loadError ?? "This submission is not part of the selected event."}</p>
-          <Link className={styles.primaryLink} href={submissionListHref(eventId)}>
+          <Link className={styles.primaryLink} href={submissionListHref(eventId, organizationId)}>
             Back to submissions
           </Link>
         </div>
@@ -1234,7 +1600,7 @@ export function SubmissionDetailWorkspace({
           <nav className={styles.breadcrumbs} aria-label="Breadcrumb">
             <Link href="/admin/events">{eventTitle(eventId)}</Link>
             <span aria-hidden="true">/</span>
-            <Link href={submissionListHref(eventId)}>Submissions</Link>
+            <Link href={submissionListHref(eventId, organizationId)}>Submissions</Link>
             <span aria-hidden="true">/</span>
             <span aria-current="page">{submission.id}</span>
           </nav>
@@ -1248,7 +1614,7 @@ export function SubmissionDetailWorkspace({
             <time dateTime={submission.updatedAt}>{formatDate(submission.updatedAt)}</time>
           </p>
         </div>
-        <Link className={styles.backLink} href={submissionListHref(eventId)}>
+        <Link className={styles.backLink} href={submissionListHref(eventId, organizationId)}>
           Back to submissions
         </Link>
       </header>
@@ -1297,6 +1663,26 @@ export function SubmissionDetailWorkspace({
               </ol>
             </section>
 
+            <DecisionControl
+              submission={submission}
+              baseUrl={baseUrl ?? ""}
+              onSaved={(decision) => {
+                setSubmission((current) =>
+                  current === null
+                    ? current
+                    : {
+                        ...current,
+                        decision,
+                        status: decisionSubmissionStatus(decision.status),
+                        reviewSummary: {
+                          ...current.reviewSummary,
+                          recommendation: `${decision.status[0]?.toLocaleUpperCase() ?? ""}${decision.status.slice(1)}`,
+                        },
+                      },
+                );
+              }}
+            />
+            <AcceptedHandoffSummary submission={submission} />
             <ReopenControl submission={submission} baseUrl={baseUrl ?? ""} />
           </div>
 
@@ -1316,6 +1702,11 @@ export function SubmissionDetailWorkspace({
                         {participant.role} · {participant.organization}
                       </span>
                       <a href={`mailto:${participant.email}`}>{participant.email}</a>
+                      {Object.entries(participant.answers ?? {}).map(([question, answer]) => (
+                        <span key={`${participant.id}-${question}`}>
+                          {question}: {answerText(answer) ?? "—"}
+                        </span>
+                      ))}
                     </div>
                   </li>
                 ))}
@@ -1447,6 +1838,10 @@ function ReopenControl({
       <p>
         Organizer-only control for a post-close edit. A human organizer must provide the reason and
         confirm the action; automated tools cannot reopen a submission or make a final decision.
+      </p>
+      <p className={styles.mutedText} role="note">
+        After the CFP close date, the public portal shows a closed message and speaker edits are
+        read-only. This audited reopen is the only organizer path to permit a post-close change.
       </p>
       <p className={styles.auditCallout} role="note">
         Every reopen is recorded in the audit log with the organizer identity, timestamp, and

@@ -360,6 +360,29 @@ describe("agenda organizer workspace", () => {
     expect(workspaceStyles).toMatch(/aria-invalid/u);
     expect(workspaceStyles).toMatch(/min-height:\s*2\.75rem/u);
   });
+  it("renders the unavailable suggestion capability without a clickable generator", () => {
+    const markup = renderToStaticMarkup(
+      createElement(AgendaSuggestionPanel, {
+        run: null,
+        currentDraftVersion: data.draft.version,
+        busy: false,
+        busyOperation: null,
+        eligibleUnscheduledCount: data.unscheduledSessions.length,
+        selectedChangeIds: [],
+        onSelectionChange: vi.fn(),
+        onGenerate: undefined,
+        onRegenerate: undefined,
+        onReject: undefined,
+        onApply: undefined,
+      }),
+    );
+
+    expect(markup).toContain(
+      "Suggestion generation is unavailable until an approved provider is connected.",
+    );
+    expect(markup).toMatch(/<button[^>]*disabled=""[^>]*>Generate private suggestions<\/button>/u);
+    expect(markup.match(/<input[^>]*disabled=""[^>]*>/gu) ?? []).toHaveLength(3);
+  });
   it("keeps organizer actions below sticky chrome and preserves draft context after a failed request", () => {
     const markup = renderBoard(data, undefined, preview, true, "validate", "Validation failed.");
     expect(markup).toContain("Agenda request failed");

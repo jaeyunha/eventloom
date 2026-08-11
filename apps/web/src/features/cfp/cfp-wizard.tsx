@@ -21,6 +21,7 @@ import {
   type CfpApi,
   CfpApiError,
   type CfpAuthenticatedSession,
+  type CfpFileUploadResult,
   type CfpFormField,
   type CfpPublishedForm,
   type CfpServerSubmission,
@@ -79,7 +80,8 @@ interface EvaluatedFieldState {
 }
 
 interface FileUploadState {
-  status: "idle" | "pending" | "error";
+  status: "idle" | "pending" | "ready" | "error";
+  assetId?: string;
   name?: string;
   message?: string;
 }
@@ -803,6 +805,7 @@ export function CfpWizard({
   const [mutationPending, setMutationPending] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const submissionIdRef = useRef<string | null>(null);
+  const fileDraftCreationRef = useRef<Promise<CfpServerSubmission> | null>(null);
   const versionRef = useRef(1);
   const formVersionRef = useRef<number | null>(null);
   const draftRevisionRef = useRef(0);
@@ -899,6 +902,7 @@ export function CfpWizard({
       setHydrated(true);
       return () => {
         active = false;
+        fileDraftCreationRef.current = null;
         controller.abort();
         mutationGateRef.current?.invalidate();
       };
@@ -1007,6 +1011,7 @@ export function CfpWizard({
 
     return () => {
       active = false;
+      fileDraftCreationRef.current = null;
       controller.abort();
       mutationGateRef.current?.invalidate();
     };
@@ -1072,6 +1077,67 @@ export function CfpWizard({
     setFileUploadStates((current) => ({ ...current, [key]: state }));
     noteLocalChange();
     setErrors({});
+  }
+  async function handleFileUpload(
+    field: CfpFormField,
+    participantId: string | undefined,
+    file: File,
+  ): Promise<CfpFileUploadResult> {
+    if (!identity) throw new Error("CFP identity is not configured.");
+    const uploadFile = api.uploadFile;
+    if (uploadFile === undefined) {
+      throw new CfpApiError(
+        "CFP_FILE_UPLOAD_UNAVAILABLE",
+        "Private file uploads are not configured.",
+        400,
+      );
+    }
+    const activeFormId = identity.formId ?? published?.form.id;
+    if (!activeFormId) throw new Error("The published CFP form is unavailable.");
+    let submissionId = submissionIdRef.current;
+    if (!submissionId) {
+      let creation = fileDraftCreationRef.current;
+      if (creation === null) {
+        creation = api.createDraft({
+          organizationId: identity.organizationId,
+          eventId: identity.eventId,
+          formId: activeFormId,
+          idempotencyKey: mutationIdempotencyKey("cfp-file-draft"),
+        });
+        fileDraftCreationRef.current = creation;
+      }
+      let created: CfpServerSubmission;
+      try {
+        created = await creation;
+      } finally {
+        if (fileDraftCreationRef.current === creation) fileDraftCreationRef.current = null;
+      }
+      submissionId = created.id;
+      submissionIdRef.current = created.id;
+      versionRef.current = created.version;
+      formVersionRef.current = created.formVersion;
+      window.localStorage.setItem(
+        getCfpSubmissionPointerStorageKey(identity.organizationId, identity.eventId, activeFormId),
+        created.id,
+      );
+    }
+    const result = await uploadFile({
+      organizationId: identity.organizationId,
+      eventId: identity.eventId,
+      submissionId,
+      fieldKey: field.key,
+      ...(participantId === undefined ? {} : { participantId }),
+      file,
+      idempotencyKey: mutationIdempotencyKey("cfp-file-upload"),
+    });
+    if (result.state !== "ready" || result.assetId.trim().length === 0) {
+      throw new CfpApiError(
+        "CFP_FILE_UPLOAD_REJECTED",
+        "The uploaded file was rejected during finalization.",
+        409,
+      );
+    }
+    return result;
   }
 
   async function persistServerDraft(
@@ -1511,6 +1577,7 @@ export function CfpWizard({
               fileUploadStates={fileUploadStates}
               onAnswerChange={setSubmissionAnswer}
               onFileUploadStateChange={setFileUploadState}
+              onFileUpload={(field, file) => handleFileUpload(field, undefined, file)}
               updateDraft={updateDraft}
             />
           ) : null}
@@ -1522,6 +1589,9 @@ export function CfpWizard({
               answers={participantAnswers}
               fileUploadStates={fileUploadStates}
               onAnswerChange={setParticipantAnswer}
+              onFileUpload={(field, participantId, file) =>
+                handleFileUpload(field, participantId, file)
+              }
               onFileUploadStateChange={setFileUploadState}
               updateDraft={updateDraft}
             />
@@ -1833,6 +1903,7 @@ function SubmissionStep({
   answers,
   fileUploadStates,
   onAnswerChange,
+  onFileUpload,
   onFileUploadStateChange,
   updateDraft,
 }: StepFormProps & {
@@ -1840,6 +1911,7 @@ function SubmissionStep({
   answers: DynamicAnswers;
   fileUploadStates: FileUploadStates;
   onAnswerChange: (key: string, value: unknown) => void;
+  onFileUpload: (field: CfpFormField, file: File) => Promise<CfpFileUploadResult>;
   onFileUploadStateChange: (key: string, state: FileUploadState) => void;
 }) {
   if (form && form.submissionFields.length > 0) {
@@ -1851,6 +1923,7 @@ function SubmissionStep({
         fileUploadStates={fileUploadStates}
         form={form}
         onAnswerChange={onAnswerChange}
+        onFileUpload={onFileUpload}
         onFileUploadStateChange={onFileUploadStateChange}
       />
     );
@@ -2044,12 +2117,18 @@ function SearchableField({
 function FileRequestControl({
   field,
   state,
+  value,
   id,
+  onChange,
+  onUpload,
   onStateChange,
 }: {
   field: CfpFormField;
   state: FileUploadState | undefined;
+  value: unknown;
   id: string;
+  onChange: (value: unknown) => void;
+  onUpload: (file: File) => Promise<CfpFileUploadResult>;
   onStateChange: (state: FileUploadState) => void;
 }) {
   const configuredMimeTypes =
@@ -2059,20 +2138,38 @@ function FileRequestControl({
     ? configuredMimeTypes.filter((type): type is string => typeof type === "string")
     : [];
   const maxSize = typeof maxBytes === "number" && Number.isFinite(maxBytes) ? maxBytes : undefined;
+  const persistedAssetId =
+    isRecord(value) && typeof value.assetId === "string" && value.assetId.trim()
+      ? value.assetId
+      : undefined;
+  const displayState =
+    state ??
+    (persistedAssetId === undefined
+      ? undefined
+      : { status: "ready" as const, assetId: persistedAssetId });
+  const uploadSequenceRef = useRef(0);
+
   function mimeTypeAllowed(contentType: string): boolean {
+    const normalized = contentType.trim().toLowerCase();
     return acceptedTypes.some((allowed) => {
-      if (allowed === "*/*" || allowed === "*") return true;
-      if (allowed.endsWith("/*")) return contentType.startsWith(allowed.slice(0, -1));
-      return allowed === contentType;
+      const normalizedAllowed = allowed.trim().toLowerCase();
+      if (normalizedAllowed === "*/*" || normalizedAllowed === "*") return true;
+      if (normalizedAllowed.endsWith("/*"))
+        return normalized.startsWith(normalizedAllowed.slice(0, -1));
+      return normalizedAllowed === normalized;
     });
   }
 
   function handleFileChange(event: ChangeEvent<HTMLInputElement>): void {
     const file = event.currentTarget.files?.[0];
+    const sequence = ++uploadSequenceRef.current;
+    event.currentTarget.value = "";
     if (!file) {
+      onChange(undefined);
       onStateChange({ status: "idle" });
       return;
     }
+    onChange(undefined);
     if (acceptedTypes.length > 0 && !mimeTypeAllowed(file.type)) {
       onStateChange({
         status: "error",
@@ -2090,6 +2187,27 @@ function FileRequestControl({
       return;
     }
     onStateChange({ status: "pending", name: file.name });
+    void onUpload(file)
+      .then((result) => {
+        if (sequence !== uploadSequenceRef.current) return;
+        if (result.state !== "ready" || result.assetId.trim().length === 0) {
+          throw new CfpApiError(
+            "CFP_FILE_UPLOAD_REJECTED",
+            "The uploaded file was rejected during finalization.",
+            409,
+          );
+        }
+        onChange({ assetId: result.assetId });
+        onStateChange({ status: "ready", name: file.name, assetId: result.assetId });
+      })
+      .catch((error) => {
+        if (sequence !== uploadSequenceRef.current) return;
+        onStateChange({
+          status: "error",
+          name: file.name,
+          message: mutationErrorMessage(error, "The file could not be uploaded."),
+        });
+      });
   }
 
   return (
@@ -2097,18 +2215,23 @@ function FileRequestControl({
       <input
         id={id}
         accept={acceptedTypes.length > 0 ? acceptedTypes.join(",") : undefined}
-        aria-describedby={state?.status === "error" ? `${field.key}-file-error` : undefined}
+        aria-describedby={displayState?.status === "error" ? `${field.key}-file-error` : undefined}
         onChange={handleFileChange}
         type="file"
       />
-      {state?.status === "pending" ? (
+      {displayState?.status === "pending" ? (
         <p aria-live="polite" className={styles.fieldHint}>
-          {state.name} is selected and upload is pending.
+          {displayState.name} is uploading…
         </p>
       ) : null}
-      {state?.status === "error" ? (
+      {displayState?.status === "ready" ? (
+        <p aria-live="polite" className={styles.fieldHint}>
+          {displayState.name ?? "The selected file"} is uploaded and ready.
+        </p>
+      ) : null}
+      {displayState?.status === "error" ? (
         <p className={styles.fieldError} id={`${field.key}-file-error`} role="alert">
-          {state.message}
+          {displayState.message}
         </p>
       ) : null}
     </div>
@@ -2174,6 +2297,7 @@ function PublishedFieldControl({
   value,
   error,
   onChange,
+  onFileUpload,
   fileState,
   onFileStateChange,
   errorKey,
@@ -2181,6 +2305,7 @@ function PublishedFieldControl({
   field: CfpFormField;
   value: unknown;
   error: string | undefined;
+  onFileUpload: (file: File) => Promise<CfpFileUploadResult>;
   onChange: (value: unknown) => void;
   fileState: FileUploadState | undefined;
   onFileStateChange: (state: FileUploadState) => void;
@@ -2202,7 +2327,10 @@ function PublishedFieldControl({
           return (
             <FileRequestControl
               field={field}
+              value={value}
               id={controlProps.id}
+              onChange={onChange}
+              onUpload={(file) => onFileUpload(file)}
               onStateChange={onFileStateChange}
               state={fileState}
             />
@@ -2308,6 +2436,7 @@ function DynamicSubmissionFields({
   errors,
   fileUploadStates,
   onAnswerChange,
+  onFileUpload,
   onFileUploadStateChange,
 }: {
   form: CfpPublishedForm;
@@ -2315,6 +2444,7 @@ function DynamicSubmissionFields({
   answers: DynamicAnswers;
   errors: ValidationErrors;
   fileUploadStates: FileUploadStates;
+  onFileUpload: (field: CfpFormField, file: File) => Promise<CfpFileUploadResult>;
   onAnswerChange: (key: string, value: unknown) => void;
   onFileUploadStateChange: (key: string, state: FileUploadState) => void;
 }) {
@@ -2359,6 +2489,7 @@ function DynamicSubmissionFields({
                   field={configuredField}
                   fileState={fileUploadStates[fileStateKey(field.key)]}
                   onChange={(value) => onAnswerChange(field.key, value)}
+                  onFileUpload={(file) => onFileUpload(field, file)}
                   onFileStateChange={(state) =>
                     onFileUploadStateChange(fileStateKey(field.key), state)
                   }
@@ -2380,6 +2511,7 @@ function ParticipantsStep({
   answers,
   fileUploadStates,
   onAnswerChange,
+  onFileUpload,
   onFileUploadStateChange,
   updateDraft,
 }: StepFormProps & {
@@ -2387,6 +2519,11 @@ function ParticipantsStep({
   answers: ParticipantAnswers;
   fileUploadStates: FileUploadStates;
   onAnswerChange: (participantId: string, key: string, value: unknown) => void;
+  onFileUpload: (
+    field: CfpFormField,
+    participantId: string,
+    file: File,
+  ) => Promise<CfpFileUploadResult>;
   onFileUploadStateChange: (key: string, state: FileUploadState) => void;
 }) {
   if (form && form.participantFields.length > 0) {
@@ -2398,6 +2535,7 @@ function ParticipantsStep({
         fileUploadStates={fileUploadStates}
         form={form}
         onAnswerChange={onAnswerChange}
+        onFileUpload={onFileUpload}
         onFileUploadStateChange={onFileUploadStateChange}
         updateDraft={updateDraft}
       />
@@ -2588,12 +2726,18 @@ function DynamicParticipantsFields({
   answers,
   fileUploadStates,
   onAnswerChange,
+  onFileUpload,
   onFileUploadStateChange,
   updateDraft,
 }: StepFormProps & {
   form: CfpPublishedForm;
   answers: ParticipantAnswers;
   fileUploadStates: FileUploadStates;
+  onFileUpload: (
+    field: CfpFormField,
+    participantId: string,
+    file: File,
+  ) => Promise<CfpFileUploadResult>;
   onAnswerChange: (participantId: string, key: string, value: unknown) => void;
   onFileUploadStateChange: (key: string, state: FileUploadState) => void;
 }) {
@@ -2750,6 +2894,7 @@ function DynamicParticipantsFields({
                   field={configuredField}
                   fileState={fileUploadStates[fileStateKey(field.key, index)]}
                   onChange={(value) => updateParticipantField(index, field.key, value)}
+                  onFileUpload={(file) => onFileUpload(field, participant.id, file)}
                   onFileStateChange={(state) =>
                     onFileUploadStateChange(fileStateKey(field.key, index), state)
                   }

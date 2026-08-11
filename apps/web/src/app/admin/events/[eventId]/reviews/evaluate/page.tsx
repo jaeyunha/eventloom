@@ -1,4 +1,4 @@
-import { ReviewWorkspace } from "../../../../../../features/reviews/review-workspace";
+import { ReviewWorkspace } from "@/features/reviews/review-workspace";
 
 export default async function EvaluateReviewPage({
   params,

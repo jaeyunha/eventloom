@@ -56,6 +56,83 @@ describe("local agenda demo API", () => {
       }),
     ).rejects.toMatchObject({ code: "AGENDA_VERSION_CONFLICT", status: 409 });
   });
+  it("keeps suggestion generation private until a human applies selected changes", async () => {
+    const input = {
+      eventId: "evt_demo",
+      baseDraftVersion: 3,
+      dates: ["2026-09-18"],
+      eligibleStatuses: ["accepted"],
+      roomIds: ["room_main", "room_studio"],
+      dayWindows: [{ date: "2026-09-18", startLocal: "09:00", endLocal: "17:00" }],
+      orderedRules: [],
+      ignoreExistingTimes: false,
+      ignoreExistingRooms: false,
+    } as const;
+    const api = createAgendaDemoApi("evt_demo");
+    const initial = await api.getWorkspace("evt_demo");
+    const generated = await api.generateSuggestion(input);
+
+    expect(generated).toMatchObject({
+      id: "suggestion_1",
+      version: 1,
+      status: "pending",
+      baseDraftVersion: 3,
+      acceptedChangeIds: [],
+      validation: { conflicts: [] },
+    });
+    expect(generated.diff.changes).toHaveLength(1);
+    expect((await api.getWorkspace("evt_demo")).draft).toEqual(initial.draft);
+    await expect(api.getSuggestion({ eventId: "evt_demo", runId: generated.id })).resolves.toEqual(
+      generated,
+    );
+
+    const secondApi = createAgendaDemoApi("evt_demo");
+    await expect(secondApi.generateSuggestion(input)).resolves.toEqual(generated);
+
+    const regenerated = await api.regenerateSuggestion({
+      eventId: "evt_demo",
+      runId: generated.id,
+      baseDraftVersion: 3,
+    });
+    expect(regenerated).toMatchObject({
+      id: "suggestion_2",
+      version: 2,
+      status: "pending",
+      baseDraftVersion: 3,
+    });
+    await expect(
+      api.getSuggestion({ eventId: "evt_demo", runId: generated.id }),
+    ).resolves.toMatchObject({ status: "superseded" });
+
+    const rejected = await api.rejectSuggestion({ eventId: "evt_demo", runId: regenerated.id });
+    expect(rejected).toMatchObject({ status: "rejected", acceptedChangeIds: [] });
+    await expect(
+      api.applySuggestion({
+        eventId: "evt_demo",
+        runId: regenerated.id,
+        acceptedChangeIds: [regenerated.diff.changes[0]?.id ?? ""],
+      }),
+    ).rejects.toMatchObject({ code: "SUGGESTION_STATE_INVALID", status: 409 });
+    expect((await api.getWorkspace("evt_demo")).draft).toEqual(initial.draft);
+    const freshRun = await api.generateSuggestion(input);
+    const changeId = freshRun.diff.changes[0]?.id;
+    if (!changeId) throw new Error("Expected a deterministic suggestion change.");
+    const applied = await api.applySuggestion({
+      eventId: "evt_demo",
+      runId: freshRun.id,
+      acceptedChangeIds: [changeId],
+    });
+    expect(applied.draft).toMatchObject({ version: 4 });
+    expect(applied.draft.entries).toHaveLength(3);
+    expect(applied.unscheduledSessions).toEqual([]);
+    expect(applied.currentPublishedRevision).toMatchObject({ sessionCount: 1 });
+    await expect(
+      api.getSuggestion({ eventId: "evt_demo", runId: freshRun.id }),
+    ).resolves.toMatchObject({
+      status: "applied",
+      acceptedChangeIds: [changeId],
+    });
+  });
 
   it("detects room conflicts and publishes an immutable revision after they are resolved", async () => {
     const api = createAgendaDemoApi("evt_demo");

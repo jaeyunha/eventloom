@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { IntegrationAdmin } from "../../../../../../features/integrations/integration-admin";
+import { IntegrationAdmin } from "@/features/integrations/integration-admin";
 
 export const metadata: Metadata = {
   title: "Webhooks",

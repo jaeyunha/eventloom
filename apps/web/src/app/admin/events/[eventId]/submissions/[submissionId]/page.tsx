@@ -1,4 +1,4 @@
-import { SubmissionDetailWorkspace } from "../../../../../../features/admin/submission-workspace";
+import { SubmissionDetailWorkspace } from "@/features/admin/submission-workspace";
 
 interface SubmissionDetailPageProps {
   params: Promise<{ eventId: string; submissionId: string }>;

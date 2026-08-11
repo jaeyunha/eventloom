@@ -77,6 +77,57 @@ describe("published embed model", () => {
       1,
     );
   });
+  it("uses inclusive authoritative event boundaries for empty days", () => {
+    const days = publicAgendaDays(entries, "America/Los_Angeles", {
+      startsOn: "2026-09-18",
+      endsOn: "2026-09-20",
+    });
+
+    expect(days.map((day) => day.date)).toEqual(["2026-09-18", "2026-09-19", "2026-09-20"]);
+    expect(days[0]?.entries.map((entry) => entry.id)).toEqual(["entry_morning", "entry_evening"]);
+    expect(days[2]?.entries).toEqual([]);
+  });
+
+  it("keeps a single-day authoritative event range to one day", () => {
+    const days = publicAgendaDays(entries, "America/Los_Angeles", {
+      startsOn: "2026-09-18",
+      endsOn: "2026-09-18",
+    });
+
+    expect(days.map((day) => day.date)).toEqual(["2026-09-18"]);
+    expect(days[0]?.entries).toHaveLength(2);
+  });
+
+  it("falls back to entry-derived days for invalid or reversed boundaries", () => {
+    const invalidDays = publicAgendaDays(entries, "America/Los_Angeles", {
+      startsOn: "not-a-date",
+      endsOn: "2026-09-20",
+    });
+    const reversedDays = publicAgendaDays(entries, "America/Los_Angeles", {
+      startsOn: "2026-09-20",
+      endsOn: "2026-09-18",
+    });
+
+    expect(invalidDays.map((day) => day.date)).toEqual(["2026-09-18"]);
+    expect(reversedDays.map((day) => day.date)).toEqual(["2026-09-18"]);
+  });
+
+  it("keeps event days when filters produce no matching entries", () => {
+    const filteredEntries = filterAgendaEntries(
+      entries,
+      "",
+      "Missing track",
+      "America/Los_Angeles",
+    );
+    const days = publicAgendaDays(filteredEntries, "America/Los_Angeles", {
+      startsOn: "2026-09-18",
+      endsOn: "2026-09-20",
+    });
+
+    expect(filteredEntries).toEqual([]);
+    expect(days.map((day) => day.date)).toEqual(["2026-09-18", "2026-09-19", "2026-09-20"]);
+    expect(days.every((day) => day.entries.length === 0)).toBe(true);
+  });
 
   it("filters published speaker fields without relying on private records", () => {
     expect(filterSpeakers(speakers, "review", "").map((speaker) => speaker.id)).toEqual([

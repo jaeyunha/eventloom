@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { SubmissionDetail } from "../../../../features/portal/submission-detail";
+import { SubmissionDetail } from "@/features/portal/submission-detail";
 
 export const metadata: Metadata = {
   title: "Submission status",

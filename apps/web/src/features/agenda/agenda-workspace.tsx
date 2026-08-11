@@ -1663,10 +1663,10 @@ export function AgendaWorkspace({
       statusMessage={statusMessage}
       error={error}
       suggestionRun={suggestionRun}
-      onGenerateSuggestion={generateSuggestion}
       {...(suggestionApi === null
         ? {}
         : {
+            onGenerateSuggestion: generateSuggestion,
             onRegenerateSuggestion: regenerateSuggestion,
             onRejectSuggestion: rejectSuggestion,
             onApplySuggestion: applySuggestion,

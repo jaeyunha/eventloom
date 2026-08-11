@@ -1,4 +1,4 @@
-import { CfpEditor } from "../../../../../features/admin/cfp-editor";
+import { CfpEditor } from "@/features/admin/cfp-editor";
 
 interface CfpPageProps {
   params: Promise<{ eventId: string }>;

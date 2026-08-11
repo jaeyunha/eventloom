@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
-import { getPublishedAgendaOrLocalDemo } from "../../../../features/embed/demo/projections";
-import { EmbedFrame, EmbedUnavailable } from "../../../../features/embed/embed-frame";
-import { embedTheme } from "../../../../features/embed/model";
-import { PublicAgendaView } from "../../../../features/embed/public-agenda";
+import { getPublishedAgendaOrLocalDemo } from "@/features/embed/demo/projections";
+import { EmbedFrame, EmbedUnavailable } from "@/features/embed/embed-frame";
+import { embedTheme } from "@/features/embed/model";
+import { PublicAgendaView } from "@/features/embed/public-agenda";
 
 export const metadata: Metadata = {
   title: "Published agenda",
@@ -17,7 +17,8 @@ interface PublicAgendaPageProps {
 
 export default async function PublicAgendaPage({ params, searchParams }: PublicAgendaPageProps) {
   const [{ eventSlug }, query] = await Promise.all([params, searchParams]);
-  const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
+  const apiBaseUrl =
+    process.env.API_UPSTREAM_ORIGIN?.trim() ?? process.env.NEXT_PUBLIC_API_URL?.trim();
   if (!apiBaseUrl) {
     return <EmbedUnavailable message="The public program endpoint is not configured." />;
   }

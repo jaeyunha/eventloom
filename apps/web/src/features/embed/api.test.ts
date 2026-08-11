@@ -20,15 +20,12 @@ const publishedAgenda: PublishedAgenda = {
 };
 
 describe("public embed API", () => {
-  it("loads only the published projection with cache revalidation", async () => {
+  it("loads only the latest immutable published projection", async () => {
     const calls: Array<{
       input: RequestInfo | URL;
-      init: RequestInit & { next?: { revalidate: number } };
+      init: RequestInit;
     }> = [];
-    const fetcher = async (
-      input: RequestInfo | URL,
-      init?: RequestInit & { next?: { revalidate: number } },
-    ) => {
+    const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
       calls.push({ input, init: init ?? {} });
       return new Response(JSON.stringify({ data: publishedAgenda }), {
         status: 200,
@@ -38,18 +35,18 @@ describe("public embed API", () => {
 
     await expect(
       getPublishedAgenda(
-        "https://open-sessionboard-api-staging.ashleyha0317.workers.dev/",
+        "https://open-sessionboard-web-staging.ashleyha0317.workers.dev/",
         "open/systems",
         fetcher,
       ),
     ).resolves.toEqual(publishedAgenda);
     expect(String(calls[0]?.input)).toBe(
-      "https://open-sessionboard-api-staging.ashleyha0317.workers.dev/api/public/events/open%2Fsystems/agenda",
+      "https://open-sessionboard-web-staging.ashleyha0317.workers.dev/api/public/events/open%2Fsystems/agenda",
     );
     expect(calls[0]?.init).toMatchObject({
       cache: "force-cache",
       headers: { accept: "application/json" },
-      next: { revalidate: 60 },
+      next: { revalidate: 60, tags: ["public-programs"] },
     });
     expect(calls[0]?.init.credentials).toBeUndefined();
   });
@@ -68,7 +65,7 @@ describe("public embed API", () => {
       );
 
     const error = await getPublishedAgenda(
-      "https://open-sessionboard-api-staging.ashleyha0317.workers.dev",
+      "https://open-sessionboard-web-staging.ashleyha0317.workers.dev",
       "open",
       fetcher,
     ).catch((caught: unknown) => caught);

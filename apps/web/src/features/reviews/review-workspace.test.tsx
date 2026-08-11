@@ -448,6 +448,22 @@ describe("review workspace", () => {
     expect(markup).toContain("Blind review");
     expect(markup).toContain("Reviewer views hide participant identity fields.");
   });
+  it("keeps organizer review navigation scoped to the selected organization", () => {
+    const markup = renderToStaticMarkup(
+      createElement(ReviewWorkspace, {
+        eventId: "summit-2026",
+        mode: "organizer",
+        organizationId: "org-selected",
+        initialState: organizerState,
+      }),
+    );
+
+    expect(markup).toContain('href="/admin/organizations/org-selected/events/summit-2026/reviews"');
+    expect(markup).toContain(
+      'href="/admin/organizations/org-selected/events/summit-2026/reviews/evaluate"',
+    );
+    expect(markup).not.toContain('href="/admin/events/summit-2026/reviews"');
+  });
 
   it("renders the authoring controls after a plan is created", () => {
     const markup = renderToStaticMarkup(
@@ -528,6 +544,119 @@ describe("review workspace", () => {
     expect(markup).not.toContain("Riley");
     expect(markup).not.toContain("review plan status");
     expect(markup).not.toContain("Create evaluation plan");
+  });
+  it("does not render account identity fields from blind submission answers", () => {
+    const markup = renderToStaticMarkup(
+      createElement(ReviewWorkspace, {
+        eventId: "summit-2026",
+        mode: "evaluator",
+        initialState: {
+          assignment: {
+            ...testAssignment("summit-2026"),
+            submissionFields: [
+              { id: "email", label: "Email", value: "ada@example.com" },
+              { id: "firstName", label: "First name", value: "Ada" },
+              { id: "lastName", label: "Last name", value: "Lovelace" },
+              { id: "fullName", label: "Full name", value: "Ada Lovelace" },
+              { id: "topic", label: "Topic", value: "Accessible systems" },
+            ],
+          },
+        },
+      }),
+    );
+
+    expect(markup).toContain("Accessible systems");
+    expect(markup).not.toContain("ada@example.com");
+    expect(markup).not.toContain("<dt>Email</dt>");
+    expect(markup).not.toContain("<dt>First name</dt>");
+    expect(markup).not.toContain("<dt>Last name</dt>");
+    expect(markup).not.toContain("<dt>Full name</dt>");
+  });
+  it("filters generic reviewer answers to the blind evaluator projection", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              data: {
+                assignments: [
+                  {
+                    plan: {
+                      id: "plan-blind",
+                      eventId: "summit-2026",
+                      name: "Blind review",
+                      status: "open",
+                      blindReview: true,
+                      createdAt: "2026-08-10T00:00:00.000Z",
+                      updatedAt: "2026-08-10T01:00:00.000Z",
+                    },
+                    assignment: {
+                      id: "assignment-blind",
+                      eventId: "summit-2026",
+                      planId: "plan-blind",
+                      submissionId: "submission-blind",
+                      roundId: "round-blind",
+                      reviewerId: "reviewer-1",
+                      status: "assigned",
+                      version: 1,
+                    },
+                    round: {
+                      id: "round-blind",
+                      name: "Blind round",
+                      sequence: 1,
+                      opensAt: null,
+                      closesAt: "2026-08-18T00:00:00.000Z",
+                      rubric: {
+                        id: "rubric-blind",
+                        name: "Blind rubric",
+                        criteria: testCriteria,
+                      },
+                    },
+                    submission: {
+                      id: "submission-blind",
+                      title: "Blind submission",
+                      abstract: "Blind abstract",
+                      identityRedacted: true,
+                      answers: {
+                        email: "ada@example.com",
+                        firstName: "Ada",
+                        lastName: "Lovelace",
+                        fullName: "Ada Lovelace",
+                        topic: "Accessible systems",
+                      },
+                    },
+                    review: null,
+                    suggestions: [],
+                  },
+                ],
+              },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+      ),
+    );
+
+    try {
+      const queue = await loadEvaluatorQueue(undefined, "https://api.example");
+      const assignment = queue[0]?.assignment;
+      if (assignment === undefined) throw new Error("Expected a blind evaluator assignment.");
+      const markup = renderToStaticMarkup(
+        createElement(ReviewWorkspace, {
+          eventId: "summit-2026",
+          mode: "evaluator",
+          initialState: { assignment },
+        }),
+      );
+
+      expect(markup).toContain("Accessible systems");
+      expect(markup).not.toContain("ada@example.com");
+      expect(markup).not.toContain("<dt>First name</dt>");
+      expect(markup).not.toContain("<dt>Last name</dt>");
+      expect(markup).not.toContain("<dt>Full name</dt>");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("marks AI evidence uncounted and requires a written abstention reason", () => {
@@ -763,6 +892,30 @@ describe("review workspace", () => {
     expect(evaluatorMarkup).toMatch(/disabled=""/u);
     expect(queueMarkup).toContain("Submitted");
     expect(queueMarkup).not.toContain("Needs review");
+  });
+  it("does not reopen persisted abstained assignments after reload", () => {
+    const abstainedAssignment = {
+      ...testAssignment("summit-2026"),
+      assignmentStatus: "abstained" as const,
+    };
+    const scorecardMarkup = renderToStaticMarkup(
+      createElement(ReviewWorkspace, {
+        eventId: "summit-2026",
+        mode: "evaluator",
+        initialState: { assignment: abstainedAssignment },
+      }),
+    );
+    const queueMarkup = renderToStaticMarkup(
+      createElement(ReviewWorkspace, {
+        mode: "evaluator",
+        initialState: { queue: [{ assignment: abstainedAssignment }] },
+      }),
+    );
+
+    expect(scorecardMarkup).toContain("Assignment abstained");
+    expect(scorecardMarkup).not.toContain("Score this submission");
+    expect(queueMarkup).toContain("No review assignments are currently available.");
+    expect(queueMarkup).not.toContain("Open scorecard");
   });
   it("keeps organizer authoring controls safe when React defers event updaters", async () => {
     vi.resetModules();

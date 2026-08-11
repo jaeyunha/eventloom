@@ -1,11 +1,5 @@
 import type { ApiScope, WebhookEventType } from "@open-sessionboard/contracts";
-import type {
-  AcceleventsAdminPreview,
-  AcceleventsPublishResult,
-  IntegrationAdminSnapshot,
-  IntegrationErrorBody,
-  OneTimeSecret,
-} from "./types";
+import type { IntegrationAdminSnapshot, IntegrationErrorBody, OneTimeSecret } from "./types";
 
 export class IntegrationAdminApiError extends Error {
   readonly code: string;
@@ -23,11 +17,7 @@ export class IntegrationAdminApiError extends Error {
 
 export interface IntegrationAdminApi {
   getSnapshot(eventId: string, signal?: AbortSignal): Promise<IntegrationAdminSnapshot>;
-  saveCredential(input: {
-    eventId: string;
-    provider: "opensend" | "accelevents";
-    secret: string;
-  }): Promise<void>;
+  saveCredential(input: { eventId: string; provider: "opensend"; secret: string }): Promise<void>;
   createApiKey(input: {
     eventId: string;
     label: string;
@@ -43,14 +33,6 @@ export interface IntegrationAdminApi {
   setWebhookActive(eventId: string, subscriptionId: string, active: boolean): Promise<void>;
   rotateWebhookSecret(eventId: string, subscriptionId: string): Promise<OneTimeSecret>;
   deleteWebhook(eventId: string, subscriptionId: string): Promise<void>;
-  previewAccelevents(eventId: string): Promise<AcceleventsAdminPreview>;
-  publishAccelevents(input: {
-    eventId: string;
-    publicationId: string;
-    snapshotHash: string;
-    confirmationToken: string;
-    idempotencyKey: string;
-  }): Promise<AcceleventsPublishResult>;
   retryCalendarDelivery(eventId: string, deliveryId: string): Promise<void>;
 }
 
@@ -72,15 +54,6 @@ async function toApiError(response: Response): Promise<IntegrationAdminApiError>
     response.status,
     body?.error?.traceId,
   );
-}
-type SnapshotPayload = Omit<IntegrationAdminSnapshot, "accelevents"> & {
-  readonly accelevents?: unknown;
-};
-
-function withoutLegacyAccelevents(snapshot: SnapshotPayload): IntegrationAdminSnapshot {
-  const current = { ...snapshot } as SnapshotPayload & { accelevents?: unknown };
-  delete current.accelevents;
-  return current as IntegrationAdminSnapshot;
 }
 
 function idempotencyKey(): string {
@@ -121,10 +94,10 @@ export function createIntegrationAdminApi(
 
   return {
     getSnapshot(eventId, signal) {
-      return request<SnapshotPayload>(`${eventPath(eventId)}/integrations`, {
+      return request<IntegrationAdminSnapshot>(`${eventPath(eventId)}/integrations`, {
         cache: "no-store",
         ...(signal === undefined ? {} : { signal }),
-      }).then(withoutLegacyAccelevents);
+      });
     },
 
     saveCredential(input) {
@@ -198,31 +171,6 @@ export function createIntegrationAdminApi(
         method: "DELETE",
         headers: { "idempotency-key": idempotencyKey() },
       });
-    },
-
-    previewAccelevents(eventId) {
-      return request<AcceleventsAdminPreview>(
-        `${eventPath(eventId)}/integrations/accelevents/preview`,
-        {
-          method: "POST",
-          headers: { "idempotency-key": idempotencyKey() },
-          body: JSON.stringify({}),
-        },
-      );
-    },
-
-    publishAccelevents(input) {
-      return request<AcceleventsPublishResult>(
-        `${eventPath(input.eventId)}/integrations/accelevents/publications/${segment(input.publicationId)}`,
-        {
-          method: "POST",
-          headers: { "idempotency-key": input.idempotencyKey },
-          body: JSON.stringify({
-            snapshotHash: input.snapshotHash,
-            confirmationToken: input.confirmationToken,
-          }),
-        },
-      );
     },
 
     retryCalendarDelivery(eventId, deliveryId) {

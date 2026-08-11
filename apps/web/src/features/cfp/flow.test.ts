@@ -1,4 +1,10 @@
 import { describe, expect, it } from "vitest";
+import {
+  clearCfpSubmissionState,
+  getCfpDraftStorageKey,
+  getCfpSubmissionPointerStorageKey,
+} from "./draft-persistence";
+import { CfpMutationGate } from "./api";
 import { getCfpStepRoute, getNextCfpStep, getPreviousCfpStep } from "./routes";
 import {
   createEmptyDraft,
@@ -53,5 +59,46 @@ describe("CFP flow", () => {
       submittedAt: "2026-08-08T12:00:00.000Z",
     });
     expect(repeated).toBe(first);
+  });
+  it("clears the completed draft pointer and legacy browser state before a new session", () => {
+    const values = new Map<string, string>([
+      [getCfpDraftStorageKey("future-conf"), JSON.stringify(createEmptyDraft("future-conf"))],
+      [
+        getCfpSubmissionPointerStorageKey("org-1", "future-conf", "future-conf-cfp"),
+        "submission_completed",
+      ],
+    ]);
+    const storage = {
+      removeItem(key: string) {
+        values.delete(key);
+      },
+    };
+
+    clearCfpSubmissionState(
+      "future-conf",
+      { organizationId: "org-1", eventId: "future-conf", formId: "future-conf-cfp" },
+      storage,
+    );
+
+    expect(values).toEqual(new Map());
+  });
+  it("ignores a stale completion without releasing a newer save", () => {
+    const gate = new CfpMutationGate();
+    const first = gate.begin();
+    expect(first).not.toBeNull();
+    expect(gate.begin()).toBeNull();
+
+    gate.invalidate();
+    const second = gate.begin();
+    expect(second).not.toBeNull();
+    if (first === null || second === null) throw new Error("The mutation leases were not created.");
+
+    expect(gate.isCurrent(first)).toBe(false);
+    expect(gate.isCurrent(second)).toBe(true);
+
+    gate.finish(first);
+    expect(gate.isActive()).toBe(true);
+    gate.finish(second);
+    expect(gate.isActive()).toBe(false);
   });
 });

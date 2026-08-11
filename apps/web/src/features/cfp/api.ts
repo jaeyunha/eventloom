@@ -65,6 +65,26 @@ export class CfpMutationGate {
     this.#nextSequence += 1;
   }
 }
+export interface CfpFileAssetReference {
+  assetId: string;
+}
+
+export interface CfpFileUploadAuthorization {
+  asset: CfpFileAssetReference & Record<string, unknown>;
+  grant: {
+    method: "PUT";
+    url: string;
+    headers: Readonly<Record<string, string>>;
+    expiresAt: string;
+  };
+}
+
+export interface CfpFileUploadResult extends CfpFileAssetReference {
+  state: "ready" | "rejected";
+  contentType: string;
+  sizeBytes: number;
+}
+
 export function isCfpSchemaVersionConflict(error: unknown): error is CfpApiError {
   if (!(error instanceof CfpApiError) || error.status !== 409) return false;
   const code = error.code.toLowerCase().replaceAll("-", "_");
@@ -254,6 +274,29 @@ const cfpSubmitResultSchema = z.object({
   confirmationQueued: z.boolean(),
 });
 export type CfpSubmitResult = z.infer<typeof cfpSubmitResultSchema>;
+const cfpFileUploadAuthorizationSchema = z.object({
+  asset: z
+    .object({
+      assetId: z.string().trim().min(1),
+    })
+    .passthrough(),
+  grant: z
+    .object({
+      method: z.literal("PUT"),
+      url: z.string().trim().min(1),
+      headers: z.record(z.string(), z.string()),
+      expiresAt: z.string().trim().min(1),
+    })
+    .passthrough(),
+});
+const cfpFileUploadResultSchema = z
+  .object({
+    assetId: z.string().trim().min(1),
+    state: z.enum(["ready", "rejected"]),
+    contentType: z.string().trim().min(1),
+    sizeBytes: z.number().int().nonnegative(),
+  })
+  .passthrough();
 
 const eventSchema = z
   .object({
@@ -296,6 +339,16 @@ export interface CfpAuthenticatedSession {
   lastName: string;
 }
 export interface CfpApi {
+  uploadFile?(input: {
+    organizationId: string;
+    eventId: string;
+    submissionId: string;
+    fieldKey: string;
+    participantId?: string;
+    file: File;
+    idempotencyKey?: string;
+    signal?: AbortSignal;
+  }): Promise<CfpFileUploadResult>;
   getSession(input?: { signal?: AbortSignal }): Promise<CfpAuthenticatedSession | null>;
   getPublished(input: {
     organizationId: string;
@@ -417,6 +470,14 @@ function segment(value: string): string {
   return encodeURIComponent(normalized);
 }
 
+function resolveUploadGrantUrl(value: string, origin: string): string {
+  try {
+    return new URL(value).toString();
+  } catch {
+    const normalizedOrigin = trimTrailingSlash(origin);
+    return normalizedOrigin ? new URL(value, `${normalizedOrigin}/`).toString() : value;
+  }
+}
 function makeIdempotencyKey(prefix: string): string {
   if (typeof crypto === "undefined" || typeof crypto.randomUUID !== "function") {
     throw new Error("The CFP API requires Web Crypto for idempotent mutations.");
@@ -696,8 +757,89 @@ export function createCfpApi(baseUrl: string, fetcher: Fetcher = fetch): CfpApi 
   function key(prefix: string, provided?: string): string {
     return provided?.trim() || makeIdempotencyKey(prefix);
   }
+  async function uploadPrivateFile(
+    file: File,
+    grant: CfpFileUploadAuthorization["grant"],
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const expiresAt = Date.parse(grant.expiresAt);
+    if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+      throw new CfpApiError(
+        "CFP_FILE_UPLOAD_EXPIRED",
+        "The private file upload authorization has expired.",
+        409,
+      );
+    }
+    const response = await withCfpRequestTimeout(
+      (requestSignal) =>
+        fetcher(resolveUploadGrantUrl(grant.url, baseUrl), {
+          method: grant.method,
+          credentials: "omit",
+          cache: "no-store",
+          headers: grant.headers,
+          body: file,
+          signal: requestSignal,
+        }),
+      signal,
+      "The private file upload timed out. Try again.",
+    );
+    if (!response.ok) throw await parseError(response);
+  }
 
   return {
+    uploadFile: async (input) => {
+      const issueKey = key("cfp-file-upload", input.idempotencyKey);
+      const authorization = await request(
+        `${apiBase}${resourcePath(input.organizationId, input.eventId)}/submissions/${segment(input.submissionId)}/file-requests/${segment(input.fieldKey)}/upload`,
+        cfpFileUploadAuthorizationSchema,
+        {
+          method: "POST",
+          headers: { "idempotency-key": issueKey },
+          ...(input.signal === undefined ? {} : { signal: input.signal }),
+          body: JSON.stringify({
+            fileName: input.file.name,
+            contentType: input.file.type.trim() || "application/octet-stream",
+            sizeBytes: input.file.size,
+            ...(input.participantId === undefined ? {} : { participantId: input.participantId }),
+          }),
+        },
+      );
+      const grantExpiry = Date.parse(authorization.grant.expiresAt);
+      if (!Number.isFinite(grantExpiry) || grantExpiry <= Date.now()) {
+        throw new CfpApiError(
+          "CFP_FILE_UPLOAD_EXPIRED",
+          "The private file upload authorization has expired.",
+          409,
+        );
+      }
+      await uploadPrivateFile(input.file, authorization.grant, input.signal);
+      const finalized = await request(
+        `${apiBase}${resourcePath(input.organizationId, input.eventId)}/submissions/${segment(input.submissionId)}/file-requests/${segment(input.fieldKey)}/assets/${segment(authorization.asset.assetId)}/finalize`,
+        cfpFileUploadResultSchema,
+        {
+          method: "POST",
+          headers: {
+            "idempotency-key": key(
+              "cfp-file-finalize",
+              input.idempotencyKey === undefined ? undefined : `${input.idempotencyKey}:finalize`,
+            ),
+          },
+          ...(input.signal === undefined ? {} : { signal: input.signal }),
+          body: JSON.stringify({
+            state: "ready",
+            ...(input.participantId === undefined ? {} : { participantId: input.participantId }),
+          }),
+        },
+      );
+      if (finalized.assetId !== authorization.asset.assetId || finalized.state !== "ready") {
+        throw new CfpApiError(
+          "CFP_FILE_UPLOAD_REJECTED",
+          "The uploaded file was rejected during finalization.",
+          409,
+        );
+      }
+      return finalized;
+    },
     getSession: async (input) => {
       const result = await authSessionRequest(fetcher, authBase, input?.signal);
       if (result.response.status === 401 || result.response.status === 403) return null;

@@ -392,12 +392,12 @@
   border-bottom: 1px solid var(--sb-color-border);
 }
 
-.senderList li:last-child {
-  border-bottom: 0;
+.senderList li code {
+  color: var(--sb-color-ink);
 }
 
-.senderList code {
-  color: var(--sb-color-ink);
+.senderList li:last-child {
+  border-bottom: 0;
 }
 
 .actionRow {

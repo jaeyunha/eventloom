@@ -311,7 +311,7 @@
 }
 
 .toggleRow input,
-.fieldRuleRow input {
+.fieldRuleRow input[type="checkbox"] {
   flex: 0 0 auto;
   width: 1.1rem;
   height: 1.1rem;
@@ -367,22 +367,23 @@
 
 .fieldRuleRow {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: auto auto minmax(0, 1fr);
   align-items: center;
   gap: 1rem;
   padding: 0.8rem 0.4rem;
   border-bottom: 1px solid var(--color-border, #dfe2e8);
 }
+.fieldRuleRow > .formGrid {
+  grid-column: 1 / -1;
+  width: 100%;
+}
+
+.fieldRuleRow > .textButton {
+  justify-self: end;
+}
 
 .fieldRuleRow:last-child {
   border-bottom: 0;
-}
-
-.fieldRuleRow > div:first-child {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.5rem;
 }
 
 .fieldRuleRow label {
@@ -653,14 +654,14 @@
   border-bottom: 1px solid var(--color-border, #dfe2e8);
 }
 
-.previewDetails p:not(.sectionKicker):not(.fieldHint) {
+.previewDetails p:not(.sectionKicker, .fieldHint) {
   margin: 0.7rem 0 0;
   color: var(--color-muted, #697181);
   font-size: 0.88rem;
 }
 
-.previewSuccessText {
-  color: var(--color-success, #18794e) !important;
+.previewDetails p.previewSuccessText {
+  color: var(--color-success, #18794e);
   font-weight: 750;
 }
 

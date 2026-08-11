@@ -1,4 +1,4 @@
-import { CfpWizard } from "../../../features/cfp/cfp-wizard";
+import { CfpWizard } from "@/features/cfp/cfp-wizard";
 
 interface CfpPageProps {
   params: Promise<{ eventSlug: string }>;

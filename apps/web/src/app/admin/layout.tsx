@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
-import { AdminShell } from "../../features/admin/admin-shell";
+import { AdminShell } from "@/features/admin/admin-shell";
+export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "Organizer workspace",

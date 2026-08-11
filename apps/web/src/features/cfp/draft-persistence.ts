@@ -18,6 +18,39 @@ export function getCfpDraftStorageKey(eventSlug: string): string {
   return `${STORAGE_PREFIX}:${encodeURIComponent(eventSlug)}`;
 }
 
+export function clearCfpDraftStorage(
+  eventSlug: string,
+  storage: Pick<StorageLike, "removeItem">,
+): void {
+  storage.removeItem(getCfpDraftStorageKey(eventSlug));
+}
+
+const SUBMISSION_POINTER_PREFIX = "open-sessionboard:cfp-submission:v1";
+
+export interface CfpSubmissionPointerIdentity {
+  organizationId: string;
+  eventId: string;
+  formId: string;
+}
+
+export function getCfpSubmissionPointerStorageKey(
+  organizationId: string,
+  eventId: string,
+  formId: string,
+): string {
+  return `${SUBMISSION_POINTER_PREFIX}:${encodeURIComponent(organizationId)}:${encodeURIComponent(eventId)}:${encodeURIComponent(formId)}`;
+}
+
+export function clearCfpSubmissionState(
+  eventSlug: string,
+  identity: CfpSubmissionPointerIdentity,
+  storage: Pick<StorageLike, "removeItem">,
+): void {
+  clearCfpDraftStorage(eventSlug, storage);
+  storage.removeItem(
+    getCfpSubmissionPointerStorageKey(identity.organizationId, identity.eventId, identity.formId),
+  );
+}
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -107,7 +140,7 @@ export class BrowserCfpDraftPersistence implements CfpDraftPersistence {
   }
 
   async clear(eventSlug: string): Promise<void> {
-    this.#storage.removeItem(getCfpDraftStorageKey(eventSlug));
+    clearCfpDraftStorage(eventSlug, this.#storage);
   }
 }
 

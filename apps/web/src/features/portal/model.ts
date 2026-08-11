@@ -1,4 +1,5 @@
 import type {
+  PortalContext,
   PortalProfile,
   PortalSubmission,
   PortalSubmissionStatus,
@@ -173,6 +174,36 @@ export function findProfileForTask(task: PortalTask, profiles: readonly PortalPr
 
 export function findSubmissionForTask(task: PortalTask, submissions: readonly PortalSubmission[]) {
   return submissions.find((submission) => submission.id === task.submissionId);
+}
+export function portalIdentityProfile(
+  view: PortalView | null | undefined,
+  context: PortalContext | null,
+): PortalProfile | undefined {
+  return (
+    view?.profiles.find((candidate) => candidate.participantId === context?.primaryParticipantId) ??
+    view?.profiles[0]
+  );
+}
+export function portalSubmissionEditTarget(
+  context: PortalContext | null,
+  submission: PortalSubmission,
+): { href: string; pointerKey: string } | null {
+  if (
+    context === null ||
+    submission.formId === undefined ||
+    (submission.status !== "submitted" && submission.status !== "under_review")
+  ) {
+    return null;
+  }
+  const eventSlug = context.slug?.trim() || context.eventId;
+  const organizationId = context.id.split(":")[1]?.trim();
+  if (!organizationId) return null;
+  return {
+    href: `/cfp/${encodeURIComponent(eventSlug)}/submission`,
+    pointerKey: `open-sessionboard:cfp-submission:v1:${encodeURIComponent(
+      organizationId,
+    )}:${encodeURIComponent(context.eventId)}:${encodeURIComponent(submission.formId)}`,
+  };
 }
 
 export interface PortalSummary {

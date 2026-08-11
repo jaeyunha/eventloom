@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { submissionStatusPresentation } from "./model";
+import { portalSubmissionEditTarget, submissionStatusPresentation } from "./model";
 import styles from "./portal.module.css";
 import { usePortal } from "./portal-provider";
+import { portalSubmissionIdsMatch } from "./portal-submissions";
 import {
   EmptyState,
   formatPortalDate,
@@ -29,11 +30,13 @@ export function SubmissionDetail({ submissionId }: Readonly<{ submissionId: stri
 }
 
 function SubmissionDetailContent({ submissionId }: Readonly<{ submissionId: string }>) {
-  const { eventQuery, view } = usePortal();
+  const { eventQuery, view, context, can, workspace, workspaceLoading } = usePortal();
   if (!view) {
     return null;
   }
-  const submission = view.submissions.find((candidate) => candidate.id === submissionId);
+  const submission = view.submissions.find((candidate) =>
+    portalSubmissionIdsMatch(candidate.id, submissionId),
+  );
   if (!submission) {
     return (
       <EmptyState
@@ -48,8 +51,17 @@ function SubmissionDetailContent({ submissionId }: Readonly<{ submissionId: stri
     );
   }
   const presentation = submissionStatusPresentation(submission.status);
-  const submissionTasks = view.tasks.filter((task) => task.submissionId === submission.id);
+  const submissionTasks = view.tasks.filter((task) =>
+    portalSubmissionIdsMatch(task.submissionId, submission.id),
+  );
   const currentJourneyIndex = standardJourney.indexOf(submission.status);
+  const editTarget = can("submission-edit")
+    ? portalSubmissionEditTarget(context, submission)
+    : null;
+  const roster = Object.values(workspace.rosters).find((candidate) =>
+    portalSubmissionIdsMatch(candidate.submissionId, submission.id),
+  );
+  const canManageRoster = can("roster-manage") && (roster?.capabilities.manage ?? false);
 
   return (
     <>
@@ -62,6 +74,15 @@ function SubmissionDetailContent({ submissionId }: Readonly<{ submissionId: stri
         description="Your latest program status and accepted-speaker requirements."
         action={<SubmissionStatusBadge status={submission.status} />}
       />
+      {editTarget === null ? null : (
+        <Link
+          className={styles.primaryButton}
+          href={editTarget.href}
+          onClick={() => window.localStorage.setItem(editTarget.pointerKey, submission.id)}
+        >
+          Edit proposal
+        </Link>
+      )}
 
       <section className={`${styles.panel} ${styles.statusHero}`}>
         <div
@@ -108,6 +129,52 @@ function SubmissionDetailContent({ submissionId }: Readonly<{ submissionId: stri
           </ol>
         </section>
       )}
+      {submission.status === "accepted" ? (
+        <section className={styles.panel} aria-labelledby="participants-heading">
+          <div className={styles.panelHeading}>
+            <div>
+              <p className={styles.eyebrow}>Accepted session</p>
+              <h2 id="participants-heading">Participants</h2>
+            </div>
+            {canManageRoster ? (
+              <Link href="/portal?workspace=co-speakers">Manage co-speakers</Link>
+            ) : null}
+          </div>
+          {roster === undefined ? (
+            <p className={styles.toolbarDescription}>
+              {workspaceLoading
+                ? "Loading the participant roster…"
+                : "The participant roster is unavailable for this session."}
+            </p>
+          ) : roster.members.length === 0 ? (
+            <EmptyState
+              title="No co-speakers added"
+              description={
+                canManageRoster
+                  ? "Add collaborators from the co-speaker workspace."
+                  : "No co-speakers are listed for this session."
+              }
+            />
+          ) : (
+            <ul className={styles.taskSummaryList} aria-label="Session participants">
+              {roster.members.map((member) => (
+                <li key={member.participantId}>
+                  <span className={styles.taskCheck} aria-hidden="true">
+                    {member.status === "active" ? "✓" : "○"}
+                  </span>
+                  <div>
+                    <h3>{member.displayName}</h3>
+                    <p>
+                      {member.role.replaceAll("_", " ")} · {member.status}
+                      {member.email ? ` · ${member.email}` : ""}
+                    </p>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      ) : null}
 
       {submission.status === "accepted" ? (
         <section className={styles.panel} aria-labelledby="accepted-tasks-heading">

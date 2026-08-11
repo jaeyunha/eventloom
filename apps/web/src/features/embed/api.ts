@@ -1,4 +1,9 @@
-import type { PublicEmbedErrorResponse, PublishedAgenda, PublishedSpeakerGallery } from "./types";
+import type {
+  PublicEmbedErrorResponse,
+  PublishedAgenda,
+  PublishedProgram,
+  PublishedSpeakerGallery,
+} from "./types";
 
 export class PublicEmbedApiError extends Error {
   readonly code: string;
@@ -14,13 +19,18 @@ export class PublicEmbedApiError extends Error {
   }
 }
 
-type PublicFetcher = (
-  input: RequestInfo | URL,
-  init?: RequestInit & { next?: { revalidate: number } },
-) => Promise<Response>;
+type PublicFetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+const PUBLIC_PROJECTION_REVALIDATE_SECONDS = 60;
+export const PUBLIC_PROGRAM_CACHE_TAG = "public-programs";
 const REMOTE_API_ORIGINS = {
-  staging: "https://open-sessionboard-api-staging.ashleyha0317.workers.dev",
-  production: "https://open-sessionboard-api-production.ashleyha0317.workers.dev",
+  staging: [
+    "https://open-sessionboard-web-staging.ashleyha0317.workers.dev",
+    "https://open-sessionboard-api-staging.ashleyha0317.workers.dev",
+  ],
+  production: [
+    "https://open-sessionboard-web-production.ashleyha0317.workers.dev",
+    "https://open-sessionboard-api-production.ashleyha0317.workers.dev",
+  ],
 } as const;
 
 function configuredEnvironment(): "local" | "staging" | "production" | undefined {
@@ -68,7 +78,7 @@ function normalizeApiOrigin(value: string): string {
 
   if (environment !== undefined) {
     const expected = REMOTE_API_ORIGINS[environment];
-    if (origin.origin !== expected) {
+    if (!(expected as readonly string[]).includes(origin.origin)) {
       throw new PublicEmbedApiError(
         "CONFIGURATION_ERROR",
         "The public API origin does not match this deployment environment.",
@@ -78,7 +88,7 @@ function normalizeApiOrigin(value: string): string {
     return origin.origin;
   }
 
-  if (!(Object.values(REMOTE_API_ORIGINS) as readonly string[]).includes(origin.origin)) {
+  if (!(Object.values(REMOTE_API_ORIGINS).flat() as readonly string[]).includes(origin.origin)) {
     const isLocal =
       (origin.hostname === "localhost" || origin.hostname === "127.0.0.1") &&
       (origin.protocol === "http:" || origin.protocol === "https:");
@@ -105,7 +115,10 @@ async function getPublishedProjection<T>(
     {
       headers: { accept: "application/json" },
       cache: "force-cache",
-      next: { revalidate: 60 },
+      next: {
+        revalidate: PUBLIC_PROJECTION_REVALIDATE_SECONDS,
+        tags: [PUBLIC_PROGRAM_CACHE_TAG],
+      },
     },
   );
   if (!response.ok) {
@@ -137,4 +150,14 @@ export function getPublishedSpeakers(
   fetcher: PublicFetcher = fetch,
 ): Promise<PublishedSpeakerGallery> {
   return getPublishedProjection(baseUrl, eventSlug, "speakers", fetcher);
+}
+export function getPublishedProgram(
+  baseUrl: string,
+  eventSlug: string,
+  fetcher: PublicFetcher = fetch,
+): Promise<PublishedProgram> {
+  return Promise.all([
+    getPublishedAgenda(baseUrl, eventSlug, fetcher),
+    getPublishedSpeakers(baseUrl, eventSlug, fetcher),
+  ]).then(([agenda, speakers]) => ({ agenda, speakers }));
 }

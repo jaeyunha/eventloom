@@ -1,4 +1,5 @@
 import { ProductNavigation } from "../components/product-shell/product-navigation";
+export const dynamic = "force-dynamic";
 
 const workflowSteps = [
   {
@@ -72,17 +73,16 @@ export default function Home() {
               deliberate workflow for conference teams and speakers.
             </p>
             <div className="home-actions">
-              <a className="home-button home-button-primary" href="/cfp/open-sessionboard-conf">
+              <a className="home-button home-button-primary" href="/cfp/devflow-conf-2027">
                 Open the CFP
               </a>
-              <a className="home-button home-button-secondary" href="/portal">
-                Visit speaker portal
+              <a className="home-button home-button-secondary" href="/login">
+                Sign in
               </a>
             </div>
             <p className="home-note">
-              Built in the open for teams that want useful defaults, visible boundaries, and people
-              in charge of the final call. This landing page shows workflow surfaces, not live event
-              data.
+              Submitters create or use an account during the CFP. Accepted speakers return to the
+              portal for profiles, tasks, and files.
             </p>
           </div>
 
@@ -236,8 +236,8 @@ export default function Home() {
             Open Sessionboard is open-source software for teams who want to understand their
             workflow, adapt it to their events, and keep operational decisions accountable.
           </p>
-          <a className="home-button home-button-secondary" href="/docs/api">
-            Read the API docs
+          <a className="home-button home-button-secondary" href="/login">
+            Sign in to a workspace
           </a>
         </section>
       </main>

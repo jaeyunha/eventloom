@@ -13,6 +13,17 @@ import {
   SubmissionStatusBadge,
 } from "./portal-ui";
 
+export function portalSubmissionIdsMatch(left: string, right: string): boolean {
+  const normalizedLeft = left.trim();
+  const normalizedRight = right.trim();
+  if (normalizedLeft.length === 0 || normalizedRight.length === 0) return false;
+  return (
+    normalizedLeft === normalizedRight ||
+    normalizedLeft === `speaker-submission:${normalizedRight}` ||
+    normalizedRight === `speaker-submission:${normalizedLeft}`
+  );
+}
+
 export function PortalSubmissions() {
   return (
     <PortalContentState>
@@ -27,7 +38,10 @@ function PortalSubmissionsContent() {
   if (!view) {
     return null;
   }
-  const submissions = filterSubmissions(view.submissions, search);
+  const submissions = filterSubmissions(view.submissions, search).filter(
+    (candidate, index, all) =>
+      all.findIndex((other) => portalSubmissionIdsMatch(other.id, candidate.id)) === index,
+  );
 
   return (
     <>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agendaDays, publicationReadiness } from "./model";
+import { agendaDays, eventDates, publicationReadiness } from "./model";
 import type { AgendaPreview, AgendaWorkspaceData } from "./types";
 
 const data: AgendaWorkspaceData = {
@@ -68,6 +68,36 @@ describe("agenda workspace model", () => {
     expect(days.map((day) => day.date)).toEqual(["2026-09-18", "2026-09-19"]);
     expect(days[0]?.label).toBe("Friday, September 18");
     expect(days[0]?.entries[0]?.title).toBe("Opening keynote");
+  });
+  it("uses the authoritative event range for empty days and excludes out-of-range draft dates", () => {
+    const outsideEntry = data.draft.entries[0];
+    if (!outsideEntry) throw new Error("Expected fixture entry.");
+    const days = agendaDays(
+      [
+        ...data.draft.entries,
+        {
+          ...outsideEntry,
+          id: "entry_outside_event",
+          startsAtLocal: "2026-09-21T10:00",
+          endsAtLocal: "2026-09-21T10:45",
+        },
+      ],
+      {
+        startsOn: "2026-09-17",
+        endsOn: "2026-09-20",
+      },
+    );
+
+    expect(days.map((day) => day.date)).toEqual([
+      "2026-09-17",
+      "2026-09-18",
+      "2026-09-19",
+      "2026-09-20",
+    ]);
+    expect(days[0]?.entries).toEqual([]);
+    expect(days[1]?.entries[0]?.title).toBe("Opening keynote");
+    expect(days[3]?.entries).toEqual([]);
+    expect(eventDates("2026-09-19", "2026-09-18")).toEqual([]);
   });
 
   it("requires validation of the exact current draft", () => {

@@ -32,7 +32,10 @@ function PortalHomeContent() {
   if (!view) {
     return null;
   }
-  const profile = view.profiles[0];
+  const profile =
+    view.profiles.find(
+      (candidate) => candidate.participantId === view.context?.primaryParticipantId,
+    ) ?? view.profiles[0];
   const summary = summarizePortal(view);
   const visibleTasks = view.tasks.filter(
     (task) => task.status !== "completed" && task.status !== "waived",

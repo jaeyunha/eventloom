@@ -1,4 +1,4 @@
-import { SubmissionListWorkspace } from "../../../../../features/admin/submission-workspace";
+import { SubmissionListWorkspace } from "@/features/admin/submission-workspace";
 
 interface SubmissionsPageProps {
   params: Promise<{ eventId: string }>;

@@ -2,6 +2,16 @@ import type { ReactNode } from "react";
 import styles from "./embed.module.css";
 import type { EmbedTheme, PublishedEvent } from "./types";
 
+type EmbedView = "sessions" | "itinerary" | "agenda" | "speakers-list" | "speakers";
+
+const embedViews: readonly Readonly<[EmbedView, string]>[] = [
+  ["sessions", "Sessions"],
+  ["speakers-list", "Speakers List"],
+  ["agenda", "Agenda"],
+  ["itinerary", "Itinerary"],
+  ["speakers", "Speaker Gallery"],
+];
+
 export function EmbedFrame({
   children,
   event,
@@ -13,13 +23,14 @@ export function EmbedFrame({
   event: PublishedEvent;
   eventSlug: string;
   theme: EmbedTheme;
-  view: "agenda" | "speakers";
+  view: EmbedView;
 }>) {
   const themeQuery = theme === "auto" ? "" : `?theme=${theme}`;
+  const currentViewLabel = embedViews.find(([path]) => path === view)?.[1] ?? "program";
   return (
     <div className={styles.embedRoot} data-theme={theme}>
       <a className={styles.skipLink} href="#embed-content">
-        Skip to {view === "agenda" ? "agenda" : "speakers"}
+        Skip to {currentViewLabel.toLowerCase()}
       </a>
       <header className={styles.embedHeader}>
         <div>
@@ -31,18 +42,15 @@ export function EmbedFrame({
           </p>
         </div>
         <nav aria-label="Published event views">
-          <a
-            aria-current={view === "agenda" ? "page" : undefined}
-            href={`/embed/${encodeURIComponent(eventSlug)}/agenda${themeQuery}`}
-          >
-            Agenda
-          </a>
-          <a
-            aria-current={view === "speakers" ? "page" : undefined}
-            href={`/embed/${encodeURIComponent(eventSlug)}/speakers${themeQuery}`}
-          >
-            Speakers
-          </a>
+          {embedViews.map(([path, label]) => (
+            <a
+              key={path}
+              aria-current={view === path ? "page" : undefined}
+              href={`/embed/${encodeURIComponent(eventSlug)}/${path}${themeQuery}`}
+            >
+              {label}
+            </a>
+          ))}
         </nav>
       </header>
       <main id="embed-content" className={styles.embedMain} tabIndex={-1}>

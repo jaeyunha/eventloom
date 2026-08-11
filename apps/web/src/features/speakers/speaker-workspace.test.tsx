@@ -1,0 +1,366 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it } from "vitest";
+import {
+  createSpeakerApi,
+  type SpeakerApi,
+  type SpeakerRecord,
+  type SpeakerRosterEnvelope,
+  type SpeakerAsset,
+} from "./api";
+import {
+  duplicateEmailConflicts,
+  SpeakerAssetDownload,
+  SpeakerWorkspace,
+} from "./speaker-workspace";
+
+const speaker: SpeakerRecord = {
+  participantId: "participant-1",
+  displayName: "Priya Raman",
+  email: "priya@example.test",
+  jobTitle: "Principal Engineer",
+  company: "Latticework Systems",
+  biography: "Builds reliable developer platforms.",
+  socialLinks: { twitter: "https://x.com/priya", linkedin: "https://linkedin.com/in/priya" },
+  headshotAssetId: null,
+  status: "confirmed",
+  sessions: [{ submissionId: "session-1", title: "Incremental builds", status: "accepted" }],
+  taskSummary: { total: 3, completed: 2, overdue: 0 },
+  assets: [],
+  version: 3,
+  updatedAt: "2026-08-09T00:00:00.000Z",
+};
+
+const roster: SpeakerRosterEnvelope = {
+  organizationId: "org-1",
+  eventId: "event-1",
+  speakers: [speaker],
+};
+const readyAsset: SpeakerAsset = {
+  assetId: "asset-ready",
+  fileName: "slides.pdf",
+  contentType: "application/pdf",
+  byteSize: 1_024,
+  status: "ready",
+  uploadedAt: "2026-08-09T00:00:00.000Z",
+  downloadUrl: null,
+};
+
+const pendingAsset: SpeakerAsset = {
+  ...readyAsset,
+  assetId: "asset-pending",
+  fileName: "draft.pdf",
+  status: "pending",
+};
+
+const task = {
+  taskId: "task-1",
+  title: "Confirm participation",
+  description: "General speaker onboarding task.",
+  type: "general" as const,
+  dueAt: "2027-04-01",
+  status: "pending" as const,
+  completedAt: null,
+  sessionId: null,
+  latestAssetId: null,
+};
+
+describe("speaker API adapter", () => {
+  it("qualifies roster, multipart preview, and canonical commit requests by organization and event", async () => {
+    const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+    const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      const path = String(input);
+      if (path.endsWith("/imports/preview")) {
+        return new Response(JSON.stringify({ data: { validRows: [], invalidRows: [] } }), {
+          status: 200,
+        });
+      }
+      return new Response(JSON.stringify({ data: roster }), { status: 200 });
+    };
+    const api = createSpeakerApi("https://api.example.test/", "org/1", "event/1", fetcher);
+
+    await api.list();
+    await api.previewImport(
+      new File(["displayName,email\nPriya,priya@example.test"], "speakers.csv", {
+        type: "text/csv",
+      }),
+    );
+    await api.commitImport({ rows: [], idempotencyKey: "import-once" });
+
+    expect(String(calls[0]?.input)).toBe(
+      "https://api.example.test/api/admin/organizations/org%2F1/events/event%2F1/speakers",
+    );
+    expect(String(calls[1]?.input)).toContain("/speakers/imports/preview");
+    expect(calls[1]?.init?.body).toBeInstanceOf(FormData);
+    expect(String(calls[2]?.input)).toContain("/speakers/imports");
+    expect(JSON.parse(String(calls[2]?.init?.body))).toEqual({
+      rows: [],
+      idempotencyKey: "import-once",
+    });
+    expect(calls[0]?.init).toMatchObject({ credentials: "include", cache: "no-store" });
+  });
+  it("posts the canonical organizer download route and returns its grant URL", async () => {
+    const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+    const api = createSpeakerApi(
+      "https://api.example.test",
+      "org/1",
+      "event/1",
+      async (input, init) => {
+        calls.push({ input, ...(init === undefined ? {} : { init }) });
+        return new Response(
+          JSON.stringify({
+            data: {
+              url: "https://downloads.example.test/grant",
+              expiresAt: "2026-08-10T12:02:00.000Z",
+            },
+          }),
+          { status: 200 },
+        );
+      },
+    );
+
+    const grant = await api.getDownloadGrant("asset/1");
+
+    expect(grant.url).toBe("https://downloads.example.test/grant");
+    expect(String(calls[0]?.input)).toBe(
+      "https://api.example.test/api/admin/organizations/org%2F1/events/event%2F1/organizer/assets/asset%2F1/download",
+    );
+    expect(calls[0]?.init).toMatchObject({
+      method: "POST",
+      credentials: "include",
+      cache: "no-store",
+    });
+    expect(calls[0]?.init?.body).toBeUndefined();
+  });
+
+  it("sends versioned profile edits, multi-speaker tasks, progress reads, and invitations", async () => {
+    const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+    const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      const path = String(input);
+      if (path.includes("/speaker-tasks")) {
+        if (init?.method === "POST")
+          return new Response(JSON.stringify({ data: task }), { status: 201 });
+        return new Response(
+          JSON.stringify({
+            data: {
+              organizationId: "org-1",
+              eventId: "event-1",
+              speakerProfileId: "participant-1",
+              tasks: [task],
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (path.endsWith("/invitations/preview")) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              { participantId: "participant-1", recipientEmail: speaker.email, state: "ready" },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      if (path.endsWith("/invitations/send")) {
+        return new Response(
+          JSON.stringify({ data: { status: "queued", recipientEmail: speaker.email } }),
+          { status: 200 },
+        );
+      }
+      return new Response(JSON.stringify({ data: speaker }), { status: 200 });
+    };
+    const api = createSpeakerApi("https://api.example.test", "org-1", "event-1", fetcher);
+
+    await api.update("participant-1", {
+      expectedVersion: 3,
+      displayName: speaker.displayName,
+      email: speaker.email,
+      jobTitle: speaker.jobTitle ?? "",
+      company: speaker.company ?? "",
+      biography: speaker.biography,
+      socialLinks: speaker.socialLinks,
+      status: "confirmed",
+    });
+    await api.assignTasks({
+      title: task.title,
+      description: task.description,
+      dueAt: task.dueAt ?? "",
+      participantIds: ["participant-1", "participant-2"],
+    });
+    await api.listTasks("participant-1");
+    await api.previewInvitations({ participantIds: ["participant-1"] });
+    await api.sendInvitations({
+      participantIds: ["participant-1"],
+      templateId: "speaker-welcome",
+      idempotencyKey: "invite-once",
+    });
+
+    expect(String(calls[0]?.input)).toContain("/speakers/participant-1");
+    expect(JSON.parse(String(calls[0]?.init?.body))).toMatchObject({
+      expectedVersion: 3,
+      jobTitle: "Principal Engineer",
+    });
+    expect(String(calls[1]?.input)).toContain("/speaker-tasks");
+    expect(JSON.parse(String(calls[1]?.init?.body))).toEqual({
+      title: task.title,
+      description: task.description,
+      dueAt: task.dueAt,
+      participantIds: ["participant-1", "participant-2"],
+    });
+    expect(String(calls[2]?.input)).toContain("/speaker-tasks?participantId=participant-1");
+    expect(String(calls[3]?.input)).toContain("/speakers/invitations/preview");
+    expect(JSON.parse(String(calls[4]?.init?.body))).toMatchObject({
+      templateId: "speaker-welcome",
+      idempotencyKey: "invite-once",
+    });
+  });
+
+  it("surfaces server conflicts and rejects missing tenant scope", async () => {
+    const api = createSpeakerApi(
+      "https://api.example.test",
+      "org-1",
+      "event-1",
+      async () =>
+        new Response(JSON.stringify({ error: { code: "CONFLICT", message: "stale profile" } }), {
+          status: 409,
+        }),
+    );
+    await expect(
+      api.update("participant-1", {
+        expectedVersion: 3,
+        displayName: "Priya Raman",
+        email: "priya@example.test",
+        jobTitle: "Principal Engineer",
+        company: "Latticework Systems",
+        biography: "Bio",
+        socialLinks: {},
+        status: "confirmed",
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT", status: 409 });
+    expect(() => createSpeakerApi("https://api.example.test", " ", "event-1")).toThrow(
+      "organization ID is required",
+    );
+    expect(() => createSpeakerApi("https://api.example.test", "org-1", " ")).toThrow(
+      "event ID is required",
+    );
+  });
+});
+
+describe("speaker workspace", () => {
+  it("does not request a grant on initial asset render and keeps non-ready assets unavailable", () => {
+    const requests: SpeakerAsset[] = [];
+    const readyMarkup = renderToStaticMarkup(
+      createElement(SpeakerAssetDownload, {
+        asset: readyAsset,
+        downloadUrl: null,
+        busy: false,
+        disabled: false,
+        error: null,
+        onRequest: (asset: SpeakerAsset) => requests.push(asset),
+      }),
+    );
+    const pendingMarkup = renderToStaticMarkup(
+      createElement(SpeakerAssetDownload, {
+        asset: pendingAsset,
+        downloadUrl: null,
+        busy: false,
+        disabled: false,
+        error: null,
+        onRequest: (asset: SpeakerAsset) => requests.push(asset),
+      }),
+    );
+
+    expect(requests).toHaveLength(0);
+    expect(readyMarkup).toContain("Download / view");
+    expect(readyMarkup).toContain("<button");
+    expect(pendingMarkup).toContain("Download is not available for this asset.");
+    expect(pendingMarkup).not.toContain("<button");
+  });
+
+  it("requests exactly one grant when the ready-asset button is clicked", () => {
+    const requests: SpeakerAsset[] = [];
+    const rendered = SpeakerAssetDownload({
+      asset: readyAsset,
+      downloadUrl: null,
+      busy: false,
+      disabled: false,
+      error: null,
+      onRequest: (asset) => requests.push(asset),
+    });
+    const fragment = rendered as {
+      props?: {
+        children?: unknown;
+      };
+    };
+    const children = Array.isArray(fragment.props?.children)
+      ? fragment.props.children
+      : [fragment.props?.children];
+    const button = children.find(
+      (child): child is { props: { onClick?: () => void; type?: string } } =>
+        typeof child === "object" &&
+        child !== null &&
+        "props" in child &&
+        (child as { props?: { type?: string } }).props?.type === "button",
+    );
+    const onClick = button?.props.onClick;
+    if (onClick === undefined) throw new Error("Expected a ready-asset download button.");
+    onClick();
+
+    expect(requests).toEqual([readyAsset]);
+  });
+  it("renders the roster controls and keeps private storage fields out of the UI", () => {
+    const markup = renderToStaticMarkup(
+      createElement(SpeakerWorkspace, {
+        organizationId: "org-1",
+        eventId: "event-1",
+        baseUrl: "https://api.example.test",
+      }),
+    );
+
+    expect(markup).toContain("Speaker roster");
+    expect(markup).toContain("Search speakers");
+    expect(markup).toContain("Add speaker");
+    expect(markup).toContain("Import speakers from CSV");
+    expect(markup).toContain("General speaker tasks");
+    expect(markup).toContain("Onboarding progress");
+    expect(markup).not.toContain("objectKey");
+  });
+
+  it("keeps duplicate authoritative speakers visible to conflict presentation", () => {
+    const duplicate = {
+      ...speaker,
+      participantId: "participant-2",
+      displayName: "Marcus Chen",
+      email: " PRIYA@EXAMPLE.TEST ",
+    };
+    const conflicts = duplicateEmailConflicts([speaker, duplicate]);
+
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0]?.email).toBe("priya@example.test");
+    expect(conflicts[0]?.speakers.map((candidate) => candidate.participantId)).toEqual([
+      "participant-1",
+      "participant-2",
+    ]);
+  });
+
+  it("renders independently recoverable CSV and bulk-email action controls", () => {
+    const markup = renderToStaticMarkup(
+      createElement(SpeakerWorkspace, {
+        organizationId: "org-1",
+        eventId: "event-1",
+        api: {} as SpeakerApi,
+      }),
+    );
+
+    expect(markup).toContain("Import speakers from CSV");
+    expect(markup).toContain("Preview merge");
+    expect(markup).toContain("Queue speaker email");
+    expect(markup).toContain('aria-label="Refresh speaker email history"');
+    expect(markup).toContain("Refresh email history");
+    const csvInput = markup.match(/<input[^>]*accept="\.csv,text\/csv"[^>]*>/u)?.[0] ?? "";
+    expect(csvInput).not.toContain("disabled");
+  });
+});

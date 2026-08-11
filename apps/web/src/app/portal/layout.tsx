@@ -1,8 +1,10 @@
 import type { Metadata } from "next";
 import { type ReactNode, Suspense } from "react";
-import styles from "../../features/portal/portal.module.css";
-import { PortalProvider } from "../../features/portal/portal-provider";
-import { PortalFrame } from "../../features/portal/portal-ui";
+import styles from "@/features/portal/portal.module.css";
+import { PortalAuthGuard } from "@/features/portal/portal-auth-guard";
+import { PortalProvider } from "@/features/portal/portal-provider";
+import { PortalFrame } from "@/features/portal/portal-ui";
+export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "Speaker portal",
@@ -21,9 +23,11 @@ export default function SpeakerPortalLayout({ children }: Readonly<{ children: R
         </div>
       }
     >
-      <PortalProvider>
-        <PortalFrame>{children}</PortalFrame>
-      </PortalProvider>
+      <PortalAuthGuard>
+        <PortalProvider>
+          <PortalFrame>{children}</PortalFrame>
+        </PortalProvider>
+      </PortalAuthGuard>
     </Suspense>
   );
 }

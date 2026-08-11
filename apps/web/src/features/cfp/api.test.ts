@@ -366,3 +366,103 @@ describe("CFP mutation schema versions", () => {
     ).toBe(false);
   });
 });
+describe("CFP private file uploads", () => {
+  it("authorizes, uploads directly, and finalizes a file without exposing a data URL", async () => {
+    const requests: Array<{ url: string; init: RequestInit | undefined }> = [];
+    const expiresAt = new Date(Date.now() + 60_000).toISOString();
+    const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      requests.push({ url, init });
+      if (url.endsWith("/upload")) {
+        return Response.json({
+          data: {
+            asset: { assetId: "asset-pending" },
+            grant: {
+              method: "PUT",
+              url: "https://uploads.example.com/private/asset-pending",
+              headers: { "content-type": "application/pdf" },
+              expiresAt,
+            },
+          },
+        });
+      }
+      if (url === "https://uploads.example.com/private/asset-pending") {
+        return new Response(null, { status: 200 });
+      }
+      return Response.json({
+        data: {
+          assetId: "asset-pending",
+          state: "ready",
+          contentType: "application/pdf",
+          sizeBytes: 3,
+        },
+      });
+    }) as typeof fetch;
+    const api = createCfpApi("https://api.example.com", fetcher);
+    const file = new File(["pdf"], "slides.pdf", { type: "application/pdf" });
+
+    await expect(
+      api.uploadFile?.({
+        organizationId: "org-1",
+        eventId: "event-1",
+        submissionId: "submission-1",
+        fieldKey: "slides",
+        file,
+        idempotencyKey: "upload-1",
+      }),
+    ).resolves.toEqual({
+      assetId: "asset-pending",
+      state: "ready",
+      contentType: "application/pdf",
+      sizeBytes: 3,
+    });
+
+    expect(requests).toHaveLength(3);
+    expect(requests[0]?.url).toBe(
+      "https://api.example.com/api/cfp/organizations/org-1/events/event-1/submissions/submission-1/file-requests/slides/upload",
+    );
+    const issueHeaders = new Headers(requests[0]?.init?.headers);
+    const finalizeHeaders = new Headers(requests[2]?.init?.headers);
+    expect(issueHeaders.get("idempotency-key")).toBe("upload-1");
+    expect(finalizeHeaders.get("idempotency-key")).toBe("upload-1:finalize");
+    expect(JSON.parse(String(requests[0]?.init?.body))).toMatchObject({
+      fileName: "slides.pdf",
+      contentType: "application/pdf",
+      sizeBytes: 3,
+    });
+    expect(requests[1]?.init?.method).toBe("PUT");
+    expect(requests[1]?.init?.credentials).toBe("omit");
+    expect(requests[1]?.init?.body).toBe(file);
+    expect(requests[2]?.url).toContain("/assets/asset-pending/finalize");
+    expect(JSON.parse(String(requests[2]?.init?.body))).toEqual({ state: "ready" });
+  });
+
+  it("rejects expired authorization before contacting the private upload grant", async () => {
+    const requests: string[] = [];
+    const api = createCfpApi("https://api.example.com", (async (input) => {
+      requests.push(String(input));
+      return Response.json({
+        data: {
+          asset: { assetId: "asset-expired" },
+          grant: {
+            method: "PUT",
+            url: "https://uploads.example.com/private/asset-expired",
+            headers: {},
+            expiresAt: new Date(Date.now() - 1_000).toISOString(),
+          },
+        },
+      });
+    }) as typeof fetch);
+
+    await expect(
+      api.uploadFile?.({
+        organizationId: "org-1",
+        eventId: "event-1",
+        submissionId: "submission-1",
+        fieldKey: "slides",
+        file: new File(["pdf"], "slides.pdf", { type: "application/pdf" }),
+      }),
+    ).rejects.toMatchObject({ code: "CFP_FILE_UPLOAD_EXPIRED", status: 409 });
+    expect(requests).toHaveLength(1);
+  });
+});

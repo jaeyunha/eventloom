@@ -12,12 +12,6 @@ const snapshot: IntegrationAdminSnapshot = {
     timeZone: "America/Los_Angeles",
     publishedAgendaRevisionId: "agenda-revision-7",
   },
-  accelevents: {
-    state: "not_configured",
-    accountLabel: null,
-    credentialLastFour: null,
-    lastPublication: null,
-  },
   delivery: {
     openSend: {
       state: "connected",
@@ -91,8 +85,6 @@ describe("integration admin UI", () => {
     expect(markup).toContain("Webhooks");
     expect(markup).toContain("Needs attention");
     expect(markup).toContain("Source-of-truth boundary");
-    expect(markup).not.toContain("Accelevents");
-    expect(markup).not.toContain("/accelevents");
   });
 
   it("renders the scoped API-key surface", () => {

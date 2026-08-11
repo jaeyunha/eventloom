@@ -3,6 +3,8 @@ import {
   filterSubmissions,
   filterTasks,
   isTaskBlocked,
+  portalIdentityProfile,
+  portalSubmissionEditTarget,
   submissionStatusPresentation,
   summarizePortal,
   taskPrimaryAction,
@@ -109,6 +111,64 @@ describe("speaker portal view model", () => {
     expect(
       summarizePortal({ ...portal, tasks: [], outstandingTaskCount: 0 }).completionPercent,
     ).toBe(100);
+  });
+  it("uses the server-selected primary participant for account identity", () => {
+    const priya = {
+      id: "profile-priya",
+      eventId: "event-1",
+      participantId: "participant-priya",
+      displayName: "Priya Raman",
+      biography: "",
+      version: 1,
+      updatedAt: "2026-08-09T00:00:00.000Z",
+    };
+    const marcus = {
+      ...priya,
+      id: "profile-marcus",
+      participantId: "participant-marcus",
+      displayName: "Marcus Okafor",
+    };
+    const context = {
+      id: "portal:event-1",
+      eventId: "event-1",
+      name: "DevFlow Conf 2027",
+      capabilities: [],
+      submissionIds: [],
+      participantIds: [marcus.participantId, priya.participantId],
+      primaryParticipantId: priya.participantId,
+    } as const;
+
+    expect(
+      portalIdentityProfile({ ...portal, profiles: [marcus, priya], context }, context)
+        ?.displayName,
+    ).toBe("Priya Raman");
+  });
+  it("builds a pinned edit route only for editable submitted proposals", () => {
+    const context = {
+      id: "portal:ai-engineer:devflow-conf-2027",
+      eventId: "devflow-conf-2027",
+      slug: "devflow-conf-2027",
+      name: "DevFlow Conf 2027",
+      capabilities: ["submission-edit"],
+      submissionIds: ["submission-1"],
+      participantIds: ["participant-1"],
+    } as const;
+    const baseSubmission = portal.submissions[0];
+    expect(baseSubmission).toBeDefined();
+    if (baseSubmission === undefined) throw new Error("Expected a portal submission fixture.");
+    const submission = {
+      ...baseSubmission,
+      id: "submission-1",
+      status: "submitted",
+      formId: "devflow-conf-2027-cfp",
+    } as const;
+
+    expect(portalSubmissionEditTarget(context, submission)).toEqual({
+      href: "/cfp/devflow-conf-2027/submission",
+      pointerKey:
+        "open-sessionboard:cfp-submission:v1:ai-engineer:devflow-conf-2027:devflow-conf-2027-cfp",
+    });
+    expect(portalSubmissionEditTarget(context, { ...submission, status: "accepted" })).toBeNull();
   });
 
   it("normalizes biographies and enforces the API text policy", () => {

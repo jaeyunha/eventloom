@@ -1,0 +1,342 @@
+"use client";
+
+import { useMemo, useState } from "react";
+import styles from "./embed.module.css";
+import { formatPublishedTime } from "./model";
+import type { PublishedAgendaEntry, PublishedProgram, PublishedSpeaker } from "./types";
+
+const DESCRIPTION_LIMIT = 190;
+
+function uniqueValues(values: readonly string[]): readonly string[] {
+  return [...new Set(values.filter((value) => value.trim().length > 0))].sort((left, right) =>
+    left.localeCompare(right),
+  );
+}
+
+function truncateDescription(value: string): string {
+  if (value.length <= DESCRIPTION_LIMIT) {
+    return value;
+  }
+  return `${value.slice(0, DESCRIPTION_LIMIT).trimEnd()}…`;
+}
+
+function formatDateTime(value: string, timeZone: string): string {
+  const instant = new Date(value);
+  if (Number.isNaN(instant.valueOf())) {
+    return value;
+  }
+  return new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone,
+  }).format(instant);
+}
+function compareStarts(left: PublishedAgendaEntry, right: PublishedAgendaEntry): number {
+  const leftStart = Date.parse(left.startsAt);
+  const rightStart = Date.parse(right.startsAt);
+  if (!Number.isNaN(leftStart) && !Number.isNaN(rightStart)) {
+    return leftStart - rightStart;
+  }
+  return left.startsAt.localeCompare(right.startsAt);
+}
+
+function speakerForName(
+  name: string,
+  speakers: readonly PublishedSpeaker[],
+): PublishedSpeaker | undefined {
+  const normalizedName = name.trim().toLocaleLowerCase();
+  return speakers.find(
+    (speaker) => speaker.displayName.trim().toLocaleLowerCase() === normalizedName,
+  );
+}
+
+function entrySpeakerNames(
+  entry: PublishedAgendaEntry,
+  speakers: readonly PublishedSpeaker[],
+): readonly string[] {
+  const publishedNames = entry.speakerNames
+    .filter((name) => name.trim().length > 0)
+    .filter((name, index, names) => names.indexOf(name) === index)
+    .map((name) => {
+      const speaker =
+        speakerForName(name, speakers) ?? speakers.find((candidate) => candidate.id === name);
+      return speaker?.displayName ?? name;
+    });
+  if (publishedNames.length > 0) return publishedNames;
+  return speakers
+    .filter((speaker) => speaker.sessionIds.includes(entry.id))
+    .map((speaker) => speaker.displayName);
+}
+
+function entrySearchText(
+  entry: PublishedAgendaEntry,
+  speakers: readonly PublishedSpeaker[],
+): string {
+  const names = entrySpeakerNames(entry, speakers);
+  const speakerDetails = names.flatMap((name) => {
+    const speaker = speakerForName(name, speakers);
+    return speaker ? [speaker.jobTitle, speaker.organization, speaker.biography] : [];
+  });
+  return [entry.title, ...names, ...speakerDetails]
+    .filter((value): value is string => Boolean(value))
+    .join(" ")
+    .toLocaleLowerCase();
+}
+
+function speakerRole(speaker: PublishedSpeaker): string {
+  const jobTitle = speaker.jobTitle?.trim() ?? "";
+  const organization = speaker.organization?.trim() ?? "";
+  return [jobTitle, organization].filter(Boolean).join(" · ") || "Speaker";
+}
+
+function WidgetLinks({ eventSlug }: Readonly<{ eventSlug: string }>) {
+  const encodedSlug = encodeURIComponent(eventSlug);
+  return (
+    <nav className={styles.feedLinks} aria-label="Published program views">
+      <a href={`/embed/${encodedSlug}/sessions`}>Sessions</a>
+      <a href={`/embed/${encodedSlug}/itinerary`}>Itinerary</a>
+      <a href={`/embed/${encodedSlug}/agenda`}>Agenda</a>
+      <a href={`/embed/${encodedSlug}/speakers`}>Speakers</a>
+    </nav>
+  );
+}
+
+export function PublicSessionsView({ program }: Readonly<{ program: PublishedProgram }>) {
+  const { agenda, speakers } = program;
+  const [query, setQuery] = useState("");
+  const [track, setTrack] = useState("");
+  const [format, setFormat] = useState("");
+  const [room, setRoom] = useState("");
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
+
+  const tracks = useMemo(
+    () => uniqueValues(agenda.entries.flatMap((entry) => entry.trackNames)),
+    [agenda.entries],
+  );
+  const formats = useMemo(
+    () => uniqueValues(agenda.entries.map((entry) => entry.format)),
+    [agenda.entries],
+  );
+  const rooms = useMemo(
+    () => uniqueValues(agenda.entries.map((entry) => entry.roomName)),
+    [agenda.entries],
+  );
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const entries = useMemo(
+    () =>
+      [...agenda.entries]
+        .filter((entry) => {
+          if (track && !entry.trackNames.includes(track)) return false;
+          if (format && entry.format !== format) return false;
+          if (room && entry.roomName !== room) return false;
+          return (
+            !normalizedQuery || entrySearchText(entry, speakers.speakers).includes(normalizedQuery)
+          );
+        })
+        .sort(compareStarts),
+    [agenda.entries, format, normalizedQuery, room, speakers.speakers, track],
+  );
+
+  const hasFilters = Boolean(query || track || format || room);
+  const clearFilters = () => {
+    setQuery("");
+    setTrack("");
+    setFormat("");
+    setRoom("");
+  };
+
+  return (
+    <section aria-labelledby="sessions-heading">
+      <div className={styles.viewHeading}>
+        <div>
+          <p className={styles.eyebrow}>Find your next session</p>
+          <h2 id="sessions-heading">Sessions</h2>
+          <p>
+            Browse the published program from revision {agenda.revision.number}. Search session
+            titles or speaker names, then narrow by track, format, or room.
+          </p>
+        </div>
+        <WidgetLinks eventSlug={agenda.event.slug} />
+      </div>
+
+      <search>
+        <form className={styles.filters} onSubmit={(event) => event.preventDefault()}>
+          <label>
+            <span>Search sessions or speakers</span>
+            <input
+              type="search"
+              value={query}
+              placeholder="Search by title or speaker"
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          </label>
+          <button
+            className={styles.clearButton}
+            type="button"
+            aria-expanded={filtersOpen}
+            aria-controls="sessions-filters"
+            onClick={() => setFiltersOpen((open) => !open)}
+          >
+            {filtersOpen ? "Hide filters" : "Filters"}
+          </button>
+          {hasFilters ? (
+            <button className={styles.clearButton} type="button" onClick={clearFilters}>
+              Clear filters
+            </button>
+          ) : null}
+        </form>
+
+        <fieldset
+          id="sessions-filters"
+          className={styles.filters}
+          aria-label="Session filters"
+          hidden={!filtersOpen}
+        >
+          <label>
+            <span>Track</span>
+            <select value={track} onChange={(event) => setTrack(event.target.value)}>
+              <option value="">All tracks</option>
+              {tracks.map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Format</span>
+            <select value={format} onChange={(event) => setFormat(event.target.value)}>
+              <option value="">All formats</option>
+              {formats.map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Location</span>
+            <select value={room} onChange={(event) => setRoom(event.target.value)}>
+              <option value="">All locations</option>
+              {rooms.map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
+          </label>
+        </fieldset>
+      </search>
+
+      <div className={styles.resultBar} role="status" aria-live="polite">
+        <span>
+          {entries.length === 0
+            ? `Sessions 0 of ${agenda.entries.length}`
+            : `Sessions 1 - ${entries.length} of ${agenda.entries.length}`}
+        </span>
+        <span>Times shown in {agenda.event.timeZone}</span>
+      </div>
+
+      {entries.length === 0 ? (
+        <div className={styles.emptyResult} role="status">
+          <h3>No sessions match these filters</h3>
+          <p>Try another title, speaker, track, format, or location.</p>
+        </div>
+      ) : (
+        <ol className={styles.publicSessionList}>
+          {entries.map((entry) => {
+            const names = entrySpeakerNames(entry, speakers.speakers);
+            const isExpanded = expanded.has(entry.id);
+            const hasLongDescription = entry.summary.length > DESCRIPTION_LIMIT;
+            const hasDescription = entry.summary.trim().length > 0;
+            return (
+              <li key={entry.id}>
+                <article className={styles.publicSessionCard}>
+                  <div className={styles.publicSessionTime}>
+                    <time dateTime={entry.startsAt}>
+                      {formatDateTime(entry.startsAt, agenda.event.timeZone)}
+                    </time>
+                    <span>
+                      {formatPublishedTime(entry.startsAt, agenda.event.timeZone)} –{" "}
+                      {formatPublishedTime(entry.endsAt, agenda.event.timeZone)}
+                    </span>
+                  </div>
+                  <div className={styles.publicSessionCopy}>
+                    <div className={styles.publicSessionMeta}>
+                      {entry.format.trim() ? <span>Format: {entry.format}</span> : null}
+                      {entry.trackNames
+                        .filter((trackName) => trackName.trim().length > 0)
+                        .map((trackName) => (
+                          <span key={trackName}>Track: {trackName}</span>
+                        ))}
+                    </div>
+                    <h3>{entry.title}</h3>
+                    {names.length > 0 ? (
+                      <div className={styles.publicSpeakers}>
+                        <strong>Speakers</strong>
+                        <ul>
+                          {names.map((name) => {
+                            const speaker = speakerForName(name, speakers.speakers);
+                            return (
+                              <li key={name}>
+                                {speaker ? (
+                                  <>
+                                    <span>{speaker.displayName}</span>{" "}
+                                    <span>({speakerRole(speaker)})</span>
+                                  </>
+                                ) : (
+                                  name
+                                )}
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </div>
+                    ) : (
+                      <p className={styles.publicSpeakers}>Speakers to be announced</p>
+                    )}
+                    {hasDescription ? (
+                      <p id={`session-summary-${entry.id}`}>
+                        {isExpanded || !hasLongDescription
+                          ? entry.summary
+                          : truncateDescription(entry.summary)}
+                      </p>
+                    ) : (
+                      <p>No description was published.</p>
+                    )}
+                    {hasLongDescription ? (
+                      <button
+                        className={styles.clearButton}
+                        type="button"
+                        aria-expanded={isExpanded}
+                        aria-controls={`session-summary-${entry.id}`}
+                        onClick={() =>
+                          setExpanded((current) => {
+                            const next = new Set(current);
+                            if (next.has(entry.id)) next.delete(entry.id);
+                            else next.add(entry.id);
+                            return next;
+                          })
+                        }
+                      >
+                        {isExpanded ? "Show less" : "Show more"}
+                      </button>
+                    ) : null}
+                  </div>
+                  <div className={styles.publicRoom}>
+                    <span>Location</span>
+                    <strong>{entry.roomName || "Location to be announced"}</strong>
+                  </div>
+                </article>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </section>
+  );
+}

@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { AgendaWorkspace } from "../../../../../../../features/agenda/agenda-workspace";
+import { AgendaWorkspace } from "@/features/agenda/agenda-workspace";
 
 export const metadata: Metadata = {
   title: "Agenda workspace",

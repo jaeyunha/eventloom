@@ -12,6 +12,34 @@ export interface AgendaDay {
   entries: readonly AgendaEntry[];
 }
 
+function parseDateOnly(value: string): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(value);
+  if (!match) return null;
+  const [, year, month, day] = match;
+  const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+  if (
+    Number.isNaN(date.valueOf()) ||
+    date.getUTCFullYear() !== Number(year) ||
+    date.getUTCMonth() !== Number(month) - 1 ||
+    date.getUTCDate() !== Number(day)
+  ) {
+    return null;
+  }
+  return date;
+}
+
+export function eventDates(startsOn: string, endsOn: string): readonly string[] {
+  const start = parseDateOnly(startsOn);
+  const end = parseDateOnly(endsOn);
+  if (start === null || end === null || start.valueOf() > end.valueOf()) return [];
+
+  const dates: string[] = [];
+  for (let current = start.valueOf(); current <= end.valueOf(); current += 86_400_000) {
+    dates.push(new Date(current).toISOString().slice(0, 10));
+  }
+  return dates;
+}
+
 function parseLocalDateTime(value: string): Date | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(value);
   if (!match) {
@@ -49,22 +77,29 @@ export function formatLocalTime(value: string): string {
   }).format(date);
 }
 
-export function agendaDays(entries: readonly AgendaEntry[]): readonly AgendaDay[] {
+export function agendaDays(
+  entries: readonly AgendaEntry[],
+  event?: Pick<AgendaWorkspaceData["event"], "startsOn" | "endsOn">,
+): readonly AgendaDay[] {
+  const dates = event ? eventDates(event.startsOn, event.endsOn) : null;
+  const eventDateSet = dates === null ? null : new Set(dates);
   const byDate = new Map<string, AgendaEntry[]>();
   for (const entry of [...entries].sort((left, right) => {
     const timeOrder = left.startsAtLocal.localeCompare(right.startsAtLocal);
     return timeOrder === 0 ? left.roomName.localeCompare(right.roomName) : timeOrder;
   })) {
     const date = entry.startsAtLocal.slice(0, 10);
+    if (eventDateSet !== null && !eventDateSet.has(date)) continue;
     const dayEntries = byDate.get(date) ?? [];
     dayEntries.push(entry);
     byDate.set(date, dayEntries);
   }
 
-  return [...byDate].map(([date, dayEntries]) => ({
+  const dayDates = dates ?? [...byDate.keys()];
+  return dayDates.map((date) => ({
     date,
-    label: formatLocalDate(dayEntries[0]?.startsAtLocal ?? date),
-    entries: dayEntries,
+    label: formatLocalDate(`${date}T12:00`),
+    entries: byDate.get(date) ?? [],
   }));
 }
 

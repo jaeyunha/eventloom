@@ -22,6 +22,7 @@ export interface PublishedSpeaker {
 
 export interface PublishedAgendaEntry {
   id: string;
+  sessionId?: string;
   title: string;
   summary: string;
   format: string;
@@ -50,6 +51,11 @@ export interface PublishedAgenda {
     publishedAt: string;
   };
   entries: readonly PublishedAgendaEntry[];
+}
+
+export interface PublishedProgram {
+  agenda: PublishedAgenda;
+  speakers: PublishedSpeakerGallery;
 }
 
 export interface PublicEmbedErrorResponse {
