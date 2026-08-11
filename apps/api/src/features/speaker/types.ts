@@ -220,6 +220,8 @@ export interface SpeakerRosterEntry {
   role: "primary" | "co_speaker";
   status: "pending" | "active" | "revoked";
   workflowStatus?: string;
+  /** Organizer workflow value; `workflowStatus` remains the server admission discriminator. */
+  organizerStatus?: string;
   version: number;
   createdAt: string;
   updatedAt: string;
@@ -234,11 +236,23 @@ export interface SpeakerWorkspaceSession {
 
 export interface SpeakerWorkspaceAsset {
   assetId: string;
+  eventId: string;
+  participantId: string;
+  submissionId: string | null;
+  taskId: string | null;
+  kind: SpeakerAssetKind;
   fileName: string;
   contentType: string;
   byteSize: number;
   status: "pending" | "ready" | "rejected";
   uploadedAt: string;
+  finalizedAt: string | null;
+  version: number;
+  versionFamilyId: string;
+  supersedesAssetId: string | null;
+  commentThreadId: string;
+  reviewState: SpeakerAssetReviewState | null;
+  reviewNote: string | null;
   downloadUrl: string | null;
 }
 
@@ -249,6 +263,7 @@ export interface SpeakerWorkspaceTask {
   type: "general" | "action" | "file_request";
   dueAt: string | null;
   status: string;
+  version: number;
   completedAt: string | null;
   sessionId: string | null;
   latestAssetId: string | null;
@@ -323,13 +338,26 @@ export interface SpeakerInvitationDeliveryInput {
 }
 
 export interface SpeakerInvitationDeliveryReceipt {
+  id?: string;
   status?: "queued" | "sent" | "failed";
+  queued?: boolean;
   duplicate?: boolean;
 }
 
-export interface SpeakerInvitationResult {
-  status: "queued" | "sent" | "failed";
+export interface SpeakerInvitationRecipientResult {
+  participantId: string;
   recipientEmail: string;
+  status: "queued" | "sent" | "failed" | "duplicate";
+  receiptId: string | null;
+}
+
+export interface SpeakerInvitationResult {
+  organizationId: string;
+  eventId: string;
+  idempotencyKey: string;
+  status: "queued" | "sent" | "failed" | "duplicate";
+  duplicate: boolean;
+  recipients: readonly SpeakerInvitationRecipientResult[];
 }
 
 export interface SpeakerTaskAssignmentInput {
@@ -595,6 +623,12 @@ export interface SpeakerReminderQueueInput {
   idempotencyKey?: string;
 }
 
+export interface SpeakerReminderRecipientResult {
+  participantId: string;
+  status: "queued" | "failed" | "duplicate";
+  receiptId: string | null;
+}
+
 export interface SpeakerReminderQueueResult {
   organizationId: string;
   eventId: string;
@@ -602,7 +636,10 @@ export interface SpeakerReminderQueueResult {
   queued: boolean;
   duplicate: boolean;
   sentCount: number;
+  failedCount: number;
+  duplicateCount: number;
   recipientIds: readonly string[];
+  receipts: readonly SpeakerReminderRecipientResult[];
 }
 
 export interface SpeakerReminderDeliveryInput {
@@ -615,6 +652,7 @@ export interface SpeakerReminderDeliveryInput {
 
 export interface SpeakerReminderDeliveryReceipt {
   id?: string;
+  status?: "queued" | "failed";
   queued?: boolean;
   duplicate?: boolean;
 }
@@ -801,6 +839,7 @@ export interface UpdateSpeakerProfileCommand {
   biography?: string;
   socialLinks?: Readonly<Record<string, string>>;
   headshotAssetId?: string | null;
+  travelLogistics?: SpeakerTravelLogistics;
   expectedVersion: number;
   updatedAt: string;
   actorAccountId: string;
@@ -821,9 +860,14 @@ export interface SpeakerReminderRecord {
   idempotencyKey: string;
   taskIds: readonly string[];
   recipientIds: readonly string[];
+  receipts: readonly SpeakerReminderRecipientResult[];
   createdAt: string;
   actorAccountId: string;
 }
+
+export type SpeakerAcceptedParticipantLookup =
+  | { participantId: string; submissionId: string; email: string }
+  | { ambiguous: true };
 
 export interface SpeakerRepository {
   getAccessScope(eventId: string, accountId: string): Promise<SpeakerAccessScope>;
@@ -839,6 +883,25 @@ export interface SpeakerRepository {
   getProfile(eventId: string, participantId: string): Promise<SpeakerProfile | null>;
   updateBiography(command: UpdateBiographyCommand): Promise<RepositoryResult<SpeakerProfile>>;
   updateProfile?(command: UpdateSpeakerProfileCommand): Promise<RepositoryResult<SpeakerProfile>>;
+  findAcceptedParticipantByEmail?(
+    eventId: string,
+    submissionIds: readonly string[],
+    email: string,
+  ): Promise<SpeakerAcceptedParticipantLookup | null>;
+  ensureOrganizerSpeakerProfile?(input: {
+    organizationId: string;
+    eventId: string;
+    participantId: string;
+    displayName: string;
+    email: string;
+    jobTitle: string;
+    company: string;
+    biography: string;
+    socialLinks: Readonly<Record<string, string>>;
+    travelLogistics?: SpeakerTravelLogistics;
+    status: string;
+    updatedAt: string;
+  }): Promise<SpeakerProfile>;
   listTasks(eventId: string, participantIds: readonly string[]): Promise<SpeakerTask[]>;
   createTask?(command: SpeakerTaskRepositoryCommand): Promise<RepositoryResult<SpeakerTask>>;
   createSpeakerTask?(command: SpeakerTaskRepositoryCommand): Promise<RepositoryResult<SpeakerTask>>;

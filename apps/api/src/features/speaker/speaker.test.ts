@@ -8,6 +8,7 @@ import type {
   PrivateUploadGrant,
   RepositoryResult,
   SpeakerAccessScope,
+  SpeakerAcceptedParticipantLookup,
   SpeakerAsset,
   SpeakerAssetComment,
   SpeakerEventResource,
@@ -23,6 +24,7 @@ import type {
   SpeakerWikiPage,
   TransitionSpeakerTaskCommand,
   UpdateBiographyCommand,
+  UpdateSpeakerProfileCommand,
 } from "./types";
 
 class FakeSpeakerRepository implements SpeakerRepository {
@@ -64,6 +66,17 @@ class FakeSpeakerRepository implements SpeakerRepository {
     );
   }
 
+  createProfile(candidate: SpeakerProfile): Promise<RepositoryResult<SpeakerProfile>> {
+    const exists = this.profiles.some(
+      (profile) =>
+        profile.eventId === candidate.eventId &&
+        profile.participantId === candidate.participantId,
+    );
+    if (exists) return Promise.resolve({ ok: false, reason: "version_conflict" });
+    this.profiles.push(structuredClone(candidate));
+    return Promise.resolve({ ok: true, value: structuredClone(candidate) });
+  }
+
   getProfile(eventId: string, participantId: string): Promise<SpeakerProfile | null> {
     return Promise.resolve(
       this.profiles.find(
@@ -92,6 +105,36 @@ class FakeSpeakerRepository implements SpeakerRepository {
     };
     this.profiles[index] = updated;
     return Promise.resolve({ ok: true, value: updated });
+  }
+
+  updateProfile(command: UpdateSpeakerProfileCommand): Promise<RepositoryResult<SpeakerProfile>> {
+    const index = this.profiles.findIndex(
+      (profile) =>
+        profile.eventId === command.eventId &&
+        profile.participantId === command.participantId,
+    );
+    const current = this.profiles[index];
+    if (current === undefined) return Promise.resolve({ ok: false, reason: "not_found" });
+    if (current.version !== command.expectedVersion) {
+      return Promise.resolve({ ok: false, reason: "version_conflict" });
+    }
+    const {
+      expectedVersion: _expectedVersion,
+      actorAccountId: _actorAccountId,
+      updatedAt,
+      headshotAssetId,
+      ...changes
+    } = command;
+    const updated: SpeakerProfile = {
+      ...current,
+      ...changes,
+      ...(headshotAssetId === undefined || headshotAssetId === null ? {} : { headshotAssetId }),
+      version: current.version + 1,
+      updatedAt,
+    };
+    if (headshotAssetId === null) delete updated.headshotAssetId;
+    this.profiles[index] = updated;
+    return Promise.resolve({ ok: true, value: structuredClone(updated) });
   }
 
   listTasks(eventId: string, participantIds: readonly string[]): Promise<SpeakerTask[]> {
@@ -182,7 +225,7 @@ class OrganizerSpeakerRepository extends FakeSpeakerRepository {
     eventId: string,
     submissionIds: readonly string[],
     email: string,
-  ): Promise<{ participantId: string; submissionId: string; email: string } | null> {
+  ): Promise<SpeakerAcceptedParticipantLookup | null> {
     const normalizedEmail = email.trim().toLowerCase();
     const matches = this.submissions.flatMap((candidate) => {
       if (
@@ -205,7 +248,9 @@ class OrganizerSpeakerRepository extends FakeSpeakerRepository {
           email: normalizedEmail,
         }));
     });
-    return Promise.resolve(matches.length === 1 ? (matches[0] ?? null) : null);
+    return Promise.resolve(
+      matches.length > 1 ? { ambiguous: true } : matches.length === 1 ? (matches[0] ?? null) : null,
+    );
   }
 
   listRoster(eventId: string, submissionId: string): Promise<SpeakerRosterEntry[]> {
@@ -249,6 +294,22 @@ class OrganizerSpeakerRepository extends FakeSpeakerRepository {
     }
     this.tasks.push(command.task);
     return Promise.resolve({ ok: true, value: command.task });
+  }
+
+  updateTask(command: SpeakerTaskRepositoryCommand): Promise<RepositoryResult<SpeakerTask>> {
+    if (command.expectedVersion === null) {
+      return Promise.resolve({ ok: false, reason: "version_conflict" });
+    }
+    const index = this.tasks.findIndex(
+      (task) => task.eventId === command.task.eventId && task.id === command.task.id,
+    );
+    const current = this.tasks[index];
+    if (current === undefined) return Promise.resolve({ ok: false, reason: "not_found" });
+    if (current.version !== command.expectedVersion) {
+      return Promise.resolve({ ok: false, reason: "version_conflict" });
+    }
+    this.tasks[index] = structuredClone(command.task);
+    return Promise.resolve({ ok: true, value: structuredClone(command.task) });
   }
 }
 class ConcurrentOrganizerRepository extends OrganizerSpeakerRepository {
@@ -726,9 +787,128 @@ describe("SpeakerService organizer asset reads", () => {
     repository.releaseReads();
     await expect(pending).resolves.toEqual([expect.objectContaining({ id: "asset-concurrent" })]);
   });
+  it("authorizes manual-speaker asset metadata, history, comments, and explicit downloads", async () => {
+    const { repository, gateway, service } = createOrganizerFixture();
+    await service.createOrganizerSpeaker({
+      organizationId: "org-1",
+      eventId: "event-1",
+      accountId: "account-1",
+      displayName: "Avery Chen",
+      email: "avery@example.test",
+      jobTitle: "Staff Engineer",
+      company: "Newco",
+      biography: "Builds distributed systems.",
+      socialLinks: {},
+      status: "confirmed",
+      idempotencyKey: "manual-asset-speaker",
+    });
+    const manual = repository.roster[0];
+    if (manual === undefined) throw new Error("Expected a persisted manual speaker.");
+    repository.assets.push(
+      {
+        id: "manual-slides-v1",
+        tenantId: "org-1",
+        eventId: "event-1",
+        submissionId: manual.submissionId,
+        participantId: manual.participantId,
+        taskId: "manual-slides-task",
+        versionFamilyId: "manual-slides",
+        version: 1,
+        commentThreadId: "manual-slides",
+        kind: "slides",
+        objectKey: "events/event-1/manual/slides-v1",
+        fileName: "slides-v1.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 1_024,
+        state: "ready",
+        finalizedAt: now,
+        createdAt: now,
+      },
+      {
+        id: "manual-slides-v2",
+        tenantId: "org-1",
+        eventId: "event-1",
+        submissionId: manual.submissionId,
+        participantId: manual.participantId,
+        taskId: "manual-slides-task",
+        versionFamilyId: "manual-slides",
+        supersedesAssetId: "manual-slides-v1",
+        version: 2,
+        commentThreadId: "manual-slides",
+        reviewState: "needs_changes",
+        reviewNote: "Update the closing slide.",
+        kind: "slides",
+        objectKey: "events/event-1/manual/slides-v2",
+        fileName: "slides-v2.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 2_048,
+        state: "ready",
+        finalizedAt: now,
+        createdAt: now,
+      },
+    );
+
+    const metadata = await service.listOrganizerSpeakerAssets(
+      "org-1",
+      "event-1",
+      "account-1",
+      manual.participantId,
+    );
+    expect(metadata).toEqual([
+      expect.objectContaining({
+        assetId: "manual-slides-v1",
+        eventId: "event-1",
+        participantId: manual.participantId,
+        taskId: "manual-slides-task",
+        kind: "slides",
+        version: 1,
+        versionFamilyId: "manual-slides",
+        commentThreadId: "manual-slides",
+        downloadUrl: null,
+      }),
+      expect.objectContaining({
+        assetId: "manual-slides-v2",
+        version: 2,
+        supersedesAssetId: "manual-slides-v1",
+        reviewState: "needs_changes",
+        reviewNote: "Update the closing slide.",
+        downloadUrl: null,
+      }),
+    ]);
+
+    const history = await service.listOrganizerAssetHistory(
+      "event-1",
+      "account-1",
+      "manual-slides-v2",
+    );
+    expect(history.map((asset) => asset.id)).toEqual(["manual-slides-v1", "manual-slides-v2"]);
+
+    const comment = await service.addOrganizerAssetComment({
+      eventId: "event-1",
+      accountId: "account-1",
+      assetId: "manual-slides-v2",
+      body: "The closing slide is ready for another review.",
+    });
+    expect(comment).toMatchObject({
+      eventId: "event-1",
+      assetId: "manual-slides-v2",
+      version: 1,
+    });
+    await expect(
+      service.listOrganizerAssetComments("event-1", "account-1", "manual-slides-v2"),
+    ).resolves.toEqual([expect.objectContaining({ id: comment.id })]);
+
+    const grant = await service.issueOrganizerDownloadGrant({
+      eventId: "event-1",
+      accountId: "account-1",
+      assetId: "manual-slides-v2",
+    });
+    expect(grant.url).toContain("private-download.invalid");
+    expect(gateway.downloads).toHaveLength(1);
+  });
 });
 describe("SpeakerService organizer speaker writes", () => {
-  it("replays manual saves by canonical identity and returns the task envelope", async () => {
+  it("replays canonical saves by accepted identity and returns one task per assignee", async () => {
     const { repository, service } = createOrganizerFixture();
     const baseInput = {
       organizationId: "org-1",
@@ -784,6 +964,170 @@ describe("SpeakerService organizer speaker writes", () => {
     ]);
     expect(taskEnvelope.organizationId).toBe("org-1");
     expect(taskEnvelope.eventId).toBe("event-1");
+  });
+
+  it("persists manual speakers, profile changes, and single-assignee task changes across services", async () => {
+    const { repository, gateway, service } = createOrganizerFixture();
+    const created = await service.createOrganizerSpeaker({
+      organizationId: "org-1",
+      eventId: "event-1",
+      accountId: "account-1",
+      displayName: "Avery Chen",
+      email: "avery@example.test",
+      jobTitle: "Staff Engineer",
+      company: "Newco",
+      biography: "Builds distributed systems.",
+      socialLinks: { website: "https://avery.example.test" },
+      status: "pending",
+      idempotencyKey: "manual-avery",
+    });
+    const manual = created.speakers.find((speaker) => speaker.email === "avery@example.test");
+    expect(manual).toMatchObject({
+      participantId: "participant:generated-1",
+      status: "pending",
+      version: 1,
+    });
+    expect(repository.roster[0]).toMatchObject({
+      participantId: "participant:generated-1",
+      submissionId: "speaker-submission:crm-contact:participant:generated-1",
+      workflowStatus: "crm-prospect",
+      organizerStatus: "pending",
+    });
+    expect(repository.profiles[0]).toMatchObject({
+      participantId: "participant:generated-1",
+      email: "avery@example.test",
+      version: 1,
+    });
+
+    const updated = await service.updateOrganizerSpeaker({
+      organizationId: "org-1",
+      eventId: "event-1",
+      accountId: "account-1",
+      participantId: "participant:generated-1",
+      expectedVersion: 1,
+      displayName: "Avery Chen",
+      email: "avery@example.test",
+      jobTitle: "Principal Engineer",
+      company: "Newco",
+      biography: "Builds durable distributed systems.",
+      socialLinks: { website: "https://avery.example.test" },
+      travelLogistics: { travelRequired: true, dietaryRequirements: "Vegan" },
+      status: "confirmed",
+    });
+    expect(updated.speakers[0]).toMatchObject({
+      participantId: "participant:generated-1",
+      status: "confirmed",
+      version: 2,
+      travelLogistics: { travelRequired: true, dietaryRequirements: "Vegan" },
+    });
+    expect(repository.profiles[0]).toMatchObject({
+      jobTitle: "Principal Engineer",
+      status: "confirmed",
+      version: 2,
+      travelLogistics: { travelRequired: true, dietaryRequirements: "Vegan" },
+    });
+
+    const assignment = await service.assignOrganizerSpeakerTask({
+      organizationId: "org-1",
+      eventId: "event-1",
+      accountId: "account-1",
+      title: "Confirm travel",
+      description: "Confirm the travel plan.",
+      dueAt: "2027-04-01",
+      participantIds: ["participant:generated-1"],
+    });
+    const assignedTask = assignment.tasks[0];
+    expect(assignedTask).toMatchObject({
+      participantId: "participant:generated-1",
+      title: "Confirm travel",
+      status: "not_started",
+      version: 1,
+    });
+    expect(repository.tasks[0]?.assigneeIds).toEqual(["participant:generated-1"]);
+
+    const changedTask = await service.updateOrganizerSpeakerTask({
+      organizationId: "org-1",
+      eventId: "event-1",
+      accountId: "account-1",
+      taskId: assignedTask?.taskId ?? "",
+      expectedVersion: 1,
+      title: "Confirm final travel",
+      status: "completed",
+    });
+    expect(changedTask.tasks[0]).toMatchObject({
+      participantId: "participant:generated-1",
+      title: "Confirm final travel",
+      status: "completed",
+      version: 2,
+    });
+
+    const restarted = new SpeakerService(repository, gateway, {
+      now: () => new Date(now),
+      generateId: () => "restarted",
+    });
+    const persistedRoster = await restarted.listOrganizerSpeakerRoster(
+      "org-1",
+      "event-1",
+      "account-1",
+    );
+    expect(persistedRoster.speakers[0]).toMatchObject({
+      participantId: "participant:generated-1",
+      status: "confirmed",
+      version: 2,
+    });
+    const persistedTasks = await restarted.listOrganizerSpeakerTasks(
+      "org-1",
+      "event-1",
+      "account-1",
+      "participant:generated-1",
+    );
+    expect(persistedTasks.tasks).toEqual([
+      expect.objectContaining({
+        participantId: "participant:generated-1",
+        title: "Confirm final travel",
+        status: "completed",
+        version: 2,
+      }),
+    ]);
+  });
+  it("imports new manual speakers once and replays the import without duplicates", async () => {
+    const { repository, service } = createOrganizerFixture();
+    const preview = await service.previewSpeakerImport({
+      organizationId: "org-1",
+      eventId: "event-1",
+      accountId: "account-1",
+      csv: [
+        "displayName,email,jobTitle,company,biography,status",
+        "Jordan Lee,jordan@example.test,Developer Advocate,Example Co,Builds developer communities,confirmed",
+        "Sam Rivera,sam@example.test,Staff Engineer,Example Co,Builds reliable APIs,pending",
+      ].join("\n"),
+    });
+    expect(preview.invalidRows).toEqual([]);
+    expect(preview.validRows).toHaveLength(2);
+
+    const first = await service.commitSpeakerImport({
+      organizationId: "org-1",
+      eventId: "event-1",
+      accountId: "account-1",
+      rows: preview.validRows,
+      idempotencyKey: "manual-import-once",
+    });
+    const replay = await service.commitSpeakerImport({
+      organizationId: "org-1",
+      eventId: "event-1",
+      accountId: "account-1",
+      rows: preview.validRows,
+      idempotencyKey: "manual-import-once",
+    });
+
+    expect(first.speakers.map((speaker) => speaker.email)).toEqual([
+      "jordan@example.test",
+      "sam@example.test",
+    ]);
+    expect(replay).toEqual(first);
+    expect(repository.roster).toHaveLength(2);
+    expect(repository.profiles).toHaveLength(2);
+    expect(new Set(repository.roster.map((entry) => entry.participantId)).size).toBe(2);
   });
   it("does not create organizer tasks from stale profile projections", async () => {
     const { repository, service } = createOrganizerFixture();
@@ -1895,6 +2239,10 @@ it("persists logistics, exposes reminder eligibility, and queues a versioned bul
   expect(new Set(task.map((item) => item.participantId))).toEqual(
     new Set(["participant-1", "participant-2"]),
   );
+  expect(task.map((item) => item.assigneeIds)).toEqual([
+    ["participant-1"],
+    ["participant-2"],
+  ]);
   expect(task.every((item) => item.dueAt === "2026-08-07")).toBe(true);
 
   const eligibility = await service.getReminderEligibility({
@@ -1932,6 +2280,91 @@ it("persists logistics, exposes reminder eligibility, and queues a versioned bul
   expect(send.status).toBe("queued");
   expect(deliveries).toHaveLength(2);
   expect(send.history.some((entry) => entry.action === "delivery_queued")).toBe(true);
+});
+
+it("returns terminal invitation receipts and reports idempotent replays per recipient", async () => {
+  const { repository } = createOrganizerFixture();
+  repository.profiles.push(
+    {
+      ...profile("participant-1"),
+      displayName: "Priya Raman",
+      email: "priya@example.test",
+    },
+    {
+      ...profile("participant-2"),
+      displayName: "Marcus Okafor",
+      email: "marcus@example.test",
+    },
+  );
+  const deliveries: string[] = [];
+  const invitationService = new SpeakerService(repository, new FakePrivateAssetGateway(), {
+    now: () => new Date(now),
+    delivery: {
+      enqueueInvitation(input) {
+        deliveries.push(input.participantId);
+        return Promise.resolve(
+          input.participantId === "participant-1"
+            ? { id: "invite-receipt-1", status: "queued" as const }
+            : { id: "invite-receipt-2", status: "failed" as const },
+        );
+      },
+    },
+  });
+
+  const first = await invitationService.sendOrganizerSpeakerInvitations({
+    organizationId: "org-1",
+    eventId: "event-1",
+    accountId: "account-1",
+    participantIds: ["participant-1", "participant-2", "participant-missing", "participant-1"],
+    templateId: "speaker-invite",
+    idempotencyKey: "invite-once",
+  });
+  expect(first).toEqual({
+    organizationId: "org-1",
+    eventId: "event-1",
+    idempotencyKey: "invite-once",
+    status: "failed",
+    duplicate: false,
+    recipients: [
+      {
+        participantId: "participant-1",
+        recipientEmail: "priya@example.test",
+        status: "queued",
+        receiptId: "invite-receipt-1",
+      },
+      {
+        participantId: "participant-2",
+        recipientEmail: "marcus@example.test",
+        status: "failed",
+        receiptId: "invite-receipt-2",
+      },
+      {
+        participantId: "participant-missing",
+        recipientEmail: "",
+        status: "failed",
+        receiptId: null,
+      },
+    ],
+  });
+
+  const replay = await invitationService.sendOrganizerSpeakerInvitations({
+    organizationId: "org-1",
+    eventId: "event-1",
+    accountId: "account-1",
+    participantIds: ["participant-1", "participant-2", "participant-missing"],
+    templateId: "speaker-invite",
+    idempotencyKey: "invite-once",
+  });
+  expect(replay).toMatchObject({
+    status: "failed",
+    duplicate: false,
+    recipients: [
+      { participantId: "participant-1", status: "duplicate" },
+      { participantId: "participant-2", status: "failed" },
+      { participantId: "participant-missing", status: "failed" },
+    ],
+  });
+  expect(deliveries).toEqual(["participant-1", "participant-2"]);
 });
 it("queues due scheduled reminders idempotently without sending ineligible tasks", async () => {
   const { repository } = createOrganizerFixture();
@@ -1977,7 +2410,7 @@ it("queues due scheduled reminders idempotently without sending ineligible tasks
           participantId: input.recipient.participantId,
           taskIds: input.recipient.taskIds,
         });
-        return Promise.resolve({ queued: true, duplicate: false });
+        return Promise.resolve({ id: "reminder-receipt-1", queued: true, duplicate: false });
       },
     },
   });
@@ -1998,12 +2431,30 @@ it("queues due scheduled reminders idempotently without sending ineligible tasks
     duplicate: false,
     sentCount: 1,
     recipientIds: ["participant-1"],
+    failedCount: 0,
+    duplicateCount: 0,
+    receipts: [
+      {
+        participantId: "participant-1",
+        status: "queued",
+        receiptId: "reminder-receipt-1",
+      },
+    ],
   });
   expect(second).toMatchObject({
     queued: false,
     duplicate: true,
-    sentCount: 1,
+    sentCount: 0,
     idempotencyKey: first.idempotencyKey,
+    failedCount: 0,
+    duplicateCount: 1,
+    receipts: [
+      {
+        participantId: "participant-1",
+        status: "duplicate",
+        receiptId: "reminder-receipt-1",
+      },
+    ],
   });
   expect(deliveries).toEqual([
     {
