@@ -1833,6 +1833,43 @@ export function createSpeakerTaskAdminRoutes(dependencies: SpeakerRouteDependenc
     });
     return context.json({ data }, 201);
   });
+  app.patch("/:taskId", async (context) => {
+    const body = await parseBody(context, organizerTaskUpdateSchema);
+    if (!body) {
+      return context.json(
+        errorBody(context, "VALIDATION_ERROR", "The speaker task update payload is invalid."),
+        400,
+      );
+    }
+    const data = await dependencies.service.updateOrganizerSpeakerTask({
+      organizationId: requiredSpeakerParam(context, "organizationId"),
+      eventId: requiredSpeakerParam(context, "eventId"),
+      accountId: context.get("speakerAccountId"),
+      taskId: requiredSpeakerParam(context, "taskId"),
+      expectedVersion: body.expectedVersion,
+      ...(body.title === undefined ? {} : { title: body.title }),
+      ...(body.instructions === undefined ? {} : { instructions: body.instructions }),
+      ...(body.description === undefined ? {} : { description: body.description }),
+      ...(body.dueAt === undefined ? {} : { dueAt: body.dueAt }),
+      ...(body.dueDate === undefined ? {} : { dueDate: body.dueDate }),
+      ...(body.allowedMimeTypes === undefined ? {} : { allowedMimeTypes: body.allowedMimeTypes }),
+      ...(body.maxBytes === undefined
+        ? body.maxSizeBytes === undefined
+          ? {}
+          : { maxBytes: body.maxSizeBytes }
+        : { maxBytes: body.maxBytes }),
+      ...(body.acceptedAssetKinds === undefined
+        ? {}
+        : { acceptedAssetKinds: body.acceptedAssetKinds }),
+      ...(body.assigneeIds === undefined ? {} : { assigneeIds: body.assigneeIds }),
+      ...(body.dependencyIds === undefined ? {} : { dependencyIds: body.dependencyIds }),
+      ...(body.reminderOffsetsMinutes === undefined
+        ? {}
+        : { reminderOffsetsMinutes: body.reminderOffsetsMinutes }),
+      ...(body.status === undefined ? {} : { status: body.status }),
+    });
+    return context.json({ data });
+  });
 
   app.onError((error, context) => {
     if (error instanceof SpeakerServiceError) {
