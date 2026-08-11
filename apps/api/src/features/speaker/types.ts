@@ -258,6 +258,7 @@ export interface SpeakerWorkspaceAsset {
 
 export interface SpeakerWorkspaceTask {
   taskId: string;
+  participantId: string;
   title: string;
   description: string;
   type: "general" | "action" | "file_request";

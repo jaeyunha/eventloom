@@ -6694,7 +6694,7 @@ export class SpeakerService {
     organizationId: string;
     eventId: string;
     speakerProfileId: string;
-    tasks: Array<SpeakerWorkspaceTask & { participantId: string }>;
+    tasks: SpeakerWorkspaceTask[];
   }> {
     const scope = await this.requireOrganizerOrganizationScope(
       input.organizationId,
@@ -6746,7 +6746,7 @@ export class SpeakerService {
     organizationId: string;
     eventId: string;
     speakerProfileId: string;
-    tasks: Array<SpeakerWorkspaceTask & { participantId: string }>;
+    tasks: SpeakerWorkspaceTask[];
   }> {
     await this.requireOrganizerOrganizationScope(
       input.organizationId,
@@ -7204,7 +7204,7 @@ export class SpeakerService {
     };
   }
 
-  private workspaceTask(task: SpeakerTask): SpeakerWorkspaceTask & { participantId: string } {
+  private workspaceTask(task: SpeakerTask): SpeakerWorkspaceTask {
     return {
       taskId: task.id,
       participantId: task.participantId,
