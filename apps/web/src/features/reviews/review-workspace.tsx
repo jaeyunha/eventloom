@@ -439,8 +439,7 @@ export function reviewerSelectionBlocked(
 }
 
 function apiBaseUrl(): string {
-  const configured = process.env.NEXT_PUBLIC_API_URL?.trim();
-  return configured ? configured.replace(/\/+$/u, "") : "";
+  return "";
 }
 
 function browserSameOrigin(): string {
