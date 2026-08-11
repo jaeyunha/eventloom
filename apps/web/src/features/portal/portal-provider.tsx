@@ -11,6 +11,10 @@ import {
   useState,
 } from "react";
 import { createPortalApi, type PortalApi, PortalApiError } from "./api";
+import {
+  scopePortalContextToPrimaryParticipant,
+  scopePortalViewToPrimaryParticipant,
+} from "./model";
 import type {
   PortalAsset,
   PortalAssetComment,
@@ -78,7 +82,14 @@ interface PortalContextValue {
   savingProfile: boolean;
   reload(): Promise<void>;
   loadWorkspace(): Promise<void>;
-  saveBiography(profile: PortalProfile, biography: string): Promise<boolean>;
+  saveProfile(input: {
+    profile: PortalProfile;
+    biography: string;
+    jobTitle: string;
+    company: string;
+    socialLinks: Readonly<Record<string, string>>;
+    headshot?: File;
+  }): Promise<boolean>;
   transitionTask(task: PortalTask, toStatus: PortalTaskStatus, note?: string): Promise<boolean>;
   uploadTask(task: PortalTask, file: File): Promise<boolean>;
   addRosterEntry(input: {
@@ -146,6 +157,30 @@ function withUpdatedTask(view: PortalView, task: PortalTask): PortalView {
       (candidate) => candidate.status !== "completed" && candidate.status !== "waived",
     ).length,
   };
+}
+
+function withUpdatedAsset(view: PortalView, asset: PortalAsset): PortalView {
+  return {
+    ...view,
+    assets: [...(view.assets ?? []).filter((candidate) => candidate.id !== asset.id), asset],
+  };
+}
+
+function taskMutationMatches(
+  updated: PortalTask,
+  original: PortalTask,
+  eventId: string,
+  expectedStatus: PortalTaskStatus,
+): boolean {
+  return (
+    updated.id === original.id &&
+    updated.eventId === eventId &&
+    updated.submissionId === original.submissionId &&
+    updated.participantId === original.participantId &&
+    updated.owner === "speaker" &&
+    updated.status === expectedStatus &&
+    updated.version > original.version
+  );
 }
 
 function isAbort(error: unknown): boolean {
@@ -463,6 +498,7 @@ export function PortalProvider({
       setContext(target);
       setCapabilities(normalizeCapabilities(target.capabilities));
       setView(null);
+      setSavingProfile(false);
       clearWorkspace();
       setMutationError(null);
       setLoading(true);
@@ -473,22 +509,43 @@ export function PortalProvider({
           return false;
         }
         const serverContext = nextView.context ?? target;
+        if (
+          serverContext.eventId !== target.eventId ||
+          serverContext.primaryParticipantId !== target.primaryParticipantId
+        ) {
+          throw new PortalApiError(
+            "CONTEXT_MISMATCH",
+            "The portal response does not match the selected event and speaker.",
+            409,
+          );
+        }
         const nextCapabilities = normalizeCapabilities(
           nextView.capabilities ?? serverContext.capabilities,
         );
-        setContext(serverContext);
-        setCapabilities(nextCapabilities);
-        setView({
-          ...nextView,
-          context: serverContext,
-          capabilities: nextCapabilities,
-        });
-        setLoading(false);
-        await loadWorkspaceFor(
-          { ...serverContext, capabilities: nextCapabilities },
+        const scopedView = scopePortalViewToPrimaryParticipant(
           { ...nextView, context: serverContext, capabilities: nextCapabilities },
-          signal,
+          serverContext,
         );
+        const scopedContext =
+          scopedView.context ?? scopePortalContextToPrimaryParticipant(serverContext);
+        if (!scopedContext.primaryParticipantId) {
+          throw new PortalApiError(
+            "NO_PORTAL_PARTICIPANT",
+            "No authorized speaker profile is available for this event.",
+            403,
+          );
+        }
+        setContext(scopedContext);
+        setContexts((current) =>
+          current.map((candidate) =>
+            candidate.id === scopedContext.id ? scopedContext : candidate,
+          ),
+        );
+        setCapabilities(nextCapabilities);
+        setView(scopedView);
+        setWorkspace({ ...emptyWorkspace, assets: [...(scopedView.assets ?? [])] });
+        setWorkspaceLoading(false);
+        setLoading(false);
         return true;
       } catch (loadError) {
         if (isAbort(loadError)) {
@@ -503,7 +560,7 @@ export function PortalProvider({
         return false;
       }
     },
-    [api, clearWorkspace, loadWorkspaceFor],
+    [api, clearWorkspace],
   );
 
   const loadInitial = useCallback(
@@ -527,7 +584,9 @@ export function PortalProvider({
             403,
           );
         }
-        const authorizedContexts = await api.listPortalContexts(signal);
+        const authorizedContexts = (await api.listPortalContexts(signal))
+          .map((candidate) => scopePortalContextToPrimaryParticipant(candidate))
+          .filter((candidate) => candidate.primaryParticipantId !== undefined);
         if (signal?.aborted) {
           return;
         }
@@ -608,8 +667,15 @@ export function PortalProvider({
     setWorkspaceLoading(false);
   }, [context, loadWorkspaceFor, view]);
 
-  const saveBiography = useCallback(
-    async (profile: PortalProfile, biography: string) => {
+  const saveProfile = useCallback(
+    async (input: {
+      profile: PortalProfile;
+      biography: string;
+      jobTitle: string;
+      company: string;
+      socialLinks: Readonly<Record<string, string>>;
+      headshot?: File;
+    }) => {
       if (!api || !context) {
         setMutationError("The speaker portal API URL is not configured.");
         return false;
@@ -618,30 +684,116 @@ export function PortalProvider({
         setMutationError("You do not have permission to edit this profile.");
         return false;
       }
+      if (
+        input.profile.eventId !== context.eventId ||
+        input.profile.participantId !== context.primaryParticipantId
+      ) {
+        setMutationError("This profile does not belong to the active speaker.");
+        return false;
+      }
+      if (!api.updateProfile) {
+        setMutationError("The speaker profile API is not available yet.");
+        return false;
+      }
+      if (input.headshot && (!can("asset-write") || !api.uploadFile || !api.finalizeAsset)) {
+        setMutationError("Private headshot uploads are not available for this event.");
+        return false;
+      }
+
       const targetContext = context;
       const generation = loadGeneration.current;
       setSavingProfile(true);
       setMutationError(null);
       try {
-        const updated = await api.updateBiography({
+        let finalizedHeadshot: PortalAsset | undefined;
+        if (input.headshot && api.uploadFile && api.finalizeAsset) {
+          const pending = await api.uploadFile({
+            eventId: targetContext.eventId,
+            participantId: input.profile.participantId,
+            kind: "headshot",
+            file: input.headshot,
+            ...(input.profile.headshotAssetId
+              ? { supersedesAssetId: input.profile.headshotAssetId }
+              : {}),
+          });
+          if (
+            pending.eventId !== targetContext.eventId ||
+            pending.participantId !== input.profile.participantId ||
+            pending.kind !== "headshot"
+          ) {
+            throw new PortalApiError(
+              "CONTEXT_MISMATCH",
+              "The headshot upload belongs to a different event or participant.",
+              409,
+            );
+          }
+          finalizedHeadshot = await api.finalizeAsset({
+            eventId: targetContext.eventId,
+            assetId: pending.id,
+            state: "ready",
+          });
+          if (
+            finalizedHeadshot.eventId !== targetContext.eventId ||
+            finalizedHeadshot.participantId !== input.profile.participantId ||
+            finalizedHeadshot.kind !== "headshot" ||
+            finalizedHeadshot.state !== "ready"
+          ) {
+            throw new PortalApiError(
+              "CONTEXT_MISMATCH",
+              "The finalized headshot belongs to a different event or participant.",
+              409,
+            );
+          }
+        }
+
+        const updated = await api.updateProfile({
           eventId: targetContext.eventId,
-          participantId: profile.participantId,
-          biography,
-          expectedVersion: profile.version,
+          participantId: input.profile.participantId,
+          biography: input.biography,
+          jobTitle: input.jobTitle,
+          company: input.company,
+          socialLinks: input.socialLinks,
+          ...(finalizedHeadshot === undefined
+            ? {}
+            : { headshotAssetId: finalizedHeadshot.id }),
+          expectedVersion: input.profile.version,
         });
+        if (
+          updated.eventId !== targetContext.eventId ||
+          updated.participantId !== input.profile.participantId ||
+          (finalizedHeadshot !== undefined &&
+            updated.headshotAssetId !== finalizedHeadshot.id)
+        ) {
+          throw new PortalApiError(
+            "CONTEXT_MISMATCH",
+            "The saved profile does not match the active speaker.",
+            409,
+          );
+        }
         if (!isPortalGenerationCurrent(generation, loadGeneration.current)) {
           return false;
         }
-        setView((current) =>
-          current
-            ? {
-                ...current,
-                profiles: current.profiles.map((candidate) =>
-                  candidate.participantId === updated.participantId ? updated : candidate,
-                ),
-              }
-            : current,
-        );
+        setView((current) => {
+          if (!current) return current;
+          const updatedView = {
+            ...current,
+            profiles: current.profiles.map((candidate) =>
+              candidate.participantId === updated.participantId ? updated : candidate,
+            ),
+          };
+          return finalizedHeadshot === undefined
+            ? updatedView
+            : withUpdatedAsset(updatedView, finalizedHeadshot);
+        });
+        if (finalizedHeadshot !== undefined) {
+          setWorkspace((current) => ({
+            ...current,
+            assets: [
+              ...current.assets.filter((candidate) => candidate.id !== finalizedHeadshot.id),
+              finalizedHeadshot,
+            ],
+          }));
+        }
         return true;
       } catch (saveError) {
         if (isPortalGenerationCurrent(generation, loadGeneration.current)) {
@@ -649,7 +801,9 @@ export function PortalProvider({
         }
         return false;
       } finally {
-        setSavingProfile(false);
+        if (isPortalGenerationCurrent(generation, loadGeneration.current)) {
+          setSavingProfile(false);
+        }
       }
     },
     [api, can, context],
@@ -677,6 +831,13 @@ export function PortalProvider({
           expectedVersion: task.version,
           ...(note === undefined ? {} : { note }),
         });
+        if (!taskMutationMatches(updated, task, targetContext.eventId, toStatus)) {
+          throw new PortalApiError(
+            "CONTEXT_MISMATCH",
+            "The saved task does not match the active speaker or requested status.",
+            409,
+          );
+        }
         if (!isPortalGenerationCurrent(generation, loadGeneration.current)) {
           return false;
         }
@@ -759,10 +920,26 @@ export function PortalProvider({
           expectedVersion: task.version,
           note: `Uploaded ${file.name}`,
         });
+        if (!taskMutationMatches(updated, task, targetContext.eventId, "submitted")) {
+          throw new PortalApiError(
+            "CONTEXT_MISMATCH",
+            "The saved upload task does not match the active speaker or submitted status.",
+            409,
+          );
+        }
         if (!isPortalGenerationCurrent(generation, loadGeneration.current)) {
           return false;
         }
-        setView((current) => (current ? withUpdatedTask(current, updated) : current));
+        setView((current) =>
+          current ? withUpdatedAsset(withUpdatedTask(current, updated), finalized) : current,
+        );
+        setWorkspace((current) => ({
+          ...current,
+          assets: [
+            ...current.assets.filter((candidate) => candidate.id !== finalized.id),
+            finalized,
+          ],
+        }));
         return true;
       } catch (uploadError) {
         if (isPortalGenerationCurrent(generation, loadGeneration.current)) {
@@ -1323,7 +1500,7 @@ export function PortalProvider({
       savingProfile,
       reload,
       loadWorkspace,
-      saveBiography,
+      saveProfile,
       transitionTask,
       uploadTask,
       addRosterEntry,
@@ -1364,7 +1541,7 @@ export function PortalProvider({
       mutationError,
       reload,
       removeRosterEntry,
-      saveBiography,
+      saveProfile,
       saveTaskResponse,
       savingProfile,
       switchContext,

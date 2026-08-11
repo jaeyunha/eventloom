@@ -3,9 +3,9 @@
 import { type ChangeEvent, useState } from "react";
 import {
   filterTasks,
-  findProfileForTask,
   findSubmissionForTask,
   isTaskBlocked,
+  portalTaskAsset,
   type TaskFilter,
   taskPrimaryAction,
   taskStatusPresentation,
@@ -15,8 +15,10 @@ import { usePortal } from "./portal-provider";
 import {
   EmptyState,
   formatPortalDate,
+  formatPortalFileSize,
   InlineMutationError,
   PageHeading,
+  portalAssetStateLabel,
   PortalContentState,
   Progress,
   TaskStatusBadge,
@@ -124,23 +126,29 @@ function PortalTasksContent() {
 }
 
 function TaskCard({ task }: Readonly<{ task: PortalTask }>) {
-  const { busyTaskIds, transitionTask, uploadTask, view } = usePortal();
+  const { busyTaskIds, downloadAsset, transitionTask, uploadTask, view } = usePortal();
   const [note, setNote] = useState("");
   const [fileName, setFileName] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState(false);
   if (!view) {
     return null;
   }
   const blocked = isTaskBlocked(task, view.tasks);
   const submission = findSubmissionForTask(task, view.submissions);
-  const profile = findProfileForTask(task, view.profiles);
+  const asset = portalTaskAsset(task, view.assets ?? []);
   const presentation = taskStatusPresentation(task.status);
   const action = blocked ? null : taskPrimaryAction(task);
   const busy = busyTaskIds.has(task.id);
   const dependencyNames = task.dependencyIds.map(
     (dependencyId) =>
-      view.tasks.find((candidate) => candidate.id === dependencyId)?.title ?? dependencyId,
+      view.tasks.find((candidate) => candidate.id === dependencyId)?.title ??
+      "Another required task",
   );
   const uploadKind = task.acceptedAssetKinds?.[0];
+  const assetMetadataMissing =
+    task.type === "upload" &&
+    ["submitted", "completed", "needs_changes", "reopened"].includes(task.status) &&
+    asset === undefined;
 
   async function runPrimaryAction() {
     if (action === "start") {
@@ -153,14 +161,28 @@ function TaskCard({ task }: Readonly<{ task: PortalTask }>) {
   }
 
   async function handleFile(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.currentTarget.files?.[0];
+    const input = event.currentTarget;
+    const file = input.files?.[0];
     if (!file) {
       return;
     }
     setFileName(file.name);
-    const didUpload = await uploadTask(task, file);
-    if (didUpload) {
-      event.currentTarget.value = "";
+    try {
+      await uploadTask(task, file);
+    } finally {
+      setFileName(null);
+      input.value = "";
+    }
+  }
+
+  async function handleDownload() {
+    if (!asset || asset.state !== "ready") return;
+    setDownloading(true);
+    try {
+      const grant = await downloadAsset(asset.id);
+      if (grant) window.location.assign(grant.url);
+    } finally {
+      setDownloading(false);
     }
   }
 
@@ -173,7 +195,6 @@ function TaskCard({ task }: Readonly<{ task: PortalTask }>) {
         <div className={styles.taskTitle}>
           <p>
             {submission?.title ?? "Accepted session"}
-            {profile ? ` · ${profile.displayName}` : ""}
           </p>
           <h3 id={`task-${task.id}`}>{task.title}</h3>
         </div>
@@ -188,6 +209,49 @@ function TaskCard({ task }: Readonly<{ task: PortalTask }>) {
           <strong>Due</strong> {formatPortalDate(task.dueAt) ?? "No due date"}
         </span>
       </div>
+
+      {asset ? (
+        <div className={styles.taskActionArea} aria-label={`File details for ${task.title}`}>
+          <div className={styles.taskMetadata}>
+            <span>
+              <strong>File</strong> {asset.fileName}
+            </span>
+            <span>
+              <strong>State</strong> {portalAssetStateLabel(asset.state)}
+            </span>
+            <span>
+              <strong>Format</strong> {asset.contentType}
+            </span>
+            <span>
+              <strong>Size</strong> {formatPortalFileSize(asset.sizeBytes)}
+            </span>
+            {asset.version === undefined ? null : (
+              <span>
+                <strong>Version</strong> {asset.version}
+              </span>
+            )}
+          </div>
+          {asset.state === "rejected" && asset.rejectionReason ? (
+            <p className={styles.fieldError} role="status">
+              {asset.rejectionReason}
+            </p>
+          ) : null}
+          {asset.state === "ready" ? (
+            <button
+              className={styles.secondaryButton}
+              type="button"
+              disabled={downloading}
+              onClick={() => void handleDownload()}
+            >
+              {downloading ? "Preparing download…" : "Download file"}
+            </button>
+          ) : null}
+        </div>
+      ) : assetMetadataMissing ? (
+        <p className={styles.blockedNotice} role="status">
+          File metadata is not available for this upload.
+        </p>
+      ) : null}
 
       {blocked ? (
         <div className={styles.blockedNotice}>
@@ -206,7 +270,13 @@ function TaskCard({ task }: Readonly<{ task: PortalTask }>) {
               disabled={busy}
               onChange={(event) => void handleFile(event)}
             />
-            <small>{fileName ? `Selected: ${fileName}` : "Your file is uploaded privately."}</small>
+            <small>
+              {busy
+                ? "Uploading privately…"
+                : fileName
+                  ? `Selected: ${fileName}`
+                  : "The selected file will be uploaded privately."}
+            </small>
           </label>
         </div>
       ) : null}

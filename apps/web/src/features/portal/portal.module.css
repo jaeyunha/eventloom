@@ -1054,6 +1054,11 @@
   background: #f9fafc;
 }
 
+.taskActionArea .taskMetadata {
+  flex-wrap: wrap;
+  margin: 0 0 0.75rem;
+}
+
 .fileField {
   display: grid;
   gap: 0.5rem;

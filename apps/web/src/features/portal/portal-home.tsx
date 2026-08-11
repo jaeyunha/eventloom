@@ -32,10 +32,9 @@ function PortalHomeContent() {
   if (!view) {
     return null;
   }
-  const profile =
-    view.profiles.find(
-      (candidate) => candidate.participantId === view.context?.primaryParticipantId,
-    ) ?? view.profiles[0];
+  const profile = view.profiles.find(
+    (candidate) => candidate.participantId === view.context?.primaryParticipantId,
+  );
   const summary = summarizePortal(view);
   const visibleTasks = view.tasks.filter(
     (task) => task.status !== "completed" && task.status !== "waived",
@@ -46,7 +45,7 @@ function PortalHomeContent() {
       <PageHeading
         eyebrow="Speaker portal"
         title={`Welcome${profile ? `, ${profile.displayName.split(" ")[0]}` : ""}`}
-        description="Track your proposals and complete everything the event team needs from you."
+        description="Track your proposals as they become sessions and complete everything the event team needs from you."
         action={
           <Link className={styles.primaryButton} href={`/portal/tasks${eventQuery}`}>
             View tasks
@@ -61,7 +60,7 @@ function PortalHomeContent() {
           </span>
           <div>
             <strong>{summary.submissionCount}</strong>
-            <span>{summary.submissionCount === 1 ? "Submission" : "Submissions"}</span>
+            <span>{summary.submissionCount === 1 ? "Session" : "Sessions"}</span>
           </div>
           <small>{summary.acceptedCount} accepted</small>
         </article>
@@ -84,15 +83,15 @@ function PortalHomeContent() {
         <section className={styles.panel}>
           <div className={styles.panelHeading}>
             <div>
-              <p className={styles.eyebrow}>Your proposals</p>
-              <h2>Submission status</h2>
+              <p className={styles.eyebrow}>Your sessions</p>
+              <h2>Session status</h2>
             </div>
-            <Link href={`/portal/submissions${eventQuery}`}>View all</Link>
+            <Link href={`/portal/submissions${eventQuery}`}>View all sessions</Link>
           </div>
           {view.submissions.length === 0 ? (
             <EmptyState
-              title="No submissions yet"
-              description="Submitted proposals will appear here."
+              title="No sessions yet"
+              description="Submitted proposals will appear here as they become sessions."
             />
           ) : (
             <div className={styles.cardList}>

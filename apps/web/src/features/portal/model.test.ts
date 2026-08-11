@@ -4,13 +4,17 @@ import {
   filterTasks,
   isTaskBlocked,
   portalIdentityProfile,
+  portalProfileHeadshot,
   portalSubmissionEditTarget,
+  portalTaskAsset,
+  scopePortalContextToPrimaryParticipant,
+  scopePortalViewToPrimaryParticipant,
   submissionStatusPresentation,
   summarizePortal,
   taskPrimaryAction,
   validateBiography,
 } from "./model";
-import type { PortalTask, PortalView } from "./types";
+import type { PortalAsset, PortalTask, PortalView } from "./types";
 
 function task(overrides: Partial<PortalTask> = {}): PortalTask {
   return {
@@ -142,6 +146,189 @@ describe("speaker portal view model", () => {
       portalIdentityProfile({ ...portal, profiles: [marcus, priya], context }, context)
         ?.displayName,
     ).toBe("Priya Raman");
+  });
+
+  it("keeps only the primary speaker's sessions, profile, tasks, and assets", () => {
+    const priyaParticipantId = "participant-priya";
+    const marcusParticipantId = "participant-marcus";
+    const context = {
+      id: "portal:event-1",
+      eventId: "event-1",
+      name: "DevFlow Conf 2027",
+      capabilities: ["profile-self", "task-response", "asset-read"],
+      submissionIds: ["session-priya", "session-marcus"],
+      participantIds: [marcusParticipantId, priyaParticipantId],
+      primaryParticipantId: priyaParticipantId,
+    } as const;
+    const priyaProfile = {
+      id: "profile-priya",
+      eventId: "event-1",
+      participantId: priyaParticipantId,
+      displayName: "Priya Raman",
+      biography: "Builds reliable platforms.",
+      headshotAssetId: "asset-headshot",
+      version: 2,
+      updatedAt: "2026-08-09T00:00:00.000Z",
+    };
+    const marcusProfile = {
+      ...priyaProfile,
+      id: "profile-marcus",
+      participantId: marcusParticipantId,
+      displayName: "Marcus Okafor",
+      headshotAssetId: "asset-marcus",
+    };
+    const priyaTask = task({
+      id: "task-priya",
+      submissionId: "session-priya",
+      participantId: priyaParticipantId,
+      type: "upload",
+      status: "submitted",
+      acceptedAssetKinds: ["slides"],
+    });
+    const marcusTask = task({
+      id: "task-marcus",
+      submissionId: "session-marcus",
+      participantId: marcusParticipantId,
+    });
+    const assets: PortalAsset[] = [
+      {
+        id: "asset-headshot",
+        eventId: "event-1",
+        participantId: priyaParticipantId,
+        kind: "headshot",
+        fileName: "priya.webp",
+        contentType: "image/webp",
+        sizeBytes: 2_048,
+        state: "ready",
+        createdAt: "2026-08-09T00:00:00.000Z",
+      },
+      {
+        id: "asset-slides-v1",
+        eventId: "event-1",
+        participantId: priyaParticipantId,
+        submissionId: "session-priya",
+        taskId: priyaTask.id,
+        kind: "slides",
+        fileName: "slides-v1.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 4_096,
+        state: "ready",
+        createdAt: "2026-08-09T01:00:00.000Z",
+        version: 1,
+      },
+      {
+        id: "asset-slides-v2",
+        eventId: "event-1",
+        participantId: priyaParticipantId,
+        submissionId: "session-priya",
+        taskId: priyaTask.id,
+        kind: "slides",
+        fileName: "slides-v2.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 8_192,
+        state: "ready",
+        createdAt: "2026-08-09T02:00:00.000Z",
+        version: 2,
+      },
+      {
+        id: "asset-marcus",
+        eventId: "event-1",
+        participantId: marcusParticipantId,
+        taskId: marcusTask.id,
+        kind: "headshot",
+        fileName: "marcus.png",
+        contentType: "image/png",
+        sizeBytes: 1_024,
+        state: "ready",
+        createdAt: "2026-08-09T00:00:00.000Z",
+      },
+    ];
+    const scoped = scopePortalViewToPrimaryParticipant(
+      {
+        submissions: [
+          {
+            id: "session-priya",
+            eventId: "event-1",
+            title: "Reliable systems",
+            status: "accepted",
+            participantIds: [priyaParticipantId, marcusParticipantId],
+            updatedAt: "2026-08-09T00:00:00.000Z",
+          },
+          {
+            id: "session-marcus",
+            eventId: "event-1",
+            title: "Community programs",
+            status: "accepted",
+            participantIds: [marcusParticipantId],
+            updatedAt: "2026-08-09T00:00:00.000Z",
+          },
+        ],
+        profiles: [marcusProfile, priyaProfile],
+        tasks: [marcusTask, priyaTask],
+        outstandingTaskCount: 2,
+        context,
+        assets,
+        roster: {
+          organizationId: "organization-1",
+          eventId: "event-1",
+          submissionId: "session-priya",
+          capabilities: { manage: true, invite: true },
+          members: [],
+        },
+      },
+      context,
+    );
+
+    expect(scoped.submissions).toEqual([
+      expect.objectContaining({
+        id: "session-priya",
+        participantIds: [priyaParticipantId],
+      }),
+    ]);
+    expect(scoped.profiles.map(({ participantId }) => participantId)).toEqual([
+      priyaParticipantId,
+    ]);
+    expect(scoped.tasks.map(({ id }) => id)).toEqual([priyaTask.id]);
+    expect(scoped.assets?.map(({ id }) => id)).toEqual([
+      "asset-headshot",
+      "asset-slides-v1",
+      "asset-slides-v2",
+    ]);
+    expect(scoped.context).toMatchObject({
+      participantIds: [priyaParticipantId],
+      submissionIds: ["session-priya"],
+      primaryParticipantId: priyaParticipantId,
+    });
+    expect(scoped.outstandingTaskCount).toBe(1);
+    expect(scoped.roster).toBeUndefined();
+    expect(portalProfileHeadshot(priyaProfile, scoped.assets ?? [])?.id).toBe(
+      "asset-headshot",
+    );
+    expect(portalTaskAsset(priyaTask, scoped.assets ?? [])?.id).toBe("asset-slides-v2");
+  });
+
+  it("fails closed when the server-selected participant is not authorized", () => {
+    const context = {
+      id: "portal:event-1",
+      eventId: "event-1",
+      name: "DevFlow Conf 2027",
+      capabilities: [],
+      submissionIds: ["submission-1"],
+      participantIds: ["participant-priya"],
+      primaryParticipantId: "participant-marcus",
+    } as const;
+
+    expect(scopePortalContextToPrimaryParticipant(context)).toMatchObject({
+      participantIds: [],
+      submissionIds: [],
+    });
+    expect(scopePortalViewToPrimaryParticipant(portal, context)).toMatchObject({
+      submissions: [],
+      profiles: [],
+      tasks: [],
+      assets: [],
+      outstandingTaskCount: 0,
+    });
   });
   it("builds a pinned edit route only for editable submitted proposals", () => {
     const context = {

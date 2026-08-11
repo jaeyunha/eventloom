@@ -55,7 +55,10 @@ export interface PortalProfile {
   participantId: string;
   displayName: string;
   biography: string;
-  headshotAssetId?: string;
+  jobTitle?: string;
+  company?: string;
+  socialLinks?: Readonly<Record<string, string>>;
+  headshotAssetId?: string | null;
   version: number;
   updatedAt: string;
 }
