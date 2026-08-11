@@ -2,117 +2,171 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import {
-  enrichServerSubmission,
+  enrichCanonicalSubmission,
   getAcceptedHandoffMetadata,
   getSeededSubmission,
-  mapServerSubmission,
+  mapCanonicalSubmission,
   SubmissionDetailWorkspace,
   SubmissionListWorkspace,
 } from "./submission-workspace";
 
-describe("organizer submission workspace", () => {
-  it("round-trips official taxonomy, custom answers, co-speakers, and edited abstracts", () => {
-    const abstract =
-      "Our monorepo CI took 40 minutes on a good day. This talk walks through how we cut it to 6 minutes.";
-    const record = {
-      id: "submission-devflow-1",
-      tenantId: "tenant-devflow",
-      eventId: "devflow-conf-2027",
+const canonicalEnvelope = {
+  submission: {
+    id: "submission-devflow-1",
+    tenantId: "tenant-devflow",
+    eventId: "devflow-conf-2027",
+    formId: "main-cfp",
+    ownerAccountId: "speaker-account",
+    formVersion: 4,
+    version: 1,
+    status: "submitted" as const,
+    completedSteps: ["welcome", "account", "submission", "participant", "review"],
+    answers: {
       title: "Taming 40-Minute CI: Incremental Builds at Monorepo Scale",
-      abstract,
-      answers: {
-        title: "Taming 40-Minute CI: Incremental Builds at Monorepo Scale",
-        abstract,
-        track: "Platform & Infra",
-        format: "Talk (30 min)",
-        audienceLevel: "Intermediate",
-        keyTakeaway: "A decision framework for which incremental-build investments pay off",
+      abstract:
+        "Our monorepo CI took 40 minutes on a good day. This talk walks through how we cut it to 6 minutes.",
+      format: "workshop",
+      track: "platform",
+      topics: ["accessibility", "reliability"],
+      workshopAudience: "Staff engineers and platform teams.",
+    },
+    participants: [
+      {
+        id: "participant-priya",
+        firstName: "Priya",
+        lastName: "Raman",
+        email: "sbek-speaker@example.com",
+        role: "primary" as const,
+        biography: "Priya's canonical biography.",
+        answers: {
+          participantType: "company",
+          participantCompany: "Latticework Systems",
+        },
       },
-      fieldDefinitions: [
-        { key: "title", label: "Session title" },
-        { key: "abstract", label: "Abstract" },
-        { key: "track", label: "Track", options: ["AI Engineering", "Platform & Infra"] },
-        {
-          key: "format",
-          label: "Format",
-          options: [{ value: "Talk (30 min)", label: "Talk (30 min)" }],
-        },
-        {
-          key: "audienceLevel",
-          label: "Audience level",
-          options: ["Beginner", "Intermediate", "Advanced"],
-        },
-        { key: "keyTakeaway", label: "Key takeaway" },
+      {
+        id: "participant-marcus",
+        firstName: "Marcus",
+        lastName: "Okafor",
+        email: "sbek-speaker2@example.com",
+        role: "co_speaker" as const,
+        biography: "Marcus's canonical biography.",
+        answers: { participantType: "individual" },
+      },
+    ],
+    secondaryContacts: [],
+    createdAt: "2027-01-02T11:00:00.000Z",
+    updatedAt: "2027-01-02T12:00:00.000Z",
+    submittedAt: "2027-01-02T12:00:00.000Z",
+    reopenedAt: null,
+  },
+  submissionFields: [
+    { key: "title", label: "Session title" },
+    { key: "abstract", label: "Abstract" },
+    {
+      key: "format",
+      label: "Session format",
+      options: [{ value: "workshop", label: "Workshop" }],
+    },
+    {
+      key: "track",
+      label: "Track",
+      options: [{ value: "platform", label: "Platform & Infra" }],
+    },
+    {
+      key: "topics",
+      label: "Topics",
+      options: [
+        { value: "accessibility", label: "Accessibility" },
+        { value: "reliability", label: "Reliability" },
       ],
-      participants: [
-        {
-          id: "participant-priya",
-          displayName: "Priya Raman",
-          email: "sbek-speaker@example.com",
-          biography: "Priya's fixture biography.",
-          role: "primary",
-          organization: "Latticework Systems",
-          answers: { dietary: "Vegetarian" },
-        },
-        {
-          id: "participant-marcus",
-          displayName: "Marcus Okafor",
-          email: "sbek-speaker2@example.com",
-          biography: "Marcus's fixture biography.",
-          role: "co_speaker",
-          organization: "Cloudreach Labs",
-          answers: { pronouns: "he/him" },
-        },
+    },
+    { key: "workshopAudience", label: "Workshop audience" },
+  ],
+  participantFields: [
+    { key: "firstName", label: "First name" },
+    { key: "lastName", label: "Last name" },
+    { key: "email", label: "Email" },
+    {
+      key: "participantType",
+      label: "Participant type",
+      options: [
+        { value: "company", label: "Company" },
+        { value: "individual", label: "Individual" },
       ],
-      status: "submitted",
-      version: 1,
-      submittedAt: "2027-01-02T12:00:00.000Z",
-      updatedAt: "2027-01-02T12:00:00.000Z",
-      reopenedAt: null,
-    } as const;
+    },
+    { key: "participantCompany", label: "Company" },
+    { key: "biography", label: "Biography" },
+  ],
+} as const;
 
-    const listRecord = mapServerSubmission(record);
-    const detailRecord = mapServerSubmission(record);
-    expect(listRecord).toMatchObject({
+describe("organizer submission workspace", () => {
+  it("maps the exact canonical fields, edited values, and every co-speaker", () => {
+    const record = mapCanonicalSubmission(canonicalEnvelope);
+
+    expect(record).toMatchObject({
+      id: "submission-devflow-1",
+      title: "Taming 40-Minute CI: Incremental Builds at Monorepo Scale",
       track: "Platform & Infra",
-      format: "Talk (30 min)",
+      format: "Workshop",
+      abstract:
+        "Our monorepo CI took 40 minutes on a good day. This talk walks through how we cut it to 6 minutes.",
     });
-    expect(detailRecord).toMatchObject({
-      track: "Platform & Infra",
-      format: "Talk (30 min)",
-      abstract,
-    });
-    expect(detailRecord.answers).toEqual(
-      expect.arrayContaining([
-        { question: "Audience level", answer: "Intermediate" },
-        {
-          question: "Key takeaway",
-          answer: "A decision framework for which incremental-build investments pay off",
-        },
-      ]),
-    );
-    expect(detailRecord.participants).toMatchObject([
+    expect(record.answers).toEqual([
+      {
+        question: "Session title",
+        answer: "Taming 40-Minute CI: Incremental Builds at Monorepo Scale",
+      },
+      {
+        question: "Abstract",
+        answer:
+          "Our monorepo CI took 40 minutes on a good day. This talk walks through how we cut it to 6 minutes.",
+      },
+      { question: "Session format", answer: "Workshop" },
+      { question: "Track", answer: "Platform & Infra" },
+      { question: "Topics", answer: "Accessibility, Reliability" },
+      { question: "Workshop audience", answer: "Staff engineers and platform teams." },
+    ]);
+    expect(record.participants).toMatchObject([
       {
         name: "Priya Raman",
         role: "Speaker",
         organization: "Latticework Systems",
-        answers: { dietary: "Vegetarian" },
+        biography: "Priya's canonical biography.",
+        answers: {
+          "First name": "Priya",
+          "Last name": "Raman",
+          Email: "sbek-speaker@example.com",
+          "Participant type": "Company",
+          Company: "Latticework Systems",
+          Biography: "Priya's canonical biography.",
+        },
       },
       {
         name: "Marcus Okafor",
         role: "Co-speaker",
-        organization: "Cloudreach Labs",
-        answers: { pronouns: "he/him" },
+        organization: "",
+        biography: "Marcus's canonical biography.",
+        answers: {
+          "First name": "Marcus",
+          "Last name": "Okafor",
+          Email: "sbek-speaker2@example.com",
+          "Participant type": "Individual",
+          Company: "—",
+          Biography: "Marcus's canonical biography.",
+        },
       },
     ]);
 
-    const editedAbstract = `${abstract} Updated: now includes 2026 benchmark data.`;
-    const editedRecord = mapServerSubmission({
-      ...record,
-      abstract: editedAbstract,
-      answers: { ...record.answers, abstract: editedAbstract },
-      version: 2,
-      updatedAt: "2027-01-03T12:00:00.000Z",
+    const editedAbstract =
+      "Updated: the session now includes the canonical 2027 benchmark data.";
+    const editedRecord = mapCanonicalSubmission({
+      ...canonicalEnvelope,
+      submission: {
+        ...canonicalEnvelope.submission,
+        version: 2,
+        updatedAt: "2027-01-03T12:00:00.000Z",
+        answers: { ...canonicalEnvelope.submission.answers, abstract: editedAbstract },
+      },
     });
     expect(editedRecord.abstract).toBe(editedAbstract);
     expect(editedRecord.answers).toContainEqual({
@@ -120,7 +174,7 @@ describe("organizer submission workspace", () => {
       answer: editedAbstract,
     });
   });
-  it("uses the same-origin gateway and keeps submissions visible when aggregates fail", async () => {
+  it("uses the same-origin gateway and keeps canonical submissions visible when aggregates fail", async () => {
     const requests: string[] = [];
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input);
@@ -156,23 +210,10 @@ describe("organizer submission workspace", () => {
     });
 
     try {
-      const submission = await enrichServerSubmission("", {
-        id: "submission-1",
-        tenantId: "org-1",
-        eventId: "event-1",
-        title: "Visible submission",
-        abstract: "The authoritative abstract.",
-        answers: {},
-        participants: [],
-        status: "submitted",
-        version: 1,
-        submittedAt: "2027-01-02T12:00:00.000Z",
-        updatedAt: "2027-01-02T12:00:00.000Z",
-        reopenedAt: null,
-      });
+      const submission = await enrichCanonicalSubmission("", canonicalEnvelope);
       expect(submission).toMatchObject({
-        id: "submission-1",
-        title: "Visible submission",
+        id: "submission-devflow-1",
+        title: "Taming 40-Minute CI: Incremental Builds at Monorepo Scale",
         evaluationPlanId: "plan-1",
         reviewSummary: { completed: 0, total: 0, averageScore: null, maxScore: 0 },
       });
@@ -180,7 +221,9 @@ describe("organizer submission workspace", () => {
       expect(requests.every((request) => request.startsWith("/api/admin/evaluations/"))).toBe(true);
       expect(
         requests.some((request) =>
-          request.includes("/plans/plan-1/rounds/round-final/submissions/submission-1/aggregate"),
+          request.includes(
+            "/plans/plan-1/rounds/round-final/submissions/submission-devflow-1/aggregate",
+          ),
         ),
       ).toBe(true);
     } finally {
@@ -188,22 +231,15 @@ describe("organizer submission workspace", () => {
     }
   });
 
-  it("uses the stored taxonomy answer and only renders an em dash when it is absent", () => {
-    const record = {
-      id: "submission-without-format",
-      tenantId: "tenant-devflow",
-      eventId: "devflow-conf-2027",
-      title: "A submission",
-      abstract: "An abstract",
-      answers: { track: "Platform & Infra" },
-      participants: [],
-      status: "submitted",
-      version: 1,
-      submittedAt: null,
-      updatedAt: "2027-01-02T12:00:00.000Z",
-      reopenedAt: null,
-    };
-    expect(mapServerSubmission(record)).toMatchObject({
+  it("uses stored taxonomy answers and an em dash only when a canonical field is absent", () => {
+    const record = mapCanonicalSubmission({
+      ...canonicalEnvelope,
+      submission: {
+        ...canonicalEnvelope.submission,
+        answers: { ...canonicalEnvelope.submission.answers, format: undefined },
+      },
+    });
+    expect(record).toMatchObject({
       track: "Platform & Infra",
       format: "—",
     });

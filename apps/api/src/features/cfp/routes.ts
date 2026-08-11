@@ -22,7 +22,13 @@ export interface CfpRouteEnvironment {
 export interface CfpRouteService
   extends Pick<
       CfpService,
-      "saveEvent" | "saveForm" | "createDraft" | "saveDraft" | "review" | "submit"
+      | "saveEvent"
+      | "saveForm"
+      | "createDraft"
+      | "saveDraft"
+      | "review"
+      | "submit"
+      | "listOrganizerSubmissions"
     >,
     Partial<
       Pick<
@@ -337,6 +343,14 @@ export function createCfpRoutes(dependencies: CfpRouteDependencies): Hono<CfpRou
     }
     return context.json({ data });
   });
+  routes.get("/submissions", async (context) => {
+    organizer(context, routeParam(context, "organizationId"));
+    const data = await dependencies.service.listOrganizerSubmissions({
+      tenantId: routeParam(context, "organizationId"),
+      eventId: routeParam(context, "eventId"),
+    });
+    return context.json({ data });
+  });
 
   routes.get("/submissions/:submissionId", async (context) => {
     const principal = applicant(context);
@@ -346,6 +360,7 @@ export function createCfpRoutes(dependencies: CfpRouteDependencies): Hono<CfpRou
     }
     const data = await service.call(dependencies.service, {
       tenantId: routeParam(context, "organizationId"),
+      eventId: routeParam(context, "eventId"),
       submissionId: routeParam(context, "submissionId"),
       ownerAccountId: principal.userId,
     });
@@ -359,6 +374,7 @@ export function createCfpRoutes(dependencies: CfpRouteDependencies): Hono<CfpRou
     }
     const data = await service.call(dependencies.service, {
       tenantId: routeParam(context, "organizationId"),
+      eventId: routeParam(context, "eventId"),
       submissionId: routeParam(context, "submissionId"),
       ownerAccountId: principal.userId,
     });
@@ -372,6 +388,7 @@ export function createCfpRoutes(dependencies: CfpRouteDependencies): Hono<CfpRou
     }
     const data = await service.call(dependencies.service, {
       tenantId: routeParam(context, "organizationId"),
+      eventId: routeParam(context, "eventId"),
       submissionId: routeParam(context, "submissionId"),
       ownerAccountId: principal.userId,
     });
@@ -447,6 +464,7 @@ export function createCfpRoutes(dependencies: CfpRouteDependencies): Hono<CfpRou
     const input = await body(context, saveDraftSchema);
     const data = await dependencies.service.saveDraft({
       tenantId: routeParam(context, "organizationId"),
+      eventId: routeParam(context, "eventId"),
       submissionId: routeParam(context, "submissionId"),
       ownerAccountId: principal.userId,
       idempotencyKey: idempotencyKey(context),
@@ -509,6 +527,7 @@ export function createCfpRoutes(dependencies: CfpRouteDependencies): Hono<CfpRou
     const input = await body(context, saveParticipantsSchema);
     const data = await dependencies.service.saveDraft({
       tenantId: routeParam(context, "organizationId"),
+      eventId: routeParam(context, "eventId"),
       submissionId: routeParam(context, "submissionId"),
       ownerAccountId: principal.userId,
       idempotencyKey: idempotencyKey(context),
@@ -527,6 +546,7 @@ export function createCfpRoutes(dependencies: CfpRouteDependencies): Hono<CfpRou
     const principal = applicant(context);
     const data = await dependencies.service.review({
       tenantId: routeParam(context, "organizationId"),
+      eventId: routeParam(context, "eventId"),
       submissionId: routeParam(context, "submissionId"),
       ownerAccountId: principal.userId,
       idempotencyKey: idempotencyKey(context),
@@ -539,6 +559,7 @@ export function createCfpRoutes(dependencies: CfpRouteDependencies): Hono<CfpRou
     const input = await body(context, submitSchema);
     const data = await dependencies.service.submit({
       tenantId: routeParam(context, "organizationId"),
+      eventId: routeParam(context, "eventId"),
       submissionId: routeParam(context, "submissionId"),
       ownerAccountId: principal.userId,
       idempotencyKey: idempotencyKey(context),
@@ -647,6 +668,7 @@ export function createCfpPublicRoutes(
       }
       const data = await service.call(dependencies.service, {
         tenantId: routeParam(context, "organizationId"),
+        eventId: routeParam(context, "eventId"),
         submissionId: routeParam(context, "submissionId"),
         ownerAccountId: principal.userId,
       });
@@ -664,6 +686,7 @@ export function createCfpPublicRoutes(
       }
       const data = await service.call(dependencies.service, {
         tenantId: routeParam(context, "organizationId"),
+        eventId: routeParam(context, "eventId"),
         submissionId: routeParam(context, "submissionId"),
         ownerAccountId: principal.userId,
       });
@@ -680,6 +703,7 @@ export function createCfpPublicRoutes(
       }
       const data = await service.call(dependencies.service, {
         tenantId: routeParam(context, "organizationId"),
+        eventId: routeParam(context, "eventId"),
         submissionId: routeParam(context, "submissionId"),
         ownerAccountId: principal.userId,
       });
