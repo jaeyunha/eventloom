@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { InMemoryEvaluationRepository, InMemorySubmissionReviewSource } from "./repository";
 import {
   createEvaluationRoutes,
@@ -805,6 +805,8 @@ describe("evaluation HTTP routes", () => {
   });
 
   it("exports a stable, formula-safe organizer CSV without crossing tenants", async () => {
+    const getAggregate = vi.spyOn(EvaluationService.prototype, "getAggregate");
+    const listAggregates = vi.spyOn(EvaluationService.prototype, "listAggregates");
     const app = createTestApp({}, {}, [
       {
         id: "submission-1",
@@ -841,6 +843,10 @@ describe("evaluation HTTP routes", () => {
     expect(firstText).toContain("submission-1");
     expect(firstText).toContain("submission-1,'=2+3,'@attacker");
     expect(otherTenant.status).toBe(404);
+    expect(getAggregate).not.toHaveBeenCalled();
+    expect(listAggregates).toHaveBeenCalledTimes(2);
+    getAggregate.mockRestore();
+    listAggregates.mockRestore();
   });
 
   it("only sends outstanding reminders through the injected communications boundary", async () => {
