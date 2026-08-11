@@ -7,10 +7,8 @@ import styles from "./embed.module.css";
 import {
   filterAgendaEntries,
   formatPublishedDateTimeRange,
-  formatPublishedTime,
   publicAgendaDays,
-  publishedEntrySpeakerNames,
-  publishedEntrySpeakers,
+  publishedEntryPresenters,
   uniqueSorted,
 } from "./model";
 import type {
@@ -26,23 +24,6 @@ function uniqueValues(values: readonly string[]): readonly string[] {
   );
 }
 
-function speakerForEntryName(
-  entry: PublishedAgendaEntry,
-  name: string,
-  speakers: readonly PublishedSpeaker[],
-): PublishedSpeaker | undefined {
-  const normalizedName = name.trim().toLocaleLowerCase();
-  return publishedEntrySpeakers(entry, speakers).find(
-    (speaker) => speaker.displayName.trim().toLocaleLowerCase() === normalizedName,
-  );
-}
-
-function entrySpeakerNames(
-  entry: PublishedAgendaEntry,
-  speakers: readonly PublishedSpeaker[],
-): readonly string[] {
-  return publishedEntrySpeakerNames(entry, speakers);
-}
 
 function speakerRole(speaker: PublishedSpeaker): string {
   const jobTitle = speaker.jobTitle?.trim() ?? "";
@@ -54,13 +35,12 @@ function entrySearchText(
   entry: PublishedAgendaEntry,
   speakers: readonly PublishedSpeaker[],
 ): string {
-  const names = entrySpeakerNames(entry, speakers);
-  const speakerDetails = publishedEntrySpeakers(entry, speakers).flatMap((speaker) => [
-    speaker.jobTitle,
-    speaker.organization,
-    speaker.biography,
-  ]);
-  return [entry.title, ...names, ...speakerDetails]
+  const presenters = publishedEntryPresenters(entry, speakers);
+  const speakerDetails = presenters.flatMap((presenter) => {
+    const speaker = presenter.speaker;
+    return speaker ? [speaker.jobTitle, speaker.organization, speaker.biography] : [];
+  });
+  return [entry.title, ...presenters.map((presenter) => presenter.displayName), ...speakerDetails]
     .filter((value): value is string => Boolean(value))
     .join(" ")
     .toLocaleLowerCase();
@@ -80,7 +60,7 @@ export function PublicAgendaSessionDetail({
   speakers?: readonly PublishedSpeaker[];
 }>) {
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
-  const names = entrySpeakerNames(entry, speakers);
+  const presenters = publishedEntryPresenters(entry, speakers);
   const hasDescription = entry.summary.trim().length > 0;
   const hasLongDescription = entry.summary.length > 320;
   return (
@@ -134,24 +114,22 @@ export function PublicAgendaSessionDetail({
               {descriptionExpanded ? "Show less" : "Show more"}
             </button>
           ) : null}
-          {names.length > 0 ? (
+          {presenters.length > 0 ? (
             <div className={styles.publicSpeakers}>
               <strong>Speakers</strong>
               <ul>
-                {names.map((name) => {
-                  const speaker = speakerForEntryName(entry, name, speakers);
-                  return (
-                    <li key={name}>
-                      {speaker ? (
-                        <>
-                          <span>{speaker.displayName}</span> <span>({speakerRole(speaker)})</span>
-                        </>
-                      ) : (
-                        name
-                      )}
-                    </li>
-                  );
-                })}
+                {presenters.map((presenter) => (
+                  <li key={presenter.key}>
+                    {presenter.speaker ? (
+                      <>
+                        <span>{presenter.displayName}</span>{" "}
+                        <span>({speakerRole(presenter.speaker)})</span>
+                      </>
+                    ) : (
+                      presenter.displayName
+                    )}
+                  </li>
+                ))}
               </ul>
             </div>
           ) : null}
@@ -440,59 +418,61 @@ export function PublicAgendaView({ program }: Readonly<{ program: PublishedProgr
                   </div>
                 ) : (
                   <ol className={styles.publicSessionList}>
-                    {agendaDay.entries.map((entry) => (
-                      <li key={entry.id}>
-                        <button
-                          className={styles.publicSessionCard}
-                          type="button"
-                          aria-labelledby={`agenda-entry-${entry.id}`}
-                          aria-haspopup="dialog"
-                          onClick={(event) => openEntry(entry.id, event.currentTarget)}
-                        >
-                          <div className={styles.publicSessionTime}>
-                            <time dateTime={entry.startsAt}>
-                              {formatPublishedTime(entry.startsAt, displayTimeZone)}
-                            </time>
-                            <span aria-hidden="true">to</span>
-                            <time dateTime={entry.endsAt}>
-                              {formatPublishedTime(entry.endsAt, displayTimeZone)}
-                            </time>
-                          </div>
-                          <div className={styles.publicSessionCopy}>
-                            <div className={styles.publicSessionMeta}>
-                              {entry.format.trim() ? <span>Format: {entry.format}</span> : null}
-                              {entry.trackNames
-                                .filter((trackName) => trackName.trim().length > 0)
-                                .map((trackName) => (
-                                  <span key={trackName}>Track: {trackName}</span>
-                                ))}
+                    {agendaDay.entries.map((entry) => {
+                      const presenters = publishedEntryPresenters(entry, speakers);
+                      return (
+                        <li key={entry.id}>
+                          <button
+                            className={styles.publicSessionCard}
+                            type="button"
+                            aria-labelledby={`agenda-entry-${entry.id}`}
+                            aria-haspopup="dialog"
+                            onClick={(event) => openEntry(entry.id, event.currentTarget)}
+                          >
+                            <div className={styles.publicSessionTime}>
+                              <time dateTime={entry.startsAt}>
+                                {formatPublishedDateTimeRange(
+                                  entry.startsAt,
+                                  entry.endsAt,
+                                  displayTimeZone,
+                                )}
+                              </time>
                             </div>
-                            <h4 id={`agenda-entry-${entry.id}`}>{entry.title}</h4>
-                            {entrySpeakerNames(entry, speakers).length > 0 ? (
-                              <p className={styles.publicSpeakers}>
-                                Presented by{" "}
-                                {entrySpeakerNames(entry, speakers).map((name, index) => {
-                                  const speaker = speakerForEntryName(entry, name, speakers);
-                                  return (
-                                    <span key={name}>
+                            <div className={styles.publicSessionCopy}>
+                              <div className={styles.publicSessionMeta}>
+                                {entry.format.trim() ? <span>Format: {entry.format}</span> : null}
+                                {entry.trackNames
+                                  .filter((trackName) => trackName.trim().length > 0)
+                                  .map((trackName) => (
+                                    <span key={trackName}>Track: {trackName}</span>
+                                  ))}
+                              </div>
+                              <h4 id={`agenda-entry-${entry.id}`}>{entry.title}</h4>
+                              {presenters.length > 0 ? (
+                                <p className={styles.publicSpeakers}>
+                                  Presented by{" "}
+                                  {presenters.map((presenter, index) => (
+                                    <span key={presenter.key}>
                                       {index > 0 ? ", " : null}
-                                      {speaker
-                                        ? `${speaker.displayName} (${speakerRole(speaker)})`
-                                        : name}
+                                      {presenter.speaker
+                                        ? `${presenter.displayName} (${speakerRole(
+                                            presenter.speaker,
+                                          )})`
+                                        : presenter.displayName}
                                     </span>
-                                  );
-                                })}
-                              </p>
-                            ) : null}
-                            <p>{entry.summary || "No description was published."}</p>
-                          </div>
-                          <div className={styles.publicRoom}>
-                            <span>Room</span>
-                            <strong>{entry.roomName || "Room not published"}</strong>
-                          </div>
-                        </button>
-                      </li>
-                    ))}
+                                  ))}
+                                </p>
+                              ) : null}
+                              <p>{entry.summary || "No description was published."}</p>
+                            </div>
+                            <div className={styles.publicRoom}>
+                              <span>Room</span>
+                              <strong>{entry.roomName || "Room not published"}</strong>
+                            </div>
+                          </button>
+                        </li>
+                      );
+                    })}
                   </ol>
                 )}
               </section>

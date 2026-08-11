@@ -2,11 +2,7 @@
 
 import { useMemo, useState } from "react";
 import styles from "./embed.module.css";
-import {
-  formatPublishedTime,
-  publishedEntrySpeakerNames,
-  publishedEntrySpeakers,
-} from "./model";
+import { formatPublishedDateTimeRange, publishedEntryPresenters } from "./model";
 import type { PublishedAgendaEntry, PublishedProgram, PublishedSpeaker } from "./types";
 
 const DESCRIPTION_LIMIT = 190;
@@ -24,20 +20,6 @@ function truncateDescription(value: string): string {
   return `${value.slice(0, DESCRIPTION_LIMIT).trimEnd()}…`;
 }
 
-function formatDateTime(value: string, timeZone: string): string {
-  const instant = new Date(value);
-  if (Number.isNaN(instant.valueOf())) {
-    return value;
-  }
-  return new Intl.DateTimeFormat("en-US", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-    timeZone,
-  }).format(instant);
-}
 function compareStarts(left: PublishedAgendaEntry, right: PublishedAgendaEntry): number {
   const leftStart = Date.parse(left.startsAt);
   const rightStart = Date.parse(right.startsAt);
@@ -47,28 +29,17 @@ function compareStarts(left: PublishedAgendaEntry, right: PublishedAgendaEntry):
   return left.startsAt.localeCompare(right.startsAt);
 }
 
-function speakerForEntryName(
-  entry: PublishedAgendaEntry,
-  name: string,
-  speakers: readonly PublishedSpeaker[],
-): PublishedSpeaker | undefined {
-  const normalizedName = name.trim().toLocaleLowerCase();
-  return publishedEntrySpeakers(entry, speakers).find(
-    (speaker) => speaker.displayName.trim().toLocaleLowerCase() === normalizedName,
-  );
-}
 
 function entrySearchText(
   entry: PublishedAgendaEntry,
   speakers: readonly PublishedSpeaker[],
 ): string {
-  const names = publishedEntrySpeakerNames(entry, speakers);
-  const speakerDetails = publishedEntrySpeakers(entry, speakers).flatMap((speaker) => [
-    speaker.jobTitle,
-    speaker.organization,
-    speaker.biography,
-  ]);
-  return [entry.title, ...names, ...speakerDetails]
+  const presenters = publishedEntryPresenters(entry, speakers);
+  const speakerDetails = presenters.flatMap((presenter) => {
+    const speaker = presenter.speaker;
+    return speaker ? [speaker.jobTitle, speaker.organization, speaker.biography] : [];
+  });
+  return [entry.title, ...presenters.map((presenter) => presenter.displayName), ...speakerDetails]
     .filter((value): value is string => Boolean(value))
     .join(" ")
     .toLocaleLowerCase();
@@ -237,7 +208,7 @@ export function PublicSessionsView({ program }: Readonly<{ program: PublishedPro
       ) : (
         <ol className={styles.publicSessionList}>
           {entries.map((entry) => {
-            const names = publishedEntrySpeakerNames(entry, speakers.speakers);
+            const presenters = publishedEntryPresenters(entry, speakers.speakers);
             const isExpanded = expanded.has(entry.id);
             const hasLongDescription = entry.summary.length > DESCRIPTION_LIMIT;
             const hasDescription = entry.summary.trim().length > 0;
@@ -249,12 +220,12 @@ export function PublicSessionsView({ program }: Readonly<{ program: PublishedPro
                 >
                   <div className={styles.publicSessionTime}>
                     <time dateTime={entry.startsAt}>
-                      {formatDateTime(entry.startsAt, agenda.event.timeZone)}
+                      {formatPublishedDateTimeRange(
+                        entry.startsAt,
+                        entry.endsAt,
+                        agenda.event.timeZone,
+                      )}
                     </time>
-                    <span>
-                      {formatPublishedTime(entry.startsAt, agenda.event.timeZone)} –{" "}
-                      {formatPublishedTime(entry.endsAt, agenda.event.timeZone)}
-                    </span>
                   </div>
                   <div className={styles.publicSessionCopy}>
                     <div className={styles.publicSessionMeta}>
@@ -266,25 +237,22 @@ export function PublicSessionsView({ program }: Readonly<{ program: PublishedPro
                         ))}
                     </div>
                     <h3>{entry.title}</h3>
-                    {names.length > 0 ? (
+                    {presenters.length > 0 ? (
                       <div className={styles.publicSpeakers}>
                         <strong>Speakers</strong>
                         <ul>
-                          {names.map((name) => {
-                            const speaker = speakerForEntryName(entry, name, speakers.speakers);
-                            return (
-                              <li key={name}>
-                                {speaker ? (
-                                  <>
-                                    <span>{speaker.displayName}</span>{" "}
-                                    <span>({speakerRole(speaker)})</span>
-                                  </>
-                                ) : (
-                                  name
-                                )}
-                              </li>
-                            );
-                          })}
+                          {presenters.map((presenter) => (
+                            <li key={presenter.key}>
+                              {presenter.speaker ? (
+                                <>
+                                  <span>{presenter.displayName}</span>{" "}
+                                  <span>({speakerRole(presenter.speaker)})</span>
+                                </>
+                              ) : (
+                                presenter.displayName
+                              )}
+                            </li>
+                          ))}
                         </ul>
                       </div>
                     ) : (

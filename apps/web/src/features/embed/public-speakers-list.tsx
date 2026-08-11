@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import styles from "./embed.module.css";
 import {
   formatPublishedDateTimeRange,
@@ -88,7 +88,7 @@ function SpeakerEntry({
   eventSlug: string;
   speaker: PublishedSpeaker;
   program: PublishedProgram;
-  onSelect?: () => void;
+  onSelect?: (target: HTMLButtonElement) => void;
 }>) {
   const [biographyExpanded, setBiographyExpanded] = useState(false);
   const biography = speaker.biography.trim();
@@ -116,7 +116,8 @@ function SpeakerEntry({
             {onSelect ? (
               <button
                 type="button"
-                onClick={onSelect}
+                id={`speaker-list-trigger-${speaker.id}`}
+                onClick={(event) => onSelect(event.currentTarget)}
                 style={{
                   padding: 0,
                   border: 0,
@@ -204,6 +205,8 @@ function SpeakerEntry({
 export function PublicSpeakersListView({ program }: Readonly<{ program: PublishedProgram }>) {
   const [query, setQuery] = useState("");
   const [selectedSpeakerId, setSelectedSpeakerId] = useState<string | null>(null);
+  const backButtonRef = useRef<HTMLButtonElement>(null);
+  const returnFocusRef = useRef<HTMLButtonElement | null>(null);
   const speakers = useMemo(() => {
     const sorted = sortSpeakersBySurname(program.speakers.speakers);
     return sorted.filter((speaker) => speakerMatchesName(speaker, query));
@@ -212,6 +215,26 @@ export function PublicSpeakersListView({ program }: Readonly<{ program: Publishe
     ? program.speakers.speakers.find((speaker) => speaker.id === selectedSpeakerId)
     : undefined;
   const totalSpeakers = program.speakers.speakers.length;
+
+  useEffect(() => {
+    if (selectedSpeaker) {
+      backButtonRef.current?.focus();
+      return;
+    }
+    const returnFocusTarget = returnFocusRef.current;
+    if (returnFocusTarget?.isConnected) {
+      returnFocusTarget.focus();
+    } else if (returnFocusTarget?.id) {
+      document.getElementById(returnFocusTarget.id)?.focus();
+    }
+    returnFocusRef.current = null;
+  }, [selectedSpeaker]);
+
+  const openSpeaker = (speakerId: string, target: HTMLButtonElement) => {
+    returnFocusRef.current = target;
+    setSelectedSpeakerId(speakerId);
+  };
+  const closeSpeaker = () => setSelectedSpeakerId(null);
 
   if (selectedSpeaker) {
     return (
@@ -223,9 +246,10 @@ export function PublicSpeakersListView({ program }: Readonly<{ program: Publishe
             <p>Published profile and sessions from the current program projection.</p>
           </div>
           <button
+            ref={backButtonRef}
             className={styles.clearButton}
             type="button"
-            onClick={() => setSelectedSpeakerId(null)}
+            onClick={closeSpeaker}
           >
             Back to speakers
           </button>
@@ -297,7 +321,7 @@ export function PublicSpeakersListView({ program }: Readonly<{ program: Publishe
               eventSlug={program.agenda.event.slug}
               speaker={speaker}
               program={program}
-              onSelect={() => setSelectedSpeakerId(speaker.id)}
+              onSelect={(target) => openSpeaker(speaker.id, target)}
             />
           ))}
         </ul>

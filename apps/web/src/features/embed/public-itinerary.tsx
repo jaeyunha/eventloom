@@ -3,10 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 import styles from "./embed.module.css";
 import {
+  formatPublishedDateTimeRange,
   formatPublishedTime,
   publicAgendaDays,
-  publishedEntrySpeakerNames,
-  publishedEntrySpeakers,
+  publishedEntryPresenters,
 } from "./model";
 import type { PublishedAgendaEntry, PublishedProgram, PublishedSpeaker } from "./types";
 
@@ -37,18 +37,6 @@ function eventDateKey(value: string, timeZone: string): string {
   return `${valueFor("year")}-${valueFor("month")}-${valueFor("day")}`;
 }
 
-function formatDateTimeRange(entry: PublishedAgendaEntry, timeZone: string): string {
-  const instant = new Date(entry.startsAt);
-  if (Number.isNaN(instant.valueOf())) return `${entry.startsAt} – ${entry.endsAt}`;
-  const date = new Intl.DateTimeFormat("en-US", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-    timeZone,
-  }).format(instant);
-  return `${date} · ${formatPublishedTime(entry.startsAt, timeZone)} – ${formatPublishedTime(entry.endsAt, timeZone)}`;
-}
 function eventBoundaryTimestamp(value: string): number | null {
   const normalized = value.trim();
   if (!/^\d{4}-\d{2}-\d{2}$/u.test(normalized)) return null;
@@ -108,16 +96,6 @@ function publicEventDays(
   return days.sort((left, right) => left.date.localeCompare(right.date));
 }
 
-function speakerForEntryName(
-  entry: PublishedAgendaEntry,
-  name: string,
-  speakers: readonly PublishedSpeaker[],
-): PublishedSpeaker | undefined {
-  const normalizedName = name.trim().toLocaleLowerCase();
-  return publishedEntrySpeakers(entry, speakers).find(
-    (speaker) => speaker.displayName.trim().toLocaleLowerCase() === normalizedName,
-  );
-}
 
 function speakerRole(speaker: PublishedSpeaker): string {
   const jobTitle = speaker.jobTitle?.trim() ?? "";
@@ -131,13 +109,12 @@ function entryMatchesQuery(
   query: string,
 ): boolean {
   if (!query) return true;
-  const names = publishedEntrySpeakerNames(entry, speakers);
-  const speakerDetails = publishedEntrySpeakers(entry, speakers).flatMap((speaker) => [
-    speaker.jobTitle,
-    speaker.organization,
-    speaker.biography,
-  ]);
-  return [entry.title, ...names, ...speakerDetails]
+  const presenters = publishedEntryPresenters(entry, speakers);
+  const speakerDetails = presenters.flatMap((presenter) => {
+    const speaker = presenter.speaker;
+    return speaker ? [speaker.jobTitle, speaker.organization, speaker.biography] : [];
+  });
+  return [entry.title, ...presenters.map((presenter) => presenter.displayName), ...speakerDetails]
     .filter((value): value is string => Boolean(value))
     .join(" ")
     .toLocaleLowerCase()
@@ -558,7 +535,7 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
                       <h4 id={`itinerary-time-${day.date}-${time}`}>{time}</h4>
                       <ol className={styles.publicSessionList}>
                         {entries.map((entry) => {
-                          const names = publishedEntrySpeakerNames(
+                          const presenters = publishedEntryPresenters(
                             entry,
                             program.speakers.speakers,
                           );
@@ -572,7 +549,11 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
                               <article className={styles.publicSessionCard}>
                                 <div className={styles.publicSessionTime}>
                                   <time dateTime={entry.startsAt}>
-                                    {formatDateTimeRange(entry, agenda.event.timeZone)}
+                                    {formatPublishedDateTimeRange(
+                                      entry.startsAt,
+                                      entry.endsAt,
+                                      agenda.event.timeZone,
+                                    )}
                                   </time>
                                 </div>
                                 <div className={styles.publicSessionCopy}>
@@ -617,22 +598,17 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
                                   <p className={styles.publicSpeakers}>
                                     <strong>Speakers</strong>
                                   </p>
-                                  {names.length > 0 ? (
+                                  {presenters.length > 0 ? (
                                     <ul>
-                                      {names.map((name) => {
-                                        const speaker = speakerForEntryName(
-                                          entry,
-                                          name,
-                                          speakers.speakers,
-                                        );
-                                        return (
-                                          <li key={name}>
-                                            {speaker
-                                              ? `${speaker.displayName} (${speakerRole(speaker)})`
-                                              : name}
-                                          </li>
-                                        );
-                                      })}
+                                      {presenters.map((presenter) => (
+                                        <li key={presenter.key}>
+                                          {presenter.speaker
+                                            ? `${presenter.displayName} (${speakerRole(
+                                                presenter.speaker,
+                                              )})`
+                                            : presenter.displayName}
+                                        </li>
+                                      ))}
                                     </ul>
                                   ) : (
                                     <p>No speakers listed</p>
@@ -653,7 +629,11 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
                                   >
                                     <p>
                                       <strong>Session details:</strong>{" "}
-                                      {formatDateTimeRange(entry, agenda.event.timeZone)}
+                                      {formatPublishedDateTimeRange(
+                                        entry.startsAt,
+                                        entry.endsAt,
+                                        agenda.event.timeZone,
+                                      )}
                                     </p>
                                     <p>
                                       <strong>Room:</strong>{" "}
