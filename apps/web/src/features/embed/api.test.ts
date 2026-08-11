@@ -129,20 +129,94 @@ describe("public embed API", () => {
     });
     expect(calls[2]?.init?.next).toBeUndefined();
   });
-  it("rejects persistent revision skew after refreshing only the lower revision", async () => {
+
+  it.each(["agenda", "speakers"] as const)(
+    "recovers when a refreshed %s projection overtakes the retained revision",
+    async (lowerProjection) => {
+      const revision2 = {
+        ...publishedAgenda.revision,
+        id: "revision_2",
+        number: 2,
+      };
+      const revision4 = {
+        ...publishedAgenda.revision,
+        id: "revision_4",
+        number: 4,
+        publishedAt: "2026-08-08T13:00:00.000Z",
+      };
+      const staleAgenda = { ...publishedAgenda, revision: revision2 };
+      const staleSpeakers = { ...publishedSpeakers, revision: revision2 };
+      const refreshedAgenda = { ...publishedAgenda, revision: revision4 };
+      const refreshedSpeakers = { ...publishedSpeakers, revision: revision4 };
+      const reads = { agenda: 0, speakers: 0 };
+      const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+      const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+        calls.push({ input, ...(init === undefined ? {} : { init }) });
+        const projection = String(input).endsWith("/agenda") ? "agenda" : "speakers";
+        reads[projection] += 1;
+        const firstRead = reads[projection] === 1;
+        const data =
+          projection === "agenda"
+            ? firstRead && lowerProjection === "agenda"
+              ? staleAgenda
+              : firstRead
+                ? publishedAgenda
+                : refreshedAgenda
+            : firstRead && lowerProjection === "speakers"
+              ? staleSpeakers
+              : firstRead
+                ? publishedSpeakers
+                : refreshedSpeakers;
+        return Response.json({ data });
+      };
+
+      await expect(
+        getPublishedProgram(
+          "https://open-sessionboard-web-staging.ashleyha0317.workers.dev",
+          "open-systems",
+          fetcher,
+        ),
+      ).resolves.toEqual({ agenda: refreshedAgenda, speakers: refreshedSpeakers });
+      expect(calls).toHaveLength(4);
+      expect(calls.map(({ init }) => init?.cache)).toEqual([
+        "force-cache",
+        "force-cache",
+        "no-store",
+        "no-store",
+      ]);
+      expect(String(calls[2]?.input)).toMatch(new RegExp(`/${lowerProjection}$`, "u"));
+      expect(String(calls[3]?.input)).toMatch(
+        new RegExp(`/${lowerProjection === "agenda" ? "speakers" : "agenda"}$`, "u"),
+      );
+    },
+  );
+  it("fails closed when the retained projection does not catch an overtaking revision", async () => {
     const staleSpeakers: PublishedSpeakerGallery = {
       ...publishedSpeakers,
       revision: { ...publishedSpeakers.revision, id: "revision_2", number: 2 },
     };
+    const overtakingSpeakers: PublishedSpeakerGallery = {
+      ...publishedSpeakers,
+      revision: {
+        ...publishedSpeakers.revision,
+        id: "revision_4",
+        number: 4,
+        publishedAt: "2026-08-08T13:00:00.000Z",
+      },
+    };
+    let speakerReads = 0;
     const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
     const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
       calls.push({ input, ...(init === undefined ? {} : { init }) });
-      return new Response(
-        JSON.stringify({
-          data: String(input).endsWith("/agenda") ? publishedAgenda : staleSpeakers,
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
+      const speakers = String(input).endsWith("/speakers");
+      if (speakers) speakerReads += 1;
+      return Response.json({
+        data: speakers
+          ? speakerReads === 1
+            ? staleSpeakers
+            : overtakingSpeakers
+          : publishedAgenda,
+      });
     };
 
     await expect(
@@ -155,10 +229,11 @@ describe("public embed API", () => {
       code: "PUBLICATION_REVISION_MISMATCH",
       status: 409,
     });
-    expect(calls).toHaveLength(3);
+    expect(calls).toHaveLength(4);
     expect(calls.map(({ init }) => init?.cache)).toEqual([
       "force-cache",
       "force-cache",
+      "no-store",
       "no-store",
     ]);
   });

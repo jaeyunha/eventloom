@@ -74,6 +74,70 @@ describe("local public embed demo projections", () => {
     }
   });
 
+  it.each([
+    [401, "UNAUTHORIZED"],
+    [500, "INTERNAL_ERROR"],
+  ] as const)(
+    "does not let a fast local 404 mask a slower %i paired failure",
+    async (status, code) => {
+      const calls: Array<RequestInfo | URL> = [];
+      const fetcher = async (input: RequestInfo | URL) => {
+        calls.push(input);
+        if (String(input).endsWith("/agenda")) {
+          return Response.json(
+            { error: { code: "PUBLICATION_NOT_FOUND", message: "No published agenda." } },
+            { status: 404 },
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        return Response.json(
+          { error: { code, message: "The speaker projection failed." } },
+          { status },
+        );
+      };
+
+      await expect(
+        getPublishedProgramOrLocalDemo(
+          "http://localhost:8787",
+          "open-sessionboard-conf",
+          "local",
+          fetcher,
+        ),
+      ).rejects.toMatchObject({ code, status });
+      expect(calls).toHaveLength(2);
+    },
+  );
+
+  it("does not replace a successful real projection when its pair permits local fallback", async () => {
+    const publishedAgenda = createLocalDemoAgenda("published-event");
+    publishedAgenda.event.name = "Published by the API";
+    const calls: Array<RequestInfo | URL> = [];
+    const fetcher = async (input: RequestInfo | URL) => {
+      calls.push(input);
+      if (String(input).endsWith("/agenda")) {
+        return Response.json({ data: publishedAgenda });
+      }
+      return Response.json(
+        { error: { code: "INTEGRATION_UNAVAILABLE", message: "Projection unavailable." } },
+        { status: 503 },
+      );
+    };
+
+    await expect(
+      getPublishedProgramOrLocalDemo(
+        "http://localhost:8787",
+        "published-event",
+        "local",
+        fetcher,
+      ),
+    ).rejects.toMatchObject({
+      code: "INTEGRATION_UNAVAILABLE",
+      status: 503,
+      agendaError: undefined,
+    });
+    expect(calls).toHaveLength(2);
+  });
+
   it("does not mask a publication mismatch with the local demo", async () => {
     const agenda = createLocalDemoAgenda("open-sessionboard-conf");
     const staleSpeakers = {

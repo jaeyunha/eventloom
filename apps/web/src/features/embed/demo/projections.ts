@@ -1,4 +1,9 @@
-import { getPublishedProgram, PublicEmbedApiError, publishedProgramFromProjections } from "../api";
+import {
+  getPublishedProgram,
+  PublicEmbedApiError,
+  PublicEmbedProgramLoadError,
+  publishedProgramFromProjections,
+} from "../api";
 import type {
   PublishedAgenda,
   PublishedEvent,
@@ -141,10 +146,19 @@ export function shouldUseLocalEmbedDemoForError(
   appEnv: string | undefined,
   error: unknown,
 ): boolean {
+  if (!isLocalEmbedDemoEnvironment(appEnv)) {
+    return false;
+  }
+  if (error instanceof PublicEmbedProgramLoadError) {
+    return (
+      error.agendaError instanceof PublicEmbedApiError &&
+      (error.agendaError.status === 404 || error.agendaError.status === 503) &&
+      error.speakersError instanceof PublicEmbedApiError &&
+      (error.speakersError.status === 404 || error.speakersError.status === 503)
+    );
+  }
   return (
-    isLocalEmbedDemoEnvironment(appEnv) &&
-    error instanceof PublicEmbedApiError &&
-    (error.status === 404 || error.status === 503)
+    error instanceof PublicEmbedApiError && (error.status === 404 || error.status === 503)
   );
 }
 

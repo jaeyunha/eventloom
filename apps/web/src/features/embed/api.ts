@@ -18,6 +18,28 @@ export class PublicEmbedApiError extends Error {
     this.traceId = traceId;
   }
 }
+export class PublicEmbedProgramLoadError extends PublicEmbedApiError {
+  readonly agendaError: unknown;
+  readonly speakersError: unknown;
+
+  constructor(agendaError: unknown, speakersError: unknown) {
+    const errors = [agendaError, speakersError].filter(
+      (error): error is PublicEmbedApiError => error instanceof PublicEmbedApiError,
+    );
+    const primary =
+      errors.find((error) => error.status !== 404 && error.status !== 503) ?? errors[0];
+
+    super(
+      primary?.code ?? "PUBLIC_EMBED_UNAVAILABLE",
+      primary?.message ?? "The published event views are not available.",
+      primary?.status ?? 503,
+      primary?.traceId,
+    );
+    this.name = "PublicEmbedProgramLoadError";
+    this.agendaError = agendaError;
+    this.speakersError = speakersError;
+  }
+}
 
 type PublicFetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 type PublicEmbedEnvironment = "local" | "staging" | "production" | undefined;
@@ -205,8 +227,10 @@ export function getPublishedProgram(
   fetcher: PublicFetcher = fetch,
   appEnvironment?: string,
 ): Promise<PublishedProgram> {
-  const loadPair = (bypassCache: boolean) =>
-    Promise.all([
+  const loadPair = async (
+    bypassCache: boolean,
+  ): Promise<[PublishedAgenda, PublishedSpeakerGallery]> => {
+    const [agenda, speakers] = await Promise.allSettled([
       getPublishedProjection<PublishedAgenda>(
         baseUrl,
         eventSlug,
@@ -224,6 +248,14 @@ export function getPublishedProgram(
         bypassCache,
       ),
     ]);
+    if (agenda.status === "fulfilled" && speakers.status === "fulfilled") {
+      return [agenda.value, speakers.value];
+    }
+    throw new PublicEmbedProgramLoadError(
+      agenda.status === "rejected" ? agenda.reason : undefined,
+      speakers.status === "rejected" ? speakers.reason : undefined,
+    );
+  };
   return loadPair(false).then(async ([agenda, speakers]) => {
     if (publishedProjectionsMatch(agenda, speakers)) {
       return { agenda, speakers };
@@ -238,6 +270,17 @@ export function getPublishedProgram(
         appEnvironment,
         true,
       );
+      if (refreshedAgenda.revision.number > speakers.revision.number) {
+        const refreshedSpeakers = await getPublishedProjection<PublishedSpeakerGallery>(
+          baseUrl,
+          eventSlug,
+          "speakers",
+          fetcher,
+          appEnvironment,
+          true,
+        );
+        return publishedProgramFromProjections(refreshedAgenda, refreshedSpeakers);
+      }
       return publishedProgramFromProjections(refreshedAgenda, speakers);
     }
 
@@ -250,6 +293,17 @@ export function getPublishedProgram(
         appEnvironment,
         true,
       );
+      if (refreshedSpeakers.revision.number > agenda.revision.number) {
+        const refreshedAgenda = await getPublishedProjection<PublishedAgenda>(
+          baseUrl,
+          eventSlug,
+          "agenda",
+          fetcher,
+          appEnvironment,
+          true,
+        );
+        return publishedProgramFromProjections(refreshedAgenda, refreshedSpeakers);
+      }
       return publishedProgramFromProjections(agenda, refreshedSpeakers);
     }
 
