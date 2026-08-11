@@ -24,7 +24,7 @@ git -C "$REPO" commit -m initial >/dev/null
 
 create() {
   (cd "$REPO" && OPEN_SESSIONBOARD_WORKTREE_OVERRIDE_BASE="$OVERRIDE" \
-    "$CREATE" --no-install --env-mode none "$1" main >/dev/null)
+    "$CREATE" --no-launch --no-install --env-mode none "$1" main >/dev/null)
 }
 cleanup() {
   (cd "$REPO" && OPEN_SESSIONBOARD_WORKTREE_OVERRIDE_BASE="$OVERRIDE" \
