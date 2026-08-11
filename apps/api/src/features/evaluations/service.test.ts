@@ -6,7 +6,12 @@ import {
   EvaluationService,
   type EvaluationServiceOptions,
 } from "./service";
-import type { EvaluationActor, ReviewRound, SubmissionReviewMaterial } from "./types";
+import type {
+  EvaluationActor,
+  EvaluationReviewerProjection,
+  ReviewRound,
+  SubmissionReviewMaterial,
+} from "./types";
 
 const tenantId = "tenant-1";
 const eventId = "event-1";
@@ -85,6 +90,7 @@ async function fixture(
     blindReview?: boolean;
     reviewsPerSubmission?: number;
     submissionMaterial?: SubmissionReviewMaterial;
+    reviewerProjection?: EvaluationReviewerProjection;
   } = {},
 ) {
   let currentTime = new Date(nowIso);
@@ -113,6 +119,9 @@ async function fixture(
       maxAssignmentsPerReviewer: 1,
     },
     rounds: [round],
+    ...(options.reviewerProjection === undefined
+      ? {}
+      : { reviewerProjection: options.reviewerProjection }),
   });
   const plan = await service.openPlan(organizer, draft.id, draft.version);
   return {
@@ -192,7 +201,8 @@ describe("evaluation plans and assignments", () => {
   });
 
   it("redacts identity fields and participants in blind rounds", async () => {
-    const { service } = await fixture({ blindReview: true });
+    const { plan, service } = await fixture({ blindReview: true });
+    expect(plan.reviewerProjection).toEqual({ fieldIds: [], fileIds: [] });
     const assignment = await assignOne(service);
 
     const context = await service.getReviewContext(reviewer("reviewer-1"), assignment.id);
@@ -201,8 +211,9 @@ describe("evaluation plans and assignments", () => {
       id: submission.id,
       title: submission.title,
       abstract: submission.abstract,
-      answers: { experience: "Advanced" },
+      answers: {},
       participants: [],
+      files: [],
       identityRedacted: true,
     });
     expect(JSON.stringify(context)).not.toContain("speaker@example.com");
@@ -217,7 +228,47 @@ describe("evaluation plans and assignments", () => {
 
     expect(context.submission.identityRedacted).toBe(false);
     expect(context.submission.participants[0]?.email).toBe("speaker@example.com");
-    expect(context.submission.answers).toHaveProperty("speakerEmail");
+    expect(context.submission.answers).toEqual({});
+    expect(context.submission.files).toEqual([]);
+  });
+
+  it("exposes only explicitly allowlisted answers and files", async () => {
+    const { service } = await fixture({
+      blindReview: false,
+      reviewerProjection: { fieldIds: ["experience"], fileIds: ["file-1"] },
+      submissionMaterial: {
+        ...submission,
+        files: [
+          {
+            id: "file-1",
+            name: "allowed.pdf",
+            mimeType: "application/pdf",
+            sizeBytes: 12,
+          },
+          {
+            id: "file-2",
+            name: "private.pdf",
+            mimeType: "application/pdf",
+            sizeBytes: 24,
+          },
+        ],
+      },
+    });
+    const assignment = await assignOne(service);
+
+    const context = await service.getReviewContext(reviewer("reviewer-1"), assignment.id);
+
+    expect(context.submission.answers).toEqual({ experience: "Advanced" });
+    expect(context.submission.files).toEqual([
+      {
+        id: "file-1",
+        name: "allowed.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 12,
+      },
+    ]);
+    expect(context.submission.answers).not.toHaveProperty("speakerEmail");
+    expect(JSON.stringify(context.submission)).not.toContain("private.pdf");
   });
 });
 

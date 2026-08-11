@@ -539,12 +539,11 @@ function suggestionStorageKey(tenantId: string, suggestionId: string): string {
 
 function normalizeProjection(
   projection: EvaluationReviewerProjection | undefined,
-): EvaluationReviewerProjection | undefined {
-  if (projection === undefined) return undefined;
-  const fieldIds = (projection.fieldIds ?? projection.visibleFieldIds ?? []).map((fieldId) =>
+): EvaluationReviewerProjection {
+  const fieldIds = (projection?.fieldIds ?? projection?.visibleFieldIds ?? []).map((fieldId) =>
     requireText(fieldId, "Projection field id", 100),
   );
-  const fileIds = (projection.fileIds ?? projection.visibleFileIds ?? []).map((fileId) =>
+  const fileIds = (projection?.fileIds ?? projection?.visibleFileIds ?? []).map((fileId) =>
     requireText(fileId, "Projection file id", 100),
   );
   if (new Set(fieldIds).size !== fieldIds.length || new Set(fileIds).size !== fileIds.length) {
@@ -723,7 +722,7 @@ export class EvaluationService {
       closesAt: input.closesAt,
       assignmentRule: { ...input.assignmentRule },
       rounds: structuredClone(input.rounds),
-      ...(reviewerProjection === undefined ? {} : { reviewerProjection }),
+      reviewerProjection,
       version: 1,
       createdAt: now,
       updatedAt: now,
@@ -760,10 +759,12 @@ export class EvaluationService {
     validateRounds(rounds);
     const reviewerProjectionInput =
       input.reviewerProjection ?? input.evaluatorProjection ?? input.projection;
-    const reviewerProjection =
-      reviewerProjectionInput === undefined
-        ? plan.reviewerProjection
-        : normalizeProjection(reviewerProjectionInput);
+    const reviewerProjection = normalizeProjection(
+      reviewerProjectionInput ??
+        plan.reviewerProjection ??
+        plan.evaluatorProjection ??
+        plan.projection,
+    );
     const now = this.#clock().toISOString();
     const updated: EvaluationPlan = {
       ...plan,
@@ -772,7 +773,7 @@ export class EvaluationService {
       closesAt,
       assignmentRule: { ...assignmentRule },
       rounds: structuredClone(rounds),
-      ...(reviewerProjection === undefined ? {} : { reviewerProjection }),
+      reviewerProjection,
       version: plan.version + 1,
       updatedAt: now,
     };
@@ -2158,13 +2159,15 @@ export class EvaluationService {
       ? NonNullable<T>
       : never,
   ): ReviewContext["submission"] {
-    const projection = plan.reviewerProjection ?? plan.evaluatorProjection ?? plan.projection;
+    const projection = normalizeProjection(
+      plan.reviewerProjection ?? plan.evaluatorProjection ?? plan.projection,
+    );
     const blindReview =
       plan.blindReview ||
       round.blindReview === true ||
       (round.anonymization !== undefined && round.anonymization !== "none");
     const identityFields = blindReview ? new Set(material.identityFieldIds) : new Set<string>();
-    const selectedFields = projection?.fieldIds ?? projection?.visibleFieldIds;
+    const selectedFields = projection.fieldIds ?? projection.visibleFieldIds;
     const answers = Object.fromEntries(
       Object.entries(material.answers).filter(
         ([fieldId]) =>
@@ -2172,7 +2175,7 @@ export class EvaluationService {
           (selectedFields === undefined || selectedFields.includes(fieldId)),
       ),
     );
-    const selectedFiles = projection?.fileIds ?? projection?.visibleFileIds;
+    const selectedFiles = projection.fileIds ?? projection.visibleFileIds;
     const files = (material.files ?? []).filter((file) => selectedFiles?.includes(file.id));
     return {
       id: material.id,
@@ -2180,7 +2183,7 @@ export class EvaluationService {
       abstract: material.abstract,
       answers,
       participants: blindReview ? [] : material.participants,
-      ...(files.length > 0 || plan.reviewerProjection !== undefined ? { files } : {}),
+      files,
       identityRedacted: blindReview,
     };
   }

@@ -102,6 +102,7 @@ const planRequest = {
   blindReview: true,
   closesAt: "2026-08-12T12:00:00.000Z",
   assignmentRule: { reviewsPerSubmission: 1, maxAssignmentsPerReviewer: 5 },
+  reviewerProjection: { fieldIds: ["topic"], fileIds: [] },
   rounds: [
     {
       id: "round-1",
