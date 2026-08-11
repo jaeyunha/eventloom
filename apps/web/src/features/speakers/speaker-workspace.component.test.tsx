@@ -20,5 +20,7 @@ describe("speaker workspace filters", () => {
     expect(markup).toContain('aria-label="Filter by task progress"');
     expect(markup).toContain('aria-label="Clear speaker filters"');
     expect(markup).toContain("Onboarding progress");
+    expect(markup).toContain("0 of 3 onboarding task");
+    expect(markup).toContain("Custom speaker fields are not available");
   });
 });

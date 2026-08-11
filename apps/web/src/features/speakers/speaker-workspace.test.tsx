@@ -4,14 +4,25 @@ import { describe, expect, it } from "vitest";
 import {
   createSpeakerApi,
   type SpeakerApi,
+  type SpeakerAsset,
   type SpeakerRecord,
   type SpeakerRosterEnvelope,
-  type SpeakerAsset,
+  type SpeakerTask,
 } from "./api";
 import {
+  createSpeakerTaskAssignment,
   duplicateEmailConflicts,
+  filterSpeakerRoster,
+  retainInvitationHistory,
   SpeakerAssetDownload,
+  SpeakerAssetMetadata,
+  SpeakerInvitationControls,
+  speakerOnboardingTaskDefinitions,
+  speakerInvitationReady,
+  speakerProgressMatches,
   SpeakerWorkspace,
+  travelLogisticsFor,
+  validateSpeakerTaskAssignment,
 } from "./speaker-workspace";
 
 const speaker: SpeakerRecord = {
@@ -55,6 +66,7 @@ const pendingAsset: SpeakerAsset = {
 
 const task = {
   taskId: "task-1",
+  participantId: "participant-1",
   title: "Confirm participation",
   description: "General speaker onboarding task.",
   type: "general" as const,
@@ -100,6 +112,51 @@ describe("speaker API adapter", () => {
     });
     expect(calls[0]?.init).toMatchObject({ credentials: "include", cache: "no-store" });
   });
+  it("posts an idempotent manual speaker with status and logistics metadata", async () => {
+    const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+    const api = createSpeakerApi(
+      "https://api.example.test",
+      "org-1",
+      "event-1",
+      async (input, init) => {
+        calls.push({ input, ...(init === undefined ? {} : { init }) });
+        return new Response(JSON.stringify({ data: roster }), { status: 201 });
+      },
+    );
+
+    await api.create({
+      idempotencyKey: "manual-speaker-once",
+      displayName: "Priya Raman",
+      email: "priya@example.test",
+      jobTitle: "Principal Engineer",
+      company: "Latticework Systems",
+      biography: "Bio",
+      socialLinks: {},
+      travelLogistics: {
+        travelRequired: true,
+        arrivalAt: "2027-03-30",
+        departureAt: "2027-04-03",
+        accommodation: "Conference hotel",
+      },
+      status: "confirmed",
+    });
+
+    expect(String(calls[0]?.input)).toBe(
+      "https://api.example.test/api/admin/organizations/org-1/events/event-1/speakers",
+    );
+    expect(calls[0]?.init?.method).toBe("POST");
+    expect(JSON.parse(String(calls[0]?.init?.body))).toMatchObject({
+      idempotencyKey: "manual-speaker-once",
+      displayName: "Priya Raman",
+      status: "confirmed",
+      travelLogistics: {
+        travelRequired: true,
+        arrivalAt: "2027-03-30",
+        departureAt: "2027-04-03",
+        accommodation: "Conference hotel",
+      },
+    });
+  });
   it("posts the canonical organizer download route and returns its grant URL", async () => {
     const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
     const api = createSpeakerApi(
@@ -133,6 +190,29 @@ describe("speaker API adapter", () => {
     });
     expect(calls[0]?.init?.body).toBeUndefined();
   });
+  it("redacts list-returned asset grants until an organizer explicitly requests one", async () => {
+    const api = createSpeakerApi(
+      "https://api.example.test",
+      "org-1",
+      "event-1",
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                ...readyAsset,
+                downloadUrl: "https://downloads.example.test/legacy-grant",
+              },
+            ],
+          }),
+          { status: 200 },
+        ),
+    );
+
+    await expect(api.getAssets("participant-1")).resolves.toEqual([
+      { ...readyAsset, downloadUrl: null },
+    ]);
+  });
 
   it("sends versioned profile edits, multi-speaker tasks, progress reads, and invitations", async () => {
     const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
@@ -140,8 +220,26 @@ describe("speaker API adapter", () => {
       calls.push({ input, ...(init === undefined ? {} : { init }) });
       const path = String(input);
       if (path.includes("/speaker-tasks")) {
-        if (init?.method === "POST")
-          return new Response(JSON.stringify({ data: task }), { status: 201 });
+        if (init?.method === "POST") {
+          return new Response(
+            JSON.stringify({
+              data: {
+                organizationId: "org-1",
+                eventId: "event-1",
+                speakerProfileId: "",
+                tasks: [
+                  task,
+                  {
+                    ...task,
+                    taskId: "task-1:participant-2",
+                    participantId: "participant-2",
+                  },
+                ],
+              },
+            }),
+            { status: 201 },
+          );
+        }
         return new Response(
           JSON.stringify({
             data: {
@@ -182,6 +280,15 @@ describe("speaker API adapter", () => {
       company: speaker.company ?? "",
       biography: speaker.biography,
       socialLinks: speaker.socialLinks,
+      travelLogistics: {
+        travelRequired: true,
+        arrivalAt: "2027-03-30",
+        departureAt: "2027-04-03",
+        accommodation: "Conference hotel",
+        dietaryRequirements: "Vegan",
+        accessibilityNeeds: "Step-free access",
+        travelNotes: "Arrives after 18:00",
+      },
       status: "confirmed",
     });
     await api.assignTasks({
@@ -202,6 +309,12 @@ describe("speaker API adapter", () => {
     expect(JSON.parse(String(calls[0]?.init?.body))).toMatchObject({
       expectedVersion: 3,
       jobTitle: "Principal Engineer",
+      travelLogistics: {
+        travelRequired: true,
+        arrivalAt: "2027-03-30",
+        departureAt: "2027-04-03",
+        accommodation: "Conference hotel",
+      },
     });
     expect(String(calls[1]?.input)).toContain("/speaker-tasks");
     expect(JSON.parse(String(calls[1]?.init?.body))).toEqual({
@@ -249,6 +362,187 @@ describe("speaker API adapter", () => {
   });
 });
 
+describe("speaker workspace contracts", () => {
+  it("applies exact roster and progress filters, including zero-task speakers as incomplete", () => {
+    const secondSpeaker: SpeakerRecord = {
+      ...speaker,
+      participantId: "participant-2",
+      displayName: "Marcus Chen",
+      email: "marcus@example.test",
+      status: "invited",
+      sessions: [{ submissionId: "session-2", title: "Reliable queues", status: "accepted" }],
+      taskSummary: { total: 0, completed: 0, overdue: 0 },
+    };
+    const completedTask: SpeakerTask = {
+      ...task,
+      status: "completed",
+      completedAt: "2026-08-10T00:00:00.000Z",
+    };
+    const rows = [
+      { participantId: speaker.participantId, displayName: speaker.displayName, tasks: [completedTask] },
+      { participantId: secondSpeaker.participantId, displayName: secondSpeaker.displayName, tasks: [] },
+    ];
+
+    expect(speakerProgressMatches([completedTask], "complete")).toBe(true);
+    expect(speakerProgressMatches([], "complete")).toBe(false);
+    expect(speakerProgressMatches([], "incomplete")).toBe(true);
+    expect(
+      filterSpeakerRoster([speaker, secondSpeaker], rows, {
+        query: " marcus ",
+        status: "invited",
+        session: "session-2",
+        progress: "incomplete",
+      }).map((candidate) => candidate.participantId),
+    ).toEqual(["participant-2"]);
+    expect(
+      filterSpeakerRoster([speaker, secondSpeaker], rows, {
+        query: "",
+        status: "all",
+        session: "all",
+        progress: "complete",
+      }).map((candidate) => candidate.participantId),
+    ).toEqual(["participant-1"]);
+  });
+
+  it("reconstructs three API-loaded onboarding definitions with exact assignees and dates", () => {
+    const tasks: SpeakerTask[] = [
+      { ...task, taskId: "definition-1:participant-1", participantId: "participant-1" },
+      { ...task, taskId: "definition-1:participant-2", participantId: "participant-2" },
+      {
+        ...task,
+        taskId: "definition-2",
+        title: "Review biography",
+        dueAt: "2027-04-05",
+      },
+      {
+        ...task,
+        taskId: "definition-3",
+        title: "Confirm logistics",
+        dueAt: "2027-04-09",
+      },
+      {
+        ...task,
+        taskId: "file-request-1",
+        title: "Upload slides",
+        description: "A deliverable task.",
+        type: "file_request",
+      },
+    ];
+    const definitions = speakerOnboardingTaskDefinitions([
+      {
+        participantId: "participant-1",
+        displayName: "Priya Raman",
+        tasks: tasks.filter((candidate) => candidate.participantId === "participant-1"),
+      },
+      {
+        participantId: "participant-2",
+        displayName: "Marcus Chen",
+        tasks: tasks.filter((candidate) => candidate.participantId === "participant-2"),
+      },
+    ]);
+
+    expect(definitions).toEqual([
+      {
+        definitionId: "definition-1",
+        title: "Confirm participation",
+        dueAt: "2027-04-01",
+        participantIds: ["participant-1", "participant-2"],
+      },
+      {
+        definitionId: "definition-2",
+        title: "Review biography",
+        dueAt: "2027-04-05",
+        participantIds: ["participant-1"],
+      },
+      {
+        definitionId: "definition-3",
+        title: "Confirm logistics",
+        dueAt: "2027-04-09",
+        participantIds: ["participant-1"],
+      },
+    ]);
+    expect(
+      validateSpeakerTaskAssignment(
+        { title: "Fourth", dueAt: "2027-04-10", participantIds: ["participant-1"] },
+        definitions.length,
+      ),
+    ).toContain("Exactly 3");
+    expect(
+      createSpeakerTaskAssignment({
+        title: " Confirm logistics ",
+        dueAt: " 2027-04-09 ",
+        participantIds: ["participant-1", "participant-1", " participant-2 "],
+      }),
+    ).toMatchObject({
+      title: "Confirm logistics",
+      dueAt: "2027-04-09",
+      participantIds: ["participant-1", "participant-2"],
+    });
+  });
+
+  it("maps logistics fields and retains terminal invitation results without replacing history", () => {
+    expect(
+      travelLogisticsFor({
+        displayName: "Priya Raman",
+        email: "priya@example.test",
+        title: "Principal Engineer",
+        company: "Latticework Systems",
+        biography: "Bio",
+        twitter: "",
+        linkedin: "",
+        website: "",
+        status: "confirmed",
+        travelRequired: true,
+        arrivalAt: " 2027-03-30 ",
+        departureAt: "2027-04-03",
+        accommodation: " Conference hotel ",
+        dietaryRequirements: " Vegan ",
+        accessibilityNeeds: " Step-free access ",
+        travelNotes: " Arrives after 18:00 ",
+      }),
+    ).toEqual({
+      travelRequired: true,
+      arrivalAt: "2027-03-30",
+      departureAt: "2027-04-03",
+      accommodation: "Conference hotel",
+      dietaryRequirements: "Vegan",
+      accessibilityNeeds: "Step-free access",
+      travelNotes: "Arrives after 18:00",
+    });
+
+    const preview = [
+      {
+        participantId: "participant-1",
+        recipientEmail: "priya@example.test",
+        state: "ready" as const,
+      },
+    ];
+    expect(speakerInvitationReady(preview, speaker)).toBe(true);
+    expect(
+      speakerInvitationReady(preview, { ...speaker, email: "changed@example.test" }),
+    ).toBe(false);
+    expect(
+      speakerInvitationReady([{ ...preview[0]!, state: "blocked" }], speaker),
+    ).toBe(false);
+    expect(speakerInvitationReady(preview, { ...speaker, status: "revoked" })).toBe(false);
+    const first = retainInvitationHistory(
+      [],
+      preview,
+      { status: "sent", recipientEmail: "priya@example.test" },
+      "2026-08-11T10:00:00.000Z",
+    );
+    const second = retainInvitationHistory(
+      first,
+      preview,
+      { status: "failed", recipientEmail: "priya@example.test" },
+      "2026-08-11T11:00:00.000Z",
+    );
+
+    expect(second.map((entry) => entry.result.status)).toEqual(["failed", "sent"]);
+    expect(second[1]?.occurredAt).toBe("2026-08-11T10:00:00.000Z");
+  });
+});
+
 describe("speaker workspace", () => {
   it("does not request a grant on initial asset render and keeps non-ready assets unavailable", () => {
     const requests: SpeakerAsset[] = [];
@@ -278,6 +572,28 @@ describe("speaker workspace", () => {
     expect(readyMarkup).toContain("<button");
     expect(pendingMarkup).toContain("Download is not available for this asset.");
     expect(pendingMarkup).not.toContain("<button");
+  });
+  it("renders organizer asset metadata and keeps preview separate from invitation send", () => {
+    const metadata = renderToStaticMarkup(createElement(SpeakerAssetMetadata, { asset: readyAsset }));
+    const controls = renderToStaticMarkup(
+      createElement(SpeakerInvitationControls, {
+        previewBusy: false,
+        sendBusy: false,
+        disabled: false,
+        canSend: false,
+        onPreview: () => undefined,
+        onSend: () => undefined,
+      }),
+    );
+
+    expect(metadata).toContain("application/pdf");
+    expect(metadata).toContain("1 KB");
+    expect(metadata).toContain("Ready");
+    expect(metadata).toContain("Aug 9, 2026");
+    expect(controls).toContain("Preview portal invite");
+    expect(controls).toContain("Send portal invite");
+    expect(controls.match(/<button/g)).toHaveLength(2);
+    expect(controls.match(/disabled=""/g)).toHaveLength(1);
   });
 
   it("requests exactly one grant when the ready-asset button is clicked", () => {

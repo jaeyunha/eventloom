@@ -16,12 +16,14 @@ import {
   type SpeakerInvitationPreview,
   type SpeakerInvitationResult,
   type SpeakerProgressEnvelope,
+  type SpeakerProgressRow,
   type SpeakerRecord,
   type SpeakerReminderEligibilityEnvelope,
   type SpeakerRosterEnvelope,
   type SpeakerSession,
   type SpeakerStatus,
   type SpeakerTask,
+  type SpeakerTaskAssignmentInput,
   type SpeakerTaskEnvelope,
   type SpeakerTravelLogistics,
   type SpeakerUpdateInput,
@@ -34,9 +36,9 @@ export interface SpeakerWorkspaceProps {
   readonly api?: SpeakerApi;
 }
 
-type ProgressFilter = "all" | "complete" | "incomplete";
+export type ProgressFilter = "all" | "complete" | "incomplete";
 
-interface CreateDraft {
+export interface SpeakerProfileDraft {
   displayName: string;
   email: string;
   title: string;
@@ -60,6 +62,25 @@ interface EditDraft extends CreateDraft {
   expectedVersion: number;
 }
 
+type CreateDraft = SpeakerProfileDraft;
+
+export const MAX_ORGANIZER_ONBOARDING_TASKS = 3;
+export const ORGANIZER_ONBOARDING_TASK_DESCRIPTION = "General speaker onboarding task.";
+export const SPEAKER_CUSTOM_FIELDS_CONTRACT_GAP =
+  "Custom speaker fields are not available in the current speaker API contract. Travel and logistics are saved with the speaker profile; custom fields require a speaker API read/write contract.";
+
+export interface SpeakerInvitationHistoryEntry {
+  readonly preview: readonly SpeakerInvitationPreview[];
+  readonly result: SpeakerInvitationResult;
+  readonly occurredAt: string;
+}
+
+export interface SpeakerOnboardingTaskDefinition {
+  readonly definitionId: string;
+  readonly title: string;
+  readonly dueAt: string | null;
+  readonly participantIds: readonly string[];
+}
 const panelStyle = {
   display: "grid",
   gap: "1rem",
@@ -232,6 +253,16 @@ function dateLabel(value: string | null | undefined): string {
   return new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeZone: "UTC" }).format(parsed);
 }
 
+function dateTimeLabel(value: string): string {
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) return value;
+  return new Intl.DateTimeFormat("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "UTC",
+  }).format(parsed);
+}
+
 function assetSize(value: number): string {
   if (!Number.isFinite(value) || value < 1) return "Unknown size";
   if (value < 1_024) return `${value} B`;
@@ -239,7 +270,7 @@ function assetSize(value: number): string {
   return `${Math.round(value / 104_857.6) / 10} MB`;
 }
 
-function taskComplete(status: string): boolean {
+export function taskComplete(status: string): boolean {
   return status === "completed" || status === "submitted" || status === "waived";
 }
 
@@ -249,6 +280,150 @@ function taskSummaryFor(tasks: readonly SpeakerTask[]): SpeakerRecord["taskSumma
     completed: tasks.filter((task) => taskComplete(task.status)).length,
     overdue: tasks.filter((task) => task.status === "overdue").length,
   };
+}
+export function speakerProgressComplete(tasks: readonly SpeakerTask[]): boolean {
+  return tasks.length > 0 && tasks.every((task) => taskComplete(task.status));
+}
+
+export function speakerProgressMatches(
+  tasks: readonly SpeakerTask[],
+  filter: ProgressFilter,
+): boolean {
+  if (filter === "all") return true;
+  const complete = speakerProgressComplete(tasks);
+  return filter === "complete" ? complete : !complete;
+}
+
+export interface SpeakerRosterFilterState {
+  readonly query: string;
+  readonly status: string;
+  readonly session: string;
+  readonly progress: ProgressFilter;
+}
+
+export function filterSpeakerRoster(
+  speakers: readonly SpeakerRecord[],
+  progressRows: readonly SpeakerProgressRow[],
+  filters: SpeakerRosterFilterState,
+): readonly SpeakerRecord[] {
+  const normalizedQuery = filters.query.trim().toLocaleLowerCase();
+  const progressByParticipant = new Map(
+    progressRows.map((row) => [row.participantId, row] as const),
+  );
+  return speakers.filter((speaker) => {
+    const matchesQuery =
+      normalizedQuery.length === 0 ||
+      [
+        speaker.displayName,
+        speaker.email,
+        speaker.jobTitle ?? "",
+        speaker.company ?? "",
+        speaker.biography,
+      ]
+        .join(" ")
+        .toLocaleLowerCase()
+        .includes(normalizedQuery);
+    const matchesStatus = filters.status === "all" || speaker.status === filters.status;
+    const matchesSession =
+      filters.session === "all" ||
+      speaker.sessions.some((session) => session.submissionId === filters.session);
+    const progressRow = progressByParticipant.get(speaker.participantId);
+    const matchesProgress =
+      filters.progress === "all" ||
+      speakerProgressMatches(progressRow?.tasks ?? [], filters.progress);
+    return matchesQuery && matchesStatus && matchesSession && matchesProgress;
+  });
+}
+
+export interface SpeakerOnboardingTaskDraft {
+  readonly title: string;
+  readonly dueAt: string;
+  readonly participantIds: readonly string[];
+}
+
+export function createSpeakerTaskAssignment(
+  draft: SpeakerOnboardingTaskDraft,
+): SpeakerTaskAssignmentInput {
+  return {
+    title: draft.title.trim(),
+    description: ORGANIZER_ONBOARDING_TASK_DESCRIPTION,
+    dueAt: draft.dueAt.trim(),
+    participantIds: [...new Set(draft.participantIds.map((id) => id.trim()).filter(Boolean))],
+  };
+}
+
+export function speakerTaskDefinitionId(task: SpeakerTask): string {
+  const participantSuffix = `:${task.participantId}`;
+  return task.taskId.endsWith(participantSuffix)
+    ? task.taskId.slice(0, -participantSuffix.length)
+    : task.taskId;
+}
+
+export function speakerOnboardingTaskDefinitions(
+  rows: readonly SpeakerProgressRow[],
+): readonly SpeakerOnboardingTaskDefinition[] {
+  const definitions = new Map<string, SpeakerOnboardingTaskDefinition>();
+  for (const row of rows) {
+    for (const task of row.tasks) {
+      if (
+        task.type !== "general" ||
+        task.description !== ORGANIZER_ONBOARDING_TASK_DESCRIPTION
+      ) {
+        continue;
+      }
+      const definitionId = speakerTaskDefinitionId(task);
+      const current = definitions.get(definitionId);
+      definitions.set(definitionId, {
+        definitionId,
+        title: current?.title ?? task.title,
+        dueAt: current?.dueAt ?? task.dueAt,
+        participantIds: [
+          ...new Set([...(current?.participantIds ?? []), task.participantId]),
+        ],
+      });
+    }
+  }
+  return [...definitions.values()].sort((left, right) =>
+    left.definitionId.localeCompare(right.definitionId),
+  );
+}
+
+export function validateSpeakerTaskAssignment(
+  draft: SpeakerOnboardingTaskDraft,
+  existingTaskCount: number,
+): string | null {
+  if (existingTaskCount >= MAX_ORGANIZER_ONBOARDING_TASKS) {
+    return `Exactly ${MAX_ORGANIZER_ONBOARDING_TASKS} organizer onboarding tasks are supported.`;
+  }
+  const input = createSpeakerTaskAssignment(draft);
+  if (input.title.length === 0 || input.dueAt.length === 0 || input.participantIds.length === 0) {
+    return "Enter a task title, due date, and select at least one speaker.";
+  }
+  return null;
+}
+
+export function retainInvitationHistory(
+  current: readonly SpeakerInvitationHistoryEntry[],
+  preview: readonly SpeakerInvitationPreview[],
+  result: SpeakerInvitationResult,
+  occurredAt = new Date().toISOString(),
+): readonly SpeakerInvitationHistoryEntry[] {
+  return [{ preview: [...preview], result, occurredAt }, ...current];
+}
+
+export function speakerInvitationReady(
+  previews: readonly SpeakerInvitationPreview[],
+  speaker: Pick<SpeakerRecord, "participantId" | "email" | "status">,
+): boolean {
+  const matching = previews.filter(
+    (preview) => preview.participantId === speaker.participantId,
+  );
+  return (
+    speaker.status !== "revoked" &&
+    matching.length === 1 &&
+    matching[0]?.state === "ready" &&
+    normalizedEmail(matching[0].recipientEmail) === normalizedEmail(speaker.email)
+  );
 }
 
 function taskStatusLabel(status: string): string {
@@ -263,7 +438,9 @@ function socialLinksFor(draft: CreateDraft | EditDraft) {
     ...(draft.website.trim() ? { website: draft.website.trim() } : {}),
   };
 }
-function travelLogisticsFor(draft: CreateDraft | EditDraft): Partial<SpeakerTravelLogistics> {
+export function travelLogisticsFor(
+  draft: CreateDraft | EditDraft,
+): Partial<SpeakerTravelLogistics> {
   return {
     travelRequired: draft.travelRequired === true,
     arrivalAt: draft.arrivalAt.trim() || null,
@@ -402,7 +579,7 @@ export function SpeakerAssetDownload({
   error,
   onRequest,
 }: SpeakerAssetDownloadProps) {
-  if (downloadUrl !== null) {
+  if (asset.status === "ready" && downloadUrl !== null) {
     return (
       <a
         className={styles.secondaryButton}
@@ -456,6 +633,60 @@ export function SpeakerAssetDownload({
           {error}
         </p>
       ) : null}
+    </>
+  );
+}
+export function SpeakerAssetMetadata({ asset }: Readonly<{ asset: SpeakerAsset }>) {
+  return (
+    <span
+      style={{
+        display: "block",
+        marginTop: "0.2rem",
+        color: "var(--admin-muted)",
+        fontSize: "0.74rem",
+      }}
+    >
+      {asset.contentType} · {assetSize(asset.byteSize)} · {statusLabel(asset.status)} · uploaded{" "}
+      {dateLabel(asset.uploadedAt)}
+    </span>
+  );
+}
+
+export interface SpeakerInvitationControlsProps {
+  readonly previewBusy: boolean;
+  readonly sendBusy: boolean;
+  readonly disabled: boolean;
+  readonly canSend: boolean;
+  readonly onPreview: () => void;
+  readonly onSend: () => void;
+}
+
+export function SpeakerInvitationControls({
+  previewBusy,
+  sendBusy,
+  disabled,
+  canSend,
+  onPreview,
+  onSend,
+}: SpeakerInvitationControlsProps) {
+  return (
+    <>
+      <button
+        className={styles.secondaryButton}
+        type="button"
+        onClick={onPreview}
+        disabled={disabled || previewBusy || sendBusy}
+      >
+        {previewBusy ? "Preparing invite…" : "Preview portal invite"}
+      </button>
+      <button
+        className={styles.primaryButton}
+        type="button"
+        onClick={onSend}
+        disabled={disabled || sendBusy || previewBusy || !canSend}
+      >
+        {sendBusy ? "Sending invite…" : "Send portal invite"}
+      </button>
     </>
   );
 }
@@ -713,17 +944,27 @@ export function SpeakerWorkspace({
   const [taskTitle, setTaskTitle] = useState("");
   const [taskDueAt, setTaskDueAt] = useState("");
   const [taskAssignees, setTaskAssignees] = useState<readonly string[]>([]);
-  const [taskAssignments, setTaskAssignments] = useState<readonly SpeakerTask[]>([]);
   const [invitationPreview, setInvitationPreview] = useState<
     readonly SpeakerInvitationPreview[] | null
   >(null);
   const [invitationResult, setInvitationResult] = useState<SpeakerInvitationResult | null>(null);
+  const [invitationResultParticipantId, setInvitationResultParticipantId] = useState<
+    string | null
+  >(null);
+  const [invitationError, setInvitationError] = useState<string | null>(null);
+  const [invitationSendIdempotencyKey, setInvitationSendIdempotencyKey] = useState<string | null>(
+    null,
+  );
+  const [invitationHistory, setInvitationHistory] = useState<
+    readonly SpeakerInvitationHistoryEntry[]
+  >([]);
   const [detailBusy, setDetailBusy] = useState(false);
   const [detailNotice, setDetailNotice] = useState<string | null>(null);
   const [downloadUrls, setDownloadUrls] = useState<Readonly<Record<string, string>>>({});
   const [downloadErrors, setDownloadErrors] = useState<Readonly<Record<string, string>>>({});
   const [downloadBusyAssetId, setDownloadBusyAssetId] = useState<string | null>(null);
-  const [inviteBusy, setInviteBusy] = useState(false);
+  const [invitationPreviewBusy, setInvitationPreviewBusy] = useState(false);
+  const [invitationSendBusy, setInvitationSendBusy] = useState(false);
   const [importPreviewBusy, setImportPreviewBusy] = useState(false);
   const [importCommitBusy, setImportCommitBusy] = useState(false);
   const [taskBusy, setTaskBusy] = useState(false);
@@ -768,6 +1009,12 @@ export function SpeakerWorkspace({
     setLoading(true);
     setError(null);
     setProgressError(null);
+    setProgress(null);
+    setInvitationPreview(null);
+    setInvitationResult(null);
+    setInvitationResultParticipantId(null);
+    setInvitationError(null);
+    setInvitationSendIdempotencyKey(null);
     void api
       .list(controller.signal)
       .then((nextRoster) => {
@@ -896,50 +1143,36 @@ export function SpeakerWorkspace({
     }
     return [...values.entries()].sort((left, right) => left[1].localeCompare(right[1]));
   }, [speakers]);
-  const progressByParticipant = useMemo(
-    () => new Map((progress?.rows ?? []).map((row) => [row.participantId, row])),
-    [progress?.rows],
-  );
   const normalizedQuery = query.trim().toLocaleLowerCase();
   const filteredSpeakers = useMemo(
     () =>
-      speakers.filter((speaker) => {
-        const matchesQuery =
-          normalizedQuery.length === 0 ||
-          [
-            speaker.displayName,
-            speaker.email,
-            speaker.jobTitle ?? "",
-            speaker.company ?? "",
-            speaker.biography,
-          ]
-            .join(" ")
-            .toLocaleLowerCase()
-            .includes(normalizedQuery);
-        const matchesStatus = statusFilter === "all" || speaker.status === statusFilter;
-        const matchesSession =
-          sessionFilter === "all" ||
-          speaker.sessions.some((session) => session.submissionId === sessionFilter);
-        const progressRow = progressByParticipant.get(speaker.participantId);
-        const complete =
-          progressRow !== undefined &&
-          progressRow.tasks.length > 0 &&
-          progressRow.tasks.every((task) => taskComplete(task.status));
-        const matchesProgress =
-          progressFilter === "all" || (progressFilter === "complete" ? complete : !complete);
-        return matchesQuery && matchesStatus && matchesSession && matchesProgress;
+      filterSpeakerRoster(speakers, progress?.rows ?? [], {
+        query,
+        status: statusFilter,
+        session: sessionFilter,
+        progress: progressFilter,
       }),
-    [normalizedQuery, progressByParticipant, progressFilter, sessionFilter, speakers, statusFilter],
+    [progress?.rows, progressFilter, query, sessionFilter, speakers, statusFilter],
   );
-  const progressRows = useMemo(() => {
-    const rows = progress?.rows ?? [];
-    return rows.filter((row) => {
-      if (progressFilter === "all") return true;
-      const complete = row.tasks.length > 0 && row.tasks.every((task) => taskComplete(task.status));
-      return progressFilter === "complete" ? complete : !complete;
-    });
-  }, [progress?.rows, progressFilter]);
-  const invitationPreviewCount = invitationPreview?.length ?? 0;
+  const progressRows = useMemo(
+    () =>
+      (progress?.rows ?? []).filter((row) => speakerProgressMatches(row.tasks, progressFilter)),
+    [progress?.rows, progressFilter],
+  );
+  const onboardingTaskDefinitions = useMemo(
+    () => speakerOnboardingTaskDefinitions(progress?.rows ?? []),
+    [progress?.rows],
+  );
+  const selectedInvitationPreview =
+    selectedSpeaker === null
+      ? []
+      : (invitationPreview ?? []).filter(
+          (preview) => preview.participantId === selectedSpeaker.participantId,
+        );
+  const invitationPreviewCount = selectedInvitationPreview.length;
+  const invitationReady =
+    selectedSpeaker !== null &&
+    speakerInvitationReady(invitationPreview ?? [], selectedSpeaker);
   const hasActiveRosterFilters =
     normalizedQuery.length > 0 ||
     statusFilter !== "all" ||
@@ -1000,6 +1233,11 @@ export function SpeakerWorkspace({
     );
     setEditError(null);
     setNotice(null);
+    setInvitationPreview(null);
+    setInvitationResult(null);
+    setInvitationResultParticipantId(null);
+    setInvitationError(null);
+    setInvitationSendIdempotencyKey(null);
   }
 
   function applyAuthoritativeRoster(nextRoster: SpeakerRosterEnvelope, message?: string): void {
@@ -1022,6 +1260,12 @@ export function SpeakerWorkspace({
       );
       setError(null);
       setProgressError(null);
+      setProgress(null);
+      setInvitationPreview(null);
+      setInvitationResult(null);
+      setInvitationResultParticipantId(null);
+      setInvitationError(null);
+      setInvitationSendIdempotencyKey(null);
       if (message) setNotice(message);
       if (api !== null) {
         const progressController = new AbortController();
@@ -1080,6 +1324,12 @@ export function SpeakerWorkspace({
     setLoading(true);
     setError(null);
     setProgressError(null);
+    setProgress(null);
+    setInvitationPreview(null);
+    setInvitationResult(null);
+    setInvitationResultParticipantId(null);
+    setInvitationError(null);
+    setInvitationSendIdempotencyKey(null);
     try {
       const nextRoster = normalizeRoster(
         await api.list(controller.signal),
@@ -1185,6 +1435,9 @@ export function SpeakerWorkspace({
     setEditError(null);
     setInvitationPreview(null);
     setInvitationResult(null);
+    setInvitationResultParticipantId(null);
+    setInvitationError(null);
+    setInvitationSendIdempotencyKey(null);
     setDetailNotice(null);
   }
 
@@ -1206,6 +1459,11 @@ export function SpeakerWorkspace({
       setEditError("Name and email are required.");
       return;
     }
+    setInvitationPreview(null);
+    setInvitationResult(null);
+    setInvitationResultParticipantId(null);
+    setInvitationError(null);
+    setInvitationSendIdempotencyKey(null);
     setSaveBusy(true);
     setEditError(null);
     try {
@@ -1310,26 +1568,81 @@ export function SpeakerWorkspace({
       setNotice("Task assignment is unavailable until the organizer speaker API is configured.");
       return;
     }
-    const title = taskTitle.trim();
-    if (!title || !taskDueAt || taskAssignees.length === 0) {
-      setNotice("Enter a task title, due date, and select at least one speaker.");
+    if (progress === null || progressError !== null) {
+      setNotice(
+        "Wait for API-backed onboarding progress to load before assigning another task.",
+      );
       return;
     }
+    const draft = {
+      title: taskTitle,
+      dueAt: taskDueAt,
+      participantIds: taskAssignees,
+    } satisfies SpeakerOnboardingTaskDraft;
+    const validationError = validateSpeakerTaskAssignment(draft, onboardingTaskDefinitions.length);
+    if (validationError !== null) {
+      setNotice(validationError);
+      return;
+    }
+    const input = createSpeakerTaskAssignment(draft);
     setTaskBusy(true);
     setNotice(null);
     try {
-      const taskEnvelope = await api.assignTasks({
-        title,
-        description: "General speaker onboarding task.",
-        dueAt: taskDueAt,
-        participantIds: taskAssignees,
-      });
+      const latest = await withTimeout(async (signal) => {
+        const latestRoster = normalizeRoster(
+          await api.list(signal),
+          organizationId,
+          eventId,
+        );
+        const latestProgress = await progressFor(
+          api,
+          latestRoster.speakers,
+          organizationId,
+          eventId,
+          signal,
+        );
+        return { latestRoster, latestProgress };
+      }, "Onboarding task preflight");
+      setProgress(latest.latestProgress);
+      setRoster(mergeProgressSummaries(latest.latestRoster, latest.latestProgress));
+      setInvitationPreview(null);
+      setInvitationResult(null);
+      setInvitationResultParticipantId(null);
+      setInvitationError(null);
+      setInvitationSendIdempotencyKey(null);
+      const latestValidationError = validateSpeakerTaskAssignment(
+        draft,
+        speakerOnboardingTaskDefinitions(latest.latestProgress.rows).length,
+      );
+      if (latestValidationError !== null) {
+        setNotice(latestValidationError);
+        return;
+      }
+      const taskEnvelope = await api.assignTasks(input);
       if (taskEnvelope.organizationId !== organizationId || taskEnvelope.eventId !== eventId) {
         throw new TypeError(
           "The speaker task response belongs to a different organization or event.",
         );
       }
-      setTaskAssignments((current) => [...current, ...taskEnvelope.tasks]);
+      const returnedAssignees = new Set(
+        taskEnvelope.tasks.map((task) => task.participantId),
+      );
+      if (
+        taskEnvelope.tasks.length !== input.participantIds.length ||
+        returnedAssignees.size !== input.participantIds.length ||
+        input.participantIds.some((participantId) => !returnedAssignees.has(participantId)) ||
+        taskEnvelope.tasks.some(
+          (task) =>
+            task.title !== input.title ||
+            task.description !== input.description ||
+            task.dueAt !== input.dueAt ||
+            task.type !== "general",
+        )
+      ) {
+        throw new TypeError(
+          "The speaker task response does not match the selected assignees.",
+        );
+      }
       setRoster((current) =>
         current === null
           ? current
@@ -1351,19 +1664,27 @@ export function SpeakerWorkspace({
               }),
             },
       );
-      setProgress((current) =>
-        current === null
-          ? current
-          : {
-              ...current,
-              rows: current.rows.map((row) => {
-                const assigned = taskEnvelope.tasks.filter(
-                  (task) => task.participantId === row.participantId,
-                );
-                return assigned.length === 0 ? row : { ...row, tasks: [...row.tasks, ...assigned] };
-              }),
-            },
-      );
+      setProgress((current) => {
+        const rows =
+          current?.rows ??
+          speakers.map((speaker) => ({
+            participantId: speaker.participantId,
+            displayName: speaker.displayName,
+            tasks: [],
+          }));
+        return {
+          organizationId,
+          eventId,
+          rows: rows.map((row) => {
+            const assigned = taskEnvelope.tasks.filter(
+              (task) => task.participantId === row.participantId,
+            );
+            return assigned.length === 0
+              ? row
+              : { ...row, tasks: [...row.tasks, ...assigned] };
+          }),
+        };
+      });
       setTaskTitle("");
       setTaskDueAt("");
       setTaskAssignees([]);
@@ -1576,35 +1897,80 @@ export function SpeakerWorkspace({
       setEmailSendBusy(false);
     }
   }
-  async function inviteSelectedSpeaker(): Promise<void> {
+  async function previewSelectedSpeakerInvitation(): Promise<void> {
     if (api === null || selectedSpeaker === null) {
-      setNotice(
+      setInvitationError(
         "Portal invitations are unavailable until the organizer speaker API is configured.",
       );
       return;
     }
-    setInviteBusy(true);
-    setNotice(null);
+    const participantId = selectedSpeaker.participantId;
+    setInvitationPreviewBusy(true);
+    setInvitationPreview(null);
+    setInvitationResult(null);
+    setInvitationResultParticipantId(null);
+    setInvitationError(null);
+    setInvitationSendIdempotencyKey(null);
     try {
-      const preview = await api.previewInvitations({
-        participantIds: [selectedSpeaker.participantId],
-      });
-      setInvitationPreview(preview);
-      const result = await api.sendInvitations({
-        participantIds: [selectedSpeaker.participantId],
-        templateId: "speaker-welcome",
-        idempotencyKey: crypto.randomUUID(),
-      });
-      setInvitationResult(result);
-      setNotice(
-        result.status === "failed"
-          ? "The portal invitation could not be sent. Review the speaker email and try again."
-          : "Portal invitation queued successfully.",
+      const preview = await withTimeout(
+        () => api.previewInvitations({ participantIds: [participantId] }),
+        "Portal invitation preview",
       );
+      if (
+        preview.length !== 1 ||
+        preview[0]?.participantId !== participantId
+      ) {
+        throw new TypeError(
+          "The invitation preview does not match the selected speaker.",
+        );
+      }
+      setInvitationPreview(preview);
     } catch (reason: unknown) {
-      setNotice(errorMessage(reason));
+      setInvitationError(errorMessage(reason));
     } finally {
-      setInviteBusy(false);
+      setInvitationPreviewBusy(false);
+    }
+  }
+
+  async function sendSelectedSpeakerInvitation(): Promise<void> {
+    if (
+      api === null ||
+      selectedSpeaker === null ||
+      !invitationReady
+    ) {
+      setInvitationError(
+        "Preview an eligible portal invitation before sending it.",
+      );
+      return;
+    }
+    const participantId = selectedSpeaker.participantId;
+    const preview = selectedInvitationPreview;
+    const idempotencyKey = invitationSendIdempotencyKey ?? crypto.randomUUID();
+    setInvitationSendIdempotencyKey(idempotencyKey);
+    setInvitationSendBusy(true);
+    setInvitationResult(null);
+    setInvitationResultParticipantId(null);
+    setInvitationError(null);
+    try {
+      const result = await withTimeout(
+        () =>
+          api.sendInvitations({
+            participantIds: [participantId],
+            templateId: "speaker-welcome",
+            idempotencyKey,
+          }),
+        "Portal invitation send",
+      );
+      setInvitationResult(result);
+      setInvitationResultParticipantId(participantId);
+      setInvitationHistory((current) =>
+        retainInvitationHistory(current, preview, result),
+      );
+      setInvitationSendIdempotencyKey(null);
+    } catch (reason: unknown) {
+      setInvitationError(errorMessage(reason));
+    } finally {
+      setInvitationSendBusy(false);
     }
   }
 
@@ -1674,6 +2040,9 @@ export function SpeakerWorkspace({
           </p>
           <p style={mutedStyle}>
             Organization <strong>{organizationId}</strong> · Event <strong>{eventId}</strong>
+          </p>
+          <p style={mutedStyle} role="note">
+            {SPEAKER_CUSTOM_FIELDS_CONTRACT_GAP}
           </p>
         </div>
         <div className={styles.headerActions}>
@@ -2173,6 +2542,11 @@ export function SpeakerWorkspace({
             Create plain mark-complete onboarding tasks for multiple speakers. File requests and
             deliverables belong in Content.
           </p>
+          <p style={mutedStyle} role="status">
+            {onboardingTaskDefinitions.length} of {MAX_ORGANIZER_ONBOARDING_TASKS} onboarding task
+            definitions configured. The API-loaded definitions and their assignees remain visible
+            after a roster refresh.
+          </p>
         </div>
         <form
           onSubmit={(event) => void assignTask(event)}
@@ -2247,14 +2621,25 @@ export function SpeakerWorkspace({
             <button
               className={styles.primaryButton}
               type="submit"
-              disabled={taskBusy || api === null || speakers.length === 0}
+              disabled={
+                taskBusy ||
+                api === null ||
+                speakers.length === 0 ||
+                progress === null ||
+                progressError !== null ||
+                onboardingTaskDefinitions.length >= MAX_ORGANIZER_ONBOARDING_TASKS
+              }
             >
-              {taskBusy ? "Assigning…" : "Assign general task"}
+              {taskBusy
+                ? "Assigning…"
+                : onboardingTaskDefinitions.length >= MAX_ORGANIZER_ONBOARDING_TASKS
+                  ? "Three onboarding tasks configured"
+                  : "Assign onboarding task"}
             </button>
             <span style={mutedStyle}>Task type: action / mark complete</span>
           </div>
         </form>
-        {taskAssignments.length > 0 ? (
+        {onboardingTaskDefinitions.length > 0 ? (
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem" }}>
               <caption
@@ -2266,11 +2651,11 @@ export function SpeakerWorkspace({
                   clip: "rect(0 0 0 0)",
                 }}
               >
-                Recently assigned general tasks
+                API-loaded organizer onboarding task definitions
               </caption>
               <thead>
                 <tr>
-                  {["Task", "Due", "Assignees", "Type"].map((heading) => (
+                  {["Task", "Due", "Assignees"].map((heading) => (
                     <th
                       key={heading}
                       scope="col"
@@ -2289,8 +2674,8 @@ export function SpeakerWorkspace({
                 </tr>
               </thead>
               <tbody>
-                {taskAssignments.map((task) => (
-                  <tr key={task.taskId}>
+                {onboardingTaskDefinitions.map((definition) => (
+                  <tr key={definition.definitionId}>
                     <th
                       scope="row"
                       style={{
@@ -2299,7 +2684,7 @@ export function SpeakerWorkspace({
                         textAlign: "left",
                       }}
                     >
-                      {task.title}
+                      {definition.title}
                     </th>
                     <td
                       style={{
@@ -2307,7 +2692,7 @@ export function SpeakerWorkspace({
                         borderBottom: "1px solid var(--admin-border)",
                       }}
                     >
-                      {dateLabel(task.dueAt)}
+                      {dateLabel(definition.dueAt)}
                     </td>
                     <td
                       style={{
@@ -2315,16 +2700,16 @@ export function SpeakerWorkspace({
                         borderBottom: "1px solid var(--admin-border)",
                       }}
                     >
-                      {speakers.find((speaker) => speaker.participantId === task.participantId)
-                        ?.displayName ?? "Speaker"}
-                    </td>
-                    <td
-                      style={{
-                        padding: "0.65rem 0.55rem",
-                        borderBottom: "1px solid var(--admin-border)",
-                      }}
-                    >
-                      {statusLabel(task.type)}
+                      {definition.participantIds
+                        .map((participantId) => {
+                          const assignee = speakers.find(
+                            (speaker) => speaker.participantId === participantId,
+                          );
+                          return assignee === undefined
+                            ? participantId
+                            : `${assignee.displayName} (${participantId})`;
+                        })
+                        .join(", ")}
                     </td>
                   </tr>
                 ))}
@@ -2737,25 +3122,59 @@ export function SpeakerWorkspace({
               >
                 {detailBusy ? "Refreshing details…" : "Refresh sessions and files"}
               </button>
-              <button
-                className={styles.primaryButton}
-                type="button"
-                onClick={() => void inviteSelectedSpeaker()}
-                disabled={inviteBusy || api === null}
-              >
-                {inviteBusy ? "Sending invite…" : "Send portal invite"}
-              </button>
+              <SpeakerInvitationControls
+                previewBusy={invitationPreviewBusy}
+                sendBusy={invitationSendBusy}
+                disabled={api === null}
+                canSend={invitationReady}
+                onPreview={() => void previewSelectedSpeakerInvitation()}
+                onSend={() => void sendSelectedSpeakerInvitation()}
+              />
             </div>
           </div>
           {invitationPreviewCount > 0 ? (
-            <FormMessage
-              message={`Invitation preview ready for ${invitationPreviewCount} speaker.`}
-            />
+            <div style={{ display: "grid", gap: "0.35rem" }}>
+              <FormMessage
+                message={`Invitation preview completed for ${invitationPreviewCount} speaker. ${invitationReady ? "Eligible to send." : "Sending is blocked."} Sending remains a separate explicit action.`}
+              />
+              <ul aria-label="Portal invitation preview" style={listStyle}>
+                {selectedInvitationPreview.map((preview) => (
+                  <li key={preview.participantId}>
+                    <strong>{statusLabel(preview.state)}</strong> ·{" "}
+                    {preview.recipientEmail || "No deliverable email"}
+                  </li>
+                ))}
+              </ul>
+            </div>
           ) : null}
-          {invitationResult ? (
+          {invitationResult &&
+          invitationResultParticipantId === selectedSpeaker.participantId ? (
             <FormMessage
               message={`Invitation ${invitationResult.status} for ${invitationResult.recipientEmail}.`}
+              error={invitationResult.status === "failed"}
             />
+          ) : null}
+          {invitationError ? <FormMessage message={invitationError} error /> : null}
+          {invitationHistory.length > 0 ? (
+            <div style={{ display: "grid", gap: "0.4rem" }}>
+              <h3 style={{ margin: 0, fontSize: "0.9rem" }}>Portal invitation send history</h3>
+              <ul aria-label="Portal invitation send history" style={listStyle}>
+                {invitationHistory.map((entry, index) => (
+                  <li key={`${entry.occurredAt}:${index}`}>
+                    <strong>{statusLabel(entry.result.status)}</strong> ·{" "}
+                    {entry.preview
+                      .map((preview) => preview.recipientEmail || preview.participantId)
+                      .join(", ")}{" "}
+                    · {dateTimeLabel(entry.occurredAt)} UTC
+                  </li>
+                ))}
+              </ul>
+              <p style={mutedStyle}>
+                History above is retained only while this speaker-workspace view remains open. The
+                speaker API does not expose a persistent portal-invitation history read endpoint;
+                delivery must be confirmed through the communications provider handoff.
+              </p>
+            </div>
           ) : null}
           {detailNotice ? (
             <FormMessage
@@ -2904,20 +3323,10 @@ export function SpeakerWorkspace({
                       }}
                     >
                       <strong>{asset.fileName}</strong>
-                      <span
-                        style={{
-                          display: "block",
-                          marginTop: "0.2rem",
-                          color: "var(--admin-muted)",
-                          fontSize: "0.74rem",
-                        }}
-                      >
-                        {asset.contentType} · {assetSize(asset.byteSize)} ·{" "}
-                        {statusLabel(asset.status)} · uploaded {dateLabel(asset.uploadedAt)}
-                      </span>
+                      <SpeakerAssetMetadata asset={asset} />
                       <SpeakerAssetDownload
                         asset={asset}
-                        downloadUrl={downloadUrls[asset.assetId] ?? asset.downloadUrl}
+                        downloadUrl={downloadUrls[asset.assetId] ?? null}
                         busy={downloadBusyAssetId === asset.assetId}
                         disabled={api === null || downloadBusyAssetId !== null}
                         error={downloadErrors[asset.assetId] ?? null}
