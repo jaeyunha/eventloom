@@ -92,7 +92,9 @@ const eventRecord: OrganizerEventRecord = {
   updatedBy: "organizer-1",
 };
 
-function markup(state: Parameters<typeof OrganizerOverviewView>[0]["state"]): string {
+function markup(
+  state: Parameters<typeof OrganizerOverviewView>[0]["state"],
+): string {
   return renderToStaticMarkup(
     createElement(OrganizerOverviewView, {
       state,
@@ -119,7 +121,9 @@ describe("organizer overview", () => {
     expect(output).toContain("Priority queued");
     expect(output).toContain("Publish the remaining session");
     expect(output).toContain("Open agenda");
-    expect(output).toContain("/admin/organizations/ai-engineer/events/event-live/agenda");
+    expect(output).toContain(
+      "/admin/organizations/ai-engineer/events/event-live/agenda",
+    );
     expect(output).not.toContain("Summit 2026");
   });
 
@@ -146,9 +150,13 @@ describe("organizer overview", () => {
     });
 
     expect(output).toContain("all caught up");
-    expect(output).toContain("No action items are waiting for this organization.");
+    expect(output).toContain(
+      "No action items are waiting for this organization.",
+    );
     expect(output).toContain("No events yet");
-    expect(output).toContain("No events are available for this organization yet.");
+    expect(output).toContain(
+      "No events are available for this organization yet.",
+    );
     expect(output).toContain("Manage events");
   });
 
@@ -170,7 +178,11 @@ describe("organizer overview", () => {
       markup({
         status: "error",
         message: "The API is unavailable.",
-        core: { status: "error", data: null, message: "The API is unavailable." },
+        core: {
+          status: "error",
+          data: null,
+          message: "The API is unavailable.",
+        },
         activity: { status: "loading", data: null },
       }),
     ).toContain("The API is unavailable.");
@@ -194,7 +206,11 @@ describe("organizer overview", () => {
     const failed = markup({
       status: "loaded",
       core: { status: "loaded", data: loadedCore },
-      activity: { status: "error", data: null, message: "Activity is unavailable." },
+      activity: {
+        status: "error",
+        data: null,
+        message: "Activity is unavailable.",
+      },
     });
     expect(failed).toContain("Live program");
     expect(failed).toContain("Action items unavailable");
@@ -231,27 +247,38 @@ describe("organizer overview", () => {
         NEXT_PUBLIC_API_URL: "http://localhost:8787/",
         NEXT_PUBLIC_APP_ENV: "local",
       }),
-    ).toEqual({ apiBaseUrl: "http://localhost:8787", organizationId: "local-organization" });
+    ).toEqual({
+      apiBaseUrl: "http://localhost:8787",
+      organizationId: "local-organization",
+    });
     expect(
       resolveOrganizerOverviewConfig({
         NEXT_PUBLIC_API_URL: "http://localhost:8787/",
         NEXT_PUBLIC_APP_ENV: "local",
         NEXT_PUBLIC_ORGANIZATION_ID: "ai-engineer",
       }),
-    ).toEqual({ apiBaseUrl: "http://localhost:8787", organizationId: "ai-engineer" });
+    ).toEqual({
+      apiBaseUrl: "http://localhost:8787",
+      organizationId: "ai-engineer",
+    });
     expect(
       resolveOrganizerOverviewConfig({
         NEXT_PUBLIC_API_URL: "https://api.example.test",
         NEXT_PUBLIC_APP_ENV: "production",
         NEXT_PUBLIC_ORGANIZATION_ID: "ai-engineer",
       }),
-    ).toEqual({ apiBaseUrl: "https://api.example.test", organizationId: "ai-engineer" });
+    ).toEqual({
+      apiBaseUrl: "https://api.example.test",
+      organizationId: "ai-engineer",
+    });
     expect(
       resolveOrganizerOverviewConfig({
         NEXT_PUBLIC_API_URL: "https://api.example.test",
         NEXT_PUBLIC_APP_ENV: "production",
       }),
-    ).toMatchObject({ error: expect.stringContaining("NEXT_PUBLIC_ORGANIZATION_ID") });
+    ).toMatchObject({
+      error: expect.stringContaining("NEXT_PUBLIC_ORGANIZATION_ID"),
+    });
   });
 
   it("fetches the exact credentialed core and activity endpoints", async () => {
@@ -264,7 +291,9 @@ describe("organizer overview", () => {
         const requestedUrl = String(url);
         requestedUrls.push(requestedUrl);
         requestedInit = init;
-        const data = requestedUrl.endsWith("/core") ? loadedCore : loadedActivity;
+        const data = requestedUrl.endsWith("/core")
+          ? loadedCore
+          : loadedActivity;
         return new Response(JSON.stringify({ data }), {
           status: 200,
           headers: { "content-type": "application/json" },
@@ -300,11 +329,15 @@ describe("organizer overview", () => {
         if (String(url).endsWith("/core")) {
           coreRequestCount += 1;
           await coreGate;
-          return new Response(JSON.stringify({ data: loadedCore }), { status: 200 });
+          return new Response(JSON.stringify({ data: loadedCore }), {
+            status: 200,
+          });
         }
         activityRequestCount += 1;
         await activityGate;
-        return new Response(JSON.stringify({ data: loadedActivity }), { status: 200 });
+        return new Response(JSON.stringify({ data: loadedActivity }), {
+          status: 200,
+        });
       },
     );
 
@@ -319,7 +352,9 @@ describe("organizer overview", () => {
 
     releaseCore?.();
     releaseActivity?.();
-    await expect(Promise.all([firstCore, secondCore, firstActivity, secondActivity])).resolves.toEqual([
+    await expect(
+      Promise.all([firstCore, secondCore, firstActivity, secondActivity]),
+    ).resolves.toEqual([
       loadedCore,
       loadedCore,
       loadedActivity,
@@ -334,7 +369,9 @@ describe("organizer overview", () => {
 
   it("rejects malformed, incomplete, and cross-tenant split envelopes", () => {
     expect(() =>
-      parseOrganizerOverviewCoreResponse({ data: { organizationId: "ai-engineer", events: [] } }),
+      parseOrganizerOverviewCoreResponse({
+        data: { organizationId: "ai-engineer", events: [] },
+      }),
     ).toThrow("organizer overview core response");
     expect(() =>
       parseOrganizerOverviewActivityResponse({
@@ -353,16 +390,53 @@ describe("organizer overview", () => {
       createElement(OrganizerEventsView, {
         state: {
           status: "loaded",
-          data: { organizationId: eventRecord.organizationId, events: [eventRecord] },
+          data: {
+            organizationId: eventRecord.organizationId,
+            events: [eventRecord],
+          },
         },
+        onCreate: async () => undefined,
+        onUpdate: async () => undefined,
+        onArchive: async () => undefined,
       }),
     );
 
     expect(output).toContain("Event management");
     expect(output).toContain("Create event");
-    expect(output).toContain("/admin/organizations/ai-engineer/events/event-live/agenda");
-    expect(output).toContain("/admin/organizations/ai-engineer/events/event-live/settings");
+    expect(output).toContain(
+      "/admin/organizations/ai-engineer/events/event-live/agenda",
+    );
+    expect(output).toContain(
+      "/admin/organizations/ai-engineer/events/event-live/settings",
+    );
     expect(output).toContain("America/Los_Angeles");
+  });
+  it("retains event records after refresh failure and disables stale mutations", () => {
+    const output = renderToStaticMarkup(
+      createElement(OrganizerEventsView, {
+        state: {
+          status: "error",
+          message: "The refresh failed.",
+          data: {
+            organizationId: eventRecord.organizationId,
+            events: [eventRecord],
+          },
+        },
+        onRetry: () => undefined,
+        onCreate: async () => undefined,
+        onUpdate: async () => undefined,
+        onArchive: async () => undefined,
+      }),
+    );
+
+    expect(output).toContain("Live program");
+    expect(output).toContain(
+      "Showing previous event data. The refresh failed.",
+    );
+    expect(output).toContain("Retry event refresh");
+    expect(output).not.toContain(">Create event<");
+    expect(output).not.toContain(">Edit<");
+    expect(output).not.toContain(">Archive<");
   });
 
   it("sends canonical event create fields and parses the event envelope", async () => {
@@ -417,7 +491,10 @@ describe("organizer overview", () => {
         data: [
           {
             ...eventRecord,
-            defaultCalendarSettings: { ...eventRecord.defaultCalendarSettings, timezone: "UTC" },
+            defaultCalendarSettings: {
+              ...eventRecord.defaultCalendarSettings,
+              timezone: "UTC",
+            },
           },
         ],
       }),
@@ -460,16 +537,40 @@ describe("admin navigation", () => {
       ["Events", "/admin/events"],
       ["Members", "/admin/organizations/org%2Flive/members"],
       ["CFP Form", "/admin/organizations/org%2Flive/events/event%2Flive/cfp"],
-      ["Submissions", "/admin/organizations/org%2Flive/events/event%2Flive/submissions"],
-      ["Reviews", "/admin/organizations/org%2Flive/events/event%2Flive/reviews"],
-      ["Speakers", "/admin/organizations/org%2Flive/events/event%2Flive/speakers"],
-      ["Deliverables", "/admin/organizations/org%2Flive/events/event%2Flive/deliverables"],
+      [
+        "Submissions",
+        "/admin/organizations/org%2Flive/events/event%2Flive/submissions",
+      ],
+      [
+        "Reviews",
+        "/admin/organizations/org%2Flive/events/event%2Flive/reviews",
+      ],
+      [
+        "Speakers",
+        "/admin/organizations/org%2Flive/events/event%2Flive/speakers",
+      ],
+      [
+        "Deliverables",
+        "/admin/organizations/org%2Flive/events/event%2Flive/deliverables",
+      ],
       ["Files", "/admin/organizations/org%2Flive/events/event%2Flive/files"],
       ["Agenda", "/admin/organizations/org%2Flive/events/event%2Flive/agenda"],
-      ["Settings", "/admin/organizations/org%2Flive/events/event%2Flive/settings"],
-      ["Communications", "/admin/organizations/org%2Flive/events/event%2Flive/communications"],
-      ["Reports", "/admin/organizations/org%2Flive/events/event%2Flive/reports"],
-      ["Content remix", "/admin/organizations/org%2Flive/events/event%2Flive/remix"],
+      [
+        "Settings",
+        "/admin/organizations/org%2Flive/events/event%2Flive/settings",
+      ],
+      [
+        "Communications",
+        "/admin/organizations/org%2Flive/events/event%2Flive/communications",
+      ],
+      [
+        "Reports",
+        "/admin/organizations/org%2Flive/events/event%2Flive/reports",
+      ],
+      [
+        "Content remix",
+        "/admin/organizations/org%2Flive/events/event%2Flive/remix",
+      ],
       ["Embeds", "/admin/organizations/org%2Flive/events/event%2Flive/embeds"],
     ] as const;
 
@@ -477,7 +578,9 @@ describe("admin navigation", () => {
     expect(new Set(items.map((item) => item.href)).size).toBe(items.length);
     expect(
       items.some((item) =>
-        `${item.label} ${item.href}`.toLocaleLowerCase().includes("accelevents"),
+        `${item.label} ${item.href}`
+          .toLocaleLowerCase()
+          .includes("accelevents"),
       ),
     ).toBe(false);
 
@@ -508,7 +611,10 @@ describe("admin navigation", () => {
     }
 
     expect(
-      eventNavigationFor({ organizationId: "ai-engineer", eventId: "event-live" }).some(
+      eventNavigationFor({
+        organizationId: "ai-engineer",
+        eventId: "event-live",
+      }).some(
         (item) => item.href === "/admin/organizations/ai-engineer/members",
       ),
     ).toBe(true);
@@ -516,13 +622,19 @@ describe("admin navigation", () => {
 
   it("recognizes only qualified event paths for event-scoped navigation", () => {
     expect(
-      qualifiedEventContext("/admin/organizations/org%2Flive/events/event%2Flive/agenda"),
+      qualifiedEventContext(
+        "/admin/organizations/org%2Flive/events/event%2Flive/agenda",
+      ),
     ).toEqual({ organizationId: "org/live", eventId: "event/live" });
     expect(qualifiedEventContext("/admin/events/event-live/agenda")).toBeNull();
   });
   it("mounts protected page content while organizer access is still being checked", () => {
     const output = renderToStaticMarkup(
-      createElement(AdminShell, null, createElement("p", null, "Primary organizer content")),
+      createElement(
+        AdminShell,
+        null,
+        createElement("p", null, "Primary organizer content"),
+      ),
     );
 
     expect(output).toContain("Open Sessionboard");
