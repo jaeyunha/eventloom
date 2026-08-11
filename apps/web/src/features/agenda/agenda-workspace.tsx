@@ -1,6 +1,10 @@
 "use client";
 
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  createScopedReadFlightCoordinator,
+  type ScopedReadFlightCoordinator,
+} from "@/lib/scoped-read-flight";
 import styles from "./agenda.module.css";
 import viewStyles from "./agenda-workspace.module.css";
 import { type AgendaApi, AgendaApiError, createAgendaApi } from "./api";
@@ -1426,6 +1430,7 @@ interface AgendaWorkspaceProps {
   api?: AgendaApi;
   appEnvironment?: string;
 }
+type AgendaWorkspaceLoadResult = Awaited<ReturnType<typeof loadAgendaWorkspace>>;
 
 export interface AgendaAsyncScopeToken {
   readonly scopeKey: string;
@@ -1493,6 +1498,10 @@ function ScopedAgendaWorkspace({
     },
     [appEnvironment, eventId],
   );
+  const initialReadKey = useMemo(
+    () => ({ api, resolveLocalDemoApi, scopeKey }),
+    [api, resolveLocalDemoApi, scopeKey],
+  );
   const [snapshot, setSnapshot] = useState<ScopedAgendaSnapshot | null>(null);
   const [preview, setPreview] = useState<AgendaPreview | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1501,6 +1510,14 @@ function ScopedAgendaWorkspace({
   const loadGenerationRef = useRef(0);
   const operationGenerationRef = useRef(0);
   const mountedRef = useRef(true);
+  const initialReadCoordinatorRef = useRef<ScopedReadFlightCoordinator<
+    object,
+    AgendaWorkspaceLoadResult
+  > | null>(null);
+  if (initialReadCoordinatorRef.current === null) {
+    initialReadCoordinatorRef.current = createScopedReadFlightCoordinator();
+  }
+  const initialReadCoordinator = initialReadCoordinatorRef.current;
   const busy = busyOperation !== null;
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -1544,7 +1561,7 @@ function ScopedAgendaWorkspace({
   }, []);
 
   const load = useCallback(
-    async (signal?: AbortSignal) => {
+    async (signal?: AbortSignal, initialRead?: Promise<AgendaWorkspaceLoadResult>) => {
       const token = { scopeKey, generation: loadGenerationRef.current + 1 };
       loadGenerationRef.current = token.generation;
       const loadIsCurrent = () =>
@@ -1558,7 +1575,8 @@ function ScopedAgendaWorkspace({
         setStatusMessage(null);
       }
       try {
-        const loaded = await loadAgendaWorkspace(api, resolveLocalDemoApi, eventId, signal);
+        const loaded = await (initialRead ??
+          loadAgendaWorkspace(api, resolveLocalDemoApi, eventId, signal));
         if (!agendaWorkspaceDataMatchesEvent(loaded.data, eventId)) {
           throw new Error("The agenda response belongs to another event.");
         }
@@ -1588,10 +1606,12 @@ function ScopedAgendaWorkspace({
   );
 
   useEffect(() => {
-    const controller = new AbortController();
-    void load(controller.signal);
-    return () => controller.abort();
-  }, [load]);
+    const lease = initialReadCoordinator.acquire(initialReadKey, (signal) =>
+      loadAgendaWorkspace(api, resolveLocalDemoApi, eventId, signal),
+    );
+    void load(lease.signal, lease.promise);
+    return () => lease.release();
+  }, [api, eventId, initialReadCoordinator, initialReadKey, load, resolveLocalDemoApi]);
 
   async function mutate(
     operation: (activeApi: AgendaApi, current: AgendaWorkspaceData) => Promise<AgendaWorkspaceData>,

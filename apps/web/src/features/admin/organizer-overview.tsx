@@ -10,6 +10,10 @@ import {
   useRef,
   useState,
 } from "react";
+import {
+  createScopedReadFlightCoordinator,
+  type ScopedReadFlightCoordinator,
+} from "@/lib/scoped-read-flight";
 import styles from "./admin-shell.module.css";
 
 export interface OrganizerOverviewCoreMetrics {
@@ -3035,6 +3039,13 @@ export function OrganizerEvents({
     if ("error" in config) return null;
     return createOrganizerEventsApi(config.apiBaseUrl, config.organizationId);
   }, [config, providedApi]);
+  const initialReadKey = useMemo(
+    () =>
+      api && !("error" in config)
+        ? { api, organizationId: config.organizationId }
+        : null,
+    [api, config],
+  );
   const [state, setState] = useState<OrganizerEventsViewState>(() =>
     "error" in config
       ? { status: "config-error", message: config.error }
@@ -3043,9 +3054,19 @@ export function OrganizerEvents({
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const generationRef = useRef(0);
+  const initialReadCoordinatorRef = useRef<
+    ScopedReadFlightCoordinator<object, readonly OrganizerEventRecord[]> | null
+  >(null);
+  if (initialReadCoordinatorRef.current === null) {
+    initialReadCoordinatorRef.current = createScopedReadFlightCoordinator();
+  }
+  const initialReadCoordinator = initialReadCoordinatorRef.current;
 
   const load = useCallback(
-    async (signal?: AbortSignal) => {
+    async (
+      signal?: AbortSignal,
+      initialRead?: Promise<readonly OrganizerEventRecord[]>,
+    ) => {
       if (!api || "error" in config) return;
       const generation = generationRef.current;
       setState((current) => {
@@ -3056,7 +3077,7 @@ export function OrganizerEvents({
       });
       setNotice(null);
       try {
-        const events = await api.listEvents(signal);
+        const events = await (initialRead ?? api.listEvents(signal));
         if (signal?.aborted || generationRef.current !== generation) return;
         if (
           events.some((event) => event.organizationId !== config.organizationId)
@@ -3084,7 +3105,7 @@ export function OrganizerEvents({
 
   useEffect(() => {
     generationRef.current += 1;
-    if (!api || "error" in config) {
+    if (!api || "error" in config || !initialReadKey) {
       setState(
         "error" in config
           ? { status: "config-error", message: config.error }
@@ -3096,13 +3117,16 @@ export function OrganizerEvents({
       return;
     }
     setState({ status: "loading" });
-    const controller = new AbortController();
-    void load(controller.signal);
+    const lease = initialReadCoordinator.acquire(
+      initialReadKey,
+      (signal) => api.listEvents(signal),
+    );
+    void load(lease.signal, lease.promise);
     return () => {
       generationRef.current += 1;
-      controller.abort();
+      lease.release();
     };
-  }, [api, config, load]);
+  }, [api, config, initialReadCoordinator, initialReadKey, load]);
 
   async function create(input: OrganizerEventCreateInput) {
     if (!api || "error" in config) return;
