@@ -5917,7 +5917,7 @@ export class AirtableCommunicationRepository implements CommunicationRepository 
   ): Promise<readonly CommunicationTemplate[]> {
     return (
       await this.#templates.list({
-        filterByFormula: eventFilterFormula("Settings JSON", eventId),
+        filterByFormula: communicationIndexedFilterFormula(tenantId, eventId, purpose),
       })
     )
       .filter(

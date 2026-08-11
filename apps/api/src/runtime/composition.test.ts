@@ -4231,9 +4231,9 @@ describe("production communication repository composition", () => {
     const templateRequest = transport.requests.find(
       (request) => request.method === "GET" && request.table === "Email Templates",
     );
-    expect(String(templateRequest?.query?.filterByFormula)).toContain("FIND(");
-    expect(String(templateRequest?.query?.filterByFormula)).toContain("{Settings JSON}");
-    expect(String(templateRequest?.query?.filterByFormula)).toContain(eventId);
+    expect(String(templateRequest?.query?.filterByFormula)).toBe(
+      `AND({Organization ID}='${tenantId}',{Event ID}='${eventId}',{Purpose}='organizer_group_email')`,
+    );
 
     transport.requests.length = 0;
     const service = new CommunicationService(repository, undefined, {
