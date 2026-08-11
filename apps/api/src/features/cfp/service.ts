@@ -44,6 +44,7 @@ export interface CfpRepository {
   getEvent(tenantId: string, eventId: string): Promise<EventCfp | null>;
   saveEvent(event: EventCfp, expectedVersion: number | null): Promise<void>;
   getForm(tenantId: string, formId: string): Promise<CfpForm | null>;
+  listFormsByIds?(ids: readonly string[]): Promise<readonly CfpForm[]>;
   listForms(tenantId: string, eventId: string): Promise<CfpForm[]>;
   saveForm(form: CfpForm, expectedVersion: number | null): Promise<void>;
   /**
@@ -662,19 +663,51 @@ export class CfpService {
     tenantId: string;
     eventId: string;
   }): Promise<CfpOrganizerSubmission[]> {
-    await this.#getEvent(input.tenantId, input.eventId);
+    const eventRead = this.#getEvent(input.tenantId, input.eventId);
     const listSubmissions = this.#repository.listSubmissionsForEvent;
     if (listSubmissions === undefined) {
+      await eventRead;
       throw new CfpError("NOT_FOUND", "The CFP submissions were not found.");
     }
-    const submissions = await listSubmissions.call(this.#repository, input.tenantId, input.eventId);
+    const [, submissions] = await Promise.all([
+      eventRead,
+      listSubmissions.call(this.#repository, input.tenantId, input.eventId),
+    ]);
+    const scopedSubmissions = submissions.filter(
+      (submission) =>
+        submission.tenantId === input.tenantId && submission.eventId === input.eventId,
+    );
+    const formIds = [...new Set(scopedSubmissions.map((submission) => submission.formId))];
+    const formsById = new Map<string, CfpForm>();
+    if (formIds.length > 0) {
+      const listFormsByIds = this.#repository.listFormsByIds;
+      if (listFormsByIds !== undefined) {
+        const forms = await listFormsByIds.call(this.#repository, formIds);
+        for (const form of forms) {
+          if (form.tenantId === input.tenantId) {
+            formsById.set(form.id, form);
+          }
+        }
+      } else {
+        const forms = await Promise.all(
+          formIds.map((formId) => this.#getForm(input.tenantId, formId)),
+        );
+        for (const [index, formId] of formIds.entries()) {
+          const form = forms[index];
+          if (form !== undefined) {
+            formsById.set(formId, form);
+          }
+        }
+      }
+    }
 
     const records: CfpOrganizerSubmission[] = [];
-    for (const submission of submissions) {
-      if (submission.tenantId !== input.tenantId || submission.eventId !== input.eventId) {
-        continue;
+    for (const submission of scopedSubmissions) {
+      const form = formsById.get(submission.formId);
+      if (form === undefined) {
+        throw new CfpError("NOT_FOUND", "The CFP form was not found.");
       }
-      const form = await this.#getForm(input.tenantId, submission.formId);
+      ensureTenant(form.tenantId, input.tenantId);
       if (form.eventId !== input.eventId) {
         continue;
       }

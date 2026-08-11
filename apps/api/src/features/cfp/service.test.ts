@@ -241,6 +241,35 @@ class MemoryRepository implements CfpRepository {
     }
   }
 }
+class BatchedMemoryRepository extends MemoryRepository {
+  readonly listFormsByIdsCalls: string[][] = [];
+
+  async listFormsByIds(ids: readonly string[]): Promise<readonly CfpForm[]> {
+    this.listFormsByIdsCalls.push([...ids]);
+    const requested = new Set(ids);
+    return [...this.forms.values()]
+      .filter((form) => requested.has(form.id))
+      .map((form) => structuredClone(form));
+  }
+}
+
+class ParallelFormRepository extends MemoryRepository {
+  readonly formReadIds: string[] = [];
+  activeFormReads = 0;
+  maxConcurrentFormReads = 0;
+
+  async getForm(tenantId: string, formId: string): Promise<CfpForm | null> {
+    this.formReadIds.push(formId);
+    this.activeFormReads += 1;
+    this.maxConcurrentFormReads = Math.max(this.maxConcurrentFormReads, this.activeFormReads);
+    try {
+      await Promise.resolve();
+      return await super.getForm(tenantId, formId);
+    } finally {
+      this.activeFormReads -= 1;
+    }
+  }
+}
 
 class MemoryIdempotency implements CfpIdempotencyCoordinator {
   readonly #operations = new Map<string, Promise<unknown>>();
@@ -256,8 +285,11 @@ class MemoryIdempotency implements CfpIdempotencyCoordinator {
   }
 }
 
-function createFixture(now = "2026-08-08T12:00:00.000Z", fileAssets?: CfpFileAssetAuthorizer) {
-  const repository = new MemoryRepository();
+function createFixture(
+  now = "2026-08-08T12:00:00.000Z",
+  fileAssets?: CfpFileAssetAuthorizer,
+  repository: MemoryRepository = new MemoryRepository(),
+) {
   const confirmations: string[] = [];
   const confirmationPayloads: Array<{ eventName: string; submissionTitle: string }> = [];
   const confirmationKeys = new Set<string>();
@@ -290,6 +322,36 @@ function createFixture(now = "2026-08-08T12:00:00.000Z", fileAssets?: CfpFileAss
   return { service, repository, confirmations, confirmationPayloads, clock };
 }
 
+function buildOrganizerSubmission(overrides: Partial<Submission> = {}): Submission {
+  return {
+    id: "submission_1",
+    tenantId: "tenant_1",
+    eventId: "event_1",
+    formId: "form_1",
+    ownerAccountId: "account_1",
+    formVersion: 1,
+    version: 1,
+    status: "submitted",
+    completedSteps: ["welcome", "account", "submission", "participant", "review"],
+    answers: { title: "A submission" },
+    participants: [
+      {
+        id: "participant_1",
+        firstName: "Ada",
+        lastName: "Lovelace",
+        email: "ada@example.com",
+        role: "primary",
+        biography: "Engineer",
+        answers: { firstName: "Ada" },
+      },
+    ],
+    secondaryContacts: [],
+    createdAt: "2026-08-08T12:00:00.000Z",
+    updatedAt: "2026-08-08T12:00:00.000Z",
+    submittedAt: "2026-08-08T12:00:00.000Z",
+    ...overrides,
+  };
+}
 async function completeValidDraft(
   service: CfpService,
   idempotencyPrefix = "flow",
@@ -1069,6 +1131,64 @@ describe("CFP submission lifecycle", () => {
     });
   });
 
+  it("deduplicates organizer form enrichment through the optional batch lookup", async () => {
+    const repository = new BatchedMemoryRepository();
+    const { service } = createFixture(undefined, undefined, repository);
+    for (let index = 1; index <= 4; index += 1) {
+      repository.submissions.set(
+        `submission_${index}`,
+        buildOrganizerSubmission({ id: `submission_${index}` }),
+      );
+    }
+
+    const records = await service.listOrganizerSubmissions({
+      tenantId: "tenant_1",
+      eventId: "event_1",
+    });
+
+    expect(records).toHaveLength(4);
+    expect(repository.listFormsByIdsCalls).toEqual([["form_1"]]);
+    expect(records[0]).toEqual({
+      submission: expect.objectContaining({ id: "submission_1" }),
+      submissionFields: repository.forms.get("form_1")?.submissionFields,
+      participantFields: repository.forms.get("form_1")?.participantFields,
+    });
+    expect(records[0]?.submission.participants).toEqual(buildOrganizerSubmission().participants);
+  });
+  it("keeps cross-tenant forms returned by a batch lookup out of organizer enrichment", async () => {
+    const repository = new BatchedMemoryRepository();
+    repository.forms.set("form_1", buildForm({ tenantId: "tenant_other" }));
+    repository.submissions.set("submission_1", buildOrganizerSubmission());
+    const { service } = createFixture(undefined, undefined, repository);
+
+    await expect(
+      service.listOrganizerSubmissions({ tenantId: "tenant_1", eventId: "event_1" }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(repository.listFormsByIdsCalls).toEqual([["form_1"]]);
+  });
+
+  it("parallelizes fallback form lookup across unique form ids", async () => {
+    const repository = new ParallelFormRepository();
+    repository.forms.set("form_2", buildForm({ id: "form_2" }));
+    repository.submissions.set(
+      "submission_1",
+      buildOrganizerSubmission({ id: "submission_1", formId: "form_1" }),
+    );
+    repository.submissions.set(
+      "submission_2",
+      buildOrganizerSubmission({ id: "submission_2", formId: "form_2" }),
+    );
+    const { service } = createFixture(undefined, undefined, repository);
+
+    const records = await service.listOrganizerSubmissions({
+      tenantId: "tenant_1",
+      eventId: "event_1",
+    });
+
+    expect(records).toHaveLength(2);
+    expect(repository.formReadIds).toEqual(["form_1", "form_2"]);
+    expect(repository.maxConcurrentFormReads).toBe(2);
+  });
   it("lists canonical organizer submissions with scoped forms and schema versions", async () => {
     const { service, repository } = createFixture();
     const organizerForm = buildForm();
