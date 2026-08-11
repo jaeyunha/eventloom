@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getPublishedAgenda,
   getPublishedProgram,
@@ -30,6 +30,12 @@ const publishedSpeakers: PublishedSpeakerGallery = {
 };
 
 describe("public embed API", () => {
+  beforeEach(() => {
+    vi.stubEnv("APP_ENV", "staging");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
   it("loads only the latest immutable published projection", async () => {
     const calls: Array<{
       input: RequestInfo | URL;
