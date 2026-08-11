@@ -11,6 +11,9 @@ Build and verify the product defined by `spec/open-sessionboard.md` and `prd.jso
 - Keep the Forge repository private during development. Public visibility is a release-gate action.
 - Preserve the clean-root repository history; make focused implementation commits after the baseline.
 - Never expose secrets from `.env`, Cloudflare, Airtable, OpenSend, OAuth providers, or Accelevents.
+- Deterministic fakes and mocked API responses are unit-test tools only. They never constitute release, deployment, integration, or end-to-end evidence.
+- Before claiming a workflow works, exercise it through the deployed browser UI and real Hono API against the actual Airtable, D1, Durable Object, R2, Queue, and integration boundaries it uses.
+- A production handoff requires chained multi-persona acceptance evidence from real persisted state; mocked Playwright routes cannot satisfy that gate.
 
 ## Architecture boundaries
 
@@ -18,7 +21,7 @@ Build and verify the product defined by `spec/open-sessionboard.md` and `prd.jso
 - Hono on Cloudflare Workers owns the application API.
 - Airtable is authoritative for program business records.
 - D1, Durable Objects, R2, and Queues own application state, coordination, files, and background work.
-- Integrations are adapters behind explicit interfaces; tests must have deterministic fakes.
+- Integrations are adapters behind explicit interfaces; unit tests may use deterministic fakes, but release verification must exercise the real deployed adapters.
 - All tenant-owned records and API access must enforce tenant isolation.
 
 ## Commands

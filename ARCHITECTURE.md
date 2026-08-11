@@ -16,7 +16,7 @@ Owns authentication enforcement, tenant authorization, validation, business work
 
 ### Airtable
 
-Authoritative store for organizations, events, forms, submissions, participants, profiles, review plans, evaluations, decisions, tasks, sessions, rooms, tracks, and agenda versions. Stable application IDs are stored independently of Airtable record IDs.
+Authoritative store for organizations, events, forms and fields, submissions, participants and profiles, review plans/evaluations/decisions, speaker tasks, sessions, rooms, tracks, formats, levels, tags and session statuses/settings, agenda versions/entries, portal contexts and session rosters, task forms/responses, portal resources/wiki pages, file assets/versions/comments, email templates/send snapshots, report definitions/runs, remix candidates/audit, reusable fields, publication outbox, and business audit records. Stable application IDs are stored independently of Airtable record IDs.
 
 ### Cloudflare state
 
@@ -27,7 +27,7 @@ Authoritative store for organizations, events, forms, submissions, participants,
 
 ## Authentication and authorization
 
-Better Auth runs in the Hono API and persists to D1. Magic-link login is required; Google and Microsoft OAuth are optional provider paths. Roles are organization-scoped (`owner`, `admin`, `reviewer`) while speakers access only their own profile, submissions, participants, and tasks. Public embeds use explicitly published projections.
+Better Auth runs in the Hono API and persists to D1. Magic-link login and verified email are required, with Google OAuth as the supported social-login path; Microsoft OAuth is not part of this build. Roles are organization-scoped (`owner`, `admin`, `reviewer`) while speakers access only their own profile, submissions, participants, and tasks. Public embeds use explicitly published projections.
 
 ## Core workflow
 
@@ -37,13 +37,12 @@ Better Auth runs in the Hono API and persists to D1. Magic-link login is require
 4. Human organizers make final decisions and trigger transactional communications.
 5. Accepted submissions create speaker tasks and schedulable sessions.
 6. Schedule mutations are conflict-checked and versioned before publication.
-7. Publication updates public embeds, calendar messages, webhooks, and optional Accelevents previews/pushes.
+7. Publication updates public embeds, calendar messages, webhooks, and queued delivery records.
 
 ## Integration contracts
 
-- **OpenSend:** sender identities `auth@foreverbrowsing.com`, `speakers@foreverbrowsing.com`, and `calendar@foreverbrowsing.com`; queue-backed retries and delivery auditing.
+- **OpenSend:** uses `auth@sessionboard.namuh.co`, `speakers@sessionboard.namuh.co`, and `calendar@sessionboard.namuh.co`; queue-backed retries and delivery auditing apply. Provider-side sender verification is a release prerequisite and is not claimed by this repository.
 - **Calendar:** RFC 5545 `REQUEST`, `UPDATE`, and `CANCEL` messages with stable UID, incrementing SEQUENCE, explicit TZID, and deterministic attendee identity. Calendar-provider OAuth is not required.
-- **Accelevents:** outbound-only preview/diff followed by explicit organizer confirmation; never an implicit write-through.
 - **Public API:** versioned REST resources, scoped API keys, OpenAPI documentation, cursor pagination, idempotent writes, consistent errors, and signed retrying webhooks.
 
 ## Reliability and security invariants
