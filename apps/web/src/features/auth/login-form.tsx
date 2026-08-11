@@ -6,8 +6,6 @@ import { safeLoginReturnTo } from "./return-path";
 
 const AUTH_PATH = "/api/auth";
 const ADMIN_PATH = "/admin";
-const CONFIGURATION_ERROR =
-  "Sign-in is unavailable because NEXT_PUBLIC_API_URL is not configured. Ask the site administrator to set it.";
 const INVALID_CREDENTIALS_MESSAGE = "The email or password is incorrect.";
 const UNVERIFIED_EMAIL_MESSAGE =
   "Your email is not verified yet. Check your inbox for a verification link.";
@@ -34,15 +32,14 @@ export type LoginErrorKind =
   | "email-unverified"
   | "server"
   | "network"
-  | "configuration"
   | "organization-domain"
   | "authentication";
 
 export interface LoginEnvironment {
-  readonly NEXT_PUBLIC_API_URL?: string | undefined;
+  readonly apiBaseUrl?: string | undefined;
 }
 
-export type LoginConfig = { readonly apiBaseUrl: string } | { readonly error: string };
+export type LoginConfig = { readonly apiBaseUrl: string };
 
 export type LoginFetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 const defaultFetcher: LoginFetcher = (input, init) => globalThis.fetch(input, init);
@@ -93,7 +90,7 @@ export interface LoginApi {
 }
 
 export interface LoginFormProps {
-  /** A test seam; production uses NEXT_PUBLIC_API_URL. */
+  /** A test/injection seam; production uses the same-origin browser gateway. */
   readonly apiBaseUrl?: string;
   /** A test seam; production uses the browser fetch implementation. */
   readonly fetcher?: LoginFetcher;
@@ -264,7 +261,7 @@ function trimTrailingSlash(value: string): string {
 }
 
 function normalizeEnvironment(environment: LoginEnvironment): string {
-  return trimTrailingSlash(environment.NEXT_PUBLIC_API_URL?.trim() ?? "");
+  return trimTrailingSlash(environment.apiBaseUrl?.trim() ?? "");
 }
 function normalizedOrganizerEmail(value: string): string | null {
   const normalized = value.trim().toLowerCase();
@@ -274,14 +271,8 @@ function normalizedOrganizerEmail(value: string): string | null {
   return ORGANIZER_EMAIL_DOMAINS.has(normalized.slice(at + 1)) ? normalized : null;
 }
 
-export function resolveLoginConfig(
-  environment: LoginEnvironment = { NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL },
-): LoginConfig {
-  const apiBaseUrl = normalizeEnvironment(environment);
-  if (!apiBaseUrl) {
-    return { error: CONFIGURATION_ERROR };
-  }
-  return { apiBaseUrl };
+export function resolveLoginConfig(environment: LoginEnvironment = {}): LoginConfig {
+  return { apiBaseUrl: normalizeEnvironment(environment) };
 }
 
 function responseFields(payload: unknown): {
@@ -508,12 +499,11 @@ export function LoginForm({
     () =>
       apiBaseUrl === undefined
         ? resolveLoginConfig()
-        : resolveLoginConfig({ NEXT_PUBLIC_API_URL: apiBaseUrl }),
+        : resolveLoginConfig({ apiBaseUrl }),
     [apiBaseUrl],
   );
   const api = useMemo(
-    () =>
-      "apiBaseUrl" in config ? createLoginApi(config.apiBaseUrl, fetcher ?? defaultFetcher) : null,
+    () => createLoginApi(config.apiBaseUrl, fetcher ?? defaultFetcher),
     [config, fetcher],
   );
   const redirect = navigate ?? defaultNavigate;
@@ -546,10 +536,6 @@ export function LoginForm({
     setMagicLinkSent(false);
   }
 
-  function showConfigurationError(): void {
-    const message = "error" in config ? config.error : CONFIGURATION_ERROR;
-    setError({ kind: "configuration", message });
-  }
 
   function validateCredentials(): { email: string; password: string } | null {
     const normalizedEmail = email.trim().toLowerCase();
@@ -608,10 +594,6 @@ export function LoginForm({
 
   async function submitOrganizerSignup(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
-    if (api === null) {
-      showConfigurationError();
-      return;
-    }
     const credentials = validateOrganizerSignup();
     if (credentials === null) return;
 
@@ -636,10 +618,6 @@ export function LoginForm({
 
   async function submitCredentials(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
-    if (api === null) {
-      showConfigurationError();
-      return;
-    }
     const credentials = validateCredentials();
     if (credentials === null) return;
 
@@ -662,10 +640,6 @@ export function LoginForm({
   }
 
   async function submitMagicLink(): Promise<void> {
-    if (api === null) {
-      showConfigurationError();
-      return;
-    }
     const normalizedEmail = validateMagicLinkEmail();
     if (normalizedEmail === null) return;
 
@@ -761,14 +735,6 @@ export function LoginForm({
             </div>
           </div>
 
-          {"error" in config ? (
-            <div className={styles.error} id="login-config-error" role="alert">
-              <span className={styles.errorMark} aria-hidden="true">
-                !
-              </span>
-              <p>{config.error}</p>
-            </div>
-          ) : null}
 
           {verificationRequired ? (
             <div className={styles.boundaryNote} role="status" aria-live="polite">

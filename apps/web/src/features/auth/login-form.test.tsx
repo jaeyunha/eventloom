@@ -292,13 +292,13 @@ describe("organizer login", () => {
     expect(markup).not.toContain("Email me a magic link");
   });
 
-  it("reports missing API configuration without rendering a misleading sign-in state", () => {
-    expect(resolveLoginConfig({})).toMatchObject({
-      error: expect.stringContaining("NEXT_PUBLIC_API_URL"),
-    });
+  it("uses the same-origin gateway without browser API configuration", () => {
+    expect(resolveLoginConfig({})).toEqual({ apiBaseUrl: "" });
+    expect(resolveLoginConfig({ apiBaseUrl: "   " })).toEqual({ apiBaseUrl: "" });
+
     const markup = renderToStaticMarkup(createElement(LoginForm, { apiBaseUrl: "   " }));
 
-    expect(markup).toContain('role="alert"');
-    expect(markup).toContain("NEXT_PUBLIC_API_URL");
+    expect(markup).not.toContain('id="login-config-error"');
+    expect(markup).not.toContain("NEXT_PUBLIC_API_URL");
   });
 });

@@ -4,7 +4,6 @@ import { z } from "zod";
 const webEnvironmentSchema = z.object({
   APP_ENV: deploymentEnvironmentSchema,
   NEXT_PUBLIC_APP_URL: z.url(),
-  NEXT_PUBLIC_API_URL: z.url(),
 });
 
 export type WebEnvironment = z.infer<typeof webEnvironmentSchema>;
