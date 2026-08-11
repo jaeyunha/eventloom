@@ -1818,9 +1818,16 @@ describe("local runtime composition", () => {
       table: "Published Speaker Projections",
       fields: {
         "Application ID": `published:${eventId}`,
+        "Organization ID": organizationId,
+        "Event Slug": eventId,
         "Projection JSON": JSON.stringify({
           id: `published:${eventId}`,
           organizationId,
+          eventId,
+          eventSlug: eventId,
+          revisionId: "revision-devflow-1",
+          revisionNumber: 1,
+          publishedAt: updatedAt,
           event: {
             slug: eventId,
             name: "Devflow Conference",
@@ -2121,6 +2128,51 @@ describe("local runtime composition", () => {
     expect(publicationPayload.data.speakers.map((speaker) => speaker.id)).not.toContain(
       selectedContact.data.id,
     );
+
+    const projectionRead = [...transport.requests]
+      .reverse()
+      .find(
+        (request) => request.method === "GET" && request.table === "Published Speaker Projections",
+      );
+    expect(projectionRead?.query).toMatchObject({
+      pageSize: 2,
+      filterByFormula: `{Event Slug}='${eventId}'`,
+    });
+
+    transport.seed({
+      baseId: "base-test",
+      table: "Published Speaker Projections",
+      recordId: "rec00000000000099",
+      fields: {
+        "Application ID": `published:other:${eventId}`,
+        "Organization ID": "other-organization",
+        "Event Slug": eventId,
+        "Projection JSON": JSON.stringify({
+          id: `published:other:${eventId}`,
+          organizationId: "other-organization",
+          eventId: "other-event",
+          eventSlug: eventId,
+          revisionId: "revision-other-1",
+          revisionNumber: 1,
+          publishedAt: updatedAt,
+          event: {
+            slug: eventId,
+            name: "Ambiguous Event",
+            timeZone: "UTC",
+            startsOn: "2026-08-09",
+            endsOn: "2026-08-10",
+            venueName: null,
+          },
+          revision: {
+            id: "revision-other-1",
+            number: 1,
+            publishedAt: updatedAt,
+          },
+          speakers: [],
+        }),
+      },
+    });
+    await expect(dependencies.publishedSpeakers?.getPublishedSpeakers(eventId)).resolves.toBeNull();
   });
   it("requires the fixed origin pair and OpenSend credentials", () => {
     const bindings = productionBindings(new FakeAirtableTransport(), productionD1("unused"));
@@ -2610,14 +2662,20 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
     }
 
     await dependencies.agenda.afterPublish(eventId, revision);
-    expect(
-      transport.requests.some(
-        (request) =>
-          request.table === "Published Speaker Projections" &&
-          JSON.stringify(request.body ?? {}).includes("Priya Raman") &&
-          JSON.stringify(request.body ?? {}).includes(revision.id),
-      ),
-    ).toBe(true);
+    const projectionWrite = transport.requests.find(
+      (request) => request.method === "POST" && request.table === "Published Speaker Projections",
+    );
+    expect(projectionWrite?.body).toMatchObject({
+      fields: {
+        "Application ID": `published-speakers:${organizationId}:${eventId}`,
+        "Organization ID": organizationId,
+        "Event Slug": "published-cache-event",
+        "Revision ID": revision.id,
+        "Revision Number": revision.revisionNumber,
+        "Published At": revision.publishedAt,
+      },
+    });
+    expect(JSON.stringify(projectionWrite?.body ?? {})).toContain("Priya Raman");
 
     expect([...state.outbox.values()]).toContainEqual(
       expect.objectContaining({

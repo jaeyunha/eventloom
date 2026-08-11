@@ -175,6 +175,7 @@ import type {
 import {
   type AirtableListOptions,
   type AirtableMapper,
+  type AirtablePage,
   AirtableRepository,
   AirtableRepositoryError,
   type AirtableTransport,
@@ -630,6 +631,10 @@ export class AirtableJsonStore<T extends object> {
     return this.#repository.deleteByRecordId(recordId);
   }
 
+  listPage(options: AirtableListOptions = {}): Promise<AirtablePage<T>> {
+    return this.#repository.list(options);
+  }
+
   async list(options: Omit<AirtableListOptions, "cursor"> = {}): Promise<T[]> {
     const values: T[] = [];
     let cursor: string | undefined;
@@ -680,6 +685,11 @@ export const PUBLISHED_SPEAKER_PROJECTIONS_TABLE = "Published Speaker Projection
 interface PublishedSpeakerProjectionRecord extends PublishedSpeakerProjection {
   readonly id: string;
   readonly organizationId: string;
+  readonly eventId: string;
+  readonly eventSlug: string;
+  readonly revisionId: string;
+  readonly revisionNumber: number;
+  readonly publishedAt: string;
 }
 
 /**
@@ -697,21 +707,44 @@ class AirtablePublishedSpeakerProjectionStore implements PublishedSpeakerRouteDe
       ...options,
       table: PUBLISHED_SPEAKER_PROJECTIONS_TABLE,
       jsonField: "Projection JSON",
+      scopeFields: { organizationId: true },
+      indexedFields: {
+        "Event Slug": "eventSlug",
+        "Revision ID": "revisionId",
+        "Revision Number": "revisionNumber",
+        "Published At": "publishedAt",
+      },
     });
   }
   async putPublishedSpeakers(record: PublishedSpeakerProjectionRecord): Promise<void> {
     const existing = await this.#store.findWithRecordId(record.id);
     if (existing === undefined) {
       await this.#store.create(record);
-      return;
+    } else {
+      await this.#store.updateByRecordId(record.id, existing.recordId, record);
     }
-    await this.#store.updateByRecordId(record.id, existing.recordId, record);
+
+    const legacyId = `published-speakers:${record.eventSlug}`;
+    if (legacyId === record.id) return;
+    const legacy = await this.#store.findWithRecordId(legacyId);
+    if (
+      legacy !== undefined &&
+      legacy.entity.organizationId === record.organizationId &&
+      legacy.entity.event.slug === record.eventSlug
+    ) {
+      await this.#store.deleteByRecordId(legacy.recordId);
+    }
   }
 
   async getPublishedSpeakers(eventSlug: string): Promise<PublishedSpeakerProjection | null> {
     const normalizedSlug = eventSlug.trim();
     if (normalizedSlug.length === 0) return null;
-    const matches = (await this.#store.list()).filter(
+    const page = await this.#store.listPage({
+      pageSize: 2,
+      fields: [APPLICATION_ID, "Organization ID", "Event Slug", "Projection JSON"],
+      filterByFormula: applicationIdFormula("Event Slug", normalizedSlug),
+    });
+    const matches = page.items.filter(
       (record) => record.event.slug === normalizedSlug && record.organizationId.trim().length > 0,
     );
     if (matches.length !== 1) return null;
@@ -8326,8 +8359,13 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
         }
 
         await publishedSpeakerProjections.putPublishedSpeakers({
-          id: `published-speakers:${rawEvent.slug}`,
+          id: `published-speakers:${organizationId}:${eventId}`,
           organizationId,
+          eventId,
+          eventSlug: rawEvent.slug,
+          revisionId: revision.id,
+          revisionNumber: revision.revisionNumber,
+          publishedAt: revision.publishedAt,
           event: {
             slug: rawEvent.slug,
             name: rawEvent.name,
