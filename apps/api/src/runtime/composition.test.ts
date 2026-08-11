@@ -3768,6 +3768,426 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
     expect(evaluationsRead?.query?.filterByFormula).toContain(reviewerId);
     expect(evaluationsRead?.query?.filterByFormula).toContain(eventId);
   });
+  it("batches organizer workspace Airtable reads under the warm latency budget", async () => {
+    const tenantId = "tenant-organizer-workspace";
+    const eventId = "event-organizer-workspace";
+    const otherTenantId = "tenant-organizer-other";
+    const otherEventId = "event-organizer-other";
+    const planId = "plan-organizer-workspace";
+    const roundId = "round-organizer-workspace";
+    const now = "2026-08-10T12:00:00.000Z";
+    const later = "2026-08-10T12:05:00.000Z";
+    const transport = new FormulaRecordingTransport(220);
+    const reviewRound = {
+      id: roundId,
+      name: "Organizer review",
+      sequence: 1,
+      closesAt: null,
+      rubric: {
+        id: "rubric-organizer-workspace",
+        name: "Organizer rubric",
+        criteria: [
+          {
+            id: "quality",
+            label: "Quality",
+            description: "Proposal quality",
+            minimum: 1,
+            maximum: 5,
+            weight: 1,
+            required: true,
+          },
+        ],
+      },
+    };
+    const plan = {
+      id: planId,
+      tenantId,
+      eventId,
+      name: "Organizer queue",
+      status: "open",
+      blindReview: true,
+      closesAt: null,
+      assignmentRule: { reviewsPerSubmission: 1, maxAssignmentsPerReviewer: 10 },
+      rounds: [reviewRound],
+      reviewerProjection: { fieldIds: [], fileIds: [] },
+      gradingLockedAt: now,
+      version: 2,
+      createdAt: now,
+      updatedAt: now,
+    };
+    transport.seed({
+      baseId: "base-test",
+      table: "Review Plans",
+      fields: {
+        "Application ID": planId,
+        "Rounds JSON": JSON.stringify(plan),
+      },
+    });
+    transport.seed({
+      baseId: "base-test",
+      table: "Review Plans",
+      fields: {
+        "Application ID": "foreign-plan",
+        "Rounds JSON": JSON.stringify({
+          ...plan,
+          id: "foreign-plan",
+          tenantId: otherTenantId,
+          eventId: otherEventId,
+        }),
+      },
+    });
+    const assignmentSubmitted = {
+      id: "assignment-organizer-submitted",
+      tenantId,
+      eventId,
+      planId,
+      roundId,
+      submissionId: "submission-organizer-alpha",
+      reviewerId: "reviewer-organizer-one",
+      status: "assigned",
+      planVersion: 2,
+      rubricRevision: 2,
+      submissionRevision: 1,
+      version: 2,
+      createdAt: now,
+      updatedAt: later,
+    };
+    const assignmentOutstanding = {
+      id: "assignment-organizer-outstanding",
+      tenantId,
+      eventId,
+      planId,
+      roundId,
+      submissionId: "submission-organizer-zulu",
+      reviewerId: "reviewer-organizer-two",
+      status: "assigned",
+      planVersion: 2,
+      rubricRevision: 2,
+      submissionRevision: 1,
+      version: 1,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const staleAssignment = { ...assignmentSubmitted, version: 1, updatedAt: now };
+    const reviewSubmitted = {
+      id: `review:${assignmentSubmitted.id}`,
+      tenantId,
+      eventId,
+      planId,
+      roundId,
+      assignmentId: assignmentSubmitted.id,
+      submissionId: assignmentSubmitted.submissionId,
+      reviewerId: assignmentSubmitted.reviewerId,
+      scores: {
+        quality: {
+          criterionId: "quality",
+          value: 4,
+          origin: "human",
+          evidence: ["reviewer evidence"],
+          humanConfirmedBy: assignmentSubmitted.reviewerId,
+        },
+      },
+      comment: "Strong proposal",
+      submittedAt: later,
+      version: 2,
+      planRevision: 2,
+      rubricRevision: 2,
+      submissionRevision: 1,
+      createdAt: now,
+      updatedAt: later,
+    };
+    const staleReview = { ...reviewSubmitted, version: 1, updatedAt: now, submittedAt: null };
+    const reviewDraft = {
+      id: `review:${assignmentOutstanding.id}`,
+      tenantId,
+      eventId,
+      planId,
+      roundId,
+      assignmentId: assignmentOutstanding.id,
+      submissionId: assignmentOutstanding.submissionId,
+      reviewerId: assignmentOutstanding.reviewerId,
+      scores: {},
+      comment: "Draft",
+      submittedAt: null,
+      version: 1,
+      planRevision: 2,
+      rubricRevision: 2,
+      submissionRevision: 1,
+      createdAt: now,
+      updatedAt: now,
+    };
+    for (const evaluation of [
+      staleAssignment,
+      assignmentSubmitted,
+      assignmentOutstanding,
+      staleReview,
+      reviewSubmitted,
+      reviewDraft,
+      {
+        ...assignmentOutstanding,
+        id: "foreign-tenant-assignment",
+        tenantId: otherTenantId,
+      },
+      {
+        ...reviewDraft,
+        id: "review:foreign-tenant-assignment",
+        assignmentId: "foreign-tenant-assignment",
+        tenantId: otherTenantId,
+      },
+      {
+        ...assignmentOutstanding,
+        id: "foreign-event-assignment",
+        eventId: otherEventId,
+      },
+    ]) {
+      transport.seed({
+        baseId: "base-test",
+        table: "Evaluations",
+        fields: {
+          "Application ID": evaluation.id,
+          "Scores JSON": JSON.stringify({
+            ...evaluation,
+            entityType: "scores" in evaluation ? "evaluation_review" : "evaluation_assignment",
+          }),
+        },
+      });
+    }
+
+    const decisionAccepted = {
+      id: `decision:${planId}:${assignmentSubmitted.submissionId}`,
+      tenantId,
+      eventId,
+      planId,
+      submissionId: assignmentSubmitted.submissionId,
+      status: "accepted",
+      version: 2,
+      history: [
+        {
+          from: null,
+          to: "accepted",
+          reason: "Accepted",
+          decidedBy: "organizer-workspace",
+          decidedAt: later,
+          idempotencyKey: "decision-accepted",
+        },
+      ],
+      updatedAt: later,
+    };
+    const decisionWaitlisted = {
+      id: `decision:${planId}:${assignmentOutstanding.submissionId}`,
+      tenantId,
+      eventId,
+      planId,
+      submissionId: assignmentOutstanding.submissionId,
+      status: "waitlisted",
+      version: 1,
+      history: [
+        {
+          from: null,
+          to: "waitlisted",
+          reason: "Waitlisted",
+          decidedBy: "organizer-workspace",
+          decidedAt: now,
+          idempotencyKey: "decision-waitlisted",
+        },
+      ],
+      updatedAt: now,
+    };
+    const staleDecision = { ...decisionAccepted, version: 1, status: "waitlisted", updatedAt: now };
+    for (const decision of [
+      staleDecision,
+      decisionAccepted,
+      decisionWaitlisted,
+      {
+        ...decisionWaitlisted,
+        id: "decision:foreign-tenant",
+        tenantId: otherTenantId,
+        submissionId: "submission-foreign-tenant",
+      },
+      {
+        ...decisionWaitlisted,
+        id: "decision:foreign-event",
+        eventId: otherEventId,
+        submissionId: "submission-foreign-event",
+      },
+    ]) {
+      transport.seed({
+        baseId: "base-test",
+        table: "Decisions",
+        fields: {
+          "Application ID": decision.id,
+          "Metadata JSON": JSON.stringify({ ...decision, entityType: "evaluation_decision" }),
+        },
+      });
+    }
+
+    const seedSubmission = (input: {
+      readonly id: string;
+      readonly tenantId: string;
+      readonly eventId: string;
+      readonly title: string;
+      readonly version?: number;
+    }) => {
+      const version = input.version ?? 1;
+      transport.seed({
+        baseId: "base-test",
+        table: "Submissions",
+        fields: {
+          "Application ID": input.id,
+          "Answers JSON": JSON.stringify({
+            id: input.id,
+            tenantId: input.tenantId,
+            eventId: input.eventId,
+            formId: "form-organizer-workspace",
+            ownerAccountId: "speaker-organizer-workspace",
+            formVersion: 1,
+            version,
+            status: "submitted",
+            completedSteps: ["welcome"],
+            answers: { title: input.title, abstract: `${input.title} abstract` },
+            participants: [],
+            secondaryContacts: [],
+            createdAt: now,
+            updatedAt: version === 1 ? now : later,
+            submittedAt: now,
+            reopenedAt: null,
+          }),
+        },
+      });
+    };
+    seedSubmission({
+      id: "submission-organizer-alpha",
+      tenantId,
+      eventId,
+      title: "Alpha proposal",
+    });
+    seedSubmission({
+      id: "submission-organizer-zulu",
+      tenantId,
+      eventId,
+      title: "Zulu proposal",
+    });
+    seedSubmission({
+      id: "submission-foreign-tenant",
+      tenantId: otherTenantId,
+      eventId,
+      title: "Foreign tenant proposal",
+    });
+    seedSubmission({
+      id: "submission-foreign-event",
+      tenantId,
+      eventId: otherEventId,
+      title: "Foreign event proposal",
+    });
+
+    const service = new EvaluationService(
+      new AirtableEvaluationRepository({ baseId: "base-test", transport }),
+      new AirtableSubmissionReviewSource(
+        new AirtableCfpRepository({ baseId: "base-test", transport }),
+      ),
+    );
+    transport.requests.length = 0;
+    const startedAt = performance.now();
+    const workspace = await service.getOrganizerWorkspace(
+      {
+        tenantId,
+        userId: "organizer-workspace",
+        kind: "human",
+        grants: [{ eventId, role: "organizer" }],
+      },
+      eventId,
+    );
+    const elapsedMs = performance.now() - startedAt;
+
+    expect(elapsedMs).toBeLessThan(1_000);
+    expect(workspace.plan).toMatchObject({ id: planId, tenantId, eventId });
+    expect(workspace.submissions.map((submission) => submission.id).sort()).toEqual([
+      "submission-organizer-alpha",
+      "submission-organizer-zulu",
+    ]);
+    expect(workspace.assignments.map((assignment) => assignment.id).sort()).toEqual([
+      assignmentOutstanding.id,
+      assignmentSubmitted.id,
+    ]);
+    expect(workspace.progress).toMatchObject({
+      planId,
+      total: 2,
+      assigned: 1,
+      inProgress: 0,
+      submitted: 1,
+      abstained: 0,
+      completionPercent: 50,
+    });
+    expect(workspace.progress.reviewers).toEqual([
+      expect.objectContaining({
+        reviewerId: assignmentSubmitted.reviewerId,
+        roundId,
+        assigned: 1,
+        submitted: 1,
+        outstanding: 0,
+        completionPercent: 100,
+      }),
+      expect.objectContaining({
+        reviewerId: assignmentOutstanding.reviewerId,
+        roundId,
+        assigned: 1,
+        submitted: 0,
+        outstanding: 1,
+        completionPercent: 0,
+      }),
+    ]);
+    expect(workspace.decisions).toEqual({
+      [assignmentSubmitted.submissionId]: expect.objectContaining({
+        id: decisionAccepted.id,
+        status: "accepted",
+        version: 2,
+      }),
+      [assignmentOutstanding.submissionId]: expect.objectContaining({
+        id: decisionWaitlisted.id,
+        status: "waitlisted",
+        version: 1,
+      }),
+    });
+    expect(workspace.aggregates).toHaveLength(2);
+    expect(workspace.aggregates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          planId,
+          roundId,
+          submissionId: assignmentSubmitted.submissionId,
+          expectedReviewCount: 1,
+          submittedReviewCount: 1,
+          averageWeightedTotal: 4,
+          possibleWeightedTotal: 5,
+          criteria: [expect.objectContaining({ criterionId: "quality", average: 4, count: 1 })],
+        }),
+        expect.objectContaining({
+          planId,
+          roundId,
+          submissionId: assignmentOutstanding.submissionId,
+          expectedReviewCount: 1,
+          submittedReviewCount: 0,
+          averageWeightedTotal: null,
+          possibleWeightedTotal: 5,
+        }),
+      ]),
+    );
+    const reads = transport.requests.filter((request) => request.method === "GET");
+    expect(reads).toHaveLength(4);
+    expect(reads.map((request) => request.table).sort()).toEqual([
+      "Decisions",
+      "Evaluations",
+      "Review Plans",
+      "Submissions",
+    ]);
+    for (const table of ["Review Plans", "Evaluations", "Decisions"] as const) {
+      const read = reads.find((request) => request.table === table);
+      expect(read?.query?.filterByFormula).toContain("AND(");
+      expect(read?.query?.filterByFormula).toContain(tenantId);
+      expect(read?.query?.filterByFormula).toContain(eventId);
+    }
+    expect(JSON.stringify(workspace)).not.toContain("foreign");
+  });
   it("queues reviewer reminders through the shared outbox with stable idempotency", async () => {
     const transport = new FakeAirtableTransport();
     transport.seed({

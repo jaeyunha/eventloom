@@ -62,6 +62,7 @@ import type {
 import { conflict } from "../features/evaluations/errors";
 import type {
   EvaluationRepository,
+  OrganizerWorkspaceRecords,
   ReviewerWorkspaceRecords,
   SubmissionReviewLookup,
   SubmissionReviewSource,
@@ -287,6 +288,23 @@ function isEvaluationAssignmentRecord(value: object): boolean {
 function isEvaluationReviewRecord(value: object): boolean {
   const kind = entityType(value);
   return kind === "evaluation_review" || (kind === undefined && "scores" in value);
+}
+
+function isEvaluationDecisionRecord(value: object): value is EvaluationDecision {
+  if (!isRecord(value)) return false;
+  const kind = entityType(value);
+  if (kind !== undefined && kind !== "evaluation_decision") return false;
+  return (
+    typeof value.id === "string" &&
+    typeof value.tenantId === "string" &&
+    typeof value.eventId === "string" &&
+    typeof value.planId === "string" &&
+    typeof value.submissionId === "string" &&
+    (value.status === "accepted" || value.status === "waitlisted" || value.status === "rejected") &&
+    typeof value.version === "number" &&
+    Array.isArray(value.history) &&
+    typeof value.updatedAt === "string"
+  );
 }
 
 function textValue(record: JsonRecord, ...keys: readonly string[]): string | null {
@@ -4085,6 +4103,90 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
     return {
       assignments: [...assignmentsById.values()],
       reviews: [...reviewsByAssignment.values()],
+    };
+  }
+
+  async listOrganizerWorkspaceRecords(
+    tenantId: string,
+    eventId: string,
+  ): Promise<OrganizerWorkspaceRecords> {
+    const [evaluationRecords, decisionRecords] = await Promise.all([
+      this.#evaluations.list({
+        filterByFormula: jsonContainsAllFormula("Scores JSON", [tenantId, eventId]),
+      }),
+      this.#decisions.list({
+        filterByFormula: jsonContainsAllFormula("Metadata JSON", [tenantId, eventId]),
+      }),
+    ]);
+    const assignmentsById = new Map<string, EvaluationAssignment>();
+    const reviewsByAssignment = new Map<string, EvaluationReview>();
+    const decisionsBySubmission = new Map<string, EvaluationDecision>();
+
+    for (const record of evaluationRecords) {
+      const assignmentRecord = isEvaluationAssignmentRecord(record);
+      const reviewRecord = isEvaluationReviewRecord(record);
+      if (!assignmentRecord && !reviewRecord) continue;
+      if (
+        resolvedOrganizationId(record) !== tenantId ||
+        record.eventId !== eventId ||
+        typeof record.version !== "number" ||
+        typeof record.updatedAt !== "string"
+      ) {
+        continue;
+      }
+      const value = untagged(record);
+      if (assignmentRecord) {
+        const assignment = value as unknown as EvaluationAssignment;
+        if (typeof assignment.id !== "string") continue;
+        const current = assignmentsById.get(assignment.id);
+        if (
+          current === undefined ||
+          assignment.version > current.version ||
+          (assignment.version === current.version &&
+            assignment.updatedAt.localeCompare(current.updatedAt) > 0)
+        ) {
+          assignmentsById.set(assignment.id, clone(assignment));
+        }
+      } else {
+        const review = value as unknown as EvaluationReview;
+        if (typeof review.assignmentId !== "string") continue;
+        const current = reviewsByAssignment.get(review.assignmentId);
+        if (
+          current === undefined ||
+          review.version > current.version ||
+          (review.version === current.version &&
+            review.updatedAt.localeCompare(current.updatedAt) > 0)
+        ) {
+          reviewsByAssignment.set(review.assignmentId, clone(review));
+        }
+      }
+    }
+
+    for (const record of decisionRecords) {
+      if (
+        !isEvaluationDecisionRecord(record) ||
+        resolvedOrganizationId(record) !== tenantId ||
+        record.eventId !== eventId
+      ) {
+        continue;
+      }
+      const decision = untagged(record);
+      const key = `${decision.planId}\u0000${decision.submissionId}`;
+      const current = decisionsBySubmission.get(key);
+      if (
+        current === undefined ||
+        decision.version > current.version ||
+        (decision.version === current.version &&
+          decision.updatedAt.localeCompare(current.updatedAt) > 0)
+      ) {
+        decisionsBySubmission.set(key, clone(decision));
+      }
+    }
+
+    return {
+      assignments: [...assignmentsById.values()],
+      reviews: [...reviewsByAssignment.values()],
+      decisions: [...decisionsBySubmission.values()],
     };
   }
 

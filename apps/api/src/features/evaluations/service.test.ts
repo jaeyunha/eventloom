@@ -3,6 +3,7 @@ import type { EvaluationError } from "./errors";
 import {
   InMemoryEvaluationRepository,
   InMemorySubmissionReviewSource,
+  type OrganizerWorkspaceRecords,
   type ReviewerWorkspaceRecords,
   type SubmissionReviewLookup,
 } from "./repository";
@@ -49,6 +50,8 @@ class StaleAssignmentRepository extends InMemoryEvaluationRepository {
 }
 class WorkspaceBatchRepository extends InMemoryEvaluationRepository {
   planListCalls = 0;
+  organizerWorkspaceCalls = 0;
+  decisionCalls = 0;
   workspaceCalls = 0;
   assignmentListCalls = 0;
   reviewListCalls = 0;
@@ -71,6 +74,19 @@ class WorkspaceBatchRepository extends InMemoryEvaluationRepository {
     if (gate !== null) await gate;
     return super.listReviewerWorkspaceRecords(requestedTenantId, reviewerId, eventIds);
   }
+  override async listOrganizerWorkspaceRecords(
+    requestedTenantId: string,
+    requestedEventId: string,
+  ): Promise<OrganizerWorkspaceRecords> {
+    this.organizerWorkspaceCalls += 1;
+    const gate = this.batchGate;
+    if (gate !== null) await gate;
+    return super.listOrganizerWorkspaceRecords(requestedTenantId, requestedEventId);
+  }
+  override async getDecision(requestedTenantId: string, planId: string, submissionId: string) {
+    this.decisionCalls += 1;
+    return super.getDecision(requestedTenantId, planId, submissionId);
+  }
 
   override async listAssignments(requestedTenantId: string, planId: string) {
     this.assignmentListCalls += 1;
@@ -87,6 +103,8 @@ class WorkspaceBatchRepository extends InMemoryEvaluationRepository {
     this.workspaceCalls = 0;
     this.assignmentListCalls = 0;
     this.reviewListCalls = 0;
+    this.organizerWorkspaceCalls = 0;
+    this.decisionCalls = 0;
   }
 }
 
@@ -96,6 +114,8 @@ class WorkspaceBatchSource extends InMemorySubmissionReviewSource {
   lastLookups: readonly SubmissionReviewLookup[] = [];
   omitMaterials = false;
   failure: Error | null = null;
+  organizerListCalls = 0;
+  organizerBatchGate: Promise<void> | null = null;
 
   override async getSubmissionForReview(
     requestedTenantId: string,
@@ -116,11 +136,19 @@ class WorkspaceBatchSource extends InMemorySubmissionReviewSource {
     if (this.omitMaterials) return [];
     return [...(await super.getSubmissionsForReview(requestedTenantId, lookups))].reverse();
   }
+  override async listSubmissionsForOrganizer(requestedTenantId: string, requestedEventId: string) {
+    this.organizerListCalls += 1;
+    const gate = this.organizerBatchGate;
+    if (gate !== null) await gate;
+    return super.listSubmissionsForOrganizer(requestedTenantId, requestedEventId);
+  }
 
   resetCounts(): void {
     this.singleCalls = 0;
     this.batchCalls = 0;
     this.lastLookups = [];
+    this.organizerListCalls = 0;
+    this.organizerBatchGate = null;
   }
 }
 
@@ -433,6 +461,97 @@ describe("evaluation plans and assignments", () => {
     await expect(service.listReviewerWorkspace(reviewer("reviewer-1"), eventId)).rejects.toBe(
       failure,
     );
+  });
+  it("batches organizer workspace reads with authoritative review progress", async () => {
+    const repository = new WorkspaceBatchRepository();
+    const submissions = new WorkspaceBatchSource([
+      submission,
+      { ...submission, id: "submission-2", title: "Another session" },
+    ]);
+    const { service } = await fixture({
+      repository,
+      submissions,
+      reviewsPerSubmission: 1,
+      maxAssignmentsPerReviewer: 2,
+    });
+    const assignment = await assignOne(service);
+    const draft = await service.saveReview(reviewer("reviewer-1"), assignment.id, {
+      scores: [
+        { criterionId: "quality", value: 4, origin: "human" },
+        { criterionId: "relevance", value: 8, origin: "human" },
+      ],
+    });
+    await service.submitReview(reviewer("reviewer-1"), assignment.id, draft.version);
+    await repository.putDecision(
+      {
+        id: "decision-1",
+        tenantId,
+        eventId,
+        planId: "plan-1",
+        submissionId: submission.id,
+        status: "accepted",
+        version: 1,
+        history: [],
+        updatedAt: nowIso,
+      },
+      null,
+    );
+    await repository.putAssignments([
+      { ...assignment, id: "assignment-other-event", eventId: "event-2" },
+      { ...assignment, id: "assignment-other-tenant", tenantId: "tenant-2" },
+    ]);
+    repository.resetCounts();
+    submissions.resetCounts();
+
+    let releaseBatchReads = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseBatchReads = resolve;
+    });
+    repository.batchGate = gate;
+    submissions.organizerBatchGate = gate;
+    const pending = service.getOrganizerWorkspace(organizer, eventId);
+
+    expect(repository.planListCalls).toBe(1);
+    expect(repository.organizerWorkspaceCalls).toBe(1);
+    expect(submissions.organizerListCalls).toBe(1);
+    releaseBatchReads();
+    const workspace = await pending;
+
+    expect(repository.assignmentListCalls).toBe(0);
+    expect(repository.reviewListCalls).toBe(0);
+    expect(repository.decisionCalls).toBe(0);
+    expect(workspace.plan.id).toBe("plan-1");
+    expect(workspace.submissions.map((entry) => entry.id)).toEqual([
+      "submission-1",
+      "submission-2",
+    ]);
+    expect(workspace.assignments).toHaveLength(1);
+    expect(workspace.assignments[0]).toMatchObject({
+      id: assignment.id,
+      status: "submitted",
+      tenantId,
+      eventId,
+      planId: "plan-1",
+    });
+    expect(workspace.progress).toMatchObject({
+      total: 1,
+      assigned: 0,
+      submitted: 1,
+      completionPercent: 100,
+    });
+    expect(workspace.aggregates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          submissionId: submission.id,
+          roundId: round.id,
+          submittedReviewCount: 1,
+        }),
+      ]),
+    );
+    expect(workspace.decisions[submission.id]).toMatchObject({
+      status: "accepted",
+      submissionId: submission.id,
+    });
   });
   it("hard-deletes outstanding assignments with no or draft reviews", async () => {
     const { service, repository } = await fixture({ reviewsPerSubmission: 2 });

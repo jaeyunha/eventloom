@@ -939,7 +939,7 @@ describe("review workspace", () => {
     expect(evaluatorMarkup).toContain("Declare conflict and abstain");
   });
 
-  it("loads organizer aggregates once per round and joins them by submission", async () => {
+  it("regresses the old 12-request two-phase baseline (plans 2, progress 2, assignments 2, submissions 2, aggregate 1, decisions 3) to one authoritative workspace request for three submissions", async () => {
     const requests: string[] = [];
     const plan = {
       id: "plan-batch",
@@ -995,8 +995,81 @@ describe("review workspace", () => {
         version: 1,
       },
     ];
+    const submissions = [
+      { id: "submission-a", title: "Submission A", abstract: "A" },
+      { id: "submission-b", title: "Submission B", abstract: "B" },
+      { id: "submission-c", title: "Submission C", abstract: "C" },
+    ];
+    const progress = {
+      planId: plan.id,
+      total: 3,
+      assigned: 1,
+      inProgress: 1,
+      submitted: 1,
+      abstained: 0,
+      completionPercent: 33,
+      reviewers: [
+        {
+          reviewerId: "reviewer-1",
+          roundId: "round-batch",
+          assigned: 1,
+          inProgress: 0,
+          submitted: 1,
+          abstained: 0,
+          outstanding: 0,
+          completionPercent: 100,
+        },
+      ],
+    };
+    const aggregates = [
+      {
+        roundId: "round-batch",
+        submissionId: "submission-b",
+        submittedReviewCount: 2,
+        expectedReviewCount: 3,
+        averageWeightedTotal: 3,
+        possibleWeightedTotal: 5,
+      },
+      {
+        roundId: "round-batch",
+        submissionId: "submission-a",
+        submittedReviewCount: 1,
+        expectedReviewCount: 1,
+        averageWeightedTotal: 4.5,
+        possibleWeightedTotal: 5,
+      },
+      {
+        roundId: "round-batch",
+        submissionId: "submission-c",
+        submittedReviewCount: 0,
+        expectedReviewCount: 1,
+        averageWeightedTotal: null,
+        possibleWeightedTotal: 5,
+      },
+    ];
+    const decisions = {
+      "submission-b": {
+        id: "decision-b",
+        tenantId: "tenant-test",
+        eventId: "summit-2026",
+        planId: plan.id,
+        submissionId: "submission-b",
+        status: "waitlisted",
+        version: 2,
+        history: [
+          {
+            from: null,
+            to: "waitlisted",
+            reason: "Needs a stronger delivery plan.",
+            decidedBy: "organizer-1",
+            decidedAt: "2026-08-10T02:00:00.000Z",
+          },
+        ],
+        updatedAt: "2026-08-10T02:00:00.000Z",
+      },
+    };
     const json = (body: unknown) =>
-      new Response(JSON.stringify(body), {
+      new Response(JSON.stringify({ data: body }), {
         status: 200,
         headers: { "content-type": "application/json" },
       });
@@ -1006,48 +1079,8 @@ describe("review workspace", () => {
         const url = new URL(String(input));
         requests.push(url.toString());
         const path = url.pathname.replace("/api/admin/evaluations", "");
-        if (path === "/plans") return json({ plans: [plan] });
-        if (path === `/plans/${plan.id}/progress`) {
-          return json({
-            total: 3,
-            assigned: 3,
-            inProgress: 1,
-            submitted: 1,
-            abstained: 0,
-            completionPercent: 33,
-            reviewers: [],
-          });
-        }
-        if (path === "/events/summit-2026/submissions") {
-          return json([
-            { id: "submission-a", title: "Submission A", abstract: "A" },
-            { id: "submission-b", title: "Submission B", abstract: "B" },
-            { id: "submission-c", title: "Submission C", abstract: "C" },
-          ]);
-        }
-        if (path === `/plans/${plan.id}/assignments`) return json({ assignments });
-        if (path === `/plans/${plan.id}/rounds/round-batch/aggregates`) {
-          return json({
-            aggregates: [
-              {
-                submissionId: "submission-b",
-                submittedReviewCount: 2,
-                expectedReviewCount: 3,
-                averageWeightedTotal: 3,
-                possibleWeightedTotal: 5,
-              },
-              {
-                submissionId: "submission-a",
-                submittedReviewCount: 1,
-                expectedReviewCount: 1,
-                averageWeightedTotal: 4.5,
-                possibleWeightedTotal: 5,
-              },
-            ],
-          });
-        }
-        if (/^\/plans\/plan-batch\/submissions\/[^/]+\/decision$/u.test(path)) {
-          return json(null);
+        if (path === "/organizer/workspace") {
+          return json({ plan, submissions, assignments, progress, aggregates, decisions });
         }
         throw new Error(`Unexpected evaluation request: ${url.toString()}`);
       }),
@@ -1055,16 +1088,45 @@ describe("review workspace", () => {
 
     try {
       const seed = await loadOrganizerData("summit-2026", "https://api.example");
-      const aggregateRequests = requests.filter((request) =>
-        new URL(request).pathname.endsWith("/aggregates"),
+      const paths = requests.map((request) => new URL(request).pathname);
+      const dedicatedPlanRequests = paths.filter((path) => path.endsWith("/plans"));
+      const progressRequests = paths.filter((path) => path.endsWith("/progress"));
+      const assignmentRequests = paths.filter((path) => path.endsWith("/assignments"));
+      const submissionRequests = paths.filter(
+        (path) => path.endsWith("/submissions") && !path.includes("/plans/"),
       );
-      const singularAggregateRequests = requests.filter((request) =>
-        /\/submissions\/[^/]+\/aggregate$/u.test(new URL(request).pathname),
-      );
+      const aggregateRequests = paths.filter((path) => path.endsWith("/aggregates"));
+      const decisionRequests = paths.filter((path) => path.endsWith("/decision"));
 
-      expect(aggregateRequests).toHaveLength(1);
-      expect(singularAggregateRequests).toHaveLength(0);
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toBe(
+        "https://api.example/api/admin/evaluations/organizer/workspace?eventId=summit-2026",
+      );
+      expect(dedicatedPlanRequests).toHaveLength(0);
+      expect(progressRequests).toHaveLength(0);
+      expect(assignmentRequests).toHaveLength(0);
+      expect(submissionRequests).toHaveLength(0);
+      expect(aggregateRequests).toHaveLength(0);
+      expect(decisionRequests).toHaveLength(0);
+      expect(submissions).toHaveLength(3);
       expect(seed.assignments).toEqual(assignments);
+      expect(seed.progress).toEqual({
+        totalAssignments: 3,
+        assigned: 1,
+        inProgress: 1,
+        submitted: 1,
+        abstained: 0,
+        conflicts: 0,
+        completionPercent: 33,
+        reviewers: progress.reviewers,
+      });
+      expect(seed.decisionBySubmission).toEqual({
+        "submission-b": {
+          status: "waitlisted",
+          reason: "Needs a stronger delivery plan.",
+          version: 2,
+        },
+      });
       expect(seed.aggregates).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -1084,7 +1146,7 @@ describe("review workspace", () => {
           expect.objectContaining({
             id: "submission-c",
             countedScore: "—",
-            possibleScore: "—",
+            possibleScore: "5.0",
             countedReviews: 0,
             expectedReviews: 1,
           }),

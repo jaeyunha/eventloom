@@ -169,6 +169,14 @@ export interface EvaluationReviewerWorkspaceAssignment extends ReviewContext {
 export interface EvaluationReviewerWorkspace {
   readonly assignments: readonly EvaluationReviewerWorkspaceAssignment[];
 }
+export interface EvaluationOrganizerWorkspace {
+  readonly plan: EvaluationPlan;
+  readonly submissions: readonly EvaluationSubmissionRecord[];
+  readonly assignments: readonly EvaluationAssignment[];
+  readonly progress: EvaluationProgress;
+  readonly aggregates: readonly EvaluationAggregate[];
+  readonly decisions: Readonly<Record<string, EvaluationDecision>>;
+}
 
 export interface AssignReviewersInput {
   planId: string;
@@ -532,6 +540,127 @@ function aggregateForSubmission(
     criteria,
   };
 }
+function effectiveAssignmentsForPlan(
+  plan: EvaluationPlan,
+  assignments: readonly EvaluationAssignment[],
+  reviews: readonly EvaluationReview[],
+): readonly EvaluationAssignment[] {
+  const submittedReviewIds = new Set(
+    reviews
+      .filter(
+        (review) =>
+          review.tenantId === plan.tenantId &&
+          review.eventId === plan.eventId &&
+          review.planId === plan.id &&
+          review.submittedAt !== null,
+      )
+      .map((review) => review.assignmentId),
+  );
+  return assignments
+    .filter(
+      (assignment) =>
+        assignment.tenantId === plan.tenantId &&
+        assignment.eventId === plan.eventId &&
+        assignment.planId === plan.id,
+    )
+    .map((assignment) => {
+      if (assignment.status === "abstained") return assignment;
+      if (submittedReviewIds.has(assignment.id)) {
+        return { ...assignment, status: "submitted" as const };
+      }
+      if (assignment.status === "submitted") {
+        return { ...assignment, status: "assigned" as const };
+      }
+      return assignment;
+    });
+}
+
+function progressForAssignments(
+  plan: EvaluationPlan,
+  assignments: readonly EvaluationAssignment[],
+): EvaluationProgress {
+  const relevantAssignments = assignments.filter(
+    (assignment) =>
+      assignment.tenantId === plan.tenantId &&
+      assignment.eventId === plan.eventId &&
+      assignment.planId === plan.id,
+  );
+  const count = (status: EvaluationAssignment["status"]) =>
+    relevantAssignments.filter((assignment) => assignment.status === status).length;
+  const submitted = count("submitted");
+  const abstained = count("abstained");
+  const actionable = relevantAssignments.length - abstained;
+  const reviewerProgress = new Map<
+    string,
+    {
+      reviewerId: string;
+      roundId: string;
+      assigned: number;
+      inProgress: number;
+      submitted: number;
+      abstained: number;
+      completionPercent: number;
+      outstanding: number;
+    }
+  >();
+  for (const assignment of relevantAssignments) {
+    const status = assignment.status;
+    const key = `${assignment.reviewerId}\u0000${assignment.roundId}`;
+    const current = reviewerProgress.get(key) ?? {
+      reviewerId: assignment.reviewerId,
+      roundId: assignment.roundId,
+      assigned: 0,
+      inProgress: 0,
+      submitted: 0,
+      abstained: 0,
+      completionPercent: 0,
+      outstanding: 0,
+    };
+    if (status === "abstained") {
+      current.abstained += 1;
+    } else {
+      current.assigned += 1;
+      if (status === "in_progress") current.inProgress += 1;
+      if (status === "submitted") current.submitted += 1;
+    }
+    current.outstanding = Math.max(0, current.assigned - current.submitted);
+    current.completionPercent =
+      current.assigned === 0 ? 0 : (current.submitted / current.assigned) * 100;
+    reviewerProgress.set(key, current);
+  }
+  return {
+    planId: plan.id,
+    total: relevantAssignments.length,
+    assigned: count("assigned"),
+    inProgress: count("in_progress"),
+    submitted,
+    abstained,
+    completionPercent: actionable === 0 ? 0 : (submitted / actionable) * 100,
+    reviewers: [...reviewerProgress.values()].sort(
+      (left, right) =>
+        left.reviewerId.localeCompare(right.reviewerId) ||
+        left.roundId.localeCompare(right.roundId),
+    ),
+  };
+}
+function organizerRound(plan: EvaluationPlan, now: Date): ReviewRound | undefined {
+  const openRound = [...plan.rounds]
+    .sort((left, right) => right.sequence - left.sequence || right.id.localeCompare(left.id))
+    .find(
+      (round) =>
+        plan.status === "open" &&
+        (round.opensAt === null ||
+          round.opensAt === undefined ||
+          Date.parse(round.opensAt) <= now.getTime()) &&
+        (round.closesAt === null || Date.parse(round.closesAt) > now.getTime()),
+    );
+  return (
+    openRound ??
+    [...plan.rounds].sort(
+      (left, right) => left.sequence - right.sequence || left.id.localeCompare(right.id),
+    )[0]
+  );
+}
 
 function suggestionStorageKey(tenantId: string, suggestionId: string): string {
   return `${tenantId}\u0000${suggestionId}`;
@@ -658,6 +787,89 @@ export class EvaluationService {
     const source = this.#submissions as SubmissionReviewSource & EvaluationSubmissionSource;
     if (source.listSubmissionsForOrganizer === undefined) return [];
     return source.listSubmissionsForOrganizer(actor.tenantId, eventId);
+  }
+  async getOrganizerWorkspace(
+    actor: EvaluationActor,
+    eventId: string,
+    preferredPlanId?: string,
+  ): Promise<EvaluationOrganizerWorkspace> {
+    const normalizedEventId = requireText(eventId, "Event id", 100);
+    requireHumanOrganizer(actor, normalizedEventId);
+    const normalizedPreferredPlanId =
+      preferredPlanId === undefined ? undefined : requireText(preferredPlanId, "Plan id", 100);
+    const [listedPlans, workspaceRecords, listedSubmissions] = await Promise.all([
+      this.#repository.listPlans(actor.tenantId, normalizedEventId),
+      this.#repository.listOrganizerWorkspaceRecords(actor.tenantId, normalizedEventId),
+      this.listOrganizerSubmissions(actor, normalizedEventId),
+    ]);
+    const plans = listedPlans.filter(
+      (plan) => plan.tenantId === actor.tenantId && plan.eventId === normalizedEventId,
+    );
+    const preferredPlan =
+      normalizedPreferredPlanId === undefined
+        ? undefined
+        : plans.find((plan) => plan.id === normalizedPreferredPlanId);
+    const plan =
+      preferredPlan ??
+      [...plans].sort(
+        (left, right) =>
+          (right.status === "open" ? 1 : 0) - (left.status === "open" ? 1 : 0) ||
+          right.updatedAt.localeCompare(left.updatedAt) ||
+          right.id.localeCompare(left.id),
+      )[0];
+    if (plan === undefined) {
+      throw notFound("No evaluation plan was found for this event.");
+    }
+    const submissions = [
+      ...new Map(
+        listedSubmissions
+          .filter(
+            (submission) =>
+              submission.tenantId === actor.tenantId && submission.eventId === normalizedEventId,
+          )
+          .map((submission) => [submission.id, submission] as const),
+      ).values(),
+    ];
+    const assignments = workspaceRecords.assignments.filter(
+      (assignment) =>
+        assignment.tenantId === actor.tenantId &&
+        assignment.eventId === normalizedEventId &&
+        assignment.planId === plan.id,
+    );
+    const reviews = workspaceRecords.reviews.filter(
+      (review) =>
+        review.tenantId === actor.tenantId &&
+        review.eventId === normalizedEventId &&
+        review.planId === plan.id,
+    );
+    const effectiveAssignments = effectiveAssignmentsForPlan(plan, assignments, reviews);
+    const round = organizerRound(plan, this.#clock());
+    const aggregates =
+      round === undefined
+        ? []
+        : [...submissions]
+            .sort((left, right) => left.id.localeCompare(right.id))
+            .map((submission) =>
+              aggregateForSubmission(plan, round, submission.id, assignments, reviews),
+            );
+    const decisions = Object.fromEntries(
+      workspaceRecords.decisions
+        .filter(
+          (decision) =>
+            decision.tenantId === actor.tenantId &&
+            decision.eventId === normalizedEventId &&
+            decision.planId === plan.id,
+        )
+        .map((decision) => [decision.submissionId, decision] as const),
+    );
+    return {
+      plan,
+      submissions,
+      assignments: effectiveAssignments,
+      progress: progressForAssignments(plan, effectiveAssignments),
+      aggregates,
+      decisions,
+    };
   }
 
   async reopenSubmission(
@@ -1962,74 +2174,7 @@ export class EvaluationService {
       this.#repository.listAssignments(actor.tenantId, plan.id),
       this.#repository.listReviews(actor.tenantId, plan.id),
     ]);
-    const assignments = allAssignments.filter((assignment) => assignment.eventId === plan.eventId);
-    const submittedReviewIds = new Set(
-      reviews
-        .filter((review) => review.eventId === plan.eventId && review.submittedAt !== null)
-        .map((review) => review.assignmentId),
-    );
-    const effectiveStatus = (assignment: EvaluationAssignment): EvaluationAssignment["status"] => {
-      if (assignment.status === "abstained") return "abstained";
-      if (submittedReviewIds.has(assignment.id)) return "submitted";
-      return assignment.status === "submitted" ? "assigned" : assignment.status;
-    };
-    const count = (status: EvaluationAssignment["status"]) =>
-      assignments.filter((assignment) => effectiveStatus(assignment) === status).length;
-    const submitted = count("submitted");
-    const abstained = count("abstained");
-    const actionable = assignments.length - abstained;
-    const reviewerProgress = new Map<
-      string,
-      {
-        reviewerId: string;
-        roundId: string;
-        assigned: number;
-        inProgress: number;
-        submitted: number;
-        abstained: number;
-        completionPercent: number;
-        outstanding: number;
-      }
-    >();
-    for (const assignment of assignments) {
-      const status = effectiveStatus(assignment);
-      const key = `${assignment.reviewerId}\u0000${assignment.roundId}`;
-      const current = reviewerProgress.get(key) ?? {
-        reviewerId: assignment.reviewerId,
-        roundId: assignment.roundId,
-        assigned: 0,
-        inProgress: 0,
-        submitted: 0,
-        abstained: 0,
-        completionPercent: 0,
-        outstanding: 0,
-      };
-      if (status === "abstained") {
-        current.abstained += 1;
-      } else {
-        current.assigned += 1;
-        if (status === "in_progress") current.inProgress += 1;
-        if (status === "submitted") current.submitted += 1;
-      }
-      current.outstanding = Math.max(0, current.assigned - current.submitted);
-      current.completionPercent =
-        current.assigned === 0 ? 0 : (current.submitted / current.assigned) * 100;
-      reviewerProgress.set(key, current);
-    }
-    return {
-      planId: plan.id,
-      total: assignments.length,
-      assigned: count("assigned"),
-      inProgress: count("in_progress"),
-      submitted,
-      abstained,
-      completionPercent: actionable === 0 ? 0 : (submitted / actionable) * 100,
-      reviewers: [...reviewerProgress.values()].sort(
-        (left, right) =>
-          left.reviewerId.localeCompare(right.reviewerId) ||
-          left.roundId.localeCompare(right.roundId),
-      ),
-    };
+    return progressForAssignments(plan, effectiveAssignmentsForPlan(plan, allAssignments, reviews));
   }
 
   async recordDecision(

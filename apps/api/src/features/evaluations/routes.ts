@@ -413,6 +413,16 @@ export function createEvaluationRoutes(
       ),
     });
   });
+  routes.get("/organizer/workspace", async (context) => {
+    const eventId = context.req.query("eventId");
+    return context.json({
+      data: await service.getOrganizerWorkspace(
+        actor(context),
+        eventId ?? "",
+        context.req.query("planId"),
+      ),
+    });
+  });
   routes.get("/plans", async (context) => {
     const eventId = context.req.query("eventId");
     return context.json({ plans: await service.listPlans(actor(context), eventId) });

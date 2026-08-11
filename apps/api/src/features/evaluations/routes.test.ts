@@ -429,6 +429,47 @@ describe("evaluation HTTP routes", () => {
     expect(emptyBatch.status).toBe(200);
     await expect(emptyBatch.json()).resolves.toEqual({ data: { assignments: [] } });
   });
+  it("returns the organizer workspace snapshot and validates event scope", async () => {
+    const app = createTestApp();
+    const missingEvent = await app.request("/evaluations/organizer/workspace");
+    expect(missingEvent.status).toBe(400);
+    await expect(missingEvent.json()).resolves.toMatchObject({
+      error: { code: "EVALUATION_INVALID_INPUT" },
+    });
+
+    await jsonRequest(app, "/evaluations/plans", "POST", planRequest);
+    await jsonRequest(app, "/evaluations/plans/plan-1/open", "POST", { expectedVersion: 1 });
+    await jsonRequest(app, "/evaluations/plans/plan-1/assignments", "POST", {
+      roundId: "round-1",
+      submissionId: "submission-1",
+      reviewerIds: ["reviewer-1"],
+    });
+
+    const response = await app.request(
+      "/evaluations/organizer/workspace?eventId=event-1&planId=plan-1",
+    );
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      data: {
+        plan: { id: string };
+        submissions: readonly { id: string }[];
+        assignments: readonly { planId: string; submissionId: string }[];
+        progress: { planId: string };
+        aggregates: readonly { planId: string; roundId: string }[];
+        decisions: Record<string, unknown>;
+      };
+    };
+    expect(body.data.plan.id).toBe("plan-1");
+    expect(body.data.submissions.map((entry) => entry.id)).toEqual(["submission-1"]);
+    expect(body.data.assignments).toEqual([
+      expect.objectContaining({ planId: "plan-1", submissionId: "submission-1" }),
+    ]);
+    expect(body.data.progress.planId).toBe("plan-1");
+    expect(body.data.aggregates).toEqual([
+      expect.objectContaining({ planId: "plan-1", roundId: "round-1" }),
+    ]);
+    expect(body.data.decisions).toEqual({});
+  });
   it("moves Sam from 0/2 to 2/2 with two blind, complete scorecards", async () => {
     const submissions: readonly SubmissionReviewMaterial[] = [
       {

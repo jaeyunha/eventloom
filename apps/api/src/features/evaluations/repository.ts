@@ -12,6 +12,11 @@ export interface ReviewerWorkspaceRecords {
   readonly assignments: readonly EvaluationAssignment[];
   readonly reviews: readonly EvaluationReview[];
 }
+export interface OrganizerWorkspaceRecords {
+  readonly assignments: readonly EvaluationAssignment[];
+  readonly reviews: readonly EvaluationReview[];
+  readonly decisions: readonly EvaluationDecision[];
+}
 
 export interface SubmissionReviewLookup {
   readonly eventId: string;
@@ -37,6 +42,10 @@ export interface EvaluationRepository {
     reviewerId: string,
     eventIds: readonly string[],
   ): Promise<ReviewerWorkspaceRecords>;
+  listOrganizerWorkspaceRecords(
+    tenantId: string,
+    eventId: string,
+  ): Promise<OrganizerWorkspaceRecords>;
   putReview(review: EvaluationReview, expectedVersion: number | null): Promise<void>;
   saveReviewDraft(
     assignment: EvaluationAssignment,
@@ -205,6 +214,22 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
             review.reviewerId === reviewerId &&
             allowedEventIds.has(review.eventId),
         )
+        .map(clone),
+    };
+  }
+  async listOrganizerWorkspaceRecords(
+    tenantId: string,
+    eventId: string,
+  ): Promise<OrganizerWorkspaceRecords> {
+    return {
+      assignments: [...this.#assignments.values()]
+        .filter((assignment) => assignment.tenantId === tenantId && assignment.eventId === eventId)
+        .map(clone),
+      reviews: [...this.#reviews.values()]
+        .filter((review) => review.tenantId === tenantId && review.eventId === eventId)
+        .map(clone),
+      decisions: [...this.#decisions.values()]
+        .filter((decision) => decision.tenantId === tenantId && decision.eventId === eventId)
         .map(clone),
     };
   }

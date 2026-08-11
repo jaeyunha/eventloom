@@ -291,6 +291,7 @@ interface ApiProgress {
 }
 
 interface ApiAggregate {
+  roundId: string;
   submissionId: string;
   submittedReviewCount: number;
   expectedReviewCount: number;
@@ -366,6 +367,14 @@ interface ApiReviewerWorkspaceAssignment extends ApiReviewContext {
 }
 interface ApiReviewerWorkspaceResponse {
   assignments: readonly ApiReviewerWorkspaceAssignment[];
+}
+interface ApiOrganizerWorkspaceResponse {
+  readonly plan: ApiPlan;
+  readonly submissions: readonly ApiSubmission[];
+  readonly assignments: readonly ApiAssignment[];
+  readonly progress: ApiProgress;
+  readonly aggregates: readonly ApiAggregate[];
+  readonly decisions: Readonly<Record<string, ApiDecision>>;
 }
 type AuthoritativeReview = NonNullable<ApiReviewContext["review"]>;
 
@@ -763,58 +772,42 @@ function normalizeApiSubmission(submission: ApiSubmission): ApiSubmission | null
     participants: Array.isArray(submission.participants) ? submission.participants : [],
   };
 }
-function selectApiPlan(plans: readonly ApiPlan[], preferredPlanId?: string): ApiPlan | undefined {
-  const normalizedPlans = plans.map(normalizeApiPlan);
-  const preferred =
-    preferredPlanId === undefined
-      ? undefined
-      : normalizedPlans.find((candidate) => candidate.id === preferredPlanId);
-  if (preferred !== undefined) return preferred;
-  return [...normalizedPlans].sort(
-    (left, right) =>
-      (right.status === "open" ? 1 : 0) - (left.status === "open" ? 1 : 0) ||
-      right.updatedAt.localeCompare(left.updatedAt) ||
-      right.id.localeCompare(left.id),
-  )[0];
-}
 export async function loadOrganizerData(
   eventId: string,
   baseUrl: string,
   preferredPlanId?: string,
-  includeDetails = true,
 ): Promise<ReviewPlanSeed> {
-  const planResult = await evaluationRequest<{ plans: readonly ApiPlan[] }>(
-    baseUrl,
-    `/plans?eventId=${encodeURIComponent(eventId)}`,
-  );
-  const plan = selectApiPlan(planResult.plans, preferredPlanId);
-  if (plan === undefined) throw new MissingEvaluationPlanError();
-  const [progress, submissions, assignmentResult] = await Promise.all([
-    evaluationRequest<ApiProgress>(baseUrl, `/plans/${encodeURIComponent(plan.id)}/progress`),
-    evaluationRequest<readonly ApiSubmission[]>(
+  const planQuery =
+    preferredPlanId === undefined ? "" : `&planId=${encodeURIComponent(preferredPlanId)}`;
+  let workspace: ApiOrganizerWorkspaceResponse;
+  try {
+    workspace = await evaluationRequest<ApiOrganizerWorkspaceResponse>(
       baseUrl,
-      `/events/${encodeURIComponent(eventId)}/submissions`,
-    ),
-    evaluationRequest<{ assignments: readonly ApiAssignment[] }>(
-      baseUrl,
-      `/plans/${encodeURIComponent(plan.id)}/assignments`,
-    ),
-  ]);
-  const assignments = assignmentResult.assignments;
-  const reviewerProgress = deriveReviewerProgress(assignments);
+      `/organizer/workspace?eventId=${encodeURIComponent(eventId)}${planQuery}`,
+    );
+  } catch (reason: unknown) {
+    if (reason instanceof EvaluationRequestError && reason.status === 404) {
+      throw new MissingEvaluationPlanError();
+    }
+    throw reason;
+  }
+  const plan = normalizeApiPlan(workspace.plan);
+  const assignments = workspace.assignments;
   const mappedProgress: ApiProgress = {
-    ...progress,
-    reviewers: progress.reviewers ?? reviewerProgress,
+    ...workspace.progress,
+    reviewers: workspace.progress.reviewers ?? deriveReviewerProgress(assignments),
   };
   const uniqueSubmissions = [
     ...new Map(
-      submissions
+      workspace.submissions
         .map(normalizeApiSubmission)
         .filter((submission): submission is ApiSubmission => submission !== null)
         .map((submission) => [submission.id, submission] as const),
     ).values(),
   ];
+  const aggregateRoundId = workspace.aggregates[0]?.roundId;
   const round =
+    plan.rounds.find((candidate) => candidate.id === aggregateRoundId) ??
     [...plan.rounds]
       .sort((left, right) => right.sequence - left.sequence)
       .find(
@@ -824,45 +817,10 @@ export async function loadOrganizerData(
             candidate.opensAt === undefined ||
             Date.parse(candidate.opensAt) <= Date.now()) &&
           (candidate.closesAt === null || Date.parse(candidate.closesAt) > Date.now()),
-      ) ?? [...plan.rounds].sort((left, right) => left.sequence - right.sequence)[0];
-  if (!includeDetails) {
-    const pendingAggregates = uniqueSubmissions.map((submission) => {
-      const submissionAssignments = assignments.filter(
-        (assignment) =>
-          assignment.submissionId === submission.id && assignment.roundId === round?.id,
-      );
-      return {
-        id: submission.id,
-        reference: submission.id,
-        title: submission.title,
-        countedScore: "—",
-        possibleScore: "—",
-        countedReviews: submissionAssignments.filter(
-          (assignment) => assignment.status === "submitted",
-        ).length,
-        expectedReviews: submissionAssignments.filter(
-          (assignment) => assignment.status !== "abstained",
-        ).length,
-        conflicts: submissionAssignments.filter((assignment) => assignment.status === "abstained")
-          .length,
-        abstentions: submissionAssignments.filter((assignment) => assignment.status === "abstained")
-          .length,
-        participants: submission.participants ?? [],
-      };
-    });
-    return mapPlan(plan, eventId, pendingAggregates, mappedProgress, {}, assignments);
-  }
-  const aggregates =
-    round === undefined
-      ? []
-      : (
-          await evaluationRequest<{ aggregates: readonly ApiAggregate[] }>(
-            baseUrl,
-            `/plans/${encodeURIComponent(plan.id)}/rounds/${encodeURIComponent(round.id)}/aggregates`,
-          )
-        ).aggregates;
+      ) ??
+    [...plan.rounds].sort((left, right) => left.sequence - right.sequence)[0];
   const aggregateBySubmissionId = new Map(
-    aggregates.map((aggregate) => [aggregate.submissionId, aggregate] as const),
+    workspace.aggregates.map((aggregate) => [aggregate.submissionId, aggregate] as const),
   );
   const aggregateEntries = uniqueSubmissions.map((submission) => {
     const aggregate = aggregateBySubmissionId.get(submission.id);
@@ -886,18 +844,7 @@ export async function loadOrganizerData(
       participants: submission.participants ?? [],
     };
   });
-  const decisions = Object.fromEntries(
-    await Promise.all(
-      uniqueSubmissions.map(async (submission) => {
-        const decision = await evaluationRequest<ApiDecision | null>(
-          baseUrl,
-          `/plans/${encodeURIComponent(plan.id)}/submissions/${encodeURIComponent(submission.id)}/decision`,
-        );
-        return [submission.id, decision] as const;
-      }),
-    ),
-  );
-  return mapPlan(plan, eventId, aggregateEntries, mappedProgress, decisions, assignments);
+  return mapPlan(plan, eventId, aggregateEntries, mappedProgress, workspace.decisions, assignments);
 }
 
 function readableSubmissionFieldLabel(fieldId: string): string {
@@ -1322,24 +1269,13 @@ export function ReviewWorkspace({
       mode === "organizer"
         ? eventId === undefined
           ? Promise.reject(new Error("An event is required for organizer review plans."))
-          : loadOrganizerData(eventId, baseUrl, undefined, false)
+          : loadOrganizerData(eventId, baseUrl)
         : loadEvaluatorQueue(eventId, baseUrl);
     void load
       .then((value) => {
         if (!active) return;
-        if (mode === "organizer") {
-          const fastSeed = value as ReviewPlanSeed;
-          setSeed(fastSeed);
-          if (eventId !== undefined) {
-            void loadOrganizerData(eventId, baseUrl, fastSeed.planId)
-              .then((detailedSeed) => {
-                if (active) setSeed(detailedSeed);
-              })
-              .catch(() => {
-                // The fast authoritative plan remains usable when optional score hydration is slow.
-              });
-          }
-        } else setQueue(value as readonly ReviewerQueueEntry[]);
+        if (mode === "organizer") setSeed(value as ReviewPlanSeed);
+        else setQueue(value as readonly ReviewerQueueEntry[]);
       })
       .catch((reason: unknown) => {
         if (!active) return;
@@ -2673,37 +2609,16 @@ function OrganizerWorkspace({
   reviewerMembersError: string | null;
 }>) {
   const [authoritativeSeed, setAuthoritativeSeed] = useState(seed);
-  const [detailLoading, setDetailLoading] = useState(true);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
   const refreshSequenceRef = useRef(0);
 
   useEffect(() => {
-    const sequence = refreshSequenceRef.current + 1;
-    refreshSequenceRef.current = sequence;
-    let active = true;
+    refreshSequenceRef.current += 1;
     setAuthoritativeSeed(seed);
-    setDetailLoading(true);
+    setDetailLoading(false);
     setDetailError(null);
-    void loadOrganizerData(seed.eventId, baseUrl, seed.planId)
-      .then((nextSeed) => {
-        if (active && refreshSequenceRef.current === sequence) {
-          setAuthoritativeSeed(nextSeed);
-        }
-      })
-      .catch((reason: unknown) => {
-        if (active && refreshSequenceRef.current === sequence) {
-          setDetailError(
-            reason instanceof Error ? reason.message : "The review details could not be loaded.",
-          );
-        }
-      })
-      .finally(() => {
-        if (active && refreshSequenceRef.current === sequence) setDetailLoading(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, [baseUrl, seed]);
+  }, [seed]);
 
   async function refreshAuthoritativeSeed(): Promise<void> {
     const sequence = refreshSequenceRef.current + 1;
