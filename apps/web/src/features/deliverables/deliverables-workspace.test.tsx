@@ -365,13 +365,11 @@ function deferred<T>(): {
 }
 
 describe("deliverables core request starter", () => {
-  it("starts all independent core requests before any deferred response settles and forwards one signal", async () => {
+  it("starts the sessions and matrix requests before either deferred response settles", async () => {
     const signal = new AbortController().signal;
     const calls: string[] = [];
     const sessions = deferred<readonly DeliverableSession[]>();
     const matrix = deferred<DeliverableTaskMatrix>();
-    const assets = deferred<readonly DeliverableAsset[]>();
-    const profiles = deferred<readonly DeliverableSpeakerProfile[]>();
     const matrixValue: DeliverableTaskMatrix = {
       organizationId: "org-1",
       eventId: "event-1",
@@ -390,31 +388,105 @@ describe("deliverables core request starter", () => {
         expect(options?.signal).toBe(signal);
         return matrix.promise;
       }),
-      listAssets: vi.fn((options?: { readonly signal?: AbortSignal }) => {
-        calls.push("assets");
-        expect(options?.signal).toBe(signal);
-        return assets.promise;
+      listTasks: vi.fn(() => {
+        calls.push("tasks");
+        throw new Error("Task projection should not be requested.");
       }),
-      listProfiles: vi.fn((receivedSignal?: AbortSignal) => {
+      listAssets: vi.fn(() => {
+        calls.push("assets");
+        throw new Error("Asset projection should not be requested.");
+      }),
+      listProfiles: vi.fn(() => {
         calls.push("profiles");
-        expect(receivedSignal).toBe(signal);
-        return profiles.promise;
+        throw new Error("Profile projection should not be requested.");
       }),
     } as unknown as DeliverablesApi;
 
     const requests = startDeliverablesCoreRequests(api, "deliverables", signal);
 
-    expect(calls).toEqual(["sessions", "matrix", "assets", "profiles"]);
+    expect(calls).toEqual(["sessions", "matrix"]);
+    expect(requests.tasks).toBeUndefined();
+    expect(requests.assets).toBeUndefined();
+    expect(requests.profiles).toBeUndefined();
     sessions.resolve([session]);
     matrix.resolve(matrixValue);
-    assets.resolve([assetV2]);
-    profiles.resolve([profile]);
+    await Promise.all([requests.sessions, requests.matrix ?? Promise.resolve(matrixValue)]);
+  });
+  it("keeps files mode loading its complete asset and profile projections", async () => {
+    const calls: string[] = [];
+    const matrixValue: DeliverableTaskMatrix = {
+      organizationId: "org-1",
+      eventId: "event-1",
+      total: 0,
+      filters: {},
+      items: [],
+    };
+    const api = {
+      listSessions: vi.fn(() => {
+        calls.push("sessions");
+        return Promise.resolve<readonly DeliverableSession[]>([]);
+      }),
+      listDeliverableMatrix: vi.fn(() => {
+        calls.push("matrix");
+        return Promise.resolve(matrixValue);
+      }),
+      listAssets: vi.fn(() => {
+        calls.push("assets");
+        return Promise.resolve<readonly DeliverableAsset[]>([]);
+      }),
+      listProfiles: vi.fn(() => {
+        calls.push("profiles");
+        return Promise.resolve<readonly DeliverableSpeakerProfile[]>([]);
+      }),
+    } as unknown as DeliverablesApi;
+
+    const requests = startDeliverablesCoreRequests(api, "files");
+
+    expect(calls).toEqual(["sessions", "matrix", "assets", "profiles"]);
     await Promise.all([
       requests.sessions,
       requests.matrix ?? Promise.resolve(matrixValue),
       requests.assets ?? Promise.resolve([]),
       requests.profiles ?? Promise.resolve([]),
     ]);
+  });
+
+  it("starts explicit projection fallback requests when the matrix capability is missing", () => {
+    const calls: string[] = [];
+    const api = {
+      listSessions: vi.fn(() => {
+        calls.push("sessions");
+        return Promise.resolve<readonly DeliverableSession[]>([]);
+      }),
+      listTasks: vi.fn(() => {
+        calls.push("tasks");
+        return Promise.resolve<readonly DeliverableTask[]>([]);
+      }),
+      listAssets: vi.fn(() => {
+        calls.push("assets");
+        return Promise.resolve<readonly DeliverableAsset[]>([]);
+      }),
+      listProfiles: vi.fn(() => {
+        calls.push("profiles");
+        return Promise.resolve<readonly DeliverableSpeakerProfile[]>([]);
+      }),
+    } as unknown as DeliverablesApi;
+
+    const requests = startDeliverablesCoreRequests(api, "deliverables");
+
+    expect(calls).toEqual(["sessions", "tasks", "assets", "profiles"]);
+    expect(requests.matrix).toBeUndefined();
+  });
+  it("keeps an authoritative matrix failure observable", async () => {
+    const matrixFailure = new Error("Matrix service unavailable.");
+    const api = {
+      listSessions: vi.fn(() => Promise.resolve<readonly DeliverableSession[]>([])),
+      listDeliverableMatrix: vi.fn().mockRejectedValue(matrixFailure),
+    } as unknown as DeliverablesApi;
+
+    const requests = startDeliverablesCoreRequests(api, "deliverables");
+
+    await expect(requests.matrix).rejects.toBe(matrixFailure);
   });
 
   it("keeps a sessions HTTP 500 as a failed request rather than empty success data", async () => {
@@ -540,6 +612,28 @@ describe("deliverables core request starter", () => {
     ).toBe(false);
   });
 
+  it("renders matrix-derived rows, versions, and participant labels without projection props", () => {
+    const markup = renderToStaticMarkup(
+      createElement(DeliverablesWorkspaceView, {
+        organizationId: "org-1",
+        eventId: "event-1",
+        sessions: [session],
+        tasks: [],
+        assets: [],
+        profiles: [],
+        matrixItems: [matrixItem],
+        selectedAssetId: assetV1.id,
+        onInspectAsset: () => undefined,
+      }),
+    );
+
+    expect(markup).toContain("Priya Raman");
+    expect(markup).toContain(session.title);
+    expect(markup).toContain(task.title);
+    expect(markup).toContain("2 versions");
+    expect(markup).toContain("slides.pdf");
+    expect(markup).toContain("Current");
+  });
   it("retains a successful asset-detail sibling when the other request fails", async () => {
     const settled = await settleDeliverablesAssetDetailRequests(
       Promise.resolve([assetV2]),

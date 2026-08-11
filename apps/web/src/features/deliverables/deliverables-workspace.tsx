@@ -2177,6 +2177,10 @@ export function DeliverablesWorkspaceView({
   onRetry,
 }: DeliverablesWorkspaceViewProps) {
   const filesMode = mode === "files";
+  const matrixAssetsForView = useMemo(
+    () => (filesMode || matrixItems === undefined ? assets : matrixAssetsFromItems(matrixItems)),
+    [assets, filesMode, matrixItems],
+  );
   const rows = useMemo(
     () =>
       matrixItems === undefined
@@ -2263,14 +2267,14 @@ export function DeliverablesWorkspaceView({
             <div>
               <strong>
                 {filesMode
-                  ? `${assets.length} asset projection${assets.length === 1 ? "" : "s"}`
-                  : `${tasks.length} task${tasks.length === 1 ? "" : "s"}`}
+                  ? `${matrixAssetsForView.length} asset projection${matrixAssetsForView.length === 1 ? "" : "s"}`
+                  : `${rows.length} task${rows.length === 1 ? "" : "s"}`}
               </strong>
               <br />
               <span style={mutedStyle}>
                 {filesMode
-                  ? `${new Set(assets.map(assetFamily)).size} version famil${new Set(assets.map(assetFamily)).size === 1 ? "y" : "ies"}`
-                  : `${assets.length} private asset projection${assets.length === 1 ? "" : "s"}`}
+                  ? `${new Set(matrixAssetsForView.map(assetFamily)).size} version famil${new Set(matrixAssetsForView.map(assetFamily)).size === 1 ? "y" : "ies"}`
+                  : `${matrixAssetsForView.length} private asset projection${matrixAssetsForView.length === 1 ? "" : "s"}`}
               </span>
             </div>
           </div>
@@ -2327,7 +2331,7 @@ export function DeliverablesWorkspaceView({
               <p>
                 {filesMode
                   ? "Retrieving authorized event sessions, private asset projections, and speaker records."
-                  : "Retrieving organization- and event-qualified sessions, tasks, private asset projections, and speaker records."}
+                  : "Retrieving organization- and event-qualified sessions plus the authoritative deliverables matrix."}
               </p>
             </section>
           ) : null}
@@ -2405,7 +2409,9 @@ export function DeliverablesWorkspaceView({
           ) : null}
           {selectedAssetId !== null
             ? (() => {
-                const selectedAsset = assets.find((asset) => asset.id === selectedAssetId);
+                const selectedAsset = matrixAssetsForView.find(
+                  (asset) => asset.id === selectedAssetId,
+                );
                 const authoritativeCurrentAsset =
                   selectedAsset === undefined
                     ? undefined
@@ -2425,7 +2431,7 @@ export function DeliverablesWorkspaceView({
                 ) : (
                   <AssetDetail
                     asset={selectedAsset}
-                    allAssets={assets}
+                    allAssets={matrixAssetsForView}
                     history={assetHistory}
                     assetHistoryError={assetHistoryError ?? null}
                     commentsError={commentsError ?? null}
@@ -2525,21 +2531,27 @@ export function startDeliverablesCoreRequests(
     requests.matrix = startDeliverablesRequest(() =>
       listDeliverableMatrix(signal === undefined ? undefined : { signal }),
     );
-  } else {
+  }
+
+  const needsProjectionFallback = mode === "deliverables" && listDeliverableMatrix === undefined;
+  if (needsProjectionFallback) {
     const listTasks = api.listTasks;
-    if (mode !== "files" && listTasks !== undefined) {
+    if (listTasks !== undefined) {
       requests.tasks = startDeliverablesRequest(() => listTasks(signal));
     }
   }
-  const listAssets = api.listAssets;
-  if (listAssets !== undefined) {
-    requests.assets = startDeliverablesRequest(() =>
-      signal === undefined ? listAssets() : listAssets({ signal }),
-    );
-  }
-  const listProfiles = api.listProfiles;
-  if (listProfiles !== undefined) {
-    requests.profiles = startDeliverablesRequest(() => listProfiles(signal));
+
+  if (mode === "files" || needsProjectionFallback) {
+    const listAssets = api.listAssets;
+    if (listAssets !== undefined) {
+      requests.assets = startDeliverablesRequest(() =>
+        signal === undefined ? listAssets() : listAssets({ signal }),
+      );
+    }
+    const listProfiles = api.listProfiles;
+    if (listProfiles !== undefined) {
+      requests.profiles = startDeliverablesRequest(() => listProfiles(signal));
+    }
   }
   return requests;
 }
@@ -2656,13 +2668,19 @@ export function settleDeliverablesAssetDetailRequests(
   }));
 }
 
-function matrixAssets(matrixValue: DeliverableTaskMatrix): readonly DeliverableAsset[] {
+function matrixAssetsFromItems(
+  items: readonly DeliverableMatrixItem[],
+): readonly DeliverableAsset[] {
   const byId = new Map<string, DeliverableAsset>();
-  for (const item of matrixValue.items) {
+  for (const item of items) {
     for (const asset of item.assets) byId.set(asset.id, asset);
     if (item.currentAsset !== undefined) byId.set(item.currentAsset.id, item.currentAsset);
   }
   return [...byId.values()];
+}
+
+function matrixAssets(matrixValue: DeliverableTaskMatrix): readonly DeliverableAsset[] {
+  return matrixAssetsFromItems(matrixValue.items);
 }
 
 export function DeliverablesWorkspace({
@@ -2779,6 +2797,7 @@ export function DeliverablesWorkspace({
       if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return false;
       setMatrix(next);
       setTasks(next.items.map((item) => item.task));
+      if (mode === "deliverables") setAssets(matrixAssets(next));
       return true;
     } catch (reason) {
       if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return false;
@@ -2835,46 +2854,55 @@ export function DeliverablesWorkspace({
           messages.push(
             "Exact task status and current-version tracking are unavailable: the organizer deliverables matrix endpoint is not provisioned.",
           );
-          if (requests.tasks !== undefined) {
-            if (tasksResult?.ok === true) setTasks(tasksResult.value);
-            else if (tasksResult !== undefined)
-              messages.push(`Task tracking unavailable: ${messageFromError(tasksResult.reason)}`);
+          if (mode !== "files" && requests.tasks === undefined) {
+            messages.push(
+              "Task tracking unavailable: no organizer task projection endpoint is provisioned.",
+            );
+          } else if (tasksResult?.ok === true) {
+            setTasks(tasksResult.value);
+          } else if (tasksResult !== undefined) {
+            messages.push(`Task tracking unavailable: ${messageFromError(tasksResult.reason)}`);
           }
         } else if (matrixResult?.ok === true) {
-          setMatrix(matrixResult.value);
-          setTasks(matrixResult.value.items.map((item) => item.task));
-          if (assetsResult?.ok !== true) setAssets(matrixAssets(matrixResult.value));
+          const nextMatrix = matrixResult.value;
+          setMatrix(nextMatrix);
+          setTasks(nextMatrix.items.map((item) => item.task));
+          if (mode === "deliverables") setAssets(matrixAssets(nextMatrix));
         } else if (matrixResult !== undefined) {
           messages.push(
             `Exact deliverables matrix unavailable: ${messageFromError(matrixResult.reason)}`,
           );
         }
 
-        if (requests.assets === undefined) {
+        if (requests.assets !== undefined) {
+          if (assetsResult?.ok === true) {
+            setAssets(assetsResult.value);
+          } else if (assetsResult !== undefined) {
+            messages.push(
+              `Private asset library unavailable: ${messageFromError(assetsResult.reason)}`,
+            );
+          }
+        } else if (mode === "files" || requests.matrix === undefined) {
           messages.push(
             "Private asset library unavailable: no asset projection endpoint is provisioned.",
           );
-        } else if (assetsResult?.ok === true) {
-          setAssets(assetsResult.value);
-        } else if (assetsResult !== undefined) {
-          messages.push(
-            `Private asset library unavailable: ${messageFromError(assetsResult.reason)}`,
-          );
         }
 
-        if (requests.profiles === undefined) {
+        if (requests.profiles !== undefined) {
+          if (profilesResult?.ok === true) {
+            setProfiles(profilesResult.value);
+          } else if (profilesResult !== undefined) {
+            messages.push(
+              mode === "files"
+                ? `Speaker labels unavailable: ${messageFromError(profilesResult.reason)}`
+                : `Speaker profile editing unavailable: ${messageFromError(profilesResult.reason)}`,
+            );
+          }
+        } else if (mode === "files" || requests.matrix === undefined) {
           messages.push(
             mode === "files"
               ? "Speaker labels are unavailable: the private profile endpoint is not provisioned for organizer access."
               : "Speaker profile editing unavailable: the private profile endpoint is not provisioned for organizer access.",
-          );
-        } else if (profilesResult?.ok === true) {
-          setProfiles(profilesResult.value);
-        } else if (profilesResult !== undefined) {
-          messages.push(
-            mode === "files"
-              ? `Speaker labels unavailable: ${messageFromError(profilesResult.reason)}`
-              : `Speaker profile editing unavailable: ${messageFromError(profilesResult.reason)}`,
           );
         }
 
