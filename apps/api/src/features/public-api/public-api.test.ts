@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import type { AuthPrincipal } from "../auth/types";
+import { publicApiV1Contract } from "./contract";
 import {
   AtomicIdempotencyCoordinator,
   type IdempotencyBeginResult,
@@ -70,8 +71,10 @@ class EventRepository implements PublicApiRepository<EventRecord, EventMutation,
   ];
   creates = 0;
   updates = 0;
+  lastFilters: Readonly<Record<string, string>> | undefined;
 
   async list(input: PublicApiListInput) {
+    this.lastFilters = input.filters;
     const rows = this.records
       .filter((record) => record.organizationId === input.organizationId)
       .sort((left, right) => {
@@ -162,6 +165,7 @@ function fixture(principal: AuthPrincipal | null = apiKey) {
   app.route(
     "/api/v1",
     createPublicApiV1Routes<EventRecord, EventMutation, EventMutation>({
+      contract: publicApiV1Contract,
       idempotency: new AtomicIdempotencyCoordinator(store),
       resources: [
         {
@@ -192,6 +196,28 @@ describe("public API v1", () => {
     expect(first.status).toBe(200);
     expect(firstBody.data[0]?.id).toBe("event-a");
     expect(secondBody.data[0]?.id).toBe("event-b");
+  });
+  it("enforces resource filter fields and rejects unrelated query keys", async () => {
+    const { app, repository } = fixture();
+    const unsupportedQueries = [
+      `filter=${encodeURIComponent(JSON.stringify({ status: "draft", unsupported: "x" }))}`,
+      "filter.unsupported=x",
+      "filter%5Bunsupported%5D=x",
+      "unrelated=x",
+    ];
+
+    for (const query of unsupportedQueries) {
+      const response = await app.request(`/api/v1/organizations/org-1/events?${query}`);
+      const body = (await response.json()) as { error: { code: string } };
+      expect(response.status).toBe(400);
+      expect(body.error.code).toBe("VALIDATION_FAILED");
+    }
+
+    const declared = await app.request(
+      `/api/v1/organizations/org-1/events?filter=${encodeURIComponent(JSON.stringify({ status: "draft" }))}`,
+    );
+    expect(declared.status).toBe(200);
+    expect(repository.lastFilters).toEqual({ status: "draft" });
   });
 
   it("rejects a cursor bound to another organization", async () => {
@@ -324,5 +350,10 @@ describe("public API v1", () => {
     expect(body.error.message).not.toContain("base64");
     expect(document.openapi).toBe("3.1.0");
     expect(document.paths["/api/v1/organizations/{organizationId}/events"]).toBeDefined();
+    const updatePath = document.paths[
+      "/api/v1/organizations/{organizationId}/events/{id}"
+    ] as { patch?: unknown; put?: unknown };
+    expect(updatePath.patch).toBeDefined();
+    expect(updatePath.put).toBeUndefined();
   });
 });

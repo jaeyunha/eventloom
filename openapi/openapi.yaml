@@ -25,10 +25,11 @@ info:
     organizer drafts, private assets, recipient data, evaluation notes, advisory candidates, or
     internal storage coordinates.
 
-    Generic public-v1 mutations require Idempotency-Key and updates require If-Match. Webhook
-    subscription administration is the exception: its implemented POST/PATCH/PUT/DELETE routes
-    do not require either header. A request may not select a tenant or event outside the
-    authenticated principal's grants.
+    Generic public-v1 mutations require Idempotency-Key; PATCH is the only generic public-v1
+    update method and updates require the header-only If-Match value (a body expectedVersion is not
+    a substitute). Webhook subscription administration is the exception: its implemented
+    POST/PATCH/PUT/DELETE routes do not require either header. A request may not select a tenant or
+    event outside the authenticated principal's grants.
   license:
     name: AGPL-3.0-or-later
     identifier: AGPL-3.0-or-later
@@ -3196,35 +3197,6 @@ paths:
         "429": { $ref: "#/components/responses/RateLimitError" }
         "500": { $ref: "#/components/responses/InternalError" }
         "503": { $ref: "#/components/responses/ConfigurationError" }
-    put:
-      tags: [Public]
-      operationId: replaceEvents
-      summary: Replace an event with optimistic concurrency
-      security:
-        - apiKey: ["events:write"]
-      parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
-        - $ref: "#/components/parameters/IfMatch"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/PublicApiEventsUpdate" }
-      responses:
-        "200":
-          description: Event updated.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/PublicApiEventsRecord" }
-        "400": { $ref: "#/components/responses/ValidationError" }
-        "401": { $ref: "#/components/responses/AuthenticationError" }
-        "403": { $ref: "#/components/responses/AuthorizationError" }
-        "404": { $ref: "#/components/responses/NotFoundError" }
-        "409": { $ref: "#/components/responses/ConflictError" }
-        "412": { $ref: "#/components/responses/PreconditionError" }
-        "429": { $ref: "#/components/responses/RateLimitError" }
-        "500": { $ref: "#/components/responses/InternalError" }
-        "503": { $ref: "#/components/responses/ConfigurationError" }
 
   /api/v1/organizations/{organizationId}/speakers:
     parameters:
@@ -3412,35 +3384,6 @@ paths:
       tags: [Public]
       operationId: updateSessions
       summary: Update a session with optimistic concurrency
-      security:
-        - apiKey: ["agenda:write"]
-      parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
-        - $ref: "#/components/parameters/IfMatch"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/PublicApiSessionsUpdate" }
-      responses:
-        "200":
-          description: Session updated.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/PublicApiSessionsRecord" }
-        "400": { $ref: "#/components/responses/ValidationError" }
-        "401": { $ref: "#/components/responses/AuthenticationError" }
-        "403": { $ref: "#/components/responses/AuthorizationError" }
-        "404": { $ref: "#/components/responses/NotFoundError" }
-        "409": { $ref: "#/components/responses/ConflictError" }
-        "412": { $ref: "#/components/responses/PreconditionError" }
-        "429": { $ref: "#/components/responses/RateLimitError" }
-        "500": { $ref: "#/components/responses/InternalError" }
-        "503": { $ref: "#/components/responses/ConfigurationError" }
-    put:
-      tags: [Public]
-      operationId: replaceSessions
-      summary: Replace a session with optimistic concurrency
       security:
         - apiKey: ["agenda:write"]
       parameters:
@@ -3686,7 +3629,7 @@ components:
       name: filter
       in: query
       required: false
-      description: JSON object filter. Dotted and bracketed filter keys are also accepted.
+      description: "JSON object filter, or dotted (filter.field) / bracketed (filter[field]) encoding. Only these resource-specific fields are documented and accepted: events (status, slug), speakers (eventId, displayName), agenda (revision), and sessions (eventId, status). Unsupported filter fields and unrelated query parameters are rejected."
       schema: { type: string }
     EventId:
       name: eventId
@@ -3834,7 +3777,7 @@ components:
       name: If-Match
       in: header
       required: true
-      description: Strong or weak quoted positive resource version from the latest ETag.
+      description: Required header-only positive resource version from the latest ETag; a body expectedVersion value is not a substitute. Strong or weak quoted values are accepted.
       schema: { type: string, pattern: '^(W/)?"?[1-9][0-9]*"?$' }
     RequestId:
       name: X-Request-ID

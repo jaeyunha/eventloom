@@ -341,23 +341,35 @@ function parsePositiveInteger(
   return parsed;
 }
 
-function filterValues(query: Record<string, string | undefined>): Record<string, string> {
+function filterValues(
+  query: Record<string, string | undefined>,
+  contractResource?: PublicApiResourceContract,
+): Record<string, string> {
   const filters: Record<string, string> = {};
+  const allowedFields = new Set(contractResource?.filters.fields ?? []);
+  const addFilter = (key: string, value: string): void => {
+    if (!allowedFields.has(key)) {
+      throw validationError("The filter field is not supported.");
+    }
+    filters[key] = value;
+  };
+
   const encoded = query.filter;
   if (encoded !== undefined && encoded.trim().length > 0) {
+    let parsed: unknown;
     try {
-      const parsed: unknown = JSON.parse(encoded);
-      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-        throw new Error("not an object");
-      }
-      for (const [key, value] of Object.entries(parsed)) {
-        if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") {
-          throw new Error("invalid filter");
-        }
-        filters[key] = String(value);
-      }
+      parsed = JSON.parse(encoded);
     } catch {
       throw validationError("The filter query parameter is invalid.");
+    }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw validationError("The filter query parameter is invalid.");
+    }
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") {
+        throw validationError("The filter query parameter is invalid.");
+      }
+      addFilter(key, String(value));
     }
   }
 
@@ -367,10 +379,11 @@ function filterValues(query: Record<string, string | undefined>): Record<string,
     }
     const dotted = key.startsWith("filter.") ? key.slice("filter.".length) : undefined;
     const bracketed = /^filter\[([^\]]+)\]$/u.exec(key)?.[1];
-    const filterKey = dotted ?? bracketed ?? key;
-    if (filterKey.length > 0) {
-      filters[filterKey] = value;
+    const filterKey = dotted ?? bracketed;
+    if (filterKey === undefined || filterKey.length === 0) {
+      throw validationError("The query parameter is not supported.");
     }
+    addFilter(filterKey, value);
   }
   return filters;
 }
@@ -400,7 +413,7 @@ function parseListQuery<TRecord, TCreate, TUpdate>(
     throw validationError("The sort field is not supported.");
   }
 
-  const filters = filterValues(query);
+  const filters = filterValues(query, contractResource);
   const filterHash = stableStringify(filters);
   const pagination = contractResource?.pagination;
   return {
@@ -856,8 +869,8 @@ function openApiDocument<TRecord, TCreate, TUpdate>(
         required: false,
         description:
           filter === undefined
-            ? "JSON object filter. Dotted and bracketed filter keys are also accepted."
-            : `JSON object filter; dotted (filter.field) and bracketed (filter[field]) forms are accepted for ${filter.fields.join(", ")}.`,
+            ? "Filtering is not supported for this resource."
+            : `JSON object filter; dotted (filter.field) and bracketed (filter[field]) forms are accepted for ${filter.fields.join(", ")}; unsupported fields and unrelated query parameters are rejected.`,
         schema: { type: "string" },
       },
     ];
@@ -973,6 +986,8 @@ function openApiDocument<TRecord, TCreate, TUpdate>(
                 name: "If-Match",
                 in: "header",
                 required: true,
+                description:
+                  "Required header-only resource version; a body expectedVersion value is not a substitute.",
                 schema: { type: "string", pattern: '^(W/)?"?[1-9][0-9]*"?$' },
               },
             ]),
@@ -999,9 +1014,6 @@ function openApiDocument<TRecord, TCreate, TUpdate>(
       });
       itemOperations.patch = updateOperation(
         `update${toSchemaName(displayName, "").replace(/^PublicApi/u, "")}`,
-      );
-      itemOperations.put = updateOperation(
-        `replace${toSchemaName(displayName, "").replace(/^PublicApi/u, "")}`,
       );
     }
     if (Object.keys(itemOperations).length > 0) {

@@ -37,7 +37,6 @@ GET   /api/v1/organizations/{organizationId}/events
 POST  /api/v1/organizations/{organizationId}/events
 GET   /api/v1/organizations/{organizationId}/events/{id}
 PATCH /api/v1/organizations/{organizationId}/events/{id}
-PUT   /api/v1/organizations/{organizationId}/events/{id}
 
 GET   /api/v1/organizations/{organizationId}/speakers
 GET   /api/v1/organizations/{organizationId}/speakers/{id}
@@ -49,7 +48,6 @@ GET   /api/v1/organizations/{organizationId}/sessions
 POST  /api/v1/organizations/{organizationId}/sessions
 GET   /api/v1/organizations/{organizationId}/sessions/{id}
 PATCH /api/v1/organizations/{organizationId}/sessions/{id}
-PUT   /api/v1/organizations/{organizationId}/sessions/{id}
 ```
 
 Resource bodies are JSON records with stable application IDs. The `agenda` resource is a read-only published/projection view; generic agenda writes are intentionally neither mounted nor advertised. `speakers` is read-only because a generic participant write is not a safe public projection. Event and session writes use the generic adapter contract and do not replace the first-party organizer workflows or their richer validation/audit semantics.
@@ -76,13 +74,13 @@ The cursor is bound to the organization, resource, sort, direction, and filters.
 | `agenda` | `id`, `updatedAt` (`id`) |
 | `sessions` | `id`, `title`, `updatedAt` (`id`) |
 
-Filters may be supplied as a JSON object in `filter`, or as `filter.field=value` / `filter[field]=value`. The enabled contract identifies common fields (`status`/`slug` for events, `eventId`/`displayName` for speakers, `revision` for agenda, and `eventId`/`status` for sessions); filter values are compared as strings by the adapter.
+Filters may be supplied as a JSON object in `filter`, or as `filter.field=value` / `filter[field]=value`. Only these resource-specific fields are documented and accepted: `events` (`status`, `slug`), `speakers` (`eventId`, `displayName`), `agenda` (`revision`), and `sessions` (`eventId`, `status`). Unsupported filter fields and unrelated query parameters are rejected with `400 VALIDATION_FAILED`; filter values are compared as strings by the adapter.
 
 ## Idempotency and concurrency
 
-Public resource `POST`, `PATCH`, and `PUT` mutations require an `Idempotency-Key` header containing 8–128 characters. Replaying the same key with the same method, path, and body returns the stored result. Reusing it for a different request returns `409 IDEMPOTENCY_CONFLICT`. Use a fresh key for every intended mutation.
+Public resource `POST` and `PATCH` mutations require an `Idempotency-Key` header containing 8–128 characters. Replaying the same key with the same method, path, and body returns the stored result. Reusing it for a different request returns `409 IDEMPOTENCY_CONFLICT`. Use a fresh key for every intended mutation.
 
-`PATCH` and `PUT` also require `If-Match` with the positive resource version last read (quoted or unquoted, with an optional weak `W/` prefix). A missing, malformed, or stale version returns `412 PRECONDITION_FAILED`; reread and reconcile instead of blindly retrying. `Idempotency-Key` and `If-Match` do not apply to read-only speakers or agenda routes.
+`PATCH` updates require a header-only `If-Match` value containing the positive resource version last read (quoted or unquoted, with an optional weak `W/` prefix); a body `expectedVersion` is not a substitute. A missing, malformed, or stale version returns `412 PRECONDITION_FAILED`; reread and reconcile instead of blindly retrying. `Idempotency-Key` and `If-Match` do not apply to read-only speakers or agenda routes.
 
 ## Errors, tracing, and rate limits
 
