@@ -71,9 +71,9 @@ For an OpenAI-backed local diagnostic, keep `OPENAI_API_KEY` only in the ignored
 
 Release evidence requires the deployed staging UI/API against the provider selected for staging:
 
-- Request an agenda proposal and verify provider/model provenance, private diff, human-selected apply/reject, reload persistence, audit history, stale-version rejection, conflict revalidation, and no automatic publication.
-- Request evaluation assistance using only the reviewer-visible rubric/submission projection; verify suggestions remain uncounted until a human confirms or edits them and cannot decide an outcome.
-- Request content remix for selected fields only; verify unselected fields are absent, human edits are supported, stale candidates fail, and nothing overwrites source content until explicit apply.
+- Request an agenda proposal and verify `openai-responses` / `gpt-5.6-sol` provenance, private diff, human-selected apply/reject, reload persistence, audit history, stale-version rejection, conflict revalidation, and no automatic publication.
+- Request evaluation assistance and verify `gpt-5.6-sol` provenance using only the reviewer-visible rubric/submission projection; suggestions remain uncounted until a human confirms or edits them and cannot decide an outcome.
+- Request content remix and verify `gpt-5.6-terra` provenance for selected fields only; unselected fields are absent, human edits are supported, stale candidates fail, and nothing overwrites source content until explicit apply.
 - Disable the provider and prove ordinary CFP, portal, review, CRM, agenda, publication, and reporting workflows still operate while AI controls/endpoints show an explicit unavailable state.
 
 Production receives only a bounded smoke check after the complete staging workflow passes.

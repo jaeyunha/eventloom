@@ -30,6 +30,7 @@ describe("OpenAI Responses advisory binding", () => {
       binding.run("gpt-test", {
         prompt: SYNTHETIC_PROMPT,
         response_format: { type: "json_object" },
+        reasoning: { effort: "medium" },
       }),
     ).resolves.toEqual({ response: '{"ok":true}' });
 
@@ -40,6 +41,45 @@ describe("OpenAI Responses advisory binding", () => {
       model: "gpt-test",
       input: SYNTHETIC_PROMPT,
       text: { format: { type: "json_object" } },
+      reasoning: { effort: "medium" },
+    });
+  });
+
+  it("maps strict JSON schemas to the Responses text format", async () => {
+    let requestBody: Record<string, unknown> | undefined;
+    const binding = createOpenAiResponsesBinding({
+      apiKey: "test-key",
+      fetch: async (_input, init) => {
+        requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return Response.json(responseBody('{"ok":true}'));
+      },
+    });
+    const schema = {
+      type: "object",
+      additionalProperties: false,
+      properties: { ok: { type: "boolean" } },
+      required: ["ok"],
+    };
+
+    await binding.run("gpt-test", {
+      prompt: SYNTHETIC_PROMPT,
+      response_format: {
+        type: "json_schema",
+        name: "synthetic_result",
+        strict: true,
+        schema,
+      },
+    });
+
+    expect(requestBody).toMatchObject({
+      text: {
+        format: {
+          type: "json_schema",
+          name: "synthetic_result",
+          strict: true,
+          schema,
+        },
+      },
     });
   });
 

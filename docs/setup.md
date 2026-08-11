@@ -57,7 +57,13 @@ SPEAKERS_FROM_EMAIL=speakers@sessionboard.namuh.co
 CALENDAR_FROM_EMAIL=calendar@sessionboard.namuh.co
 AI_PROVIDER=openai
 OPENAI_API_KEY=<backend-only-openai-key>
-OPENAI_MODEL=gpt-5-mini
+OPENAI_MODEL=gpt-5.6-terra
+OPENAI_AGENDA_MODEL=gpt-5.6-sol
+OPENAI_EVALUATION_MODEL=gpt-5.6-sol
+OPENAI_REMIX_MODEL=gpt-5.6-terra
+OPENAI_AGENDA_REASONING_EFFORT=medium
+OPENAI_EVALUATION_REASONING_EFFORT=medium
+OPENAI_REMIX_REASONING_EFFORT=low
 ```
 
 The angle-bracket values are operator placeholders, not credentials to commit. Apply local D1 migrations and start both services from the repository root:
@@ -92,7 +98,7 @@ RUN_OPENAI_LIVE=1 bunx vitest run \
 
 These synthetic checks prove the real Responses API adapter and local agenda proposal lifecycle. They do not replace deployed staging UI/API acceptance.
 
-Staging and production are configured with `AI_PROVIDER="openai"` and `OPENAI_MODEL` in `apps/api/wrangler.toml`. Before deploying either environment, store its distinct OpenAI key as a Cloudflare secret:
+Staging and production are configured with OpenAI Responses and the same quality-first per-feature defaults in `apps/api/wrangler.toml`: Sol/medium for agenda and evaluation, Terra/low for remix. `OPENAI_MODEL=gpt-5.6-terra` is the fallback for any future advisory feature without an explicit override. Before deploying either environment, store its distinct OpenAI key as a Cloudflare secret:
 
 ```bash
 bunx wrangler secret put OPENAI_API_KEY --cwd apps/api --env staging

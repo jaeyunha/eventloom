@@ -74,7 +74,7 @@ AI is not seed infrastructure. Provisioning personas and seeding fixtures create
 
 ## Advisory AI provider contract
 
-The repository runtime contract selects OpenAI Responses (`openai-responses`) for all advisory AI features in local, staging, and production. Configuration uses `AI_PROVIDER=openai`, `OPENAI_MODEL`, and a backend-only `OPENAI_API_KEY`; each deployed environment requires an isolated provider-managed secret. The key must never enter `NEXT_PUBLIC_*`, Wrangler variables, browser evidence, logs, API responses, or committed files.
+The repository runtime contract selects OpenAI Responses (`openai-responses`) for all advisory AI features in local, staging, and production. Agenda and evaluation use `gpt-5.6-sol` with medium reasoning; content remix uses `gpt-5.6-terra` with low reasoning. These are explicit quality-first defaults, independently configurable through `OPENAI_*_MODEL` and `OPENAI_*_REASONING_EFFORT`. `gpt-5.6-luna` remains a benchmark candidate for high-volume work rather than an assumed quality-equivalent replacement. Configuration uses a backend-only `OPENAI_API_KEY`; each deployed environment requires an isolated provider-managed secret. The key must never enter `NEXT_PUBLIC_*`, Wrangler variables, browser evidence, logs, API responses, or committed files.
 
 The provider boundary is typed and feature-specific:
 

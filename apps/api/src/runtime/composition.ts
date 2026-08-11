@@ -5,6 +5,7 @@ import {
   type OutboxConsumerBindings,
 } from "../infrastructure/cloudflare/outbox-consumer";
 import {
+  type AdvisoryAiReasoningEffort,
   createCloudflareAiProviders,
   createOpenAiResponsesBinding,
   DEFAULT_OPENAI_RESPONSES_MODEL,
@@ -60,10 +61,33 @@ function configurationErrorResponse(request: Request, bindings: RuntimeBindings)
   );
 }
 
-function createLocalAiProviders(apiKey: string, model: string | undefined) {
+function localReasoningEffort(
+  value: string | undefined,
+  fallback: AdvisoryAiReasoningEffort,
+): AdvisoryAiReasoningEffort {
+  const normalized = value?.trim().toLowerCase() || fallback;
+  if (!["none", "low", "medium", "high", "xhigh", "max"].includes(normalized)) {
+    throw new RuntimeConfigurationError([
+      "OpenAI reasoning effort must be none, low, medium, high, xhigh, or max.",
+    ]);
+  }
+  return normalized as AdvisoryAiReasoningEffort;
+}
+
+function createLocalAiProviders(apiKey: string, bindings: RuntimeBindings) {
   const binding = createOpenAiResponsesBinding({ apiKey });
+  const model = bindings.OPENAI_MODEL?.trim() || DEFAULT_OPENAI_RESPONSES_MODEL;
   return createCloudflareAiProviders(binding, {
-    model: model?.trim() || DEFAULT_OPENAI_RESPONSES_MODEL,
+    model,
+    agendaModel: bindings.OPENAI_AGENDA_MODEL?.trim() || model,
+    evaluationModel: bindings.OPENAI_EVALUATION_MODEL?.trim() || model,
+    remixModel: bindings.OPENAI_REMIX_MODEL?.trim() || model,
+    agendaReasoningEffort: localReasoningEffort(bindings.OPENAI_AGENDA_REASONING_EFFORT, "medium"),
+    evaluationReasoningEffort: localReasoningEffort(
+      bindings.OPENAI_EVALUATION_REASONING_EFFORT,
+      "medium",
+    ),
+    remixReasoningEffort: localReasoningEffort(bindings.OPENAI_REMIX_REASONING_EFFORT, "low"),
     providerName: "openai-responses",
     promptVersion: "openai-responses-v1",
   });
@@ -82,7 +106,7 @@ export function createRuntimeDependencies(bindings: RuntimeBindings): ApiDepende
       ]);
     }
     const aiProviders = useOpenAi
-      ? createLocalAiProviders(bindings.OPENAI_API_KEY ?? "", bindings.OPENAI_MODEL)
+      ? createLocalAiProviders(bindings.OPENAI_API_KEY ?? "", bindings)
       : undefined;
     return createLocalDependencies(aiProviders);
   }

@@ -1,4 +1,5 @@
 export type {
+  AdvisoryAiReasoningEffort,
   CloudflareAiBinding,
   CloudflareAiProviderCause,
   CloudflareAiProviderErrorCode,

@@ -1,6 +1,6 @@
 import { type CloudflareAiBinding, CloudflareAiProviderError } from "./cloudflare";
 
-export const DEFAULT_OPENAI_RESPONSES_MODEL = "gpt-5-mini";
+export const DEFAULT_OPENAI_RESPONSES_MODEL = "gpt-5.6-terra";
 const DEFAULT_OPENAI_RESPONSES_ENDPOINT = "https://api.openai.com/v1/responses";
 const JSON_RESPONSE_FORMAT = { type: "json_object" } as const;
 
@@ -36,6 +36,8 @@ export function createOpenAiResponsesBinding(
       if (typeof model !== "string" || model.trim().length === 0) {
         throw invalidResponsesOutput();
       }
+      const reasoning = openAiReasoning(inputs.reasoning);
+      const responseFormat = openAiResponseFormat(inputs.response_format);
 
       let response: Response;
       try {
@@ -49,7 +51,8 @@ export function createOpenAiResponsesBinding(
           body: JSON.stringify({
             model,
             input: prompt,
-            text: { format: JSON_RESPONSE_FORMAT },
+            text: { format: responseFormat },
+            ...(reasoning === undefined ? {} : { reasoning }),
           }),
         });
       } catch {
@@ -71,6 +74,37 @@ export function createOpenAiResponsesBinding(
       return { response: text };
     },
   };
+}
+
+function openAiResponseFormat(value: unknown): Record<string, unknown> {
+  if (value === undefined) return JSON_RESPONSE_FORMAT;
+  if (!isRecord(value)) throw invalidResponsesOutput();
+  if (value.type === "json_object") return JSON_RESPONSE_FORMAT;
+  if (
+    value.type !== "json_schema" ||
+    typeof value.name !== "string" ||
+    value.name.trim().length === 0 ||
+    value.strict !== true ||
+    !isRecord(value.schema)
+  ) {
+    throw invalidResponsesOutput();
+  }
+  return {
+    type: "json_schema",
+    name: value.name,
+    strict: true,
+    schema: value.schema,
+  };
+}
+function openAiReasoning(value: unknown): { effort: string } | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || typeof value.effort !== "string") {
+    throw invalidResponsesOutput();
+  }
+  if (!["none", "low", "medium", "high", "xhigh", "max"].includes(value.effort)) {
+    throw invalidResponsesOutput();
+  }
+  return { effort: value.effort };
 }
 
 function normalizeEndpoint(value: string | undefined): string {

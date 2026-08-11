@@ -43,6 +43,7 @@ import {
   inspectCloudflareBindings,
 } from "../infrastructure/cloudflare/bindings";
 import {
+  type AdvisoryAiReasoningEffort,
   type CloudflareAiBinding,
   createCloudflareAiProviders,
   createOpenAiResponsesBinding,
@@ -73,6 +74,12 @@ export type RuntimeBindings = ApiBindings &
     readonly AI_PROVIDER?: string;
     readonly OPENAI_API_KEY?: string;
     readonly OPENAI_MODEL?: string;
+    readonly OPENAI_AGENDA_MODEL?: string;
+    readonly OPENAI_EVALUATION_MODEL?: string;
+    readonly OPENAI_REMIX_MODEL?: string;
+    readonly OPENAI_AGENDA_REASONING_EFFORT?: string;
+    readonly OPENAI_EVALUATION_REASONING_EFFORT?: string;
+    readonly OPENAI_REMIX_REASONING_EFFORT?: string;
     readonly ORGANIZER_AUTOJOIN_DOMAINS?: string;
     readonly ORGANIZER_AUTOJOIN_ORGANIZATION_ID?: string;
   };
@@ -2003,6 +2010,24 @@ function configuredApiOrigin(bindings: RuntimeBindings): string | null {
   return bindings.API_ORIGIN === undefined ? expected : bindings.API_ORIGIN;
 }
 
+const aiReasoningEfforts = new Set<AdvisoryAiReasoningEffort>([
+  "none",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+]);
+
+function aiReasoningEffort(
+  value: string | undefined,
+  fallback: AdvisoryAiReasoningEffort,
+): AdvisoryAiReasoningEffort | null {
+  const normalized = value?.trim().toLowerCase() || fallback;
+  return aiReasoningEfforts.has(normalized as AdvisoryAiReasoningEffort)
+    ? (normalized as AdvisoryAiReasoningEffort)
+    : null;
+}
 type AiProviderSelection = "auto" | "cloudflare" | "openai" | "disabled";
 
 function aiProviderSelection(value: string | undefined): AiProviderSelection | null {
@@ -2015,21 +2040,45 @@ function aiProviderSelection(value: string | undefined): AiProviderSelection | n
     : null;
 }
 
-function selectedAiProvider(bindings: RuntimeBindings): {
-  binding: CloudflareAiBinding | undefined;
-  model: string | undefined;
-  providerName: "cloudflare-workers-ai" | "openai-responses";
-  promptVersion: string;
-} | null {
+interface SelectedAiProvider {
+  readonly binding: CloudflareAiBinding | undefined;
+  readonly model: string | undefined;
+  readonly agendaModel?: string;
+  readonly evaluationModel?: string;
+  readonly remixModel?: string;
+  readonly agendaReasoningEffort?: AdvisoryAiReasoningEffort;
+  readonly evaluationReasoningEffort?: AdvisoryAiReasoningEffort;
+  readonly remixReasoningEffort?: AdvisoryAiReasoningEffort;
+  readonly providerName: "cloudflare-workers-ai" | "openai-responses";
+  readonly promptVersion: string;
+}
+
+function selectedAiProvider(bindings: RuntimeBindings): SelectedAiProvider | null {
   const selection = aiProviderSelection(bindings.AI_PROVIDER);
   if (selection === null || selection === "disabled") return null;
   const openAiKey = bindings.OPENAI_API_KEY?.trim();
   const cloudflareModel = bindings.AI_MODEL?.trim();
   const useOpenAi = selection === "openai" || (selection === "auto" && nonEmpty(openAiKey));
   if (useOpenAi && nonEmpty(openAiKey)) {
+    const model = bindings.OPENAI_MODEL?.trim() || DEFAULT_OPENAI_RESPONSES_MODEL;
+    const agendaReasoningEffort = aiReasoningEffort(
+      bindings.OPENAI_AGENDA_REASONING_EFFORT,
+      "medium",
+    );
+    const evaluationReasoningEffort = aiReasoningEffort(
+      bindings.OPENAI_EVALUATION_REASONING_EFFORT,
+      "medium",
+    );
+    const remixReasoningEffort = aiReasoningEffort(bindings.OPENAI_REMIX_REASONING_EFFORT, "low");
     return {
       binding: createOpenAiResponsesBinding({ apiKey: openAiKey }),
-      model: bindings.OPENAI_MODEL?.trim() || DEFAULT_OPENAI_RESPONSES_MODEL,
+      model,
+      agendaModel: bindings.OPENAI_AGENDA_MODEL?.trim() || model,
+      evaluationModel: bindings.OPENAI_EVALUATION_MODEL?.trim() || model,
+      remixModel: bindings.OPENAI_REMIX_MODEL?.trim() || model,
+      ...(agendaReasoningEffort === null ? {} : { agendaReasoningEffort }),
+      ...(evaluationReasoningEffort === null ? {} : { evaluationReasoningEffort }),
+      ...(remixReasoningEffort === null ? {} : { remixReasoningEffort }),
       providerName: "openai-responses",
       promptVersion: "openai-responses-v1",
     };
@@ -2079,6 +2128,17 @@ export function inspectProductionRuntime(
     }
   } else if (aiSelection === "openai" && !nonEmpty(bindings.OPENAI_API_KEY)) {
     issues.push("AI_PROVIDER=openai requires OPENAI_API_KEY");
+  }
+  if (aiSelection === "openai") {
+    for (const [name, value, fallback] of [
+      ["OPENAI_AGENDA_REASONING_EFFORT", bindings.OPENAI_AGENDA_REASONING_EFFORT, "medium"],
+      ["OPENAI_EVALUATION_REASONING_EFFORT", bindings.OPENAI_EVALUATION_REASONING_EFFORT, "medium"],
+      ["OPENAI_REMIX_REASONING_EFFORT", bindings.OPENAI_REMIX_REASONING_EFFORT, "low"],
+    ] as const) {
+      if (aiReasoningEffort(value, fallback) === null) {
+        issues.push(`${name} must be none, low, medium, high, xhigh, or max`);
+      }
+    }
   }
   if (
     organizerAutojoinConfigurationProvided(bindings) &&
@@ -2168,6 +2228,20 @@ export function createCloudflareDependencies(bindings: RuntimeBindings): ApiDepe
   const aiSelection = selectedAiProvider(bindings);
   const aiProviders = createCloudflareAiProviders(aiSelection?.binding, {
     ...(aiSelection?.model === undefined ? {} : { model: aiSelection.model }),
+    ...(aiSelection?.agendaModel === undefined ? {} : { agendaModel: aiSelection.agendaModel }),
+    ...(aiSelection?.evaluationModel === undefined
+      ? {}
+      : { evaluationModel: aiSelection.evaluationModel }),
+    ...(aiSelection?.remixModel === undefined ? {} : { remixModel: aiSelection.remixModel }),
+    ...(aiSelection?.agendaReasoningEffort === undefined
+      ? {}
+      : { agendaReasoningEffort: aiSelection.agendaReasoningEffort }),
+    ...(aiSelection?.evaluationReasoningEffort === undefined
+      ? {}
+      : { evaluationReasoningEffort: aiSelection.evaluationReasoningEffort }),
+    ...(aiSelection?.remixReasoningEffort === undefined
+      ? {}
+      : { remixReasoningEffort: aiSelection.remixReasoningEffort }),
     ...(aiSelection === null
       ? {}
       : {

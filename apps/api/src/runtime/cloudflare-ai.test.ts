@@ -211,7 +211,9 @@ describe("Cloudflare runtime AI composition", () => {
 
     expect(run?.eventId).toBe("event-1");
     expect(calls[0]?.model).toBe(MODEL);
-    expect(calls[0]?.inputs).toMatchObject({ response_format: { type: "json_object" } });
+    expect(calls[0]?.inputs).toMatchObject({
+      response_format: { type: "json_schema", name: "agenda_proposal" },
+    });
   });
 
   it("requires the configured provider's explicit credentials", () => {
@@ -388,7 +390,9 @@ liveRuntimeTest(
       WEB_ORIGIN: "http://127.0.0.1:3015",
       AI_PROVIDER: "openai",
       OPENAI_API_KEY: apiKey,
-      OPENAI_MODEL: process.env.OPENAI_MODEL?.trim() || "gpt-5-mini",
+      OPENAI_AGENDA_MODEL: process.env.OPENAI_AGENDA_MODEL?.trim() || "gpt-5.6-sol",
+      OPENAI_AGENDA_REASONING_EFFORT:
+        process.env.OPENAI_AGENDA_REASONING_EFFORT?.trim() || "medium",
     });
     await expect(generateLocalSuggestion(dependencies)).resolves.toMatchObject({
       eventId: "demo-event",
