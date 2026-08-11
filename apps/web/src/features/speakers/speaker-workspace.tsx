@@ -949,6 +949,7 @@ export function SpeakerWorkspace({
   const [reminderEligibility, setReminderEligibility] =
     useState<SpeakerReminderEligibilityEnvelope | null>(null);
   const [visibleSecondaryContext, setVisibleSecondaryContext] = useState<string | null>(null);
+  const [visibleProgressContext, setVisibleProgressContext] = useState<string | null>(null);
   const [sessionFilter, setSessionFilter] = useState("all");
   const [progressFilter, setProgressFilter] = useState<ProgressFilter>("all");
   const [showAdd, setShowAdd] = useState(false);
@@ -990,8 +991,10 @@ export function SpeakerWorkspace({
   const rosterRequestRef = useRef(0);
   const importRequestRef = useRef(0);
   const secondaryLoadRef = useRef<{ api: SpeakerApi; key: string } | null>(null);
+  const progressLoadRef = useRef<{ api: SpeakerApi; key: string; requestId: number } | null>(null);
   const emailSectionRef = useRef<HTMLElement | null>(null);
   const reminderSectionRef = useRef<HTMLElement | null>(null);
+  const progressSectionRef = useRef<HTMLElement | null>(null);
   const importBusy = importPreviewBusy || importCommitBusy;
 
   useEffect(() => {
@@ -1021,7 +1024,6 @@ export function SpeakerWorkspace({
       rosterTimedOut = true;
       controller.abort();
     }, ASYNC_ACTION_TIMEOUT_MS);
-    let progressController: AbortController | null = null;
     setLoading(true);
     setError(null);
     setProgressError(null);
@@ -1049,39 +1051,6 @@ export function SpeakerWorkspace({
             : (normalizedRoster.speakers[0]?.participantId ?? null),
         );
         setLoading(false);
-
-        const nextProgressController = new AbortController();
-        progressController = nextProgressController;
-        let progressTimedOut = false;
-        const progressTimeout = setTimeout(() => {
-          progressTimedOut = true;
-          nextProgressController.abort();
-        }, ASYNC_ACTION_TIMEOUT_MS);
-        void speakerProgressFor(
-          api,
-          normalizedRoster.speakers,
-          organizationId,
-          eventId,
-          nextProgressController.signal,
-        )
-          .then((nextProgress) => {
-            if (!active || requestId !== rosterRequestRef.current) return;
-            setProgress(nextProgress);
-            setRoster((current) =>
-              current === null ? current : mergeProgressSummaries(current, nextProgress),
-            );
-          })
-          .catch((reason: unknown) => {
-            if (!active || requestId !== rosterRequestRef.current) return;
-            setProgressError(
-              progressTimedOut
-                ? "Speaker progress refresh timed out. Try again."
-                : errorMessage(reason),
-            );
-          })
-          .finally(() => {
-            clearTimeout(progressTimeout);
-          });
       })
       .catch((reason: unknown) => {
         if (!active || requestId !== rosterRequestRef.current) return;
@@ -1098,10 +1067,83 @@ export function SpeakerWorkspace({
     return () => {
       active = false;
       controller.abort();
-      progressController?.abort();
     };
   }, [api, eventId, organizationId]);
   const secondaryContextKey = `${organizationId}:${eventId}`;
+  const progressSectionVisible = visibleProgressContext === secondaryContextKey;
+  useEffect(() => {
+    if (progressSectionVisible || progressSectionRef.current === null) return;
+    if (typeof IntersectionObserver === "undefined") {
+      setVisibleProgressContext(secondaryContextKey);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+        setVisibleProgressContext(secondaryContextKey);
+        observer.disconnect();
+      },
+      { rootMargin: "240px" },
+    );
+    observer.observe(progressSectionRef.current);
+    return () => observer.disconnect();
+  }, [progressSectionVisible, secondaryContextKey]);
+  useEffect(() => {
+    if (
+      api === null ||
+      roster === null ||
+      loading ||
+      !progressSectionVisible ||
+      roster.organizationId !== organizationId ||
+      roster.eventId !== eventId
+    ) {
+      return;
+    }
+    const requestId = rosterRequestRef.current;
+    const currentRequest = progressLoadRef.current;
+    if (
+      currentRequest?.api === api &&
+      currentRequest.key === secondaryContextKey &&
+      currentRequest.requestId === requestId
+    ) {
+      return;
+    }
+    const request = { api, key: secondaryContextKey, requestId };
+    progressLoadRef.current = request;
+    const controller = new AbortController();
+    let active = true;
+    let settled = false;
+    let timedOut = false;
+    const timeoutId = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, ASYNC_ACTION_TIMEOUT_MS);
+    setProgressError(null);
+    void speakerProgressFor(api, roster.speakers, organizationId, eventId, controller.signal)
+      .then((nextProgress) => {
+        if (!active || requestId !== rosterRequestRef.current) return;
+        setProgress(nextProgress);
+        setRoster((current) =>
+          current === null ? current : mergeProgressSummaries(current, nextProgress),
+        );
+      })
+      .catch((reason: unknown) => {
+        if (!active || requestId !== rosterRequestRef.current) return;
+        setProgressError(
+          timedOut ? "Speaker progress refresh timed out. Try again." : errorMessage(reason),
+        );
+      })
+      .finally(() => {
+        settled = true;
+        clearTimeout(timeoutId);
+      });
+    return () => {
+      active = false;
+      controller.abort();
+      clearTimeout(timeoutId);
+      if (!settled && progressLoadRef.current === request) progressLoadRef.current = null;
+    };
+  }, [api, eventId, loading, organizationId, progressSectionVisible, roster, secondaryContextKey]);
   const secondarySectionsVisible = visibleSecondaryContext === secondaryContextKey;
   useEffect(() => {
     if (secondarySectionsVisible) return;
@@ -2571,7 +2613,11 @@ export function SpeakerWorkspace({
         ) : null}
       </section>
 
-      <section style={{ ...panelStyle, marginBottom: "1rem" }} aria-labelledby="tasks-heading">
+      <section
+        ref={progressSectionRef}
+        style={{ ...panelStyle, marginBottom: "1rem" }}
+        aria-labelledby="tasks-heading"
+      >
         <div>
           <h2 id="tasks-heading" style={{ margin: 0, fontSize: "1.05rem" }}>
             General speaker tasks
