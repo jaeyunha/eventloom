@@ -5,14 +5,18 @@ import {
   createDeliverablesApi,
   type DeliverableAsset,
   type DeliverableExportDownload,
+  type DeliverableMatrixItem,
   type DeliverableSession,
   type DeliverableSpeakerProfile,
   type DeliverableTask,
 } from "./api";
 import {
   DeliverablesWorkspaceView,
+  type DeliverableRow,
+  deliverablesExportActionLabels,
   deliverablesExportStatusLabels,
   triggerDeliverablesDownload,
+  ReminderPreview,
 } from "./deliverables-workspace";
 
 const session: DeliverableSession = {
@@ -51,6 +55,16 @@ const profile: DeliverableSpeakerProfile = {
   participantId: "speaker-1",
   displayName: "Priya Raman",
   biography: "Build systems engineer.",
+  jobTitle: "Principal Build Engineer",
+  company: "Monorepo Labs",
+  status: "confirmed",
+  email: "priya@example.test",
+  socialLinks: { linkedin: "https://example.test/priya" },
+  travelLogistics: {
+    travelRequired: true,
+    arrivalAt: "2027-05-01T10:00:00.000Z",
+    departureAt: "2027-05-04T16:00:00.000Z",
+  },
   headshotAssetId: "asset-headshot",
   version: 2,
   updatedAt: "2026-08-09T12:00:00.000Z",
@@ -97,6 +111,15 @@ const assetV2: DeliverableAsset = {
   createdAt: "2026-08-09T12:00:00.000Z",
   version: 2,
   supersedesAssetId: "asset-1",
+};
+
+const matrixItem: DeliverableMatrixItem = {
+  task,
+  participantId: "speaker-1",
+  participantName: "Priya Raman",
+  assets: [assetV1, assetV2],
+  currentAsset: assetV1,
+  status: "overdue",
 };
 
 describe("deliverables API adapter", () => {
@@ -331,6 +354,15 @@ describe("deliverables workspace", () => {
         tasks: [task],
         assets: [assetV1, assetV2],
         profiles: [profile],
+        matrixItems: [matrixItem],
+        operationStates: [
+          {
+            key: "asset-comment",
+            label: "Reply to asset thread",
+            phase: "succeeded",
+            message: "Organizer reply added to the asset-family thread.",
+          },
+        ],
         selectedAssetId: "asset-2",
         assetHistory: [assetV1, assetV2],
         comments: [
@@ -368,9 +400,13 @@ describe("deliverables workspace", () => {
     expect(markup).toContain("Filter by speaker");
     expect(markup).toContain("Filter by task");
     expect(markup).toContain("Preview reminder recipients");
+    expect(markup).toContain("Outstanding only");
+    expect(markup).toContain("Overdue");
     expect(markup).toContain("slides.pdf");
     expect(markup).toContain("Current");
     expect(markup).toContain("Draft deck - final version coming Friday.");
+    expect(markup).toContain("Cross-role comment thread");
+    expect(markup).toContain("Post organizer reply");
     expect(markup).toContain("Approve content");
     expect(markup).toContain("Session title and abstract");
     expect(markup).toContain("Public approval gate");
@@ -379,6 +415,11 @@ describe("deliverables workspace", () => {
     expect(markup).toContain("Prior version to restore");
     expect(markup).toContain("Restore selected prior version");
     expect(markup).toContain("Speaker bio and headshot");
+    expect(markup).toContain("Principal Build Engineer");
+    expect(markup).toContain("Monorepo Labs");
+    expect(markup).toContain("priya@example.test");
+    expect(markup).toContain("Organizer operation status");
+    expect(markup).toContain("Organizer reply added to the asset-family thread.");
     expect(markup).not.toContain("must-not-cross-boundary");
     expect(markup).toContain("Download selected deliverables ZIP");
   });
@@ -426,11 +467,12 @@ describe("deliverables workspace", () => {
         tasks: [task],
         assets: [assetV1, assetV2],
         profiles: [profile],
+        matrixItems: [{ ...matrixItem, currentAsset: assetV2, status: "uploaded" }],
         onInspectAsset: () => undefined,
       }),
     );
     expect(markup).toContain("slides.pdf");
-    expect(markup).toContain("v2 · 2 versions");
+    expect(markup).toContain("Authoritative current v2 · 2 versions");
     expect(markup).toContain("Review state");
     expect(markup).toContain("View version history");
   });
@@ -457,6 +499,82 @@ describe("deliverables workspace", () => {
     expect(markup).toContain('aria-label="Select slides.pdf"');
   });
 
+  it("selects only the server-authoritative current ready version", () => {
+    const markup = renderToStaticMarkup(
+      createElement(DeliverablesWorkspaceView, {
+        organizationId: "org-1",
+        eventId: "event-1",
+        mode: "files",
+        sessions: [session],
+        tasks: [task],
+        assets: [assetV1, assetV2],
+        profiles: [profile],
+        matrixItems: [matrixItem],
+        onExportFiles: async () => undefined,
+      }),
+    );
+
+    expect(markup).toContain('data-current-version="asset-1"');
+    expect(markup).toContain("Authoritative current v1 · 2 versions");
+    expect(markup).toContain("Slides · application/pdf · 1024 bytes");
+    expect(markup).not.toContain('data-current-version="asset-2"');
+  });
+
+  it("does not infer a ZIP-selectable current version when the matrix omits one", () => {
+    const markup = renderToStaticMarkup(
+      createElement(DeliverablesWorkspaceView, {
+        organizationId: "org-1",
+        eventId: "event-1",
+        mode: "files",
+        sessions: [session],
+        tasks: [task],
+        assets: [assetV1, assetV2],
+        profiles: [profile],
+        matrixItems: [
+          {
+            task,
+            participantId: "speaker-1",
+            participantName: "Priya Raman",
+            assets: [assetV1, assetV2],
+            status: "submitted",
+          },
+        ],
+        onExportFiles: async () => undefined,
+      }),
+    );
+
+    expect(markup).toContain("current version unavailable");
+    expect(markup).not.toContain("data-current-version");
+    expect(markup).toContain("Select at least one latest ready asset.");
+  });
+
+  it("requires explicit confirmation of the exact outstanding reminder snapshot", () => {
+    const row: DeliverableRow = {
+      task,
+      session,
+      sessionLabel: session.title,
+      speaker: profile,
+      speakerLabel: profile.displayName,
+      assets: [assetV1],
+      currentAsset: assetV1,
+      status: "overdue",
+    };
+    const markup = renderToStaticMarkup(
+      createElement(ReminderPreview, {
+        rows: [row],
+        selectedTaskIds: [],
+        busy: false,
+        sendAvailable: true,
+        onSend: () => undefined,
+      }),
+    );
+
+    expect(markup).toContain("Explicit reminder recipients and outstanding tasks");
+    expect(markup).toContain("I confirm this exact outstanding recipient and task snapshot.");
+    expect(markup).toContain("Confirm and send reminders");
+    expect(markup).toContain('disabled=""');
+  });
+
   it("keeps every ZIP response state explicit and non-fabricated", () => {
     expect(Object.keys(deliverablesExportStatusLabels)).toEqual([
       "idle",
@@ -470,6 +588,9 @@ describe("deliverables workspace", () => {
     expect(deliverablesExportStatusLabels.queued).toContain("queued");
     expect(deliverablesExportStatusLabels.generating).toContain("generating");
     expect(deliverablesExportStatusLabels.ready).toContain("validated ZIP response");
+    expect(deliverablesExportActionLabels.queued).toBe("ZIP export queued");
+    expect(deliverablesExportActionLabels.ready).toBe("Download ready ZIP");
+    expect(deliverablesExportActionLabels.failure).toBe("Retry ZIP export");
     expect(deliverablesExportStatusLabels["download-started"]).toContain("download");
     expect(deliverablesExportStatusLabels.failure).toContain("failed");
   });

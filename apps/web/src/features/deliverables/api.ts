@@ -79,6 +79,47 @@ export interface DeliverableTask {
   readonly version: number;
   readonly updatedAt: string;
 }
+/**
+ * Server-derived organizer task matrix status. The UI must not reconstruct
+ * `pending` or `uploaded` from task and asset projections.
+ */
+export type DeliverableMatrixStatus = DeliverableTaskStatus | "pending" | "uploaded";
+export type DeliverableMatrixFilterStatus =
+  | DeliverableMatrixStatus
+  | "incomplete"
+  | "all";
+
+export interface DeliverableMatrixQuery {
+  readonly participantId?: string;
+  readonly taskId?: string;
+  readonly status?: DeliverableMatrixFilterStatus;
+  readonly signal?: AbortSignal;
+}
+
+export interface DeliverableMatrixFilters {
+  readonly participantId?: string;
+  readonly taskId?: string;
+  readonly status?: DeliverableMatrixFilterStatus;
+}
+
+export interface DeliverableMatrixItem {
+  readonly task: DeliverableTask;
+  readonly participantId: string;
+  readonly participantName?: string;
+  readonly assets: readonly DeliverableAsset[];
+  readonly currentAsset?: DeliverableAsset;
+  readonly status: DeliverableMatrixStatus;
+}
+
+export interface DeliverableTaskMatrix {
+  readonly organizationId: string;
+  readonly eventId: string;
+  readonly total: number;
+  readonly filters: DeliverableMatrixFilters;
+  readonly items: readonly DeliverableMatrixItem[];
+}
+
+export type DeliverablesMatrix = DeliverableTaskMatrix;
 
 /** Public asset projection. Server-owned object keys are deliberately not modeled. */
 export interface DeliverableAsset {
@@ -146,6 +187,19 @@ export interface DeliverableSpeakerProfile {
   readonly participantId: string;
   readonly displayName: string;
   readonly biography: string;
+  readonly jobTitle?: string;
+  readonly company?: string;
+  readonly status?: string;
+  readonly email?: string;
+  readonly socialLinks?: Readonly<Record<string, string>>;
+  readonly social?: Readonly<Record<string, string>>;
+  readonly travelLogistics?: {
+    readonly travelRequired: boolean;
+    readonly arrivalAt: string | null;
+    readonly departureAt: string | null;
+    readonly origin?: string | null;
+    readonly destination?: string | null;
+  };
   readonly headshotAssetId?: string;
   readonly version: number;
   readonly updatedAt: string;
@@ -203,8 +257,9 @@ export interface DeliverablesApi {
     sessionId: string,
     signal?: AbortSignal,
   ): Promise<readonly DeliverableContentHistoryEntry[]>;
+  /** Server-derived organizer task/status/current-asset matrix. */
+  listDeliverableMatrix?(options?: DeliverableMatrixQuery): Promise<DeliverableTaskMatrix>;
 
-  /** These methods use the private speaker asset/task contracts exactly. */
   listTasks?(signal?: AbortSignal): Promise<readonly DeliverableTask[]>;
   listAssets?(options?: {
     readonly participantId?: string;
@@ -288,6 +343,14 @@ function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function stringRecord(value: unknown): Readonly<Record<string, string>> | undefined {
+  if (!isRecord(value)) return undefined;
+  const entries = Object.entries(value).filter(
+    (entry): entry is [string, string] => typeof entry[1] === "string",
+  );
+  return entries.length === 0 ? undefined : Object.fromEntries(entries);
+}
+
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/u, "");
 }
@@ -326,18 +389,54 @@ async function errorFrom(response: Response): Promise<DeliverablesApiError> {
 
 function publicAsset(value: unknown): DeliverableAsset {
   const candidate = isRecord(value) ? value : {};
-  // The API already strips objectKey; this projection also strips it defensively if a legacy server returns it.
-  const { objectKey: _objectKey, tenantId: _tenantId, ...safe } = candidate;
   const reviewState =
-    safe.reviewState === "approved" || safe.reviewState === "needs_changes"
-      ? safe.reviewState
-      : safe.reviewStatus === "approved" || safe.reviewStatus === "needs_changes"
-        ? safe.reviewStatus
+    candidate.reviewState === "approved" || candidate.reviewState === "needs_changes"
+      ? candidate.reviewState
+      : candidate.reviewStatus === "approved" || candidate.reviewStatus === "needs_changes"
+        ? candidate.reviewStatus
         : undefined;
   return {
-    ...safe,
+    id: typeof candidate.id === "string" ? candidate.id : "",
+    eventId: typeof candidate.eventId === "string" ? candidate.eventId : "",
+    participantId: typeof candidate.participantId === "string" ? candidate.participantId : "",
+    kind: candidate.kind as DeliverableAssetKind,
+    fileName: typeof candidate.fileName === "string" ? candidate.fileName : "",
+    contentType: typeof candidate.contentType === "string" ? candidate.contentType : "",
+    sizeBytes: typeof candidate.sizeBytes === "number" ? candidate.sizeBytes : 0,
+    state: candidate.state as DeliverableAssetState,
+    createdAt: typeof candidate.createdAt === "string" ? candidate.createdAt : "",
+    ...(typeof candidate.submissionId === "string"
+      ? { submissionId: candidate.submissionId }
+      : {}),
+    ...(typeof candidate.sessionTitle === "string"
+      ? { sessionTitle: candidate.sessionTitle }
+      : {}),
+    ...(typeof candidate.participantName === "string"
+      ? { participantName: candidate.participantName }
+      : {}),
+    ...(typeof candidate.taskId === "string" ? { taskId: candidate.taskId } : {}),
+    ...(typeof candidate.version === "number" ? { version: candidate.version } : {}),
+    ...(typeof candidate.versionFamilyId === "string"
+      ? { versionFamilyId: candidate.versionFamilyId }
+      : {}),
+    ...(typeof candidate.supersedesAssetId === "string"
+      ? { supersedesAssetId: candidate.supersedesAssetId }
+      : {}),
+    ...(typeof candidate.commentThreadId === "string"
+      ? { commentThreadId: candidate.commentThreadId }
+      : {}),
+    ...(typeof candidate.rejectionReason === "string"
+      ? { rejectionReason: candidate.rejectionReason }
+      : {}),
+    ...(typeof candidate.finalizedAt === "string" ? { finalizedAt: candidate.finalizedAt } : {}),
     ...(reviewState === undefined ? {} : { reviewState }),
-  } as unknown as DeliverableAsset;
+    ...(typeof candidate.reviewNote === "string" ? { reviewNote: candidate.reviewNote } : {}),
+    ...(typeof candidate.reviewVersion === "number"
+      ? { reviewVersion: candidate.reviewVersion }
+      : {}),
+    ...(typeof candidate.reviewedAt === "string" ? { reviewedAt: candidate.reviewedAt } : {}),
+    ...(typeof candidate.reviewedBy === "string" ? { reviewedBy: candidate.reviewedBy } : {}),
+  };
 }
 interface DeliverableUploadAuthorization {
   readonly asset: DeliverableAsset;
@@ -443,13 +542,123 @@ function normalizeContentHistory(value: unknown): DeliverableContentHistoryEntry
 function normalizeTask(value: unknown): DeliverableTask {
   return value as DeliverableTask;
 }
+function normalizeMatrixItem(value: unknown): DeliverableMatrixItem {
+  if (
+    !isRecord(value) ||
+    !isRecord(value.task) ||
+    !Array.isArray(value.assets) ||
+    typeof value.participantId !== "string" ||
+    typeof value.status !== "string" ||
+    !(deliverableTaskStatuses as readonly string[])
+      .concat(["pending", "uploaded"])
+      .includes(value.status)
+  ) {
+    throw new DeliverablesApiError(
+      "DELIVERABLES_MATRIX_INVALID_RESPONSE",
+      "The organizer deliverables matrix item was invalid.",
+      200,
+    );
+  }
+  const currentAsset = isRecord(value.currentAsset) ? publicAsset(value.currentAsset) : undefined;
+  return {
+    task: normalizeTask(value.task),
+    participantId: value.participantId,
+    ...(typeof value.participantName === "string" ? { participantName: value.participantName } : {}),
+    assets: value.assets.map(publicAsset),
+    ...(currentAsset === undefined ? {} : { currentAsset }),
+    status: value.status as DeliverableMatrixStatus,
+  };
+}
+
+function normalizeMatrix(value: unknown): DeliverableTaskMatrix {
+  if (
+    !isRecord(value) ||
+    typeof value.organizationId !== "string" ||
+    typeof value.eventId !== "string" ||
+    typeof value.total !== "number" ||
+    !Number.isInteger(value.total) ||
+    value.total < 0 ||
+    !Array.isArray(value.items)
+  ) {
+    throw new DeliverablesApiError(
+      "DELIVERABLES_MATRIX_INVALID_RESPONSE",
+      "The organizer deliverables matrix response was invalid.",
+      200,
+    );
+  }
+  const rawFilters = isRecord(value.filters) ? value.filters : {};
+  const status =
+    typeof rawFilters.status === "string" &&
+    (deliverableTaskStatuses as readonly string[])
+      .concat(["pending", "uploaded", "incomplete", "all"])
+      .includes(rawFilters.status)
+      ? (rawFilters.status as DeliverableMatrixFilterStatus)
+      : undefined;
+  return {
+    organizationId: value.organizationId,
+    eventId: value.eventId,
+    total: value.total,
+    filters: {
+      ...(typeof rawFilters.participantId === "string"
+        ? { participantId: rawFilters.participantId }
+        : {}),
+      ...(typeof rawFilters.taskId === "string" ? { taskId: rawFilters.taskId } : {}),
+      ...(status === undefined ? {} : { status }),
+    },
+    items: value.items.map(normalizeMatrixItem),
+  };
+}
 
 function normalizeProfile(value: unknown): DeliverableSpeakerProfile {
-  return value as DeliverableSpeakerProfile;
+  const candidate = isRecord(value) ? value : {};
+  const socialLinks = stringRecord(candidate.socialLinks);
+  const social = stringRecord(candidate.social);
+  const travel = isRecord(candidate.travelLogistics) ? candidate.travelLogistics : undefined;
+  return {
+    id: typeof candidate.id === "string" ? candidate.id : "",
+    eventId: typeof candidate.eventId === "string" ? candidate.eventId : "",
+    participantId: typeof candidate.participantId === "string" ? candidate.participantId : "",
+    displayName: typeof candidate.displayName === "string" ? candidate.displayName : "",
+    biography: typeof candidate.biography === "string" ? candidate.biography : "",
+    ...(typeof candidate.jobTitle === "string" ? { jobTitle: candidate.jobTitle } : {}),
+    ...(typeof candidate.company === "string" ? { company: candidate.company } : {}),
+    ...(typeof candidate.status === "string" ? { status: candidate.status } : {}),
+    ...(typeof candidate.email === "string" ? { email: candidate.email } : {}),
+    ...(socialLinks === undefined ? {} : { socialLinks }),
+    ...(social === undefined ? {} : { social }),
+    ...(travel === undefined
+      ? {}
+      : {
+          travelLogistics: {
+            travelRequired: travel.travelRequired === true,
+            arrivalAt: typeof travel.arrivalAt === "string" ? travel.arrivalAt : null,
+            departureAt: typeof travel.departureAt === "string" ? travel.departureAt : null,
+            ...(typeof travel.origin === "string" ? { origin: travel.origin } : {}),
+            ...(typeof travel.destination === "string"
+              ? { destination: travel.destination }
+              : {}),
+          },
+        }),
+    ...(typeof candidate.headshotAssetId === "string"
+      ? { headshotAssetId: candidate.headshotAssetId }
+      : {}),
+    version: typeof candidate.version === "number" ? candidate.version : 0,
+    updatedAt: typeof candidate.updatedAt === "string" ? candidate.updatedAt : "",
+  };
 }
 
 function normalizeComment(value: unknown): DeliverableComment {
-  return value as DeliverableComment;
+  const candidate = isRecord(value) ? value : {};
+  return {
+    id: typeof candidate.id === "string" ? candidate.id : "",
+    assetId: typeof candidate.assetId === "string" ? candidate.assetId : "",
+    body: typeof candidate.body === "string" ? candidate.body : "",
+    authorLabel: typeof candidate.authorLabel === "string" ? candidate.authorLabel : "",
+    createdAt: typeof candidate.createdAt === "string" ? candidate.createdAt : "",
+    ...(typeof candidate.eventId === "string" ? { eventId: candidate.eventId } : {}),
+    ...(typeof candidate.updatedAt === "string" ? { updatedAt: candidate.updatedAt } : {}),
+    ...(typeof candidate.version === "number" ? { version: candidate.version } : {}),
+  };
 }
 
 function withJsonHeaders(init: RequestInit = {}): RequestInit {
@@ -597,8 +806,10 @@ export function createDeliverablesApi(
   const normalizedBaseUrl = trimTrailingSlash(baseUrl.trim());
   if (normalizedBaseUrl.length === 0)
     throw new TypeError("An API URL is required for deliverables requests.");
-  const organizationSegment = segment(organizationId, "organization ID");
-  const eventSegment = segment(eventId, "event ID");
+  const organizationScope = organizationId.trim();
+  const eventScope = eventId.trim();
+  const organizationSegment = segment(organizationScope, "organization ID");
+  const eventSegment = segment(eventScope, "event ID");
   const adminSessionsBase = `${normalizedBaseUrl}/api/admin/organizations/${organizationSegment}/events/${eventSegment}/sessions`;
   const speakerBase = `${normalizedBaseUrl}/api/speaker/events/${eventSegment}`;
 
@@ -728,6 +939,26 @@ export function createDeliverablesApi(
           assigneeIds: input.assigneeIds,
         }),
       }).then(normalizeTask);
+    },
+    async listDeliverableMatrix(options) {
+      const query = new URLSearchParams();
+      if (options?.participantId !== undefined) query.set("participantId", options.participantId);
+      if (options?.taskId !== undefined) query.set("taskId", options.taskId);
+      if (options?.status !== undefined) query.set("status", options.status);
+      const suffix = query.size === 0 ? "" : `?${query.toString()}`;
+      const body = await speakerRequest<unknown>(
+        `/organizer/deliverables${suffix}`,
+        options?.signal === undefined ? {} : { signal: options.signal },
+      );
+      const matrix = normalizeMatrix(body);
+      if (matrix.organizationId !== organizationScope || matrix.eventId !== eventScope) {
+        throw new DeliverablesApiError(
+          "DELIVERABLES_MATRIX_SCOPE_MISMATCH",
+          "The organizer deliverables matrix did not match the requested organization and event.",
+          200,
+        );
+      }
+      return matrix;
     },
     async listTasks(signal) {
       const body = await speakerRequest<unknown>(

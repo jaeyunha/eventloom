@@ -6,6 +6,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import {
@@ -17,14 +18,17 @@ import {
   type DeliverableDownloadGrant,
   type DeliverableExportDownload,
   type DeliverableExportInput,
+  type DeliverableMatrixItem,
+  type DeliverableMatrixStatus,
   type DeliverableReviewInput,
   type DeliverableReviewState,
   type DeliverableSession,
   type DeliverableSpeakerProfile,
   type DeliverablesApi,
-  DeliverablesApiError,
   type DeliverableTask,
   type DeliverableTaskInput,
+  type DeliverableTaskMatrix,
+  DeliverablesApiError,
   deliverableAssetKinds,
 } from "./api";
 
@@ -99,12 +103,42 @@ export const deliverablesExportStatusLabels: Readonly<Record<DeliverablesExportU
     "download-started": "The browser download has started.",
     failure: "The authorized ZIP request failed.",
   };
+export const deliverablesExportActionLabels: Readonly<
+  Record<DeliverablesExportUiStatus, string>
+> = {
+  idle: "Download selected files ZIP",
+  queued: "ZIP export queued",
+  preparing: "Preparing ZIP…",
+  generating: "Generating ZIP…",
+  ready: "Download ready ZIP",
+  "download-started": "Download started",
+  failure: "Retry ZIP export",
+};
+
+export type DeliverablesOperationKey =
+  | "task-create"
+  | "asset-comment"
+  | "asset-download"
+  | "asset-review"
+  | "reminder-send"
+  | "biography-save"
+  | "headshot-replace"
+  | "deliverables-export"
+  | "files-export";
+export type DeliverablesOperationPhase = "pending" | "succeeded" | "failed";
+export interface DeliverablesOperationState {
+  readonly key: DeliverablesOperationKey;
+  readonly label: string;
+  readonly phase: DeliverablesOperationPhase;
+  readonly message: string;
+}
 
 export interface DeliverablesSnapshot {
   readonly sessions: readonly DeliverableSession[];
   readonly tasks: readonly DeliverableTask[];
   readonly assets: readonly DeliverableAsset[];
   readonly profiles: readonly DeliverableSpeakerProfile[];
+  readonly matrix?: DeliverableTaskMatrix;
 }
 
 export interface DeliverablesWorkspaceProps {
@@ -123,6 +157,7 @@ export interface DeliverableRow {
   readonly speakerLabel: string;
   readonly assets: readonly DeliverableAsset[];
   readonly currentAsset: DeliverableAsset | undefined;
+  readonly status: DeliverableMatrixStatus;
 }
 
 export interface DeliverablesWorkspaceViewProps {
@@ -133,11 +168,13 @@ export interface DeliverablesWorkspaceViewProps {
   readonly tasks: readonly DeliverableTask[];
   readonly assets: readonly DeliverableAsset[];
   readonly profiles: readonly DeliverableSpeakerProfile[];
+  readonly matrixItems?: readonly DeliverableMatrixItem[];
   readonly loading?: boolean;
   readonly busy?: boolean;
   readonly error?: string | null;
   readonly statusMessage?: string | null;
   readonly capabilityMessages?: readonly string[];
+  readonly operationStates?: readonly DeliverablesOperationState[];
   readonly apiConfigured?: boolean;
   readonly onCreateTask?: (input: DeliverableTaskInput) => Promise<void>;
   readonly onInspectAsset?: (assetId: string) => void;
@@ -204,25 +241,25 @@ function formatStatus(status: string): string {
   return status.replace(/[_-]+/gu, " ").replace(/\b\w/gu, (letter) => letter.toUpperCase());
 }
 
-function statusForTask(task: DeliverableTask, assets: readonly DeliverableAsset[]): string {
+function statusForTask(
+  task: DeliverableTask,
+  assets: readonly DeliverableAsset[],
+): DeliverableMatrixStatus {
   const latest = assets.find((asset) => isCurrentAsset(asset, assets));
-  const reviewState = (latest as (DeliverableAsset & { reviewState?: string }) | undefined)
-    ?.reviewState;
-  if (reviewState === "needs_changes") return "needs_changes";
+  if (latest?.reviewState === "needs_changes") return "needs_changes";
   if (latest?.state === "ready") {
     return task.status === "completed" || task.status === "waived" ? task.status : "uploaded";
   }
   return task.status;
 }
 
-function statusMatches(
-  task: DeliverableTask,
-  assets: readonly DeliverableAsset[],
-  filter: string,
-): boolean {
+function isOutstanding(status: DeliverableMatrixStatus): boolean {
+  return !["completed", "waived", "uploaded"].includes(status);
+}
+
+function statusMatches(status: DeliverableMatrixStatus, filter: string): boolean {
   if (filter === "all") return true;
-  const status = statusForTask(task, assets);
-  if (filter === "pending") return !["completed", "waived", "uploaded"].includes(status);
+  if (filter === "pending" || filter === "incomplete") return isOutstanding(status);
   if (filter === "uploaded") return ["uploaded", "completed", "waived"].includes(status);
   return status === filter;
 }
@@ -291,6 +328,32 @@ function taskRows(
       speakerLabel: task.participantName ?? speaker?.displayName ?? "Speaker",
       assets: relatedAssets,
       currentAsset: relatedAssets.find((asset) => isCurrentAsset(asset, relatedAssets)),
+      status: statusForTask(task, relatedAssets),
+    };
+  });
+}
+
+function matrixRows(
+  items: readonly DeliverableMatrixItem[],
+  sessions: readonly DeliverableSession[],
+  profiles: readonly DeliverableSpeakerProfile[],
+): readonly DeliverableRow[] {
+  const sessionBySubmission = new Map(sessions.map((session) => [session.id, session]));
+  const profileByParticipant = new Map(profiles.map((profile) => [profile.participantId, profile]));
+  return items.map((item) => {
+    const task = item.task;
+    const session = sessionBySubmission.get(task.submissionId);
+    const speaker = profileByParticipant.get(item.participantId);
+    return {
+      task,
+      session,
+      sessionLabel: session?.title ?? task.sessionTitle ?? "Session unavailable",
+      speaker,
+      speakerLabel:
+        item.participantName ?? task.participantName ?? speaker?.displayName ?? "Speaker",
+      assets: item.assets,
+      currentAsset: item.currentAsset,
+      status: item.status,
     };
   });
 }
@@ -583,9 +646,11 @@ function DeliverablesTable({
   speakerFilter,
   taskFilter,
   statusFilter,
+  outstandingOnly,
   onSpeakerFilter,
   onTaskFilter,
   onStatusFilter,
+  onOutstandingOnly,
   busy,
   exportAvailable,
   exportableCount,
@@ -599,9 +664,11 @@ function DeliverablesTable({
   speakerFilter: string;
   taskFilter: string;
   statusFilter: string;
+  outstandingOnly: boolean;
   onSpeakerFilter: (value: string) => void;
   onTaskFilter: (value: string) => void;
   onStatusFilter: (value: string) => void;
+  onOutstandingOnly: (value: boolean) => void;
   busy: boolean;
   exportAvailable: boolean;
   exportableCount: number;
@@ -615,11 +682,10 @@ function DeliverablesTable({
     (row) =>
       (speakerFilter === "all" || row.task.participantId === speakerFilter) &&
       (taskFilter === "all" || row.task.id === taskFilter) &&
-      statusMatches(row.task, row.assets, statusFilter),
+      statusMatches(row.status, statusFilter) &&
+      (!outstandingOnly || isOutstanding(row.status)),
   );
-  const incompleteCount = rows.filter((row) =>
-    statusMatches(row.task, row.assets, "pending"),
-  ).length;
+  const incompleteCount = rows.filter((row) => isOutstanding(row.status)).length;
   return (
     <section style={cardStyle} aria-labelledby="tracking-heading">
       <div style={rowStyle}>
@@ -674,6 +740,17 @@ function DeliverablesTable({
             <option value="overdue">Overdue</option>
           </select>
         </label>
+        <label style={{ ...fieldStyle, alignContent: "end" }}>
+          <span>Outstanding filter</span>
+          <span style={rowStyle}>
+            <input
+              type="checkbox"
+              checked={outstandingOnly}
+              onChange={(event) => onOutstandingOnly(event.currentTarget.checked)}
+            />
+            Outstanding only
+          </span>
+        </label>
       </div>
       <div style={{ ...rowStyle, marginBottom: "0.8rem" }}>
         <button
@@ -724,7 +801,7 @@ function DeliverablesTable({
             </thead>
             <tbody>
               {visibleRows.map((row) => {
-                const status = statusForTask(row.task, row.assets);
+                const status = row.status;
                 const versionCount =
                   row.currentAsset === undefined
                     ? 0
@@ -789,6 +866,7 @@ function FileLibrary({
   sessions,
   tasks,
   profiles,
+  matrixItems,
   busy,
   onInspectAsset,
   onExport,
@@ -797,6 +875,7 @@ function FileLibrary({
   sessions: readonly DeliverableSession[];
   tasks: readonly DeliverableTask[];
   profiles: readonly DeliverableSpeakerProfile[];
+  matrixItems?: readonly DeliverableMatrixItem[];
   busy: boolean;
   onInspectAsset?: (assetId: string) => void;
   onExport?: (input: DeliverableExportInput) => Promise<DeliverableExportDownload | undefined>;
@@ -811,6 +890,7 @@ function FileLibrary({
     readonly DeliverablesExportUiStatus[]
   >([]);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [readyDownload, setReadyDownload] = useState<DeliverableExportDownload | null>(null);
 
   const sessionsById = useMemo(
     () => new Map(sessions.map((session) => [session.id, session])),
@@ -822,29 +902,57 @@ function FileLibrary({
     [profiles],
   );
   const families = useMemo(() => {
+    const authoritativeCurrentByFamily = new Map(
+      (matrixItems ?? []).flatMap((item) =>
+        item.currentAsset === undefined
+          ? []
+          : [[assetFamily(item.currentAsset), item.currentAsset.id] as const],
+      ),
+    );
+    const sourceAssets = new Map<string, DeliverableAsset>();
+    for (const asset of [
+      ...assets,
+      ...(matrixItems ?? []).flatMap((item) => [
+        ...item.assets,
+        ...(item.currentAsset === undefined ? [] : [item.currentAsset]),
+      ]),
+    ]) {
+      sourceAssets.set(asset.id, asset);
+    }
     const grouped = new Map<string, DeliverableAsset[]>();
-    for (const asset of assets) {
+    for (const asset of sourceAssets.values()) {
       const family = grouped.get(assetFamily(asset));
       if (family === undefined) grouped.set(assetFamily(asset), [asset]);
       else family.push(asset);
     }
-    return [...grouped.values()]
-      .map((versions) => {
-        const current = latestAsset(versions);
-        return current === undefined ? null : { current, versions };
+    return [...grouped.entries()]
+      .map(([familyId, versions]) => {
+        const authoritativeId = authoritativeCurrentByFamily.get(familyId);
+        const current =
+          versions.find((asset) => asset.id === authoritativeId) ?? latestAsset(versions);
+        return current === undefined
+          ? null
+          : { current, versions, authoritative: current.id === authoritativeId };
       })
-      .filter((family): family is { current: DeliverableAsset; versions: DeliverableAsset[] } =>
-        Boolean(family),
+      .filter(
+        (
+          family,
+        ): family is {
+          current: DeliverableAsset;
+          versions: DeliverableAsset[];
+          authoritative: boolean;
+        } => Boolean(family),
       )
       .sort((left, right) => compareAssetVersions(left.current, right.current));
-  }, [assets]);
+  }, [assets, matrixItems]);
   const rows = useMemo(
     () =>
-      families.map(({ current, versions }) => {
+      families.map(({ current, versions, authoritative }) => {
         const sessionId = assetSessionId(current, tasksById);
         return {
           current,
           versions,
+          authoritative,
           sessionId,
           sessionTitle:
             sessionsById.get(sessionId)?.title ??
@@ -888,19 +996,23 @@ function FileLibrary({
   }, [visibleRows]);
   const currentById = useMemo(() => new Map(rows.map((row) => [row.current.id, row])), [rows]);
   const selectableVisibleIds = visibleRows
-    .filter((row) => row.current.state === "ready")
+    .filter((row) => row.authoritative && row.current.state === "ready")
     .map((row) => row.current.id);
-  const selectedReadyIds = selectedAssetIds.filter(
-    (assetId) => currentById.get(assetId)?.current.state === "ready",
-  );
+  const selectedReadyIds = selectedAssetIds.filter((assetId) => {
+    const row = currentById.get(assetId);
+    return row?.authoritative === true && row.current.state === "ready";
+  });
   const allVisibleSelected =
     selectableVisibleIds.length > 0 &&
     selectableVisibleIds.every((assetId) => selectedAssetIds.includes(assetId));
   const exportInFlight =
     exportStatus === "queued" || exportStatus === "preparing" || exportStatus === "generating";
+  const downloadReady = exportStatus === "ready" && readyDownload !== null;
 
   useEffect(() => {
-    const currentIds = new Set(rows.map((row) => row.current.id));
+    const currentIds = new Set(
+      rows.filter((row) => row.authoritative).map((row) => row.current.id),
+    );
     setSelectedAssetIds((current) => current.filter((assetId) => currentIds.has(assetId)));
   }, [rows]);
 
@@ -930,6 +1042,7 @@ function FileLibrary({
   async function exportSelected(): Promise<void> {
     if (onExport === undefined || selectedReadyIds.length === 0 || exportInFlight) return;
     setExportError(null);
+    setReadyDownload(null);
     setExportStage("queued", true);
     await Promise.resolve();
     setExportStage("preparing");
@@ -939,10 +1052,23 @@ function FileLibrary({
       if (download === undefined) {
         throw new Error("The ZIP export returned no download response.");
       }
+      setReadyDownload(download);
       setExportStage("ready");
-      triggerDeliverablesDownload(download);
+    } catch (reason) {
+      setReadyDownload(null);
+      setExportError(messageFromError(reason));
+      setExportStage("failure");
+    }
+  }
+
+  function startReadyDownload(): void {
+    if (readyDownload === null) return;
+    try {
+      triggerDeliverablesDownload(readyDownload);
+      setReadyDownload(null);
       setExportStage("download-started");
     } catch (reason) {
+      setReadyDownload(null);
       setExportError(messageFromError(reason));
       setExportStage("failure");
     }
@@ -963,9 +1089,10 @@ function FileLibrary({
         <span>{families.length} version families</span>
       </div>
       <p style={mutedStyle}>
-        Every row is the authoritative latest version of one immutable asset family. Filename,
-        session, speaker, upload date, review state, version history, authorized downloads, and
-        comments stay in this event-scoped library.
+        Rows use the server-authoritative current version when the matrix returns one. Families
+        without a confirmed current version remain visible but cannot be selected for ZIP export.
+        Filename, session, speaker, upload date, review state, history, downloads, and comments stay
+        event-scoped.
       </p>
       <p style={mutedStyle}>
         Choose View version history to open authorized Download version controls for each immutable
@@ -1037,7 +1164,7 @@ function FileLibrary({
           <div style={{ display: "grid", gap: "0.35rem" }}>
             {sessionGroups.map(([sessionId, group]) => {
               const selectableIds = group
-                .filter((row) => row.current.state === "ready")
+                .filter((row) => row.authoritative && row.current.state === "ready")
                 .map((row) => row.current.id);
               const checked =
                 selectableIds.length > 0 &&
@@ -1074,23 +1201,13 @@ function FileLibrary({
           style={secondaryButtonStyle}
           type="button"
           disabled={
-            busy || exportInFlight || onExport === undefined || selectedReadyIds.length === 0
+            busy ||
+            exportInFlight ||
+            (!downloadReady && (onExport === undefined || selectedReadyIds.length === 0))
           }
-          onClick={() => void exportSelected()}
+          onClick={() => (downloadReady ? startReadyDownload() : void exportSelected())}
         >
-          {exportStatus === "queued"
-            ? "ZIP export queued"
-            : exportStatus === "preparing"
-              ? "Preparing ZIP…"
-              : exportStatus === "generating"
-                ? "Generating ZIP…"
-                : exportStatus === "ready"
-                  ? "ZIP ready"
-                  : exportStatus === "download-started"
-                    ? "Download started"
-                    : exportStatus === "failure"
-                      ? "Retry ZIP export"
-                      : "Download selected files ZIP"}
+          {deliverablesExportActionLabels[exportStatus]}
         </button>
         <span style={mutedStyle}>
           {onExport === undefined
@@ -1143,21 +1260,28 @@ function FileLibrary({
               </tr>
             </thead>
             <tbody>
-              {visibleRows.map(({ current, versions, sessionTitle, speaker }) => (
-                <tr key={assetFamily(current)}>
+              {visibleRows.map(({ current, versions, sessionTitle, speaker, authoritative }) => (
+                <tr
+                  key={assetFamily(current)}
+                  data-current-version={authoritative ? current.id : undefined}
+                >
                   <td>
                     <input
                       type="checkbox"
                       aria-label={`Select ${current.fileName}`}
                       checked={selectedAssetIds.includes(current.id)}
-                      disabled={current.state !== "ready"}
+                      disabled={!authoritative || current.state !== "ready"}
                       onChange={() => toggleAsset(current.id)}
                     />
                   </td>
                   <th scope="row">
                     {current.fileName}
                     <br />
-                    <small style={mutedStyle}>{current.contentType}</small>
+                    <small style={mutedStyle}>
+                      {formatStatus(current.kind)} · {current.contentType} · {current.sizeBytes} bytes
+                      <br />
+                      Asset {current.id} · family {current.versionFamilyId ?? current.id}
+                    </small>
                   </th>
                   <td>{speaker}</td>
                   <td>{sessionTitle}</td>
@@ -1165,8 +1289,10 @@ function FileLibrary({
                   <td>{reviewStateForAsset(current)}</td>
                   <td>
                     <strong>
-                      v{current.version ?? 1} · {versions.length} version
-                      {versions.length === 1 ? "" : "s"}
+                      {authoritative
+                        ? `Authoritative current v${current.version ?? 1}`
+                        : `Latest projection v${current.version ?? 1}; current version unavailable`}{" "}
+                      · {versions.length} version{versions.length === 1 ? "" : "s"}
                     </strong>
                     <br />
                     <button
@@ -1189,7 +1315,7 @@ function FileLibrary({
     </section>
   );
 }
-function ReminderPreview({
+export function ReminderPreview({
   rows,
   selectedTaskIds,
   busy,
@@ -1203,16 +1329,21 @@ function ReminderPreview({
   sendAvailable: boolean;
 }>) {
   const selected = rows.filter(
-    (row) =>
-      selectedTaskIds.includes(row.task.id) && statusMatches(row.task, row.assets, "pending"),
+    (row) => selectedTaskIds.includes(row.task.id) && isOutstanding(row.status),
   );
   const effective =
-    selected.length > 0
-      ? selected
-      : rows.filter((row) => statusMatches(row.task, row.assets, "pending"));
+    selectedTaskIds.length > 0 ? selected : rows.filter((row) => isOutstanding(row.status));
   const recipients = [
     ...new Map(effective.map((row) => [row.task.participantId, row.speakerLabel])).entries(),
   ];
+  const snapshotKey = effective
+    .map(
+      (row) =>
+        `${row.task.id}\u0000${row.task.version}\u0000${row.task.participantId}\u0000${row.task.dueAt ?? ""}\u0000${row.status}`,
+    )
+    .join("\u0001");
+  const [confirmedSnapshotKey, setConfirmedSnapshotKey] = useState<string | null>(null);
+  const confirmed = confirmedSnapshotKey === snapshotKey;
   return (
     <section style={cardStyle} aria-labelledby="reminder-preview-heading">
       <div style={rowStyle}>
@@ -1253,12 +1384,26 @@ function ReminderPreview({
           </table>
         </div>
       )}
+      <label style={{ ...rowStyle, marginTop: "0.8rem" }}>
+        <input
+          type="checkbox"
+          checked={confirmed}
+          disabled={effective.length === 0 || !sendAvailable || busy}
+          onChange={(event) =>
+            setConfirmedSnapshotKey(event.currentTarget.checked ? snapshotKey : null)
+          }
+        />
+        I confirm this exact outstanding recipient and task snapshot.
+      </label>
       <div style={{ ...rowStyle, marginTop: "0.8rem" }}>
         <button
           style={buttonStyle}
           type="button"
-          disabled={busy || !sendAvailable || effective.length === 0}
-          onClick={onSend}
+          disabled={busy || !sendAvailable || effective.length === 0 || !confirmed}
+          onClick={() => {
+            onSend();
+            setConfirmedSnapshotKey(null);
+          }}
         >
           {busy
             ? "Sending reminders…"
@@ -1281,6 +1426,8 @@ function AssetDetail({
   allAssets,
   history,
   comments,
+  authoritativeCurrentAssetId,
+  matrixAuthoritative,
   loading,
   busy,
   onDownload,
@@ -1292,6 +1439,8 @@ function AssetDetail({
   allAssets: readonly DeliverableAsset[];
   history: readonly DeliverableAssetHistoryEntry[];
   comments: readonly DeliverableComment[];
+  authoritativeCurrentAssetId?: string;
+  matrixAuthoritative: boolean;
   loading: boolean;
   busy: boolean;
   onDownload?: (assetId: string) => Promise<void>;
@@ -1307,6 +1456,12 @@ function AssetDetail({
   const [commentBody, setCommentBody] = useState("");
   const [reviewNote, setReviewNote] = useState("");
   const [commentError, setCommentError] = useState<string | null>(null);
+  const thread = [...comments].sort(
+    (left, right) =>
+      left.createdAt.localeCompare(right.createdAt) ||
+      (left.version ?? 0) - (right.version ?? 0) ||
+      left.id.localeCompare(right.id),
+  );
 
   async function submitComment(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -1362,14 +1517,25 @@ function AssetDetail({
             </thead>
             <tbody>
               {versions.map((version) => {
-                const current = isCurrentAsset(version, versions);
+                const current =
+                  authoritativeCurrentAssetId === undefined
+                    ? !matrixAuthoritative && isCurrentAsset(version, versions)
+                    : version.id === authoritativeCurrentAssetId;
                 return (
                   <tr key={version.id}>
                     <th scope="row">v{version.version ?? 1}</th>
                     <td>{formatTime(version.createdAt)}</td>
                     <td>{formatStatus(version.state)}</td>
                     <td>{reviewStateForAsset(version)}</td>
-                    <td>{current ? <strong>Current</strong> : "Previous"}</td>
+                    <td>
+                      {current ? (
+                        <strong>Current</strong>
+                      ) : matrixAuthoritative ? (
+                        "Not current"
+                      ) : (
+                        "Previous"
+                      )}
+                    </td>
                     <td>
                       <button
                         style={{ ...secondaryButtonStyle, padding: "0.35rem 0.5rem" }}
@@ -1389,12 +1555,16 @@ function AssetDetail({
           </table>
         </div>
       )}
-      <h3>Cross-role comments</h3>
-      {comments.length === 0 ? (
-        <p style={mutedStyle}>No comments have been returned for this asset.</p>
+      <h3>Cross-role comment thread</h3>
+      <p style={mutedStyle}>
+        Speaker and organizer replies are displayed together in the asset-family conversation using
+        the author labels returned by the server.
+      </p>
+      {thread.length === 0 ? (
+        <p style={mutedStyle}>No comments have been returned for this asset family.</p>
       ) : (
-        <ol>
-          {comments.map((comment) => (
+        <ol aria-label="Asset family comment thread">
+          {thread.map((comment) => (
             <li key={comment.id}>
               <strong>{comment.authorLabel}</strong> ·{" "}
               <time dateTime={comment.createdAt}>{formatTime(comment.createdAt)}</time>
@@ -1408,7 +1578,7 @@ function AssetDetail({
         style={{ display: "grid", gap: "0.55rem" }}
       >
         <label style={fieldStyle}>
-          <span>Add a comment</span>
+          <span>Reply to this asset-family thread</span>
           <textarea
             style={inputStyle}
             rows={3}
@@ -1423,7 +1593,7 @@ function AssetDetail({
           type="submit"
           disabled={busy || onAddComment === undefined}
         >
-          {onAddComment === undefined ? "Comments unavailable" : "Post comment"}
+          {onAddComment === undefined ? "Comments unavailable" : "Post organizer reply"}
         </button>
       </form>
       <h3>Review decision</h3>
@@ -1791,6 +1961,53 @@ function SpeakerEditor({
               ))}
             </select>
           </label>
+          {selected === undefined ? null : (
+            <dl
+              aria-label="Organizer speaker profile metadata"
+              style={{ ...gridStyle, margin: "0.8rem 0" }}
+            >
+              <div>
+                <dt>Job title</dt>
+                <dd>{selected.jobTitle ?? "Not provided"}</dd>
+              </div>
+              <div>
+                <dt>Company</dt>
+                <dd>{selected.company ?? "Not provided"}</dd>
+              </div>
+              <div>
+                <dt>Profile status</dt>
+                <dd>{selected.status === undefined ? "Not recorded" : formatStatus(selected.status)}</dd>
+              </div>
+              <div>
+                <dt>Email</dt>
+                <dd>{selected.email ?? "Not provided"}</dd>
+              </div>
+              <div>
+                <dt>Social profiles</dt>
+                <dd>
+                  {Object.entries(selected.socialLinks ?? selected.social ?? {}).length === 0
+                    ? "Not provided"
+                    : Object.entries(selected.socialLinks ?? selected.social ?? {})
+                        .map(([network, value]) => `${formatStatus(network)}: ${value}`)
+                        .join(" · ")}
+                </dd>
+              </div>
+              <div>
+                <dt>Travel metadata</dt>
+                <dd>
+                  {selected.travelLogistics === undefined
+                    ? "Not recorded"
+                    : `${selected.travelLogistics.travelRequired ? "Travel required" : "No travel required"} · arrival ${selected.travelLogistics.arrivalAt ?? "not recorded"} · departure ${selected.travelLogistics.departureAt ?? "not recorded"}`}
+                </dd>
+              </div>
+              <div>
+                <dt>Profile version</dt>
+                <dd>
+                  v{selected.version} · updated {formatTime(selected.updatedAt)}
+                </dd>
+              </div>
+            </dl>
+          )}
           <form
             onSubmit={(event) => void save(event)}
             style={{ display: "grid", gap: "0.8rem", marginTop: "0.8rem" }}
@@ -1845,8 +2062,12 @@ function SpeakerEditor({
             </button>
           </form>
           <p style={mutedStyle}>
-            Current headshot: {headshot?.fileName ?? "No headshot returned"}. Biography history and
-            restore are unavailable until the profile version-history endpoint is provisioned.
+            Current headshot: {headshot?.fileName ?? "No headshot returned"}
+            {headshot === undefined
+              ? ""
+              : ` · ${formatStatus(headshot.kind)} · ${headshot.contentType} · ${headshot.sizeBytes} bytes · v${headshot.version ?? 1}`}.
+            Biography history and restore are unavailable until the profile version-history endpoint is
+            provisioned.
           </p>
         </>
       )}
@@ -1862,11 +2083,13 @@ export function DeliverablesWorkspaceView({
   tasks,
   assets,
   profiles,
+  matrixItems,
   loading = false,
   busy = false,
   error = null,
   statusMessage = null,
   capabilityMessages = [],
+  operationStates = [],
   apiConfigured = true,
   onCreateTask,
   onInspectAsset,
@@ -1889,8 +2112,11 @@ export function DeliverablesWorkspaceView({
 }: DeliverablesWorkspaceViewProps) {
   const filesMode = mode === "files";
   const rows = useMemo(
-    () => taskRows(tasks, sessions, assets, profiles),
-    [assets, profiles, sessions, tasks],
+    () =>
+      matrixItems === undefined
+        ? taskRows(tasks, sessions, assets, profiles)
+        : matrixRows(matrixItems, sessions, profiles),
+    [assets, matrixItems, profiles, sessions, tasks],
   );
   const participants = useMemo(() => {
     const byId = new Map<string, string>();
@@ -1906,6 +2132,7 @@ export function DeliverablesWorkspaceView({
   const [speakerFilter, setSpeakerFilter] = useState("all");
   const [taskFilter, setTaskFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [outstandingOnly, setOutstandingOnly] = useState(false);
   const [reminderPreviewOpen, setReminderPreviewOpen] = useState(false);
   useEffect(() => {
     const taskIds = new Set(rows.map((row) => row.task.id));
@@ -1928,12 +2155,11 @@ export function DeliverablesWorkspaceView({
           (speakerFilter === "all" || row.task.participantId === speakerFilter) &&
           (taskFilter === "all" || row.task.id === taskFilter) &&
           row.currentAsset?.state === "ready" &&
-          statusMatches(row.task, row.assets, statusFilter),
+          statusMatches(row.status, statusFilter) &&
+          (!outstandingOnly || isOutstanding(row.status)),
       ),
-    [rows, selectedTaskIds, speakerFilter, statusFilter, taskFilter],
+    [outstandingOnly, rows, selectedTaskIds, speakerFilter, statusFilter, taskFilter],
   );
-  const exportStatus =
-    statusFilter === "all" ? undefined : (statusFilter as DeliverableExportInput["status"]);
   const exportSelection = useMemo<DeliverableExportInput | null>(() => {
     const assetIds = exportableRows.flatMap((row) =>
       row.currentAsset === undefined ? [] : [row.currentAsset.id],
@@ -1943,9 +2169,8 @@ export function DeliverablesWorkspaceView({
       assetIds,
       taskIds: exportableRows.map((row) => row.task.id),
       participantIds: [...new Set(exportableRows.map((row) => row.task.participantId))],
-      ...(exportStatus === undefined ? {} : { status: exportStatus }),
     };
-  }, [exportableRows, exportStatus]);
+  }, [exportableRows]);
 
   return (
     <div style={pageStyle} data-workspace-mode={mode}>
@@ -2028,6 +2253,19 @@ export function DeliverablesWorkspaceView({
           <div role="status" aria-live="polite">
             {statusMessage}
           </div>
+          {operationStates.length > 0 ? (
+            <section style={cardStyle} aria-labelledby="operation-status-heading">
+              <h2 id="operation-status-heading">Organizer operation status</h2>
+              <ul aria-live="polite">
+                {operationStates.map((operation) => (
+                  <li key={operation.key} data-operation-phase={operation.phase}>
+                    <strong>{operation.label}</strong>: {formatStatus(operation.phase)} —{" "}
+                    {operation.message}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
           {loading ? (
             <section style={cardStyle} role="status">
               <h2>{filesMode ? "Loading Files library" : "Loading deliverables"}</h2>
@@ -2060,7 +2298,9 @@ export function DeliverablesWorkspaceView({
                 speakerFilter={speakerFilter}
                 taskFilter={taskFilter}
                 statusFilter={statusFilter}
+                outstandingOnly={outstandingOnly}
                 onSpeakerFilter={setSpeakerFilter}
+                onOutstandingOnly={setOutstandingOnly}
                 busy={busy}
                 exportAvailable={onExportDeliverables !== undefined}
                 exportableCount={exportableRows.length}
@@ -2080,6 +2320,7 @@ export function DeliverablesWorkspaceView({
               sessions={sessions}
               tasks={tasks}
               profiles={profiles}
+              {...(matrixItems === undefined ? {} : { matrixItems })}
               busy={busy}
               {...(onInspectAsset === undefined ? {} : { onInspectAsset })}
               {...(onExportFiles === undefined ? {} : { onExport: onExportFiles })}
@@ -2094,13 +2335,12 @@ export function DeliverablesWorkspaceView({
               onSend={() => {
                 const selected = rows.filter(
                   (row) =>
-                    selectedTaskIds.includes(row.task.id) &&
-                    statusMatches(row.task, row.assets, "pending"),
+                    selectedTaskIds.includes(row.task.id) && isOutstanding(row.status),
                 );
                 const effective =
-                  selected.length > 0
+                  selectedTaskIds.length > 0
                     ? selected
-                    : rows.filter((row) => statusMatches(row.task, row.assets, "pending"));
+                    : rows.filter((row) => isOutstanding(row.status));
                 const recipientIds = [...new Set(effective.map((row) => row.task.participantId))];
                 void onSendBulkReminder?.({
                   taskIds: effective.map((row) => row.task.id),
@@ -2112,6 +2352,19 @@ export function DeliverablesWorkspaceView({
           {selectedAssetId !== null
             ? (() => {
                 const selectedAsset = assets.find((asset) => asset.id === selectedAssetId);
+                const authoritativeCurrentAsset =
+                  selectedAsset === undefined
+                    ? undefined
+                    : matrixItems
+                        ?.filter((item) =>
+                          item.assets.some(
+                            (candidate) =>
+                              assetFamily(candidate) === assetFamily(selectedAsset),
+                          ),
+                        )
+                        .flatMap((item) =>
+                          item.currentAsset === undefined ? [] : [item.currentAsset],
+                        )[0];
                 return selectedAsset === undefined ? (
                   <section style={cardStyle} role="alert">
                     <p>The selected private asset is no longer present in this event projection.</p>
@@ -2122,6 +2375,10 @@ export function DeliverablesWorkspaceView({
                     allAssets={assets}
                     history={assetHistory}
                     comments={comments}
+                    matrixAuthoritative={matrixItems !== undefined}
+                    {...(authoritativeCurrentAsset === undefined
+                      ? {}
+                      : { authoritativeCurrentAssetId: authoritativeCurrentAsset.id })}
                     loading={loadingAssetDetails}
                     busy={busy}
                     reviewAvailable={onReviewAsset !== undefined}
@@ -2196,6 +2453,7 @@ export function DeliverablesWorkspace({
   const [profiles, setProfiles] = useState<readonly DeliverableSpeakerProfile[]>(
     initialData?.profiles ?? [],
   );
+  const [matrix, setMatrix] = useState<DeliverableTaskMatrix | undefined>(initialData?.matrix);
   const [loading, setLoading] = useState(initialData === undefined && api !== null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(
@@ -2206,9 +2464,39 @@ export function DeliverablesWorkspace({
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [capabilityMessages, setCapabilityMessages] = useState<readonly string[]>([]);
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
+  const selectedAssetIdRef = useRef<string | null>(selectedAssetId);
+  selectedAssetIdRef.current = selectedAssetId;
   const [assetHistory, setAssetHistory] = useState<readonly DeliverableAssetHistoryEntry[]>([]);
   const [comments, setComments] = useState<readonly DeliverableComment[]>([]);
   const [loadingAssetDetails, setLoadingAssetDetails] = useState(false);
+  const [operationStates, setOperationStates] = useState<
+    Partial<Record<DeliverablesOperationKey, DeliverablesOperationState>>
+  >({});
+
+  function recordOperation(
+    key: DeliverablesOperationKey,
+    label: string,
+    phase: DeliverablesOperationPhase,
+    message: string,
+  ): void {
+    setOperationStates((current) => ({
+      ...current,
+      [key]: { key, label, phase, message },
+    }));
+  }
+
+  async function refreshMatrix(): Promise<void> {
+    if (api?.listDeliverableMatrix === undefined) return;
+    try {
+      const next = await api.listDeliverableMatrix();
+      setMatrix(next);
+      setTasks(next.items.map((item) => item.task));
+    } catch (reason) {
+      setError(
+        `The operation succeeded, but the exact deliverables matrix could not be refreshed. ${messageFromError(reason)}`,
+      );
+    }
+  }
 
   const load = useCallback(
     async (signal?: AbortSignal) => {
@@ -2242,18 +2530,35 @@ export function DeliverablesWorkspace({
             if (!signal?.aborted) setSessions(sessionsWithHistory);
           }
         } else setError(messageFromError(sessionsResult.reason));
-        if (mode !== "files") {
-          if (api.listTasks === undefined)
-            messages.push(
-              "Task tracking and task creation are unavailable: the organizer task endpoint is not provisioned.",
-            );
-          else {
+        if (api.listDeliverableMatrix === undefined) {
+          messages.push(
+            "Exact task status and current-version tracking are unavailable: the organizer deliverables matrix endpoint is not provisioned.",
+          );
+          if (mode !== "files" && api.listTasks !== undefined) {
             const result = await api
               .listTasks(signal)
               .then((value) => ({ ok: true as const, value }))
               .catch((reason: unknown) => ({ ok: false as const, reason }));
             if (result.ok) setTasks(result.value);
             else messages.push(`Task tracking unavailable: ${messageFromError(result.reason)}`);
+          }
+        } else {
+          const result = await api
+            .listDeliverableMatrix(signal === undefined ? undefined : { signal })
+            .then((value) => ({ ok: true as const, value }))
+            .catch((reason: unknown) => ({ ok: false as const, reason }));
+          if (result.ok) {
+            setMatrix(result.value);
+            setTasks(result.value.items.map((item) => item.task));
+            const matrixAssets = new Map<string, DeliverableAsset>();
+            for (const item of result.value.items) {
+              for (const asset of item.assets) matrixAssets.set(asset.id, asset);
+              if (item.currentAsset !== undefined)
+                matrixAssets.set(item.currentAsset.id, item.currentAsset);
+            }
+            setAssets([...matrixAssets.values()]);
+          } else {
+            messages.push(`Exact deliverables matrix unavailable: ${messageFromError(result.reason)}`);
           }
         }
         if (api.listAssets === undefined)
@@ -2371,14 +2676,24 @@ export function DeliverablesWorkspace({
     setBusy(true);
     setError(null);
     setStatusMessage(null);
+    recordOperation("task-create", "Create file-request task", "pending", "Request in progress.");
     try {
       const next = await api.createTask(input);
       setTasks((current) => [...current, next]);
+      await refreshMatrix();
       setStatusMessage(
         `Task ${next.title} created for ${input.assigneeIds.length} speaker${input.assigneeIds.length === 1 ? "" : "s"}.`,
       );
+      recordOperation(
+        "task-create",
+        "Create file-request task",
+        "succeeded",
+        `Created ${next.title}.`,
+      );
     } catch (reason) {
-      setError(messageFromError(reason));
+      const message = messageFromError(reason);
+      setError(message);
+      recordOperation("task-create", "Create file-request task", "failed", message);
     } finally {
       setBusy(false);
     }
@@ -2396,12 +2711,23 @@ export function DeliverablesWorkspace({
     }
     setBusy(true);
     setError(null);
+    recordOperation("asset-comment", "Reply to asset thread", "pending", "Reply in progress.");
     try {
       const next = await api.addAssetComment(input);
-      setComments((current) => [...current, next]);
+      if (selectedAssetIdRef.current === input.assetId) {
+        setComments((current) => [...current, next]);
+      }
       setStatusMessage("Comment added to the immutable asset thread.");
+      recordOperation(
+        "asset-comment",
+        "Reply to asset thread",
+        "succeeded",
+        "Organizer reply added to the asset-family thread.",
+      );
     } catch (reason) {
-      setError(messageFromError(reason));
+      const message = messageFromError(reason);
+      setError(message);
+      recordOperation("asset-comment", "Reply to asset thread", "failed", message);
     } finally {
       setBusy(false);
     }
@@ -2416,6 +2742,7 @@ export function DeliverablesWorkspace({
     }
     setBusy(true);
     setError(null);
+    recordOperation("asset-download", "Download asset version", "pending", "Capability request in progress.");
     try {
       const grant: DeliverableDownloadGrant = await api.getDownloadGrant(assetId);
       const safeUrl = safeDownloadUrl(grant.url);
@@ -2435,8 +2762,16 @@ export function DeliverablesWorkspace({
       setStatusMessage(
         "A short-lived private download capability was issued for the selected version.",
       );
+      recordOperation(
+        "asset-download",
+        "Download asset version",
+        "succeeded",
+        "Authorized version download started.",
+      );
     } catch (reason) {
-      setError(messageFromError(reason));
+      const message = messageFromError(reason);
+      setError(message);
+      recordOperation("asset-download", "Download asset version", "failed", message);
     } finally {
       setBusy(false);
     }
@@ -2456,12 +2791,21 @@ export function DeliverablesWorkspace({
     setBusy(true);
     setError(null);
     setStatusMessage(null);
+    recordOperation("deliverables-export", "Export deliverables ZIP", "pending", "ZIP request in progress.");
     try {
       const download = await requestExport(input);
       triggerDeliverablesDownload(download);
       setStatusMessage(`${download.fileName} is ready to download.`);
+      recordOperation(
+        "deliverables-export",
+        "Export deliverables ZIP",
+        "succeeded",
+        `${download.fileName} was validated and the browser download started.`,
+      );
     } catch (reason) {
-      setError(messageFromError(reason));
+      const message = messageFromError(reason);
+      setError(message);
+      recordOperation("deliverables-export", "Export deliverables ZIP", "failed", message);
     } finally {
       setBusy(false);
     }
@@ -2473,12 +2817,21 @@ export function DeliverablesWorkspace({
     setBusy(true);
     setError(null);
     setStatusMessage(null);
+    recordOperation("files-export", "Export files ZIP", "pending", "ZIP request in progress.");
     try {
       const download = await requestExport(input);
       setStatusMessage(`${download.fileName} is ready for browser download.`);
+      recordOperation(
+        "files-export",
+        "Export files ZIP",
+        "succeeded",
+        `${download.fileName} is ready for browser download.`,
+      );
       return download;
     } catch (reason) {
-      setError(messageFromError(reason));
+      const message = messageFromError(reason);
+      setError(message);
+      recordOperation("files-export", "Export files ZIP", "failed", message);
       throw reason;
     } finally {
       setBusy(false);
@@ -2542,14 +2895,23 @@ export function DeliverablesWorkspace({
     setBusy(true);
     setError(null);
     setStatusMessage(null);
+    recordOperation("biography-save", "Save speaker biography", "pending", "Profile update in progress.");
     try {
       const next = await api.updateBiography(input);
       setProfiles((current) =>
         current.map((profile) => (profile.participantId === next.participantId ? next : profile)),
       );
       setStatusMessage(`Biography saved for ${next.displayName}.`);
+      recordOperation(
+        "biography-save",
+        "Save speaker biography",
+        "succeeded",
+        `Biography saved for ${next.displayName}.`,
+      );
     } catch (reason) {
-      setError(messageFromError(reason));
+      const message = messageFromError(reason);
+      setError(message);
+      recordOperation("biography-save", "Save speaker biography", "failed", message);
     } finally {
       setBusy(false);
     }
@@ -2575,6 +2937,7 @@ export function DeliverablesWorkspace({
     setBusy(true);
     setError(null);
     setStatusMessage(null);
+    recordOperation("headshot-replace", "Replace speaker headshot", "pending", "Private upload in progress.");
     try {
       const next = await api.replaceHeadshot({
         ...input,
@@ -2592,8 +2955,16 @@ export function DeliverablesWorkspace({
           : [...current, next.asset];
       });
       setStatusMessage(`Headshot replaced for ${next.profile.displayName}.`);
+      recordOperation(
+        "headshot-replace",
+        "Replace speaker headshot",
+        "succeeded",
+        `Headshot replaced for ${next.profile.displayName}.`,
+      );
     } catch (reason) {
-      setError(messageFromError(reason));
+      const message = messageFromError(reason);
+      setError(message);
+      recordOperation("headshot-replace", "Replace speaker headshot", "failed", message);
     } finally {
       setBusy(false);
     }
@@ -2612,13 +2983,22 @@ export function DeliverablesWorkspace({
     setBusy(true);
     setError(null);
     setStatusMessage(null);
+    recordOperation("reminder-send", "Send outstanding reminders", "pending", "Confirmed send in progress.");
     try {
       const result = await api.sendBulkReminder(input);
       setStatusMessage(
         `Reminder send recorded for ${result.sentCount} recipient${result.sentCount === 1 ? "" : "s"}.`,
       );
+      recordOperation(
+        "reminder-send",
+        "Send outstanding reminders",
+        "succeeded",
+        `Send recorded for ${result.sentCount} recipient${result.sentCount === 1 ? "" : "s"}.`,
+      );
     } catch (reason) {
-      setError(messageFromError(reason));
+      const message = messageFromError(reason);
+      setError(message);
+      recordOperation("reminder-send", "Send outstanding reminders", "failed", message);
     } finally {
       setBusy(false);
     }
@@ -2654,12 +3034,22 @@ export function DeliverablesWorkspace({
       : async (input: DeliverableReviewInput): Promise<void> => {
           setBusy(true);
           setError(null);
+          recordOperation("asset-review", "Review current asset", "pending", "Review update in progress.");
           try {
             const next = await reviewAsset(input);
             setAssets((current) => current.map((asset) => (asset.id === next.id ? next : asset)));
+            await refreshMatrix();
             setStatusMessage(`Asset review recorded as ${input.state}.`);
+            recordOperation(
+              "asset-review",
+              "Review current asset",
+              "succeeded",
+              `Review recorded as ${formatStatus(input.state)}.`,
+            );
           } catch (reason) {
-            setError(messageFromError(reason));
+            const message = messageFromError(reason);
+            setError(message);
+            recordOperation("asset-review", "Review current asset", "failed", message);
           } finally {
             setBusy(false);
           }
@@ -2673,11 +3063,15 @@ export function DeliverablesWorkspace({
       tasks={tasks}
       assets={assets}
       profiles={profiles}
+      {...(matrix === undefined ? {} : { matrixItems: matrix.items })}
       loading={loading}
       busy={busy}
       error={error}
       statusMessage={statusMessage}
       capabilityMessages={capabilityMessages}
+      operationStates={Object.values(operationStates).filter(
+        (state): state is DeliverablesOperationState => state !== undefined,
+      )}
       apiConfigured={api !== null}
       {...(api?.createTask === undefined ? {} : { onCreateTask: createTask })}
       onInspectAsset={setSelectedAssetId}
