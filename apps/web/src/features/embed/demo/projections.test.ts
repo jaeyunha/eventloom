@@ -124,12 +124,7 @@ describe("local public embed demo projections", () => {
     };
 
     await expect(
-      getPublishedProgramOrLocalDemo(
-        "http://localhost:8787",
-        "published-event",
-        "local",
-        fetcher,
-      ),
+      getPublishedProgramOrLocalDemo("http://localhost:8787", "published-event", "local", fetcher),
     ).rejects.toMatchObject({
       code: "INTEGRATION_UNAVAILABLE",
       status: 503,

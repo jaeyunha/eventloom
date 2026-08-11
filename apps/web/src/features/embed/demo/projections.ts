@@ -157,9 +157,7 @@ export function shouldUseLocalEmbedDemoForError(
       (error.speakersError.status === 404 || error.speakersError.status === 503)
     );
   }
-  return (
-    error instanceof PublicEmbedApiError && (error.status === 404 || error.status === 503)
-  );
+  return error instanceof PublicEmbedApiError && (error.status === 404 || error.status === 503);
 }
 
 export async function getPublishedProgramOrLocalDemo(

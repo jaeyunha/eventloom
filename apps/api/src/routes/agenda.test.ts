@@ -1205,7 +1205,8 @@ describe("anonymous published agenda feeds", () => {
     try {
       const engine = createEngine();
       await initialize(engine);
-      const app = appForWithPublic(engine);
+      const adminApp = appFor(engine);
+      const publicApp = publicAppFor(engine);
       const root = "/api/admin/organizations/org-a/events/event-a/agenda";
       const publicPath = "/api/public/events/event-a/agenda.json";
       const entry = {
@@ -1217,13 +1218,13 @@ describe("anonymous published agenda feeds", () => {
         endsAtLocal: "2026-08-10T10:00",
       };
       const update = (expectedVersion: number, roomId: string) =>
-        app.request(`${root}/draft`, {
+        adminApp.request(`${root}/draft`, {
           method: "PUT",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ expectedVersion, entries: [{ ...entry, roomId }] }),
         });
       const publish = (expectedVersion: number) =>
-        app.request(`${root}/publish`, {
+        adminApp.request(`${root}/publish`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ expectedVersion }),
@@ -1231,7 +1232,7 @@ describe("anonymous published agenda feeds", () => {
 
       expect((await update(1, "room-large")).status).toBe(200);
       expect((await publish(2)).status).toBe(200);
-      expect((await app.request(publicPath)).status).toBe(200);
+      expect((await publicApp.request(publicPath)).status).toBe(200);
       await vi.waitFor(() => expect(put).toHaveBeenCalledTimes(1));
 
       expect((await update(2, "room-small")).status).toBe(200);
