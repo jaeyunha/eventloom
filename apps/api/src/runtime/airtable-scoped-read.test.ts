@@ -238,7 +238,7 @@ describe("scoped adapter read ordering", () => {
     expect(projections).toHaveLength(1);
     expect(projections[0]?.context.primaryParticipantId).toBe("participant-draft");
     expect(projections[0]?.scope.capabilitiesByParticipant).toMatchObject({
-      "participant-draft": [],
+      "participant-draft": ["submission-edit"],
       "participant-accepted": expect.arrayContaining(["asset-read", "submission-edit"]),
     });
   });
