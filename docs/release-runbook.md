@@ -103,18 +103,18 @@ The command requires `CLOUDFLARE_API_TOKEN`, validates the deployment configurat
 
 The repository staging/production contract selects OpenAI Responses, but AI remains optional at application boot. Before deploying, confirm that the target environment has its own `OPENAI_API_KEY` Cloudflare secret. Never place it in Wrangler `[vars]`, `NEXT_PUBLIC_*`, CI output, or evidence.
 
-Deploy the web Worker from the identical candidate commit. The script requires the exact public URL inputs and an explicit tenant ID:
+Deploy the web Worker from the identical candidate commit. The script requires the exact browser-visible `NEXT_PUBLIC_APP_URL`, server-only `API_UPSTREAM_ORIGIN`, and explicit tenant ID:
 
 ```bash
 set -eu
 export NEXT_PUBLIC_APP_URL='https://open-sessionboard-web-staging.ashleyha0317.workers.dev'
-export NEXT_PUBLIC_API_URL='https://open-sessionboard-api-staging.ashleyha0317.workers.dev'
+export API_UPSTREAM_ORIGIN='https://open-sessionboard-api-staging.ashleyha0317.workers.dev'
 : "${NEXT_PUBLIC_ORGANIZATION_ID:?set the explicit staging organization application ID}"
 : "${CLOUDFLARE_API_TOKEN:?set the staging deployment token from the secret manager}"
 node scripts/cloudflare/deploy-web.mjs staging open-sessionboard-web:staging
 ```
 
-For non-local deployment, the script validates the supplied API Worker origin, then injects the web origin as the browser-visible API base and sets `API_UPSTREAM_ORIGIN` to the API Worker. Verify that `/api/*` same-origin requests, API CORS, auth cookies, and callbacks all use the observed pinned origins.
+For non-local deployment, the script validates the supplied server-only `API_UPSTREAM_ORIGIN` as the API Worker origin and configures the web server-side proxy. Browsers always call same-origin `/api/*` through the browser-visible `NEXT_PUBLIC_APP_URL`. Verify that `/api/*` same-origin requests, API CORS, auth cookies, and callbacks all use the observed pinned origins.
 
 Verify the exact staging origins before browser work:
 
@@ -164,12 +164,12 @@ Production requires a recorded go approval after staging, security, accessibilit
 node scripts/cloudflare/deploy.mjs production open-sessionboard:production
 ```
 
-Deploy the web Worker with production-only public inputs and the matching confirmation token:
+Deploy the web Worker with the production-only browser-visible app URL, server-only API upstream origin, and matching confirmation token:
 
 ```bash
 set -eu
 export NEXT_PUBLIC_APP_URL='https://open-sessionboard-web-production.ashleyha0317.workers.dev'
-export NEXT_PUBLIC_API_URL='https://open-sessionboard-api-production.ashleyha0317.workers.dev'
+export API_UPSTREAM_ORIGIN='https://open-sessionboard-api-production.ashleyha0317.workers.dev'
 : "${NEXT_PUBLIC_ORGANIZATION_ID:?set the explicit production organization application ID}"
 : "${CLOUDFLARE_API_TOKEN:?set the production deployment token from the secret manager}"
 node scripts/cloudflare/deploy-web.mjs production open-sessionboard-web:production

@@ -75,7 +75,7 @@ assert test -f "$LOCAL_WORKTREE/.env"
 assert test ! -L "$LOCAL_WORKTREE/.env"
 assert test -f "$LOCAL_WORKTREE/apps/web/.env.local"
 assert test ! -L "$LOCAL_WORKTREE/apps/web/.env.local"
-assert grep -Fx 'NEXT_PUBLIC_API_URL=http://127.0.0.1:8787' "$LOCAL_WORKTREE/.env"
+assert grep -Fx 'API_UPSTREAM_ORIGIN=http://127.0.0.1:8787' "$LOCAL_WORKTREE/.env"
 assert grep -Fx 'NEXT_PUBLIC_ORGANIZATION_ID=ai-engineer' "$LOCAL_WORKTREE/apps/web/.env.local"
 assert test ! -e "$LOCAL_WORKTREE/apps/api/.dev.vars"
 if grep -Eq 'ROOT_SECRET|WEB_SECRET|API_SECRET' \

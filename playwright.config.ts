@@ -39,7 +39,6 @@ export default defineConfig({
         CLAUDE_CODE: "",
         NEXT_PUBLIC_APP_URL: webBaseUrl,
         API_UPSTREAM_ORIGIN: apiBaseUrl,
-        NEXT_PUBLIC_API_URL: apiBaseUrl,
         NEXT_PUBLIC_ORGANIZATION_ID: "ai-engineer",
       },
     },

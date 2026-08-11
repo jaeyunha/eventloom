@@ -13,7 +13,7 @@
   "vars": {
     "APP_ENV": "local",
     "NEXT_PUBLIC_APP_URL": "http://localhost:3015",
-    "NEXT_PUBLIC_API_URL": "http://localhost:8787"
+    "API_UPSTREAM_ORIGIN": "http://localhost:8787"
   },
   "assets": {
     "directory": ".open-next/assets",
@@ -42,7 +42,7 @@
         "APP_ENV": "staging",
         // These are intentionally empty; deploy-web.mjs injects verified origins.
         "NEXT_PUBLIC_APP_URL": "",
-        "NEXT_PUBLIC_API_URL": ""
+        "API_UPSTREAM_ORIGIN": ""
       },
       "assets": {
         "directory": ".open-next/assets",
@@ -71,7 +71,7 @@
         "APP_ENV": "production",
         // These are intentionally empty; deploy-web.mjs injects verified origins.
         "NEXT_PUBLIC_APP_URL": "",
-        "NEXT_PUBLIC_API_URL": ""
+        "API_UPSTREAM_ORIGIN": ""
       },
       "assets": {
         "directory": ".open-next/assets",

@@ -25,13 +25,13 @@ Keep one ignored file per boundary, outside the repository when possible:
 
 Each file must contain the non-secret configuration names required by `scripts/release/preflight.mjs`:
 
-- `APP_ENV`, `WEB_ORIGIN`, `NEXT_PUBLIC_APP_URL`, `NEXT_PUBLIC_API_URL`, and `API_URL`.
+- `APP_ENV`, `WEB_ORIGIN`, `NEXT_PUBLIC_APP_URL`, `API_UPSTREAM_ORIGIN`, and `API_URL`.
 - `BETTER_AUTH_SECRET` (at least 32 random bytes) and `BETTER_AUTH_URL`.
 - `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `D1_DATABASE_ID`, `R2_BUCKET_NAME`, and `QUEUE_NAME`.
 - `AIRTABLE_ACCESS_TOKEN` and `AIRTABLE_BASE_ID` for that boundary.
 - `OPENSEND_API_URL`, `OPENSEND_API_KEY`, `AUTH_FROM_EMAIL`, `SPEAKERS_FROM_EMAIL`, and `CALENDAR_FROM_EMAIL`.
 
-Use the exact pinned API origin for `NEXT_PUBLIC_API_URL`, `API_URL`, and `BETTER_AUTH_URL` in these preflight inputs. The guarded web deployment accepts that API origin as an input and then injects the web origin as the browser-visible same-origin API base, with `API_UPSTREAM_ORIGIN` pointing at the API Worker. Do not print values or attach environment files to evidence.
+Use the exact pinned API origin for `API_UPSTREAM_ORIGIN`, `API_URL`, and `BETTER_AUTH_URL` in these preflight inputs. `API_UPSTREAM_ORIGIN` is server-only: browsers always call same-origin `/api/*` through the browser-visible `NEXT_PUBLIC_APP_URL`, and the web Worker forwards those requests to the API Worker. `API_URL` remains the API deployment/preflight origin. Do not print values or attach environment files to evidence.
 
 The preflight requires distinct secrets, D1 IDs, R2 buckets, Queues, Airtable credentials, OpenSend keys, and origins across local, staging, and production. It rejects placeholders, cross-environment sharing, non-HTTPS non-local URLs, Wrangler mismatches, and a staging/production placeholder D1 ID. Staging must contain synthetic records and suppressed or allowlisted delivery behavior.
 

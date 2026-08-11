@@ -4,7 +4,7 @@ const REQUIRED_CONFIGURATION = [
   "APP_ENV",
   "WEB_ORIGIN",
   "NEXT_PUBLIC_APP_URL",
-  "NEXT_PUBLIC_API_URL",
+  "API_UPSTREAM_ORIGIN",
   "API_URL",
   "BETTER_AUTH_SECRET",
   "BETTER_AUTH_URL",
@@ -335,7 +335,7 @@ export function validateReleaseConfiguration({
     for (const key of [
       "WEB_ORIGIN",
       "NEXT_PUBLIC_APP_URL",
-      "NEXT_PUBLIC_API_URL",
+      "API_UPSTREAM_ORIGIN",
       "API_URL",
       "OPENSEND_API_URL",
     ]) {
@@ -399,7 +399,7 @@ export function validateReleaseConfiguration({
     }
   }
 
-  for (const key of ["WEB_ORIGIN", "NEXT_PUBLIC_APP_URL", "NEXT_PUBLIC_API_URL", "API_URL"]) {
+  for (const key of ["WEB_ORIGIN", "NEXT_PUBLIC_APP_URL", "API_UPSTREAM_ORIGIN", "API_URL"]) {
     const values = ENVIRONMENTS.map((environment) => configValue(configurations[environment], key));
     if (new Set(values).size !== ENVIRONMENTS.length) {
       fail("INVALID_ISOLATION", `${key} must be unique across environments`);
