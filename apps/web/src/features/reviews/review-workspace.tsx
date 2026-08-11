@@ -1310,19 +1310,8 @@ export function ReviewWorkspace({
     void load
       .then((value) => {
         if (!active) return;
-        if (mode === "organizer") {
-          const fastSeed = value as ReviewPlanSeed;
-          setSeed(fastSeed);
-          if (eventId !== undefined) {
-            void loadOrganizerData(eventId, baseUrl, fastSeed.planId)
-              .then((detailedSeed) => {
-                if (active) setSeed(detailedSeed);
-              })
-              .catch(() => {
-                // The fast authoritative plan remains usable when optional score hydration is slow.
-              });
-          }
-        } else setQueue(value as readonly ReviewerQueueEntry[]);
+        if (mode === "organizer") setSeed(value as ReviewPlanSeed);
+        else setQueue(value as readonly ReviewerQueueEntry[]);
       })
       .catch((reason: unknown) => {
         if (!active) return;
@@ -2610,6 +2599,36 @@ function OrganizerAuthoring({
     </section>
   );
 }
+export function OrganizerDetailStatus({
+  loading,
+  error,
+  onRetry,
+}: Readonly<{
+  loading: boolean;
+  error: string | null;
+  onRetry: () => void;
+}>) {
+  if (!loading && error === null) return null;
+  return (
+    <aside className={styles.authorityNotice} role={error === null ? "status" : "alert"}>
+      <span className={styles.noticeIcon} aria-hidden="true">
+        {error === null ? "…" : "!"}
+      </span>
+      <div>
+        <h2>{error === null ? "Loading review details" : "Review details need attention"}</h2>
+        <p>
+          {error === null ? "The plan is usable while aggregate scores and decisions load." : error}
+        </p>
+        {error === null ? null : (
+          <button className={styles.secondaryButton} type="button" onClick={onRetry}>
+            Retry review details
+          </button>
+        )}
+      </div>
+    </aside>
+  );
+}
+
 function OrganizerWorkspace({
   seed,
   baseUrl,
@@ -2626,37 +2645,79 @@ function OrganizerWorkspace({
   reviewerMembersError: string | null;
 }>) {
   const [authoritativeSeed, setAuthoritativeSeed] = useState(seed);
+  const [detailLoading, setDetailLoading] = useState(true);
+  const [detailError, setDetailError] = useState<string | null>(null);
   const refreshSequenceRef = useRef(0);
 
   useEffect(() => {
-    refreshSequenceRef.current += 1;
+    const sequence = refreshSequenceRef.current + 1;
+    refreshSequenceRef.current = sequence;
+    let active = true;
     setAuthoritativeSeed(seed);
-  }, [seed]);
+    setDetailLoading(true);
+    setDetailError(null);
+    void loadOrganizerData(seed.eventId, baseUrl, seed.planId)
+      .then((nextSeed) => {
+        if (active && refreshSequenceRef.current === sequence) {
+          setAuthoritativeSeed(nextSeed);
+        }
+      })
+      .catch((reason: unknown) => {
+        if (active && refreshSequenceRef.current === sequence) {
+          setDetailError(
+            reason instanceof Error ? reason.message : "The review details could not be loaded.",
+          );
+        }
+      })
+      .finally(() => {
+        if (active && refreshSequenceRef.current === sequence) setDetailLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [baseUrl, seed]);
 
   async function refreshAuthoritativeSeed(): Promise<void> {
     const sequence = refreshSequenceRef.current + 1;
     refreshSequenceRef.current = sequence;
+    setDetailLoading(true);
+    setDetailError(null);
     try {
       const nextSeed = await loadOrganizerData(seed.eventId, baseUrl, seed.planId);
-      if (refreshSequenceRef.current === sequence) setAuthoritativeSeed(nextSeed);
-    } catch {
-      // Keep the last authoritative snapshot visible when a refresh is unavailable.
+      if (refreshSequenceRef.current === sequence) {
+        setAuthoritativeSeed(nextSeed);
+      }
+    } catch (reason: unknown) {
+      if (refreshSequenceRef.current === sequence) {
+        setDetailError(
+          reason instanceof Error ? reason.message : "The review details could not be loaded.",
+        );
+      }
+    } finally {
+      if (refreshSequenceRef.current === sequence) setDetailLoading(false);
     }
   }
 
   return (
-    <OrganizerWorkspaceView
-      seed={authoritativeSeed}
-      baseUrl={baseUrl}
-      organizationId={organizationId}
-      reviewerMembers={reviewerMembers}
-      reviewerMembersLoading={reviewerMembersLoading}
-      reviewerMembersError={reviewerMembersError}
-      onAuthoritativePlan={(plan) =>
-        setAuthoritativeSeed((current) => seedWithAuthoritativePlan(current, plan))
-      }
-      onAssignmentsPersisted={refreshAuthoritativeSeed}
-    />
+    <>
+      <OrganizerDetailStatus
+        loading={detailLoading}
+        error={detailError}
+        onRetry={() => void refreshAuthoritativeSeed()}
+      />
+      <OrganizerWorkspaceView
+        seed={authoritativeSeed}
+        baseUrl={baseUrl}
+        organizationId={organizationId}
+        reviewerMembers={reviewerMembers}
+        reviewerMembersLoading={reviewerMembersLoading}
+        reviewerMembersError={reviewerMembersError}
+        onAuthoritativePlan={(plan) =>
+          setAuthoritativeSeed((current) => seedWithAuthoritativePlan(current, plan))
+        }
+        onAssignmentsPersisted={refreshAuthoritativeSeed}
+      />
+    </>
   );
 }
 

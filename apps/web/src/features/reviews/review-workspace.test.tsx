@@ -11,12 +11,13 @@ import {
   type EvaluatorAssignment,
   loadEvaluatorQueue,
   loadOrganizerData,
+  OrganizerDetailStatus,
   parseNumericAuthoringValue,
   type ReviewPlanSeed,
   type ReviewRound,
   ReviewWorkspace,
-  reviewerDisplayLabel,
   type RubricCriterion,
+  reviewerDisplayLabel,
   reviewerNavigationDisabled,
   reviewerSelectionBlocked,
   validateCreateEvaluationPlanForm,
@@ -327,6 +328,31 @@ describe("review workspace", () => {
     expect(workspaceStyles).toMatch(
       /\.referenceBadge\s*\{[^}]*max-inline-size:[^;}]+;[^}]*white-space:\s*normal;[^}]*overflow-wrap:\s*anywhere;/u,
     );
+  });
+  it("keeps the organizer plan usable while review details load or fail", () => {
+    const retry = vi.fn();
+    const loadingMarkup = renderToStaticMarkup(
+      createElement(OrganizerDetailStatus, {
+        loading: true,
+        error: null,
+        onRetry: retry,
+      }),
+    );
+    const errorMarkup = renderToStaticMarkup(
+      createElement(OrganizerDetailStatus, {
+        loading: false,
+        error: "Aggregate details are temporarily unavailable.",
+        onRetry: retry,
+      }),
+    );
+
+    expect(loadingMarkup).toContain(
+      "The plan is usable while aggregate scores and decisions load.",
+    );
+    expect(loadingMarkup).toContain('role="status"');
+    expect(errorMarkup).toContain("Aggregate details are temporarily unavailable.");
+    expect(errorMarkup).toContain("Retry review details");
+    expect(errorMarkup).toContain('role="alert"');
   });
   it("renders an accessible first-plan form for an organizer event with no plans", () => {
     const markup = renderToStaticMarkup(
