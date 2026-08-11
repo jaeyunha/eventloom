@@ -54,6 +54,7 @@ binding = "AI"
 
 [env.staging.vars]
 APP_ENV = "staging"
+AI_PROVIDER = "cloudflare"
 AI_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8"
 API_ORIGIN = "https://open-sessionboard-api-staging.ashleyha0317.workers.dev"
 WEB_ORIGIN = "https://open-sessionboard-web-staging.ashleyha0317.workers.dev"
@@ -103,6 +104,7 @@ binding = "AI"
 
 [env.production.vars]
 APP_ENV = "production"
+AI_PROVIDER = "cloudflare"
 AI_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8"
 API_ORIGIN = "https://open-sessionboard-api-production.ashleyha0317.workers.dev"
 WEB_ORIGIN = "https://open-sessionboard-web-production.ashleyha0317.workers.dev"

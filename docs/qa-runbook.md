@@ -63,6 +63,21 @@ Exercise every state with visible assertions, not just successful navigation. Us
 - Create or import synthetic CRM contacts, search/filter, apply tags/custom fields and pipeline state, add a note/program-history item, detect a duplicate, and perform an explicit optimistic-concurrency merge.
 - Confirm CRM records never authorize another organization, private speaker files, reviewer notes, or unpublished agenda data.
 
+### Advisory AI
+
+AI is not fixture generation. Seed normal synthetic records first, then invoke a proposal as an authorized user. Mocked provider tests prove validation and failure handling only.
+
+For an OpenAI-backed local diagnostic, keep `OPENAI_API_KEY` only in the ignored root `.env`, set `AI_PROVIDER=openai`, and run the opt-in synthetic adapter plus local agenda lifecycle tests documented in `docs/setup.md`. Never capture the key, authorization header, raw private prompt, or provider response.
+
+Release evidence requires the deployed staging UI/API against the provider selected for staging:
+
+- Request an agenda proposal and verify provider/model provenance, private diff, human-selected apply/reject, reload persistence, audit history, stale-version rejection, conflict revalidation, and no automatic publication.
+- Request evaluation assistance using only the reviewer-visible rubric/submission projection; verify suggestions remain uncounted until a human confirms or edits them and cannot decide an outcome.
+- Request content remix for selected fields only; verify unselected fields are absent, human edits are supported, stale candidates fail, and nothing overwrites source content until explicit apply.
+- Disable the provider and prove ordinary CFP, portal, review, CRM, agenda, publication, and reporting workflows still operate while AI controls/endpoints show an explicit unavailable state.
+
+Production receives only a bounded smoke check after the complete staging workflow passes.
+
 ### Agenda, publication, and embeds
 
 - Open list/day/week/month/room views and retain the event's canonical IANA timezone.

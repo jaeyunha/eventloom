@@ -59,16 +59,30 @@ The first-party CRM is supported for organizer memberships only and is organizat
 
 ### Reports and advisory AI
 
-Organizers can define and run allowlisted, program-scoped reports and download audited CSV/XLSX output, including reproducible individual or cumulative grade exports for a selected evaluation-plan version. Advisory AI may propose evaluation assistance, agenda placements, or bounded content-remix candidates. Every candidate is private and revision-scoped until an authorized human accepts, edits, or rejects it; unconfirmed output cannot affect scores, ranks, decisions, schedule records, messages, exports, or public projections.
+Organizers can define and run allowlisted, program-scoped reports and download audited CSV/XLSX output, including reproducible individual or cumulative grade exports for a selected evaluation-plan version. Advisory AI may propose evaluation assistance, agenda placements, or bounded content-remix candidates. Every candidate is private, typed, provenance-labeled, and revision-scoped until an authorized human accepts, edits, or rejects it; unconfirmed output cannot affect scores, ranks, decisions, schedule records, messages, exports, or public projections.
+
+AI is not seed infrastructure. Provisioning personas and seeding fixtures create ordinary accounts and program records; a provider runs only when an authorized user requests an agenda, evaluation, or remix proposal.
 
 ## Architecture constraints
 
 - Next.js is the browser frontend only. Hono on Cloudflare Workers is the separately deployed application API. The frontend has no Airtable, D1, R2, queue, or provider credentials.
 - Airtable is authoritative for organization, event, CFP, submission, participant, review, session, agenda, CRM, report, and other program business records. Stable application IDs are independent of Airtable record IDs.
 - Cloudflare D1 (via Better Auth/Drizzle) owns account and session state, API keys, idempotency, webhook and delivery indexes, durable outbox state, publication receipts, and integration metadata. Durable Objects serialize tenant/event mutations, schedule locks, and calendar sequence allocation. R2 stores private uploads and export artifacts. The supported Queue contract carries communications, calendar, webhook, and cache-invalidation work.
-- Integrations are explicit adapters. External effects are queued, idempotent, observable, retryable, and auditable; deterministic fakes are test tools, not deployment evidence.
+- Integrations are explicit adapters. External effects are queued, idempotent, observable, retryable, and auditable. Deterministic mocks/fakes validate contracts only; they are not deployment evidence. AI provider availability is feature-specific and is not an application boot or ordinary seed/provision prerequisite.
 - Local, staging, and production use separate Airtable bases, D1 databases, R2 buckets, queues, secrets, API keys, and delivery behavior. Staging uses synthetic data and suppressed or sandboxed recipients.
 - Public performance targets are LCP ≤1.5 s p75, INP ≤200 ms, CLS ≤0.1; cached API reads target ≤300 ms p95, ordinary writes ≤1 s p95, and Airtable workflows ≤2 s p95. These are release criteria, not current claims.
+
+## Advisory AI provider contract
+
+Current staging and production configuration is explicitly pinned to Cloudflare Workers AI (`cloudflare-workers-ai`); that configuration is not evidence that a real deployed AI workflow has been accepted. Local development or a future deployed environment may select OpenAI Responses (`openai-responses`) with `AI_PROVIDER=openai`, `OPENAI_MODEL`, and a backend-only `OPENAI_API_KEY`. The key must never enter `NEXT_PUBLIC_*`, Wrangler variables, browser evidence, logs, API responses, or committed files.
+
+The provider boundary is typed and feature-specific:
+
+- Agenda receives the event and base draft/revision version, selected rooms, day/time windows, ordered rules, eligible session titles and scheduling fields, and existing agenda entries.
+- Evaluation receives the selected rubric plus the submission title, abstract, and answers visible under the reviewer's projection; blind or private fields are excluded.
+- Remix receives only organizer-selected content fields and guidance/tone; unselected source fields are excluded.
+
+The OpenAI adapter uses the official `POST /v1/responses` REST shape, requests JSON mode under `text.format`, and reads raw response text from `output[].content[]` entries with `output_text`. Both providers return private, typed advisory candidates with provenance. Base versions and source revisions are checked before application; stale candidates are rejected, and a human must apply, edit, or reject the result. If a provider is unavailable, the affected control/endpoint reports an explicit unavailable state while non-AI workflows continue.
 
 ## Authentication, identities, and integrations
 
@@ -106,7 +120,8 @@ Accelevents is a separate external event platform. It is not in the competition 
 
 A behavior is supported only when its authorization, validation, persistence, error path, retry/idempotency behavior, and relevant public/private projection are defined. Source presence alone is not a pass. Acceptance evidence must use observable browser or API behavior against the intended environment and must preserve redacted artifacts without secrets.
 
-The release gate is a seeded end-to-end scenario that covers CFP publication and draft/resume, multi-participant submission and routing, multi-round human review with advisory AI, a human decision, speaker tasks/files/forms and deliverables, conflict-checked agenda draft and immutable publication, OpenSend email and updateable/cancellable calendar delivery, public embeds/feeds, API keys and signed webhooks, CRM, reports/exports, and cross-persona/tenant denial checks. It also requires real email, calendar, export, accessibility, performance, and nontechnical-organizer usability evidence. A run that times out, starts from dirty or stale state, uses mocked provider behavior, or omits manual checks cannot be release evidence.
+The release gate is a seeded end-to-end scenario that covers CFP publication and draft/resume, multi-participant submission and routing, multi-round human review with advisory AI, a human decision, speaker tasks/files/forms and deliverables, conflict-checked agenda draft and immutable publication, OpenSend email and updateable/cancellable calendar delivery, public embeds/feeds, API keys and signed webhooks, CRM, reports/exports, and cross-persona/tenant denial checks. For AI specifically, release evidence must use the deployed staging UI/API against the selected real provider: an authorized request for agenda, evaluation, and remix proposals as enabled; provider provenance; proposal review; human apply/edit/reject; reload/persistence/audit; stale/version handling; explicit unavailable behavior; and proof that nothing auto-publishes, scores, decides, or overwrites records. It also requires real email, calendar, export, accessibility, performance, and nontechnical-organizer usability evidence. A run that times out, starts from dirty or stale state, uses mocked provider behavior, or omits manual checks cannot be release evidence.
+Production may receive only bounded smoke after staging AI and non-AI acceptance is complete; production smoke is not a substitute for the staging workflow.
 
 ## Explicit non-goals
 
@@ -137,11 +152,12 @@ The repository and cited evidence contain source coverage for each supported are
 
 ### Current status
 
-- **partial:** CFP, portal, review, communications, agenda, embeds, API/webhooks, Speaker CRM, deliverables, reports, and advisory AI have implementation/source coverage, but no complete release verification has been accepted for the product as a whole.
+- **partial:** CFP, portal, review, communications, agenda, embeds, API/webhooks, Speaker CRM, deliverables, and reports have implementation/source coverage. Advisory AI is source-wired; mocked contract tests and opt-in synthetic OpenAI adapter/local agenda lifecycle checks pass, but no deployed staging AI workflow or complete product release verification has been accepted.
 - **partial:** The latest usable evaluator run reached **54.0% overall** with **92.5% coverage across completed areas**. It timed out during `CRM-S2`, ran against dirty pre-fix production workflow state, and is explicitly incomplete diagnostic evidence—not release evidence.
+- **partial:** No deployed end-to-end AI workflow has been accepted. The **31.3% AI Agenda diagnostic** is diagnostic evidence only, not validation or release evidence.
 - **pending:** No clean post-reset full evaluator run has completed. Real email delivery, calendar update/cancel behavior, and export inspection remain outstanding. The custom web/API domains remain pending as described above.
 - **partial:** Calendar timezone migration and DST-specific API error responses have a known gap. Private-upload policy requests malware scanning, but no supported file-scan Queue consumer completes that boundary. The production reminder Cron can also return early on invalid runtime configuration without durable failure evidence. These paths require implementation and release re-verification.
-- **partial:** Release gates are incomplete, including full seeded browser/API workflow evidence, accessibility, performance, security/tenant checks, provider-side sender verification, and representative organizer usability evidence.
+- **partial:** Release gates are incomplete, including full seeded browser/API workflow evidence, accessibility, performance, security/tenant checks, provider-side sender verification, real deployed AI provider workflows, and representative organizer usability evidence.
 - **unsupported:** Accelevents is intentionally unsupported, not an incomplete release feature. Social OAuth is likewise unsupported by contract.
 
 No current area is labeled **release-verified**. The historical evaluator ledger in `docs/llm-judge-runs.md` is the record of run evidence and must be updated with a new dated entry before any future run can be considered.

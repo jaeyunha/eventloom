@@ -72,6 +72,8 @@ make all
 
 The automated Playwright/axe artifacts from this command are local or CI evidence. Label them with the local loopback target (`http://127.0.0.1:3015` and `http://127.0.0.1:8787`) and do not present them as staging evidence. Do not suppress warnings, skip authentication, weaken assertions, or convert a timeout into a pass.
 
+When OpenAI is the candidate provider, also run the opt-in synthetic real-API adapter and local agenda lifecycle checks from `docs/setup.md`. They validate the key/provider path without printing secrets, but remain local diagnostics rather than staging evidence.
+
 ## 3. Read-only preflight and migration review
 
 Run the read-only release preflight without an optional-provider requirement:
@@ -99,6 +101,8 @@ node scripts/cloudflare/deploy.mjs staging open-sessionboard:staging
 
 The command requires `CLOUDFLARE_API_TOKEN`, validates the deployment configuration, applies remote D1 migrations, and deploys the Worker. If migration succeeds while deployment fails, stop, keep the mirrors private, and execute the recorded recovery path before retrying.
 
+The committed staging/production configuration is pinned to Cloudflare Workers AI. AI is not a boot prerequisite: a deliberate provider change must be reviewed separately. For OpenAI, store `OPENAI_API_KEY` with `wrangler secret put`; never place it in Wrangler `[vars]`, `NEXT_PUBLIC_*`, CI output, or evidence.
+
 Deploy the web Worker from the identical candidate commit. The script requires the exact public URL inputs and an explicit tenant ID:
 
 ```bash
@@ -124,13 +128,16 @@ Then run the seeded workflow from [Browser QA](qa-runbook.md) against the real r
 
 1. CFP configuration, conditional fields, account verification, draft resume, participant add, submit, and retry.
 2. Speaker portal ownership, profile, tasks, files/forms, and acceptance-gated content.
-3. Multi-round human review, blind fields, advisory AI confirmation/edit, decision, communication, and reports.
+3. Multi-round human review, blind fields, real-provider advisory evaluation suggestions, human confirmation/edit, decision, communication, and reports.
 4. Built-in CRM contact/import/filter/tag/custom-field/history/duplicate/merge behavior.
-5. Agenda conflict checks, warning override, immutable publication, rollback, embeds, JSON/iCal, API keys, and signed/retrying webhooks.
+5. Agenda conflict checks, real-provider private proposals with selective human application/rejection and stale handling, warning override, immutable publication, rollback, embeds, JSON/iCal, API keys, and signed/retrying webhooks.
 6. OpenSend status plus one real controlled calendar request/update/cancel sequence.
 7. Keyboard, screen-reader, CUA focus/spatial checks, narrow/wide layouts, loading/empty/error/forbidden/retry states.
+8. Selected-field content remix through the real provider, human edit/apply/reject, reload/audit, stale rejection, and proof that unselected fields and unapplied output never alter source data.
 
 Ever and `codex-cua` must use synthetic identities and the deployed staging origin. Local Playwright results cannot substitute for these sessions. Evidence must show the real isolated Airtable/D1/R2/Queue/OpenSend/webhook boundaries, not mocked routes.
+
+Also disable or misconfigure the selected AI provider and prove the rest of the application still works while AI controls/endpoints return an explicit unavailable state. Provider configuration and mocked tests are not AI feature acceptance.
 
 ## 5. Security, privacy, performance, and known gaps
 
@@ -193,6 +200,7 @@ Check every item against the same production candidate:
 - [ ] Staging Ever and `codex-cua` evidence passed on the candidate with synthetic identities.
 - [ ] Real Airtable, D1, R2, Queue, OpenSend, webhook, and calendar boundary evidence is attached separately from local fakes.
 - [ ] CFP, portal, review, human decision, CRM, agenda/publication, embeds/API, security, accessibility, and performance scenarios passed.
+- [ ] Real-provider staging evidence covers agenda, evaluation, and remix proposals; provenance, human apply/edit/reject, reload/audit, stale handling, unavailable behavior, and no automatic consequential action are proven.
 - [ ] Calendar request/update/cancel evidence shows one stable UID and no duplicate event.
 - [ ] Known timezone-migration and DST-specific API error-mapping gaps are recorded as gaps, not claimed as delivered behavior.
 - [ ] Rollback and monitoring owners are active; secrets and private artifacts are absent.

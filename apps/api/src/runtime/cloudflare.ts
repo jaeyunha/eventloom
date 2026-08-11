@@ -42,7 +42,12 @@ import {
   type CloudflareOutboxMessage,
   inspectCloudflareBindings,
 } from "../infrastructure/cloudflare/bindings";
-import { type CloudflareAiBinding, createCloudflareAiProviders } from "../integrations/ai";
+import {
+  type CloudflareAiBinding,
+  createCloudflareAiProviders,
+  createOpenAiResponsesBinding,
+  DEFAULT_OPENAI_RESPONSES_MODEL,
+} from "../integrations/ai";
 import { DEFAULT_OPEN_SEND_SENDERS, OpenSendClient } from "../integrations/opensend/client";
 import type { OpenSendMessage } from "../integrations/opensend/types";
 import { AirtableJsonStore, createAirtableDependencies, D1IdempotencyStore } from "./airtable";
@@ -65,6 +70,9 @@ export type RuntimeBindings = ApiBindings &
     readonly AIRTABLE_TRANSPORT?: AirtableTransport;
     readonly AI?: CloudflareAiBinding;
     readonly AI_MODEL?: string;
+    readonly AI_PROVIDER?: string;
+    readonly OPENAI_API_KEY?: string;
+    readonly OPENAI_MODEL?: string;
     readonly ORGANIZER_AUTOJOIN_DOMAINS?: string;
     readonly ORGANIZER_AUTOJOIN_ORGANIZATION_ID?: string;
   };
@@ -1995,6 +2003,53 @@ function configuredApiOrigin(bindings: RuntimeBindings): string | null {
   return bindings.API_ORIGIN === undefined ? expected : bindings.API_ORIGIN;
 }
 
+type AiProviderSelection = "auto" | "cloudflare" | "openai" | "disabled";
+
+function aiProviderSelection(value: string | undefined): AiProviderSelection | null {
+  const normalized = value?.trim().toLowerCase() || "auto";
+  return normalized === "auto" ||
+    normalized === "cloudflare" ||
+    normalized === "openai" ||
+    normalized === "disabled"
+    ? normalized
+    : null;
+}
+
+function selectedAiProvider(bindings: RuntimeBindings): {
+  binding: CloudflareAiBinding | undefined;
+  model: string | undefined;
+  providerName: "cloudflare-workers-ai" | "openai-responses";
+  promptVersion: string;
+} | null {
+  const selection = aiProviderSelection(bindings.AI_PROVIDER);
+  if (selection === null || selection === "disabled") return null;
+  const openAiKey = bindings.OPENAI_API_KEY?.trim();
+  const cloudflareModel = bindings.AI_MODEL?.trim();
+  const useOpenAi = selection === "openai" || (selection === "auto" && nonEmpty(openAiKey));
+  if (useOpenAi && nonEmpty(openAiKey)) {
+    return {
+      binding: createOpenAiResponsesBinding({ apiKey: openAiKey }),
+      model: bindings.OPENAI_MODEL?.trim() || DEFAULT_OPENAI_RESPONSES_MODEL,
+      providerName: "openai-responses",
+      promptVersion: "openai-responses-v1",
+    };
+  }
+  const useCloudflare =
+    selection === "cloudflare" ||
+    (selection === "auto" &&
+      bindings.AI !== undefined &&
+      typeof bindings.AI.run === "function" &&
+      nonEmpty(cloudflareModel));
+  if (useCloudflare) {
+    return {
+      binding: bindings.AI,
+      model: cloudflareModel,
+      providerName: "cloudflare-workers-ai",
+      promptVersion: "cloudflare-workers-ai-v1",
+    };
+  }
+  return null;
+}
 export function inspectProductionRuntime(
   bindings: RuntimeBindings,
 ): RuntimeConfigurationInspection {
@@ -2012,13 +2067,18 @@ export function inspectProductionRuntime(
       issues.push("API_ORIGIN does not match the fixed deployment origin.");
     }
   }
-  if (environment !== null) {
+  const aiSelection = aiProviderSelection(bindings.AI_PROVIDER);
+  if (aiSelection === null) {
+    issues.push("AI_PROVIDER must be auto, cloudflare, openai, or disabled");
+  } else if (aiSelection === "cloudflare") {
     if (bindings.AI === undefined || typeof bindings.AI.run !== "function") {
-      issues.push("AI must be a Cloudflare Workers AI binding outside local development");
+      issues.push("AI_PROVIDER=cloudflare requires the Workers AI binding");
     }
     if (!nonEmpty(bindings.AI_MODEL)) {
-      issues.push("AI_MODEL is required outside local development");
+      issues.push("AI_PROVIDER=cloudflare requires AI_MODEL");
     }
+  } else if (aiSelection === "openai" && !nonEmpty(bindings.OPENAI_API_KEY)) {
+    issues.push("AI_PROVIDER=openai requires OPENAI_API_KEY");
   }
   if (
     organizerAutojoinConfigurationProvided(bindings) &&
@@ -2105,11 +2165,16 @@ export function createCloudflareDependencies(bindings: RuntimeBindings): ApiDepe
     throw new TypeError("The production authentication runtime is not configured.");
   }
   const organizerAutojoin = parseOrganizerAutojoinConfiguration(bindings);
-  const model = bindings.AI_MODEL?.trim();
-  const aiProviders = createCloudflareAiProviders(
-    bindings.AI,
-    model === undefined ? {} : { model },
-  );
+  const aiSelection = selectedAiProvider(bindings);
+  const aiProviders = createCloudflareAiProviders(aiSelection?.binding, {
+    ...(aiSelection?.model === undefined ? {} : { model: aiSelection.model }),
+    ...(aiSelection === null
+      ? {}
+      : {
+          providerName: aiSelection.providerName,
+          promptVersion: aiSelection.promptVersion,
+        }),
+  });
 
   const authConfiguration = createBetterAuthRuntimeConfiguration({
     secret: bindings.BETTER_AUTH_SECRET ?? "",

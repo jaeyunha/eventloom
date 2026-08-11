@@ -5,6 +5,11 @@ import {
   type OutboxConsumerBindings,
 } from "../infrastructure/cloudflare/outbox-consumer";
 import {
+  createCloudflareAiProviders,
+  createOpenAiResponsesBinding,
+  DEFAULT_OPENAI_RESPONSES_MODEL,
+} from "../integrations/ai";
+import {
   createCloudflareDependencies,
   inspectProductionRuntime,
   type RuntimeBindings,
@@ -55,8 +60,32 @@ function configurationErrorResponse(request: Request, bindings: RuntimeBindings)
   );
 }
 
+function createLocalAiProviders(apiKey: string, model: string | undefined) {
+  const binding = createOpenAiResponsesBinding({ apiKey });
+  return createCloudflareAiProviders(binding, {
+    model: model?.trim() || DEFAULT_OPENAI_RESPONSES_MODEL,
+    providerName: "openai-responses",
+    promptVersion: "openai-responses-v1",
+  });
+}
+
 export function createRuntimeDependencies(bindings: RuntimeBindings): ApiDependencies {
-  if (bindings.APP_ENV === "local") return createLocalDependencies();
+  if (bindings.APP_ENV === "local") {
+    const aiSelection = bindings.AI_PROVIDER?.trim().toLowerCase() || "auto";
+    const useOpenAi =
+      (aiSelection === "openai" || aiSelection === "auto") &&
+      typeof bindings.OPENAI_API_KEY === "string" &&
+      bindings.OPENAI_API_KEY.trim().length > 0;
+    if (aiSelection !== "auto" && aiSelection !== "openai" && aiSelection !== "disabled") {
+      throw new RuntimeConfigurationError([
+        "Local AI_PROVIDER must be auto, openai, or disabled; Workers AI requires deployed bindings.",
+      ]);
+    }
+    const aiProviders = useOpenAi
+      ? createLocalAiProviders(bindings.OPENAI_API_KEY ?? "", bindings.OPENAI_MODEL)
+      : undefined;
+    return createLocalDependencies(aiProviders);
+  }
   if (bindings.APP_ENV !== "staging" && bindings.APP_ENV !== "production") {
     throw new RuntimeConfigurationError(["APP_ENV must be local, staging, or production"]);
   }

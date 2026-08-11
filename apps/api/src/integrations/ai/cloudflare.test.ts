@@ -434,7 +434,7 @@ describe("Cloudflare Workers AI advisory providers", () => {
     await expect(unavailable.remix.generate(remixInput)).rejects.toMatchObject({
       code: "AI_UNAVAILABLE",
       retryable: true,
-      message: "Cloudflare Workers AI is unavailable.",
+      message: "AI provider is unavailable.",
     });
 
     const authFailure = new FakeAi();
@@ -464,7 +464,7 @@ describe("Cloudflare Workers AI advisory providers", () => {
     await expect(providers.remix.generate(remixInput)).rejects.toMatchObject({
       code: "AI_RETRYABLE",
       retryable: true,
-      message: "Cloudflare Workers AI request timed out.",
+      message: "AI provider request timed out.",
     });
     expect(() => createCloudflareAiProviders(stalled, { requestTimeoutMs: 0 })).toThrow(
       "between 1 and 120000 milliseconds",

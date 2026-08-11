@@ -38,8 +38,8 @@ import type {
   PrivateAssetGateway,
   RepositoryResult,
   SpeakerAccessScope,
-  SpeakerPortalCapability,
   SpeakerAsset,
+  SpeakerPortalCapability,
   SpeakerProfile,
   SpeakerRepository,
   SpeakerSubmission,
@@ -48,6 +48,7 @@ import type {
   UpdateBiographyCommand,
   UpdateSpeakerProfileCommand,
 } from "../features/speaker/types";
+import type { CloudflareAiProviders } from "../integrations/ai";
 import { InMemoryWebhookRepository } from "../integrations/webhooks/types";
 import type {
   IntegrationAdminRouteDependencies,
@@ -483,7 +484,7 @@ class LocalPrivateAssetGateway implements PrivateAssetGateway {
   }
 }
 
-function localAgendaEngine(): AgendaEngine {
+function localAgendaEngine(suggestionProvider?: CloudflareAiProviders["agenda"]): AgendaEngine {
   const repository = new InMemoryAgendaRepository();
   const engine = new AgendaEngine(repository, new InMemoryAgendaMutationLock(), {
     clock: { now: () => new Date(SEEDED_AT) },
@@ -493,6 +494,7 @@ function localAgendaEngine(): AgendaEngine {
         return (prefix) => `${prefix}_local_${++sequence}`;
       })(),
     },
+    ...(suggestionProvider === undefined ? {} : { suggestionProvider }),
   });
   const seeding = new Map<string, Promise<void>>();
   const seedEntries: readonly AgendaEntryInput[] = [
@@ -577,6 +579,16 @@ function localAgendaEngine(): AgendaEngine {
     "overrideWarning",
     "publish",
     "rollback",
+    "generateSuggestion",
+    "generateAgendaSuggestion",
+    "getSuggestion",
+    "getAgendaSuggestion",
+    "regenerateSuggestion",
+    "regenerateAgendaSuggestion",
+    "rejectSuggestion",
+    "rejectAgendaSuggestion",
+    "applySuggestion",
+    "applyAgendaSuggestion",
   ]);
   return new Proxy(engine, {
     get(target, property, receiver) {
@@ -1138,7 +1150,7 @@ function eventIdFrom(request: Request): string {
   return pathMatch === undefined ? "demo-event" : decodeURIComponent(pathMatch);
 }
 
-export function createLocalDependencies(): ApiDependencies {
+export function createLocalDependencies(aiProviders?: CloudflareAiProviders): ApiDependencies {
   const authenticator = localAuthenticator();
   const speakerRepository = new LocalSpeakerRepository();
   const speakerService = new SpeakerService(speakerRepository, new LocalPrivateAssetGateway(), {
@@ -1171,8 +1183,11 @@ export function createLocalDependencies(): ApiDependencies {
   ]);
   const evaluationService = new EvaluationService(evaluationRepository, evaluationSubmissions, {
     clock: () => new Date(SEEDED_AT),
+    ...(aiProviders?.evaluations === undefined
+      ? {}
+      : { aiSuggestionProvider: aiProviders.evaluations }),
   });
-  const agendaEngine = localAgendaEngine();
+  const agendaEngine = localAgendaEngine(aiProviders?.agenda);
   const organizerOverview = new LocalOrganizerOverviewRepository({
     publicRepository,
     speakerRepository,

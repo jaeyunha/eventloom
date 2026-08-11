@@ -47,7 +47,7 @@ browser
 - **Durable Objects:** Tenant/event mutation serialization, schedule locks and conflict coordination, and calendar sequence allocation.
 - **R2:** Private uploads and export artifacts, exposed only through authorized access.
 - **Queue:** One multiplexed Cloudflare Queue (`OUTBOX_QUEUE`) carries typed outbox work for communications, calendar delivery, webhooks, and cache invalidation.
-- **Ingress:** The API Worker handles HTTP `fetch`, Queue deliveries, and the production Cron Trigger for scheduled reminders. Workers AI is an advisory provider behind the API, never an authority.
+- **Ingress and advisory AI:** The API Worker handles HTTP `fetch`, Queue deliveries, and the production Cron Trigger for scheduled reminders. Advisory AI is optional: current deployments select Workers AI, while local or future environments can select OpenAI Responses with a backend-only key. AI is never an authority or application boot prerequisite.
 
 ## Authentication, communications, and calendar
 
