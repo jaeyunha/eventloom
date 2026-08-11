@@ -146,6 +146,7 @@ const SPEAKER_PROFILE_IDS = Object.freeze({
   }`,
 });
 const REVIEW_PLAN_ID = `${CANONICAL_EVENT_ID}-initial-review`;
+const REVIEW_FINAL_ROUND_ID = `${REVIEW_PLAN_ID}-round-final`;
 const REVIEW_ROUND_ID = `${REVIEW_PLAN_ID}-round-initial`;
 const AGENDA_REVISION_ID = `${CANONICAL_EVENT_ID}-agenda-revision-1`;
 const SPEAKER_PROJECTION_REVISION_ID = `${CANONICAL_EVENT_ID}-speakers-revision-1`;
@@ -153,6 +154,11 @@ const PUBLISHED_SPEAKERS_ID = `published-speakers:${CANONICAL_EVENT_ID}`;
 const REVIEW_WINDOW_DEFAULT = Object.freeze({
   opensAt: "2026-08-01T00:00:00.000Z",
   closesAt: "2027-04-30T23:59:59.000Z",
+});
+const REVIEW_ROUND_DATES = Object.freeze({
+  initialClosesAt: "2026-10-15T23:59:59.000Z",
+  finalOpensAt: "2026-10-16T00:00:00.000Z",
+  finalClosesAt: "2026-11-30T23:59:59.000Z",
 });
 const PUBLISHED_AT_DEFAULT = "2026-08-09T12:00:00.000Z";
 const TASK_NAMES = Object.freeze([
@@ -392,67 +398,113 @@ function buildReviewPlan(config, reviewerId) {
   if (new Date(opensAt).getTime() >= new Date(closesAt).getTime()) {
     fail("CONFIGURATION_ERROR", "The review window must open before it closes.");
   }
-  const round = {
-    id: REVIEW_ROUND_ID,
-    name: "Initial Review",
-    sequence: 1,
-    opensAt,
-    closesAt,
-    blindReview: true,
-    anonymization: "double",
-    reviewerPool: { name: "Initial Review pool", reviewerIds: reviewerId ? [reviewerId] : [] },
-    rubric: {
-      id: `${REVIEW_PLAN_ID}-rubric-initial`,
-      name: "Initial Review rubric",
-      criteria: [
-        {
-          id: "originality",
-          label: "Originality",
-          description: "How distinct and inventive is this proposal?",
-          minimum: 1,
-          maximum: 5,
-          weight: 2,
-          required: true,
-          inputType: "numeric",
-        },
-        {
-          id: "relevance",
-          label: "Relevance",
-          description: "How relevant is this proposal to the event audience?",
-          minimum: 1,
-          maximum: 5,
-          weight: 1,
-          required: true,
-          inputType: "numeric",
-        },
-        {
-          id: "recommendation",
-          label: "Recommendation",
-          description: "Recommendation for the program committee.",
-          minimum: 0,
-          maximum: 0,
-          weight: 0,
-          required: true,
-          inputType: "dropdown",
-          options: [
-            { label: "Accept", value: "accept" },
-            { label: "Maybe", value: "maybe" },
-            { label: "Reject", value: "reject" },
-          ],
-        },
-        {
-          id: "comments",
-          label: "Comments",
-          description: "Notes for the program committee.",
-          minimum: 0,
-          maximum: 0,
-          weight: 0,
-          required: false,
-          inputType: "free_text",
-        },
-      ],
+  if (new Date(closesAt).getTime() < new Date(REVIEW_ROUND_DATES.finalClosesAt).getTime()) {
+    fail("CONFIGURATION_ERROR", "The review window must close after both review rounds.");
+  }
+  const rounds = [
+    {
+      id: REVIEW_ROUND_ID,
+      name: "Initial Review",
+      sequence: 1,
+      opensAt,
+      closesAt: REVIEW_ROUND_DATES.initialClosesAt,
+      blindReview: true,
+      anonymization: "double",
+      reviewerPool: { name: "Initial Review pool", reviewerIds: reviewerId ? [reviewerId] : [] },
+      rubric: {
+        id: `${REVIEW_PLAN_ID}-rubric-initial`,
+        name: "Initial Review rubric",
+        criteria: [
+          {
+            id: "originality",
+            label: "Originality",
+            description: "How distinct and inventive is this proposal?",
+            minimum: 1,
+            maximum: 5,
+            weight: 2,
+            required: true,
+            inputType: "numeric",
+          },
+          {
+            id: "relevance",
+            label: "Relevance",
+            description: "How relevant is this proposal to the event audience?",
+            minimum: 1,
+            maximum: 5,
+            weight: 1,
+            required: true,
+            inputType: "numeric",
+          },
+          {
+            id: "recommendation",
+            label: "Recommendation",
+            description: "Recommendation for the program committee.",
+            minimum: 0,
+            maximum: 0,
+            weight: 0,
+            required: true,
+            inputType: "dropdown",
+            options: [
+              { label: "Accept", value: "accept" },
+              { label: "Maybe", value: "maybe" },
+              { label: "Reject", value: "reject" },
+            ],
+          },
+          {
+            id: "comments",
+            label: "Comments",
+            description: "Notes for the program committee.",
+            minimum: 0,
+            maximum: 0,
+            weight: 0,
+            required: false,
+            inputType: "free_text",
+          },
+        ],
+      },
     },
-  };
+    {
+      id: REVIEW_FINAL_ROUND_ID,
+      name: "Final Review",
+      sequence: 2,
+      opensAt: REVIEW_ROUND_DATES.finalOpensAt,
+      closesAt: REVIEW_ROUND_DATES.finalClosesAt,
+      blindReview: false,
+      anonymization: "none",
+      reviewerPool: { name: "Final Review pool", reviewerIds: [] },
+      rubric: {
+        id: `${REVIEW_PLAN_ID}-rubric-final`,
+        name: "Final Review rubric",
+        criteria: [
+          {
+            id: "final-recommendation",
+            label: "Final recommendation",
+            description: "Final recommendation for the program committee.",
+            minimum: 0,
+            maximum: 0,
+            weight: 0,
+            required: true,
+            inputType: "dropdown",
+            options: [
+              { label: "Advance", value: "advance" },
+              { label: "Hold", value: "hold" },
+              { label: "Reject", value: "reject" },
+            ],
+          },
+          {
+            id: "program-notes",
+            label: "Program notes",
+            description: "Final notes for program handoff.",
+            minimum: 0,
+            maximum: 0,
+            weight: 0,
+            required: false,
+            inputType: "free_text",
+          },
+        ],
+      },
+    },
+  ];
   return {
     id: REVIEW_PLAN_ID,
     tenantId: CANONICAL_ORGANIZATION_ID,
@@ -468,7 +520,7 @@ function buildReviewPlan(config, reviewerId) {
       maxAssignmentsPerReviewer: 5,
       autoDistribute: false,
     },
-    rounds: [round],
+    rounds,
     reviewerProjection: { visibleFieldIds: [], visibleFileIds: [] },
     version: 1,
     createdAt: "2026-08-09T00:00:00.000Z",
@@ -598,7 +650,10 @@ function sessionSpecs({ proposals, catalogs }) {
     },
   ];
   return entries.map((entry) => {
-    const id = stableId(CANONICAL_EVENT_ID, "session", entry.title);
+    const id =
+      entry.proposal === null
+        ? stableId(CANONICAL_EVENT_ID, "session", entry.title)
+        : `session-${entry.proposal.id}`;
     const trackApplicationId = trackId(entry.track);
     const formatApplicationId = formatId(entry.format);
     const roomApplicationId = entry.room === null ? null : roomId(entry.room);
@@ -3253,6 +3308,7 @@ function refreshPayloads(manifest) {
       const reviewPlan = JSON.parse(operation.fields["Rounds JSON"]);
       const reviewerId = userIdOrRef(manifest, "reviewer-sam");
       for (const round of reviewPlan.rounds ?? []) {
+        if (round.id !== REVIEW_ROUND_ID) continue;
         round.reviewerPool = { ...(round.reviewerPool ?? {}), reviewerIds: [reviewerId] };
       }
       operation.fields["Rounds JSON"] = json(reviewPlan);
@@ -3703,14 +3759,102 @@ export async function readRepairInvariantReport({
     sessions
       .filter((session) => session.roomId === null)
       .every((session) => session.publicationStatus === "unpublished");
+  const reviewPlanOperations = manifest.operations.filter(
+    (operation) => operation.table === "Review Plans",
+  );
+  let reviewPlan;
+  try {
+    reviewPlan =
+      reviewPlanOperations.length === 1
+        ? JSON.parse(reviewPlanOperations[0].fields?.["Rounds JSON"] ?? "")
+        : undefined;
+  } catch {
+    reviewPlan = undefined;
+  }
+  const reviewRounds = Array.isArray(reviewPlan?.rounds) ? reviewPlan.rounds : [];
+  const initialReviewRound = reviewRounds.find((round) => round?.id === REVIEW_ROUND_ID);
+  const finalReviewRound = reviewRounds.find((round) => round?.id === REVIEW_FINAL_ROUND_ID);
+  const reviewerId =
+    manifest.identityLedger.find((identity) => identity.identityKey === "reviewer-sam")?.userId ??
+    "identity:reviewer-sam";
+  const initialCriteria = initialReviewRound?.rubric?.criteria;
+  const finalCriteria = finalReviewRound?.rubric?.criteria;
+  const initialRubricValid =
+    initialReviewRound?.rubric?.id === `${REVIEW_PLAN_ID}-rubric-initial` &&
+    Array.isArray(initialCriteria) &&
+    initialCriteria.some(
+      (criterion) =>
+        criterion?.id === "originality" &&
+        criterion.weight === 2 &&
+        (criterion.inputType ?? "numeric") === "numeric",
+    ) &&
+    initialCriteria.some(
+      (criterion) =>
+        criterion?.id === "relevance" &&
+        criterion.weight === 1 &&
+        (criterion.inputType ?? "numeric") === "numeric",
+    ) &&
+    initialCriteria.some(
+      (criterion) => criterion?.id === "recommendation" && criterion.inputType === "dropdown",
+    ) &&
+    initialCriteria.some(
+      (criterion) => criterion?.id === "comments" && criterion.inputType === "free_text",
+    );
+  const finalRubricValid =
+    finalReviewRound?.rubric?.id === `${REVIEW_PLAN_ID}-rubric-final` &&
+    finalReviewRound.rubric.id !== initialReviewRound?.rubric?.id &&
+    Array.isArray(finalCriteria) &&
+    finalCriteria.some(
+      (criterion) =>
+        criterion?.id === "final-recommendation" && criterion.inputType === "dropdown",
+    ) &&
+    finalCriteria.some(
+      (criterion) => criterion?.id === "program-notes" && criterion.inputType === "free_text",
+    );
+  checks.reviewRounds =
+    reviewPlan?.status === "open" &&
+    reviewRounds.length === 2 &&
+    initialReviewRound?.name === "Initial Review" &&
+    initialReviewRound.sequence === 1 &&
+    initialReviewRound.opensAt === "2026-08-01T00:00:00.000Z" &&
+    initialReviewRound.closesAt === REVIEW_ROUND_DATES.initialClosesAt &&
+    initialReviewRound.blindReview === true &&
+    initialReviewRound.anonymization === "double" &&
+    initialReviewRound.reviewerPool?.reviewerIds?.length === 1 &&
+    initialReviewRound.reviewerPool.reviewerIds[0] === reviewerId &&
+    finalReviewRound?.name === "Final Review" &&
+    finalReviewRound.sequence === 2 &&
+    finalReviewRound.opensAt === REVIEW_ROUND_DATES.finalOpensAt &&
+    finalReviewRound.closesAt === REVIEW_ROUND_DATES.finalClosesAt &&
+    finalReviewRound.reviewerPool?.reviewerIds?.length === 0 &&
+    typeof reviewPlan?.closesAt === "string" &&
+    Date.parse(reviewPlan.closesAt) >= Date.parse(finalReviewRound.closesAt) &&
+    initialRubricValid &&
+    finalRubricValid;
   const assignmentOperations = manifest.operations.filter(
     (operation) => operation.table === "Evaluations",
   );
-  checks.reviewAssignments =
+  const assignmentsPointToInitial =
     assignmentOperations.length === 3 &&
+    assignmentOperations.every((operation) => {
+      if (operation.fields?.["Round ID"] !== REVIEW_ROUND_ID) return false;
+      try {
+        return JSON.parse(operation.fields?.["Scores JSON"] ?? "").roundId === REVIEW_ROUND_ID;
+      } catch {
+        return false;
+      }
+    });
+  const reviewerPoolOperations = manifest.operations.filter(
+    (operation) => operation.kind === "reviewer-pool",
+  );
+  checks.reviewAssignments =
+    assignmentsPointToInitial &&
+    reviewPlanOperations.length === 1 &&
+    reviewerPoolOperations.length === 1 &&
+    reviewerPoolOperations[0].payload?.roundId === REVIEW_ROUND_ID &&
+    reviewerPoolOperations[0].payload?.reviewerId === reviewerId &&
     assignmentOperations.every((operation) => operation.fields.Status === "assigned") &&
-    manifest.operations.filter((operation) => operation.table === "Review Plans").length === 1 &&
-    manifest.operations.filter((operation) => operation.kind === "reviewer-pool").length === 1;
+    checks.reviewRounds;
   checks.tasks =
     (graph?.tasks?.length ?? 0) === 10 &&
     graph.tasks.every((task) => task.status === "not_started" && task.completedAt === null);

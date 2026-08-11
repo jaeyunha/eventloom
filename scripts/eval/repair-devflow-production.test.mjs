@@ -438,6 +438,99 @@ test("builds the strict six-identity ledger and exact canonical graph", () => {
     true,
   );
 });
+test("persists independent review rounds and deterministic proposal session IDs", () => {
+  const manifest = build();
+  const replay = build();
+  const reviewPlanOperation = manifest.operations.find(
+    (operation) => operation.table === "Review Plans",
+  );
+  assert.ok(reviewPlanOperation);
+  const plan = JSON.parse(reviewPlanOperation.fields["Rounds JSON"]);
+  const reviewPlanId = `${manifest.eventId}-initial-review`;
+  const [initialRound, finalRound] = plan.rounds;
+  assert.deepEqual(
+    plan.rounds.map((round) => ({
+      id: round.id,
+      name: round.name,
+      sequence: round.sequence,
+      opensAt: round.opensAt,
+      closesAt: round.closesAt,
+      reviewerIds: round.reviewerPool?.reviewerIds,
+      rubricId: round.rubric.id,
+    })),
+    [
+      {
+        id: `${reviewPlanId}-round-initial`,
+        name: "Initial Review",
+        sequence: 1,
+        opensAt: "2026-08-01T00:00:00.000Z",
+        closesAt: "2026-10-15T23:59:59.000Z",
+        reviewerIds: [IDS["reviewer-sam"]],
+        rubricId: `${reviewPlanId}-rubric-initial`,
+      },
+      {
+        id: `${reviewPlanId}-round-final`,
+        name: "Final Review",
+        sequence: 2,
+        opensAt: "2026-10-16T00:00:00.000Z",
+        closesAt: "2026-11-30T23:59:59.000Z",
+        reviewerIds: [],
+        rubricId: `${reviewPlanId}-rubric-final`,
+      },
+    ],
+  );
+  assert.equal(plan.status, "open");
+  assert.ok(Date.parse(plan.closesAt) >= Date.parse(finalRound.closesAt));
+  assert.equal(initialRound.blindReview, true);
+  assert.equal(initialRound.anonymization, "double");
+  assert.notEqual(initialRound.rubric.id, finalRound.rubric.id);
+  assert.deepEqual(
+    Object.fromEntries(
+      initialRound.rubric.criteria.map((criterion) => [
+        criterion.id,
+        [criterion.inputType, criterion.weight],
+      ]),
+    ),
+    {
+      originality: ["numeric", 2],
+      relevance: ["numeric", 1],
+      recommendation: ["dropdown", 0],
+      comments: ["free_text", 0],
+    },
+  );
+  assert.deepEqual(
+    finalRound.rubric.criteria.map((criterion) => [criterion.id, criterion.inputType]),
+    [
+      ["final-recommendation", "dropdown"],
+      ["program-notes", "free_text"],
+    ],
+  );
+  const assignments = manifest.operations.filter((operation) => operation.table === "Evaluations");
+  assert.equal(assignments.length, 3);
+  assert.equal(
+    assignments.every((operation) => {
+      const scores = JSON.parse(operation.fields["Scores JSON"]);
+      return operation.fields["Round ID"] === initialRound.id && scores.roundId === initialRound.id;
+    }),
+    true,
+  );
+  const proposalSessions = manifest.graph.sessions.filter((session) => session.proposalId !== null);
+  assert.deepEqual(
+    proposalSessions.map((session) => [session.proposalId, session.id]),
+    manifest.graph.proposals.map((proposal) => [proposal.id, `session-${proposal.id}`]),
+  );
+  const lightning = manifest.graph.sessions.find((session) => session.proposalId === null);
+  assert.equal(lightning.id, "devflow-conf-2027-session-lightning-agents-in-production-q-a");
+  assert.equal(manifest.digest, replay.digest);
+  assert.deepEqual(
+    manifest.operations.map((operation) => [operation.key, operation.id, operation.inputDigest]),
+    replay.operations.map((operation) => [operation.key, operation.id, operation.inputDigest]),
+  );
+  assert.deepEqual(
+    manifest.graph.sessions.map((session) => [session.id, session.proposalId]),
+    replay.graph.sessions.map((session) => [session.id, session.proposalId]),
+  );
+});
 
 test("prepare is read-only and plans all writes", async () => {
   const manifest = build();
