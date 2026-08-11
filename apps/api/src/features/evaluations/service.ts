@@ -169,6 +169,10 @@ export interface EvaluationReviewerWorkspaceAssignment extends ReviewContext {
 export interface EvaluationReviewerWorkspace {
   readonly assignments: readonly EvaluationReviewerWorkspaceAssignment[];
 }
+export interface EvaluationOrganizerWorkspaceDiagnostic {
+  readonly code: "decisions_unavailable";
+  readonly message: string;
+}
 export interface EvaluationOrganizerWorkspace {
   readonly plan: EvaluationPlan;
   readonly submissions: readonly EvaluationSubmissionRecord[];
@@ -176,6 +180,7 @@ export interface EvaluationOrganizerWorkspace {
   readonly progress: EvaluationProgress;
   readonly aggregates: readonly EvaluationAggregate[];
   readonly decisions: Readonly<Record<string, EvaluationDecision>>;
+  readonly diagnostics?: readonly EvaluationOrganizerWorkspaceDiagnostic[];
 }
 
 export interface AssignReviewersInput {
@@ -797,11 +802,7 @@ export class EvaluationService {
     requireHumanOrganizer(actor, normalizedEventId);
     const normalizedPreferredPlanId =
       preferredPlanId === undefined ? undefined : requireText(preferredPlanId, "Plan id", 100);
-    const [listedPlans, workspaceRecords, listedSubmissions] = await Promise.all([
-      this.#repository.listPlans(actor.tenantId, normalizedEventId),
-      this.#repository.listOrganizerWorkspaceRecords(actor.tenantId, normalizedEventId),
-      this.listOrganizerSubmissions(actor, normalizedEventId),
-    ]);
+    const listedPlans = await this.#repository.listPlans(actor.tenantId, normalizedEventId);
     const plans = listedPlans.filter(
       (plan) => plan.tenantId === actor.tenantId && plan.eventId === normalizedEventId,
     );
@@ -820,6 +821,27 @@ export class EvaluationService {
     if (plan === undefined) {
       throw notFound("No evaluation plan was found for this event.");
     }
+    const [listedSubmissions, batchedWorkspaceRecords] = await Promise.all([
+      this.listOrganizerSubmissions(actor, normalizedEventId),
+      this.#repository
+        .listOrganizerWorkspaceRecords(actor.tenantId, normalizedEventId)
+        .catch(() => null),
+    ]);
+    const workspaceRecords =
+      batchedWorkspaceRecords ??
+      (await Promise.all([
+        this.#repository.listAssignments(actor.tenantId, plan.id),
+        this.#repository.listReviews(actor.tenantId, plan.id),
+      ]).then(([assignments, reviews]) => ({ assignments, reviews, decisions: [] })));
+    const diagnostics =
+      batchedWorkspaceRecords === null
+        ? [
+            {
+              code: "decisions_unavailable" as const,
+              message: "Decision data is temporarily unavailable.",
+            },
+          ]
+        : undefined;
     const submissions = [
       ...new Map(
         listedSubmissions
@@ -869,6 +891,7 @@ export class EvaluationService {
       progress: progressForAssignments(plan, effectiveAssignments),
       aggregates,
       decisions,
+      ...(diagnostics === undefined ? {} : { diagnostics }),
     };
   }
 

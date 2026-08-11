@@ -56,11 +56,10 @@ class WorkspaceBatchRepository extends InMemoryEvaluationRepository {
   assignmentListCalls = 0;
   reviewListCalls = 0;
   batchGate: Promise<void> | null = null;
+  organizerWorkspaceFailure: Error | null = null;
 
   override async listPlans(tenantId: string, requestedEventId?: string) {
     this.planListCalls += 1;
-    const gate = this.batchGate;
-    if (gate !== null) await gate;
     return super.listPlans(tenantId, requestedEventId);
   }
 
@@ -81,6 +80,7 @@ class WorkspaceBatchRepository extends InMemoryEvaluationRepository {
     this.organizerWorkspaceCalls += 1;
     const gate = this.batchGate;
     if (gate !== null) await gate;
+    if (this.organizerWorkspaceFailure !== null) throw this.organizerWorkspaceFailure;
     return super.listOrganizerWorkspaceRecords(requestedTenantId, requestedEventId);
   }
   override async getDecision(requestedTenantId: string, planId: string, submissionId: string) {
@@ -510,6 +510,7 @@ describe("evaluation plans and assignments", () => {
     repository.batchGate = gate;
     submissions.organizerBatchGate = gate;
     const pending = service.getOrganizerWorkspace(organizer, eventId);
+    await Promise.resolve();
 
     expect(repository.planListCalls).toBe(1);
     expect(repository.organizerWorkspaceCalls).toBe(1);
@@ -552,6 +553,55 @@ describe("evaluation plans and assignments", () => {
       status: "accepted",
       submissionId: submission.id,
     });
+    expect(workspace.diagnostics).toBeUndefined();
+  });
+  it("returns core organizer data with diagnostics when decision hydration fails", async () => {
+    const repository = new WorkspaceBatchRepository();
+    const submissions = new WorkspaceBatchSource([submission]);
+    const { service } = await fixture({ repository, submissions, reviewsPerSubmission: 1 });
+    const assignment = await assignOne(service);
+    repository.resetCounts();
+    submissions.resetCounts();
+    repository.organizerWorkspaceFailure = new Error("Decision row could not be decoded.");
+
+    const workspace = await service.getOrganizerWorkspace(organizer, eventId);
+
+    expect(repository.planListCalls).toBe(1);
+    expect(repository.organizerWorkspaceCalls).toBe(1);
+    expect(repository.assignmentListCalls).toBe(1);
+    expect(repository.reviewListCalls).toBe(1);
+    expect(workspace).toMatchObject({
+      plan: { id: "plan-1" },
+      submissions: [{ id: submission.id }],
+      assignments: [{ id: assignment.id }],
+      progress: { planId: "plan-1", total: 1 },
+      aggregates: [{ submissionId: submission.id, roundId: round.id }],
+      decisions: {},
+      diagnostics: [
+        {
+          code: "decisions_unavailable",
+          message: "Decision data is temporarily unavailable.",
+        },
+      ],
+    });
+  });
+
+  it("returns missing-plan before attempting organizer hydration", async () => {
+    const repository = new WorkspaceBatchRepository();
+    repository.organizerWorkspaceFailure = new Error("Decision row could not be decoded.");
+    const submissions = new WorkspaceBatchSource([submission]);
+    const service = new EvaluationService(repository, submissions);
+
+    await expectEvaluationError(
+      service.getOrganizerWorkspace(organizer, eventId),
+      "EVALUATION_NOT_FOUND",
+    );
+
+    expect(repository.planListCalls).toBe(1);
+    expect(repository.organizerWorkspaceCalls).toBe(0);
+    expect(repository.assignmentListCalls).toBe(0);
+    expect(repository.reviewListCalls).toBe(0);
+    expect(submissions.organizerListCalls).toBe(0);
   });
   it("hard-deletes outstanding assignments with no or draft reviews", async () => {
     const { service, repository } = await fixture({ reviewsPerSubmission: 2 });

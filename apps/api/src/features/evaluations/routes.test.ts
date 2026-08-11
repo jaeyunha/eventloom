@@ -1,6 +1,10 @@
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
-import { InMemoryEvaluationRepository, InMemorySubmissionReviewSource } from "./repository";
+import {
+  InMemoryEvaluationRepository,
+  InMemorySubmissionReviewSource,
+  type OrganizerWorkspaceRecords,
+} from "./repository";
 import {
   createEvaluationRoutes,
   type EvaluationRouteEnvironment,
@@ -39,6 +43,17 @@ const otherTenantOrganizer: EvaluationActor = {
   kind: "human",
   grants: [{ eventId: "event-1", role: "organizer" }],
 };
+class DecisionReadFailureRepository extends InMemoryEvaluationRepository {
+  organizerWorkspaceCalls = 0;
+
+  override async listOrganizerWorkspaceRecords(
+    tenantId: string,
+    eventId: string,
+  ): Promise<OrganizerWorkspaceRecords> {
+    this.organizerWorkspaceCalls += 1;
+    throw new Error(`Decision rows for ${tenantId}/${eventId} could not be decoded.`);
+  }
+}
 
 function createTestApp(
   serviceOptions: EvaluationServiceOptions = {},
@@ -62,8 +77,9 @@ function createTestApp(
       ],
     },
   ],
+  repositoryOverride?: InMemoryEvaluationRepository,
 ) {
-  const repository = new InMemoryEvaluationRepository();
+  const repository = repositoryOverride ?? new InMemoryEvaluationRepository();
   const source = new InMemorySubmissionReviewSource(submissionMaterials);
   const service = new EvaluationService(repository, source, {
     clock: () => new Date("2026-08-08T12:00:00.000Z"),
@@ -469,6 +485,51 @@ describe("evaluation HTTP routes", () => {
       expect.objectContaining({ planId: "plan-1", roundId: "round-1" }),
     ]);
     expect(body.data.decisions).toEqual({});
+  });
+  it("keeps the organizer workspace usable and exposes diagnostics when decisions fail", async () => {
+    const repository = new DecisionReadFailureRepository();
+    const app = createTestApp({}, {}, undefined, repository);
+    await jsonRequest(app, "/evaluations/plans", "POST", planRequest);
+    await jsonRequest(app, "/evaluations/plans/plan-1/open", "POST", { expectedVersion: 1 });
+    await jsonRequest(app, "/evaluations/plans/plan-1/assignments", "POST", {
+      roundId: "round-1",
+      submissionId: "submission-1",
+      reviewerIds: ["reviewer-1"],
+    });
+
+    const response = await app.request("/evaluations/organizer/workspace?eventId=event-1");
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      data: {
+        plan: { id: "plan-1" },
+        submissions: [{ id: "submission-1" }],
+        assignments: [{ planId: "plan-1", submissionId: "submission-1" }],
+        progress: { planId: "plan-1", total: 1 },
+        aggregates: [{ planId: "plan-1", submissionId: "submission-1" }],
+        decisions: {},
+        diagnostics: [
+          {
+            code: "decisions_unavailable",
+            message: "Decision data is temporarily unavailable.",
+          },
+        ],
+      },
+    });
+    expect(repository.organizerWorkspaceCalls).toBe(1);
+  });
+
+  it("returns missing-plan without reading decisions", async () => {
+    const repository = new DecisionReadFailureRepository();
+    const app = createTestApp({}, {}, undefined, repository);
+
+    const response = await app.request("/evaluations/organizer/workspace?eventId=event-1");
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "EVALUATION_NOT_FOUND" },
+    });
+    expect(repository.organizerWorkspaceCalls).toBe(0);
   });
   it("moves Sam from 0/2 to 2/2 with two blind, complete scorecards", async () => {
     const submissions: readonly SubmissionReviewMaterial[] = [
