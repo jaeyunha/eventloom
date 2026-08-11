@@ -1470,6 +1470,184 @@ describe("SpeakerService portal access", () => {
     expect(portal.wiki).toEqual([expect.objectContaining({ id: "wiki-1" })]);
     expect(gateway.downloads).toHaveLength(0);
   });
+  it("isolates portal projections and ready grants to the authenticated primary speaker", async () => {
+    const repository = new CountingPortalRepository();
+    repository.scopes.set("event-1:account-1", {
+      tenantId: "org-1",
+      submissionIds: ["submission-primary", "submission-co"],
+      participantIds: ["participant-primary", "participant-co"],
+      primaryParticipantId: "participant-primary",
+      capabilities: ["profile-self", "roster-manage", "task-response", "asset-read"],
+    });
+    repository.submissions.push(
+      {
+        ...submission("submission-primary", "participant-primary"),
+        participantIds: ["participant-primary", "participant-co"],
+        primaryParticipantId: "participant-primary",
+      },
+      submission("submission-co", "participant-co"),
+    );
+    repository.profiles.push(
+      profile("participant-primary"),
+      {
+        ...profile("participant-co"),
+        displayName: "Co Speaker",
+      },
+    );
+    repository.tasks.push(
+      task({
+        id: "task-primary",
+        participantId: "participant-primary",
+        submissionId: "submission-primary",
+      }),
+      task({
+        id: "task-co",
+        participantId: "participant-co",
+        submissionId: "submission-co",
+      }),
+    );
+    repository.assets.push(
+      {
+        id: "asset-primary-ready",
+        tenantId: "org-1",
+        eventId: "event-1",
+        submissionId: "submission-primary",
+        participantId: "participant-primary",
+        kind: "slides",
+        objectKey: "events/event-1/participants/participant-primary/slides/ready",
+        fileName: "primary.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 1_024,
+        state: "ready",
+        createdAt: now,
+      },
+      {
+        id: "asset-primary-pending",
+        tenantId: "org-1",
+        eventId: "event-1",
+        submissionId: "submission-primary",
+        participantId: "participant-primary",
+        kind: "supporting_file",
+        objectKey: "events/event-1/participants/participant-primary/supporting/pending",
+        fileName: "pending.txt",
+        contentType: "text/plain",
+        sizeBytes: 128,
+        state: "pending_upload",
+        createdAt: now,
+      },
+      {
+        id: "asset-co-ready",
+        tenantId: "org-1",
+        eventId: "event-1",
+        submissionId: "submission-co",
+        participantId: "participant-co",
+        kind: "slides",
+        objectKey: "events/event-1/participants/participant-co/slides/ready",
+        fileName: "co.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 2_048,
+        state: "ready",
+        createdAt: now,
+      },
+    );
+    repository.portalContexts.push({
+      id: "portal:org-1:event-1",
+      eventId: "event-1",
+      name: "Portal event",
+      capabilities: ["profile-self", "roster-manage", "task-response", "asset-read"],
+      submissionIds: ["submission-primary", "submission-co"],
+      participantIds: ["participant-primary", "participant-co"],
+      primaryParticipantId: "participant-primary",
+    });
+    repository.roster.push(
+      {
+        id: "roster-primary",
+        eventId: "event-1",
+        submissionId: "speaker-submission:submission-primary",
+        participantId: "participant-primary",
+        displayName: "Primary Speaker",
+        email: "primary@example.test",
+        role: "primary",
+        status: "active",
+        version: 1,
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        id: "roster-co",
+        eventId: "event-1",
+        submissionId: "speaker-submission:submission-primary",
+        participantId: "participant-co",
+        displayName: "Co Speaker",
+        email: "co@example.test",
+        role: "co_speaker",
+        status: "active",
+        version: 1,
+        createdAt: now,
+        updatedAt: now,
+      },
+    );
+    const gateway = new FakePrivateAssetGateway();
+    const service = new SpeakerService(repository, gateway, {
+      now: () => new Date(now),
+    });
+
+    const contexts = await service.listPortalContexts("account-1");
+    const portal = await service.getPortal("event-1", "account-1");
+
+    expect(contexts).toEqual([
+      expect.objectContaining({
+        submissionIds: ["submission-primary"],
+        participantIds: ["participant-primary"],
+        primaryParticipantId: "participant-primary",
+      }),
+    ]);
+    expect(portal.submissions).toEqual([
+      expect.objectContaining({
+        id: "submission-primary",
+        participantIds: ["participant-primary"],
+        primaryParticipantId: "participant-primary",
+      }),
+    ]);
+    expect(portal.profiles.map((candidate) => candidate.participantId)).toEqual([
+      "participant-primary",
+    ]);
+    expect(portal.tasks.map((candidate) => candidate.id)).toEqual(["task-primary"]);
+    expect(portal.assets?.map((candidate) => candidate.id)).toEqual([
+      "asset-primary-ready",
+      "asset-primary-pending",
+    ]);
+    expect(portal.roster?.members.map((member) => member.participantId)).toEqual([
+      "participant-primary",
+    ]);
+    expect(JSON.stringify({ contexts, portal })).not.toContain("participant-co");
+    expect(JSON.stringify({ contexts, portal })).not.toContain("co@example.test");
+
+    await expect(
+      service.issueDownloadGrant({
+        eventId: "event-1",
+        accountId: "account-1",
+        assetId: "asset-co-ready",
+      }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(
+      service.issueDownloadGrant({
+        eventId: "event-1",
+        accountId: "account-1",
+        assetId: "asset-primary-pending",
+      }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(
+      service.issueDownloadGrant({
+        eventId: "event-1",
+        accountId: "account-1",
+        assetId: "asset-primary-ready",
+      }),
+    ).resolves.toMatchObject({
+      url: expect.stringContaining("primary"),
+    });
+    expect(gateway.downloads).toHaveLength(1);
+  });
   it("returns only event-scoped submissions, profiles, accepted tasks, and status counts", async () => {
     const { service } = createFixture();
 
