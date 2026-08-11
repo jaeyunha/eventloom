@@ -510,7 +510,7 @@ describe("evaluation plans and assignments", () => {
     repository.batchGate = gate;
     submissions.organizerBatchGate = gate;
     const pending = service.getOrganizerWorkspace(organizer, eventId);
-    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(repository.planListCalls).toBe(1);
     expect(repository.organizerWorkspaceCalls).toBe(1);

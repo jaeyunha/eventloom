@@ -1,5 +1,9 @@
 import { closed, conflict, forbidden, invalidInput, notFound } from "./errors";
-import type { EvaluationRepository, SubmissionReviewSource } from "./repository";
+import type {
+  EvaluationRepository,
+  OrganizerWorkspaceRecords,
+  SubmissionReviewSource,
+} from "./repository";
 import type {
   EvaluationActor,
   EvaluationAggregate,
@@ -827,12 +831,16 @@ export class EvaluationService {
         .listOrganizerWorkspaceRecords(actor.tenantId, normalizedEventId)
         .catch(() => null),
     ]);
-    const workspaceRecords =
-      batchedWorkspaceRecords ??
-      (await Promise.all([
+    let workspaceRecords: OrganizerWorkspaceRecords;
+    if (batchedWorkspaceRecords === null) {
+      const [assignments, reviews] = await Promise.all([
         this.#repository.listAssignments(actor.tenantId, plan.id),
         this.#repository.listReviews(actor.tenantId, plan.id),
-      ]).then(([assignments, reviews]) => ({ assignments, reviews, decisions: [] })));
+      ]);
+      workspaceRecords = { assignments, reviews, decisions: [] };
+    } else {
+      workspaceRecords = batchedWorkspaceRecords;
+    }
     const diagnostics =
       batchedWorkspaceRecords === null
         ? [
