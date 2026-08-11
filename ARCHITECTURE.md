@@ -76,7 +76,7 @@ The built-in Speaker CRM is an organization-scoped first-party contact system wi
 ## Integrations and advisory AI
 
 - **OpenSend:** The API sends through `https://opensend.namuh.co` using `auth@sessionboard.namuh.co`, `speakers@sessionboard.namuh.co`, and `calendar@sessionboard.namuh.co`. Provider verification and environment-specific credentials are deployment concerns.
-- **Calendar:** RFC 5545 `REQUEST`, `UPDATE`, and `CANCEL` messages use stable UIDs, increasing `SEQUENCE`, explicit IANA time zones, and `calendar@sessionboard.namuh.co`. Calendar-provider OAuth is not required.
+- **Calendar:** RFC 5545 `REQUEST`, `UPDATE`, and `CANCEL` messages use UIDs under `calendar.sessionboard.namuh.co`, increasing `SEQUENCE`, explicit IANA time zones, and organizer `calendar@sessionboard.namuh.co`. Calendar-provider OAuth is not required.
 - **Public API and webhooks:** Versioned REST resources, scoped API keys, cursor pagination, idempotent writes, optimistic concurrency, and signed retryable webhooks expose only authorized or published data.
 - **Workers AI:** Cloudflare Workers AI may produce private, typed evaluation suggestions, agenda proposals, or content-remix candidates. It never scores, decides, schedules, publishes, sends, exports, or overwrites source content without an explicit human action followed by normal authorization and conflict checks.
 

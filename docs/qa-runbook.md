@@ -1,128 +1,117 @@
 # Browser interaction and accessibility QA
 
-Automated tests are necessary but not sufficient. Release acceptance requires a real browser pass with both Ever and the `codex-cua` skill against a deterministic seeded event. This runbook does not claim that a pass has occurred; every run needs dated evidence tied to a commit and environment.
+This runbook defines evidence collection; it does not claim that any QA pass has occurred. A release-quality result needs a clean candidate SHA, a dated evidence directory, and observable assertions against the intended environment. Local Playwright, staging Ever, staging `codex-cua`, and real Airtable/OpenSend observations are separate evidence classes.
+
+## Evidence classes and current origins
+
+- **Local Playwright:** run against the local services at `http://127.0.0.1:3015` and `http://127.0.0.1:8787`. It is useful automated evidence for the local build only. It cannot prove staging deployment, real provider delivery, or release acceptance.
+- **Staging Ever and `codex-cua`:** run against the deployed staging web Worker at `https://open-sessionboard-web-staging.ashleyha0317.workers.dev`; its API boundary is `https://open-sessionboard-api-staging.ashleyha0317.workers.dev`. Use the real rendered build, real Airtable staging data, the deployed API, and the configured OpenSend boundary. Do not replace these with mocked routes or a local build.
+- **Production smoke:** use only designated synthetic/demo records after the production deployment gate. Do not replay the complete staging dataset or use participant data.
+
+The browser-visible staging API base is the web origin: `/api/*` is proxied by the web Worker to `API_UPSTREAM_ORIGIN`, the pinned API Worker origin. Record both origins in every staging result.
 
 ## Preconditions
 
-1. Use local or isolated staging, never production participant data.
-2. Seed one synthetic organization/event with organizer, reviewer, submitter, participant, and API-client identities.
-3. Include a conditional CFP field, multiple participants, at least two review rounds, one accepted session, a room conflict, a participant conflict, a warning that can be overridden, speaker tasks/files, a published revision, a webhook receiver, and an Accelevents sandbox preview.
-4. Use test inboxes and sandbox/suppressed OpenSend delivery.
-5. Start the web and API independently with `make dev`; verify `/health` and `/api/health` before browser work.
-6. Run the relevant automated tests first. A browser pass never excuses a failing assertion.
-7. Create an evidence directory outside the repository (for example `/tmp/open-sessionboard-qa/<commit>-<utc-time>`). Do not commit browser profiles, recordings, private payloads, magic links, API keys, or screenshots containing secrets.
+1. Use local or isolated staging only. Keep production participant data out of fixtures, inboxes, recordings, screenshots, and logs.
+2. Provision an explicit synthetic organization/event and distinct synthetic identities for organizer, reviewer, speaker, submitter, and any named evaluator personas. The canonical evaluator scope, when used, is organization `ai-engineer` and event `devflow-conf-2027`; the commands and confirmation boundaries are in [setup](setup.md).
+3. Use the built-in Speaker CRM in the supported organizer walkthrough. External event-platform or third-party sign-in setup is not part of this run.
+4. Use test inboxes and suppressed, sandboxed, or recipient-allowlisted OpenSend delivery. Never paste a password, magic link, API key, or private inbox content into evidence.
+5. For local work, start both services with `make dev` and check both health endpoints. For staging work, check the exact pinned web and API health endpoints after deployment.
+6. Record before browser interaction: commit SHA and dirty/clean state, `APP_ENV`, exact origins, evaluator fixture/manifest version, browser and viewport, tool/session ID, operator, and UTC start time.
+7. Store redacted screenshots, accessibility trees, traces, and reports outside the repository, for example `/tmp/open-sessionboard-qa/<commit>-<utc-run>`. Do not commit browser profiles, recordings, or generated output.
 
-Record before the run:
+## Local automated pass
 
-- Git commit SHA and dirty/clean state
-- `APP_ENV` and exact web/API origins
-- seed fixture/version
-- browser name/version and viewport
-- Ever version/session ID
-- CUA bridge status and exact target app
-- operator and UTC start time
+The local Playwright command is a local/CI gate, not staging evidence:
+
+```bash
+make test-e2e
+```
+
+Keep its report tied to the local `127.0.0.1` origins and candidate SHA. A deterministic fake or mocked response can support a unit/automated test, but it cannot establish a real Airtable, D1, Durable Object, R2, Queue, OpenSend, or deployed Worker result.
 
 ## Required walkthrough
 
-Exercise every state below with visible assertions, not just successful navigation.
+Exercise every state with visible assertions, not just successful navigation. Use the same authenticated synthetic identities throughout a stateful staging walkthrough.
 
 ### CFP and account
 
-- Open the public CFP welcome state.
-- Complete account/verified-email fixture access without skipping authentication.
+- Open the public CFP welcome state and verify the event/timezone display.
+- Complete email/password and verified-email or magic-link fixture access; do not skip authentication.
 - Use keyboard-only navigation through Welcome → Account → Submission → Participant → Review.
-- Trigger and read required-field errors; confirm focus moves to or is announced for the invalid control.
-- Show/hide a conditional field and prove its value/requiredness follows the rule.
-- Save, reload, and resume a draft.
-- Add a second participant and secondary contact; verify limits and duplicate/invalid email feedback.
+- Trigger required-field errors and confirm focus, labels, descriptions, and announcements.
+- Show/hide a conditional field and prove its value and requiredness follow the rule.
+- Save, reload, and resume a draft; add a second participant and secondary contact.
 - Submit once, retry the final action, and prove only one submitted version exists.
 - Confirm success content and portal redirect.
 
-### Speaker portal
+### Speaker portal and deliverables
 
-- Confirm the speaker sees only their authorized submissions, profiles, tasks, and assets.
-- Edit biography and upload through the authorized flow.
-- Exercise task dependency/state feedback, including a blocked transition and a valid submission.
+- Confirm each speaker sees only authorized submissions, profiles, tasks, files, forms, and downloads.
+- Edit biography/profile fields and upload a private asset through the authorized flow.
+- Exercise task dependency feedback, blocked and valid transitions, due-state presentation, and a completed deliverable.
 - Verify acceptance-gated content is absent for an unaccepted fixture.
-- Attempt a cross-user/cross-event URL and capture the safe denial without private data.
+- Attempt a cross-user or cross-event URL and capture a safe denial with no private data.
 - Confirm private responses are not browser-cacheable and signed asset links expire.
 
-### Organizer and reviewer
+### Organizer, reviewer, and CRM
 
 - Configure event/CFP settings and preview conditional routing.
-- Filter/sort the submissions table and open a detail view without losing context.
-- Assign a multi-round review plan.
-- Complete a rubric with autosave, keyboard controls, comments, and a conflict-of-interest abstention.
-- Show AI-prefilled assistance as uncounted until a human confirms or edits it.
-- Verify blind-review fields remain hidden.
-- Make a human decision and prove no AI action can accept/reject by itself.
-- Confirm progress and decision state update without exposing another tenant.
+- Filter and sort submissions, open a detail view without losing context, and verify organization/event scope.
+- Assign a multi-round review plan and complete a rubric with autosave, comments, keyboard controls, and conflict-of-interest abstention.
+- Verify blind-review fields remain hidden and that only a human can make the final decision; advisory AI remains uncounted until human confirmation/edit.
+- Create or import synthetic CRM contacts, search/filter, apply tags/custom fields and pipeline state, add a note/program-history item, detect a duplicate, and perform an explicit optimistic-concurrency merge.
+- Confirm CRM records never authorize another organization, private speaker files, reviewer notes, or unpublished agenda data.
 
 ### Agenda, publication, and embeds
 
-- Open list/day/week/month/rooms views and retain the event timezone.
-- Drag an accepted session into a room/time slot with CUA.
-- Trigger same-room and same-participant hard conflicts and prove publication remains blocked.
-- Trigger a warning, enter an auditable override reason, and preview the exact diff.
-- Test a DST-invalid time and an ambiguous time requiring earlier/later disambiguation.
-- Publish one immutable revision, then prove public views do not show later draft edits.
-- Verify speaker gallery and agenda/itinerary embeds in iframe and script modes.
-- Check narrow and wide viewports, safe theme controls, JSON/iCal links, empty/loading/error states, and keyboard/screen-reader navigation.
-- Roll back to a prior revision and verify corrective public/calendar/integration state.
+- Open list/day/week/month/room views and retain the event's canonical IANA timezone.
+- Drag an accepted session into a room/time slot and provide a keyboard alternative.
+- Trigger same-room and same-participant hard conflicts; prove publication remains blocked.
+- Trigger a warning, enter an auditable override reason, preview the exact diff, publish one immutable revision, and prove later draft edits do not change public views.
+- Verify speaker and agenda embeds in iframe and script modes, JSON/iCal projections, narrow/wide viewports, loading/empty/error states, safe theme controls, and keyboard/screen-reader navigation.
+- Roll back to a prior revision and verify the new corrective revision and public projections.
+- Verify one calendar invitation uses `calendar@sessionboard.namuh.co` as organizer and a UID ending in `@calendar.sessionboard.namuh.co`; verify update/cancel idempotency without duplicate delivery.
 
-### Integrations and failures
+The agenda resolver has a DST-aware contract, but two current implementation gaps must remain explicit: changing an event timezone does not yet have a delivered full draft migration/revalidation workflow, and the API does not yet expose stable DST-specific error mapping for nonexistent or ambiguous local times. Exercise such cases only as diagnostics, record the observed response, and never mark either gap as a passing delivered feature.
 
-- Inspect Accelevents mapped speakers/sessions, changed fields, and validation errors before confirmation.
-- Prove no outbound write occurs without explicit confirmation of the exact snapshot.
-- Exercise a sandbox failure/retry/reconciliation without changing Airtable source records.
-- Create/rotate a webhook secret and verify the full secret is never shown in a response/status view.
-- Verify a signed delivery, a bad signature rejection at the receiver, and delivery retry visibility.
-- Inspect OpenSend/calendar status using redacted identifiers; verify one calendar event updates/cancels without duplication.
-- Exercise API 400/401/403/404/409/412/429/500-style safe envelopes where deterministic fixtures exist.
-- Disable or misconfigure one optional integration and verify the product reports an actionable unavailable state without leaking configuration.
+### API, webhooks, and delivery failures
 
-## Ever pass
+- Exercise scoped public API reads, API-key scope/revocation, idempotency conflicts, and safe 400/401/403/404/409/412/429/500-style envelopes where the current fixture supports them.
+- Create/rotate a webhook secret and verify that the full secret is never returned; verify a valid signature, a bad-signature rejection, retry visibility, and delivery deduplication.
+- Inspect OpenSend and calendar delivery status using redacted identifiers. Verify suppressed staging mail, one updateable/cancellable calendar event, stable sequence behavior, and no duplicate retry.
+- Disable or misconfigure one supported optional runtime capability and verify an actionable unavailable state without leaking configuration.
 
-Check the Ever installation and active sessions:
+## Ever pass on staging
+
+Check the installed tool and active sessions:
 
 ```bash
 ever doctor
 ever status --json
 ```
 
-Use focused tasks rather than one unbounded prompt. Keep the default guarded filesystem/shell policy and identify the exact environment, seed, starting URL, account role, expected observations, and evidence directory in each task.
+Use focused, durable tasks with the exact pinned staging URL, role, expected observations, and evidence directory. Example:
 
 ```bash
 ever run --permission-mode guard \
-  "Against the already running isolated staging app at https://<web-host>, use the seeded organizer account already authenticated in the browser. Exercise the CFP configuration and submission-review path in docs/qa-runbook.md. Do not change source files or use production services. Report each assertion, failure, final URL, and screenshot path."
+  "Against the already running isolated staging app at https://open-sessionboard-web-staging.ashleyha0317.workers.dev, use the explicitly seeded synthetic organizer account already authenticated in the browser. Exercise the CFP configuration, submission, review, agenda, publication, embeds, CRM, and delivery assertions in docs/qa-runbook.md. Do not change source files or use production services. Report every assertion, failure, final URL, and redacted evidence path."
 ```
 
-Run separate durable sessions for CFP/portal, review, agenda/publication, embeds/accessibility, and integration failures. Continue only when the next task is deliberately part of the same stateful walkthrough:
+Use separate sessions for CFP/portal, review/CRM, agenda/publication, embeds/accessibility, and API/delivery failures. Retain each session ID, task text, observed URLs, pass/fail assertion, and redacted screenshot/state path. A narrative without browser state is not release evidence.
 
-```bash
-ever run --continue <session-id> \
-  "Continue with the agenda conflict, publish, rollback, and public embed assertions from docs/qa-runbook.md."
-```
+## `codex-cua` pass on staging
 
-For every Ever result, retain the session ID, task text, observed URLs, pass/fail assertions, and redacted screenshot paths. A narrative claim without browser state or an observable assertion is not evidence.
-
-## `codex-cua` pass
-
-Invoke the `codex-cua` skill in the GJC session used for exact GUI acceptance. The command-line bridge must be healthy:
+Use the `codex-cua` skill against the same rendered staging build. Confirm the bridge and select one exact browser application:
 
 ```bash
 cua status
 cua apps
-```
-
-Choose the exact browser instance returned by `cua apps`. Use that same `<app>` identifier for every command; do not rely on whichever application is globally foreground. Start/activate and capture a full accessibility tree plus screenshot:
-
-```bash
 cua start <app>
 cua state --full --shot /tmp/open-sessionboard-qa/<run>/landing.png <app>
 ```
 
-Interact through visible or accessibility-tree evidence:
+After every navigation, dialog, re-rendered list, scroll, and drag/drop, re-read the accessibility state because element indexes may change:
 
 ```bash
 cua click --element <index> <app>
@@ -135,31 +124,7 @@ cua drag <app> <from-x> <from-y> <to-x> <to-y>
 cua state --shot /tmp/open-sessionboard-qa/<run>/after-action.png <app>
 ```
 
-Re-read `cua state` after navigation, dialogs, re-rendered lists, scrolling, and drag/drop; prior element indexes may be stale. Prefer element-index interaction for controls and coordinates only when validating spatial behavior such as scheduling drag/drop. Record both pre- and post-action states.
-
-The CUA pass must include:
-
-- tab order, visible focus, skip/navigation landmarks, Enter/Space activation, Escape dismissal, and focus return
-- form labels, descriptions, validation relationships, status/live announcements, and no keyboard traps
-- dialog names/focus containment
-- table/list semantics and accessible sort state
-- drag/drop with a keyboard-accessible alternative
-- text zoom/reflow and narrow viewport behavior
-- contrast and non-color status cues
-- loading, empty, validation, forbidden, conflict, integration-failure, and retry states
-- exact screenshots for CFP completion, reviewer confirmation, conflict-blocked agenda, publication, and both embeds
-
-Never type real credentials with `cua type`; authenticate through the approved synthetic fixture or pre-authenticated isolated browser profile.
-
-## Automated accessibility support
-
-Run the Playwright suite's axe WCAG 2.1 AA scans and keyboard scenarios against the same build:
-
-```bash
-make test-e2e
-```
-
-Browser QA must investigate, not waive, any automated violation. Also inspect dynamic states axe may miss: focus order after conditional fields, autosave announcements, drag/drop alternatives, publication dialogs, iframe titles, and errors after network failures.
+The CUA evidence must cover tab order, visible focus, landmarks, Enter/Space activation, Escape dismissal and focus return, form labels/descriptions and error relationships, live announcements, dialog containment, table/list semantics, keyboard drag/drop alternatives, text zoom/reflow, contrast/non-color cues, loading/empty/validation/forbidden/conflict/failure/retry states, and exact screenshots for CFP completion, reviewer confirmation, conflict-blocked agenda, publication, CRM, and both embeds. Never type real credentials; use the approved synthetic fixture or a pre-authenticated isolated profile.
 
 ## Evidence and disposition
 
@@ -169,11 +134,11 @@ Create a result row for every walkthrough area:
 | --- | --- |
 | Area/scenario | Exact action and state |
 | Commit/environment | SHA, `APP_ENV`, web/API origins |
-| Tool | Playwright, Ever session ID, or CUA target app |
+| Tool | Local Playwright, Ever session ID, or CUA application |
+| Boundary | Local fixture, staging Airtable/OpenSend, or other observed runtime boundary |
 | Evidence | Redacted screenshot/state/report path |
-| Expected | Observable acceptance criterion |
-| Observed | Concrete result |
+| Expected/observed | Concrete observable result |
 | Status | Pass, fail, or blocked |
-| Defect | Issue/reference for any non-pass |
+| Defect/known gap | Issue or explicit implementation gap for any non-pass |
 
-A release QA pass requires all mandatory scenarios to pass on the release commit. Re-run affected scenarios after fixes. Never mark a stale earlier-commit screenshot as evidence for the release commit, and never weaken a test or assertion to convert a failure into a pass.
+A release QA result requires staging Ever and `codex-cua` evidence against the release commit plus real deployed-boundary observations. Local Playwright evidence remains labeled local and cannot substitute for staging browser, real Airtable/OpenSend, or manual calendar evidence. Never mark a stale commit, mocked provider response, skipped-auth walkthrough, or known timezone/DST gap as a pass.

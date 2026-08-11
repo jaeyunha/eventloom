@@ -35,7 +35,7 @@ printf 'example\n' > "$REPO/.env.example"
 (
   cd "$REPO"
   OPEN_SESSIONBOARD_WORKTREE_OVERRIDE_BASE="$OVERRIDE" \
-    "$CREATE" --no-launch --no-install feature/test main >/dev/null
+    "$CREATE" --no-launch --no-install --env-mode symlink feature/test main >/dev/null
 )
 
 WORKTREE="$OVERRIDE/open-sessionboard/feature/test"
@@ -63,6 +63,42 @@ assert grep -q updated "$WORKTREE/.env"
     "$CREATE" --no-launch --no-install --env-mode none no-env main >/dev/null
 )
 assert test ! -e "$OVERRIDE/open-sessionboard/no-env/.env"
+
+# The default local mode creates only regular, sanitized development files.
+(
+  cd "$REPO"
+  OPEN_SESSIONBOARD_WORKTREE_OVERRIDE_BASE="$OVERRIDE" \
+    "$CREATE" --no-launch --no-install local-env main >/dev/null
+)
+LOCAL_WORKTREE="$OVERRIDE/open-sessionboard/local-env"
+assert test -f "$LOCAL_WORKTREE/.env"
+assert test ! -L "$LOCAL_WORKTREE/.env"
+assert test -f "$LOCAL_WORKTREE/apps/web/.env.local"
+assert test ! -L "$LOCAL_WORKTREE/apps/web/.env.local"
+assert grep -Fx 'NEXT_PUBLIC_API_URL=http://127.0.0.1:8787' "$LOCAL_WORKTREE/.env"
+assert grep -Fx 'NEXT_PUBLIC_ORGANIZATION_ID=ai-engineer' "$LOCAL_WORKTREE/apps/web/.env.local"
+assert test ! -e "$LOCAL_WORKTREE/apps/api/.dev.vars"
+if grep -Eq 'ROOT_SECRET|WEB_SECRET|API_SECRET' \
+  "$LOCAL_WORKTREE/.env" "$LOCAL_WORKTREE/apps/web/.env.local"; then
+  fail 'local mode copied source secrets'
+fi
+
+printf 'CUSTOM_LOCAL_VALUE=keep\n' > "$LOCAL_WORKTREE/.env"
+(
+  cd "$REPO"
+  OPEN_SESSIONBOARD_WORKTREE_OVERRIDE_BASE="$OVERRIDE" \
+    "$CREATE" --no-launch --no-install local-env main >/dev/null
+)
+assert grep -Fx 'CUSTOM_LOCAL_VALUE=keep' "$LOCAL_WORKTREE/.env"
+(
+  cd "$REPO"
+  OPEN_SESSIONBOARD_WORKTREE_OVERRIDE_BASE="$OVERRIDE" \
+    "$CREATE" --no-launch --no-install --refresh-env local-env main >/dev/null
+)
+assert grep -Fx 'APP_ENV=local' "$LOCAL_WORKTREE/.env"
+if grep -q 'CUSTOM_LOCAL_VALUE' "$LOCAL_WORKTREE/.env"; then
+  fail 'refresh did not replace local environment'
+fi
 
 # Forced cmux launch forwards the worktree, deterministic GJC command, prompt,
 # and focus flag without executing GJC in the test process.
@@ -107,6 +143,8 @@ fi
     "$CLEANUP" no-env >/dev/null
   OPEN_SESSIONBOARD_WORKTREE_OVERRIDE_BASE="$OVERRIDE" \
     "$CLEANUP" cmux-lane >/dev/null
+  OPEN_SESSIONBOARD_WORKTREE_OVERRIDE_BASE="$OVERRIDE" \
+    "$CLEANUP" local-env >/dev/null
 )
 assert test ! -e "$WORKTREE"
 assert git -C "$REPO" show-ref --verify --quiet refs/heads/feature/test

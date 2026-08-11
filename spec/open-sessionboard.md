@@ -80,7 +80,7 @@ OpenSend is the email and calendar delivery boundary at `https://opensend.namuh.
 - `speakers@sessionboard.namuh.co` for speaker, decision, reminder, task, and organizer-group messages;
 - `calendar@sessionboard.namuh.co` for schedule publication, update, and cancellation messages.
 
-Calendar delivery is provider-neutral RFC 5545 `REQUEST`, `UPDATE`, and `CANCEL` through OpenSend, with a stable UID, increasing `SEQUENCE`, explicit IANA `TZID`, and room/video details when present. Direct provider calendar writes and calendar-provider OAuth are not required.
+Calendar delivery is provider-neutral RFC 5545 `REQUEST`, `UPDATE`, and `CANCEL` through OpenSend, with stable UIDs under `calendar.sessionboard.namuh.co`, increasing `SEQUENCE`, explicit IANA `TZID`, and room/video details when present. Direct provider calendar writes and calendar-provider OAuth are not required.
 
 The current deployment uses these pinned Workers origins:
 

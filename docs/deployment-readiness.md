@@ -1,10 +1,21 @@
 # Deployment readiness preflight
 
-The release preflight is read-only. It checks configuration, provider isolation, Cloudflare access, and Forge privacy; it never deploys, migrates D1, writes provider data, or changes repository visibility. A passing result is evidence for the release runbook, not authorization to deploy or publish.
+The release preflight is a read-only configuration and privacy check. It reads the selected environment files, compares isolation and Wrangler resources, optionally reads Cloudflare resources, and confirms that Forge remains private. It never deploys, applies migrations, writes Airtable or OpenSend data, provisions evaluator identities, changes repository visibility, or proves that a product workflow has passed.
+
+## Current and pending hosting
+
+Staging and production currently use the pinned Workers origins below. Their API and web Wrangler environments have `workers_dev = true`; this is the expected current state, not a failure.
+
+| Environment | Web | API |
+| --- | --- | --- |
+| Staging | `https://open-sessionboard-web-staging.ashleyha0317.workers.dev` | `https://open-sessionboard-api-staging.ashleyha0317.workers.dev` |
+| Production | `https://open-sessionboard-web-production.ashleyha0317.workers.dev` | `https://open-sessionboard-api-production.ashleyha0317.workers.dev` |
+
+`https://sessionboard.namuh.co` and `https://api.sessionboard.namuh.co` are recommended future stable web/API domains. DNS, Worker routes, cookies, CORS, callbacks, health checks, and release evidence for them are **pending**. The preflight must not require those names and must not claim that they are configured.
 
 ## Inputs and secret handling
 
-Prepare one ignored environment file per boundary. `.env.*` is ignored by Git; keep these files outside the repository when the operator environment supports that. Never attach them to release evidence.
+Keep one ignored file per boundary, outside the repository when possible:
 
 ```text
 .env.release-local
@@ -12,46 +23,23 @@ Prepare one ignored environment file per boundary. `.env.*` is ignored by Git; k
 .env.release-production
 ```
 
-Each file must contain the core application and provider keys represented in `.env.example`:
+Each file must contain the non-secret configuration names required by `scripts/release/preflight.mjs`:
 
-- application environment, web/API origins, and a dedicated `BETTER_AUTH_SECRET`
-- Cloudflare account, deployment token, D1 database ID, R2 bucket, and Queue
-- one Airtable token/base pair
-- OpenSend URL, sending key, and the three sender addresses
-- complete Accelevents URL/key pair when that optional adapter is enabled
+- `APP_ENV`, `WEB_ORIGIN`, `NEXT_PUBLIC_APP_URL`, `NEXT_PUBLIC_API_URL`, and `API_URL`.
+- `BETTER_AUTH_SECRET` (at least 32 random bytes) and `BETTER_AUTH_URL`.
+- `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `D1_DATABASE_ID`, `R2_BUCKET_NAME`, and `QUEUE_NAME`.
+- `AIRTABLE_ACCESS_TOKEN` and `AIRTABLE_BASE_ID` for that boundary.
+- `OPENSEND_API_URL`, `OPENSEND_API_KEY`, `AUTH_FROM_EMAIL`, `SPEAKERS_FROM_EMAIL`, and `CALENDAR_FROM_EMAIL`.
 
-The preflight compares values in memory and reports only key names and environment names. It never writes or prints a configured value. Local, staging, and production must have distinct Better Auth secrets, Cloudflare deployment tokens, D1 IDs, R2 buckets, Queues, Airtable tokens/bases, OpenSend keys, and enabled provider credentials. Origins must also be distinct, and non-local origins must use HTTPS. The Cloudflare account and provider API base URLs may be shared when the provider intentionally hosts every isolated resource in one account or endpoint.
+Use the exact pinned API origin for `NEXT_PUBLIC_API_URL`, `API_URL`, and `BETTER_AUTH_URL` in these preflight inputs. The guarded web deployment accepts that API origin as an input and then injects the web origin as the browser-visible same-origin API base, with `API_UPSTREAM_ORIGIN` pointing at the API Worker. Do not print values or attach environment files to evidence.
 
-The selected environment is checked against `apps/api/wrangler.toml`. `WEB_ORIGIN`, account ID, D1 ID, R2 bucket, and Queue must match exactly. A staging or production placeholder D1 ID is a hard failure.
+The preflight requires distinct secrets, D1 IDs, R2 buckets, Queues, Airtable credentials, OpenSend keys, and origins across local, staging, and production. It rejects placeholders, cross-environment sharing, non-HTTPS non-local URLs, Wrangler mismatches, and a staging/production placeholder D1 ID. Staging must contain synthetic records and suppressed or allowlisted delivery behavior.
 
-### Optional provider decision
+## Cloudflare and Forge permissions
 
-An optional integration provider must be either absent or configured as a complete pair:
+The deployment token in `CLOUDFLARE_API_TOKEN` is separate from the read-only audit token in `CLOUDFLARE_API_AUDIT_TOKEN`. The deployment token is restricted to the configured account and needs Workers Scripts Edit, D1 Edit, Workers R2 Storage Edit, and Queues Edit. D1 Edit is required because the later deployment script applies remote migrations. The audit token only reads token policy and is never used for deployment.
 
-| Provider | Complete pair |
-| --- | --- |
-| Accelevents | `ACCELEVENTS_API_BASE_URL`, `ACCELEVENTS_API_KEY` |
-
-Pass `--require-providers accelevents` when that adapter is enabled for the release. A named provider then fails when disabled. The script validates presence, pair completeness, HTTPS, and cross-environment credential isolation. Operators must still retain provider-side evidence for OpenSend sender verification/suppression mode and the staging Accelevents sandbox event; those facts cannot be proven from configuration presence alone.
-
-## Cloudflare credentials and permissions
-
-The selected environment needs a deployment token in `CLOUDFLARE_API_TOKEN`. Set `CLOUDFLARE_TOKEN_KIND=user` for a user API token (the default) or `account` for an account-owned token. Restrict it to the approved account and grant only:
-
-- Workers Scripts Edit
-- D1 Edit
-- Workers R2 Storage Edit
-- Queues Edit
-
-Cloudflare's token-policy API may return these Edit permissions as `Workers Scripts Write`, `D1 Write`, `Workers R2 Storage Write`, and `Queues Write`. The preflight accepts those API names, verifies all four permissions, and rejects a permission policy that is not restricted to the configured account.
-
-**D1 Edit is required.** The deployment script applies remote migrations before deploying the Worker. A D1 resource GET proves only read access and is not enough. The preflight therefore inspects the deployment token's policy and requires `D1 Edit`/`D1 Write` explicitly. A token without it can pass a resource lookup but will fail migration; that is a release stop condition.
-
-Token-policy inspection uses a separate `CLOUDFLARE_API_AUDIT_TOKEN`, supplied through the operator environment rather than committed files. Give that audit credential only the API-token read permission needed to inspect the selected user or account token. It must not receive deployment permissions. The deployment token itself performs read-only probes for the exact D1 database, R2 bucket, and Queue declared in Wrangler. Durable Object creation is part of Worker deployment and has no separate preflight mutation.
-
-## Forge privacy credential
-
-Set these only in the operator environment or selected ignored environment file:
+The Forge variables are operator-only:
 
 ```dotenv
 FORGE_API_URL=https://forge.smol.ai
@@ -59,11 +47,11 @@ FORGE_REPOSITORY=jaeyunha/open-sessionboard
 FORGE_API_TOKEN=<repository-read-token>
 ```
 
-The token needs repository read access only. The preflight calls Forge's repository GET endpoint and fails unless the exact repository reports `private: true`. It never calls a repository update endpoint. Do not grant the preflight token repository administration or visibility-write access.
+The online preflight performs a repository GET and fails unless Forge reports the repository as private. It does not call a visibility update endpoint. Forge and GitHub mirrors are both intentional during development; both remain private until the separate final release gate.
 
 ## Commands
 
-Run the static validation first. It reads all three environment files so it can detect shared resources and credentials:
+Run the offline configuration check first. It reads all three files and deliberately reports `"ready": false` because Cloudflare and Forge were not observed:
 
 ```bash
 node scripts/release/preflight.mjs \
@@ -71,24 +59,22 @@ node scripts/release/preflight.mjs \
   --env local=.env.release-local \
   --env staging=.env.release-staging \
   --env production=.env.release-production \
-  --require-providers google,microsoft,accelevents \
   --offline
 ```
 
-`--offline` exits successfully after configuration checks but reports `"ready": false` because Cloudflare and Forge were not observed. For the online release check, export the two read-only audit credentials when they are not already in the selected ignored file, then omit `--offline`:
+For the online check, supply the read-only audit credentials from the secret manager and omit `--offline`:
 
 ```bash
-export CLOUDFLARE_API_AUDIT_TOKEN='<from-secret-manager>'
-export FORGE_API_TOKEN='<from-secret-manager>'
+export CLOUDFLARE_API_AUDIT_TOKEN='<cloudflare-token-policy-read-token>'
+export FORGE_API_TOKEN='<forge-repository-read-token>'
 node scripts/release/preflight.mjs \
   --environment staging \
   --env local=.env.release-local \
   --env staging=.env.release-staging \
-  --env production=.env.release-production \
-  --require-providers google,microsoft,accelevents
+  --env production=.env.release-production
 ```
 
-Exactly one `--env` may use `-` to read that environment from the current process instead of a file. This is useful in CI:
+No `--require-providers` argument is needed for the supported product configuration. In particular, do not add unsupported provider names to this command. Exactly one `--env` value may be `-` to read that boundary from the current process:
 
 ```bash
 node scripts/release/preflight.mjs \
@@ -98,10 +84,4 @@ node scripts/release/preflight.mjs \
   --env production=.env.release-production
 ```
 
-The script emits one JSON object. `"ready": true` means configuration, isolation, token policy, Cloudflare resource reads, and Forge privacy all passed for the selected environment. Failures contain a stable code and a sanitized message. Store that JSON with the release commit evidence, then continue the independent migration, route/domain, provider-side, automated, CUA, security, performance, and rollback gates in the release runbook.
-
-Run the focused implementation test without contacting providers:
-
-```bash
-node --test scripts/release/preflight.test.mjs
-```
+The script emits one sanitized JSON object. `configurationValid: true` means the files and Wrangler inventory passed static checks. `ready: true` additionally requires the online Cloudflare and Forge checks plus any migration-readiness input. A passing preflight is evidence for the release runbook, not deployment or end-to-end evidence. Evaluator seed, persona provisioning, and graph repair are separate procedures in [Environment and provider setup](setup.md).

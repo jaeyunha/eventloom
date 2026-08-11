@@ -1,197 +1,236 @@
-# Environment and provider setup
+# Environment and deployment setup
 
-This guide configures the separately deployed Next.js web application and Hono Worker API. It does not assert that any environment has been provisioned or deployed. Record real resource identifiers and verified URLs in the operator's secret manager or release evidence, not in this repository.
+Open Sessionboard has two separately deployed services: a Next.js web Worker and a Hono API Worker. This guide describes the repository's current configuration and the operator procedures; it does not claim that an environment has been provisioned, deployed, or release-verified. Keep resource IDs and all secret values in the operator's secret manager or in ignored environment files.
 
-## Prerequisites
+## Scope and current origins
 
-- Bun 1.3.14 (the version pinned by `packageManager`)
-- A Cloudflare account with Workers, D1, Durable Objects, R2, and Queues enabled
-- One Airtable base and restricted personal access token per environment
-- An OpenSend sending-scoped key. Provider-side sender verification is a release prerequisite; this repository does not claim that verification.
-- No social OAuth application is required; interactive access uses verified email/password and email magic links.
-- Forge access to `jaeyunha/open-sessionboard`
+The built-in Speaker CRM is supported first-party product scope. Accelevents is a separate external event-platform integration, not the built-in CRM, and is unsupported by the current runtime; it has no credentials, setup, preflight, QA, monitoring, or release step here. Interactive authentication is Better Auth email/password plus verified email and one-time email links.
 
-Install dependencies and create the local environment file:
+The current deployment contract is pinned to these origins:
+
+| Environment | Web origin | API origin | Current hosting state |
+| --- | --- | --- | --- |
+| Local | `http://127.0.0.1:3015` | `http://127.0.0.1:8787` | Local processes; browser calls the API directly |
+| Staging | `https://open-sessionboard-web-staging.ashleyha0317.workers.dev` | `https://open-sessionboard-api-staging.ashleyha0317.workers.dev` | Cloudflare Workers with `workers_dev = true` |
+| Production | `https://open-sessionboard-web-production.ashleyha0317.workers.dev` | `https://open-sessionboard-api-production.ashleyha0317.workers.dev` | Cloudflare Workers with `workers_dev = true` |
+
+`https://sessionboard.namuh.co` (web) and `https://api.sessionboard.namuh.co` (API) are the recommended future stable public contract. DNS, Worker bindings, cookies, CORS, callbacks, and health checks for those names are **pending**; do not use them as current origins or claim that routes are configured. The pinned Workers origins remain the only deployment inputs accepted by the current scripts.
+
+## Prerequisites and isolation
+
+- Bun 1.3.14 (the version pinned by `packageManager`).
+- A Cloudflare account with Workers, D1, Durable Objects, R2, and Queues enabled.
+- A dedicated Airtable base and restricted personal access token per environment.
+- An OpenSend sending-scoped key per environment. Staging must be suppressed, sandboxed, or recipient-allowlisted.
+- Access to the private Forge repository `jaeyunha/open-sessionboard`.
+
+Keep local, staging, and production separate. Never copy an Airtable base/token, D1 database, R2 bucket, Queue, Better Auth secret, Cloudflare deployment token, or OpenSend key between environments. Staging data and delivery must never reach production resources or recipients.
+
+## Local development
+
+Install dependencies and create the ignored environment file:
 
 ```bash
 bun install
 cp .env.example .env
 ```
 
-Keep `.env` local. Do not paste provider secrets into issues, browser code, screenshots, terminal transcripts, Wrangler variables, or committed files.
-
-## Isolation model
-
-`local`, `staging`, and `production` are security boundaries, not labels for shared resources.
-
-| Boundary | Local | Staging | Production |
-| --- | --- | --- | --- |
-| Airtable | Local/developer base with test records | Dedicated base with synthetic records only | Dedicated production base |
-| D1 | `open-sessionboard-local` | `open-sessionboard-staging` | `open-sessionboard-production` |
-| R2 | `open-sessionboard-private-files-local` | `open-sessionboard-private-files-staging` | `open-sessionboard-private-files-production` |
-| Queue | `open-sessionboard-outbox-local` | `open-sessionboard-outbox-staging` | `open-sessionboard-outbox-production` |
-| Worker | Local Wrangler process | `open-sessionboard-api-staging` | `open-sessionboard-api-production` |
-| Web origin | `http://127.0.0.1:3015` | Dedicated staging host | Dedicated production host |
-| API keys/session auth | Test credentials | Separate non-production credentials | Production credentials |
-| OpenSend | Captured or allowlisted recipients | Sandbox/suppressed delivery to allowlisted recipients | Release-gated provider-verified senders |
-
-Never copy a D1 database, R2 bucket, Airtable base, API key, webhook secret, Better Auth secret, or OpenSend key between staging and production. Durable Object state is isolated by the environment-specific Worker deployment. Staging must not address production recipients.
-
-## Local application
-
-Set at least these values in `.env`:
+Use loopback addresses consistently for local browser, callback, and API configuration. Set at least:
 
 ```dotenv
 APP_ENV=local
-WEB_ORIGIN=http://localhost:3015
+WEB_ORIGIN=http://127.0.0.1:3015
 NEXT_PUBLIC_APP_ENV=local
-NEXT_PUBLIC_APP_URL=http://localhost:3015
-NEXT_PUBLIC_API_URL=http://localhost:8787
-NEXT_PUBLIC_ORGANIZATION_ID=local-organization
-API_URL=http://localhost:8787
-API_UPSTREAM_ORIGIN=http://localhost:8787
+NEXT_PUBLIC_APP_URL=http://127.0.0.1:3015
+NEXT_PUBLIC_API_URL=http://127.0.0.1:8787
+NEXT_PUBLIC_ORGANIZATION_ID=ai-engineer
+API_URL=http://127.0.0.1:8787
+API_UPSTREAM_ORIGIN=http://127.0.0.1:8787
+BETTER_AUTH_URL=http://127.0.0.1:8787
 BETTER_AUTH_SECRET=<at-least-32-random-bytes>
 AIRTABLE_ACCESS_TOKEN=<local-base-token>
 AIRTABLE_BASE_ID=<local-base-id>
 OPENSEND_API_URL=https://opensend.namuh.co
-OPENSEND_API_KEY=<test-or-suppressed-sending-key>
+OPENSEND_API_KEY=<local-or-suppressed-sending-key>
 AUTH_FROM_EMAIL=auth@sessionboard.namuh.co
 SPEAKERS_FROM_EMAIL=speakers@sessionboard.namuh.co
 CALENDAR_FROM_EMAIL=calendar@sessionboard.namuh.co
 ```
 
-Apply D1 migrations to the local Wrangler database from the API workspace, then start both deployables from the repository root:
+The angle-bracket values are operator placeholders, not credentials to commit. Apply local D1 migrations and start both services from the repository root:
 
 ```bash
 bunx wrangler d1 migrations apply DB --cwd apps/api --local
 make dev
 ```
 
-Verify liveness independently:
+Check each service independently:
 
 ```bash
 curl --fail http://127.0.0.1:3015/health
 curl --fail http://127.0.0.1:8787/api/health
 ```
 
-A structured API `503 CONFIGURATION_ERROR` means the Worker is alive but its required environment is invalid. Fix configuration rather than bypassing validation.
+`API_UPSTREAM_ORIGIN` is the server-side API destination used by the web `/api/*` proxy. In local development it is the direct loopback API. In staging and production the browser uses the web origin for `/api/*`, while the web Worker forwards those requests to the pinned API origin; do not expose or replace that upstream setting with a secret.
 
-## Cloudflare
+## Cloudflare resources and API deployment
 
-### Token and account
+For staging and production, provision the environment-suffixed D1 database, private R2 bucket, and outbox Queue named in `apps/api/wrangler.toml`, then replace only the target environment's placeholder D1 ID with the real ID. Keep the binding names `DB`, `AGENDA_COORDINATOR`, `PRIVATE_FILES`, and `OUTBOX_QUEUE` unchanged. The committed staging and production Worker environments intentionally keep `workers_dev = true` and the pinned origins above.
+Set `WEB_ORIGIN` to the web origin and `API_ORIGIN` to the API origin in the corresponding Wrangler environment; both values must remain the exact pinned origins above.
 
-The approved Cloudflare account is `7bcb73282d45e4294cc70dd3e2671bfb`. Use a short-lived or deployment-specific API token restricted to this account. It needs only the service-specific edit permissions used to provision and deploy the Worker, D1, Durable Objects, R2, and Queues. Confirm **D1 Edit** explicitly; a token without it cannot complete the migration/deployment script.
-
-`CLOUDFLARE_API_TOKEN` belongs in the deployment environment. Do not add it to `apps/api/wrangler.toml`. The validator rejects secret-like Wrangler variables.
-
-### Resources
-
-For each non-local environment:
-
-1. Create the environment's D1 database, private R2 bucket, and outbox Queue using the exact environment-suffixed names in `apps/api/wrangler.toml`.
-2. Replace that environment's placeholder D1 `database_id` with the ID returned by Cloudflare.
-3. Keep `DB`, `AGENDA_COORDINATOR`, `PRIVATE_FILES`, and `OUTBOX_QUEUE` binding names unchanged; application code depends on them.
-4. Keep the environment-specific `workers_dev = true` setting for the competition deployment unless a reviewed custom domain is bound. The release scripts pin the exact staging and production `workers.dev` origins and reject mismatches.
-5. Use the exact deployed API hostname for health checks, authentication and magic-link callbacks, the frontend's `NEXT_PUBLIC_API_URL`, and release evidence.
-6. Confirm the Worker `WEB_ORIGIN` is the exact deployed web origin, with no path or wildcard, and set `NEXT_PUBLIC_ORGANIZATION_ID` to the explicit Airtable organization application ID.
-
-The committed D1 migrations contain operational state only: identity/access, API keys, idempotency, webhook delivery, publication/audit indexes, and integration coordination. Airtable remains authoritative for program records.
-
-### Secrets
-
-Upload secrets separately for staging and production. Wrangler prompts for values without putting them on the command line:
-
-```bash
-bunx wrangler secret put BETTER_AUTH_SECRET --cwd apps/api --env staging
-bunx wrangler secret put AIRTABLE_ACCESS_TOKEN --cwd apps/api --env staging
-bunx wrangler secret put AIRTABLE_BASE_ID --cwd apps/api --env staging
-bunx wrangler secret put OPENSEND_API_KEY --cwd apps/api --env staging
-```
-
-Repeat the secret and origin configuration for production with production-specific values only; do not share D1 session state or OpenSend credentials between environments.
-
-### Validate and deploy the API
-
-Configuration validation and Wrangler dry-runs are safe preflight checks:
+Validate and dry-run before a guarded API deployment:
 
 ```bash
 node scripts/cloudflare/validate-config.mjs --environment staging
 node scripts/cloudflare/dry-run.mjs staging
-```
-
-The deployment form of validation deliberately fails while the D1 ID is a placeholder:
-
-```bash
 node scripts/cloudflare/validate-config.mjs --environment staging --deployment
 ```
 
-The deploy script applies remote D1 migrations before deploying Worker code. Approve only additive migrations that the currently deployed Worker can safely run against, retain the migration output, verify a usable D1 backup/time-travel recovery point, and assign a recovery owner before execution. A successful dry-run does not prove database compatibility.
-
-After the release gate authorizes a deployment, the guarded script applies remote D1 migrations and deploys the API Worker:
+After migration compatibility, backup/recovery ownership, and release approval are recorded, the API deployment command is:
 
 ```bash
 node scripts/cloudflare/deploy.mjs staging open-sessionboard:staging
 ```
 
-If Worker deployment fails after migrations succeed, the previous Worker may remain active on the migrated schema. Keep the release private, stop retries, inspect the migration/deploy logs, and execute the preapproved database or Worker recovery path before attempting another deploy. Do not describe the environment as deployed until the bound API hostname passes health checks.
+Use `production open-sessionboard:production` for production. The command requires `CLOUDFLARE_API_TOKEN`, validates the configuration, applies remote D1 migrations, and then deploys the API Worker. A migration can succeed while the Worker deploy fails; stop and use the recorded recovery procedure rather than retrying blindly.
 
-Production uses `production open-sessionboard:production`. The API and web deploy separately; the guarded web deployment requires the pinned `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_APP_URL`, and explicit `NEXT_PUBLIC_ORGANIZATION_ID`, and never receives provider credentials.
+## Guarded web deployment
 
-## Airtable
+The web deploy script accepts only the pinned Workers origins for non-local environments. It requires all three public variables plus a deployment token. The API URL supplied to the script is the API Worker origin for validation; the script injects the web origin as the browser-visible `NEXT_PUBLIC_API_URL` and sets `API_UPSTREAM_ORIGIN` to the API Worker so production requests use the same-origin proxy.
 
-Create a dedicated base for each environment. Restrict each personal access token to its one base. The runtime adapter needs record read/write access; the schema provisioner additionally needs the `schema.bases:write` scope (which includes schema reads). A token without that scope fails clearly before any schema mutation.
-
-The base is the sole writable authority for organizations, events, forms and fields, submissions, participants and profiles, evaluation plans/reviews/decisions, tasks, sessions, rooms, tracks, formats, levels, tags and statuses, session settings, agenda versions/entries, portal contexts and rosters, task forms and responses, portal resources and wiki pages, file assets/versions/comments, email templates and send snapshots, report definitions/runs, remix candidates/audit, reusable fields, publication outbox, and audit records. D1 must not duplicate these records.
-
-Provision the additive schema from the repository root after loading the target environment's variables:
+A no-side-effect build/Wrangler check is available before the guarded deployment:
 
 ```bash
-node scripts/airtable/provision.mjs --dry-run
-node scripts/airtable/provision.mjs --apply
+NEXT_PUBLIC_APP_URL='https://open-sessionboard-web-staging.ashleyha0317.workers.dev' \
+NEXT_PUBLIC_API_URL='https://open-sessionboard-api-staging.ashleyha0317.workers.dev' \
+NEXT_PUBLIC_ORGANIZATION_ID='<explicit-staging-organization-id>' \
+node scripts/cloudflare/deploy-web.mjs staging --dry-run
 ```
 
-Dry-run is the safe default and performs only a metadata read. Apply is explicit, creates or reconciles the approved tables and fields, and is safe to repeat. It never deletes or renames tables/fields and leaves unmanaged tables (including an initial `Table 1`) untouched. Run against local, then staging, then production; inspect the dry-run output at each boundary and never provision production first.
+Deploy staging only after the API and release gates authorize it. The shell guards prevent an accidental deployment without the token or tenant ID:
 
-For every table:
+```bash
+set -eu
+export NEXT_PUBLIC_APP_URL='https://open-sessionboard-web-staging.ashleyha0317.workers.dev'
+export NEXT_PUBLIC_API_URL='https://open-sessionboard-api-staging.ashleyha0317.workers.dev'
+: "${NEXT_PUBLIC_ORGANIZATION_ID:?set the explicit staging organization application ID}"
+: "${CLOUDFLARE_API_TOKEN:?set the staging deployment token from the secret manager}"
+node scripts/cloudflare/deploy-web.mjs staging open-sessionboard-web:staging
+```
 
-- Include a dedicated application-owned ID field used by the mapper. Application IDs must be unique; Airtable record IDs remain internal.
-- Keep Airtable record IDs internal; they must never appear in public URLs or API records.
-- Preserve version fields used for optimistic concurrency.
-- Use linked records only where the typed adapter expects them.
-- Apply schema changes deliberately to local, then staging, then production; never test a schema migration first against production.
+The production form is identical except for the pinned production origins and confirmation token:
 
-Use synthetic email addresses and profiles in staging. Validate pagination, rate-limit retry, and duplicate application-ID behavior before approving a base.
+```bash
+set -eu
+export NEXT_PUBLIC_APP_URL='https://open-sessionboard-web-production.ashleyha0317.workers.dev'
+export NEXT_PUBLIC_API_URL='https://open-sessionboard-api-production.ashleyha0317.workers.dev'
+: "${NEXT_PUBLIC_ORGANIZATION_ID:?set the explicit production organization application ID}"
+: "${CLOUDFLARE_API_TOKEN:?set the production deployment token from the secret manager}"
+node scripts/cloudflare/deploy-web.mjs production open-sessionboard-web:production
+```
 
-## OpenSend
+The web deployment receives only public URLs, environment, and the explicit tenant ID. Never pass Airtable, OpenSend, Better Auth, or other private values to the web bundle.
 
-OpenSend is configured at `https://opensend.namuh.co`. Create separate sending-scoped keys for staging and production. Do not use an account-administration key in the Worker. Provider-side SPF, DKIM, DMARC, and sender verification are release prerequisites; this repository does not claim that any provider verification has completed.
+## Airtable and OpenSend
 
-Verify SPF, DKIM, DMARC, and provider verification for these identities before enabling production delivery:
+Create and provision a dedicated Airtable base for each environment. Airtable remains authoritative for organizations, events, CFPs, submissions, participants, reviews, sessions, agendas, CRM records, reports, and other program data; D1 stores identity/access and operational indexes. Use synthetic records in staging and inspect a dry run before any additive schema apply.
 
-- `auth@sessionboard.namuh.co` — magic links and account verification
-- `speakers@sessionboard.namuh.co` — CFP, decision, reminder, and task mail
-- `calendar@sessionboard.namuh.co` — RFC 5545 invitation mail and organizer identity
+OpenSend is the email and calendar delivery boundary at `https://opensend.namuh.co`. Use these exact sender identities:
 
-Staging delivery must be suppressed, sandboxed, or recipient-allowlisted. Confirm bounce, complaint, and provider webhook visibility without sending to real program participants. Messages and calendar attachments carry idempotency keys so retries do not intentionally create duplicate sends.
-Calendar delivery remains provider-neutral: send RFC 5545 REQUEST, UPDATE, and CANCEL messages through OpenSend with stable UID, increasing SEQUENCE, and explicit IANA TZID. Include room and video details when present; no calendar-provider OAuth is required.
+- `auth@sessionboard.namuh.co` for verification and account mail.
+- `speakers@sessionboard.namuh.co` for CFP, decision, reminder, task, and organizer-group mail.
+- `calendar@sessionboard.namuh.co` for calendar invitations, updates, and cancellations.
 
-## Interactive authentication
+Provider-side sender verification and deliverability are not claimed by this repository. Calendar messages are provider-neutral RFC 5545 attachments with a stable UID, increasing `SEQUENCE`, and explicit IANA `TZID`; no calendar-provider account is configured by this project.
 
-Better Auth provides verified email/password and email magic-link sign-in. Configure `BETTER_AUTH_SECRET`, the web/API origins, and OpenSend delivery in every enabled environment. No social OAuth client, secret, callback, or provider consent scope is required.
+## Evaluator state preparation
 
-Email verification and magic-link URLs return to the configured web origin. Verify delivery, expiry, one-time consumption, logout, and tenant membership behavior in staging before production.
+Evaluator preparation is separate from deployment and is never release evidence by itself. Use only an isolated local or staging environment, synthetic identities, and private files outside the repository. The canonical evaluator scope is organization `ai-engineer` and event `devflow-conf-2027`.
 
-## Post-configuration checks
+### Provision synthetic personas (mutating)
 
-Before considering an environment usable:
+`provision-personas.mjs` creates Better Auth accounts and organization/event access through an injected D1 command adapter. It has no identity, password, origin, tenant, event, or adapter defaults. Supply four distinct synthetic personas and loopback or pinned HTTPS origins explicitly:
 
-- Health responses identify the expected `APP_ENV` and include a trace ID.
-- CORS allows only the exact configured web origin with credentials.
-- Browser code contains only `NEXT_PUBLIC_*` URLs, never provider secrets.
-- A test API key cannot cross its organization or exceed its scopes.
-- A private upload cannot be fetched without an authorized, expiring grant.
-- Airtable program records never appear in D1.
-- Staging email actions cannot reach production recipients.
-- Logs, error responses, admin status pages, and screenshots expose no secret values.
+```bash
+set -eu
+export EVAL_ENVIRONMENT=staging
+export EVAL_WEB_ORIGIN='https://open-sessionboard-web-staging.ashleyha0317.workers.dev'
+export EVAL_API_ORIGIN='https://open-sessionboard-api-staging.ashleyha0317.workers.dev'
+export EVAL_ORGANIZATION_ID='ai-engineer'
+export EVAL_EVENT_ID='devflow-conf-2027'
+: "${EVAL_D1_COMMAND_ADAPTER:?set the injected D1 adapter module path}"
+: "${EVAL_ORGANIZER_EMAIL:?set a synthetic organizer email}"
+: "${EVAL_ORGANIZER_PASSWORD:?set the synthetic organizer password}"
+: "${EVAL_REVIEWER_EMAIL:?set a synthetic reviewer email}"
+: "${EVAL_REVIEWER_PASSWORD:?set the synthetic reviewer password}"
+: "${EVAL_SPEAKER_EMAIL:?set a synthetic speaker email}"
+: "${EVAL_SPEAKER_PASSWORD:?set the synthetic speaker password}"
+: "${EVAL_SUBMITTER_EMAIL:?set a synthetic submitter email}"
+: "${EVAL_SUBMITTER_PASSWORD:?set the synthetic submitter password}"
+node scripts/eval/provision-personas.mjs
+```
 
-Calendar lifecycle behavior is specified in [Calendar semantics](calendar-semantics.md). Release approval is specified in [Release runbook](release-runbook.md).
+The script writes its private evaluator config under `/tmp/killmysaas-evals/` by default and never prints credentials. Production requires the exact confirmation value enforced by the script; do not run it against production participant data.
+
+### Seed Airtable (dry-run versus apply)
+
+`seed-devflow.mjs` reads the official fixture and plans additive Airtable upserts for the canonical organization/event. `--dry-run` is the read-only/default plan; `--apply` performs POST/PATCH writes. Both require an explicit environment and Airtable credentials supplied by the operator:
+
+```bash
+set -eu
+export EVAL_ENVIRONMENT=staging
+export EVAL_ORGANIZATION_ID='ai-engineer'
+export EVAL_EVENT_ID='devflow-conf-2027'
+# Explicit canonical evaluator scope; do not substitute another tenant or event.
+: "${AIRTABLE_ACCESS_TOKEN:?set the staging Airtable token from the secret manager}"
+: "${AIRTABLE_BASE_ID:?set the staging Airtable base ID}"
+node scripts/eval/seed-devflow.mjs --dry-run --full-chain
+```
+
+Apply only after reviewing the plan and approving the mutation:
+
+```bash
+node scripts/eval/seed-devflow.mjs --apply --full-chain
+```
+
+`--subset-fallback` is an explicit alternate fixture mode, not a substitute for the ordered browser workflow. Production apply additionally requires the script's exact `EVAL_PRODUCTION_CONFIRMATION=I_UNDERSTAND_PRODUCTION_DEVFLOW_SEEDING` value.
+
+### Repair and read-only evaluator checks
+
+`repair-devflow-production.mjs` is the canonical graph repair entry point. Keep the repair config and credential file private. The config must name the six synthetic identities `organizer-agenda`, `organizer-fixture`, `reviewer-sam`, `speaker-priya`, `speaker-marcus`, and `submitter`; do not copy real credentials into either file.
+
+Prepare a manifest (reads and plans; no product writes), then inspect invariants (read-only):
+
+```bash
+set -eu
+export EVAL_ENVIRONMENT=staging
+export EVAL_ORGANIZATION_ID='ai-engineer'
+export EVAL_EVENT_ID='devflow-conf-2027'
+export EVAL_WEB_ORIGIN='https://open-sessionboard-web-staging.ashleyha0317.workers.dev'
+export EVAL_API_ORIGIN='https://open-sessionboard-api-staging.ashleyha0317.workers.dev'
+: "${EVAL_D1_COMMAND_ADAPTER:?set the injected D1 adapter module path}"
+: "${AIRTABLE_ACCESS_TOKEN:?set the staging Airtable token from the secret manager}"
+: "${AIRTABLE_BASE_ID:?set the staging Airtable base ID}"
+REPAIR_CONFIG='/tmp/killmysaas-evals/devflow-repair-config.json'
+REPAIR_CREDENTIALS='/tmp/killmysaas-evals/devflow-repair-credentials.json'
+REPAIR_MANIFEST='/tmp/killmysaas-evals/devflow-repair-manifest.json'
+node scripts/eval/repair-devflow-production.mjs --dry-run \
+  --config "$REPAIR_CONFIG" --credentials "$REPAIR_CREDENTIALS" --manifest "$REPAIR_MANIFEST"
+node scripts/eval/repair-devflow-production.mjs --invariants \
+  --manifest "$REPAIR_MANIFEST" --config "$REPAIR_CONFIG" --credentials "$REPAIR_CREDENTIALS"
+```
+
+Apply or resume is mutating and requires the explicit confirmation accepted by the script:
+
+```bash
+node scripts/eval/repair-devflow-production.mjs --apply --confirm ai-engineer \
+  --manifest "$REPAIR_MANIFEST" --config "$REPAIR_CONFIG" --credentials "$REPAIR_CREDENTIALS"
+node scripts/eval/repair-devflow-production.mjs --resume --confirm ai-engineer \
+  --manifest "$REPAIR_MANIFEST" --config "$REPAIR_CONFIG" --credentials "$REPAIR_CREDENTIALS"
+```
+
+`--reset-workflow` is a destructive repair phase and is not a routine release step. `scripts/eval/measure-overview-latency.mjs` is a separate read-only Airtable GET diagnostic that reads the repository `.env`; retain its output only as diagnostic evidence. None of these commands were run for this documentation change.
+
+## Configuration checks
+
+Before treating an environment as usable, verify that health responses identify the expected `APP_ENV`, CORS allows only the exact web origin with credentials, browser code contains no private values, tenant/API-key scopes cannot cross organizations, private files require expiring authorization, and staging delivery cannot reach production recipients. Release evidence and calendar lifecycle details are defined in [Deployment readiness](deployment-readiness.md), [Calendar semantics](calendar-semantics.md), [Browser QA](qa-runbook.md), and [Release runbook](release-runbook.md).

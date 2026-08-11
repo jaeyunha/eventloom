@@ -9,7 +9,7 @@ usage() {
 Usage: ./hack/create_worktree.sh [options] <worktree_name> [base_ref]
 
 Options:
-  --env-mode <mode>  symlink (default), copy, or none.
+  --env-mode <mode>  local (default), symlink, copy, or none.
   --no-install       Skip `bun install --frozen-lockfile`.
   --refresh-env      Replace existing worktree environment files.
   --launcher <name>  cmux (default), auto, or none.
@@ -23,9 +23,9 @@ The default base ref is `main`. Worktrees are created under
 $HOME/wt/open-sessionboard/<worktree_name>. Override the parent directory with
 OPEN_SESSIONBOARD_WORKTREE_OVERRIDE_BASE; the repository name is still appended.
 
-Ignored `.env`, `.env.*`, `.dev.vars`, and `.dev.vars.*` files are provisioned
-from the authoritative main checkout. `.env.example` files are never copied or
-linked.
+`local` writes only loopback/public development values. `copy` and `symlink`
+provision ignored `.env`, `.env.*`, `.dev.vars`, and `.dev.vars.*` files from
+the authoritative main checkout. `.env.example` files are never provisioned.
 EOF
 }
 
@@ -82,7 +82,7 @@ registered_branch_at_path() {
   return 1
 }
 
-ENV_MODE=symlink
+ENV_MODE=local
 INSTALL=true
 REFRESH_ENV=false
 LAUNCHER=cmux
@@ -93,7 +93,7 @@ PROMPT_FILE=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --env-mode)
-      [ $# -ge 2 ] || fail '--env-mode requires symlink, copy, or none'
+      [ $# -ge 2 ] || fail '--env-mode requires local, symlink, copy, or none'
       ENV_MODE=$2
       shift 2
       ;;
@@ -143,7 +143,7 @@ while [ $# -gt 0 ]; do
 done
 
 case "$ENV_MODE" in
-  symlink|copy|none) ;;
+  local|symlink|copy|none) ;;
   *) fail "invalid env mode: $ENV_MODE" ;;
 esac
 case "$LAUNCHER" in
@@ -236,6 +236,38 @@ provision_env_files() {
     printf 'Environment provisioning disabled.\n'
     return 0
   }
+  if [ "$ENV_MODE" = local ]; then
+    local relative target target_dir
+    for relative in .env apps/web/.env.local; do
+      target="$WORKTREE_PATH/$relative"
+      target_dir=$(dirname "$target")
+      mkdir -p "$target_dir"
+
+      if [ -e "$target" ] || [ -L "$target" ]; then
+        if [ "$REFRESH_ENV" != true ]; then
+          printf 'Keeping existing %s\n' "$relative"
+          continue
+        fi
+        rm -f "$target"
+      fi
+
+      cat > "$target" <<'EOF'
+# Generated local-only worktree configuration. Contains no provider credentials.
+APP_ENV=local
+WEB_ORIGIN=http://127.0.0.1:3015
+NEXT_PUBLIC_APP_ENV=local
+NEXT_PUBLIC_APP_URL=http://127.0.0.1:3015
+NEXT_PUBLIC_API_URL=http://127.0.0.1:8787
+API_UPSTREAM_ORIGIN=http://127.0.0.1:8787
+NEXT_PUBLIC_ORGANIZATION_ID=ai-engineer
+API_URL=http://127.0.0.1:8787
+BETTER_AUTH_URL=http://127.0.0.1:8787
+EOF
+      chmod go-rwx "$target" 2>/dev/null || true
+      printf 'Created local %s\n' "$relative"
+    done
+    return 0
+  fi
 
   while IFS= read -r -d '' source_file; do
     local relative target target_dir

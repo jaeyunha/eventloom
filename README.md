@@ -94,6 +94,8 @@ bun run dev
 
 The Next.js web application runs on port `3015`; the Hono Worker runs on port `8787`. Set `API_UPSTREAM_ORIGIN=http://127.0.0.1:8787`. The web health endpoint is `http://127.0.0.1:3015/health`; the API health endpoint is `http://127.0.0.1:8787/api/health`.
 
+For isolated agent work, `./hack/create_worktree.sh <name> <base-ref>` now creates a sanitized local `.env` by default with only loopback URLs and `ai-engineer`; it never copies provider credentials. Use `--env-mode copy` only for the guarded integration/release worktree. Do not use `--env-mode symlink` for isolated agent work.
+
 Local, staging, and production must use separate Airtable bases, D1 databases, Durable Objects, R2 buckets, Queues, secrets, API keys, and OpenSend credentials. Staging uses synthetic data and suppressed or sandboxed recipients. See [`docs/setup.md`](docs/setup.md).
 
 ## Quality commands
