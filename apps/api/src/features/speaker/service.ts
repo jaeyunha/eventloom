@@ -1325,6 +1325,10 @@ function isCrmRosterEntry(entry: SpeakerRosterEntry): boolean {
     canonicalSpeakerSubmissionId(entry.submissionId).startsWith("speaker-submission:crm-contact:")
   );
 }
+
+function isOrganizerManagedRosterEntry(entry: SpeakerRosterEntry): boolean {
+  return isCrmRosterEntry(entry) && entry.organizerStatus !== undefined;
+}
 function speakerSubmissionAllowed(
   allowedSubmissionIds: readonly string[],
   submissionId: string | undefined,
@@ -5781,9 +5785,6 @@ export class SpeakerService {
       await this.organizerRosterEntries(organizationId, eventId, scope, accountId)
     ).filter((entry) => acceptedParticipantIds.has(entry.participantId) || isCrmRosterEntry(entry));
     const crmParticipantIds = entries.filter(isCrmRosterEntry).map((entry) => entry.participantId);
-    const crmByParticipant = new Map(
-      entries.filter(isCrmRosterEntry).map((entry) => [entry.participantId, entry]),
-    );
     const participantIds = unique([...acceptedParticipantIds, ...crmParticipantIds]);
     const profiles = await this.repository.listProfiles(eventId, participantIds);
     const profileByParticipant = new Map(
@@ -5793,14 +5794,19 @@ export class SpeakerService {
     const acceptedSubmissionIds = new Set(
       acceptedSubmissions.map((submission) => canonicalSpeakerSubmissionId(submission.id)),
     );
+    const manualByParticipant = new Map(
+      entries
+        .filter(isOrganizerManagedRosterEntry)
+        .map((entry) => [entry.participantId, entry]),
+    );
     const tasks = (await this.repository.listTasks(eventId, participantIds)).filter(
       (task) =>
         task.eventId === eventId &&
         task.owner === "speaker" &&
         (acceptedSubmissionIds.has(canonicalSpeakerSubmissionId(task.submissionId)) ||
-          (crmByParticipant.get(task.participantId) !== undefined &&
+          (manualByParticipant.get(task.participantId) !== undefined &&
             sameSpeakerSubmission(
-              crmByParticipant.get(task.participantId)?.submissionId ?? "",
+              manualByParticipant.get(task.participantId)?.submissionId ?? "",
               task.submissionId,
             ))),
     );
@@ -5811,9 +5817,9 @@ export class SpeakerService {
           acceptedParticipantIds.has(asset.participantId)) ||
           acceptedSubmissionIds.has(canonicalSpeakerSubmissionId(asset.submissionId ?? "")) ||
           (asset.submissionId !== undefined &&
-            crmByParticipant.get(asset.participantId) !== undefined &&
+            manualByParticipant.get(asset.participantId) !== undefined &&
             sameSpeakerSubmission(
-              crmByParticipant.get(asset.participantId)?.submissionId ?? "",
+              manualByParticipant.get(asset.participantId)?.submissionId ?? "",
               asset.submissionId,
             ))),
     );
@@ -6629,7 +6635,9 @@ export class SpeakerService {
     const scope = await this.requireOrganizerOrganizationScope(organizationId, eventId, accountId);
     const roster = await this.organizerRosterEntries(organizationId, eventId, scope, accountId);
     const manualByParticipant = new Map(
-      roster.filter(isCrmRosterEntry).map((entry) => [entry.participantId, entry]),
+      roster
+        .filter(isOrganizerManagedRosterEntry)
+        .map((entry) => [entry.participantId, entry]),
     );
     if (
       participantId !== undefined &&
@@ -6648,18 +6656,16 @@ export class SpeakerService {
       return manual !== undefined && sameSpeakerSubmission(manual.submissionId, task.submissionId);
     };
     const tasks = await this.repository.listTasks(eventId, requested);
-    const assets = (await this.assetsForParticipants(eventId, requested)).filter(
-      (asset) => {
-        if (asset.tenantId !== undefined && asset.tenantId !== scope.tenantId) return false;
-        if (speakerSubmissionAllowed(scope.submissionIds, asset.submissionId)) return true;
-        const manual = manualByParticipant.get(asset.participantId);
-        return (
-          manual !== undefined &&
-          asset.submissionId !== undefined &&
-          sameSpeakerSubmission(manual.submissionId, asset.submissionId)
-        );
-      },
-    );
+    const assets = (await this.assetsForParticipants(eventId, requested)).filter((asset) => {
+      if (asset.tenantId !== undefined && asset.tenantId !== scope.tenantId) return false;
+      if (speakerSubmissionAllowed(scope.submissionIds, asset.submissionId)) return true;
+      const manual = manualByParticipant.get(asset.participantId);
+      return (
+        manual !== undefined &&
+        asset.submissionId !== undefined &&
+        sameSpeakerSubmission(manual.submissionId, asset.submissionId)
+      );
+    });
     return {
       organizationId,
       eventId,
@@ -6776,7 +6782,8 @@ export class SpeakerService {
       accountId,
     );
     const manual = roster.some(
-      (entry) => entry.participantId === participantId && isCrmRosterEntry(entry),
+      (entry) =>
+        entry.participantId === participantId && isOrganizerManagedRosterEntry(entry),
     );
     if (!scope.participantIds.includes(participantId) && !manual) throw notFound();
     const submissions = await this.repository.listSubmissions(eventId, scope.submissionIds);
@@ -6807,11 +6814,11 @@ export class SpeakerService {
       scope,
       accountId,
     );
-    const rosterEntry = entries.find((entry) => entry.participantId === participantId);
-    if (
-      !scope.participantIds.includes(participantId) &&
-      !(rosterEntry !== undefined && isCrmRosterEntry(rosterEntry))
-    ) {
+    const rosterEntry = entries.find(
+      (entry) =>
+        entry.participantId === participantId && isOrganizerManagedRosterEntry(entry),
+    );
+    if (!scope.participantIds.includes(participantId) && rosterEntry === undefined) {
       throw notFound();
     }
     const assets = (await this.assetsForParticipants(eventId, [participantId])).filter(
@@ -6950,10 +6957,12 @@ export class SpeakerService {
             participantId: recipient.participantId,
             recipientEmail: recipient.recipientEmail,
             status:
-              receipt.duplicate === true
+              receipt.status ??
+              (receipt.duplicate === true
                 ? ("duplicate" as const)
-                : receipt.status ??
-                  (receipt.queued === false ? ("failed" as const) : ("queued" as const)),
+                : receipt.queued === false
+                  ? ("failed" as const)
+                  : ("queued" as const)),
             receiptId: receipt.id ?? null,
           };
         } catch {
@@ -7016,7 +7025,7 @@ export class SpeakerService {
     const manual = roster.find(
       (entry) =>
         entry.participantId === asset.participantId &&
-        isCrmRosterEntry(entry) &&
+        isOrganizerManagedRosterEntry(entry) &&
         asset.submissionId !== undefined &&
         sameSpeakerSubmission(entry.submissionId, asset.submissionId),
     );
@@ -7160,7 +7169,10 @@ export class SpeakerService {
       socialLinks: entry.socialLinks ?? profile?.socialLinks ?? profile?.social ?? {},
       travelLogistics: travelLogisticsFrom(profile?.travelLogistics ?? entry.travelLogistics),
       headshotAssetId: entry.headshotAssetId ?? profile?.headshotAssetId ?? null,
-      status: entry.organizerStatus ?? profile?.status ?? entry.workflowStatus ?? entry.status,
+      status:
+        isCrmRosterEntry(entry) && !isOrganizerManagedRosterEntry(entry)
+          ? crmRosterWorkflowStatus
+          : (entry.organizerStatus ?? profile?.status ?? entry.workflowStatus ?? entry.status),
       sessions: submissions
         .filter((submission) => submission.participantIds.includes(participantId))
         .map((submission) => ({

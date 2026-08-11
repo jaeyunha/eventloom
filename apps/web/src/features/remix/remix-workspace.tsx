@@ -420,8 +420,7 @@ function WorkspaceStatus({
 export function RemixWorkspace({ organizationId, eventId, api: apiOverride }: RemixWorkspaceProps) {
   const scopeValid = organizationId.trim().length > 0 && eventId.trim().length > 0;
   const baseUrl = process.env.NEXT_PUBLIC_API_URL?.trim() ?? "";
-  const testMode =
-    apiOverride === undefined && process.env.NODE_ENV === "test" && baseUrl.length === 0;
+  const testMode = apiOverride === undefined && process.env.NODE_ENV === "test";
   const api = useMemo(() => {
     if (apiOverride !== undefined) return apiOverride;
     if (!scopeValid || baseUrl.length === 0) return null;

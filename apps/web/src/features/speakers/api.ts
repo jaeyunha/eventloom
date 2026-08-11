@@ -210,9 +210,22 @@ export interface SpeakerInvitationPreview {
   readonly state: "ready" | "blocked" | string;
 }
 
-export interface SpeakerInvitationResult {
-  readonly status: "queued" | "sent" | "failed" | string;
+export type SpeakerInvitationDeliveryStatus = "queued" | "sent" | "failed" | "duplicate";
+
+export interface SpeakerInvitationRecipientResult {
+  readonly participantId: string;
   readonly recipientEmail: string;
+  readonly status: SpeakerInvitationDeliveryStatus;
+  readonly receiptId: string | null;
+}
+
+export interface SpeakerInvitationResult {
+  readonly organizationId: string;
+  readonly eventId: string;
+  readonly idempotencyKey: string;
+  readonly status: SpeakerInvitationDeliveryStatus;
+  readonly duplicate: boolean;
+  readonly recipients: readonly SpeakerInvitationRecipientResult[];
 }
 
 export interface SpeakerProgressRow {
@@ -305,6 +318,65 @@ function baseWithoutTrailingSlash(value: string): string {
 
 function pathSegment(value: string): string {
   return encodeURIComponent(value);
+}
+
+function parseSpeakerInvitationResult(value: unknown): SpeakerInvitationResult {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError("The invitation result is invalid.");
+  }
+  const record = value as Record<string, unknown>;
+  const statuses = new Set<SpeakerInvitationDeliveryStatus>([
+    "queued",
+    "sent",
+    "failed",
+    "duplicate",
+  ]);
+  if (
+    typeof record.organizationId !== "string" ||
+    record.organizationId.trim().length === 0 ||
+    typeof record.eventId !== "string" ||
+    record.eventId.trim().length === 0 ||
+    typeof record.idempotencyKey !== "string" ||
+    record.idempotencyKey.trim().length === 0 ||
+    typeof record.status !== "string" ||
+    !statuses.has(record.status as SpeakerInvitationDeliveryStatus) ||
+    typeof record.duplicate !== "boolean" ||
+    !Array.isArray(record.recipients) ||
+    record.recipients.length === 0
+  ) {
+    throw new TypeError("The invitation result is invalid.");
+  }
+  const recipients = record.recipients.map((value): SpeakerInvitationRecipientResult => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new TypeError("The invitation recipient result is invalid.");
+    }
+    const recipient = value as Record<string, unknown>;
+    if (
+      typeof recipient.participantId !== "string" ||
+      recipient.participantId.trim().length === 0 ||
+      typeof recipient.recipientEmail !== "string" ||
+      recipient.recipientEmail.trim().length === 0 ||
+      typeof recipient.status !== "string" ||
+      !statuses.has(recipient.status as SpeakerInvitationDeliveryStatus) ||
+      (recipient.receiptId !== null && typeof recipient.receiptId !== "string")
+    ) {
+      throw new TypeError("The invitation recipient result is invalid.");
+    }
+    return {
+      participantId: recipient.participantId,
+      recipientEmail: recipient.recipientEmail,
+      status: recipient.status as SpeakerInvitationDeliveryStatus,
+      receiptId: recipient.receiptId,
+    };
+  });
+  return {
+    organizationId: record.organizationId,
+    eventId: record.eventId,
+    idempotencyKey: record.idempotencyKey,
+    status: record.status as SpeakerInvitationDeliveryStatus,
+    duplicate: record.duplicate,
+    recipients,
+  };
 }
 
 async function errorFrom(response: Response): Promise<SpeakerApiError> {
@@ -484,8 +556,9 @@ export function createSpeakerApi(
       );
     },
     getDownloadGrant(assetId, signal) {
-      return eventRequest<SpeakerDownloadGrant>(
-        `/organizer/assets/${pathSegment(assetId)}/download`,
+      return requestAt<SpeakerDownloadGrant>(
+        normalizedBaseUrl,
+        `/api/speaker/events/${pathSegment(normalizedEventId)}/organizer/assets/${pathSegment(assetId)}/download`,
         {
           method: "POST",
           ...(signal === undefined ? {} : { signal }),
@@ -522,7 +595,9 @@ export function createSpeakerApi(
       );
     },
     sendInvitations(input) {
-      return jsonRequest<SpeakerInvitationResult>("/invitations/send", "POST", input);
+      return jsonRequest<unknown>("/invitations/send", "POST", input).then(
+        parseSpeakerInvitationResult,
+      );
     },
     listEmailTemplates(signal) {
       return request<readonly SpeakerEmailTemplate[]>(

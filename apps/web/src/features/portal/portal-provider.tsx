@@ -300,7 +300,10 @@ export function PortalProvider({
 
       const rosterLoad = (async () => {
         const includedRoster = nextView.roster;
-        if (includedRoster !== undefined) {
+        if (
+          includedRoster !== undefined &&
+          !hasPortalCapability(target.capabilities, "roster-manage")
+        ) {
           const roster = await safely(
             async () => {
               if (

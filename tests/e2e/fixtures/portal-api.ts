@@ -710,7 +710,7 @@ export async function installPortalApi(
     else view.wiki = next.wiki;
   };
 
-  await page.route("http://127.0.0.1:8787/**", async (route) => {
+  await page.route("**/api/**", async (route) => {
     const request = route.request();
     requests.push(request);
     const url = new URL(request.url());
@@ -718,6 +718,11 @@ export async function installPortalApi(
 
     if (request.method() === "OPTIONS") {
       await route.fulfill({ status: 204, headers: corsHeaders });
+      return;
+    }
+
+    if (pathname.startsWith("/api/auth/")) {
+      await route.fallback();
       return;
     }
 

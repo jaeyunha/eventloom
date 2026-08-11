@@ -7323,7 +7323,7 @@ export class AirtableSpeakerReminderDeliveryAdapter implements SpeakerReminderDe
       },
     });
     return {
-      status: result.inserted ? "queued" : "sent",
+      status: "queued",
       duplicate: !result.inserted,
     };
   }

@@ -16,7 +16,6 @@ import { E2E_SESSION_COOKIE, type E2eAuthSession, expect, test } from "./fixture
 
 test.use({ authRole: "organizer" });
 
-const API_ORIGIN = "http://127.0.0.1:8787";
 const ORGANIZATION_ID = "ai-engineer";
 const ORGANIZER_EMAIL = "jaeyunha0317@gmail.com";
 const ORGANIZER_PASSWORD = "CalmSystems!26";
@@ -335,7 +334,7 @@ async function installOrganizerApi(
   const createdInputs: OrganizerEventCreateInput[] = [];
   const verifiedLogins: string[] = [];
 
-  await page.route(`${API_ORIGIN}/**`, async (route) => {
+  await page.route("**/api/**", async (route) => {
     const request = route.request();
     requests.push(request);
     const url = new URL(request.url());

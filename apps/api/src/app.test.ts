@@ -243,6 +243,57 @@ describe("canonical organizer workspaces", () => {
     }
   });
 });
+describe("speaker private-asset route assembly", () => {
+  it("mounts the organizer download grant under the canonical speaker router", async () => {
+    let received: { eventId: string; accountId: string; assetId: string } | undefined;
+    const app = createApp({
+      authenticator: { authenticate: async () => null },
+      speaker: {
+        authenticate: async () => ({ accountId: "organizer-1" }),
+        service: {
+          issueOrganizerDownloadGrant: async (input: {
+            eventId: string;
+            accountId: string;
+            assetId: string;
+          }) => {
+            received = input;
+            return {
+              method: "GET" as const,
+              url: "https://downloads.example.test/capability",
+              expiresAt: "2026-08-10T12:02:00.000Z",
+            };
+          },
+        } as never,
+      },
+    });
+
+    const response = await app.request(
+      "/api/speaker/events/event-1/organizer/assets/asset-1/download",
+      { method: "POST" },
+      environment,
+    );
+    const unmounted = await app.request(
+      "/api/admin/organizations/org-1/events/event-1/organizer/assets/asset-1/download",
+      { method: "POST" },
+      environment,
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      data: {
+        method: "GET",
+        url: "https://downloads.example.test/capability",
+        expiresAt: "2026-08-10T12:02:00.000Z",
+      },
+    });
+    expect(received).toEqual({
+      eventId: "event-1",
+      accountId: "organizer-1",
+      assetId: "asset-1",
+    });
+    expect(unmounted.status).toBe(404);
+  });
+});
 describe("feature-router error normalization", () => {
   it("normalizes feature-router errors into the API error contract", async () => {
     const organizationId = "org-1";

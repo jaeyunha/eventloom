@@ -150,7 +150,7 @@ export async function getPublishedAgendaOrLocalDemo(
   fetcher: PublicFetcher = fetch,
 ): Promise<PublishedAgenda> {
   try {
-    return await getPublishedAgenda(baseUrl, eventSlug, fetcher);
+    return await getPublishedAgenda(baseUrl, eventSlug, fetcher, appEnv);
   } catch (error) {
     if (shouldUseLocalEmbedDemoForError(appEnv, error)) {
       return createLocalDemoAgenda(eventSlug);
@@ -166,7 +166,7 @@ export async function getPublishedSpeakersOrLocalDemo(
   fetcher: PublicFetcher = fetch,
 ): Promise<PublishedSpeakerGallery> {
   try {
-    return await getPublishedSpeakers(baseUrl, eventSlug, fetcher);
+    return await getPublishedSpeakers(baseUrl, eventSlug, fetcher, appEnv);
   } catch (error) {
     if (shouldUseLocalEmbedDemoForError(appEnv, error)) {
       return createLocalDemoSpeakerGallery(eventSlug);

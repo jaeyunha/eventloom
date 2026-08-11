@@ -1173,6 +1173,14 @@ export function SpeakerWorkspace({
   const invitationReady =
     selectedSpeaker !== null &&
     speakerInvitationReady(invitationPreview ?? [], selectedSpeaker);
+  const selectedInvitationResultRecipient =
+    selectedSpeaker === null ||
+    invitationResult === null ||
+    invitationResultParticipantId !== selectedSpeaker.participantId
+      ? null
+      : (invitationResult.recipients.find(
+          (recipient) => recipient.participantId === selectedSpeaker.participantId,
+        ) ?? null);
   const hasActiveRosterFilters =
     normalizedQuery.length > 0 ||
     statusFilter !== "all" ||
@@ -1961,6 +1969,12 @@ export function SpeakerWorkspace({
           }),
         "Portal invitation send",
       );
+      const selectedRecipient = result.recipients.find(
+        (recipient) => recipient.participantId === participantId,
+      );
+      if (selectedRecipient === undefined) {
+        throw new TypeError("The invitation result does not include the selected speaker.");
+      }
       setInvitationResult(result);
       setInvitationResultParticipantId(participantId);
       setInvitationHistory((current) =>
@@ -3148,10 +3162,11 @@ export function SpeakerWorkspace({
             </div>
           ) : null}
           {invitationResult &&
+          selectedInvitationResultRecipient &&
           invitationResultParticipantId === selectedSpeaker.participantId ? (
             <FormMessage
-              message={`Invitation ${invitationResult.status} for ${invitationResult.recipientEmail}.`}
-              error={invitationResult.status === "failed"}
+              message={`Invitation ${selectedInvitationResultRecipient.status} for ${selectedInvitationResultRecipient.recipientEmail}.`}
+              error={selectedInvitationResultRecipient.status === "failed"}
             />
           ) : null}
           {invitationError ? <FormMessage message={invitationError} error /> : null}

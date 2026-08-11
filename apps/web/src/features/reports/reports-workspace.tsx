@@ -337,8 +337,7 @@ export function ReportsWorkspace({
   baseUrl: explicitBaseUrl,
 }: ReportsWorkspaceProps) {
   const baseUrl = apiBaseUrl(explicitBaseUrl);
-  const testMode =
-    baseUrl === null && process.env.APP_ENV !== "production" && process.env.NODE_ENV === "test";
+  const testMode = process.env.APP_ENV !== "production" && process.env.NODE_ENV === "test";
   const [definitions, setDefinitions] = useState<readonly ReportDefinition[]>(() =>
     testMode ? [seededDefinition(eventId)] : [],
   );

@@ -15,6 +15,10 @@ export const portalNavigation = [
   { href: "/portal/submissions", label: "Sessions", icon: "▤" },
   { href: "/portal/tasks", label: "Tasks", icon: "✓" },
   { href: "/portal/profile", label: "Profile", icon: "◉" },
+  { href: "/portal?workspace=co-speakers", label: "Co-speakers", icon: "◎" },
+  { href: "/portal?workspace=files", label: "Files", icon: "▱" },
+  { href: "/portal?workspace=resources", label: "Resources", icon: "◇" },
+  { href: "/portal?workspace=wiki", label: "Wiki", icon: "◫" },
 ] as const;
 
 const noParticipantWorkspaceDescription =
@@ -30,6 +34,11 @@ export async function signOutAndRedirect(
     body: "{}",
   }).catch(() => undefined);
   navigate("/login");
+}
+
+function portalNavigationHref(href: string, eventQuery: string): string {
+  if (eventQuery.length === 0) return href;
+  return href.includes("?") ? `${href}&${eventQuery.slice(1)}` : `${href}${eventQuery}`;
 }
 
 export function PortalFrame({ children }: Readonly<{ children: ReactNode }>) {
@@ -113,7 +122,11 @@ export function PortalFrame({ children }: Readonly<{ children: ReactNode }>) {
           <nav className={styles.portalNav} aria-label="Speaker portal">
             <p className={styles.navLabel}>Your event</p>
             {portalNavigation.map((item) => (
-              <Link key={item.href} className={styles.navItem} href={`${item.href}${eventQuery}`}>
+              <Link
+                key={item.href}
+                className={styles.navItem}
+                href={portalNavigationHref(item.href, eventQuery)}
+              >
                 <span aria-hidden="true">{item.icon}</span>
                 {item.label}
                 {item.label === "Tasks" && (view?.outstandingTaskCount ?? 0) > 0 ? (
