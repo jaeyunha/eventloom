@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { createElement, isValidElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
@@ -19,6 +21,11 @@ import {
   reviewerSelectionBlocked,
   validateCreateEvaluationPlanForm,
 } from "./review-workspace";
+
+const workspaceStyles = readFileSync(
+  fileURLToPath(new URL("./review-workspace.module.css", import.meta.url)),
+  "utf8",
+);
 
 const testCriteria: readonly RubricCriterion[] = [
   {
@@ -300,6 +307,26 @@ describe("review workspace", () => {
     expect(reviewerNavigationDisabled(false, queue.isPending(), false, false)).toBe(true);
     expect(reviewerSelectionBlocked(null, "assignment-a", "assignment-b")).toBe(false);
     expect(pendingStates).toEqual([true, false]);
+  });
+  it("wraps long authoritative submission references without widening the page", () => {
+    const longReference = `submission-${"authoritative-id-".repeat(20)}`;
+    const assignment = {
+      ...testAssignment("summit-2026"),
+      id: longReference,
+      reference: longReference,
+    };
+    const markup = renderToStaticMarkup(
+      createElement(ReviewWorkspace, {
+        mode: "evaluator",
+        initialState: { queue: [{ assignment }] },
+      }),
+    );
+
+    expect(markup).toContain(longReference);
+    expect(workspaceStyles).toMatch(/\.decisionSummary\s*>\s*\*\s*\{[^}]*min-inline-size:\s*0/u);
+    expect(workspaceStyles).toMatch(
+      /\.referenceBadge\s*\{[^}]*max-inline-size:[^;}]+;[^}]*white-space:\s*normal;[^}]*overflow-wrap:\s*anywhere;/u,
+    );
   });
   it("renders an accessible first-plan form for an organizer event with no plans", () => {
     const markup = renderToStaticMarkup(
