@@ -149,7 +149,6 @@ const REVIEW_PLAN_ID = `${CANONICAL_EVENT_ID}-initial-review`;
 const REVIEW_FINAL_ROUND_ID = `${REVIEW_PLAN_ID}-round-final`;
 const REVIEW_ROUND_ID = `${REVIEW_PLAN_ID}-round-initial`;
 const AGENDA_REVISION_ID = `${CANONICAL_EVENT_ID}-agenda-revision-1`;
-const SPEAKER_PROJECTION_REVISION_ID = `${CANONICAL_EVENT_ID}-speakers-revision-1`;
 const PUBLISHED_SPEAKERS_ID = `published-speakers:${CANONICAL_EVENT_ID}`;
 const REVIEW_WINDOW_DEFAULT = Object.freeze({
   opensAt: "2026-08-01T00:00:00.000Z",
@@ -598,10 +597,12 @@ function proposalSpecs({ fixture, config, manifest }) {
   });
 }
 
-function sessionSpecs({ proposals, catalogs }) {
+function sessionSpecs({ config, proposals, catalogs, manifest }) {
   const trackId = (name) => catalogs.tracks.get(name);
   const formatId = (name) => catalogs.formats.get(name);
   const roomId = (name) => catalogs.rooms.get(name);
+  const actorId = userIdOrRef(manifest, "organizer-fixture");
+  const metadataTimestamp = "2026-08-09T00:00:00.000Z";
   const proposalByTitle = new Map(proposals.map((proposal) => [proposal.title, proposal]));
   const entries = [
     {
@@ -663,31 +664,46 @@ function sessionSpecs({ proposals, catalogs }) {
     if (entry.room !== null && roomApplicationId === undefined) {
       fail("FIXTURE_INVALID", `Cannot resolve room for ${entry.title}.`);
     }
+    const participantIds = entry.identityKeys.map(
+      (identityKey) => SPEAKER_PARTICIPANT_IDS[identityKey],
+    );
     return {
       id,
       key: entry.key,
+      tenantId: CANONICAL_ORGANIZATION_ID,
+      organizationId: CANONICAL_ORGANIZATION_ID,
+      eventId: CANONICAL_EVENT_ID,
       title: entry.title,
+      description:
+        entry.proposal?.abstract ?? "A practical Q&A on running AI agents in production.",
       status: "confirmed",
+      contentStatus: "Approved",
       publicationStatus: entry.room === null ? "unpublished" : "published",
       durationMinutes: entry.format.startsWith("Lightning") ? 10 : 30,
+      capacityRequired: 1,
       track: entry.track,
       trackId: trackApplicationId,
+      trackIds: [trackApplicationId],
       format: entry.format,
       formatId: formatApplicationId,
       room: entry.room,
       roomId: roomApplicationId,
       startsAt: entry.startsAt,
       endsAt: entry.endsAt,
+      timeZone: config.timezone,
+      tagIds: [],
+      resourceIds: [],
       identityKeys: entry.identityKeys,
-      participantIds: entry.identityKeys.map((identityKey) => SPEAKER_PARTICIPANT_IDS[identityKey]),
-      speakerIds: entry.identityKeys.map((identityKey) => SPEAKER_PARTICIPANT_IDS[identityKey]),
-      speakerRoster: entry.identityKeys.map((identityKey) => ({
-        id: SPEAKER_PARTICIPANT_IDS[identityKey],
-        role: "speaker",
-      })),
+      participantIds,
+      speakerIds: participantIds,
+      speakerRoster: participantIds.map((id) => ({ id, role: "speaker" })),
       proposalId: entry.proposal?.id ?? null,
-      description:
-        entry.proposal?.abstract ?? "A practical Q&A on running AI agents in production.",
+      version: 1,
+      createdAt: metadataTimestamp,
+      updatedAt: metadataTimestamp,
+      createdBy: actorId,
+      updatedBy: actorId,
+      history: [],
     };
   });
 }
@@ -834,7 +850,7 @@ function publicProjection({ fixture, config, sessions }) {
   return {
     event,
     revision: {
-      id: SPEAKER_PROJECTION_REVISION_ID,
+      id: AGENDA_REVISION_ID,
       number: 1,
       publishedAt: config.repair?.publishedAt ?? PUBLISHED_AT_DEFAULT,
     },
@@ -1516,9 +1532,9 @@ function dynamicOperations({
         id: session.id,
         fields: {
           [APPLICATION_ID_FIELD]: session.id,
-          "Organization ID": CANONICAL_ORGANIZATION_ID,
-          "Event ID": CANONICAL_EVENT_ID,
-          Event: CANONICAL_EVENT_ID,
+          "Organization ID": session.organizationId,
+          "Event ID": session.eventId,
+          Event: session.eventId,
           Title: session.title,
           Description: session.description,
           Status: session.status,
@@ -1527,23 +1543,42 @@ function dynamicOperations({
           "Participant IDs JSON": json(session.participantIds),
           "Speaker IDs JSON": json(session.speakerIds),
           "Speaker Roster JSON": json(session.speakerRoster),
-          "Track IDs JSON": json([session.trackId]),
+          "Track IDs JSON": json(session.trackIds),
+          "Tag IDs JSON": json(session.tagIds),
+          "Resource IDs JSON": json(session.resourceIds),
           "Format ID": session.formatId,
           Room: session.roomId,
           Track: session.trackId,
           "Starts At": session.startsAt,
           "Ends At": session.endsAt,
-          "Time Zone": config.timezone,
-          "Capacity Required": 1,
+          "Time Zone": session.timeZone,
+          "Capacity Required": session.capacityRequired,
           "Metadata JSON": json(session),
           "Settings JSON": json({
             publicationStatus: session.publicationStatus,
+            contentStatus: session.contentStatus,
             roomId: session.roomId,
             trackId: session.trackId,
             formatId: session.formatId,
           }),
-          "History JSON": json([]),
-          Version: 1,
+          "Audit JSON": json({
+            action: "created",
+            actorId: session.createdBy,
+            occurredAt: session.createdAt,
+            source: "production-repair",
+          }),
+          "Provenance JSON": json({
+            source: "production-repair",
+            organizationId: session.organizationId,
+            eventId: session.eventId,
+            actorId: session.createdBy,
+          }),
+          "Created By User ID": session.createdBy,
+          "Updated By User ID": session.updatedBy,
+          "Created At": session.createdAt,
+          "Updated At": session.updatedAt,
+          "History JSON": json(session.history),
+          Version: session.version,
         },
         phase: "sessions",
         dependsOn:
@@ -1709,7 +1744,7 @@ function dynamicOperations({
         [APPLICATION_ID_FIELD]: PUBLISHED_SPEAKERS_ID,
         "Organization ID": CANONICAL_ORGANIZATION_ID,
         "Event Slug": CANONICAL_EVENT_ID,
-        "Revision ID": SPEAKER_PROJECTION_REVISION_ID,
+        "Revision ID": AGENDA_REVISION_ID,
         "Revision Number": 1,
         "Published At": projection.revision.publishedAt,
         "Projection JSON": json(projection),
@@ -1723,6 +1758,76 @@ function dynamicOperations({
     }),
   );
   return operations;
+}
+
+const REQUIRED_SESSION_METADATA_FIELDS = Object.freeze([
+  "id",
+  "tenantId",
+  "organizationId",
+  "eventId",
+  "title",
+  "description",
+  "status",
+  "durationMinutes",
+  "capacityRequired",
+  "trackId",
+  "trackIds",
+  "formatId",
+  "tagIds",
+  "speakerIds",
+  "resourceIds",
+  "timeZone",
+  "version",
+  "createdAt",
+  "updatedAt",
+  "createdBy",
+  "updatedBy",
+  "history",
+]);
+
+function assertSessionMetadata(value, label) {
+  if (!isObject(value)) fail("MANIFEST_INVALID", `${label} metadata must be an object.`);
+  for (const field of REQUIRED_SESSION_METADATA_FIELDS) {
+    const fieldValue = value[field];
+    if (
+      fieldValue === undefined ||
+      fieldValue === null ||
+      (typeof fieldValue === "string" && fieldValue.trim().length === 0)
+    ) {
+      fail("MANIFEST_INVALID", `${label} metadata is missing ${field}.`);
+    }
+  }
+  for (const field of ["trackIds", "tagIds", "speakerIds", "resourceIds", "history"]) {
+    if (!Array.isArray(value[field])) {
+      fail("MANIFEST_INVALID", `${label} metadata field ${field} must be an array.`);
+    }
+  }
+  if (!Number.isSafeInteger(value.version) || value.version < 1) {
+    fail("MANIFEST_INVALID", `${label} metadata version must be a positive integer.`);
+  }
+  if (
+    value.tenantId !== CANONICAL_ORGANIZATION_ID ||
+    value.organizationId !== CANONICAL_ORGANIZATION_ID
+  ) {
+    fail("MANIFEST_INVALID", `${label} metadata has a non-canonical organization scope.`);
+  }
+  if (value.eventId !== CANONICAL_EVENT_ID) {
+    fail("MANIFEST_INVALID", `${label} metadata has a non-canonical event scope.`);
+  }
+  return value;
+}
+
+function parseSessionMetadata(operation) {
+  const raw = operation.fields?.["Metadata JSON"];
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    fail("MANIFEST_INVALID", `Session operation ${operation.key} has no Metadata JSON.`);
+  }
+  try {
+    return assertSessionMetadata(JSON.parse(raw), `Session operation ${operation.key}`);
+  } catch (error) {
+    if (error instanceof DevflowRepairError) throw error;
+    fail("MANIFEST_INVALID", `Session operation ${operation.key} has invalid Metadata JSON.`);
+  }
 }
 
 function ensureManifestShape(manifest) {
@@ -1812,6 +1917,8 @@ function ensureManifestShape(manifest) {
       fail("MANIFEST_INVALID", "The repair graph sessions are required.");
     }
     for (const session of graph.sessions) {
+      if (!isObject(session)) fail("MANIFEST_INVALID", "A repair graph session must be an object.");
+      assertSessionMetadata(session, `Graph session ${session.id ?? "<unknown>"}`);
       if (Object.hasOwn(session, "speakerProfileIds")) {
         fail("MANIFEST_INVALID", "The repair graph cannot contain speakerProfileIds.");
       }
@@ -1873,8 +1980,52 @@ function ensureManifestShape(manifest) {
     ) {
       fail("IDENTITY_DRIFT", "The public speaker projection IDs are not canonical.");
     }
+    const currentRevisionId = graph.agenda?.currentPublishedRevisionId;
+    const agendaRevision = Array.isArray(graph.agenda?.revisions)
+      ? graph.agenda.revisions.find((revision) => revision?.id === currentRevisionId)
+      : undefined;
+    const projectionRevision = graph.projection?.revision;
+    const projectionOperation = manifest.operations.find(
+      (operation) => operation.table === "Published Speaker Projections",
+    );
+    if (
+      currentRevisionId !== AGENDA_REVISION_ID ||
+      !isObject(agendaRevision) ||
+      !isObject(projectionRevision) ||
+      projectionRevision.id !== agendaRevision.id ||
+      projectionRevision.number !== agendaRevision.revisionNumber ||
+      projectionRevision.publishedAt !== agendaRevision.publishedAt ||
+      !isObject(projectionOperation) ||
+      projectionOperation.fields?.["Revision ID"] !== agendaRevision.id ||
+      projectionOperation.fields?.["Revision Number"] !== agendaRevision.revisionNumber ||
+      projectionOperation.fields?.["Published At"] !== agendaRevision.publishedAt
+    ) {
+      fail(
+        "MANIFEST_INVALID",
+        "The canonical agenda and speaker projection revision references do not resolve.",
+      );
+    }
   }
   for (const operation of manifest.operations) {
+    if (operation.table === "Sessions") {
+      const metadata = parseSessionMetadata(operation);
+      if (
+        metadata.id !== operation.id ||
+        operation.fields?.["Organization ID"] !== metadata.organizationId ||
+        operation.fields?.["Event ID"] !== metadata.eventId ||
+        operation.fields?.Version !== metadata.version ||
+        operation.fields?.["Created By User ID"] !== metadata.createdBy ||
+        operation.fields?.["Updated By User ID"] !== metadata.updatedBy ||
+        operation.fields?.["Created At"] !== metadata.createdAt ||
+        operation.fields?.["Updated At"] !== metadata.updatedAt ||
+        operation.fields?.["History JSON"] !== json(metadata.history)
+      ) {
+        fail(
+          "MANIFEST_INVALID",
+          `Session operation ${operation.key} metadata fields are inconsistent.`,
+        );
+      }
+    }
     if (operation.table === "Speaker Profiles" && !profileIds.has(operation.id)) {
       fail("IDENTITY_DRIFT", "A speaker profile operation has a non-canonical ID.");
     }
@@ -1992,7 +2143,7 @@ export function buildRepairManifest(options = {}) {
   };
   const catalogs = catalogMaps(fixture, CANONICAL_EVENT_ID);
   const proposals = proposalSpecs({ fixture, config, manifest });
-  const sessions = sessionSpecs({ config, proposals, catalogs });
+  const sessions = sessionSpecs({ config, proposals, catalogs, manifest });
   const tasks = taskSpecs({ config, proposals });
   const communication = communicationSpecs({ fixture, sessions, manifest, config });
   const agenda = agendaState({ config, sessions, fixture, catalogs, manifest });
@@ -2757,20 +2908,32 @@ export async function applyWorkflowReset({
     const current = await readResetTarget(transport, operation);
     if (current === undefined) {
       const complete = resetLedgerEntry(manifest, operation, "complete", { missing: true });
-      await notifyLedger(transport, complete);
+      await notifyLedger(transport, complete, {
+        manifest,
+        manifestPath,
+        writeManifest,
+        phase: "reset-workflow",
+      });
       continue;
     }
     const started = resetLedgerEntry(manifest, operation, "started", {
       expectedVersion: operation.expectedVersion,
     });
-    await notifyLedger(transport, started);
+    await notifyLedger(transport, started, {
+      manifest,
+      manifestPath,
+      writeManifest,
+      phase: "reset-workflow",
+    });
     await deleteResetTarget(transport, operation);
     writes += 1;
     deletes += 1;
     const after =
-      operation.applicationId === undefined || operation.store !== "airtable"
-        ? undefined
-        : await readResetTarget(transport, operation);
+      operation.store === "airtable" && operation.applicationId !== undefined
+        ? await readResetTarget(transport, operation)
+        : (await discoverWorkflowResetTargets({ manifest, transport })).find(
+            (candidate) => candidate.key === operation.key,
+          );
     if (after !== undefined) {
       fail("RESET_NOT_VERIFIED", `Reset delete ${operation.key} could not be verified.`);
     }
@@ -2778,7 +2941,12 @@ export async function applyWorkflowReset({
       deleted: true,
       version: operation.expectedVersion,
     });
-    await notifyLedger(transport, complete);
+    await notifyLedger(transport, complete, {
+      manifest,
+      manifestPath,
+      writeManifest,
+      phase: "reset-workflow",
+    });
     if (failureAfter !== undefined && writes >= failureAfter) {
       fail("PARTIAL_RESET", "Injected workflow reset failure after the requested write count.");
     }
@@ -2794,6 +2962,19 @@ export async function applyWorkflowReset({
     const existing = records[0];
     if (existing !== undefined && scopeDrift(operation, existing) !== undefined) {
       fail("SCOPE_DRIFT", `Foundation ${operation.key} has foreign scope.`);
+    }
+    if (reconcilePostWriteCheckpoint(operation, existing, existingLedger, "Foundation restore")) {
+      const complete = resetLedgerEntry(manifest, { ...operation, key }, "complete", {
+        recovered: true,
+        version: existingVersion(existing),
+      });
+      await notifyLedger(transport, complete, {
+        manifest,
+        manifestPath,
+        writeManifest,
+        phase: "reset-workflow",
+      });
+      continue;
     }
     const planned =
       preflight.prepared?.foundation?.find((entry) => entry.key === operation.key) ??
@@ -2812,13 +2993,23 @@ export async function applyWorkflowReset({
         skipped: true,
         version: existingVersion(existing),
       });
-      await notifyLedger(transport, complete);
+      await notifyLedger(transport, complete, {
+        manifest,
+        manifestPath,
+        writeManifest,
+        phase: "reset-workflow",
+      });
       continue;
     }
     const started = resetLedgerEntry(manifest, { ...operation, key }, "started", {
       expectedVersion: existing === undefined ? null : existingVersion(existing),
     });
-    await notifyLedger(transport, started);
+    await notifyLedger(transport, started, {
+      manifest,
+      manifestPath,
+      writeManifest,
+      phase: "reset-workflow",
+    });
     await writeOperation(transport, operation, existing);
     writes += 1;
     restored += 1;
@@ -2832,7 +3023,12 @@ export async function applyWorkflowReset({
     const complete = resetLedgerEntry(manifest, { ...operation, key }, "complete", {
       version: existingVersion(after[0]),
     });
-    await notifyLedger(transport, complete);
+    await notifyLedger(transport, complete, {
+      manifest,
+      manifestPath,
+      writeManifest,
+      phase: "reset-workflow",
+    });
     if (failureAfter !== undefined && writes >= failureAfter) {
       fail("PARTIAL_RESET", "Injected workflow reset failure after the requested write count.");
     }
@@ -2853,9 +3049,51 @@ export async function applyWorkflowReset({
   };
 }
 
+async function reconcileResetLedger({ manifest, manifestPath, transport, writeManifest }) {
+  const deletions = manifest.resetWorkflow?.deletions;
+  if (!Array.isArray(deletions)) return;
+  for (const planned of deletions) {
+    const ledger = manifest.resetLedger?.[planned.key];
+    if (ledger?.state !== "started" || ledger.durableLedgerFailure?.attemptedState !== "complete") {
+      continue;
+    }
+    const operation = {
+      ...planned,
+      applicationId: planned.store === "airtable" ? planned.id : undefined,
+      inputDigest: ledger.inputDigest,
+    };
+    const records =
+      operation.store === "airtable"
+        ? [await readResetTarget(transport, operation)].filter((record) => record !== undefined)
+        : (await discoverWorkflowResetTargets({ manifest, transport })).filter(
+            (candidate) => candidate.key === operation.key,
+          );
+    if (records.length > 1) {
+      fail("DUPLICATE_OBJECT", `Multiple reset records match ${operation.key} during resume.`);
+    }
+    if (records[0] !== undefined) continue;
+    const complete = resetLedgerEntry(manifest, operation, "complete", {
+      missing: true,
+      recovered: true,
+    });
+    await notifyLedger(transport, complete, {
+      manifest,
+      manifestPath,
+      writeManifest,
+      phase: "reset-workflow",
+    });
+  }
+}
+
 export async function resumeWorkflowReset(options = {}) {
   const manifest =
     options.manifest ?? readRepairManifest(options.manifestPath ?? DEFAULT_REPAIR_MANIFEST_PATH);
+  await reconcileResetLedger({
+    manifest,
+    manifestPath: options.manifestPath ?? DEFAULT_REPAIR_MANIFEST_PATH,
+    transport: options.transport,
+    writeManifest: options.writeManifest ?? true,
+  });
   const prepared = await prepareWorkflowReset({
     ...options,
     manifest,
@@ -3083,7 +3321,8 @@ export function createRepairTransport({ airtable, commandAdapter } = {}) {
       return true;
     },
     async recordLedger(entry) {
-      if (commandAdapter === undefined) return true;
+      if (commandAdapter === undefined)
+        fail("LEDGER_UNAVAILABLE", "A D1 command adapter is required for the durable ledger.");
       if (typeof commandAdapter.recordLedger === "function")
         return commandAdapter.recordLedger(entry);
       if (typeof commandAdapter.execute === "function")
@@ -3093,22 +3332,83 @@ export function createRepairTransport({ airtable, commandAdapter } = {}) {
           idempotencyKey: entry.key,
           ...entry,
         });
-      return true;
+      fail("LEDGER_UNAVAILABLE", "The D1 command adapter cannot record the durable ledger.");
     },
   };
 }
 
-async function notifyLedger(transport, entry) {
-  if (
-    transport !== undefined &&
-    transport !== null &&
-    typeof transport.recordLedger === "function"
-  ) {
-    try {
-      await transport.recordLedger(clone(entry));
-    } catch {
-      fail("LEDGER_WRITE_FAILED", "The durable repair ledger could not be recorded.");
+function errorCode(error) {
+  return isObject(error) && typeof error.code === "string" ? error.code : "UNKNOWN";
+}
+
+function preserveRetryableLedgerState(manifest, phase, entry, causeCode) {
+  if (!isObject(manifest)) return null;
+  const ledger = phase === "reset-workflow" ? manifest.resetLedger : manifest.runLedger;
+  if (!isObject(ledger) || !isObject(ledger[entry.key])) return null;
+  const recoveryState = entry.state === "complete" ? "started" : entry.state;
+  ledger[entry.key] = {
+    ...ledger[entry.key],
+    state: recoveryState,
+    durableLedgerFailure: {
+      attemptedState: entry.state,
+      causeCode,
+      failedAt: entry.updatedAt,
+    },
+  };
+  return recoveryState;
+}
+
+async function notifyLedger(transport, entry, checkpointContext = undefined) {
+  try {
+    if (
+      transport === undefined ||
+      transport === null ||
+      typeof transport.recordLedger !== "function"
+    ) {
+      fail("LEDGER_UNAVAILABLE", "A durable repair ledger transport is required.");
     }
+    await transport.recordLedger(clone(entry));
+  } catch (error) {
+    const causeCode = errorCode(error);
+    const recoveryState = preserveRetryableLedgerState(
+      checkpointContext?.manifest,
+      checkpointContext?.phase,
+      entry,
+      causeCode,
+    );
+    const checkpoint = {
+      attempted: false,
+      persisted: false,
+      path: checkpointContext?.manifestPath ?? null,
+      recoveryState,
+    };
+    if (
+      checkpointContext?.manifest !== undefined &&
+      checkpointContext?.manifestPath !== undefined &&
+      checkpointContext.writeManifest !== false
+    ) {
+      checkpoint.attempted = true;
+      try {
+        checkpoint.path = writeRepairManifest(
+          checkpointContext.manifestPath,
+          checkpointContext.manifest,
+        );
+        checkpoint.persisted = true;
+      } catch (checkpointError) {
+        checkpoint.errorCode = errorCode(checkpointError);
+      }
+    }
+    fail(
+      "LEDGER_WRITE_FAILED",
+      `The durable repair ledger could not be recorded for ${entry.key} (${entry.state}); inspect the checkpoint before resuming.`,
+      {
+        phase: checkpointContext?.phase ?? "repair",
+        ledgerKey: entry.key,
+        state: entry.state,
+        causeCode,
+        checkpoint,
+      },
+    );
   }
 }
 
@@ -3240,6 +3540,11 @@ function updateIdentityFromRecord(manifest, operation, record) {
 
 function refreshPayloads(manifest) {
   const keyMap = new Map();
+  const sessionActorId = userIdOrRef(manifest, "organizer-fixture");
+  for (const session of manifest.graph?.sessions ?? []) {
+    session.createdBy = sessionActorId;
+    session.updatedBy = sessionActorId;
+  }
   for (const operation of manifest.operations) {
     if (operation.kind === "identity") {
       const identity = identityByKey(manifest, operation.payload.identityKey);
@@ -3283,6 +3588,30 @@ function refreshPayloads(manifest) {
         operation.fields["User ID"] = userIdOrRef(manifest, identity.identityKey);
         operation.ownedFields["User ID"] = operation.fields["User ID"];
       }
+    }
+    if (operation.table === "Sessions") {
+      const metadata = JSON.parse(operation.fields["Metadata JSON"]);
+      metadata.createdBy = sessionActorId;
+      metadata.updatedBy = sessionActorId;
+      operation.fields["Metadata JSON"] = json(metadata);
+      operation.fields["Created By User ID"] = sessionActorId;
+      operation.fields["Updated By User ID"] = sessionActorId;
+      const audit = JSON.parse(operation.fields["Audit JSON"]);
+      audit.actorId = sessionActorId;
+      operation.fields["Audit JSON"] = json(audit);
+      const provenance = JSON.parse(operation.fields["Provenance JSON"]);
+      provenance.actorId = sessionActorId;
+      operation.fields["Provenance JSON"] = json(provenance);
+      for (const field of [
+        "Metadata JSON",
+        "Created By User ID",
+        "Updated By User ID",
+        "Audit JSON",
+        "Provenance JSON",
+      ]) {
+        operation.ownedFields[field] = operation.fields[field];
+      }
+      operation.inputDigest = digest(metadata);
     }
     if (operation.table === "Speaker Profiles") {
       const profileValue = JSON.parse(operation.fields.Biography);
@@ -3516,6 +3845,46 @@ async function resolveIdentityForApply({ manifest, operation, transport, credent
   operation.payload.credentialBacked = credentialBacked;
 }
 
+function reconcilePostWriteCheckpoint(operation, existing, ledger, label) {
+  if (ledger?.state !== "started" || ledger.durableLedgerFailure?.attemptedState !== "complete") {
+    return false;
+  }
+  if (
+    operation.store !== "airtable" ||
+    existing === undefined ||
+    !existingMatchesOwned(operation, existing)
+  ) {
+    fail(
+      "LEDGER_RECONCILIATION_CONFLICT",
+      `${label} ${operation.key} does not match the planned post-write state; inspect the authoritative record before resuming.`,
+      {
+        ledgerKey: ledger.key ?? operation.key,
+        table: operation.table ?? null,
+        objectId: operation.id,
+      },
+    );
+  }
+  return true;
+}
+async function verifyCompletedIdentityOperation(manifest, transport, operation) {
+  const records = await readOperation(transport, operation);
+  if (records.length !== 1) {
+    fail("LEDGER_DRIFT", `Ledger identity ${operation.key} is missing or duplicated.`);
+  }
+  const identity = identityByKey(manifest, operation.payload.identityKey);
+  const record = records[0];
+  const email = existingIdentityEmail(record);
+  const userId = optionalText(recordValue(record, "User ID", "userId", "id"));
+  const verified = recordValue(record, "Verified", "emailVerified", "verified");
+  if (
+    email !== identity.email ||
+    userId !== identity.userId ||
+    (verified !== true && verified !== "true" && verified !== 1)
+  ) {
+    fail("LEDGER_DRIFT", `Ledger identity ${operation.key} no longer matches its account.`);
+  }
+}
+
 export async function applyRepair({
   prepared,
   manifest: suppliedManifest,
@@ -3526,6 +3895,7 @@ export async function applyRepair({
   confirm,
   now = new Date().toISOString(),
   failureAfter,
+  writeManifest = true,
 } = {}) {
   const manifest = suppliedManifest ?? prepared?.manifest ?? readRepairManifest(manifestPath);
   ensureManifestShape(manifest);
@@ -3556,9 +3926,17 @@ export async function applyRepair({
         fail("DEPENDENCY_INCOMPLETE", `Repair dependency ${dependency} is incomplete.`);
     }
     const operationLedger = manifest.runLedger[operation.key];
-    if (operationLedger?.state === "complete") {
+    if (operationLedger?.state === "complete" && operation.kind === "identity") {
+      await verifyCompletedIdentityOperation(manifest, transport, operation);
       completed += 1;
       continue;
+    }
+    if (
+      operation.kind === "identity" &&
+      operationLedger?.state === "started" &&
+      operationLedger.durableLedgerFailure?.attemptedState === "complete"
+    ) {
+      reconcilePostWriteCheckpoint(operation, undefined, operationLedger, "Identity repair");
     }
     if (operation.kind === "identity") {
       await resolveIdentityForApply({
@@ -3572,13 +3950,23 @@ export async function applyRepair({
       const started = ledgerEntry(manifest, operation, "started", {
         userId: identityByKey(manifest, operation.payload.identityKey).userId,
       });
-      await notifyLedger(transport, started);
+      await notifyLedger(transport, started, {
+        manifest,
+        manifestPath,
+        writeManifest,
+        phase: "repair",
+      });
       await writeOperation(transport, operation, undefined);
       writes += 1;
       const identityEntry = ledgerEntry(manifest, operation, "complete", {
         userId: identityByKey(manifest, operation.payload.identityKey).userId,
       });
-      await notifyLedger(transport, identityEntry);
+      await notifyLedger(transport, identityEntry, {
+        manifest,
+        manifestPath,
+        writeManifest,
+        phase: "repair",
+      });
       completed += 1;
       continue;
     }
@@ -3607,6 +3995,20 @@ export async function applyRepair({
     }
     if (existing !== undefined && scopeDrift(operation, existing) !== undefined)
       fail("SCOPE_DRIFT", `Existing ${operation.key} has foreign scope.`);
+    if (reconcilePostWriteCheckpoint(operation, existing, ledger, "Repair operation")) {
+      const completeEntry = ledgerEntry(manifest, operation, "complete", {
+        recovered: true,
+        version: existingVersion(existing),
+      });
+      await notifyLedger(transport, completeEntry, {
+        manifest,
+        manifestPath,
+        writeManifest,
+        phase: "repair",
+      });
+      completed += 1;
+      continue;
+    }
     if (
       existing !== undefined &&
       ledger?.state === "started" &&
@@ -3616,7 +4018,12 @@ export async function applyRepair({
         recovered: true,
         version: existingVersion(existing),
       });
-      await notifyLedger(transport, completeEntry);
+      await notifyLedger(transport, completeEntry, {
+        manifest,
+        manifestPath,
+        writeManifest,
+        phase: "repair",
+      });
       completed += 1;
       continue;
     }
@@ -3639,15 +4046,25 @@ export async function applyRepair({
         skipped: true,
         version: existingVersion(existing),
       });
-      await notifyLedger(transport, completeEntry);
+      await notifyLedger(transport, completeEntry, {
+        manifest,
+        manifestPath,
+        writeManifest,
+        phase: "repair",
+      });
       completed += 1;
-      writeRepairManifest(manifestPath, manifest);
+      if (writeManifest) writeRepairManifest(manifestPath, manifest);
       continue;
     }
     const started = ledgerEntry(manifest, operation, "started", {
       expectedVersion: existing === undefined ? null : existingVersion(existing),
     });
-    await notifyLedger(transport, started);
+    await notifyLedger(transport, started, {
+      manifest,
+      manifestPath,
+      writeManifest,
+      phase: "repair",
+    });
     await writeOperation(transport, operation, existing);
     writes += 1;
     const after = await readOperation(transport, operation);
@@ -3662,15 +4079,20 @@ export async function applyRepair({
     const completeEntry = ledgerEntry(manifest, operation, "complete", {
       version: after[0] === undefined ? undefined : existingVersion(after[0]),
     });
-    await notifyLedger(transport, completeEntry);
+    await notifyLedger(transport, completeEntry, {
+      manifest,
+      manifestPath,
+      writeManifest,
+      phase: "repair",
+    });
     completed += 1;
     if (failureAfter !== undefined && writes >= failureAfter)
       fail("PARTIAL_REPAIR", "Injected repair failure after the requested write count.");
-    writeRepairManifest(manifestPath, manifest);
+    if (writeManifest) writeRepairManifest(manifestPath, manifest);
   }
   manifest.appliedAt = dateIso(now, "repair apply time");
   manifest.status = "applied";
-  writeRepairManifest(manifestPath, manifest);
+  if (writeManifest) writeRepairManifest(manifestPath, manifest);
   return {
     phase: "apply",
     dryRun: false,

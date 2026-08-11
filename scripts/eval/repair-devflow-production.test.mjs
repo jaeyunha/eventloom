@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import {
   applyRepair,
@@ -46,18 +49,33 @@ function identities() {
   );
 }
 
-function fakeTransport({ duplicateKey, driftKey, omitBlankFields = false } = {}) {
+function fakeTransport({
+  duplicateKey,
+  driftKey,
+  omitBlankFields = false,
+  ledgerFailureState,
+  ledgerFailureKey,
+} = {}) {
   const records = new Map();
   const writes = [];
   const commands = [];
+  const ledgerEntries = [];
+  const commandRecords = new Map();
   let failWrites = false;
+  let durableLedgerFailureState = ledgerFailureState;
+  let durableLedgerFailureKey = ledgerFailureKey;
   const key = (operation) => `${operation.table ?? operation.kind}:${operation.id}`;
   return {
     records,
     writes,
     commands,
+    ledgerEntries,
     setFailWrites(value) {
       failWrites = value;
+    },
+    setLedgerFailure(value, key = durableLedgerFailureKey) {
+      durableLedgerFailureState = value;
+      durableLedgerFailureKey = key;
     },
     async read(operation) {
       if (operation.key === duplicateKey)
@@ -65,6 +83,10 @@ function fakeTransport({ duplicateKey, driftKey, omitBlankFields = false } = {})
           { id: "a", fields: operation.fields },
           { id: "b", fields: operation.fields },
         ];
+      if (operation.store !== "airtable") {
+        const command = commandRecords.get(operation.key);
+        return command === undefined ? [] : [command];
+      }
       const record = records.get(key(operation));
       if (record === undefined) return [];
       if (operation.key === driftKey)
@@ -100,14 +122,36 @@ function fakeTransport({ duplicateKey, driftKey, omitBlankFields = false } = {})
     async execute(command) {
       if (failWrites) throw new Error("injected command failure");
       commands.push(command);
+      if (typeof command.idempotencyKey === "string") {
+        commandRecords.set(command.idempotencyKey, structuredClone(command));
+      }
     },
     async verifyIdentity() {},
-    async recordLedger() {},
+    async recordLedger(entry) {
+      ledgerEntries.push(entry);
+      if (
+        entry.state === durableLedgerFailureState &&
+        (durableLedgerFailureKey === undefined || entry.key === durableLedgerFailureKey)
+      ) {
+        const error = new Error("injected durable ledger failure");
+        error.code = "LEDGER_UNAVAILABLE";
+        throw error;
+      }
+    },
   };
 }
 
 function build() {
   return buildRepairManifest({ identities: identities() });
+}
+function temporaryManifestPath() {
+  const directory = mkdtempSync(join(tmpdir(), "devflow-repair-test-"));
+  return {
+    path: join(directory, "manifest.json"),
+    cleanup() {
+      rmSync(directory, { recursive: true, force: true });
+    },
+  };
 }
 function resetTransport() {
   const transport = fakeTransport();
@@ -153,6 +197,24 @@ function addWorkflowRecords(transport, manifest) {
       id: unknownId,
     }),
   });
+  const d1Id = "outbox-evaluator-created";
+  const d1Record = {
+    store: "d1",
+    table: "durable_outbox",
+    id: d1Id,
+    recordId: d1Id,
+    applicationId: d1Id,
+    fields: {
+      "Organization ID": "ai-engineer",
+      "Event ID": "devflow-conf-2027",
+      "Payload JSON": JSON.stringify({
+        tenantId: "ai-engineer",
+        eventId: "devflow-conf-2027",
+      }),
+    },
+  };
+  transport.records.set(`${d1Record.table}:${d1Id}`, d1Record);
+  transport.discovered.push(d1Record);
   transport.add("Sessions", "foreign-event-session", {
     "Application ID": "foreign-event-session",
     "Organization ID": "ai-engineer",
@@ -247,6 +309,48 @@ test("builds the strict six-identity ledger and exact canonical graph", () => {
     ),
     true,
   );
+  const requiredSessionFields = [
+    "tenantId",
+    "organizationId",
+    "eventId",
+    "createdAt",
+    "updatedAt",
+    "createdBy",
+    "updatedBy",
+    "history",
+  ];
+  assert.equal(
+    manifest.graph.sessions.every((session) =>
+      requiredSessionFields.every((field) => Object.hasOwn(session, field)),
+    ),
+    true,
+  );
+  assert.equal(
+    sessionOperations.every((operation) => {
+      const metadata = JSON.parse(operation.fields["Metadata JSON"]);
+      return (
+        requiredSessionFields.every((field) => Object.hasOwn(metadata, field)) &&
+        operation.fields["Organization ID"] === metadata.organizationId &&
+        operation.fields["Event ID"] === metadata.eventId &&
+        operation.fields["Created At"] === metadata.createdAt &&
+        operation.fields["Updated At"] === metadata.updatedAt &&
+        operation.fields["Created By User ID"] === metadata.createdBy &&
+        operation.fields["Updated By User ID"] === metadata.updatedBy &&
+        operation.fields["History JSON"] === JSON.stringify(metadata.history)
+      );
+    }),
+    true,
+  );
+  const currentAgendaRevision = manifest.graph.agenda.revisions.find(
+    (revision) => revision.id === manifest.graph.agenda.currentPublishedRevisionId,
+  );
+  assert.ok(currentAgendaRevision);
+  assert.deepEqual(manifest.graph.projection.revision, {
+    id: currentAgendaRevision.id,
+    number: currentAgendaRevision.revisionNumber,
+    publishedAt: currentAgendaRevision.publishedAt,
+  });
+  assert.equal(projectionOperation.fields["Revision ID"], currentAgendaRevision.id);
   const scheduledParticipantIds = [
     ...new Set(
       manifest.graph.sessions
@@ -438,6 +542,44 @@ test("builds the strict six-identity ledger and exact canonical graph", () => {
     true,
   );
 });
+
+test("rejects incomplete session metadata and unresolved publication revisions", async () => {
+  const incompleteSession = build();
+  delete incompleteSession.graph.sessions[0].updatedBy;
+  await assert.rejects(
+    readRepairInvariantReport({ manifest: incompleteSession }),
+    (error) =>
+      error instanceof DevflowRepairError &&
+      error.code === "MANIFEST_INVALID" &&
+      error.message.includes("updatedBy"),
+  );
+
+  const inconsistentOperation = build();
+  const sessionOperation = inconsistentOperation.operations.find(
+    (operation) => operation.table === "Sessions",
+  );
+  sessionOperation.fields["Created At"] = "2026-08-10T00:00:00.000Z";
+  await assert.rejects(
+    readRepairInvariantReport({ manifest: inconsistentOperation }),
+    (error) =>
+      error instanceof DevflowRepairError &&
+      error.code === "MANIFEST_INVALID" &&
+      error.message.includes("metadata fields are inconsistent"),
+  );
+
+  const unresolvedRevision = build();
+  const projectionOperation = unresolvedRevision.operations.find(
+    (operation) => operation.table === "Published Speaker Projections",
+  );
+  projectionOperation.fields["Revision ID"] = `${unresolvedRevision.eventId}-other-revision`;
+  await assert.rejects(
+    readRepairInvariantReport({ manifest: unresolvedRevision }),
+    (error) =>
+      error instanceof DevflowRepairError &&
+      error.code === "MANIFEST_INVALID" &&
+      error.message.includes("revision references do not resolve"),
+  );
+});
 test("persists independent review rounds and deterministic proposal session IDs", () => {
   const manifest = build();
   const replay = build();
@@ -606,6 +748,171 @@ test("partial failure can resume from the durable run ledger", async () => {
   );
 });
 
+test("durable complete failure checkpoints a retryable state and resumes without rewriting", async () => {
+  const temporary = temporaryManifestPath();
+  try {
+    const manifest = build();
+    const target = manifest.operations.find((operation) => operation.table === "Sessions");
+    const transport = fakeTransport({
+      ledgerFailureState: "complete",
+      ledgerFailureKey: target.key,
+    });
+    const prepared = await prepareRepair({ manifest, transport, writeManifest: false });
+    let failure;
+    await assert.rejects(
+      applyRepair({
+        manifest,
+        manifestPath: temporary.path,
+        prepared,
+        transport,
+        confirm: REPAIR_CONFIRMATION,
+      }),
+      (error) => {
+        failure = error;
+        return error instanceof DevflowRepairError && error.code === "LEDGER_WRITE_FAILED";
+      },
+    );
+    assert.deepEqual(failure.details, {
+      phase: "repair",
+      ledgerKey: target.key,
+      state: "complete",
+      causeCode: "LEDGER_UNAVAILABLE",
+      checkpoint: {
+        attempted: true,
+        persisted: true,
+        path: temporary.path,
+        recoveryState: "started",
+      },
+    });
+    const checkpoint = JSON.parse(readFileSync(temporary.path, "utf8"));
+    assert.equal(checkpoint.runLedger[target.key].state, "started");
+    assert.equal(checkpoint.runLedger[target.key].durableLedgerFailure.attemptedState, "complete");
+    assert.equal(transport.writes.filter((operation) => operation.key === target.key).length, 1);
+    const stored = transport.records.get(`${target.table}:${target.id}`);
+    stored.fields["External Observation"] = "preserved";
+
+    transport.setLedgerFailure(undefined);
+    const resumed = await resumeRepair({
+      manifest: checkpoint,
+      manifestPath: temporary.path,
+      transport,
+      confirm: REPAIR_CONFIRMATION,
+      writeManifest: false,
+    });
+    assert.equal(resumed.status, "applied");
+    assert.equal(checkpoint.runLedger[target.key].state, "complete");
+    assert.equal(transport.writes.filter((operation) => operation.key === target.key).length, 1);
+    assert.equal(stored.fields["External Observation"], "preserved");
+  } finally {
+    temporary.cleanup();
+  }
+});
+
+test("durable started failure remains retryable without writing a manifest", async () => {
+  const manifest = build();
+  const target = manifest.operations.find((operation) => operation.table === "Sessions");
+  const transport = fakeTransport({
+    ledgerFailureState: "started",
+    ledgerFailureKey: target.key,
+  });
+  const prepared = await prepareRepair({ manifest, transport, writeManifest: false });
+  let failure;
+  await assert.rejects(
+    applyRepair({
+      manifest,
+      prepared,
+      transport,
+      confirm: REPAIR_CONFIRMATION,
+      writeManifest: false,
+    }),
+    (error) => {
+      failure = error;
+      return error instanceof DevflowRepairError && error.code === "LEDGER_WRITE_FAILED";
+    },
+  );
+  assert.equal(failure.details.checkpoint.attempted, false);
+  assert.equal(failure.details.checkpoint.persisted, false);
+  assert.equal(failure.details.checkpoint.recoveryState, "started");
+  assert.equal(manifest.runLedger[target.key].state, "started");
+  assert.equal(manifest.runLedger[target.key].durableLedgerFailure.attemptedState, "started");
+  assert.equal(transport.writes.filter((operation) => operation.key === target.key).length, 0);
+
+  transport.setLedgerFailure(undefined);
+  const resumed = await resumeRepair({
+    manifest,
+    transport,
+    confirm: REPAIR_CONFIRMATION,
+    writeManifest: false,
+  });
+  assert.equal(resumed.status, "applied");
+  assert.equal(manifest.runLedger[target.key].state, "complete");
+  assert.equal(transport.writes.filter((operation) => operation.key === target.key).length, 1);
+});
+
+test("apply refuses to mutate without a durable ledger capability", async () => {
+  const manifest = build();
+  const transport = fakeTransport();
+  delete transport.recordLedger;
+  const prepared = await prepareRepair({ manifest, transport, writeManifest: false });
+  let failure;
+  await assert.rejects(
+    applyRepair({
+      manifest,
+      prepared,
+      transport,
+      confirm: REPAIR_CONFIRMATION,
+      writeManifest: false,
+    }),
+    (error) => {
+      failure = error;
+      return error instanceof DevflowRepairError && error.code === "LEDGER_WRITE_FAILED";
+    },
+  );
+  assert.equal(failure.details.causeCode, "LEDGER_UNAVAILABLE");
+  assert.equal(failure.details.state, "started");
+  assert.equal(failure.details.checkpoint.recoveryState, "started");
+  assert.equal(transport.writes.length, 0);
+  assert.equal(transport.commands.length, 0);
+});
+
+test("post-write reconciliation rejects an owned-field mutation before retry", async () => {
+  const manifest = build();
+  const target = manifest.operations.find((operation) => operation.table === "Sessions");
+  const transport = fakeTransport({
+    ledgerFailureState: "complete",
+    ledgerFailureKey: target.key,
+  });
+  const prepared = await prepareRepair({ manifest, transport, writeManifest: false });
+  await assert.rejects(
+    applyRepair({
+      manifest,
+      prepared,
+      transport,
+      confirm: REPAIR_CONFIRMATION,
+      writeManifest: false,
+    }),
+    (error) => error instanceof DevflowRepairError && error.code === "LEDGER_WRITE_FAILED",
+  );
+  const stored = transport.records.get(`${target.table}:${target.id}`);
+  stored.fields.Title = "Changed before reconciliation";
+  transport.setLedgerFailure(undefined);
+
+  await assert.rejects(
+    applyRepair({
+      manifest,
+      prepared,
+      transport,
+      confirm: REPAIR_CONFIRMATION,
+      writeManifest: false,
+    }),
+    (error) =>
+      error instanceof DevflowRepairError &&
+      error.code === "LEDGER_RECONCILIATION_CONFLICT" &&
+      error.details.ledgerKey === target.key,
+  );
+  assert.equal(transport.writes.filter((operation) => operation.key === target.key).length, 1);
+});
+
 test("apply verifies Airtable records when blank cells are omitted", async () => {
   const manifest = build();
   const transport = fakeTransport({ omitBlankFields: true });
@@ -694,6 +1001,20 @@ test("apply creates an unresolved identity before dependent writes", async () =>
     IDS["organizer-fixture"],
   );
   assert.equal(signupName, "Jordan Alvarez");
+  const sessionOperation = manifest.operations.find((operation) => operation.table === "Sessions");
+  const sessionMetadata = JSON.parse(sessionOperation.fields["Metadata JSON"]);
+  assert.equal(sessionMetadata.createdBy, IDS["organizer-fixture"]);
+  assert.equal(sessionMetadata.updatedBy, IDS["organizer-fixture"]);
+  assert.equal(sessionOperation.fields["Created By User ID"], IDS["organizer-fixture"]);
+  assert.equal(sessionOperation.fields["Updated By User ID"], IDS["organizer-fixture"]);
+  assert.equal(
+    manifest.graph.sessions.every(
+      (session) =>
+        session.createdBy === IDS["organizer-fixture"] &&
+        session.updatedBy === IDS["organizer-fixture"],
+    ),
+    true,
+  );
 });
 
 test("runRepair forwards production account origins to identity resolution", async () => {
@@ -773,6 +1094,11 @@ test("workflow reset plans without writes, removes unknown scoped records, and p
         entry.id === "published-speakers:devflow-conf-2027",
     ),
   );
+  assert.ok(
+    prepared.prepared.plan.deletes.some(
+      (entry) => entry.store === "d1" && entry.id === "outbox-evaluator-created",
+    ),
+  );
   const result = await applyWorkflowReset({
     manifest,
     prepared,
@@ -799,6 +1125,7 @@ test("workflow reset plans without writes, removes unknown scoped records, and p
   assert.equal(transport.records.has("Sessions:foreign-event-session"), true);
   assert.equal(transport.records.has("Sessions:foreign-org-session"), true);
   assert.equal(transport.writes.length, 0);
+  assert.equal(transport.records.has("durable_outbox:outbox-evaluator-created"), false);
   const second = await applyWorkflowReset({
     manifest,
     transport,
@@ -903,6 +1230,165 @@ test("workflow reset resumes after a partial delete and rejects unsafe confirmat
     Object.values(manifest.resetLedger).every((entry) => entry.state === "complete"),
     true,
   );
+});
+
+test("workflow reset replays a failed durable completion without deleting twice", async () => {
+  const temporary = temporaryManifestPath();
+  try {
+    const manifest = build();
+    const transport = resetTransport();
+    addWorkflowRecords(transport, manifest);
+    const prepared = await prepareWorkflowReset({ manifest, transport, writeManifest: false });
+    const target = prepared.targets[0];
+    transport.setLedgerFailure("complete", target.key);
+    let failure;
+    await assert.rejects(
+      applyWorkflowReset({
+        manifest,
+        manifestPath: temporary.path,
+        prepared,
+        transport,
+        confirm: RESET_WORKFLOW_CONFIRMATION,
+      }),
+      (error) => {
+        failure = error;
+        return error instanceof DevflowRepairError && error.code === "LEDGER_WRITE_FAILED";
+      },
+    );
+    assert.equal(failure.details.phase, "reset-workflow");
+    assert.equal(failure.details.ledgerKey, target.key);
+    assert.equal(failure.details.checkpoint.recoveryState, "started");
+    assert.equal(failure.details.checkpoint.persisted, true);
+    assert.equal(transport.deletes.filter((operation) => operation.key === target.key).length, 1);
+
+    const checkpoint = JSON.parse(readFileSync(temporary.path, "utf8"));
+    assert.equal(checkpoint.resetLedger[target.key].state, "started");
+    transport.setLedgerFailure(undefined);
+    const resumed = await resumeWorkflowReset({
+      manifest: checkpoint,
+      manifestPath: temporary.path,
+      transport,
+      confirm: RESET_WORKFLOW_CONFIRMATION,
+      writeManifest: false,
+    });
+    assert.equal(resumed.status, "applied");
+    assert.equal(checkpoint.resetLedger[target.key].state, "complete");
+    assert.equal(checkpoint.resetLedger[target.key].recovered, true);
+    assert.equal(transport.deletes.filter((operation) => operation.key === target.key).length, 1);
+  } finally {
+    temporary.cleanup();
+  }
+});
+
+test("workflow reset retries a failed durable start before deleting", async () => {
+  const manifest = build();
+  const transport = resetTransport();
+  addWorkflowRecords(transport, manifest);
+  const prepared = await prepareWorkflowReset({ manifest, transport, writeManifest: false });
+  const target = prepared.targets[0];
+  transport.setLedgerFailure("started", target.key);
+  await assert.rejects(
+    applyWorkflowReset({
+      manifest,
+      prepared,
+      transport,
+      confirm: RESET_WORKFLOW_CONFIRMATION,
+      writeManifest: false,
+    }),
+    (error) => error instanceof DevflowRepairError && error.code === "LEDGER_WRITE_FAILED",
+  );
+  assert.equal(manifest.resetLedger[target.key].state, "started");
+  assert.equal(manifest.resetLedger[target.key].durableLedgerFailure.attemptedState, "started");
+  assert.equal(transport.deletes.filter((operation) => operation.key === target.key).length, 0);
+
+  transport.setLedgerFailure(undefined);
+  const resumed = await resumeWorkflowReset({
+    manifest,
+    transport,
+    confirm: RESET_WORKFLOW_CONFIRMATION,
+    writeManifest: false,
+  });
+  assert.equal(resumed.status, "applied");
+  assert.equal(manifest.resetLedger[target.key].state, "complete");
+  assert.equal(transport.deletes.filter((operation) => operation.key === target.key).length, 1);
+});
+
+test("foundation reconciliation preserves an unowned mutation without rewriting", async () => {
+  const manifest = build();
+  const transport = resetTransport();
+  const prepared = await prepareWorkflowReset({ manifest, transport, writeManifest: false });
+  const target = prepared.foundationOperations[0];
+  transport.setLedgerFailure("complete");
+  let failure;
+  await assert.rejects(
+    applyWorkflowReset({
+      manifest,
+      prepared,
+      transport,
+      confirm: RESET_WORKFLOW_CONFIRMATION,
+      writeManifest: false,
+    }),
+    (error) => {
+      failure = error;
+      return error instanceof DevflowRepairError && error.code === "LEDGER_WRITE_FAILED";
+    },
+  );
+  const stored = transport.records.get(`${target.table}:${target.id}`);
+  stored.fields["External Observation"] = "preserved";
+  transport.setLedgerFailure(undefined);
+
+  const resumed = await resumeWorkflowReset({
+    manifest,
+    transport,
+    confirm: RESET_WORKFLOW_CONFIRMATION,
+    writeManifest: false,
+  });
+  assert.equal(resumed.status, "applied");
+  assert.equal(manifest.resetLedger[failure.details.ledgerKey].state, "complete");
+  assert.equal(transport.writes.filter((operation) => operation.key === target.key).length, 1);
+  assert.equal(stored.fields["External Observation"], "preserved");
+});
+
+test("foundation reconciliation rejects an owned-field mutation before rewriting", async () => {
+  const manifest = build();
+  const transport = resetTransport();
+  const prepared = await prepareWorkflowReset({ manifest, transport, writeManifest: false });
+  const target = prepared.foundationOperations[0];
+  transport.setLedgerFailure("complete");
+  let failure;
+  await assert.rejects(
+    applyWorkflowReset({
+      manifest,
+      prepared,
+      transport,
+      confirm: RESET_WORKFLOW_CONFIRMATION,
+      writeManifest: false,
+    }),
+    (error) => {
+      failure = error;
+      return error instanceof DevflowRepairError && error.code === "LEDGER_WRITE_FAILED";
+    },
+  );
+  const stored = transport.records.get(`${target.table}:${target.id}`);
+  const ownedField = Object.keys(target.ownedFields).find(
+    (field) => field !== "Application ID" && typeof stored.fields[field] === "string",
+  );
+  stored.fields[ownedField] = "Changed before reconciliation";
+  transport.setLedgerFailure(undefined);
+
+  await assert.rejects(
+    resumeWorkflowReset({
+      manifest,
+      transport,
+      confirm: RESET_WORKFLOW_CONFIRMATION,
+      writeManifest: false,
+    }),
+    (error) =>
+      error instanceof DevflowRepairError &&
+      error.code === "LEDGER_RECONCILIATION_CONFLICT" &&
+      error.details.ledgerKey === failure.details.ledgerKey,
+  );
+  assert.equal(transport.writes.filter((operation) => operation.key === target.key).length, 1);
 });
 
 test("reset CLI requires exact confirmation only for destructive mode", () => {

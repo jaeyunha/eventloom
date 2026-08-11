@@ -187,10 +187,89 @@ Do not call an environment deployed or verified until the observed pinned origin
 
 Do not replay the full staging dataset into production or mutate a live agenda as a smoke test. Keep both mirrors private until the final visibility gate.
 
+## 6a. Evaluator manual evidence and finalization gate
+
+The evaluator model configuration is frozen to **Terra medium (agent)** and
+**Sol high (judge)**. Do not substitute, tune, or recommend a model change.
+Provider configuration, local synthetic AI checks, and mocked responses are
+not release evidence.
+
+The 41-row map in
+[`llm-judge-runs.md`](llm-judge-runs.md#exact-id-to-artifact-to-report-map)
+freezes the pending queue from run `2026-08-11T14-11-08`: 6 Abstract
+Management, 4 AI Agenda, 12 CFP, 8 Content Management, 3 Public Widgets, 3
+Speaker CRM, and 5 Speaker Management IDs. Because `cannot_judge` automated
+items also enter the pending queue, later runs can have a different set. The
+release owner must use the candidate run's generated queue and preserve:
+
+```text
+<run-dir>/manual-checklist.md
+<run-dir>/manual-results.json
+<run-dir>/manual/<CHECK-ID>/...
+<run-dir>/report.json
+<run-dir>/report.html
+<run-dir>/run.log
+```
+
+Each `manual-results.json` key must be one pending rubric ID for that run, exactly once,
+with a parser-compatible `verdict` and `notes`. For release evidence, `notes`
+must contain the concrete expected/observed result, named reviewer and role,
+UTC ISO-8601 `reviewed_at`, exact observed boundary, limitations, and one or
+more relative redacted `evidence_refs` under `manual/<CHECK-ID>/`. Do not put
+credentials, magic links, raw inbox contents, API keys, or private payloads in
+the run directory.
+
+Allowed manual outcomes are:
+
+| Outcome | Meaning | Release result |
+| --- | --- | --- |
+| `pass` | Full criterion observed at the required boundary with cited artifacts. | Required for every release row. |
+| `partial` | A material half or boundary remains unverified. | Visible limitation; no-go. |
+| `fail` | Attempted behavior is broken. | No-go. |
+| `not_found` | The applicable surface was searched and the capability is absent. | No-go. |
+| `cannot_judge` | Evidence is insufficient or the workflow was blocked. | Leave pending; no-go. |
+
+Before invoking the finalizer, the release owner must compare the parsed
+`manual-results.json` key set with the run's generated pending IDs and reject
+missing, unknown, duplicate, placeholder, invalid, missing-evidence, or
+non-passing required records. For run `2026-08-11T14-11-08`, that set is the
+exact 41 IDs mapped above. A duplicate JSON object key is not safely detectable
+after a normal parse, so validate the source or use a duplicate-detecting
+parser.
+
+From the evaluator checkout, run the actual fold-in command:
+
+```bash
+pnpm run finalize -- --run <run-dir>
+```
+
+The current command consumes recognized pending keys, updates the matching
+`report.json` item, regenerates `report.html`, and rewrites the checklist. It
+warns/ignores unknown or non-pending keys, leaves missing/invalid/placeholder/
+`cannot_judge` entries pending, and does not itself reject duplicate keys or
+non-passing outcomes. Treat its exit status and warnings as processing output,
+not approval. Release acceptance additionally requires:
+
+1. `manual-results.json` contains every generated pending ID once each (the
+   mapped 41 IDs for run `2026-08-11T14-11-08`).
+2. Every pending outcome is `pass`, with artifacts present, redacted, and tied
+   to the same candidate SHA/environment; no limitations are hidden.
+3. `<run-dir>/report.json` shows `manualPending: 0` and `scoreWithheld: false`;
+   `<run-dir>/report.html` and the evidence header agree.
+4. Automated/local checks, provider/deployed observations, manual evidence, and
+   LLM-judge output remain labeled as separate evidence classes.
+
+No current documentation change performs these observations. Until a release
+owner completes them, the run is incomplete and cannot support a release or
+submission claim.
+
 ## 7. Final release gate
 
 Check every item against the same production candidate:
-
+- [ ] Manual evidence gate passed against the candidate run's exact generated pending IDs (the mapped 41-ID set for `2026-08-11T14-11-08`): no missing, unknown, duplicate, placeholder, invalid, missing-evidence, or non-passing records.
+- [ ] The evaluator finalizer was run from its checkout with `pnpm run finalize -- --run <run-dir>`; `report.json` has `manualPending: 0` and `scoreWithheld: false`, and the generated HTML/checklist agree.
+- [ ] Any manual limitation (`partial`, `fail`, `not_found`, `cannot_judge`), known implementation gap, or unavailable provider remains visible and is a no-go.
+- [ ] Manual, automated/local, provider/deployed, and LLM-judge evidence are labeled separately; mocked/local diagnostics and provider configuration are not release evidence.
 - [ ] Candidate SHA is clean and all evidence paths identify that SHA.
 - [ ] Current staging/production web and API origins match the pinned Workers values and observed `workers_dev = true` state.
 - [ ] Future stable domain names are clearly marked pending; no evidence claims DNS or routes are configured.
