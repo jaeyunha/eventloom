@@ -120,12 +120,24 @@ describe("organizer submission workspace", () => {
       answer: editedAbstract,
     });
   });
-  it("keeps authoritative submissions visible when optional evaluation aggregates fail", async () => {
+  it("uses the same-origin gateway and keeps submissions visible when aggregates fail", async () => {
+    const requests: string[] = [];
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input);
+      requests.push(url);
       if (url.includes("/plans?eventId=")) {
         return Response.json({
-          data: { plans: [{ id: "plan-1", rounds: [{ id: "round-1" }] }] },
+          data: {
+            plans: [
+              {
+                id: "plan-1",
+                rounds: [
+                  { id: "round-initial", sequence: 1 },
+                  { id: "round-final", sequence: 2 },
+                ],
+              },
+            ],
+          },
         });
       }
       if (url.endsWith("/assignments")) {
@@ -144,7 +156,7 @@ describe("organizer submission workspace", () => {
     });
 
     try {
-      const submission = await enrichServerSubmission("https://api.example.test", {
+      const submission = await enrichServerSubmission("", {
         id: "submission-1",
         tenantId: "org-1",
         eventId: "event-1",
@@ -164,6 +176,13 @@ describe("organizer submission workspace", () => {
         evaluationPlanId: "plan-1",
         reviewSummary: { completed: 0, total: 0, averageScore: null, maxScore: 0 },
       });
+      expect(requests).toHaveLength(4);
+      expect(requests.every((request) => request.startsWith("/api/admin/evaluations/"))).toBe(true);
+      expect(
+        requests.some((request) =>
+          request.includes("/plans/plan-1/rounds/round-final/submissions/submission-1/aggregate"),
+        ),
+      ).toBe(true);
     } finally {
       fetchMock.mockRestore();
     }

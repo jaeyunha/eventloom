@@ -13,6 +13,7 @@ import {
   type ReviewPlanSeed,
   type ReviewRound,
   ReviewWorkspace,
+  reviewerDisplayLabel,
   type RubricCriterion,
   reviewerNavigationDisabled,
   validateCreateEvaluationPlanForm,
@@ -256,6 +257,24 @@ describe("review workspace", () => {
     expect(reviewerNavigationDisabled(false, queue.isPending(), false, false)).toBe(true);
     expect(pendingStates).toEqual([true, false]);
   });
+
+  it("resolves Sam's persisted reviewer ID to a named progress label", () => {
+    expect(
+      reviewerDisplayLabel("sam-whitfield", [
+        {
+          organizationId: "org-1",
+          userId: "sam-whitfield",
+          email: "sam@example.com",
+          name: "Sam Whitfield",
+          emailVerified: true,
+          status: "active",
+          role: "reviewer",
+          createdAt: "2026-08-01T00:00:00.000Z",
+          updatedAt: "2026-08-01T00:00:00.000Z",
+        },
+      ]),
+    ).toBe("Sam Whitfield");
+  });
   it("renders an accessible first-plan form for an organizer event with no plans", () => {
     const markup = renderToStaticMarkup(
       createElement(ReviewWorkspace, {
@@ -348,7 +367,7 @@ describe("review workspace", () => {
     });
   });
 
-  it("posts the canonical DTO and returns the created plan", async () => {
+  it("posts the canonical DTO through the same-origin gateway and returns the created plan", async () => {
     const input = {
       eventId: "event-empty",
       name: "Program committee",
@@ -361,7 +380,7 @@ describe("review workspace", () => {
     const requests: Array<{ input: RequestInfo | URL; init: RequestInit | undefined }> = [];
     const responsePlan = { id: "plan-created" };
     const created = await createEvaluationPlan(
-      "https://api.example",
+      "",
       input,
       async (request, init) => {
         requests.push({ input: request, init });
@@ -375,7 +394,7 @@ describe("review workspace", () => {
     expect(created).toEqual(responsePlan);
     expect(requests).toHaveLength(1);
     const request = requests[0];
-    expect(request?.input).toBe("https://api.example/api/admin/evaluations/plans");
+    expect(request?.input).toBe("/api/admin/evaluations/plans");
     expect(request?.init?.method).toBe("POST");
     expect(JSON.parse(String(request?.init?.body))).toEqual(buildEvaluationPlanCreateDto(input));
   });
@@ -1011,7 +1030,7 @@ describe("review workspace", () => {
     );
 
     try {
-      const queue = await loadEvaluatorQueue(undefined, "https://api.example");
+      const queue = await loadEvaluatorQueue("summit-2026", "");
       const markup = renderToStaticMarkup(
         createElement(ReviewWorkspace, {
           mode: "evaluator",
@@ -1019,7 +1038,9 @@ describe("review workspace", () => {
         }),
       );
 
-      expect(requests).toEqual(["https://api.example/api/admin/evaluations/reviewer/workspace"]);
+      expect(requests).toEqual([
+        "/api/admin/evaluations/reviewer/workspace?eventId=summit-2026",
+      ]);
       expect(requests.some((request) => request.includes("/assignments/"))).toBe(false);
       expect(markup).toContain("Canonical submission title");
       expect(markup).toContain("Canonical review plan");

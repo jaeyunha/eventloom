@@ -29,6 +29,10 @@ const reviewer: EvaluationActor = {
   kind: "human",
   grants: [{ eventId: "event-1", role: "reviewer" }],
 };
+const samReviewer: EvaluationActor = {
+  ...reviewer,
+  userId: "sam-whitfield",
+};
 const otherTenantOrganizer: EvaluationActor = {
   tenantId: "tenant-2",
   userId: "organizer-2",
@@ -67,13 +71,16 @@ function createTestApp(
   });
   const app = new Hono<EvaluationRouteEnvironment>();
   app.use("*", async (context, next) => {
+    const actorHeader = context.req.header("x-test-actor");
     context.set(
       "evaluationActor",
-      context.req.header("x-test-actor") === "reviewer"
+      actorHeader === "reviewer"
         ? reviewer
-        : context.req.header("x-test-actor") === "other-tenant"
-          ? otherTenantOrganizer
-          : organizer,
+        : actorHeader === "sam"
+          ? samReviewer
+          : actorHeader === "other-tenant"
+            ? otherTenantOrganizer
+            : organizer,
     );
     await next();
   });
@@ -354,6 +361,211 @@ describe("evaluation HTTP routes", () => {
     expect(emptyBatch.status).toBe(200);
     await expect(emptyBatch.json()).resolves.toEqual({ data: { assignments: [] } });
   });
+  it("moves Sam from 0/2 to 2/2 with two blind, complete scorecards", async () => {
+    const submissions: readonly SubmissionReviewMaterial[] = [
+      {
+        id: "submission-sam-1",
+        tenantId: "tenant-1",
+        eventId: "event-1",
+        title: "First blind proposal",
+        abstract: "First proposal details",
+        answers: { identity: "First hidden identity", topic: "First visible topic" },
+        identityFieldIds: ["identity"],
+        participants: [
+          {
+            id: "participant-sam-1",
+            displayName: "First Hidden Person",
+            email: "first-hidden@example.com",
+            biography: "First hidden biography",
+          },
+        ],
+      },
+      {
+        id: "submission-sam-2",
+        tenantId: "tenant-1",
+        eventId: "event-1",
+        title: "Second blind proposal",
+        abstract: "Second proposal details",
+        answers: { identity: "Second hidden identity", topic: "Second visible topic" },
+        identityFieldIds: ["identity"],
+        participants: [
+          {
+            id: "participant-sam-2",
+            displayName: "Second Hidden Person",
+            email: "second-hidden@example.com",
+            biography: "Second hidden biography",
+          },
+        ],
+      },
+    ];
+    const app = createTestApp({}, {}, submissions);
+    const round = planRequest.rounds[0];
+    const qualityCriterion = round?.rubric.criteria[0];
+    if (round === undefined || qualityCriterion === undefined) {
+      throw new Error("The route fixture must include an initial round and criterion.");
+    }
+    const created = await jsonRequest(app, "/evaluations/plans", "POST", {
+      ...planRequest,
+      assignmentRule: { reviewsPerSubmission: 1, maxAssignmentsPerReviewer: 2 },
+      rounds: [
+        {
+          ...round,
+          reviewerPool: { reviewerIds: [samReviewer.userId], name: "Sam review pool" },
+          rubric: {
+            ...round.rubric,
+            criteria: [
+              qualityCriterion,
+              {
+                id: "recommendation",
+                label: "Recommendation",
+                description: "Committee recommendation",
+                minimum: 1,
+                maximum: 3,
+                weight: 1,
+                required: true,
+                inputType: "dropdown",
+                options: [
+                  { id: "accept", label: "Accept", value: "accept" },
+                  { id: "maybe", label: "Maybe", value: "maybe" },
+                  { id: "reject", label: "Reject", value: "reject" },
+                ],
+              },
+              {
+                id: "evidence",
+                label: "Evidence",
+                description: "Written evidence for the scorecard.",
+                minimum: 0,
+                maximum: 1,
+                weight: 1,
+                required: true,
+                inputType: "free_text",
+              },
+            ],
+          },
+        },
+      ],
+    });
+    expect(created.status).toBe(201);
+    await jsonRequest(app, "/evaluations/plans/plan-1/open", "POST", {
+      expectedVersion: 1,
+    });
+
+    for (const submission of submissions) {
+      const assigned = await jsonRequest(
+        app,
+        "/evaluations/plans/plan-1/assignments",
+        "POST",
+        {
+          roundId: "round-1",
+          submissionId: submission.id,
+          reviewerIds: [samReviewer.userId],
+        },
+      );
+      expect(assigned.status).toBe(201);
+    }
+
+    const assignmentsResponse = await app.request("/evaluations/plans/plan-1/assignments");
+    const assignmentsBody = (await assignmentsResponse.json()) as {
+      assignments: Array<{ id: string; reviewerId: string; submissionId: string }>;
+    };
+    expect(assignmentsBody.assignments).toHaveLength(2);
+    expect(assignmentsBody.assignments.map((assignment) => assignment.reviewerId)).toEqual([
+      samReviewer.userId,
+      samReviewer.userId,
+    ]);
+    expect(
+      new Set(assignmentsBody.assignments.map((assignment) => assignment.submissionId)),
+    ).toEqual(new Set(["submission-sam-1", "submission-sam-2"]));
+
+    const initialProgressResponse = await app.request("/evaluations/plans/plan-1/progress");
+    const initialProgress = (await initialProgressResponse.json()) as {
+      total: number;
+      submitted: number;
+      reviewers: Array<{
+        reviewerId: string;
+        assigned: number;
+        submitted: number;
+        outstanding: number;
+        completionPercent: number;
+      }>;
+    };
+    expect(initialProgress).toMatchObject({ total: 2, submitted: 0 });
+    expect(initialProgress.reviewers).toEqual([
+      expect.objectContaining({
+        reviewerId: samReviewer.userId,
+        assigned: 2,
+        submitted: 0,
+        outstanding: 2,
+        completionPercent: 0,
+      }),
+    ]);
+
+    const reviewerWorkspace = await app.request(
+      "/evaluations/reviewer/workspace?eventId=event-1",
+      { headers: { "x-test-actor": "sam" } },
+    );
+    const reviewerWorkspaceBody = (await reviewerWorkspace.json()) as {
+      data: {
+        assignments: Array<{
+          assignment: { id: string };
+          submission: { answers: Record<string, unknown>; participants: unknown[] };
+        }>;
+      };
+    };
+    expect(reviewerWorkspaceBody.data.assignments).toHaveLength(2);
+    expect(
+      reviewerWorkspaceBody.data.assignments.every(
+        (entry) =>
+          entry.submission.participants.length === 0 &&
+          !("identity" in entry.submission.answers) &&
+          "topic" in entry.submission.answers,
+      ),
+    ).toBe(true);
+
+    for (const assignment of assignmentsBody.assignments) {
+      const saved = await jsonRequest(
+        app,
+        `/evaluations/assignments/${assignment.id}/review`,
+        "PUT",
+        {
+          scores: [
+            { criterionId: "quality", value: 4, origin: "human" },
+            { criterionId: "recommendation", value: "accept", origin: "human" },
+            {
+              criterionId: "evidence",
+              value: `Complete evidence for ${assignment.submissionId}.`,
+              origin: "human",
+            },
+          ],
+          comment: "Complete scorecard.",
+        },
+        "sam",
+      );
+      const savedBody = (await saved.json()) as { version: number };
+      expect(saved.status).toBe(200);
+      const submitted = await jsonRequest(
+        app,
+        `/evaluations/assignments/${assignment.id}/review/submit`,
+        "POST",
+        { expectedVersion: savedBody.version },
+        "sam",
+      );
+      expect(submitted.status).toBe(200);
+    }
+
+    const completedProgressResponse = await app.request("/evaluations/plans/plan-1/progress");
+    const completedProgress = (await completedProgressResponse.json()) as typeof initialProgress;
+    expect(completedProgress).toMatchObject({ total: 2, submitted: 2 });
+    expect(completedProgress.reviewers).toEqual([
+      expect.objectContaining({
+        reviewerId: samReviewer.userId,
+        assigned: 2,
+        submitted: 2,
+        outstanding: 0,
+        completionPercent: 100,
+      }),
+    ]);
+  });
   it("persists canonical verified reviewer IDs and fails closed for aliases or other tenants", async () => {
     const reviewerIdentity: NonNullable<EvaluationRouteOptions["reviewerIdentity"]> = {
       resolveReviewerIds: async (actor, input) =>
@@ -540,28 +752,54 @@ describe("evaluation HTTP routes", () => {
           id: "round-2",
           name: "Final review",
           sequence: 2,
-          reviewerPool: { reviewerIds: [], name: "Final committee" },
+          opensAt: "2026-08-11T12:00:00.000Z",
+          closesAt: "2026-08-12T12:00:00.000Z",
+          reviewerPool: { reviewerIds: ["reviewer-2"], name: "Final committee" },
+          rubric: {
+            id: "rubric-2",
+            name: "Finalist rubric",
+            criteria: [
+              {
+                ...firstCriterion,
+                id: "final-fit",
+                label: "Final program fit",
+                description: "Fit for the final program.",
+              },
+            ],
+          },
         },
       ],
     });
     const planResponse = await app.request("/evaluations/plans/plan-1");
     const plan = (await planResponse.json()) as {
       rounds: Array<{
+        id: string;
+        opensAt?: string | null;
+        closesAt: string | null;
         reviewerPool?: { reviewerIds: string[] };
-        rubric: { criteria: Array<{ inputType?: string; options?: unknown[] }> };
+        rubric: {
+          id: string;
+          criteria: Array<{ id: string; inputType?: string; options?: unknown[] }>;
+        };
       }>;
     };
 
     expect(response.status).toBe(201);
     expect(planResponse.status).toBe(200);
     expect(plan.rounds[0]?.reviewerPool?.reviewerIds).toEqual(["reviewer-1"]);
-    expect(plan.rounds[1]?.reviewerPool?.reviewerIds).toEqual([]);
+    expect(plan.rounds[1]?.reviewerPool?.reviewerIds).toEqual(["reviewer-2"]);
     expect(plan.rounds[0]?.rubric.criteria.map((criterion) => criterion.inputType)).toEqual([
       undefined,
       "dropdown",
       "free_text",
     ]);
     expect(plan.rounds[0]?.rubric.criteria[1]?.options).toHaveLength(3);
+    expect(plan.rounds.map((round) => [round.opensAt, round.closesAt])).toEqual([
+      ["2026-08-01T12:00:00.000Z", "2026-08-11T12:00:00.000Z"],
+      ["2026-08-11T12:00:00.000Z", "2026-08-12T12:00:00.000Z"],
+    ]);
+    expect(plan.rounds.map((round) => round.rubric.id)).toEqual(["rubric-1", "rubric-2"]);
+    expect(plan.rounds[1]?.rubric.criteria.map((criterion) => criterion.id)).toEqual(["final-fit"]);
 
     await jsonRequest(app, "/evaluations/plans/plan-1/open", "POST", { expectedVersion: 1 });
     const outsidePool = await jsonRequest(app, "/evaluations/plans/plan-1/assignments", "POST", {
@@ -572,8 +810,26 @@ describe("evaluation HTTP routes", () => {
     expect(outsidePool.status).toBe(403);
   });
 
-  it("exports a stable organizer CSV without crossing tenants", async () => {
-    const app = createTestApp();
+  it("exports a stable, formula-safe organizer CSV without crossing tenants", async () => {
+    const app = createTestApp({}, {}, [
+      {
+        id: "submission-1",
+        tenantId: "tenant-1",
+        eventId: "event-1",
+        title: "=2+3",
+        abstract: "Proposal details",
+        answers: { topic: "Visible" },
+        identityFieldIds: [],
+        participants: [
+          {
+            id: "participant-1",
+            displayName: "@attacker",
+            email: "participant@example.com",
+            biography: "Participant biography",
+          },
+        ],
+      },
+    ]);
     await jsonRequest(app, "/evaluations/plans", "POST", planRequest);
     const first = await app.request("/evaluations/plans/plan-1/export.csv");
     const second = await app.request("/evaluations/plans/plan-1/export.csv");
@@ -589,6 +845,7 @@ describe("evaluation HTTP routes", () => {
     expect(firstText).toBe(secondText);
     expect(firstText).toContain("submission_id,title,participants");
     expect(firstText).toContain("submission-1");
+    expect(firstText).toContain("submission-1,'=2+3,'@attacker");
     expect(otherTenant.status).toBe(404);
   });
 
