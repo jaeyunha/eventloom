@@ -1,9 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  getPublishedAgenda,
-  getPublishedProgram,
-  PublicEmbedApiError,
-} from "./api";
+import { getPublishedAgenda, getPublishedProgram, PublicEmbedApiError } from "./api";
 import type { PublishedAgenda, PublishedSpeakerGallery } from "./types";
 
 const publishedAgenda: PublishedAgenda = {
@@ -98,7 +94,12 @@ describe("public embed API", () => {
       if (speakers) speakerReads += 1;
       return new Response(
         JSON.stringify({
-          data: speakers && speakerReads === 1 ? staleSpeakers : speakers ? publishedSpeakers : publishedAgenda,
+          data:
+            speakers && speakerReads === 1
+              ? staleSpeakers
+              : speakers
+                ? publishedSpeakers
+                : publishedAgenda,
         }),
         { status: 200, headers: { "content-type": "application/json" } },
       );

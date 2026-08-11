@@ -1049,7 +1049,6 @@ async function loadReviewerWorkspace(
   }
 }
 
-
 export async function loadEvaluatorQueue(
   eventId: string | undefined,
   baseUrl: string,
@@ -1296,7 +1295,7 @@ export function ReviewWorkspace({
     return () => {
       active = false;
     };
-  }, [baseUrl, eventId, mode, reviewerQueueMode, initialStateProvided]);
+  }, [baseUrl, eventId, mode, initialStateProvided]);
 
   if (loading) {
     return (

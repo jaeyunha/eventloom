@@ -665,10 +665,7 @@ export function getAcceptedHandoffMetadata(
   };
 }
 
-function participantFieldValue(
-  participant: CanonicalSubmissionParticipant,
-  key: string,
-): unknown {
+function participantFieldValue(participant: CanonicalSubmissionParticipant, key: string): unknown {
   if (key === "firstName") return participant.firstName;
   if (key === "lastName") return participant.lastName;
   if (key === "email") return participant.email;
@@ -688,9 +685,7 @@ function participantOrganization(
   return value === "—" ? "" : value;
 }
 
-export function mapCanonicalSubmission(
-  envelope: CanonicalSubmissionEnvelope,
-): SubmissionRecord {
+export function mapCanonicalSubmission(envelope: CanonicalSubmissionEnvelope): SubmissionRecord {
   const { submission, submissionFields, participantFields } = envelope;
   const definitions = new Map(submissionFields.map((definition) => [definition.key, definition]));
   const answer = (key: string): string =>
@@ -730,9 +725,7 @@ export function mapCanonicalSubmission(
     updatedAt: submission.updatedAt,
     participants: submission.participants.map((participant) => ({
       id: participant.id,
-      name:
-        `${participant.firstName} ${participant.lastName}`.trim() ||
-        participant.email,
+      name: `${participant.firstName} ${participant.lastName}`.trim() || participant.email,
       email: participant.email,
       role: participantRole(participant.role),
       organization: participantOrganization(participant, participantFields),
@@ -1132,7 +1125,9 @@ export function SubmissionListWorkspace({
             <span>accepted</span>
           </div>
           <div className={styles.summaryNote}>
-            <span>{loading ? "Loading canonical CFP submissions…" : "Canonical CFP organizer view"}</span>
+            <span>
+              {loading ? "Loading canonical CFP submissions…" : "Canonical CFP organizer view"}
+            </span>
             <small>
               {loadError ??
                 "Submission content comes from CFP; review assignments and decisions are optional evaluation enrichment."}
@@ -1633,9 +1628,7 @@ export function SubmissionDetailWorkspace({
     )
       .then((records) => {
         if (!active) return null;
-        const envelope = records.find(
-          (candidate) => candidate.submission.id === submissionId,
-        );
+        const envelope = records.find((candidate) => candidate.submission.id === submissionId);
         return envelope === undefined ? null : enrichCanonicalSubmission(baseUrl, envelope);
       })
       .then((loaded) => {
@@ -1795,7 +1788,9 @@ export function SubmissionDetailWorkspace({
                         {participant.organization ? ` · ${participant.organization}` : ""}
                       </span>
                       <a href={`mailto:${participant.email}`}>{participant.email}</a>
-                      {participant.biography ? <span>Biography: {participant.biography}</span> : null}
+                      {participant.biography ? (
+                        <span>Biography: {participant.biography}</span>
+                      ) : null}
                       {Object.entries(participant.answers ?? {}).map(([question, answer]) => (
                         <span key={`${participant.id}-${question}`}>
                           {question}: {answerText(answer) ?? "—"}

@@ -354,17 +354,13 @@ describe("review workspace", () => {
     };
     const requests: Array<{ input: RequestInfo | URL; init: RequestInit | undefined }> = [];
     const responsePlan = { id: "plan-created" };
-    const created = await createEvaluationPlan(
-      "",
-      input,
-      async (request, init) => {
-        requests.push({ input: request, init });
-        return new Response(JSON.stringify(responsePlan), {
-          status: 201,
-          headers: { "content-type": "application/json" },
-        });
-      },
-    );
+    const created = await createEvaluationPlan("", input, async (request, init) => {
+      requests.push({ input: request, init });
+      return new Response(JSON.stringify(responsePlan), {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      });
+    });
 
     expect(created).toEqual(responsePlan);
     expect(requests).toHaveLength(1);
@@ -859,9 +855,7 @@ describe("review workspace", () => {
         }),
       );
 
-      expect(requests).toEqual([
-        "/api/admin/evaluations/reviewer/workspace?eventId=summit-2026",
-      ]);
+      expect(requests).toEqual(["/api/admin/evaluations/reviewer/workspace?eventId=summit-2026"]);
       expect(requests.some((request) => request.includes("/assignments/"))).toBe(false);
       expect(markup).toContain("Canonical submission title");
       expect(markup).toContain("Canonical review plan");

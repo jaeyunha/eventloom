@@ -69,8 +69,7 @@ class FakeSpeakerRepository implements SpeakerRepository {
   createProfile(candidate: SpeakerProfile): Promise<RepositoryResult<SpeakerProfile>> {
     const exists = this.profiles.some(
       (profile) =>
-        profile.eventId === candidate.eventId &&
-        profile.participantId === candidate.participantId,
+        profile.eventId === candidate.eventId && profile.participantId === candidate.participantId,
     );
     if (exists) return Promise.resolve({ ok: false, reason: "version_conflict" });
     this.profiles.push(structuredClone(candidate));
@@ -110,8 +109,7 @@ class FakeSpeakerRepository implements SpeakerRepository {
   updateProfile(command: UpdateSpeakerProfileCommand): Promise<RepositoryResult<SpeakerProfile>> {
     const index = this.profiles.findIndex(
       (profile) =>
-        profile.eventId === command.eventId &&
-        profile.participantId === command.participantId,
+        profile.eventId === command.eventId && profile.participantId === command.participantId,
     );
     const current = this.profiles[index];
     if (current === undefined) return Promise.resolve({ ok: false, reason: "not_found" });
@@ -1487,13 +1485,10 @@ describe("SpeakerService portal access", () => {
       },
       submission("submission-co", "participant-co"),
     );
-    repository.profiles.push(
-      profile("participant-primary"),
-      {
-        ...profile("participant-co"),
-        displayName: "Co Speaker",
-      },
-    );
+    repository.profiles.push(profile("participant-primary"), {
+      ...profile("participant-co"),
+      displayName: "Co Speaker",
+    });
     repository.tasks.push(
       task({
         id: "task-primary",
@@ -2425,10 +2420,7 @@ it("persists logistics, exposes reminder eligibility, and queues a versioned bul
   expect(new Set(task.map((item) => item.participantId))).toEqual(
     new Set(["participant-1", "participant-2"]),
   );
-  expect(task.map((item) => item.assigneeIds)).toEqual([
-    ["participant-1"],
-    ["participant-2"],
-  ]);
+  expect(task.map((item) => item.assigneeIds)).toEqual([["participant-1"], ["participant-2"]]);
   expect(task.every((item) => item.dueAt === "2026-08-07")).toBe(true);
 
   const eligibility = await service.getReminderEligibility({

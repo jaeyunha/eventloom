@@ -653,9 +653,7 @@ function payloadString(value: Record<string, unknown>, key: string): string {
   return candidate.trim();
 }
 
-function communicationStatusTarget(
-  value: unknown,
-): OutboxCommunicationStatusTarget | null {
+function communicationStatusTarget(value: unknown): OutboxCommunicationStatusTarget | null {
   if (!isRecord(value)) return null;
   if (value.effect === "send_communication") {
     return {
@@ -668,8 +666,7 @@ function communicationStatusTarget(
   if (value.effect === "send_crm_outreach") {
     return {
       kind: "crm_outreach",
-      eventId:
-        value.eventId === null ? null : payloadString(value, "eventId"),
+      eventId: value.eventId === null ? null : payloadString(value, "eventId"),
       outreachId: payloadString(value, "outreachId"),
       contactId: payloadString(value, "contactId"),
       idempotencyKey: payloadString(value, "idempotencyKey"),

@@ -294,14 +294,9 @@ export function createRuntimeWorker(): ExportedHandler<RuntimeBindings> {
         return;
       }
       const runtime = runtimeFor(bindings);
-      await consumeOutboxQueue(
-        batch,
-        bindings as OutboxConsumerBindings,
-        executionContext,
-        {
-          statusRecorder: createOutboxDeliveryStatusRecorder(runtime.dependencies),
-        },
-      );
+      await consumeOutboxQueue(batch, bindings as OutboxConsumerBindings, executionContext, {
+        statusRecorder: createOutboxDeliveryStatusRecorder(runtime.dependencies),
+      });
     },
     async scheduled(controller, bindings) {
       let runtime: RuntimeApplication;

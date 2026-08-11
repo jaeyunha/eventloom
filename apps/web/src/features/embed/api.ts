@@ -34,7 +34,9 @@ const REMOTE_API_ORIGINS = {
   ],
 } as const;
 
-function configuredEnvironment(value: string | undefined = process.env.APP_ENV): PublicEmbedEnvironment {
+function configuredEnvironment(
+  value: string | undefined = process.env.APP_ENV,
+): PublicEmbedEnvironment {
   const normalized = value?.trim();
   return normalized === "local" || normalized === "staging" || normalized === "production"
     ? normalized

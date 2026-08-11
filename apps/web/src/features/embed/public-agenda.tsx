@@ -24,7 +24,6 @@ function uniqueValues(values: readonly string[]): readonly string[] {
   );
 }
 
-
 function speakerRole(speaker: PublishedSpeaker): string {
   const jobTitle = speaker.jobTitle?.trim() ?? "";
   const organization = speaker.organization?.trim() ?? "";
@@ -207,16 +206,7 @@ export function PublicAgendaView({ program }: Readonly<{ program: PublishedProgr
           (!room || entry.roomName === room) &&
           (!normalizedQuery || entrySearchText(entry, speakers).includes(normalizedQuery)),
       ),
-    [
-      agenda.entries,
-      agenda.event.timeZone,
-      day,
-      format,
-      normalizedQuery,
-      speakers,
-      room,
-      track,
-    ],
+    [agenda.entries, agenda.event.timeZone, day, format, normalizedQuery, speakers, room, track],
   );
   const hasFacetFilters = Boolean(normalizedQuery || track || format || room);
   const visibleDays = useMemo(() => {

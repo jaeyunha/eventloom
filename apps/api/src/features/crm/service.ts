@@ -879,7 +879,8 @@ export class CrmService {
             });
           }
         } catch (error) {
-          if (!(error instanceof CrmServiceError) || error.code !== "CRM_INVALID_INPUT") throw error;
+          if (!(error instanceof CrmServiceError) || error.code !== "CRM_INVALID_INPUT")
+            throw error;
           skipped += 1;
           rows.push({
             rowNumber,
@@ -1489,11 +1490,7 @@ export class CrmService {
       }
       const existing = await repository.getProjection(organizationId, eventId, contactId);
       if (existing !== null) {
-        if (
-          existing.role !== role ||
-          existing.sessionId !== sessionId ||
-          existing.note !== note
-        ) {
+        if (existing.role !== role || existing.sessionId !== sessionId || existing.note !== note) {
           throw conflict(
             "This contact already has a different canonical relationship for the event.",
           );
@@ -1522,11 +1519,7 @@ export class CrmService {
       const saved = await repository.saveProjection(projection);
       assertTenant(saved, organizationId);
       if (saved.id !== projection.id) {
-        if (
-          saved.role !== role ||
-          saved.sessionId !== sessionId ||
-          saved.note !== note
-        ) {
+        if (saved.role !== role || saved.sessionId !== sessionId || saved.note !== note) {
           throw conflict(
             "This contact already has a different canonical relationship for the event.",
           );
@@ -1655,7 +1648,7 @@ export class CrmService {
               terminal: status !== "queued",
               failureReason:
                 status === "failed"
-                  ? sent.failureReason ?? "The delivery boundary rejected the recipient."
+                  ? (sent.failureReason ?? "The delivery boundary rejected the recipient.")
                   : null,
             };
           } else {
@@ -1718,31 +1711,25 @@ export class CrmService {
     const organizationId = identifier(input.organizationId, "organizationId");
     const outreachId = identifier(input.outreachId, "outreachId");
     const idempotencyKey = text(input.idempotencyKey, "idempotencyKey", 512);
-    const providerMessageId = optionalText(
-      input.providerMessageId,
-      "providerMessageId",
-      512,
-    );
+    const providerMessageId = optionalText(input.providerMessageId, "providerMessageId", 512);
     const reason = optionalText(input.reason, "reason", 2_000);
     const occurredAt =
       input.occurredAt === undefined
         ? nowIso(this.#clock)
         : (() => {
             const parsed = new Date(input.occurredAt);
-            if (!Number.isFinite(parsed.getTime())) throw invalid("occurredAt must be an ISO instant.");
+            if (!Number.isFinite(parsed.getTime()))
+              throw invalid("occurredAt must be an ISO instant.");
             return parsed.toISOString();
           })();
     const repository = this.requireRepository();
-    const current = await repository.getOutreachByIdempotencyKey(
-      organizationId,
-      idempotencyKey,
-    );
-    if (current === null || current.id !== outreachId) throw notFound("The outreach was not found.");
+    const current = await repository.getOutreachByIdempotencyKey(organizationId, idempotencyKey);
+    if (current === null || current.id !== outreachId)
+      throw notFound("The outreach was not found.");
     if (current.terminal) {
       if (
         current.status === input.status &&
-        (providerMessageId === undefined ||
-          providerMessageId === current.providerMessageId) &&
+        (providerMessageId === undefined || providerMessageId === current.providerMessageId) &&
         (reason === undefined || reason === current.failureReason)
       ) {
         return clone(current);
@@ -1819,7 +1806,9 @@ export class CrmService {
     const outreach =
       repository.listOutreach === undefined ? [] : await repository.listOutreach(organization);
     const outreachCounts = { queued: 0, sent: 0, failed: 0 };
-    for (const command of outreach.filter((candidate) => candidate.organizationId === organization)) {
+    for (const command of outreach.filter(
+      (candidate) => candidate.organizationId === organization,
+    )) {
       if (command.status === "queued") outreachCounts.queued += 1;
       else if (command.status === "sent" || command.status === "delivered")
         outreachCounts.sent += 1;

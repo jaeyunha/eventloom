@@ -365,10 +365,7 @@ export function speakerOnboardingTaskDefinitions(
   const definitions = new Map<string, SpeakerOnboardingTaskDefinition>();
   for (const row of rows) {
     for (const task of row.tasks) {
-      if (
-        task.type !== "general" ||
-        task.description !== ORGANIZER_ONBOARDING_TASK_DESCRIPTION
-      ) {
+      if (task.type !== "general" || task.description !== ORGANIZER_ONBOARDING_TASK_DESCRIPTION) {
         continue;
       }
       const definitionId = speakerTaskDefinitionId(task);
@@ -377,9 +374,7 @@ export function speakerOnboardingTaskDefinitions(
         definitionId,
         title: current?.title ?? task.title,
         dueAt: current?.dueAt ?? task.dueAt,
-        participantIds: [
-          ...new Set([...(current?.participantIds ?? []), task.participantId]),
-        ],
+        participantIds: [...new Set([...(current?.participantIds ?? []), task.participantId])],
       });
     }
   }
@@ -415,9 +410,7 @@ export function speakerInvitationReady(
   previews: readonly SpeakerInvitationPreview[],
   speaker: Pick<SpeakerRecord, "participantId" | "email" | "status">,
 ): boolean {
-  const matching = previews.filter(
-    (preview) => preview.participantId === speaker.participantId,
-  );
+  const matching = previews.filter((preview) => preview.participantId === speaker.participantId);
   return (
     speaker.status !== "revoked" &&
     matching.length === 1 &&
@@ -948,9 +941,9 @@ export function SpeakerWorkspace({
     readonly SpeakerInvitationPreview[] | null
   >(null);
   const [invitationResult, setInvitationResult] = useState<SpeakerInvitationResult | null>(null);
-  const [invitationResultParticipantId, setInvitationResultParticipantId] = useState<
-    string | null
-  >(null);
+  const [invitationResultParticipantId, setInvitationResultParticipantId] = useState<string | null>(
+    null,
+  );
   const [invitationError, setInvitationError] = useState<string | null>(null);
   const [invitationSendIdempotencyKey, setInvitationSendIdempotencyKey] = useState<string | null>(
     null,
@@ -1155,8 +1148,7 @@ export function SpeakerWorkspace({
     [progress?.rows, progressFilter, query, sessionFilter, speakers, statusFilter],
   );
   const progressRows = useMemo(
-    () =>
-      (progress?.rows ?? []).filter((row) => speakerProgressMatches(row.tasks, progressFilter)),
+    () => (progress?.rows ?? []).filter((row) => speakerProgressMatches(row.tasks, progressFilter)),
     [progress?.rows, progressFilter],
   );
   const onboardingTaskDefinitions = useMemo(
@@ -1171,8 +1163,7 @@ export function SpeakerWorkspace({
         );
   const invitationPreviewCount = selectedInvitationPreview.length;
   const invitationReady =
-    selectedSpeaker !== null &&
-    speakerInvitationReady(invitationPreview ?? [], selectedSpeaker);
+    selectedSpeaker !== null && speakerInvitationReady(invitationPreview ?? [], selectedSpeaker);
   const selectedInvitationResultRecipient =
     selectedSpeaker === null ||
     invitationResult === null ||
@@ -1577,9 +1568,7 @@ export function SpeakerWorkspace({
       return;
     }
     if (progress === null || progressError !== null) {
-      setNotice(
-        "Wait for API-backed onboarding progress to load before assigning another task.",
-      );
+      setNotice("Wait for API-backed onboarding progress to load before assigning another task.");
       return;
     }
     const draft = {
@@ -1597,11 +1586,7 @@ export function SpeakerWorkspace({
     setNotice(null);
     try {
       const latest = await withTimeout(async (signal) => {
-        const latestRoster = normalizeRoster(
-          await api.list(signal),
-          organizationId,
-          eventId,
-        );
+        const latestRoster = normalizeRoster(await api.list(signal), organizationId, eventId);
         const latestProgress = await progressFor(
           api,
           latestRoster.speakers,
@@ -1632,9 +1617,7 @@ export function SpeakerWorkspace({
           "The speaker task response belongs to a different organization or event.",
         );
       }
-      const returnedAssignees = new Set(
-        taskEnvelope.tasks.map((task) => task.participantId),
-      );
+      const returnedAssignees = new Set(taskEnvelope.tasks.map((task) => task.participantId));
       if (
         taskEnvelope.tasks.length !== input.participantIds.length ||
         returnedAssignees.size !== input.participantIds.length ||
@@ -1647,9 +1630,7 @@ export function SpeakerWorkspace({
             task.type !== "general",
         )
       ) {
-        throw new TypeError(
-          "The speaker task response does not match the selected assignees.",
-        );
+        throw new TypeError("The speaker task response does not match the selected assignees.");
       }
       setRoster((current) =>
         current === null
@@ -1687,9 +1668,7 @@ export function SpeakerWorkspace({
             const assigned = taskEnvelope.tasks.filter(
               (task) => task.participantId === row.participantId,
             );
-            return assigned.length === 0
-              ? row
-              : { ...row, tasks: [...row.tasks, ...assigned] };
+            return assigned.length === 0 ? row : { ...row, tasks: [...row.tasks, ...assigned] };
           }),
         };
       });
@@ -1924,13 +1903,8 @@ export function SpeakerWorkspace({
         () => api.previewInvitations({ participantIds: [participantId] }),
         "Portal invitation preview",
       );
-      if (
-        preview.length !== 1 ||
-        preview[0]?.participantId !== participantId
-      ) {
-        throw new TypeError(
-          "The invitation preview does not match the selected speaker.",
-        );
+      if (preview.length !== 1 || preview[0]?.participantId !== participantId) {
+        throw new TypeError("The invitation preview does not match the selected speaker.");
       }
       setInvitationPreview(preview);
     } catch (reason: unknown) {
@@ -1941,14 +1915,8 @@ export function SpeakerWorkspace({
   }
 
   async function sendSelectedSpeakerInvitation(): Promise<void> {
-    if (
-      api === null ||
-      selectedSpeaker === null ||
-      !invitationReady
-    ) {
-      setInvitationError(
-        "Preview an eligible portal invitation before sending it.",
-      );
+    if (api === null || selectedSpeaker === null || !invitationReady) {
+      setInvitationError("Preview an eligible portal invitation before sending it.");
       return;
     }
     const participantId = selectedSpeaker.participantId;
@@ -1977,9 +1945,7 @@ export function SpeakerWorkspace({
       }
       setInvitationResult(result);
       setInvitationResultParticipantId(participantId);
-      setInvitationHistory((current) =>
-        retainInvitationHistory(current, preview, result),
-      );
+      setInvitationHistory((current) => retainInvitationHistory(current, preview, result));
       setInvitationSendIdempotencyKey(null);
     } catch (reason: unknown) {
       setInvitationError(errorMessage(reason));
@@ -3174,8 +3140,8 @@ export function SpeakerWorkspace({
             <div style={{ display: "grid", gap: "0.4rem" }}>
               <h3 style={{ margin: 0, fontSize: "0.9rem" }}>Portal invitation send history</h3>
               <ul aria-label="Portal invitation send history" style={listStyle}>
-                {invitationHistory.map((entry, index) => (
-                  <li key={`${entry.occurredAt}:${index}`}>
+                {invitationHistory.map((entry) => (
+                  <li key={`${entry.result.idempotencyKey}:${entry.occurredAt}`}>
                     <strong>{statusLabel(entry.result.status)}</strong> ·{" "}
                     {entry.preview
                       .map((preview) => preview.recipientEmail || preview.participantId)

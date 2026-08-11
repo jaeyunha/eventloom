@@ -96,7 +96,6 @@ function publicEventDays(
   return days.sort((left, right) => left.date.localeCompare(right.date));
 }
 
-
 function speakerRole(speaker: PublishedSpeaker): string {
   const jobTitle = speaker.jobTitle?.trim() ?? "";
   const organization = speaker.organization?.trim() ?? "";

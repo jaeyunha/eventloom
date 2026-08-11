@@ -1,8 +1,5 @@
 import { PortalHome } from "@/features/portal/portal-home";
-import {
-  PortalWorkspace,
-  type PortalWorkspaceSection,
-} from "@/features/portal/portal-workspace";
+import { PortalWorkspace, type PortalWorkspaceSection } from "@/features/portal/portal-workspace";
 
 const workspaceSections = new Set<PortalWorkspaceSection>([
   "co-speakers",

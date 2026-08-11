@@ -118,10 +118,7 @@ describe("CFP authenticated session", () => {
   it("keeps sign-up verification required when the returned user is unverified", async () => {
     const api = createCfpApi("https://web.example.com", (async (input) => {
       if (String(input).endsWith("/sign-in/email")) {
-        return Response.json(
-          { error: { code: "INVALID_EMAIL_OR_PASSWORD" } },
-          { status: 401 },
-        );
+        return Response.json({ error: { code: "INVALID_EMAIL_OR_PASSWORD" } }, { status: 401 });
       }
       return Response.json({
         token: null,

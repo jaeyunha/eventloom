@@ -423,8 +423,16 @@ describe("speaker workspace contracts", () => {
       completedAt: "2026-08-10T00:00:00.000Z",
     };
     const rows = [
-      { participantId: speaker.participantId, displayName: speaker.displayName, tasks: [completedTask] },
-      { participantId: secondSpeaker.participantId, displayName: secondSpeaker.displayName, tasks: [] },
+      {
+        participantId: speaker.participantId,
+        displayName: speaker.displayName,
+        tasks: [completedTask],
+      },
+      {
+        participantId: secondSpeaker.participantId,
+        displayName: secondSpeaker.displayName,
+        tasks: [],
+      },
     ];
 
     expect(speakerProgressMatches([completedTask], "complete")).toBe(true);
@@ -562,12 +570,10 @@ describe("speaker workspace contracts", () => {
       },
     ];
     expect(speakerInvitationReady(preview, speaker)).toBe(true);
-    expect(
-      speakerInvitationReady(preview, { ...speaker, email: "changed@example.test" }),
-    ).toBe(false);
-    expect(
-      speakerInvitationReady([{ ...preview[0]!, state: "blocked" }], speaker),
-    ).toBe(false);
+    expect(speakerInvitationReady(preview, { ...speaker, email: "changed@example.test" })).toBe(
+      false,
+    );
+    expect(speakerInvitationReady([{ ...preview[0]!, state: "blocked" }], speaker)).toBe(false);
     expect(speakerInvitationReady(preview, { ...speaker, status: "revoked" })).toBe(false);
     const first = retainInvitationHistory(
       [],
@@ -646,7 +652,9 @@ describe("speaker workspace", () => {
     expect(pendingMarkup).not.toContain("<button");
   });
   it("renders organizer asset metadata and keeps preview separate from invitation send", () => {
-    const metadata = renderToStaticMarkup(createElement(SpeakerAssetMetadata, { asset: readyAsset }));
+    const metadata = renderToStaticMarkup(
+      createElement(SpeakerAssetMetadata, { asset: readyAsset }),
+    );
     const controls = renderToStaticMarkup(
       createElement(SpeakerInvitationControls, {
         previewBusy: false,
