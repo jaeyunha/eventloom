@@ -92,13 +92,13 @@ RUN_OPENAI_LIVE=1 bunx vitest run \
 
 These synthetic checks prove the real Responses API adapter and local agenda proposal lifecycle. They do not replace deployed staging UI/API acceptance.
 
-Staging and production remain pinned to `AI_PROVIDER="cloudflare"` and the Workers AI binding in `apps/api/wrangler.toml`. To deliberately switch a deployed environment to OpenAI, review the data boundary, change only that environment's non-secret provider/model configuration, and store the key as a Cloudflare secret:
+Staging and production are configured with `AI_PROVIDER="openai"` and `OPENAI_MODEL` in `apps/api/wrangler.toml`. Before deploying either environment, store its distinct OpenAI key as a Cloudflare secret:
 
 ```bash
 bunx wrangler secret put OPENAI_API_KEY --cwd apps/api --env staging
 ```
 
-Use the corresponding `production` environment only after staging acceptance. Never add the key to `wrangler.toml`; rotate or delete the secret when the provider is disabled.
+Use a separate key and the corresponding `production` environment only after staging acceptance. Never add either key to `wrangler.toml`; rotate or delete a secret when AI is disabled.
 
 ## Cloudflare resources and API deployment
 

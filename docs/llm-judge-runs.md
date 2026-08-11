@@ -55,7 +55,7 @@ The judge provider returned an HTTP 520 response with Cloudflare HTML during jud
 - Typecheck/lint/format: passed
 - API Wrangler dry-run build: passed
 
-The live checks used synthetic prompts and local seeded records. They establish that the backend key reaches the API-only adapter, the raw Responses REST output is parsed, and a real provider proposal passes through the local agenda suggestion lifecycle. They do not prove the deployed staging UI, Cloudflare Workers AI, evaluation/remix workflows, human apply/reject behavior, persistence across deployed reloads, or release acceptance.
+The live checks used synthetic prompts and local seeded records. They establish that the backend key reaches the API-only adapter, the raw Responses REST output is parsed, and a real OpenAI proposal passes through the local agenda suggestion lifecycle. They do not prove the deployed staging UI, evaluation/remix workflows, human apply/reject behavior, persistence across deployed reloads, or release acceptance.
 
 ## Current release status
 

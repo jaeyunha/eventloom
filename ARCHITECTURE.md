@@ -13,7 +13,7 @@ browser
      + Durable Object coordination
      + R2 private files
      + one multiplexed Cloudflare Queue
-     + optional advisory AI provider (Workers AI in staging/production; OpenAI Responses when explicitly configured)
+     + optional OpenAI Responses advisory provider
 ```
 
 The gateway is the canonical browser path. API clients and provider callbacks may address the Worker API origin directly; the web application does not become a second backend.
@@ -79,10 +79,10 @@ The built-in Speaker CRM is an organization-scoped first-party contact system wi
 - **Calendar:** RFC 5545 `REQUEST`, `UPDATE`, and `CANCEL` messages use UIDs under `calendar.sessionboard.namuh.co`, increasing `SEQUENCE`, explicit IANA time zones, and organizer `calendar@sessionboard.namuh.co`. Calendar-provider OAuth is not required.
 - **Public API and webhooks:** Versioned REST resources, scoped API keys, cursor pagination, idempotent writes, optimistic concurrency, and signed retryable webhooks expose only authorized or published data.
 - **Optional advisory AI:** AI is feature-scoped, not an application boot or seed prerequisite. A provider is called only after an authorized user requests an agenda proposal, evaluation assistance, or remix proposal. If that feature's provider is unavailable, non-AI workflows continue and the control/API reports an explicit unavailable state.
-- **Provider selection:** Current staging and production are explicitly pinned to Cloudflare Workers AI (`cloudflare-workers-ai`). Local development or a future deployed environment may select OpenAI Responses (`openai-responses`) with `AI_PROVIDER=openai`, `OPENAI_MODEL`, and a backend-only `OPENAI_API_KEY`. OpenAI adapters use `POST /v1/responses`, request JSON mode under `text.format`, and extract raw REST text from `output[].content[]` entries with `output_text`.
+- **Provider selection:** The repository runtime contract selects OpenAI Responses (`openai-responses`) for local, staging, and production with `AI_PROVIDER=openai`, `OPENAI_MODEL`, and a backend-only `OPENAI_API_KEY`. The adapter uses `POST /v1/responses`, requests JSON mode under `text.format`, and extracts raw REST text from `output[].content[]` entries with `output_text`. Each deployed environment requires its own provider-managed secret.
 - **Payload boundary:** Agenda requests contain the event and base draft/revision version, selected rooms, day/time windows, ordered rules, eligible session titles and scheduling fields, and existing agenda entries. Evaluation requests contain the selected rubric plus the submission title, abstract, and answers visible under the reviewer's projection. Remix requests contain only organizer-selected content fields and tone/guidance. Unselected private fields, credentials, and unrelated records are excluded.
 - **Advisory result boundary:** Providers return typed, private candidates with provider/model provenance. Base versions and source revisions are checked again before any application; stale candidates are rejected. A human must review and explicitly apply, edit, or reject a candidate. AI never scores, decides, schedules, publishes, sends, exports, or overwrites source records by itself.
-- **Evidence status:** Deterministic tests cover both provider contracts, and opt-in synthetic checks have exercised the real OpenAI Responses adapter plus the local agenda proposal lifecycle. No real deployed staging end-to-end AI workflow has been accepted. The 31.3% AI Agenda diagnostic is diagnostic only and is not validation or release evidence.
+- **Evidence status:** Deterministic contract tests and opt-in synthetic checks have exercised the real OpenAI Responses adapter plus the local agenda proposal lifecycle. No deployed staging end-to-end AI workflow has been accepted. The 31.3% AI Agenda diagnostic is diagnostic only and is not validation or release evidence.
 
 ## Current hosting
 

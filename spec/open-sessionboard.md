@@ -74,7 +74,7 @@ AI is not seed infrastructure. Provisioning personas and seeding fixtures create
 
 ## Advisory AI provider contract
 
-Current staging and production configuration is explicitly pinned to Cloudflare Workers AI (`cloudflare-workers-ai`); that configuration is not evidence that a real deployed AI workflow has been accepted. Local development or a future deployed environment may select OpenAI Responses (`openai-responses`) with `AI_PROVIDER=openai`, `OPENAI_MODEL`, and a backend-only `OPENAI_API_KEY`. The key must never enter `NEXT_PUBLIC_*`, Wrangler variables, browser evidence, logs, API responses, or committed files.
+The repository runtime contract selects OpenAI Responses (`openai-responses`) for all advisory AI features in local, staging, and production. Configuration uses `AI_PROVIDER=openai`, `OPENAI_MODEL`, and a backend-only `OPENAI_API_KEY`; each deployed environment requires an isolated provider-managed secret. The key must never enter `NEXT_PUBLIC_*`, Wrangler variables, browser evidence, logs, API responses, or committed files.
 
 The provider boundary is typed and feature-specific:
 

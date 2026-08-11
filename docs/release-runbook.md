@@ -101,7 +101,7 @@ node scripts/cloudflare/deploy.mjs staging open-sessionboard:staging
 
 The command requires `CLOUDFLARE_API_TOKEN`, validates the deployment configuration, applies remote D1 migrations, and deploys the Worker. If migration succeeds while deployment fails, stop, keep the mirrors private, and execute the recorded recovery path before retrying.
 
-The committed staging/production configuration is pinned to Cloudflare Workers AI. AI is not a boot prerequisite: a deliberate provider change must be reviewed separately. For OpenAI, store `OPENAI_API_KEY` with `wrangler secret put`; never place it in Wrangler `[vars]`, `NEXT_PUBLIC_*`, CI output, or evidence.
+The repository staging/production contract selects OpenAI Responses, but AI remains optional at application boot. Before deploying, confirm that the target environment has its own `OPENAI_API_KEY` Cloudflare secret. Never place it in Wrangler `[vars]`, `NEXT_PUBLIC_*`, CI output, or evidence.
 
 Deploy the web Worker from the identical candidate commit. The script requires the exact public URL inputs and an explicit tenant ID:
 
