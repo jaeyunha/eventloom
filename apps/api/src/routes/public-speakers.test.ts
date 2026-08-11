@@ -231,6 +231,65 @@ describe("published speaker projection route", () => {
       vi.unstubAllGlobals();
     }
   });
+  it("keeps a newer speaker revision after an older deferred put settles", async () => {
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    let cachedResponse: Response | undefined;
+    let putCount = 0;
+    let resolveOldPut!: () => void;
+    const oldPut = new Promise<void>((resolve) => {
+      resolveOldPut = resolve;
+    });
+    const match = vi.fn(async () => undefined as Response | undefined);
+    const put = vi.fn(async (_request: Request, response: Response) => {
+      putCount += 1;
+      if (putCount === 1) await oldPut;
+      cachedResponse = response.clone();
+    });
+    const deleteCache = vi.fn(async () => true);
+    vi.stubGlobal("caches", { default: { match, put, delete: deleteCache } });
+
+    const newerProjection: PublishedSpeakerProjection = {
+      ...projection,
+      revision: {
+        id: "speaker-publication-2",
+        number: 2,
+        publishedAt: "2026-08-10T12:00:00.000Z",
+      },
+    };
+    let currentProjection = projection;
+    const dependencies = {
+      getPublishedSpeakers: vi.fn(async () => currentProjection),
+    };
+
+    try {
+      const app = createApp({ publishedSpeakers: dependencies });
+      const path = "/api/public/events/open-sessionboard-conf/speakers";
+
+      expect((await app.request(path, undefined, bindings)).status).toBe(200);
+      await vi.waitFor(() => expect(put).toHaveBeenCalledTimes(1));
+
+      now += 60_001;
+      currentProjection = newerProjection;
+      const newerResponse = await app.request(path, undefined, bindings);
+      expect(newerResponse.status).toBe(200);
+      await expect(newerResponse.json()).resolves.toMatchObject({
+        data: { revision: { number: 2 } },
+      });
+      expect(put).toHaveBeenCalledTimes(1);
+
+      resolveOldPut();
+      await vi.waitFor(() => expect(put).toHaveBeenCalledTimes(2));
+      if (cachedResponse === undefined) throw new Error("Expected the newer cached response.");
+      await expect(cachedResponse.clone().json()).resolves.toMatchObject({
+        data: { revision: { number: 2 } },
+      });
+    } finally {
+      resolveOldPut();
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
+  });
   it("does not cache speaker projection errors", async () => {
     const getPublishedSpeakers = vi.fn(async () => {
       throw new Error("speaker read failed");

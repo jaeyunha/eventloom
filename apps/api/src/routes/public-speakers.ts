@@ -109,14 +109,21 @@ interface SpeakerResponseCache {
   put(request: Request, response: Response): Promise<void>;
 }
 
-interface SpeakerCacheEntry {
+interface SpeakerCachedResponse {
   readonly body: string;
   readonly contentType: string;
+}
+
+interface SpeakerCacheEntry extends SpeakerCachedResponse {
   readonly expiresAt: number;
+  readonly revisionNumber: number;
 }
 
 interface SpeakerCacheState {
   readonly entries: Map<string, SpeakerCacheEntry>;
+  readonly generations: Map<string, number>;
+  readonly persistence: Map<string, Promise<void>>;
+  readonly latestRevisions: Map<string, number>;
 }
 
 const speakerCacheStates = new WeakMap<object, SpeakerCacheState>();
@@ -134,7 +141,12 @@ function speakerCacheState(dependencies: PublishedSpeakerRouteDependencies): Spe
   const key = dependencies as unknown as object;
   const existing = speakerCacheStates.get(key);
   if (existing !== undefined) return existing;
-  const created: SpeakerCacheState = { entries: new Map() };
+  const created: SpeakerCacheState = {
+    entries: new Map(),
+    generations: new Map(),
+    persistence: new Map(),
+    latestRevisions: new Map(),
+  };
   speakerCacheStates.set(key, created);
   return created;
 }
@@ -158,7 +170,7 @@ function removeExpiredSpeakerEntries(state: SpeakerCacheState, now = Date.now())
   }
 }
 
-function speakerCacheResponse(entry: SpeakerCacheEntry): Response {
+function speakerCacheResponse(entry: SpeakerCachedResponse): Response {
   return new Response(entry.body, {
     status: 200,
     headers: {
@@ -171,7 +183,7 @@ function speakerCacheResponse(entry: SpeakerCacheEntry): Response {
 async function readSpeakerCache(
   state: SpeakerCacheState,
   path: string,
-): Promise<SpeakerCacheEntry | null> {
+): Promise<SpeakerCachedResponse | null> {
   removeExpiredSpeakerEntries(state);
   const memoryEntry = state.entries.get(path);
   if (memoryEntry !== undefined) return memoryEntry;
@@ -185,7 +197,6 @@ async function readSpeakerCache(
           return {
             body: await cached.clone().text(),
             contentType,
-            expiresAt: Date.now() + PUBLIC_SPEAKER_CACHE_TTL_MS,
           };
         }
       }
@@ -196,15 +207,41 @@ async function readSpeakerCache(
   return null;
 }
 
+function nextSpeakerCacheGeneration(state: SpeakerCacheState, path: string): number {
+  const generation = (state.generations.get(path) ?? 0) + 1;
+  state.generations.set(path, generation);
+  return generation;
+}
+
+function enqueueSpeakerCachePut(
+  state: SpeakerCacheState,
+  path: string,
+  operation: () => Promise<void>,
+): Promise<void> {
+  const previous = state.persistence.get(path) ?? Promise.resolve();
+  const persistence = previous
+    .catch(() => undefined)
+    .then(operation)
+    .catch(() => undefined);
+  state.persistence.set(path, persistence);
+  void persistence.finally(() => {
+    if (state.persistence.get(path) === persistence) state.persistence.delete(path);
+  });
+  return persistence;
+}
+
 function scheduleSpeakerCachePut(
   context: PublishedSpeakerContext,
+  state: SpeakerCacheState,
   workerCache: SpeakerResponseCache,
   path: string,
   entry: SpeakerCacheEntry,
+  generation: number,
 ): void {
-  const persistence = Promise.resolve()
-    .then(() => workerCache.put(speakerCacheRequest(path), speakerCacheResponse(entry)))
-    .catch(() => undefined);
+  const persistence = enqueueSpeakerCachePut(state, path, async () => {
+    if (state.generations.get(path) !== generation) return;
+    await workerCache.put(speakerCacheRequest(path), speakerCacheResponse(entry));
+  });
   try {
     context.executionCtx.waitUntil(persistence);
   } catch {
@@ -218,6 +255,9 @@ function writeSpeakerCache(
   path: string,
   entry: SpeakerCacheEntry,
 ): void {
+  if ((state.latestRevisions.get(path) ?? 0) > entry.revisionNumber) return;
+  state.latestRevisions.set(path, entry.revisionNumber);
+  const generation = nextSpeakerCacheGeneration(state, path);
   removeExpiredSpeakerEntries(state);
   state.entries.set(path, entry);
   while (state.entries.size > PUBLIC_SPEAKER_CACHE_MAX_ENTRIES) {
@@ -227,7 +267,7 @@ function writeSpeakerCache(
   }
   const workerCache = workerSpeakerCache();
   if (workerCache === null) return;
-  scheduleSpeakerCachePut(context, workerCache, path, entry);
+  scheduleSpeakerCachePut(context, state, workerCache, path, entry, generation);
 }
 
 function traceId(context: PublishedSpeakerContext): string {
@@ -282,6 +322,7 @@ export function createPublishedSpeakerRoutes(
       writeSpeakerCache(context, cacheState, path, {
         body,
         contentType,
+        revisionNumber: data.revision.number,
         expiresAt: Date.now() + PUBLIC_SPEAKER_CACHE_TTL_MS,
       });
     }

@@ -1186,6 +1186,69 @@ describe("anonymous published agenda feeds", () => {
       vi.unstubAllGlobals();
     }
   });
+  it("removes a deferred old agenda put that completes after publication invalidation", async () => {
+    const oldPut = deferred<void>();
+    let cachedResponse: Response | undefined;
+    let putCount = 0;
+    const match = vi.fn(async () => cachedResponse?.clone());
+    const put = vi.fn(async (_request: Request, response: Response) => {
+      putCount += 1;
+      if (putCount === 1) await oldPut.promise;
+      cachedResponse = response.clone();
+    });
+    const deleteCache = vi.fn(async () => {
+      cachedResponse = undefined;
+      return true;
+    });
+    vi.stubGlobal("caches", { default: { match, put, delete: deleteCache } });
+
+    try {
+      const engine = createEngine();
+      await initialize(engine);
+      const app = appForWithPublic(engine);
+      const root = "/api/admin/organizations/org-a/events/event-a/agenda";
+      const publicPath = "/api/public/events/event-a/agenda.json";
+      const entry = {
+        id: "entry-1",
+        sessionId: "session-1",
+        roomId: "room-large",
+        trackIds: [],
+        startsAtLocal: "2026-08-10T09:00",
+        endsAtLocal: "2026-08-10T10:00",
+      };
+      const update = (expectedVersion: number, roomId: string) =>
+        app.request(`${root}/draft`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ expectedVersion, entries: [{ ...entry, roomId }] }),
+        });
+      const publish = (expectedVersion: number) =>
+        app.request(`${root}/publish`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ expectedVersion }),
+        });
+
+      expect((await update(1, "room-large")).status).toBe(200);
+      expect((await publish(2)).status).toBe(200);
+      expect((await app.request(publicPath)).status).toBe(200);
+      await vi.waitFor(() => expect(put).toHaveBeenCalledTimes(1));
+
+      expect((await update(2, "room-small")).status).toBe(200);
+      expect((await publish(3)).status).toBe(200);
+      expect(cachedResponse).toBeUndefined();
+      const deletesBeforeOldPutSettles = deleteCache.mock.calls.length;
+
+      oldPut.resolve();
+      await vi.waitFor(() =>
+        expect(deleteCache.mock.calls.length).toBeGreaterThan(deletesBeforeOldPutSettles),
+      );
+      expect(cachedResponse).toBeUndefined();
+    } finally {
+      oldPut.resolve();
+      vi.unstubAllGlobals();
+    }
+  });
   it("keeps different public agenda slugs isolated", async () => {
     const first = publicRevision();
     const second = {

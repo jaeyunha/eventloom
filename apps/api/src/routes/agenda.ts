@@ -959,6 +959,7 @@ type PublishedAgendaProjection = ReturnType<typeof publishedAgendaView>;
 type PublishedAgendaProjectionValue = {
   readonly eventId: string;
   readonly eventSlug: string;
+  readonly revisionNumber: number;
   readonly projection: PublishedAgendaProjection;
 };
 const PUBLIC_CACHE_ORIGIN = "https://sessionboard-public-cache.invalid";
@@ -983,11 +984,16 @@ interface AgendaCacheEntry extends AgendaCachedResponse {
   readonly eventId: string;
   readonly eventSlug: string;
   readonly expiresAt: number;
+  readonly revisionNumber: number;
 }
 
 interface AgendaCacheState {
   readonly entries: Map<string, AgendaCacheEntry>;
   readonly bypassed: Set<string>;
+  readonly generations: Map<string, number>;
+  readonly persistence: Map<string, Promise<void>>;
+  readonly minimumRevisions: Map<string, number>;
+  readonly latestRevisions: Map<string, number>;
 }
 
 const agendaCacheStates = new WeakMap<object, AgendaCacheState>();
@@ -1009,7 +1015,14 @@ function agendaCacheState(engine: AgendaEngine): AgendaCacheState {
   const key = engine as unknown as object;
   const existing = agendaCacheStates.get(key);
   if (existing !== undefined) return existing;
-  const created: AgendaCacheState = { entries: new Map(), bypassed: new Set() };
+  const created: AgendaCacheState = {
+    entries: new Map(),
+    bypassed: new Set(),
+    generations: new Map(),
+    persistence: new Map(),
+    minimumRevisions: new Map(),
+    latestRevisions: new Map(),
+  };
   agendaCacheStates.set(key, created);
   return created;
 }
@@ -1103,15 +1116,44 @@ async function readAgendaCacheResponse(
   return null;
 }
 
+function nextAgendaCacheGeneration(state: AgendaCacheState, path: string): number {
+  const generation = (state.generations.get(path) ?? 0) + 1;
+  state.generations.set(path, generation);
+  return generation;
+}
+
+function enqueueAgendaCacheOperation(
+  state: AgendaCacheState,
+  path: string,
+  operation: () => Promise<void>,
+): Promise<void> {
+  const previous = state.persistence.get(path) ?? Promise.resolve();
+  const persistence = previous
+    .catch(() => undefined)
+    .then(operation)
+    .catch(() => undefined);
+  state.persistence.set(path, persistence);
+  void persistence.finally(() => {
+    if (state.persistence.get(path) === persistence) state.persistence.delete(path);
+  });
+  return persistence;
+}
+
 function scheduleAgendaCachePut(
   context: AgendaContext,
+  state: AgendaCacheState,
   workerCache: PublicResponseCache,
   path: string,
   entry: AgendaCacheEntry,
+  generation: number,
 ): void {
-  const persistence = Promise.resolve()
-    .then(() => workerCache.put(publicCacheRequest(path), agendaCacheResponse(entry)))
-    .catch(() => undefined);
+  const persistence = enqueueAgendaCacheOperation(state, path, async () => {
+    if (state.generations.get(path) !== generation) return;
+    await workerCache.put(publicCacheRequest(path), agendaCacheResponse(entry));
+    if (state.generations.get(path) !== generation && state.bypassed.has(path)) {
+      await workerCache.delete(publicCacheRequest(path));
+    }
+  });
   try {
     context.executionCtx.waitUntil(persistence);
   } catch {
@@ -1125,11 +1167,15 @@ function writeAgendaCacheResponse(
   path: string,
   entry: AgendaCacheEntry,
 ): void {
+  if ((state.minimumRevisions.get(path) ?? 0) > entry.revisionNumber) return;
+  if ((state.latestRevisions.get(path) ?? 0) > entry.revisionNumber) return;
+  state.latestRevisions.set(path, entry.revisionNumber);
+  const generation = nextAgendaCacheGeneration(state, path);
   state.bypassed.delete(path);
   rememberAgendaCacheEntry(state, path, entry);
   const workerCache = workerResponseCache();
   if (workerCache === null) return;
-  scheduleAgendaCachePut(context, workerCache, path, entry);
+  scheduleAgendaCachePut(context, state, workerCache, path, entry, generation);
 }
 
 async function invalidatePublishedAgendaCache(
@@ -1164,7 +1210,14 @@ async function invalidatePublishedAgendaCache(
     agendaCacheIndex.delete(path);
   }
   if (state !== undefined) {
-    for (const path of paths) state.bypassed.add(path);
+    for (const path of paths) {
+      state.bypassed.add(path);
+      nextAgendaCacheGeneration(state, path);
+      state.minimumRevisions.set(
+        path,
+        Math.max(state.minimumRevisions.get(path) ?? 0, revision.revisionNumber),
+      );
+    }
     while (state.bypassed.size > PUBLIC_AGENDA_CACHE_MAX_BYPASS_ENTRIES) {
       const oldestPath = state.bypassed.values().next().value;
       if (typeof oldestPath !== "string") break;
@@ -1395,7 +1448,9 @@ async function publishedProjection(
     eventMetadata = resolved;
   }
   const projection = publicProjectionForSlug(revision, eventSlug, eventMetadata);
-  return projection === null ? null : { eventId: revision.eventId, eventSlug, projection };
+  return projection === null
+    ? null
+    : { eventId: revision.eventId, eventSlug, revisionNumber: revision.revisionNumber, projection };
 }
 
 /** Anonymous routes expose only the immutable current publication, never a draft. */
@@ -1433,6 +1488,7 @@ export function createPublishedAgendaRoutes(
         etag,
         eventId: result.eventId,
         eventSlug: result.eventSlug,
+        revisionNumber: result.revisionNumber,
         expiresAt: Date.now() + PUBLIC_AGENDA_CACHE_TTL_MS,
       });
     }
