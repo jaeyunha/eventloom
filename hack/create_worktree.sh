@@ -12,6 +12,11 @@ Options:
   --env-mode <mode>  symlink (default), copy, or none.
   --no-install       Skip `bun install --frozen-lockfile`.
   --refresh-env      Replace existing worktree environment files.
+  --launcher <name>  cmux (default), auto, or none.
+  --no-launch        Create/setup only; alias for `--launcher none`.
+  --focus            Focus the newly created cmux workspace.
+  --prompt <text>    Start GJC with this literal task prompt.
+  --prompt-file <p>  Read the GJC task prompt from a file.
   --help             Show this help.
 
 The default base ref is `main`. Worktrees are created under
@@ -27,6 +32,16 @@ EOF
 fail() {
   printf 'Error: %s\n' "$*" >&2
   exit 1
+}
+
+shell_quote() {
+  local value=$1
+  value=${value//\'/\'\"\'\"\'}
+  printf "'%s'" "$value"
+}
+
+is_in_cmux() {
+  [ -n "${CMUX_WORKSPACE_ID:-}" ] || [ -n "${CMUX_SURFACE_ID:-}" ]
 }
 
 registered_worktree_for_branch() {
@@ -70,7 +85,11 @@ registered_branch_at_path() {
 ENV_MODE=symlink
 INSTALL=true
 REFRESH_ENV=false
-
+LAUNCHER=cmux
+FOCUS=false
+PROMPT=''
+PROMPT_SET=false
+PROMPT_FILE=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --env-mode)
@@ -85,6 +104,30 @@ while [ $# -gt 0 ]; do
     --refresh-env)
       REFRESH_ENV=true
       shift
+      ;;
+    --launcher)
+      [ $# -ge 2 ] || fail '--launcher requires auto, cmux, or none'
+      LAUNCHER=$2
+      shift 2
+      ;;
+    --no-launch)
+      LAUNCHER=none
+      shift
+      ;;
+    --focus)
+      FOCUS=true
+      shift
+      ;;
+    --prompt)
+      [ $# -ge 2 ] || fail '--prompt requires text'
+      PROMPT=$2
+      PROMPT_SET=true
+      shift 2
+      ;;
+    --prompt-file)
+      [ $# -ge 2 ] || fail '--prompt-file requires a path'
+      PROMPT_FILE=$2
+      shift 2
       ;;
     --help|-h)
       usage
@@ -103,6 +146,16 @@ case "$ENV_MODE" in
   symlink|copy|none) ;;
   *) fail "invalid env mode: $ENV_MODE" ;;
 esac
+case "$LAUNCHER" in
+  auto|cmux|none) ;;
+  *) fail "invalid launcher: $LAUNCHER" ;;
+esac
+[ "$PROMPT_SET" = false ] || [ -z "$PROMPT_FILE" ] || \
+  fail 'use either --prompt or --prompt-file, not both'
+if [ -n "$PROMPT_FILE" ]; then
+  [ -f "$PROMPT_FILE" ] || fail "prompt file does not exist: $PROMPT_FILE"
+  IFS= read -r -d '' PROMPT < "$PROMPT_FILE" || true
+fi
 [ $# -ge 1 ] || { usage >&2; exit 2; }
 [ $# -le 2 ] || fail 'expected worktree_name and optional base_ref'
 
@@ -227,7 +280,65 @@ else
 fi
 
 trap - ERR
+
+if [ -z "$PROMPT" ]; then
+  PROMPT=$(printf 'Implement the approved work in worktree %s. Branch: %s. Base: %s. Follow AGENTS.md, preserve unrelated work, implement fully, run focused and repository gates, and commit the verified result.' \
+    "$WORKTREE_PATH" "$WORKTREE_NAME" "$BASE_REF")
+fi
+BRANCH_SLUG=$(printf '%s' "$WORKTREE_NAME" | tr -cs '[:alnum:]_.-' '-')
+BRANCH_SLUG=${BRANCH_SLUG#-}
+BRANCH_SLUG=${BRANCH_SLUG%-}
+[ -n "$BRANCH_SLUG" ] || BRANCH_SLUG=worktree
+SESSION_DIGEST=$(printf '%s\0%s' "$GIT_COMMON_DIR" "$WORKTREE_NAME" | \
+  git -C "$REPO_ROOT" hash-object --stdin)
+SESSION_DIGEST=${SESSION_DIGEST:0:12}
+GJC_TMUX_SESSION="gjc-${REPO_NAME}-${BRANCH_SLUG}-${SESSION_DIGEST}"
+GJC_MESSAGE="Prompt: $PROMPT"
+GJC_COMMAND="cd $(shell_quote "$WORKTREE_PATH") && exec env $(shell_quote "GJC_TMUX_SESSION=$GJC_TMUX_SESSION") gjc --tmux $(shell_quote "$GJC_MESSAGE")"
+
+SELECTED_LAUNCHER=$LAUNCHER
+if [ "$SELECTED_LAUNCHER" = auto ]; then
+  if is_in_cmux; then
+    SELECTED_LAUNCHER=cmux
+  else
+    SELECTED_LAUNCHER=none
+  fi
+fi
+
+print_manual_command() {
+  printf 'Start GJC manually from the worktree with:\n%s\n' "$GJC_COMMAND"
+}
+
+launch_cmux() {
+  if ! command -v cmux >/dev/null 2>&1; then
+    printf 'cmux is unavailable; the worktree remains ready at %s.\n' "$WORKTREE_PATH" >&2
+    print_manual_command
+    return 0
+  fi
+  local workspace_name="${REPO_NAME}/${WORKTREE_NAME}"
+  local -a args=(
+    new-workspace
+    --name "$workspace_name"
+    --cwd "$WORKTREE_PATH"
+    --command "$GJC_COMMAND"
+    --focus "$FOCUS"
+  )
+  if ! cmux "${args[@]}"; then
+    printf 'cmux launch failed; the worktree remains ready at %s.\n' "$WORKTREE_PATH" >&2
+    print_manual_command
+  fi
+}
+
+case "$SELECTED_LAUNCHER" in
+  cmux) launch_cmux ;;
+  none)
+    printf 'Host launcher: none.\n'
+    print_manual_command
+    ;;
+esac
+
 printf '\nWorktree ready: %s\n' "$WORKTREE_PATH"
 printf 'Branch: %s\n' "$WORKTREE_NAME"
 printf 'Base: %s\n' "$BASE_REF"
+printf 'GJC tmux session: %s\n' "$GJC_TMUX_SESSION"
 printf 'Remove it safely with:\n  ./hack/cleanup_worktree.sh %q\n' "$WORKTREE_NAME"
