@@ -47,15 +47,16 @@ The judge provider returned an HTTP 520 response with Cloudflare HTML during jud
 ## 2026-08-11 — OpenAI Responses local integration diagnostic
 
 - Status: local synthetic diagnostic; not deployed or release evidence
-- Commit: `b940452`
+- Initial adapter commit: `b940452`
+- Quality-model routing commit: `bab7878`
 - Provider path: OpenAI Responses API using the ignored backend-only `OPENAI_API_KEY`
-- Live checks: real Responses adapter and real-provider local agenda proposal lifecycle passed
-- Focused deterministic checks: 60 passed, 2 opt-in live checks skipped by default
-- Full unit/integration gate: 638 passed, 2 opt-in live checks skipped by default
+- Live checks: real Responses adapter; local agenda proposal lifecycle with `gpt-5.6-sol`; and typed agenda, evaluation, and remix provider contracts with Sol/Sol/Terra all passed
+- Focused deterministic checks: 62 passed, 3 opt-in live checks skipped by default
+- Full unit/integration gate: 640 passed, 3 opt-in live checks skipped by default
 - Typecheck/lint/format: passed
-- API Wrangler dry-run build: passed
+- API Wrangler dry-run build and staging/production configuration validation: passed
 
-The live checks used synthetic prompts and local seeded records. They establish that the backend key reaches the API-only adapter, the raw Responses REST output is parsed, and a real OpenAI proposal passes through the local agenda suggestion lifecycle. They do not prove the deployed staging UI, evaluation/remix workflows, human apply/reject behavior, persistence across deployed reloads, or release acceptance.
+The live checks used synthetic prompts and local seeded records. They establish that the backend key reaches the API-only adapter, strict Structured Outputs parse through all three typed feature contracts, and a real `gpt-5.6-sol` proposal passes through the local agenda suggestion lifecycle. They do not prove deployed staging UI behavior, evaluation/remix persistence, human apply/reject behavior, reload/audit behavior, or release acceptance.
 
 ## Current release status
 
