@@ -259,12 +259,26 @@ describe("public API v1", () => {
       headers: { "content-type": "application/json", "idempotency-key": "update-1" },
       body: JSON.stringify({ name: "No version" }),
     });
+    const bodyOnly = await app.request("/api/v1/organizations/org-1/events/event-a", {
+      method: "PATCH",
+      headers: { "content-type": "application/json", "idempotency-key": "update-body" },
+      body: JSON.stringify({ name: "Body version", expectedVersion: 1 }),
+    });
+    const invalidVersion = await app.request("/api/v1/organizations/org-1/events/event-a", {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json",
+        "idempotency-key": "update-zero",
+        "if-match": "0",
+      },
+      body: JSON.stringify({ name: "Zero version" }),
+    });
     const updated = await app.request("/api/v1/organizations/org-1/events/event-a", {
       method: "PATCH",
       headers: {
         "content-type": "application/json",
         "idempotency-key": "update-1",
-        "if-match": '"1"',
+        "if-match": 'W/"1"',
       },
       body: JSON.stringify({ name: "Updated" }),
     });
@@ -277,10 +291,22 @@ describe("public API v1", () => {
       },
       body: JSON.stringify({ name: "Stale" }),
     });
+    const put = await app.request("/api/v1/organizations/org-1/events/event-a", {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json",
+        "idempotency-key": "update-put",
+        "if-match": "2",
+      },
+      body: JSON.stringify({ name: "Replacement" }),
+    });
     expect(missing.status).toBe(412);
+    expect(bodyOnly.status).toBe(412);
+    expect(invalidVersion.status).toBe(412);
     expect(updated.status).toBe(200);
     expect(stale.status).toBe(412);
     expect(repository.updates).toBe(1);
+    expect(put.status).toBe(404);
   });
 
   it("returns safe trace-bearing errors and a small OpenAPI document", async () => {

@@ -626,22 +626,13 @@ function parseExpectedVersion(
   body: unknown,
 ): { readonly expectedVersion: number; readonly data: unknown } {
   const header = context.req.header("if-match");
-  let raw: string | undefined = header;
-  if (raw !== undefined) {
-    raw = raw.trim().replace(/^W\//u, "").replace(/^"|"$/gu, "");
-  }
-  if (raw === undefined && typeof body === "object" && body !== null) {
-    const bodyVersion = (body as Record<string, unknown>).expectedVersion;
-    if (typeof bodyVersion === "number" && Number.isInteger(bodyVersion)) {
-      raw = String(bodyVersion);
-    }
-  }
+  const raw = header?.trim().replace(/^W\//u, "").replace(/^"|"$/gu, "");
   if (raw === undefined || !/^\d+$/u.test(raw)) {
     throw new PublicApiError("PRECONDITION_FAILED", "An If-Match version is required for updates.");
   }
   const expectedVersion = Number(raw);
   if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
-    throw validationError("The If-Match version is invalid.");
+    throw new PublicApiError("PRECONDITION_FAILED", "The If-Match version is invalid.");
   }
 
   if (typeof body === "object" && body !== null && !Array.isArray(body)) {
@@ -1308,7 +1299,6 @@ export function createPublicApiV1Routes<
 
     if (operationEnabled(resource, "update", contract)) {
       routes.patch(itemPath, updateHandler);
-      routes.put(itemPath, updateHandler);
     }
   }
 
