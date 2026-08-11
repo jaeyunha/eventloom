@@ -6,10 +6,10 @@ import type {
 } from "../../features/agenda/types";
 import type {
   EvaluationAiSuggestionProvider,
+  EvaluationSuggestionProvenance,
   EvaluationSuggestionProviderCandidate,
   EvaluationSuggestionProviderInput,
   EvaluationSuggestionProviderResult,
-  EvaluationSuggestionProvenance,
 } from "../../features/evaluations/types";
 import type {
   RemixField,
@@ -944,7 +944,7 @@ function parseEvaluationOutput(
   if (criteria.size === 0 || raw.candidates.length !== criteria.size) throw invalidOutput();
 
   const provenance: EvaluationSuggestionProvenance = {
-    provider: "cloudflare-workers-ai",
+    provider: providerName ?? "unavailable",
     model: model ?? "unavailable",
     generatedAt: safeNow(now),
     sourceReferences: ["abstract"],
@@ -1001,17 +1001,7 @@ function parseEvaluationOutput(
   );
   if (seenCriteria.size !== criteria.size) throw invalidOutput();
 
-  const sourceReferences = [...new Set(candidates.flatMap((candidate) => candidate.evidence))];
-  return {
-    candidates,
-    provenance: {
-      provider: providerName ?? "unavailable",
-      model: model ?? "unavailable",
-      generatedAt: safeNow(now),
-      sourceReferences,
-      promptVersion: promptVersion ?? DEFAULT_PROMPT_VERSION,
-    },
-  };
+  return { candidates, provenance };
 }
 
 function assertRemixInput(input: RemixProviderInput): void {
