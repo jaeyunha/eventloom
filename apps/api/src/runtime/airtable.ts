@@ -669,17 +669,12 @@ export class AirtableJsonStore<T extends object> {
     return this.list({ filterByFormula: applicationIdsFormula(uniqueIds) });
   }
 }
-async function listEventScopedJson<T extends object>(
-  store: AirtableJsonStore<T>,
+export async function listEventScopedJson<T extends object>(
+  store: Pick<AirtableJsonStore<T>, "list">,
   jsonField: string,
   eventId: string,
 ): Promise<T[]> {
-  try {
-    return await store.list({ filterByFormula: eventFilterFormula(jsonField, eventId) });
-  } catch (error) {
-    if (!(error instanceof TypeError)) throw error;
-    return store.list();
-  }
+  return store.list({ filterByFormula: eventFilterFormula(jsonField, eventId) });
 }
 export const PUBLISHED_SPEAKER_PROJECTIONS_TABLE = "Published Speaker Projections";
 
