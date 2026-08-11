@@ -149,7 +149,7 @@ describe("organizer session settings domain", () => {
       eventId: "event-a",
       sessionId: waitlisted.id,
       expectedVersion: waitlisted.version,
-      status: "Approved",
+      contentStatus: "Approved",
     });
     await service.createSession(organizer, {
       eventId: "event-a",
@@ -215,6 +215,35 @@ describe("organizer session settings domain", () => {
       await next();
     });
     app.route("/api/admin/organizations/:organizationId/events/:eventId/sessions", routes);
+    const readPublishedContent = async () => {
+      const response = await app.request(
+        "http://localhost/api/admin/organizations/tenant-a/events/event-a/sessions/published-content",
+      );
+      expect(response.status).toBe(200);
+      return (
+        (await response.json()) as {
+          data: {
+            tenantId: string;
+            eventId: string;
+            sessions: readonly {
+              id: string;
+              title: string;
+              abstract: string;
+              contentStatus: "Approved";
+              durationMinutes: number;
+              capacityRequired: number;
+              roomId?: string;
+              trackIds: readonly string[];
+              formatId?: string;
+              speakerIds: readonly string[];
+              resourceIds: readonly string[];
+              version: number;
+              updatedAt: string;
+            }[];
+          };
+        }
+      ).data;
+    };
 
     const createdResponse = await app.request(
       "http://localhost/api/admin/organizations/tenant-a/events/event-a/sessions",
@@ -238,6 +267,25 @@ describe("organizer session settings domain", () => {
     ).data;
     expect(createdResponse.status).toBe(201);
     expect(created).toMatchObject({ id: "content-session", version: 1 });
+    expect(await readPublishedContent()).toEqual({
+      tenantId: "tenant-a",
+      eventId: "event-a",
+      sessions: [
+        {
+          id: "content-session",
+          title: "Original title",
+          abstract: "Original abstract",
+          contentStatus: "Approved",
+          durationMinutes: 30,
+          capacityRequired: 0,
+          trackIds: [],
+          speakerIds: ["speaker-1"],
+          resourceIds: [],
+          version: 1,
+          updatedAt: now.toISOString(),
+        },
+      ],
+    });
 
     const firstResponse = await app.request(
       "http://localhost/api/admin/organizations/tenant-a/events/event-a/sessions/content-session",
@@ -256,6 +304,7 @@ describe("organizer session settings domain", () => {
         data: {
           title: string;
           description: string;
+          contentStatus: string;
           version: number;
           updatedBy: string;
           history: readonly {
@@ -270,9 +319,11 @@ describe("organizer session settings domain", () => {
     expect(first).toMatchObject({
       title: "Prefixed title",
       description: "Original abstract",
+      contentStatus: "Needs changes",
       version: 2,
       updatedBy: "organizer-1",
     });
+    expect((await readPublishedContent()).sessions).toEqual([]);
 
     const secondResponse = await app.request(
       "http://localhost/api/admin/organizations/tenant-a/events/event-a/sessions/content-session",
@@ -291,6 +342,7 @@ describe("organizer session settings domain", () => {
         data: {
           title: string;
           description: string;
+          contentStatus: string;
           version: number;
           history: readonly {
             version: number;
@@ -304,6 +356,7 @@ describe("organizer session settings domain", () => {
     expect(second).toMatchObject({
       title: "Prefixed title",
       description: "Original abstract with appended detail",
+      contentStatus: "Needs changes",
       version: 3,
     });
     expect(second.history).toHaveLength(3);
@@ -313,11 +366,21 @@ describe("organizer session settings domain", () => {
           version: 2,
           actorId: "organizer-1",
           occurredAt: now.toISOString(),
+          actorLabel: "organizer-1",
+          snapshot: expect.objectContaining({
+            title: "Prefixed title",
+            description: "Original abstract",
+          }),
         }),
         expect.objectContaining({
           version: 3,
           actorId: "organizer-1",
           occurredAt: now.toISOString(),
+          actorLabel: "organizer-1",
+          snapshot: expect.objectContaining({
+            title: "Prefixed title",
+            description: "Original abstract with appended detail",
+          }),
         }),
       ]),
     );
@@ -331,8 +394,10 @@ describe("organizer session settings domain", () => {
           version: number;
           actorId: string;
           occurredAt: string;
+          actorLabel?: string;
           title?: string;
           description?: string;
+          snapshot?: { title: string; description: string };
         }[];
       }
     ).data;
@@ -342,12 +407,22 @@ describe("organizer session settings domain", () => {
         expect.objectContaining({
           actorId: "organizer-1",
           occurredAt: now.toISOString(),
+          actorLabel: "organizer-1",
+          snapshot: expect.objectContaining({
+            title: "Prefixed title",
+            description: "Original abstract",
+          }),
           title: "Prefixed title",
           description: "Original abstract",
         }),
         expect.objectContaining({
           actorId: "organizer-1",
           occurredAt: now.toISOString(),
+          actorLabel: "organizer-1",
+          snapshot: expect.objectContaining({
+            title: "Prefixed title",
+            description: "Original abstract with appended detail",
+          }),
           title: "Prefixed title",
           description: "Original abstract with appended detail",
         }),
@@ -368,34 +443,149 @@ describe("organizer session settings domain", () => {
         data: {
           title: string;
           description: string;
+          contentStatus: string;
           version: number;
           updatedBy: string;
+          history: readonly {
+            action: string;
+            version: number;
+            actorId: string;
+            actorLabel?: string;
+            occurredAt: string;
+          }[];
         };
       }
     ).data;
     expect(restored).toMatchObject({
       title: "Prefixed title",
       description: "Original abstract",
+      contentStatus: "Needs changes",
       version: 4,
       updatedBy: "organizer-1",
     });
+    expect(restored.history.at(-1)).toMatchObject({
+      action: "restored",
+      version: 4,
+      actorId: "organizer-1",
+      actorLabel: "organizer-1",
+      occurredAt: now.toISOString(),
+    });
+    expect((await readPublishedContent()).sessions).toEqual([]);
 
     const approvalResponse = await app.request(
       "http://localhost/api/admin/organizations/tenant-a/events/event-a/sessions/content-session",
       {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ expectedVersion: restored.version, status: "Approved" }),
+        body: JSON.stringify({ expectedVersion: restored.version, contentStatus: "Approved" }),
       },
     );
     expect(approvalResponse.status).toBe(200);
+    const approved = (
+      (await approvalResponse.json()) as {
+        data: {
+          version: number;
+          id: string;
+          history: readonly {
+            action: string;
+            version: number;
+            actorId: string;
+            actorLabel?: string;
+            occurredAt: string;
+          }[];
+        };
+      }
+    ).data;
+    expect(approved).toMatchObject({ id: "content-session", version: 5 });
+    expect(approved.history).toHaveLength(5);
+    expect(approved.history.at(-1)).toMatchObject({
+      action: "approved",
+      version: 5,
+      actorId: "organizer-1",
+      actorLabel: "organizer-1",
+      occurredAt: now.toISOString(),
+    });
+    expect(await readPublishedContent()).toEqual({
+      tenantId: "tenant-a",
+      eventId: "event-a",
+      sessions: [
+        {
+          id: "content-session",
+          title: "Prefixed title",
+          abstract: "Original abstract",
+          contentStatus: "Approved",
+          durationMinutes: 30,
+          capacityRequired: 0,
+          trackIds: [],
+          speakerIds: ["speaker-1"],
+          resourceIds: [],
+          version: 5,
+          updatedAt: now.toISOString(),
+        },
+      ],
+    });
+
+    const approvedEditResponse = await app.request(
+      "http://localhost/api/admin/organizations/tenant-a/events/event-a/sessions/content-session",
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          expectedVersion: approved.version,
+          title: "Approved title correction",
+          contentStatus: "Approved",
+        }),
+      },
+    );
+    expect(approvedEditResponse.status).toBe(200);
+    const approvedEdit = (
+      (await approvedEditResponse.json()) as {
+        data: {
+          title: string;
+          contentStatus: string;
+          version: number;
+          history: readonly {
+            action: string;
+            version: number;
+            actorId: string;
+            occurredAt: string;
+          }[];
+        };
+      }
+    ).data;
+    expect(approvedEdit).toMatchObject({
+      title: "Approved title correction",
+      contentStatus: "Approved",
+      version: 6,
+    });
+    expect(approvedEdit.history.at(-1)).toMatchObject({
+      action: "updated",
+      version: 6,
+      actorId: "organizer-1",
+      occurredAt: now.toISOString(),
+    });
+    expect((await readPublishedContent()).sessions[0]).toMatchObject({
+      title: "Approved title correction",
+      contentStatus: "Approved",
+      version: 6,
+    });
+
+    const noOpResponse = await app.request(
+      "http://localhost/api/admin/organizations/tenant-a/events/event-a/sessions/content-session",
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ expectedVersion: approvedEdit.version, contentStatus: "Approved" }),
+      },
+    );
+    expect(noOpResponse.status).toBe(200);
     expect(
       (
-        (await approvalResponse.json()) as {
-          data: { version: number; id: string };
+        (await noOpResponse.json()) as {
+          data: { version: number; history: readonly unknown[] };
         }
       ).data,
-    ).toMatchObject({ id: "content-session", version: 5 });
+    ).toMatchObject({ version: 6, history: approvedEdit.history });
 
     const conflictResponse = await app.request(
       "http://localhost/api/admin/organizations/tenant-a/events/event-a/sessions/content-session",
@@ -465,7 +655,7 @@ describe("organizer session settings domain", () => {
           expectedVersion: 2,
           title: "Version three",
           description: "Third abstract",
-          status: "Needs changes",
+          contentStatus: "Needs changes",
         }),
       },
     );
@@ -529,7 +719,7 @@ describe("organizer session settings domain", () => {
     expect(restored).toMatchObject({
       title: "Version one",
       description: "First abstract",
-      contentStatus: "Approved",
+      contentStatus: "Needs changes",
       version: 4,
     });
     expect(restored.history).toHaveLength(4);
@@ -714,7 +904,7 @@ describe("organizer session settings domain", () => {
           expectedVersion: 1,
           title: "Taming 40-Minute CI: Updated",
           description: "Updated abstract",
-          status: "Approved",
+          contentStatus: "Approved",
         }),
       },
     );
