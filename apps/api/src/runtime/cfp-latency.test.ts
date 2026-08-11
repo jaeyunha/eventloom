@@ -117,6 +117,8 @@ function seed(
 class DelayedTransport implements AirtableTransport {
   activeReads = 0;
   maxConcurrentReads = 0;
+  activeFormReads = 0;
+  maxConcurrentFormReads = 0;
 
   constructor(
     private readonly transport: AirtableTransport,
@@ -127,13 +129,24 @@ class DelayedTransport implements AirtableTransport {
     if (request.method !== "GET") {
       return this.transport.request<TBody>(request);
     }
+    const isFormRead = request.table === "CFP Forms";
     this.activeReads += 1;
+    if (isFormRead) {
+      this.activeFormReads += 1;
+      this.maxConcurrentFormReads = Math.max(
+        this.maxConcurrentFormReads,
+        this.activeFormReads,
+      );
+    }
     this.maxConcurrentReads = Math.max(this.maxConcurrentReads, this.activeReads);
     try {
       await new Promise((resolve) => setTimeout(resolve, this.delayMs));
       return await this.transport.request<TBody>(request);
     } finally {
       this.activeReads -= 1;
+      if (isFormRead) {
+        this.activeFormReads -= 1;
+      }
     }
   }
 }
@@ -155,6 +168,47 @@ describe("organizer CFP submission latency", () => {
         },
       });
     }
+    const alternatePayload = submission(7);
+    fake.seed({
+      baseId,
+      table: "Submissions",
+      fields: {
+        "Application ID": alternatePayload.id,
+        Payload: JSON.stringify(alternatePayload),
+      },
+    });
+    const indexedEvent = submission(8);
+    fake.seed({
+      baseId,
+      table: "Submissions",
+      fields: {
+        "Application ID": indexedEvent.id,
+        "Event ID": indexedEvent.eventId,
+        "Answers JSON": JSON.stringify({ ...indexedEvent, eventId: "other-event" }),
+      },
+    });
+    const flat = submission(9);
+    fake.seed({
+      baseId,
+      table: "Submissions",
+      fields: {
+        "Application ID": flat.id,
+        "Tenant ID": flat.tenantId,
+        "Event ID": flat.eventId,
+        "Form ID": flat.formId,
+        "Owner Account ID": flat.ownerAccountId,
+        formVersion: flat.formVersion,
+        Version: flat.version,
+        Status: flat.status,
+        completedSteps: JSON.stringify(flat.completedSteps),
+        answers: JSON.stringify(flat.answers),
+        participants: JSON.stringify(flat.participants),
+        secondaryContacts: JSON.stringify(flat.secondaryContacts),
+        "Created At": flat.createdAt,
+        "Updated At": flat.updatedAt,
+        submittedAt: flat.submittedAt ?? "",
+      },
+    });
     const readDelayMs = 350;
     const delayed = new DelayedTransport(fake, readDelayMs);
     const repository = new AirtableCfpRepository({ baseId, transport: delayed });
@@ -171,7 +225,7 @@ describe("organizer CFP submission latency", () => {
     expect(6 * readDelayMs).toBeGreaterThan(1_000);
     expect(elapsedMs).toBeLessThan(1_000);
     expect(delayed.maxConcurrentReads).toBe(2);
-    expect(records).toHaveLength(4);
+    expect(records).toHaveLength(7);
     expect(Object.keys(records[0] ?? {}).sort()).toEqual([
       "participantFields",
       "submission",
@@ -179,13 +233,30 @@ describe("organizer CFP submission latency", () => {
     ]);
     expect(records[0]?.submission).toEqual(submission(1));
     expect(records[0]?.submission.participants).toEqual(submission(1).participants);
+    expect(records.map(({ submission: record }) => record.id)).toEqual([
+      "submission-1",
+      "submission-2",
+      "submission-3",
+      "submission-4",
+      alternatePayload.id,
+      indexedEvent.id,
+      flat.id,
+    ]);
+    const indexedRecord = records.find(
+      ({ submission: record }) => record.id === indexedEvent.id,
+    )?.submission;
+    expect(indexedRecord).toEqual(indexedEvent);
+    const flatRecord = records.find(
+      ({ submission: record }) => record.id === flat.id,
+    )?.submission;
+    expect(flatRecord).toEqual(flat);
 
     const reads = fake.requests.filter((request) => request.method === "GET");
     expect(reads).toHaveLength(3);
     expect(reads.filter((request) => request.table === "CFP Forms")).toHaveLength(1);
-    expect(reads.find((request) => request.table === "Submissions")?.query?.filterByFormula).toBe(
-      `FIND(${JSON.stringify(eventId)},{Answers JSON})>0`,
-    );
+    expect(
+      reads.find((request) => request.table === "Submissions")?.query?.filterByFormula,
+    ).toBeUndefined();
   });
 
   it("parallelizes multiple Airtable form-ID batches", async () => {
@@ -206,6 +277,6 @@ describe("organizer CFP submission latency", () => {
     const reads = fake.requests.filter((request) => request.method === "GET");
     expect(reads).toHaveLength(4);
     expect(reads.filter((request) => request.table === "CFP Forms")).toHaveLength(2);
-    expect(delayed.maxConcurrentReads).toBeGreaterThan(1);
+    expect(delayed.maxConcurrentFormReads).toBe(2);
   });
 });

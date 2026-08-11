@@ -253,6 +253,20 @@ class BatchedMemoryRepository extends MemoryRepository {
   }
 }
 
+class DualRejectingOrganizerRepository extends MemoryRepository {
+  override async getEvent(_tenantId: string, _eventId: string): Promise<EventCfp | null> {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    return null;
+  }
+
+  override async listSubmissionsForEvent(
+    _tenantId: string,
+    _eventId: string,
+  ): Promise<Submission[]> {
+    throw new CfpError("CONFLICT", "submission read failed");
+  }
+}
+
 class ParallelFormRepository extends MemoryRepository {
   readonly formReadIds: string[] = [];
   activeFormReads = 0;
@@ -1154,6 +1168,18 @@ describe("CFP submission lifecycle", () => {
       participantFields: repository.forms.get("form_1")?.participantFields,
     });
     expect(records[0]?.submission.participants).toEqual(buildOrganizerSubmission().participants);
+  });
+
+  it("prioritizes event ownership failure when both organizer reads reject", async () => {
+    const repository = new DualRejectingOrganizerRepository();
+    const { service } = createFixture(undefined, undefined, repository);
+
+    await expect(
+      service.listOrganizerSubmissions({ tenantId: "tenant_other", eventId: "event_1" }),
+    ).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      message: "The event was not found.",
+    });
   });
   it("keeps cross-tenant forms returned by a batch lookup out of organizer enrichment", async () => {
     const repository = new BatchedMemoryRepository();

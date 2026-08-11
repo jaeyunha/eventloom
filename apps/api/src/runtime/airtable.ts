@@ -3792,11 +3792,7 @@ export class AirtableCfpRepository implements CfpRepository {
   }
   async listSubmissionsForEvent(tenantId: string, eventId: string): Promise<Submission[]> {
     const byId = new Map<string, Submission>();
-    for (const submission of await listEventScopedJson(
-      this.#submissions,
-      "Answers JSON",
-      eventId,
-    )) {
+    for (const submission of await this.#submissions.list()) {
       if (
         submission.formId === undefined ||
         submission.tenantId !== tenantId ||

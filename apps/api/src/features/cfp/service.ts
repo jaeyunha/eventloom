@@ -669,10 +669,17 @@ export class CfpService {
       await eventRead;
       throw new CfpError("NOT_FOUND", "The CFP submissions were not found.");
     }
-    const [, submissions] = await Promise.all([
+    const [eventResult, submissionsResult] = await Promise.allSettled([
       eventRead,
       listSubmissions.call(this.#repository, input.tenantId, input.eventId),
     ]);
+    if (eventResult.status === "rejected") {
+      throw eventResult.reason;
+    }
+    if (submissionsResult.status === "rejected") {
+      throw submissionsResult.reason;
+    }
+    const submissions = submissionsResult.value;
     const scopedSubmissions = submissions.filter(
       (submission) =>
         submission.tenantId === input.tenantId && submission.eventId === input.eventId,
