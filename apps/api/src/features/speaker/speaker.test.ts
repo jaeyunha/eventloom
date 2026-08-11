@@ -1089,6 +1089,14 @@ describe("SpeakerService organizer speaker writes", () => {
         version: 2,
       }),
     ]);
+    await expect(
+      restarted.listOrganizerSpeakerSessions(
+        "org-1",
+        "event-1",
+        "account-1",
+        "participant:generated-1",
+      ),
+    ).resolves.toEqual([]);
   });
   it("imports new manual speakers once and replays the import without duplicates", async () => {
     const { repository, service } = createOrganizerFixture();

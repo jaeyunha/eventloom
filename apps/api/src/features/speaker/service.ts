@@ -6733,16 +6733,16 @@ export class SpeakerService {
     participantId: string,
   ): Promise<SpeakerWorkspaceSession[]> {
     const scope = await this.requireOrganizerOrganizationScope(organizationId, eventId, accountId);
-    if (
-      !scope.participantIds.includes(participantId) &&
-      !this.organizerSpeakerCache
-        .get(this.organizerSpeakerCacheKey(organizationId, eventId))
-        ?.some(
-          (entry) => entry.participantId === participantId && entry.authorAccountId === accountId,
-        )
-    ) {
-      throw notFound();
-    }
+    const roster = await this.organizerRosterEntries(
+      organizationId,
+      eventId,
+      scope,
+      accountId,
+    );
+    const manual = roster.some(
+      (entry) => entry.participantId === participantId && isCrmRosterEntry(entry),
+    );
+    if (!scope.participantIds.includes(participantId) && !manual) throw notFound();
     const submissions = await this.repository.listSubmissions(eventId, scope.submissionIds);
     return submissions
       .filter(
