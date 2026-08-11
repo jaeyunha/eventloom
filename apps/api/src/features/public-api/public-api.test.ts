@@ -142,6 +142,13 @@ const apiKey: AuthPrincipal = {
   scopes: ["events:read", "events:write"],
 };
 
+const otherApiKey: AuthPrincipal = {
+  kind: "apiKey",
+  apiKeyId: "key-2",
+  organizationId: "org-2",
+  scopes: ["events:read", "events:write"],
+};
+
 function fixture(principal: AuthPrincipal | null = apiKey) {
   const repository = new EventRepository();
   const store = new TestIdempotencyStore();
@@ -186,12 +193,28 @@ describe("public API v1", () => {
     expect(secondBody.data[0]?.id).toBe("event-b");
   });
 
-  it("denies unauthenticated, cross-tenant, and missing-scope access", async () => {
+  it("rejects a cursor bound to another organization", async () => {
+    const first = await fixture(apiKey).app.request(
+      "/api/v1/organizations/org-1/events?sort=name&limit=1",
+    );
+    const firstBody = (await first.json()) as {
+      page: { nextCursor: string | null };
+    };
+    const crossOrganization = await fixture(otherApiKey).app.request(
+      `/api/v1/organizations/org-2/events?sort=name&limit=1&cursor=${encodeURIComponent(firstBody.page.nextCursor ?? "")}`,
+    );
+    expect(first.status).toBe(200);
+    expect(firstBody.page.nextCursor).toEqual(expect.any(String));
+    expect(crossOrganization.status).toBe(400);
+  });
+  it("denies unauthenticated, cross-organization, and missing-scope access", async () => {
     const unauthenticated = await fixture(null).app.request("/api/v1/organizations/org-1/events", {
       headers: { "x-request-id": "trace-test" },
     });
     const browserSession = await fixture(user).app.request("/api/v1/organizations/org-1/events");
-    const crossTenant = await fixture(apiKey).app.request("/api/v1/organizations/org-2/events");
+    const crossOrganization = await fixture(apiKey).app.request(
+      "/api/v1/organizations/org-2/events",
+    );
     const missingScope = await fixture({
       ...apiKey,
       scopes: ["events:read"],
@@ -205,7 +228,7 @@ describe("public API v1", () => {
     });
     expect(unauthenticated.status).toBe(401);
     expect(browserSession.status).toBe(403);
-    expect(crossTenant.status).toBe(403);
+    expect(crossOrganization.status).toBe(403);
     expect(missingScope.status).toBe(403);
   });
 

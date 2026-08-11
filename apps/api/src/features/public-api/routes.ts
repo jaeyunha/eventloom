@@ -2,11 +2,11 @@ import { type Context, Hono } from "hono";
 import { ZodError, type ZodType } from "zod";
 import { type ApiKeyScope, AuthAccessError, type AuthPrincipal } from "../auth/types";
 import {
-  publicApiResourceContract,
-  publicApiV1Contract,
   type PublicApiOperation,
   type PublicApiResourceContract,
   type PublicApiV1Contract,
+  publicApiResourceContract,
+  publicApiV1Contract,
 } from "./contract";
 import {
   type CursorDirection,
@@ -58,7 +58,6 @@ export type PublicApiAuthorizationHook = (
 ) => void | Promise<void>;
 
 export interface PublicApiListInput {
-  readonly tenantId: string;
   readonly organizationId: string;
   readonly resource: string;
   readonly limit: number;
@@ -72,7 +71,6 @@ export interface PublicApiListInput {
 }
 
 export interface PublicApiGetInput {
-  readonly tenantId: string;
   readonly organizationId: string;
   readonly resource: string;
   readonly id: string;
@@ -80,7 +78,6 @@ export interface PublicApiGetInput {
 }
 
 export interface PublicApiCreateInput<TCreate> {
-  readonly tenantId: string;
   readonly organizationId: string;
   readonly resource: string;
   readonly data: TCreate;
@@ -89,7 +86,6 @@ export interface PublicApiCreateInput<TCreate> {
 }
 
 export interface PublicApiUpdateInput<TUpdate> {
-  readonly tenantId: string;
   readonly organizationId: string;
   readonly resource: string;
   readonly id: string;
@@ -491,7 +487,7 @@ function sortItems<TRecord>(
 function cursorForItem(
   item: unknown,
   input: {
-    readonly tenantId: string;
+    readonly organizationId: string;
     readonly resource: string;
     readonly sort: string;
     readonly direction: CursorDirection;
@@ -507,7 +503,7 @@ function cursorForItem(
   ];
   return encodeCursor({
     version: 1,
-    tenantId: input.tenantId,
+    organizationId: input.organizationId,
     resource: input.resource,
     sort: input.sort,
     direction: input.direction,
@@ -520,7 +516,7 @@ function cursorForItem(
 function validateCursor(
   cursor: CursorPayload,
   input: {
-    readonly tenantId: string;
+    readonly organizationId: string;
     readonly resource: string;
     readonly sort: string;
     readonly direction: CursorDirection;
@@ -528,7 +524,7 @@ function validateCursor(
   },
 ): void {
   if (
-    cursor.tenantId !== input.tenantId ||
+    cursor.organizationId !== input.organizationId ||
     cursor.resource !== input.resource ||
     cursor.sort !== input.sort ||
     cursor.direction !== input.direction ||
@@ -572,7 +568,7 @@ function nextCursorFromResult<TRecord>(
   nextCursor: string | CursorPayload | null | undefined,
   last: TRecord | undefined,
   input: {
-    readonly tenantId: string;
+    readonly organizationId: string;
     readonly resource: string;
     readonly sort: string;
     readonly direction: CursorDirection;
@@ -592,7 +588,7 @@ function nextCursorFromResult<TRecord>(
     }
     return encodeCursor({
       version: 1,
-      tenantId: candidate.tenantId ?? input.tenantId,
+      organizationId: candidate.organizationId ?? input.organizationId,
       resource: candidate.resource ?? input.resource,
       sort: candidate.sort ?? input.sort,
       direction: candidate.direction ?? input.direction,
@@ -612,7 +608,7 @@ function nextCursorFromResult<TRecord>(
       }
       return encodeCursor({
         version: 1,
-        tenantId: input.tenantId,
+        organizationId: input.organizationId,
         resource: input.resource,
         sort: input.sort,
         direction: input.direction,
@@ -1151,7 +1147,7 @@ export function createPublicApiV1Routes<
             throw validationError("The cursor is invalid.");
           }
           validateCursor(cursorData, {
-            tenantId: organizationId,
+            organizationId,
             resource: segment,
             sort: query.sort,
             direction: query.direction,
@@ -1159,7 +1155,6 @@ export function createPublicApiV1Routes<
           });
         }
         const listInput: PublicApiListInput = {
-          tenantId: organizationId,
           organizationId,
           resource: segment,
           limit: query.limit,
@@ -1181,7 +1176,7 @@ export function createPublicApiV1Routes<
           hasOverflow;
         const nextCursor = hasMore
           ? nextCursorFromResult(listed.nextCursor, data[data.length - 1], {
-              tenantId: organizationId,
+              organizationId,
               resource: segment,
               sort: query.sort,
               direction: query.direction,
@@ -1199,7 +1194,6 @@ export function createPublicApiV1Routes<
         const principal = await authorize(context, resource, organizationId, "read");
         const id = requiredRouteParam(context, "id");
         const record = await resource.repository.get({
-          tenantId: organizationId,
           organizationId,
           resource: segment,
           id,
@@ -1228,7 +1222,6 @@ export function createPublicApiV1Routes<
         const operation = async (): Promise<MutationResult> => ({
           status: 201,
           body: await resource.repository.create({
-            tenantId: organizationId,
             organizationId,
             resource: segment,
             data,
@@ -1267,7 +1260,6 @@ export function createPublicApiV1Routes<
       const id = requiredRouteParam(context, "id");
       const operation = async (): Promise<MutationResult> => {
         const current = await resource.repository.get({
-          tenantId: organizationId,
           organizationId,
           resource: segment,
           id,
@@ -1287,7 +1279,6 @@ export function createPublicApiV1Routes<
           );
         }
         const updated = await resource.repository.update({
-          tenantId: organizationId,
           organizationId,
           resource: segment,
           id,
