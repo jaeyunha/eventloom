@@ -119,6 +119,7 @@ export interface ReviewPlanSeed {
   sourceRounds?: ApiPlan["rounds"];
   sourceClosesAt?: string | null;
   aggregates: readonly AggregateRow[];
+  assignments: readonly ReviewPlanAssignment[];
   progress: {
     totalAssignments: number;
     assigned: number;
@@ -170,7 +171,7 @@ interface ReviewerProgressSummary {
   completionPercent: number;
 }
 
-interface ApiAssignment {
+export interface ReviewPlanAssignment {
   id: string;
   eventId: string;
   planId: string;
@@ -180,6 +181,7 @@ interface ApiAssignment {
   status: "assigned" | "in_progress" | "submitted" | "abstained";
   version: number;
 }
+type ApiAssignment = ReviewPlanAssignment;
 export interface EvaluatorAssignment {
   eventId: string;
   eventName: string;
@@ -502,6 +504,19 @@ async function evaluationRequest<T>(
   }
   return body as T;
 }
+export async function deleteReviewAssignment(
+  baseUrl: string,
+  planId: string,
+  assignmentId: string,
+  fetcher: Fetcher = fetch,
+): Promise<void> {
+  await evaluationRequest<unknown>(
+    baseUrl,
+    `/plans/${encodeURIComponent(planId)}/assignments/${encodeURIComponent(assignmentId)}`,
+    { method: "DELETE" },
+    fetcher,
+  );
+}
 
 function dateLabel(value: string | null): string {
   if (value === null) return "—";
@@ -571,6 +586,7 @@ function mapPlan(
   aggregates: readonly AggregateRow[],
   progress: ApiProgress,
   decisions: Readonly<Record<string, ApiDecision | null>>,
+  assignments: readonly ReviewPlanAssignment[] = [],
 ): ReviewPlanSeed {
   const now = Date.now();
   return {
@@ -630,6 +646,7 @@ function mapPlan(
       rubric: { name: round.rubric.name, criteria: round.rubric.criteria },
     })),
     aggregates,
+    assignments,
     progress: {
       totalAssignments: progress.total,
       assigned: progress.assigned,
@@ -684,6 +701,7 @@ function seedWithAuthoritativePlan(seed: ReviewPlanSeed, plan: ApiPlan): ReviewP
       reviewers: seed.progress.reviewers,
     },
     decisions,
+    seed.assignments,
   );
   return {
     ...mapped,
@@ -832,7 +850,7 @@ export async function loadOrganizerData(
         participants: submission.participants ?? [],
       };
     });
-    return mapPlan(plan, eventId, pendingAggregates, mappedProgress, {});
+    return mapPlan(plan, eventId, pendingAggregates, mappedProgress, {}, assignments);
   }
   const aggregates =
     round === undefined
@@ -879,7 +897,7 @@ export async function loadOrganizerData(
       }),
     ),
   );
-  return mapPlan(plan, eventId, aggregateEntries, mappedProgress, decisions);
+  return mapPlan(plan, eventId, aggregateEntries, mappedProgress, decisions, assignments);
 }
 
 function readableSubmissionFieldLabel(fieldId: string): string {
@@ -3037,6 +3055,12 @@ function OrganizerWorkspaceView({
           baseUrl={baseUrl}
           reviewerMembers={reviewerMembers}
         />
+        <ReviewerAssignmentList
+          seed={seed}
+          baseUrl={baseUrl}
+          reviewerMembers={reviewerMembers}
+          onAssignmentsPersisted={onAssignmentsPersisted}
+        />
 
         <section className={styles.section} aria-labelledby="aggregate-heading">
           <div className={styles.sectionHeading}>
@@ -3326,7 +3350,119 @@ function ReviewerProgressDashboard({
     </section>
   );
 }
+function reviewerAssignmentStatusLabel(status: ReviewPlanAssignment["status"]): string {
+  if (status === "in_progress") return "In progress";
+  if (status === "submitted") return "Submitted";
+  if (status === "abstained") return "Recused";
+  return "Assigned";
+}
 
+function ReviewerAssignmentList({
+  seed,
+  baseUrl,
+  reviewerMembers,
+  onAssignmentsPersisted,
+}: Readonly<{
+  seed: ReviewPlanSeed;
+  baseUrl: string;
+  reviewerMembers: readonly OrganizationMember[];
+  onAssignmentsPersisted?: (() => Promise<void>) | undefined;
+}>) {
+  const [busyAssignmentId, setBusyAssignmentId] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const submissionById = new Map(seed.aggregates.map((aggregate) => [aggregate.id, aggregate]));
+  const roundById = new Map(seed.rounds.map((round) => [round.id, round]));
+
+  async function unassign(assignment: ReviewPlanAssignment): Promise<void> {
+    if (busyAssignmentId !== null) return;
+    if (typeof window !== "undefined" && !window.confirm("Unassign this reviewer assignment?")) {
+      return;
+    }
+    setBusyAssignmentId(assignment.id);
+    setMessage(null);
+    try {
+      await deleteReviewAssignment(baseUrl, seed.planId, assignment.id);
+      await onAssignmentsPersisted?.();
+      setMessage("Reviewer assignment unassigned.");
+    } catch (reason: unknown) {
+      setMessage(
+        reason instanceof Error
+          ? reason.message
+          : "The reviewer assignment could not be unassigned.",
+      );
+    } finally {
+      setBusyAssignmentId(null);
+    }
+  }
+
+  return (
+    <section className={styles.section} aria-labelledby="current-assignments-heading">
+      <div className={styles.sectionHeading}>
+        <div>
+          <p className={styles.sectionEyebrow}>Authoritative assignments</p>
+          <h2 id="current-assignments-heading">Current reviewer assignments</h2>
+        </div>
+        <span className={styles.mutedLabel}>{seed.assignments.length} assignments</span>
+      </div>
+      {seed.assignments.length === 0 ? (
+        <p className={styles.fieldHint}>No reviewer assignments have been persisted yet.</p>
+      ) : (
+        <div className={styles.tableWrap}>
+          <table className={styles.dataTable}>
+            <caption>Current reviewer assignments</caption>
+            <thead>
+              <tr>
+                <th scope="col">Submission</th>
+                <th scope="col">Reviewer</th>
+                <th scope="col">Round</th>
+                <th scope="col">Status</th>
+                <th scope="col">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {seed.assignments.map((assignment) => {
+                const aggregate = submissionById.get(assignment.submissionId);
+                const round = roundById.get(assignment.roundId);
+                const reviewer = reviewerDisplayLabel(assignment.reviewerId, reviewerMembers);
+                const busy = busyAssignmentId === assignment.id;
+                return (
+                  <tr key={assignment.id}>
+                    <th scope="row">
+                      <strong>{aggregate?.title ?? assignment.submissionId}</strong>
+                      <span>{aggregate?.reference ?? assignment.submissionId}</span>
+                    </th>
+                    <td>
+                      <strong>{reviewer}</strong>
+                      <span>{assignment.reviewerId}</span>
+                    </td>
+                    <td>{round?.name ?? assignment.roundId}</td>
+                    <td>{reviewerAssignmentStatusLabel(assignment.status)}</td>
+                    <td>
+                      <button
+                        className={styles.dangerButton}
+                        type="button"
+                        onClick={() => void unassign(assignment)}
+                        disabled={busyAssignmentId !== null}
+                        aria-label={`Unassign ${reviewer} from ${aggregate?.title ?? assignment.submissionId}`}
+                      >
+                        {busy ? "Unassigning…" : "Unassign"}
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {message ? (
+        <p className={styles.submittedMessage} role="status">
+          {message}
+        </p>
+      ) : null}
+    </section>
+  );
+}
 function DecisionEditor({
   aggregate,
   baseUrl,

@@ -8,6 +8,7 @@ import {
   buildEvaluationPlanCreateDto,
   createEvaluationPlan,
   createReviewAutosaveQueue,
+  deleteReviewAssignment,
   type EvaluatorAssignment,
   loadEvaluatorQueue,
   loadOrganizerData,
@@ -159,6 +160,28 @@ function testPlan(eventId: string): ReviewPlanSeed {
         participants: [{ id: "riley", displayName: "Riley Chen", role: "Author" }],
       },
     ],
+    assignments: [
+      {
+        id: "assignment-042-sam",
+        eventId,
+        planId: "plan-test",
+        roundId: "round-initial",
+        submissionId: "submission-042",
+        reviewerId: "sam-whitfield",
+        status: "in_progress",
+        version: 1,
+      },
+      {
+        id: "assignment-017-sam",
+        eventId,
+        planId: "plan-test",
+        roundId: "round-initial",
+        submissionId: "submission-017",
+        reviewerId: "sam-whitfield",
+        status: "assigned",
+        version: 1,
+      },
+    ],
     progress: {
       totalAssignments: 18,
       assigned: 18,
@@ -307,6 +330,59 @@ describe("review workspace", () => {
     expect(workspaceStyles).toMatch(
       /\.referenceBadge\s*\{[^}]*max-inline-size:[^;}]+;[^}]*white-space:\s*normal;[^}]*overflow-wrap:\s*anywhere;/u,
     );
+  });
+  it("preserves and renders authoritative reviewer assignments with unassign controls", () => {
+    const plan = testPlan("summit-2026");
+    expect(plan.assignments).toHaveLength(2);
+    const markup = renderToStaticMarkup(
+      createElement(ReviewWorkspace, {
+        eventId: "summit-2026",
+        mode: "organizer",
+        initialState: { organizer: plan },
+      }),
+    );
+
+    expect(markup).toContain("Current reviewer assignments");
+    expect(markup).toContain("Designing resilient public services");
+    expect(markup).toContain("SUB-042");
+    expect(markup).toContain("sam-whitfield");
+    expect(markup).toContain("Initial committee review");
+    expect(markup).toContain("In progress");
+    expect(markup).toContain("Unassign");
+  });
+
+  it("deletes an assignment through the exact plan-scoped path and propagates errors", async () => {
+    const requests: Array<{ input: string; method: string | undefined }> = [];
+    await deleteReviewAssignment(
+      "https://api.example",
+      "plan-test",
+      "assignment-test",
+      async (input, init) => {
+        requests.push({ input: String(input), method: init?.method });
+        return new Response(null, { status: 204 });
+      },
+    );
+
+    expect(requests).toEqual([
+      {
+        input:
+          "https://api.example/api/admin/evaluations/plans/plan-test/assignments/assignment-test",
+        method: "DELETE",
+      },
+    ]);
+
+    await expect(
+      deleteReviewAssignment(
+        "https://api.example",
+        "plan-test",
+        "assignment-test",
+        async () =>
+          new Response(JSON.stringify({ error: { message: "Assignment removal is forbidden." } }), {
+            status: 403,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    ).rejects.toThrow("Assignment removal is forbidden.");
   });
   it("keeps the organizer plan usable while review details load or fail", () => {
     const retry = vi.fn();
@@ -988,6 +1064,7 @@ describe("review workspace", () => {
 
       expect(aggregateRequests).toHaveLength(1);
       expect(singularAggregateRequests).toHaveLength(0);
+      expect(seed.assignments).toEqual(assignments);
       expect(seed.aggregates).toEqual(
         expect.arrayContaining([
           expect.objectContaining({

@@ -4,7 +4,11 @@ import Link from "next/link";
 import { portalSubmissionEditTarget, submissionStatusPresentation } from "./model";
 import styles from "./portal.module.css";
 import { usePortal } from "./portal-provider";
-import { portalSubmissionIdsMatch } from "./portal-submissions";
+import {
+  canonicalPortalSubmissionId,
+  portalSubmissionDisplayTitle,
+  portalSubmissionIdsMatch,
+} from "./portal-submissions";
 import {
   EmptyState,
   formatPortalDate,
@@ -13,13 +17,22 @@ import {
   SubmissionStatusBadge,
   TaskStatusBadge,
 } from "./portal-ui";
-import type { PortalSubmissionStatus } from "./types";
+import type { PortalSubmission, PortalSubmissionStatus } from "./types";
 
 const standardJourney: readonly PortalSubmissionStatus[] = [
   "submitted",
   "under_review",
   "accepted",
 ];
+
+function portalDetailEditTarget(
+  context: Parameters<typeof portalSubmissionEditTarget>[0],
+  submission: PortalSubmission,
+): ReturnType<typeof portalSubmissionEditTarget> {
+  const target = portalSubmissionEditTarget(context, submission);
+  if (target !== null || submission.status !== "accepted") return target;
+  return portalSubmissionEditTarget(context, { ...submission, status: "submitted" });
+}
 
 export function SubmissionDetail({ submissionId }: Readonly<{ submissionId: string }>) {
   return (
@@ -54,10 +67,9 @@ function SubmissionDetailContent({ submissionId }: Readonly<{ submissionId: stri
   const submissionTasks = view.tasks.filter((task) =>
     portalSubmissionIdsMatch(task.submissionId, submission.id),
   );
+  const displayTitle = portalSubmissionDisplayTitle(submission, view.submissions);
   const currentJourneyIndex = standardJourney.indexOf(submission.status);
-  const editTarget = can("submission-edit")
-    ? portalSubmissionEditTarget(context, submission)
-    : null;
+  const editTarget = can("submission-edit") ? portalDetailEditTarget(context, submission) : null;
 
   return (
     <>
@@ -66,7 +78,7 @@ function SubmissionDetailContent({ submissionId }: Readonly<{ submissionId: stri
       </Link>
       <PageHeading
         eyebrow={`Session ${submission.id}`}
-        title={submission.title}
+        title={displayTitle}
         description="Your latest session status and accepted-speaker requirements."
         action={<SubmissionStatusBadge status={submission.status} />}
       />
@@ -74,7 +86,12 @@ function SubmissionDetailContent({ submissionId }: Readonly<{ submissionId: stri
         <Link
           className={styles.primaryButton}
           href={editTarget.href}
-          onClick={() => window.localStorage.setItem(editTarget.pointerKey, submission.id)}
+          onClick={() =>
+            window.localStorage.setItem(
+              editTarget.pointerKey,
+              canonicalPortalSubmissionId(submission.id),
+            )
+          }
         >
           Edit proposal
         </Link>
