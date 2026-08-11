@@ -1,7 +1,8 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  AdminShell,
   eventNavigationFor,
   qualifiedEventContext,
   sessionHasOrganizerMembership,
@@ -19,6 +20,9 @@ import {
   resolveOrganizerOverviewConfig,
   validateOrganizerEventForm,
 } from "./organizer-overview";
+vi.mock("next/navigation", () => ({
+  usePathname: () => "/admin",
+}));
 
 const loadedData: OrganizerOverviewData = {
   organizationId: "ai-engineer",
@@ -399,6 +403,16 @@ describe("admin navigation", () => {
       qualifiedEventContext("/admin/organizations/org%2Flive/events/event%2Flive/agenda"),
     ).toEqual({ organizationId: "org/live", eventId: "event/live" });
     expect(qualifiedEventContext("/admin/events/event-live/agenda")).toBeNull();
+  });
+  it("mounts protected page content while organizer access is still being checked", () => {
+    const output = renderToStaticMarkup(
+      createElement(AdminShell, null, createElement("p", null, "Primary organizer content")),
+    );
+
+    expect(output).toContain("Open Sessionboard");
+    expect(output).toContain("Primary organizer content");
+    expect(output).toContain('aria-busy="true"');
+    expect(output).toContain("Checking organizer access");
   });
   it("accepts only owner or admin membership for the selected organization", () => {
     const session = {

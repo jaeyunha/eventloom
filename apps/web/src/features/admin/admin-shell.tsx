@@ -222,23 +222,6 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
 
   if (publicMemberSetup) return <>{children}</>;
 
-  if (authentication === "checking") {
-    return (
-      <main className={styles.content} aria-busy="true" aria-live="polite">
-        <div className={styles.contentInner}>Checking organizer access…</div>
-      </main>
-    );
-  }
-  if (authentication === "denied") {
-    return (
-      <main className={styles.content} role="alert">
-        <div className={styles.contentInner}>
-          <h1>Access denied</h1>
-          <p>An owner or administrator membership is required for this organization.</p>
-        </div>
-      </main>
-    );
-  }
   async function signOut(): Promise<void> {
     await fetch("/api/auth/sign-out", {
       method: "POST",
@@ -319,8 +302,27 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
           </div>
         </aside>
 
-        <main id="admin-content" className={styles.content} tabIndex={-1}>
-          <div className={styles.contentInner}>{children}</div>
+        <main
+          id="admin-content"
+          className={styles.content}
+          tabIndex={-1}
+          aria-busy={authentication === "checking" ? true : undefined}
+        >
+          <div className={styles.contentInner}>
+            {authentication === "checking" ? (
+              <p className={styles.srOnly} role="status">
+                Checking organizer access
+              </p>
+            ) : null}
+            {authentication === "denied" ? (
+              <div role="alert">
+                <h1>Access denied</h1>
+                <p>An owner or administrator membership is required for this organization.</p>
+              </div>
+            ) : (
+              children
+            )}
+          </div>
         </main>
       </div>
     </div>
