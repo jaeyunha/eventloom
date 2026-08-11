@@ -22,6 +22,7 @@ import {
   speakerOnboardingTaskDefinitions,
   speakerProgressFor,
   speakerProgressMatches,
+  speakerSecondaryLoadKey,
   travelLogisticsFor,
   validateSpeakerTaskAssignment,
 } from "./speaker-workspace";
@@ -892,6 +893,13 @@ describe("speaker workspace", () => {
     expect(markup).toContain("General speaker tasks");
     expect(markup).toContain("Onboarding progress");
     expect(markup).not.toContain("objectKey");
+  });
+  it("starts secondary speaker reads only after the current roster renders", () => {
+    expect(speakerSecondaryLoadKey(null, "org-1", "event-1", false)).toBeNull();
+    expect(speakerSecondaryLoadKey(roster, "org-1", "event-1", true)).toBeNull();
+    expect(speakerSecondaryLoadKey(roster, "org-2", "event-1", false)).toBeNull();
+    expect(speakerSecondaryLoadKey(roster, "org-1", "event-2", false)).toBeNull();
+    expect(speakerSecondaryLoadKey(roster, "org-1", "event-1", false)).toBe("org-1:event-1");
   });
 
   it("keeps duplicate authoritative speakers visible to conflict presentation", () => {

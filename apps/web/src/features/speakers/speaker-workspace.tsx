@@ -452,6 +452,22 @@ function normalizeRoster(
   }
   return { ...roster, speakers: [...roster.speakers] };
 }
+export function speakerSecondaryLoadKey(
+  roster: SpeakerRosterEnvelope | null,
+  organizationId: string,
+  eventId: string,
+  loading: boolean,
+): string | null {
+  if (
+    loading ||
+    roster === null ||
+    roster.organizationId !== organizationId ||
+    roster.eventId !== eventId
+  ) {
+    return null;
+  }
+  return `${organizationId}:${eventId}`;
+}
 function normalizedEmail(value: string): string {
   return value.trim().toLowerCase();
 }
@@ -970,6 +986,7 @@ export function SpeakerWorkspace({
   const [saveBusy, setSaveBusy] = useState(false);
   const rosterRequestRef = useRef(0);
   const importRequestRef = useRef(0);
+  const secondaryLoadRef = useRef<{ api: SpeakerApi; key: string } | null>(null);
   const importBusy = importPreviewBusy || importCommitBusy;
 
   useEffect(() => {
@@ -1079,8 +1096,12 @@ export function SpeakerWorkspace({
       progressController?.abort();
     };
   }, [api, eventId, organizationId]);
+  const currentSecondaryLoadKey = speakerSecondaryLoadKey(roster, organizationId, eventId, loading);
   useEffect(() => {
-    if (api === null) return;
+    const loadKey = currentSecondaryLoadKey;
+    if (api === null || loadKey === null) return;
+    if (secondaryLoadRef.current?.api === api && secondaryLoadRef.current.key === loadKey) return;
+    secondaryLoadRef.current = { api, key: loadKey };
     let active = true;
     void withTimeout((signal) => api.listEmailTemplates(signal), "Email template load")
       .then((templates) => {
@@ -1115,7 +1136,7 @@ export function SpeakerWorkspace({
     return () => {
       active = false;
     };
-  }, [api]);
+  }, [api, currentSecondaryLoadKey]);
 
   const speakers = roster?.speakers ?? [];
   const selectedSpeaker = speakers.find((speaker) => speaker.participantId === selectedId) ?? null;
