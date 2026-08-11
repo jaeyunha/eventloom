@@ -256,14 +256,38 @@ function normalizeRoster(
       );
     }
     const id = resourceId(reference.id, "speakerRoster id");
+    const existing = refs.get(id);
     const role =
       reference.role === undefined
-        ? undefined
+        ? existing?.role
         : optionalText(reference.role, "speakerRoster role", 64);
-    if (refs.has(id) && role === undefined) continue;
-    refs.set(id, role === undefined ? { id } : { id, role });
+    const displayName =
+      reference.displayName === undefined
+        ? existing?.displayName
+        : optionalText(reference.displayName, "speakerRoster displayName", 200);
+    refs.set(id, {
+      id,
+      ...(role === undefined ? {} : { role }),
+      ...(displayName === undefined ? {} : { displayName }),
+    });
   }
   return { speakerIds: [...refs.keys()], speakerRoster: [...refs.values()] };
+}
+function sessionSpeakerNames(session: Session): string[] {
+  const rosterNames = new Map(
+    session.speakerRoster.flatMap((reference) => {
+      const displayName = reference.displayName?.trim();
+      return displayName ? [[reference.id, displayName] as const] : [];
+    }),
+  );
+  const storedNames = Array.isArray((session as Session & { speakerNames?: unknown }).speakerNames)
+    ? ((session as Session & { speakerNames: unknown[] }).speakerNames.filter(
+        (value): value is string => typeof value === "string" && value.trim().length > 0,
+      ))
+    : [];
+  return session.speakerIds.map(
+    (participantId, index) => rosterNames.get(participantId) ?? storedNames[index] ?? participantId,
+  );
 }
 
 function normalizeResources(
@@ -1549,6 +1573,7 @@ export class SessionService {
           ],
           ...(session.formatId === undefined ? {} : { formatId: session.formatId }),
           speakerIds: [...session.speakerIds],
+          speakerNames: sessionSpeakerNames(session),
           resourceIds: [...session.resourceIds],
           version: session.version,
           updatedAt: session.updatedAt,
@@ -1586,7 +1611,7 @@ export class SessionService {
         durationMinutes: session.durationMinutes,
         summary: session.abstract,
         format: session.formatId ?? "Session",
-        speakerNames: [...session.speakerIds],
+        speakerNames: [...session.speakerNames],
         ...(session.roomId === undefined
           ? {}
           : { roomName: roomById.get(session.roomId)?.name ?? session.roomId }),

@@ -2922,6 +2922,8 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
           id: "session-submission-acceptance",
           title: "Canonical session",
           status: "accepted",
+          participantIds: ["participant-primary", "participant-co"],
+          speakerNames: ["Primary Speaker", "Co Speaker"],
         }),
       ],
     });

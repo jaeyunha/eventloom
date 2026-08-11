@@ -4372,6 +4372,8 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
     const speakerRoster: readonly SessionSpeakerReference[] = submission.participants.map(
       (participant) => ({
         id: participant.id,
+        displayName:
+          `${participant.firstName.trim()} ${participant.lastName.trim()}`.trim() || participant.id,
         role: participant.role,
       }),
     );
