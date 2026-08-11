@@ -58,6 +58,60 @@ describe("published speaker projection route", () => {
     await expect(response.json()).resolves.toEqual({ data: projection });
     expect(getPublishedSpeakers).toHaveBeenCalledWith("open-sessionboard-conf");
   });
+  it("caches successful projections without crossing event slugs", async () => {
+    const otherProjection: PublishedSpeakerProjection = {
+      ...projection,
+      event: { ...projection.event, slug: "other-event", name: "Other Event" },
+    };
+    const getPublishedSpeakers = vi.fn(async (eventSlug: string) => {
+      if (eventSlug === projection.event.slug) return projection;
+      if (eventSlug === otherProjection.event.slug) return otherProjection;
+      return null;
+    });
+    const app = createApp({ publishedSpeakers: { getPublishedSpeakers } });
+
+    const first = await app.request(
+      "/api/public/events/open-sessionboard-conf/speakers",
+      undefined,
+      bindings,
+    );
+    const cached = await app.request(
+      "/api/public/events/open-sessionboard-conf/speakers",
+      undefined,
+      bindings,
+    );
+    const other = await app.request("/api/public/events/other-event/speakers", undefined, bindings);
+
+    expect(first.status).toBe(200);
+    expect(cached.status).toBe(200);
+    expect(other.status).toBe(200);
+    await expect(other.json()).resolves.toMatchObject({
+      data: { event: { slug: "other-event", name: "Other Event" } },
+    });
+    expect(getPublishedSpeakers).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache speaker projection errors", async () => {
+    const getPublishedSpeakers = vi.fn(async () => {
+      throw new Error("speaker read failed");
+    });
+    const app = createApp({ publishedSpeakers: { getPublishedSpeakers } });
+
+    const first = await app.request(
+      "/api/public/events/open-sessionboard-conf/speakers",
+      undefined,
+      bindings,
+    );
+    const second = await app.request(
+      "/api/public/events/open-sessionboard-conf/speakers",
+      undefined,
+      bindings,
+    );
+
+    expect(first.status).toBe(500);
+    expect(second.status).toBe(500);
+    expect(getPublishedSpeakers).toHaveBeenCalledTimes(2);
+  });
 
   it("does not expose a projection when the published source has no current revision", async () => {
     const getPublishedSpeakers = vi.fn(async () => null);

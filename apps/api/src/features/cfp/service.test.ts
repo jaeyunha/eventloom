@@ -10,8 +10,10 @@ import type {
 import { evaluateFormRules, validateCfpForm } from "./rules";
 import {
   CfpError,
+  type CfpFileAssetAuthorizer,
   type CfpIdempotencyCoordinator,
   type CfpRepository,
+  type CfpReusableField,
   CfpService,
 } from "./service";
 
@@ -145,6 +147,7 @@ class MemoryRepository implements CfpRepository {
   submissions = new Map<string, Submission>();
   versions: SubmissionVersion[] = [];
   audits: AuditEntry[] = [];
+  reusableFields: Array<CfpReusableField> = [];
 
   constructor() {
     this.events.set(event.id, structuredClone(event));
@@ -182,6 +185,19 @@ class MemoryRepository implements CfpRepository {
       throw new CfpError("CONFLICT", "form version conflict");
     }
     this.forms.set(value.id, structuredClone(value));
+  }
+  async getReusableField(
+    tenantId: string,
+    fieldId: string,
+    version: number,
+  ): Promise<CfpReusableField | null> {
+    const found = this.reusableFields.find(
+      (candidate) =>
+        candidate.tenantId === tenantId &&
+        candidate.id === fieldId &&
+        candidate.version === version,
+    );
+    return found === undefined ? null : structuredClone(found);
   }
 
   async getSubmission(tenantId: string, submissionId: string): Promise<Submission | null> {
@@ -236,9 +252,10 @@ class MemoryIdempotency implements CfpIdempotencyCoordinator {
   }
 }
 
-function createFixture(now = "2026-08-08T12:00:00.000Z") {
+function createFixture(now = "2026-08-08T12:00:00.000Z", fileAssets?: CfpFileAssetAuthorizer) {
   const repository = new MemoryRepository();
   const confirmations: string[] = [];
+  const confirmationPayloads: Array<{ eventName: string; submissionTitle: string }> = [];
   const confirmationKeys = new Set<string>();
   let sequence = 0;
   const clock = { current: new Date(now), now: () => clock.current };
@@ -246,17 +263,27 @@ function createFixture(now = "2026-08-08T12:00:00.000Z") {
     repository,
     idempotency: new MemoryIdempotency(),
     effects: {
-      enqueueSubmissionConfirmation: async ({ submission, idempotencyKey }) => {
+      enqueueSubmissionConfirmation: async ({
+        submission,
+        event: queuedEvent,
+        submissionTitle,
+        idempotencyKey,
+      }) => {
         if (!confirmationKeys.has(idempotencyKey)) {
           confirmationKeys.add(idempotencyKey);
           confirmations.push(submission.id);
+          confirmationPayloads.push({
+            eventName: queuedEvent?.name ?? "",
+            submissionTitle: submissionTitle ?? "",
+          });
         }
       },
     },
     clock,
     ids: { next: (prefix) => `${prefix}_${++sequence}` },
+    ...(fileAssets === undefined ? {} : { fileAssets }),
   });
-  return { service, repository, confirmations, clock };
+  return { service, repository, confirmations, confirmationPayloads, clock };
 }
 
 async function completeValidDraft(
@@ -380,11 +407,182 @@ describe("CFP rules and configuration", () => {
     );
     expect(saved.welcomeContent).toBe("scriptbad()/script Welcome");
   });
+  it("persists dynamic participant fields and publishes safe conditional rules", async () => {
+    const { service } = createFixture();
+    const saved = await service.saveForm(
+      buildForm({
+        version: 2,
+        rules: [
+          {
+            id: "show_company",
+            priority: 1,
+            when: {
+              type: "group",
+              operator: "all",
+              conditions: [
+                { type: "predicate", fieldKey: "format", operator: "equals", value: "talk" },
+              ],
+            },
+            actions: [
+              { type: "show_field", fieldKey: "participantCompany" },
+              { type: "route", queue: "private-admin-queue", tags: [] },
+            ],
+          },
+        ],
+        participantFields: [
+          ...buildForm().participantFields,
+          {
+            id: "participant_company",
+            sectionId: "people",
+            key: "participantCompany",
+            label: "Company",
+            kind: "text",
+            required: false,
+            options: [],
+            description: "<script>private</script>Company",
+          },
+        ],
+      }),
+      1,
+    );
+    expect(saved.participantFields.at(-1)).toMatchObject({
+      key: "participantCompany",
+      description: "scriptprivate/scriptCompany",
+    });
+
+    const published = await service.getPublishedCfp({
+      tenantId: "tenant_1",
+      eventId: "event_1",
+      formId: "form_1",
+    });
+    expect(published.form.participantFields).toEqual(
+      expect.arrayContaining([expect.objectContaining({ key: "participantCompany" })]),
+    );
+    expect(published.form.rules[0]?.actions).toEqual([
+      { type: "show_field", fieldKey: "participantCompany" },
+    ]);
+    expect(published.form.settings).not.toHaveProperty("adminNotificationsEnabled");
+    expect(published.form.settings).not.toHaveProperty("remindersEnabled");
+  });
+
+  it("authorizes reusable field versions within the tenant", async () => {
+    const { service, repository } = createFixture();
+    repository.reusableFields.push({
+      tenantId: "tenant_1",
+      id: "shared_company",
+      version: 3,
+    });
+    const form = buildForm({ version: 2 });
+    form.submissionFields = form.submissionFields.map((field, index) =>
+      index === 0 ? { ...field, fieldRef: { id: "shared_company", version: 3 } } : field,
+    );
+    const saved = await service.saveForm(form, 1);
+    expect(saved.version).toBe(2);
+    expect(saved.submissionFields[0]).toMatchObject({
+      fieldRef: { id: "shared_company", version: 3 },
+    });
+
+    const crossTenant = createFixture();
+    crossTenant.repository.reusableFields.push({
+      tenantId: "tenant_2",
+      id: "shared_company",
+      version: 3,
+    });
+    const crossTenantForm = buildForm({
+      version: 2,
+      submissionFields: form.submissionFields,
+    });
+    await expect(crossTenant.service.saveForm(crossTenantForm, 1)).rejects.toMatchObject({
+      code: "VALIDATION_FAILED",
+    });
+  });
+
+  it("accepts only authorized finalized file assets and preserves schema versions", async () => {
+    const fileAssets: CfpFileAssetAuthorizer = {
+      getAsset: async (input) => ({
+        assetId: input.assetId,
+        tenantId: input.tenantId,
+        eventId: input.eventId,
+        submissionId: input.submissionId,
+        owner: input.owner,
+        state: "ready",
+        contentType: "application/pdf",
+        sizeBytes: 512,
+      }),
+    };
+    const { service, repository } = createFixture("2026-08-08T12:00:00.000Z", fileAssets);
+    const fileForm = buildForm({
+      version: 2,
+      submissionFields: [
+        ...buildForm().submissionFields,
+        {
+          id: "field_slides",
+          sectionId: "session",
+          key: "slides",
+          label: "Slides",
+          kind: "file_request",
+          required: true,
+          options: [],
+          fileRequest: {
+            allowedMimeTypes: ["application/pdf"],
+            maxBytes: 1024,
+            required: true,
+            owner: "submission",
+          },
+        },
+      ],
+    });
+    await service.saveForm(fileForm, 1);
+    const draft = await service.createDraft({
+      tenantId: "tenant_1",
+      eventId: "event_1",
+      formId: "form_1",
+      ownerAccountId: "account_1",
+      idempotencyKey: "file-create",
+    });
+    await expect(
+      service.saveDraft({
+        tenantId: "tenant_1",
+        submissionId: draft.id,
+        ownerAccountId: "account_1",
+        expectedVersion: draft.version,
+        formVersion: 2,
+        idempotencyKey: "file-object-key",
+        answers: { title: "Session", slides: { assetId: "asset-1", objectKey: "events/private" } },
+      }),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+
+    const saved = await service.saveDraft({
+      tenantId: "tenant_1",
+      submissionId: draft.id,
+      ownerAccountId: "account_1",
+      expectedVersion: draft.version,
+      formVersion: 2,
+      idempotencyKey: "file-valid",
+      answers: { title: "Session", slides: { assetId: "asset-1" } },
+    });
+    expect(saved.formVersion).toBe(2);
+    expect(saved.answers.slides).toEqual({ assetId: "asset-1" });
+
+    await service.saveForm(buildForm({ version: 3 }), 2);
+    await expect(
+      service.saveDraft({
+        tenantId: "tenant_1",
+        submissionId: draft.id,
+        ownerAccountId: "account_1",
+        expectedVersion: saved.version,
+        formVersion: 2,
+        idempotencyKey: "stale-schema",
+        answers: { title: "Stale" },
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(repository.submissions.get(draft.id)?.formVersion).toBe(2);
+  });
 });
 
 describe("CFP submission lifecycle", () => {
   it("autosaves ordered steps, sanitizes input, previews routing, and submits once", async () => {
-    const { service, repository, confirmations } = createFixture();
+    const { service, repository, confirmations, confirmationPayloads } = createFixture();
     const firstCreate = await service.createDraft({
       tenantId: "tenant_1",
       eventId: "event_1",
@@ -400,6 +598,7 @@ describe("CFP submission lifecycle", () => {
       idempotencyKey: "same-create",
     });
     expect(repeatedCreate.id).toBe(firstCreate.id);
+    expect(firstCreate.completedSteps).toEqual(["welcome"]);
 
     const ready = await completeValidDraft(service);
     expect(ready.completedSteps).toEqual([
@@ -453,6 +652,9 @@ describe("CFP submission lifecycle", () => {
     expect(submitted).toEqual(repeatedSubmit);
     expect(submitted.submission.status).toBe("submitted");
     expect(confirmations).toEqual([ready.id]);
+    expect(confirmationPayloads).toEqual([
+      { eventName: "Future Conf", submissionTitle: "Typed APIs" },
+    ]);
     expect(repository.versions.filter((version) => version.reason === "submitted")).toHaveLength(1);
 
     const retryWithNewKey = await service.submit({
@@ -567,6 +769,33 @@ describe("CFP submission lifecycle", () => {
     ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
   });
 
+  it("allows a submitter to edit a submitted proposal while the CFP remains open", async () => {
+    const { service, clock } = createFixture();
+    const ready = await completeValidDraft(service, "open-edit");
+    const submitted = await service.submit({
+      tenantId: "tenant_1",
+      submissionId: ready.id,
+      ownerAccountId: "account_1",
+      expectedVersion: ready.version,
+      idempotencyKey: "open-submit",
+    });
+
+    clock.current = new Date("2026-08-09T12:00:00.000Z");
+    const edited = await service.saveDraft({
+      tenantId: "tenant_1",
+      submissionId: ready.id,
+      ownerAccountId: "account_1",
+      expectedVersion: submitted.submission.version,
+      idempotencyKey: "open-edit-save",
+      answers: {
+        ...submitted.submission.answers,
+        abstract: `${String(submitted.submission.answers.abstract)} Updated: now includes 2026 benchmark data.`,
+      },
+    });
+
+    expect(edited.status).toBe("submitted");
+    expect(edited.answers.abstract).toContain("Updated: now includes 2026 benchmark data.");
+  });
   it("requires audited reopening for post-close edits and allows pre-decision withdrawal", async () => {
     const { service, repository, clock } = createFixture();
     const ready = await completeValidDraft(service, "closed-flow");
@@ -625,5 +854,140 @@ describe("CFP submission lifecycle", () => {
     });
     expect(withdrawn.status).toBe("withdrawn");
     expect(repository.audits.at(-1)).toMatchObject({ action: "submission_withdrawn" });
+  });
+  it("creates a new authenticated submission with authoritative versions before review", async () => {
+    const { service, repository } = createFixture();
+    const created = await service.createDraft({
+      tenantId: "tenant_1",
+      eventId: "event_1",
+      formId: "form_1",
+      ownerAccountId: "speaker_account",
+      idempotencyKey: "new-flow-create",
+    });
+
+    expect(created).toMatchObject({
+      tenantId: "tenant_1",
+      ownerAccountId: "speaker_account",
+      formVersion: 1,
+      version: 1,
+      completedSteps: ["welcome"],
+    });
+
+    const account = await service.saveDraft({
+      tenantId: "tenant_1",
+      submissionId: created.id,
+      ownerAccountId: "speaker_account",
+      expectedVersion: created.version,
+      formVersion: created.formVersion,
+      idempotencyKey: "new-flow-account",
+      completedStep: "account",
+      answers: {
+        accountEmail: "speaker@example.com",
+        accountFirstName: "Taylor",
+        accountLastName: "Speaker",
+        accountAcceptedTerms: true,
+      },
+    });
+    const submission = await service.saveDraft({
+      tenantId: "tenant_1",
+      submissionId: created.id,
+      ownerAccountId: "speaker_account",
+      expectedVersion: account.version,
+      formVersion: account.formVersion,
+      idempotencyKey: "new-flow-submission",
+      completedStep: "submission",
+      answers: {
+        accountEmail: "speaker@example.com",
+        accountFirstName: "Taylor",
+        accountLastName: "Speaker",
+        accountAcceptedTerms: true,
+        title: "Reliable APIs",
+        abstract: "A practical session about durable API contracts.",
+        format: "talk",
+      },
+    });
+    const participant = await service.saveDraft({
+      tenantId: "tenant_1",
+      submissionId: created.id,
+      ownerAccountId: "speaker_account",
+      expectedVersion: submission.version,
+      formVersion: submission.formVersion,
+      idempotencyKey: "new-flow-participant",
+      completedStep: "participant",
+      participants: [
+        {
+          id: "speaker-participant",
+          firstName: "Taylor",
+          lastName: "Speaker",
+          email: "speaker@example.com",
+          role: "primary",
+          biography: "Principal engineer and conference speaker.",
+          answers: {},
+        },
+      ],
+    });
+    const reviewed = await service.saveDraft({
+      tenantId: "tenant_1",
+      submissionId: created.id,
+      ownerAccountId: "speaker_account",
+      expectedVersion: participant.version,
+      formVersion: participant.formVersion,
+      idempotencyKey: "new-flow-review",
+      completedStep: "review",
+    });
+
+    expect(reviewed.version).toBe(5);
+    expect(reviewed.formVersion).toBe(created.formVersion);
+    expect(reviewed.completedSteps).toEqual([
+      "welcome",
+      "account",
+      "submission",
+      "participant",
+      "review",
+    ]);
+    expect(reviewed.answers).toMatchObject({
+      title: "Reliable APIs",
+      abstract: "A practical session about durable API contracts.",
+    });
+
+    await expect(
+      service.review({
+        tenantId: "tenant_1",
+        submissionId: reviewed.id,
+        ownerAccountId: "speaker_account",
+        idempotencyKey: "new-flow-review-check",
+      }),
+    ).resolves.toMatchObject({ canSubmit: true, version: reviewed.version });
+
+    await expect(
+      service.saveDraft({
+        tenantId: "tenant_1",
+        submissionId: reviewed.id,
+        ownerAccountId: "speaker_account",
+        expectedVersion: account.version,
+        formVersion: reviewed.formVersion,
+        idempotencyKey: "new-flow-stale",
+        answers: { ...reviewed.answers, title: "Stale write" },
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+
+    await expect(
+      service.saveDraft({
+        tenantId: "tenant_2",
+        submissionId: reviewed.id,
+        ownerAccountId: "speaker_account",
+        expectedVersion: reviewed.version,
+        formVersion: reviewed.formVersion,
+        idempotencyKey: "new-flow-cross-tenant",
+        answers: { ...reviewed.answers, title: "Cross-tenant write" },
+      }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+    expect(repository.submissions.get(reviewed.id)).toMatchObject({
+      version: reviewed.version,
+      tenantId: "tenant_1",
+      ownerAccountId: "speaker_account",
+      answers: { title: "Reliable APIs" },
+    });
   });
 });

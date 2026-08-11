@@ -24,7 +24,7 @@ const details: Omit<CalendarInvitationPayload, "uid" | "sequence"> = {
   timeZone: "America/Los_Angeles",
   startsAt: "2025-03-09T09:30:00Z",
   endsAt: "2025-03-09T11:00:00Z",
-  organizer: "calendar@foreverbrowsing.com",
+  organizer: "calendar@sessionboard.namuh.co",
   attendees: ["speaker@example.com", "host@example.com"],
   summary: "Session, with a; comma and \\slash",
   location: "Room 1, Building A",
@@ -60,9 +60,17 @@ function actionInput(
 describe("calendar UID and lifecycle", () => {
   it("creates a stable UID scoped to tenant, event, and session", () => {
     const first = createCalendarUid(scope);
-    expect(first).toBe("tenant-demo.event-demo.session-demo@calendar.foreverbrowsing.com");
+    expect(first).toBe("tenant-demo.event-demo.session-demo@calendar.sessionboard.namuh.co");
     expect(createCalendarUid({ ...scope })).toBe(first);
     expect(createCalendarUid({ ...scope, sessionId: "another-session" })).not.toBe(first);
+  });
+  it("preserves a supplied UID when publishing an existing calendar identity", async () => {
+    const existingUid = "tenant-demo.event-demo.session-demo@calendar.foreverbrowsing.com";
+    const repository = new InMemoryCalendarInvitationRepository();
+    const published = await repository.publish(initialPayload({ uid: existingUid }));
+
+    expect(published.uid).toBe(existingUid);
+    expect((await repository.load(existingUid))?.payload.uid).toBe(existingUid);
   });
 
   it("starts at sequence zero and increments update and cancellation atomically", async () => {
@@ -86,6 +94,7 @@ describe("calendar UID and lifecycle", () => {
     expect(cancelled.payload.uid).toBe(first.payload.uid);
     expect(cancelled.ical).toContain("METHOD:CANCEL");
     expect(cancelled.ical).toContain("STATUS:CANCELLED");
+    expect(cancelled.ical).toContain("ORGANIZER:mailto:calendar@sessionboard.namuh.co");
   });
 
   it("replays an idempotency key and rejects a conflicting reuse", async () => {
@@ -106,7 +115,7 @@ describe("RFC 5545 serialization", () => {
     const payload = initialPayload({
       method: "UPDATE",
       sequence: 4,
-      summary: "Session, with a; comma and \\slash " + "unicode café 🚀 ".repeat(8),
+      summary: `Session, with a; comma and \\slash ${"unicode café 🚀 ".repeat(8)}`,
     });
     const ical = serializeCalendarInvitation(payload);
     const lines = ical.split("\r\n").slice(0, -1);

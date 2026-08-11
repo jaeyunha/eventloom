@@ -213,6 +213,33 @@ describe("CFP API routes", () => {
     await expect(formResponse.json()).resolves.toMatchObject({ data: { id: "form_1" } });
     expect(service.calls.map((call) => call.method)).toEqual(["saveEvent", "saveForm"]);
   });
+  it("allows an organizer to persist a past close date without changing tenant scope", async () => {
+    const { app, service } = createFixture();
+    const pastEvent = {
+      ...event,
+      closesAt: "2026-08-05T07:00:00.000Z",
+    };
+    const response = await app.request(
+      `${basePath}/config`,
+      {
+        method: "PUT",
+        headers: requestHeaders("organizer"),
+        body: JSON.stringify({ event: pastEvent, expectedVersion: 1 }),
+      },
+      environment,
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      data: {
+        tenantId: "org_1",
+        closesAt: "2026-08-05T07:00:00.000Z",
+      },
+    });
+    expect(service.calls).toEqual([
+      { method: "saveEvent", input: { input: pastEvent, expectedVersion: 1 } },
+    ]);
+  });
 
   it("denies configuration writes to applicants and rejects cross-tenant bodies", async () => {
     const { app } = createFixture();

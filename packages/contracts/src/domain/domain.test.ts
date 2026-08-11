@@ -3,8 +3,10 @@ import {
   acceleventsPublicationPreviewSchema,
   agendaVersionIdSchema,
   apiErrorResponseSchema,
+  calendarInvitationPayloadSchema,
   eventIdSchema,
   eventRoleSchema,
+  openSendSenderSchema,
   paginatedResponseSchema,
   paginationRequestSchema,
   reviewScoreSchema,
@@ -151,7 +153,42 @@ describe("agenda and integration boundaries", () => {
       }),
     ).toThrow();
   });
+  it("locks integration sender and organizer identities to sessionboard", () => {
+    const senders = [
+      "auth@sessionboard.namuh.co",
+      "speakers@sessionboard.namuh.co",
+      "calendar@sessionboard.namuh.co",
+    ] as const;
+    expect(senders.map((sender) => openSendSenderSchema.parse(sender))).toEqual(senders);
+    for (const sender of [
+      "auth@foreverbrowsing.com",
+      "speakers@foreverbrowsing.com",
+      "calendar@foreverbrowsing.com",
+    ]) {
+      expect(() => openSendSenderSchema.parse(sender)).toThrow();
+    }
 
+    const invitation = calendarInvitationPayloadSchema.parse({
+      method: "REQUEST",
+      uid: "session.uid@calendar.sessionboard.namuh.co",
+      sequence: 0,
+      timeZone: "America/Los_Angeles",
+      startsAt: now,
+      endsAt: later,
+      organizer: "calendar@sessionboard.namuh.co",
+      attendees: ["speaker@example.com"],
+      summary: "Session",
+      location: "Room 1",
+      idempotencyKey: "calendar-0001",
+    });
+    expect(invitation.organizer).toBe("calendar@sessionboard.namuh.co");
+    expect(() =>
+      calendarInvitationPayloadSchema.parse({
+        ...invitation,
+        organizer: "calendar@foreverbrowsing.com",
+      }),
+    ).toThrow();
+  });
   it("validates signed webhook headers as a closed transport contract", () => {
     expect(
       webhookSignatureHeadersSchema.parse({

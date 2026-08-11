@@ -22,28 +22,28 @@ describe("OpenSendClient production configuration", () => {
       sendingApiKey: "test-sending-key",
       fetch,
       senderAddresses: {
-        auth: "auth@foreverbrowsing.com",
-        speakers: "speakers@foreverbrowsing.com",
-        calendar: "calendar@foreverbrowsing.com",
+        auth: "auth@sessionboard.namuh.co",
+        speakers: "speakers@sessionboard.namuh.co",
+        calendar: "calendar@sessionboard.namuh.co",
       },
     });
 
-    expect(client.senderFor("auth")).toBe("auth@foreverbrowsing.com");
-    expect(client.senderFor("speakers")).toBe("speakers@foreverbrowsing.com");
-    expect(client.senderFor("calendar")).toBe("calendar@foreverbrowsing.com");
+    expect(client.senderFor("auth")).toBe("auth@sessionboard.namuh.co");
+    expect(client.senderFor("speakers")).toBe("speakers@sessionboard.namuh.co");
+    expect(client.senderFor("calendar")).toBe("calendar@sessionboard.namuh.co");
 
     await client.send(message, "calendar");
     const request = requests[0];
     if (request === undefined) throw new Error("Expected an OpenSend request.");
     expect(JSON.parse(String(request.body))).toMatchObject({
-      from: "calendar@foreverbrowsing.com",
+      from: "calendar@sessionboard.namuh.co",
     });
 
     expect(
       () =>
         new OpenSendClient({
           sendingApiKey: "test-sending-key",
-          senderAddresses: { auth: "unverified@example.com" },
+          senderAddresses: { auth: "auth@foreverbrowsing.com" },
           fetch,
         }),
     ).toThrowError(

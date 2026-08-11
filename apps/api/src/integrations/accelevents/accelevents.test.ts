@@ -135,8 +135,12 @@ describe("Accelevents publication", () => {
   it("maps only accepted program records and produces deterministic previews and diffs", async () => {
     const { provider, service } = createFixture();
     const desired = mapAcceptedProgram(programSource());
+    const desiredSpeaker = desired.speakers[0];
+    if (!desiredSpeaker) {
+      throw new Error("Expected an accepted speaker in the fixture.");
+    }
     provider.seed(EVENT_ID, {
-      speakers: [{ ...desired.speakers[0]!, biography: "Older biography" }],
+      speakers: [{ ...desiredSpeaker, biography: "Older biography" }],
       sessions: [...desired.sessions],
     });
 
@@ -315,15 +319,21 @@ describe("Accelevents publication", () => {
       publicationId: PUBLICATION_ID,
       source: programSource(),
     });
+    const desiredSpeakerOne = desired.speakers[0];
+    const desiredSpeakerTwo = desired.speakers[1];
+    const desiredSession = desired.sessions[0];
+    if (!desiredSpeakerOne || !desiredSpeakerTwo || !desiredSession) {
+      throw new Error("Expected accepted records in the fixture.");
+    }
     provider.seed(EVENT_ID, {
       speakers: [
-        { ...desired.speakers[0]!, biography: "Provider drift" },
-        desired.speakers[1]!,
-        { ...desired.speakers[0]!, externalId: EXTRA_SPEAKER_ID, email: "extra@example.com" },
+        { ...desiredSpeakerOne, biography: "Provider drift" },
+        desiredSpeakerTwo,
+        { ...desiredSpeakerOne, externalId: EXTRA_SPEAKER_ID, email: "extra@example.com" },
       ],
       sessions: [
         ...desired.sessions,
-        { ...desired.sessions[0]!, externalId: EXTRA_SESSION_ID, title: "Provider-only session" },
+        { ...desiredSession, externalId: EXTRA_SESSION_ID, title: "Provider-only session" },
       ],
     });
 

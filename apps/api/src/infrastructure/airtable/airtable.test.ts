@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   type AirtableMapper,
+  applicationIdFormula,
   AirtableRepository,
   AirtableRepositoryError,
   type AirtableRequest,
@@ -114,6 +115,51 @@ describe("AirtableRepository", () => {
     expect(first.nextCursor).toBe("offset:2");
     expect(second.items.map(({ id }) => id)).toEqual(["evt_03"]);
     expect(second.nextCursor).toBeUndefined();
+  });
+
+  it("supports OR filters for bounded application-ID reads", async () => {
+    const transport = new FakeAirtableTransport();
+    seedEvent(transport, { id: "evt_03", name: "Third", active: true });
+    seedEvent(transport, { id: "evt_01", name: "First", active: true });
+    seedEvent(transport, { id: "evt_02", name: "Second", active: true });
+    const repository = createRepository(transport);
+
+    const result = await repository.list({
+      filterByFormula: "OR({Application ID}='evt_01',{Application ID}='evt_03')",
+    });
+
+    expect(result.items.map(({ id }) => id)).toEqual(["evt_01", "evt_03"]);
+  });
+  it("uses event-scoped filters without returning another event", async () => {
+    const transport = new FakeAirtableTransport();
+    transport.seed({
+      baseId: "app_test",
+      table: "Events",
+      fields: {
+        "Application ID": "evt_a",
+        "Event ID": "event-a",
+        Name: "Event A",
+        Active: true,
+      },
+    });
+    transport.seed({
+      baseId: "app_test",
+      table: "Events",
+      fields: {
+        "Application ID": "evt_b",
+        "Event ID": "event-b",
+        Name: "Event B",
+        Active: true,
+      },
+    });
+    const repository = createRepository(transport);
+
+    const result = await repository.list({
+      filterByFormula: applicationIdFormula("Event ID", "event-a"),
+    });
+
+    expect(result.items.map(({ id }) => id)).toEqual(["evt_a"]);
+    expect(transport.requests[0]?.query?.filterByFormula).toBe("{Event ID}='event-a'");
   });
 
   it("rejects internal Airtable IDs and duplicate application IDs", async () => {

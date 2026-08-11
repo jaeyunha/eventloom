@@ -42,6 +42,7 @@ export const eventCfpSchema = z
 export type EventCfp = z.infer<typeof eventCfpSchema>;
 
 export const formFieldKindSchema = z.enum([
+  "file_request",
   "text",
   "rich_text",
   "email",
@@ -52,23 +53,87 @@ export const formFieldKindSchema = z.enum([
 ]);
 export type FormFieldKind = z.infer<typeof formFieldKindSchema>;
 
-export const formFieldSchema = z.object({
-  id: identifierSchema,
-  sectionId: identifierSchema,
-  key: z
-    .string()
-    .trim()
-    .min(1)
-    .max(100)
-    .regex(/^[A-Za-z][A-Za-z0-9_.-]*$/),
-  label: z.string().trim().min(1).max(200),
-  kind: formFieldKindSchema,
-  required: z.boolean().default(false),
-  options: z.array(z.string().trim().min(1).max(200)).max(200).default([]),
-});
+const mimeTypeSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(127)
+  .regex(/^(?:[a-z0-9!#$&^_.+-]+|\*)\/(?:[a-z0-9!#$&^_.+-]+|\*)$/i);
+
+export const fileRequestOwnerSchema = z.enum(["submission", "participant"]);
+export type FileRequestOwner = z.infer<typeof fileRequestOwnerSchema>;
+
+export const formFieldReferenceSchema = z
+  .object({
+    id: identifierSchema,
+    version: z.number().int().positive(),
+  })
+  .strict();
+export type FormFieldReference = z.infer<typeof formFieldReferenceSchema>;
+
+export const fileRequestSchema = z
+  .object({
+    allowedMimeTypes: z.array(mimeTypeSchema).min(1).max(100),
+    maxBytes: z.number().int().positive().max(1_073_741_824),
+    required: z.boolean().default(false),
+    owner: fileRequestOwnerSchema,
+  })
+  .strict();
+export type FileRequest = z.infer<typeof fileRequestSchema>;
+
+const fileAssetIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]*$/);
+
+export const fileRequestAnswerSchema = z
+  .object({
+    assetId: fileAssetIdSchema,
+  })
+  .strict();
+export type FileRequestAnswer = z.infer<typeof fileRequestAnswerSchema>;
+
+export const formFieldSchema = z
+  .object({
+    description: z.string().max(10_000).optional(),
+    placeholder: z.string().max(500).optional(),
+    fieldRef: formFieldReferenceSchema.optional(),
+    fileRequest: fileRequestSchema.optional(),
+    id: identifierSchema,
+    sectionId: identifierSchema,
+    key: z
+      .string()
+      .trim()
+      .min(1)
+      .max(100)
+      .regex(/^[A-Za-z][A-Za-z0-9_.-]*$/),
+    label: z.string().trim().min(1).max(200),
+    kind: formFieldKindSchema,
+    required: z.boolean().default(false),
+    options: z.array(z.string().trim().min(1).max(200)).max(200).default([]),
+  })
+  .superRefine((field, context) => {
+    if (field.kind === "file_request" && field.fileRequest === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["fileRequest"],
+        message: "File-request fields must declare an authorized file request.",
+      });
+    }
+    if (field.kind !== "file_request" && field.fileRequest !== undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["fileRequest"],
+        message: "Only file-request fields may declare file request settings.",
+      });
+    }
+  });
 export type FormField = z.infer<typeof formFieldSchema>;
 
 export const formSectionSchema = z.object({
+  order: z.number().int().min(0).max(10_000).optional(),
   id: identifierSchema,
   title: z.string().trim().min(1).max(200),
   description: z.string().max(10_000).default(""),

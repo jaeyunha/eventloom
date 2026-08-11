@@ -4,11 +4,16 @@ import {
   openSendEmailPayloadSchema,
 } from "@open-sessionboard/contracts";
 import { createCalendarInvitation } from "../../integrations/calendar/ical";
-import { OpenSendClient, type OpenSendMessage } from "../../integrations/opensend";
+import {
+  DEFAULT_OPEN_SEND_SENDERS,
+  OpenSendClient,
+  type OpenSendMessage,
+} from "../../integrations/opensend";
 import { createCalendarOpenSendMessage } from "../../integrations/opensend/calendar-email";
 import { OpenSendError } from "../../integrations/opensend/types";
 import {
   type CloudflareBindings,
+  type CloudflareOutboxInvitationTransient,
   type CloudflareOutboxMessage,
   type CloudflareOutboxTopic,
   cloudflareOutboxTopics,
@@ -452,6 +457,105 @@ function isOutboxOptions(value: unknown): value is OutboxConsumerOptions {
   ].some((key) => key in value);
 }
 
+interface MemberInvitationMetadata {
+  readonly kind: "member_invitation";
+  readonly invitationId: string;
+  readonly recipient: string;
+  readonly expiresAt: string;
+}
+
+const queueMessageKeys = new Set([
+  "version",
+  "jobId",
+  "tenantId",
+  "topic",
+  "enqueuedAt",
+  "transient",
+]);
+
+const invitationTransientKeys = new Set(["kind", "invitationId", "recipient", "message"]);
+const invitationMetadataKeys = new Set(["kind", "invitationId", "recipient", "expiresAt"]);
+const invitationMessageKeys = new Set(["from", "to", "subject", "html", "text", "idempotencyKey"]);
+
+function hasOnlyKeys(value: Record<string, unknown>, keys: ReadonlySet<string>): boolean {
+  return Object.keys(value).every((key) => keys.has(key));
+}
+
+function parseMemberInvitationMetadata(value: unknown): MemberInvitationMetadata | null {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, invitationMetadataKeys) ||
+    value.kind !== "member_invitation" ||
+    typeof value.invitationId !== "string" ||
+    value.invitationId.trim().length === 0 ||
+    typeof value.recipient !== "string" ||
+    value.recipient.trim().length === 0 ||
+    typeof value.expiresAt !== "string" ||
+    validDate(value.expiresAt) === null
+  ) {
+    return null;
+  }
+  return {
+    kind: "member_invitation",
+    invitationId: value.invitationId,
+    recipient: value.recipient,
+    expiresAt: value.expiresAt,
+  };
+}
+
+function parseInvitationTransient(value: unknown): CloudflareOutboxInvitationTransient | null {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, invitationTransientKeys) ||
+    value.kind !== "member_invitation" ||
+    typeof value.invitationId !== "string" ||
+    value.invitationId.trim().length === 0 ||
+    typeof value.recipient !== "string" ||
+    value.recipient.trim().length === 0 ||
+    !isRecord(value.message) ||
+    !hasOnlyKeys(value.message, invitationMessageKeys)
+  ) {
+    return null;
+  }
+  const result = openSendEmailPayloadSchema.safeParse(value.message);
+  if (!result.success) return null;
+  const message = value.message as unknown as OpenSendMessage;
+  if (
+    message.from !== DEFAULT_OPEN_SEND_SENDERS.auth ||
+    message.to.length !== 1 ||
+    message.to[0] !== value.recipient ||
+    message.idempotencyKey !== `member-invitation:${value.invitationId}`
+  ) {
+    return null;
+  }
+  return {
+    kind: "member_invitation",
+    invitationId: value.invitationId,
+    recipient: value.recipient,
+    message,
+  };
+}
+
+function assertInvitationTransientMatches(
+  job: OutboxJob,
+  transient: CloudflareOutboxInvitationTransient,
+): void {
+  const metadata = parseMemberInvitationMetadata(job.payload);
+  if (
+    job.topic !== "communications" ||
+    metadata === null ||
+    metadata.invitationId !== transient.invitationId ||
+    metadata.recipient !== transient.recipient ||
+    job.deduplicationKey !== `member-invitation:${transient.invitationId}`
+  ) {
+    throw new OutboxDeliveryError(
+      "MESSAGE_MISMATCH",
+      "The transient invitation delivery does not match the outbox job.",
+      { retryable: false },
+    );
+  }
+}
+
 function parseQueueMessage(value: unknown): CloudflareOutboxMessage | null {
   if (!isRecord(value)) return null;
   if (
@@ -467,7 +571,17 @@ function parseQueueMessage(value: unknown): CloudflareOutboxMessage | null {
   ) {
     return null;
   }
-  return value as unknown as CloudflareOutboxMessage;
+  const transient = "transient" in value ? parseInvitationTransient(value.transient) : undefined;
+  if ("transient" in value && transient === null) return null;
+  if (!hasOnlyKeys(value, queueMessageKeys)) return null;
+  return {
+    version: 1,
+    jobId: value.jobId,
+    tenantId: value.tenantId,
+    topic: value.topic as CloudflareOutboxTopic,
+    enqueuedAt: value.enqueuedAt,
+    ...(transient == null ? {} : { transient }),
+  };
 }
 function queueMessageFailureReason(value: unknown): "MALFORMED_MESSAGE" | "UNSUPPORTED_TOPIC" {
   if (isRecord(value) && typeof value.topic === "string" && !outboxTopicSet.has(value.topic)) {
@@ -836,7 +950,11 @@ export class OutboxConsumer {
     }
 
     const job = claim.job;
-    if (job.tenantId !== queueMessage.tenantId || job.topic !== queueMessage.topic) {
+    if (
+      job.tenantId !== queueMessage.tenantId ||
+      job.topic !== queueMessage.topic ||
+      (queueMessage.transient !== undefined && queueMessage.topic !== "communications")
+    ) {
       try {
         await this.#repository.markFailed(job.id, "MESSAGE_MISMATCH", true);
       } catch (cause) {
@@ -862,7 +980,7 @@ export class OutboxConsumer {
       idempotencyKey: job.deduplicationKey ?? `${job.tenantId}:${job.id}`,
     };
     try {
-      await this.dispatch(job, context);
+      await this.dispatch(job, context, queueMessage.transient);
       await this.#repository.markDelivered(job.id, this.#now());
       log(this.#logger, "info", "outbox side effect delivered", {
         topic: job.topic,
@@ -960,10 +1078,20 @@ export class OutboxConsumer {
     return { action: "retry", delayMs, reason };
   }
 
-  private async dispatch(job: OutboxJob, context: OutboxDeliveryContext): Promise<void> {
+  private async dispatch(
+    job: OutboxJob,
+    context: OutboxDeliveryContext,
+    transient?: CloudflareOutboxInvitationTransient,
+  ): Promise<void> {
     switch (job.topic) {
       case "communications": {
-        const payload = parseEmailPayload(job.payload);
+        let payload: OpenSendMessage;
+        if (transient === undefined) {
+          payload = parseEmailPayload(job.payload);
+        } else {
+          assertInvitationTransientMatches(job, transient);
+          payload = transient.message;
+        }
         const adapter = this.#adapters.communications ?? this.#adapters.email;
         if (adapter === undefined) throw adapterError(job.topic);
         await adapter(payload, context);

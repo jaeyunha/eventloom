@@ -14,9 +14,9 @@ export type OpenSendSenderAddresses = Readonly<
 >;
 
 export const DEFAULT_OPEN_SEND_SENDERS: OpenSendSenderAddresses = {
-  auth: "auth@foreverbrowsing.com",
-  speakers: "speakers@foreverbrowsing.com",
-  calendar: "calendar@foreverbrowsing.com",
+  auth: "auth@sessionboard.namuh.co",
+  speakers: "speakers@sessionboard.namuh.co",
+  calendar: "calendar@sessionboard.namuh.co",
 };
 
 const DEFAULT_BASE_URL = "https://opensend.namuh.co";

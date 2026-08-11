@@ -7,6 +7,9 @@ import type {
 } from "../features/cfp/model";
 import {
   CfpError,
+  type CfpFileAsset,
+  type CfpFileAssetGateway,
+  type CfpFileUploadAuthorization,
   type CfpIdempotencyCoordinator,
   type CfpRepository,
   CfpService,
@@ -85,6 +88,21 @@ function seededForm(tenantId: string, eventId: string, formId = "main-cfp"): Cfp
         kind: "select",
         required: true,
         options: ["Featured Keynote", "Keynote", "Breakout Session", "Workshop"],
+      },
+      {
+        id: "field-slides",
+        sectionId: "session",
+        key: "slides",
+        label: "Optional session slides",
+        kind: "file_request",
+        required: false,
+        options: [],
+        fileRequest: {
+          allowedMimeTypes: ["application/pdf"],
+          maxBytes: 10 * 1024 * 1024,
+          required: false,
+          owner: "submission",
+        },
       },
     ],
     participantFields: [
@@ -214,6 +232,324 @@ class LocalCfpRepository implements CfpRepository {
     if (audit !== undefined) this.audits.push(clone(audit));
   }
 }
+type LocalFileCapability = {
+  readonly assetId: string;
+  readonly fieldKey: string;
+  readonly token: string;
+  readonly expiresAt: string;
+  used: boolean;
+  uploaded?: {
+    readonly contentType: string;
+    readonly sizeBytes: number;
+    readonly body: Uint8Array;
+  };
+};
+
+async function localDigest(value: string): Promise<string> {
+  const digest = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)),
+  );
+  return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+class LocalCfpFileAssetGateway implements CfpFileAssetGateway {
+  readonly #repository: LocalCfpRepository;
+  readonly #assets = new Map<string, CfpFileAsset>();
+  readonly #capabilities = new Map<string, LocalFileCapability>();
+  readonly #requestIds = new Map<string, string>();
+  readonly #now: () => Date;
+
+  constructor(repository: LocalCfpRepository, now: () => Date) {
+    this.#repository = repository;
+    this.#now = now;
+  }
+
+  private async context(input: {
+    tenantId: string;
+    eventId: string;
+    submissionId: string;
+    owner: "submission" | "participant";
+    participantId?: string;
+    fieldKey: string;
+  }): Promise<{
+    readonly submission: Submission;
+    readonly field: CfpForm["submissionFields"][number];
+  }> {
+    const event = await this.#repository.getEvent(input.tenantId, input.eventId);
+    const submission = await this.#repository.getSubmission(input.tenantId, input.submissionId);
+    if (event === null || submission === null || submission.eventId !== input.eventId) {
+      throw new CfpError("FORBIDDEN", "The file asset binding is not owned by this event.");
+    }
+    const form = await this.#repository.getForm(input.tenantId, submission.formId);
+    if (form === null || form.eventId !== input.eventId) {
+      throw new CfpError("FORBIDDEN", "The file asset form is not owned by this event.");
+    }
+    const fields =
+      input.participantId === undefined ? form.submissionFields : form.participantFields;
+    const field = fields.find((candidate) => candidate.key === input.fieldKey);
+    if (field === undefined || field.kind !== "file_request" || field.fileRequest === undefined) {
+      throw new CfpError(
+        "VALIDATION_FAILED",
+        "The requested field is not an authorized file request.",
+      );
+    }
+    if (field.fileRequest.owner !== input.owner) {
+      throw new CfpError("FORBIDDEN", "The file asset owner does not match the requested field.");
+    }
+    if (input.owner === "participant") {
+      if (
+        input.participantId === undefined ||
+        !submission.participants.some((participant) => participant.id === input.participantId)
+      ) {
+        throw new CfpError(
+          "FORBIDDEN",
+          "The file upload participant is not part of this submission.",
+        );
+      }
+    } else if (input.participantId !== undefined) {
+      throw new CfpError("FORBIDDEN", "This submission file request cannot target a participant.");
+    }
+    return { submission, field };
+  }
+
+  async issueUpload(input: {
+    tenantId: string;
+    eventId: string;
+    submissionId: string;
+    owner: "submission" | "participant";
+    participantId?: string;
+    fieldKey: string;
+    fileName: string;
+    contentType: string;
+    sizeBytes: number;
+    idempotencyKey: string;
+  }): Promise<CfpFileUploadAuthorization> {
+    if (input.idempotencyKey.trim().length === 0) {
+      throw new CfpError("IDEMPOTENCY_KEY_REQUIRED", "An idempotency key is required.");
+    }
+    const { submission, field } = await this.context(input);
+    const contentType = input.contentType.trim().toLowerCase();
+    const fileName = input.fileName.trim();
+    if (
+      fileName.length === 0 ||
+      !Number.isSafeInteger(input.sizeBytes) ||
+      input.sizeBytes <= 0 ||
+      field.fileRequest === undefined ||
+      input.sizeBytes > field.fileRequest.maxBytes ||
+      !field.fileRequest.allowedMimeTypes.some((allowed) => {
+        const candidate = allowed.trim().toLowerCase();
+        return (
+          candidate === contentType ||
+          (candidate.endsWith("/*") && contentType.startsWith(candidate.slice(0, -1)))
+        );
+      })
+    ) {
+      throw new CfpError("VALIDATION_FAILED", "The upload metadata is not allowed.");
+    }
+    const requestKey = JSON.stringify([
+      input.tenantId,
+      input.eventId,
+      submission.id,
+      input.owner,
+      input.participantId ?? "",
+      input.fieldKey,
+      input.idempotencyKey,
+    ]);
+    const existingId = this.#requestIds.get(requestKey);
+    if (existingId !== undefined) {
+      const existing = this.#assets.get(existingId);
+      const capability = this.#capabilities.get(existingId);
+      if (
+        existing !== undefined &&
+        capability !== undefined &&
+        existing.state === "pending_upload" &&
+        existing.contentType === contentType &&
+        existing.sizeBytes === input.sizeBytes &&
+        existing.owner === input.owner &&
+        existing.participantId === input.participantId
+      ) {
+        return this.authorization(existing, capability);
+      }
+      throw new CfpError("CONFLICT", "The file upload idempotency key is already bound.");
+    }
+    const digest = await localDigest(requestKey);
+    const assetId = `cfp-file-local-${digest.slice(0, 32)}`;
+    const token = `local-upload-${(await localDigest(`${requestKey}:token`)).slice(0, 40)}`;
+    const expiresAt = new Date(this.#now().getTime() + 15 * 60 * 1000).toISOString();
+    const asset: CfpFileAsset = {
+      assetId,
+      tenantId: input.tenantId,
+      eventId: input.eventId,
+      submissionId: submission.id,
+      owner: input.owner,
+      ...(input.participantId === undefined ? {} : { participantId: input.participantId }),
+      state: "pending_upload",
+      contentType,
+      sizeBytes: input.sizeBytes,
+    };
+    this.#assets.set(assetId, asset);
+    this.#requestIds.set(requestKey, assetId);
+    const capability: LocalFileCapability = {
+      assetId,
+      fieldKey: input.fieldKey,
+      token,
+      expiresAt,
+      used: false,
+    };
+    this.#capabilities.set(assetId, capability);
+    return this.authorization(asset, capability);
+  }
+
+  private authorization(
+    asset: CfpFileAsset,
+    capability: LocalFileCapability,
+  ): CfpFileUploadAuthorization {
+    return {
+      authorizationId: asset.assetId,
+      asset: clone(asset),
+      grant: {
+        method: "PUT",
+        url: `/api/speaker/assets/capabilities/upload/${encodeURIComponent(asset.assetId)}/${capability.token}`,
+        headers: {
+          "content-type": asset.contentType,
+          "content-length": String(asset.sizeBytes),
+        },
+        expiresAt: capability.expiresAt,
+      },
+    };
+  }
+
+  async consumeUploadCapability(
+    assetId: string,
+    token: string,
+    request: Request,
+  ): Promise<{
+    readonly contentType: string;
+    readonly sizeBytes: number;
+    readonly uploadedAt: string;
+  }> {
+    const capability = this.#capabilities.get(assetId);
+    const asset = this.#assets.get(assetId);
+    if (
+      capability === undefined ||
+      asset === undefined ||
+      capability.token !== token ||
+      capability.used ||
+      Date.parse(capability.expiresAt) <= this.#now().getTime()
+    ) {
+      throw new Error("The upload capability is invalid or expired.");
+    }
+    if (request.method !== "PUT") throw new Error("The upload capability requires PUT.");
+    const contentType = request.headers.get("content-type")?.trim().toLowerCase() ?? "";
+    const body = new Uint8Array(await request.arrayBuffer());
+    const declaredLength = request.headers.get("content-length");
+    if (
+      contentType !== asset.contentType ||
+      body.byteLength !== asset.sizeBytes ||
+      (declaredLength !== null && Number(declaredLength) !== asset.sizeBytes)
+    ) {
+      throw new Error("The uploaded object metadata is not allowed.");
+    }
+    capability.used = true;
+    capability.uploaded = {
+      contentType,
+      sizeBytes: body.byteLength,
+      body,
+    };
+    return {
+      contentType,
+      sizeBytes: body.byteLength,
+      uploadedAt: this.#now().toISOString(),
+    };
+  }
+
+  async finalizeUpload(input: {
+    tenantId: string;
+    eventId: string;
+    submissionId: string;
+    fieldKey: string;
+    assetId: string;
+    owner: "submission" | "participant";
+    participantId?: string;
+    state: "ready" | "rejected";
+    rejectionReason?: string;
+    idempotencyKey: string;
+  }): Promise<CfpFileAsset> {
+    if (input.idempotencyKey.trim().length === 0) {
+      throw new CfpError("IDEMPOTENCY_KEY_REQUIRED", "An idempotency key is required.");
+    }
+    const rejectionReason = input.rejectionReason?.trim();
+    if (rejectionReason !== undefined && rejectionReason.length > 2000) {
+      throw new CfpError("VALIDATION_FAILED", "The upload rejection reason is too long.");
+    }
+    await this.context(input);
+    const asset = this.#assets.get(input.assetId);
+    const capability = this.#capabilities.get(input.assetId);
+    if (
+      asset === undefined ||
+      capability === undefined ||
+      asset.tenantId !== input.tenantId ||
+      asset.eventId !== input.eventId ||
+      asset.submissionId !== input.submissionId ||
+      asset.owner !== input.owner ||
+      asset.participantId !== input.participantId ||
+      capability.fieldKey !== input.fieldKey
+    ) {
+      throw new CfpError("FORBIDDEN", "The private upload asset is not owned by this submission.");
+    }
+    if (asset.state === input.state) return clone(asset);
+    if (asset.state !== "pending_upload") {
+      throw new CfpError("VALIDATION_FAILED", "The private upload asset is no longer available.");
+    }
+    if (input.state === "ready") {
+      if (capability.uploaded === undefined || capability.uploaded.sizeBytes !== asset.sizeBytes) {
+        throw new CfpError("VALIDATION_FAILED", "The private upload has not been uploaded.");
+      }
+    }
+    const finalized: CfpFileAsset = {
+      ...asset,
+      state: input.state,
+    };
+    this.#assets.set(input.assetId, finalized);
+    capability.used = true;
+    return clone(finalized);
+  }
+
+  async getAsset(input: {
+    tenantId: string;
+    eventId: string;
+    submissionId: string;
+    assetId: string;
+    owner: "submission" | "participant";
+    participantId?: string;
+  }): Promise<CfpFileAsset | null> {
+    const asset = this.#assets.get(input.assetId);
+    const capability = this.#capabilities.get(input.assetId);
+    if (asset === undefined || capability === undefined) return null;
+    try {
+      await this.context({
+        tenantId: input.tenantId,
+        eventId: input.eventId,
+        submissionId: input.submissionId,
+        owner: asset.owner,
+        fieldKey: capability.fieldKey,
+        ...(asset.participantId === undefined ? {} : { participantId: asset.participantId }),
+      });
+    } catch {
+      return null;
+    }
+    if (
+      asset.tenantId !== input.tenantId ||
+      asset.eventId !== input.eventId ||
+      asset.submissionId !== input.submissionId ||
+      asset.owner !== input.owner ||
+      asset.participantId !== input.participantId
+    ) {
+      return null;
+    }
+    return clone(asset);
+  }
+}
 
 class LocalCfpIdempotency implements CfpIdempotencyCoordinator {
   readonly #operations = new Map<string, Promise<unknown>>();
@@ -233,11 +569,14 @@ class LocalCfpIdempotency implements CfpIdempotencyCoordinator {
 
 export function createLocalCfpService(): CfpService {
   let sequence = 0;
+  const now = () => new Date(LOCAL_CFP_NOW);
+  const repository = new LocalCfpRepository();
   return new CfpService({
-    repository: new LocalCfpRepository(),
+    repository,
     idempotency: new LocalCfpIdempotency(),
     effects: { async enqueueSubmissionConfirmation() {} },
-    clock: { now: () => new Date(LOCAL_CFP_NOW) },
+    clock: { now },
     ids: { next: (prefix) => `${prefix}_local_${++sequence}` },
+    fileAssets: new LocalCfpFileAssetGateway(repository, now),
   });
 }

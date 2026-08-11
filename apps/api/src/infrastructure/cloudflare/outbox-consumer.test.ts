@@ -7,6 +7,8 @@ import {
   type OutboxJob,
   type OutboxQueueMessage,
 } from "./outbox-consumer";
+import { CloudflareMemberInvitationDelivery } from "../../runtime/cloudflare";
+import type { CloudflareOutboxInvitationTransient, CloudflareOutboxMessage } from "./bindings";
 
 const NOW = new Date("2026-08-09T12:00:00.000Z");
 
@@ -20,7 +22,7 @@ function job(overrides: Partial<OutboxJob> = {}): OutboxJob {
     tenantId: "tenant-1",
     topic: "communications",
     payload: {
-      from: "auth@foreverbrowsing.com",
+      from: "auth@sessionboard.namuh.co",
       to: ["recipient@example.com"],
       subject: "Welcome",
       html: "<p>Welcome</p>",
@@ -71,6 +73,39 @@ function queueBody(topic: OutboxJob["topic"] = "communications") {
   };
 }
 
+function invitationTransient(
+  setupUrl = "https://example.test/admin/organizations/tenant-1/members/setup?token=setup-token",
+): CloudflareOutboxInvitationTransient {
+  const invitationId = "invitation-1";
+  const recipient = "recipient@example.com";
+  return {
+    kind: "member_invitation",
+    invitationId,
+    recipient,
+    message: {
+      from: "auth@sessionboard.namuh.co",
+      to: [recipient],
+      subject: "You are invited to Open Sessionboard as Owner",
+      html: `<p>Set up access: ${setupUrl}</p>`,
+      text: `Set up access: ${setupUrl}`,
+      idempotencyKey: `member-invitation:${invitationId}`,
+    },
+  };
+}
+
+function invitationJob(overrides: Partial<OutboxJob> = {}): OutboxJob {
+  return job({
+    deduplicationKey: "member-invitation:invitation-1",
+    payload: {
+      kind: "member_invitation",
+      invitationId: "invitation-1",
+      recipient: "recipient@example.com",
+      expiresAt: "2026-08-10T12:00:00.000Z",
+    },
+    ...overrides,
+  });
+}
+
 async function run(
   queueMessage: OutboxQueueMessage,
   repository: InMemoryOutboxJobRepository,
@@ -106,6 +141,108 @@ describe("Cloudflare outbox consumer", () => {
     expect(queueMessage.acked).toBe(true);
     expect(queueMessage.retries).toEqual([]);
     expect(repository.get("job-1")?.state).toBe("delivered");
+  });
+  it("dispatches a member invitation from the transient queue payload", async () => {
+    const setupUrl =
+      "https://example.test/admin/organizations/tenant-1/members/setup?token=setup-token";
+    const repository = new InMemoryOutboxJobRepository([invitationJob()]);
+    const send = vi.fn(async () => undefined);
+    const queueMessage = message({ ...queueBody(), transient: invitationTransient(setupUrl) });
+
+    await run(queueMessage, repository, { communications: send });
+
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining(setupUrl),
+      }),
+      expect.objectContaining({ idempotencyKey: "member-invitation:invitation-1" }),
+    );
+    expect(queueMessage.acked).toBe(true);
+    expect(repository.get("job-1")?.state).toBe("delivered");
+  });
+
+  it("retries a transient member invitation through the queue message", async () => {
+    const repository = new InMemoryOutboxJobRepository([invitationJob()]);
+    const send = vi.fn(async () => {
+      throw new OutboxDeliveryError("PROVIDER_UNAVAILABLE", "provider unavailable", {
+        retryable: true,
+      });
+    });
+    const queueMessage = message({ ...queueBody(), transient: invitationTransient() });
+
+    await run(queueMessage, repository, { communications: send });
+
+    expect(send).toHaveBeenCalledOnce();
+    expect(queueMessage.acked).toBe(false);
+    expect(queueMessage.retries).toEqual([1]);
+    expect(repository.get("job-1")?.state).toBe("queued");
+  });
+  it("does not persist the member setup URL or token in D1 outbox metadata", async () => {
+    let insertedValues: readonly unknown[] | null = null;
+    const database = {
+      prepare(query: string) {
+        return {
+          bind(...values: unknown[]) {
+            if (query.startsWith("INSERT INTO outbox_jobs")) insertedValues = values;
+            return {
+              async first<T>() {
+                return null as T | null;
+              },
+              async run() {
+                return { meta: { changes: 1 } };
+              },
+            };
+          },
+        };
+      },
+    } as unknown as D1Database;
+    const queueMessages: CloudflareOutboxMessage[] = [];
+    const queue = {
+      async send(value: CloudflareOutboxMessage) {
+        queueMessages.push(value);
+      },
+    } as unknown as Queue<CloudflareOutboxMessage>;
+    const delivery = new CloudflareMemberInvitationDelivery(database, queue);
+    const setupUrl =
+      "https://example.test/admin/organizations/tenant-1/members/setup?token=raw-setup-token";
+
+    await delivery.sendMemberInvitation({
+      invitationId: "invitation-1",
+      organizationId: "tenant-1",
+      userId: "user-1",
+      email: "recipient@example.com",
+      name: "Recipient",
+      role: "owner",
+      setupUrl,
+      expiresAt: "2026-08-10T12:00:00.000Z",
+    });
+
+    const persisted = JSON.stringify(insertedValues?.[3]);
+    expect(persisted).toContain("member_invitation");
+    expect(persisted).not.toContain(setupUrl);
+    expect(persisted).not.toContain("raw-setup-token");
+    expect(queueMessages).toHaveLength(1);
+    expect(JSON.stringify(queueMessages[0])).toContain(setupUrl);
+  });
+  it("fails closed when transient invitation metadata does not match the claimed job", async () => {
+    const repository = new InMemoryOutboxJobRepository([invitationJob()]);
+    const send = vi.fn(async () => undefined);
+    const transient = invitationTransient();
+    const queueMessage = message({
+      ...queueBody(),
+      transient: {
+        ...transient,
+        recipient: "attacker@example.com",
+        message: { ...transient.message, to: ["attacker@example.com"] },
+      },
+    });
+
+    await run(queueMessage, repository, { communications: send });
+
+    expect(send).not.toHaveBeenCalled();
+    expect(queueMessage.acked).toBe(true);
+    expect(queueMessage.retries).toEqual([]);
+    expect(repository.get("job-1")?.state).toBe("failed");
   });
   it("keeps a configured OpenSend HTTP 500 retryable", async () => {
     const repository = new InMemoryOutboxJobRepository([job()]);

@@ -173,9 +173,9 @@ export const syncAttemptSchema = z.object({
 export type SyncAttempt = z.infer<typeof syncAttemptSchema>;
 
 export const openSendSenderSchema = z.enum([
-  "auth@foreverbrowsing.com",
-  "speakers@foreverbrowsing.com",
-  "calendar@foreverbrowsing.com",
+  "auth@sessionboard.namuh.co",
+  "speakers@sessionboard.namuh.co",
+  "calendar@sessionboard.namuh.co",
 ]);
 
 export const openSendEmailPayloadSchema = z.object({
@@ -195,7 +195,7 @@ export const calendarInvitationPayloadSchema = z.object({
   timeZone: z.string().trim().min(1),
   startsAt: timestampSchema,
   endsAt: timestampSchema,
-  organizer: z.literal("calendar@foreverbrowsing.com"),
+  organizer: z.literal("calendar@sessionboard.namuh.co"),
   attendees: z.array(z.email()).min(1),
   summary: z.string().trim().min(1).max(300),
   location: z.string().trim().max(300),

@@ -29,11 +29,14 @@ export interface CfpRouteService
         CfpService,
         | "getEvent"
         | "getForm"
+        | "listForms"
         | "getPublishedCfp"
         | "getReceipt"
         | "loadDraft"
         | "createForm"
         | "publishForm"
+        | "issueFileUpload"
+        | "finalizeFileUpload"
       >
     > {}
 
@@ -69,18 +72,40 @@ const publishSchema = z.object({ expectedVersion: expectedVersionSchema }).stric
 const saveDraftSchema = z
   .object({
     expectedVersion: expectedVersionSchema,
+    formVersion: expectedVersionSchema.optional(),
     completedStep: submissionStepSchema.optional(),
     answers: z.record(z.string(), z.unknown()).optional(),
+  })
+  .strict();
+const fileUploadSchema = z
+  .object({
+    participantId: identifierSchema.optional(),
+    fileName: z.string().trim().min(1).max(255),
+    contentType: z.string().trim().min(1).max(127),
+    sizeBytes: z.number().int().positive(),
+  })
+  .strict();
+const fileFinalizeSchema = z
+  .object({
+    participantId: identifierSchema.optional(),
+    state: z.enum(["ready", "rejected"]),
+    rejectionReason: z.string().max(2000).optional(),
   })
   .strict();
 const saveParticipantsSchema = z
   .object({
     expectedVersion: expectedVersionSchema,
+    formVersion: expectedVersionSchema.optional(),
     participants: z.array(submissionParticipantSchema).max(15),
     secondaryContacts: z.array(secondaryContactSchema).max(15).optional(),
   })
   .strict();
-const submitSchema = z.object({ expectedVersion: expectedVersionSchema }).strict();
+const submitSchema = z
+  .object({
+    expectedVersion: expectedVersionSchema,
+    formVersion: expectedVersionSchema.optional(),
+  })
+  .strict();
 
 type CfpContext = Context<CfpRouteEnvironment>;
 type ErrorStatus = 400 | 401 | 403 | 404 | 409;
@@ -284,6 +309,18 @@ export function createCfpRoutes(dependencies: CfpRouteDependencies): Hono<CfpRou
     });
     return context.json({ data });
   });
+  routes.get("/forms", async (context) => {
+    organizer(context, routeParam(context, "organizationId"));
+    const service = dependencies.service.listForms;
+    if (service === undefined) {
+      throw new CfpError("NOT_FOUND", "The CFP forms were not found.");
+    }
+    const data = await service.call(dependencies.service, {
+      tenantId: routeParam(context, "organizationId"),
+      eventId: routeParam(context, "eventId"),
+    });
+    return context.json({ data });
+  });
 
   routes.get("/forms/:formId", async (context) => {
     organizer(context, routeParam(context, "organizationId"));
@@ -414,11 +451,58 @@ export function createCfpRoutes(dependencies: CfpRouteDependencies): Hono<CfpRou
       ownerAccountId: principal.userId,
       idempotencyKey: idempotencyKey(context),
       expectedVersion: input.expectedVersion,
+      ...(input.formVersion === undefined ? {} : { formVersion: input.formVersion }),
       ...(input.completedStep === undefined ? {} : { completedStep: input.completedStep }),
       ...(input.answers === undefined ? {} : { answers: input.answers }),
     });
     return context.json({ data });
   });
+  routes.post("/submissions/:submissionId/file-requests/:fieldKey/upload", async (context) => {
+    const principal = applicant(context);
+    const service = dependencies.service.issueFileUpload;
+    if (service === undefined) {
+      throw new CfpError("VALIDATION_FAILED", "Private file uploads are not configured.");
+    }
+    const input = await body(context, fileUploadSchema);
+    const data = await service.call(dependencies.service, {
+      tenantId: routeParam(context, "organizationId"),
+      eventId: routeParam(context, "eventId"),
+      submissionId: routeParam(context, "submissionId"),
+      ownerAccountId: principal.userId,
+      fieldKey: routeParam(context, "fieldKey"),
+      idempotencyKey: idempotencyKey(context),
+      fileName: input.fileName,
+      contentType: input.contentType,
+      sizeBytes: input.sizeBytes,
+      ...(input.participantId === undefined ? {} : { participantId: input.participantId }),
+    });
+    return context.json({ data }, 201);
+  });
+
+  routes.post(
+    "/submissions/:submissionId/file-requests/:fieldKey/assets/:assetId/finalize",
+    async (context) => {
+      const principal = applicant(context);
+      const service = dependencies.service.finalizeFileUpload;
+      if (service === undefined) {
+        throw new CfpError("VALIDATION_FAILED", "Private file uploads are not configured.");
+      }
+      const input = await body(context, fileFinalizeSchema);
+      const data = await service.call(dependencies.service, {
+        tenantId: routeParam(context, "organizationId"),
+        eventId: routeParam(context, "eventId"),
+        submissionId: routeParam(context, "submissionId"),
+        ownerAccountId: principal.userId,
+        fieldKey: routeParam(context, "fieldKey"),
+        assetId: routeParam(context, "assetId"),
+        idempotencyKey: idempotencyKey(context),
+        state: input.state,
+        ...(input.participantId === undefined ? {} : { participantId: input.participantId }),
+        ...(input.rejectionReason === undefined ? {} : { rejectionReason: input.rejectionReason }),
+      });
+      return context.json({ data });
+    },
+  );
 
   routes.put("/submissions/:submissionId/participants", async (context) => {
     const principal = applicant(context);
@@ -429,6 +513,7 @@ export function createCfpRoutes(dependencies: CfpRouteDependencies): Hono<CfpRou
       ownerAccountId: principal.userId,
       idempotencyKey: idempotencyKey(context),
       expectedVersion: input.expectedVersion,
+      ...(input.formVersion === undefined ? {} : { formVersion: input.formVersion }),
       completedStep: "participant",
       participants: input.participants,
       ...(input.secondaryContacts === undefined
@@ -458,6 +543,7 @@ export function createCfpRoutes(dependencies: CfpRouteDependencies): Hono<CfpRou
       ownerAccountId: principal.userId,
       idempotencyKey: idempotencyKey(context),
       expectedVersion: input.expectedVersion,
+      ...(input.formVersion === undefined ? {} : { formVersion: input.formVersion }),
     });
     return context.json({ data });
   });

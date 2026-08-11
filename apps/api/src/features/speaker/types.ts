@@ -14,6 +14,7 @@ export type SpeakerTaskStatus = (typeof speakerTaskStatuses)[number];
 export type SpeakerTaskType = "form" | "upload" | "action";
 export type SpeakerAssetKind = "headshot" | "slides" | "supporting_file";
 export type SpeakerAssetState = "pending_upload" | "ready" | "rejected";
+export type SpeakerAssetReviewState = "approved" | "needs_changes";
 export type SpeakerSubmissionStatus =
   | "draft"
   | "submitted"
@@ -22,9 +23,65 @@ export type SpeakerSubmissionStatus =
   | "declined"
   | "withdrawn";
 
-export interface SpeakerAccessScope {
+export const speakerPortalCapabilities = [
+  "profile-self",
+  "submission-edit",
+  "roster-manage",
+  "task-response",
+  "asset-read",
+  "asset-write",
+  "asset-comment",
+  "resource-read",
+] as const;
+
+export type SpeakerPortalCapability = (typeof speakerPortalCapabilities)[number];
+
+export interface SpeakerPortalContext {
+  id: string;
+  eventId: string;
+  name: string;
+  slug?: string;
+  status?: string;
+  capabilities: readonly SpeakerPortalCapability[];
   submissionIds: readonly string[];
   participantIds: readonly string[];
+  primaryParticipantId?: string;
+}
+
+export interface SpeakerRosterMember {
+  participantId: string;
+  displayName: string;
+  email: string | null;
+  role: "primary" | "co_speaker";
+  status: "pending" | "active" | "revoked";
+  capabilities: {
+    edit: boolean;
+    remove: boolean;
+  };
+}
+
+export interface SpeakerRosterEnvelope {
+  organizationId: string;
+  eventId: string;
+  submissionId: string;
+  capabilities: {
+    manage: boolean;
+    invite: boolean;
+  };
+  members: readonly SpeakerRosterMember[];
+}
+
+export interface SpeakerAccessScope {
+  /** Airtable/D1 tenant authority; absent only for legacy in-memory fixtures. */
+  tenantId?: string;
+  submissionIds: readonly string[];
+  participantIds: readonly string[];
+  capabilities?: readonly SpeakerPortalCapability[];
+  capabilitiesByParticipant?: Readonly<Record<string, readonly SpeakerPortalCapability[]>>;
+  primaryParticipantId?: string;
+  role?: "speaker" | "organizer" | "owner" | "admin";
+  /** True only when the adapter has established event-qualified organizer authority. */
+  organizer?: boolean;
 }
 
 export interface SpeakerSubmission {
@@ -34,13 +91,36 @@ export interface SpeakerSubmission {
   status: SpeakerSubmissionStatus;
   participantIds: readonly string[];
   updatedAt: string;
+  formId?: string;
+  version?: number;
+  primaryParticipantId?: string;
+  closeAt?: string;
+  answers?: Readonly<Record<string, unknown>>;
+}
+
+export interface SpeakerTravelLogistics {
+  travelRequired: boolean;
+  arrivalAt: string | null;
+  departureAt: string | null;
+  accommodation: string;
+  dietaryRequirements: string;
+  accessibilityNeeds: string;
+  travelNotes: string;
 }
 
 export interface SpeakerProfile {
+  socialLinks?: Readonly<Record<string, string>>;
+  email?: string;
+  /** Alias accepted by adapters that expose social profiles under `social`. */
+  social?: Readonly<Record<string, string>>;
   id: string;
   eventId: string;
   participantId: string;
   displayName: string;
+  jobTitle?: string;
+  company?: string;
+  status?: string;
+  travelLogistics?: SpeakerTravelLogistics;
   biography: string;
   headshotAssetId?: string;
   version: number;
@@ -48,6 +128,17 @@ export interface SpeakerProfile {
 }
 
 export interface SpeakerTask {
+  /** Optional MIME policy for organizer-created file requests. */
+  allowedMimeTypes?: readonly string[];
+  /** Canonical byte limit for organizer-created file requests. */
+  maxBytes?: number;
+  /** UI-compatible alias for maxBytes. */
+  maxSizeBytes?: number;
+  /** Event-qualified assignment projection for organizer-created tasks. */
+  assigneeIds?: readonly string[];
+  participantName?: string;
+  /** Accepted submission title used as the event-scoped session label in organizer projections. */
+  sessionTitle?: string;
   id: string;
   eventId: string;
   submissionId: string;
@@ -56,8 +147,10 @@ export interface SpeakerTask {
   owner: "speaker" | "organizer";
   title: string;
   description?: string;
+  instructions?: string;
   status: SpeakerTaskStatus;
   dueAt?: string;
+  dueDate?: string;
   dependencyIds: readonly string[];
   reminderOffsetsMinutes: readonly number[];
   acceptedAssetKinds?: readonly SpeakerAssetKind[];
@@ -78,17 +171,579 @@ export interface SpeakerTaskTransition {
 }
 
 export interface SpeakerAsset {
+  reviewState?: SpeakerAssetReviewState;
+  reviewNote?: string;
+  reviewedAt?: string;
+  reviewedBy?: string;
+  reviewVersion?: number;
   id: string;
+  /** Server-owned tenant binding. Legacy records may not have this field. */
+  tenantId?: string;
   eventId: string;
+  submissionId?: string;
   participantId: string;
+  /** Organizer-only display label projected from the accepted event roster. */
+  participantName?: string;
+  /** Accepted submission title projected for organizer file-library grouping. */
+  sessionTitle?: string;
   taskId?: string;
   kind: SpeakerAssetKind;
+  /** Internal R2 key. API responses must remove this field before serialization. */
   objectKey: string;
   fileName: string;
   contentType: string;
   sizeBytes: number;
   state: SpeakerAssetState;
   createdAt: string;
+  /** Immutable version lineage metadata. */
+  version?: number;
+  versionFamilyId?: string;
+  supersedesAssetId?: string;
+  /** Stable identifier reserved for future asset comments. */
+  commentThreadId?: string;
+  rejectionReason?: string;
+  finalizedAt?: string;
+}
+export interface SpeakerRosterEntry {
+  id: string;
+  eventId: string;
+  submissionId: string;
+  participantId: string;
+  displayName: string;
+  email?: string;
+  jobTitle?: string;
+  company?: string;
+  biography?: string;
+  socialLinks?: Readonly<Record<string, string>>;
+  travelLogistics?: SpeakerTravelLogistics;
+  headshotAssetId?: string;
+  role: "primary" | "co_speaker";
+  status: "pending" | "active" | "revoked";
+  workflowStatus?: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  /** Server-only actor binding used for audit projection. */
+  authorAccountId?: string;
+}
+export interface SpeakerWorkspaceSession {
+  submissionId: string;
+  title: string;
+  status: string;
+}
+
+export interface SpeakerWorkspaceAsset {
+  assetId: string;
+  fileName: string;
+  contentType: string;
+  byteSize: number;
+  status: "pending" | "ready" | "rejected";
+  uploadedAt: string;
+  downloadUrl: string | null;
+}
+
+export interface SpeakerWorkspaceTask {
+  taskId: string;
+  title: string;
+  description: string;
+  type: "general" | "action" | "file_request";
+  dueAt: string | null;
+  status: string;
+  completedAt: string | null;
+  sessionId: string | null;
+  latestAssetId: string | null;
+}
+
+export interface SpeakerWorkspaceTaskSummary {
+  total: number;
+  completed: number;
+  overdue: number;
+}
+
+export interface SpeakerWorkspaceRecord {
+  participantId: string;
+  displayName: string;
+  email: string;
+  jobTitle: string;
+  company: string;
+  biography: string;
+  socialLinks: Readonly<Record<string, string>>;
+  travelLogistics: SpeakerTravelLogistics;
+  headshotAssetId: string | null;
+  status: string;
+  sessions: readonly SpeakerWorkspaceSession[];
+  taskSummary: SpeakerWorkspaceTaskSummary;
+  assets: readonly SpeakerWorkspaceAsset[];
+  version: number;
+  updatedAt: string;
+}
+
+export interface SpeakerWorkspaceRoster {
+  organizationId: string;
+  eventId: string;
+  speakers: readonly SpeakerWorkspaceRecord[];
+}
+
+export interface SpeakerImportRow {
+  rowNumber: number;
+  displayName: string;
+  email: string;
+  jobTitle: string;
+  company: string;
+  biography: string;
+  socialLinks: Readonly<Record<string, string>>;
+  status?: string;
+}
+
+export interface SpeakerImportIssue {
+  rowNumber: number;
+  field?: string;
+  message: string;
+}
+
+export interface SpeakerImportPreview {
+  validRows: readonly SpeakerImportRow[];
+  invalidRows: readonly SpeakerImportIssue[];
+}
+
+export interface SpeakerInvitationPreview {
+  participantId: string;
+  recipientEmail: string;
+  state: "ready" | "blocked";
+}
+
+export interface SpeakerInvitationDeliveryInput {
+  organizationId: string;
+  eventId: string;
+  participantId: string;
+  recipientEmail: string;
+  templateId: string;
+  idempotencyKey: string;
+  actorAccountId: string;
+}
+
+export interface SpeakerInvitationDeliveryReceipt {
+  status?: "queued" | "sent" | "failed";
+  duplicate?: boolean;
+}
+
+export interface SpeakerInvitationResult {
+  status: "queued" | "sent" | "failed";
+  recipientEmail: string;
+}
+
+export interface SpeakerTaskAssignmentInput {
+  organizationId: string;
+  eventId: string;
+  accountId: string;
+  title: string;
+  description: string;
+  dueAt: string;
+  participantIds: readonly string[];
+}
+
+export interface SpeakerAssetComment {
+  id: string;
+  eventId: string;
+  assetId: string;
+  body: string;
+  authorLabel: string;
+  createdAt: string;
+  updatedAt?: string;
+  version?: number;
+  /** Never serialize this server-only field. */
+  authorAccountId?: string;
+}
+export interface SpeakerTaskCreateInput {
+  eventId: string;
+  accountId: string;
+  type: SpeakerTaskType;
+  title: string;
+  description?: string;
+  instructions?: string;
+  dueAt?: string;
+  dueDate?: string;
+  allowedMimeTypes?: readonly string[];
+  maxBytes?: number;
+  maxSizeBytes?: number;
+  acceptedAssetKinds?: readonly SpeakerAssetKind[];
+  dependencyIds?: readonly string[];
+  reminderOffsetsMinutes?: readonly number[];
+  assigneeIds: readonly string[];
+  submissionId?: string;
+}
+
+export interface SpeakerTaskUpdateInput {
+  eventId: string;
+  accountId: string;
+  taskId: string;
+  expectedVersion: number;
+  title?: string;
+  description?: string;
+  instructions?: string;
+  dueAt?: string;
+  dueDate?: string;
+  allowedMimeTypes?: readonly string[];
+  maxBytes?: number;
+  maxSizeBytes?: number;
+  acceptedAssetKinds?: readonly SpeakerAssetKind[];
+  dependencyIds?: readonly string[];
+  reminderOffsetsMinutes?: readonly number[];
+  assigneeIds?: readonly string[];
+  status?: SpeakerTaskStatus;
+}
+
+export interface SpeakerTaskRepositoryCommand {
+  task: SpeakerTask;
+  expectedVersion: number | null;
+  actorAccountId: string;
+}
+
+export type SpeakerDeliverableStatus = SpeakerTaskStatus | "pending" | "uploaded";
+
+export interface SpeakerDeliverableRow {
+  organizationId: string;
+  eventId: string;
+  task: SpeakerTask;
+  participantId: string;
+  participantName?: string;
+  assets: readonly SpeakerAsset[];
+  currentAsset?: SpeakerAsset;
+  status: SpeakerDeliverableStatus;
+}
+
+export interface SpeakerDeliverablesQuery {
+  participantId?: string;
+  taskId?: string;
+  status?: SpeakerDeliverableStatus | "incomplete" | "pending" | "all";
+}
+
+export interface SpeakerDeliverablesMatrix {
+  organizationId: string;
+  eventId: string;
+  items: readonly SpeakerDeliverableRow[];
+  total: number;
+  filters: SpeakerDeliverablesQuery;
+}
+export interface SpeakerDeliverablesExportInput {
+  eventId: string;
+  accountId: string;
+  assetIds?: readonly string[];
+  taskIds?: readonly string[];
+  participantIds?: readonly string[];
+  status?: SpeakerDeliverableStatus | "incomplete" | "all";
+}
+
+export interface SpeakerDeliverablesExportManifestEntry {
+  assetId: string;
+  participantId: string;
+  participantName: string | null;
+  sessionId: string | null;
+  sessionTitle: string | null;
+  taskId: string | null;
+  taskTitle: string | null;
+  status: SpeakerDeliverableStatus;
+  version: number;
+  taskVersion: number | null;
+  fileName: string;
+  path: string;
+  contentType: string;
+  sizeBytes: number;
+}
+
+export interface SpeakerDeliverablesExportManifest {
+  format: "speaker-deliverables-export";
+  version: 1;
+  organizationId: string;
+  eventId: string;
+  entries: readonly SpeakerDeliverablesExportManifestEntry[];
+}
+
+export interface SpeakerDeliverablesExportResult {
+  fileName: string;
+  contentType: "application/zip";
+  sizeBytes: number;
+  body: Uint8Array;
+  manifest: SpeakerDeliverablesExportManifest;
+}
+
+export interface SpeakerAssetReviewInput {
+  eventId: string;
+  accountId: string;
+  assetId: string;
+  state: SpeakerAssetReviewState;
+  note?: string;
+  expectedVersion?: number;
+}
+
+export interface SpeakerAssetReviewCommand {
+  eventId: string;
+  assetId: string;
+  state: SpeakerAssetReviewState;
+  note?: string;
+  expectedVersion: number;
+  reviewedAt: string;
+  reviewedBy: string;
+}
+
+export interface SpeakerAssetAuditEntry {
+  id: string;
+  organizationId: string;
+  eventId: string;
+  assetId: string;
+  action: "approved" | "needs_changes" | "commented" | "downloaded" | "exported";
+  actorAccountId: string;
+  note?: string;
+  occurredAt: string;
+  version: number;
+}
+
+export interface SpeakerOrganizerProfileInput {
+  eventId: string;
+  accountId: string;
+  participantId: string;
+  biography?: string;
+  socialLinks?: Readonly<Record<string, string>>;
+  social?: Readonly<Record<string, string>>;
+  headshotAssetId?: string | null;
+  expectedVersion: number;
+}
+
+export interface SpeakerContentRecord {
+  id: string;
+  eventId: string;
+  tenantId?: string;
+  entityType: "session" | "speaker";
+  entityId: string;
+  title?: string;
+  description?: string;
+  abstract?: string;
+  biography?: string;
+  socialLinks?: Readonly<Record<string, string>>;
+  headshotAssetId?: string;
+  status?: string;
+  version: number;
+  updatedAt: string;
+  updatedBy: string;
+}
+
+export interface SpeakerContentHistoryEntry {
+  id: string;
+  eventId: string;
+  entityType: "session" | "speaker";
+  entityId: string;
+  action: "created" | "updated" | "restored" | "approved" | "needs_changes";
+  version: number;
+  actorAccountId: string;
+  actorLabel?: string;
+  occurredAt: string;
+  snapshot: SpeakerContentRecord;
+}
+
+export interface SpeakerContentUpdateInput {
+  eventId: string;
+  accountId: string;
+  entityType: "session" | "speaker";
+  entityId: string;
+  expectedVersion: number;
+  title?: string;
+  description?: string;
+  abstract?: string;
+  biography?: string;
+  socialLinks?: Readonly<Record<string, string>>;
+  headshotAssetId?: string | null;
+  status?: string;
+}
+
+export interface SpeakerContentRestoreInput {
+  eventId: string;
+  accountId: string;
+  entityType: "session" | "speaker";
+  entityId: string;
+  version: number;
+  expectedVersion?: number;
+}
+
+export interface SpeakerReminderTask {
+  taskId: string;
+  title: string;
+  dueAt?: string;
+  participantId: string;
+}
+
+export interface SpeakerReminderRecipient {
+  participantId: string;
+  displayName: string;
+  email?: string;
+  taskIds: readonly string[];
+  tasks: readonly SpeakerReminderTask[];
+}
+
+export interface SpeakerReminderPreview {
+  organizationId: string;
+  eventId: string;
+  recipients: readonly SpeakerReminderRecipient[];
+  recipientIds: readonly string[];
+  taskIds: readonly string[];
+}
+
+export interface SpeakerReminderQueueInput {
+  eventId: string;
+  accountId: string;
+  taskIds?: readonly string[];
+  recipientIds?: readonly string[];
+  idempotencyKey?: string;
+}
+
+export interface SpeakerReminderQueueResult {
+  organizationId: string;
+  eventId: string;
+  idempotencyKey: string;
+  queued: boolean;
+  duplicate: boolean;
+  sentCount: number;
+  recipientIds: readonly string[];
+}
+
+export interface SpeakerReminderDeliveryInput {
+  organizationId: string;
+  eventId: string;
+  recipient: SpeakerReminderRecipient;
+  idempotencyKey: string;
+  actorAccountId: string;
+}
+
+export interface SpeakerReminderDeliveryReceipt {
+  id?: string;
+  queued?: boolean;
+  duplicate?: boolean;
+}
+
+export interface SpeakerReminderDelivery {
+  enqueue?(input: SpeakerReminderDeliveryInput): Promise<SpeakerReminderDeliveryReceipt>;
+  queue?(input: SpeakerReminderDeliveryInput): Promise<SpeakerReminderDeliveryReceipt>;
+  enqueueReminder?(input: SpeakerReminderDeliveryInput): Promise<SpeakerReminderDeliveryReceipt>;
+  enqueueDeliverableReminder?(
+    input: SpeakerReminderDeliveryInput,
+  ): Promise<SpeakerReminderDeliveryReceipt>;
+  enqueueInvitation?(
+    input: SpeakerInvitationDeliveryInput,
+  ): Promise<SpeakerInvitationDeliveryReceipt>;
+  queueInvitation?(
+    input: SpeakerInvitationDeliveryInput,
+  ): Promise<SpeakerInvitationDeliveryReceipt>;
+}
+
+export type SpeakerTaskFormFieldType =
+  | "text"
+  | "textarea"
+  | "rich_text"
+  | "email"
+  | "url"
+  | "number"
+  | "date"
+  | "select"
+  | "multiselect"
+  | "multi_select"
+  | "checkbox"
+  | "boolean"
+  | "file_request";
+
+export interface SpeakerTaskFormField {
+  id: string;
+  key?: string;
+  name?: string;
+  label: string;
+  type?: SpeakerTaskFormFieldType;
+  kind?: SpeakerTaskFormFieldType;
+  required?: boolean;
+  description?: string;
+  helpText?: string;
+  placeholder?: string;
+  options?: readonly (string | { value: string; label: string })[];
+  minLength?: number;
+  maxLength?: number;
+  min?: number;
+  max?: number;
+}
+
+export interface SpeakerTaskFormDefinition {
+  id: string;
+  eventId: string;
+  taskId: string;
+  title: string;
+  description?: string;
+  fields: readonly SpeakerTaskFormField[];
+  version: number;
+  published: boolean;
+  updatedAt: string;
+}
+
+export interface SpeakerTaskForm {
+  taskId: string;
+  definitionVersion: number;
+  title: string;
+  description: string;
+  status: SpeakerTaskStatus;
+  fields: readonly {
+    id: string;
+    label: string;
+    type: Exclude<SpeakerTaskFormFieldType, "multi_select">;
+    required: boolean;
+    options: readonly { value: string; label: string }[];
+  }[];
+  latestResponse: SpeakerTaskResponse | null;
+}
+
+export type SpeakerFormAnswer = string | number | boolean | readonly string[] | null;
+
+export type SpeakerTaskResponseStatus = "draft" | "submitted" | "needs_changes" | "reopened";
+
+export interface SpeakerTaskResponseRecord {
+  id: string;
+  eventId: string;
+  taskId: string;
+  participantId: string;
+  definitionVersion: number;
+  answers: Readonly<Record<string, SpeakerFormAnswer>>;
+  status: SpeakerTaskResponseStatus;
+  version: number;
+  updatedAt: string;
+  feedback?: string;
+  submittedAt?: string;
+}
+
+export interface SpeakerTaskResponse {
+  responseId: string;
+  definitionVersion: number;
+  answers: Readonly<Record<string, SpeakerFormAnswer>>;
+  submittedAt: string | null;
+  status: SpeakerTaskResponseStatus;
+  organizerFeedback: string | null;
+}
+
+export interface SpeakerTaskResponseEnvelope {
+  organizationId: string;
+  eventId: string;
+  taskId: string;
+  participantId: string;
+  latestResponse: SpeakerTaskResponse | null;
+  history: readonly SpeakerTaskResponse[];
+}
+
+export interface SpeakerEventResource {
+  id: string;
+  eventId: string;
+  title: string;
+  summary?: string;
+  html?: string;
+  url?: string;
+  order: number;
+  updatedAt: string;
+}
+
+export interface SpeakerWikiPage extends SpeakerEventResource {
+  slug?: string;
 }
 
 export interface RepositoryMutationResult<T> {
@@ -120,14 +775,75 @@ export interface TransitionSpeakerTaskCommand {
   transition: SpeakerTaskTransition;
 }
 
+export interface FinalizeSpeakerAssetCommand {
+  eventId: string;
+  assetId: string;
+  state: Extract<SpeakerAssetState, "ready" | "rejected">;
+  finalizedAt: string;
+  rejectionReason?: string;
+}
+export interface SpeakerOrganizerAccessScope {
+  tenantId: string;
+  eventId: string;
+  role: "owner" | "admin";
+  submissionIds: readonly string[];
+  participantIds: readonly string[];
+}
+
+export interface UpdateSpeakerProfileCommand {
+  eventId: string;
+  participantId: string;
+  displayName?: string;
+  email?: string;
+  jobTitle?: string;
+  company?: string;
+  status?: string;
+  biography?: string;
+  socialLinks?: Readonly<Record<string, string>>;
+  headshotAssetId?: string | null;
+  expectedVersion: number;
+  updatedAt: string;
+  actorAccountId: string;
+}
+
+export interface UpdateSpeakerContentCommand extends SpeakerContentUpdateInput {
+  updatedAt: string;
+}
+
+export interface RestoreSpeakerContentVersionCommand extends SpeakerContentRestoreInput {
+  updatedAt: string;
+}
+
+export interface SpeakerReminderRecord {
+  id: string;
+  organizationId: string;
+  eventId: string;
+  idempotencyKey: string;
+  taskIds: readonly string[];
+  recipientIds: readonly string[];
+  createdAt: string;
+  actorAccountId: string;
+}
+
 export interface SpeakerRepository {
   getAccessScope(eventId: string, accountId: string): Promise<SpeakerAccessScope>;
+  /** Organizer authority is event-qualified and must never be inferred from a participant grant. */
+  getOrganizerAccessScope?(
+    eventId: string,
+    accountId: string,
+  ): Promise<SpeakerOrganizerAccessScope | null>;
   listSubmissions(eventId: string, submissionIds: readonly string[]): Promise<SpeakerSubmission[]>;
   getSubmission(eventId: string, submissionId: string): Promise<SpeakerSubmission | null>;
   listProfiles(eventId: string, participantIds: readonly string[]): Promise<SpeakerProfile[]>;
+  createProfile?(profile: SpeakerProfile): Promise<RepositoryResult<SpeakerProfile>>;
   getProfile(eventId: string, participantId: string): Promise<SpeakerProfile | null>;
   updateBiography(command: UpdateBiographyCommand): Promise<RepositoryResult<SpeakerProfile>>;
+  updateProfile?(command: UpdateSpeakerProfileCommand): Promise<RepositoryResult<SpeakerProfile>>;
   listTasks(eventId: string, participantIds: readonly string[]): Promise<SpeakerTask[]>;
+  createTask?(command: SpeakerTaskRepositoryCommand): Promise<RepositoryResult<SpeakerTask>>;
+  createSpeakerTask?(command: SpeakerTaskRepositoryCommand): Promise<RepositoryResult<SpeakerTask>>;
+  updateTask?(command: SpeakerTaskRepositoryCommand): Promise<RepositoryResult<SpeakerTask>>;
+  updateSpeakerTask?(command: SpeakerTaskRepositoryCommand): Promise<RepositoryResult<SpeakerTask>>;
   getTask(eventId: string, taskId: string): Promise<SpeakerTask | null>;
   getTasksByIds(eventId: string, taskIds: readonly string[]): Promise<SpeakerTask[]>;
   transitionTask(
@@ -135,6 +851,84 @@ export interface SpeakerRepository {
   ): Promise<RepositoryResult<{ task: SpeakerTask; transition: SpeakerTaskTransition }>>;
   createPendingAsset(asset: SpeakerAsset): Promise<SpeakerAsset>;
   getAsset(eventId: string, assetId: string): Promise<SpeakerAsset | null>;
+  /** Optional while legacy/local repositories are migrated. */
+  listAssets?(eventId: string, participantIds: readonly string[]): Promise<SpeakerAsset[]>;
+  /** Finalization is a state transition; metadata remains immutable. */
+  finalizeAsset?(command: FinalizeSpeakerAssetCommand): Promise<RepositoryResult<SpeakerAsset>>;
+  reviewAsset?(command: SpeakerAssetReviewCommand): Promise<RepositoryResult<SpeakerAsset>>;
+  updateAssetReview?(command: SpeakerAssetReviewCommand): Promise<RepositoryResult<SpeakerAsset>>;
+  appendAssetAudit?(entry: SpeakerAssetAuditEntry): Promise<void>;
+  listAssetAudit?(eventId: string, assetId: string): Promise<SpeakerAssetAuditEntry[]>;
+  listPortalContexts?(accountId: string): Promise<SpeakerPortalContext[]>;
+  listRoster?(eventId: string, submissionId: string): Promise<SpeakerRosterEntry[]>;
+  /** Efficient event-wide roster projection used by organizer workspaces. */
+  listRosterForEvent?(eventId: string): Promise<SpeakerRosterEntry[]>;
+  saveRoster?(
+    entry: SpeakerRosterEntry,
+    expectedVersion: number | null,
+  ): Promise<RepositoryResult<SpeakerRosterEntry>>;
+  revokeRoster?(
+    eventId: string,
+    submissionId: string,
+    participantId: string,
+    expectedVersion: number,
+    updatedAt: string,
+  ): Promise<RepositoryResult<SpeakerRosterEntry>>;
+  getTaskForm?(eventId: string, taskId: string): Promise<SpeakerTaskFormDefinition | null>;
+  listTaskResponses?(
+    eventId: string,
+    taskId: string,
+    participantId: string,
+  ): Promise<SpeakerTaskResponseRecord[]>;
+  saveTaskResponse?(
+    response: SpeakerTaskResponseRecord,
+    expectedVersion: number | null,
+  ): Promise<RepositoryResult<SpeakerTaskResponseRecord>>;
+  listAssetHistory?(eventId: string, versionFamilyId: string): Promise<SpeakerAsset[]>;
+  listAssetComments?(eventId: string, assetId: string): Promise<SpeakerAssetComment[]>;
+  createAssetComment?(comment: SpeakerAssetComment): Promise<SpeakerAssetComment>;
+  listEventResources?(eventId: string): Promise<SpeakerEventResource[]>;
+  listWikiPages?(eventId: string): Promise<SpeakerWikiPage[]>;
+  getContent?(
+    eventId: string,
+    entityType: "session" | "speaker",
+    entityId: string,
+  ): Promise<SpeakerContentRecord | null>;
+  listContentHistory?(
+    eventId: string,
+    entityType: "session" | "speaker",
+    entityId: string,
+  ): Promise<SpeakerContentHistoryEntry[]>;
+  updateContent?(
+    command: UpdateSpeakerContentCommand,
+  ): Promise<RepositoryResult<SpeakerContentRecord>>;
+  restoreContentVersion?(
+    command: RestoreSpeakerContentVersionCommand,
+  ): Promise<RepositoryResult<SpeakerContentRecord>>;
+  getSessionContent?(eventId: string, sessionId: string): Promise<SpeakerContentRecord | null>;
+  getSpeakerContent?(eventId: string, participantId: string): Promise<SpeakerContentRecord | null>;
+  listSessionContentHistory?(
+    eventId: string,
+    sessionId: string,
+  ): Promise<SpeakerContentHistoryEntry[]>;
+  listSpeakerContentHistory?(
+    eventId: string,
+    participantId: string,
+  ): Promise<SpeakerContentHistoryEntry[]>;
+  updateSessionContent?(
+    command: UpdateSpeakerContentCommand,
+  ): Promise<RepositoryResult<SpeakerContentRecord>>;
+  updateSpeakerContent?(
+    command: UpdateSpeakerContentCommand,
+  ): Promise<RepositoryResult<SpeakerContentRecord>>;
+  restoreSessionContentVersion?(
+    command: RestoreSpeakerContentVersionCommand,
+  ): Promise<RepositoryResult<SpeakerContentRecord>>;
+  restoreSpeakerContentVersion?(
+    command: RestoreSpeakerContentVersionCommand,
+  ): Promise<RepositoryResult<SpeakerContentRecord>>;
+  getReminder?(eventId: string, idempotencyKey: string): Promise<SpeakerReminderRecord | null>;
+  saveReminder?(record: SpeakerReminderRecord): Promise<SpeakerReminderRecord>;
 }
 
 export interface CreatePrivateUploadGrantCommand {
@@ -147,6 +941,21 @@ export interface CreatePrivateUploadGrantCommand {
   stripMetadata: boolean;
 }
 
+/** Server-only binding persisted with an opaque capability. */
+export interface PrivateAssetCapabilityBinding {
+  capabilityId: string;
+  tenantId: string;
+  eventId: string;
+  submissionId: string;
+  participantId: string;
+  taskId?: string;
+  objectKey: string;
+  contentType: string;
+  sizeBytes: number;
+  fileName: string;
+  expiresAt: string;
+}
+
 export interface PrivateUploadGrant {
   method: "PUT";
   url: string;
@@ -155,17 +964,50 @@ export interface PrivateUploadGrant {
 }
 
 export interface PrivateDownloadGrant {
+  method?: "GET";
   url: string;
   expiresAt: string;
 }
 
+export interface PrivateAssetObjectMetadata {
+  contentType: string;
+  sizeBytes: number;
+}
+
+export interface PrivateUploadReceipt extends PrivateAssetObjectMetadata {
+  uploadedAt: string;
+}
+
+export interface PrivateDownloadObject {
+  body: ReadableStream<Uint8Array>;
+  contentType: string;
+  sizeBytes: number;
+  fileName: string;
+}
+
 export interface PrivateAssetGateway {
+  /** Legacy provider adapter; production uses registerUploadCapability. */
   createUploadGrant(command: CreatePrivateUploadGrantCommand): Promise<PrivateUploadGrant>;
+  /** Legacy provider adapter; production uses registerDownloadCapability. */
   createDownloadGrant(command: {
     objectKey: string;
     fileName: string;
     expiresAt: string;
   }): Promise<PrivateDownloadGrant>;
+  registerUploadCapability?(command: PrivateAssetCapabilityBinding): Promise<PrivateUploadGrant>;
+  registerDownloadCapability?(
+    command: PrivateAssetCapabilityBinding,
+  ): Promise<PrivateDownloadGrant>;
+  consumeUploadCapability?(
+    capabilityId: string,
+    token: string,
+    request: Request,
+  ): Promise<PrivateUploadReceipt>;
+  consumeDownloadCapability?(capabilityId: string, token: string): Promise<PrivateDownloadObject>;
+  inspectObject?(
+    command: Pick<PrivateAssetCapabilityBinding, "objectKey" | "contentType" | "sizeBytes">,
+  ): Promise<PrivateAssetObjectMetadata | null>;
+  readObject?(command: PrivateAssetCapabilityBinding): Promise<PrivateDownloadObject | null>;
 }
 
 export interface SpeakerPortalView {
@@ -173,4 +1015,10 @@ export interface SpeakerPortalView {
   profiles: SpeakerProfile[];
   tasks: SpeakerTask[];
   outstandingTaskCount: number;
+  context?: SpeakerPortalContext;
+  capabilities?: readonly SpeakerPortalCapability[];
+  roster?: SpeakerRosterEnvelope;
+  assets?: SpeakerAsset[];
+  resources?: SpeakerEventResource[];
+  wiki?: SpeakerWikiPage[];
 }

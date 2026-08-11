@@ -257,7 +257,7 @@ export class WebhookDeliveryWorker {
         const failed = await this.fail(delivery.id, failure);
         return { delivery: failed ?? delivery, outcome: "dead_letter" };
       }
-      if (!subscription || !subscription.active) {
+      if (!subscription?.active) {
         const failed = await this.fail(delivery.id, {
           attemptCount: attempt,
           attemptedAt: now,

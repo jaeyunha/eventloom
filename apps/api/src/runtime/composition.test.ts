@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest";
 import { createApp } from "../app";
 import type { AgendaState, PublishedAgendaRevision } from "../features/agenda/types";
 import type { CfpForm, EventCfp, Submission } from "../features/cfp/model";
+import type { CfpRepository } from "../features/cfp/service";
+import type {
+  PrivateAssetCapabilityBinding,
+  PrivateUploadGrant,
+  SpeakerAsset,
+} from "../features/speaker/types";
 import { CommunicationService } from "../features/communications/service";
 import type { CommunicationActor, CommunicationRecipient } from "../features/communications/types";
 import { SessionService } from "../features/sessions/service";
@@ -12,12 +18,14 @@ import {
 } from "../infrastructure/airtable";
 import type { CloudflareOutboxMessage } from "../infrastructure/cloudflare/bindings";
 import {
+  AirtableCfpFileAssetGateway,
   AirtableCfpRepository,
   AirtableCommunicationRepository,
   AirtableCrmRepository,
   AirtableEvaluationAcceptanceHandoff,
   AirtableEvaluationReminderBoundary,
   AirtableEvaluationRepository,
+  AirtableRemixContentGateway,
   AirtableEventRepository,
   AirtableSessionRepository,
   AirtableSpeakerReminderDeliveryAdapter,
@@ -183,6 +191,7 @@ function autojoinDatabase(input: {
   readonly email: string;
   readonly emailVerified: boolean;
   readonly memberships?: readonly { organization_id: string; role: string }[];
+  readonly pendingInvitation?: boolean;
   readonly speakerGrants?: readonly {
     organization_id: string;
     speaker_profile_id: string;
@@ -201,6 +210,9 @@ function autojoinDatabase(input: {
   const database = {
     prepare(query: string) {
       return {
+        async all<T>() {
+          return this.bind().all<T>();
+        },
         bind(...values: unknown[]) {
           return {
             async first<T>() {
@@ -229,6 +241,41 @@ function autojoinDatabase(input: {
               }
               if (query.includes("FROM speaker_grants")) {
                 return { results: state.speakerGrants as T[] };
+              }
+              if (query.includes("FROM auth_verifications")) {
+                return {
+                  results: input.pendingInvitation
+                    ? ([
+                        {
+                          id: "pending-invitation",
+                          identifier: JSON.stringify({
+                            kind: "member_invitation",
+                            invitation: {
+                              id: "pending-invitation",
+                              organizationId: "ai-engineer",
+                              userId: "user-autojoin",
+                              email: input.email.trim().toLowerCase(),
+                              name: "Pending Evaluator",
+                              role: "reviewer",
+                              idempotencyKey: "pending-autojoin",
+                              status: "delivered",
+                              createdAt: "2026-08-11T00:00:00.000Z",
+                              updatedAt: "2026-08-11T00:00:01.000Z",
+                              expiresAt: "2099-01-01T00:00:00.000Z",
+                              deliveredAt: "2026-08-11T00:00:01.000Z",
+                              acceptedAt: null,
+                            },
+                            activationDigest: null,
+                            usedAt: null,
+                          }),
+                          token_digest: "random-pending-token-digest",
+                          expires_at: "2099-01-01T00:00:00.000Z",
+                          created_at: "2026-08-11T00:00:00.000Z",
+                          updated_at: "2026-08-11T00:00:01.000Z",
+                        },
+                      ] as T[])
+                    : ([] as T[]),
+                };
               }
               return { results: [] as T[] };
             },
@@ -340,6 +387,228 @@ function cfpReceiptDatabase(): {
   } as unknown as NonNullable<RuntimeBindings["DB"]>;
   return { database, rows };
 }
+function cfpFileAssetCompositionFixture(): {
+  readonly gateway: AirtableCfpFileAssetGateway;
+  readonly setUploaded: (uploaded: boolean) => void;
+  readonly binding: () => PrivateAssetCapabilityBinding | undefined;
+} {
+  const event: EventCfp = {
+    id: "event-file",
+    tenantId: "tenant-file",
+    version: 1,
+    slug: "event-file",
+    name: "File CFP",
+    timezone: "UTC",
+    opensAt: "2026-08-01T00:00:00.000Z",
+    closesAt: "2026-09-01T00:00:00.000Z",
+  };
+  const form: CfpForm = {
+    id: "form-file",
+    tenantId: event.tenantId,
+    eventId: event.id,
+    name: "File CFP",
+    version: 1,
+    status: "published",
+    welcomeContent: "",
+    settings: {
+      speakerLimit: 2,
+      maxSubmissionsPerAccount: 2,
+      remindersEnabled: false,
+      adminNotificationsEnabled: false,
+      confirmationMessage: "",
+      successContent: "",
+    },
+    sections: [{ id: "section", title: "Talk", description: "" }],
+    submissionFields: [
+      {
+        id: "slides",
+        sectionId: "section",
+        key: "slides",
+        label: "Slides",
+        kind: "file_request",
+        required: false,
+        options: [],
+        fileRequest: {
+          allowedMimeTypes: ["application/pdf"],
+          maxBytes: 1024,
+          required: false,
+          owner: "submission",
+        },
+      },
+    ],
+    participantFields: [],
+    rules: [],
+  };
+  const submission: Submission = {
+    id: "submission-file",
+    tenantId: event.tenantId,
+    eventId: event.id,
+    formId: form.id,
+    ownerAccountId: "owner-file",
+    formVersion: 1,
+    version: 1,
+    status: "draft",
+    completedSteps: ["welcome"],
+    answers: {},
+    participants: [],
+    secondaryContacts: [],
+    createdAt: "2026-08-08T00:00:00.000Z",
+    updatedAt: "2026-08-08T00:00:00.000Z",
+  };
+  const cfp = {
+    async getEvent(tenantId: string, eventId: string) {
+      return tenantId === event.tenantId && eventId === event.id ? event : null;
+    },
+    async getForm(tenantId: string, formId: string) {
+      return tenantId === form.tenantId && formId === form.id ? form : null;
+    },
+    async getSubmission(tenantId: string, submissionId: string) {
+      return tenantId === submission.tenantId && submissionId === submission.id ? submission : null;
+    },
+  } as unknown as CfpRepository;
+  const assets = new Map<string, SpeakerAsset>();
+  const speakers = {
+    async createPendingAsset(asset: SpeakerAsset) {
+      assets.set(asset.id, structuredClone(asset));
+      return structuredClone(asset);
+    },
+    async getAsset(eventId: string, assetId: string) {
+      const asset = assets.get(assetId);
+      return asset?.eventId === eventId ? structuredClone(asset) : null;
+    },
+    async finalizeAsset(command: {
+      eventId: string;
+      assetId: string;
+      state: "ready" | "rejected";
+      finalizedAt: string;
+      rejectionReason?: string;
+    }) {
+      const asset = assets.get(command.assetId);
+      if (asset === undefined || asset.eventId !== command.eventId) {
+        return { ok: false, reason: "not_found" } as const;
+      }
+      const finalized = {
+        ...asset,
+        state: command.state,
+        finalizedAt: command.finalizedAt,
+        ...(command.rejectionReason === undefined
+          ? {}
+          : { rejectionReason: command.rejectionReason }),
+      };
+      assets.set(asset.id, finalized);
+      return { ok: true, value: structuredClone(finalized) } as const;
+    },
+  };
+  let uploaded = false;
+  let latestBinding: PrivateAssetCapabilityBinding | undefined;
+  const privateAssets = {
+    async registerUploadCapability(
+      binding: PrivateAssetCapabilityBinding,
+    ): Promise<PrivateUploadGrant> {
+      latestBinding = structuredClone(binding);
+      return {
+        method: "PUT",
+        url: `/api/speaker/assets/capabilities/upload/${binding.capabilityId}/opaque-token`,
+        headers: {
+          "content-type": binding.contentType,
+          "content-length": String(binding.sizeBytes),
+        },
+        expiresAt: binding.expiresAt,
+      };
+    },
+    async verifyUploadCapability(binding: PrivateAssetCapabilityBinding) {
+      return (
+        uploaded &&
+        latestBinding !== undefined &&
+        latestBinding.capabilityId === binding.capabilityId
+      );
+    },
+    async invalidateUploadCapability() {
+      uploaded = false;
+    },
+  };
+  return {
+    gateway: new AirtableCfpFileAssetGateway({
+      cfp,
+      speakers,
+      privateAssets,
+      now: () => new Date("2026-08-08T12:00:00.000Z"),
+    }),
+    setUploaded(value) {
+      uploaded = value;
+    },
+    binding: () => latestBinding,
+  };
+}
+
+describe("production CFP file asset composition", () => {
+  it("binds upload capabilities, denies tenant mismatch, and finds finalized assets", async () => {
+    const fixture = cfpFileAssetCompositionFixture();
+    const authorization = await fixture.gateway.issueUpload({
+      tenantId: "tenant-file",
+      eventId: "event-file",
+      submissionId: "submission-file",
+      owner: "submission",
+      fieldKey: "slides",
+      fileName: "slides.pdf",
+      contentType: "application/pdf",
+      sizeBytes: 4,
+      idempotencyKey: "issue-file-1",
+    });
+
+    expect(authorization).toMatchObject({
+      asset: {
+        tenantId: "tenant-file",
+        eventId: "event-file",
+        submissionId: "submission-file",
+        owner: "submission",
+        state: "pending_upload",
+      },
+      grant: { method: "PUT", url: expect.stringContaining("opaque-token") },
+    });
+    expect(fixture.binding()).toMatchObject({
+      tenantId: "tenant-file",
+      eventId: "event-file",
+      submissionId: "submission-file",
+      objectKey: expect.stringContaining("cfp/"),
+    });
+    await expect(
+      fixture.gateway.getAsset({
+        tenantId: "tenant-other",
+        eventId: "event-file",
+        submissionId: "submission-file",
+        assetId: authorization.asset.assetId,
+        owner: "submission",
+      }),
+    ).resolves.toBeNull();
+
+    fixture.setUploaded(true);
+    const finalized = await fixture.gateway.finalizeUpload({
+      tenantId: "tenant-file",
+      eventId: "event-file",
+      submissionId: "submission-file",
+      fieldKey: "slides",
+      assetId: authorization.asset.assetId,
+      owner: "submission",
+      state: "ready",
+      idempotencyKey: "finalize-file-1",
+    });
+    expect(finalized).toMatchObject({
+      assetId: authorization.asset.assetId,
+      state: "ready",
+      tenantId: "tenant-file",
+    });
+    await expect(
+      fixture.gateway.getAsset({
+        tenantId: "tenant-file",
+        eventId: "event-file",
+        submissionId: "submission-file",
+        assetId: finalized.assetId,
+        owner: "submission",
+      }),
+    ).resolves.toEqual(finalized);
+  });
+});
 
 describe("production CFP receipt effects", () => {
   it("queues one verified submitter receipt per submission version without calling OpenSend", async () => {
@@ -457,6 +726,7 @@ describe("production organizer autojoin", () => {
     readonly email: string;
     readonly emailVerified: boolean;
     readonly memberships?: readonly { organization_id: string; role: string }[];
+    readonly pendingInvitation?: boolean;
     readonly speakerGrants?: readonly {
       organization_id: string;
       speaker_profile_id: string;
@@ -496,6 +766,17 @@ describe("production organizer autojoin", () => {
     });
     expect(state.inserts[0]?.created_at).toBe(state.inserts[0]?.updated_at);
     expect(Number.isFinite(Date.parse(state.inserts[0]?.created_at ?? ""))).toBe(true);
+  });
+
+  it("does not autojoin a verified evaluator while an invitation is unfinished", async () => {
+    const { session, state } = await resolveSession({
+      email: "evaluator@swyx.io",
+      emailVerified: true,
+      pendingInvitation: true,
+    });
+
+    expect(session?.memberships).toEqual([]);
+    expect(state.inserts).toHaveLength(0);
   });
 
   it("preserves an existing organization role", async () => {
@@ -542,12 +823,32 @@ describe("production organizer autojoin", () => {
     });
     expect(state.inserts).toHaveLength(0);
   });
+  it("does not autojoin verified sessions when the policy is disabled", async () => {
+    const { database, state } = autojoinDatabase({
+      email: "host@swyx.io",
+      emailVerified: true,
+    });
+    const gateway = new D1BetterAuthGateway(database);
 
-  it("fails closed for partial or invalid organizer autojoin configuration", () => {
+    await expect(gateway.resolveSession("session-token")).resolves.toMatchObject({
+      email: "host@swyx.io",
+      memberships: [],
+    });
+    expect(state.inserts).toHaveLength(0);
+  });
+
+  it("allows disabled autojoin but fails closed for partial or invalid configuration", () => {
     const bindings = productionBindings(new FakeAirtableTransport(), productionD1("unused"));
+    const {
+      ORGANIZER_AUTOJOIN_DOMAINS: _withoutDomains,
+      ORGANIZER_AUTOJOIN_ORGANIZATION_ID: _withoutOrganization,
+      ...withoutAutojoin
+    } = bindings;
     const { ORGANIZER_AUTOJOIN_DOMAINS: _domains, ...withoutDomains } = bindings;
     const { ORGANIZER_AUTOJOIN_ORGANIZATION_ID: _organization, ...withoutOrganization } = bindings;
 
+    expect(inspectProductionRuntime(withoutAutojoin).success).toBe(true);
+    expect(() => createRuntimeApp(withoutAutojoin)).not.toThrow();
     expect(inspectProductionRuntime(withoutDomains).success).toBe(false);
     expect(inspectProductionRuntime(withoutOrganization).success).toBe(false);
     expect(
@@ -1918,7 +2219,10 @@ type AcceptanceIdempotencyRow = {
   expiresAt: string;
 };
 
-function acceptanceDatabase(events: string[]): {
+function acceptanceDatabase(
+  events: string[],
+  options: { readonly speakerGrantAvailable?: boolean } = {},
+): {
   readonly database: NonNullable<RuntimeBindings["DB"]>;
   readonly outbox: Map<string, { state: string; topic: string; payload: unknown }>;
   readonly grants: string[];
@@ -1953,10 +2257,12 @@ function acceptanceDatabase(events: string[]): {
               }
               if (query.includes("FROM auth_users")) {
                 events.push("db:auth-users");
-                return {
-                  id: "account-speaker",
-                  email: "speaker@example.test",
-                } as T;
+                return options.speakerGrantAvailable === false
+                  ? null
+                  : ({
+                      id: "account-speaker",
+                      email: "speaker@example.test",
+                    } as T);
               }
               return null;
             },
@@ -2652,6 +2958,210 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       payload: { eventId: "event-acceptance" },
     });
     expect(queueMessages).toContainEqual(expect.objectContaining({ topic: "cache-invalidation" }));
+  });
+  it("fails acceptance observably when speaker grant provisioning returns false", async () => {
+    const events: string[] = [];
+    const { fake, transport } = acceptanceTransport(events);
+    const submission: Submission = {
+      id: "submission-grant-failure",
+      tenantId: "tenant-grant-failure",
+      eventId: "event-grant-failure",
+      formId: "form-grant-failure",
+      ownerAccountId: "owner-grant-failure",
+      formVersion: 1,
+      version: 1,
+      status: "submitted",
+      completedSteps: [],
+      answers: { title: "Grant failure" },
+      participants: [
+        {
+          id: "participant-grant-failure",
+          firstName: "Grant",
+          lastName: "Failure",
+          email: "grant-failure@example.test",
+          role: "primary",
+          biography: "Grant failure biography",
+          answers: {},
+        },
+      ],
+      secondaryContacts: [],
+      createdAt: "2026-08-09T00:00:00.000Z",
+      updatedAt: "2026-08-09T00:00:00.000Z",
+    };
+    fake.seed({
+      baseId: "base-test",
+      table: "Submissions",
+      fields: {
+        "Application ID": submission.id,
+        "Answers JSON": JSON.stringify(submission),
+      },
+    });
+    const { database } = acceptanceDatabase(events, { speakerGrantAvailable: false });
+    const cfp = new AirtableCfpRepository({ baseId: "base-test", transport });
+    const speakers = new AirtableSpeakerRepository({
+      baseId: "base-test",
+      transport,
+      database,
+    });
+    const sessions = new AirtableSessionRepository({ baseId: "base-test", transport });
+    const queue = {
+      async send() {},
+    } as unknown as NonNullable<RuntimeBindings["OUTBOX_QUEUE"]>;
+    const handoff = new AirtableEvaluationAcceptanceHandoff({
+      cfp,
+      speakers,
+      sessions,
+      database,
+      queue,
+    });
+
+    await expect(
+      handoff.accept({
+        tenantId: submission.tenantId,
+        eventId: submission.eventId,
+        planId: "plan-grant-failure",
+        submissionId: submission.id,
+        decisionId: "decision-grant-failure",
+        decidedBy: "organizer-grant-failure",
+        decidedAt: "2026-08-09T01:00:00.000Z",
+        reason: "Accepted",
+        idempotencyKey: "grant-failure-key",
+      }),
+    ).rejects.toThrow("Speaker grant provisioning failed");
+    expect(events).toContain("db:auth-users");
+  });
+  it("restricts remix speaker visibility and application to the event tenant", async () => {
+    const tenantId = "tenant-remix-owner";
+    const otherTenantId = "tenant-remix-other";
+    const eventId = "event-remix-scope";
+    const events: string[] = [];
+    const { fake, transport } = acceptanceTransport(events);
+    fake.seed({
+      baseId: "base-test",
+      table: "Events",
+      fields: {
+        "Application ID": eventId,
+        "Settings JSON": JSON.stringify({
+          id: eventId,
+          organizationId: tenantId,
+          eventId,
+          name: "Remix scope event",
+        }),
+      },
+    });
+    fake.seed({
+      baseId: "base-test",
+      table: "Speaker Profiles",
+      fields: {
+        "Application ID": `speaker-profile:${eventId}:accepted`,
+        Biography: JSON.stringify({
+          id: `speaker-profile:${eventId}:accepted`,
+          tenantId,
+          eventId,
+          participantId: "accepted",
+          displayName: "Accepted Speaker",
+          biography: "Accepted biography",
+          status: "accepted",
+          version: 1,
+          updatedAt: "2026-08-09T00:00:00.000Z",
+        }),
+      },
+    });
+    fake.seed({
+      baseId: "base-test",
+      table: "Speaker Profiles",
+      fields: {
+        "Application ID": `speaker-profile:${eventId}:organizer`,
+        Biography: JSON.stringify({
+          id: `speaker-profile:${eventId}:organizer`,
+          eventId,
+          participantId: "organizer",
+          displayName: "Organizer Speaker",
+          biography: "Organizer biography",
+          status: "active",
+          version: 1,
+          updatedAt: "2026-08-09T00:00:00.000Z",
+        }),
+      },
+    });
+    fake.seed({
+      baseId: "base-test",
+      table: "Speaker Profiles",
+      fields: {
+        "Application ID": `speaker-profile:${eventId}:cross-tenant`,
+        Biography: JSON.stringify({
+          id: `speaker-profile:${eventId}:cross-tenant`,
+          organizationId: otherTenantId,
+          eventId,
+          participantId: "cross-tenant",
+          displayName: "Cross Tenant Speaker",
+          biography: "Cross tenant biography",
+          status: "active",
+          version: 1,
+          updatedAt: "2026-08-09T00:00:00.000Z",
+        }),
+      },
+    });
+    const { database } = acceptanceDatabase(events);
+    const queue = {
+      async send() {},
+    } as unknown as NonNullable<RuntimeBindings["OUTBOX_QUEUE"]>;
+    const gateway = new AirtableRemixContentGateway({
+      baseId: "base-test",
+      transport,
+      database,
+      queue,
+    });
+
+    await expect(gateway.listSpeakers({ tenantId, eventId })).resolves.toEqual([
+      expect.objectContaining({ id: "accepted", biography: "Accepted biography" }),
+      expect.objectContaining({ id: "organizer", biography: "Organizer biography" }),
+    ]);
+    await expect(gateway.listSpeakers({ tenantId: otherTenantId, eventId })).resolves.toEqual([]);
+    await expect(
+      gateway.getSpeaker({ tenantId: otherTenantId, eventId, sourceId: "accepted" }),
+    ).resolves.toBeNull();
+
+    await expect(
+      gateway.applyRevision({
+        tenantId,
+        eventId,
+        sourceType: "speaker",
+        sourceId: "organizer",
+        expectedSourceRevision: 1,
+        fields: ["biography"],
+        content: { biography: "Updated organizer biography" },
+        candidateId: "candidate-organizer",
+        actorId: "organizer-owner",
+        appliedAt: "2026-08-09T01:00:00.000Z",
+      }),
+    ).resolves.toMatchObject({ sourceRevision: 2, sourceId: "organizer" });
+    const profilePatch = fake.requests.find(
+      (request) => request.method === "PATCH" && request.table === "Speaker Profiles",
+    );
+    expect(profilePatch?.body).toEqual(
+      expect.objectContaining({
+        fields: expect.objectContaining({ "Organization ID": tenantId }),
+      }),
+    );
+    await expect(gateway.getSpeaker({ tenantId, eventId, sourceId: "organizer" })).resolves.toEqual(
+      expect.objectContaining({ biography: "Updated organizer biography", revision: 2 }),
+    );
+
+    await expect(
+      gateway.applyRevision({
+        tenantId: otherTenantId,
+        eventId,
+        sourceType: "speaker",
+        sourceId: "accepted",
+        expectedSourceRevision: 1,
+        fields: ["biography"],
+        content: { biography: "Cross tenant update" },
+        candidateId: "candidate-cross-tenant",
+        actorId: "other-owner",
+        appliedAt: "2026-08-09T01:00:00.000Z",
+      }),
+    ).rejects.toThrow("speaker content changed");
   });
   it("queues reviewer reminders through the shared outbox with stable idempotency", async () => {
     const transport = new FakeAirtableTransport();

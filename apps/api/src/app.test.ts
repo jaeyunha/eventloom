@@ -1,6 +1,11 @@
 import { apiErrorSchema, healthResponseSchema } from "@open-sessionboard/contracts";
 import { describe, expect, it } from "vitest";
 import { type ApiBindings, createApp } from "./app";
+import { AuthAccessError, type AuthPrincipal, type UserPrincipal } from "./features/auth/types";
+import { CommunicationError } from "./features/communications/service";
+import { RemixError } from "./features/remix/service";
+import { ReportError } from "./features/reports/service";
+import { SessionServiceError } from "./features/sessions/service";
 
 const environment: ApiBindings = {
   APP_ENV: "local",
@@ -68,5 +73,257 @@ describe("API foundation", () => {
     expect(response.status).toBe(404);
     expect(body.error.code).toBe("NOT_FOUND");
     expect(response.headers.get("x-request-id")).toBe(body.error.traceId);
+  });
+});
+
+describe("authentication session access", () => {
+  it("enriches Better Auth sessions with membership and speaker-grant routing data", async () => {
+    const principal: AuthPrincipal = {
+      kind: "user",
+      sessionId: "session-1",
+      userId: "user-1",
+      email: "user@example.test",
+      memberships: [{ organizationId: "ai-engineer", role: "admin" }],
+      speakerGrants: [
+        {
+          organizationId: "ai-engineer",
+          speakerProfileId: "speaker-1",
+        },
+      ],
+    };
+    const app = createApp({
+      auth: {
+        handler: async () =>
+          new Response(
+            JSON.stringify({
+              session: { id: principal.sessionId, userId: principal.userId },
+              user: { id: principal.userId, email: principal.email },
+            }),
+            {
+              headers: {
+                "content-type": "application/json",
+                "x-auth-source": "better-auth",
+              },
+            },
+          ),
+      },
+      authenticator: { authenticate: async () => principal },
+    });
+
+    const response = await app.request(
+      "/api/auth/get-session",
+      { headers: { cookie: "better-auth.session_token=test" } },
+      environment,
+    );
+    const body = (await response.json()) as {
+      memberships: UserPrincipal["memberships"];
+      speakerGrants: UserPrincipal["speakerGrants"];
+    };
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-auth-source")).toBe("better-auth");
+    expect(body.memberships).toEqual(principal.memberships);
+    expect(body.speakerGrants).toEqual(principal.speakerGrants);
+  });
+});
+describe("canonical organizer workspaces", () => {
+  it("mounts each organization/event workspace behind authentication without duplicate event paths", async () => {
+    const organizationId = "org-1";
+    const eventId = "event-1";
+    const principal = {
+      kind: "user" as const,
+      sessionId: "session-1",
+      userId: "organizer-1",
+      email: "organizer@example.test",
+      memberships: [{ organizationId, role: "admin" as const }],
+      speakerGrants: [],
+    };
+    const organizerHeaders = { authorization: "Bearer organizer" };
+    const authenticator = {
+      authenticate: async (request: Request) => {
+        if (request.headers.get("authorization") !== organizerHeaders.authorization) {
+          throw new AuthAccessError("UNAUTHENTICATED", "Authentication is required.");
+        }
+        return principal;
+      },
+    };
+
+    const app = createApp({
+      authenticator,
+      sessions: {
+        service: {
+          listSessions: async () => [],
+        } as never,
+      },
+      communications: {
+        service: {
+          listTemplates: async () => [],
+        } as never,
+        actorFor: async (_principal, tenant, scopedEvent) =>
+          tenant === organizationId
+            ? {
+                tenantId: tenant,
+                userId: principal.userId,
+                kind: "human" as const,
+                grants: [{ eventId: scopedEvent, role: "organizer" as const }],
+              }
+            : null,
+      },
+      reports: {
+        service: {
+          listDefinitions: async () => [],
+        } as never,
+        actorFor: async (_principal, tenant, scopedEvent) =>
+          tenant === organizationId
+            ? {
+                tenantId: tenant,
+                userId: principal.userId,
+                kind: "human" as const,
+                grants: [{ eventId: scopedEvent, role: "organizer" as const }],
+              }
+            : null,
+      },
+      remix: {
+        service: {
+          listRecords: async () => [],
+        } as never,
+        actorFor: async (_principal, tenant, scopedEvent) =>
+          tenant === organizationId
+            ? {
+                tenantId: tenant,
+                userId: principal.userId,
+                kind: "human" as const,
+                grants: [{ eventId: scopedEvent, role: "organizer" as const }],
+              }
+            : null,
+      },
+    });
+
+    const mounts = [
+      {
+        canonical: `/api/admin/organizations/${organizationId}/events/${eventId}/sessions`,
+        duplicate: `/api/admin/organizations/${organizationId}/events/${eventId}/sessions/events/${eventId}`,
+      },
+      {
+        canonical: `/api/admin/organizations/${organizationId}/events/${eventId}/communications/templates`,
+        duplicate: `/api/admin/organizations/${organizationId}/events/${eventId}/communications/templates/events/${eventId}`,
+      },
+      {
+        canonical: `/api/admin/organizations/${organizationId}/events/${eventId}/reports/definitions`,
+        duplicate: `/api/admin/organizations/${organizationId}/events/${eventId}/reports/events/${eventId}/definitions`,
+      },
+      {
+        canonical: `/api/admin/organizations/${organizationId}/events/${eventId}/remix/records?sourceType=session`,
+        duplicate: `/api/admin/organizations/${organizationId}/events/${eventId}/remix/events/${eventId}/records?sourceType=session`,
+      },
+    ];
+
+    for (const mount of mounts) {
+      const anonymous = await app.request(mount.canonical, undefined, environment);
+      const authorized = await app.request(
+        mount.canonical,
+        { headers: organizerHeaders },
+        environment,
+      );
+      const wrongTenant = await app.request(
+        mount.canonical.replace(`/organizations/${organizationId}/`, "/organizations/other-org/"),
+        { headers: organizerHeaders },
+        environment,
+      );
+      const duplicate = await app.request(
+        mount.duplicate,
+        { headers: organizerHeaders },
+        environment,
+      );
+
+      expect(anonymous.status).toBe(401);
+      expect(authorized.status).toBe(200);
+      expect(wrongTenant.status).toBe(403);
+      expect(duplicate.status).toBe(404);
+    }
+  });
+});
+describe("feature-router error normalization", () => {
+  it("normalizes feature-router errors into the API error contract", async () => {
+    const organizationId = "org-1";
+    const eventId = "event-1";
+    const principal = {
+      kind: "user" as const,
+      sessionId: "session-1",
+      userId: "organizer-1",
+      email: "organizer@example.test",
+      memberships: [{ organizationId, role: "admin" as const }],
+      speakerGrants: [],
+    };
+    const actorFor = async (_principal: AuthPrincipal, tenant: string, scopedEvent: string) => ({
+      tenantId: tenant,
+      userId: principal.userId,
+      kind: "human" as const,
+      grants: [{ eventId: scopedEvent, role: "organizer" as const }],
+    });
+    const app = createApp({
+      authenticator: { authenticate: async () => principal },
+      sessions: {
+        service: {
+          listSessions: async () => {
+            throw new SessionServiceError("FORBIDDEN", 403, "Organizer access is required.");
+          },
+        } as never,
+      },
+      communications: {
+        service: {
+          listTemplates: async () => {
+            throw new CommunicationError(
+              "COMMUNICATION_UNAVAILABLE",
+              503,
+              "The delivery provider is unavailable.",
+            );
+          },
+        } as never,
+        actorFor,
+      },
+      reports: {
+        service: {
+          listDefinitions: async () => {
+            throw new ReportError("REPORT_FORBIDDEN", "Report access is denied.", 403);
+          },
+        } as never,
+        actorFor,
+      },
+      remix: {
+        service: {
+          listRecords: async () => {
+            throw new RemixError("REMIX_INVALID_INPUT", "The remix request is invalid.", 400);
+          },
+        } as never,
+        actorFor,
+      },
+    });
+
+    const paths = [
+      `/api/admin/organizations/${organizationId}/events/${eventId}/sessions`,
+      `/api/admin/organizations/${organizationId}/events/${eventId}/communications/templates`,
+      `/api/admin/organizations/${organizationId}/events/${eventId}/reports/definitions`,
+      `/api/admin/organizations/${organizationId}/events/${eventId}/remix/records?sourceType=session`,
+    ];
+    const responses = await Promise.all(
+      paths.map((path) =>
+        app.request(path, { headers: { authorization: "Bearer organizer" } }, environment),
+      ),
+    );
+    const bodies = await Promise.all(responses.map((response) => response.json()));
+
+    expect(responses.map((response) => response.status)).toEqual([403, 503, 403, 400]);
+    expect(bodies.map((body) => apiErrorSchema.parse(body).error.code)).toEqual([
+      "ACCESS_DENIED",
+      "INTEGRATION_UNAVAILABLE",
+      "ACCESS_DENIED",
+      "VALIDATION_FAILED",
+    ]);
+    for (const [index, response] of responses.entries()) {
+      expect(apiErrorSchema.parse(bodies[index]).error.traceId).toBe(
+        response.headers.get("x-request-id"),
+      );
+    }
   });
 });

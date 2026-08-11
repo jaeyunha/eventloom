@@ -1,9 +1,17 @@
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import { InMemoryEvaluationRepository, InMemorySubmissionReviewSource } from "./repository";
-import { createEvaluationRoutes, type EvaluationRouteEnvironment } from "./routes";
-import { EvaluationService } from "./service";
-import type { EvaluationActor } from "./types";
+import {
+  createEvaluationRoutes,
+  type EvaluationRouteEnvironment,
+  type EvaluationRouteOptions,
+} from "./routes";
+import {
+  type EvaluationDecisionProjectionInput,
+  EvaluationService,
+  type EvaluationServiceOptions,
+} from "./service";
+import type { EvaluationActor, SubmissionReviewMaterial } from "./types";
 
 const organizer: EvaluationActor = {
   tenantId: "tenant-1",
@@ -28,9 +36,10 @@ const otherTenantOrganizer: EvaluationActor = {
   grants: [{ eventId: "event-1", role: "organizer" }],
 };
 
-function createTestApp() {
-  const repository = new InMemoryEvaluationRepository();
-  const source = new InMemorySubmissionReviewSource([
+function createTestApp(
+  serviceOptions: EvaluationServiceOptions = {},
+  routeOptions: EvaluationRouteOptions = {},
+  submissionMaterials: readonly SubmissionReviewMaterial[] = [
     {
       id: "submission-1",
       tenantId: "tenant-1",
@@ -48,9 +57,13 @@ function createTestApp() {
         },
       ],
     },
-  ]);
+  ],
+) {
+  const repository = new InMemoryEvaluationRepository();
+  const source = new InMemorySubmissionReviewSource(submissionMaterials);
   const service = new EvaluationService(repository, source, {
     clock: () => new Date("2026-08-08T12:00:00.000Z"),
+    ...serviceOptions,
   });
   const app = new Hono<EvaluationRouteEnvironment>();
   app.use("*", async (context, next) => {
@@ -64,7 +77,7 @@ function createTestApp() {
     );
     await next();
   });
-  app.route("/evaluations", createEvaluationRoutes(service));
+  app.route("/evaluations", createEvaluationRoutes(service, routeOptions));
   return app;
 }
 
@@ -115,6 +128,32 @@ const planRequest = {
 };
 
 describe("evaluation HTTP routes", () => {
+  it("creates the first draft from the canonical plan DTO without a seeded fallback", async () => {
+    const app = createTestApp();
+    const before = await app.request("/evaluations/plans?eventId=event-1");
+    const beforeBody = (await before.json()) as { plans: readonly unknown[] };
+
+    const response = await jsonRequest(app, "/evaluations/plans", "POST", planRequest);
+    const body = (await response.json()) as {
+      id: string;
+      eventId: string;
+      name: string;
+      status: string;
+      blindReview: boolean;
+      closesAt: string | null;
+      assignmentRule: typeof planRequest.assignmentRule;
+      rounds: typeof planRequest.rounds;
+    };
+
+    expect(before.status).toBe(200);
+    expect(beforeBody.plans).toEqual([]);
+    expect(response.status).toBe(201);
+    expect(body).toMatchObject({
+      ...planRequest,
+      status: "draft",
+      version: 1,
+    });
+  });
   it("lists plans by event without crossing tenant boundaries", async () => {
     const app = createTestApp();
     const eventOne = await jsonRequest(app, "/evaluations/plans", "POST", planRequest);
@@ -199,7 +238,184 @@ describe("evaluation HTTP routes", () => {
     expect(body.submission.participants).toEqual([]);
     expect(body.submission.answers).toEqual({ topic: "Visible" });
   });
+  it("loads the authenticated reviewer workspace in one redacted batch", async () => {
+    const app = createTestApp({}, {}, [
+      {
+        id: "submission-1",
+        tenantId: "tenant-1",
+        eventId: "event-1",
+        title: "Blind proposal",
+        abstract: "Proposal details",
+        answers: { identity: "Hidden", topic: "Visible" },
+        identityFieldIds: ["identity"],
+        participants: [
+          {
+            id: "participant-1",
+            displayName: "Hidden Person",
+            email: "hidden@example.com",
+            biography: "Hidden biography",
+          },
+        ],
+      },
+      {
+        id: "submission-2",
+        tenantId: "tenant-1",
+        eventId: "event-1",
+        title: "Second proposal",
+        abstract: "Second details",
+        answers: { identity: "Other hidden", topic: "Second visible" },
+        identityFieldIds: ["identity"],
+        participants: [
+          {
+            id: "participant-2",
+            displayName: "Other Hidden Person",
+            email: "other-hidden@example.com",
+            biography: "Other hidden biography",
+          },
+        ],
+      },
+    ]);
+    await jsonRequest(app, "/evaluations/plans", "POST", {
+      ...planRequest,
+      assignmentRule: { reviewsPerSubmission: 2, maxAssignmentsPerReviewer: 5 },
+    });
+    await jsonRequest(app, "/evaluations/plans/plan-1/open", "POST", { expectedVersion: 1 });
+    await jsonRequest(app, "/evaluations/plans/plan-1/assignments", "POST", {
+      roundId: "round-1",
+      submissionId: "submission-1",
+      reviewerIds: ["reviewer-1"],
+    });
+    await jsonRequest(app, "/evaluations/plans/plan-1/assignments", "POST", {
+      roundId: "round-1",
+      submissionId: "submission-2",
+      reviewerIds: ["reviewer-1", "reviewer-2"],
+    });
 
+    const assignmentId = "plan-1:round-1:submission-1:reviewer-1";
+    const saved = await jsonRequest(
+      app,
+      `/evaluations/assignments/${assignmentId}/review`,
+      "PUT",
+      {
+        scores: [{ criterionId: "quality", value: 4, origin: "human" }],
+        comment: "Ready for committee.",
+      },
+      "reviewer",
+    );
+    await jsonRequest(
+      app,
+      `/evaluations/assignments/${assignmentId}/review/submit`,
+      "POST",
+      { expectedVersion: 1 },
+      "reviewer",
+    );
+
+    const batch = await app.request("/evaluations/reviewer/workspace?eventId=event-1", {
+      headers: { "x-test-actor": "reviewer" },
+    });
+    const body = (await batch.json()) as {
+      data: {
+        assignments: Array<{
+          assignment: { id: string; reviewerId: string; status: string };
+          plan: { name: string };
+          submission: {
+            title: string;
+            participants: unknown[];
+            answers: Record<string, unknown>;
+          };
+          review: { comment: string } | null;
+        }>;
+      };
+    };
+    const organizerBatch = await app.request("/evaluations/reviewer/workspace?eventId=event-1");
+    const otherEventBatch = await app.request("/evaluations/reviewer/workspace?eventId=event-2", {
+      headers: { "x-test-actor": "reviewer" },
+    });
+    const emptyBatch = await createTestApp().request(
+      "/evaluations/reviewer/workspace?eventId=event-1",
+      { headers: { "x-test-actor": "reviewer" } },
+    );
+
+    expect(saved.status).toBe(200);
+    expect(batch.status).toBe(200);
+    expect(body.data.assignments).toHaveLength(2);
+    expect(
+      body.data.assignments.every((entry) => entry.assignment.reviewerId === reviewer.userId),
+    ).toBe(true);
+    expect(body.data.assignments.map((entry) => entry.assignment.status)).toContain("submitted");
+    expect(body.data.assignments[0]?.plan.name).toBe("Committee");
+    expect(body.data.assignments[0]?.submission.title).toBe("Blind proposal");
+    expect(body.data.assignments[0]?.submission.participants).toEqual([]);
+    expect(body.data.assignments[0]?.submission.answers).toEqual({ topic: "Visible" });
+    expect(body.data.assignments[0]?.review?.comment).toBe("Ready for committee.");
+    expect(organizerBatch.status).toBe(403);
+    expect(otherEventBatch.status).toBe(403);
+    expect(emptyBatch.status).toBe(200);
+    await expect(emptyBatch.json()).resolves.toEqual({ data: { assignments: [] } });
+  });
+  it("persists canonical verified reviewer IDs and fails closed for aliases or other tenants", async () => {
+    const reviewerIdentity: NonNullable<EvaluationRouteOptions["reviewerIdentity"]> = {
+      resolveReviewerIds: async (actor, input) =>
+        actor.tenantId === organizer.tenantId &&
+        input.eventId === "event-1" &&
+        input.reviewerIds.length === 1 &&
+        input.reviewerIds[0] === reviewer.userId
+          ? [reviewer.userId]
+          : null,
+    };
+    const app = createTestApp({}, { reviewerIdentity });
+    await jsonRequest(app, "/evaluations/plans", "POST", planRequest);
+    await jsonRequest(app, "/evaluations/plans/plan-1/open", "POST", {
+      expectedVersion: 1,
+    });
+
+    const assigned = await jsonRequest(app, "/evaluations/plans/plan-1/assignments", "POST", {
+      roundId: "round-1",
+      submissionId: "submission-1",
+      reviewerIds: [reviewer.userId],
+    });
+    const body = (await assigned.json()) as {
+      assignments: Array<{ reviewerId: string }>;
+    };
+    const mine = await app.request("/evaluations/plans/plan-1/assignments/mine", {
+      headers: { "x-test-actor": "reviewer" },
+    });
+    const mineBody = (await mine.json()) as {
+      assignments: Array<{ reviewerId: string }>;
+    };
+
+    expect(assigned.status).toBe(201);
+    expect(body.assignments).toEqual([expect.objectContaining({ reviewerId: reviewer.userId })]);
+    expect(mine.status).toBe(200);
+    expect(mineBody.assignments).toEqual([
+      expect.objectContaining({ reviewerId: reviewer.userId }),
+    ]);
+
+    for (const reviewerId of ["reviewer@example.com", "unverified-reviewer-1", "sam-whitfield"]) {
+      const denied = await jsonRequest(app, "/evaluations/plans/plan-1/assignments", "POST", {
+        roundId: "round-1",
+        submissionId: "submission-1",
+        reviewerIds: [reviewerId],
+      });
+      expect(denied.status).toBe(403);
+      await expect(denied.json()).resolves.toMatchObject({
+        error: { code: "EVALUATION_REVIEWER_NOT_FOUND" },
+      });
+    }
+
+    const crossTenant = await jsonRequest(
+      app,
+      "/evaluations/plans/plan-1/assignments",
+      "POST",
+      {
+        roundId: "round-1",
+        submissionId: "submission-1",
+        reviewerIds: [reviewer.userId],
+      },
+      "other-tenant",
+    );
+    expect(crossTenant.status).toBe(404);
+  });
   it("returns a stable safe error for malformed requests", async () => {
     const response = await jsonRequest(createTestApp(), "/evaluations/plans", "POST", {
       name: "Missing required fields",
@@ -212,5 +428,214 @@ describe("evaluation HTTP routes", () => {
         message: "The evaluation request is invalid.",
       },
     });
+  });
+  it("projects organizer decision outcomes through the decision route", async () => {
+    const projected: EvaluationDecisionProjectionInput[] = [];
+    const app = createTestApp({
+      decisionProjection: {
+        projectDecision: async (input) => {
+          projected.push(structuredClone(input));
+        },
+      },
+    });
+    await jsonRequest(app, "/evaluations/plans", "POST", planRequest);
+    await jsonRequest(app, "/evaluations/plans/plan-1/open", "POST", { expectedVersion: 1 });
+
+    const accepted = await jsonRequest(
+      app,
+      "/evaluations/plans/plan-1/submissions/submission-1/decision",
+      "PUT",
+      {
+        status: "accepted",
+        reason: "Committee consensus",
+        idempotencyKey: "route-decision-1",
+      },
+    );
+    const acceptedBody = (await accepted.json()) as { version: number };
+    const waitlisted = await jsonRequest(
+      app,
+      "/evaluations/plans/plan-1/submissions/submission-1/decision",
+      "PUT",
+      {
+        status: "waitlisted",
+        reason: "Capacity changed",
+        idempotencyKey: "route-decision-2",
+        expectedVersion: acceptedBody.version,
+      },
+    );
+    const waitlistedBody = (await waitlisted.json()) as { version: number };
+    const rejected = await jsonRequest(
+      app,
+      "/evaluations/plans/plan-1/submissions/submission-1/decision",
+      "PUT",
+      {
+        status: "rejected",
+        reason: "Program fit changed",
+        idempotencyKey: "route-decision-3",
+        expectedVersion: waitlistedBody.version,
+      },
+    );
+
+    expect(accepted.status).toBe(200);
+    expect(waitlisted.status).toBe(200);
+    expect(rejected.status).toBe(200);
+    expect(projected.map((input) => input.status)).toEqual(["accepted", "waitlisted", "rejected"]);
+    expect(projected.map((input) => input.communication.templatePurpose)).toEqual([
+      "decision_accepted",
+      "decision_waitlisted",
+      "decision_rejected",
+    ]);
+  });
+  it("persists per-round pools and all scorecard input types", async () => {
+    const app = createTestApp();
+    const firstRound = planRequest.rounds[0];
+    const firstCriterion = firstRound?.rubric.criteria[0];
+    if (firstRound === undefined || firstCriterion === undefined) {
+      throw new Error("The route fixture must include an initial round and criterion.");
+    }
+    const response = await jsonRequest(app, "/evaluations/plans", "POST", {
+      ...planRequest,
+      rounds: [
+        {
+          ...firstRound,
+          opensAt: "2026-08-01T12:00:00.000Z",
+          blindReview: true,
+          anonymization: "double",
+          reviewerPool: { reviewerIds: ["reviewer-1"], name: "Initial committee" },
+          rubric: {
+            ...firstRound.rubric,
+            criteria: [
+              firstCriterion,
+              {
+                id: "recommendation",
+                label: "Recommendation",
+                description: "Committee recommendation",
+                minimum: 1,
+                maximum: 3,
+                weight: 1,
+                required: true,
+                inputType: "dropdown",
+                options: [
+                  { id: "accept", label: "Accept", value: "accept" },
+                  { id: "maybe", label: "Maybe", value: "maybe" },
+                  { id: "reject", label: "Reject", value: "reject" },
+                ],
+              },
+              {
+                id: "comments",
+                label: "Comments",
+                description: "Evidence",
+                minimum: 0,
+                maximum: 1,
+                weight: 1,
+                required: false,
+                inputType: "free_text",
+              },
+            ],
+          },
+        },
+        {
+          ...firstRound,
+          id: "round-2",
+          name: "Final review",
+          sequence: 2,
+          reviewerPool: { reviewerIds: [], name: "Final committee" },
+        },
+      ],
+    });
+    const planResponse = await app.request("/evaluations/plans/plan-1");
+    const plan = (await planResponse.json()) as {
+      rounds: Array<{
+        reviewerPool?: { reviewerIds: string[] };
+        rubric: { criteria: Array<{ inputType?: string; options?: unknown[] }> };
+      }>;
+    };
+
+    expect(response.status).toBe(201);
+    expect(planResponse.status).toBe(200);
+    expect(plan.rounds[0]?.reviewerPool?.reviewerIds).toEqual(["reviewer-1"]);
+    expect(plan.rounds[1]?.reviewerPool?.reviewerIds).toEqual([]);
+    expect(plan.rounds[0]?.rubric.criteria.map((criterion) => criterion.inputType)).toEqual([
+      undefined,
+      "dropdown",
+      "free_text",
+    ]);
+    expect(plan.rounds[0]?.rubric.criteria[1]?.options).toHaveLength(3);
+
+    await jsonRequest(app, "/evaluations/plans/plan-1/open", "POST", { expectedVersion: 1 });
+    const outsidePool = await jsonRequest(app, "/evaluations/plans/plan-1/assignments", "POST", {
+      roundId: "round-1",
+      submissionId: "submission-1",
+      reviewerIds: ["reviewer-2"],
+    });
+    expect(outsidePool.status).toBe(403);
+  });
+
+  it("exports a stable organizer CSV without crossing tenants", async () => {
+    const app = createTestApp();
+    await jsonRequest(app, "/evaluations/plans", "POST", planRequest);
+    const first = await app.request("/evaluations/plans/plan-1/export.csv");
+    const second = await app.request("/evaluations/plans/plan-1/export.csv");
+    const otherTenant = await app.request("/evaluations/plans/plan-1/export.csv", {
+      headers: { "x-test-actor": "other-tenant" },
+    });
+    const firstText = await first.text();
+    const secondText = await second.text();
+
+    expect(first.status).toBe(200);
+    expect(first.headers.get("content-type")).toContain("text/csv");
+    expect(first.headers.get("content-disposition")).toContain("evaluation-plan-1.csv");
+    expect(firstText).toBe(secondText);
+    expect(firstText).toContain("submission_id,title,participants");
+    expect(firstText).toContain("submission-1");
+    expect(otherTenant.status).toBe(404);
+  });
+
+  it("only sends outstanding reminders through the injected communications boundary", async () => {
+    const calls: Array<{
+      planId: string;
+      reviewerIds: readonly string[];
+      assignmentIds: readonly string[];
+    }> = [];
+    const app = createTestApp(
+      {},
+      {
+        reminders: {
+          sendOutstandingReviewerReminders: async (_actor, input) => {
+            calls.push(input);
+            return { queued: input.assignmentIds.length, reviewerIds: input.reviewerIds };
+          },
+        },
+      },
+    );
+    await jsonRequest(app, "/evaluations/plans", "POST", planRequest);
+    await jsonRequest(app, "/evaluations/plans/plan-1/open", "POST", { expectedVersion: 1 });
+    await jsonRequest(app, "/evaluations/plans/plan-1/assignments", "POST", {
+      roundId: "round-1",
+      submissionId: "submission-1",
+      reviewerIds: ["reviewer-1"],
+    });
+    const reminder = await jsonRequest(app, "/evaluations/plans/plan-1/reminders", "POST", {
+      roundId: "round-1",
+      reviewerIds: ["reviewer-1"],
+    });
+    const unavailable = await jsonRequest(
+      createTestApp(),
+      "/evaluations/plans/plan-1/reminders",
+      "POST",
+      { reviewerIds: ["reviewer-1"] },
+    );
+
+    expect(reminder.status).toBe(202);
+    expect(await reminder.json()).toEqual({ queued: 1, reviewerIds: ["reviewer-1"] });
+    expect(calls).toEqual([
+      {
+        planId: "plan-1",
+        roundId: "round-1",
+        reviewerIds: ["reviewer-1"],
+        assignmentIds: ["plan-1:round-1:submission-1:reviewer-1"],
+      },
+    ]);
+    expect(unavailable.status).toBe(503);
   });
 });

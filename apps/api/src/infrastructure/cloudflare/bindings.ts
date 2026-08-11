@@ -2,6 +2,7 @@ import {
   type DeploymentEnvironment,
   deploymentEnvironmentSchema,
 } from "@open-sessionboard/contracts";
+import type { OpenSendMessage } from "../../integrations/opensend/types";
 
 export const cloudflareBindingNames = {
   database: "DB",
@@ -18,12 +19,18 @@ export const cloudflareOutboxTopics = [
 ] as const;
 
 export type CloudflareOutboxTopic = (typeof cloudflareOutboxTopics)[number];
-
+export interface CloudflareOutboxInvitationTransient {
+  readonly kind: "member_invitation";
+  readonly invitationId: string;
+  readonly recipient: string;
+  readonly message: OpenSendMessage;
+}
 export interface CloudflareOutboxMessage {
   readonly version: 1;
   readonly jobId: string;
   readonly tenantId: string;
   readonly topic: CloudflareOutboxTopic;
+  readonly transient?: CloudflareOutboxInvitationTransient;
   readonly enqueuedAt: string;
 }
 

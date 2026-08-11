@@ -38,6 +38,7 @@ import type { AirtableTransport } from "../infrastructure/airtable";
 import { FetchAirtableTransport, RetryingAirtableTransport } from "../infrastructure/airtable";
 import {
   type CloudflareBindings,
+  type CloudflareOutboxInvitationTransient,
   type CloudflareOutboxMessage,
   inspectCloudflareBindings,
 } from "../infrastructure/cloudflare/bindings";
@@ -155,6 +156,7 @@ interface MemberInvitationEnvelope {
   readonly kind: "member_invitation";
   readonly invitation: MemberInvitation;
   readonly usedAt: string | null;
+  readonly activationDigest: string | null;
 }
 
 interface ReviewerPoolRecord extends ReviewerPool {
@@ -207,6 +209,18 @@ function parseOrganizerAutojoinConfiguration(
   }
 
   return { domains: [...new Set(domains)], organizationId };
+}
+
+function organizerAutojoinConfigurationProvided(
+  bindings: Pick<
+    RuntimeBindings,
+    "ORGANIZER_AUTOJOIN_DOMAINS" | "ORGANIZER_AUTOJOIN_ORGANIZATION_ID"
+  >,
+): boolean {
+  return (
+    nonEmpty(bindings.ORGANIZER_AUTOJOIN_DOMAINS) ||
+    nonEmpty(bindings.ORGANIZER_AUTOJOIN_ORGANIZATION_ID)
+  );
 }
 
 function validOrganizerAutojoinConfiguration(
@@ -340,7 +354,12 @@ export class D1BetterAuthGateway implements BetterAuthGateway {
       organizerAutojoin.domains.includes(emailDomain) &&
       !memberships.some(
         (membership) => membership.organizationId === organizerAutojoin.organizationId,
-      )
+      ) &&
+      !(await this.hasUnfinishedMemberInvitation(
+        organizerAutojoin.organizationId,
+        row.user_id,
+        row.email,
+      ))
     ) {
       const auditTimestamp = new Date().toISOString();
       const insertResult = await this.database
@@ -380,6 +399,37 @@ export class D1BetterAuthGateway implements BetterAuthGateway {
       memberships,
       speakerGrants: speakerGrantsFrom(speakerGrantResult.results),
     };
+  }
+
+  private async hasUnfinishedMemberInvitation(
+    organizationId: string,
+    userId: string,
+    email: string,
+  ): Promise<boolean> {
+    const rows = await this.database
+      .prepare(
+        `SELECT id, identifier, token_digest, expires_at, created_at, updated_at
+           FROM auth_verifications`,
+      )
+      .all<MemberInvitationRow>();
+    return rows.results.some((invitationRow) => {
+      let parsed: MemberInvitationEnvelope | null;
+      try {
+        parsed = invitationEnvelope(JSON.parse(invitationRow.identifier));
+      } catch {
+        parsed = null;
+      }
+      return (
+        parsed !== null &&
+        parsed.usedAt === null &&
+        parsed.invitation.organizationId === organizationId &&
+        parsed.invitation.userId === userId &&
+        parsed.invitation.email.toLowerCase() === email.toLowerCase() &&
+        (parsed.invitation.status === "pending" ||
+          parsed.invitation.status === "delivered" ||
+          parsed.invitation.status === "accepted")
+      );
+    });
   }
 
   async requestMagicLink(input: { email: string; callbackUrl: string }): Promise<void> {
@@ -600,6 +650,7 @@ function invitationEnvelope(value: unknown): MemberInvitationEnvelope | null {
     typeof candidate.expiresAt !== "string" ||
     (candidate.deliveredAt !== null && typeof candidate.deliveredAt !== "string") ||
     (candidate.acceptedAt !== null && typeof candidate.acceptedAt !== "string") ||
+    (value.activationDigest !== null && typeof value.activationDigest !== "string") ||
     (value.usedAt !== null && typeof value.usedAt !== "string")
   ) {
     return null;
@@ -607,6 +658,7 @@ function invitationEnvelope(value: unknown): MemberInvitationEnvelope | null {
   return {
     kind: "member_invitation",
     invitation: candidate as unknown as MemberInvitation,
+    activationDigest: value.activationDigest as string | null,
     usedAt: value.usedAt as string | null,
   };
 }
@@ -1318,8 +1370,9 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
       kind: "member_invitation",
       invitation: cloneValue(input),
       usedAt: null,
+      activationDigest: null,
     };
-    const temporaryDigest = await sha256(`member-invitation:${input.id}`);
+    const temporaryDigest = await sha256(randomToken());
     try {
       await this.database
         .prepare(
@@ -1348,30 +1401,79 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
     invitationId: string,
     deliveredAt: string,
   ): Promise<MemberInvitation> {
-    return this.updateInvitation(invitationId, (invitation) => ({
-      ...invitation,
-      status: "delivered",
-      deliveredAt,
-      updatedAt: deliveredAt,
-    }));
-  }
-
-  async markInvitationAccepted(
-    invitationId: string,
-    acceptedAt: string,
-  ): Promise<MemberInvitation> {
     return this.updateInvitation(invitationId, (invitation) => {
-      if (invitation.status === "accepted") return invitation;
-      if (invitation.status === "revoked") {
-        throw new MemberRepositoryConflictError("The invitation is revoked.");
+      if (invitation.status !== "pending") {
+        throw new MemberRepositoryConflictError("The invitation is not pending delivery.");
       }
       return {
         ...invitation,
-        status: "accepted",
-        acceptedAt,
-        updatedAt: acceptedAt,
+        status: "delivered",
+        deliveredAt,
+        updatedAt: deliveredAt,
       };
     });
+  }
+
+  async claimInvitationActivation(
+    invitationId: string,
+    activationDigest: string,
+    acceptedAt: string,
+  ): Promise<MemberInvitation> {
+    const row = await this.database
+      .prepare(
+        `SELECT id, identifier, token_digest, expires_at, created_at, updated_at
+           FROM auth_verifications
+          WHERE id = ?
+          LIMIT 1`,
+      )
+      .bind(invitationId)
+      .first<MemberInvitationRow>();
+    if (row === null) throw new MemberRepositoryConflictError("The invitation does not exist.");
+    const parsed = this.parseInvitationRow(row);
+    if (parsed === null) throw new MemberRepositoryConflictError("The invitation does not exist.");
+    if (parsed.envelope.invitation.status === "accepted") {
+      if (parsed.envelope.activationDigest !== activationDigest) {
+        throw new MemberRepositoryConflictError(
+          "The invitation is already being activated with different account details.",
+        );
+      }
+      return cloneValue(parsed.envelope.invitation);
+    }
+    if (
+      parsed.envelope.invitation.status !== "pending" &&
+      parsed.envelope.invitation.status !== "delivered"
+    ) {
+      throw new MemberRepositoryConflictError("The invitation cannot be activated.");
+    }
+    const updatedInvitation: MemberInvitation = {
+      ...parsed.envelope.invitation,
+      status: "accepted",
+      acceptedAt,
+      updatedAt: acceptedAt,
+    };
+    const updatedEnvelope: MemberInvitationEnvelope = {
+      ...parsed.envelope,
+      invitation: updatedInvitation,
+      activationDigest,
+    };
+    const result = await this.database
+      .prepare(
+        `UPDATE auth_verifications
+            SET identifier = ?, expires_at = ?, updated_at = ?
+          WHERE id = ? AND identifier = ?`,
+      )
+      .bind(
+        invitationIdentifier(updatedEnvelope),
+        updatedInvitation.expiresAt,
+        updatedInvitation.updatedAt,
+        invitationId,
+        row.identifier,
+      )
+      .run();
+    if (Number(result.meta?.changes ?? 1) !== 1) {
+      throw new MemberRepositoryConflictError("The invitation activation claim was superseded.");
+    }
+    return cloneValue(updatedInvitation);
   }
 
   async activateUser(userId: string, name: string | null, updatedAt: string): Promise<MemberUser> {
@@ -1442,16 +1544,17 @@ export class D1MemberIdentityRepository implements MemberIdentityRepository {
     };
     const result = await this.database
       .prepare(
-        "UPDATE auth_verifications SET identifier = ?, expires_at = ?, updated_at = ? WHERE id = ?",
+        "UPDATE auth_verifications SET identifier = ?, expires_at = ?, updated_at = ? WHERE id = ? AND identifier = ?",
       )
       .bind(
         invitationIdentifier(updatedEnvelope),
         updatedEnvelope.invitation.expiresAt,
         updatedEnvelope.invitation.updatedAt,
         invitationId,
+        row.identifier,
       )
       .run();
-    if (Number(result.meta?.changes ?? 1) === 0) {
+    if (Number(result.meta?.changes ?? 1) !== 1) {
       throw new MemberRepositoryConflictError("The invitation could not be updated.");
     }
     return cloneValue(updatedEnvelope.invitation);
@@ -1500,22 +1603,27 @@ export class D1MemberAuthBoundary implements MemberAuthBoundary {
       parsed.invitation.id !== row.id ||
       parsed.invitation.organizationId !== input.organizationId ||
       parsed.invitation.userId !== input.userId ||
-      parsed.invitation.email !== input.email
+      parsed.invitation.email !== input.email ||
+      parsed.invitation.expiresAt !== input.expiresAt.toISOString() ||
+      parsed.invitation.status !== "pending" ||
+      parsed.activationDigest !== null ||
+      parsed.usedAt !== null
     ) {
       throw new Error("The invitation setup record is invalid.");
     }
     const result = await this.database
       .prepare(
-        "UPDATE auth_verifications SET token_digest = ?, expires_at = ?, updated_at = ? WHERE id = ?",
+        "UPDATE auth_verifications SET token_digest = ?, expires_at = ?, updated_at = ? WHERE id = ? AND identifier = ?",
       )
       .bind(
         tokenDigest,
         input.expiresAt.toISOString(),
         new Date().toISOString(),
         input.invitationId,
+        row.identifier,
       )
       .run();
-    if (Number(result.meta?.changes ?? 1) === 0) {
+    if (Number(result.meta?.changes ?? 1) !== 1) {
       throw new Error("The invitation setup record could not be issued.");
     }
     const setupUrl =
@@ -1652,7 +1760,11 @@ export class D1MemberAuthBoundary implements MemberAuthBoundary {
   }
 }
 
-/** Invitation messages are persisted to the existing communications outbox. */
+interface CloudflareMemberInvitationQueueMessage extends CloudflareOutboxMessage {
+  readonly transient: CloudflareOutboxInvitationTransient;
+}
+
+/** Invitation delivery keeps bearer URLs transient in the queue; D1 stores metadata and state only. */
 export class CloudflareMemberInvitationDelivery implements MemberInvitationDelivery {
   constructor(
     private readonly database: D1Database,
@@ -1684,6 +1796,12 @@ export class CloudflareMemberInvitationDelivery implements MemberInvitationDeliv
     };
     const now = new Date().toISOString();
     const jobId = `runtime:${input.organizationId}:communications:member-invitation:${input.invitationId}`;
+    const metadata = {
+      kind: "member_invitation",
+      invitationId: input.invitationId,
+      recipient: input.email,
+      expiresAt: input.expiresAt,
+    } as const;
     const result = await this.database
       .prepare(
         `INSERT INTO outbox_jobs
@@ -1696,8 +1814,7 @@ export class CloudflareMemberInvitationDelivery implements MemberInvitationDeliv
         jobId,
         input.organizationId,
         `member-invitation:${input.invitationId}`,
-        JSON.stringify(message),
-        now,
+        JSON.stringify(metadata),
         now,
         now,
         now,
@@ -1714,13 +1831,20 @@ export class CloudflareMemberInvitationDelivery implements MemberInvitationDeliv
             .first<{ readonly state: string }>()
         )?.state;
     if (state !== "pending") return;
-    await this.queue.send({
+    const queueMessage: CloudflareMemberInvitationQueueMessage = {
       version: 1,
+      transient: {
+        kind: "member_invitation",
+        invitationId: input.invitationId,
+        recipient: input.email,
+        message,
+      },
       jobId,
       tenantId: input.organizationId,
       topic: "communications",
       enqueuedAt: now,
-    });
+    };
+    await this.queue.send(queueMessage);
     await this.database
       .prepare(
         "UPDATE outbox_jobs SET state = 'queued', updated_at = ? WHERE id = ? AND state = 'pending'",
@@ -1896,9 +2020,12 @@ export function inspectProductionRuntime(
       issues.push("AI_MODEL is required outside local development");
     }
   }
-  if (parseOrganizerAutojoinConfiguration(bindings) === null) {
+  if (
+    organizerAutojoinConfigurationProvided(bindings) &&
+    parseOrganizerAutojoinConfiguration(bindings) === null
+  ) {
     issues.push(
-      "ORGANIZER_AUTOJOIN_DOMAINS and ORGANIZER_AUTOJOIN_ORGANIZATION_ID must be configured for organizer autojoin.",
+      "ORGANIZER_AUTOJOIN_DOMAINS and ORGANIZER_AUTOJOIN_ORGANIZATION_ID must be configured as a valid pair.",
     );
   }
 
@@ -1978,9 +2105,6 @@ export function createCloudflareDependencies(bindings: RuntimeBindings): ApiDepe
     throw new TypeError("The production authentication runtime is not configured.");
   }
   const organizerAutojoin = parseOrganizerAutojoinConfiguration(bindings);
-  if (organizerAutojoin === null) {
-    throw new TypeError("The organizer autojoin runtime is not configured.");
-  }
   const model = bindings.AI_MODEL?.trim();
   const aiProviders = createCloudflareAiProviders(
     bindings.AI,

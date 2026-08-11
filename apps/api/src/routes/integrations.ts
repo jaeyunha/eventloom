@@ -1,17 +1,17 @@
 import {
+  type ApiScope,
   apiErrorSchema,
   apiScopes,
-  type ApiScope,
-  webhookEventTypes,
   type WebhookEventType,
+  webhookEventTypes,
 } from "@open-sessionboard/contracts";
 import { type Context, Hono } from "hono";
 import { ZodError, z } from "zod";
 import { requireOrganizationRole } from "../features/auth/authorization";
 import { AuthAccessError, type AuthPrincipal } from "../features/auth/types";
 import {
-  type WebhookSubscriptionRecord,
   WebhookRepositoryError,
+  type WebhookSubscriptionRecord,
   type WebhookSubscriptionRepository,
 } from "../integrations/webhooks/types";
 

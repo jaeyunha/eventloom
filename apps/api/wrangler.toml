@@ -48,13 +48,20 @@ workers_dev = true
 
 [env.staging.observability]
 enabled = true
+[env.staging.ai]
+binding = "AI"
+
 
 [env.staging.vars]
 APP_ENV = "staging"
+AI_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8"
 API_ORIGIN = "https://open-sessionboard-api-staging.ashleyha0317.workers.dev"
 WEB_ORIGIN = "https://open-sessionboard-web-staging.ashleyha0317.workers.dev"
+CACHE_INVALIDATION_URL = "https://open-sessionboard-web-staging.ashleyha0317.workers.dev/api/internal/cache-invalidation"
 OPENSEND_API_URL = "https://opensend.namuh.co"
-AUTH_FROM_EMAIL = "auth@foreverbrowsing.com"
+AUTH_FROM_EMAIL = "auth@sessionboard.namuh.co"
+SPEAKERS_FROM_EMAIL = "speakers@sessionboard.namuh.co"
+CALENDAR_FROM_EMAIL = "calendar@sessionboard.namuh.co"
 
 [[env.staging.d1_databases]]
 binding = "DB"
@@ -85,15 +92,25 @@ dead_letter_queue = "open-sessionboard-outbox-staging-dlq"
 name = "open-sessionboard-api-production"
 workers_dev = true
 
+[env.production.triggers]
+crons = ["0 * * * *"]
+
 [env.production.observability]
 enabled = true
+[env.production.ai]
+binding = "AI"
+
 
 [env.production.vars]
 APP_ENV = "production"
+AI_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8"
 API_ORIGIN = "https://open-sessionboard-api-production.ashleyha0317.workers.dev"
 WEB_ORIGIN = "https://open-sessionboard-web-production.ashleyha0317.workers.dev"
+CACHE_INVALIDATION_URL = "https://open-sessionboard-web-production.ashleyha0317.workers.dev/api/internal/cache-invalidation"
 OPENSEND_API_URL = "https://opensend.namuh.co"
-AUTH_FROM_EMAIL = "auth@foreverbrowsing.com"
+AUTH_FROM_EMAIL = "auth@sessionboard.namuh.co"
+SPEAKERS_FROM_EMAIL = "speakers@sessionboard.namuh.co"
+CALENDAR_FROM_EMAIL = "calendar@sessionboard.namuh.co"
 
 [[env.production.d1_databases]]
 binding = "DB"

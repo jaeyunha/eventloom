@@ -83,8 +83,10 @@ export class FakeAirtableTransport implements AirtableTransport {
     let records = [...table];
     const formula = queryString(request.query?.filterByFormula);
     if (formula !== undefined) {
-      const condition = parseEqualityFormula(formula);
-      records = records.filter((record) => record.fields[condition.field] === condition.value);
+      const conditions = parseFilterFormula(formula);
+      records = records.filter((record) =>
+        conditions.some((condition) => record.fields[condition.field] === condition.value),
+      );
     }
 
     const sorts = parseSorts(request.query);
@@ -202,6 +204,41 @@ function parseEqualityFormula(formula: string): { field: string; value: string }
     field: unescapeFormula(match[1]),
     value: unescapeFormula(match[2]),
   };
+}
+
+function parseFilterFormula(formula: string): readonly { field: string; value: string }[] {
+  if (!formula.startsWith("OR(") || !formula.endsWith(")")) {
+    return [parseEqualityFormula(formula)];
+  }
+  const inner = formula.slice(3, -1);
+  const clauses: string[] = [];
+  let start = 0;
+  let quoted = false;
+  let escaped = false;
+  for (let index = 0; index < inner.length; index += 1) {
+    const character = inner[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (character === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (character === "'") {
+      quoted = !quoted;
+      continue;
+    }
+    if (character === "," && !quoted) {
+      clauses.push(inner.slice(start, index));
+      start = index + 1;
+    }
+  }
+  clauses.push(inner.slice(start));
+  if (quoted || clauses.some((clause) => clause.length === 0)) {
+    throw new TypeError(`The fake transport does not support formula: ${formula}`);
+  }
+  return clauses.map(parseEqualityFormula);
 }
 
 function unescapeFormula(value: string): string {

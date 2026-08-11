@@ -6,8 +6,10 @@ import {
   type AgendaEntryInput,
   type AgendaError,
   type AgendaIdGenerator,
+  type AgendaSuggestionProvider,
   type AgendaTimeZoneError,
   AgendaValidationError,
+  DeterministicAgendaSuggestionProvider,
   InMemoryAgendaMutationLock,
   InMemoryAgendaRepository,
   resolveLocalDateTime,
@@ -61,7 +63,7 @@ function entry(
   return { id, sessionId, roomId, startsAtLocal, endsAtLocal, trackIds };
 }
 
-function createEngine(): AgendaEngine {
+function createEngine(provider?: AgendaSuggestionProvider): AgendaEngine {
   let nextId = 0;
   const clock: AgendaClock = { now: () => new Date("2026-08-08T18:00:00.000Z") };
   const idGenerator: AgendaIdGenerator = {
@@ -73,6 +75,7 @@ function createEngine(): AgendaEngine {
   return new AgendaEngine(new InMemoryAgendaRepository(), new InMemoryAgendaMutationLock(), {
     clock,
     idGenerator,
+    ...(provider === undefined ? {} : { suggestionProvider: provider }),
   });
 }
 
@@ -84,6 +87,21 @@ async function initialize(engine: AgendaEngine): Promise<void> {
     actorId: "organizer-1",
     ...catalog,
   });
+}
+
+function suggestionInput(baseDraftVersion = 1) {
+  return {
+    eventId: "event-1",
+    actorId: "organizer-1",
+    baseDraftVersion,
+    dates: ["2026-08-10"],
+    eligibleStatuses: ["accepted"],
+    rooms: ["room-large"],
+    dayWindows: [{ date: "2026-08-10", startLocal: "09:00", endLocal: "17:00" }],
+    orderedRules: ["avoid hard conflicts", "prefer larger rooms"],
+    ignoreExistingTimes: false,
+    ignoreExistingRooms: false,
+  } as const;
 }
 
 describe("agenda time zones", () => {
@@ -306,5 +324,202 @@ describe("agenda concurrency and revisions", () => {
 
     await Promise.all([operation(), operation(), operation()]);
     expect(maximumActive).toBe(1);
+  });
+});
+describe("advisory agenda suggestions", () => {
+  it("fails closed when no suggestion provider is injected", async () => {
+    const engine = createEngine();
+    await initialize(engine);
+
+    await expect(engine.generateSuggestion(suggestionInput())).rejects.toMatchObject({
+      code: "SUGGESTION_PROVIDER_UNAVAILABLE",
+    });
+    expect(await engine.getSuggestionRuns("event-1")).toEqual([]);
+  });
+  it("captures criteria and leaves the private draft unchanged during generation", async () => {
+    const engine = createEngine(new DeterministicAgendaSuggestionProvider());
+    await initialize(engine);
+    const before = await engine.getDraft("event-1");
+
+    const run = await engine.generateSuggestion(suggestionInput());
+    const after = await engine.getDraft("event-1");
+
+    expect(after).toEqual(before);
+    expect(run.status).toBe("pending");
+    expect(run.baseDraftVersion).toBe(before.version);
+    expect(run.baseDraftRevision).toBe(before.version);
+    expect(run.criteria.dates).toEqual(["2026-08-10"]);
+    expect(run.criteria.eligibleStatuses).toEqual(["accepted"]);
+    expect(run.criteria.roomIds).toEqual(["room-large"]);
+    expect(run.criteria.dayWindows[0]).toEqual({
+      date: "2026-08-10",
+      startLocal: "09:00",
+      endLocal: "17:00",
+    });
+    expect(run.criteria.orderedRules).toEqual(["avoid hard conflicts", "prefer larger rooms"]);
+    expect(run.diff.summary).toContain("proposed agenda change");
+  });
+
+  it("rejects applying a run after its base draft revision becomes stale", async () => {
+    const provider: AgendaSuggestionProvider = {
+      suggest: () => ({
+        placements: [
+          {
+            sessionId: "session-2",
+            roomId: "room-large",
+            startsAtLocal: "2026-08-10T09:00",
+            endsAtLocal: "2026-08-10T10:00",
+          },
+        ],
+      }),
+    };
+    const engine = createEngine(provider);
+    await initialize(engine);
+    const run = await engine.generateSuggestion(suggestionInput());
+
+    const changedDraft = await engine.updateDraft({
+      eventId: "event-1",
+      expectedVersion: 1,
+      actorId: "organizer-1",
+      entries: [
+        entry("entry-3", "session-3", "room-large", "2026-08-10T11:00", "2026-08-10T12:00"),
+      ],
+    });
+    const changeId = run.diff.changes[0]?.id ?? "missing";
+
+    await expect(
+      engine.applySuggestion({
+        eventId: "event-1",
+        runId: run.id,
+        actorId: "organizer-1",
+        expectedDraftVersion: changedDraft.version,
+        acceptedChangeIds: [changeId],
+      }),
+    ).rejects.toMatchObject({ code: "CONCURRENT_MODIFICATION" });
+    expect((await engine.getDraft("event-1")).entries).toEqual(changedDraft.entries);
+    expect((await engine.getSuggestion("event-1", run.id)).status).toBe("pending");
+  });
+
+  it("re-runs hard-conflict validation and never publishes while applying", async () => {
+    const provider: AgendaSuggestionProvider = {
+      suggest: () => ({
+        placements: [
+          {
+            sessionId: "session-2",
+            roomId: "room-small",
+            startsAtLocal: "2026-08-10T09:30",
+            endsAtLocal: "2026-08-10T10:30",
+          },
+        ],
+      }),
+    };
+    const engine = createEngine(provider);
+    await initialize(engine);
+    const existing = await engine.updateDraft({
+      eventId: "event-1",
+      expectedVersion: 1,
+      actorId: "organizer-1",
+      entries: [
+        entry("entry-1", "session-1", "room-small", "2026-08-10T09:00", "2026-08-10T10:00"),
+      ],
+    });
+    const run = await engine.generateSuggestion({
+      ...suggestionInput(existing.version),
+      rooms: ["room-small"],
+    });
+    const changeId = run.diff.changes[0]?.id ?? "missing";
+
+    await expect(
+      engine.applySuggestion({
+        eventId: "event-1",
+        runId: run.id,
+        actorId: "organizer-1",
+        acceptedChangeIds: [changeId],
+      }),
+    ).rejects.toBeInstanceOf(AgendaValidationError);
+    expect((await engine.getDraft("event-1")).entries).toEqual(existing.entries);
+    expect(await engine.getPublishedAgenda("event-1")).toBeNull();
+    expect(await engine.getOutbox("event-1")).toEqual([]);
+  });
+
+  it("applies only selected changes and records the human acceptance audit", async () => {
+    const provider: AgendaSuggestionProvider = {
+      suggest: () => ({
+        placements: [
+          {
+            sessionId: "session-2",
+            roomId: "room-large",
+            startsAtLocal: "2026-08-10T09:00",
+            endsAtLocal: "2026-08-10T10:00",
+          },
+          {
+            sessionId: "session-3",
+            roomId: "room-large",
+            startsAtLocal: "2026-08-10T11:00",
+            endsAtLocal: "2026-08-10T12:00",
+          },
+        ],
+      }),
+    };
+    const engine = createEngine(provider);
+    await initialize(engine);
+    const run = await engine.generateSuggestion(suggestionInput());
+    const selected = run.diff.changes.find((change) => change.sessionId === "session-2");
+    const unselected = run.diff.changes.find((change) => change.sessionId === "session-3");
+    expect(selected).toBeDefined();
+    expect(unselected).toBeDefined();
+
+    const draft = await engine.applySuggestion({
+      eventId: "event-1",
+      runId: run.id,
+      actorId: "organizer-1",
+      acceptedChangeIds: [selected?.id ?? "missing"],
+    });
+
+    expect(draft.entries.map((candidate) => candidate.sessionId)).toEqual(["session-2"]);
+    const appliedRun = await engine.getSuggestion("event-1", run.id);
+    expect(appliedRun.status).toBe("applied");
+    expect(appliedRun.acceptedChangeIds).toEqual([selected?.id]);
+    expect((await engine.getAudit("event-1")).at(-1)?.details).toMatchObject({
+      runId: run.id,
+      acceptedChangeIds: selected?.id,
+    });
+    expect(await engine.getPublishedAgenda("event-1")).toBeNull();
+    expect(await engine.getOutbox("event-1")).toEqual([]);
+  });
+
+  it("regenerates a pending run as a new version and supersedes the prior run", async () => {
+    let generation = 0;
+    const provider: AgendaSuggestionProvider = {
+      suggest: () => {
+        generation += 1;
+        const start = generation === 1 ? "09:00" : "10:00";
+        return {
+          placements: [
+            {
+              sessionId: "session-2",
+              roomId: "room-large",
+              startsAtLocal: `2026-08-10T${start}`,
+              endsAtLocal: `2026-08-10T${generation === 1 ? "10:00" : "11:00"}`,
+            },
+          ],
+        };
+      },
+    };
+    const engine = createEngine(provider);
+    await initialize(engine);
+    const first = await engine.generateSuggestion(suggestionInput());
+    const second = await engine.regenerateSuggestion({
+      eventId: "event-1",
+      runId: first.id,
+      actorId: "organizer-1",
+    });
+
+    expect(generation).toBe(2);
+    expect(second.version).toBe(first.version + 1);
+    expect(second.regenerationOfRunId).toBe(first.id);
+    expect((await engine.getSuggestion("event-1", first.id)).status).toBe("superseded");
+    expect((await engine.getSuggestionRuns("event-1")).map((run) => run.version)).toEqual([1, 2]);
+    expect(second.diff.summary).toContain("Add");
   });
 });

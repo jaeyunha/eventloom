@@ -53,15 +53,34 @@ export class AirtableRepository<
   }
 
   async list(options: AirtableListOptions = {}): Promise<AirtablePage<TEntity>> {
-    const page = await this.#requestPage(options);
-    const items = page.records.map((record) => this.#decodeRecord(record));
+    const page = await this.listWithRecordIds(options);
+    const items = page.items.map((item) => item.entity);
+    return page.nextCursor === undefined ? { items } : { items, nextCursor: page.nextCursor };
+  }
 
+  async listWithRecordIds(
+    options: AirtableListOptions = {},
+  ): Promise<AirtablePage<{ readonly recordId: string; readonly entity: TEntity }>> {
+    const page = await this.#requestPage(options);
+    const items = page.records.map((record) => ({
+      recordId: record.id,
+      entity: this.#decodeRecord(record),
+    }));
     return page.offset === undefined ? { items } : { items, nextCursor: page.offset };
   }
 
   async find(applicationId: string, signal?: AbortSignal): Promise<TEntity | undefined> {
+    return (await this.findWithRecordId(applicationId, signal))?.entity;
+  }
+
+  async findWithRecordId(
+    applicationId: string,
+    signal?: AbortSignal,
+  ): Promise<{ readonly recordId: string; readonly entity: TEntity } | undefined> {
     const record = await this.#findRecord(applicationId, signal);
-    return record === undefined ? undefined : this.#decodeRecord(record);
+    return record === undefined
+      ? undefined
+      : { recordId: record.id, entity: this.#decodeRecord(record) };
   }
 
   async get(applicationId: string, signal?: AbortSignal): Promise<TEntity> {
@@ -108,14 +127,24 @@ export class AirtableRepository<
         `No ${this.#table} record exists for the application ID.`,
       );
     }
+    return this.updateByRecordId(stableId, existing.id, input, signal);
+  }
 
+  async updateByRecordId(
+    applicationId: string,
+    recordId: string,
+    input: TUpdate,
+    signal?: AbortSignal,
+  ): Promise<TEntity> {
+    const stableId = validateApplicationId(applicationId);
+    const internalId = validateRecordId(recordId);
     const encoded = asFields(this.#mapper.encodeUpdate(input));
     const fields = { ...encoded, [this.#mapper.applicationIdField]: stableId };
     const request: AirtableRequest = {
       method: "PATCH",
       baseId: this.#baseId,
       table: this.#table,
-      recordId: existing.id,
+      recordId: internalId,
       body: { fields },
       ...(signal === undefined ? {} : { signal }),
     };
@@ -130,12 +159,15 @@ export class AirtableRepository<
     if (existing === undefined) {
       return false;
     }
+    return this.deleteByRecordId(existing.id, signal);
+  }
 
+  async deleteByRecordId(recordId: string, signal?: AbortSignal): Promise<boolean> {
     const request: AirtableRequest = {
       method: "DELETE",
       baseId: this.#baseId,
       table: this.#table,
-      recordId: existing.id,
+      recordId: validateRecordId(recordId),
       ...(signal === undefined ? {} : { signal }),
     };
     const response = await this.#transport.request(request);
@@ -219,6 +251,14 @@ export function validateApplicationId(applicationId: string): string {
   const value = requiredValue(applicationId, "applicationId");
   if (AIRTABLE_RECORD_ID.test(value)) {
     throw new TypeError("Airtable record IDs cannot be used as application IDs.");
+  }
+  return value;
+}
+
+function validateRecordId(recordId: string): string {
+  const value = requiredValue(recordId, "recordId");
+  if (!AIRTABLE_RECORD_ID.test(value)) {
+    throw new TypeError("A valid Airtable record ID is required.");
   }
   return value;
 }

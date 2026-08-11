@@ -2,6 +2,7 @@ import { detectAgendaConflicts } from "./conflicts";
 import { AgendaRepositoryConflictError } from "./infrastructure";
 import { canonicalizeTimeZone, resolveLocalDateTime } from "./timezone";
 import type {
+  AcceptAgendaSuggestionChangeInput,
   AgendaAuditEntry,
   AgendaCatalog,
   AgendaClock,
@@ -18,10 +19,25 @@ import type {
   AgendaRoom,
   AgendaSession,
   AgendaState,
+  AgendaSuggestionChange,
+  AgendaSuggestionChangeKind,
+  AgendaSuggestionCriteriaInput,
+  AgendaSuggestionCriteriaSnapshot,
+  AgendaSuggestionDayWindow,
+  AgendaSuggestionDayWindowInput,
+  AgendaSuggestionPlacement,
+  AgendaSuggestionProvider,
+  AgendaSuggestionProviderRequest,
+  AgendaSuggestionProviderResult,
+  AgendaSuggestionRun,
   AgendaTrack,
   AgendaValidationReport,
   AgendaWarningOverride,
+  ApplyAgendaSuggestionInput,
+  GenerateAgendaSuggestionInput,
   PublishedAgendaRevision,
+  RegenerateAgendaSuggestionInput,
+  RejectAgendaSuggestionInput,
 } from "./types";
 
 export type AgendaErrorCode =
@@ -31,6 +47,10 @@ export type AgendaErrorCode =
   | "INVALID_AGENDA"
   | "PUBLICATION_BLOCKED"
   | "REVISION_NOT_FOUND"
+  | "SUGGESTION_NOT_FOUND"
+  | "SUGGESTION_PROVIDER_UNAVAILABLE"
+  | "SUGGESTION_INVALID"
+  | "SUGGESTION_STATE_INVALID"
   | "WARNING_NOT_FOUND";
 
 export class AgendaError extends Error {
@@ -99,6 +119,8 @@ export interface AgendaEngineOptions {
   customRules?: readonly AgendaCustomRule[];
   clock?: AgendaClock;
   idGenerator?: AgendaIdGenerator;
+  suggestionProvider?: AgendaSuggestionProvider;
+  agendaSuggestionProvider?: AgendaSuggestionProvider;
 }
 
 const outboxTypes: readonly AgendaOutboxEventType[] = [
@@ -106,11 +128,52 @@ const outboxTypes: readonly AgendaOutboxEventType[] = [
   "calendar.agenda-updated",
   "embed-cache.invalidate",
 ];
+export class DeterministicAgendaSuggestionProvider implements AgendaSuggestionProvider {
+  suggest(request: AgendaSuggestionProviderRequest): AgendaSuggestionProviderResult {
+    const sessions = [...request.sessions].sort((left, right) => left.id.localeCompare(right.id));
+    const rooms = request.criteria.rooms;
+    const windows = request.criteria.dayWindows;
+    const existingSessionIds = new Set(request.existingEntries.map((entry) => entry.sessionId));
+    const placements: AgendaSuggestionPlacement[] = [];
+    let slot = 0;
+
+    for (const session of sessions) {
+      if (
+        existingSessionIds.has(session.id) &&
+        !request.criteria.ignoreExistingTimes &&
+        !request.criteria.ignoreExistingRooms
+      ) {
+        continue;
+      }
+      const window = windows[slot % windows.length];
+      const room = rooms[slot % rooms.length];
+      if (window === undefined || room === undefined) continue;
+      const duration = Math.max(1, Math.min(session.durationMinutes ?? 60, 240));
+      const startMinutes =
+        toMinutes(window.startLocal) + Math.floor(slot / rooms.length) * duration;
+      const endMinutes = startMinutes + duration;
+      if (endMinutes > toMinutes(window.endLocal)) {
+        slot += 1;
+        continue;
+      }
+      placements.push({
+        sessionId: session.id,
+        roomId: room.id,
+        trackIds: [],
+        startsAtLocal: `${window.date}T${formatMinutes(startMinutes)}`,
+        endsAtLocal: `${window.date}T${formatMinutes(endMinutes)}`,
+      });
+      slot += 1;
+    }
+    return { placements };
+  }
+}
 
 export class AgendaEngine {
   readonly #customRules: readonly AgendaCustomRule[];
   readonly #clock: AgendaClock;
   readonly #idGenerator: AgendaIdGenerator;
+  readonly #suggestionProvider: AgendaSuggestionProvider | null;
 
   constructor(
     readonly repository: AgendaRepository,
@@ -122,6 +185,8 @@ export class AgendaEngine {
     this.#idGenerator =
       options.idGenerator ??
       ({ nextId: (prefix) => `${prefix}_${crypto.randomUUID()}` } satisfies AgendaIdGenerator);
+    this.#suggestionProvider =
+      options.suggestionProvider ?? options.agendaSuggestionProvider ?? null;
   }
 
   async createAgenda(input: CreateAgendaInput): Promise<AgendaDraft> {
@@ -160,6 +225,7 @@ export class AgendaEngine {
         currentPublishedRevisionId: null,
         outbox: [],
         audit: [this.audit(input.eventId, input.actorId, "agenda.created", now, {})],
+        suggestionRuns: [],
       };
       await this.repository.compareAndSwap(input.eventId, null, state);
       return structuredClone(draft);
@@ -187,7 +253,291 @@ export class AgendaEngine {
   async getAudit(eventId: string): Promise<readonly AgendaAuditEntry[]> {
     return (await this.requireState(eventId)).audit;
   }
+  async getSuggestionRuns(eventId: string): Promise<readonly AgendaSuggestionRun[]> {
+    return structuredClone((await this.requireState(eventId)).suggestionRuns ?? []);
+  }
 
+  async getSuggestion(eventId: string, runId: string): Promise<AgendaSuggestionRun> {
+    const run = (await this.requireState(eventId)).suggestionRuns?.find(
+      (candidate) => candidate.id === runId,
+    );
+    if (run === undefined) {
+      throw new AgendaError("SUGGESTION_NOT_FOUND", `Agenda suggestion run not found: ${runId}`);
+    }
+    return structuredClone(run);
+  }
+  async getSuggestionRun(eventId: string, runId: string): Promise<AgendaSuggestionRun> {
+    return this.getSuggestion(eventId, runId);
+  }
+
+  async listSuggestionRuns(eventId: string): Promise<readonly AgendaSuggestionRun[]> {
+    return this.getSuggestionRuns(eventId);
+  }
+
+  async generateSuggestion(input: GenerateAgendaSuggestionInput): Promise<AgendaSuggestionRun> {
+    return this.mutate(input.eventId, async (state) => {
+      requireNonEmpty(input.actorId, "actorId");
+      const baseDraftVersion =
+        input.baseDraftVersion ??
+        input.baseRevision ??
+        input.baseDraftRevision ??
+        state.draft.version;
+      assertDraftVersion(state, baseDraftVersion);
+      const criteria = normalizeSuggestionCriteria(input.criteria ?? input, state);
+      const run = await this.buildSuggestionRun(
+        state,
+        input.actorId,
+        baseDraftVersion,
+        criteria,
+        null,
+        1,
+      );
+      const now = this.now();
+      return {
+        state: {
+          ...state,
+          stateVersion: state.stateVersion + 1,
+          suggestionRuns: [...(state.suggestionRuns ?? []), run],
+          audit: [
+            ...state.audit,
+            this.audit(state.eventId, input.actorId, "agenda.suggestion.generated", now, {
+              runId: run.id,
+              runVersion: run.version,
+              baseDraftVersion,
+            }),
+          ],
+        },
+        result: run,
+      };
+    });
+  }
+
+  async generateAgendaSuggestion(
+    input: GenerateAgendaSuggestionInput,
+  ): Promise<AgendaSuggestionRun> {
+    return this.generateSuggestion(input);
+  }
+
+  async rejectSuggestion(input: RejectAgendaSuggestionInput): Promise<AgendaSuggestionRun> {
+    return this.mutate(input.eventId, async (state) => {
+      requireNonEmpty(input.actorId, "actorId");
+      const current = requireSuggestionRun(state, input.runId);
+      assertSuggestionPending(current);
+      const now = this.now();
+      const run: AgendaSuggestionRun = {
+        ...current,
+        status: "rejected",
+        rejectedAt: now,
+        rejectedBy: input.actorId,
+      };
+      return {
+        state: {
+          ...state,
+          stateVersion: state.stateVersion + 1,
+          suggestionRuns: replaceSuggestionRun(state, run),
+          audit: [
+            ...state.audit,
+            this.audit(state.eventId, input.actorId, "agenda.suggestion.rejected", now, {
+              runId: run.id,
+              runVersion: run.version,
+            }),
+          ],
+        },
+        result: run,
+      };
+    });
+  }
+
+  async rejectAgendaSuggestion(input: RejectAgendaSuggestionInput): Promise<AgendaSuggestionRun> {
+    return this.rejectSuggestion(input);
+  }
+
+  async regenerateSuggestion(input: RegenerateAgendaSuggestionInput): Promise<AgendaSuggestionRun> {
+    return this.mutate(input.eventId, async (state) => {
+      requireNonEmpty(input.actorId, "actorId");
+      const previous = requireSuggestionRun(state, input.runId);
+      assertSuggestionRegenerable(previous);
+      const baseDraftVersion =
+        input.baseDraftVersion ??
+        input.baseRevision ??
+        input.baseDraftRevision ??
+        state.draft.version;
+      assertDraftVersion(state, baseDraftVersion);
+      if (input.expectedDraftVersion !== undefined) {
+        assertDraftVersion(state, input.expectedDraftVersion);
+      }
+      const criteria =
+        input.criteria === undefined
+          ? previous.criteria
+          : normalizeSuggestionCriteria(input.criteria, state);
+      const run = await this.buildSuggestionRun(
+        state,
+        input.actorId,
+        baseDraftVersion,
+        criteria,
+        previous.id,
+        previous.version + 1,
+      );
+      const now = this.now();
+      const superseded: AgendaSuggestionRun =
+        previous.status === "pending"
+          ? {
+              ...previous,
+              status: "superseded",
+              supersededAt: now,
+            }
+          : previous;
+      return {
+        state: {
+          ...state,
+          stateVersion: state.stateVersion + 1,
+          suggestionRuns: [
+            ...replaceSuggestionRun(state, superseded).filter(
+              (candidate) => candidate.id !== run.id,
+            ),
+            run,
+          ],
+          audit: [
+            ...state.audit,
+            this.audit(state.eventId, input.actorId, "agenda.suggestion.regenerated", now, {
+              runId: run.id,
+              previousRunId: previous.id,
+              runVersion: run.version,
+              baseDraftVersion,
+            }),
+          ],
+        },
+        result: run,
+      };
+    });
+  }
+
+  async regenerateAgendaSuggestion(
+    input: RegenerateAgendaSuggestionInput,
+  ): Promise<AgendaSuggestionRun> {
+    return this.regenerateSuggestion(input);
+  }
+
+  async applySuggestion(input: ApplyAgendaSuggestionInput): Promise<AgendaDraft> {
+    return this.mutate(input.eventId, async (state) => {
+      requireNonEmpty(input.actorId, "actorId");
+      const run = requireSuggestionRun(state, input.runId);
+      assertSuggestionPending(run);
+      if (input.expectedDraftVersion !== undefined) {
+        assertDraftVersion(state, input.expectedDraftVersion);
+      }
+      if (input.expectedBaseRevision !== undefined) {
+        assertDraftVersion(state, input.expectedBaseRevision);
+      }
+      assertDraftVersion(state, run.baseDraftVersion);
+      const selectedIds = selectedSuggestionChangeIds(input);
+      if (selectedIds.length === 0) {
+        throw new AgendaError(
+          "SUGGESTION_INVALID",
+          "Applying an agenda suggestion requires at least one selected change",
+        );
+      }
+      const changes = selectedIds.map((changeId) => {
+        const change = run.diff.changes.find(
+          (candidate) =>
+            candidate.id === changeId ||
+            candidate.entryId === changeId ||
+            candidate.after?.id === changeId,
+        );
+        if (change === undefined) {
+          throw new AgendaError(
+            "SUGGESTION_INVALID",
+            `Agenda suggestion change not found: ${changeId}`,
+          );
+        }
+        return change;
+      });
+      const entries = applySuggestionChanges(state.draft.entries, changes);
+      validateStoredEntries(entries, state);
+      const report = this.validationReport(state, entries);
+      if (report.conflicts.length > 0) {
+        throw new AgendaValidationError(
+          "Applying the agenda suggestion has hard conflicts",
+          report,
+        );
+      }
+
+      const activeWarningIds = new Set(report.warnings.map((warning) => warning.id));
+      const now = this.now();
+      const draft: AgendaDraft = {
+        ...state.draft,
+        version: state.draft.version + 1,
+        entries,
+        warningOverrides: state.draft.warningOverrides.filter((override) =>
+          activeWarningIds.has(override.warningId),
+        ),
+        updatedAt: now,
+        updatedBy: input.actorId,
+      };
+      const appliedRun: AgendaSuggestionRun = {
+        ...run,
+        status: "applied",
+        acceptedChangeIds: selectedIds,
+        appliedChangeIds: selectedIds,
+        appliedAt: now,
+        appliedBy: input.actorId,
+      };
+      return {
+        state: {
+          ...state,
+          stateVersion: state.stateVersion + 1,
+          draft,
+          suggestionRuns: replaceSuggestionRun(state, appliedRun),
+          audit: [
+            ...state.audit,
+            this.audit(state.eventId, input.actorId, "agenda.suggestion.applied", now, {
+              runId: run.id,
+              draftVersion: draft.version,
+              acceptedChangeIds: selectedIds.join(","),
+              baseDraftVersion: run.baseDraftVersion,
+            }),
+          ],
+        },
+        result: draft,
+      };
+    });
+  }
+
+  async applyAgendaSuggestion(input: ApplyAgendaSuggestionInput): Promise<AgendaDraft> {
+    return this.applySuggestion(input);
+  }
+  async acceptSuggestionChange(input: AcceptAgendaSuggestionChangeInput): Promise<AgendaDraft> {
+    return this.applySuggestion({
+      eventId: input.eventId,
+      runId: input.runId,
+      actorId: input.actorId,
+      acceptedChangeIds: [input.changeId],
+      ...(input.expectedDraftVersion === undefined
+        ? {}
+        : { expectedDraftVersion: input.expectedDraftVersion }),
+    });
+  }
+
+  async acceptAgendaSuggestionChange(
+    input: AcceptAgendaSuggestionChangeInput,
+  ): Promise<AgendaDraft> {
+    return this.acceptSuggestionChange(input);
+  }
+  async generate(input: GenerateAgendaSuggestionInput): Promise<AgendaSuggestionRun> {
+    return this.generateSuggestion(input);
+  }
+
+  async reject(input: RejectAgendaSuggestionInput): Promise<AgendaSuggestionRun> {
+    return this.rejectSuggestion(input);
+  }
+
+  async regenerate(input: RegenerateAgendaSuggestionInput): Promise<AgendaSuggestionRun> {
+    return this.regenerateSuggestion(input);
+  }
+
+  async apply(input: ApplyAgendaSuggestionInput): Promise<AgendaDraft> {
+    return this.applySuggestion(input);
+  }
   async validateEntries(
     eventId: string,
     entries: readonly AgendaEntryInput[],
@@ -207,9 +557,25 @@ export class AgendaEngine {
       assertDraftVersion(state, input.expectedVersion);
       requireNonEmpty(input.actorId, "actorId");
       const entries = materializeEntries(input.entries, state);
+      const nonAcceptedSessionId = firstNonAcceptedSessionId(state.sessions, entries);
+      if (nonAcceptedSessionId !== null) {
+        throw new AgendaError(
+          "INVALID_AGENDA",
+          `Only accepted sessions can be scheduled: ${nonAcceptedSessionId}`,
+        );
+      }
       const report = this.validationReport(state, entries);
       if (report.conflicts.length > 0) {
         throw new AgendaValidationError("Hard scheduling conflicts must be resolved", report);
+      }
+      const unchanged =
+        entries.length === state.draft.entries.length &&
+        entries.every((entry, index) => {
+          const current = state.draft.entries[index];
+          return current !== undefined && current.id === entry.id && entriesEqual(current, entry);
+        });
+      if (unchanged) {
+        return { state, result: state.draft, changed: false };
       }
 
       const activeWarningIds = new Set(report.warnings.map((warning) => warning.id));
@@ -247,11 +613,12 @@ export class AgendaEngine {
       requireNonEmpty(input.actorId, "actorId");
       validateMinimumTravelMinutes(input.minimumTravelMinutes);
       const catalog = normalizeCatalog(input);
-      validateStoredEntries(state.draft.entries, catalog);
+      const synchronizedCatalog = retainScheduledSessionsAsIneligible(state, catalog);
+      validateStoredEntries(state.draft.entries, synchronizedCatalog);
       const candidate = {
         ...state,
         minimumTravelMinutes: input.minimumTravelMinutes,
-        ...catalog,
+        ...synchronizedCatalog,
       };
       const report = this.validationReport(candidate, state.draft.entries);
       if (report.conflicts.length > 0) {
@@ -341,6 +708,13 @@ export class AgendaEngine {
     return this.mutate(input.eventId, async (state) => {
       assertDraftVersion(state, input.expectedVersion);
       requireNonEmpty(input.actorId, "actorId");
+      const nonAcceptedSessionId = firstNonAcceptedSessionId(state.sessions, state.draft.entries);
+      if (nonAcceptedSessionId !== null) {
+        throw new AgendaError(
+          "PUBLICATION_BLOCKED",
+          `Only accepted sessions can be published: ${nonAcceptedSessionId}`,
+        );
+      }
       const current = currentRevision(state);
       if (current?.sourceDraftVersion === state.draft.version) {
         return { state, result: current, changed: false };
@@ -441,6 +815,87 @@ export class AgendaEngine {
     });
   }
 
+  private async buildSuggestionRun(
+    state: AgendaState,
+    actorId: string,
+    baseDraftVersion: number,
+    criteria: AgendaSuggestionCriteriaSnapshot,
+    regenerationOfRunId: string | null,
+    version: number,
+  ): Promise<AgendaSuggestionRun> {
+    const provider = this.#suggestionProvider;
+    if (provider === null) {
+      throw new AgendaError(
+        "SUGGESTION_PROVIDER_UNAVAILABLE",
+        "An agenda suggestion provider is not configured",
+      );
+    }
+
+    const providerMethod = provider.suggest ?? provider.generate ?? provider.propose;
+    if (providerMethod === undefined) {
+      throw new AgendaError(
+        "SUGGESTION_PROVIDER_UNAVAILABLE",
+        "The agenda suggestion provider does not expose a generation method",
+      );
+    }
+
+    const eligibleStatuses = new Set(criteria.eligibleStatuses);
+    const sessions = state.sessions.filter((session) => eligibleStatuses.has(session.status));
+    const request: AgendaSuggestionProviderRequest = {
+      eventId: state.eventId,
+      timeZone: state.timeZone,
+      baseDraftVersion,
+      baseRevision: baseDraftVersion,
+      criteria: structuredClone(criteria),
+      sessions: structuredClone(sessions),
+      existingEntries: structuredClone(state.draft.entries),
+      dates: criteria.dates,
+      eligibleStatuses: criteria.eligibleStatuses,
+      rooms: criteria.rooms,
+      roomIds: criteria.roomIds,
+      dayWindows: criteria.dayWindows,
+      orderedRules: criteria.orderedRules,
+      ignoreExistingTimes: criteria.ignoreExistingTimes,
+      ignoreExistingRooms: criteria.ignoreExistingRooms,
+      ignoreExistingSchedule: criteria.ignoreExistingSchedule,
+    };
+    let providerResult: AgendaSuggestionProviderResult;
+    try {
+      providerResult = await providerMethod.call(provider, request);
+    } catch (error) {
+      if (error instanceof AgendaError) {
+        throw error;
+      }
+      throw new AgendaError(
+        "SUGGESTION_INVALID",
+        error instanceof Error ? error.message : "The agenda suggestion provider failed",
+      );
+    }
+
+    const runId = this.#idGenerator.nextId("suggestion");
+    const proposedEntries = materializeSuggestionEntries(state, criteria, providerResult, runId);
+    const diff = suggestionDiff(state.draft.entries, proposedEntries, state.sessions, state.rooms);
+    return {
+      id: runId,
+      eventId: state.eventId,
+      version,
+      status: "pending",
+      baseDraftVersion,
+      baseDraftRevision: baseDraftVersion,
+      baseEntries: structuredClone(state.draft.entries),
+      criteria: structuredClone(criteria),
+      criteriaSnapshot: structuredClone(criteria),
+      placements: structuredClone(proposedEntries),
+      proposedEntries: structuredClone(proposedEntries),
+      diff,
+      validation: this.validationReport(state, proposedEntries),
+      generatedAt: this.now(),
+      generatedBy: actorId,
+      regenerationOfRunId,
+      acceptedChangeIds: [],
+      appliedChangeIds: [],
+    };
+  }
   private async mutate<T>(
     eventId: string,
     operation: (
@@ -521,7 +976,25 @@ export class AgendaEngine {
       revisionNumber: state.revisions.length + 1,
       sourceDraftVersion: draft.version,
       timeZone: state.timeZone,
-      entries: structuredClone(draft.entries),
+      entries: draft.entries.map((entry) => {
+        const session = state.sessions.find((candidate) => candidate.id === entry.sessionId);
+        const room = state.rooms.find((candidate) => candidate.id === entry.roomId);
+        const trackNames = entry.trackIds.flatMap((trackId) => {
+          const track = state.tracks.find((candidate) => candidate.id === trackId);
+          return track === undefined ? [] : [track.name];
+        });
+        return {
+          ...structuredClone(entry),
+          metadata: {
+            title: session?.title ?? entry.sessionId,
+            summary: session?.summary?.trim() ?? "",
+            format: session?.format?.trim() || "Session",
+            speakerNames: [...(session?.speakerNames ?? [])],
+            roomName: room?.name ?? entry.roomId,
+            trackNames,
+          },
+        };
+      }),
       warningOverrides: structuredClone(draft.warningOverrides),
       publishedAt: now,
       publishedBy: actorId,
@@ -562,6 +1035,441 @@ export class AgendaEngine {
   }
 }
 
+function normalizeSuggestionCriteria(
+  input: AgendaSuggestionCriteriaInput,
+  state: AgendaState,
+): AgendaSuggestionCriteriaSnapshot {
+  const providedWindows = input.dayWindows ?? [];
+  const dates = uniqueNonEmpty(
+    input.dates ?? providedWindows.map((window) => window.date),
+    "suggestion dates",
+  );
+  if (dates.length === 0) {
+    throw new AgendaError("SUGGESTION_INVALID", "An agenda suggestion requires at least one date");
+  }
+  for (const date of dates) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      throw new AgendaError("SUGGESTION_INVALID", `Invalid suggestion date: ${date}`);
+    }
+  }
+
+  const eligibleStatuses = uniqueNonEmpty(
+    input.eligibleStatuses ?? ["accepted"],
+    "eligible session statuses",
+  );
+  if (eligibleStatuses.length === 0) {
+    throw new AgendaError(
+      "SUGGESTION_INVALID",
+      "An agenda suggestion requires at least one eligible session status",
+    );
+  }
+  const requestedRooms = input.roomIds ?? input.rooms ?? state.rooms;
+  if (requestedRooms.length === 0) {
+    throw new AgendaError(
+      "SUGGESTION_INVALID",
+      "An agenda suggestion requires at least one organizer-selected room",
+    );
+  }
+  const roomIds = uniqueNonEmpty(
+    requestedRooms.map((room) => (typeof room === "string" ? room : room.id)),
+    "suggestion rooms",
+  );
+  const roomById = new Map(state.rooms.map((room) => [room.id, room]));
+  for (const roomId of roomIds) {
+    if (!roomById.has(roomId)) {
+      throw new AgendaError("SUGGESTION_INVALID", `Unknown suggestion room: ${roomId}`);
+    }
+  }
+
+  const dayWindows =
+    providedWindows.length === 0
+      ? dates.map((date) => ({ date, startLocal: "09:00", endLocal: "17:00" }))
+      : providedWindows.map((window) => normalizeSuggestionWindow(window));
+  for (const window of dayWindows) {
+    if (!dates.includes(window.date)) {
+      throw new AgendaError(
+        "SUGGESTION_INVALID",
+        `Suggestion day window ${window.date} is not in the selected dates`,
+      );
+    }
+    if (toMinutes(window.startLocal) >= toMinutes(window.endLocal)) {
+      throw new AgendaError(
+        "SUGGESTION_INVALID",
+        `Suggestion day window on ${window.date} must end after it starts`,
+      );
+    }
+  }
+
+  const orderedRules = input.orderedRules ?? input.rules ?? [];
+  for (const rule of orderedRules) {
+    if (typeof rule === "string") {
+      requireNonEmpty(rule, "suggestion organizer rule");
+    } else if (Object.keys(rule).length === 0) {
+      throw new AgendaError("SUGGESTION_INVALID", "Suggestion organizer rules must not be empty");
+    }
+  }
+
+  return {
+    dates,
+    eligibleStatuses,
+    roomIds,
+    rooms: roomIds.map((roomId) => roomById.get(roomId) as AgendaRoom),
+    dayWindows: structuredClone(dayWindows),
+    orderedRules: structuredClone(orderedRules),
+    ignoreExistingTimes: input.ignoreExistingTimes ?? input.ignoreExistingSchedule?.times ?? false,
+    ignoreExistingRooms: input.ignoreExistingRooms ?? input.ignoreExistingSchedule?.rooms ?? false,
+    ignoreExistingSchedule: {
+      times: input.ignoreExistingTimes ?? input.ignoreExistingSchedule?.times ?? false,
+      rooms: input.ignoreExistingRooms ?? input.ignoreExistingSchedule?.rooms ?? false,
+    },
+  };
+}
+
+function normalizeSuggestionWindow(
+  window: AgendaSuggestionDayWindowInput,
+): AgendaSuggestionDayWindow {
+  const start = window.startLocal ?? window.start ?? window.startsAtLocal?.slice(11, 16) ?? "";
+  const end = window.endLocal ?? window.end ?? window.endsAtLocal?.slice(11, 16) ?? "";
+  requireNonEmpty(window.date, "suggestion day window date");
+  requireNonEmpty(start, "suggestion day window start");
+  requireNonEmpty(end, "suggestion day window end");
+  if (!/^\d{2}:\d{2}$/.test(start) || !/^\d{2}:\d{2}$/.test(end)) {
+    throw new AgendaError(
+      "SUGGESTION_INVALID",
+      `Suggestion day window on ${window.date} must use HH:mm times`,
+    );
+  }
+  toMinutes(start);
+  toMinutes(end);
+  return { date: window.date, startLocal: start, endLocal: end };
+}
+
+function materializeSuggestionEntries(
+  state: AgendaState,
+  criteria: AgendaSuggestionCriteriaSnapshot,
+  providerResult: AgendaSuggestionProviderResult,
+  runId: string,
+): AgendaEntry[] {
+  const placements =
+    providerResult.placements ??
+    providerResult.proposedPlacements ??
+    providerResult.proposedEntries ??
+    [];
+  const selectedRooms = new Set(criteria.roomIds);
+  const eligibleStatuses = new Set(criteria.eligibleStatuses);
+  const sessionsById = new Map(state.sessions.map((session) => [session.id, session]));
+  const existingById = new Map(state.draft.entries.map((entry) => [entry.id, entry]));
+  const existingBySession = new Map(state.draft.entries.map((entry) => [entry.sessionId, entry]));
+  const removedIds = new Set(providerResult.removeEntryIds ?? []);
+  for (const entryId of removedIds) {
+    if (!existingById.has(entryId)) {
+      throw new AgendaError("SUGGESTION_INVALID", `Unknown entry to remove: ${entryId}`);
+    }
+  }
+
+  const seenPlacementSessions = new Set<string>();
+  const nextInputs = state.draft.entries
+    .filter((entry) => !removedIds.has(entry.id))
+    .map((entry) => toEntryInput(entry));
+  const inputsBySession = new Map(nextInputs.map((entry) => [entry.sessionId, entry]));
+
+  for (const placement of placements) {
+    const session = sessionsById.get(placement.sessionId);
+    if (session === undefined || !eligibleStatuses.has(session.status)) {
+      throw new AgendaError(
+        "SUGGESTION_INVALID",
+        `Suggestion placement references an ineligible session: ${placement.sessionId}`,
+      );
+    }
+    if (seenPlacementSessions.has(placement.sessionId)) {
+      throw new AgendaError(
+        "SUGGESTION_INVALID",
+        `Suggestion contains multiple placements for session ${placement.sessionId}`,
+      );
+    }
+    seenPlacementSessions.add(placement.sessionId);
+    if (!selectedRooms.has(placement.roomId)) {
+      throw new AgendaError(
+        "SUGGESTION_INVALID",
+        `Suggestion placement uses a room outside the selected rooms: ${placement.roomId}`,
+      );
+    }
+    validateSuggestionPlacementWindow(placement, criteria);
+    const existing =
+      (placement.id === undefined ? undefined : existingById.get(placement.id)) ??
+      existingBySession.get(placement.sessionId);
+    const id = placement.id ?? existing?.id ?? `${runId}:${placement.sessionId}`;
+    const nextInput: AgendaEntryInput = {
+      id,
+      sessionId: placement.sessionId,
+      roomId: placement.roomId,
+      trackIds: placement.trackIds ?? existing?.trackIds ?? [],
+      startsAtLocal: placement.startsAtLocal,
+      endsAtLocal: placement.endsAtLocal,
+      ...(placement.startDisambiguation === undefined
+        ? {}
+        : { startDisambiguation: placement.startDisambiguation }),
+      ...(placement.endDisambiguation === undefined
+        ? {}
+        : { endDisambiguation: placement.endDisambiguation }),
+    };
+    inputsBySession.set(placement.sessionId, nextInput);
+  }
+
+  try {
+    return materializeEntries([...inputsBySession.values()], state);
+  } catch (error) {
+    if (error instanceof AgendaError && error.code === "INVALID_AGENDA") {
+      throw new AgendaError("SUGGESTION_INVALID", error.message);
+    }
+    throw error;
+  }
+}
+
+function validateSuggestionPlacementWindow(
+  placement: AgendaSuggestionPlacement,
+  criteria: AgendaSuggestionCriteriaSnapshot,
+): void {
+  const date = placement.startsAtLocal.slice(0, 10);
+  const endDate = placement.endsAtLocal.slice(0, 10);
+  if (date !== endDate || !criteria.dates.includes(date)) {
+    throw new AgendaError(
+      "SUGGESTION_INVALID",
+      `Suggestion placement for ${placement.sessionId} is outside the selected dates`,
+    );
+  }
+  const windows = criteria.dayWindows.filter((window) => window.date === date);
+  const start = placement.startsAtLocal.slice(11, 16);
+  const end = placement.endsAtLocal.slice(11, 16);
+  if (
+    windows.length === 0 ||
+    windows.every(
+      (window) =>
+        toMinutes(start) < toMinutes(window.startLocal) ||
+        toMinutes(end) > toMinutes(window.endLocal),
+    )
+  ) {
+    throw new AgendaError(
+      "SUGGESTION_INVALID",
+      `Suggestion placement for ${placement.sessionId} is outside the day window`,
+    );
+  }
+}
+
+function suggestionDiff(
+  base: readonly AgendaEntry[],
+  proposed: readonly AgendaEntry[],
+  sessions: readonly AgendaSession[],
+  rooms: readonly AgendaRoom[],
+): import("./types").AgendaSuggestionDiff {
+  const baseById = new Map(base.map((entry) => [entry.id, entry]));
+  const proposedById = new Map(proposed.map((entry) => [entry.id, entry]));
+  const sessionNames = new Map(sessions.map((session) => [session.id, session.title]));
+  const roomNames = new Map(rooms.map((room) => [room.id, room.name]));
+  const changes: AgendaSuggestionChange[] = [];
+  const addedEntryIds: string[] = [];
+  const removedEntryIds: string[] = [];
+  const changedEntryIds: string[] = [];
+
+  for (const id of [...new Set([...baseById.keys(), ...proposedById.keys()])].sort()) {
+    const before = baseById.get(id) ?? null;
+    const after = proposedById.get(id) ?? null;
+    if (before === null && after !== null) {
+      addedEntryIds.push(id);
+      changes.push({
+        id: `add:${id}`,
+        kind: "add",
+        entryId: id,
+        sessionId: after.sessionId,
+        before: null,
+        after: structuredClone(after),
+        summary: describeSuggestionChange("add", after, null, sessionNames, roomNames),
+      });
+    } else if (before !== null && after === null) {
+      removedEntryIds.push(id);
+      changes.push({
+        id: `remove:${id}`,
+        kind: "remove",
+        entryId: id,
+        sessionId: before.sessionId,
+        before: structuredClone(before),
+        after: null,
+        summary: describeSuggestionChange("remove", null, before, sessionNames, roomNames),
+      });
+    } else if (before !== null && after !== null && !entriesEqual(before, after)) {
+      changedEntryIds.push(id);
+      changes.push({
+        id: `move:${id}`,
+        kind: "move",
+        entryId: id,
+        sessionId: after.sessionId,
+        before: structuredClone(before),
+        after: structuredClone(after),
+        summary: describeSuggestionChange("move", after, before, sessionNames, roomNames),
+      });
+    }
+  }
+
+  const summary =
+    changes.length === 0
+      ? "No agenda changes were proposed."
+      : `${changes.length} proposed agenda change${changes.length === 1 ? "" : "s"}: ${changes
+          .map((change) => change.summary)
+          .join("; ")}`;
+  return {
+    summary,
+    description: summary,
+    changes,
+    addedEntryIds,
+    removedEntryIds,
+    changedEntryIds,
+  };
+}
+
+function describeSuggestionChange(
+  kind: AgendaSuggestionChangeKind,
+  next: AgendaEntry | null,
+  previous: AgendaEntry | null,
+  sessionNames: ReadonlyMap<string, string>,
+  roomNames: ReadonlyMap<string, string>,
+): string {
+  const entry = next ?? previous;
+  if (entry === null) return "Unknown agenda change";
+  const session = sessionNames.get(entry.sessionId) ?? entry.sessionId;
+  const room = roomNames.get(entry.roomId) ?? entry.roomId;
+  const destination = `${session} in ${room} at ${entry.startsAtLocal.slice(11, 16)}–${entry.endsAtLocal.slice(11, 16)}`;
+  if (kind === "add") return `Add ${destination}`;
+  if (kind === "remove") return `Remove ${destination}`;
+  return `Move ${destination}`;
+}
+
+function applySuggestionChanges(
+  currentEntries: readonly AgendaEntry[],
+  changes: readonly AgendaSuggestionChange[],
+): AgendaEntry[] {
+  const entries = [...currentEntries];
+  for (const change of changes) {
+    const currentIndex = entries.findIndex((entry) => entry.id === change.entryId);
+    if (change.before === null) {
+      if (currentIndex !== -1) {
+        throw new AgendaError(
+          "CONCURRENT_MODIFICATION",
+          `Agenda entry ${change.entryId} changed since suggestion generation`,
+        );
+      }
+      if (change.after === null) {
+        throw new AgendaError("SUGGESTION_INVALID", `Suggestion change ${change.id} has no result`);
+      }
+      entries.push(structuredClone(change.after));
+      continue;
+    }
+    const currentEntry = currentIndex === -1 ? undefined : entries[currentIndex];
+    if (currentEntry === undefined || !entriesEqual(currentEntry, change.before)) {
+      throw new AgendaError(
+        "CONCURRENT_MODIFICATION",
+        `Agenda entry ${change.entryId} changed since suggestion generation`,
+      );
+    }
+    if (change.after === null) {
+      entries.splice(currentIndex, 1);
+    } else {
+      entries[currentIndex] = structuredClone(change.after);
+    }
+  }
+  return entries;
+}
+
+function selectedSuggestionChangeIds(input: ApplyAgendaSuggestionInput): string[] {
+  const selected =
+    input.acceptedChangeIds ??
+    input.selectedChangeIds ??
+    input.selectedChanges ??
+    input.changeIds ??
+    [];
+  const ids = [...selected];
+  if (new Set(ids).size !== ids.length) {
+    throw new AgendaError(
+      "SUGGESTION_INVALID",
+      "An agenda suggestion change cannot be selected twice",
+    );
+  }
+  return ids;
+}
+
+function formatMinutes(value: number): string {
+  return `${String(Math.floor(value / 60)).padStart(2, "0")}:${String(value % 60).padStart(2, "0")}`;
+}
+function requireSuggestionRun(state: AgendaState, runId: string): AgendaSuggestionRun {
+  const run = (state.suggestionRuns ?? []).find((candidate) => candidate.id === runId);
+  if (run === undefined) {
+    throw new AgendaError("SUGGESTION_NOT_FOUND", `Agenda suggestion run not found: ${runId}`);
+  }
+  return run;
+}
+
+function replaceSuggestionRun(
+  state: AgendaState,
+  replacement: AgendaSuggestionRun,
+): AgendaSuggestionRun[] {
+  const runs = state.suggestionRuns ?? [];
+  if (!runs.some((run) => run.id === replacement.id)) {
+    throw new AgendaError(
+      "SUGGESTION_NOT_FOUND",
+      `Agenda suggestion run not found: ${replacement.id}`,
+    );
+  }
+  return runs.map((run) => (run.id === replacement.id ? replacement : run));
+}
+
+function assertSuggestionPending(run: AgendaSuggestionRun): void {
+  if (run.status !== "pending") {
+    throw new AgendaError(
+      "SUGGESTION_STATE_INVALID",
+      `Agenda suggestion run ${run.id} is already ${run.status}`,
+    );
+  }
+}
+function assertSuggestionRegenerable(run: AgendaSuggestionRun): void {
+  if (run.status === "applied" || run.status === "superseded") {
+    throw new AgendaError(
+      "SUGGESTION_STATE_INVALID",
+      `Agenda suggestion run ${run.id} is already ${run.status}`,
+    );
+  }
+}
+
+function uniqueNonEmpty(values: readonly string[], label: string): string[] {
+  for (const value of values) {
+    if (value.trim().length === 0) {
+      throw new AgendaError("SUGGESTION_INVALID", `${label} must not be empty`);
+    }
+  }
+  if (new Set(values).size !== values.length) {
+    throw new AgendaError("SUGGESTION_INVALID", `Duplicate value in ${label}`);
+  }
+  return [...values];
+}
+
+function toMinutes(value: string): number {
+  const match = /^(\d{2}):(\d{2})$/.exec(value);
+  const hour = Number(match?.[1]);
+  const minute = Number(match?.[2]);
+  if (match === null || hour > 23 || minute > 59) {
+    throw new AgendaError("SUGGESTION_INVALID", `Invalid local time: ${value}`);
+  }
+  return hour * 60 + minute;
+}
+
+function toEntryInput(entry: AgendaEntry): AgendaEntryInput {
+  return {
+    id: entry.id,
+    sessionId: entry.sessionId,
+    roomId: entry.roomId,
+    trackIds: entry.trackIds,
+    startsAtLocal: entry.startsAtLocal,
+    endsAtLocal: entry.endsAtLocal,
+  };
+}
 function normalizeCatalog(catalog: AgendaCatalog): AgendaCatalog {
   validateUniqueIds(catalog.sessions, "session");
   validateUniqueIds(catalog.rooms, "room");
@@ -667,6 +1575,44 @@ function validateStoredEntries(entries: readonly AgendaEntry[], catalog: AgendaC
       throw new AgendaError("INVALID_AGENDA", `Entry ${entry.id} references an unknown track`);
     }
   }
+}
+function retainScheduledSessionsAsIneligible(
+  state: Pick<AgendaState, "draft" | "sessions">,
+  catalog: AgendaCatalog,
+): AgendaCatalog {
+  const catalogSessionIds = new Set(catalog.sessions.map((session) => session.id));
+  const retainedSessions = state.sessions
+    .filter(
+      (session) =>
+        !catalogSessionIds.has(session.id) &&
+        state.draft.entries.some((entry) => entry.sessionId === session.id),
+    )
+    .map((session) => ({
+      id: session.id,
+      title: session.title,
+      status: "ineligible",
+      participantIds: [],
+      resourceIds: [],
+      capacityRequired: 0,
+    }));
+  return {
+    ...catalog,
+    sessions: [...catalog.sessions, ...retainedSessions],
+  };
+}
+
+function firstNonAcceptedSessionId(
+  sessions: readonly AgendaSession[],
+  entries: readonly AgendaEntry[],
+): string | null {
+  const sessionsById = new Map(sessions.map((session) => [session.id, session]));
+  for (const entry of entries) {
+    const session = sessionsById.get(entry.sessionId);
+    if (session === undefined || session.status.trim().toLowerCase() !== "accepted") {
+      return entry.sessionId;
+    }
+  }
+  return null;
 }
 
 function validateUniqueIds(values: readonly { id: string }[], label: string): void {

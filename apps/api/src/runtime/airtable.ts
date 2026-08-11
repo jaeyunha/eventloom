@@ -25,6 +25,9 @@ import type {
 import {
   type CfpEffects,
   CfpError,
+  type CfpFileAsset,
+  type CfpFileAssetGateway,
+  type CfpFileUploadAuthorization,
   type CfpIdempotencyCoordinator,
   type CfpRepository,
   CfpService,
@@ -318,6 +321,18 @@ function isCrmRosterAdmission(value: object): boolean {
 
 function eventReference(record: JsonRecord): string | null {
   return textValue(record, "eventId", "eventID", "event");
+}
+function speakerProfileScoped(
+  profile: JsonRecord | SpeakerProfile,
+  tenantId: string,
+  eventId: string,
+  eventOrganizationId: string | undefined,
+): boolean {
+  const record = profile as unknown as JsonRecord;
+  if (eventReference(record) !== eventId || eventOrganizationId !== tenantId) return false;
+  const profileOrganizationId = authoritativeOrganizationId(record);
+  if (profileOrganizationId !== undefined) return profileOrganizationId === tenantId;
+  return !Object.hasOwn(record, "organizationId") && !Object.hasOwn(record, "tenantId");
 }
 
 function belongsToOrganization(
@@ -1329,6 +1344,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       ...shared,
       table: "Speaker Profiles",
       jsonField: "Biography",
+      scopeFields: { eventId: true, organizationId: true },
     });
     this.#tasks = new AirtableJsonStore({
       ...shared,
@@ -1890,14 +1906,39 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     readonly eventId: string;
     readonly participant: SubmissionParticipant;
     readonly updatedAt: string;
+    readonly organizationId?: string;
   }): Promise<SpeakerProfile> {
     const id = `speaker-profile:${input.eventId}:${input.participant.id}`;
-    const existing = await this.getProfile(input.eventId, input.participant.id);
+    const event = await this.#events.find(input.eventId);
+    const eventOrganizationId =
+      event === undefined ? undefined : authoritativeOrganizationId(event);
+    const organizationId =
+      typeof input.organizationId === "string" && input.organizationId.trim().length > 0
+        ? input.organizationId.trim()
+        : eventOrganizationId;
+    if (organizationId === undefined) {
+      throw new Error("The speaker profile organization could not be resolved.");
+    }
+    if (eventOrganizationId !== undefined && eventOrganizationId !== organizationId) {
+      throw new Error("The speaker profile event belongs to another organization.");
+    }
+    const existing = await this.getProfile(input.eventId, input.participant.id, organizationId);
     const displayName = `${input.participant.firstName} ${input.participant.lastName}`.trim();
     const email = input.participant.email.trim().toLowerCase();
     if (existing !== null) {
-      const updated: SpeakerProfile = {
+      const existingOrganizationId = authoritativeOrganizationId(existing);
+      if (
+        existingOrganizationId === undefined &&
+        (Object.hasOwn(existing, "organizationId") || Object.hasOwn(existing, "tenantId"))
+      ) {
+        throw new Error("The speaker profile has conflicting tenant data.");
+      }
+      if (existingOrganizationId !== undefined && existingOrganizationId !== organizationId) {
+        throw new Error("The speaker profile belongs to another organization.");
+      }
+      const updated: SpeakerProfile & JsonRecord = {
         ...existing,
+        tenantId: organizationId,
         ...(displayName.length === 0 || existing.displayName === displayName
           ? {}
           : { displayName }),
@@ -1907,11 +1948,12 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       if (
         updated.displayName === existing.displayName &&
         updated.email === existing.email &&
-        updated.status === existing.status
+        updated.status === existing.status &&
+        existingOrganizationId === organizationId
       ) {
         return existing;
       }
-      const persisted = {
+      const persisted: SpeakerProfile & JsonRecord = {
         ...updated,
         version: existing.version + 1,
         updatedAt: input.updatedAt,
@@ -1922,6 +1964,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     const profile = tagged(
       {
         id,
+        tenantId: organizationId,
         eventId: input.eventId,
         participantId: input.participant.id,
         displayName,
@@ -1949,9 +1992,14 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     readonly status: string;
     readonly updatedAt: string;
   }): Promise<SpeakerProfile> {
-    const existing = await this.getProfile(input.eventId, input.participantId);
-    const profile: SpeakerProfile = {
+    const existing = await this.getProfile(
+      input.eventId,
+      input.participantId,
+      input.organizationId,
+    );
+    const profile: SpeakerProfile & JsonRecord = {
       id: existing?.id ?? `speaker-profile:${input.eventId}:${input.participantId}`,
+      tenantId: input.organizationId,
       eventId: input.eventId,
       participantId: input.participantId,
       displayName: input.displayName,
@@ -1998,7 +2046,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     ) {
       return false;
     }
-    const profile = await this.getProfile(input.eventId, input.participantId);
+    const profile = await this.getProfile(input.eventId, input.participantId, input.organizationId);
     if (profile === null || profile.email?.trim().toLowerCase() !== email) return false;
     const result = await this.#database
       .prepare(
@@ -2074,21 +2122,48 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     eventId: string,
     participantIds: readonly string[],
   ): Promise<SpeakerProfile[]> {
+    const event = await this.#events.find(eventId);
+    const organizationId = event === undefined ? undefined : authoritativeOrganizationId(event);
+    if (organizationId === undefined) return [];
     const profileIds = participantIds.map(
       (participantId) => `speaker-profile:${eventId}:${participantId}`,
     );
     return (await this.#profiles.listByIds(profileIds))
       .filter(
-        (profile) => profile.eventId === eventId && participantIds.includes(profile.participantId),
+        (profile) =>
+          speakerProfileScoped(profile, organizationId, eventId, organizationId) &&
+          participantIds.includes(profile.participantId),
       )
       .map((profile) => untagged(profile));
   }
 
-  async getProfile(eventId: string, participantId: string): Promise<SpeakerProfile | null> {
+  async getProfile(
+    eventId: string,
+    participantId: string,
+    organizationId?: string,
+  ): Promise<SpeakerProfile | null> {
     const profile = await this.#profiles.find(`speaker-profile:${eventId}:${participantId}`);
-    return profile !== undefined &&
-      profile.eventId === eventId &&
-      profile.participantId === participantId
+    if (
+      profile === undefined ||
+      profile.eventId !== eventId ||
+      profile.participantId !== participantId
+    ) {
+      return null;
+    }
+    const event = await this.#events.find(eventId);
+    const eventOrganizationId =
+      event === undefined ? undefined : authoritativeOrganizationId(event);
+    const expectedOrganizationId =
+      typeof organizationId === "string" && organizationId.trim().length > 0
+        ? organizationId.trim()
+        : eventOrganizationId;
+    if (expectedOrganizationId === undefined) return null;
+    return speakerProfileScoped(
+      profile,
+      expectedOrganizationId,
+      eventId,
+      eventOrganizationId ?? expectedOrganizationId,
+    )
       ? untagged(profile)
       : null;
   }
@@ -2096,23 +2171,30 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
   async updateBiography(
     command: UpdateBiographyCommand,
   ): Promise<RepositoryResult<SpeakerProfile>> {
-    const profile = await this.getProfile(command.eventId, command.participantId);
+    const event = await this.#events.find(command.eventId);
+    const organizationId = event === undefined ? undefined : authoritativeOrganizationId(event);
+    if (organizationId === undefined) return { ok: false, reason: "not_found" };
+    const profile = await this.getProfile(command.eventId, command.participantId, organizationId);
     if (profile === null) return { ok: false, reason: "not_found" };
     if (profile.version !== command.expectedVersion)
       return { ok: false, reason: "version_conflict" };
-    const updated = {
+    const updated: SpeakerProfile & JsonRecord = {
       ...profile,
+      tenantId: organizationId,
       biography: command.biography,
       version: profile.version + 1,
       updatedAt: command.updatedAt,
     };
-    await this.#profiles.update(profile.id, updated);
-    return { ok: true, value: updated };
+    await this.#profiles.update(profile.id, tagged(updated, "speaker_profile"));
+    return { ok: true, value: clone(updated) };
   }
   async updateProfile(
     command: UpdateSpeakerProfileCommand,
   ): Promise<RepositoryResult<SpeakerProfile>> {
-    const profile = await this.getProfile(command.eventId, command.participantId);
+    const event = await this.#events.find(command.eventId);
+    const organizationId = event === undefined ? undefined : authoritativeOrganizationId(event);
+    if (organizationId === undefined) return { ok: false, reason: "not_found" };
+    const profile = await this.getProfile(command.eventId, command.participantId, organizationId);
     if (profile === null) return { ok: false, reason: "not_found" };
     if (profile.version !== command.expectedVersion) {
       return { ok: false, reason: "version_conflict" };
@@ -2129,8 +2211,9 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
         return { ok: false, reason: "not_found" };
       }
     }
-    const updated: SpeakerProfile = {
+    const updated: SpeakerProfile & JsonRecord = {
       ...profile,
+      tenantId: organizationId,
       ...(command.displayName === undefined ? {} : { displayName: command.displayName }),
       ...(command.email === undefined ? {} : { email: command.email }),
       ...(command.jobTitle === undefined ? {} : { jobTitle: command.jobTitle }),
@@ -2227,8 +2310,15 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     return clone(asset);
   }
   async getAsset(eventId: string, assetId: string): Promise<SpeakerAsset | null> {
-    const asset = await this.#assets.find(assetId);
-    return asset !== undefined && entityType(asset) === "speaker_asset" && asset.eventId === eventId
+    const [asset, event] = await Promise.all([
+      this.#assets.find(assetId),
+      this.#events.find(eventId),
+    ]);
+    const tenantId = event === undefined ? undefined : authoritativeOrganizationId(event);
+    return asset !== undefined &&
+      entityType(asset) === "speaker_asset" &&
+      asset.eventId === eventId &&
+      (tenantId === undefined || asset.tenantId === undefined || asset.tenantId === tenantId)
       ? clone(untagged(asset))
       : null;
   }
@@ -2688,6 +2778,57 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
       ? { contentType, sizeBytes: object.size }
       : null;
   }
+  async verifyUploadCapability(binding: PrivateAssetCapabilityBinding): Promise<boolean> {
+    const row = await this.readRow(binding.capabilityId);
+    const capability = parseStoredCapability(row?.scan_result_code ?? null);
+    if (
+      row === null ||
+      capability === null ||
+      capability.kind !== "upload" ||
+      row.state !== "uploaded" ||
+      capability.tenantId !== binding.tenantId ||
+      capability.eventId !== binding.eventId ||
+      capability.submissionId !== binding.submissionId ||
+      capability.participantId !== binding.participantId ||
+      capability.objectKey !== binding.objectKey ||
+      capability.contentType.trim().toLowerCase() !== binding.contentType.trim().toLowerCase() ||
+      capability.sizeBytes !== binding.sizeBytes ||
+      capability.fileName !== binding.fileName
+    ) {
+      return false;
+    }
+    return (await this.inspectObject(binding)) !== null;
+  }
+
+  async invalidateUploadCapability(binding: PrivateAssetCapabilityBinding): Promise<void> {
+    const row = await this.readRow(binding.capabilityId);
+    const capability = parseStoredCapability(row?.scan_result_code ?? null);
+    if (
+      row === null ||
+      capability === null ||
+      capability.kind !== "upload" ||
+      capability.tenantId !== binding.tenantId ||
+      capability.eventId !== binding.eventId ||
+      capability.submissionId !== binding.submissionId ||
+      capability.participantId !== binding.participantId ||
+      capability.objectKey !== binding.objectKey
+    ) {
+      return;
+    }
+    if (this.#database === undefined) {
+      const stored = this.#memory.get(binding.capabilityId);
+      if (stored !== undefined) stored.state = "consumed";
+      return;
+    }
+    await this.#database
+      .prepare(
+        `UPDATE private_uploads
+            SET state = 'deleted', updated_at = ?
+          WHERE id = ? AND scan_result_code = ?`,
+      )
+      .bind(new Date().toISOString(), binding.capabilityId, row.scan_result_code)
+      .run();
+  }
 
   async readObject(binding: PrivateAssetCapabilityBinding): Promise<PrivateDownloadObject | null> {
     const object = await this.#bucket.get(binding.objectKey);
@@ -2809,7 +2950,7 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
       )
       .bind(
         databaseState,
-        nextState,
+        nextState === "download-consumed" ? nextState : expectedPayload,
         new Date().toISOString(),
         capabilityId,
         expectedState,
@@ -2838,6 +2979,405 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
   }
 }
 
+const CFP_SUBMISSION_PARTICIPANT = "__cfp_submission__";
+const CFP_FILE_UPLOAD_LIFETIME_MS = 15 * 60 * 1000;
+
+function cfpAssetMetadata(asset: SpeakerAsset): {
+  readonly fieldKey: string;
+  readonly owner: "submission" | "participant";
+  readonly participantId?: string;
+} | null {
+  const tenantId = typeof asset.tenantId === "string" ? asset.tenantId.trim() : "";
+  const submissionId = typeof asset.submissionId === "string" ? asset.submissionId.trim() : "";
+  const segments = asset.objectKey.split("/");
+  if (
+    tenantId.length === 0 ||
+    submissionId.length === 0 ||
+    segments.length !== 7 ||
+    segments[0] !== "cfp" ||
+    segments[6] !== asset.id
+  ) {
+    return null;
+  }
+  const pathTenantEncoded = segments[1];
+  const pathEventEncoded = segments[2];
+  const pathSubmissionEncoded = segments[3];
+  const owner = segments[4];
+  const pathFieldEncoded = segments[5];
+  if (
+    pathTenantEncoded === undefined ||
+    pathEventEncoded === undefined ||
+    pathSubmissionEncoded === undefined ||
+    owner === undefined ||
+    pathFieldEncoded === undefined
+  ) {
+    return null;
+  }
+  let pathTenant: string;
+  let pathEvent: string;
+  let pathSubmission: string;
+  let pathField: string;
+  try {
+    pathTenant = decodeURIComponent(pathTenantEncoded);
+    pathEvent = decodeURIComponent(pathEventEncoded);
+    pathSubmission = decodeURIComponent(pathSubmissionEncoded);
+    pathField = decodeURIComponent(pathFieldEncoded);
+  } catch {
+    return null;
+  }
+  if (
+    pathTenant !== tenantId ||
+    pathEvent !== asset.eventId ||
+    pathSubmission !== submissionId ||
+    (owner !== "submission" && owner !== "participant") ||
+    pathField.trim().length === 0
+  ) {
+    return null;
+  }
+  if (owner === "submission") {
+    return asset.participantId === CFP_SUBMISSION_PARTICIPANT
+      ? { fieldKey: pathField, owner }
+      : null;
+  }
+  const participantId = typeof asset.participantId === "string" ? asset.participantId.trim() : "";
+  return participantId.length === 0 ? null : { fieldKey: pathField, owner, participantId };
+}
+
+function cfpAssetView(asset: SpeakerAsset): CfpFileAsset | null {
+  const metadata = cfpAssetMetadata(asset);
+  const tenantId = typeof asset.tenantId === "string" ? asset.tenantId.trim() : "";
+  const submissionId = typeof asset.submissionId === "string" ? asset.submissionId.trim() : "";
+  if (
+    metadata === null ||
+    tenantId.length === 0 ||
+    asset.eventId.trim().length === 0 ||
+    submissionId.length === 0 ||
+    asset.id.trim().length === 0 ||
+    asset.kind !== "supporting_file"
+  ) {
+    return null;
+  }
+  return {
+    assetId: asset.id,
+    tenantId,
+    eventId: asset.eventId,
+    submissionId,
+    ...(metadata.owner === "participant" ? { participantId: metadata.participantId } : {}),
+    owner: metadata.owner,
+    state: asset.state,
+    contentType: asset.contentType,
+    sizeBytes: asset.sizeBytes,
+  };
+}
+type CfpSpeakerAssetStore = Pick<
+  AirtableSpeakerRepository,
+  "createPendingAsset" | "getAsset" | "finalizeAsset"
+>;
+type CfpPrivateAssetProvider = Pick<
+  R2PrivateAssetGateway,
+  "registerUploadCapability" | "verifyUploadCapability" | "invalidateUploadCapability"
+>;
+
+/** Airtable-authoritative CFP file assets backed by the existing speaker asset and R2 stores. */
+export class AirtableCfpFileAssetGateway implements CfpFileAssetGateway {
+  readonly #cfp: CfpRepository;
+  readonly #speakers: CfpSpeakerAssetStore;
+  readonly #privateAssets: CfpPrivateAssetProvider;
+  readonly #now: () => Date;
+
+  constructor(options: {
+    readonly cfp: CfpRepository;
+    readonly speakers: CfpSpeakerAssetStore;
+    readonly privateAssets: CfpPrivateAssetProvider;
+    readonly now?: () => Date;
+  }) {
+    this.#cfp = options.cfp;
+    this.#speakers = options.speakers;
+    this.#privateAssets = options.privateAssets;
+    this.#now = options.now ?? (() => new Date());
+  }
+
+  private async context(input: {
+    tenantId: string;
+    eventId: string;
+    submissionId: string;
+    owner: "submission" | "participant";
+    participantId?: string;
+    fieldKey: string;
+  }): Promise<{
+    readonly submission: Submission;
+    readonly form: CfpForm;
+    readonly field: CfpForm["submissionFields"][number];
+  }> {
+    const [event, submission] = await Promise.all([
+      this.#cfp.getEvent(input.tenantId, input.eventId),
+      this.#cfp.getSubmission(input.tenantId, input.submissionId),
+    ]);
+    if (event === null || submission === null || submission.eventId !== input.eventId) {
+      throw new CfpError("FORBIDDEN", "The file asset binding is not owned by this event.");
+    }
+    const form = await this.#cfp.getForm(input.tenantId, submission.formId);
+    if (form === null || form.eventId !== input.eventId) {
+      throw new CfpError("FORBIDDEN", "The file asset form is not owned by this event.");
+    }
+    const fields =
+      input.participantId === undefined ? form.submissionFields : form.participantFields;
+    const field = fields.find((candidate) => candidate.key === input.fieldKey);
+    if (field === undefined || field.kind !== "file_request" || field.fileRequest === undefined) {
+      throw new CfpError(
+        "VALIDATION_FAILED",
+        "The requested field is not an authorized file request.",
+      );
+    }
+    if (field.fileRequest.owner !== input.owner) {
+      throw new CfpError("FORBIDDEN", "The file asset owner does not match the requested field.");
+    }
+    if (input.owner === "participant") {
+      if (
+        input.participantId === undefined ||
+        !submission.participants.some((participant) => participant.id === input.participantId)
+      ) {
+        throw new CfpError(
+          "FORBIDDEN",
+          "The file upload participant is not part of this submission.",
+        );
+      }
+    } else if (input.participantId !== undefined) {
+      throw new CfpError("FORBIDDEN", "This submission file request cannot target a participant.");
+    }
+    return { submission, form, field };
+  }
+
+  private async stored(input: {
+    tenantId: string;
+    eventId: string;
+    submissionId: string;
+    assetId: string;
+    owner: "submission" | "participant";
+    participantId?: string;
+    fieldKey?: string;
+  }): Promise<{
+    readonly stored: SpeakerAsset;
+    readonly asset: CfpFileAsset;
+    readonly metadata: NonNullable<ReturnType<typeof cfpAssetMetadata>>;
+  } | null> {
+    const stored = await this.#speakers.getAsset(input.eventId, input.assetId);
+    if (stored === null) return null;
+    const metadata = cfpAssetMetadata(stored);
+    const asset = cfpAssetView(stored);
+    if (
+      metadata === null ||
+      asset === null ||
+      asset.tenantId !== input.tenantId ||
+      asset.eventId !== input.eventId ||
+      asset.submissionId !== input.submissionId ||
+      asset.owner !== input.owner ||
+      asset.participantId !== input.participantId ||
+      (input.fieldKey !== undefined && metadata.fieldKey !== input.fieldKey)
+    ) {
+      return null;
+    }
+    try {
+      await this.context({
+        tenantId: input.tenantId,
+        eventId: input.eventId,
+        submissionId: input.submissionId,
+        owner: metadata.owner,
+        fieldKey: metadata.fieldKey,
+        ...(metadata.participantId === undefined ? {} : { participantId: metadata.participantId }),
+      });
+    } catch {
+      return null;
+    }
+    return { stored, asset, metadata };
+  }
+
+  private binding(asset: SpeakerAsset, expiresAt: string): PrivateAssetCapabilityBinding {
+    const metadata = cfpAssetMetadata(asset);
+    if (metadata === null || asset.submissionId === undefined || asset.tenantId === undefined) {
+      throw new Error("The CFP file asset metadata is incomplete.");
+    }
+    return {
+      capabilityId: asset.id,
+      tenantId: asset.tenantId,
+      eventId: asset.eventId,
+      submissionId: asset.submissionId,
+      participantId: asset.participantId,
+      objectKey: asset.objectKey,
+      contentType: asset.contentType,
+      sizeBytes: asset.sizeBytes,
+      fileName: asset.fileName,
+      expiresAt,
+    };
+  }
+
+  async issueUpload(input: {
+    tenantId: string;
+    eventId: string;
+    submissionId: string;
+    owner: "submission" | "participant";
+    participantId?: string;
+    fieldKey: string;
+    fileName: string;
+    contentType: string;
+    sizeBytes: number;
+    idempotencyKey: string;
+  }): Promise<CfpFileUploadAuthorization> {
+    if (input.idempotencyKey.trim().length === 0) {
+      throw new CfpError("IDEMPOTENCY_KEY_REQUIRED", "An idempotency key is required.");
+    }
+    const { submission, field } = await this.context(input);
+    const fileName = input.fileName.trim();
+    const contentType = input.contentType.trim().toLowerCase();
+    if (
+      fileName.length === 0 ||
+      !Number.isSafeInteger(input.sizeBytes) ||
+      input.sizeBytes <= 0 ||
+      field.fileRequest === undefined ||
+      input.sizeBytes > field.fileRequest.maxBytes ||
+      !field.fileRequest.allowedMimeTypes.some((allowed) => {
+        const candidate = allowed.trim().toLowerCase();
+        return (
+          candidate === contentType ||
+          (candidate.endsWith("/*") && contentType.startsWith(candidate.slice(0, -1)))
+        );
+      })
+    ) {
+      throw new CfpError("VALIDATION_FAILED", "The upload metadata is not allowed.");
+    }
+    const requestKey = JSON.stringify([
+      input.tenantId,
+      input.eventId,
+      submission.id,
+      input.owner,
+      input.participantId ?? "",
+      input.fieldKey,
+      input.idempotencyKey,
+    ]);
+    const assetId = `cfp-file-${(await capabilityHash(requestKey)).slice(0, 40)}`;
+    const existing = await this.stored({
+      tenantId: input.tenantId,
+      eventId: input.eventId,
+      submissionId: submission.id,
+      assetId,
+      owner: input.owner,
+      ...(input.participantId === undefined ? {} : { participantId: input.participantId }),
+      fieldKey: input.fieldKey,
+    });
+    if (existing !== null) {
+      if (
+        existing.asset.state !== "pending_upload" ||
+        existing.stored.contentType.trim().toLowerCase() !== contentType ||
+        existing.stored.sizeBytes !== input.sizeBytes ||
+        existing.stored.fileName !== fileName
+      ) {
+        throw new CfpError("CONFLICT", "The file upload idempotency key is already bound.");
+      }
+      const expiresAt = new Date(this.#now().getTime() + CFP_FILE_UPLOAD_LIFETIME_MS).toISOString();
+      const grant = await this.#privateAssets.registerUploadCapability(
+        this.binding(existing.stored, expiresAt),
+      );
+      return {
+        authorizationId: existing.asset.assetId,
+        asset: existing.asset,
+        grant,
+      };
+    }
+
+    const expiresAt = new Date(this.#now().getTime() + CFP_FILE_UPLOAD_LIFETIME_MS).toISOString();
+    const storedAsset: SpeakerAsset = {
+      id: assetId,
+      tenantId: input.tenantId,
+      eventId: input.eventId,
+      submissionId: submission.id,
+      participantId: input.participantId ?? CFP_SUBMISSION_PARTICIPANT,
+      kind: "supporting_file",
+      objectKey: [
+        "cfp",
+        encodeURIComponent(input.tenantId),
+        encodeURIComponent(input.eventId),
+        encodeURIComponent(submission.id),
+        input.owner,
+        encodeURIComponent(input.fieldKey),
+        assetId,
+      ].join("/"),
+      fileName,
+      contentType,
+      sizeBytes: input.sizeBytes,
+      state: "pending_upload",
+      createdAt: this.#now().toISOString(),
+    };
+    const persisted = await this.#speakers.createPendingAsset(storedAsset);
+    const grant = await this.#privateAssets.registerUploadCapability(
+      this.binding(persisted, expiresAt),
+    );
+    const asset = cfpAssetView(persisted);
+    if (asset === null) throw new Error("The persisted CFP file asset is invalid.");
+    return { authorizationId: asset.assetId, asset, grant };
+  }
+
+  async finalizeUpload(input: {
+    tenantId: string;
+    eventId: string;
+    submissionId: string;
+    fieldKey: string;
+    assetId: string;
+    owner: "submission" | "participant";
+    participantId?: string;
+    state: "ready" | "rejected";
+    rejectionReason?: string;
+    idempotencyKey: string;
+  }): Promise<CfpFileAsset> {
+    if (input.idempotencyKey.trim().length === 0) {
+      throw new CfpError("IDEMPOTENCY_KEY_REQUIRED", "An idempotency key is required.");
+    }
+    const rejectionReason = input.rejectionReason?.trim();
+    if (rejectionReason !== undefined && rejectionReason.length > 2000) {
+      throw new CfpError("VALIDATION_FAILED", "The upload rejection reason is too long.");
+    }
+    const existing = await this.stored(input);
+    if (existing === null) {
+      throw new CfpError("FORBIDDEN", "The private upload asset is not owned by this submission.");
+    }
+    if (existing.asset.state === input.state) return existing.asset;
+    if (existing.asset.state !== "pending_upload") {
+      throw new CfpError("VALIDATION_FAILED", "The private upload asset is no longer available.");
+    }
+    const expiresAt = new Date(this.#now().getTime() + CFP_FILE_UPLOAD_LIFETIME_MS).toISOString();
+    const binding = this.binding(existing.stored, expiresAt);
+    if (input.state === "ready") {
+      if (!(await this.#privateAssets.verifyUploadCapability(binding))) {
+        throw new CfpError("VALIDATION_FAILED", "The private upload has not been uploaded.");
+      }
+    } else {
+      await this.#privateAssets.invalidateUploadCapability(binding);
+    }
+    const result = await this.#speakers.finalizeAsset({
+      eventId: input.eventId,
+      assetId: input.assetId,
+      state: input.state,
+      finalizedAt: this.#now().toISOString(),
+      ...(rejectionReason === undefined ? {} : { rejectionReason }),
+    });
+    if (!result.ok) {
+      throw new CfpError("VALIDATION_FAILED", "The private upload could not be finalized.");
+    }
+    const asset = cfpAssetView(result.value);
+    if (asset === null) throw new Error("The finalized CFP file asset is invalid.");
+    return asset;
+  }
+
+  async getAsset(input: {
+    tenantId: string;
+    eventId: string;
+    submissionId: string;
+    assetId: string;
+    owner: "submission" | "participant";
+    participantId?: string;
+  }): Promise<CfpFileAsset | null> {
+    return (await this.stored(input))?.asset ?? null;
+  }
+}
 function eventStatusFromRecord(value: unknown): Event["status"] {
   if (value === "draft") return "draft";
   if (value === "archived") return "archived";
@@ -3714,6 +4254,7 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
         const profile = await this.#speakers.ensureProfile({
           eventId: input.eventId,
           participant,
+          organizationId: input.tenantId,
           updatedAt: input.decidedAt,
         });
         await this.#speakers.ensureProfileTask({
@@ -3934,22 +4475,21 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
   ): Promise<void> {
     for (const participant of submission.participants) {
       const email = participant.email.trim();
-      if (email.length === 0) continue;
-      try {
-        await this.#speakers.ensureProfile({
-          eventId: input.eventId,
-          participant,
-          updatedAt: input.decidedAt,
-        });
-        await this.#speakers.ensureVerifiedSpeakerGrant({
-          organizationId: input.tenantId,
-          eventId: input.eventId,
-          participantId: participant.id,
-          email,
-          createdAt: input.decidedAt,
-        });
-      } catch {
-        // Account provisioning is retried on a later acceptance handoff; it cannot block the session.
+      await this.#speakers.ensureProfile({
+        eventId: input.eventId,
+        participant,
+        organizationId: input.tenantId,
+        updatedAt: input.decidedAt,
+      });
+      const provisioned = await this.#speakers.ensureVerifiedSpeakerGrant({
+        organizationId: input.tenantId,
+        eventId: input.eventId,
+        participantId: participant.id,
+        email,
+        createdAt: input.decidedAt,
+      });
+      if (!provisioned) {
+        throw new Error(`Speaker grant provisioning failed for participant ${participant.id}.`);
       }
     }
   }
@@ -5830,7 +6370,12 @@ export class AirtableCrmRepository implements CrmRepository {
     this.#outreach = jsonStore(shared, "CRM Outreach", "Outreach JSON");
     this.#imports = jsonStore(shared, "CRM Imports", "Import JSON");
     this.#commands = jsonStore(shared, "CRM Commands", "Result JSON");
-    this.#speakerProfiles = jsonStore(shared, "Speaker Profiles", "Biography");
+    this.#speakerProfiles = new AirtableJsonStore({
+      ...shared,
+      table: "Speaker Profiles",
+      jsonField: "Biography",
+      scopeFields: { eventId: true, organizationId: true },
+    });
     this.#speakerRoster = jsonStore(shared, "Session Roster", "Members JSON");
     this.#events = options.events;
   }
@@ -6388,6 +6933,7 @@ export class AirtableCrmRepository implements CrmRepository {
     };
     const profileChanged =
       profile === undefined ||
+      profileOrganization !== organizationId ||
       profile.displayName !== contact.displayName ||
       (profile.email ?? null) !== contact.email ||
       (profile.jobTitle ?? null) !== contact.title ||
@@ -6404,6 +6950,7 @@ export class AirtableCrmRepository implements CrmRepository {
       delete profileBase.socialLinks;
       const profileValue: SpeakerProfile & JsonRecord = {
         ...profileBase,
+        tenantId: organizationId,
         id: profileId,
         eventId: projection.eventId,
         participantId: contact.id,
@@ -6933,6 +7480,7 @@ export class AirtableRemixRepository implements RemixRepository {
 
 export class AirtableRemixContentGateway implements RemixContentGateway {
   readonly #sessions: AirtableJsonStore<Session>;
+  readonly #events: AirtableJsonStore<JsonRecord>;
   readonly #profiles: AirtableJsonStore<JsonRecord>;
   readonly #database: D1Database;
   readonly #queue: Queue<CloudflareOutboxMessage>;
@@ -6945,7 +7493,17 @@ export class AirtableRemixContentGateway implements RemixContentGateway {
   }) {
     const shared = { baseId: options.baseId, transport: options.transport };
     this.#sessions = jsonStore(shared, "Sessions", "Metadata JSON");
-    this.#profiles = jsonStore(shared, "Speaker Profiles", "Biography");
+    this.#events = new AirtableJsonStore({
+      ...shared,
+      table: "Events",
+      jsonField: "Settings JSON",
+    });
+    this.#profiles = new AirtableJsonStore({
+      ...shared,
+      table: "Speaker Profiles",
+      jsonField: "Biography",
+      scopeFields: { eventId: true, organizationId: true },
+    });
     this.#database = options.database;
     this.#queue = options.queue;
   }
@@ -6974,8 +7532,13 @@ export class AirtableRemixContentGateway implements RemixContentGateway {
     eventId: string;
     filter?: RemixRecordFilter;
   }): Promise<readonly RemixSpeakerRecord[]> {
+    const event = await this.#events.find(input.eventId);
+    const eventOrganizationId =
+      event === undefined ? undefined : authoritativeOrganizationId(event);
     return (await this.#profiles.list())
-      .filter((profile) => remixScoped(profile, input.tenantId, input.eventId))
+      .filter((profile) =>
+        speakerProfileScoped(profile, input.tenantId, input.eventId, eventOrganizationId),
+      )
       .flatMap((profile) => {
         const id = textValue(profile, "participantId", "Participant ID", "id");
         const biography = textValue(profile, "biography", "Biography");
@@ -7018,9 +7581,12 @@ export class AirtableRemixContentGateway implements RemixContentGateway {
     eventId: string;
     sourceId: string;
   }): Promise<RemixSpeakerRecord | null> {
+    const event = await this.#events.find(input.eventId);
+    const eventOrganizationId =
+      event === undefined ? undefined : authoritativeOrganizationId(event);
     const profile = (await this.#profiles.list()).find(
       (candidate) =>
-        remixScoped(candidate, input.tenantId, input.eventId) &&
+        speakerProfileScoped(candidate, input.tenantId, input.eventId, eventOrganizationId) &&
         textValue(candidate, "participantId", "Participant ID", "id") === input.sourceId,
     );
     if (profile === undefined) return null;
@@ -7107,10 +7673,13 @@ export class AirtableRemixContentGateway implements RemixContentGateway {
       };
     }
 
+    const event = await this.#events.find(input.eventId);
+    const eventOrganizationId =
+      event === undefined ? undefined : authoritativeOrganizationId(event);
     const profiles = await this.#profiles.list();
     const profile = profiles.find(
       (candidate) =>
-        remixScoped(candidate, input.tenantId, input.eventId) &&
+        speakerProfileScoped(candidate, input.tenantId, input.eventId, eventOrganizationId) &&
         textValue(candidate, "participantId", "Participant ID", "id") === input.sourceId,
     );
     if (
@@ -7123,6 +7692,7 @@ export class AirtableRemixContentGateway implements RemixContentGateway {
     const content = input.content as Extract<RemixContent, { biography: string }>;
     const next = {
       ...profile,
+      tenantId: input.tenantId,
       biography: content.biography,
       version: profile.version + 1,
       updatedAt: input.appliedAt,
@@ -7513,11 +8083,6 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
   const eventRepository = new AirtableEventRepository(shared);
   const eventService = new EventService(eventRepository);
   const cfpIdempotency = new D1IdempotencyStore(options.database);
-  const cfpService = new CfpService({
-    repository: cfpRepository,
-    idempotency: cfpIdempotency,
-    effects: new CloudflareCfpEffects(options.outboxQueue, options.database),
-  });
   const crmRepository = new AirtableCrmRepository({
     ...shared,
     events: eventRepository,
@@ -7535,13 +8100,24 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
     ...shared,
     database: options.database,
   });
-  const speakerService = new SpeakerService(
-    speakerRepository,
-    new R2PrivateAssetGateway(options.privateFiles, options.webOrigin, options.database),
-    {
-      delivery: new AirtableSpeakerReminderDeliveryAdapter(options.database, options.outboxQueue),
-    },
+  const privateAssets = new R2PrivateAssetGateway(
+    options.privateFiles,
+    options.webOrigin,
+    options.database,
   );
+  const speakerService = new SpeakerService(speakerRepository, privateAssets, {
+    delivery: new AirtableSpeakerReminderDeliveryAdapter(options.database, options.outboxQueue),
+  });
+  const cfpService = new CfpService({
+    repository: cfpRepository,
+    idempotency: cfpIdempotency,
+    effects: new CloudflareCfpEffects(options.outboxQueue, options.database),
+    fileAssets: new AirtableCfpFileAssetGateway({
+      cfp: cfpRepository,
+      speakers: speakerRepository,
+      privateAssets,
+    }),
+  });
   const sessionRepository = new AirtableSessionRepository(shared);
   let sessionService!: SessionService;
   const agendaRepository = new AirtableAgendaRepository(shared);

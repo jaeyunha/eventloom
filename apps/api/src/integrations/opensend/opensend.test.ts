@@ -13,7 +13,7 @@ import {
 } from "./index";
 
 const message: OpenSendMessage = {
-  from: "speakers@foreverbrowsing.com",
+  from: "speakers@sessionboard.namuh.co",
   to: ["speaker@example.com"],
   subject: "Your session is accepted",
   html: "<p>Congratulations</p>",
@@ -36,7 +36,7 @@ describe("OpenSendClient", () => {
 
     const result = await client.send({
       ...message,
-      from: "calendar@foreverbrowsing.com",
+      from: "calendar@sessionboard.namuh.co",
       headers: { "X-Sessionboard-Calendar-Action": "REQUEST" },
       attachments: [
         {
@@ -61,7 +61,7 @@ describe("OpenSendClient", () => {
     expect(headers.get("authorization")).toBe("Bearer os_sending_secret");
     expect(headers.get("idempotency-key")).toBe("email-job-0001");
     expect(JSON.parse(String(request.init.body))).toMatchObject({
-      from: "calendar@foreverbrowsing.com",
+      from: "calendar@sessionboard.namuh.co",
       to: ["speaker@example.com"],
       attachments: [{ filename: "session.ics" }],
     });
@@ -115,7 +115,7 @@ describe("createCalendarOpenSendMessage", () => {
         timeZone: "America/Los_Angeles",
         startsAt: "2026-11-01T10:30:00.000Z",
         endsAt: "2026-11-01T11:30:00.000Z",
-        organizer: "calendar@foreverbrowsing.com",
+        organizer: "calendar@sessionboard.namuh.co",
         attendees: ["speaker@example.com"],
         summary: "A <safer> session",
         location: "Room & Board",
@@ -130,7 +130,7 @@ describe("createCalendarOpenSendMessage", () => {
     );
 
     expect(email).toMatchObject({
-      from: "calendar@foreverbrowsing.com",
+      from: "calendar@sessionboard.namuh.co",
       to: ["speaker@example.com"],
       subject: "Updated invitation: A <safer> session",
       idempotencyKey: "calendar-update-0003",
@@ -155,7 +155,7 @@ describe("createCalendarOpenSendMessage", () => {
           timeZone: "America/Los_Angeles",
           startsAt: "2026-11-01T10:30:00.000Z",
           endsAt: "2026-11-01T11:30:00.000Z",
-          organizer: "calendar@foreverbrowsing.com",
+          organizer: "calendar@sessionboard.namuh.co",
           attendees: ["speaker@example.com"],
           summary: "Session",
           location: "",

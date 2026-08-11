@@ -58,5 +58,5 @@ export class CalendarInvitationError extends Error {
   }
 }
 
-export const CALENDAR_UID_DOMAIN = "calendar.foreverbrowsing.com";
-export const CALENDAR_ORGANIZER = "calendar@foreverbrowsing.com";
+export const CALENDAR_UID_DOMAIN = "calendar.sessionboard.namuh.co";
+export const CALENDAR_ORGANIZER = "calendar@sessionboard.namuh.co";

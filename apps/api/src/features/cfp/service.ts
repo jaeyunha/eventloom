@@ -3,6 +3,9 @@ import {
   type CfpForm,
   type EventCfp,
   eventCfpSchema,
+  type FormField,
+  type FormRuleAction,
+  fileRequestAnswerSchema,
   type Submission,
   type SubmissionStep,
   type SubmissionVersion,
@@ -10,7 +13,7 @@ import {
   submissionSteps,
 } from "./model";
 import { evaluateFormRules, validateCfpForm, validateSubmissionAnswers } from "./rules";
-import { sanitizeForm, sanitizePlainText, sanitizeSubmission } from "./sanitize";
+import { sanitizeForm, sanitizePlainText, sanitizeRichText, sanitizeSubmission } from "./sanitize";
 
 export type CfpErrorCode =
   | "NOT_FOUND"
@@ -43,6 +46,15 @@ export interface CfpRepository {
   getForm(tenantId: string, formId: string): Promise<CfpForm | null>;
   listForms(tenantId: string, eventId: string): Promise<CfpForm[]>;
   saveForm(form: CfpForm, expectedVersion: number | null): Promise<void>;
+  /**
+   * Reusable fields are immutable tenant-owned definitions. The resolver must
+   * never return a definition from another tenant or a different version.
+   */
+  getReusableField?(
+    tenantId: string,
+    fieldId: string,
+    version: number,
+  ): Promise<CfpReusableField | null>;
   getSubmission(tenantId: string, submissionId: string): Promise<Submission | null>;
   countOwnedSubmissions(input: {
     tenantId: string;
@@ -57,6 +69,73 @@ export interface CfpRepository {
   ): Promise<void>;
 }
 
+export interface CfpReusableField {
+  tenantId: string;
+  id: string;
+  version: number;
+  field?: FormField;
+}
+
+export interface CfpFileAsset {
+  assetId: string;
+  tenantId: string;
+  eventId: string;
+  submissionId: string;
+  participantId?: string;
+  owner: "submission" | "participant";
+  state: "pending_upload" | "ready" | "rejected";
+  contentType: string;
+  sizeBytes: number;
+}
+
+export interface CfpFileAssetAuthorizer {
+  getAsset(input: {
+    tenantId: string;
+    eventId: string;
+    submissionId: string;
+    assetId: string;
+    owner: "submission" | "participant";
+    participantId?: string;
+  }): Promise<CfpFileAsset | null>;
+}
+export interface CfpFileUploadAuthorization {
+  authorizationId?: string;
+  asset: CfpFileAsset;
+  grant: {
+    method: "PUT";
+    url: string;
+    headers: Readonly<Record<string, string>>;
+    expiresAt: string;
+  };
+}
+
+export interface CfpFileAssetGateway extends CfpFileAssetAuthorizer {
+  issueUpload(input: {
+    tenantId: string;
+    eventId: string;
+    submissionId: string;
+    owner: "submission" | "participant";
+    participantId?: string;
+    fieldKey: string;
+    fileName: string;
+    contentType: string;
+    sizeBytes: number;
+    idempotencyKey: string;
+  }): Promise<CfpFileUploadAuthorization>;
+  finalizeUpload(input: {
+    tenantId: string;
+    eventId: string;
+    submissionId: string;
+    fieldKey: string;
+    assetId: string;
+    owner: "submission" | "participant";
+    participantId?: string;
+    state: "ready" | "rejected";
+    rejectionReason?: string;
+    idempotencyKey: string;
+  }): Promise<CfpFileAsset>;
+}
+
 export interface CfpIdempotencyCoordinator {
   run<T>(scope: string, key: string, operation: () => Promise<T>): Promise<T>;
 }
@@ -68,6 +147,8 @@ export interface CfpEffects {
   enqueueSubmissionConfirmation(input: {
     submission: Submission;
     form: CfpForm;
+    event: EventCfp;
+    submissionTitle: string;
     idempotencyKey: string;
   }): Promise<void>;
 }
@@ -111,11 +192,17 @@ export interface PublicCfpEvent {
   closesAt: EventCfp["closesAt"];
 }
 
+export type PublicFormRuleAction = Exclude<FormRuleAction, { type: "route" }>;
+export type PublicFormRule = Omit<CfpForm["rules"][number], "actions"> & {
+  actions: PublicFormRuleAction[];
+};
+
 export type PublicCfpForm = Omit<
   CfpForm,
   "tenantId" | "eventId" | "rules" | "settings" | "status"
 > & {
   status: "published";
+  rules: PublicFormRule[];
   settings: Pick<
     CfpForm["settings"],
     | "speakerLimit"
@@ -269,12 +356,261 @@ function validateReview(submission: Submission, form: CfpForm): ReviewIssue[] {
   }
   return issues;
 }
+function isEmptyAnswer(value: unknown): boolean {
+  return (
+    value === undefined ||
+    value === null ||
+    value === "" ||
+    (Array.isArray(value) && value.length === 0)
+  );
+}
+function submissionTitle(submission: Submission): string {
+  const value = submission.answers.title;
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function validateFileRequestShapes(form: CfpForm, submission: Submission): ReviewIssue[] {
+  const issues: ReviewIssue[] = [];
+
+  const inspect = (field: FormField, value: unknown, path: string): void => {
+    if (field.kind !== "file_request" || field.fileRequest === undefined) {
+      return;
+    }
+    const required = field.required || field.fileRequest.required;
+    if (isEmptyAnswer(value)) {
+      if (required) {
+        issues.push({
+          path,
+          code: "required",
+          message: `${field.label} is required.`,
+        });
+      }
+      return;
+    }
+    if (!fileRequestAnswerSchema.safeParse(value).success) {
+      issues.push({
+        path,
+        code: "invalid_file",
+        message: `${field.label} must reference a finalized uploaded asset.`,
+      });
+    }
+  };
+
+  for (const field of form.submissionFields) {
+    inspect(field, submission.answers[field.key], `answers.${field.key}`);
+  }
+  for (const [index, participant] of submission.participants.entries()) {
+    for (const field of form.participantFields) {
+      inspect(field, participant.answers[field.key], `participants.${index}.answers.${field.key}`);
+    }
+  }
+  return issues;
+}
+
+function allowedMimeType(allowed: string, actual: string): boolean {
+  const normalizedAllowed = allowed.trim().toLowerCase();
+  const normalizedActual = actual.trim().toLowerCase();
+  return (
+    normalizedAllowed === normalizedActual ||
+    (normalizedAllowed.endsWith("/*") &&
+      normalizedActual.startsWith(normalizedAllowed.slice(0, -1)))
+  );
+}
+function sanitizeDynamicForm(form: CfpForm): CfpForm {
+  const sanitizeField = (field: FormField): FormField => ({
+    ...field,
+    ...(field.description === undefined
+      ? {}
+      : { description: sanitizeRichText(field.description) }),
+    ...(field.placeholder === undefined
+      ? {}
+      : { placeholder: sanitizePlainText(field.placeholder) }),
+  });
+  return {
+    ...form,
+    submissionFields: form.submissionFields.map(sanitizeField),
+    participantFields: form.participantFields.map(sanitizeField),
+  };
+}
+
+function publicFormRules(form: CfpForm): PublicFormRule[] {
+  return form.rules.flatMap((rule) => {
+    const actions = rule.actions.filter(
+      (action): action is PublicFormRuleAction => action.type !== "route",
+    );
+    return actions.length === 0 ? [] : [{ ...rule, actions }];
+  });
+}
+function ensureSubmissionSchemaVersion(submission: Submission, form: CfpForm): void {
+  if (submission.formVersion !== form.version) {
+    throw new CfpError(
+      "CONFLICT",
+      "The CFP form schema version is no longer available for this submission.",
+      {
+        submissionFormVersion: submission.formVersion,
+        currentFormVersion: form.version,
+      },
+    );
+  }
+}
+interface CfpFileUploadContext {
+  event: EventCfp;
+  form: CfpForm;
+  submission: Submission;
+  field: FormField;
+  owner: "submission" | "participant";
+  participantId?: string;
+}
+
+function normalizedFileUploadMetadata(
+  field: FormField,
+  fileName: string,
+  contentType: string,
+  sizeBytes: number,
+): { fileName: string; contentType: string; sizeBytes: number } {
+  if (field.kind !== "file_request" || field.fileRequest === undefined) {
+    throw new CfpError("VALIDATION_FAILED", "The requested field is not a file request.");
+  }
+  const normalizedName = fileName.trim();
+  if (normalizedName.length === 0 || normalizedName.length > 255) {
+    throw new CfpError(
+      "VALIDATION_FAILED",
+      "The upload file name must be between 1 and 255 characters.",
+    );
+  }
+  const normalizedType = contentType.trim().toLowerCase();
+  if (normalizedType.length === 0 || normalizedType.length > 127) {
+    throw new CfpError("VALIDATION_FAILED", "The upload content type is invalid.");
+  }
+  if (!Number.isSafeInteger(sizeBytes) || sizeBytes <= 0) {
+    throw new CfpError("VALIDATION_FAILED", "The upload size must be a positive integer.");
+  }
+  if (sizeBytes > field.fileRequest.maxBytes) {
+    throw new CfpError("VALIDATION_FAILED", "The upload exceeds the maximum allowed file size.");
+  }
+  if (
+    !field.fileRequest.allowedMimeTypes.some((allowed) => allowedMimeType(allowed, normalizedType))
+  ) {
+    throw new CfpError(
+      "VALIDATION_FAILED",
+      "The upload content type is not allowed for this field.",
+    );
+  }
+  return { fileName: normalizedName, contentType: normalizedType, sizeBytes };
+}
+
+function assertFileAssetBinding(
+  asset: CfpFileAsset | null | undefined,
+  expected: {
+    tenantId: string;
+    eventId: string;
+    submissionId: string;
+    assetId?: string;
+    owner: "submission" | "participant";
+    participantId?: string;
+  },
+  message: string,
+): CfpFileAsset {
+  if (
+    asset === null ||
+    asset === undefined ||
+    !fileRequestAnswerSchema.safeParse({ assetId: asset.assetId }).success ||
+    (expected.assetId !== undefined && asset.assetId !== expected.assetId) ||
+    asset.tenantId !== expected.tenantId ||
+    asset.eventId !== expected.eventId ||
+    asset.submissionId !== expected.submissionId ||
+    asset.owner !== expected.owner ||
+    (expected.owner === "participant"
+      ? asset.participantId !== expected.participantId
+      : asset.participantId !== undefined)
+  ) {
+    throw new CfpError("VALIDATION_FAILED", message);
+  }
+  return asset;
+}
+
+function assertUploadAuthorization(
+  authorization: CfpFileUploadAuthorization,
+  expected: {
+    tenantId: string;
+    eventId: string;
+    submissionId: string;
+    owner: "submission" | "participant";
+    participantId?: string;
+    contentType: string;
+    sizeBytes: number;
+    now?: Date;
+  },
+): CfpFileAsset {
+  const asset = assertFileAssetBinding(
+    authorization?.asset,
+    expected,
+    "The private upload authorization is not owned by this submission.",
+  );
+  if (asset.state !== "pending_upload") {
+    throw new CfpError("VALIDATION_FAILED", "The private upload authorization is not pending.");
+  }
+  if (
+    asset.contentType.trim().toLowerCase() !== expected.contentType ||
+    asset.sizeBytes !== expected.sizeBytes
+  ) {
+    throw new CfpError(
+      "VALIDATION_FAILED",
+      "The private upload authorization metadata is invalid.",
+    );
+  }
+  const grant = authorization?.grant;
+  const expiresAt = Date.parse(grant?.expiresAt ?? "");
+  if (
+    grant === undefined ||
+    grant.method !== "PUT" ||
+    typeof grant.url !== "string" ||
+    grant.url.trim().length === 0 ||
+    !Number.isFinite(expiresAt) ||
+    expiresAt <= (expected.now?.getTime() ?? Date.now())
+  ) {
+    throw new CfpError(
+      "VALIDATION_FAILED",
+      "The private upload authorization is invalid or expired.",
+    );
+  }
+  return asset;
+}
+
+function assetForFileField(
+  form: CfpForm,
+  fieldKey: string,
+  participantId: string | undefined,
+): FormField {
+  const fields = participantId === undefined ? form.submissionFields : form.participantFields;
+  const field = fields.find((candidate) => candidate.key === fieldKey);
+  if (field === undefined || field.kind !== "file_request" || field.fileRequest === undefined) {
+    throw new CfpError(
+      "VALIDATION_FAILED",
+      "The requested field is not an authorized file request.",
+    );
+  }
+  if (field.fileRequest.owner === "participant" && participantId === undefined) {
+    throw new CfpError("VALIDATION_FAILED", "A participant is required for this file request.");
+  }
+  if (field.fileRequest.owner === "submission" && participantId !== undefined) {
+    throw new CfpError(
+      "VALIDATION_FAILED",
+      "This submission file request cannot target a participant.",
+    );
+  }
+  return field;
+}
 
 export class CfpService {
   readonly #repository: CfpRepository;
   readonly #idempotency: CfpIdempotencyCoordinator;
   readonly #effects: CfpEffects;
   readonly #clock: CfpClock;
+  readonly #fileAssets:
+    | (CfpFileAssetAuthorizer &
+        Partial<Pick<CfpFileAssetGateway, "issueUpload" | "finalizeUpload">>)
+    | undefined;
   readonly #ids: CfpIdGenerator;
 
   constructor(dependencies: {
@@ -283,11 +619,14 @@ export class CfpService {
     effects: CfpEffects;
     clock?: CfpClock;
     ids?: CfpIdGenerator;
+    fileAssets?: CfpFileAssetAuthorizer &
+      Partial<Pick<CfpFileAssetGateway, "issueUpload" | "finalizeUpload">>;
   }) {
     this.#repository = dependencies.repository;
     this.#idempotency = dependencies.idempotency;
     this.#effects = dependencies.effects;
     this.#clock = dependencies.clock ?? { now: () => new Date() };
+    this.#fileAssets = dependencies.fileAssets;
     this.#ids =
       dependencies.ids ??
       ({ next: (prefix) => `${prefix}_${crypto.randomUUID()}` } satisfies CfpIdGenerator);
@@ -298,6 +637,20 @@ export class CfpService {
 
   async getForm(input: { tenantId: string; formId: string }): Promise<CfpForm> {
     return this.#getForm(input.tenantId, input.formId);
+  }
+
+  async listForms(input: { tenantId: string; eventId: string }): Promise<CfpForm[]> {
+    await this.#getEvent(input.tenantId, input.eventId);
+    const forms = await this.#repository.listForms(input.tenantId, input.eventId);
+    return forms
+      .filter((form) => form.tenantId === input.tenantId && form.eventId === input.eventId)
+      .sort((left, right) => {
+        const statusOrder = { published: 0, draft: 1, closed: 2 } as const;
+        return (
+          statusOrder[left.status] - statusOrder[right.status] ||
+          (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)
+        );
+      });
   }
 
   async getPublishedCfp(input: {
@@ -318,7 +671,8 @@ export class CfpService {
     if (form.status !== "published") {
       throw new CfpError("FORM_NOT_PUBLISHED", "The CFP form is not published.");
     }
-    const sanitizedForm = sanitizeForm(form);
+    await this.#validateReusableFields(form);
+    const sanitizedForm = sanitizeDynamicForm(sanitizeForm(form));
     const {
       tenantId: _tenantId,
       eventId: _eventId,
@@ -338,6 +692,7 @@ export class CfpService {
       form: {
         ...publicForm,
         status: "published",
+        rules: publicFormRules(sanitizedForm),
         settings: {
           speakerLimit: settings.speakerLimit,
           maxSubmissionsPerAccount: settings.maxSubmissionsPerAccount,
@@ -381,6 +736,7 @@ export class CfpService {
     const event = await this.#getEvent(input.tenantId, submission.eventId);
     const form = await this.#getForm(input.tenantId, submission.formId);
     ensureEventFormMatch(event, form);
+    ensureSubmissionSchemaVersion(submission, form);
     return sanitizeSubmission(submission, form);
   }
 
@@ -444,7 +800,7 @@ export class CfpService {
         issues: validation.issues,
       });
     }
-    const form = sanitizeForm(validation.form);
+    const form = sanitizeDynamicForm(sanitizeForm(validation.form));
     const sanitizedValidation = validateCfpForm(form);
     if (!sanitizedValidation.success) {
       throw new CfpError("VALIDATION_FAILED", "Sanitized CFP form configuration is invalid.", {
@@ -453,8 +809,22 @@ export class CfpService {
     }
     const event = await this.#getEvent(form.tenantId, form.eventId);
     ensureEventFormMatch(event, form);
+    const existing = await this.#repository.getForm(form.tenantId, form.id);
+    if (existing) {
+      ensureEventFormMatch(event, existing);
+      if (expectedVersion !== existing.version || form.version !== existing.version + 1) {
+        throw new CfpError("CONFLICT", "The CFP form has changed since it was loaded.", {
+          expectedVersion,
+          currentVersion: existing.version,
+          submittedVersion: form.version,
+        });
+      }
+    } else if (expectedVersion !== null || form.version !== 1) {
+      throw new CfpError("CONFLICT", "A new CFP form must start at version 1.");
+    }
+    await this.#validateReusableFields(form);
     const forms = await this.#repository.listForms(form.tenantId, form.eventId);
-    if (!forms.some((existing) => existing.id === form.id) && forms.length >= 20) {
+    if (!forms.some((candidate) => candidate.id === form.id) && forms.length >= 20) {
       throw new CfpError("FORM_LIMIT_REACHED", "An event cannot have more than 20 CFP forms.");
     }
     await this.#repository.saveForm(form, expectedVersion);
@@ -476,6 +846,7 @@ export class CfpService {
         const event = await this.#getEvent(input.tenantId, input.eventId);
         const form = await this.#getForm(input.tenantId, input.formId);
         ensureEventFormMatch(event, form);
+        await this.#validateReusableFields(form);
         if (form.status !== "published") {
           throw new CfpError("FORM_NOT_PUBLISHED", "The CFP form is not published.");
         }
@@ -503,7 +874,7 @@ export class CfpService {
           formVersion: form.version,
           version: 1,
           status: "draft",
-          completedSteps: [],
+          completedSteps: ["welcome"],
           answers: {},
           participants: [],
           secondaryContacts: [],
@@ -523,12 +894,194 @@ export class CfpService {
       },
     );
   }
+  async issueFileUpload(input: {
+    tenantId: string;
+    eventId: string;
+    submissionId: string;
+    ownerAccountId: string;
+    fieldKey: string;
+    participantId?: string;
+    fileName: string;
+    contentType: string;
+    sizeBytes: number;
+    idempotencyKey: string;
+  }): Promise<CfpFileUploadAuthorization> {
+    const key = requireIdempotencyKey(input.idempotencyKey);
+    return this.#idempotency.run(
+      `${input.tenantId}:cfp:file-upload:issue:${input.submissionId}:${input.fieldKey}:${key}`,
+      key,
+      async () => {
+        const context = await this.#getFileUploadContext(input);
+        const metadata = normalizedFileUploadMetadata(
+          context.field,
+          input.fileName,
+          input.contentType,
+          input.sizeBytes,
+        );
+        const gateway = this.#fileAssets;
+        if (gateway?.issueUpload === undefined) {
+          throw new CfpError("VALIDATION_FAILED", "Private file uploads are not configured.");
+        }
+        let authorization: CfpFileUploadAuthorization;
+        try {
+          authorization = await gateway.issueUpload({
+            tenantId: context.submission.tenantId,
+            eventId: context.submission.eventId,
+            submissionId: context.submission.id,
+            owner: context.owner,
+            ...(context.participantId === undefined
+              ? {}
+              : { participantId: context.participantId }),
+            fieldKey: input.fieldKey,
+            fileName: metadata.fileName,
+            contentType: metadata.contentType,
+            sizeBytes: metadata.sizeBytes,
+            idempotencyKey: key,
+          });
+        } catch (error) {
+          if (error instanceof CfpError) throw error;
+          throw new CfpError(
+            "VALIDATION_FAILED",
+            "The private file upload could not be authorized.",
+          );
+        }
+        assertUploadAuthorization(authorization, {
+          tenantId: context.submission.tenantId,
+          eventId: context.submission.eventId,
+          submissionId: context.submission.id,
+          owner: context.owner,
+          ...(context.participantId === undefined ? {} : { participantId: context.participantId }),
+          contentType: metadata.contentType,
+          sizeBytes: metadata.sizeBytes,
+          now: this.#clock.now(),
+        });
+        return authorization;
+      },
+    );
+  }
+
+  async finalizeFileUpload(input: {
+    tenantId: string;
+    eventId: string;
+    submissionId: string;
+    ownerAccountId: string;
+    fieldKey: string;
+    assetId: string;
+    participantId?: string;
+    state: "ready" | "rejected";
+    rejectionReason?: string;
+    idempotencyKey: string;
+  }): Promise<CfpFileAsset> {
+    const key = requireIdempotencyKey(input.idempotencyKey);
+    return this.#idempotency.run(
+      `${input.tenantId}:cfp:file-upload:finalize:${input.submissionId}:${input.assetId}:${key}`,
+      key,
+      async () => {
+        const context = await this.#getFileUploadContext(input);
+        const gateway = this.#fileAssets;
+        if (gateway?.finalizeUpload === undefined) {
+          throw new CfpError("VALIDATION_FAILED", "Private file uploads are not configured.");
+        }
+        let asset: CfpFileAsset | null;
+        try {
+          asset = await gateway.getAsset({
+            tenantId: context.submission.tenantId,
+            eventId: context.submission.eventId,
+            submissionId: context.submission.id,
+            assetId: input.assetId,
+            owner: context.owner,
+            ...(context.participantId === undefined
+              ? {}
+              : { participantId: context.participantId }),
+          });
+        } catch (error) {
+          if (error instanceof CfpError) throw error;
+          throw new CfpError("VALIDATION_FAILED", "The private file upload could not be verified.");
+        }
+        const currentAsset = assertFileAssetBinding(
+          asset,
+          {
+            tenantId: context.submission.tenantId,
+            eventId: context.submission.eventId,
+            submissionId: context.submission.id,
+            assetId: input.assetId,
+            owner: context.owner,
+            ...(context.participantId === undefined
+              ? {}
+              : { participantId: context.participantId }),
+          },
+          "The private upload asset is not owned by this submission.",
+        );
+        if (currentAsset.state === input.state) {
+          if (input.state === "ready")
+            this.#validateFinalizedFileAsset(context.field, currentAsset);
+          return currentAsset;
+        }
+        if (currentAsset.state !== "pending_upload") {
+          throw new CfpError(
+            "VALIDATION_FAILED",
+            "The private upload asset is no longer available for finalization.",
+          );
+        }
+        const rejectionReason = input.rejectionReason?.trim();
+        if (rejectionReason !== undefined && rejectionReason.length > 2000) {
+          throw new CfpError("VALIDATION_FAILED", "The upload rejection reason is too long.");
+        }
+        let finalized: CfpFileAsset;
+        try {
+          finalized = await gateway.finalizeUpload({
+            tenantId: context.submission.tenantId,
+            eventId: context.submission.eventId,
+            submissionId: context.submission.id,
+            fieldKey: input.fieldKey,
+            assetId: input.assetId,
+            owner: context.owner,
+            ...(context.participantId === undefined
+              ? {}
+              : { participantId: context.participantId }),
+            state: input.state,
+            ...(rejectionReason ? { rejectionReason } : {}),
+            idempotencyKey: key,
+          });
+        } catch (error) {
+          if (error instanceof CfpError) throw error;
+          throw new CfpError(
+            "VALIDATION_FAILED",
+            "The private file upload could not be finalized.",
+          );
+        }
+        const result = assertFileAssetBinding(
+          finalized,
+          {
+            tenantId: context.submission.tenantId,
+            eventId: context.submission.eventId,
+            submissionId: context.submission.id,
+            assetId: input.assetId,
+            owner: context.owner,
+            ...(context.participantId === undefined
+              ? {}
+              : { participantId: context.participantId }),
+          },
+          "The finalized private upload asset is not owned by this submission.",
+        );
+        if (result.state !== input.state) {
+          throw new CfpError(
+            "VALIDATION_FAILED",
+            "The private upload finalization state is invalid.",
+          );
+        }
+        if (result.state === "ready") this.#validateFinalizedFileAsset(context.field, result);
+        return result;
+      },
+    );
+  }
 
   async saveDraft(input: {
     tenantId: string;
     submissionId: string;
     ownerAccountId: string;
     expectedVersion: number;
+    formVersion?: number;
     idempotencyKey: string;
     completedStep?: SubmissionStep;
     answers?: Record<string, unknown>;
@@ -547,12 +1100,18 @@ export class CfpService {
         const event = await this.#getEvent(input.tenantId, current.eventId);
         const form = await this.#getForm(input.tenantId, current.formId);
         ensureEventFormMatch(event, form);
+        ensureSubmissionSchemaVersion(current, form);
+        if (input.formVersion !== undefined && input.formVersion !== current.formVersion) {
+          throw new CfpError("CONFLICT", "The submission schema version is stale.", {
+            expectedFormVersion: input.formVersion,
+            currentFormVersion: current.formVersion,
+          });
+        }
         this.#ensureEditable(current, event);
 
         const next = sanitizeSubmission(
           submissionSchema.parse({
             ...current,
-            formVersion: form.version,
             version: current.version + 1,
             completedSteps: addCompletedStep(current.completedSteps, input.completedStep),
             answers: input.answers ?? current.answers,
@@ -567,6 +1126,15 @@ export class CfpService {
             "VALIDATION_FAILED",
             `This form allows at most ${form.settings.speakerLimit} speakers.`,
           );
+        }
+        const fileIssues = [
+          ...validateFileRequestShapes(form, next),
+          ...(await this.#validateFileRequestAssets(form, next)),
+        ];
+        if (fileIssues.length > 0) {
+          throw new CfpError("VALIDATION_FAILED", "The file request payload is invalid.", {
+            issues: fileIssues,
+          });
         }
         await this.#repository.saveSubmissionVersion(
           {
@@ -600,11 +1168,16 @@ export class CfpService {
         const event = await this.#getEvent(input.tenantId, submission.eventId);
         const form = await this.#getForm(input.tenantId, submission.formId);
         ensureEventFormMatch(event, form);
+        ensureSubmissionSchemaVersion(submission, form);
         if (submission.status !== "reopened") {
           ensureOpen(event, this.#clock.now());
         }
         const sanitized = sanitizeSubmission(submission, form);
-        const issues = validateReview(sanitized, form);
+        const issues = [
+          ...validateReview(sanitized, form),
+          ...validateFileRequestShapes(form, sanitized),
+          ...(await this.#validateFileRequestAssets(form, sanitized)),
+        ];
         const evaluated = evaluateFormRules(form, sanitized.answers);
         return {
           submissionId: submission.id,
@@ -623,6 +1196,7 @@ export class CfpService {
     submissionId: string;
     ownerAccountId: string;
     expectedVersion: number;
+    formVersion?: number;
     idempotencyKey: string;
   }): Promise<SubmitResult> {
     const key = requireIdempotencyKey(input.idempotencyKey);
@@ -632,10 +1206,15 @@ export class CfpService {
       async () => {
         const current = await this.#getOwnedSubmission(input);
         if (current.status === "submitted") {
+          const event = await this.#getEvent(input.tenantId, current.eventId);
           const form = await this.#getForm(input.tenantId, current.formId);
+          ensureEventFormMatch(event, form);
+          ensureSubmissionSchemaVersion(current, form);
           await this.#effects.enqueueSubmissionConfirmation({
             submission: current,
             form,
+            event,
+            submissionTitle: submissionTitle(current),
             idempotencyKey: `${current.tenantId}:${current.id}:submission-confirmation`,
           });
           return {
@@ -658,6 +1237,13 @@ export class CfpService {
         const event = await this.#getEvent(input.tenantId, current.eventId);
         const form = await this.#getForm(input.tenantId, current.formId);
         ensureEventFormMatch(event, form);
+        ensureSubmissionSchemaVersion(current, form);
+        if (input.formVersion !== undefined && input.formVersion !== current.formVersion) {
+          throw new CfpError("CONFLICT", "The submission schema version is stale.", {
+            expectedFormVersion: input.formVersion,
+            currentFormVersion: current.formVersion,
+          });
+        }
         if (current.status !== "reopened") {
           if (form.status !== "published") {
             throw new CfpError("FORM_NOT_PUBLISHED", "The CFP form is not published.");
@@ -666,7 +1252,11 @@ export class CfpService {
         }
 
         const sanitized = sanitizeSubmission(current, form);
-        const issues = validateReview(sanitized, form);
+        const issues = [
+          ...validateReview(sanitized, form),
+          ...validateFileRequestShapes(form, sanitized),
+          ...(await this.#validateFileRequestAssets(form, sanitized)),
+        ];
         if (issues.length > 0) {
           throw new CfpError("VALIDATION_FAILED", "The submission is not ready to submit.", {
             issues,
@@ -675,7 +1265,6 @@ export class CfpService {
         const now = this.#clock.now().toISOString();
         const submitted = submissionSchema.parse({
           ...sanitized,
-          formVersion: form.version,
           version: current.version + 1,
           status: "submitted",
           submittedAt: now,
@@ -693,6 +1282,8 @@ export class CfpService {
         await this.#effects.enqueueSubmissionConfirmation({
           submission: submitted,
           form,
+          event,
+          submissionTitle: submissionTitle(submitted),
           idempotencyKey: `${submitted.tenantId}:${submitted.id}:submission-confirmation`,
         });
         return {
@@ -823,6 +1414,234 @@ export class CfpService {
         return withdrawn;
       },
     );
+  }
+
+  async #getFileUploadContext(input: {
+    tenantId: string;
+    eventId: string;
+    submissionId: string;
+    ownerAccountId: string;
+    fieldKey: string;
+    participantId?: string;
+  }): Promise<CfpFileUploadContext> {
+    const submission = await this.#getOwnedSubmission(input);
+    if (submission.eventId !== input.eventId) {
+      throw new CfpError("FORBIDDEN", "The submission does not belong to this event.");
+    }
+    const event = await this.#getEvent(input.tenantId, input.eventId);
+    const form = await this.#getForm(input.tenantId, submission.formId);
+    ensureEventFormMatch(event, form);
+    ensureSubmissionSchemaVersion(submission, form);
+    this.#ensureEditable(submission, event);
+    const field = assetForFileField(form, input.fieldKey, input.participantId);
+    const participantId = input.participantId;
+    if (
+      field.fileRequest?.owner === "participant" &&
+      (participantId === undefined ||
+        !submission.participants.some((participant) => participant.id === participantId))
+    ) {
+      throw new CfpError(
+        "FORBIDDEN",
+        "The file upload participant is not part of this submission.",
+      );
+    }
+    return {
+      event,
+      form,
+      submission,
+      field,
+      owner: field.fileRequest?.owner ?? "submission",
+      ...(participantId === undefined ? {} : { participantId }),
+    };
+  }
+
+  #validateFinalizedFileAsset(field: FormField, asset: CfpFileAsset): void {
+    if (field.kind !== "file_request" || field.fileRequest === undefined) {
+      throw new CfpError("VALIDATION_FAILED", "The requested field is not a file request.");
+    }
+    if (
+      !Number.isSafeInteger(asset.sizeBytes) ||
+      asset.sizeBytes <= 0 ||
+      asset.sizeBytes > field.fileRequest.maxBytes
+    ) {
+      throw new CfpError("VALIDATION_FAILED", "The finalized upload exceeds the file size limit.");
+    }
+    if (
+      !field.fileRequest.allowedMimeTypes.some((allowed) =>
+        allowedMimeType(allowed, asset.contentType),
+      )
+    ) {
+      throw new CfpError("VALIDATION_FAILED", "The finalized upload has an unsupported file type.");
+    }
+  }
+  async #validateReusableFields(form: CfpForm): Promise<void> {
+    const references = [...form.submissionFields, ...form.participantFields].flatMap((field) =>
+      field.fieldRef === undefined ? [] : [{ field, reference: field.fieldRef }],
+    );
+    if (references.length === 0) {
+      return;
+    }
+    const resolver = this.#repository.getReusableField;
+    if (resolver === undefined) {
+      throw new CfpError(
+        "VALIDATION_FAILED",
+        "Reusable field references require a tenant-scoped field resolver.",
+      );
+    }
+    for (const { field, reference } of references) {
+      const reusable = await resolver.call(
+        this.#repository,
+        form.tenantId,
+        reference.id,
+        reference.version,
+      );
+      if (
+        reusable === null ||
+        reusable.tenantId !== form.tenantId ||
+        reusable.id !== reference.id ||
+        reusable.version !== reference.version
+      ) {
+        throw new CfpError(
+          "VALIDATION_FAILED",
+          `Reusable field '${reference.id}' version ${reference.version} is not available in this tenant.`,
+          {
+            issues: [
+              {
+                path: `fields.${field.id}.fieldRef`,
+                code: "invalid_reference",
+                message: "The reusable field reference is not authorized for this tenant.",
+              },
+            ],
+          },
+        );
+      }
+    }
+  }
+
+  async #validateFileRequestAssets(form: CfpForm, submission: Submission): Promise<ReviewIssue[]> {
+    const issues: ReviewIssue[] = [];
+
+    const inspect = async (
+      field: FormField,
+      value: unknown,
+      path: string,
+      participantId: string | undefined,
+    ): Promise<void> => {
+      if (
+        field.kind !== "file_request" ||
+        field.fileRequest === undefined ||
+        isEmptyAnswer(value)
+      ) {
+        return;
+      }
+      const parsed = fileRequestAnswerSchema.safeParse(value);
+      if (!parsed.success) {
+        return;
+      }
+      if (this.#fileAssets === undefined) {
+        issues.push({
+          path,
+          code: "asset_unverifiable",
+          message: `${field.label} must be verified by the private asset service.`,
+        });
+        return;
+      }
+
+      const owner = field.fileRequest.owner;
+      const asset = await this.#fileAssets.getAsset({
+        tenantId: submission.tenantId,
+        eventId: submission.eventId,
+        submissionId: submission.id,
+        assetId: parsed.data.assetId,
+        owner,
+        ...(participantId === undefined ? {} : { participantId }),
+      });
+      if (asset === null || asset.assetId !== parsed.data.assetId) {
+        issues.push({
+          path,
+          code: "invalid_file",
+          message: `${field.label} does not reference an authorized asset.`,
+        });
+        return;
+      }
+      if (
+        asset.tenantId !== submission.tenantId ||
+        asset.eventId !== submission.eventId ||
+        asset.submissionId !== submission.id ||
+        asset.state !== "ready"
+      ) {
+        issues.push({
+          path,
+          code: "invalid_file",
+          message: `${field.label} must reference a ready asset owned by this submission.`,
+        });
+        return;
+      }
+      if (asset.owner !== owner) {
+        issues.push({
+          path,
+          code: "invalid_file",
+          message: `${field.label} is owned by the wrong resource.`,
+        });
+        return;
+      }
+      if (
+        owner === "participant" &&
+        (participantId === undefined || asset.participantId !== participantId)
+      ) {
+        issues.push({
+          path,
+          code: "invalid_file",
+          message: `${field.label} must reference an asset owned by this participant.`,
+        });
+        return;
+      }
+      if (owner === "submission" && asset.participantId !== undefined) {
+        issues.push({
+          path,
+          code: "invalid_file",
+          message: `${field.label} must reference an asset owned by this submission.`,
+        });
+        return;
+      }
+      if (
+        !Number.isFinite(asset.sizeBytes) ||
+        asset.sizeBytes < 0 ||
+        asset.sizeBytes > field.fileRequest.maxBytes
+      ) {
+        issues.push({
+          path,
+          code: "file_size",
+          message: `${field.label} exceeds the maximum allowed file size.`,
+        });
+      }
+      if (
+        !field.fileRequest.allowedMimeTypes.some((allowed) =>
+          allowedMimeType(allowed, asset.contentType),
+        )
+      ) {
+        issues.push({
+          path,
+          code: "file_type",
+          message: `${field.label} has an unsupported file type.`,
+        });
+      }
+    };
+
+    for (const field of form.submissionFields) {
+      await inspect(field, submission.answers[field.key], `answers.${field.key}`, undefined);
+    }
+    for (const [index, participant] of submission.participants.entries()) {
+      for (const field of form.participantFields) {
+        await inspect(
+          field,
+          participant.answers[field.key],
+          `participants.${index}.answers.${field.key}`,
+          participant.id,
+        );
+      }
+    }
+    return issues;
   }
 
   async #getEvent(tenantId: string, eventId: string): Promise<EventCfp> {
