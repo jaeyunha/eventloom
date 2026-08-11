@@ -206,7 +206,10 @@ export interface DeliverablesWorkspaceViewProps {
     readonly title: string;
     readonly description: string;
   }) => Promise<void>;
-  readonly onApproveSession?: (session: DeliverableSession, status: string) => Promise<void>;
+  readonly onApproveSession?: (
+    session: DeliverableSession,
+    contentStatus: "Approved" | "Needs changes",
+  ) => Promise<void>;
   readonly onRestoreSessionVersion?: (input: {
     readonly sessionId: string;
     readonly version: number;
@@ -1660,7 +1663,10 @@ function SessionEditor({
     readonly title: string;
     readonly description: string;
   }) => Promise<void>;
-  onApprove?: (session: DeliverableSession, status: string) => Promise<void>;
+  onApprove?: (
+    session: DeliverableSession,
+    contentStatus: "Approved" | "Needs changes",
+  ) => Promise<void>;
   onRestore?: (input: {
     readonly sessionId: string;
     readonly version: number;
@@ -2859,7 +2865,10 @@ export function DeliverablesWorkspace({
     }
   }
 
-  async function approveSession(session: DeliverableSession, status: string): Promise<void> {
+  async function approveSession(
+    session: DeliverableSession,
+    contentStatus: "Approved" | "Needs changes",
+  ): Promise<void> {
     if (api === null) return;
     setBusy(true);
     setError(null);
@@ -2868,12 +2877,12 @@ export function DeliverablesWorkspace({
       const next = await api.updateSession({
         sessionId: session.id,
         expectedVersion: session.version,
-        status,
+        contentStatus,
       });
       setSessions((current) =>
         current.map((candidate) => (candidate.id === next.id ? next : candidate)),
       );
-      setStatusMessage(`Session status changed to ${status}.`);
+      setStatusMessage(`Session content status changed to ${contentStatus}.`);
     } catch (reason) {
       setError(messageFromError(reason));
     } finally {

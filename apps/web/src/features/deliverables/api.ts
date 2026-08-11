@@ -251,7 +251,7 @@ export interface DeliverablesApi {
     readonly expectedVersion: number;
     readonly title?: string;
     readonly description?: string;
-    readonly status?: string;
+    readonly contentStatus?: "Approved" | "Needs changes";
   }): Promise<DeliverableSession>;
   listSessionContentHistory?(
     sessionId: string,
@@ -901,7 +901,7 @@ export function createDeliverablesApi(
       const payload: JsonRecord = { expectedVersion: input.expectedVersion };
       if (input.title !== undefined) payload.title = input.title;
       if (input.description !== undefined) payload.description = input.description;
-      if (input.status !== undefined) payload.status = input.status;
+      if (input.contentStatus !== undefined) payload.contentStatus = input.contentStatus;
       return adminRequest<unknown>(`/${segment(input.sessionId, "session ID")}`, {
         method: "PATCH",
         body: JSON.stringify(payload),
