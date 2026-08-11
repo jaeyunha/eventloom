@@ -1,9 +1,5 @@
 import type { Metadata } from "next";
-import { publishedProgramFromProjections } from "@/features/embed/api";
-import {
-  getPublishedAgendaOrLocalDemo,
-  getPublishedSpeakersOrLocalDemo,
-} from "@/features/embed/demo/projections";
+import { getPublishedProgramOrLocalDemo } from "@/features/embed/demo/projections";
 import { EmbedFrame, EmbedUnavailable } from "@/features/embed/embed-frame";
 import { embedTheme } from "@/features/embed/model";
 import { SpeakerGallery } from "@/features/embed/speaker-gallery";
@@ -31,11 +27,11 @@ export default async function SpeakerGalleryPage({
 
   const theme = embedTheme(query.theme);
   try {
-    const [gallery, agenda] = await Promise.all([
-      getPublishedSpeakersOrLocalDemo(apiBaseUrl, eventSlug, process.env.APP_ENV),
-      getPublishedAgendaOrLocalDemo(apiBaseUrl, eventSlug, process.env.APP_ENV),
-    ]);
-    const program = publishedProgramFromProjections(agenda, gallery);
+    const program = await getPublishedProgramOrLocalDemo(
+      apiBaseUrl,
+      eventSlug,
+      process.env.APP_ENV,
+    );
     return (
       <EmbedFrame event={program.agenda.event} eventSlug={eventSlug} theme={theme} view="speakers">
         <SpeakerGallery gallery={program.speakers} agenda={{ entries: program.agenda.entries }} />

@@ -224,10 +224,36 @@ export function getPublishedProgram(
         bypassCache,
       ),
     ]);
-  return loadPair(false).then(([agenda, speakers]) => {
-    if (publishedProjectionsMatch(agenda, speakers)) return { agenda, speakers };
-    return loadPair(true).then(([refreshedAgenda, refreshedSpeakers]) =>
-      publishedProgramFromProjections(refreshedAgenda, refreshedSpeakers),
-    );
+  return loadPair(false).then(async ([agenda, speakers]) => {
+    if (publishedProjectionsMatch(agenda, speakers)) {
+      return { agenda, speakers };
+    }
+
+    if (agenda.revision.number < speakers.revision.number) {
+      const refreshedAgenda = await getPublishedProjection<PublishedAgenda>(
+        baseUrl,
+        eventSlug,
+        "agenda",
+        fetcher,
+        appEnvironment,
+        true,
+      );
+      return publishedProgramFromProjections(refreshedAgenda, speakers);
+    }
+
+    if (speakers.revision.number < agenda.revision.number) {
+      const refreshedSpeakers = await getPublishedProjection<PublishedSpeakerGallery>(
+        baseUrl,
+        eventSlug,
+        "speakers",
+        fetcher,
+        appEnvironment,
+        true,
+      );
+      return publishedProgramFromProjections(agenda, refreshedSpeakers);
+    }
+
+    const [refreshedAgenda, refreshedSpeakers] = await loadPair(true);
+    return publishedProgramFromProjections(refreshedAgenda, refreshedSpeakers);
   });
 }

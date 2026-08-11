@@ -1078,6 +1078,9 @@ async function readAgendaCacheResponse(
     removeExpiredAgendaEntries(state);
     return null;
   }
+  removeExpiredAgendaEntries(state);
+  const memoryEntry = state.entries.get(path);
+  if (memoryEntry !== undefined) return memoryEntry;
   const workerCache = workerResponseCache();
   if (workerCache !== null) {
     try {
@@ -1097,24 +1100,36 @@ async function readAgendaCacheResponse(
       // Cache API failures must never turn a public read into an error.
     }
   }
-  removeExpiredAgendaEntries(state);
-  return state.entries.get(path) ?? null;
+  return null;
 }
 
-async function writeAgendaCacheResponse(
+function scheduleAgendaCachePut(
+  context: AgendaContext,
+  workerCache: PublicResponseCache,
+  path: string,
+  entry: AgendaCacheEntry,
+): void {
+  const persistence = Promise.resolve()
+    .then(() => workerCache.put(publicCacheRequest(path), agendaCacheResponse(entry)))
+    .catch(() => undefined);
+  try {
+    context.executionCtx.waitUntil(persistence);
+  } catch {
+    // Hono tests and local invocations may not attach an execution context.
+  }
+}
+
+function writeAgendaCacheResponse(
+  context: AgendaContext,
   state: AgendaCacheState,
   path: string,
   entry: AgendaCacheEntry,
-): Promise<void> {
+): void {
   state.bypassed.delete(path);
   rememberAgendaCacheEntry(state, path, entry);
   const workerCache = workerResponseCache();
   if (workerCache === null) return;
-  try {
-    await workerCache.put(publicCacheRequest(path), agendaCacheResponse(entry));
-  } catch {
-    // Cache API failures must never turn a successful public read into an error.
-  }
+  scheduleAgendaCachePut(context, workerCache, path, entry);
 }
 
 async function invalidatePublishedAgendaCache(
@@ -1412,7 +1427,7 @@ export function createPublishedAgendaRoutes(
     const body = render(result);
     const etag = await feedEtag(body);
     if (cacheable) {
-      await writeAgendaCacheResponse(cacheState, path, {
+      writeAgendaCacheResponse(context, cacheState, path, {
         body,
         contentType,
         etag,

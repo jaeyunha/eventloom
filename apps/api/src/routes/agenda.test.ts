@@ -1125,7 +1125,67 @@ describe("anonymous published agenda feeds", () => {
     expect(second.status).toBe(200);
     expect(getPublishedAgenda).toHaveBeenCalledTimes(1);
   });
+  it("prefers an unexpired isolate-memory agenda entry before consulting Cache API", async () => {
+    const match = vi.fn(async () => undefined as Response | undefined);
+    const put = vi.fn(async () => undefined);
+    const deleteCache = vi.fn(async () => true);
+    vi.stubGlobal("caches", { default: { match, put, delete: deleteCache } });
+    let releaseMatch: ((value: Response | undefined) => void) | undefined;
+    const blockedMatch = new Promise<Response | undefined>((resolve) => {
+      releaseMatch = resolve;
+    });
 
+    try {
+      const getPublishedAgenda = vi.fn(async () => publicRevision());
+      const app = publicAppFor({ getPublishedAgenda } as unknown as AgendaEngine);
+      const path = "/api/public/events/open-systems/agenda.json";
+
+      const first = await app.request(path);
+      expect(first.status).toBe(200);
+
+      match.mockImplementation(() => blockedMatch);
+      const second = await Promise.race([
+        app.request(path),
+        new Promise<"timed-out">((resolve) => {
+          setTimeout(() => resolve("timed-out"), 100);
+        }),
+      ]);
+
+      expect(second).not.toBe("timed-out");
+      if (second !== "timed-out") expect(second.status).toBe(200);
+      expect(match).toHaveBeenCalledTimes(1);
+      expect(getPublishedAgenda).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseMatch?.(undefined);
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not wait for a pending agenda Cache API put before responding", async () => {
+    const putDeferred = deferred<void>();
+    const match = vi.fn(async () => undefined as Response | undefined);
+    const put = vi.fn(() => putDeferred.promise);
+    const deleteCache = vi.fn(async () => true);
+    vi.stubGlobal("caches", { default: { match, put, delete: deleteCache } });
+
+    try {
+      const app = publicAppFor(publicEngine(publicRevision()));
+      const response = await Promise.race([
+        app.request("/api/public/events/open-systems/agenda.json"),
+        new Promise<"timed-out">((resolve) => {
+          setTimeout(() => resolve("timed-out"), 100);
+        }),
+      ]);
+
+      expect(response).not.toBe("timed-out");
+      if (response !== "timed-out") expect(response.status).toBe(200);
+      await Promise.resolve();
+      expect(put).toHaveBeenCalledTimes(1);
+    } finally {
+      putDeferred.resolve();
+      vi.unstubAllGlobals();
+    }
+  });
   it("keeps different public agenda slugs isolated", async () => {
     const first = publicRevision();
     const second = {

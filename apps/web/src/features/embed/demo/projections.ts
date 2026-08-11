@@ -1,7 +1,12 @@
-import { getPublishedAgenda, getPublishedSpeakers, PublicEmbedApiError } from "../api";
-import type { PublishedAgenda, PublishedEvent, PublishedSpeakerGallery } from "../types";
+import { getPublishedProgram, PublicEmbedApiError, publishedProgramFromProjections } from "../api";
+import type {
+  PublishedAgenda,
+  PublishedEvent,
+  PublishedProgram,
+  PublishedSpeakerGallery,
+} from "../types";
 
-type PublicFetcher = NonNullable<Parameters<typeof getPublishedAgenda>[2]>;
+type PublicFetcher = NonNullable<Parameters<typeof getPublishedProgram>[2]>;
 
 const DEMO_REVISION = {
   id: "revision_demo_3",
@@ -143,33 +148,20 @@ export function shouldUseLocalEmbedDemoForError(
   );
 }
 
-export async function getPublishedAgendaOrLocalDemo(
+export async function getPublishedProgramOrLocalDemo(
   baseUrl: string,
   eventSlug: string,
   appEnv: string | undefined,
   fetcher: PublicFetcher = fetch,
-): Promise<PublishedAgenda> {
+): Promise<PublishedProgram> {
   try {
-    return await getPublishedAgenda(baseUrl, eventSlug, fetcher, appEnv);
+    return await getPublishedProgram(baseUrl, eventSlug, fetcher, appEnv);
   } catch (error) {
     if (shouldUseLocalEmbedDemoForError(appEnv, error)) {
-      return createLocalDemoAgenda(eventSlug);
-    }
-    throw error;
-  }
-}
-
-export async function getPublishedSpeakersOrLocalDemo(
-  baseUrl: string,
-  eventSlug: string,
-  appEnv: string | undefined,
-  fetcher: PublicFetcher = fetch,
-): Promise<PublishedSpeakerGallery> {
-  try {
-    return await getPublishedSpeakers(baseUrl, eventSlug, fetcher, appEnv);
-  } catch (error) {
-    if (shouldUseLocalEmbedDemoForError(appEnv, error)) {
-      return createLocalDemoSpeakerGallery(eventSlug);
+      return publishedProgramFromProjections(
+        createLocalDemoAgenda(eventSlug),
+        createLocalDemoSpeakerGallery(eventSlug),
+      );
     }
     throw error;
   }

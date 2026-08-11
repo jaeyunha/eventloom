@@ -64,13 +64,16 @@ describe("public embed API", () => {
   });
 
   it("returns a program only when both public widgets share one revision and event", async () => {
-    const fetcher = async (input: RequestInfo | URL) =>
-      new Response(
+    const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+    const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      return new Response(
         JSON.stringify({
           data: String(input).endsWith("/agenda") ? publishedAgenda : publishedSpeakers,
         }),
         { status: 200, headers: { "content-type": "application/json" } },
       );
+    };
 
     await expect(
       getPublishedProgram(
@@ -79,9 +82,11 @@ describe("public embed API", () => {
         fetcher,
       ),
     ).resolves.toEqual({ agenda: publishedAgenda, speakers: publishedSpeakers });
+    expect(calls).toHaveLength(2);
+    expect(calls.map(({ init }) => init?.cache)).toEqual(["force-cache", "force-cache"]);
   });
 
-  it("recovers once from normal post-publication cache skew with a no-store pair", async () => {
+  it("recovers one-revision skew by refreshing only the stale projection", async () => {
     const staleSpeakers: PublishedSpeakerGallery = {
       ...publishedSpeakers,
       revision: { ...publishedSpeakers.revision, id: "revision_2", number: 2 },
@@ -112,26 +117,33 @@ describe("public embed API", () => {
         fetcher,
       ),
     ).resolves.toEqual({ agenda: publishedAgenda, speakers: publishedSpeakers });
-    expect(calls).toHaveLength(4);
+    expect(calls).toHaveLength(3);
     expect(calls.slice(0, 2).map(({ init }) => init?.cache)).toEqual([
       "force-cache",
       "force-cache",
     ]);
-    expect(calls.slice(2).map(({ init }) => init?.cache)).toEqual(["no-store", "no-store"]);
-    expect(calls.slice(2).every(({ init }) => init?.next === undefined)).toBe(true);
+    expect(String(calls[2]?.input)).toMatch(/\/speakers$/u);
+    expect(calls[2]?.init).toMatchObject({
+      cache: "no-store",
+      headers: { accept: "application/json" },
+    });
+    expect(calls[2]?.init?.next).toBeUndefined();
   });
-  it("rejects cross-widget data from different publication revisions", async () => {
+  it("rejects persistent revision skew after refreshing only the lower revision", async () => {
     const staleSpeakers: PublishedSpeakerGallery = {
       ...publishedSpeakers,
       revision: { ...publishedSpeakers.revision, id: "revision_2", number: 2 },
     };
-    const fetcher = async (input: RequestInfo | URL) =>
-      new Response(
+    const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+    const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      return new Response(
         JSON.stringify({
           data: String(input).endsWith("/agenda") ? publishedAgenda : staleSpeakers,
         }),
         { status: 200, headers: { "content-type": "application/json" } },
       );
+    };
 
     await expect(
       getPublishedProgram(
@@ -143,6 +155,48 @@ describe("public embed API", () => {
       code: "PUBLICATION_REVISION_MISMATCH",
       status: 409,
     });
+    expect(calls).toHaveLength(3);
+    expect(calls.map(({ init }) => init?.cache)).toEqual([
+      "force-cache",
+      "force-cache",
+      "no-store",
+    ]);
+  });
+
+  it("retries both projections for an equal-number mismatch and rejects when it persists", async () => {
+    const mismatchedAgenda: PublishedAgenda = {
+      ...publishedAgenda,
+      event: { ...publishedAgenda.event, name: "Different event" },
+    };
+    const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+    const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      return new Response(
+        JSON.stringify({
+          data: String(input).endsWith("/agenda") ? mismatchedAgenda : publishedSpeakers,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    };
+
+    await expect(
+      getPublishedProgram(
+        "https://open-sessionboard-web-staging.ashleyha0317.workers.dev",
+        "open-systems",
+        fetcher,
+      ),
+    ).rejects.toMatchObject({
+      code: "PUBLICATION_REVISION_MISMATCH",
+      status: 409,
+    });
+    expect(calls).toHaveLength(4);
+    expect(calls.map(({ init }) => init?.cache)).toEqual([
+      "force-cache",
+      "force-cache",
+      "no-store",
+      "no-store",
+    ]);
+    expect(calls.slice(2).every(({ init }) => init?.next === undefined)).toBe(true);
   });
 
   it("returns a stable public error without assuming draft data exists", async () => {

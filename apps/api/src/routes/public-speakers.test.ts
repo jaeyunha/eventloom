@@ -165,7 +165,72 @@ describe("published speaker projection route", () => {
     });
     expect(getPublishedSpeakers).toHaveBeenCalledTimes(2);
   });
+  it("prefers an unexpired isolate-memory speaker entry before consulting Cache API", async () => {
+    const match = vi.fn(async () => undefined as Response | undefined);
+    const put = vi.fn(async () => undefined);
+    const deleteCache = vi.fn(async () => true);
+    vi.stubGlobal("caches", { default: { match, put, delete: deleteCache } });
+    let releaseMatch: ((value: Response | undefined) => void) | undefined;
+    const blockedMatch = new Promise<Response | undefined>((resolve) => {
+      releaseMatch = resolve;
+    });
 
+    try {
+      const getPublishedSpeakers = vi.fn(async () => projection);
+      const app = createApp({ publishedSpeakers: { getPublishedSpeakers } });
+      const path = "/api/public/events/open-sessionboard-conf/speakers";
+
+      const first = await app.request(path, undefined, bindings);
+      expect(first.status).toBe(200);
+
+      match.mockImplementation(() => blockedMatch);
+      const second = await Promise.race([
+        app.request(path, undefined, bindings),
+        new Promise<"timed-out">((resolve) => {
+          setTimeout(() => resolve("timed-out"), 100);
+        }),
+      ]);
+
+      expect(second).not.toBe("timed-out");
+      if (second !== "timed-out") expect(second.status).toBe(200);
+      expect(match).toHaveBeenCalledTimes(1);
+      expect(getPublishedSpeakers).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseMatch?.(undefined);
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not wait for a pending speaker Cache API put before responding", async () => {
+    let resolvePut!: () => void;
+    const putDeferred = new Promise<void>((resolve) => {
+      resolvePut = resolve;
+    });
+    const match = vi.fn(async () => undefined as Response | undefined);
+    const put = vi.fn(() => putDeferred);
+    const deleteCache = vi.fn(async () => true);
+    vi.stubGlobal("caches", { default: { match, put, delete: deleteCache } });
+
+    try {
+      const app = createApp({
+        publishedSpeakers: { getPublishedSpeakers: async () => projection },
+      });
+      const response = await Promise.race([
+        app.request("/api/public/events/open-sessionboard-conf/speakers", undefined, bindings),
+        new Promise<"timed-out">((resolve) => {
+          setTimeout(() => resolve("timed-out"), 100);
+        }),
+      ]);
+
+      expect(response).not.toBe("timed-out");
+      if (response !== "timed-out") expect(response.status).toBe(200);
+      await Promise.resolve();
+      expect(put).toHaveBeenCalledTimes(1);
+    } finally {
+      resolvePut();
+      vi.unstubAllGlobals();
+    }
+  });
   it("does not cache speaker projection errors", async () => {
     const getPublishedSpeakers = vi.fn(async () => {
       throw new Error("speaker read failed");

@@ -172,6 +172,9 @@ async function readSpeakerCache(
   state: SpeakerCacheState,
   path: string,
 ): Promise<SpeakerCacheEntry | null> {
+  removeExpiredSpeakerEntries(state);
+  const memoryEntry = state.entries.get(path);
+  if (memoryEntry !== undefined) return memoryEntry;
   const workerCache = workerSpeakerCache();
   if (workerCache !== null) {
     try {
@@ -190,15 +193,31 @@ async function readSpeakerCache(
       // Cache API failures must never turn a public read into an error.
     }
   }
-  removeExpiredSpeakerEntries(state);
-  return state.entries.get(path) ?? null;
+  return null;
 }
 
-async function writeSpeakerCache(
+function scheduleSpeakerCachePut(
+  context: PublishedSpeakerContext,
+  workerCache: SpeakerResponseCache,
+  path: string,
+  entry: SpeakerCacheEntry,
+): void {
+  const persistence = Promise.resolve()
+    .then(() => workerCache.put(speakerCacheRequest(path), speakerCacheResponse(entry)))
+    .catch(() => undefined);
+  try {
+    context.executionCtx.waitUntil(persistence);
+  } catch {
+    // Hono tests and local invocations may not attach an execution context.
+  }
+}
+
+function writeSpeakerCache(
+  context: PublishedSpeakerContext,
   state: SpeakerCacheState,
   path: string,
   entry: SpeakerCacheEntry,
-): Promise<void> {
+): void {
   removeExpiredSpeakerEntries(state);
   state.entries.set(path, entry);
   while (state.entries.size > PUBLIC_SPEAKER_CACHE_MAX_ENTRIES) {
@@ -208,11 +227,7 @@ async function writeSpeakerCache(
   }
   const workerCache = workerSpeakerCache();
   if (workerCache === null) return;
-  try {
-    await workerCache.put(speakerCacheRequest(path), speakerCacheResponse(entry));
-  } catch {
-    // Cache API failures must never turn a successful public read into an error.
-  }
+  scheduleSpeakerCachePut(context, workerCache, path, entry);
 }
 
 function traceId(context: PublishedSpeakerContext): string {
@@ -260,12 +275,13 @@ export function createPublishedSpeakerRoutes(
     }
     const data = publishedSpeakerProjectionSchema.parse(projection);
     context.header("cache-control", PUBLIC_SPEAKER_CACHE_CONTROL);
-    const response = context.json({ data });
+    const body = JSON.stringify({ data });
+    const contentType = "application/json";
+    const response = context.body(body, 200, { "content-type": contentType });
     if (cacheable) {
-      const body = await response.clone().text();
-      await writeSpeakerCache(cacheState, path, {
+      writeSpeakerCache(context, cacheState, path, {
         body,
-        contentType: response.headers.get("content-type") ?? "application/json; charset=UTF-8",
+        contentType,
         expiresAt: Date.now() + PUBLIC_SPEAKER_CACHE_TTL_MS,
       });
     }

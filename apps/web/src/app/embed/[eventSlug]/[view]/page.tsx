@@ -1,15 +1,10 @@
 import type { Metadata } from "next";
-import { getPublishedProgram, publishedProgramFromProjections } from "@/features/embed/api";
-import {
-  getPublishedAgendaOrLocalDemo,
-  getPublishedSpeakersOrLocalDemo,
-} from "@/features/embed/demo/projections";
+import { getPublishedProgramOrLocalDemo } from "@/features/embed/demo/projections";
 import { EmbedFrame, EmbedUnavailable } from "@/features/embed/embed-frame";
 import { embedTheme } from "@/features/embed/model";
 import { PublicItineraryView } from "@/features/embed/public-itinerary";
 import { PublicSessionsView } from "@/features/embed/public-sessions";
 import { PublicSpeakersListView } from "@/features/embed/public-speakers-list";
-import type { PublishedProgram } from "@/features/embed/types";
 
 export const metadata: Metadata = {
   title: "Published event program",
@@ -20,22 +15,6 @@ export const metadata: Metadata = {
 interface PublicWidgetPageProps {
   params: Promise<{ eventSlug: string; view: string }>;
   searchParams: Promise<Record<string, string | string[] | undefined>>;
-}
-
-async function loadProgram(
-  apiBaseUrl: string,
-  eventSlug: string,
-  appEnv: string | undefined,
-): Promise<PublishedProgram> {
-  try {
-    return await getPublishedProgram(apiBaseUrl, eventSlug);
-  } catch {
-    const [agenda, speakers] = await Promise.all([
-      getPublishedAgendaOrLocalDemo(apiBaseUrl, eventSlug, appEnv),
-      getPublishedSpeakersOrLocalDemo(apiBaseUrl, eventSlug, appEnv),
-    ]);
-    return publishedProgramFromProjections(agenda, speakers);
-  }
 }
 
 export default async function PublicWidgetPage({ params, searchParams }: PublicWidgetPageProps) {
@@ -50,7 +29,11 @@ export default async function PublicWidgetPage({ params, searchParams }: PublicW
   }
 
   try {
-    const program = await loadProgram(apiBaseUrl, eventSlug, process.env.APP_ENV);
+    const program = await getPublishedProgramOrLocalDemo(
+      apiBaseUrl,
+      eventSlug,
+      process.env.APP_ENV,
+    );
     const theme = embedTheme(query.theme);
     return (
       <EmbedFrame event={program.agenda.event} eventSlug={eventSlug} theme={theme} view={view}>
