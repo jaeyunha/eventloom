@@ -143,6 +143,133 @@ function view(subscription: WebhookSubscriptionRecord) {
   return toWebhookSubscriptionView(subscription);
 }
 
+const webhookPathParameters = [
+  {
+    name: "organizationId",
+    in: "path",
+    required: true,
+    schema: { type: "string", minLength: 1, maxLength: 200 },
+  },
+] as const;
+
+const webhookSubscriptionPropertySchemas = {
+  endpointUrl: { type: "string", format: "uri", pattern: "^https://" },
+  events: {
+    type: "array",
+    minItems: 1,
+    maxItems: 100,
+    items: { type: "string", minLength: 1, maxLength: 200 },
+  },
+  active: { type: "boolean" },
+  signingSecret: { type: "string", minLength: 32, maxLength: 512 },
+  eventId: { type: ["string", "null"], minLength: 1, maxLength: 200 },
+} as const;
+
+const webhookSubscriptionCreateOpenApiSchema = {
+  type: "object",
+  required: ["endpointUrl", "events"],
+  properties: {
+    ...webhookSubscriptionPropertySchemas,
+    eventId: { type: "string", minLength: 1, maxLength: 200 },
+  },
+  additionalProperties: false,
+} as const;
+
+const webhookSubscriptionUpdateOpenApiSchema = {
+  type: "object",
+  properties: webhookSubscriptionPropertySchemas,
+  additionalProperties: false,
+} as const;
+
+function webhookOpenApiOperation(
+  scope: "webhooks:read" | "webhooks:write",
+  operationId: string,
+  summary: string,
+  successStatus: "200" | "201" = "200",
+  requestSchema?: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+  return {
+    tags: ["Webhooks"],
+    operationId,
+    summary,
+    security: [{ apiKey: [scope] }],
+    ...(requestSchema === undefined
+      ? {}
+      : {
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: requestSchema,
+              },
+            },
+          },
+        }),
+    responses: {
+      [successStatus]: { description: "Webhook subscription operation succeeded." },
+      "400": { description: "The request is invalid." },
+      "401": { description: "Authentication is required." },
+      "403": { description: "The API key lacks the required organization scope." },
+      "404": { description: "The webhook subscription was not found." },
+      "409": { description: "The webhook subscription conflicts with current state." },
+      "500": { description: "The webhook request could not be completed." },
+    },
+  };
+}
+
+export const webhookSubscriptionOpenApiPaths: Readonly<Record<string, unknown>> = {
+  "/api/v1/organizations/{organizationId}/webhooks": {
+    parameters: webhookPathParameters,
+    get: webhookOpenApiOperation(
+      "webhooks:read",
+      "listWebhookSubscriptions",
+      "List webhook subscriptions",
+    ),
+    post: webhookOpenApiOperation(
+      "webhooks:write",
+      "createWebhookSubscription",
+      "Create a webhook subscription",
+      "201",
+      webhookSubscriptionCreateOpenApiSchema,
+    ),
+  },
+  "/api/v1/organizations/{organizationId}/webhooks/{subscriptionId}": {
+    parameters: [
+      ...webhookPathParameters,
+      {
+        name: "subscriptionId",
+        in: "path",
+        required: true,
+        schema: { type: "string", minLength: 1, maxLength: 200 },
+      },
+    ],
+    get: webhookOpenApiOperation(
+      "webhooks:read",
+      "getWebhookSubscription",
+      "Get a webhook subscription",
+    ),
+    patch: webhookOpenApiOperation(
+      "webhooks:write",
+      "updateWebhookSubscription",
+      "Update a webhook subscription",
+      "200",
+      webhookSubscriptionUpdateOpenApiSchema,
+    ),
+    put: webhookOpenApiOperation(
+      "webhooks:write",
+      "replaceWebhookSubscription",
+      "Update a webhook subscription",
+      "200",
+      webhookSubscriptionUpdateOpenApiSchema,
+    ),
+    delete: webhookOpenApiOperation(
+      "webhooks:write",
+      "deleteWebhookSubscription",
+      "Delete a webhook subscription",
+    ),
+  },
+};
+
 /**
  * Subscription routes are relative to the mount point. Mount with
  * `/api/v1/organizations/:organizationId/webhooks`; no application wiring is

@@ -98,15 +98,6 @@ import type {
   IdempotencyStore,
   IdempotencyStoredResponse,
 } from "../features/public-api/idempotency";
-import { createIdempotencyCoordinator } from "../features/public-api/idempotency";
-import type {
-  PublicApiCreateInput,
-  PublicApiGetInput,
-  PublicApiListInput,
-  PublicApiListResult,
-  PublicApiRepository,
-  PublicApiUpdateInput,
-} from "../features/public-api/routes";
 import { RemixService } from "../features/remix/service";
 import type {
   ContentRemixCandidate,
@@ -758,31 +749,6 @@ class AirtablePublishedSpeakerProjectionStore implements PublishedSpeakerRouteDe
 
 function byOrganization(value: object, organizationId: string): boolean {
   return resolvedOrganizationId(value) === organizationId;
-}
-function scalarCompare(left: unknown, right: unknown): number {
-  if (left === right) return 0;
-  if (left === null || left === undefined) return -1;
-  if (right === null || right === undefined) return 1;
-  if (typeof left === "number" && typeof right === "number") {
-    return left < right ? -1 : 1;
-  }
-  const leftText = String(left);
-  const rightText = String(right);
-  return leftText < rightText ? -1 : 1;
-}
-
-function isAfterCursor(record: JsonRecord, input: PublicApiListInput): boolean {
-  const cursor = input.cursorData;
-  if (cursor === undefined) return true;
-  const sortCursor = cursor.values[0];
-  const idCursor = cursor.id;
-  const primary = scalarCompare(record[input.sort], sortCursor);
-  const comparison = primary === 0 ? scalarCompare(record.id, idCursor) : primary;
-  return input.direction === "asc" ? comparison > 0 : comparison < 0;
-}
-function publicRecord(record: JsonRecord): JsonRecord {
-  const { tenantId: _tenantId, ...safe } = record;
-  return safe;
 }
 
 function datesFromSubscription(value: WebhookSubscriptionRecord): WebhookSubscriptionRecord {
@@ -4918,9 +4884,7 @@ export class AirtableOrganizerOverviewRepository implements OrganizerOverviewRou
     };
   }
 
-  private async loadScopedEvents(
-    organizationId: string,
-  ): Promise<{
+  private async loadScopedEvents(organizationId: string): Promise<{
     readonly events: OrganizerOverviewEvent[];
     readonly eventIds: ReadonlySet<string>;
   }> {
@@ -7796,162 +7760,6 @@ export interface AirtableRuntimeOptions {
   readonly aiProviders?: CloudflareAiProviders;
 }
 
-class AirtablePublicRepository implements PublicApiRepository {
-  readonly #store: AirtableJsonStore<JsonRecord>;
-  readonly #jsonField: string;
-
-  constructor(options: {
-    readonly baseId: string;
-    readonly table: string;
-    readonly transport: AirtableTransport;
-    readonly jsonField?: string;
-  }) {
-    this.#jsonField = options.jsonField ?? DEFAULT_JSON_FIELD;
-    this.#store = new AirtableJsonStore(options);
-  }
-
-  async list(input: PublicApiListInput): Promise<PublicApiListResult<JsonRecord>> {
-    const records = (
-      await this.#store.list({
-        filterByFormula: organizationScopeFormula(this.#jsonField, input.organizationId, []),
-      })
-    )
-      .filter(
-        (record) =>
-          matchesOrganizationScope(record, input.organizationId) &&
-          Object.entries(input.filters).every(
-            ([key, value]) => String(record[key] ?? "") === value,
-          ) &&
-          isAfterCursor(record, input),
-      )
-      .sort((left, right) => {
-        const primary = scalarCompare(left[input.sort], right[input.sort]);
-        const byId = scalarCompare(left.id, right.id);
-        const comparison = primary === 0 ? byId : primary;
-        return input.direction === "asc" ? comparison : -comparison;
-      });
-    return {
-      items: records.slice(0, input.limit + 1).map(publicRecord),
-      hasMore: records.length > input.limit,
-      nextCursor: null,
-    };
-  }
-
-  async get(input: PublicApiGetInput): Promise<JsonRecord | null> {
-    const record = await this.#store.find(input.id);
-    if (record === undefined) return null;
-    return matchesOrganizationScope(record, input.organizationId) ? publicRecord(record) : null;
-  }
-
-  async create(input: PublicApiCreateInput<JsonRecord>): Promise<JsonRecord> {
-    const requestedId = typeof input.data.id === "string" ? input.data.id.trim() : "";
-    const record: JsonRecord = {
-      ...clone(input.data),
-      id: requestedId || randomResourceId(input.resource),
-      organizationId: input.organizationId,
-      tenantId: input.organizationId,
-      version: 1,
-      updatedAt: new Date().toISOString(),
-    };
-    await this.#store.create(record);
-    return record;
-  }
-
-  async update(input: PublicApiUpdateInput<JsonRecord>): Promise<JsonRecord | null> {
-    const current = await this.get({ ...input, id: input.id });
-    if (current === null || current.version !== input.expectedVersion) return null;
-    const updated: JsonRecord = {
-      ...current,
-      ...clone(input.data),
-      id: input.id,
-      organizationId: input.organizationId,
-      tenantId: input.organizationId,
-      version: input.expectedVersion + 1,
-      updatedAt: new Date().toISOString(),
-    };
-    await this.#store.update(input.id, updated);
-    return updated;
-  }
-}
-class AirtableAgendaPublicRepository implements PublicApiRepository {
-  readonly #states: AirtableJsonStore<AgendaState>;
-  readonly #events: AirtableJsonStore<EventCfp>;
-  readonly #generic: AirtablePublicRepository;
-
-  constructor(options: {
-    readonly baseId: string;
-    readonly transport: AirtableTransport;
-    readonly events: AirtableJsonStore<EventCfp>;
-  }) {
-    this.#states = new AirtableJsonStore({
-      baseId: options.baseId,
-      table: "Agenda Versions",
-      jsonField: "Conflicts JSON",
-      transport: options.transport,
-    });
-    this.#events = options.events;
-    this.#generic = new AirtablePublicRepository({
-      baseId: options.baseId,
-      table: "Agenda Versions",
-      jsonField: "Conflicts JSON",
-      transport: options.transport,
-    });
-  }
-
-  private async project(state: AgendaState): Promise<JsonRecord | null> {
-    const event = await this.#events.find(state.eventId);
-    const organizationId = resolvedOrganizationId(event);
-    if (organizationId === undefined) return null;
-    const currentRevision =
-      state.currentPublishedRevisionId === null
-        ? null
-        : (state.revisions.find((revision) => revision.id === state.currentPublishedRevisionId) ??
-          null);
-    return {
-      id: state.eventId,
-      organizationId,
-      version: state.draft.version,
-      revision: currentRevision?.revisionNumber ?? 0,
-      updatedAt: state.draft.updatedAt,
-      ...(currentRevision === null ? {} : { publishedAt: currentRevision.publishedAt }),
-    };
-  }
-
-  async list(input: PublicApiListInput): Promise<PublicApiListResult<JsonRecord>> {
-    const states = await this.#states.list();
-    const items: JsonRecord[] = [];
-    for (const state of states) {
-      const projected = await this.project(state);
-      if (
-        projected !== null &&
-        projected.organizationId === input.organizationId &&
-        Object.entries(input.filters).every(
-          ([key, value]) => String(projected[key] ?? "") === value,
-        ) &&
-        isAfterCursor(projected, input)
-      ) {
-        items.push(projected);
-      }
-    }
-    return { items, hasMore: false, nextCursor: null };
-  }
-
-  async get(input: PublicApiGetInput): Promise<JsonRecord | null> {
-    const state = await this.#states.find(input.id);
-    if (state === undefined) return null;
-    const projected = await this.project(state);
-    return projected?.organizationId === input.organizationId ? projected : null;
-  }
-
-  create(input: PublicApiCreateInput<JsonRecord>): Promise<JsonRecord> {
-    return this.#generic.create(input);
-  }
-
-  update(input: PublicApiUpdateInput<JsonRecord>): Promise<JsonRecord | null> {
-    return this.#generic.update(input);
-  }
-}
-
 function eventIdFromRequest(request: Request): string | undefined {
   const url = new URL(request.url);
   const pathId = /\/events\/([^/]+)/u.exec(url.pathname)?.[1];
@@ -8359,26 +8167,6 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
     jsonField: "Settings JSON",
   });
   const webhooks = new AirtableWebhookRepository(shared);
-  const eventsRepository = new AirtablePublicRepository({
-    ...shared,
-    table: "Events",
-    jsonField: "Settings JSON",
-  });
-  const sessionsRepository = new AirtablePublicRepository({
-    ...shared,
-    table: "Sessions",
-    jsonField: "Metadata JSON",
-  });
-  const speakersRepository = new AirtablePublicRepository({
-    ...shared,
-    table: "Participants",
-    jsonField: "First Name",
-  });
-  const agendaPublicRepository = new AirtableAgendaPublicRepository({
-    ...shared,
-    events,
-  });
-  const publicIdempotency = createIdempotencyCoordinator(new D1IdempotencyStore(options.database));
   const publishedSpeakerProjections = new AirtablePublishedSpeakerProjectionStore(shared);
   const organizerOverview = new AirtableOrganizerOverviewRepository(shared);
 
@@ -8598,39 +8386,7 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
     organizerOverview,
     publicApi: {
       contract: publicApiV1Contract,
-      resources: [
-        {
-          name: "events",
-          repository: eventsRepository,
-          readScope: "events:read",
-          writeScope: "events:write",
-          sortFields: ["id", "name", "updatedAt"],
-          defaultSort: "id",
-        },
-        {
-          name: "speakers",
-          repository: speakersRepository,
-          readScope: "submissions:read",
-          sortFields: ["id", "displayName", "updatedAt"],
-          defaultSort: "id",
-        },
-        {
-          name: "agenda",
-          repository: agendaPublicRepository,
-          readScope: "agenda:read",
-          sortFields: ["id", "updatedAt"],
-          defaultSort: "id",
-        },
-        {
-          name: "sessions",
-          repository: sessionsRepository,
-          readScope: "agenda:read",
-          writeScope: "agenda:write",
-          sortFields: ["id", "title", "updatedAt"],
-          defaultSort: "id",
-        },
-      ],
-      idempotency: publicIdempotency,
+      resources: [],
     },
     webhooks,
     cfp: { service: cfpService },

@@ -156,6 +156,7 @@ export interface PublicApiOpenApiOptions {
   readonly title?: string;
   readonly version?: string;
   readonly description?: string;
+  readonly paths?: Readonly<Record<string, unknown>>;
 }
 
 export interface PublicApiRoutesOptions<
@@ -770,7 +771,7 @@ function openApiDocument<TRecord, TCreate, TUpdate>(
   options: PublicApiOpenApiOptions | undefined,
   contract: PublicApiV1Contract,
 ): Record<string, unknown> {
-  const paths: Record<string, unknown> = {};
+  const paths: Record<string, unknown> = { ...options?.paths };
   const resourceSchemas: Record<string, unknown> = {};
   const errorSchemaName = "PublicApiError";
   const rateLimitSchemaName = "PublicApiRateLimit";

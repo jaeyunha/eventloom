@@ -20,11 +20,6 @@ import {
 import { EvaluationService } from "../features/evaluations/service";
 import type { EvaluationActor } from "../features/evaluations/types";
 import type {
-  IdempotencyCoordinator,
-  IdempotencyOutcome,
-} from "../features/public-api/idempotency";
-import { IdempotencyConflictError } from "../features/public-api/idempotency";
-import type {
   PublicApiCreateInput,
   PublicApiGetInput,
   PublicApiListInput,
@@ -1122,40 +1117,6 @@ function compareNullableDates(left: string | null, right: string | null): number
   if (right === null) return -1;
   return Date.parse(left) - Date.parse(right);
 }
-class LocalIdempotencyCoordinator implements IdempotencyCoordinator {
-  readonly #records = new Map<
-    string,
-    { fingerprint: string; promise: Promise<unknown>; completed: boolean }
-  >();
-
-  async run<T>(
-    scope: string,
-    key: string,
-    fingerprint: string,
-    operation: () => Promise<T>,
-  ): Promise<IdempotencyOutcome<T>> {
-    const storageKey = `${scope}\u0000${key}`;
-    const existing = this.#records.get(storageKey);
-    if (existing !== undefined) {
-      if (existing.fingerprint !== fingerprint) throw new IdempotencyConflictError();
-      return { value: (await existing.promise) as T, replayed: true };
-    }
-    const record = {
-      fingerprint,
-      completed: false,
-      promise: Promise.resolve().then(operation) as Promise<unknown>,
-    };
-    this.#records.set(storageKey, record);
-    try {
-      const value = (await record.promise) as T;
-      record.completed = true;
-      return { value, replayed: false };
-    } catch (error) {
-      this.#records.delete(storageKey);
-      throw error;
-    }
-  }
-}
 
 function eventIdFrom(request: Request): string {
   const pathMatch = /\/(?:events|event)\/([^/]+)/u.exec(new URL(request.url).pathname)?.[1];
@@ -1291,41 +1252,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
       },
     },
     publicApi: {
-      resources: [
-        {
-          name: "events",
-          repository: publicRepository,
-          readScope: "events:read",
-          writeScope: "events:write",
-          sortFields: ["id", "name", "updatedAt"],
-          defaultSort: "id",
-        },
-        {
-          name: "speakers",
-          repository: publicRepository,
-          readScope: "submissions:read",
-          writeScope: "submissions:write",
-          sortFields: ["id", "displayName", "updatedAt"],
-          defaultSort: "id",
-        },
-        {
-          name: "agenda",
-          repository: publicRepository,
-          readScope: "agenda:read",
-          writeScope: "agenda:write",
-          sortFields: ["id", "updatedAt"],
-          defaultSort: "id",
-        },
-        {
-          name: "sessions",
-          repository: publicRepository,
-          readScope: "agenda:read",
-          writeScope: "agenda:write",
-          sortFields: ["id", "title", "updatedAt"],
-          defaultSort: "id",
-        },
-      ],
-      idempotency: new LocalIdempotencyCoordinator(),
+      resources: [],
     },
     integrations: {
       getEvent: integrationRepository.getEvent.bind(integrationRepository),
