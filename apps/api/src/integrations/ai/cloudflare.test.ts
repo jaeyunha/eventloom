@@ -387,6 +387,32 @@ describe("Cloudflare Workers AI advisory providers", () => {
       ],
       provenance,
     });
+    expect(ai.calls[0]?.inputs.response_format).toMatchObject({
+      type: "json_schema",
+      name: "evaluation_proposal",
+      strict: true,
+      schema: {
+        properties: {
+          candidates: {
+            minItems: 1,
+            maxItems: 1,
+            items: {
+              properties: {
+                criterionId: { enum: ["quality"] },
+                evidence: {
+                  minItems: 1,
+                  maxItems: 3,
+                  items: { type: "string", minLength: 1, maxLength: 2_000 },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(JSON.stringify(ai.calls[0]?.inputs.response_format)).not.toContain(
+      '"enum":["title","abstract"',
+    );
     const prompt = promptOf(ai);
     expect(prompt).toContain('"tenantId":"tenant-1"');
     expect(prompt).toContain('"rubricRevision":11');
