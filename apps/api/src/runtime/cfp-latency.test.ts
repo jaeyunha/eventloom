@@ -351,4 +351,80 @@ describe("organizer CFP submission latency", () => {
     expect(delayed.maxConcurrentReads).toBe(3);
     expect(delayed.maxConcurrentFormReads).toBe(1);
   });
+  it("saves an existing draft in three read waves without a redundant update lookup", async () => {
+    const fake = new FakeAirtableTransport();
+    seed(fake, 0);
+    const { submittedAt: _submittedAt, ...submitted } = submission(1);
+    const draft: Submission = {
+      ...submitted,
+      status: "draft",
+      completedSteps: ["welcome"],
+    };
+    fake.seed({
+      baseId,
+      table: "Submissions",
+      fields: {
+        "Application ID": draft.id,
+        "Answers JSON": JSON.stringify(draft),
+      },
+    });
+    const readDelayMs = 300;
+    const delayed = new DelayedTransport(fake, readDelayMs);
+    const repository = new AirtableCfpRepository({ baseId, transport: delayed });
+    const service = new CfpService({
+      repository,
+      idempotency: {
+        run: <T>(_scope: string, _key: string, operation: () => Promise<T>) => operation(),
+      },
+      effects: {
+        enqueueSubmissionConfirmation: async () => undefined,
+      },
+      clock: { now: () => new Date("2027-02-01T00:00:00.000Z") },
+    });
+
+    const startedAt = performance.now();
+    const saved = await service.saveDraft({
+      tenantId,
+      eventId,
+      submissionId: draft.id,
+      ownerAccountId: draft.ownerAccountId,
+      expectedVersion: draft.version,
+      formVersion: draft.formVersion,
+      idempotencyKey: "save-existing-draft",
+      completedStep: "account",
+      answers: {},
+    });
+    const elapsedMs = performance.now() - startedAt;
+
+    expect(saved.version).toBe(2);
+    expect(saved.completedSteps).toEqual(["welcome", "account"]);
+    expect(elapsedMs).toBeLessThan(1_300);
+    expect(delayed.maxConcurrentReads).toBe(2);
+    const reads = fake.requests.filter((request) => request.method === "GET");
+    expect(reads).toHaveLength(4);
+    expect(reads.filter((request) => request.table === "Submissions")).toHaveLength(2);
+    expect(reads.filter((request) => request.table === "Events")).toHaveLength(1);
+    expect(reads.filter((request) => request.table === "CFP Forms")).toHaveLength(1);
+    expect(fake.requests.filter((request) => request.method === "PATCH")).toHaveLength(1);
+  });
+
+  it("checks the live submission version before updating by Airtable record id", async () => {
+    const fake = new FakeAirtableTransport();
+    seed(fake, 1);
+    const repository = new AirtableCfpRepository({ baseId, transport: fake });
+    const current = submission(1);
+
+    await expect(
+      repository.saveSubmissionVersion(
+        {
+          submission: { ...current, version: current.version + 1 },
+          reason: "draft_saved",
+          actorId: current.ownerAccountId,
+        },
+        current.version + 1,
+      ),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+
+    expect(fake.requests.filter((request) => request.method === "PATCH")).toHaveLength(0);
+  });
 });

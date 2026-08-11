@@ -4115,15 +4115,22 @@ export class AirtableCfpRepository implements CfpRepository {
     expectedVersion: number | null,
     audit?: AuditEntry,
   ): Promise<void> {
-    const current = await this.#submissions.find(version.submission.id);
+    const currentRecord = await this.#submissions.findWithRecordId(version.submission.id);
+    const current = currentRecord?.entity;
     if (
       (current?.version ?? null) !== expectedVersion ||
       (current !== undefined && current.tenantId !== version.submission.tenantId)
     ) {
       throw new CfpError("CONFLICT", "The CFP submission has changed.");
     }
-    if (current === undefined) await this.#submissions.create(version.submission);
-    else await this.#submissions.update(version.submission.id, version.submission);
+    if (currentRecord === undefined) await this.#submissions.create(version.submission);
+    else {
+      await this.#submissions.updateByRecordId(
+        version.submission.id,
+        currentRecord.recordId,
+        version.submission,
+      );
+    }
 
     if (audit !== undefined) {
       const auditRecord = {

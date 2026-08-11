@@ -952,8 +952,10 @@ export class CfpService {
       `${input.tenantId}:cfp:create:${input.formId}:${input.ownerAccountId}:${key}`,
       key,
       async () => {
-        const event = await this.#getEvent(input.tenantId, input.eventId);
-        const form = await this.#getForm(input.tenantId, input.formId);
+        const [event, form] = await Promise.all([
+          this.#getEvent(input.tenantId, input.eventId),
+          this.#getForm(input.tenantId, input.formId),
+        ]);
         ensureEventFormMatch(event, form);
         await this.#validateReusableFields(form);
         if (form.status !== "published") {
@@ -1207,8 +1209,10 @@ export class CfpService {
         if (current.version !== input.expectedVersion) {
           throw new CfpError("CONFLICT", "The submission has changed since it was loaded.");
         }
-        const event = await this.#getEvent(input.tenantId, current.eventId);
-        const form = await this.#getForm(input.tenantId, current.formId);
+        const [event, form] = await Promise.all([
+          this.#getEvent(input.tenantId, current.eventId),
+          this.#getForm(input.tenantId, current.formId),
+        ]);
         ensureEventFormMatch(event, form);
         ensureSubmissionSchemaVersion(current, form);
         if (input.formVersion !== undefined && input.formVersion !== current.formVersion) {
@@ -1279,8 +1283,10 @@ export class CfpService {
         if (submission.status === "withdrawn") {
           throw new CfpError("INVALID_TRANSITION", "A withdrawn submission cannot be reviewed.");
         }
-        const event = await this.#getEvent(input.tenantId, submission.eventId);
-        const form = await this.#getForm(input.tenantId, submission.formId);
+        const [event, form] = await Promise.all([
+          this.#getEvent(input.tenantId, submission.eventId),
+          this.#getForm(input.tenantId, submission.formId),
+        ]);
         ensureEventFormMatch(event, form);
         ensureSubmissionSchemaVersion(submission, form);
         if (submission.status !== "reopened") {
@@ -1321,8 +1327,10 @@ export class CfpService {
       async () => {
         const current = await this.#getOwnedSubmission(input);
         if (current.status === "submitted") {
-          const event = await this.#getEvent(input.tenantId, current.eventId);
-          const form = await this.#getForm(input.tenantId, current.formId);
+          const [event, form] = await Promise.all([
+            this.#getEvent(input.tenantId, current.eventId),
+            this.#getForm(input.tenantId, current.formId),
+          ]);
           ensureEventFormMatch(event, form);
           ensureSubmissionSchemaVersion(current, form);
           await this.#effects.enqueueSubmissionConfirmation({
@@ -1349,8 +1357,10 @@ export class CfpService {
         if (current.version !== input.expectedVersion) {
           throw new CfpError("CONFLICT", "The submission has changed since it was loaded.");
         }
-        const event = await this.#getEvent(input.tenantId, current.eventId);
-        const form = await this.#getForm(input.tenantId, current.formId);
+        const [event, form] = await Promise.all([
+          this.#getEvent(input.tenantId, current.eventId),
+          this.#getForm(input.tenantId, current.formId),
+        ]);
         ensureEventFormMatch(event, form);
         ensureSubmissionSchemaVersion(current, form);
         if (input.formVersion !== undefined && input.formVersion !== current.formVersion) {
