@@ -102,9 +102,7 @@ describe("remix API", () => {
 
     await expect(api.listCandidates({ eventId: "event-1" })).resolves.toEqual([generated]);
 
-    expect(calls[0]?.url).toBe(
-      "/api/admin/organizations/org-1/events/event-1/remix/candidates",
-    );
+    expect(calls[0]?.url).toBe("/api/admin/organizations/org-1/events/event-1/remix/candidates");
     expect(calls[0]?.init?.credentials).toBe("include");
   });
 

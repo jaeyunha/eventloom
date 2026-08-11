@@ -14,9 +14,6 @@ export default async function MemberSetupPage({ params, searchParams }: MemberSe
   const token = Array.isArray(query.token) ? query.token[0] : query.token;
 
   return (
-    <MemberSetup
-      organizationId={organizationId}
-      token={typeof token === "string" ? token : null}
-    />
+    <MemberSetup organizationId={organizationId} token={typeof token === "string" ? token : null} />
   );
 }

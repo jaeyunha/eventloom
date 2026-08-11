@@ -496,10 +496,7 @@ export function LoginForm({
   returnTo,
 }: LoginFormProps) {
   const config = useMemo(
-    () =>
-      apiBaseUrl === undefined
-        ? resolveLoginConfig()
-        : resolveLoginConfig({ apiBaseUrl }),
+    () => (apiBaseUrl === undefined ? resolveLoginConfig() : resolveLoginConfig({ apiBaseUrl })),
     [apiBaseUrl],
   );
   const api = useMemo(
@@ -535,7 +532,6 @@ export function LoginForm({
     setVerificationRequired(false);
     setMagicLinkSent(false);
   }
-
 
   function validateCredentials(): { email: string; password: string } | null {
     const normalizedEmail = email.trim().toLowerCase();
@@ -734,7 +730,6 @@ export function LoginForm({
               </button>
             </div>
           </div>
-
 
           {verificationRequired ? (
             <div className={styles.boundaryNote} role="status" aria-live="polite">

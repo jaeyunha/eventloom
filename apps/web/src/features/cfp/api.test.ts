@@ -53,7 +53,9 @@ describe("CFP authenticated session", () => {
       });
     }) as typeof fetch);
 
-    await expect(api.getEvent({ organizationId: "org-1", eventId: "event-1" })).resolves.toMatchObject({
+    await expect(
+      api.getEvent({ organizationId: "org-1", eventId: "event-1" }),
+    ).resolves.toMatchObject({
       id: "event-1",
     });
     expect(requestedUrl).toBe("/api/cfp/organizations/org-1/events/event-1/config");

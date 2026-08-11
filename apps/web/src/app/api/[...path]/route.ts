@@ -12,8 +12,7 @@ function gatewayTimeout(request: NextRequest): Response {
     {
       error: {
         code: "INTEGRATION_UNAVAILABLE",
-        message:
-          "The upstream API did not respond before the gateway deadline.",
+        message: "The upstream API did not respond before the gateway deadline.",
         traceId: request.headers.get("x-request-id") ?? crypto.randomUUID(),
       },
     },
@@ -60,9 +59,7 @@ function relayBody(
 function upstreamOrigin(): string {
   const value = process.env.API_UPSTREAM_ORIGIN?.trim();
   if (!value) {
-    throw new Error(
-      "API_UPSTREAM_ORIGIN is required for the web API transport.",
-    );
+    throw new Error("API_UPSTREAM_ORIGIN is required for the web API transport.");
   }
   const parsed = new URL(value);
   const localHttp =
@@ -77,15 +74,9 @@ function upstreamOrigin(): string {
   return parsed.origin;
 }
 
-async function proxy(
-  request: NextRequest,
-  context: ApiProxyContext,
-): Promise<Response> {
+async function proxy(request: NextRequest, context: ApiProxyContext): Promise<Response> {
   const { path } = await context.params;
-  const target = new URL(
-    `/api/${path.map(encodeURIComponent).join("/")}`,
-    upstreamOrigin(),
-  );
+  const target = new URL(`/api/${path.map(encodeURIComponent).join("/")}`, upstreamOrigin());
   target.search = request.nextUrl.search;
 
   const headers = new Headers(request.headers);

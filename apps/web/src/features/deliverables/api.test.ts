@@ -436,9 +436,7 @@ describe("deliverables API", () => {
 
     await expect(api.listSessions()).resolves.toEqual([]);
 
-    expect(requestedUrl).toBe(
-      "/api/admin/organizations/org%2Fone/events/event%2Fone/sessions",
-    );
+    expect(requestedUrl).toBe("/api/admin/organizations/org%2Fone/events/event%2Fone/sessions");
     expect(requestedUrl.startsWith("/api/")).toBe(true);
     expect(requestedUrl).not.toMatch(/^\/\//);
     expect(requestedUrl).not.toMatch(/^https?:\/\//);

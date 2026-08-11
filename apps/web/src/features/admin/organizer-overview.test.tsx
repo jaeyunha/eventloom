@@ -92,9 +92,7 @@ const eventRecord: OrganizerEventRecord = {
   updatedBy: "organizer-1",
 };
 
-function markup(
-  state: Parameters<typeof OrganizerOverviewView>[0]["state"],
-): string {
+function markup(state: Parameters<typeof OrganizerOverviewView>[0]["state"]): string {
   return renderToStaticMarkup(
     createElement(OrganizerOverviewView, {
       state,
@@ -121,9 +119,7 @@ describe("organizer overview", () => {
     expect(output).toContain("Priority queued");
     expect(output).toContain("Publish the remaining session");
     expect(output).toContain("Open agenda");
-    expect(output).toContain(
-      "/admin/organizations/ai-engineer/events/event-live/agenda",
-    );
+    expect(output).toContain("/admin/organizations/ai-engineer/events/event-live/agenda");
     expect(output).not.toContain("Summit 2026");
   });
 
@@ -150,13 +146,9 @@ describe("organizer overview", () => {
     });
 
     expect(output).toContain("all caught up");
-    expect(output).toContain(
-      "No action items are waiting for this organization.",
-    );
+    expect(output).toContain("No action items are waiting for this organization.");
     expect(output).toContain("No events yet");
-    expect(output).toContain(
-      "No events are available for this organization yet.",
-    );
+    expect(output).toContain("No events are available for this organization yet.");
     expect(output).toContain("Manage events");
   });
 
@@ -287,9 +279,7 @@ describe("organizer overview", () => {
         const requestedUrl = String(url);
         requestedUrls.push(requestedUrl);
         requestedInit = init;
-        const data = requestedUrl.endsWith("/core")
-          ? loadedCore
-          : loadedActivity;
+        const data = requestedUrl.endsWith("/core") ? loadedCore : loadedActivity;
         return new Response(JSON.stringify({ data }), {
           status: 200,
           headers: { "content-type": "application/json" },
@@ -350,12 +340,7 @@ describe("organizer overview", () => {
     releaseActivity?.();
     await expect(
       Promise.all([firstCore, secondCore, firstActivity, secondActivity]),
-    ).resolves.toEqual([
-      loadedCore,
-      loadedCore,
-      loadedActivity,
-      loadedActivity,
-    ]);
+    ).resolves.toEqual([loadedCore, loadedCore, loadedActivity, loadedActivity]);
 
     await expect(api.getCore()).resolves.toEqual(loadedCore);
     await expect(api.getActivity()).resolves.toEqual(loadedActivity);
@@ -399,12 +384,8 @@ describe("organizer overview", () => {
 
     expect(output).toContain("Event management");
     expect(output).toContain("Create event");
-    expect(output).toContain(
-      "/admin/organizations/ai-engineer/events/event-live/agenda",
-    );
-    expect(output).toContain(
-      "/admin/organizations/ai-engineer/events/event-live/settings",
-    );
+    expect(output).toContain("/admin/organizations/ai-engineer/events/event-live/agenda");
+    expect(output).toContain("/admin/organizations/ai-engineer/events/event-live/settings");
     expect(output).toContain("America/Los_Angeles");
   });
   it("retains event records after refresh failure and disables stale mutations", () => {
@@ -426,9 +407,7 @@ describe("organizer overview", () => {
     );
 
     expect(output).toContain("Live program");
-    expect(output).toContain(
-      "Showing previous event data. The refresh failed.",
-    );
+    expect(output).toContain("Showing previous event data. The refresh failed.");
     expect(output).toContain("Retry event refresh");
     expect(output).not.toContain(">Create event<");
     expect(output).not.toContain(">Edit<");
@@ -546,40 +525,16 @@ describe("admin navigation", () => {
       ["Events", "/admin/events"],
       ["Members", "/admin/organizations/org%2Flive/members"],
       ["CFP Form", "/admin/organizations/org%2Flive/events/event%2Flive/cfp"],
-      [
-        "Submissions",
-        "/admin/organizations/org%2Flive/events/event%2Flive/submissions",
-      ],
-      [
-        "Reviews",
-        "/admin/organizations/org%2Flive/events/event%2Flive/reviews",
-      ],
-      [
-        "Speakers",
-        "/admin/organizations/org%2Flive/events/event%2Flive/speakers",
-      ],
-      [
-        "Deliverables",
-        "/admin/organizations/org%2Flive/events/event%2Flive/deliverables",
-      ],
+      ["Submissions", "/admin/organizations/org%2Flive/events/event%2Flive/submissions"],
+      ["Reviews", "/admin/organizations/org%2Flive/events/event%2Flive/reviews"],
+      ["Speakers", "/admin/organizations/org%2Flive/events/event%2Flive/speakers"],
+      ["Deliverables", "/admin/organizations/org%2Flive/events/event%2Flive/deliverables"],
       ["Files", "/admin/organizations/org%2Flive/events/event%2Flive/files"],
       ["Agenda", "/admin/organizations/org%2Flive/events/event%2Flive/agenda"],
-      [
-        "Settings",
-        "/admin/organizations/org%2Flive/events/event%2Flive/settings",
-      ],
-      [
-        "Communications",
-        "/admin/organizations/org%2Flive/events/event%2Flive/communications",
-      ],
-      [
-        "Reports",
-        "/admin/organizations/org%2Flive/events/event%2Flive/reports",
-      ],
-      [
-        "Content remix",
-        "/admin/organizations/org%2Flive/events/event%2Flive/remix",
-      ],
+      ["Settings", "/admin/organizations/org%2Flive/events/event%2Flive/settings"],
+      ["Communications", "/admin/organizations/org%2Flive/events/event%2Flive/communications"],
+      ["Reports", "/admin/organizations/org%2Flive/events/event%2Flive/reports"],
+      ["Content remix", "/admin/organizations/org%2Flive/events/event%2Flive/remix"],
       ["Embeds", "/admin/organizations/org%2Flive/events/event%2Flive/embeds"],
     ] as const;
 
@@ -587,9 +542,7 @@ describe("admin navigation", () => {
     expect(new Set(items.map((item) => item.href)).size).toBe(items.length);
     expect(
       items.some((item) =>
-        `${item.label} ${item.href}`
-          .toLocaleLowerCase()
-          .includes("accelevents"),
+        `${item.label} ${item.href}`.toLocaleLowerCase().includes("accelevents"),
       ),
     ).toBe(false);
 
@@ -623,27 +576,19 @@ describe("admin navigation", () => {
       eventNavigationFor({
         organizationId: "ai-engineer",
         eventId: "event-live",
-      }).some(
-        (item) => item.href === "/admin/organizations/ai-engineer/members",
-      ),
+      }).some((item) => item.href === "/admin/organizations/ai-engineer/members"),
     ).toBe(true);
   });
 
   it("recognizes only qualified event paths for event-scoped navigation", () => {
     expect(
-      qualifiedEventContext(
-        "/admin/organizations/org%2Flive/events/event%2Flive/agenda",
-      ),
+      qualifiedEventContext("/admin/organizations/org%2Flive/events/event%2Flive/agenda"),
     ).toEqual({ organizationId: "org/live", eventId: "event/live" });
     expect(qualifiedEventContext("/admin/events/event-live/agenda")).toBeNull();
   });
   it("mounts protected page content while organizer access is still being checked", () => {
     const output = renderToStaticMarkup(
-      createElement(
-        AdminShell,
-        null,
-        createElement("p", null, "Primary organizer content"),
-      ),
+      createElement(AdminShell, null, createElement("p", null, "Primary organizer content")),
     );
 
     expect(output).toContain("Open Sessionboard");

@@ -62,10 +62,7 @@ export function IntegrationAdmin({
   initialSnapshot,
   api: injectedApi,
 }: IntegrationAdminProps) {
-  const api = useMemo(
-    () => injectedApi ?? createIntegrationAdminApi(""),
-    [injectedApi],
-  );
+  const api = useMemo(() => injectedApi ?? createIntegrationAdminApi(""), [injectedApi]);
   const [snapshot, setSnapshot] = useState<IntegrationAdminSnapshot | null>(
     initialSnapshot ?? null,
   );

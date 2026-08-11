@@ -1478,7 +1478,6 @@ function ScopedAgendaWorkspace({
   api: providedApi,
   appEnvironment = process.env.APP_ENV,
 }: Readonly<ScopedAgendaWorkspaceProps>) {
-
   const api = useMemo(
     () => providedApi ?? createAgendaApi("", organizationId),
     [organizationId, providedApi],

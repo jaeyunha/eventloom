@@ -1050,10 +1050,7 @@ export function CfpEditor({ eventId, organizationId, formId, api: providedApi }:
   const [configuration, setConfiguration] = useState<CfpConfiguration>(() =>
     createEditorInitialConfiguration(eventId),
   );
-  const api = useMemo(
-    () => providedApi ?? createCfpApi(""),
-    [providedApi],
-  );
+  const api = useMemo(() => providedApi ?? createCfpApi(""), [providedApi]);
   const [activeSection, setActiveSection] =
     useState<(typeof SECTION_LINKS)[number]["id"]>("event-details");
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");

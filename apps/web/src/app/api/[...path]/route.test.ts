@@ -34,20 +34,15 @@ describe("same-origin API proxy", () => {
     vi.stubGlobal("fetch", fetcher);
 
     const response = await GET(
-      new NextRequest(
-        "https://web.example.test/api/admin/events?status=active",
-        {
-          headers: { cookie: "session=opaque" },
-        },
-      ),
+      new NextRequest("https://web.example.test/api/admin/events?status=active", {
+        headers: { cookie: "session=opaque" },
+      }),
       context,
     );
 
     expect(fetcher).toHaveBeenCalledTimes(1);
     const [target, init] = fetcher.mock.calls[0] ?? [];
-    expect(String(target)).toBe(
-      "https://api.example.test/api/admin/events?status=active",
-    );
+    expect(String(target)).toBe("https://api.example.test/api/admin/events?status=active");
     expect(init?.signal).toBeInstanceOf(AbortSignal);
     const headers = new Headers(init?.headers);
     expect(headers.get("cookie")).toBe("session=opaque");
@@ -72,13 +67,9 @@ describe("same-origin API proxy", () => {
         upstreamSignal = init?.signal ?? undefined;
         markStarted?.();
         return new Promise<Response>((_resolve, reject) => {
-          upstreamSignal?.addEventListener(
-            "abort",
-            () => reject(upstreamSignal?.reason),
-            {
-              once: true,
-            },
-          );
+          upstreamSignal?.addEventListener("abort", () => reject(upstreamSignal?.reason), {
+            once: true,
+          });
         });
       }),
     );

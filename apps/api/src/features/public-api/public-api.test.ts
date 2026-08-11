@@ -339,9 +339,7 @@ describe("public API v1", () => {
     const cursor = await app.request(
       `/api/v1/organizations/org-1/events?cursor=${"x".repeat(2_049)}`,
     );
-    const identifier = await app.request(
-      `/api/v1/organizations/org-1/events/${"x".repeat(201)}`,
-    );
+    const identifier = await app.request(`/api/v1/organizations/org-1/events/${"x".repeat(201)}`);
 
     expect(cursor.status).toBe(400);
     expect(identifier.status).toBe(400);
@@ -365,26 +363,27 @@ describe("public API v1", () => {
     expect(body.error.message).not.toContain("base64");
     expect(document.openapi).toBe("3.1.0");
     expect(document.paths["/api/v1/organizations/{organizationId}/events"]).toBeDefined();
-    const collectionPath = document.paths[
-      "/api/v1/organizations/{organizationId}/events"
-    ] as {
+    const collectionPath = document.paths["/api/v1/organizations/{organizationId}/events"] as {
       get: {
         parameters: Array<{ name: string; schema: Record<string, unknown> }>;
       };
     };
-    expect(collectionPath.get.parameters.find(({ name }) => name === "cursor")?.schema).toMatchObject(
-      { minLength: 1, maxLength: 2_048 },
+    expect(
+      collectionPath.get.parameters.find(({ name }) => name === "cursor")?.schema,
+    ).toMatchObject({ minLength: 1, maxLength: 2_048 });
+    expect(collectionPath.get.parameters.find(({ name }) => name === "sort")?.schema).toMatchObject(
+      {
+        enum: ["id", "name", "updatedAt"],
+        default: "id",
+      },
     );
-    expect(collectionPath.get.parameters.find(({ name }) => name === "sort")?.schema).toMatchObject({
-      enum: ["id", "name", "updatedAt"],
-      default: "id",
-    });
     expect(
       collectionPath.get.parameters.find(({ name }) => name === "direction")?.schema,
     ).toMatchObject({ enum: ["asc", "desc"], default: "asc" });
-    const updatePath = document.paths[
-      "/api/v1/organizations/{organizationId}/events/{id}"
-    ] as { patch?: unknown; put?: unknown };
+    const updatePath = document.paths["/api/v1/organizations/{organizationId}/events/{id}"] as {
+      patch?: unknown;
+      put?: unknown;
+    };
     expect(updatePath.patch).toBeDefined();
     expect(updatePath.put).toBeUndefined();
   });

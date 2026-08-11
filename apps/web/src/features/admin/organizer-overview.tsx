@@ -36,8 +36,7 @@ export interface OrganizerOverviewEvent {
   readonly endsAt: string | null;
 }
 
-export type OrganizerOverviewActionType =
-  "reviews" | "speaker_tasks" | "agenda";
+export type OrganizerOverviewActionType = "reviews" | "speaker_tasks" | "agenda";
 
 export interface OrganizerOverviewActionItem {
   readonly id: string;
@@ -73,8 +72,7 @@ export interface OrganizerOverviewConfig {
   readonly organizationId: string;
 }
 
-export type OrganizerOverviewConfigResult =
-  OrganizerOverviewConfig | { readonly error: string };
+export type OrganizerOverviewConfigResult = OrganizerOverviewConfig | { readonly error: string };
 
 export type OrganizerOverviewRequestState<T> =
   | { readonly status: "loading"; readonly data: T | null }
@@ -175,27 +173,21 @@ function nullableString(value: unknown, field: string): string | null {
     return null;
   }
   if (typeof value !== "string") {
-    throw new Error(
-      `The organizer overview response contains an invalid ${field}.`,
-    );
+    throw new Error(`The organizer overview response contains an invalid ${field}.`);
   }
   return value;
 }
 
 function nonNegativeInteger(value: unknown, field: string): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
-    throw new Error(
-      `The organizer overview response contains an invalid ${field}.`,
-    );
+    throw new Error(`The organizer overview response contains an invalid ${field}.`);
   }
   return value;
 }
 
 function integer(value: unknown, field: string): number {
   if (typeof value !== "number" || !Number.isInteger(value)) {
-    throw new Error(
-      `The organizer overview response contains an invalid ${field}.`,
-    );
+    throw new Error(`The organizer overview response contains an invalid ${field}.`);
   }
   return value;
 }
@@ -207,30 +199,17 @@ function responseData(payload: unknown): UnknownRecord {
   return payload.data;
 }
 
-function responseOrganizationId(
-  data: UnknownRecord,
-  expectedOrganizationId?: string,
-): string {
+function responseOrganizationId(data: UnknownRecord, expectedOrganizationId?: string): string {
   const organizationId = requiredString(data.organizationId, "organizationId");
-  if (
-    expectedOrganizationId !== undefined &&
-    organizationId !== expectedOrganizationId
-  ) {
-    throw new Error(
-      "The organizer overview returned data for another organization.",
-    );
+  if (expectedOrganizationId !== undefined && organizationId !== expectedOrganizationId) {
+    throw new Error("The organizer overview returned data for another organization.");
   }
   return organizationId;
 }
 
-function parseOrganizerOverviewEvent(
-  event: unknown,
-  index: number,
-): OrganizerOverviewEvent {
+function parseOrganizerOverviewEvent(event: unknown, index: number): OrganizerOverviewEvent {
   if (!isRecord(event)) {
-    throw new Error(
-      `The organizer overview response contains an invalid event at index ${index}.`,
-    );
+    throw new Error(`The organizer overview response contains an invalid event at index ${index}.`);
   }
   return {
     id: requiredString(event.id, `events[${index}].id`),
@@ -253,19 +232,14 @@ function parseOrganizerOverviewActionItem(
   }
   const type = requiredString(item.type, `actionItems[${index}].type`);
   if (type !== "reviews" && type !== "speaker_tasks" && type !== "agenda") {
-    throw new Error(
-      `The organizer overview response contains an invalid action item type.`,
-    );
+    throw new Error(`The organizer overview response contains an invalid action item type.`);
   }
   return {
     id: requiredString(item.id, `actionItems[${index}].id`),
     type,
     eventId: requiredString(item.eventId, `actionItems[${index}].eventId`),
     title: requiredString(item.title, `actionItems[${index}].title`),
-    description: requiredString(
-      item.description,
-      `actionItems[${index}].description`,
-    ),
+    description: requiredString(item.description, `actionItems[${index}].description`),
     count: nonNegativeInteger(item.count, `actionItems[${index}].count`),
     priority: integer(item.priority, `actionItems[${index}].priority`),
     dueAt: nullableString(item.dueAt, `actionItems[${index}].dueAt`),
@@ -285,10 +259,7 @@ export function parseOrganizerOverviewCoreResponse(
   return {
     organizationId: responseOrganizationId(data, expectedOrganizationId),
     metrics: {
-      eventCount: nonNegativeInteger(
-        data.metrics.eventCount,
-        "metrics.eventCount",
-      ),
+      eventCount: nonNegativeInteger(data.metrics.eventCount, "metrics.eventCount"),
     },
     events: data.events.map(parseOrganizerOverviewEvent),
   };
@@ -306,10 +277,7 @@ export function parseOrganizerOverviewActivityResponse(
   return {
     organizationId: responseOrganizationId(data, expectedOrganizationId),
     metrics: {
-      submissionCount: nonNegativeInteger(
-        data.metrics.submissionCount,
-        "metrics.submissionCount",
-      ),
+      submissionCount: nonNegativeInteger(data.metrics.submissionCount, "metrics.submissionCount"),
       pendingReviewCount: nonNegativeInteger(
         data.metrics.pendingReviewCount,
         "metrics.pendingReviewCount",
@@ -335,11 +303,9 @@ export function resolveOrganizerOverviewConfig(
 ): OrganizerOverviewConfigResult {
   const apiBaseUrl = "";
   const appEnv = environment.NEXT_PUBLIC_APP_ENV?.trim() ?? "";
-  const configuredOrganizationId =
-    environment.NEXT_PUBLIC_ORGANIZATION_ID?.trim() ?? "";
+  const configuredOrganizationId = environment.NEXT_PUBLIC_ORGANIZATION_ID?.trim() ?? "";
   const organizationId =
-    configuredOrganizationId ||
-    (appEnv === "local" ? "local-organization" : "");
+    configuredOrganizationId || (appEnv === "local" ? "local-organization" : "");
 
   if (!organizationId) {
     return {
@@ -360,11 +326,7 @@ export function resolveOrganizerOverviewConfig(
 async function responseErrorMessage(response: Response): Promise<string> {
   try {
     const payload: unknown = await response.json();
-    if (
-      isRecord(payload) &&
-      isRecord(payload.error) &&
-      typeof payload.error.message === "string"
-    ) {
+    if (isRecord(payload) && isRecord(payload.error) && typeof payload.error.message === "string") {
       return payload.error.message;
     }
   } catch {
@@ -403,10 +365,7 @@ export function createOrganizerOverviewApi(
       if (coreInFlight !== null) {
         return coreInFlight;
       }
-      coreInFlight = request(
-        "/core",
-        parseOrganizerOverviewCoreResponse,
-      ).finally(() => {
+      coreInFlight = request("/core", parseOrganizerOverviewCoreResponse).finally(() => {
         coreInFlight = null;
       });
       return coreInFlight;
@@ -415,12 +374,11 @@ export function createOrganizerOverviewApi(
       if (activityInFlight !== null) {
         return activityInFlight;
       }
-      activityInFlight = request(
-        "/activity",
-        parseOrganizerOverviewActivityResponse,
-      ).finally(() => {
-        activityInFlight = null;
-      });
+      activityInFlight = request("/activity", parseOrganizerOverviewActivityResponse).finally(
+        () => {
+          activityInFlight = null;
+        },
+      );
       return activityInFlight;
     },
   };
@@ -503,10 +461,7 @@ function LoadingState() {
         </div>
       </header>
 
-      <section
-        className={styles.metricsGrid}
-        aria-label="Loading organization metrics"
-      >
+      <section className={styles.metricsGrid} aria-label="Loading organization metrics">
         {[coreMetricDefinition, ...activityMetricDefinitions].map((metric) => (
           <article className={styles.metricCard} key={metric.key}>
             <div className={styles.metricTop}>
@@ -525,17 +480,11 @@ function LoadingState() {
       </section>
 
       <div className={styles.dashboardGrid}>
-        <section
-          className={styles.panel}
-          aria-labelledby="organizer-overview-loading-actions"
-        >
+        <section className={styles.panel} aria-labelledby="organizer-overview-loading-actions">
           <div className={styles.panelHeader}>
             <div className={styles.panelHeading}>
               <p className={styles.panelEyebrow}>Action queue</p>
-              <h2
-                className={styles.panelTitle}
-                id="organizer-overview-loading-actions"
-              >
+              <h2 className={styles.panelTitle} id="organizer-overview-loading-actions">
                 Tasks that need you
               </h2>
             </div>
@@ -576,10 +525,7 @@ function LoadingState() {
           <div className={styles.panelHeader}>
             <div className={styles.panelHeading}>
               <p className={styles.panelEyebrow}>Organization</p>
-              <h2
-                className={styles.panelTitle}
-                id="organizer-overview-loading-guidance"
-              >
+              <h2 className={styles.panelTitle} id="organizer-overview-loading-guidance">
                 Keep your program moving
               </h2>
             </div>
@@ -598,10 +544,7 @@ function LoadingState() {
           <div className={styles.panelHeader}>
             <div className={styles.panelHeading}>
               <p className={styles.panelEyebrow}>Live event data</p>
-              <h2
-                className={styles.panelTitle}
-                id="organizer-overview-loading-events"
-              >
+              <h2 className={styles.panelTitle} id="organizer-overview-loading-events">
                 Events
               </h2>
             </div>
@@ -648,11 +591,7 @@ function MessageState({
   role: "alert" | "status";
 }>) {
   return (
-    <section
-      className={styles.panel}
-      aria-labelledby="organizer-overview-message"
-      role={role}
-    >
+    <section className={styles.panel} aria-labelledby="organizer-overview-message" role={role}>
       <div className={styles.panelContent}>
         <h1 className={styles.panelTitle} id="organizer-overview-message">
           {title}
@@ -698,10 +637,7 @@ function ActivityMetricCards({
             <div>
               <span className={styles.metricLabel}>{metric.label}</span>
               {value === undefined ? (
-                <strong
-                  className={styles.metricValue}
-                  role={hasError ? "alert" : "status"}
-                >
+                <strong className={styles.metricValue} role={hasError ? "alert" : "status"}>
                   {hasError ? "Unavailable" : "Loading…"}
                 </strong>
               ) : (
@@ -820,9 +756,7 @@ function ActionItems({
             ) : null}
             {state.status === "error" && onRetry ? (
               <div role="alert">
-                <p className={styles.muted}>
-                  Stale action items. {state.message}
-                </p>
+                <p className={styles.muted}>Stale action items. {state.message}</p>
                 <button
                   className={styles.secondaryButton}
                   type="button"
@@ -840,18 +774,13 @@ function ActionItems({
             ) : null}
             {actionItems.length === 0 ? (
               <div className={styles.emptyState}>
-                <p className={styles.emptyStateTitle}>
-                  You&apos;re all caught up
-                </p>
+                <p className={styles.emptyStateTitle}>You&apos;re all caught up</p>
                 <p className={styles.muted} role="status">
                   No action items are waiting for this organization.
                 </p>
               </div>
             ) : (
-              <ul
-                className={styles.taskList}
-                aria-label="Prioritized organizer tasks"
-              >
+              <ul className={styles.taskList} aria-label="Prioritized organizer tasks">
                 {actionItems.map((item) => {
                   const dueDate = formatDueDate(item.dueAt);
                   const critical = item.priority >= 80;
@@ -865,9 +794,7 @@ function ActionItems({
                       </span>
                       <div className={styles.taskContent}>
                         <h3 className={styles.taskTitle}>{item.title}</h3>
-                        <p className={styles.taskDescription}>
-                          {item.description}
-                        </p>
+                        <p className={styles.taskDescription}>{item.description}</p>
                         <p className={styles.taskMeta}>
                           <span className={styles.taskPriority}>
                             {critical ? "High priority" : "Priority queued"}
@@ -935,21 +862,15 @@ function EventsTable({ data }: Readonly<{ data: OrganizerOverviewCoreData }>) {
               <tr key={event.id}>
                 <td className={styles.eventNameCell}>
                   <p className={styles.eventName}>{event.name}</p>
-                  {event.slug ? (
-                    <p className={styles.eventSlug}>/{event.slug}</p>
-                  ) : null}
+                  {event.slug ? <p className={styles.eventSlug}>/{event.slug}</p> : null}
                 </td>
                 <td>
-                  <span
-                    className={`${styles.statusBadge} ${eventStatusClass(event.status)}`}
-                  >
+                  <span className={`${styles.statusBadge} ${eventStatusClass(event.status)}`}>
                     <span aria-hidden="true">●</span>&nbsp;
                     {eventStatusLabel(event.status)}
                   </span>
                 </td>
-                <td className={styles.eventDateCell}>
-                  {formatEventDates(event)}
-                </td>
+                <td className={styles.eventDateCell}>{formatEventDates(event)}</td>
                 <td>
                   <div className={styles.eventActions}>
                     <Link
@@ -973,22 +894,15 @@ function EventsTable({ data }: Readonly<{ data: OrganizerOverviewCoreData }>) {
           </tbody>
         </table>
       </div>
-      <section
-        className={styles.eventCardList}
-        aria-label="Organization events"
-      >
+      <section className={styles.eventCardList} aria-label="Organization events">
         {data.events.map((event) => (
           <article className={styles.eventCard} key={event.id}>
             <div className={styles.eventCardTop}>
               <div>
                 <h2>{event.name}</h2>
-                {event.slug ? (
-                  <p className={styles.eventSlug}>/{event.slug}</p>
-                ) : null}
+                {event.slug ? <p className={styles.eventSlug}>/{event.slug}</p> : null}
               </div>
-              <span
-                className={`${styles.statusBadge} ${eventStatusClass(event.status)}`}
-              >
+              <span className={`${styles.statusBadge} ${eventStatusClass(event.status)}`}>
                 <span aria-hidden="true">●</span>&nbsp;
                 {eventStatusLabel(event.status)}
               </span>
@@ -1082,9 +996,7 @@ export function OrganizerOverviewView({
     return (
       <MessageState
         message={
-          state.status === "error"
-            ? state.message
-            : "The core overview data was not loaded."
+          state.status === "error" ? state.message : "The core overview data was not loaded."
         }
         title="Unable to load organizer overview"
         onRetry={onRetryCore}
@@ -1114,8 +1026,8 @@ export function OrganizerOverviewView({
           <p className={styles.eyebrow}>Organizer workspace</p>
           <h1 className={styles.pageTitle}>Organization overview</h1>
           <p className={styles.pageDescription}>
-            Live operational data for your organization, including events,
-            submissions, reviews, and speaker work.
+            Live operational data for your organization, including events, submissions, reviews, and
+            speaker work.
           </p>
           {state.core.status === "loading" ? (
             <p className={styles.taskMeta} role="status" aria-live="polite">
@@ -1124,9 +1036,7 @@ export function OrganizerOverviewView({
           ) : null}
           {state.core.status === "error" ? (
             <div role="alert">
-              <p className={styles.taskMeta}>
-                Showing previous event data. {state.core.message}
-              </p>
+              <p className={styles.taskMeta}>Showing previous event data. {state.core.message}</p>
               {onRetryCore ? (
                 <button
                   className={styles.secondaryButton}
@@ -1148,10 +1058,7 @@ export function OrganizerOverviewView({
         </div>
       </header>
 
-      <section
-        className={styles.metricsGrid}
-        aria-labelledby="overview-metrics-title"
-      >
+      <section className={styles.metricsGrid} aria-labelledby="overview-metrics-title">
         <h2 className={styles.srOnly} id="overview-metrics-title">
           Live organization metrics
         </h2>
@@ -1162,12 +1069,8 @@ export function OrganizerOverviewView({
             </span>
           </div>
           <div>
-            <span className={styles.metricLabel}>
-              {coreMetricDefinition.label}
-            </span>
-            <strong className={styles.metricValue}>
-              {core.metrics.eventCount}
-            </strong>
+            <span className={styles.metricLabel}>{coreMetricDefinition.label}</span>
+            <strong className={styles.metricValue}>{core.metrics.eventCount}</strong>
             <p className={styles.metricDetail}>{coreMetricDefinition.detail}</p>
           </div>
         </article>
@@ -1190,8 +1093,8 @@ export function OrganizerOverviewView({
           </div>
           <div className={styles.panelContent}>
             <p className={styles.muted}>
-              Open an event agenda from the live event list below to review and
-              publish its current program.
+              Open an event agenda from the live event list below to review and publish its current
+              program.
             </p>
           </div>
         </section>
@@ -1207,9 +1110,7 @@ export function OrganizerOverviewView({
                 Events
               </h2>
             </div>
-            <span className={styles.panelCount}>
-              {core.events.length} total
-            </span>
+            <span className={styles.panelCount}>{core.events.length} total</span>
           </div>
           <EventsTable data={core} />
         </section>
@@ -1276,9 +1177,7 @@ export function OrganizerOverview({
         return;
       }
       if (data.organizationId !== config.organizationId) {
-        throw new Error(
-          "The organizer overview returned data for another organization.",
-        );
+        throw new Error("The organizer overview returned data for another organization.");
       }
       setState((previous) =>
         stateWithCore(previous, {
@@ -1320,9 +1219,7 @@ export function OrganizerOverview({
         return;
       }
       if (data.organizationId !== config.organizationId) {
-        throw new Error(
-          "The organizer overview returned data for another organization.",
-        );
+        throw new Error("The organizer overview returned data for another organization.");
       }
       setState((previous) =>
         stateWithActivity(previous, {
@@ -1337,8 +1234,7 @@ export function OrganizerOverview({
       setState((previous) =>
         stateWithActivity(previous, {
           status: "error",
-          data:
-            previous.status === "config-error" ? null : previous.activity.data,
+          data: previous.status === "config-error" ? null : previous.activity.data,
           message: errorMessage(error),
         }),
       );
@@ -1392,12 +1288,19 @@ export interface OrganizerEventDefaultCalendarSettings {
 }
 
 export type OrganizerEventEmbedWidgetId =
-  "sessions" | "speakers" | "agenda" | "itinerary" | "gallery";
+  | "sessions"
+  | "speakers"
+  | "agenda"
+  | "itinerary"
+  | "gallery";
 export type OrganizerEventEmbedTheme = "auto" | "light" | "dark";
 export type OrganizerEventEmbedOutputFormat =
-  "styled-html" | "basic-html" | "json" | "xml" | "ical";
-export type OrganizerEventEmbedLayout =
-  "comfortable" | "compact" | "list" | "grid" | "timeline";
+  | "styled-html"
+  | "basic-html"
+  | "json"
+  | "xml"
+  | "ical";
+export type OrganizerEventEmbedLayout = "comfortable" | "compact" | "list" | "grid" | "timeline";
 
 export interface OrganizerEventEmbedConfiguration {
   readonly id: string;
@@ -1467,25 +1370,13 @@ export interface OrganizerEventUpdateInput {
 
 export interface OrganizerEventsApi {
   listEvents(signal?: AbortSignal): Promise<readonly OrganizerEventRecord[]>;
-  getEvent(
-    eventId: string,
-    signal?: AbortSignal,
-  ): Promise<OrganizerEventRecord>;
+  getEvent(eventId: string, signal?: AbortSignal): Promise<OrganizerEventRecord>;
   createEvent(input: OrganizerEventCreateInput): Promise<OrganizerEventRecord>;
-  updateEvent(
-    eventId: string,
-    input: OrganizerEventUpdateInput,
-  ): Promise<OrganizerEventRecord>;
-  archiveEvent(
-    eventId: string,
-    expectedVersion: number,
-  ): Promise<OrganizerEventRecord>;
+  updateEvent(eventId: string, input: OrganizerEventUpdateInput): Promise<OrganizerEventRecord>;
+  archiveEvent(eventId: string, expectedVersion: number): Promise<OrganizerEventRecord>;
 }
 
-type OrganizerEventsFetcher = (
-  input: RequestInfo | URL,
-  init?: RequestInit,
-) => Promise<Response>;
+type OrganizerEventsFetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 interface OrganizerEventsErrorBody {
   readonly error?: {
@@ -1548,19 +1439,9 @@ function eventNullableString(value: unknown, field: string): string | null {
   return value;
 }
 
-function eventRequiredInteger(
-  value: unknown,
-  field: string,
-  minimum = 0,
-): number {
-  if (
-    typeof value !== "number" ||
-    !Number.isSafeInteger(value) ||
-    value < minimum
-  ) {
-    throw eventRecordError(
-      `${field} must be an integer of at least ${minimum}.`,
-    );
+function eventRequiredInteger(value: unknown, field: string, minimum = 0): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < minimum) {
+    throw eventRecordError(`${field} must be an integer of at least ${minimum}.`);
   }
   return value;
 }
@@ -1586,28 +1467,17 @@ function parseOrganizerEventEmbedConfiguration(
   const name = eventRequiredString(value.name, `${field}.name`);
   const widgetId = eventRequiredString(value.widgetId, `${field}.widgetId`);
   const theme = eventRequiredString(value.theme, `${field}.theme`);
-  const outputFormat = eventRequiredString(
-    value.outputFormat,
-    `${field}.outputFormat`,
-  );
+  const outputFormat = eventRequiredString(value.outputFormat, `${field}.outputFormat`);
   const layout = eventRequiredString(value.layout, `${field}.layout`);
   const accent = eventRequiredString(value.accent, `${field}.accent`);
-  const backgroundColor = eventRequiredString(
-    value.backgroundColor,
-    `${field}.backgroundColor`,
-  );
+  const backgroundColor = eventRequiredString(value.backgroundColor, `${field}.backgroundColor`);
   const textColor = eventRequiredString(value.textColor, `${field}.textColor`);
-  const customCss =
-    typeof value.customCss === "string" ? value.customCss : null;
+  const customCss = typeof value.customCss === "string" ? value.customCss : null;
 
   if (
-    !["sessions", "speakers", "agenda", "itinerary", "gallery"].includes(
-      widgetId,
-    ) ||
+    !["sessions", "speakers", "agenda", "itinerary", "gallery"].includes(widgetId) ||
     !["auto", "light", "dark"].includes(theme) ||
-    !["styled-html", "basic-html", "json", "xml", "ical"].includes(
-      outputFormat,
-    ) ||
+    !["styled-html", "basic-html", "json", "xml", "ical"].includes(outputFormat) ||
     !["comfortable", "compact", "list", "grid", "timeline"].includes(layout) ||
     !/^#[0-9a-f]{6}$/iu.test(accent) ||
     !/^#[0-9a-f]{6}$/iu.test(backgroundColor) ||
@@ -1615,19 +1485,11 @@ function parseOrganizerEventEmbedConfiguration(
     customCss === null ||
     typeof value.enabled !== "boolean"
   ) {
-    throw eventRecordError(
-      `${field} contains an unsupported embed configuration value.`,
-    );
+    throw eventRecordError(`${field} contains an unsupported embed configuration value.`);
   }
 
-  const stringList = (
-    listValue: unknown,
-    listField: string,
-  ): readonly string[] => {
-    if (
-      !Array.isArray(listValue) ||
-      !listValue.every((item) => typeof item === "string")
-    ) {
+  const stringList = (listValue: unknown, listField: string): readonly string[] => {
+    if (!Array.isArray(listValue) || !listValue.every((item) => typeof item === "string")) {
       throw eventRecordError(`${listField} must be an array of strings.`);
     }
     return listValue
@@ -1666,20 +1528,14 @@ function parseOrganizerEventEmbedConfigurations(
     parseOrganizerEventEmbedConfiguration(configuration, `${field}[${index}]`),
   );
   if (
-    new Set(configurations.map((configuration) => configuration.id)).size !==
-    configurations.length
+    new Set(configurations.map((configuration) => configuration.id)).size !== configurations.length
   ) {
-    throw eventRecordError(
-      `${field} must not contain duplicate configuration IDs.`,
-    );
+    throw eventRecordError(`${field} must not contain duplicate configuration IDs.`);
   }
   return configurations;
 }
 
-function parseOrganizerEventCfpSettings(
-  value: unknown,
-  field: string,
-): OrganizerEventCfpSettings {
+function parseOrganizerEventCfpSettings(value: unknown, field: string): OrganizerEventCfpSettings {
   if (!isRecord(value)) {
     throw eventRecordError(`${field} must be an object.`);
   }
@@ -1701,33 +1557,22 @@ function parseOrganizerEventCalendarSettings(
     throw eventRecordError(`${field} must be an object.`);
   }
   if ("timezone" in value) {
-    throw eventRecordError(
-      `${field}.timeZone is required; timezone is not supported.`,
-    );
+    throw eventRecordError(`${field}.timeZone is required; timezone is not supported.`);
   }
   return {
-    durationMinutes: eventRequiredInteger(
-      value.durationMinutes,
-      `${field}.durationMinutes`,
-      1,
-    ),
+    durationMinutes: eventRequiredInteger(value.durationMinutes, `${field}.durationMinutes`, 1),
     timeZone: eventRequiredString(value.timeZone, `${field}.timeZone`),
     location: eventNullableString(value.location, `${field}.location`),
   };
 }
 
-export function parseOrganizerEventRecord(
-  payload: unknown,
-): OrganizerEventRecord {
+export function parseOrganizerEventRecord(payload: unknown): OrganizerEventRecord {
   if (!isRecord(payload)) {
     throw eventRecordError("the event must be an object.");
   }
   return {
     id: eventRequiredString(payload.id, "id"),
-    organizationId: eventRequiredString(
-      payload.organizationId,
-      "organizationId",
-    ),
+    organizationId: eventRequiredString(payload.organizationId, "organizationId"),
     slug: eventRequiredString(payload.slug, "slug"),
     name: eventRequiredString(payload.name, "name"),
     status: eventStatus(payload.status, "status"),
@@ -1735,10 +1580,7 @@ export function parseOrganizerEventRecord(
     startsAt: eventRequiredString(payload.startsAt, "startsAt"),
     endsAt: eventRequiredString(payload.endsAt, "endsAt"),
     venue: eventNullableString(payload.venue, "venue"),
-    cfpSettings: parseOrganizerEventCfpSettings(
-      payload.cfpSettings,
-      "cfpSettings",
-    ),
+    cfpSettings: parseOrganizerEventCfpSettings(payload.cfpSettings, "cfpSettings"),
     defaultCalendarSettings: parseOrganizerEventCalendarSettings(
       payload.defaultCalendarSettings,
       "defaultCalendarSettings",
@@ -1759,9 +1601,7 @@ export function parseOrganizerEventRecord(
   };
 }
 
-export function parseOrganizerEventsResponse(
-  payload: unknown,
-): readonly OrganizerEventRecord[] {
+export function parseOrganizerEventsResponse(payload: unknown): readonly OrganizerEventRecord[] {
   if (!isRecord(payload) || !Array.isArray(payload.data)) {
     throw eventRecordError("data must be an array.");
   }
@@ -1777,24 +1617,20 @@ export function parseOrganizerEventsResponse(
   });
 }
 
-export function parseOrganizerEventResponse(
-  payload: unknown,
-): OrganizerEventRecord {
+export function parseOrganizerEventResponse(payload: unknown): OrganizerEventRecord {
   if (!isRecord(payload) || !("data" in payload)) {
     throw eventRecordError("data must contain one event.");
   }
   return parseOrganizerEventRecord(payload.data);
 }
 
-async function organizerEventsApiError(
-  response: Response,
-): Promise<OrganizerEventsApiError> {
+async function organizerEventsApiError(response: Response): Promise<OrganizerEventsApiError> {
   const body = (await response.json().catch(() => undefined)) as
-    OrganizerEventsErrorBody | undefined;
+    | OrganizerEventsErrorBody
+    | undefined;
   return new OrganizerEventsApiError(
     body?.error?.code ?? "EVENT_REQUEST_FAILED",
-    body?.error?.message ??
-      `The event request failed (HTTP ${response.status}).`,
+    body?.error?.message ?? `The event request failed (HTTP ${response.status}).`,
     response.status,
     body?.error?.traceId,
     body?.error?.details,
@@ -1804,16 +1640,12 @@ async function organizerEventsApiError(
 function eventPathSegment(value: string, field: string): string {
   const normalized = value.trim();
   if (normalized.length === 0) {
-    throw new TypeError(
-      `An ${field} is required for organizer event requests.`,
-    );
+    throw new TypeError(`An ${field} is required for organizer event requests.`);
   }
   return encodeURIComponent(normalized);
 }
 
-function eventCreateBody(
-  input: OrganizerEventCreateInput,
-): Record<string, unknown> {
+function eventCreateBody(input: OrganizerEventCreateInput): Record<string, unknown> {
   return {
     name: input.name,
     timeZone: input.timeZone,
@@ -1835,9 +1667,7 @@ function eventCreateBody(
   };
 }
 
-function eventUpdateBody(
-  input: OrganizerEventUpdateInput,
-): Record<string, unknown> {
+function eventUpdateBody(input: OrganizerEventUpdateInput): Record<string, unknown> {
   return {
     expectedVersion: input.expectedVersion,
     ...(input.name === undefined ? {} : { name: input.name }),
@@ -1879,9 +1709,7 @@ export function createOrganizerEventsApi(
   const normalizedBaseUrl = apiBaseUrl.trim().replace(/\/+$/u, "");
   const normalizedOrganizationId = organizationId.trim();
   if (normalizedOrganizationId.length === 0) {
-    throw new TypeError(
-      "An organization ID is required for organizer event requests.",
-    );
+    throw new TypeError("An organization ID is required for organizer event requests.");
   }
   const collectionEndpoint = `${normalizedBaseUrl}/api/admin/organizations/${eventPathSegment(normalizedOrganizationId, "organization ID")}/events`;
 
@@ -1892,8 +1720,7 @@ export function createOrganizerEventsApi(
   ): Promise<T> {
     const headers = new Headers(init.headers);
     headers.set("accept", "application/json");
-    if (init.body !== undefined)
-      headers.set("content-type", "application/json");
+    if (init.body !== undefined) headers.set("content-type", "application/json");
     const response = await fetcher(`${collectionEndpoint}${path}`, {
       ...init,
       credentials: "include",
@@ -1911,18 +1738,14 @@ export function createOrganizerEventsApi(
       return request(
         "",
         parseOrganizerEventsResponse,
-        signal === undefined
-          ? { cache: "no-store" }
-          : { cache: "no-store", signal },
+        signal === undefined ? { cache: "no-store" } : { cache: "no-store", signal },
       );
     },
     getEvent(eventId, signal) {
       return request(
         `/${eventPathSegment(eventId, "event ID")}`,
         parseOrganizerEventResponse,
-        signal === undefined
-          ? { cache: "no-store" }
-          : { cache: "no-store", signal },
+        signal === undefined ? { cache: "no-store" } : { cache: "no-store", signal },
       );
     },
     createEvent(input) {
@@ -1932,14 +1755,10 @@ export function createOrganizerEventsApi(
       });
     },
     updateEvent(eventId, input) {
-      return request(
-        `/${eventPathSegment(eventId, "event ID")}`,
-        parseOrganizerEventResponse,
-        {
-          method: "PATCH",
-          body: JSON.stringify(eventUpdateBody(input)),
-        },
-      );
+      return request(`/${eventPathSegment(eventId, "event ID")}`, parseOrganizerEventResponse, {
+        method: "PATCH",
+        body: JSON.stringify(eventUpdateBody(input)),
+      });
     },
     archiveEvent(eventId, expectedVersion) {
       return request(
@@ -1985,9 +1804,7 @@ function validEventTimeZone(value: string): boolean {
 }
 
 function localDateTimeToIso(value: string, timeZone: string): string | null {
-  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(
-    value.trim(),
-  );
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(value.trim());
   if (!match) return null;
   const year = Number(match[1]);
   const month = Number(match[2]);
@@ -2008,14 +1825,7 @@ function localDateTimeToIso(value: string, timeZone: string): string | null {
   ) {
     return null;
   }
-  const localMilliseconds = Date.UTC(
-    year,
-    month - 1,
-    day,
-    hour,
-    minute,
-    second,
-  );
+  const localMilliseconds = Date.UTC(year, month - 1, day, hour, minute, second);
   if (!Number.isFinite(localMilliseconds)) return null;
   let candidate = localMilliseconds;
   const formatter = new Intl.DateTimeFormat("en-US", {
@@ -2066,14 +1876,11 @@ function isoToLocalDateTime(value: string, timeZone: string): string {
       .filter((part) => part.type !== "literal")
       .map((part) => [part.type, part.value]),
   );
-  if (!parts.year || !parts.month || !parts.day || !parts.hour || !parts.minute)
-    return "";
+  if (!parts.year || !parts.month || !parts.day || !parts.hour || !parts.minute) return "";
   return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
 }
 
-function eventEditorFormValues(
-  event?: OrganizerEventRecord,
-): OrganizerEventFormValues {
+function eventEditorFormValues(event?: OrganizerEventRecord): OrganizerEventFormValues {
   const timeZone = event?.timeZone ?? browserEventTimeZone();
   return {
     name: event?.name ?? "",
@@ -2090,11 +1897,8 @@ function eventEditorFormValues(
     cfpClosesAt: event?.cfpSettings.closesAt
       ? isoToLocalDateTime(event.cfpSettings.closesAt, timeZone)
       : "",
-    defaultCalendarDurationMinutes: String(
-      event?.defaultCalendarSettings.durationMinutes ?? 30,
-    ),
-    defaultCalendarTimeZone:
-      event?.defaultCalendarSettings.timeZone ?? timeZone,
+    defaultCalendarDurationMinutes: String(event?.defaultCalendarSettings.durationMinutes ?? 30),
+    defaultCalendarTimeZone: event?.defaultCalendarSettings.timeZone ?? timeZone,
     defaultCalendarLocation: event?.defaultCalendarSettings.location ?? "",
   };
 }
@@ -2108,8 +1912,7 @@ export function validateOrganizerEventForm(values: OrganizerEventFormValues): {
   const name = values.name.trim();
   if (!name) return { error: "Event name is required." };
   const timeZone = values.timeZone.trim();
-  if (!validEventTimeZone(timeZone))
-    return { error: "Enter a valid IANA time zone." };
+  if (!validEventTimeZone(timeZone)) return { error: "Enter a valid IANA time zone." };
   const startsAt = localDateTimeToIso(values.startsAt, timeZone);
   if (!startsAt) return { error: "Enter a valid event start date and time." };
   const endsAt = localDateTimeToIso(values.endsAt, timeZone);
@@ -2125,17 +1928,12 @@ export function validateOrganizerEventForm(values: OrganizerEventFormValues): {
     };
   }
 
-  const defaultCalendarTimeZone =
-    values.defaultCalendarTimeZone.trim() || timeZone;
+  const defaultCalendarTimeZone = values.defaultCalendarTimeZone.trim() || timeZone;
   if (!validEventTimeZone(defaultCalendarTimeZone)) {
     return { error: "Enter a valid default calendar time zone." };
   }
   const durationMinutes = Number(values.defaultCalendarDurationMinutes);
-  if (
-    !Number.isSafeInteger(durationMinutes) ||
-    durationMinutes < 1 ||
-    durationMinutes > 1_440
-  ) {
+  if (!Number.isSafeInteger(durationMinutes) || durationMinutes < 1 || durationMinutes > 1_440) {
     return {
       error: "Default calendar duration must be between 1 and 1440 minutes.",
     };
@@ -2264,19 +2062,12 @@ export function OrganizerEventEditor({
     try {
       await onSave(result.input);
     } catch (error) {
-      setFormError(
-        error instanceof Error
-          ? error.message
-          : "The event could not be saved.",
-      );
+      setFormError(error instanceof Error ? error.message : "The event could not be saved.");
     }
   }
 
   return (
-    <form
-      onSubmit={(formEvent) => void submit(formEvent)}
-      style={{ display: "grid", gap: "1rem" }}
-    >
+    <form onSubmit={(formEvent) => void submit(formEvent)} style={{ display: "grid", gap: "1rem" }}>
       <div>
         <h2
           className={styles.panelTitle}
@@ -2286,8 +2077,7 @@ export function OrganizerEventEditor({
           {event ? "Configure event" : "Create an event"}
         </h2>
         <p className={styles.muted}>
-          Event dates are entered in the event time zone and saved as canonical
-          ISO instants.
+          Event dates are entered in the event time zone and saved as canonical ISO instants.
         </p>
       </div>
       <div style={eventTwoColumnStyle}>
@@ -2301,9 +2091,7 @@ export function OrganizerEventEditor({
             value={values.name}
             maxLength={200}
             required
-            onChange={(formEvent) =>
-              updateValue("name", formEvent.target.value)
-            }
+            onChange={(formEvent) => updateValue("name", formEvent.target.value)}
           />
         </label>
         <label style={eventFieldStyle} htmlFor="organizer-event-slug">
@@ -2316,9 +2104,7 @@ export function OrganizerEventEditor({
             value={values.slug}
             maxLength={80}
             placeholder="summit-2026"
-            onChange={(formEvent) =>
-              updateValue("slug", formEvent.target.value)
-            }
+            onChange={(formEvent) => updateValue("slug", formEvent.target.value)}
           />
         </label>
       </div>
@@ -2331,17 +2117,12 @@ export function OrganizerEventEditor({
             name="status"
             value={values.status}
             onChange={(formEvent) =>
-              updateValue(
-                "status",
-                formEvent.target.value as OrganizerEventStatus,
-              )
+              updateValue("status", formEvent.target.value as OrganizerEventStatus)
             }
           >
             {organizerEventStatuses.map((status) => (
               <option key={status} value={status}>
-                {status === "active"
-                  ? "Active"
-                  : status.charAt(0).toUpperCase() + status.slice(1)}
+                {status === "active" ? "Active" : status.charAt(0).toUpperCase() + status.slice(1)}
               </option>
             ))}
           </select>
@@ -2357,9 +2138,7 @@ export function OrganizerEventEditor({
             value={values.timeZone}
             placeholder="America/Los_Angeles"
             required
-            onChange={(formEvent) =>
-              updateValue("timeZone", formEvent.target.value)
-            }
+            onChange={(formEvent) => updateValue("timeZone", formEvent.target.value)}
           />
           <datalist id="organizer-event-time-zones">
             <option value="UTC" />
@@ -2380,9 +2159,7 @@ export function OrganizerEventEditor({
             type="datetime-local"
             value={values.startsAt}
             required
-            onChange={(formEvent) =>
-              updateValue("startsAt", formEvent.target.value)
-            }
+            onChange={(formEvent) => updateValue("startsAt", formEvent.target.value)}
           />
         </label>
         <label style={eventFieldStyle} htmlFor="organizer-event-ends-at">
@@ -2394,9 +2171,7 @@ export function OrganizerEventEditor({
             type="datetime-local"
             value={values.endsAt}
             required
-            onChange={(formEvent) =>
-              updateValue("endsAt", formEvent.target.value)
-            }
+            onChange={(formEvent) => updateValue("endsAt", formEvent.target.value)}
           />
         </label>
       </div>
@@ -2422,9 +2197,7 @@ export function OrganizerEventEditor({
           margin: 0,
         }}
       >
-        <legend
-          style={{ padding: "0 0.35rem", fontSize: "0.86rem", fontWeight: 800 }}
-        >
+        <legend style={{ padding: "0 0.35rem", fontSize: "0.86rem", fontWeight: 800 }}>
           CFP settings
         </legend>
         <label
@@ -2440,9 +2213,7 @@ export function OrganizerEventEditor({
             type="checkbox"
             name="cfpSettings.enabled"
             checked={values.cfpEnabled}
-            onChange={(formEvent) =>
-              updateValue("cfpEnabled", formEvent.target.checked)
-            }
+            onChange={(formEvent) => updateValue("cfpEnabled", formEvent.target.checked)}
           />
           <span>Enable call for proposals</span>
         </label>
@@ -2455,15 +2226,10 @@ export function OrganizerEventEditor({
               name="cfpSettings.opensAt"
               type="datetime-local"
               value={values.cfpOpensAt}
-              onChange={(formEvent) =>
-                updateValue("cfpOpensAt", formEvent.target.value)
-              }
+              onChange={(formEvent) => updateValue("cfpOpensAt", formEvent.target.value)}
             />
           </label>
-          <label
-            style={eventFieldStyle}
-            htmlFor="organizer-event-cfp-closes-at"
-          >
+          <label style={eventFieldStyle} htmlFor="organizer-event-cfp-closes-at">
             <span style={eventFieldLabelStyle}>CFP closes</span>
             <input
               style={eventInputStyle}
@@ -2471,9 +2237,7 @@ export function OrganizerEventEditor({
               name="cfpSettings.closesAt"
               type="datetime-local"
               value={values.cfpClosesAt}
-              onChange={(formEvent) =>
-                updateValue("cfpClosesAt", formEvent.target.value)
-              }
+              onChange={(formEvent) => updateValue("cfpClosesAt", formEvent.target.value)}
             />
           </label>
         </div>
@@ -2488,16 +2252,11 @@ export function OrganizerEventEditor({
           margin: 0,
         }}
       >
-        <legend
-          style={{ padding: "0 0.35rem", fontSize: "0.86rem", fontWeight: 800 }}
-        >
+        <legend style={{ padding: "0 0.35rem", fontSize: "0.86rem", fontWeight: 800 }}>
           Default calendar settings
         </legend>
         <div style={eventTwoColumnStyle}>
-          <label
-            style={eventFieldStyle}
-            htmlFor="organizer-event-calendar-duration"
-          >
+          <label style={eventFieldStyle} htmlFor="organizer-event-calendar-duration">
             <span style={eventFieldLabelStyle}>Default duration (minutes)</span>
             <input
               style={eventInputStyle}
@@ -2510,17 +2269,11 @@ export function OrganizerEventEditor({
               value={values.defaultCalendarDurationMinutes}
               required
               onChange={(formEvent) =>
-                updateValue(
-                  "defaultCalendarDurationMinutes",
-                  formEvent.target.value,
-                )
+                updateValue("defaultCalendarDurationMinutes", formEvent.target.value)
               }
             />
           </label>
-          <label
-            style={eventFieldStyle}
-            htmlFor="organizer-event-calendar-time-zone"
-          >
+          <label style={eventFieldStyle} htmlFor="organizer-event-calendar-time-zone">
             <span style={eventFieldLabelStyle}>Calendar time zone</span>
             <input
               style={eventInputStyle}
@@ -2535,10 +2288,7 @@ export function OrganizerEventEditor({
             />
           </label>
         </div>
-        <label
-          style={eventFieldStyle}
-          htmlFor="organizer-event-calendar-location"
-        >
+        <label style={eventFieldStyle} htmlFor="organizer-event-calendar-location">
           <span style={eventFieldLabelStyle}>Default calendar location</span>
           <input
             style={eventInputStyle}
@@ -2547,9 +2297,7 @@ export function OrganizerEventEditor({
             type="text"
             value={values.defaultCalendarLocation}
             maxLength={2_000}
-            onChange={(formEvent) =>
-              updateValue("defaultCalendarLocation", formEvent.target.value)
-            }
+            onChange={(formEvent) => updateValue("defaultCalendarLocation", formEvent.target.value)}
           />
         </label>
       </fieldset>
@@ -2568,11 +2316,7 @@ export function OrganizerEventEditor({
       ) : null}
       <div style={eventInlineActionsStyle}>
         {onCancel ? (
-          <button
-            className={styles.secondaryButton}
-            type="button"
-            onClick={onCancel}
-          >
+          <button className={styles.secondaryButton} type="button" onClick={onCancel}>
             Cancel
           </button>
         ) : null}
@@ -2643,8 +2387,7 @@ export interface OrganizerEventsViewProps {
   readonly busy?: boolean;
   readonly notice?: string | null;
   readonly onRetry?: (() => void) | undefined;
-  readonly onCreate?:
-    ((input: OrganizerEventCreateInput) => Promise<void>) | undefined;
+  readonly onCreate?: ((input: OrganizerEventCreateInput) => Promise<void>) | undefined;
   readonly onUpdate?:
     | ((
         eventId: string,
@@ -2652,17 +2395,12 @@ export interface OrganizerEventsViewProps {
         expectedVersion: number,
       ) => Promise<void>)
     | undefined;
-  readonly onArchive?:
-    ((eventId: string, expectedVersion: number) => Promise<void>) | undefined;
+  readonly onArchive?: ((eventId: string, expectedVersion: number) => Promise<void>) | undefined;
 }
 
 function EventsLoadingState() {
   return (
-    <section
-      className={styles.panel}
-      aria-labelledby="organizer-events-loading"
-      role="status"
-    >
+    <section className={styles.panel} aria-labelledby="organizer-events-loading" role="status">
       <div className={styles.panelContent}>
         <h1 className={styles.panelTitle} id="organizer-events-loading">
           Loading events
@@ -2683,22 +2421,14 @@ function EventsMessageState({
   readonly onRetry?: (() => void) | undefined;
 }>) {
   return (
-    <section
-      className={styles.panel}
-      aria-labelledby="organizer-events-message"
-      role="alert"
-    >
+    <section className={styles.panel} aria-labelledby="organizer-events-message" role="alert">
       <div className={styles.panelContent}>
         <h1 className={styles.panelTitle} id="organizer-events-message">
           {title}
         </h1>
         <p className={styles.muted}>{message}</p>
         {onRetry ? (
-          <button
-            className={styles.secondaryButton}
-            type="button"
-            onClick={onRetry}
-          >
+          <button className={styles.secondaryButton} type="button" onClick={onRetry}>
             Try again
           </button>
         ) : null}
@@ -2716,18 +2446,11 @@ function EventsRefreshState({
   readonly status: "loading" | "error";
 }>) {
   return (
-    <section
-      className={styles.panel}
-      role={status === "error" ? "alert" : "status"}
-    >
+    <section className={styles.panel} role={status === "error" ? "alert" : "status"}>
       <div className={styles.panelContent}>
         <p className={styles.muted}>{message}</p>
         {status === "error" && onRetry ? (
-          <button
-            className={styles.secondaryButton}
-            type="button"
-            onClick={onRetry}
-          >
+          <button className={styles.secondaryButton} type="button" onClick={onRetry}>
             Retry event refresh
           </button>
         ) : null}
@@ -2747,8 +2470,7 @@ function OrganizerEventsLoaded({
   readonly data: OrganizerEventsData;
   readonly busy: boolean;
   readonly notice: string | null;
-  readonly onCreate?:
-    ((input: OrganizerEventCreateInput) => Promise<void>) | undefined;
+  readonly onCreate?: ((input: OrganizerEventCreateInput) => Promise<void>) | undefined;
   readonly onUpdate?:
     | ((
         eventId: string,
@@ -2756,8 +2478,7 @@ function OrganizerEventsLoaded({
         expectedVersion: number,
       ) => Promise<void>)
     | undefined;
-  readonly onArchive?:
-    ((eventId: string, expectedVersion: number) => Promise<void>) | undefined;
+  readonly onArchive?: ((eventId: string, expectedVersion: number) => Promise<void>) | undefined;
 }>) {
   const [editor, setEditor] = useState<"create" | string | null>(null);
   const editingEvent =
@@ -2782,11 +2503,7 @@ function OrganizerEventsLoaded({
 
   async function archive(event: OrganizerEventRecord) {
     if (!onArchive) return;
-    if (
-      typeof window !== "undefined" &&
-      !window.confirm(`Archive ${event.name}?`)
-    )
-      return;
+    if (typeof window !== "undefined" && !window.confirm(`Archive ${event.name}?`)) return;
     await onArchive(event.id, event.version);
   }
 
@@ -2797,8 +2514,7 @@ function OrganizerEventsLoaded({
           <p className={styles.eyebrow}>Organizer workspace</p>
           <h1 className={styles.pageTitle}>Event management</h1>
           <p className={styles.pageDescription}>
-            Create events, configure their dates and defaults, and choose an
-            event workspace.
+            Create events, configure their dates and defaults, and choose an event workspace.
           </p>
         </div>
         {onCreate ? (
@@ -2806,9 +2522,7 @@ function OrganizerEventsLoaded({
             <button
               className={styles.primaryButton}
               type="button"
-              onClick={() =>
-                setEditor((current) => (current === "create" ? null : "create"))
-              }
+              onClick={() => setEditor((current) => (current === "create" ? null : "create"))}
               aria-expanded={editor === "create"}
               aria-controls="organizer-event-editor"
             >
@@ -2819,11 +2533,7 @@ function OrganizerEventsLoaded({
       </header>
 
       {notice ? (
-        <p
-          className={styles.callout}
-          role="status"
-          style={{ marginBottom: "1.25rem" }}
-        >
+        <p className={styles.callout} role="status" style={{ marginBottom: "1.25rem" }}>
           {notice}
         </p>
       ) : null}
@@ -2845,10 +2555,7 @@ function OrganizerEventsLoaded({
         </section>
       ) : null}
 
-      <section
-        className={styles.panel}
-        aria-labelledby="organizer-events-title"
-      >
+      <section className={styles.panel} aria-labelledby="organizer-events-title">
         <div className={styles.panelHeader}>
           <div className={styles.panelHeading}>
             <p className={styles.panelEyebrow}>Live organization data</p>
@@ -2861,8 +2568,7 @@ function OrganizerEventsLoaded({
         {data.events.length === 0 ? (
           <div className={styles.panelContent}>
             <p className={styles.muted} role="status">
-              No events are available for this organization yet. Create an event
-              to begin.
+              No events are available for this organization yet. Create an event to begin.
             </p>
           </div>
         ) : (
@@ -2913,10 +2619,7 @@ function OrganizerEventsLoaded({
                         </Link>
                         <Link
                           className={styles.outlineButton}
-                          href={eventSettingsHref(
-                            data.organizationId,
-                            event.id,
-                          )}
+                          href={eventSettingsHref(data.organizationId, event.id)}
                         >
                           Settings <span aria-hidden="true">→</span>
                         </Link>
@@ -2926,9 +2629,7 @@ function OrganizerEventsLoaded({
                             type="button"
                             disabled={busy}
                             onClick={() =>
-                              setEditor((current) =>
-                                current === event.id ? null : event.id,
-                              )
+                              setEditor((current) => (current === event.id ? null : event.id))
                             }
                           >
                             {editor === event.id ? "Close editor" : "Edit"}
@@ -2966,23 +2667,15 @@ export function OrganizerEventsView({
   onUpdate,
   onArchive,
 }: OrganizerEventsViewProps) {
-  if (state.status === "loading" && state.data === undefined)
-    return <EventsLoadingState />;
+  if (state.status === "loading" && state.data === undefined) return <EventsLoadingState />;
   if (state.status === "config-error") {
     return (
-      <EventsMessageState
-        title="Event management is not configured"
-        message={state.message}
-      />
+      <EventsMessageState title="Event management is not configured" message={state.message} />
     );
   }
   if (state.status === "error" && state.data === undefined) {
     return (
-      <EventsMessageState
-        title="Unable to load events"
-        message={state.message}
-        onRetry={onRetry}
-      />
+      <EventsMessageState title="Unable to load events" message={state.message} onRetry={onRetry} />
     );
   }
   const data = state.data;
@@ -2991,10 +2684,7 @@ export function OrganizerEventsView({
   return (
     <>
       {state.status === "loading" ? (
-        <EventsRefreshState
-          message="Refreshing event records…"
-          status="loading"
-        />
+        <EventsRefreshState message="Refreshing event records…" status="loading" />
       ) : state.status === "error" ? (
         <EventsRefreshState
           message={`Showing previous event data. ${state.message}`}
@@ -3018,8 +2708,7 @@ function organizerEventsErrorMessage(error: unknown): string {
   if (error instanceof OrganizerEventsApiError && error.code === "CONFLICT") {
     return "This event changed in another organizer session. Reload before saving again.";
   }
-  if (error instanceof Error && error.message.trim().length > 0)
-    return error.message;
+  if (error instanceof Error && error.message.trim().length > 0) return error.message;
   return "The organizer event request could not be completed.";
 }
 
@@ -3040,33 +2729,26 @@ export function OrganizerEvents({
     return createOrganizerEventsApi(config.apiBaseUrl, config.organizationId);
   }, [config, providedApi]);
   const initialReadKey = useMemo(
-    () =>
-      api && !("error" in config)
-        ? { api, organizationId: config.organizationId }
-        : null,
+    () => (api && !("error" in config) ? { api, organizationId: config.organizationId } : null),
     [api, config],
   );
   const [state, setState] = useState<OrganizerEventsViewState>(() =>
-    "error" in config
-      ? { status: "config-error", message: config.error }
-      : { status: "loading" },
+    "error" in config ? { status: "config-error", message: config.error } : { status: "loading" },
   );
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const generationRef = useRef(0);
-  const initialReadCoordinatorRef = useRef<
-    ScopedReadFlightCoordinator<object, readonly OrganizerEventRecord[]> | null
-  >(null);
+  const initialReadCoordinatorRef = useRef<ScopedReadFlightCoordinator<
+    object,
+    readonly OrganizerEventRecord[]
+  > | null>(null);
   if (initialReadCoordinatorRef.current === null) {
     initialReadCoordinatorRef.current = createScopedReadFlightCoordinator();
   }
   const initialReadCoordinator = initialReadCoordinatorRef.current;
 
   const load = useCallback(
-    async (
-      signal?: AbortSignal,
-      initialRead?: Promise<readonly OrganizerEventRecord[]>,
-    ) => {
+    async (signal?: AbortSignal, initialRead?: Promise<readonly OrganizerEventRecord[]>) => {
       if (!api || "error" in config) return;
       const generation = generationRef.current;
       setState((current) => {
@@ -3079,12 +2761,8 @@ export function OrganizerEvents({
       try {
         const events = await (initialRead ?? api.listEvents(signal));
         if (signal?.aborted || generationRef.current !== generation) return;
-        if (
-          events.some((event) => event.organizationId !== config.organizationId)
-        ) {
-          throw new Error(
-            "The organizer event response belongs to another organization.",
-          );
+        if (events.some((event) => event.organizationId !== config.organizationId)) {
+          throw new Error("The organizer event response belongs to another organization.");
         }
         setState({
           status: "loaded",
@@ -3117,9 +2795,8 @@ export function OrganizerEvents({
       return;
     }
     setState({ status: "loading" });
-    const lease = initialReadCoordinator.acquire(
-      initialReadKey,
-      (signal) => api.listEvents(signal),
+    const lease = initialReadCoordinator.acquire(initialReadKey, (signal) =>
+      api.listEvents(signal),
     );
     void load(lease.signal, lease.promise);
     return () => {
