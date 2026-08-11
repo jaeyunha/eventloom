@@ -429,7 +429,7 @@ export function RemixWorkspace({ organizationId, eventId, api: apiOverride }: Re
     } catch {
       return null;
     }
-  }, [apiOverride, baseUrl, organizationId, scopeValid, testMode]);
+  }, [apiOverride, organizationId, scopeValid, testMode]);
   const demo = useMemo(() => demoWorkspaceData(eventId), [eventId]);
   const [sourceType, setSourceType] = useState<RemixSourceType>("session");
   const sourceTypeInitialized = useRef(false);

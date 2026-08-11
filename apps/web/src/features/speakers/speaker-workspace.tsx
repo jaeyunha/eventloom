@@ -1068,7 +1068,7 @@ export function SpeakerWorkspace({
       controller.abort();
       progressController?.abort();
     };
-  }, [api, baseUrl, eventId, organizationId]);
+  }, [api, eventId, organizationId]);
   useEffect(() => {
     if (api === null) return;
     let active = true;

@@ -2865,7 +2865,7 @@ export function CrmWorkspace({
   const apiBaseUrl = "";
   const api = useMemo(
     () => providedApi ?? createCrmApi(apiBaseUrl, organizationId),
-    [apiBaseUrl, organizationId, providedApi],
+    [organizationId, providedApi],
   );
   const [contacts, setContacts] = useState<readonly CrmContact[]>(initialContacts ?? []);
   const [segments, setSegments] = useState<readonly CrmSegment[]>(initialSegments ?? []);

@@ -94,7 +94,7 @@ export function IntegrationAdmin({
         }
       }
     },
-    [api, eventId, initialSnapshot],
+    [api, eventId],
   );
 
   useEffect(() => {
@@ -119,7 +119,7 @@ export function IntegrationAdmin({
         setBusy(false);
       }
     },
-    [api],
+    [],
   );
 
   const refreshAfter = useCallback(async () => {

@@ -484,7 +484,7 @@ export function MemberWorkspace({
         if (!signal?.aborted) setLoading(false);
       }
     },
-    [api, baseUrl, organizationId],
+    [api, organizationId],
   );
 
   useEffect(() => {
@@ -535,7 +535,7 @@ export function MemberWorkspace({
         setPoolLoading(false);
       }
     },
-    [api, baseUrl],
+    [api],
   );
 
   useEffect(() => {
