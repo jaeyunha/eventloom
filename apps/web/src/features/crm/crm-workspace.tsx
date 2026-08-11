@@ -771,7 +771,7 @@ function parseCsvPreview(csv: string): {
   }
   const headers = (records[0] ?? []).map((header) => header.trim());
   const normalizedHeaders = headers.map((header) => header.toLowerCase());
-  const emailIndex = normalizedHeaders.indexOf("email");
+  const hasEmailColumn = normalizedHeaders.includes("email");
   const importTargets: Readonly<Record<string, string>> = {
     firstname: "firstName",
     "first name": "firstName",
@@ -784,6 +784,8 @@ function parseCsvPreview(csv: string): {
     phone: "phone",
     company: "company",
     title: "title",
+    jobtitle: "title",
+    "job title": "title",
     website: "website",
     linkedin: "linkedinUrl",
     linkedinurl: "linkedinUrl",
@@ -795,14 +797,9 @@ function parseCsvPreview(csv: string): {
   };
   const issues: string[] = [];
   if (headers.length === 0) issues.push("Add a header row before importing.");
-  if (emailIndex < 0) issues.push("No Email column was detected.");
+  if (!hasEmailColumn) issues.push("No Email column was detected.");
   if (new Set(normalizedHeaders).size !== normalizedHeaders.length) {
     issues.push("CSV column names must be unique.");
-  }
-  for (const [index, values] of records.slice(1).entries()) {
-    if (emailIndex >= 0 && !(values[emailIndex] ?? "").trim()) {
-      issues.push(`Row ${index + 2} is missing an email address.`);
-    }
   }
   const mapping = headers.map((sourceColumn, index) => {
     const target = importTargets[normalizedHeaders[index] ?? ""];

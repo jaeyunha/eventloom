@@ -7,8 +7,8 @@ import type {
   PrivateDownloadGrant,
   PrivateUploadGrant,
   RepositoryResult,
-  SpeakerAccessScope,
   SpeakerAcceptedParticipantLookup,
+  SpeakerAccessScope,
   SpeakerAsset,
   SpeakerAssetComment,
   SpeakerEventResource,
@@ -1339,6 +1339,92 @@ describe("SpeakerService organizer speaker writes", () => {
       expectServiceError(error, "VALIDATION_ERROR");
       return true;
     });
+  });
+  it("rejects a roster projection that associates one participant with another participant's canonical email", async () => {
+    const { repository, service } = createOrganizerFixture();
+    repository.roster.push({
+      id: "roster:event-1:speaker-submission:submission-2:participant-2",
+      eventId: "event-1",
+      submissionId: "speaker-submission:submission-2",
+      participantId: "participant-2",
+      displayName: "Stale Marcus",
+      email: "priya@example.test",
+      role: "primary",
+      status: "active",
+      version: 1,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    await expect(
+      service.createOrganizerSpeaker({
+        organizationId: "org-1",
+        eventId: "event-1",
+        accountId: "account-1",
+        displayName: "Priya Raman",
+        email: "PRIYA@example.test",
+        jobTitle: "Principal Engineer",
+        company: "Latticework Systems",
+        biography: "Builds reliable developer platforms.",
+        socialLinks: {},
+        status: "pending",
+        idempotencyKey: "canonical-email-mismatch",
+      }),
+    ).rejects.toSatisfy((error: unknown) => {
+      expectServiceError(error, "VALIDATION_ERROR");
+      return true;
+    });
+    expect(repository.roster).toHaveLength(1);
+  });
+
+  it("synchronizes an existing canonical speaker profile from authoritative organizer metadata", async () => {
+    const { repository, service } = createOrganizerFixture();
+    repository.profiles.push({
+      ...profile("participant-1"),
+      displayName: "Old Priya",
+      email: "priya@example.test",
+      jobTitle: "Old title",
+      company: "Old company",
+      biography: "Old biography",
+      socialLinks: { website: "https://old.example.test" },
+      status: "accepted",
+      version: 3,
+    });
+
+    const roster = await service.createOrganizerSpeaker({
+      organizationId: "org-1",
+      eventId: "event-1",
+      accountId: "account-1",
+      displayName: "Priya Raman",
+      email: "PRIYA@example.test",
+      jobTitle: "Principal Engineer",
+      company: "Latticework Systems",
+      biography: "Builds reliable developer platforms.",
+      socialLinks: { linkedin: "https://linkedin.com/in/priya" },
+      status: "confirmed",
+      idempotencyKey: "canonical-profile-sync",
+    });
+
+    expect(repository.profiles).toHaveLength(1);
+    expect(repository.profiles[0]).toMatchObject({
+      participantId: "participant-1",
+      displayName: "Priya Raman",
+      email: "priya@example.test",
+      jobTitle: "Principal Engineer",
+      company: "Latticework Systems",
+      biography: "Builds reliable developer platforms.",
+      socialLinks: { linkedin: "https://linkedin.com/in/priya" },
+      status: "confirmed",
+      version: 4,
+    });
+    expect(roster.speakers).toEqual([
+      expect.objectContaining({
+        participantId: "participant-1",
+        email: "priya@example.test",
+        jobTitle: "Principal Engineer",
+        company: "Latticework Systems",
+      }),
+    ]);
   });
 });
 

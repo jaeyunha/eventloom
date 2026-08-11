@@ -443,6 +443,8 @@ const CSV_FIELD_TARGETS: Readonly<Record<string, string>> = {
   phone: "phone",
   company: "company",
   title: "title",
+  jobtitle: "title",
+  "job title": "title",
   website: "website",
   linkedin: "linkedinUrl",
   linkedinurl: "linkedinUrl",
@@ -485,15 +487,46 @@ function importColumnMapping(columns: readonly string[]): CrmImportResult["mappi
 function csvRowInput(row: Record<string, string>): CrmImportRow {
   const known: Record<string, unknown> = {};
   const customFields: Record<string, unknown> = {};
-  const names = CSV_FIELD_TARGETS;
   for (const [key, value] of Object.entries(row)) {
-    const target = names[key.trim().toLowerCase()];
-    if (target === "tags") known.tags = value.split(",");
+    const trimmedKey = key.trim();
+    const target = CSV_FIELD_TARGETS[trimmedKey.toLowerCase()];
+    if (target === "email") known.email = value;
+    else if (value.trim().length === 0) continue;
+    else if (target === "tags") known.tags = value.split(",");
     else if (target !== undefined) known[target] = value;
-    else if (key.trim().length > 0) customFields[key.trim()] = value;
+    else if (trimmedKey.length > 0) customFields[trimmedKey] = value;
   }
   if (Object.keys(customFields).length > 0) known.customFields = customFields;
   return known as CrmImportRow;
+}
+
+function normalizeImportRow(row: CrmImportRow): CrmImportRow {
+  const normalized: Record<string, unknown> = { ...row };
+  for (const field of [
+    "firstName",
+    "lastName",
+    "displayName",
+    "phone",
+    "company",
+    "title",
+    "website",
+    "linkedinUrl",
+    "notes",
+    "source",
+    "pipelineStage",
+  ] as const) {
+    const value = normalized[field];
+    if (typeof value === "string" && value.trim().length === 0) delete normalized[field];
+  }
+  const jobTitle = normalized.jobTitle;
+  if (
+    normalized.title === undefined &&
+    typeof jobTitle === "string" &&
+    jobTitle.trim().length > 0
+  ) {
+    normalized.title = jobTitle;
+  }
+  return normalized as CrmImportRow;
 }
 
 function normalizeSegmentRules(value: unknown): readonly CrmSegmentRule[] {
@@ -801,10 +834,11 @@ export class CrmService {
       let updated = 0;
       let skipped = 0;
       for (const [index, raw] of rawRows.entries()) {
+        const row = normalizeImportRow(raw);
         const rowNumber = index + 1;
         let identity: string | null;
         try {
-          identity = nullableEmail(raw.email) ?? null;
+          identity = nullableEmail(row.email) ?? null;
         } catch (error) {
           if (!(error instanceof CrmServiceError)) throw error;
           skipped += 1;
@@ -831,7 +865,7 @@ export class CrmService {
         try {
           const candidate = this.buildContact(
             organizationId,
-            { ...raw, email: identity, source: raw.source ?? "csv" },
+            { ...row, email: identity, source: row.source ?? "csv" },
             undefined,
             "csv",
           );
@@ -862,7 +896,7 @@ export class CrmService {
           } else {
             const merged = this.buildContact(
               organizationId,
-              { ...raw, email: identity },
+              { ...row, email: identity },
               existingContact,
               existingContact.source,
             );

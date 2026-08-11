@@ -127,6 +127,88 @@ describe("CrmService", () => {
     ).toEqual(["Grace Hopper"]);
   });
 
+  it("imports same-name contacts by normalized email and preserves speaker metadata on partial updates", async () => {
+    const crm = service();
+    const result = await crm.importCsv(actor, {
+      organizationId: "org-a",
+      idempotencyKey: "speaker-import-identity",
+      csv: [
+        "name,email,jobTitle,company,source",
+        "Priya Raman,priya@example.com,Principal Engineer,Latticework Systems,speaker",
+        "Priya Raman,priya.second@example.com,Community Lead,Northstar,speaker",
+        "Priya Updated, PRIYA@example.com, , ,speaker",
+      ].join("\n"),
+    });
+
+    expect(result).toMatchObject({ created: 2, updated: 1, skipped: 0 });
+    const contacts = await crm.listContacts(actor, "org-a", { limit: 10 });
+    expect(contacts).toHaveLength(2);
+    expect(contacts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          displayName: "Priya Updated",
+          email: "priya@example.com",
+          company: "Latticework Systems",
+          title: "Principal Engineer",
+          source: "speaker",
+        }),
+        expect.objectContaining({
+          displayName: "Priya Raman",
+          email: "priya.second@example.com",
+          company: "Northstar",
+          title: "Community Lead",
+          source: "speaker",
+        }),
+      ]),
+    );
+    expect(result.rows[0]?.contactId).toBe(result.rows[2]?.contactId);
+  });
+
+  it("maps speaker row metadata without clearing fields omitted by a later email upsert", async () => {
+    const crm = service();
+    const created = await crm.importContacts(actor, {
+      organizationId: "org-a",
+      idempotencyKey: "speaker-row-create",
+      rows: [
+        {
+          displayName: "Marcus Okafor",
+          email: "MARCUS@example.com",
+          company: "Northstar",
+          jobTitle: "Community Lead",
+          source: "speaker",
+        },
+      ],
+    });
+    const contactId = created.rows[0]?.contactId;
+    expect(contactId).not.toBeNull();
+
+    const updated = await crm.importContacts(actor, {
+      organizationId: "org-a",
+      idempotencyKey: "speaker-row-update",
+      rows: [
+        {
+          displayName: "Marcus O.",
+          email: " marcus@example.com ",
+          company: " ",
+          jobTitle: " ",
+          source: "speaker",
+        },
+      ],
+    });
+
+    expect(updated).toMatchObject({ created: 0, updated: 1, skipped: 0 });
+    expect(updated.contacts).toEqual([
+      expect.objectContaining({
+        id: contactId,
+        displayName: "Marcus O.",
+        email: "marcus@example.com",
+        company: "Northstar",
+        title: "Community Lead",
+        source: "speaker",
+      }),
+    ]);
+    await expect(crm.listContacts(actor, "org-a")).resolves.toHaveLength(1);
+  });
   it("detects and merges duplicates, retaining tags and custom fields", async () => {
     const crm = service();
     const primary = await crm.createContact(actor, {

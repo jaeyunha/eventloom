@@ -5953,14 +5953,25 @@ export class SpeakerService {
     const existingIdentity = matchingEmailEntries[0];
     const canonicalLookup = this.repository.findAcceptedParticipantByEmail;
     const canonicalResult =
-      existingIdentity === undefined && canonicalLookup !== undefined
-        ? await canonicalLookup.call(this.repository, input.eventId, scope.submissionIds, email)
-        : null;
+      canonicalLookup === undefined
+        ? null
+        : await canonicalLookup.call(this.repository, input.eventId, scope.submissionIds, email);
     if (canonicalResult !== null && "ambiguous" in canonicalResult) {
       throw new SpeakerServiceError(
         "VALIDATION_ERROR",
         400,
         "Multiple accepted participants use this verified email.",
+      );
+    }
+    if (
+      canonicalResult !== null &&
+      existingIdentity !== undefined &&
+      existingIdentity.participantId.trim() !== canonicalResult.participantId.trim()
+    ) {
+      throw new SpeakerServiceError(
+        "VALIDATION_ERROR",
+        400,
+        "The verified speaker email belongs to a different participant.",
       );
     }
     const canonical = canonicalResult;
@@ -5999,38 +6010,22 @@ export class SpeakerService {
           "A speaker with that canonical participant already exists.",
         );
       }
-      const ensureOrganizerProfile = (
-        this.repository as SpeakerRepository & {
-          ensureOrganizerSpeakerProfile?: (input: {
-            organizationId: string;
-            eventId: string;
-            participantId: string;
-            displayName: string;
-            email: string;
-            jobTitle: string;
-            company: string;
-            travelLogistics?: Partial<SpeakerTravelLogistics>;
-            biography: string;
-            socialLinks: Readonly<Record<string, string>>;
-            status: string;
-            updatedAt: string;
-          }) => Promise<SpeakerProfile>;
-        }
-      ).ensureOrganizerSpeakerProfile;
-      if (ensureOrganizerProfile !== undefined) {
-        const currentProfile = await this.repository.getProfile(input.eventId, participantId);
-        const needsProfile =
-          currentProfile === null ||
-          currentProfile.displayName !== displayName ||
-          currentProfile.email?.trim().toLowerCase() !== email ||
-          currentProfile.jobTitle !== jobTitle ||
-          currentProfile.company !== company ||
-          currentProfile.biography !== biography ||
-          JSON.stringify(currentProfile.socialLinks ?? currentProfile.social ?? {}) !==
-            JSON.stringify(socialLinks) ||
-          currentProfile.status !== status ||
-          JSON.stringify(currentProfile.travelLogistics) !== JSON.stringify(travelLogistics);
-        if (needsProfile) {
+      const currentProfile = await this.repository.getProfile(input.eventId, participantId);
+      const needsProfile =
+        currentProfile === null ||
+        currentProfile.displayName !== displayName ||
+        currentProfile.email?.trim().toLowerCase() !== email ||
+        currentProfile.jobTitle !== jobTitle ||
+        currentProfile.company !== company ||
+        currentProfile.biography !== biography ||
+        JSON.stringify(currentProfile.socialLinks ?? currentProfile.social ?? {}) !==
+          JSON.stringify(socialLinks) ||
+        currentProfile.status !== status ||
+        JSON.stringify(currentProfile.travelLogistics) !== JSON.stringify(travelLogistics);
+      if (needsProfile) {
+        const updatedAt = this.now().toISOString();
+        const ensureOrganizerProfile = this.repository.ensureOrganizerSpeakerProfile;
+        if (ensureOrganizerProfile !== undefined) {
           await ensureOrganizerProfile.call(this.repository, {
             organizationId: input.organizationId,
             eventId: input.eventId,
@@ -6043,8 +6038,56 @@ export class SpeakerService {
             biography,
             socialLinks,
             status,
-            updatedAt: this.now().toISOString(),
+            updatedAt,
           });
+        } else if (currentProfile !== null && this.repository.updateProfile !== undefined) {
+          const profileResult = await this.repository.updateProfile({
+            eventId: input.eventId,
+            participantId,
+            displayName,
+            email,
+            jobTitle,
+            company,
+            travelLogistics,
+            biography,
+            socialLinks,
+            status,
+            expectedVersion: currentProfile.version,
+            updatedAt,
+            actorAccountId: input.accountId,
+          });
+          if (!profileResult.ok) {
+            throw new SpeakerServiceError(
+              profileResult.reason === "not_found" ? "NOT_FOUND" : "VERSION_CONFLICT",
+              profileResult.reason === "not_found" ? 404 : 409,
+              "The speaker profile changed. Reload it before saving.",
+            );
+          }
+        } else if (currentProfile === null && this.repository.createProfile !== undefined) {
+          const profileResult = await this.repository.createProfile({
+            id: `profile:${input.eventId}:${participantId}`,
+            eventId: input.eventId,
+            participantId,
+            displayName,
+            email,
+            jobTitle,
+            company,
+            biography,
+            socialLinks,
+            travelLogistics,
+            status,
+            version: 1,
+            updatedAt,
+          });
+          if (!profileResult.ok) {
+            throw new SpeakerServiceError(
+              profileResult.reason === "not_found" ? "NOT_FOUND" : "VERSION_CONFLICT",
+              profileResult.reason === "not_found" ? 404 : 409,
+              "The speaker profile could not be created.",
+            );
+          }
+        } else {
+          throw notFound();
         }
       }
       const roster = await this.listOrganizerSpeakerRoster(
@@ -6127,32 +6170,58 @@ export class SpeakerService {
         status,
         updatedAt: now,
       });
-    } else if (this.repository.createProfile !== undefined) {
-      const profile: SpeakerProfile = {
-        id: `profile:${input.eventId}:${participantId}`,
-        eventId: input.eventId,
-        participantId,
-        displayName,
-        email,
-        jobTitle,
-        company,
-        biography,
-        socialLinks,
-        travelLogistics,
-        status,
-        version: 1,
-        updatedAt: now,
-      };
-      const profileResult = await this.repository.createProfile(profile);
-      if (!profileResult.ok) {
-        throw new SpeakerServiceError(
-          profileResult.reason === "not_found" ? "NOT_FOUND" : "VERSION_CONFLICT",
-          profileResult.reason === "not_found" ? 404 : 409,
-          "The speaker profile could not be created.",
-        );
-      }
     } else {
-      throw notFound();
+      const currentProfile = await this.repository.getProfile(input.eventId, participantId);
+      if (currentProfile !== null && this.repository.updateProfile !== undefined) {
+        const profileResult = await this.repository.updateProfile({
+          eventId: input.eventId,
+          participantId,
+          displayName,
+          email,
+          jobTitle,
+          company,
+          travelLogistics,
+          biography,
+          socialLinks,
+          status,
+          expectedVersion: currentProfile.version,
+          updatedAt: now,
+          actorAccountId: input.accountId,
+        });
+        if (!profileResult.ok) {
+          throw new SpeakerServiceError(
+            profileResult.reason === "not_found" ? "NOT_FOUND" : "VERSION_CONFLICT",
+            profileResult.reason === "not_found" ? 404 : 409,
+            "The speaker profile changed. Reload it before saving.",
+          );
+        }
+      } else if (currentProfile === null && this.repository.createProfile !== undefined) {
+        const profile: SpeakerProfile = {
+          id: `profile:${input.eventId}:${participantId}`,
+          eventId: input.eventId,
+          participantId,
+          displayName,
+          email,
+          jobTitle,
+          company,
+          biography,
+          socialLinks,
+          travelLogistics,
+          status,
+          version: 1,
+          updatedAt: now,
+        };
+        const profileResult = await this.repository.createProfile(profile);
+        if (!profileResult.ok) {
+          throw new SpeakerServiceError(
+            profileResult.reason === "not_found" ? "NOT_FOUND" : "VERSION_CONFLICT",
+            profileResult.reason === "not_found" ? 404 : 409,
+            "The speaker profile could not be created.",
+          );
+        }
+      } else {
+        throw notFound();
+      }
     }
     const organizerCacheKey = this.organizerSpeakerCacheKey(input.organizationId, input.eventId);
     this.organizerSpeakerCache.set(organizerCacheKey, [
