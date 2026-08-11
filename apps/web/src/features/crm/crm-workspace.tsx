@@ -2862,7 +2862,7 @@ export function CrmWorkspace({
   initialEvents,
   initialAnalytics = null,
 }: CrmWorkspaceProps) {
-  const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL?.trim() ?? "";
+  const apiBaseUrl = "";
   const api = useMemo(
     () => providedApi ?? createCrmApi(apiBaseUrl, organizationId),
     [apiBaseUrl, organizationId, providedApi],

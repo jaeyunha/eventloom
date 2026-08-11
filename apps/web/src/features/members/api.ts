@@ -346,8 +346,6 @@ export function createMemberApi(
   fetcher: Fetcher = globalThis.fetch,
 ): MemberApi {
   const normalizedBaseUrl = baseUrl.trim().replace(/\/+$/u, "");
-  if (normalizedBaseUrl.length === 0)
-    throw new TypeError("An API URL is required for member requests.");
   const organizationSegment = pathSegment(organizationId, "organization ID");
   const endpoint = `${normalizedBaseUrl}/api/admin/organizations/${organizationSegment}/members`;
 

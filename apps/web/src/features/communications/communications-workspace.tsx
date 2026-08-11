@@ -904,10 +904,9 @@ export function CommunicationsWorkspace({
   initialSend = null,
   providerState: initialProviderState = "unknown",
 }: CommunicationsWorkspaceProps) {
-  const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
   const api = useMemo(
-    () => providedApi ?? (apiBaseUrl ? createCommunicationApi(apiBaseUrl, organizationId) : null),
-    [apiBaseUrl, organizationId, providedApi],
+    () => providedApi ?? createCommunicationApi("", organizationId),
+    [organizationId, providedApi],
   );
   const [templates, setTemplates] = useState<readonly CommunicationTemplate[]>(
     initialTemplates ?? [],
@@ -918,11 +917,9 @@ export function CommunicationsWorkspace({
   const [creatingTemplate, setCreatingTemplate] = useState(false);
   const [selectedAudience, setSelectedAudience] =
     useState<CommunicationAudience>("all_participants");
-  const [loading, setLoading] = useState(initialTemplates === undefined && api !== null);
+  const [loading, setLoading] = useState(initialTemplates === undefined);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(
-    api === null ? "The organizer communication API is not configured." : null,
-  );
+  const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [providerState, setProviderState] =
     useState<CommunicationProviderState>(initialProviderState);
@@ -931,10 +928,6 @@ export function CommunicationsWorkspace({
 
   const loadTemplates = useCallback(
     async (signal?: AbortSignal) => {
-      if (api === null) {
-        setLoading(false);
-        return;
-      }
       setLoading(true);
       setError(null);
       try {
@@ -974,7 +967,6 @@ export function CommunicationsWorkspace({
   }
 
   async function saveTemplate(draft: TemplateDraft): Promise<void> {
-    if (api === null) return;
     setBusy(true);
     setError(null);
     setStatusMessage(null);
@@ -998,7 +990,7 @@ export function CommunicationsWorkspace({
   }
 
   async function saveVersion(draft: TemplateDraft): Promise<void> {
-    if (api === null || draft.templateId === undefined) return;
+    if (draft.templateId === undefined) return;
     setBusy(true);
     setError(null);
     setStatusMessage(null);
@@ -1023,7 +1015,6 @@ export function CommunicationsWorkspace({
   }
 
   async function approveTemplate(template: CommunicationTemplate): Promise<void> {
-    if (api === null) return;
     setBusy(true);
     setError(null);
     setStatusMessage(null);
@@ -1043,7 +1034,6 @@ export function CommunicationsWorkspace({
   }
 
   async function createPreview(): Promise<void> {
-    if (api === null) return;
     const approvedGroupTemplates = templates.filter(
       (candidate) =>
         candidate.purpose === "organizer_group_email" && candidate.status === "approved",
@@ -1093,7 +1083,7 @@ export function CommunicationsWorkspace({
   }
 
   async function confirmSend(): Promise<void> {
-    if (api === null || preview === null || preview.recipientCount === 0) return;
+    if (preview === null || preview.recipientCount === 0) return;
     const idempotencyKey = idempotencyKeyRef.current;
     if (idempotencyKey === null) {
       setError(
@@ -1123,7 +1113,7 @@ export function CommunicationsWorkspace({
   }
 
   async function retryFailed(): Promise<void> {
-    if (api === null || send === null) return;
+    if (send === null) return;
     setBusy(true);
     setError(null);
     setStatusMessage(null);

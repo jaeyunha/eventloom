@@ -174,7 +174,6 @@ export interface DeliverablesWorkspaceViewProps {
   readonly statusMessage?: string | null;
   readonly capabilityMessages?: readonly string[];
   readonly operationStates?: readonly DeliverablesOperationState[];
-  readonly apiConfigured?: boolean;
   readonly onCreateTask?: (input: DeliverableTaskInput) => Promise<void>;
   readonly onInspectAsset?: (assetId: string) => void;
   readonly selectedAssetId?: string | null;
@@ -2098,7 +2097,6 @@ export function DeliverablesWorkspaceView({
   statusMessage = null,
   capabilityMessages = [],
   operationStates = [],
-  apiConfigured = true,
   onCreateTask,
   onInspectAsset,
   selectedAssetId = null,
@@ -2222,17 +2220,6 @@ export function DeliverablesWorkspaceView({
           tabIndex={-1}
           style={{ display: "grid", gap: "1rem" }}
         >
-          {!apiConfigured ? (
-            <div role="alert" style={dangerStyle}>
-              <strong>
-                {filesMode ? "Files API is not configured." : "Deliverables API is not configured."}
-              </strong>
-              <p>
-                Set the event-scoped API URL before organizer data can be loaded. No task or asset
-                action was attempted.
-              </p>
-            </div>
-          ) : null}
           {error !== null ? (
             <div role="alert" style={dangerStyle}>
               <strong>
@@ -2442,14 +2429,9 @@ export function DeliverablesWorkspace({
   api: providedApi,
   initialData,
 }: DeliverablesWorkspaceProps) {
-  const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
   const api = useMemo(
-    () =>
-      providedApi ??
-      (apiBaseUrl === undefined || apiBaseUrl.length === 0
-        ? null
-        : createDeliverablesApi(apiBaseUrl, organizationId, eventId)),
-    [apiBaseUrl, eventId, organizationId, providedApi],
+    () => providedApi ?? createDeliverablesApi("", organizationId, eventId),
+    [eventId, organizationId, providedApi],
   );
   const [sessions, setSessions] = useState<readonly DeliverableSession[]>(
     initialData?.sessions ?? [],
@@ -2460,13 +2442,9 @@ export function DeliverablesWorkspace({
     initialData?.profiles ?? [],
   );
   const [matrix, setMatrix] = useState<DeliverableTaskMatrix | undefined>(initialData?.matrix);
-  const [loading, setLoading] = useState(initialData === undefined && api !== null);
+  const [loading, setLoading] = useState(initialData === undefined);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(
-    api === null
-      ? `The organizer ${mode === "files" ? "Files" : "deliverables"} API is not configured.`
-      : null,
-  );
+  const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [capabilityMessages, setCapabilityMessages] = useState<readonly string[]>([]);
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
@@ -2506,7 +2484,7 @@ export function DeliverablesWorkspace({
 
   const load = useCallback(
     async (signal?: AbortSignal) => {
-      if (api === null || initialData !== undefined) {
+      if (initialData !== undefined) {
         setLoading(false);
         return;
       }
@@ -2645,7 +2623,7 @@ export function DeliverablesWorkspace({
   }, [initialData, load]);
 
   useEffect(() => {
-    if (selectedAssetId === null || api === null) return;
+    if (selectedAssetId === null) return;
     const selected = assets.find((asset) => asset.id === selectedAssetId);
     if (selected === undefined) return;
     const controller = new AbortController();
@@ -2862,7 +2840,6 @@ export function DeliverablesWorkspace({
     readonly title: string;
     readonly description: string;
   }): Promise<void> {
-    if (api === null) return;
     setBusy(true);
     setError(null);
     setStatusMessage(null);
@@ -2881,7 +2858,6 @@ export function DeliverablesWorkspace({
     session: DeliverableSession,
     contentStatus: "Approved" | "Needs changes",
   ): Promise<void> {
-    if (api === null) return;
     setBusy(true);
     setError(null);
     setStatusMessage(null);
@@ -3113,7 +3089,6 @@ export function DeliverablesWorkspace({
       operationStates={Object.values(operationStates).filter(
         (state): state is DeliverablesOperationState => state !== undefined,
       )}
-      apiConfigured={api !== null}
       {...(api?.createTask === undefined ? {} : { onCreateTask: createTask })}
       onInspectAsset={setSelectedAssetId}
       selectedAssetId={selectedAssetId}
@@ -3129,7 +3104,8 @@ export function DeliverablesWorkspace({
           : { onExportDeliverables: exportDeliverables })}
       {...(reviewAssetHandler === undefined ? {} : { onReviewAsset: reviewAssetHandler })}
       {...(api?.sendBulkReminder === undefined ? {} : { onSendBulkReminder: sendBulkReminder })}
-      {...(api === null ? {} : { onSaveSession: saveSession, onApproveSession: approveSession })}
+      onSaveSession={saveSession}
+      onApproveSession={approveSession}
       {...(api?.restoreSessionVersion === undefined
         ? {}
         : { onRestoreSessionVersion: restoreSessionVersion })}

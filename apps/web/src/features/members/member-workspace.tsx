@@ -174,10 +174,9 @@ const tableCellStyle = {
   verticalAlign: "top" as const,
 } as const;
 
-function apiBaseUrl(explicit: string | undefined): string | null {
-  const value = explicit ?? process.env.NEXT_PUBLIC_API_URL;
-  const normalized = value?.trim().replace(/\/+$/u, "");
-  return normalized && normalized.length > 0 ? normalized : null;
+function apiBaseUrl(explicit: string | undefined): string {
+  const normalized = (explicit ?? "").trim().replace(/\/+$/u, "");
+  return normalized;
 }
 
 function statusLabel(value: string): string {
@@ -419,10 +418,6 @@ export function MemberWorkspace({
       setApi(providedApi);
       return;
     }
-    if (baseUrl === null) {
-      setApi(null);
-      return;
-    }
     try {
       setApi(createMemberApi(baseUrl, organizationId));
     } catch (reason: unknown) {
@@ -432,11 +427,6 @@ export function MemberWorkspace({
   }, [baseUrl, organizationId, providedApi]);
   const loadOrganizations = useCallback(
     async (signal?: AbortSignal): Promise<void> => {
-      if (baseUrl === null) {
-        setOrganizations([]);
-        setOrganizationsError(null);
-        return;
-      }
       setOrganizationsLoading(true);
       setOrganizationsError(null);
       try {
@@ -477,11 +467,7 @@ export function MemberWorkspace({
     async (signal?: AbortSignal): Promise<void> => {
       if (api === null) {
         setLoading(false);
-        setError(
-          baseUrl === null
-            ? "The organization member API is not configured."
-            : "The organization member API is unavailable.",
-        );
+        setError("The organization member API is unavailable.");
         return;
       }
       setLoading(true);
@@ -520,11 +506,7 @@ export function MemberWorkspace({
       const eventScope = eventValue.trim();
       const roundScope = roundValue.trim();
       if (api === null) {
-        setPoolError(
-          baseUrl === null
-            ? "The organization member API is not configured."
-            : "The reviewer pool API is unavailable.",
-        );
+        setPoolError("The reviewer pool API is unavailable.");
         return;
       }
       if (!eventScope || !roundScope) {
@@ -597,11 +579,7 @@ export function MemberWorkspace({
   async function inviteMember(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (api === null) {
-      setNotice(
-        baseUrl === null
-          ? "The organization member API is not configured."
-          : "The organization member invitation API is unavailable.",
-      );
+      setNotice("The organization member invitation API is unavailable.");
       return;
     }
     const email = inviteDraft.email.trim();
@@ -720,11 +698,7 @@ export function MemberWorkspace({
 
   async function savePool(): Promise<void> {
     if (api === null) {
-      setPoolError(
-        baseUrl === null
-          ? "The organization member API is not configured."
-          : "The reviewer pool API is unavailable.",
-      );
+      setPoolError("The reviewer pool API is unavailable.");
       return;
     }
     const eventScope = poolEventId.trim();
@@ -776,10 +750,6 @@ export function MemberWorkspace({
 
   async function createOrganization(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
-    if (baseUrl === null) {
-      setOrganizationNotice("The organization API is not configured.");
-      return;
-    }
     const nextOrganizationId = organizationDraft.organizationId.trim();
     const nextSlug = organizationDraft.slug.trim();
     const nextName = organizationDraft.name.trim();
@@ -823,10 +793,6 @@ export function MemberWorkspace({
 
   async function updateOrganization(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
-    if (baseUrl === null) {
-      setOrganizationNotice("The organization API is not configured.");
-      return;
-    }
     const current = organizations.find(
       (organization) => organization.organizationId === organizationId.trim(),
     );

@@ -112,6 +112,21 @@ describe("speaker API adapter", () => {
     });
     expect(calls[0]?.init).toMatchObject({ credentials: "include", cache: "no-store" });
   });
+  it("uses a same-origin API path when the base URL is empty", async () => {
+    const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+    const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      return new Response(JSON.stringify({ data: roster }), { status: 200 });
+    };
+    const api = createSpeakerApi("", roster.organizationId, roster.eventId, fetcher);
+
+    await expect(api.list()).resolves.toEqual(roster);
+
+    expect(String(calls[0]?.input)).toBe(
+      "/api/admin/organizations/org-1/events/event-1/speakers",
+    );
+    expect(calls[0]?.init).toMatchObject({ credentials: "include" });
+  });
   it("posts an idempotent manual speaker with status and logistics metadata", async () => {
     const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
     const api = createSpeakerApi(

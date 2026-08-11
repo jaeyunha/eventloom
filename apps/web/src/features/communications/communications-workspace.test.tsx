@@ -357,4 +357,20 @@ describe("communications organizer workspace", () => {
       }),
     ).rejects.toBeInstanceOf(CommunicationApiError);
   });
+  it("routes an empty base URL through the same-origin communications gateway", async () => {
+    const fetcher = vi.fn<TestFetcher>().mockResolvedValue(jsonResponse({ templates: [] }));
+    const api = createCommunicationApi("", "org-1", fetcher);
+
+    await expect(api.listTemplates("event-1")).resolves.toEqual([]);
+
+    const [input, init] = fetcher.mock.calls[0] ?? [];
+    const requestedUrl = String(input);
+    expect(requestedUrl).toBe(
+      "/api/admin/organizations/org-1/events/event-1/communications/templates",
+    );
+    expect(requestedUrl.startsWith("/api/")).toBe(true);
+    expect(requestedUrl).not.toMatch(/^\/\//);
+    expect(requestedUrl).not.toMatch(/^https?:\/\//);
+    expect(init?.credentials).toBe("include");
+  });
 });

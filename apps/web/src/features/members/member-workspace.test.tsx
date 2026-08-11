@@ -123,6 +123,19 @@ describe("organization member API adapter", () => {
     });
     expect(calls[0]?.init).toMatchObject({ credentials: "include", cache: "no-store" });
   });
+  it("uses a same-origin API path when the base URL is empty", async () => {
+    const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+    const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push(init === undefined ? { input } : { input, init });
+      return new Response(JSON.stringify({ data: [owner] }), { status: 200 });
+    };
+    const api = createMemberApi("", owner.organizationId, fetcher);
+
+    await expect(api.listMembers()).resolves.toEqual([owner]);
+
+    expect(String(calls[0]?.input)).toBe("/api/admin/organizations/org-1/members");
+    expect(calls[0]?.init).toMatchObject({ credentials: "include" });
+  });
 
   it("rejects a cross-organization response and requires tenant scope", async () => {
     const api = createMemberApi(
@@ -313,14 +326,12 @@ describe("member invitation setup", () => {
       createElement(MemberSetup, {
         organizationId: "org-1",
         token: "secret-token",
-        apiBaseUrl: "https://api.example.test",
       }),
     );
     const missing = renderToStaticMarkup(
       createElement(MemberSetup, {
         organizationId: "org-1",
         token: null,
-        apiBaseUrl: "https://api.example.test",
       }),
     );
 

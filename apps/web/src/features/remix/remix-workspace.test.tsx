@@ -91,6 +91,22 @@ describe("remix API", () => {
     });
     expect(calls[0]?.init?.credentials).toBe("include");
   });
+  it("uses a same-origin API path when the base URL is empty", async () => {
+    const calls: { url: string; init: RequestInit | undefined }[] = [];
+    const generated = candidate();
+    const fetcher: RemixFetcher = async (input, init) => {
+      calls.push({ url: String(input), init });
+      return response({ candidates: [generated] });
+    };
+    const api = createRemixApi("", "org-1", fetcher);
+
+    await expect(api.listCandidates({ eventId: "event-1" })).resolves.toEqual([generated]);
+
+    expect(calls[0]?.url).toBe(
+      "/api/admin/organizations/org-1/events/event-1/remix/candidates",
+    );
+    expect(calls[0]?.init?.credentials).toBe("include");
+  });
 
   it("preserves regeneration lineage and sends optional guidance", async () => {
     const child = candidate({

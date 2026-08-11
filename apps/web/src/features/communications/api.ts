@@ -342,8 +342,6 @@ export function createCommunicationApi(
   fetcher: Fetcher = fetch,
 ): CommunicationApi {
   const normalizedBaseUrl = trimTrailingSlash(baseUrl.trim());
-  if (normalizedBaseUrl.length === 0)
-    throw new TypeError("An API URL is required for communication requests.");
   const apiBase = `${normalizedBaseUrl}/api/admin/organizations/${segment(organizationId, "organization ID")}/events`;
 
   async function request<T>(eventId: string, path: string, init: RequestInit = {}): Promise<T> {

@@ -62,10 +62,9 @@ export function IntegrationAdmin({
   initialSnapshot,
   api: injectedApi,
 }: IntegrationAdminProps) {
-  const configuredApiUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
   const api = useMemo(
-    () => injectedApi ?? (configuredApiUrl ? createIntegrationAdminApi(configuredApiUrl) : null),
-    [configuredApiUrl, injectedApi],
+    () => injectedApi ?? createIntegrationAdminApi(""),
+    [injectedApi],
   );
   const [snapshot, setSnapshot] = useState<IntegrationAdminSnapshot | null>(
     initialSnapshot ?? null,
@@ -82,13 +81,6 @@ export function IntegrationAdmin({
 
   const loadSnapshot = useCallback(
     async (signal?: AbortSignal) => {
-      if (!api) {
-        if (!initialSnapshot) {
-          setLoadError("The admin API URL is not configured.");
-          setLoading(false);
-        }
-        return;
-      }
       setLoadError(null);
       try {
         setSnapshot(await api.getSnapshot(eventId, signal));
@@ -113,10 +105,6 @@ export function IntegrationAdmin({
 
   const mutate = useCallback(
     async <T,>(operation: () => Promise<T>, successMessage: string): Promise<T | null> => {
-      if (!api) {
-        setMutationError("The admin API URL is not configured.");
-        return null;
-      }
       setBusy(true);
       setMutationError(null);
       setNotice(null);
@@ -135,9 +123,6 @@ export function IntegrationAdmin({
   );
 
   const refreshAfter = useCallback(async () => {
-    if (!api) {
-      return;
-    }
     try {
       setSnapshot(await api.getSnapshot(eventId));
     } catch (error) {
@@ -148,10 +133,6 @@ export function IntegrationAdmin({
   const actions = {
     busy,
     async saveCredential(provider: "opensend", secret: string) {
-      if (!api) {
-        setMutationError("The admin API URL is not configured.");
-        return false;
-      }
       const saved = await mutate(
         () => api.saveCredential({ eventId, provider, secret }),
         "OpenSend credential saved.",
@@ -167,10 +148,6 @@ export function IntegrationAdmin({
         ? Omit<Extract<P, object>, "eventId">
         : never,
     ) {
-      if (!api) {
-        setMutationError("The admin API URL is not configured.");
-        return false;
-      }
       const secret = await mutate(
         () => api.createApiKey({ ...input, eventId }),
         "API key created. Copy it before leaving this page.",
@@ -183,10 +160,6 @@ export function IntegrationAdmin({
       return true;
     },
     async revokeApiKey(apiKeyId: string) {
-      if (!api) {
-        setMutationError("The admin API URL is not configured.");
-        return false;
-      }
       const revoked = await mutate(() => api.revokeApiKey(eventId, apiKeyId), "API key revoked.");
       if (revoked === null) {
         return false;
@@ -199,10 +172,6 @@ export function IntegrationAdmin({
         ? Omit<Extract<P, object>, "eventId">
         : never,
     ) {
-      if (!api) {
-        setMutationError("The admin API URL is not configured.");
-        return false;
-      }
       const secret = await mutate(
         () => api.createWebhook({ ...input, eventId }),
         "Webhook endpoint created. Copy its signing secret now.",
@@ -215,10 +184,6 @@ export function IntegrationAdmin({
       return true;
     },
     async setWebhookActive(subscriptionId: string, active: boolean) {
-      if (!api) {
-        setMutationError("The admin API URL is not configured.");
-        return false;
-      }
       const updated = await mutate(
         () => api.setWebhookActive(eventId, subscriptionId, active),
         active ? "Webhook deliveries resumed." : "Webhook deliveries paused.",
@@ -230,10 +195,6 @@ export function IntegrationAdmin({
       return true;
     },
     async rotateWebhookSecret(subscriptionId: string) {
-      if (!api) {
-        setMutationError("The admin API URL is not configured.");
-        return false;
-      }
       const secret = await mutate(
         () => api.rotateWebhookSecret(eventId, subscriptionId),
         "Signing secret rotated. Update the endpoint before dismissing it.",
@@ -246,10 +207,6 @@ export function IntegrationAdmin({
       return true;
     },
     async deleteWebhook(subscriptionId: string) {
-      if (!api) {
-        setMutationError("The admin API URL is not configured.");
-        return false;
-      }
       const removed = await mutate(
         () => api.deleteWebhook(eventId, subscriptionId),
         "Webhook endpoint removed.",
@@ -261,10 +218,6 @@ export function IntegrationAdmin({
       return true;
     },
     async retryCalendarDelivery(deliveryId: string) {
-      if (!api) {
-        setMutationError("The admin API URL is not configured.");
-        return false;
-      }
       const retried = await mutate(
         () => api.retryCalendarDelivery(eventId, deliveryId),
         "Calendar delivery queued for retry.",

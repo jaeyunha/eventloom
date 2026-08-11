@@ -419,17 +419,17 @@ function WorkspaceStatus({
 
 export function RemixWorkspace({ organizationId, eventId, api: apiOverride }: RemixWorkspaceProps) {
   const scopeValid = organizationId.trim().length > 0 && eventId.trim().length > 0;
-  const baseUrl = process.env.NEXT_PUBLIC_API_URL?.trim() ?? "";
+  const baseUrl = "";
   const testMode = apiOverride === undefined && process.env.NODE_ENV === "test";
   const api = useMemo(() => {
     if (apiOverride !== undefined) return apiOverride;
-    if (!scopeValid || baseUrl.length === 0) return null;
+    if (testMode || !scopeValid) return null;
     try {
       return createRemixApi(baseUrl, organizationId);
     } catch {
       return null;
     }
-  }, [apiOverride, baseUrl, organizationId, scopeValid]);
+  }, [apiOverride, baseUrl, organizationId, scopeValid, testMode]);
   const demo = useMemo(() => demoWorkspaceData(eventId), [eventId]);
   const [sourceType, setSourceType] = useState<RemixSourceType>("session");
   const sourceTypeInitialized = useRef(false);
@@ -463,7 +463,6 @@ export function RemixWorkspace({ organizationId, eventId, api: apiOverride }: Re
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(() => {
     if (!scopeValid) return "Organization and event scope are required.";
-    if (!testMode && api === null) return "The event-scoped remix API is not configured.";
     return null;
   });
   const [actionMessage, setActionMessage] = useState<string | null>(null);
@@ -493,7 +492,6 @@ export function RemixWorkspace({ organizationId, eventId, api: apiOverride }: Re
     }
     if (api === null) {
       setLoading(false);
-      setError("The event-scoped remix API is not configured.");
       return () => {
         active = false;
       };

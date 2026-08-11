@@ -214,13 +214,9 @@ function editDraftFor(speaker: SpeakerRecord): EditDraft {
   };
 }
 
-function apiBaseUrl(explicit: string | undefined): string | null {
-  const value =
-    explicit ??
-    process.env.NEXT_PUBLIC_API_URL ??
-    (typeof window === "undefined" ? undefined : window.location.origin);
-  const normalized = value?.trim().replace(/\/+$/u, "");
-  return normalized && normalized.length > 0 ? normalized : null;
+function apiBaseUrl(explicit: string | undefined): string {
+  const normalized = (explicit ?? "").trim().replace(/\/+$/u, "");
+  return normalized;
 }
 
 function errorMessage(reason: unknown): string {
@@ -971,10 +967,6 @@ export function SpeakerWorkspace({
       setApi(providedApi);
       return;
     }
-    if (baseUrl === null) {
-      setApi(null);
-      return;
-    }
     try {
       setApi(createSpeakerApi(baseUrl, organizationId, eventId));
     } catch (reason: unknown) {
@@ -986,7 +978,6 @@ export function SpeakerWorkspace({
   useEffect(() => {
     if (api === null) {
       setLoading(false);
-      if (baseUrl === null) setError("The organizer speaker API is not configured.");
       return;
     }
     const requestId = rosterRequestRef.current + 1;
@@ -1305,11 +1296,7 @@ export function SpeakerWorkspace({
   }
   async function reload(message?: string): Promise<void> {
     if (api === null) {
-      setError(
-        baseUrl === null
-          ? "The organizer speaker API is not configured."
-          : "The speaker API is unavailable.",
-      );
+      setError("The speaker API is unavailable.");
       return;
     }
     const requestId = rosterRequestRef.current + 1;

@@ -461,7 +461,6 @@ export function createSpeakerApi(
   const normalizedBaseUrl = baseWithoutTrailingSlash(baseUrl.trim());
   const normalizedOrganizationId = organizationId.trim();
   const normalizedEventId = eventId.trim();
-  if (normalizedBaseUrl.length === 0) throw new TypeError("A speaker API base URL is required.");
   if (normalizedOrganizationId.length === 0) {
     throw new TypeError("An organization ID is required for speaker requests.");
   }

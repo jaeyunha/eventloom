@@ -244,7 +244,6 @@ describe("organizer overview", () => {
   it("uses local-organization only for local configuration", () => {
     expect(
       resolveOrganizerOverviewConfig({
-        NEXT_PUBLIC_API_URL: "http://localhost:8787/",
         NEXT_PUBLIC_APP_ENV: "local",
       }),
     ).toEqual({
@@ -253,7 +252,6 @@ describe("organizer overview", () => {
     });
     expect(
       resolveOrganizerOverviewConfig({
-        NEXT_PUBLIC_API_URL: "http://localhost:8787/",
         NEXT_PUBLIC_APP_ENV: "local",
         NEXT_PUBLIC_ORGANIZATION_ID: "ai-engineer",
       }),
@@ -272,7 +270,6 @@ describe("organizer overview", () => {
     });
     expect(
       resolveOrganizerOverviewConfig({
-        NEXT_PUBLIC_API_URL: "https://api.example.test",
         NEXT_PUBLIC_APP_ENV: "production",
       }),
     ).toMatchObject({

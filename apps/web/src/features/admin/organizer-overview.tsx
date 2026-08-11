@@ -104,7 +104,6 @@ export type OrganizerOverviewViewState =
     };
 
 type OrganizerOverviewEnvironment = {
-  readonly NEXT_PUBLIC_API_URL?: string | undefined;
   readonly NEXT_PUBLIC_APP_ENV?: string | undefined;
   readonly NEXT_PUBLIC_ORGANIZATION_ID?: string | undefined;
 };

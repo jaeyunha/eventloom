@@ -425,4 +425,23 @@ describe("deliverables API", () => {
       message: "Session version 3 is current.",
     });
   });
+  it("routes an empty base URL through the same-origin deliverables gateway", async () => {
+    let requestedUrl = "";
+    let requestInit: RequestInit | undefined;
+    const api = createDeliverablesApi("", "org/one", "event/one", async (input, init) => {
+      requestedUrl = String(input);
+      requestInit = init;
+      return Response.json({ data: { items: [] } });
+    });
+
+    await expect(api.listSessions()).resolves.toEqual([]);
+
+    expect(requestedUrl).toBe(
+      "/api/admin/organizations/org%2Fone/events/event%2Fone/sessions",
+    );
+    expect(requestedUrl.startsWith("/api/")).toBe(true);
+    expect(requestedUrl).not.toMatch(/^\/\//);
+    expect(requestedUrl).not.toMatch(/^https?:\/\//);
+    expect(requestInit?.credentials).toBe("include");
+  });
 });

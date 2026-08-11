@@ -1769,16 +1769,8 @@ export function EmbedWorkspace({
       }
       let api = providedApi;
       if (!api) {
-        const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
-        if (!apiBaseUrl) {
-          setState({
-            status: "error",
-            message: "The organizer API URL is not configured for event metadata.",
-          });
-          return;
-        }
         try {
-          api = createOrganizerEventsApi(apiBaseUrl, organizationId);
+          api = createOrganizerEventsApi("", organizationId);
         } catch (error) {
           setState({ status: "error", message: messageFrom(error) });
           return;

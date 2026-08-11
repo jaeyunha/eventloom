@@ -143,8 +143,7 @@ export function MemberSetup({
     if (providedMemberApi && providedLoginApi) {
       return { memberApi: providedMemberApi, loginApi: providedLoginApi };
     }
-    const baseUrl = apiBaseUrl?.trim().replace(/\/+$/u, "");
-    if (!baseUrl) return null;
+    const baseUrl = apiBaseUrl?.trim().replace(/\/+$/u, "") ?? "";
     try {
       return {
         memberApi: createMemberApi(baseUrl, organizationId),
@@ -194,7 +193,7 @@ export function MemberSetup({
       return;
     }
     if (configured === null) {
-      setError("Member setup is unavailable because the API endpoint is not configured.");
+      setError("Member setup is unavailable because the API client could not be initialized.");
       queueMicrotask(() => errorRef.current?.focus());
       return;
     }
