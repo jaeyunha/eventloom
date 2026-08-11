@@ -248,7 +248,7 @@ describe("organizer overview", () => {
         NEXT_PUBLIC_APP_ENV: "local",
       }),
     ).toEqual({
-      apiBaseUrl: "http://localhost:8787",
+      apiBaseUrl: "",
       organizationId: "local-organization",
     });
     expect(
@@ -258,17 +258,16 @@ describe("organizer overview", () => {
         NEXT_PUBLIC_ORGANIZATION_ID: "ai-engineer",
       }),
     ).toEqual({
-      apiBaseUrl: "http://localhost:8787",
+      apiBaseUrl: "",
       organizationId: "ai-engineer",
     });
     expect(
       resolveOrganizerOverviewConfig({
-        NEXT_PUBLIC_API_URL: "https://api.example.test",
         NEXT_PUBLIC_APP_ENV: "production",
         NEXT_PUBLIC_ORGANIZATION_ID: "ai-engineer",
       }),
     ).toEqual({
-      apiBaseUrl: "https://api.example.test",
+      apiBaseUrl: "",
       organizationId: "ai-engineer",
     });
     expect(
@@ -483,6 +482,19 @@ describe("organizer overview", () => {
       cfpSettings: eventRecord.cfpSettings,
       defaultCalendarSettings: eventRecord.defaultCalendarSettings,
     });
+  });
+  it("uses the same-origin gateway when no browser API origin is configured", async () => {
+    let requestedUrl = "";
+    const api = createOrganizerEventsApi("", "ai-engineer", async (url) => {
+      requestedUrl = String(url);
+      return new Response(JSON.stringify({ data: [eventRecord] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+
+    await expect(api.listEvents()).resolves.toEqual([eventRecord]);
+    expect(requestedUrl).toBe("/api/admin/organizations/ai-engineer/events");
   });
 
   it("rejects legacy calendar timezone aliases and validates complete event form input", () => {

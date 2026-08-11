@@ -326,13 +326,11 @@ export function parseOrganizerOverviewActivityResponse(
 
 export function resolveOrganizerOverviewConfig(
   environment: OrganizerOverviewEnvironment = {
-    NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL,
     NEXT_PUBLIC_APP_ENV: process.env.NEXT_PUBLIC_APP_ENV,
     NEXT_PUBLIC_ORGANIZATION_ID: process.env.NEXT_PUBLIC_ORGANIZATION_ID,
   },
 ): OrganizerOverviewConfigResult {
-  const apiBaseUrl =
-    environment.NEXT_PUBLIC_API_URL?.trim().replace(/\/+$/u, "") ?? "";
+  const apiBaseUrl = "";
   const appEnv = environment.NEXT_PUBLIC_APP_ENV?.trim() ?? "";
   const configuredOrganizationId =
     environment.NEXT_PUBLIC_ORGANIZATION_ID?.trim() ?? "";
@@ -340,12 +338,6 @@ export function resolveOrganizerOverviewConfig(
     configuredOrganizationId ||
     (appEnv === "local" ? "local-organization" : "");
 
-  if (!apiBaseUrl) {
-    return {
-      error:
-        "Organizer overview is unavailable because NEXT_PUBLIC_API_URL is missing. Configure the API origin for this web deployment.",
-    };
-  }
   if (!organizationId) {
     return {
       error:
@@ -1882,9 +1874,6 @@ export function createOrganizerEventsApi(
   fetcher: OrganizerEventsFetcher = globalThis.fetch,
 ): OrganizerEventsApi {
   const normalizedBaseUrl = apiBaseUrl.trim().replace(/\/+$/u, "");
-  if (normalizedBaseUrl.length === 0) {
-    throw new TypeError("An API URL is required for organizer event requests.");
-  }
   const normalizedOrganizationId = organizationId.trim();
   if (normalizedOrganizationId.length === 0) {
     throw new TypeError(
