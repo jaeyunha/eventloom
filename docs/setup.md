@@ -55,6 +55,15 @@ OPENSEND_API_KEY=<local-or-suppressed-sending-key>
 AUTH_FROM_EMAIL=auth@sessionboard.namuh.co
 SPEAKERS_FROM_EMAIL=speakers@sessionboard.namuh.co
 CALENDAR_FROM_EMAIL=calendar@sessionboard.namuh.co
+AI_PROVIDER=openai
+OPENAI_API_KEY=<backend-only-openai-key>
+OPENAI_MODEL=gpt-5.6-terra
+OPENAI_AGENDA_MODEL=gpt-5.6-sol
+OPENAI_EVALUATION_MODEL=gpt-5.6-sol
+OPENAI_REMIX_MODEL=gpt-5.6-terra
+OPENAI_AGENDA_REASONING_EFFORT=medium
+OPENAI_EVALUATION_REASONING_EFFORT=medium
+OPENAI_REMIX_REASONING_EFFORT=low
 ```
 
 The angle-bracket values are operator placeholders, not credentials to commit. Apply local D1 migrations and start both services from the repository root:
@@ -72,6 +81,30 @@ curl --fail http://127.0.0.1:8787/api/health
 ```
 
 `API_UPSTREAM_ORIGIN` is the server-side API destination used by the web `/api/*` proxy. In local development it is the direct loopback API. In staging and production the browser uses the web origin for `/api/*`, while the web Worker forwards those requests to the pinned API origin; do not expose or replace that upstream setting with a secret.
+
+## Advisory AI providers
+
+AI is not used to seed records. It runs only when an authorized user requests an agenda or evaluation proposal locally, or an agenda, evaluation, or content-remix proposal in the deployed Airtable runtime. Non-AI workflows boot and operate when no provider is configured.
+
+Local `make dev` loads the ignored root `.env` into the API Worker with Wrangler `--env-file`; `AI_PROVIDER=openai` uses the OpenAI Responses API. `OPENAI_API_KEY` is backend-only: never put it in `NEXT_PUBLIC_*`, browser storage, logs, evidence, committed files, or Wrangler `[vars]`.
+
+The provider adapter and local agenda lifecycle have opt-in real-API checks:
+
+```bash
+RUN_OPENAI_LIVE=1 bunx vitest run \
+  apps/api/src/integrations/ai/openai.test.ts \
+  apps/api/src/runtime/cloudflare-ai.test.ts
+```
+
+These synthetic checks prove the real Responses API adapter and local agenda proposal lifecycle. They do not replace deployed staging UI/API acceptance.
+
+Staging and production are configured with OpenAI Responses and the same quality-first per-feature defaults in `apps/api/wrangler.toml`: Sol/medium for agenda and evaluation, Terra/low for remix. `OPENAI_MODEL=gpt-5.6-terra` is the fallback for any future advisory feature without an explicit override. Before deploying either environment, store its distinct OpenAI key as a Cloudflare secret:
+
+```bash
+bunx wrangler secret put OPENAI_API_KEY --cwd apps/api --env staging
+```
+
+Use a separate key and the corresponding `production` environment only after staging acceptance. Never add either key to `wrangler.toml`; rotate or delete a secret when AI is disabled.
 
 ## Cloudflare resources and API deployment
 

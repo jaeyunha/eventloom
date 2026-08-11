@@ -21,15 +21,50 @@ import type {
 export const DEFAULT_CLOUDFLARE_AI_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8";
 const DEFAULT_PROMPT_VERSION = "cloudflare-workers-ai-v1";
 const JSON_RESPONSE_FORMAT = { type: "json_object" } as const;
+const AGENDA_RESPONSE_FORMAT = {
+  type: "json_schema",
+  name: "agenda_proposal",
+  strict: true,
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      placements: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            sessionId: { type: "string" },
+            roomId: { type: "string" },
+            startsAtLocal: { type: "string" },
+            endsAtLocal: { type: "string" },
+          },
+          required: ["sessionId", "roomId", "startsAtLocal", "endsAtLocal"],
+        },
+      },
+      removeEntryIds: { type: "array", items: { type: "string" } },
+    },
+    required: ["placements", "removeEntryIds"],
+  },
+} as const;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
-/** The structural part of the Workers AI binding used by this adapter. */
+/** Structural JSON-prompt binding shared by supported advisory AI providers. */
 export interface CloudflareAiBinding {
   run(model: string, inputs: Record<string, unknown>): Promise<unknown>;
 }
+export type AdvisoryAiReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface CloudflareAiProviderOptions {
   readonly model?: string;
+  readonly agendaModel?: string;
+  readonly evaluationModel?: string;
+  readonly remixModel?: string;
+  readonly agendaReasoningEffort?: AdvisoryAiReasoningEffort;
+  readonly evaluationReasoningEffort?: AdvisoryAiReasoningEffort;
+  readonly remixReasoningEffort?: AdvisoryAiReasoningEffort;
+  readonly providerName?: string;
   readonly promptVersion?: string;
   readonly now?: () => Date;
   readonly requestTimeoutMs?: number;
@@ -100,7 +135,7 @@ export interface CloudflareAiProviders {
 }
 
 /**
- * Creates private, advisory Workers AI adapters. The adapters only return typed
+ * Creates private, advisory AI adapters. The adapters only return typed
  * proposals; they never apply, publish, persist, or otherwise mutate source data.
  */
 export function createCloudflareAiProviders(
@@ -108,21 +143,40 @@ export function createCloudflareAiProviders(
   options: CloudflareAiProviderOptions = {},
 ): CloudflareAiProviders {
   const model = normalizeConfigurationText(options.model, DEFAULT_CLOUDFLARE_AI_MODEL);
+  const agendaModel =
+    model === null ? null : normalizeConfigurationText(options.agendaModel, model);
+  const evaluationModel =
+    model === null ? null : normalizeConfigurationText(options.evaluationModel, model);
+  const remixModel = model === null ? null : normalizeConfigurationText(options.remixModel, model);
+  const agendaReasoningEffort = normalizeReasoningEffort(options.agendaReasoningEffort);
+  const evaluationReasoningEffort = normalizeReasoningEffort(options.evaluationReasoningEffort);
+  const remixReasoningEffort = normalizeReasoningEffort(options.remixReasoningEffort);
+  const providerName = normalizeConfigurationText(options.providerName, "cloudflare-workers-ai");
   const promptVersion = normalizeConfigurationText(options.promptVersion, DEFAULT_PROMPT_VERSION);
   const now = options.now ?? (() => new Date());
   const requestTimeoutMs =
     options.requestTimeoutMs === undefined
       ? DEFAULT_REQUEST_TIMEOUT_MS
       : normalizeRequestTimeout(options.requestTimeoutMs);
-  const invoke = (prompt: string): Promise<unknown> =>
-    invokeWorkersAi(ai, model, prompt, requestTimeoutMs);
+  const invoke = (
+    prompt: string,
+    selectedModel: string | null,
+    reasoningEffort: AdvisoryAiReasoningEffort | undefined,
+    responseFormat: Record<string, unknown> = JSON_RESPONSE_FORMAT,
+  ): Promise<unknown> =>
+    invokeWorkersAi(ai, selectedModel, prompt, requestTimeoutMs, reasoningEffort, responseFormat);
 
   const agendaSuggest = async (
     request: AgendaSuggestionProviderRequest,
   ): Promise<AgendaSuggestionProviderResult> => {
     const prompt = agendaPrompt(request);
     try {
-      const output = await invoke(prompt);
+      const output = await invoke(
+        prompt,
+        agendaModel,
+        agendaReasoningEffort,
+        AGENDA_RESPONSE_FORMAT,
+      );
       return parseAgendaOutput(output, request);
     } catch (error) {
       if (error instanceof CloudflareAiProviderError && error.code === "AI_INVALID_OUTPUT") {
@@ -134,15 +188,25 @@ export function createCloudflareAiProviders(
 
   const evaluationGenerate: CloudflareEvaluationSuggestionProducer = async (input) => {
     const prompt = evaluationPrompt(input);
-    const output = await invoke(prompt);
-    return parseEvaluationOutput(output, input, model, promptVersion, now);
+    const output = await invoke(
+      prompt,
+      evaluationModel,
+      evaluationReasoningEffort,
+      evaluationResponseFormat(input),
+    );
+    return parseEvaluationOutput(output, input, providerName, evaluationModel, promptVersion, now);
   };
 
   const remixGenerate = async (input: RemixProviderInput): Promise<RemixProviderOutput> => {
     assertRemixInput(input);
     const prompt = remixPrompt(input);
-    const output = await invoke(prompt);
-    return parseRemixOutput(output, input, model, promptVersion, now);
+    const output = await invoke(
+      prompt,
+      remixModel,
+      remixReasoningEffort,
+      remixResponseFormat(input),
+    );
+    return parseRemixOutput(output, input, providerName, remixModel, promptVersion, now);
   };
 
   return {
@@ -167,6 +231,16 @@ function normalizeConfigurationText(value: string | undefined, fallback: string)
   return normalized.length > 0 && normalized.length <= 200 ? normalized : null;
 }
 
+function normalizeReasoningEffort(
+  value: AdvisoryAiReasoningEffort | undefined,
+): AdvisoryAiReasoningEffort | undefined {
+  if (value === undefined) return undefined;
+  if (!["none", "low", "medium", "high", "xhigh", "max"].includes(value)) {
+    throw new TypeError("AI reasoning effort is invalid.");
+  }
+  return value;
+}
+
 function normalizeRequestTimeout(value: number): number {
   if (!Number.isSafeInteger(value) || value < 1 || value > 120_000) {
     throw new TypeError("Workers AI request timeout must be between 1 and 120000 milliseconds.");
@@ -179,16 +253,18 @@ async function invokeWorkersAi(
   model: string | null,
   prompt: string,
   requestTimeoutMs: number,
+  reasoningEffort: AdvisoryAiReasoningEffort | undefined,
+  responseFormat: Record<string, unknown>,
 ): Promise<unknown> {
   if (ai === null || ai === undefined || typeof ai.run !== "function" || model === null) {
-    throw new CloudflareAiProviderError("AI_UNAVAILABLE", "Cloudflare Workers AI is unavailable.");
+    throw new CloudflareAiProviderError("AI_UNAVAILABLE", "AI provider is unavailable.");
   }
 
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const timeoutFailure = new Promise<never>((_, reject) => {
     timeout = setTimeout(() => {
       reject(
-        new CloudflareAiProviderError("AI_RETRYABLE", "Cloudflare Workers AI request timed out.", {
+        new CloudflareAiProviderError("AI_RETRYABLE", "AI provider request timed out.", {
           retryable: true,
         }),
       );
@@ -199,7 +275,8 @@ async function invokeWorkersAi(
     raw = await Promise.race([
       ai.run(model, {
         prompt,
-        response_format: JSON_RESPONSE_FORMAT,
+        response_format: responseFormat,
+        ...(reasoningEffort === undefined ? {} : { reasoning: { effort: reasoningEffort } }),
       }),
       timeoutFailure,
     ]);
@@ -279,7 +356,7 @@ function invalidOutput(cause?: unknown): CloudflareAiProviderError {
   const sanitizedCause = sanitizeCause(cause);
   return new CloudflareAiProviderError(
     "AI_INVALID_OUTPUT",
-    "Cloudflare Workers AI returned invalid advisory output.",
+    "AI provider returned invalid advisory output.",
     {
       retryable: false,
       ...(sanitizedCause === undefined ? {} : { cause: sanitizedCause }),
@@ -291,8 +368,8 @@ function providerMessage(
   code: Exclude<CloudflareAiProviderErrorCode, "AI_INVALID_OUTPUT">,
 ): string {
   return code === "AI_RETRYABLE"
-    ? "Cloudflare Workers AI request failed and may be retried."
-    : "Cloudflare Workers AI is unavailable.";
+    ? "AI provider request failed and may be retried."
+    : "AI provider is unavailable.";
 }
 
 function parseJsonEnvelope(raw: unknown): unknown {
@@ -749,6 +826,51 @@ function formatAgendaMinutes(value: number): string {
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }
 
+function evaluationResponseFormat(
+  input: EvaluationSuggestionProviderInput,
+): Record<string, unknown> {
+  const criteria = input.round.rubric.criteria;
+  const evidence = [
+    "title",
+    "abstract",
+    ...Object.keys(input.submission.answers).map((id) => `answers.${id}`),
+  ];
+  return {
+    type: "json_schema",
+    name: "evaluation_proposal",
+    strict: true,
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        candidates: {
+          type: "array",
+          minItems: 1,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              criterionId: { type: "string", enum: criteria.map(({ id }) => id) },
+              value: {
+                type: "number",
+                minimum: Math.min(...criteria.map(({ minimum }) => minimum)),
+                maximum: Math.max(...criteria.map(({ maximum }) => maximum)),
+              },
+              evidence: {
+                type: "array",
+                minItems: 1,
+                items: { type: "string", enum: evidence },
+              },
+            },
+            required: ["criterionId", "value", "evidence"],
+          },
+        },
+      },
+      required: ["candidates"],
+    },
+  };
+}
+
 function evaluationPrompt(input: EvaluationSuggestionProviderInput): string {
   const context = {
     tenantId: input.tenantId,
@@ -809,6 +931,7 @@ function scoreableEvaluationCriteria(input: EvaluationSuggestionProviderInput) {
 function parseEvaluationOutput(
   raw: unknown,
   input: EvaluationSuggestionProviderInput,
+  providerName: string | null,
   model: string | null,
   promptVersion: string | null,
   now: () => Date,
@@ -822,7 +945,7 @@ function parseEvaluationOutput(
   if (criteria.size === 0 || raw.candidates.length !== criteria.size) throw invalidOutput();
 
   const provenance: EvaluationSuggestionProvenance = {
-    provider: "cloudflare-workers-ai",
+    provider: providerName ?? "unavailable",
     model: model ?? "unavailable",
     generatedAt: safeNow(now),
     sourceReferences: ["abstract"],
@@ -899,6 +1022,34 @@ function assertRemixInput(input: RemixProviderInput): void {
         : null;
   if (allowed === null || input.fields.some((field) => !allowed.has(field))) throw invalidOutput();
 }
+function remixResponseFormat(input: RemixProviderInput): Record<string, unknown> {
+  const properties: Record<string, unknown> = {};
+  for (const field of input.fields) {
+    properties[field] =
+      field === "tags" || field === "tracks"
+        ? { type: "array", items: { type: "string" } }
+        : { type: "string" };
+  }
+  return {
+    type: "json_schema",
+    name: "content_remix_proposal",
+    strict: true,
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        content: {
+          type: "object",
+          additionalProperties: false,
+          properties,
+          required: [...input.fields],
+        },
+        changeSummary: { type: "string" },
+      },
+      required: ["content", "changeSummary"],
+    },
+  };
+}
 function remixPrompt(input: RemixProviderInput): string {
   const selected = new Set(input.fields);
   const source = input.source;
@@ -937,6 +1088,7 @@ function remixPrompt(input: RemixProviderInput): string {
 function parseRemixOutput(
   raw: unknown,
   input: RemixProviderInput,
+  providerName: string | null,
   model: string | null,
   promptVersion: string | null,
   now: () => Date,
@@ -976,7 +1128,7 @@ function parseRemixOutput(
     content,
     ...(changeSummary === undefined ? {} : { changeSummary }),
     provenance: {
-      provider: "cloudflare-workers-ai",
+      provider: providerName ?? "unavailable",
       model: model ?? "unavailable",
       promptVersion: promptVersion ?? DEFAULT_PROMPT_VERSION,
       generatedAt: safeNow(now),

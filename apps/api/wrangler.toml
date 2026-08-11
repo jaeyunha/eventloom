@@ -48,13 +48,16 @@ workers_dev = true
 
 [env.staging.observability]
 enabled = true
-[env.staging.ai]
-binding = "AI"
-
-
 [env.staging.vars]
 APP_ENV = "staging"
-AI_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8"
+AI_PROVIDER = "openai"
+OPENAI_MODEL = "gpt-5.6-terra"
+OPENAI_AGENDA_MODEL = "gpt-5.6-sol"
+OPENAI_EVALUATION_MODEL = "gpt-5.6-sol"
+OPENAI_REMIX_MODEL = "gpt-5.6-terra"
+OPENAI_AGENDA_REASONING_EFFORT = "medium"
+OPENAI_EVALUATION_REASONING_EFFORT = "medium"
+OPENAI_REMIX_REASONING_EFFORT = "low"
 API_ORIGIN = "https://open-sessionboard-api-staging.ashleyha0317.workers.dev"
 WEB_ORIGIN = "https://open-sessionboard-web-staging.ashleyha0317.workers.dev"
 CACHE_INVALIDATION_URL = "https://open-sessionboard-web-staging.ashleyha0317.workers.dev/api/internal/cache-invalidation"
@@ -97,13 +100,16 @@ crons = ["0 * * * *"]
 
 [env.production.observability]
 enabled = true
-[env.production.ai]
-binding = "AI"
-
-
 [env.production.vars]
 APP_ENV = "production"
-AI_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8"
+AI_PROVIDER = "openai"
+OPENAI_MODEL = "gpt-5.6-terra"
+OPENAI_AGENDA_MODEL = "gpt-5.6-sol"
+OPENAI_EVALUATION_MODEL = "gpt-5.6-sol"
+OPENAI_REMIX_MODEL = "gpt-5.6-terra"
+OPENAI_AGENDA_REASONING_EFFORT = "medium"
+OPENAI_EVALUATION_REASONING_EFFORT = "medium"
+OPENAI_REMIX_REASONING_EFFORT = "low"
 API_ORIGIN = "https://open-sessionboard-api-production.ashleyha0317.workers.dev"
 WEB_ORIGIN = "https://open-sessionboard-web-production.ashleyha0317.workers.dev"
 CACHE_INVALIDATION_URL = "https://open-sessionboard-web-production.ashleyha0317.workers.dev/api/internal/cache-invalidation"

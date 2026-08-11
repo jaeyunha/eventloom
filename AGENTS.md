@@ -12,7 +12,7 @@
 - Keep work in the program-side product scope. The built-in Speaker CRM is supported scope; Accelevents is a separate external event-platform integration and is not a supported current feature.
 - The canonical browser path is the Next.js same-origin `/api/*` gateway to the separately deployed Hono Worker. Do not put provider credentials or backend data access in the browser.
 - Email/password, verified email, and magic-link authentication are supported. Google, Microsoft, and other social OAuth are not supported.
-- Workers AI is advisory only. A human must apply, edit, or reject any consequential suggestion before it affects business records, publication, communications, or exports.
+- Advisory AI uses OpenAI Responses through a backend-only key. A human must apply, edit, or reject every consequential suggestion. Provider configuration is not feature-verification evidence.
 - Keep local, staging, and production provider resources and credentials isolated. Never expose secrets from environment files, Cloudflare, Airtable, OpenSend, or other providers.
 - Treat repository evidence and local or mocked checks honestly; do not claim release verification without the applicable deployed workflow evidence.
 

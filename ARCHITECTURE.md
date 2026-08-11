@@ -13,7 +13,7 @@ browser
      + Durable Object coordination
      + R2 private files
      + one multiplexed Cloudflare Queue
-     + Workers AI advisory provider
+     + optional OpenAI Responses advisory provider
 ```
 
 The gateway is the canonical browser path. API clients and provider callbacks may address the Worker API origin directly; the web application does not become a second backend.
@@ -78,7 +78,11 @@ The built-in Speaker CRM is an organization-scoped first-party contact system wi
 - **OpenSend:** The API sends through `https://opensend.namuh.co` using `auth@sessionboard.namuh.co`, `speakers@sessionboard.namuh.co`, and `calendar@sessionboard.namuh.co`. Provider verification and environment-specific credentials are deployment concerns.
 - **Calendar:** RFC 5545 `REQUEST`, `UPDATE`, and `CANCEL` messages use UIDs under `calendar.sessionboard.namuh.co`, increasing `SEQUENCE`, explicit IANA time zones, and organizer `calendar@sessionboard.namuh.co`. Calendar-provider OAuth is not required.
 - **Public API and webhooks:** Versioned REST resources, scoped API keys, cursor pagination, idempotent writes, optimistic concurrency, and signed retryable webhooks expose only authorized or published data.
-- **Workers AI:** Cloudflare Workers AI may produce private, typed evaluation suggestions, agenda proposals, or content-remix candidates. It never scores, decides, schedules, publishes, sends, exports, or overwrites source content without an explicit human action followed by normal authorization and conflict checks.
+- **Optional advisory AI:** AI is feature-scoped, not an application boot or seed prerequisite. A provider is called only after an authorized user requests an agenda proposal, evaluation assistance, or remix proposal. If that feature's provider is unavailable, non-AI workflows continue and the control/API reports an explicit unavailable state.
+- **Provider and model selection:** Local, staging, and production use OpenAI Responses (`openai-responses`) with a backend-only `OPENAI_API_KEY`. Agenda uses `gpt-5.6-sol` at medium reasoning because placement quality is the hardest constraint-planning task; deterministic conflict validation remains authoritative. Evaluation uses `gpt-5.6-sol` at medium reasoning because rubric interpretation and cited evidence are consequential and quality-sensitive. Content remix uses `gpt-5.6-terra` at low reasoning because it needs strong bounded writing quality without Sol's cost/latency. `gpt-5.6-luna` is the low-cost high-volume candidate, but is not selected until representative remix/evaluation benchmarks show no material quality loss. The adapter uses `POST /v1/responses` with JSON output and per-feature provenance. Each deployed environment requires its own provider-managed secret.
+- **Payload boundary:** Agenda requests contain the event and base draft/revision version, selected rooms, day/time windows, ordered rules, eligible session titles and scheduling fields, and existing agenda entries. Evaluation requests contain the selected rubric plus the submission title, abstract, and answers visible under the reviewer's projection. Remix requests contain only organizer-selected content fields and tone/guidance. Unselected private fields, credentials, and unrelated records are excluded.
+- **Advisory result boundary:** Providers return typed, private candidates with provider/model provenance. Base versions and source revisions are checked again before any application; stale candidates are rejected. A human must review and explicitly apply, edit, or reject a candidate. AI never scores, decides, schedules, publishes, sends, exports, or overwrites source records by itself.
+- **Evidence status:** Deterministic contract tests and opt-in synthetic checks have exercised the real OpenAI Responses adapter plus the local agenda proposal lifecycle. No deployed staging end-to-end AI workflow has been accepted. The 31.3% AI Agenda diagnostic is diagnostic only and is not validation or release evidence.
 
 ## Current hosting
 
@@ -106,9 +110,10 @@ Both remain private until the release gate passes. Forge is retained for competi
 ## Invariants and status pointers
 
 - Every protected query and mutation is tenant-scoped and authorization-checked.
-- Human decisions and explicit publication remain authoritative; advisory AI output is never consequential by itself.
+- Human decisions and explicit publication remain authoritative; advisory AI output is never consequential by itself, and provider availability is feature-scoped rather than a boot prerequisite.
 - Side effects are idempotent, queued, retryable, observable, and auditable.
 - Public projections contain only explicitly published fields; private files require fresh authorization.
 - Secrets stay in environment/provider secret stores and never appear in API responses or evidence.
+- Backend provider secrets stay in environment/provider secret stores and never appear in `NEXT_PUBLIC_*`, Wrangler variables, browser evidence, logs, API responses, or committed files.
 
-For supported scope and current status, read [`spec/open-sessionboard.md`](spec/open-sessionboard.md). For executable procedures, use [`docs/setup.md`](docs/setup.md), [`docs/deployment-readiness.md`](docs/deployment-readiness.md), [`docs/qa-runbook.md`](docs/qa-runbook.md), and [`docs/release-runbook.md`](docs/release-runbook.md). Evaluator outcomes and limitations are recorded in [`docs/llm-judge-runs.md`](docs/llm-judge-runs.md); this architecture document does not claim release verification.
+For supported scope and current status, read [`spec/open-sessionboard.md`](spec/open-sessionboard.md). For executable procedures, use [`docs/setup.md`](docs/setup.md), [`docs/deployment-readiness.md`](docs/deployment-readiness.md), [`docs/qa-runbook.md`](docs/qa-runbook.md), and [`docs/release-runbook.md`](docs/release-runbook.md). Evaluator outcomes and limitations are recorded in [`docs/llm-judge-runs.md`](docs/llm-judge-runs.md); this architecture document does not claim release verification. Advisory AI remains partial until deployed, real-provider end-to-end evidence is accepted.

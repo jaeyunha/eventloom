@@ -76,7 +76,11 @@ function validateWrangler(source, options) {
     /^account_id = "7bcb73282d45e4294cc70dd3e2671bfb"$/m,
     "Wrangler must target the approved Cloudflare account",
   );
-  requirePattern(source, /^workers_dev = false$/m, "workers.dev deployments must be disabled");
+  requirePattern(
+    source,
+    /^workers_dev = false$/m,
+    "The top-level local Worker must disable workers.dev",
+  );
   requirePattern(
     source,
     /^main = "src\/infrastructure\/cloudflare\/worker\.ts"$/m,
@@ -100,18 +104,19 @@ function validateWrangler(source, options) {
   const origins = collectValues(source, "WEB_ORIGIN");
   if (
     origins.length !== 3 ||
-    !origins[0].startsWith("http://localhost:") ||
+    !origins[0].startsWith("http://127.0.0.1:") ||
     origins.slice(1).some((origin) => !origin.startsWith("https://"))
   ) {
     throw new Error("Only local may use HTTP; staging and production origins must use HTTPS");
   }
   const organizerOrganizationIds = collectValues(source, "ORGANIZER_AUTOJOIN_ORGANIZATION_ID");
   if (
-    organizerOrganizationIds.length !== 2 ||
-    organizerOrganizationIds.some((value) => value !== CANONICAL_ORGANIZATION_ID)
+    organizerOrganizationIds.length > 0 &&
+    (organizerOrganizationIds.length !== 2 ||
+      organizerOrganizationIds.some((value) => value !== CANONICAL_ORGANIZATION_ID))
   ) {
     throw new Error(
-      `ORGANIZER_AUTOJOIN_ORGANIZATION_ID must be ${CANONICAL_ORGANIZATION_ID} in staging and production`,
+      `When configured, ORGANIZER_AUTOJOIN_ORGANIZATION_ID must be ${CANONICAL_ORGANIZATION_ID} in staging and production`,
     );
   }
 
