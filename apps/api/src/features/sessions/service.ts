@@ -5,6 +5,7 @@ import type {
   CreateTaxonomyInput,
   Format,
   Level,
+  PublishedSessionContentHandoff,
   RestoreSessionInput,
   Room,
   Session,
@@ -194,6 +195,15 @@ function status(value: unknown): string {
   return requiredText(value, "status", 64);
 }
 
+function contentReviewStatus(value: unknown): SessionContentStatus {
+  if (value === "Approved" || value === "Needs changes") return value;
+  throw new SessionServiceError(
+    "VALIDATION_ERROR",
+    400,
+    "contentStatus must be Approved or Needs changes.",
+  );
+}
+
 function normaliseStatusSet(values: readonly string[] | undefined, field: string): string[] {
   const result = uniqueIds(values, field, 64);
   if (result.length === 0) {
@@ -311,12 +321,6 @@ function sessionContentStatus(session: Session): SessionContentStatus | undefine
   return session.contentStatus;
 }
 
-function reviewStatus(value: string | undefined): SessionContentStatus | undefined {
-  if (value === undefined) return undefined;
-  if (sameStatus(value, "Approved")) return "Approved";
-  if (sameStatus(value, "Needs changes")) return "Needs changes";
-  return undefined;
-}
 
 function sessionIsPubliclyApproved(session: Session): boolean {
   return sessionContentStatus(session) === "Approved";
@@ -437,51 +441,6 @@ function acceptedSessionFieldsEqual(left: Session, right: Session): boolean {
     JSON.stringify(left.speakerRoster) === JSON.stringify(right.speakerRoster) &&
     JSON.stringify(left.resourceIds) === JSON.stringify(right.resourceIds)
   );
-}
-function sessionAgendaMetadata(session: Session): {
-  readonly format: string;
-  readonly summary: string;
-  readonly speakerNames: readonly string[];
-} {
-  const record = session as unknown as Record<string, unknown>;
-  const format =
-    typeof record.format === "string" && record.format.trim().length > 0
-      ? record.format.trim()
-      : (session.formatId ?? "Session");
-  const summary =
-    typeof record.summary === "string" && record.summary.trim().length > 0
-      ? record.summary.trim()
-      : session.description;
-  const directSpeakerNames = Array.isArray(record.speakerNames)
-    ? record.speakerNames.filter(
-        (value): value is string => typeof value === "string" && value.trim().length > 0,
-      )
-    : [];
-  const presenterNames = Array.isArray(record.presenters)
-    ? record.presenters
-        .map((value) => {
-          if (typeof value === "string") return value.trim();
-          if (typeof value !== "object" || value === null) return "";
-          const presenter = value as Record<string, unknown>;
-          return typeof presenter.name === "string"
-            ? presenter.name.trim()
-            : typeof presenter.displayName === "string"
-              ? presenter.displayName.trim()
-              : "";
-        })
-        .filter((value) => value.length > 0)
-    : [];
-  const speakerNames =
-    directSpeakerNames.length > 0
-      ? directSpeakerNames
-      : presenterNames.length > 0
-        ? presenterNames
-        : [...session.speakerIds];
-  return {
-    format,
-    summary,
-    speakerNames,
-  };
 }
 
 function repositoryConflict(error: unknown): boolean {
@@ -795,7 +754,6 @@ export class SessionService {
     if (current === null || !this.inScope(current, actor.tenantId, eventId)) {
       throw notFound("session");
     }
-    const currentContentStatus = sessionContentStatus(current);
     if (current.version !== expected) throw versionConflict("session");
     const target = orderedSessionHistory(current.history).find(
       (entry) => entry.version === targetVersion,
@@ -809,6 +767,16 @@ export class SessionService {
     ) {
       throw notFound("session history");
     }
+
+    const currentContentStatus = sessionContentStatus(current);
+    if (
+      current.title === snapshot.title &&
+      current.description === snapshot.description &&
+      currentContentStatus === "Needs changes"
+    ) {
+      return sessionProjection(current);
+    }
+
     const now = this.instant();
     const auditId = this.#generateId();
     const nextVersion = current.version + 1;
@@ -816,29 +784,12 @@ export class SessionService {
       ...current,
       title: snapshot.title,
       description: snapshot.description,
-      status: snapshot.status,
-      ...(snapshot.contentStatus === undefined ? {} : { contentStatus: snapshot.contentStatus }),
-      durationMinutes: snapshot.durationMinutes,
-      capacityRequired: snapshot.capacityRequired,
-      ...(snapshot.roomId === undefined ? {} : { roomId: snapshot.roomId }),
-      ...(snapshot.trackId === undefined ? {} : { trackId: snapshot.trackId }),
-      trackIds: [...snapshot.trackIds],
-      ...(snapshot.formatId === undefined ? {} : { formatId: snapshot.formatId }),
-      ...(snapshot.levelId === undefined ? {} : { levelId: snapshot.levelId }),
-      tagIds: [...snapshot.tagIds],
-      speakerIds: [...snapshot.speakerIds],
-      speakerRoster: snapshot.speakerRoster.map((reference) => ({ ...reference })),
-      resourceIds: [...snapshot.resourceIds],
+      contentStatus: "Needs changes",
       version: nextVersion,
       updatedAt: now,
       updatedBy: actor.userId,
       history: orderedSessionHistory(current.history),
     };
-    if (snapshot.contentStatus === undefined) delete restoredBase.contentStatus;
-    if (snapshot.roomId === undefined) delete restoredBase.roomId;
-    if (snapshot.formatId === undefined) delete restoredBase.formatId;
-    if (snapshot.levelId === undefined) delete restoredBase.levelId;
-    if (snapshot.trackId === undefined) delete restoredBase.trackId;
     const next: Session = {
       ...restoredBase,
       history: [
@@ -848,16 +799,12 @@ export class SessionService {
           description: restoredBase.description,
           actorLabel: actorLabel(actor),
           priorStatus: current.status,
-          newStatus: restoredBase.status,
+          newStatus: current.status,
           ...(currentContentStatus === undefined
             ? {}
             : { priorContentStatus: currentContentStatus }),
-          ...(snapshot.contentStatus === undefined
-            ? {}
-            : {
-                contentStatus: snapshot.contentStatus,
-                newContentStatus: snapshot.contentStatus,
-              }),
+          contentStatus: "Needs changes",
+          newContentStatus: "Needs changes",
           snapshot: sessionContentSnapshot(restoredBase),
         }),
       ],
@@ -986,23 +933,25 @@ export class SessionService {
     if (!current || !this.inScope(current, actor.tenantId, eventId)) throw notFound("session");
     const expected = expectedVersion(input.expectedVersion);
     if (current.version !== expected) throw versionConflict("session");
-    const currentContentStatus = sessionContentStatus(current);
+
     const settings = await this.ensureSettings(actor.tenantId, eventId, actor.userId);
-    const requestedStatus = input.status === undefined ? undefined : status(input.status);
-    const requestedContentStatus = reviewStatus(requestedStatus);
-    const nextStatus =
-      requestedContentStatus === undefined ? (requestedStatus ?? current.status) : current.status;
-    if (requestedContentStatus === undefined) this.assertConfiguredStatus(nextStatus, settings);
-    const nextContentStatus =
-      requestedContentStatus ??
-      sessionContentStatus(current) ??
-      (sameStatus(nextStatus, "Accepted") ? "Approved" : undefined);
+    const nextStatus = input.status === undefined ? current.status : status(input.status);
+    this.assertConfiguredStatus(nextStatus, settings);
+    const requestedContentStatus =
+      input.contentStatus === undefined ? undefined : contentReviewStatus(input.contentStatus);
+    const currentContentStatus = sessionContentStatus(current);
     const nextTitle =
       input.title === undefined ? current.title : requiredText(input.title, "title", 300);
     const nextDescription =
       input.description === undefined
         ? current.description
         : optionalText(input.description, "description", 20_000);
+    const contentChanged = nextTitle !== current.title || nextDescription !== current.description;
+    const nextContentStatus =
+      requestedContentStatus ??
+      (contentChanged
+        ? "Needs changes"
+        : (currentContentStatus ?? (sameStatus(nextStatus, "Accepted") ? "Approved" : undefined)));
     const normalized = await this.normalizeSessionReferences(actor.tenantId, eventId, {
       eventId,
       ...(input.roomId === undefined ? { roomId: current.roomId } : { roomId: input.roomId }),
@@ -1029,16 +978,7 @@ export class SessionService {
         ? { resourceIds: current.resourceIds }
         : { resourceIds: input.resourceIds }),
     } as unknown as Partial<CreateSessionInput> & { eventId: string });
-    const now = this.instant();
-    const auditId = this.#generateId();
-    const nextVersion = current.version + 1;
-    const contentAction: SessionHistoryEntry["action"] =
-      requestedContentStatus === undefined
-        ? "updated"
-        : requestedContentStatus === "Approved"
-          ? "approved"
-          : "needs_changes";
-    const nextBase: Session = {
+    const candidate: Session = {
       ...current,
       title: nextTitle,
       description: nextDescription,
@@ -1061,16 +1001,32 @@ export class SessionService {
       speakerRoster: normalized.speakerRoster,
       resourceIds: normalized.resourceIds,
       ...(nextContentStatus === undefined ? {} : { contentStatus: nextContentStatus }),
+      history: orderedSessionHistory(current.history),
+    };
+    if (candidate.contentStatus === undefined) delete candidate.contentStatus;
+    if (normalized.roomId === undefined) delete candidate.roomId;
+    if (normalized.formatId === undefined) delete candidate.formatId;
+    if (normalized.levelId === undefined) delete candidate.levelId;
+    if (normalized.trackIds[0] === undefined) delete candidate.trackId;
+    if (acceptedSessionFieldsEqual(current, candidate)) return sessionProjection(current);
+
+    const now = this.instant();
+    const auditId = this.#generateId();
+    const nextVersion = current.version + 1;
+    const contentAction: SessionHistoryEntry["action"] =
+      nextContentStatus !== currentContentStatus
+        ? nextContentStatus === "Approved"
+          ? "approved"
+          : nextContentStatus === "Needs changes"
+            ? "needs_changes"
+            : "updated"
+        : "updated";
+    const nextBase: Session = {
+      ...candidate,
       version: nextVersion,
       updatedAt: now,
       updatedBy: actor.userId,
-      history: orderedSessionHistory(current.history),
     };
-    if (nextBase.contentStatus === undefined) delete nextBase.contentStatus;
-    if (nextBase.roomId === undefined) delete nextBase.roomId;
-    if (nextBase.formatId === undefined) delete nextBase.formatId;
-    if (nextBase.levelId === undefined) delete nextBase.levelId;
-    if (nextBase.trackId === undefined) delete nextBase.trackId;
     const next: Session = {
       ...nextBase,
       history: [
@@ -1553,14 +1509,59 @@ export class SessionService {
     );
   }
 
-  /** Explicit read-only handoff consumed by the agenda service; it never publishes. */
-  async getAgendaCatalog(tenantId: string, eventId: string) {
+  /**
+   * Authoritative approval-gated content handoff for agenda and deliverables consumers.
+   * The session lifecycle must also be configured as agenda eligible.
+   */
+  async getPublishedSessionContent(
+    tenantId: string,
+    eventId: string,
+  ): Promise<PublishedSessionContentHandoff> {
     const organizationId = resourceId(tenantId, "tenant id");
     const scopedEventId = this.event(eventId);
     const settings = await this.readSettings(organizationId, scopedEventId);
     const eligibleStatuses = settings?.agendaEligibleStatuses ?? defaultAgendaEligibleStatuses;
-    const [sessions, rooms, tracks] = await Promise.all([
-      this.#repository.listSessions(organizationId, scopedEventId),
+    const sessions = await this.#repository.listSessions(organizationId, scopedEventId);
+    return {
+      tenantId: organizationId,
+      eventId: scopedEventId,
+      sessions: sessions
+        .filter(
+          (session) =>
+            this.inScope(session, organizationId, scopedEventId) &&
+            hasStatus(session.status, eligibleStatuses) &&
+            sessionIsPubliclyApproved(session),
+        )
+        .sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
+        .map((session) => ({
+          id: session.id,
+          title: session.title,
+          abstract: session.description,
+          contentStatus: "Approved" as const,
+          durationMinutes: session.durationMinutes,
+          capacityRequired: session.capacityRequired,
+          ...(session.roomId === undefined ? {} : { roomId: session.roomId }),
+          trackIds: [
+            ...new Set([
+              ...(session.trackIds ?? []),
+              ...(session.trackId === undefined ? [] : [session.trackId]),
+            ]),
+          ],
+          ...(session.formatId === undefined ? {} : { formatId: session.formatId }),
+          speakerIds: [...session.speakerIds],
+          resourceIds: [...session.resourceIds],
+          version: session.version,
+          updatedAt: session.updatedAt,
+        })),
+    };
+  }
+
+  /** Existing agenda adapter, projected from the authoritative published-content handoff. */
+  async getAgendaCatalog(tenantId: string, eventId: string) {
+    const organizationId = resourceId(tenantId, "tenant id");
+    const scopedEventId = this.event(eventId);
+    const [content, rooms, tracks] = await Promise.all([
+      this.getPublishedSessionContent(organizationId, scopedEventId),
       this.#repository.listRooms(organizationId, scopedEventId),
       this.#repository.listTracks(organizationId, scopedEventId),
     ]);
@@ -1575,36 +1576,24 @@ export class SessionService {
         .map((track) => [track.id, track]),
     );
     return {
-      sessions: sessions
-        .filter(
-          (session) =>
-            this.inScope(session, organizationId, scopedEventId) &&
-            hasStatus(session.status, eligibleStatuses) &&
-            sessionIsPubliclyApproved(session),
-        )
-        .map((session) => {
-          const metadata = sessionAgendaMetadata(session);
-          const trackIds = [
-            ...new Set([
-              ...(session.trackIds ?? []),
-              ...(session.trackId === undefined ? [] : [session.trackId]),
-            ]),
-          ];
-          return {
-            id: session.id,
-            title: session.title,
-            status: "accepted" as const,
-            participantIds: [...session.speakerIds],
-            resourceIds: [...session.resourceIds],
-            capacityRequired: session.capacityRequired,
-            durationMinutes: session.durationMinutes,
-            ...metadata,
-            ...(session.roomId === undefined
-              ? {}
-              : { roomName: roomById.get(session.roomId)?.name ?? session.roomId }),
-            trackNames: trackIds.map((trackId) => trackById.get(trackId)?.name ?? trackId),
-          };
-        }),
+      sessions: content.sessions.map((session) => ({
+        id: session.id,
+        title: session.title,
+        status: "accepted" as const,
+        participantIds: [...session.speakerIds],
+        resourceIds: [...session.resourceIds],
+        capacityRequired: session.capacityRequired,
+        durationMinutes: session.durationMinutes,
+        summary: session.abstract,
+        format: session.formatId ?? "Session",
+        speakerNames: [...session.speakerIds],
+        ...(session.roomId === undefined
+          ? {}
+          : { roomName: roomById.get(session.roomId)?.name ?? session.roomId }),
+        trackNames: session.trackIds.map(
+          (trackId) => trackById.get(trackId)?.name ?? trackId,
+        ),
+      })),
       rooms: [...roomById.values()].map((room) => ({
         id: room.id,
         name: room.name,
