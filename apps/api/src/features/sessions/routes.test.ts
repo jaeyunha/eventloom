@@ -166,6 +166,7 @@ describe("organizer session settings domain", () => {
       direction: "asc",
     });
     expect(listed.map((session) => session.id)).toEqual(["a-session", "z-session"]);
+    for (const session of listed) expect(session).not.toHaveProperty("history");
     expect((await service.getAgendaCatalog("tenant-a", "event-a")).sessions).toHaveLength(2);
     expect(await service.getAgendaCatalog("tenant-a", "event-a")).not.toHaveProperty("published");
   });
@@ -204,6 +205,27 @@ describe("organizer session settings domain", () => {
     );
     expect(denied.status).toBe(401);
     expect(await denied.json()).toMatchObject({ error: { code: "AUTHENTICATION_REQUIRED" } });
+  });
+  it("surfaces unexpected organizer session list failures as HTTP 500", async () => {
+    const routes = createSessionAdminRoutes({
+      service: {
+        listSessions: async () => {
+          throw new Error("repository unavailable");
+        },
+      } as never,
+    });
+    const app = new Hono<SessionRouteEnvironment>();
+    app.use("*", async (context, next) => {
+      context.set("authPrincipal", principal());
+      context.set("traceId", "trace-list-failure");
+      await next();
+    });
+    app.route("/api/admin/organizations/:organizationId/events/:eventId/sessions", routes);
+
+    const response = await app.request(
+      "http://localhost/api/admin/organizations/tenant-a/events/event-a/sessions",
+    );
+    expect(response.status).toBe(500);
   });
   it("persists organizer content edits, attribution, approval commands, and conflicts through the route envelope", async () => {
     const { service } = setup();
@@ -634,6 +656,16 @@ describe("organizer session settings domain", () => {
       (await createResponse.json()) as { data: { version: number; contentStatus?: string } }
     ).data;
     expect(created).toMatchObject({ version: 1, contentStatus: "Approved" });
+    const listResponse = await app.request(
+      "http://localhost/api/admin/organizations/tenant-a/events/event-a/sessions",
+    );
+    expect(listResponse.status).toBe(200);
+    const list = (await listResponse.json()) as {
+      data: readonly Record<string, unknown>[];
+    };
+    expect(list.data).toHaveLength(1);
+    expect(list.data[0]).toMatchObject({ id: "history-session", title: "Version one" });
+    expect(list.data[0]).not.toHaveProperty("history");
 
     const first = await app.request(
       "http://localhost/api/admin/organizations/tenant-a/events/event-a/sessions/history-session",

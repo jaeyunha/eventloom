@@ -64,6 +64,10 @@ export interface AcceptedSessionProjectionInput {
   readonly session: Session;
   readonly actorId: string;
 }
+type SessionListItem = Omit<Session, "history">;
+type SessionListPageProjection = Omit<SessionListPage, "items"> & {
+  readonly items: readonly SessionListItem[];
+};
 
 function clone<T>(value: T): T {
   return structuredClone(value);
@@ -414,6 +418,10 @@ function sessionProjection(session: Session): Session {
     ...clone(session),
     history: orderedSessionHistory(session.history),
   };
+}
+function sessionListProjection(session: Session): SessionListItem {
+  const { history: _history, ...projection } = session;
+  return clone(projection);
 }
 
 function auditEntry(
@@ -864,14 +872,14 @@ export class SessionService {
   async listSessions(
     actor: SessionActor,
     input: { tenantId?: string; eventId: string } & SessionListQuery,
-  ): Promise<readonly Session[]> {
+  ): Promise<readonly SessionListItem[]> {
     return (await this.listSessionsPage(actor, input)).items;
   }
 
   async listSessionsPage(
     actor: SessionActor,
     input: { tenantId?: string; eventId: string } & SessionListQuery,
-  ): Promise<SessionListPage> {
+  ): Promise<SessionListPageProjection> {
     this.assertActor(actor, input.tenantId, input.eventId);
     const eventId = this.event(input.eventId);
     await this.ensureAgendaInitialized(actor, eventId);
@@ -941,7 +949,7 @@ export class SessionService {
       );
     }
     return {
-      items: sessions.slice(offset, offset + limit).map(sessionProjection),
+      items: sessions.slice(offset, offset + limit).map(sessionListProjection),
       total,
       limit,
       offset,

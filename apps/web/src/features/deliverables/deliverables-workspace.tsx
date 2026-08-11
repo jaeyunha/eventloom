@@ -15,6 +15,7 @@ import {
   type DeliverableAssetHistoryEntry,
   type DeliverableAssetKind,
   type DeliverableComment,
+  type DeliverableContentHistoryEntry,
   type DeliverableDownloadGrant,
   type DeliverableExportDownload,
   type DeliverableExportInput,
@@ -25,10 +26,10 @@ import {
   type DeliverableSession,
   type DeliverableSpeakerProfile,
   type DeliverablesApi,
+  DeliverablesApiError,
   type DeliverableTask,
   type DeliverableTaskInput,
   type DeliverableTaskMatrix,
-  DeliverablesApiError,
   deliverableAssetKinds,
 } from "./api";
 
@@ -180,6 +181,7 @@ export interface DeliverablesWorkspaceViewProps {
   readonly assetHistory?: readonly DeliverableAssetHistoryEntry[];
   readonly comments?: readonly DeliverableComment[];
   readonly loadingAssetDetails?: boolean;
+  readonly loadingSessionHistories?: boolean;
   readonly onAddComment?: (input: {
     readonly assetId: string;
     readonly body: string;
@@ -1649,12 +1651,14 @@ function AssetDetail({
 
 function SessionEditor({
   sessions,
+  loadingHistory,
   busy,
   onSave,
   onApprove,
   onRestore,
 }: Readonly<{
   sessions: readonly DeliverableSession[];
+  loadingHistory: boolean;
   busy: boolean;
   onSave?: (input: {
     readonly sessionId: string;
@@ -1693,14 +1697,18 @@ function SessionEditor({
   );
 
   useEffect(() => {
-    setRestoreVersion(priorVersions[0]?.version ?? null);
+    setRestoreVersion((current) =>
+      current !== null && priorVersions.some((entry) => entry.version === current)
+        ? current
+        : (priorVersions[0]?.version ?? null),
+    );
   }, [priorVersions]);
 
   useEffect(() => {
     setTitle(selected?.title ?? "");
     setDescription(selected?.description ?? "");
     setFormError(null);
-  }, [selected]);
+  }, [selected?.description, selected?.title]);
 
   async function save(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -1821,7 +1829,11 @@ function SessionEditor({
             </div>
           </form>
           <h3>Change history</h3>
-          {history.length === 0 ? (
+          {loadingHistory ? (
+            <p role="status" style={mutedStyle}>
+              Loading session change history…
+            </p>
+          ) : history.length === 0 ? (
             <p style={mutedStyle}>
               No session history was returned. Restore is unavailable without an immutable prior
               version.
@@ -2103,6 +2115,7 @@ export function DeliverablesWorkspaceView({
   assetHistory = [],
   comments = [],
   loadingAssetDetails = false,
+  loadingSessionHistories = false,
   onAddComment,
   onDownloadVersion,
   onReviewAsset,
@@ -2400,6 +2413,7 @@ export function DeliverablesWorkspaceView({
             <>
               <SessionEditor
                 sessions={sessions}
+                loadingHistory={loadingSessionHistories}
                 busy={busy}
                 {...(onSaveSession === undefined ? {} : { onSave: onSaveSession })}
                 {...(onApproveSession === undefined ? {} : { onApprove: onApproveSession })}
@@ -2420,6 +2434,85 @@ export function DeliverablesWorkspaceView({
       </div>
     </div>
   );
+}
+export interface DeliverablesCoreRequestHandles {
+  readonly sessions: Promise<readonly DeliverableSession[]>;
+  readonly matrix?: Promise<DeliverableTaskMatrix>;
+  readonly tasks?: Promise<readonly DeliverableTask[]>;
+  readonly assets?: Promise<readonly DeliverableAsset[]>;
+  readonly profiles?: Promise<readonly DeliverableSpeakerProfile[]>;
+}
+type MutableDeliverablesCoreRequestHandles = {
+  -readonly [Key in keyof DeliverablesCoreRequestHandles]: DeliverablesCoreRequestHandles[Key];
+};
+
+function startDeliverablesRequest<T>(request: () => Promise<T>): Promise<T> {
+  try {
+    return Promise.resolve(request());
+  } catch (reason) {
+    return Promise.reject(reason);
+  }
+}
+
+/**
+ * Start every independent core request synchronously. The workspace attaches
+ * settlement handlers after this function returns so one rejection cannot
+ * prevent the other resources from starting.
+ */
+export function startDeliverablesCoreRequests(
+  api: DeliverablesApi,
+  mode: DeliverablesWorkspaceMode,
+  signal?: AbortSignal,
+): DeliverablesCoreRequestHandles {
+  const requests: MutableDeliverablesCoreRequestHandles = {
+    sessions: startDeliverablesRequest(() => api.listSessions(signal)),
+  };
+  const listDeliverableMatrix = api.listDeliverableMatrix;
+  if (listDeliverableMatrix !== undefined) {
+    requests.matrix = startDeliverablesRequest(() =>
+      listDeliverableMatrix(signal === undefined ? undefined : { signal }),
+    );
+  } else {
+    const listTasks = api.listTasks;
+    if (mode !== "files" && listTasks !== undefined) {
+      requests.tasks = startDeliverablesRequest(() => listTasks(signal));
+    }
+  }
+  const listAssets = api.listAssets;
+  if (listAssets !== undefined) {
+    requests.assets = startDeliverablesRequest(() =>
+      signal === undefined ? listAssets() : listAssets({ signal }),
+    );
+  }
+  const listProfiles = api.listProfiles;
+  if (listProfiles !== undefined) {
+    requests.profiles = startDeliverablesRequest(() => listProfiles(signal));
+  }
+  return requests;
+}
+
+type DeliverablesSettledResult<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly reason: unknown };
+
+function settleDeliverablesRequest<T>(
+  request: Promise<T> | undefined,
+): Promise<DeliverablesSettledResult<T> | undefined> {
+  return request === undefined
+    ? Promise.resolve(undefined)
+    : request.then(
+        (value) => ({ ok: true as const, value }),
+        (reason: unknown) => ({ ok: false as const, reason }),
+      );
+}
+
+function matrixAssets(matrixValue: DeliverableTaskMatrix): readonly DeliverableAsset[] {
+  const byId = new Map<string, DeliverableAsset>();
+  for (const item of matrixValue.items) {
+    for (const asset of item.assets) byId.set(asset.id, asset);
+    if (item.currentAsset !== undefined) byId.set(item.currentAsset.id, item.currentAsset);
+  }
+  return [...byId.values()];
 }
 
 export function DeliverablesWorkspace({
@@ -2453,9 +2546,11 @@ export function DeliverablesWorkspace({
   const [assetHistory, setAssetHistory] = useState<readonly DeliverableAssetHistoryEntry[]>([]);
   const [comments, setComments] = useState<readonly DeliverableComment[]>([]);
   const [loadingAssetDetails, setLoadingAssetDetails] = useState(false);
+  const [loadingSessionHistories, setLoadingSessionHistories] = useState(false);
   const [operationStates, setOperationStates] = useState<
     Partial<Record<DeliverablesOperationKey, DeliverablesOperationState>>
   >({});
+  const loadGenerationRef = useRef(0);
 
   function recordOperation(
     key: DeliverablesOperationKey,
@@ -2484,103 +2579,84 @@ export function DeliverablesWorkspace({
 
   const load = useCallback(
     async (signal?: AbortSignal) => {
+      const generation = loadGenerationRef.current + 1;
+      loadGenerationRef.current = generation;
+      const isCurrent = (): boolean => !signal?.aborted && loadGenerationRef.current === generation;
       if (initialData !== undefined) {
-        setLoading(false);
+        if (isCurrent()) setLoading(false);
         return;
       }
+      if (!isCurrent()) return;
       setLoading(true);
       setError(null);
+      setLoadingSessionHistories(false);
+      const messages: string[] = [];
       try {
-        const messages: string[] = [];
-        const sessionsResult = await api
-          .listSessions(signal)
-          .then((value) => ({ ok: true as const, value }))
-          .catch((reason: unknown) => ({ ok: false as const, reason }));
-        if (sessionsResult.ok) {
-          const listSessionContentHistory = api.listSessionContentHistory;
-          if (mode === "files" || listSessionContentHistory === undefined) {
-            setSessions(sessionsResult.value);
-          } else {
-            const sessionsWithHistory = await Promise.all(
-              sessionsResult.value.map(async (session) => {
-                try {
-                  const contentHistory = await listSessionContentHistory(session.id, signal);
-                  return { ...session, contentHistory };
-                } catch {
-                  return session;
-                }
-              }),
-            );
-            if (!signal?.aborted) setSessions(sessionsWithHistory);
-          }
-        } else setError(messageFromError(sessionsResult.reason));
-        if (api.listDeliverableMatrix === undefined) {
+        const requests = startDeliverablesCoreRequests(api, mode, signal);
+        const [sessionsResult, matrixResult, tasksResult, assetsResult, profilesResult] =
+          await Promise.all([
+            settleDeliverablesRequest(requests.sessions),
+            settleDeliverablesRequest(requests.matrix),
+            settleDeliverablesRequest(requests.tasks),
+            settleDeliverablesRequest(requests.assets),
+            settleDeliverablesRequest(requests.profiles),
+          ]);
+        if (!isCurrent()) return;
+
+        if (sessionsResult?.ok === true) {
+          const coreSessions = sessionsResult.value;
+          setSessions(coreSessions);
+        } else if (sessionsResult !== undefined) {
+          setError(messageFromError(sessionsResult.reason));
+        }
+
+        if (requests.matrix === undefined) {
           messages.push(
             "Exact task status and current-version tracking are unavailable: the organizer deliverables matrix endpoint is not provisioned.",
           );
-          if (mode !== "files" && api.listTasks !== undefined) {
-            const result = await api
-              .listTasks(signal)
-              .then((value) => ({ ok: true as const, value }))
-              .catch((reason: unknown) => ({ ok: false as const, reason }));
-            if (result.ok) setTasks(result.value);
-            else messages.push(`Task tracking unavailable: ${messageFromError(result.reason)}`);
+          if (requests.tasks !== undefined) {
+            if (tasksResult?.ok === true) setTasks(tasksResult.value);
+            else if (tasksResult !== undefined)
+              messages.push(`Task tracking unavailable: ${messageFromError(tasksResult.reason)}`);
           }
-        } else {
-          const result = await api
-            .listDeliverableMatrix(signal === undefined ? undefined : { signal })
-            .then((value) => ({ ok: true as const, value }))
-            .catch((reason: unknown) => ({ ok: false as const, reason }));
-          if (result.ok) {
-            setMatrix(result.value);
-            setTasks(result.value.items.map((item) => item.task));
-            const matrixAssets = new Map<string, DeliverableAsset>();
-            for (const item of result.value.items) {
-              for (const asset of item.assets) matrixAssets.set(asset.id, asset);
-              if (item.currentAsset !== undefined)
-                matrixAssets.set(item.currentAsset.id, item.currentAsset);
-            }
-            setAssets([...matrixAssets.values()]);
-          } else {
-            messages.push(
-              `Exact deliverables matrix unavailable: ${messageFromError(result.reason)}`,
-            );
-          }
+        } else if (matrixResult?.ok === true) {
+          setMatrix(matrixResult.value);
+          setTasks(matrixResult.value.items.map((item) => item.task));
+          if (assetsResult?.ok !== true) setAssets(matrixAssets(matrixResult.value));
+        } else if (matrixResult !== undefined) {
+          messages.push(
+            `Exact deliverables matrix unavailable: ${messageFromError(matrixResult.reason)}`,
+          );
         }
-        if (api.listAssets === undefined)
+
+        if (requests.assets === undefined) {
           messages.push(
             "Private asset library unavailable: no asset projection endpoint is provisioned.",
           );
-        else {
-          const result = await (signal === undefined
-            ? api.listAssets()
-            : api.listAssets({ signal })
-          )
-            .then((value) => ({ ok: true as const, value }))
-            .catch((reason: unknown) => ({ ok: false as const, reason }));
-          if (result.ok) setAssets(result.value);
-          else
-            messages.push(`Private asset library unavailable: ${messageFromError(result.reason)}`);
+        } else if (assetsResult?.ok === true) {
+          setAssets(assetsResult.value);
+        } else if (assetsResult !== undefined) {
+          messages.push(
+            `Private asset library unavailable: ${messageFromError(assetsResult.reason)}`,
+          );
         }
-        if (api.listProfiles === undefined) {
+
+        if (requests.profiles === undefined) {
           messages.push(
             mode === "files"
               ? "Speaker labels are unavailable: the private profile endpoint is not provisioned for organizer access."
               : "Speaker profile editing unavailable: the private profile endpoint is not provisioned for organizer access.",
           );
-        } else {
-          const result = await api
-            .listProfiles(signal)
-            .then((value) => ({ ok: true as const, value }))
-            .catch((reason: unknown) => ({ ok: false as const, reason }));
-          if (result.ok) setProfiles(result.value);
-          else
-            messages.push(
-              mode === "files"
-                ? `Speaker labels unavailable: ${messageFromError(result.reason)}`
-                : `Speaker profile editing unavailable: ${messageFromError(result.reason)}`,
-            );
+        } else if (profilesResult?.ok === true) {
+          setProfiles(profilesResult.value);
+        } else if (profilesResult !== undefined) {
+          messages.push(
+            mode === "files"
+              ? `Speaker labels unavailable: ${messageFromError(profilesResult.reason)}`
+              : `Speaker profile editing unavailable: ${messageFromError(profilesResult.reason)}`,
+          );
         }
+
         if (mode === "deliverables") {
           if (api.replaceHeadshot === undefined)
             messages.push(
@@ -2608,8 +2684,73 @@ export function DeliverablesWorkspace({
             `${mode === "files" ? "Files" : "Deliverables"} ZIP export is unavailable until the organizer export capability is provisioned.`,
           );
         setCapabilityMessages(messages);
+        setLoading(false);
+
+        const listSessionContentHistory = api.listSessionContentHistory;
+        if (
+          mode !== "files" &&
+          listSessionContentHistory !== undefined &&
+          sessionsResult?.ok === true
+        ) {
+          const historySessions = sessionsResult.value;
+          let pendingHistoryRequests = historySessions.length;
+          if (pendingHistoryRequests > 0) setLoadingSessionHistories(true);
+          const historyRequestFinished = (): void => {
+            pendingHistoryRequests -= 1;
+            if (pendingHistoryRequests === 0 && isCurrent()) {
+              setLoadingSessionHistories(false);
+            }
+          };
+          for (const session of historySessions) {
+            if (!isCurrent()) return;
+            let historyRequest: Promise<readonly DeliverableContentHistoryEntry[]>;
+            try {
+              historyRequest =
+                signal === undefined
+                  ? listSessionContentHistory(session.id)
+                  : listSessionContentHistory(session.id, signal);
+            } catch (reason) {
+              setCapabilityMessages((current) =>
+                isCurrent()
+                  ? [
+                      ...current,
+                      `Session content history unavailable for ${session.title}: ${messageFromError(reason)}`,
+                    ]
+                  : current,
+              );
+              historyRequestFinished();
+              continue;
+            }
+            void historyRequest
+              .then(
+                (contentHistory) => {
+                  if (!isCurrent()) return;
+                  setSessions((current) => {
+                    if (!isCurrent()) return current;
+                    return current.map((candidate) =>
+                      candidate.id === session.id && candidate.version === session.version
+                        ? { ...candidate, contentHistory }
+                        : candidate,
+                    );
+                  });
+                },
+                (reason: unknown) => {
+                  if (!isCurrent()) return;
+                  setCapabilityMessages((current) =>
+                    isCurrent()
+                      ? [
+                          ...current,
+                          `Session content history unavailable for ${session.title}: ${messageFromError(reason)}`,
+                        ]
+                      : current,
+                  );
+                },
+              )
+              .finally(historyRequestFinished);
+          }
+        }
       } finally {
-        if (!signal?.aborted) setLoading(false);
+        if (isCurrent()) setLoading(false);
       }
     },
     [api, initialData, mode],
@@ -3082,6 +3223,7 @@ export function DeliverablesWorkspace({
       profiles={profiles}
       {...(matrix === undefined ? {} : { matrixItems: matrix.items })}
       loading={loading}
+      loadingSessionHistories={loadingSessionHistories}
       busy={busy}
       error={error}
       statusMessage={statusMessage}

@@ -8,15 +8,18 @@ import {
   type DeliverableMatrixItem,
   type DeliverableSession,
   type DeliverableSpeakerProfile,
+  type DeliverablesApi,
   type DeliverableTask,
+  type DeliverableTaskMatrix,
 } from "./api";
 import {
-  DeliverablesWorkspaceView,
   type DeliverableRow,
+  DeliverablesWorkspaceView,
   deliverablesExportActionLabels,
   deliverablesExportStatusLabels,
-  triggerDeliverablesDownload,
   ReminderPreview,
+  startDeliverablesCoreRequests,
+  triggerDeliverablesDownload,
 } from "./deliverables-workspace";
 
 const session: DeliverableSession = {
@@ -343,8 +346,112 @@ describe("deliverables API adapter", () => {
     );
   });
 });
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T | PromiseLike<T>) => void;
+  readonly reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((nextResolve, nextReject) => {
+    resolve = nextResolve;
+    reject = nextReject;
+  });
+  return { promise, resolve, reject };
+}
+
+describe("deliverables core request starter", () => {
+  it("starts all independent core requests before any deferred response settles and forwards one signal", async () => {
+    const signal = new AbortController().signal;
+    const calls: string[] = [];
+    const sessions = deferred<readonly DeliverableSession[]>();
+    const matrix = deferred<DeliverableTaskMatrix>();
+    const assets = deferred<readonly DeliverableAsset[]>();
+    const profiles = deferred<readonly DeliverableSpeakerProfile[]>();
+    const matrixValue: DeliverableTaskMatrix = {
+      organizationId: "org-1",
+      eventId: "event-1",
+      total: 0,
+      filters: {},
+      items: [],
+    };
+    const api = {
+      listSessions: vi.fn((receivedSignal?: AbortSignal) => {
+        calls.push("sessions");
+        expect(receivedSignal).toBe(signal);
+        return sessions.promise;
+      }),
+      listDeliverableMatrix: vi.fn((options?: { readonly signal?: AbortSignal }) => {
+        calls.push("matrix");
+        expect(options?.signal).toBe(signal);
+        return matrix.promise;
+      }),
+      listAssets: vi.fn((options?: { readonly signal?: AbortSignal }) => {
+        calls.push("assets");
+        expect(options?.signal).toBe(signal);
+        return assets.promise;
+      }),
+      listProfiles: vi.fn((receivedSignal?: AbortSignal) => {
+        calls.push("profiles");
+        expect(receivedSignal).toBe(signal);
+        return profiles.promise;
+      }),
+    } as unknown as DeliverablesApi;
+
+    const requests = startDeliverablesCoreRequests(api, "deliverables", signal);
+
+    expect(calls).toEqual(["sessions", "matrix", "assets", "profiles"]);
+    sessions.resolve([session]);
+    matrix.resolve(matrixValue);
+    assets.resolve([assetV2]);
+    profiles.resolve([profile]);
+    await Promise.all([
+      requests.sessions,
+      requests.matrix ?? Promise.resolve(matrixValue),
+      requests.assets ?? Promise.resolve([]),
+      requests.profiles ?? Promise.resolve([]),
+    ]);
+  });
+
+  it("keeps a sessions HTTP 500 as a failed request rather than empty success data", async () => {
+    const api = createDeliverablesApi("https://api.example.test", "org-1", "event-1", async () =>
+      Response.json(
+        {
+          error: {
+            code: "SESSIONS_REQUEST_FAILED",
+            message: "The sessions service failed.",
+          },
+        },
+        { status: 500 },
+      ),
+    );
+
+    await expect(api.listSessions()).rejects.toMatchObject({
+      code: "SESSIONS_REQUEST_FAILED",
+      status: 500,
+      message: "The sessions service failed.",
+    });
+  });
+});
 
 describe("deliverables workspace", () => {
+  it("renders core session content while optional history is still loading", () => {
+    const markup = renderToStaticMarkup(
+      createElement(DeliverablesWorkspaceView, {
+        organizationId: "org-1",
+        eventId: "event-1",
+        sessions: [session],
+        tasks: [],
+        assets: [],
+        profiles: [],
+        loadingSessionHistories: true,
+      }),
+    );
+
+    expect(markup).toContain("Session title and abstract");
+    expect(markup).toContain("Loading session change history");
+    expect(markup).not.toContain("No session history was returned");
+  });
   it("renders task setup, filters, immutable versions, comments, approval, and content editors", () => {
     const markup = renderToStaticMarkup(
       createElement(DeliverablesWorkspaceView, {
