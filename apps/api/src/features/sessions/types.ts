@@ -21,7 +21,8 @@ export type SessionResourceType =
   | "level"
   | "tag"
   | "settings";
-export type SessionContentStatus = "Approved" | "Needs changes";
+export const sessionContentStatuses = ["Approved", "Needs changes"] as const;
+export type SessionContentStatus = (typeof sessionContentStatuses)[number];
 export type SessionMutationAction =
   | "created"
   | "updated"
@@ -49,6 +50,28 @@ export interface SessionContentSnapshot {
   speakerIds: readonly string[];
   speakerRoster: readonly SessionSpeakerReference[];
   resourceIds: readonly string[];
+}
+
+export interface PublishedSessionContent {
+  readonly id: string;
+  readonly title: string;
+  readonly abstract: string;
+  readonly contentStatus: "Approved";
+  readonly durationMinutes: number;
+  readonly capacityRequired: number;
+  readonly roomId?: string;
+  readonly trackIds: readonly string[];
+  readonly formatId?: string;
+  readonly speakerIds: readonly string[];
+  readonly resourceIds: readonly string[];
+  readonly version: number;
+  readonly updatedAt: string;
+}
+
+export interface PublishedSessionContentHandoff {
+  readonly tenantId: string;
+  readonly eventId: string;
+  readonly sessions: readonly PublishedSessionContent[];
 }
 export type SessionSortField =
   | "title"
@@ -253,6 +276,7 @@ export interface UpdateSessionInput {
   title?: string;
   description?: string;
   status?: SessionStatus;
+  contentStatus?: SessionContentStatus;
   durationMinutes?: number;
   capacityRequired?: number;
   roomId?: string | null;
@@ -431,6 +455,13 @@ export interface SessionRepositorySeed {
   speakerIds?: Readonly<Record<string, readonly string[]>>;
 }
 
+export interface PublishedSessionContentReader {
+  /** Approval-gated, tenant/event-scoped source for agenda and deliverables consumers. */
+  getPublishedSessionContent(
+    tenantId: string,
+    eventId: string,
+  ): Promise<PublishedSessionContentHandoff>;
+}
 export interface AgendaCatalogReader {
   /** Organization-qualified, read-only catalog contract consumed by agenda scheduling. */
   getAgendaCatalog(tenantId: string, eventId: string): Promise<AgendaCatalog>;
