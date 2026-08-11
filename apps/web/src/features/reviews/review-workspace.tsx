@@ -389,6 +389,47 @@ interface ApiEnvelope<T> {
 
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
+export interface ReviewAutosaveQueue {
+  enqueue(operation: () => Promise<void>): Promise<void>;
+  whenIdle(): Promise<void>;
+  isPending(): boolean;
+}
+
+export function createReviewAutosaveQueue(
+  onPendingChange: (pending: boolean) => void = () => undefined,
+): ReviewAutosaveQueue {
+  let tail = Promise.resolve();
+  let pendingCount = 0;
+  return {
+    enqueue(operation) {
+      pendingCount += 1;
+      onPendingChange(true);
+      const result = tail.then(operation);
+      const settled = result.finally(() => {
+        pendingCount -= 1;
+        onPendingChange(pendingCount > 0);
+      });
+      tail = settled.catch(() => undefined);
+      return settled;
+    },
+    whenIdle() {
+      return tail;
+    },
+    isPending() {
+      return pendingCount > 0;
+    },
+  };
+}
+
+export function reviewerNavigationDisabled(
+  destinationAvailable: boolean,
+  autosavePending: boolean,
+  draftBusy: boolean,
+  submitBusy: boolean,
+): boolean {
+  return !destinationAvailable || autosavePending || draftBusy || submitBusy;
+}
+
 function apiBaseUrl(): string | null {
   const configured = process.env.NEXT_PUBLIC_API_URL?.trim();
   return configured ? configured.replace(/\/+$/u, "") : null;
@@ -3632,7 +3673,8 @@ function EvaluatorWorkspace({
   const reviewVersionRef = useRef<number | undefined>(assignment.reviewVersion);
   const criterionRefs = useRef<Record<string, HTMLElement | null>>({});
   const [showValidation, setShowValidation] = useState(false);
-  const autosaveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const [autosavePending, setAutosavePending] = useState(false);
+  const [autosaveQueue] = useState(() => createReviewAutosaveQueue(setAutosavePending));
   const [autosaveState, setAutosaveState] = useState(
     initiallySubmitted ? "Review submitted" : "Autosave ready",
   );
@@ -3866,7 +3908,7 @@ function EvaluatorWorkspace({
     nextConfirmed: ReadonlySet<string>,
     nextResponses: Readonly<Record<string, string>>,
   ): void {
-    autosaveQueueRef.current = autosaveQueueRef.current.then(async () => {
+    void autosaveQueue.enqueue(async () => {
       setAutosaveState("Saving draft…");
       try {
         await persistReview(nextScores, nextComment, nextConfirmed, nextResponses);
@@ -3889,7 +3931,7 @@ function EvaluatorWorkspace({
     setSubmitError(null);
     setAutosaveState("Saving draft…");
     try {
-      await autosaveQueueRef.current;
+      await autosaveQueue.whenIdle();
       await persistReview();
       setAutosaveState("Draft saved");
     } catch (reason: unknown) {
@@ -4035,7 +4077,7 @@ function EvaluatorWorkspace({
     setSubmitBusy(true);
     submitBusyRef.current = true;
     try {
-      await autosaveQueueRef.current;
+      await autosaveQueue.whenIdle();
       const review = await persistReview();
       const submittedReview = await evaluationRequest<NonNullable<ApiReviewContext["review"]>>(
         baseUrl,
@@ -4323,7 +4365,12 @@ function EvaluatorWorkspace({
               className={styles.secondaryButton}
               type="button"
               onClick={onPrevious}
-              disabled={onPrevious === undefined || draftBusy || submitBusy}
+              disabled={reviewerNavigationDisabled(
+                onPrevious !== undefined,
+                autosavePending,
+                draftBusy,
+                submitBusy,
+              )}
             >
               Previous
             </button>
@@ -4331,7 +4378,12 @@ function EvaluatorWorkspace({
               className={styles.secondaryButton}
               type="button"
               onClick={onNext}
-              disabled={onNext === undefined || draftBusy || submitBusy}
+              disabled={reviewerNavigationDisabled(
+                onNext !== undefined,
+                autosavePending,
+                draftBusy,
+                submitBusy,
+              )}
             >
               Next
             </button>
