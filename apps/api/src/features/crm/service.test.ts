@@ -502,5 +502,96 @@ describe("CrmService", () => {
         (entry) => entry.kind === "communication",
       ),
     ).toHaveLength(1);
+
+    const delivered = await crm.recordOutreachDeliveryStatus({
+      organizationId: "org-a",
+      outreachId: first.id,
+      idempotencyKey: input.idempotencyKey,
+      status: "delivered",
+      providerMessageId: "provider-message-1",
+      occurredAt: "2026-01-01T00:01:00.000Z",
+    });
+    expect(delivered).toMatchObject({
+      status: "delivered",
+      queuedCount: 0,
+      sentCount: 1,
+      failedCount: 0,
+      terminal: true,
+      providerMessageId: "provider-message-1",
+      completedAt: "2026-01-01T00:01:00.000Z",
+    });
+    await expect(
+      crm.recordOutreachDeliveryStatus({
+        organizationId: "org-a",
+        outreachId: first.id,
+        idempotencyKey: input.idempotencyKey,
+        status: "delivered",
+        providerMessageId: "provider-message-1",
+      }),
+    ).resolves.toEqual(delivered);
+    await expect(
+      crm.recordOutreachDeliveryStatus({
+        organizationId: "org-a",
+        outreachId: first.id,
+        idempotencyKey: input.idempotencyKey,
+        status: "bounced",
+      }),
+    ).rejects.toMatchObject({ code: "CRM_CONFLICT" });
+    expect(
+      (await repository.listHistory("org-a", contact.id)).filter(
+        (entry) => entry.kind === "communication",
+      ),
+    ).toHaveLength(2);
   });
+  it.each(["failed", "bounced", "complained"] as const)(
+    "persists terminal %s outreach completion",
+    async (status) => {
+      const repository = new InMemoryCrmRepository();
+      const crm = new CrmService(
+        {
+          repository,
+          outreach: {
+            async send(command) {
+              return { ...command, status: "queued" };
+            },
+          },
+        },
+        {
+          clock: () => new Date("2026-01-01T00:00:00.000Z"),
+          generateId: (prefix) => `${prefix}-${status}`,
+        },
+      );
+      const contact = await crm.createContact(actor, {
+        organizationId: "org-a",
+        displayName: "Terminal Recipient",
+        email: `${status}@example.com`,
+      });
+      const outreach = await crm.sendPersonalizedOutreach(actor, {
+        organizationId: "org-a",
+        contactId: contact.id,
+        subject: "Follow up",
+        body: "Hello",
+        idempotencyKey: `outreach-${status}`,
+      });
+
+      const completed = await crm.recordOutreachDeliveryStatus({
+        organizationId: "org-a",
+        outreachId: outreach.id,
+        idempotencyKey: `outreach-${status}`,
+        status,
+        providerMessageId: `provider-${status}`,
+        reason: `provider reported ${status}`,
+      });
+
+      expect(completed).toMatchObject({
+        status,
+        queuedCount: 0,
+        sentCount: 0,
+        failedCount: 1,
+        terminal: true,
+        failureReason: `provider reported ${status}`,
+        providerMessageId: `provider-${status}`,
+      });
+    },
+  );
 });

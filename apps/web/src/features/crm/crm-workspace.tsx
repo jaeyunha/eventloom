@@ -200,12 +200,14 @@ export interface CrmOutreachCommand {
   readonly recipientEmail: string;
   readonly subject: string;
   readonly renderedBody: string;
-  readonly status: "queued" | "sent" | "failed";
+  readonly status: "queued" | "sent" | "delivered" | "failed" | "bounced" | "complained";
   readonly queuedCount: number;
   readonly sentCount: number;
   readonly failedCount: number;
   readonly terminal: boolean;
   readonly failureReason: string | null;
+  readonly providerMessageId?: string | null;
+  readonly completedAt?: string | null;
 }
 
 export interface CrmOutreachRecipientPreview {

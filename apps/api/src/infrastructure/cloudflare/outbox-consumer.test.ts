@@ -1,14 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
+import { CloudflareMemberInvitationDelivery } from "../../runtime/cloudflare";
+import type { CloudflareOutboxInvitationTransient, CloudflareOutboxMessage } from "./bindings";
 import {
   consumeOutboxQueue,
   InMemoryOutboxJobRepository,
   type OutboxConsumerBindings,
   OutboxDeliveryError,
+  type OutboxDeliveryStatusRecorder,
   type OutboxJob,
   type OutboxQueueMessage,
 } from "./outbox-consumer";
-import { CloudflareMemberInvitationDelivery } from "../../runtime/cloudflare";
-import type { CloudflareOutboxInvitationTransient, CloudflareOutboxMessage } from "./bindings";
 
 const NOW = new Date("2026-08-09T12:00:00.000Z");
 
@@ -111,6 +112,7 @@ async function run(
   repository: InMemoryOutboxJobRepository,
   adapters: NonNullable<NonNullable<Parameters<typeof consumeOutboxQueue>[3]>["adapters"]>,
   env: OutboxConsumerBindings = bindings(),
+  statusRecorder?: OutboxDeliveryStatusRecorder,
 ) {
   await consumeOutboxQueue(
     { messages: [queueMessage] } as unknown as MessageBatch<unknown>,
@@ -120,6 +122,7 @@ async function run(
       repository,
       adapters,
       now: () => NOW,
+      ...(statusRecorder === undefined ? {} : { statusRecorder }),
       logger: {},
       baseRetryDelayMs: 1_000,
       maxRetryDelayMs: 10_000,
@@ -141,6 +144,76 @@ describe("Cloudflare outbox consumer", () => {
     expect(queueMessage.acked).toBe(true);
     expect(queueMessage.retries).toEqual([]);
     expect(repository.get("job-1")?.state).toBe("delivered");
+  });
+  it("persists provider completion through the communication status boundary", async () => {
+    const repository = new InMemoryOutboxJobRepository([
+      job({
+        payload: {
+          effect: "send_communication",
+          sendId: "send-1",
+          recipientId: "participant-1",
+          eventId: "event-1",
+          payload: job().payload,
+        },
+      }),
+    ]);
+    const send = vi.fn(async () => ({ providerMessageId: "provider-1" }));
+    const statusRecorder = { recordCommunicationStatus: vi.fn(async () => undefined) };
+    const queueMessage = message(queueBody());
+
+    await run(queueMessage, repository, { communications: send }, bindings(), statusRecorder);
+
+    expect(statusRecorder.recordCommunicationStatus).toHaveBeenCalledWith({
+      tenantId: "tenant-1",
+      target: {
+        kind: "communication",
+        eventId: "event-1",
+        sendId: "send-1",
+        recipientId: "participant-1",
+      },
+      status: "delivered",
+      providerMessageId: "provider-1",
+      occurredAt: NOW.toISOString(),
+    });
+    expect(repository.get("job-1")?.state).toBe("delivered");
+  });
+  it("persists CRM outreach completion with its command correlation", async () => {
+    const repository = new InMemoryOutboxJobRepository([
+      job({
+        payload: {
+          effect: "send_crm_outreach",
+          outreachId: "outreach-1",
+          contactId: "contact-1",
+          eventId: "event-1",
+          idempotencyKey: "outreach-key-1",
+          payload: job().payload,
+        },
+      }),
+    ]);
+    const statusRecorder = { recordCommunicationStatus: vi.fn(async () => undefined) };
+    const queueMessage = message(queueBody());
+
+    await run(
+      queueMessage,
+      repository,
+      { communications: vi.fn(async () => ({ providerMessageId: "provider-2" })) },
+      bindings(),
+      statusRecorder,
+    );
+
+    expect(statusRecorder.recordCommunicationStatus).toHaveBeenCalledWith({
+      tenantId: "tenant-1",
+      target: {
+        kind: "crm_outreach",
+        eventId: "event-1",
+        outreachId: "outreach-1",
+        contactId: "contact-1",
+        idempotencyKey: "outreach-key-1",
+      },
+      status: "delivered",
+      providerMessageId: "provider-2",
+      occurredAt: NOW.toISOString(),
+    });
   });
   it("dispatches a member invitation from the transient queue payload", async () => {
     const setupUrl =
@@ -277,6 +350,31 @@ describe("Cloudflare outbox consumer", () => {
     expect(queueMessage.retries).toEqual([1]);
     expect(repository.get("job-1")?.state).toBe("queued");
   });
+  it("does not persist a terminal status while a delivery remains retryable", async () => {
+    const repository = new InMemoryOutboxJobRepository([
+      job({
+        payload: {
+          effect: "send_communication",
+          sendId: "send-1",
+          recipientId: "participant-1",
+          eventId: "event-1",
+          payload: job().payload,
+        },
+      }),
+    ]);
+    const statusRecorder = { recordCommunicationStatus: vi.fn(async () => undefined) };
+    const send = vi.fn(async () => {
+      throw new OutboxDeliveryError("PROVIDER_UNAVAILABLE", "provider unavailable", {
+        retryable: true,
+      });
+    });
+    const queueMessage = message(queueBody());
+
+    await run(queueMessage, repository, { communications: send }, bindings(), statusRecorder);
+
+    expect(statusRecorder.recordCommunicationStatus).not.toHaveBeenCalled();
+    expect(repository.get("job-1")?.state).toBe("queued");
+  });
 
   it("records terminal failures and acknowledges without retrying", async () => {
     const repository = new InMemoryOutboxJobRepository([job()]);
@@ -289,6 +387,40 @@ describe("Cloudflare outbox consumer", () => {
 
     expect(queueMessage.acked).toBe(true);
     expect(queueMessage.retries).toEqual([]);
+    expect(repository.get("job-1")?.state).toBe("failed");
+  });
+  it("persists terminal delivery failure through the status boundary", async () => {
+    const repository = new InMemoryOutboxJobRepository([
+      job({
+        payload: {
+          effect: "send_communication",
+          sendId: "send-1",
+          recipientId: "participant-1",
+          eventId: "event-1",
+          payload: job().payload,
+        },
+      }),
+    ]);
+    const statusRecorder = { recordCommunicationStatus: vi.fn(async () => undefined) };
+    const send = vi.fn(async () => {
+      throw new OutboxDeliveryError("VALIDATION_ERROR", "invalid payload", { retryable: false });
+    });
+    const queueMessage = message(queueBody());
+
+    await run(queueMessage, repository, { communications: send }, bindings(), statusRecorder);
+
+    expect(statusRecorder.recordCommunicationStatus).toHaveBeenCalledWith({
+      tenantId: "tenant-1",
+      target: {
+        kind: "communication",
+        eventId: "event-1",
+        sendId: "send-1",
+        recipientId: "participant-1",
+      },
+      status: "failed",
+      reason: "VALIDATION_ERROR",
+      occurredAt: NOW.toISOString(),
+    });
     expect(repository.get("job-1")?.state).toBe("failed");
   });
 

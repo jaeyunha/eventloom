@@ -3,6 +3,7 @@ import { type ApiDependencies, createApp } from "../app";
 import {
   consumeOutboxQueue,
   type OutboxConsumerBindings,
+  type OutboxDeliveryStatusRecorder,
 } from "../infrastructure/cloudflare/outbox-consumer";
 import {
   type AdvisoryAiReasoningEffort,
@@ -201,6 +202,57 @@ function createRuntimeApplication(bindings: RuntimeBindings): RuntimeApplication
   return { app: createApp(dependencies), dependencies };
 }
 
+function createOutboxDeliveryStatusRecorder(
+  dependencies: ApiDependencies,
+): OutboxDeliveryStatusRecorder {
+  return {
+    async recordCommunicationStatus(input) {
+      if (input.target.kind === "communication") {
+        const service = dependencies.communications?.service;
+        if (service === undefined) {
+          throw new Error("The communication delivery status service is unavailable.");
+        }
+        await service.recordDeliveryStatus(
+          {
+            tenantId: input.tenantId,
+            userId: "outbox-consumer",
+            kind: "automation",
+            grants: [{ eventId: input.target.eventId, role: "delivery" }],
+          },
+          {
+            eventId: input.target.eventId,
+            sendId: input.target.sendId,
+            recipientId: input.target.recipientId,
+            status: input.status,
+            ...(input.providerMessageId === undefined
+              ? {}
+              : { providerMessageId: input.providerMessageId }),
+            ...(input.reason === undefined ? {} : { reason: input.reason }),
+            occurredAt: input.occurredAt,
+          },
+        );
+        return;
+      }
+
+      const service = dependencies.crm?.service;
+      if (service === undefined) {
+        throw new Error("The CRM outreach delivery status service is unavailable.");
+      }
+      await service.recordOutreachDeliveryStatus({
+        organizationId: input.tenantId,
+        outreachId: input.target.outreachId,
+        idempotencyKey: input.target.idempotencyKey,
+        status: input.status,
+        ...(input.providerMessageId === undefined
+          ? {}
+          : { providerMessageId: input.providerMessageId }),
+        ...(input.reason === undefined ? {} : { reason: input.reason }),
+        occurredAt: input.occurredAt,
+      });
+    },
+  };
+}
+
 export function createRuntimeApp(bindings: RuntimeBindings) {
   return createApp(createRuntimeDependencies(bindings));
 }
@@ -241,7 +293,15 @@ export function createRuntimeWorker(): ExportedHandler<RuntimeBindings> {
         }
         return;
       }
-      await consumeOutboxQueue(batch, bindings as OutboxConsumerBindings, executionContext);
+      const runtime = runtimeFor(bindings);
+      await consumeOutboxQueue(
+        batch,
+        bindings as OutboxConsumerBindings,
+        executionContext,
+        {
+          statusRecorder: createOutboxDeliveryStatusRecorder(runtime.dependencies),
+        },
+      );
     },
     async scheduled(controller, bindings) {
       let runtime: RuntimeApplication;

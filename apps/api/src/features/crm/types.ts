@@ -303,7 +303,13 @@ export interface SendCrmOutreachInput {
   readonly idempotencyKey: string;
 }
 
-export type CrmOutreachStatus = "queued" | "sent" | "failed";
+export type CrmOutreachStatus =
+  | "queued"
+  | "sent"
+  | "delivered"
+  | "failed"
+  | "bounced"
+  | "complained";
 
 export interface CrmOutreachCommand {
   readonly id: string;
@@ -321,6 +327,8 @@ export interface CrmOutreachCommand {
   readonly failedCount: number;
   readonly terminal: boolean;
   readonly failureReason: string | null;
+  readonly providerMessageId?: string | null;
+  readonly completedAt?: string | null;
   readonly idempotencyKey: string;
   readonly createdBy: string;
   readonly createdAt: string;
@@ -371,6 +379,7 @@ export interface CrmRepository {
   saveProjection(projection: CrmEventProjection): Promise<CrmEventProjection>;
   listProjections(organizationId: string): Promise<readonly CrmEventProjection[]>;
   saveOutreach(command: CrmOutreachCommand): Promise<CrmOutreachCommand>;
+  updateOutreach(command: CrmOutreachCommand): Promise<CrmOutreachCommand>;
   getOutreachByIdempotencyKey(
     organizationId: string,
     idempotencyKey: string,
