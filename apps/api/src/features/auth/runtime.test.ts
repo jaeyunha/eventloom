@@ -140,4 +140,38 @@ describe("Better Auth D1 runtime", () => {
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({ code: "INVALID_PASSWORD" });
   });
+  it("builds magic links on the browser origin used by the same-origin gateway", async () => {
+    const { database } = recordingDatabase();
+    const links: string[] = [];
+    const runtime = createBetterAuthRuntime({
+      database,
+      configuration: createBetterAuthRuntimeConfiguration({
+        secret: "a-secret-long-enough-for-better-auth-tests",
+        baseUrl: "https://web.example.com",
+        trustedOrigins: ["https://web.example.com", "https://api.example.com"],
+      }),
+      environment: "staging",
+      sendMagicLink: async ({ url }) => {
+        links.push(url);
+      },
+    });
+
+    const response = await runtime.handler(
+      new Request("https://api.example.com/api/auth/sign-in/magic-link", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          origin: "https://web.example.com",
+        },
+        body: JSON.stringify({
+          email: "speaker@example.com",
+          callbackURL: "https://web.example.com/admin",
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(links).toHaveLength(1);
+    expect(links[0]).toMatch(/^https:\/\/web\.example\.com\/api\/auth\/magic-link\/verify\?/u);
+  });
 });

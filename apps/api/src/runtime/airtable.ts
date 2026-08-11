@@ -471,12 +471,19 @@ function decodeJson<T extends object>(fields: Readonly<AirtableFields>, jsonFiel
               : undefined;
         const tenantId =
           organizationId ?? (typeof parsed.tenantId === "string" ? parsed.tenantId : undefined);
+        const eventId =
+          typeof fields["Event ID"] === "string"
+            ? fields["Event ID"]
+            : typeof parsed.eventId === "string"
+              ? parsed.eventId
+              : undefined;
         const id = typeof fields[APPLICATION_ID] === "string" ? fields[APPLICATION_ID] : parsed.id;
         requiredId(id);
         return {
           ...parsed,
           ...(id === undefined ? {} : { id }),
           ...(tenantId === undefined ? {} : { tenantId }),
+          ...(eventId === undefined ? {} : { eventId }),
           ...(organizationId === undefined && tenantId === undefined
             ? {}
             : { organizationId: organizationId ?? tenantId }),
@@ -7795,6 +7802,7 @@ class AirtablePublicRepository implements PublicApiRepository {
       ...clone(input.data),
       id: requestedId || randomResourceId(input.resource),
       organizationId: input.organizationId,
+      tenantId: input.organizationId,
       version: 1,
       updatedAt: new Date().toISOString(),
     };
@@ -7810,6 +7818,7 @@ class AirtablePublicRepository implements PublicApiRepository {
       ...clone(input.data),
       id: input.id,
       organizationId: input.organizationId,
+      tenantId: input.organizationId,
       version: input.expectedVersion + 1,
       updatedAt: new Date().toISOString(),
     };

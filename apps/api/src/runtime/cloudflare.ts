@@ -2061,8 +2061,8 @@ export function inspectProductionRuntime(
     try {
       createBetterAuthRuntimeConfiguration({
         secret: bindings.BETTER_AUTH_SECRET ?? "",
-        baseUrl: apiOrigin,
-        trustedOrigins: [bindings.WEB_ORIGIN],
+        baseUrl: bindings.WEB_ORIGIN,
+        trustedOrigins: [bindings.WEB_ORIGIN, apiOrigin],
       });
     } catch (error) {
       if (error instanceof AuthConfigurationError) {
@@ -2113,8 +2113,8 @@ export function createCloudflareDependencies(bindings: RuntimeBindings): ApiDepe
 
   const authConfiguration = createBetterAuthRuntimeConfiguration({
     secret: bindings.BETTER_AUTH_SECRET ?? "",
-    baseUrl: apiOrigin,
-    trustedOrigins: [bindings.WEB_ORIGIN],
+    baseUrl: bindings.WEB_ORIGIN,
+    trustedOrigins: [bindings.WEB_ORIGIN, apiOrigin],
   });
   const openSend = new OpenSendClient({
     sendingApiKey: openSendKey,

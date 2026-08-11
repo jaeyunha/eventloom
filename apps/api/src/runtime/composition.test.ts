@@ -1499,10 +1499,12 @@ describe("local runtime composition", () => {
       recordId: "rec00000000000002",
       fields: {
         "Application ID": "session-airtable",
+        "Organization ID": LOCAL_ORGANIZATION_ID,
+        "Event ID": "event-airtable",
         "Metadata JSON": JSON.stringify({
           id: "session-airtable",
           organizationId: LOCAL_ORGANIZATION_ID,
-          eventId: "event-airtable",
+          eventId: "stale-event-id",
           title: "Airtable Session",
           version: 1,
           updatedAt: "2026-08-09T00:00:00.000Z",
@@ -1531,7 +1533,11 @@ describe("local runtime composition", () => {
           "content-type": "application/json",
           "idempotency-key": "production-create-1",
         },
-        body: JSON.stringify({ id: "created-event", name: "Created Event" }),
+        body: JSON.stringify({
+          id: "created-event",
+          name: "Created Event",
+          tenantId: "another-organization",
+        }),
       },
       bindings,
     );
@@ -1553,6 +1559,7 @@ describe("local runtime composition", () => {
           id: "created-session",
           eventId: "event-airtable",
           title: "Created Session",
+          tenantId: "another-organization",
         }),
       },
       bindings,
@@ -1569,6 +1576,7 @@ describe("local runtime composition", () => {
       name: "Created Event",
       organizationId: LOCAL_ORGANIZATION_ID,
       version: 1,
+      tenantId: LOCAL_ORGANIZATION_ID,
     });
     expect(JSON.stringify(createdPayload)).not.toContain("rec00000000000001");
     expect(
@@ -1576,13 +1584,14 @@ describe("local runtime composition", () => {
     ).toBe(true);
     expect(sessionsListed.status).toBe(200);
     await expect(sessionsListed.json()).resolves.toMatchObject({
-      data: [{ id: "session-airtable", title: "Airtable Session" }],
+      data: [{ id: "session-airtable", eventId: "event-airtable", title: "Airtable Session" }],
     });
     expect(sessionsCreated.status).toBe(201);
     await expect(sessionsCreated.json()).resolves.toMatchObject({
       id: "created-session",
       organizationId: LOCAL_ORGANIZATION_ID,
       version: 1,
+      tenantId: LOCAL_ORGANIZATION_ID,
     });
     expect(
       transport.requests.some(
