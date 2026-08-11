@@ -94,8 +94,12 @@ test("submitter completes the account-first CFP with two participants", async ({
       "open-sessionboard:cfp-submission:v1:ai-engineer:evaluator-2026:evaluator-2026-cfp",
     ),
     legacyDraft: window.localStorage.getItem("open-sessionboard:cfp-draft:v1:evaluator-2026"),
+    completionHandoff: window.sessionStorage.getItem(
+      "open-sessionboard:cfp-completion:v1:ai-engineer:evaluator-2026:evaluator-2026-cfp",
+    ),
   }));
-  expect(browserState.pointer).toMatch(/^submission[_-]/);
+  expect(browserState.pointer).toBeNull();
+  expect(browserState.completionHandoff).toMatch(/^submission[_-]/);
   expect(browserState.legacyDraft).toBeNull();
   await page.getByRole("button", { name: "Submit another session" }).click();
   await expect(page).toHaveURL(/\/cfp\/evaluator-2026$/);
@@ -104,6 +108,15 @@ test("submitter completes the account-first CFP with two participants", async ({
       page.evaluate(() =>
         window.localStorage.getItem(
           "open-sessionboard:cfp-submission:v1:ai-engineer:evaluator-2026:evaluator-2026-cfp",
+        ),
+      ),
+    )
+    .toBeNull();
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        window.sessionStorage.getItem(
+          "open-sessionboard:cfp-completion:v1:ai-engineer:evaluator-2026:evaluator-2026-cfp",
         ),
       ),
     )
