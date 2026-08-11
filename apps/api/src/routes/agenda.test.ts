@@ -10,7 +10,7 @@ import {
   InMemoryAgendaMutationLock,
   InMemoryAgendaRepository,
 } from "../features/agenda";
-import type { PublishedAgendaRevision } from "../features/agenda/types";
+import type { AgendaState, PublishedAgendaRevision } from "../features/agenda/types";
 import type { AuthPrincipal } from "../features/auth/types";
 import type { AgendaRouteDependencies, AgendaRouteEnvironment } from "./agenda";
 import { createAgendaAdminRoutes, createPublishedAgendaRoutes } from "./agenda";
@@ -96,6 +96,14 @@ async function initialize(
   });
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 function providerWithPlacements(
   placements = [
     {
@@ -134,6 +142,24 @@ function appFor(
       organizationIdForEvent: async () => eventOrganizationId,
       ...(afterPublish === undefined ? {} : { afterPublish }),
     }),
+  );
+  return app;
+}
+
+function appForReadProfile(
+  engine: AgendaEngine,
+  organizationIdForEvent: AgendaRouteDependencies["organizationIdForEvent"],
+  authenticatedPrincipal: AuthPrincipal | null = principal(),
+): Hono<AgendaRouteEnvironment> {
+  const app = new Hono<AgendaRouteEnvironment>();
+  app.use("*", async (context, next) => {
+    context.set("authPrincipal", authenticatedPrincipal);
+    context.set("traceId", traceId);
+    await next();
+  });
+  app.route(
+    "/api/admin/organizations/:organizationId/events/:eventId/agenda",
+    createAgendaAdminRoutes({ engine, organizationIdForEvent }),
   );
   return app;
 }
@@ -250,6 +276,76 @@ async function responseError(response: Response): Promise<{
 }
 
 describe("canonical agenda draft routes", () => {
+  it("overlaps the successful ownership and agenda reads exactly once", async () => {
+    const sourceEngine = createEngine();
+    await initialize(sourceEngine);
+    const state = await sourceEngine.repository.load("event-a");
+    if (state === null) throw new Error("Expected agenda state.");
+
+    const ownershipRead = deferred<string | null>();
+    const agendaRead = deferred<AgendaState | null>();
+    const started: string[] = [];
+    const organizationIdForEvent = vi.fn(() => {
+      started.push("event-ownership");
+      return ownershipRead.promise;
+    });
+    const load = vi.fn(() => {
+      started.push("agenda-state");
+      return agendaRead.promise;
+    });
+    const engine = { repository: { load } } as unknown as AgendaEngine;
+    const app = appForReadProfile(engine, organizationIdForEvent);
+    let settled = false;
+    const responsePromise = Promise.resolve(
+      app.request("/api/admin/organizations/org-a/events/event-a/agenda"),
+    ).then((response) => {
+      settled = true;
+      return response;
+    });
+
+    await vi.waitFor(() => expect(started).toEqual(["event-ownership", "agenda-state"]));
+    expect(organizationIdForEvent).toHaveBeenCalledTimes(1);
+    expect(organizationIdForEvent).toHaveBeenCalledWith("event-a");
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(load).toHaveBeenCalledWith("event-a");
+
+    agendaRead.resolve(state);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    ownershipRead.resolve("org-a");
+    const response = await responsePromise;
+    expect(response.status).toBe(200);
+  });
+
+  it("does not start workspace reads before organization membership is authorized", async () => {
+    const organizationIdForEvent = vi.fn(async () => "org-a");
+    const load = vi.fn(async () => null);
+    const engine = { repository: { load } } as unknown as AgendaEngine;
+    const app = appForReadProfile(engine, organizationIdForEvent, principal("org-b"));
+
+    const response = await app.request("/api/admin/organizations/org-a/events/event-a/agenda");
+
+    expect(response.status).toBe(403);
+    expect(organizationIdForEvent).not.toHaveBeenCalled();
+    expect(load).not.toHaveBeenCalled();
+  });
+
+  it("preserves event-tenant not-found precedence over a failed agenda read", async () => {
+    const organizationIdForEvent = vi.fn(async () => "org-b");
+    const load = vi.fn(async () => {
+      throw new Error("Airtable agenda read failed");
+    });
+    const engine = { repository: { load } } as unknown as AgendaEngine;
+    const app = appForReadProfile(engine, organizationIdForEvent);
+
+    const response = await app.request("/api/admin/organizations/org-a/events/event-a/agenda");
+
+    expect(response.status).toBe(404);
+    expect(await responseError(response)).toMatchObject({ code: "NOT_FOUND" });
+    expect(organizationIdForEvent).toHaveBeenCalledTimes(1);
+    expect(load).toHaveBeenCalledTimes(1);
+  });
   it("projects the root workspace and supports full-draft create/update/remove, preview, and publish", async () => {
     const engine = createEngine();
     await initialize(engine);

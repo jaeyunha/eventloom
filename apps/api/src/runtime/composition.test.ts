@@ -18,6 +18,7 @@ import {
 } from "../infrastructure/airtable";
 import type { CloudflareOutboxMessage } from "../infrastructure/cloudflare/bindings";
 import {
+  AirtableAgendaRepository,
   AirtableCfpFileAssetGateway,
   AirtableCfpRepository,
   AirtableCommunicationRepository,
@@ -2558,6 +2559,53 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       biography: "Updated biography.",
       version: 2,
     });
+  });
+  it("loads the authoritative agenda workspace with one Airtable request", async () => {
+    const eventId = "event-workspace-read";
+    const state: AgendaState = {
+      eventId,
+      stateVersion: 3,
+      timeZone: "UTC",
+      minimumTravelMinutes: 0,
+      sessions: [],
+      rooms: [],
+      tracks: [],
+      draft: {
+        eventId,
+        timeZone: "UTC",
+        version: 2,
+        entries: [],
+        warningOverrides: [],
+        updatedAt: "2026-08-11T00:00:00.000Z",
+        updatedBy: "organizer-workspace-read",
+      },
+      revisions: [],
+      currentPublishedRevisionId: null,
+      outbox: [],
+      audit: [],
+      suggestionRuns: [],
+    };
+    const transport = new FakeAirtableTransport();
+    transport.seed({
+      baseId: "base-test",
+      table: "Agenda Versions",
+      fields: {
+        "Application ID": eventId,
+        "Conflicts JSON": JSON.stringify(state),
+      },
+    });
+    const repository = new AirtableAgendaRepository({
+      baseId: "base-test",
+      transport,
+    });
+
+    await expect(repository.load(eventId)).resolves.toEqual(state);
+    expect(
+      transport.requests.map((request) => ({
+        method: request.method,
+        table: request.table,
+      })),
+    ).toEqual([{ method: "GET", table: "Agenda Versions" }]);
   });
   it("initializes and synchronizes the production agenda on first session access without publishing", async () => {
     const transport = new FakeAirtableTransport();

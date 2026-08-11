@@ -297,6 +297,17 @@ function routeParam(context: AgendaContext, name: string): string {
   return value;
 }
 
+async function requireEventOrganization(
+  dependencies: AgendaRouteDependencies,
+  organizationId: string,
+  eventId: string,
+): Promise<void> {
+  const eventOrganizationId = await dependencies.organizationIdForEvent(eventId);
+  if (eventOrganizationId === null || eventOrganizationId !== organizationId) {
+    throw new AgendaError("AGENDA_NOT_FOUND", "The event agenda was not found.");
+  }
+}
+
 async function organizerForEvent(
   context: AgendaContext,
   dependencies: AgendaRouteDependencies,
@@ -304,10 +315,7 @@ async function organizerForEvent(
   const organizationId = routeParam(context, "organizationId");
   const eventId = routeParam(context, "eventId");
   const principal = requireOrganizerPrincipal(context, organizationId);
-  const eventOrganizationId = await dependencies.organizationIdForEvent(eventId);
-  if (eventOrganizationId === null || eventOrganizationId !== organizationId) {
-    throw new AgendaError("AGENDA_NOT_FOUND", "The event agenda was not found.");
-  }
+  await requireEventOrganization(dependencies, organizationId, eventId);
   return principal;
 }
 
@@ -475,9 +483,19 @@ export function createAgendaAdminRoutes(
     await next();
   });
   routes.get("/", async (context) => {
-    await organizerForEvent(context, dependencies);
+    const organizationId = routeParam(context, "organizationId");
     const eventId = routeParam(context, "eventId");
-    const state = await dependencies.engine.repository.load(eventId);
+    requireOrganizerPrincipal(context, organizationId);
+    const eventAuthorization = requireEventOrganization(dependencies, organizationId, eventId);
+    // Capture the state outcome without letting it outrank event-tenant authorization failures.
+    const stateResultPromise = dependencies.engine.repository.load(eventId).then(
+      (state) => ({ status: "loaded" as const, state }),
+      (error: unknown) => ({ status: "error" as const, error }),
+    );
+    await eventAuthorization;
+    const stateResult = await stateResultPromise;
+    if (stateResult.status === "error") throw stateResult.error;
+    const { state } = stateResult;
     if (state === null) {
       return errorResponse(context, 404, "NOT_FOUND", "The event agenda was not found.");
     }
