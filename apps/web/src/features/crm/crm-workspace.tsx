@@ -2842,6 +2842,109 @@ export function CrmWorkspaceView({
   );
 }
 
+type CrmWorkspaceContactFilter = NonNullable<Parameters<CrmApi["listContacts"]>[0]>;
+
+type CrmWorkspaceReadKind = "contacts" | "segments" | "events" | "analytics";
+
+interface CrmWorkspaceReadHandlers {
+  readonly setContacts: (contacts: readonly CrmContact[]) => void;
+  readonly setSegments: (segments: readonly CrmSegment[]) => void;
+  readonly setEvents: (events: readonly CrmEvent[]) => void;
+  readonly setAnalytics: (analytics: CrmAnalytics) => void;
+  readonly setContactsLoading: (loading: boolean) => void;
+  readonly setSegmentsLoading: (loading: boolean) => void;
+  readonly setEventsLoading: (loading: boolean) => void;
+  readonly setAnalyticsLoading: (loading: boolean) => void;
+  readonly setError: (error: string | null) => void;
+}
+
+export function createCrmWorkspaceReadCoordinator(api: CrmApi, handlers: CrmWorkspaceReadHandlers) {
+  const generations: Record<CrmWorkspaceReadKind, number> = {
+    contacts: 0,
+    segments: 0,
+    events: 0,
+    analytics: 0,
+  };
+  let disposed = false;
+
+  function isCurrent(kind: CrmWorkspaceReadKind, generation: number): boolean {
+    return !disposed && generations[kind] === generation;
+  }
+
+  async function loadContacts(filter: CrmWorkspaceContactFilter): Promise<void> {
+    const generation = ++generations.contacts;
+    handlers.setContactsLoading(true);
+    handlers.setError(null);
+    try {
+      const nextContacts = await api.listContacts(filter);
+      if (isCurrent("contacts", generation)) handlers.setContacts(nextContacts);
+    } catch (reason) {
+      if (isCurrent("contacts", generation)) handlers.setError(messageFromError(reason));
+    } finally {
+      if (isCurrent("contacts", generation)) handlers.setContactsLoading(false);
+    }
+  }
+
+  async function loadSegments(): Promise<void> {
+    const generation = ++generations.segments;
+    handlers.setSegmentsLoading(true);
+    handlers.setError(null);
+    try {
+      const nextSegments = await api.listSegments();
+      if (isCurrent("segments", generation)) handlers.setSegments(nextSegments);
+    } catch (reason) {
+      if (isCurrent("segments", generation)) handlers.setError(messageFromError(reason));
+    } finally {
+      if (isCurrent("segments", generation)) handlers.setSegmentsLoading(false);
+    }
+  }
+
+  async function loadEvents(): Promise<void> {
+    const generation = ++generations.events;
+    handlers.setEventsLoading(true);
+    handlers.setError(null);
+    try {
+      const nextEvents = await api.listEvents();
+      if (isCurrent("events", generation)) handlers.setEvents(nextEvents);
+    } catch (reason) {
+      if (isCurrent("events", generation)) handlers.setError(messageFromError(reason));
+    } finally {
+      if (isCurrent("events", generation)) handlers.setEventsLoading(false);
+    }
+  }
+
+  async function loadAnalytics(): Promise<void> {
+    const generation = ++generations.analytics;
+    handlers.setAnalyticsLoading(true);
+    handlers.setError(null);
+    try {
+      const nextAnalytics = await api.analytics();
+      if (isCurrent("analytics", generation)) handlers.setAnalytics(nextAnalytics);
+    } catch (reason) {
+      if (isCurrent("analytics", generation)) handlers.setError(messageFromError(reason));
+    } finally {
+      if (isCurrent("analytics", generation)) handlers.setAnalyticsLoading(false);
+    }
+  }
+
+  async function refresh(filter: CrmWorkspaceContactFilter): Promise<void> {
+    await Promise.all([loadContacts(filter), loadSegments(), loadEvents(), loadAnalytics()]);
+  }
+
+  return {
+    loadContacts,
+    loadSegments,
+    loadEvents,
+    loadAnalytics,
+    refresh,
+    activate() {
+      disposed = false;
+    },
+    dispose() {
+      disposed = true;
+    },
+  };
+}
 export interface CrmWorkspaceProps {
   readonly organizationId: string;
   readonly api?: CrmApi;
@@ -2857,7 +2960,7 @@ export function CrmWorkspace({
   initialContacts,
   initialSegments,
   initialEvents,
-  initialAnalytics = null,
+  initialAnalytics,
 }: CrmWorkspaceProps) {
   const apiBaseUrl = "";
   const api = useMemo(
@@ -2867,7 +2970,7 @@ export function CrmWorkspace({
   const [contacts, setContacts] = useState<readonly CrmContact[]>(initialContacts ?? []);
   const [segments, setSegments] = useState<readonly CrmSegment[]>(initialSegments ?? []);
   const [events, setEvents] = useState<readonly CrmEvent[]>(initialEvents ?? []);
-  const [analytics, setAnalytics] = useState<CrmAnalytics | null>(initialAnalytics);
+  const [analytics, setAnalytics] = useState<CrmAnalytics | null>(initialAnalytics ?? null);
   const [selectedContact, setSelectedContact] = useState<CrmContact | undefined>();
   const [selectedContactIds, setSelectedContactIds] = useState<readonly string[]>([]);
   const [history, setHistory] = useState<readonly CrmHistoryEntry[]>([]);
@@ -2885,64 +2988,132 @@ export function CrmWorkspace({
   const [tagsFilter, setTagsFilter] = useState("");
   const [pipelineFilter, setPipelineFilter] = useState<CrmPipelineStage | "">("");
   const [statusFilter, setStatusFilter] = useState<CrmContactStatus | "">("active");
-  const [loading, setLoading] = useState(
-    initialContacts === undefined || initialSegments === undefined || initialEvents === undefined,
-  );
+  const [contactsLoading, setContactsLoading] = useState(initialContacts === undefined);
+  const [segmentsLoading, setSegmentsLoading] = useState(initialSegments === undefined);
+  const [eventsLoading, setEventsLoading] = useState(initialEvents === undefined);
+  const [analyticsLoading, setAnalyticsLoading] = useState(initialAnalytics === undefined);
+  const loading = contactsLoading || segmentsLoading || eventsLoading || analyticsLoading;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const loadGeneration = useRef(0);
+  const selectionGeneration = useRef(0);
+  const initialContactsRead = useRef<{ api: CrmApi; filterKey: string } | null>(
+    initialContacts === undefined
+      ? null
+      : {
+          api,
+          filterKey: JSON.stringify([
+            query,
+            companyFilter,
+            tagsFilter,
+            pipelineFilter,
+            statusFilter,
+          ]),
+        },
+  );
+  const initialSegmentsRead = useRef<CrmApi | null>(initialSegments === undefined ? null : api);
+  const initialEventsRead = useRef<CrmApi | null>(initialEvents === undefined ? null : api);
+  const initialAnalyticsRead = useRef<CrmApi | null>(initialAnalytics === undefined ? null : api);
   const importIdentityRef = useRef<{ csv: string; key: string } | null>(null);
   const eventIdentityRef = useRef<{ fingerprint: string; key: string } | null>(null);
 
-  const loadDirectory = useCallback(async () => {
-    const generation = ++loadGeneration.current;
-    setLoading(true);
-    setError(null);
-    try {
-      const [nextContacts, nextSegments, nextEvents, nextAnalytics] = await Promise.all([
-        api.listContacts({
-          query,
-          company: companyFilter,
-          tags: tagsFilter,
-          pipelineStage: pipelineFilter,
-          status: statusFilter,
-        }),
-        api.listSegments(),
-        api.listEvents(),
-        api.analytics(),
-      ]);
-      if (generation !== loadGeneration.current) return;
-      setContacts(nextContacts);
-      setSegments(nextSegments);
-      setEvents(nextEvents);
-      setAnalytics(nextAnalytics);
-    } catch (reason) {
-      if (generation === loadGeneration.current) setError(messageFromError(reason));
-    } finally {
-      if (generation === loadGeneration.current) setLoading(false);
-    }
-  }, [api, companyFilter, pipelineFilter, query, statusFilter, tagsFilter]);
+  const contactFilter = useMemo<CrmWorkspaceContactFilter>(
+    () => ({
+      query,
+      company: companyFilter,
+      tags: tagsFilter,
+      pipelineStage: pipelineFilter,
+      status: statusFilter,
+    }),
+    [companyFilter, pipelineFilter, query, statusFilter, tagsFilter],
+  );
+  const contactFilterRef = useRef(contactFilter);
+  contactFilterRef.current = contactFilter;
+  const contactFilterKey = useMemo(
+    () => JSON.stringify([query, companyFilter, tagsFilter, pipelineFilter, statusFilter]),
+    [companyFilter, pipelineFilter, query, statusFilter, tagsFilter],
+  );
+  const workspaceReadCoordinator = useMemo(
+    () =>
+      createCrmWorkspaceReadCoordinator(api, {
+        setContacts,
+        setSegments,
+        setEvents,
+        setAnalytics,
+        setContactsLoading,
+        setSegmentsLoading,
+        setEventsLoading,
+        setAnalyticsLoading,
+        setError,
+      }),
+    [api],
+  );
+
+  const loadContacts = useCallback(
+    () => workspaceReadCoordinator.loadContacts(contactFilterRef.current),
+    [workspaceReadCoordinator],
+  );
+  const loadSegments = useCallback(
+    () => workspaceReadCoordinator.loadSegments(),
+    [workspaceReadCoordinator],
+  );
+  const loadEvents = useCallback(
+    () => workspaceReadCoordinator.loadEvents(),
+    [workspaceReadCoordinator],
+  );
+  const loadAnalytics = useCallback(
+    () => workspaceReadCoordinator.loadAnalytics(),
+    [workspaceReadCoordinator],
+  );
 
   useEffect(() => {
-    if (
-      initialContacts !== undefined &&
-      initialSegments !== undefined &&
-      initialEvents !== undefined
-    )
-      return;
-    void loadDirectory();
-  }, [initialContacts, initialEvents, initialSegments, loadDirectory]);
+    workspaceReadCoordinator.activate();
+    return () => workspaceReadCoordinator.dispose();
+  }, [workspaceReadCoordinator]);
+
+  useEffect(() => {
+    const previous = initialContactsRead.current;
+    if (previous?.api === api && previous.filterKey === contactFilterKey) return;
+    initialContactsRead.current = { api, filterKey: contactFilterKey };
+    void loadContacts();
+  }, [api, contactFilterKey, loadContacts]);
+
+  useEffect(() => {
+    if (initialSegmentsRead.current === api) return;
+    initialSegmentsRead.current = api;
+    void loadSegments();
+  }, [api, loadSegments]);
+
+  useEffect(() => {
+    if (initialEventsRead.current === api) return;
+    initialEventsRead.current = api;
+    void loadEvents();
+  }, [api, loadEvents]);
+
+  useEffect(() => {
+    if (initialAnalyticsRead.current === api) return;
+    initialAnalyticsRead.current = api;
+    void loadAnalytics();
+  }, [api, loadAnalytics]);
+
+  useEffect(() => {
+    return () => {
+      selectionGeneration.current += 1;
+    };
+  }, []);
 
   const refresh = useCallback(async () => {
-    await loadDirectory();
-  }, [loadDirectory]);
+    await workspaceReadCoordinator.refresh(contactFilterRef.current);
+  }, [workspaceReadCoordinator]);
 
   const selectContact = useCallback(
-    async (contactId: string) => {
-      setBusy(true);
-      setError(null);
-      setStatusMessage(null);
+    async (contactId: string, manageBusy = true) => {
+      const generation = ++selectionGeneration.current;
+      if (manageBusy) {
+        setBusy(true);
+        setError(null);
+        setStatusMessage(null);
+      }
       try {
         const [contact, nextHistory, nextPipelineHistory, nextNotes, nextDuplicates] =
           await Promise.all([
@@ -2952,6 +3123,7 @@ export function CrmWorkspace({
             api.listNotes(contactId),
             api.findDuplicates(contactId),
           ]);
+        if (generation !== selectionGeneration.current) return;
         setSelectedContact(contact);
         setHistory(nextHistory);
         setPipelineHistory(nextPipelineHistory);
@@ -2963,9 +3135,9 @@ export function CrmWorkspace({
         setLastAddedEventId(null);
         setLastEventResult(null);
       } catch (reason) {
-        setError(messageFromError(reason));
+        if (generation === selectionGeneration.current) setError(messageFromError(reason));
       } finally {
-        setBusy(false);
+        if (manageBusy && generation === selectionGeneration.current) setBusy(false);
       }
     },
     [api],
@@ -2994,15 +3166,7 @@ export function CrmWorkspace({
       setStatusMessage(
         selectedContact ? "Contact changes saved." : "Contact added to the organization directory.",
       );
-      setAnalytics((current) =>
-        current
-          ? {
-              ...current,
-              totalContacts: selectedContact ? current.totalContacts : current.totalContacts + 1,
-              activeContacts: selectedContact ? current.activeContacts : current.activeContacts + 1,
-            }
-          : current,
-      );
+      await loadAnalytics();
     } catch (reason) {
       setError(messageFromError(reason));
     } finally {
@@ -3022,7 +3186,7 @@ export function CrmWorkspace({
       setStatusMessage(
         `Import ${result.id}: ${result.created} created, ${result.updated} updated, ${result.skipped} skipped${result.idempotent ? " (idempotent replay)" : ""}.`,
       );
-      await refresh();
+      await Promise.all([loadContacts(), loadAnalytics()]);
     } catch (reason) {
       setError(messageFromError(reason));
     } finally {
@@ -3102,18 +3266,25 @@ export function CrmWorkspace({
       setError(reason.message);
       throw reason;
     }
+    const primaryContactId = selectedContact.id;
+    const selectionIntent = selectionGeneration.current;
     setBusy(true);
     setError(null);
     try {
-      await api.mergeContacts(selectedContact.id, duplicateIds, idempotencyKey("crm-merge"), {
+      await api.mergeContacts(primaryContactId, duplicateIds, idempotencyKey("crm-merge"), {
         fieldWinners: plan.fieldWinners,
         customFieldWinners: plan.customFieldWinners,
       });
       setStatusMessage(
         "Duplicate contacts merged into the selected primary contact. This CRM has no undo endpoint; review retained tags and history on the primary contact.",
       );
-      await refresh();
-      await selectContact(selectedContact.id);
+      await Promise.all([
+        loadContacts(),
+        loadAnalytics(),
+        selectionGeneration.current === selectionIntent
+          ? selectContact(primaryContactId, false)
+          : Promise.resolve(),
+      ]);
     } catch (reason) {
       setError(messageFromError(reason));
       throw reason;
@@ -3131,10 +3302,12 @@ export function CrmWorkspace({
       setContacts((current) =>
         current.map((candidate) => (candidate.id === next.id ? next : candidate)),
       );
-      if (selectedContact?.id === next.id) {
-        setSelectedContact(next);
-        setPipelineHistory(await api.getPipelineHistory(next.id));
-      }
+      if (selectedContact?.id === next.id) setSelectedContact(next);
+      const [, nextPipelineHistory] = await Promise.all([
+        loadAnalytics(),
+        selectedContact?.id === next.id ? api.getPipelineHistory(next.id) : Promise.resolve(null),
+      ]);
+      if (nextPipelineHistory !== null) setPipelineHistory(nextPipelineHistory);
       setStatusMessage(`${displayName(next)} moved to ${stage}.`);
     } catch (reason) {
       setError(messageFromError(reason));
@@ -3173,10 +3346,13 @@ export function CrmWorkspace({
       setContacts((current) =>
         current.map((candidate) => (candidate.id === next.id ? next : candidate)),
       );
-      if (selectedContact?.id === next.id) {
-        setSelectedContact(next);
-        setPipelineHistory(await api.getPipelineHistory(next.id));
-      }
+      if (selectedContact?.id === next.id) setSelectedContact(next);
+      const stageChanged = contact.pipelineStage !== next.pipelineStage;
+      const [, nextPipelineHistory] = await Promise.all([
+        stageChanged ? loadAnalytics() : Promise.resolve(),
+        selectedContact?.id === next.id ? api.getPipelineHistory(next.id) : Promise.resolve(null),
+      ]);
+      if (nextPipelineHistory !== null) setPipelineHistory(nextPipelineHistory);
       setStatusMessage(`${displayName(next)} enrolled in the ${input.stage} pipeline stage.`);
     } catch (reason) {
       setError(messageFromError(reason));
@@ -3195,7 +3371,11 @@ export function CrmWorkspace({
       setContacts((current) =>
         current.map((candidate) => (candidate.id === next.id ? next : candidate)),
       );
-      setPipelineHistory(await api.getPipelineHistory(next.id));
+      const [nextPipelineHistory] = await Promise.all([
+        api.getPipelineHistory(next.id),
+        selectedContact.pipelineStage === next.pipelineStage ? Promise.resolve() : loadAnalytics(),
+      ]);
+      setPipelineHistory(nextPipelineHistory);
       setStatusMessage(`Pipeline stage saved as ${stage}.`);
     } catch (reason) {
       setError(messageFromError(reason));
@@ -3243,8 +3423,11 @@ export function CrmWorkspace({
           ? "Canonical event relationship created."
           : "The canonical event relationship already existed; no duplicate was created.",
       );
-      setHistory(await api.getContactHistory(selectedContact.id));
-      setAnalytics(await api.analytics());
+      const [nextHistory] = await Promise.all([
+        api.getContactHistory(selectedContact.id),
+        loadAnalytics(),
+      ]);
+      setHistory(nextHistory);
     } catch (reason) {
       setError(messageFromError(reason));
     } finally {
@@ -3359,11 +3542,10 @@ export function CrmWorkspace({
       setStatusMessage(
         `Outreach result: ${sentCount} sent, ${queuedCount} queued, ${failedCount} failed; ${terminal ? "terminal" : "delivery still in progress"}.`,
       );
-      const [analyticsResult, historyResult] = await Promise.allSettled([
-        api.analytics(),
+      const [, historyResult] = await Promise.allSettled([
+        loadAnalytics(),
         selectedContact ? api.getContactHistory(selectedContact.id) : Promise.resolve(null),
       ]);
-      if (analyticsResult.status === "fulfilled") setAnalytics(analyticsResult.value);
       if (historyResult.status === "fulfilled" && historyResult.value !== null) {
         setHistory(historyResult.value);
       }
@@ -3412,12 +3594,16 @@ export function CrmWorkspace({
         setOutreachResults([]);
       }}
       onStartAdd={() => {
+        selectionGeneration.current += 1;
         setSelectedContactIds([]);
         setSelectedContact(undefined);
         setDuplicates(null);
       }}
       onSaveContact={saveContact}
-      onCancelEdit={() => setSelectedContact(undefined)}
+      onCancelEdit={() => {
+        selectionGeneration.current += 1;
+        setSelectedContact(undefined);
+      }}
       onImport={importContacts}
       importResult={importResult}
       onCreateSegment={createSegment}

@@ -6759,7 +6759,11 @@ export class AirtableCrmRepository implements CrmRepository {
     const query = filter.query?.trim().toLowerCase();
     const email = filter.email?.trim().toLowerCase();
     const tags = filter.tags?.map((tag) => tag.trim().toLowerCase());
-    return (await this.#contacts.list())
+    return (
+      await this.#contacts.list({
+        filterByFormula: crmOrganizationFormula("Contact JSON", organization),
+      })
+    )
       .filter((contact) => {
         if (contact.organizationId !== organization) return false;
         if (email !== undefined && contact.email?.toLowerCase() !== email) return false;
@@ -6804,13 +6808,25 @@ export class AirtableCrmRepository implements CrmRepository {
   async findContactByEmail(organizationId: string, email: string): Promise<CrmContact | null> {
     const organization = crmOrganization(organizationId);
     const normalized = email.trim().toLowerCase();
-    const contacts = await this.listContacts(organization, { email: normalized, status: "active" });
-    return contacts[0] ?? null;
+    const contacts = await this.#contacts.list({
+      filterByFormula: crmOrganizationFormula("Contact JSON", organization),
+    });
+    return (
+      contacts.find(
+        (contact) =>
+          contact.organizationId === organization &&
+          contact.status === "active" &&
+          contact.email?.trim().toLowerCase() === normalized,
+      ) ?? null
+    );
   }
 
   async saveContact(contact: CrmContact, expectedVersion: number | null): Promise<CrmContact> {
     const organization = crmOrganization(contact.organizationId);
-    const existing = await this.#contacts.find(requiredId(contact.id, "contactId"));
+    const existingRecord = await this.#contacts.findWithRecordId(
+      requiredId(contact.id, "contactId"),
+    );
+    const existing = existingRecord?.entity;
     if (existing !== undefined && existing.organizationId !== organization) {
       throw new CrmRepositoryConflictError("The contact belongs to another organization.");
     }
@@ -6829,25 +6845,54 @@ export class AirtableCrmRepository implements CrmRepository {
       updatedAt: contact.updatedAt,
     };
     try {
-      if (existing === undefined) await this.#contacts.create(next);
-      else await this.#contacts.update(next.id, next);
+      if (existingRecord === undefined) await this.#contacts.create(next);
+      else await this.#contacts.updateByRecordId(next.id, existingRecord.recordId, next);
     } catch (error) {
       throw new CrmRepositoryConflictError(
         error instanceof Error ? error.message : "The contact could not be saved.",
       );
     }
-    const projections = (await this.#projections.list()).filter(
-      (projection) =>
-        projection.organizationId === organization && projection.contactId === next.id,
+    const projections =
+      existing === undefined
+        ? []
+        : (
+            await this.#projections.list({
+              filterByFormula: jsonContainsAllFormula("Projection JSON", [next.id]),
+            })
+          ).filter(
+            (projection) =>
+              projection.organizationId === organization && projection.contactId === next.id,
+          );
+    const eventRepository = this.#events;
+    const eventIds = [...new Set(projections.map((projection) => projection.eventId))];
+    const eventEntries =
+      eventRepository === undefined
+        ? []
+        : await Promise.all(
+            eventIds.map(
+              async (eventId) =>
+                [eventId, await eventRepository.getEvent(organization, eventId)] as const,
+            ),
+          );
+    const events = new Map(eventEntries);
+    await Promise.all(
+      projections.map((projection) =>
+        this.#projectCanonicalSpeaker(organization, projection, {
+          contact: next,
+          event: events.get(projection.eventId) ?? null,
+        }),
+      ),
     );
-    for (const projection of projections)
-      await this.#projectCanonicalSpeaker(organization, projection);
     return clone(next);
   }
 
   async listSegments(organizationId: string): Promise<readonly CrmSegment[]> {
     const organization = crmOrganization(organizationId);
-    return (await this.#segments.list())
+    return (
+      await this.#segments.list({
+        filterByFormula: crmOrganizationFormula("Segment JSON", organization),
+      })
+    )
       .filter((segment) => segment.organizationId === organization)
       .sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id))
       .map(clone);
@@ -6861,7 +6906,10 @@ export class AirtableCrmRepository implements CrmRepository {
 
   async saveSegment(segment: CrmSegment, expectedVersion: number | null): Promise<CrmSegment> {
     const organization = crmOrganization(segment.organizationId);
-    const existing = await this.#segments.find(requiredId(segment.id, "segmentId"));
+    const existingRecord = await this.#segments.findWithRecordId(
+      requiredId(segment.id, "segmentId"),
+    );
+    const existing = existingRecord?.entity;
     if (existing !== undefined && existing.organizationId !== organization) {
       throw new CrmRepositoryConflictError("The segment belongs to another organization.");
     }
@@ -6880,8 +6928,8 @@ export class AirtableCrmRepository implements CrmRepository {
       updatedAt: segment.updatedAt,
     };
     try {
-      if (existing === undefined) await this.#segments.create(next);
-      else await this.#segments.update(next.id, next);
+      if (existingRecord === undefined) await this.#segments.create(next);
+      else await this.#segments.updateByRecordId(next.id, existingRecord.recordId, next);
     } catch (error) {
       throw new CrmRepositoryConflictError(
         error instanceof Error ? error.message : "The segment could not be saved.",
@@ -6896,15 +6944,17 @@ export class AirtableCrmRepository implements CrmRepository {
     expectedVersion: number,
   ): Promise<void> {
     const organization = crmOrganization(organizationId);
-    const existing = await this.#segments.find(requiredId(segmentId, "segmentId"));
+    const existingRecord = await this.#segments.findWithRecordId(
+      requiredId(segmentId, "segmentId"),
+    );
     if (
-      existing === undefined ||
-      existing.organizationId !== organization ||
-      existing.version !== expectedVersion
+      existingRecord === undefined ||
+      existingRecord.entity.organizationId !== organization ||
+      existingRecord.entity.version !== expectedVersion
     ) {
       throw new CrmRepositoryConflictError("The segment changed before it could be deleted.");
     }
-    const deleted = await this.#segments.delete(existing.id);
+    const deleted = await this.#segments.deleteByRecordId(existingRecord.recordId);
     if (!deleted) throw new CrmRepositoryConflictError("The segment could not be deleted.");
   }
 
@@ -6914,23 +6964,42 @@ export class AirtableCrmRepository implements CrmRepository {
   ): Promise<readonly CrmHistoryEntry[]> {
     const organization = crmOrganization(organizationId);
     const contact = requiredId(contactId, "contactId");
-    return (await this.#history.list())
+    return (
+      await this.#history.list({
+        filterByFormula: jsonContainsAllFormula("History JSON", [contact]),
+      })
+    )
       .filter((entry) => entry.organizationId === organization && entry.contactId === contact)
       .sort((left, right) => right.occurredAt.localeCompare(left.occurredAt))
       .map(clone);
   }
 
-  async appendHistory(entry: CrmHistoryEntry): Promise<CrmHistoryEntry> {
+  async appendHistory(
+    entry: CrmHistoryEntry,
+    validatedContact?: CrmContact,
+  ): Promise<CrmHistoryEntry> {
     const organization = crmOrganization(entry.organizationId);
     if (entry.organizationId !== organization || entry.contactId.trim().length === 0) {
       throw new CrmRepositoryConflictError("History entry tenant data is invalid.");
     }
-    if ((await this.getContact(organization, entry.contactId)) === null) {
+    const contactRead =
+      validatedContact === undefined
+        ? this.getContact(organization, entry.contactId)
+        : Promise.resolve(
+            validatedContact.organizationId === organization &&
+              validatedContact.id === entry.contactId
+              ? validatedContact
+              : null,
+          );
+    const [contact, existing] = await Promise.all([
+      contactRead,
+      this.#history.find(requiredId(entry.id, "historyId")),
+    ]);
+    if (contact === null) {
       throw new CrmRepositoryConflictError(
         "The history contact does not belong to this organization.",
       );
     }
-    const existing = await this.#history.find(requiredId(entry.id, "historyId"));
     if (existing !== undefined) {
       if (existing.organizationId !== organization) {
         throw new CrmRepositoryConflictError("The history entry belongs to another organization.");
@@ -6953,7 +7022,11 @@ export class AirtableCrmRepository implements CrmRepository {
   ): Promise<readonly CrmPipelineEntry[]> {
     const organization = crmOrganization(organizationId);
     const contact = requiredId(contactId, "contactId");
-    return (await this.#pipeline.list())
+    return (
+      await this.#pipeline.list({
+        filterByFormula: jsonContainsAllFormula("Pipeline JSON", [contact]),
+      })
+    )
       .filter((entry) => entry.organizationId === organization && entry.contactId === contact)
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
       .map(clone);
@@ -6964,12 +7037,15 @@ export class AirtableCrmRepository implements CrmRepository {
     if (entry.organizationId !== organization || entry.contactId.trim().length === 0) {
       throw new CrmRepositoryConflictError("Pipeline entry tenant data is invalid.");
     }
-    if ((await this.getContact(organization, entry.contactId)) === null) {
+    const [contact, existing] = await Promise.all([
+      this.getContact(organization, entry.contactId),
+      this.#pipeline.find(requiredId(entry.id, "pipelineId")),
+    ]);
+    if (contact === null) {
       throw new CrmRepositoryConflictError(
         "The pipeline contact does not belong to this organization.",
       );
     }
-    const existing = await this.#pipeline.find(requiredId(entry.id, "pipelineId"));
     if (existing !== undefined) {
       if (existing.organizationId !== organization) {
         throw new CrmRepositoryConflictError("The pipeline entry belongs to another organization.");
@@ -6989,7 +7065,11 @@ export class AirtableCrmRepository implements CrmRepository {
   async listNotes(organizationId: string, contactId: string): Promise<readonly CrmNote[]> {
     const organization = crmOrganization(organizationId);
     const contact = requiredId(contactId, "contactId");
-    return (await this.#notes.list())
+    return (
+      await this.#notes.list({
+        filterByFormula: jsonContainsAllFormula("Note JSON", [contact]),
+      })
+    )
       .filter((note) => note.organizationId === organization && note.contactId === contact)
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
       .map(clone);
@@ -7000,12 +7080,15 @@ export class AirtableCrmRepository implements CrmRepository {
     if (note.organizationId !== organization || note.contactId.trim().length === 0) {
       throw new CrmRepositoryConflictError("Note tenant data is invalid.");
     }
-    if ((await this.getContact(organization, note.contactId)) === null) {
+    const [contact, existing] = await Promise.all([
+      this.getContact(organization, note.contactId),
+      this.#notes.find(requiredId(note.id, "noteId")),
+    ]);
+    if (contact === null) {
       throw new CrmRepositoryConflictError(
         "The note contact does not belong to this organization.",
       );
     }
-    const existing = await this.#notes.find(requiredId(note.id, "noteId"));
     if (existing !== undefined) {
       if (existing.organizationId !== organization) {
         throw new CrmRepositoryConflictError("The note belongs to another organization.");
@@ -7030,36 +7113,35 @@ export class AirtableCrmRepository implements CrmRepository {
     const organization = crmOrganization(organizationId);
     const event = requiredId(eventId, "eventId");
     const contact = requiredId(contactId, "contactId");
-    const projection = (await this.#projections.list()).find(
-      (candidate) =>
-        candidate.organizationId === organization &&
-        candidate.eventId === event &&
-        candidate.contactId === contact,
-    );
-    return projection === undefined ? null : clone(projection);
+    return this.#findProjection(organization, event, contact);
   }
 
-  async saveProjection(projection: CrmEventProjection): Promise<CrmEventProjection> {
+  async saveProjection(
+    projection: CrmEventProjection,
+    contact: CrmContact,
+  ): Promise<CrmEventProjection> {
     const organization = crmOrganization(projection.organizationId);
     const eventId = requiredId(projection.eventId, "eventId");
     const contactId = requiredId(projection.contactId, "contactId");
     if (projection.organizationId !== organization) {
       throw new CrmRepositoryConflictError("The projection tenant data is invalid.");
     }
-    if ((await this.getContact(organization, contactId)) === null) {
+    if (contact.organizationId !== organization || contact.id !== contactId) {
       throw new CrmRepositoryConflictError(
         "The projected contact does not belong to this organization.",
       );
     }
-    if (this.#events !== undefined) {
-      const event = await this.#events.getEvent(organization, eventId);
-      if (event === null) {
-        throw new CrmRepositoryConflictError("The event does not belong to this organization.");
-      }
+    const eventRepository = this.#events;
+    const [event, existing] = await Promise.all([
+      eventRepository?.getEvent(organization, eventId) ?? Promise.resolve(null),
+      this.#findProjection(organization, eventId, contactId),
+    ]);
+    if (eventRepository !== undefined && event === null) {
+      throw new CrmRepositoryConflictError("The event does not belong to this organization.");
     }
-    const existing = await this.getProjection(organization, eventId, contactId);
+    const context = { contact, event };
     if (existing !== null) {
-      await this.#projectCanonicalSpeaker(organization, existing);
+      await this.#projectCanonicalSpeaker(organization, existing, context);
       return clone(existing);
     }
     const stored: CrmEventProjection = {
@@ -7071,22 +7153,26 @@ export class AirtableCrmRepository implements CrmRepository {
     try {
       await this.#projections.create(stored);
     } catch (error) {
-      const concurrent = await this.getProjection(organization, eventId, contactId);
+      const concurrent = await this.#findProjection(organization, eventId, contactId);
       if (concurrent !== null) {
-        await this.#projectCanonicalSpeaker(organization, concurrent);
+        await this.#projectCanonicalSpeaker(organization, concurrent, context);
         return clone(concurrent);
       }
       throw new CrmRepositoryConflictError(
         error instanceof Error ? error.message : "The event projection could not be saved.",
       );
     }
-    await this.#projectCanonicalSpeaker(organization, stored);
+    await this.#projectCanonicalSpeaker(organization, stored, context);
     return clone(stored);
   }
 
   async listProjections(organizationId: string): Promise<readonly CrmEventProjection[]> {
     const organization = crmOrganization(organizationId);
-    return (await this.#projections.list())
+    return (
+      await this.#projections.list({
+        filterByFormula: crmOrganizationFormula("Projection JSON", organization),
+      })
+    )
       .filter((projection) => projection.organizationId === organization)
       .sort(
         (left, right) =>
@@ -7102,28 +7188,44 @@ export class AirtableCrmRepository implements CrmRepository {
     if (command.organizationId !== organization) {
       throw new CrmRepositoryConflictError("The outreach tenant data is invalid.");
     }
-    if ((await this.getContact(organization, command.contactId)) === null) {
+    const eventRepository = this.#events;
+    const [contact, event, existing] = await Promise.all([
+      this.getContact(organization, command.contactId),
+      command.eventId !== null && eventRepository !== undefined
+        ? eventRepository.getEvent(organization, requiredId(command.eventId, "eventId"))
+        : Promise.resolve(null),
+      this.#findOutreach(organization, key),
+    ]);
+    if (contact === null) {
       throw new CrmRepositoryConflictError(
         "The outreach contact does not belong to this organization.",
       );
     }
-    if (
-      command.eventId !== null &&
-      this.#events !== undefined &&
-      (await this.#events.getEvent(organization, requiredId(command.eventId, "eventId"))) === null
-    ) {
+    if (eventRepository !== undefined && command.eventId !== null && event === null) {
       throw new CrmRepositoryConflictError(
         "The outreach event does not belong to this organization.",
       );
     }
-    const existing = await this.getOutreachByIdempotencyKey(organization, key);
-    if (existing !== null) return clone(existing);
+    if (existing !== undefined) {
+      if (eventRepository !== undefined && existing.eventId !== null) {
+        const existingEvent =
+          existing.eventId === command.eventId
+            ? event
+            : await eventRepository.getEvent(organization, requiredId(existing.eventId, "eventId"));
+        if (existingEvent === null) {
+          throw new CrmRepositoryConflictError(
+            "The outreach event does not belong to this organization.",
+          );
+        }
+      }
+      return clone(existing);
+    }
     const stored = { ...clone(command), organizationId: organization, idempotencyKey: key };
     try {
       await this.#outreach.create(stored);
     } catch (error) {
-      const concurrent = await this.getOutreachByIdempotencyKey(organization, key);
-      if (concurrent !== null) return clone(concurrent);
+      const concurrent = await this.#findOutreach(organization, key);
+      if (concurrent !== undefined) return clone(concurrent);
       throw new CrmRepositoryConflictError(
         error instanceof Error ? error.message : "The outreach could not be saved.",
       );
@@ -7152,9 +7254,7 @@ export class AirtableCrmRepository implements CrmRepository {
   ): Promise<CrmOutreachCommand | null> {
     const organization = crmOrganization(organizationId);
     const key = requiredId(idempotencyKey, "idempotencyKey");
-    const command = (await this.#outreach.list()).find(
-      (candidate) => candidate.organizationId === organization && candidate.idempotencyKey === key,
-    );
+    const command = await this.#findOutreach(organization, key);
     if (command === undefined) return null;
     if (
       command.eventId !== null &&
@@ -7170,7 +7270,11 @@ export class AirtableCrmRepository implements CrmRepository {
 
   async listOutreach(organizationId: string): Promise<readonly CrmOutreachCommand[]> {
     const organization = crmOrganization(organizationId);
-    return (await this.#outreach.list())
+    return (
+      await this.#outreach.list({
+        filterByFormula: crmOrganizationFormula("Outreach JSON", organization),
+      })
+    )
       .filter((command) => command.organizationId === organization)
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
       .map(clone);
@@ -7222,7 +7326,11 @@ export class AirtableCrmRepository implements CrmRepository {
   ): Promise<CrmImportResult | null> {
     const organization = crmOrganization(organizationId);
     const key = requiredId(idempotencyKey, "idempotencyKey");
-    const result = (await this.#imports.list()).find(
+    const result = (
+      await this.#imports.list({
+        filterByFormula: jsonContainsAllFormula("Import JSON", [key]),
+      })
+    ).find(
       (candidate) => candidate.organizationId === organization && candidate.idempotencyKey === key,
     );
     if (result === undefined) return null;
@@ -7282,23 +7390,62 @@ export class AirtableCrmRepository implements CrmRepository {
     };
     await this.#commands.create(stored);
   }
+  async #findProjection(
+    organizationId: string,
+    eventId: string,
+    contactId: string,
+  ): Promise<CrmEventProjection | null> {
+    const projection = (
+      await this.#projections.list({
+        filterByFormula: jsonContainsAllFormula("Projection JSON", [contactId]),
+      })
+    ).find(
+      (candidate) =>
+        candidate.organizationId === organizationId &&
+        candidate.eventId === eventId &&
+        candidate.contactId === contactId,
+    );
+    return projection === undefined ? null : clone(projection);
+  }
+
+  async #findOutreach(
+    organizationId: string,
+    idempotencyKey: string,
+  ): Promise<CrmOutreachCommand | undefined> {
+    return (
+      await this.#outreach.list({
+        filterByFormula: jsonContainsAllFormula("Outreach JSON", [idempotencyKey]),
+      })
+    ).find(
+      (candidate) =>
+        candidate.organizationId === organizationId && candidate.idempotencyKey === idempotencyKey,
+    );
+  }
 
   async #projectCanonicalSpeaker(
     organizationId: string,
     projection: CrmEventProjection,
+    context?: { readonly contact: CrmContact; readonly event: Event | null },
   ): Promise<void> {
-    const contact = await this.getContact(organizationId, projection.contactId);
+    const contact =
+      context?.contact ?? (await this.getContact(organizationId, projection.contactId));
     if (contact === null)
       throw new CrmRepositoryConflictError("The projected contact was not found.");
-    if (this.#events !== undefined) {
-      const event = await this.#events.getEvent(organizationId, projection.eventId);
-      if (event === null)
-        throw new CrmRepositoryConflictError("The event does not belong to this organization.");
-    }
+    const event =
+      context === undefined
+        ? this.#events === undefined
+          ? null
+          : await this.#events.getEvent(organizationId, projection.eventId)
+        : context.event;
+    if (this.#events !== undefined && event === null)
+      throw new CrmRepositoryConflictError("The event does not belong to this organization.");
     const canonicalSubmissionId = `speaker-submission:crm-contact:${contact.id}`;
     const profileId = `speaker-profile:${projection.eventId}:${contact.id}`;
     const rosterId = `roster:${projection.eventId}:${canonicalSubmissionId}:${contact.id}`;
-    const profile = await this.#speakerProfiles.find(profileId);
+    const [profile, storedRoster] = await Promise.all([
+      this.#speakerProfiles.find(profileId),
+      this.#speakerRoster.find(rosterId),
+    ]);
     const profileScope = resolveOrganizationScope(profile);
     if (profileScope.status === "conflict") {
       throw new CrmRepositoryConflictError("The speaker profile has conflicting tenant data.");
@@ -7322,6 +7469,7 @@ export class AirtableCrmRepository implements CrmRepository {
       profile.biography !== (contact.notes ?? "") ||
       JSON.stringify(profile.socialLinks ?? profile.social ?? {}) !== JSON.stringify(socialLinks) ||
       profile.status !== "active";
+    const writes: Promise<unknown>[] = [];
     if (profileChanged) {
       const profileBase: JsonRecord = profile === undefined ? {} : { ...profile };
       delete profileBase.email;
@@ -7346,11 +7494,13 @@ export class AirtableCrmRepository implements CrmRepository {
         updatedAt: contact.updatedAt,
       };
       if (profile === undefined)
-        await this.#speakerProfiles.create(tagged(profileValue, "speaker_profile"));
-      else await this.#speakerProfiles.update(profileId, tagged(profileValue, "speaker_profile"));
+        writes.push(this.#speakerProfiles.create(tagged(profileValue, "speaker_profile")));
+      else
+        writes.push(
+          this.#speakerProfiles.update(profileId, tagged(profileValue, "speaker_profile")),
+        );
     }
 
-    const storedRoster = await this.#speakerRoster.find(rosterId);
     const rosterScope = resolveOrganizationScope(storedRoster);
     if (rosterScope.status === "conflict") {
       throw new CrmRepositoryConflictError("The speaker roster has conflicting tenant data.");
@@ -7400,9 +7550,10 @@ export class AirtableCrmRepository implements CrmRepository {
         createdAt: storedRoster?.createdAt ?? projection.createdAt,
         updatedAt: contact.updatedAt,
       };
-      if (storedRoster === undefined) await this.#speakerRoster.create(clone(rosterValue));
-      else await this.#speakerRoster.update(rosterId, clone(rosterValue));
+      if (storedRoster === undefined) writes.push(this.#speakerRoster.create(clone(rosterValue)));
+      else writes.push(this.#speakerRoster.update(rosterId, clone(rosterValue)));
     }
+    await Promise.all(writes);
   }
 }
 
@@ -7417,6 +7568,10 @@ function crmCommandId(organizationId: string, command: string, key: string): str
   const commandValue = requiredId(command, "command");
   const keyValue = requiredId(key, "idempotencyKey");
   return `crm-command:${organization}:${commandValue}:${keyValue}`;
+}
+
+function crmOrganizationFormula(jsonField: string, organizationId: string): string {
+  return organizationScopeFormula(jsonField, organizationId, []);
 }
 
 function crmSocialLinks(value: unknown): Readonly<Record<string, string>> {

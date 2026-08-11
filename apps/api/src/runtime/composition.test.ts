@@ -85,6 +85,23 @@ class FormulaRecordingTransport implements AirtableTransport {
     });
   }
 }
+class CrmCountingTransport extends FormulaRecordingTransport {
+  inFlight = 0;
+  maxInFlight = 0;
+
+  constructor(delayMs = 0) {
+    super(delayMs);
+  }
+  override async request<TBody = unknown>(request: AirtableRequest) {
+    this.inFlight += 1;
+    this.maxInFlight = Math.max(this.maxInFlight, this.inFlight);
+    try {
+      return await super.request<TBody>(request);
+    } finally {
+      this.inFlight -= 1;
+    }
+  }
+}
 
 function organizerHeaders(): HeadersInit {
   return { cookie: `better-auth.session_token=${LOCAL_SESSION_TOKEN}` };
@@ -1699,8 +1716,38 @@ describe("local runtime composition", () => {
       ),
     ).toBe(false);
   });
-  it("persists CRM state in Airtable, queues outreach, and projects event speakers without sessions", async () => {
+  it("matches canonical email against mixed-case authoritative CRM rows", async () => {
     const transport = new FakeAirtableTransport();
+    transport.seed({
+      baseId: "base-test",
+      table: "CRM Contacts",
+      fields: {
+        "Application ID": "mixed-case-contact",
+        "Contact JSON": JSON.stringify({
+          id: "mixed-case-contact",
+          organizationId: "crm-organization",
+          displayName: "Mixed Case",
+          email: "Mixed.Case@Example.Test",
+          status: "active",
+        }),
+      },
+    });
+    const repository = new AirtableCrmRepository({
+      baseId: "base-test",
+      transport,
+    });
+
+    await expect(
+      repository.findContactByEmail("crm-organization", "mixed.case@example.test"),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        id: "mixed-case-contact",
+        email: "Mixed.Case@Example.Test",
+      }),
+    );
+  });
+  it("persists CRM state in Airtable, queues outreach, and projects event speakers without sessions", async () => {
+    const transport = new CrmCountingTransport(5);
     const eventId = "crm-event";
     const organizationId = "crm-organization";
     transport.seed({
@@ -1773,6 +1820,13 @@ describe("local runtime composition", () => {
     expect(created.status).toBe(201);
     const createdBody = (await created.json()) as { data: { id: string; version: number } };
     expect(createdBody.data.version).toBe(1);
+    expect(
+      transport.requests.filter(
+        (request) => request.method === "GET" && request.table === "CRM Event Projections",
+      ),
+    ).toHaveLength(0);
+    const projectionRequestStart = transport.requests.length;
+    transport.maxInFlight = 0;
 
     const projection = await app.request(
       `${base}/contacts/${createdBody.data.id}/events`,
@@ -1784,6 +1838,19 @@ describe("local runtime composition", () => {
       { APP_ENV: "production", WEB_ORIGIN: "https://example.test" },
     );
     expect(projection.status).toBe(200);
+    const projectionRequests = transport.requests.slice(projectionRequestStart);
+    expect(
+      projectionRequests.filter(
+        (request) => request.method === "GET" && request.table === "CRM Contacts",
+      ),
+    ).toHaveLength(1);
+    const projectionReads = projectionRequests.filter(
+      (request) => request.method === "GET" && request.table === "CRM Event Projections",
+    );
+    expect(projectionReads).toHaveLength(2);
+    expect(
+      projectionReads.filter((request) => String(request.query?.filterByFormula).includes("FIND(")),
+    ).toHaveLength(1);
     const outreach = await app.request(
       `${base}/contacts/${createdBody.data.id}/outreach`,
       {
@@ -1794,6 +1861,53 @@ describe("local runtime composition", () => {
       { APP_ENV: "production", WEB_ORIGIN: "https://example.test" },
     );
     expect(outreach.status).toBe(202);
+    const createdSegment = await app.request(
+      `${base}/segments`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "Active contacts",
+          rules: [{ field: "status", operator: "eq", value: "active" }],
+        }),
+      },
+      { APP_ENV: "production", WEB_ORIGIN: "https://example.test" },
+    );
+    expect(createdSegment.status).toBe(201);
+    const segmentReadStart = transport.requests.length;
+    const listedSegments = await app.request(`${base}/segments`, undefined, {
+      APP_ENV: "production",
+      WEB_ORIGIN: "https://example.test",
+    });
+    expect(listedSegments.status).toBe(200);
+    const segmentReads = transport.requests
+      .slice(segmentReadStart)
+      .filter((request) => request.method === "GET" && request.table === "CRM Segments");
+    expect(segmentReads).toHaveLength(1);
+    expect(String(segmentReads[0]?.query?.filterByFormula)).toContain(
+      JSON.stringify(organizationId),
+    );
+    const analyticsReadStart = transport.requests.length;
+    transport.maxInFlight = 0;
+    const analyticsResponse = await app.request(`${base}/analytics`, undefined, {
+      APP_ENV: "production",
+      WEB_ORIGIN: "https://example.test",
+    });
+    expect(analyticsResponse.status).toBe(200);
+    const analyticsReads = transport.requests
+      .slice(analyticsReadStart)
+      .filter(
+        (request) =>
+          request.method === "GET" &&
+          ["CRM Contacts", "CRM Event Projections", "CRM Outreach"].includes(request.table),
+      );
+    expect(analyticsReads).toHaveLength(3);
+    expect(
+      analyticsReads.every((request) =>
+        String(request.query?.filterByFormula).includes(JSON.stringify(organizationId)),
+      ),
+    ).toBe(true);
+    expect(transport.maxInFlight).toBeGreaterThanOrEqual(3);
     expect(queueMessages).toHaveLength(1);
     expect(transport.requests.some((request) => request.table === "CRM Contacts")).toBe(true);
     expect(transport.requests.some((request) => request.table === "CRM Event Projections")).toBe(
@@ -1809,9 +1923,13 @@ describe("local runtime composition", () => {
       transport,
       events: new AirtableEventRepository({ baseId: "base-test", transport }),
     });
-    await expect(
-      reloadedRepository.getContact(organizationId, createdBody.data.id),
-    ).resolves.toEqual(expect.objectContaining({ displayName: "CRM Speaker", version: 1 }));
+    const reloadedContact = await reloadedRepository.getContact(
+      organizationId,
+      createdBody.data.id,
+    );
+    expect(reloadedContact).toEqual(
+      expect.objectContaining({ displayName: "CRM Speaker", version: 1 }),
+    );
     const roster = new AirtableSpeakerRepository({ baseId: "base-test", transport, database });
     await expect(
       roster.listRoster(eventId, `speaker-submission:crm-contact:${createdBody.data.id}`),
@@ -1828,6 +1946,28 @@ describe("local runtime composition", () => {
         status: "active",
       }),
     );
+    const crmFilteredReads = transport.requests.filter(
+      (request) =>
+        request.method === "GET" &&
+        ["CRM Contacts", "CRM Event Projections", "CRM Outreach"].includes(request.table),
+    );
+    expect(crmFilteredReads.length).toBeGreaterThan(0);
+    expect(
+      crmFilteredReads.every((request) => typeof request.query?.filterByFormula === "string"),
+    ).toBe(true);
+    expect(
+      crmFilteredReads.some((request) => String(request.query?.filterByFormula).includes("FIND(")),
+    ).toBe(true);
+    expect(
+      transport.requests.filter(
+        (request) => request.method === "POST" && request.table === "CRM Event Projections",
+      ),
+    ).toHaveLength(1);
+    expect(
+      transport.requests.filter(
+        (request) => request.method === "POST" && request.table === "CRM Outreach",
+      ),
+    ).toHaveLength(1);
   });
   it("admits a projected CRM contact beside a same-name accepted speaker without granting speaker eligibility", async () => {
     const transport = new FakeAirtableTransport();

@@ -4,10 +4,13 @@ import { describe, expect, it, vi } from "vitest";
 import {
   CRM_PIPELINE_STAGES,
   type CrmAnalytics,
+  type CrmApi,
   type CrmContact,
   type CrmEvent,
+  type CrmSegment,
   CrmWorkspaceView,
   createCrmApi,
+  createCrmWorkspaceReadCoordinator,
 } from "./crm-workspace";
 
 type TestFetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -17,6 +20,35 @@ function response(data: unknown, status = 200): Response {
     status,
     headers: { "content-type": "application/json" },
   });
+}
+type Deferred<T> = {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T | PromiseLike<T>) => void;
+  readonly reject: (reason?: unknown) => void;
+};
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: Deferred<T>["resolve"];
+  let reject!: Deferred<T>["reject"];
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function readHandlers() {
+  return {
+    setContacts: vi.fn(),
+    setSegments: vi.fn(),
+    setEvents: vi.fn(),
+    setAnalytics: vi.fn(),
+    setContactsLoading: vi.fn(),
+    setSegmentsLoading: vi.fn(),
+    setEventsLoading: vi.fn(),
+    setAnalyticsLoading: vi.fn(),
+    setError: vi.fn(),
+  };
 }
 
 const contact: CrmContact = {
@@ -399,5 +431,117 @@ describe("organization CRM workspace", () => {
       }),
     );
     for (const stage of CRM_PIPELINE_STAGES) expect(markup).toContain(stage);
+  });
+});
+describe("CRM workspace read coordination", () => {
+  it("starts all independent initial reads before any deferred response settles", async () => {
+    const starts: string[] = [];
+    const contactsRead = deferred<readonly CrmContact[]>();
+    const segmentsRead = deferred<readonly CrmSegment[]>();
+    const eventsRead = deferred<readonly CrmEvent[]>();
+    const analyticsRead = deferred<CrmAnalytics>();
+    const api = {
+      listContacts: vi.fn(() => {
+        starts.push("contacts");
+        return contactsRead.promise;
+      }),
+      listSegments: vi.fn(() => {
+        starts.push("segments");
+        return segmentsRead.promise;
+      }),
+      listEvents: vi.fn(() => {
+        starts.push("events");
+        return eventsRead.promise;
+      }),
+      analytics: vi.fn(() => {
+        starts.push("analytics");
+        return analyticsRead.promise;
+      }),
+    } as unknown as CrmApi;
+    const handlers = readHandlers();
+    const coordinator = createCrmWorkspaceReadCoordinator(api, handlers);
+
+    const refresh = coordinator.refresh({ query: "Ada", status: "active" });
+
+    expect(starts).toEqual(["contacts", "segments", "events", "analytics"]);
+    expect(api.listContacts).toHaveBeenCalledTimes(1);
+    expect(api.listSegments).toHaveBeenCalledTimes(1);
+    expect(api.listEvents).toHaveBeenCalledTimes(1);
+    expect(api.analytics).toHaveBeenCalledTimes(1);
+
+    contactsRead.resolve([contact]);
+    segmentsRead.resolve([]);
+    eventsRead.resolve([event]);
+    analyticsRead.resolve(analytics);
+    await refresh;
+    coordinator.dispose();
+  });
+  it("reactivates after an effect cleanup replay", async () => {
+    const api = {
+      listSegments: vi.fn(async () => []),
+    } as unknown as CrmApi;
+    const handlers = readHandlers();
+    const coordinator = createCrmWorkspaceReadCoordinator(api, handlers);
+
+    coordinator.dispose();
+    coordinator.activate();
+    await coordinator.loadSegments();
+
+    expect(api.listSegments).toHaveBeenCalledTimes(1);
+    expect(handlers.setSegments).toHaveBeenCalledWith([]);
+    expect(handlers.setSegmentsLoading).toHaveBeenLastCalledWith(false);
+    coordinator.dispose();
+  });
+
+  it("reloads only contacts for a filter change and ignores stale contact responses", async () => {
+    const firstContactsRead = deferred<readonly CrmContact[]>();
+    const secondContactsRead = deferred<readonly CrmContact[]>();
+    const newerContact = { ...contact, id: "contact-2", email: "newer@example.test" };
+    const api = {
+      listContacts: vi
+        .fn()
+        .mockImplementationOnce(() => firstContactsRead.promise)
+        .mockImplementationOnce(() => secondContactsRead.promise),
+      listSegments: vi.fn(async () => []),
+      listEvents: vi.fn(async () => []),
+      analytics: vi.fn(async () => analytics),
+    } as unknown as CrmApi;
+    const handlers = readHandlers();
+    const coordinator = createCrmWorkspaceReadCoordinator(api, handlers);
+
+    const firstLoad = coordinator.loadContacts({ query: "Ada", status: "active" });
+    const secondLoad = coordinator.loadContacts({ query: "Grace", status: "active" });
+
+    expect(api.listContacts).toHaveBeenCalledTimes(2);
+    expect(api.listSegments).not.toHaveBeenCalled();
+    expect(api.listEvents).not.toHaveBeenCalled();
+    expect(api.analytics).not.toHaveBeenCalled();
+
+    secondContactsRead.resolve([newerContact]);
+    await secondLoad;
+    firstContactsRead.resolve([contact]);
+    await firstLoad;
+
+    expect(handlers.setContacts).toHaveBeenLastCalledWith([newerContact]);
+    coordinator.dispose();
+  });
+
+  it("refreshes each intended resource exactly once", async () => {
+    const api = {
+      listContacts: vi.fn(async () => [contact]),
+      listSegments: vi.fn(async () => []),
+      listEvents: vi.fn(async () => [event]),
+      analytics: vi.fn(async () => analytics),
+    } as unknown as CrmApi;
+    const handlers = readHandlers();
+    const coordinator = createCrmWorkspaceReadCoordinator(api, handlers);
+
+    await coordinator.refresh({ status: "active" });
+
+    expect(api.listContacts).toHaveBeenCalledTimes(1);
+    expect(api.listSegments).toHaveBeenCalledTimes(1);
+    expect(api.listEvents).toHaveBeenCalledTimes(1);
+    expect(api.analytics).toHaveBeenCalledTimes(1);
+    coordinator.dispose();
   });
 });

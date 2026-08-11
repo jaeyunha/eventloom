@@ -44,6 +44,92 @@ class FailPrimaryMergeRepository extends InMemoryCrmRepository {
     return super.saveContact(contact, expectedVersion);
   }
 }
+type CountedCrmRead =
+  | "listContacts"
+  | "listProjections"
+  | "listOutreach"
+  | "getContact"
+  | "getCommandResult"
+  | "getProjection";
+
+class CountingDelayedCrmRepository extends InMemoryCrmRepository {
+  readonly calls: Record<CountedCrmRead, number> = {
+    listContacts: 0,
+    listProjections: 0,
+    listOutreach: 0,
+    getContact: 0,
+    getCommandResult: 0,
+    getProjection: 0,
+  };
+  readonly started = new Set<CountedCrmRead>();
+  activeReads = 0;
+  maxConcurrentReads = 0;
+  readonly #delays: Record<CountedCrmRead, number>;
+
+  constructor(delays: Partial<Record<CountedCrmRead, number>> = {}) {
+    super();
+    this.#delays = {
+      listContacts: 0,
+      listProjections: 0,
+      listOutreach: 0,
+      getContact: 0,
+      getCommandResult: 0,
+      getProjection: 0,
+      ...delays,
+    };
+  }
+
+  resetReads(): void {
+    for (const kind of Object.keys(this.calls) as CountedCrmRead[]) this.calls[kind] = 0;
+    this.started.clear();
+    this.activeReads = 0;
+    this.maxConcurrentReads = 0;
+  }
+
+  private async delayed<T>(kind: CountedCrmRead, read: () => Promise<T>): Promise<T> {
+    this.calls[kind] += 1;
+    this.started.add(kind);
+    this.activeReads += 1;
+    this.maxConcurrentReads = Math.max(this.maxConcurrentReads, this.activeReads);
+    try {
+      await new Promise<void>((resolve) => setTimeout(resolve, this.#delays[kind]));
+      return await read();
+    } finally {
+      this.activeReads -= 1;
+    }
+  }
+
+  override listContacts(
+    organizationId: string,
+    filter?: Parameters<InMemoryCrmRepository["listContacts"]>[1],
+  ) {
+    return this.delayed("listContacts", () => super.listContacts(organizationId, filter));
+  }
+
+  override listProjections(organizationId: string) {
+    return this.delayed("listProjections", () => super.listProjections(organizationId));
+  }
+
+  override listOutreach(organizationId: string) {
+    return this.delayed("listOutreach", () => super.listOutreach(organizationId));
+  }
+
+  override getContact(organizationId: string, contactId: string) {
+    return this.delayed("getContact", () => super.getContact(organizationId, contactId));
+  }
+
+  override getProjection(organizationId: string, eventId: string, contactId: string) {
+    return this.delayed("getProjection", () =>
+      super.getProjection(organizationId, eventId, contactId),
+    );
+  }
+
+  override getCommandResult<T>(organizationId: string, command: string, key: string) {
+    return this.delayed("getCommandResult", () =>
+      super.getCommandResult<T>(organizationId, command, key),
+    );
+  }
+}
 
 describe("CrmService", () => {
   it("keeps contacts tenant isolated while supporting search, custom fields, and tags", async () => {
@@ -486,6 +572,150 @@ describe("CrmService", () => {
         idempotencyKey: "outreach-unknown",
       }),
     ).rejects.toMatchObject({ code: "CRM_INVALID_INPUT" });
+  });
+  it("starts analytics reads together and scopes each source to the organization", async () => {
+    const repository = new CountingDelayedCrmRepository({
+      listContacts: 25,
+      listProjections: 75,
+      listOutreach: 150,
+    });
+    let sequence = 0;
+    const crm = new CrmService(
+      { repository },
+      {
+        clock: () => new Date("2026-01-01T00:00:00.000Z"),
+        generateId: (prefix) => `${prefix}-${++sequence}`,
+      },
+    );
+    const contact = await crm.createContact(actor, {
+      organizationId: "org-a",
+      displayName: "Analytics Contact",
+      email: "analytics@example.com",
+    });
+    const otherContact = await crm.createContact(otherActor, {
+      organizationId: "org-b",
+      displayName: "Other Analytics Contact",
+      email: "other-analytics@example.com",
+    });
+    await crm.addContactToEvent(actor, {
+      organizationId: "org-a",
+      contactId: contact.id,
+      eventId: "event-a",
+      idempotencyKey: "analytics-event-a",
+    });
+    await crm.addContactToEvent(otherActor, {
+      organizationId: "org-b",
+      contactId: otherContact.id,
+      eventId: "event-b",
+      idempotencyKey: "analytics-event-b",
+    });
+    await crm.sendPersonalizedOutreach(actor, {
+      organizationId: "org-a",
+      contactId: contact.id,
+      subject: "Analytics",
+      body: "Hello",
+      idempotencyKey: "analytics-outreach-a",
+    });
+    await crm.sendPersonalizedOutreach(otherActor, {
+      organizationId: "org-b",
+      contactId: otherContact.id,
+      subject: "Other Analytics",
+      body: "Hello",
+      idempotencyKey: "analytics-outreach-b",
+    });
+    repository.resetReads();
+
+    const analytics = await crm.analytics(actor, "org-a");
+
+    expect(repository.calls).toEqual({
+      listContacts: 1,
+      listProjections: 1,
+      listOutreach: 1,
+      getContact: 0,
+      getCommandResult: 0,
+      getProjection: 0,
+    });
+    expect(repository.started).toEqual(
+      new Set(["listContacts", "listProjections", "listOutreach"]),
+    );
+    expect(repository.maxConcurrentReads).toBe(3);
+    expect(analytics).toMatchObject({
+      organizationId: "org-a",
+      totalContacts: 1,
+      activeContacts: 1,
+      contactsByEvent: [{ eventId: "event-a", count: 1 }],
+      outreach: { queued: 0, sent: 0, failed: 1 },
+      contactsByPipelineStage: { new: 1 },
+      contactsBySource: { manual: 1 },
+    });
+  });
+
+  it("reuses add-to-event receipts without rereading the contact or projection", async () => {
+    const repository = new CountingDelayedCrmRepository();
+    let sequence = 0;
+    const crm = new CrmService(
+      { repository },
+      {
+        clock: () => new Date("2026-01-01T00:00:00.000Z"),
+        generateId: (prefix) => `${prefix}-${++sequence}`,
+      },
+    );
+    const contact = await crm.createContact(actor, {
+      organizationId: "org-a",
+      displayName: "Event Contact",
+      email: "event@example.com",
+    });
+    const input = {
+      organizationId: "org-a",
+      contactId: contact.id,
+      eventId: "event-a",
+      idempotencyKey: "event-reuse",
+    } as const;
+
+    repository.resetReads();
+    const created = await crm.addContactToEvent(actor, input);
+    expect(created).toMatchObject({ outcome: "created", idempotent: false });
+    expect(repository.calls).toEqual({
+      listContacts: 0,
+      listProjections: 0,
+      listOutreach: 0,
+      getContact: 1,
+      getCommandResult: 1,
+      getProjection: 0,
+    });
+
+    repository.resetReads();
+    const replay = await crm.addContactToEvent(actor, input);
+    expect(replay).toEqual({ ...created, idempotent: true });
+    expect(repository.calls).toEqual({
+      listContacts: 0,
+      listProjections: 0,
+      listOutreach: 0,
+      getContact: 0,
+      getCommandResult: 1,
+      getProjection: 0,
+    });
+
+    repository.resetReads();
+    const reused = await crm.addContactToEvent(actor, {
+      ...input,
+      idempotencyKey: "event-reuse-alias",
+    });
+    expect(reused).toMatchObject({
+      outcome: "existing",
+      idempotent: true,
+      projection: created.projection,
+    });
+    expect(repository.calls).toEqual({
+      listContacts: 0,
+      listProjections: 0,
+      listOutreach: 0,
+      getContact: 1,
+      getCommandResult: 1,
+      getProjection: 0,
+    });
+    expect(await repository.listProjections("org-a")).toHaveLength(1);
+    expect(await repository.listHistory("org-a", contact.id)).toHaveLength(1);
   });
   it("keeps same-name event projections keyed by contact identity", async () => {
     const repository = new InMemoryCrmRepository();

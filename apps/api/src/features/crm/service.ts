@@ -1500,7 +1500,6 @@ export class CrmService {
         : identifier(input.sessionId, "sessionId");
     const note = optionalText(input.note, "note", 2_000) ?? null;
     assertActor(actor, organizationId);
-    await this.getContact(actor, organizationId, contactId);
     return this.runIdempotent(`event:${organizationId}:${key}`, async () => {
       const repository = this.requireRepository();
       const prior = await repository.getCommandResult<CrmEventProjectionResult>(
@@ -1522,21 +1521,7 @@ export class CrmService {
         }
         return { ...clone(prior), idempotent: true };
       }
-      const existing = await repository.getProjection(organizationId, eventId, contactId);
-      if (existing !== null) {
-        if (existing.role !== role || existing.sessionId !== sessionId || existing.note !== note) {
-          throw conflict(
-            "This contact already has a different canonical relationship for the event.",
-          );
-        }
-        const result: CrmEventProjectionResult = {
-          projection: clone(existing),
-          idempotent: true,
-          outcome: "existing",
-        };
-        await repository.saveCommandResult(organizationId, "add-to-event", key, result);
-        return result;
-      }
+      const contact = await this.getContact(actor, organizationId, contactId);
       const createdAt = nowIso(this.#clock);
       const projection: CrmEventProjection = {
         id: this.#generateId("event-contact"),
@@ -1550,7 +1535,7 @@ export class CrmService {
         createdAt,
         updatedAt: createdAt,
       };
-      const saved = await repository.saveProjection(projection);
+      const saved = await repository.saveProjection(projection, contact);
       assertTenant(saved, organizationId);
       if (saved.id !== projection.id) {
         if (saved.role !== role || saved.sessionId !== sessionId || saved.note !== note) {
@@ -1566,18 +1551,21 @@ export class CrmService {
         await repository.saveCommandResult(organizationId, "add-to-event", key, result);
         return result;
       }
-      await repository.appendHistory({
-        id: this.#generateId("history"),
-        organizationId,
-        contactId,
-        kind: "event",
-        eventId,
-        sessionId: saved.sessionId,
-        title: "Added to event",
-        detail: saved.note,
-        occurredAt: createdAt,
-        metadata: { role: saved.role, projectionId: saved.id },
-      });
+      await repository.appendHistory(
+        {
+          id: this.#generateId("history"),
+          organizationId,
+          contactId,
+          kind: "event",
+          eventId,
+          sessionId: saved.sessionId,
+          title: "Added to event",
+          detail: saved.note,
+          occurredAt: createdAt,
+          metadata: { role: saved.role, projectionId: saved.id },
+        },
+        contact,
+      );
       const result: CrmEventProjectionResult = {
         projection: clone(saved),
         idempotent: false,
@@ -1819,8 +1807,15 @@ export class CrmService {
   async analytics(actor: CrmActor, organizationId = actor.organizationId): Promise<CrmAnalytics> {
     const organization = identifier(organizationId, "organizationId");
     assertActor(actor, organization);
-    const contacts = await this.listContacts(actor, organization, { limit: 500 });
-    const projections = (await this.requireRepository().listProjections(organization)).filter(
+    const repository = this.requireRepository();
+    const [contacts, rawProjections, outreach] = await Promise.all([
+      this.listContacts(actor, organization, { limit: 500 }),
+      repository.listProjections(organization),
+      repository.listOutreach === undefined
+        ? Promise.resolve([])
+        : repository.listOutreach(organization),
+    ]);
+    const projections = rawProjections.filter(
       (projection) => projection.organizationId === organization,
     );
     const stageCounts = Object.fromEntries(
@@ -1836,9 +1831,6 @@ export class CrmService {
     const eventCounts = new Map<string, number>();
     for (const projection of projections)
       eventCounts.set(projection.eventId, (eventCounts.get(projection.eventId) ?? 0) + 1);
-    const repository = this.requireRepository();
-    const outreach =
-      repository.listOutreach === undefined ? [] : await repository.listOutreach(organization);
     const outreachCounts = { queued: 0, sent: 0, failed: 0 };
     for (const command of outreach.filter(
       (candidate) => candidate.organizationId === organization,
@@ -2219,12 +2211,25 @@ export class InMemoryCrmRepository implements CrmRepository {
     return projection === undefined ? null : clone(projection);
   }
 
-  async saveProjection(projection: CrmEventProjection): Promise<CrmEventProjection> {
+  async saveProjection(
+    projection: CrmEventProjection,
+    contact: CrmContact,
+  ): Promise<CrmEventProjection> {
     const key = this.projectionKey(
       projection.organizationId,
       projection.eventId,
       projection.contactId,
     );
+    const storedContact = this.#contacts.get(
+      this.contactKey(projection.organizationId, projection.contactId),
+    );
+    if (
+      contact.organizationId !== projection.organizationId ||
+      contact.id !== projection.contactId ||
+      storedContact === undefined
+    ) {
+      throw new CrmRepositoryConflictError("The projected contact was not found.");
+    }
     const existing = this.#projections.get(key);
     if (existing !== undefined) return clone(existing);
     this.#projections.set(key, clone(projection));

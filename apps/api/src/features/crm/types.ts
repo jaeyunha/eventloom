@@ -363,7 +363,7 @@ export interface CrmRepository {
   saveSegment(segment: CrmSegment, expectedVersion: number | null): Promise<CrmSegment>;
   deleteSegment(organizationId: string, segmentId: string, expectedVersion: number): Promise<void>;
   listHistory(organizationId: string, contactId: string): Promise<readonly CrmHistoryEntry[]>;
-  appendHistory(entry: CrmHistoryEntry): Promise<CrmHistoryEntry>;
+  appendHistory(entry: CrmHistoryEntry, contact?: CrmContact): Promise<CrmHistoryEntry>;
   listPipelineHistory(
     organizationId: string,
     contactId: string,
@@ -376,7 +376,7 @@ export interface CrmRepository {
     eventId: string,
     contactId: string,
   ): Promise<CrmEventProjection | null>;
-  saveProjection(projection: CrmEventProjection): Promise<CrmEventProjection>;
+  saveProjection(projection: CrmEventProjection, contact: CrmContact): Promise<CrmEventProjection>;
   listProjections(organizationId: string): Promise<readonly CrmEventProjection[]>;
   saveOutreach(command: CrmOutreachCommand): Promise<CrmOutreachCommand>;
   updateOutreach(command: CrmOutreachCommand): Promise<CrmOutreachCommand>;
