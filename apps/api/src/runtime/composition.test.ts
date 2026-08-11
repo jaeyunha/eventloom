@@ -3315,6 +3315,14 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
     await expect(pendingRepository.listPortalContexts("portal-owner")).resolves.toMatchObject([
       { eventId: "event-pending-only", capabilities: ["submission-edit"] },
     ]);
+    await expect(
+      pendingRepository.getAccessScope("event-pending-only", "portal-owner"),
+    ).resolves.toMatchObject({
+      capabilities: ["submission-edit"],
+      capabilitiesByParticipant: {
+        "pending-only": ["submission-edit"],
+      },
+    });
   });
   it("writes the canonical accepted session idempotently before account grants and preserves taxonomy and participants", async () => {
     const events: string[] = [];

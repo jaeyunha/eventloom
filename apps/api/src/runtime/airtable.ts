@@ -1890,12 +1890,12 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     const capabilitiesByParticipant = Object.fromEntries(
       participantIds.map((participantId) => [
         participantId,
-        acceptedParticipants.has(participantId)
-          ? [
-              ...capabilities,
-              ...(participantId === primaryParticipantId ? (["roster-manage"] as const) : []),
-            ]
-          : [],
+        [
+          ...capabilities,
+          ...(acceptedParticipants.has(participantId) && participantId === primaryParticipantId
+            ? (["roster-manage"] as const)
+            : []),
+        ],
       ]),
     );
     const tenantIds = [
@@ -2062,12 +2062,12 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       const capabilitiesByParticipant = Object.fromEntries(
         participantIds.map((participantId) => [
           participantId,
-          acceptedParticipants.has(participantId)
-            ? [
-                ...capabilities,
-                ...(participantId === primaryParticipantId ? (["roster-manage"] as const) : []),
-              ]
-            : [],
+          [
+            ...capabilities,
+            ...(acceptedParticipants.has(participantId) && participantId === primaryParticipantId
+              ? (["roster-manage"] as const)
+              : []),
+          ],
         ]),
       );
       const slug = textValue(event, "slug");
