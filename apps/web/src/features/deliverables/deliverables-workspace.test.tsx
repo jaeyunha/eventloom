@@ -17,7 +17,11 @@ import {
   DeliverablesWorkspaceView,
   deliverablesExportActionLabels,
   deliverablesExportStatusLabels,
+  deliverablesSessionHistoryKey,
+  isDeliverablesWorkspaceScopeCurrent,
+  loadDeliverablesSessionHistory,
   ReminderPreview,
+  settleDeliverablesAssetDetailRequests,
   startDeliverablesCoreRequests,
   triggerDeliverablesDownload,
 } from "./deliverables-workspace";
@@ -432,6 +436,122 @@ describe("deliverables core request starter", () => {
       message: "The sessions service failed.",
     });
   });
+  it("does not eagerly start any dedicated session-history request", async () => {
+    const listSessionContentHistory = vi.fn();
+    const api = {
+      listSessions: vi.fn().mockResolvedValue([session]),
+      listSessionContentHistory,
+    } as unknown as DeliverablesApi;
+
+    const requests = startDeliverablesCoreRequests(api, "deliverables");
+    await requests.sessions;
+
+    expect(listSessionContentHistory).not.toHaveBeenCalled();
+  });
+
+  it("loads selected history once per session version and serves a cache hit", async () => {
+    const first =
+      deferred<
+        readonly {
+          readonly id: string;
+          readonly version: number;
+          readonly actorId: string;
+          readonly occurredAt: string;
+        }[]
+      >();
+    const second =
+      deferred<
+        readonly {
+          readonly id: string;
+          readonly version: number;
+          readonly actorId: string;
+          readonly occurredAt: string;
+        }[]
+      >();
+    const listSessionContentHistory = vi
+      .fn()
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+    const api = { listSessionContentHistory } as unknown as DeliverablesApi;
+    const cache = new Map();
+    const missing = { ...session };
+    const firstRequest = loadDeliverablesSessionHistory(api, missing, cache);
+    const duplicateRequest = loadDeliverablesSessionHistory(api, missing, cache);
+
+    expect(deliverablesSessionHistoryKey(session.id, session.version)).toContain(session.id);
+    expect(duplicateRequest).toBe(firstRequest);
+    expect(listSessionContentHistory).toHaveBeenCalledTimes(1);
+
+    const firstHistory = [
+      {
+        id: "content-history-3",
+        version: session.version,
+        actorId: "organizer-1",
+        occurredAt: "2026-08-09T12:00:00.000Z",
+      },
+    ] as const;
+    first.resolve(firstHistory);
+    await expect(firstRequest).resolves.toEqual(firstHistory);
+    await expect(loadDeliverablesSessionHistory(api, missing, cache)).resolves.toEqual(
+      firstHistory,
+    );
+    expect(listSessionContentHistory).toHaveBeenCalledTimes(1);
+
+    const nextVersion = { ...missing, version: session.version + 1 };
+    const nextRequest = loadDeliverablesSessionHistory(api, nextVersion, cache);
+    expect(listSessionContentHistory).toHaveBeenCalledTimes(2);
+    second.resolve([
+      {
+        id: "content-history-4",
+        version: nextVersion.version,
+        actorId: "organizer-1",
+        occurredAt: "2026-08-10T12:00:00.000Z",
+      },
+    ]);
+    await nextRequest;
+    await expect(
+      loadDeliverablesSessionHistory(api, { ...nextVersion, contentHistory: [] }, cache),
+    ).resolves.toEqual([]);
+  });
+
+  it("does not request canonical content history and rejects old workspace scope results", async () => {
+    const listSessionContentHistory = vi.fn();
+    const api = { listSessionContentHistory } as unknown as DeliverablesApi;
+    const cache = new Map();
+    await expect(
+      loadDeliverablesSessionHistory(api, { ...session, contentHistory: [] }, cache),
+    ).resolves.toEqual([]);
+    expect(listSessionContentHistory).not.toHaveBeenCalled();
+
+    const nextApi = {} as DeliverablesApi;
+    const current = {
+      api,
+      eventId: "event-1",
+      organizationId: "org-1",
+      epoch: 2,
+    };
+    expect(isDeliverablesWorkspaceScopeCurrent(current, current)).toBe(true);
+    expect(
+      isDeliverablesWorkspaceScopeCurrent(current, {
+        ...current,
+        api: nextApi,
+        epoch: 3,
+      }),
+    ).toBe(false);
+  });
+
+  it("retains a successful asset-detail sibling when the other request fails", async () => {
+    const settled = await settleDeliverablesAssetDetailRequests(
+      Promise.resolve([assetV2]),
+      Promise.reject(new Error("Comments service unavailable.")),
+    );
+
+    expect(settled.history).toEqual({ ok: true, value: [assetV2] });
+    expect(settled.comments.ok).toBe(false);
+    if (!settled.comments.ok) {
+      expect(settled.comments.reason).toEqual(new Error("Comments service unavailable."));
+    }
+  });
 });
 
 describe("deliverables workspace", () => {
@@ -451,6 +571,35 @@ describe("deliverables workspace", () => {
     expect(markup).toContain("Session title and abstract");
     expect(markup).toContain("Loading session change history");
     expect(markup).not.toContain("No session history was returned");
+  });
+  it("shows a detail-resource error without replacing a successful sibling", () => {
+    const markup = renderToStaticMarkup(
+      createElement(DeliverablesWorkspaceView, {
+        organizationId: "org-1",
+        eventId: "event-1",
+        sessions: [session],
+        tasks: [task],
+        assets: [assetV1, assetV2],
+        profiles: [profile],
+        selectedAssetId: assetV2.id,
+        assetHistory: [],
+        assetHistoryError: "History service unavailable.",
+        comments: [
+          {
+            id: "comment-1",
+            eventId: "event-1",
+            assetId: assetV2.id,
+            body: "Sibling comments remain visible.",
+            authorLabel: "Priya Raman",
+            createdAt: "2026-08-09T12:01:00.000Z",
+          },
+        ],
+      }),
+    );
+
+    expect(markup).toContain("Version history unavailable: History service unavailable.");
+    expect(markup).toContain("Sibling comments remain visible.");
+    expect(markup).not.toContain("No version history was returned.");
   });
   it("renders task setup, filters, immutable versions, comments, approval, and content editors", () => {
     const markup = renderToStaticMarkup(

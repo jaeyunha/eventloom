@@ -175,12 +175,18 @@ export interface DeliverablesWorkspaceViewProps {
   readonly statusMessage?: string | null;
   readonly capabilityMessages?: readonly string[];
   readonly operationStates?: readonly DeliverablesOperationState[];
+  readonly selectedSessionId?: string;
+  readonly sessionHistory?: readonly DeliverableContentHistoryEntry[];
+  readonly sessionHistoryError?: string | null;
+  readonly onSelectSession?: (sessionId: string) => void;
   readonly onCreateTask?: (input: DeliverableTaskInput) => Promise<void>;
   readonly onInspectAsset?: (assetId: string) => void;
   readonly selectedAssetId?: string | null;
   readonly assetHistory?: readonly DeliverableAssetHistoryEntry[];
   readonly comments?: readonly DeliverableComment[];
   readonly loadingAssetDetails?: boolean;
+  readonly assetHistoryError?: string | null;
+  readonly commentsError?: string | null;
   readonly loadingSessionHistories?: boolean;
   readonly onAddComment?: (input: {
     readonly assetId: string;
@@ -1429,7 +1435,9 @@ function AssetDetail({
   asset,
   allAssets,
   history,
+  assetHistoryError,
   comments,
+  commentsError,
   authoritativeCurrentAssetId,
   matrixAuthoritative,
   loading,
@@ -1442,6 +1450,8 @@ function AssetDetail({
   asset: DeliverableAsset;
   allAssets: readonly DeliverableAsset[];
   history: readonly DeliverableAssetHistoryEntry[];
+  readonly assetHistoryError: string | null;
+  readonly commentsError: string | null;
   comments: readonly DeliverableComment[];
   authoritativeCurrentAssetId?: string;
   matrixAuthoritative: boolean;
@@ -1456,7 +1466,9 @@ function AssetDetail({
   const fallbackHistory = allAssets
     .filter((candidate) => assetFamily(candidate) === family)
     .sort((left, right) => (left.version ?? 0) - (right.version ?? 0));
-  const versions = history.length > 0 ? history : fallbackHistory;
+  const scopedHistory = history.filter((candidate) => assetFamily(candidate) === family);
+  const versions =
+    assetHistoryError === null && scopedHistory.length === 0 ? fallbackHistory : scopedHistory;
   const [commentBody, setCommentBody] = useState("");
   const [reviewNote, setReviewNote] = useState("");
   const [commentError, setCommentError] = useState<string | null>(null);
@@ -1501,10 +1513,14 @@ function AssetDetail({
         short-lived server capability; object keys are never shown here.
       </p>
       <h3>Version history</h3>
-      {loading ? (
-        <p role="status">Loading immutable versions and comments…</p>
+      {assetHistoryError !== null ? (
+        <p role="alert">Version history unavailable: {assetHistoryError}</p>
       ) : versions.length === 0 ? (
-        <p style={mutedStyle}>No version history was returned.</p>
+        loading ? (
+          <p role="status">Loading immutable versions and comments…</p>
+        ) : (
+          <p style={mutedStyle}>No version history was returned.</p>
+        )
       ) : (
         <div style={{ overflowX: "auto" }}>
           <table>
@@ -1564,8 +1580,14 @@ function AssetDetail({
         Speaker and organizer replies are displayed together in the asset-family conversation using
         the author labels returned by the server.
       </p>
-      {thread.length === 0 ? (
-        <p style={mutedStyle}>No comments have been returned for this asset family.</p>
+      {commentsError !== null ? (
+        <p role="alert">Comments unavailable: {commentsError}</p>
+      ) : thread.length === 0 ? (
+        loading ? (
+          <p role="status">Loading comments…</p>
+        ) : (
+          <p style={mutedStyle}>No comments have been returned for this asset family.</p>
+        )
       ) : (
         <ol aria-label="Asset family comment thread">
           {thread.map((comment) => (
@@ -1656,6 +1678,10 @@ function SessionEditor({
   onSave,
   onApprove,
   onRestore,
+  selectedSessionId,
+  sessionHistory,
+  sessionHistoryError,
+  onSelectSession,
 }: Readonly<{
   sessions: readonly DeliverableSession[];
   loadingHistory: boolean;
@@ -1666,6 +1692,10 @@ function SessionEditor({
     readonly title: string;
     readonly description: string;
   }) => Promise<void>;
+  selectedSessionId?: string;
+  sessionHistory?: readonly DeliverableContentHistoryEntry[];
+  sessionHistoryError?: string | null;
+  onSelectSession?: (sessionId: string) => void;
   onApprove?: (
     session: DeliverableSession,
     contentStatus: "Approved" | "Needs changes",
@@ -1676,15 +1706,20 @@ function SessionEditor({
     readonly expectedVersion: number;
   }) => Promise<void>;
 }>) {
-  const [sessionId, setSessionId] = useState(sessions[0]?.id ?? "");
-  const selected = sessions.find((session) => session.id === sessionId) ?? sessions[0];
+  const [localSessionId, setLocalSessionId] = useState(sessions[0]?.id ?? "");
+  const effectiveSessionId = selectedSessionId ?? localSessionId;
+  const selected = sessions.find((session) => session.id === effectiveSessionId) ?? sessions[0];
   const [title, setTitle] = useState(selected?.title ?? "");
   const [description, setDescription] = useState(selected?.description ?? "");
   const [formError, setFormError] = useState<string | null>(null);
   const history =
-    selected?.contentHistory !== undefined && selected.contentHistory.length > 0
-      ? selected.contentHistory
-      : (selected?.history ?? []);
+    sessionHistoryError !== null && sessionHistoryError !== undefined
+      ? []
+      : selected?.contentHistory !== undefined
+        ? selected.contentHistory
+        : selected?.id === effectiveSessionId
+          ? (sessionHistory ?? selected.history ?? [])
+          : (selected?.history ?? []);
   const priorVersions = useMemo(
     () =>
       [...history]
@@ -1767,7 +1802,11 @@ function SessionEditor({
             <select
               style={inputStyle}
               value={selected?.id ?? ""}
-              onChange={(event) => setSessionId(event.currentTarget.value)}
+              onChange={(event) => {
+                const nextSessionId = event.currentTarget.value;
+                setLocalSessionId(nextSessionId);
+                onSelectSession?.(nextSessionId);
+              }}
             >
               {sessions.map((session) => (
                 <option key={session.id} value={session.id}>
@@ -1829,7 +1868,9 @@ function SessionEditor({
             </div>
           </form>
           <h3>Change history</h3>
-          {loadingHistory ? (
+          {sessionHistoryError !== null && sessionHistoryError !== undefined ? (
+            <p role="alert">Session change history unavailable: {sessionHistoryError}</p>
+          ) : loadingHistory ? (
             <p role="status" style={mutedStyle}>
               Loading session change history…
             </p>
@@ -2112,9 +2153,15 @@ export function DeliverablesWorkspaceView({
   onCreateTask,
   onInspectAsset,
   selectedAssetId = null,
+  selectedSessionId,
+  sessionHistory,
+  sessionHistoryError,
+  onSelectSession,
   assetHistory = [],
   comments = [],
   loadingAssetDetails = false,
+  assetHistoryError,
+  commentsError,
   loadingSessionHistories = false,
   onAddComment,
   onDownloadVersion,
@@ -2380,6 +2427,8 @@ export function DeliverablesWorkspaceView({
                     asset={selectedAsset}
                     allAssets={assets}
                     history={assetHistory}
+                    assetHistoryError={assetHistoryError ?? null}
+                    commentsError={commentsError ?? null}
                     comments={comments}
                     matrixAuthoritative={matrixItems !== undefined}
                     {...(authoritativeCurrentAsset === undefined
@@ -2412,6 +2461,10 @@ export function DeliverablesWorkspaceView({
           {!filesMode ? (
             <>
               <SessionEditor
+                {...(selectedSessionId === undefined ? {} : { selectedSessionId })}
+                {...(sessionHistory === undefined ? {} : { sessionHistory })}
+                {...(sessionHistoryError === undefined ? {} : { sessionHistoryError })}
+                {...(onSelectSession === undefined ? {} : { onSelectSession })}
                 sessions={sessions}
                 loadingHistory={loadingSessionHistories}
                 busy={busy}
@@ -2505,6 +2558,103 @@ function settleDeliverablesRequest<T>(
         (reason: unknown) => ({ ok: false as const, reason }),
       );
 }
+export interface DeliverablesWorkspaceScope {
+  readonly api: DeliverablesApi;
+  readonly eventId: string;
+  readonly organizationId: string;
+  readonly epoch: number;
+}
+
+export function isDeliverablesWorkspaceScopeCurrent(
+  expected: DeliverablesWorkspaceScope,
+  current: DeliverablesWorkspaceScope,
+): boolean {
+  return (
+    expected.epoch === current.epoch &&
+    expected.api === current.api &&
+    expected.eventId === current.eventId &&
+    expected.organizationId === current.organizationId
+  );
+}
+
+export function deliverablesSessionHistoryKey(sessionId: string, sessionVersion: number): string {
+  return `${sessionId}\u0000${sessionVersion}`;
+}
+
+export type DeliverablesSessionHistoryCacheEntry =
+  | {
+      readonly status: "pending";
+      readonly promise: Promise<readonly DeliverableContentHistoryEntry[]>;
+    }
+  | {
+      readonly status: "fulfilled";
+      readonly value: readonly DeliverableContentHistoryEntry[];
+    };
+
+export type DeliverablesSessionHistoryCache = Map<string, DeliverablesSessionHistoryCacheEntry>;
+
+export function loadDeliverablesSessionHistory(
+  api: DeliverablesApi,
+  session: DeliverableSession,
+  cache: DeliverablesSessionHistoryCache,
+  signal?: AbortSignal,
+): Promise<readonly DeliverableContentHistoryEntry[]> {
+  const key = deliverablesSessionHistoryKey(session.id, session.version);
+  if (session.contentHistory !== undefined) {
+    cache.set(key, { status: "fulfilled", value: session.contentHistory });
+    return Promise.resolve(session.contentHistory);
+  }
+
+  const cached = cache.get(key);
+  if (cached?.status === "fulfilled") return Promise.resolve(cached.value);
+  if (cached?.status === "pending") return cached.promise;
+
+  const request = startDeliverablesRequest(() => {
+    if (api.listSessionContentHistory === undefined) {
+      throw new Error("The session content history endpoint is not provisioned.");
+    }
+    return signal === undefined
+      ? api.listSessionContentHistory(session.id)
+      : api.listSessionContentHistory(session.id, signal);
+  });
+  let tracked!: Promise<readonly DeliverableContentHistoryEntry[]>;
+  tracked = request.then(
+    (value) => {
+      const current = cache.get(key);
+      if (current?.status === "pending" && current.promise === tracked) {
+        cache.set(key, { status: "fulfilled", value });
+      }
+      return value;
+    },
+    (reason: unknown) => {
+      const current = cache.get(key);
+      if (current?.status === "pending" && current.promise === tracked) {
+        cache.delete(key);
+      }
+      throw reason;
+    },
+  );
+  cache.set(key, { status: "pending", promise: tracked });
+  return tracked;
+}
+
+export interface DeliverablesAssetDetailSettled {
+  readonly history: DeliverablesSettledResult<readonly DeliverableAssetHistoryEntry[]>;
+  readonly comments: DeliverablesSettledResult<readonly DeliverableComment[]>;
+}
+
+export function settleDeliverablesAssetDetailRequests(
+  historyRequest: Promise<readonly DeliverableAssetHistoryEntry[]>,
+  commentsRequest: Promise<readonly DeliverableComment[]>,
+): Promise<DeliverablesAssetDetailSettled> {
+  return Promise.all([
+    settleDeliverablesRequest(historyRequest),
+    settleDeliverablesRequest(commentsRequest),
+  ]).then(([history, comments]) => ({
+    history: history as DeliverablesSettledResult<readonly DeliverableAssetHistoryEntry[]>,
+    comments: comments as DeliverablesSettledResult<readonly DeliverableComment[]>,
+  }));
+}
 
 function matrixAssets(matrixValue: DeliverableTaskMatrix): readonly DeliverableAsset[] {
   const byId = new Map<string, DeliverableAsset>();
@@ -2526,6 +2676,25 @@ export function DeliverablesWorkspace({
     () => providedApi ?? createDeliverablesApi("", organizationId, eventId),
     [eventId, organizationId, providedApi],
   );
+  const scopeRef = useRef<DeliverablesWorkspaceScope>({
+    api,
+    eventId,
+    organizationId,
+    epoch: 0,
+  });
+  if (
+    scopeRef.current.api !== api ||
+    scopeRef.current.eventId !== eventId ||
+    scopeRef.current.organizationId !== organizationId
+  ) {
+    scopeRef.current = {
+      api,
+      eventId,
+      organizationId,
+      epoch: scopeRef.current.epoch + 1,
+    };
+  }
+  const currentScope = scopeRef.current;
   const [sessions, setSessions] = useState<readonly DeliverableSession[]>(
     initialData?.sessions ?? [],
   );
@@ -2541,16 +2710,55 @@ export function DeliverablesWorkspace({
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [capabilityMessages, setCapabilityMessages] = useState<readonly string[]>([]);
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
+    initialData?.sessions[0]?.id ?? null,
+  );
+  const [sessionHistory, setSessionHistory] = useState<
+    readonly DeliverableContentHistoryEntry[] | undefined
+  >(undefined);
+  const [sessionHistoryError, setSessionHistoryError] = useState<string | null>(null);
+  const [sessionHistoryKey, setSessionHistoryKey] = useState<string | null>(null);
+  const sessionHistoryCacheRef = useRef<DeliverablesSessionHistoryCache>(new Map());
   const selectedAssetIdRef = useRef<string | null>(selectedAssetId);
   selectedAssetIdRef.current = selectedAssetId;
   const [assetHistory, setAssetHistory] = useState<readonly DeliverableAssetHistoryEntry[]>([]);
   const [comments, setComments] = useState<readonly DeliverableComment[]>([]);
   const [loadingAssetDetails, setLoadingAssetDetails] = useState(false);
+  const [assetHistoryError, setAssetHistoryError] = useState<string | null>(null);
+  const [commentsError, setCommentsError] = useState<string | null>(null);
   const [loadingSessionHistories, setLoadingSessionHistories] = useState(false);
   const [operationStates, setOperationStates] = useState<
     Partial<Record<DeliverablesOperationKey, DeliverablesOperationState>>
   >({});
   const loadGenerationRef = useRef(0);
+  const stateScopeRef = useRef(currentScope);
+  useEffect(() => {
+    if (isDeliverablesWorkspaceScopeCurrent(stateScopeRef.current, currentScope)) return;
+    stateScopeRef.current = currentScope;
+    setSessions(initialData?.sessions ?? []);
+    setTasks(initialData?.tasks ?? []);
+    setAssets(initialData?.assets ?? []);
+    setProfiles(initialData?.profiles ?? []);
+    setMatrix(initialData?.matrix);
+    setLoading(initialData === undefined);
+    setError(null);
+    setCapabilityMessages([]);
+    sessionHistoryCacheRef.current.clear();
+    setSelectedSessionId(null);
+    setSessionHistory(undefined);
+    setSessionHistoryError(null);
+    setSessionHistoryKey(null);
+    setLoadingSessionHistories(false);
+    setSelectedAssetId(null);
+    setAssetHistory([]);
+    setComments([]);
+    setAssetHistoryError(null);
+    setCommentsError(null);
+    setLoadingAssetDetails(false);
+    setBusy(false);
+    setStatusMessage(null);
+    setOperationStates({});
+  }, [currentScope, initialData]);
 
   function recordOperation(
     key: DeliverablesOperationKey,
@@ -2564,24 +2772,37 @@ export function DeliverablesWorkspace({
     }));
   }
 
-  async function refreshMatrix(): Promise<void> {
-    if (api?.listDeliverableMatrix === undefined) return;
+  async function refreshMatrix(scope: DeliverablesWorkspaceScope = currentScope): Promise<boolean> {
+    if (api.listDeliverableMatrix === undefined) return true;
     try {
       const next = await api.listDeliverableMatrix();
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return false;
       setMatrix(next);
       setTasks(next.items.map((item) => item.task));
+      return true;
     } catch (reason) {
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return false;
       setError(
         `The operation succeeded, but the exact deliverables matrix could not be refreshed. ${messageFromError(reason)}`,
       );
+      return false;
     }
   }
 
   const load = useCallback(
     async (signal?: AbortSignal) => {
+      const scope: DeliverablesWorkspaceScope = {
+        api,
+        eventId,
+        organizationId,
+        epoch: scopeRef.current.epoch,
+      };
       const generation = loadGenerationRef.current + 1;
       loadGenerationRef.current = generation;
-      const isCurrent = (): boolean => !signal?.aborted && loadGenerationRef.current === generation;
+      const isCurrent = (): boolean =>
+        !signal?.aborted &&
+        loadGenerationRef.current === generation &&
+        isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current);
       if (initialData !== undefined) {
         if (isCurrent()) setLoading(false);
         return;
@@ -2685,75 +2906,11 @@ export function DeliverablesWorkspace({
           );
         setCapabilityMessages(messages);
         setLoading(false);
-
-        const listSessionContentHistory = api.listSessionContentHistory;
-        if (
-          mode !== "files" &&
-          listSessionContentHistory !== undefined &&
-          sessionsResult?.ok === true
-        ) {
-          const historySessions = sessionsResult.value;
-          let pendingHistoryRequests = historySessions.length;
-          if (pendingHistoryRequests > 0) setLoadingSessionHistories(true);
-          const historyRequestFinished = (): void => {
-            pendingHistoryRequests -= 1;
-            if (pendingHistoryRequests === 0 && isCurrent()) {
-              setLoadingSessionHistories(false);
-            }
-          };
-          for (const session of historySessions) {
-            if (!isCurrent()) return;
-            let historyRequest: Promise<readonly DeliverableContentHistoryEntry[]>;
-            try {
-              historyRequest =
-                signal === undefined
-                  ? listSessionContentHistory(session.id)
-                  : listSessionContentHistory(session.id, signal);
-            } catch (reason) {
-              setCapabilityMessages((current) =>
-                isCurrent()
-                  ? [
-                      ...current,
-                      `Session content history unavailable for ${session.title}: ${messageFromError(reason)}`,
-                    ]
-                  : current,
-              );
-              historyRequestFinished();
-              continue;
-            }
-            void historyRequest
-              .then(
-                (contentHistory) => {
-                  if (!isCurrent()) return;
-                  setSessions((current) => {
-                    if (!isCurrent()) return current;
-                    return current.map((candidate) =>
-                      candidate.id === session.id && candidate.version === session.version
-                        ? { ...candidate, contentHistory }
-                        : candidate,
-                    );
-                  });
-                },
-                (reason: unknown) => {
-                  if (!isCurrent()) return;
-                  setCapabilityMessages((current) =>
-                    isCurrent()
-                      ? [
-                          ...current,
-                          `Session content history unavailable for ${session.title}: ${messageFromError(reason)}`,
-                        ]
-                      : current,
-                  );
-                },
-              )
-              .finally(historyRequestFinished);
-          }
-        }
       } finally {
         if (isCurrent()) setLoading(false);
       }
     },
-    [api, initialData, mode],
+    [api, eventId, initialData, mode, organizationId],
   );
 
   useEffect(() => {
@@ -2763,51 +2920,156 @@ export function DeliverablesWorkspace({
     return () => controller.abort();
   }, [initialData, load]);
 
+  const effectiveSelectedSessionId =
+    selectedSessionId ?? sessions.find((session) => session.eventId === eventId)?.id ?? null;
   useEffect(() => {
-    if (selectedAssetId === null) return;
+    if (mode === "files") return;
+    setSelectedSessionId((current) => {
+      if (
+        current !== null &&
+        sessions.some((session) => session.eventId === eventId && session.id === current)
+      ) {
+        return current;
+      }
+      return sessions.find((session) => session.eventId === eventId)?.id ?? null;
+    });
+  }, [eventId, mode, sessions]);
+
+  useEffect(() => {
+    if (mode === "files") {
+      setLoadingSessionHistories(false);
+      return;
+    }
+    const selected =
+      sessions.find(
+        (session) => session.eventId === eventId && session.id === effectiveSelectedSessionId,
+      ) ?? sessions.find((session) => session.eventId === eventId);
+    if (selected === undefined) {
+      setSessionHistory(undefined);
+      setSessionHistoryError(null);
+      setSessionHistoryKey(null);
+      setLoadingSessionHistories(false);
+      return;
+    }
+    const key = deliverablesSessionHistoryKey(selected.id, selected.version);
+    setSessionHistoryKey(key);
+    const scope = scopeRef.current;
+    const controller = new AbortController();
+    setSessionHistoryError(null);
+    if (selected.contentHistory !== undefined) {
+      sessionHistoryCacheRef.current.set(key, {
+        status: "fulfilled",
+        value: selected.contentHistory,
+      });
+      setSessionHistory(selected.contentHistory);
+      setLoadingSessionHistories(false);
+      return;
+    }
+    setSessionHistory(undefined);
+    setLoadingSessionHistories(true);
+    void loadDeliverablesSessionHistory(
+      api,
+      selected,
+      sessionHistoryCacheRef.current,
+      controller.signal,
+    )
+      .then((history) => {
+        if (
+          controller.signal.aborted ||
+          !isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)
+        )
+          return;
+        setSessionHistory(history);
+      })
+      .catch((reason: unknown) => {
+        if (
+          controller.signal.aborted ||
+          !isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)
+        )
+          return;
+        setSessionHistoryError(messageFromError(reason));
+      })
+      .finally(() => {
+        if (
+          !controller.signal.aborted &&
+          isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)
+        )
+          setLoadingSessionHistories(false);
+      });
+    return () => {
+      controller.abort();
+      const cached = sessionHistoryCacheRef.current.get(key);
+      if (cached?.status === "pending") sessionHistoryCacheRef.current.delete(key);
+    };
+  }, [api, eventId, mode, effectiveSelectedSessionId, sessions]);
+  useEffect(() => {
+    if (selectedAssetId === null) {
+      setLoadingAssetDetails(false);
+      return;
+    }
     const selected = assets.find((asset) => asset.id === selectedAssetId);
-    if (selected === undefined) return;
+    if (selected === undefined) {
+      setLoadingAssetDetails(false);
+      return;
+    }
+    if (selected.eventId !== eventId) {
+      setLoadingAssetDetails(false);
+      return;
+    }
     const controller = new AbortController();
     setLoadingAssetDetails(true);
     setAssetHistory([]);
     setComments([]);
+    setAssetHistoryError(null);
+    setCommentsError(null);
+    const getAssetHistory = api.getAssetHistory;
+    const listAssetComments = api.listAssetComments;
     const historyPromise =
-      api.getAssetHistory === undefined
+      getAssetHistory === undefined
         ? Promise.resolve<readonly DeliverableAssetHistoryEntry[]>([])
-        : api
-            .getAssetHistory(selected.id, controller.signal)
-            .catch(() => [] as readonly DeliverableAssetHistoryEntry[]);
+        : startDeliverablesRequest(() => getAssetHistory(selected.id, controller.signal));
     const commentsPromise =
-      api.listAssetComments === undefined
+      listAssetComments === undefined
         ? Promise.resolve<readonly DeliverableComment[]>([])
-        : api
-            .listAssetComments(selected.id, controller.signal)
-            .catch(() => [] as readonly DeliverableComment[]);
-    void Promise.all([historyPromise, commentsPromise])
-      .then(([history, nextComments]) => {
-        if (controller.signal.aborted) return;
-        setAssetHistory(history);
-        setComments(nextComments);
+        : startDeliverablesRequest(() => listAssetComments(selected.id, controller.signal));
+    let settledCount = 0;
+    const markSettled = (): void => {
+      settledCount += 1;
+      if (settledCount === 2 && !controller.signal.aborted) setLoadingAssetDetails(false);
+    };
+    void settleDeliverablesRequest(historyPromise)
+      .then((result) => {
+        if (controller.signal.aborted || result === undefined) return;
+        if (result.ok) setAssetHistory(result.value);
+        else setAssetHistoryError(messageFromError(result.reason));
       })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoadingAssetDetails(false);
-      });
+      .finally(markSettled);
+    void settleDeliverablesRequest(commentsPromise)
+      .then((result) => {
+        if (controller.signal.aborted || result === undefined) return;
+        if (result.ok) setComments(result.value);
+        else setCommentsError(messageFromError(result.reason));
+      })
+      .finally(markSettled);
     return () => controller.abort();
-  }, [api, assets, selectedAssetId]);
+  }, [api, assets, eventId, selectedAssetId]);
 
   async function createTask(input: DeliverableTaskInput): Promise<void> {
-    if (api?.createTask === undefined) {
+    if (api.createTask === undefined) {
       setError("Task creation is unavailable because no organizer task endpoint is provisioned.");
       return;
     }
+    const scope = scopeRef.current;
     setBusy(true);
     setError(null);
     setStatusMessage(null);
     recordOperation("task-create", "Create file-request task", "pending", "Request in progress.");
     try {
       const next = await api.createTask(input);
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
       setTasks((current) => [...current, next]);
-      await refreshMatrix();
+      await refreshMatrix(scope);
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
       setStatusMessage(
         `Task ${next.title} created for ${input.assigneeIds.length} speaker${input.assigneeIds.length === 1 ? "" : "s"}.`,
       );
@@ -2818,11 +3080,12 @@ export function DeliverablesWorkspace({
         `Created ${next.title}.`,
       );
     } catch (reason) {
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
       const message = messageFromError(reason);
       setError(message);
       recordOperation("task-create", "Create file-request task", "failed", message);
     } finally {
-      setBusy(false);
+      if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
     }
   }
 
@@ -2830,17 +3093,19 @@ export function DeliverablesWorkspace({
     readonly assetId: string;
     readonly body: string;
   }): Promise<void> {
-    if (api?.addAssetComment === undefined) {
+    if (api.addAssetComment === undefined) {
       setError(
         "Cross-role comments are unavailable because the private asset comment endpoint is not provisioned.",
       );
       return;
     }
+    const scope = scopeRef.current;
     setBusy(true);
     setError(null);
     recordOperation("asset-comment", "Reply to asset thread", "pending", "Reply in progress.");
     try {
       const next = await api.addAssetComment(input);
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
       if (selectedAssetIdRef.current === input.assetId) {
         setComments((current) => [...current, next]);
       }
@@ -2852,21 +3117,23 @@ export function DeliverablesWorkspace({
         "Organizer reply added to the asset-family thread.",
       );
     } catch (reason) {
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
       const message = messageFromError(reason);
       setError(message);
       recordOperation("asset-comment", "Reply to asset thread", "failed", message);
     } finally {
-      setBusy(false);
+      if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
     }
   }
 
   async function downloadVersion(assetId: string): Promise<void> {
-    if (api?.getDownloadGrant === undefined) {
+    if (api.getDownloadGrant === undefined) {
       setError(
         "Asset download is unavailable because no private download capability endpoint is provisioned.",
       );
       return;
     }
+    const scope = scopeRef.current;
     setBusy(true);
     setError(null);
     recordOperation(
@@ -2877,6 +3144,7 @@ export function DeliverablesWorkspace({
     );
     try {
       const grant: DeliverableDownloadGrant = await api.getDownloadGrant(assetId);
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
       const safeUrl = safeDownloadUrl(grant.url);
       if (safeUrl === null)
         throw new Error(
@@ -2901,15 +3169,16 @@ export function DeliverablesWorkspace({
         "Authorized version download started.",
       );
     } catch (reason) {
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
       const message = messageFromError(reason);
       setError(message);
       recordOperation("asset-download", "Download asset version", "failed", message);
     } finally {
-      setBusy(false);
+      if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
     }
   }
   async function requestExport(input: DeliverableExportInput): Promise<DeliverableExportDownload> {
-    if (api?.exportDeliverables === undefined) {
+    if (api.exportDeliverables === undefined) {
       throw new Error("The authorized ZIP export capability is not provisioned for this event.");
     }
     const download = await api.exportDeliverables(input);
@@ -2920,6 +3189,7 @@ export function DeliverablesWorkspace({
   }
 
   async function exportDeliverables(input: DeliverableExportInput): Promise<void> {
+    const scope = scopeRef.current;
     setBusy(true);
     setError(null);
     setStatusMessage(null);
@@ -2931,6 +3201,7 @@ export function DeliverablesWorkspace({
     );
     try {
       const download = await requestExport(input);
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
       triggerDeliverablesDownload(download);
       setStatusMessage(`${download.fileName} is ready to download.`);
       recordOperation(
@@ -2940,23 +3211,26 @@ export function DeliverablesWorkspace({
         `${download.fileName} was validated and the browser download started.`,
       );
     } catch (reason) {
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
       const message = messageFromError(reason);
       setError(message);
       recordOperation("deliverables-export", "Export deliverables ZIP", "failed", message);
     } finally {
-      setBusy(false);
+      if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
     }
   }
 
   async function exportFiles(
     input: DeliverableExportInput,
   ): Promise<DeliverableExportDownload | undefined> {
+    const scope = scopeRef.current;
     setBusy(true);
     setError(null);
     setStatusMessage(null);
     recordOperation("files-export", "Export files ZIP", "pending", "ZIP request in progress.");
     try {
       const download = await requestExport(input);
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return undefined;
       setStatusMessage(`${download.fileName} is ready for browser download.`);
       recordOperation(
         "files-export",
@@ -2966,12 +3240,13 @@ export function DeliverablesWorkspace({
       );
       return download;
     } catch (reason) {
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return undefined;
       const message = messageFromError(reason);
       setError(message);
       recordOperation("files-export", "Export files ZIP", "failed", message);
       throw reason;
     } finally {
-      setBusy(false);
+      if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
     }
   }
 
@@ -2981,17 +3256,20 @@ export function DeliverablesWorkspace({
     readonly title: string;
     readonly description: string;
   }): Promise<void> {
+    const scope = scopeRef.current;
     setBusy(true);
     setError(null);
     setStatusMessage(null);
     try {
       const next = await api.updateSession(input);
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
       setSessions((current) => current.map((session) => (session.id === next.id ? next : session)));
       setStatusMessage(`Session content saved at version ${next.version}.`);
     } catch (reason) {
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
       setError(messageFromError(reason));
     } finally {
-      setBusy(false);
+      if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
     }
   }
 
@@ -2999,6 +3277,7 @@ export function DeliverablesWorkspace({
     session: DeliverableSession,
     contentStatus: "Approved" | "Needs changes",
   ): Promise<void> {
+    const scope = scopeRef.current;
     setBusy(true);
     setError(null);
     setStatusMessage(null);
@@ -3008,14 +3287,16 @@ export function DeliverablesWorkspace({
         expectedVersion: session.version,
         contentStatus,
       });
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
       setSessions((current) =>
         current.map((candidate) => (candidate.id === next.id ? next : candidate)),
       );
       setStatusMessage(`Session content status changed to ${contentStatus}.`);
     } catch (reason) {
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
       setError(messageFromError(reason));
     } finally {
-      setBusy(false);
+      if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
     }
   }
 
@@ -3024,12 +3305,13 @@ export function DeliverablesWorkspace({
     readonly biography: string;
     readonly expectedVersion: number;
   }): Promise<void> {
-    if (api?.updateBiography === undefined) {
+    if (api.updateBiography === undefined) {
       setError(
         "Speaker profile editing is unavailable because organizer profile access is not provisioned.",
       );
       return;
     }
+    const scope = scopeRef.current;
     setBusy(true);
     setError(null);
     setStatusMessage(null);
@@ -3041,6 +3323,7 @@ export function DeliverablesWorkspace({
     );
     try {
       const next = await api.updateBiography(input);
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
       setProfiles((current) =>
         current.map((profile) => (profile.participantId === next.participantId ? next : profile)),
       );
@@ -3052,11 +3335,12 @@ export function DeliverablesWorkspace({
         `Biography saved for ${next.displayName}.`,
       );
     } catch (reason) {
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
       const message = messageFromError(reason);
       setError(message);
       recordOperation("biography-save", "Save speaker biography", "failed", message);
     } finally {
-      setBusy(false);
+      if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
     }
   }
   async function replaceHeadshot(input: {
@@ -3064,7 +3348,7 @@ export function DeliverablesWorkspace({
     readonly file: File;
     readonly supersedesAssetId?: string;
   }): Promise<void> {
-    if (api?.replaceHeadshot === undefined) {
+    if (api.replaceHeadshot === undefined) {
       setError(
         "Headshot replacement is unavailable because organizer private upload access is not provisioned.",
       );
@@ -3077,6 +3361,7 @@ export function DeliverablesWorkspace({
       setError("The selected speaker profile is no longer available; reload before replacing it.");
       return;
     }
+    const scope = scopeRef.current;
     setBusy(true);
     setError(null);
     setStatusMessage(null);
@@ -3091,6 +3376,7 @@ export function DeliverablesWorkspace({
         ...input,
         expectedVersion: currentProfile.version,
       });
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
       setProfiles((current) =>
         current.map((profile) =>
           profile.participantId === next.profile.participantId ? next.profile : profile,
@@ -3110,11 +3396,12 @@ export function DeliverablesWorkspace({
         `Headshot replaced for ${next.profile.displayName}.`,
       );
     } catch (reason) {
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
       const message = messageFromError(reason);
       setError(message);
       recordOperation("headshot-replace", "Replace speaker headshot", "failed", message);
     } finally {
-      setBusy(false);
+      if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
     }
   }
 
@@ -3122,12 +3409,13 @@ export function DeliverablesWorkspace({
     readonly taskIds: readonly string[];
     readonly recipientIds: readonly string[];
   }): Promise<void> {
-    if (api?.sendBulkReminder === undefined) {
+    if (api.sendBulkReminder === undefined) {
       setError(
         "Bulk reminder sending is unavailable because no transactional reminder endpoint is provisioned.",
       );
       return;
     }
+    const scope = scopeRef.current;
     setBusy(true);
     setError(null);
     setStatusMessage(null);
@@ -3139,6 +3427,7 @@ export function DeliverablesWorkspace({
     );
     try {
       const result = await api.sendBulkReminder(input);
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
       setStatusMessage(
         `Reminder send recorded for ${result.sentCount} recipient${result.sentCount === 1 ? "" : "s"}.`,
       );
@@ -3149,11 +3438,12 @@ export function DeliverablesWorkspace({
         `Send recorded for ${result.sentCount} recipient${result.sentCount === 1 ? "" : "s"}.`,
       );
     } catch (reason) {
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
       const message = messageFromError(reason);
       setError(message);
       recordOperation("reminder-send", "Send outstanding reminders", "failed", message);
     } finally {
-      setBusy(false);
+      if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
     }
   }
 
@@ -3162,21 +3452,24 @@ export function DeliverablesWorkspace({
     readonly version: number;
     readonly expectedVersion: number;
   }): Promise<void> {
-    if (api?.restoreSessionVersion === undefined) {
+    if (api.restoreSessionVersion === undefined) {
       setError("Session restore is unavailable because no restore endpoint is provisioned.");
       return;
     }
+    const scope = scopeRef.current;
     setBusy(true);
     setError(null);
     setStatusMessage(null);
     try {
       const next = await api.restoreSessionVersion(input);
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
       setSessions((current) => current.map((session) => (session.id === next.id ? next : session)));
       setStatusMessage(`Session content restored to version ${input.version}.`);
     } catch (reason) {
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
       setError(messageFromError(reason));
     } finally {
-      setBusy(false);
+      if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
     }
   }
 
@@ -3185,6 +3478,7 @@ export function DeliverablesWorkspace({
     reviewAsset === undefined
       ? undefined
       : async (input: DeliverableReviewInput): Promise<void> => {
+          const scope = scopeRef.current;
           setBusy(true);
           setError(null);
           recordOperation(
@@ -3195,8 +3489,10 @@ export function DeliverablesWorkspace({
           );
           try {
             const next = await reviewAsset(input);
+            if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
             setAssets((current) => current.map((asset) => (asset.id === next.id ? next : asset)));
-            await refreshMatrix();
+            await refreshMatrix(scope);
+            if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
             setStatusMessage(`Asset review recorded as ${input.state}.`);
             recordOperation(
               "asset-review",
@@ -3205,38 +3501,85 @@ export function DeliverablesWorkspace({
               `Review recorded as ${formatStatus(input.state)}.`,
             );
           } catch (reason) {
+            if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
             const message = messageFromError(reason);
             setError(message);
             recordOperation("asset-review", "Review current asset", "failed", message);
           } finally {
-            setBusy(false);
+            if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
           }
         };
+  const renderedStateIsCurrent = isDeliverablesWorkspaceScopeCurrent(
+    stateScopeRef.current,
+    currentScope,
+  );
+  const renderedSessions = renderedStateIsCurrent ? sessions : (initialData?.sessions ?? []);
+  const renderedTasks = renderedStateIsCurrent ? tasks : (initialData?.tasks ?? []);
+  const renderedAssets = renderedStateIsCurrent ? assets : (initialData?.assets ?? []);
+  const renderedProfiles = renderedStateIsCurrent ? profiles : (initialData?.profiles ?? []);
+  const renderedMatrix = renderedStateIsCurrent ? matrix : initialData?.matrix;
+  const selectedSessionForHistory =
+    renderedSessions.find(
+      (session) => session.eventId === eventId && session.id === effectiveSelectedSessionId,
+    ) ?? renderedSessions.find((session) => session.eventId === eventId);
+  const visibleSessionHistoryKey =
+    selectedSessionForHistory === undefined
+      ? null
+      : deliverablesSessionHistoryKey(
+          selectedSessionForHistory.id,
+          selectedSessionForHistory.version,
+        );
+  const visibleSessionHistory =
+    renderedStateIsCurrent && sessionHistoryKey === visibleSessionHistoryKey
+      ? sessionHistory
+      : undefined;
+  const visibleSessionHistoryError =
+    renderedStateIsCurrent && sessionHistoryKey === visibleSessionHistoryKey
+      ? sessionHistoryError
+      : null;
   return (
     <DeliverablesWorkspaceView
       eventId={eventId}
       organizationId={organizationId}
       mode={mode}
-      sessions={sessions}
-      tasks={tasks}
-      assets={assets}
-      profiles={profiles}
-      {...(matrix === undefined ? {} : { matrixItems: matrix.items })}
-      loading={loading}
-      loadingSessionHistories={loadingSessionHistories}
-      busy={busy}
-      error={error}
-      statusMessage={statusMessage}
-      capabilityMessages={capabilityMessages}
-      operationStates={Object.values(operationStates).filter(
-        (state): state is DeliverablesOperationState => state !== undefined,
-      )}
+      sessions={renderedSessions}
+      tasks={renderedTasks}
+      assets={renderedAssets}
+      profiles={renderedProfiles}
+      {...(renderedMatrix === undefined ? {} : { matrixItems: renderedMatrix.items })}
+      loading={renderedStateIsCurrent ? loading : initialData === undefined}
+      loadingSessionHistories={renderedStateIsCurrent && loadingSessionHistories}
+      busy={renderedStateIsCurrent && busy}
+      error={renderedStateIsCurrent ? error : null}
+      statusMessage={renderedStateIsCurrent ? statusMessage : null}
+      capabilityMessages={renderedStateIsCurrent ? capabilityMessages : []}
+      operationStates={
+        renderedStateIsCurrent
+          ? Object.values(operationStates).filter(
+              (state): state is DeliverablesOperationState => state !== undefined,
+            )
+          : []
+      }
       {...(api?.createTask === undefined ? {} : { onCreateTask: createTask })}
-      onInspectAsset={setSelectedAssetId}
-      selectedAssetId={selectedAssetId}
-      assetHistory={assetHistory}
-      comments={comments}
-      loadingAssetDetails={loadingAssetDetails}
+      onInspectAsset={(assetId) => {
+        setAssetHistory([]);
+        setComments([]);
+        setAssetHistoryError(null);
+        setCommentsError(null);
+        setSelectedAssetId(assetId);
+      }}
+      {...(!renderedStateIsCurrent || selectedSessionId === null ? {} : { selectedSessionId })}
+      {...(visibleSessionHistory === undefined ? {} : { sessionHistory: visibleSessionHistory })}
+      {...(visibleSessionHistoryError === null
+        ? {}
+        : { sessionHistoryError: visibleSessionHistoryError })}
+      onSelectSession={setSelectedSessionId}
+      selectedAssetId={renderedStateIsCurrent ? selectedAssetId : null}
+      assetHistory={renderedStateIsCurrent ? assetHistory : []}
+      comments={renderedStateIsCurrent ? comments : []}
+      loadingAssetDetails={renderedStateIsCurrent && loadingAssetDetails}
+      assetHistoryError={renderedStateIsCurrent ? assetHistoryError : null}
+      commentsError={renderedStateIsCurrent ? commentsError : null}
       {...(api?.addAssetComment === undefined ? {} : { onAddComment: addComment })}
       {...(api?.getDownloadGrant === undefined ? {} : { onDownloadVersion: downloadVersion })}
       {...(api?.exportDeliverables === undefined

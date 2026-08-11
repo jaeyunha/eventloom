@@ -4552,7 +4552,9 @@ function speakerOrganizerDatabase(input: {
   return { database, state };
 }
 
-function seedSpeakerOrganizerFixture(transport: FakeAirtableTransport): void {
+function seedSpeakerOrganizerFixture(
+  transport: FakeAirtableTransport | FormulaRecordingTransport,
+): void {
   transport.seed({
     baseId: "base-test",
     table: "Events",
@@ -4680,6 +4682,133 @@ describe("production organizer speaker composition", () => {
     await expect(
       repository.getOrganizerAccessScope("event-speaker", "organizer-speaker"),
     ).resolves.toBeNull();
+  });
+  it("loads organizer deliverables in three scoped Airtable dependency waves", async () => {
+    const transport = new FormulaRecordingTransport(20);
+    seedSpeakerOrganizerFixture(transport);
+    transport.seed({
+      baseId: "base-test",
+      table: "Speaker Tasks",
+      fields: {
+        "Application ID": "task-speaker-read",
+        "Owner JSON": JSON.stringify({
+          id: "task-speaker-read",
+          eventId: "event-speaker",
+          submissionId: "submission-speaker",
+          participantId: "participant-speaker",
+          type: "upload",
+          owner: "speaker",
+          title: "Upload slides",
+          status: "not_started",
+          dependencyIds: [],
+          reminderOffsetsMinutes: [],
+          version: 1,
+          updatedAt: "2026-08-09T00:00:00.000Z",
+        }),
+      },
+    });
+    transport.seed({
+      baseId: "base-test",
+      table: "File Assets",
+      fields: {
+        "Application ID": "asset-speaker-read",
+        "Settings JSON": JSON.stringify({
+          id: "asset-speaker-read",
+          entityType: "speaker_asset",
+          tenantId: "ai-engineer",
+          eventId: "event-speaker",
+          submissionId: "submission-speaker",
+          participantId: "participant-speaker",
+          taskId: "task-speaker-read",
+          kind: "slides",
+          objectKey: "events/event-speaker/slides.pdf",
+          fileName: "slides.pdf",
+          contentType: "application/pdf",
+          sizeBytes: 1_024,
+          state: "ready",
+          versionFamilyId: "slides-family",
+          version: 1,
+          createdAt: "2026-08-09T00:00:00.000Z",
+        }),
+      },
+    });
+    const { database, state } = speakerOrganizerDatabase({
+      memberships: [{ organization_id: "ai-engineer", role: "owner" }],
+    });
+    const repository = new AirtableSpeakerRepository({
+      baseId: "base-test",
+      transport,
+      database,
+    });
+
+    const pending = repository.getOrganizerReadModel("event-speaker", "organizer-speaker", {
+      profiles: true,
+      tasks: true,
+      assets: true,
+    });
+    await Promise.resolve();
+    expect(transport.requests.map((request) => request.table)).toEqual(["Events"]);
+
+    await expect(pending).resolves.toMatchObject({
+      scope: {
+        tenantId: "ai-engineer",
+        eventId: "event-speaker",
+        role: "owner",
+        participantIds: ["participant-speaker"],
+      },
+      profiles: [{ participantId: "participant-speaker" }],
+      tasks: [{ id: "task-speaker-read" }],
+      assets: [{ id: "asset-speaker-read" }],
+    });
+    const readsByTable = transport.requests.reduce<Record<string, number>>((counts, request) => {
+      if (request.method === "GET") counts[request.table] = (counts[request.table] ?? 0) + 1;
+      return counts;
+    }, {});
+    expect(readsByTable).toMatchObject({
+      Events: 1,
+      Submissions: 1,
+      "Session Roster": 1,
+      Decisions: 1,
+      "Speaker Profiles": 1,
+      "Speaker Tasks": 1,
+      "File Assets": 1,
+    });
+    expect(
+      transport.requests.find((request) => request.table === "Speaker Tasks")?.query
+        ?.filterByFormula,
+    ).toBe('FIND("event-speaker",{Owner JSON})>0');
+    expect(
+      transport.requests.find((request) => request.table === "File Assets")?.query?.filterByFormula,
+    ).toBe('FIND("event-speaker",{Settings JSON})>0');
+
+    transport.requests.length = 0;
+    await repository.listAssetHistory("event-speaker", "slides-family");
+    await repository.listAssetComments("event-speaker", "asset-speaker-read");
+    const sessions = new AirtableSessionRepository({ baseId: "base-test", transport });
+    await sessions.listSessions("ai-engineer", "event-speaker");
+    expect(
+      transport.requests.find((request) => request.table === "File Assets")?.query?.filterByFormula,
+    ).toBe('FIND("event-speaker",{Settings JSON})>0');
+    expect(
+      transport.requests.find((request) => request.table === "File Comments")?.query
+        ?.filterByFormula,
+    ).toBe('FIND("event-speaker",{Settings JSON})>0');
+    expect(
+      transport.requests.find((request) => request.table === "Sessions")?.query?.filterByFormula,
+    ).toBe('FIND("event-speaker",{Metadata JSON})>0');
+
+    const membership = state.memberships[0];
+    if (membership === undefined) throw new Error("Expected an organizer membership.");
+    membership.role = "reviewer";
+    transport.requests.length = 0;
+    await expect(
+      repository.getOrganizerReadModel("event-speaker", "organizer-speaker", {
+        profiles: true,
+        tasks: true,
+        assets: true,
+      }),
+    ).resolves.toBeNull();
+    expect(transport.requests.map((request) => request.table)).toEqual(["Events"]);
   });
 
   it("persists organizer-created speaker tasks with optimistic updates", async () => {

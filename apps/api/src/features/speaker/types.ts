@@ -870,6 +870,21 @@ export type SpeakerAcceptedParticipantLookup =
   | { participantId: string; submissionId: string; email: string }
   | { ambiguous: true };
 
+export interface SpeakerOrganizerReadResources {
+  profiles?: boolean;
+  tasks?: boolean;
+  assets?: boolean;
+}
+
+export interface SpeakerOrganizerReadModel {
+  scope: SpeakerOrganizerAccessScope;
+  submissions: readonly SpeakerSubmission[];
+  roster: readonly SpeakerRosterEntry[];
+  profiles: readonly SpeakerProfile[];
+  tasks: readonly SpeakerTask[];
+  assets: readonly SpeakerAsset[];
+}
+
 export interface SpeakerRepository {
   getAccessScope(eventId: string, accountId: string): Promise<SpeakerAccessScope>;
   /** Organizer authority is event-qualified and must never be inferred from a participant grant. */
@@ -878,6 +893,11 @@ export interface SpeakerRepository {
     accountId: string,
   ): Promise<SpeakerOrganizerAccessScope | null>;
   listSubmissions(eventId: string, submissionIds: readonly string[]): Promise<SpeakerSubmission[]>;
+  getOrganizerReadModel?(
+    eventId: string,
+    accountId: string,
+    resources: SpeakerOrganizerReadResources,
+  ): Promise<SpeakerOrganizerReadModel | null>;
   getSubmission(eventId: string, submissionId: string): Promise<SpeakerSubmission | null>;
   listProfiles(eventId: string, participantIds: readonly string[]): Promise<SpeakerProfile[]>;
   createProfile?(profile: SpeakerProfile): Promise<RepositoryResult<SpeakerProfile>>;

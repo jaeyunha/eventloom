@@ -744,12 +744,11 @@ export class SessionService {
     input: { tenantId?: string; eventId: string; sessionId: string },
   ): Promise<Session> {
     this.assertActor(actor, input.tenantId, input.eventId);
-    await this.ensureAgendaInitialized(actor, this.event(input.eventId));
-    const session = await this.#repository.getSession(
-      actor.tenantId,
-      this.event(input.eventId),
-      resourceId(input.sessionId, "session id"),
-    );
+    const eventId = this.event(input.eventId);
+    const sessionId = resourceId(input.sessionId, "session id");
+    const agendaInitialization = this.ensureAgendaInitialized(actor, eventId);
+    const sessionRead = this.#repository.getSession(actor.tenantId, eventId, sessionId);
+    const [session] = await Promise.all([sessionRead, agendaInitialization]);
     if (!session || !this.inScope(session, actor.tenantId, input.eventId))
       throw notFound("session");
     return sessionProjection(session);
@@ -882,12 +881,18 @@ export class SessionService {
   ): Promise<SessionListPageProjection> {
     this.assertActor(actor, input.tenantId, input.eventId);
     const eventId = this.event(input.eventId);
-    await this.ensureAgendaInitialized(actor, eventId);
-    let sessions = (await this.#repository.listSessions(actor.tenantId, eventId)).filter(
-      (session) => this.inScope(session, actor.tenantId, eventId),
+    const agendaInitialization = this.ensureAgendaInitialized(actor, eventId);
+    const sessionsRead = this.#repository.listSessions(actor.tenantId, eventId);
+    const settingsRead =
+      input.agendaEligible === undefined ? null : this.readSettings(actor.tenantId, eventId);
+    const [, sessionsResult, settings] = await Promise.all([
+      agendaInitialization,
+      sessionsRead,
+      settingsRead,
+    ]);
+    let sessions = sessionsResult.filter((session) =>
+      this.inScope(session, actor.tenantId, eventId),
     );
-    const settings =
-      input.agendaEligible === undefined ? null : await this.readSettings(actor.tenantId, eventId);
     const eligibleStatuses = settings?.agendaEligibleStatuses ?? defaultAgendaEligibleStatuses;
     const requestedStatuses =
       input.statuses ?? (input.status === undefined ? undefined : [input.status]);

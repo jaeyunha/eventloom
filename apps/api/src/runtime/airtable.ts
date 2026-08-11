@@ -156,6 +156,8 @@ import type {
   SpeakerInvitationDeliveryInput,
   SpeakerInvitationDeliveryReceipt,
   SpeakerOrganizerAccessScope,
+  SpeakerOrganizerReadModel,
+  SpeakerOrganizerReadResources,
   SpeakerPortalCapability,
   SpeakerPortalContext,
   SpeakerProfile,
@@ -1573,6 +1575,169 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       participantIds,
     };
   }
+  async getOrganizerReadModel(
+    eventId: string,
+    accountId: string,
+    resources: SpeakerOrganizerReadResources,
+  ): Promise<SpeakerOrganizerReadModel | null> {
+    if (eventId.trim().length === 0 || accountId.trim().length === 0) return null;
+
+    const event = await this.#events.find(eventId);
+    if (event === undefined || event.id !== eventId) return null;
+    const tenantId = resolvedOrganizationId(event);
+    if (tenantId === undefined) return null;
+
+    const membership = await this.#database
+      .prepare(
+        `SELECT organization_id, role
+           FROM organization_memberships
+          WHERE organization_id = ? AND user_id = ?
+          LIMIT 1`,
+      )
+      .bind(tenantId, accountId)
+      .first<{ organization_id?: unknown; role?: unknown }>();
+    const role =
+      membership?.role === "owner" ? "owner" : membership?.role === "admin" ? "admin" : null;
+    if (
+      membership === null ||
+      membership === undefined ||
+      membership.organization_id !== tenantId ||
+      role === null
+    ) {
+      return null;
+    }
+
+    const [submissionRecords, rosterRecordsForEvent, decisionRecords] = await Promise.all([
+      listEventScopedJson(this.#submissions, "Answers JSON", eventId),
+      listEventScopedJson(this.#roster, "Members JSON", eventId),
+      listEventScopedJson(this.#decisions, "Metadata JSON", eventId),
+    ] as const);
+    const records = submissionRecords as unknown as JsonRecord[];
+    const sourceRecords = records.filter(
+      (record) =>
+        !isSpeakerSubmissionRecord(record) &&
+        eventReference(record) === eventId &&
+        resolvedOrganizationId(record) === tenantId,
+    );
+    const sourceIds = new Set(
+      sourceRecords.map((record) => textValue(record, "id", APPLICATION_ID)).filter(isNonEmpty),
+    );
+    const linkedSpeakerRecords = records.filter((record) => {
+      if (!isSpeakerSubmissionRecord(record) || eventReference(record) !== eventId) return false;
+      const id = textValue(record, "id", APPLICATION_ID);
+      if (id === null) return false;
+      const sourceId = originalCfpSubmissionId(id);
+      return sourceId === null
+        ? resolvedOrganizationId(record) === tenantId
+        : sourceIds.has(sourceId);
+    });
+    const scopedRoster = rosterRecordsForEvent.filter(
+      (record) => record.eventId === eventId && matchesOrganizationScope(record, tenantId, true),
+    );
+    const organizerRoster = scopedRoster.filter((record) => !isCrmRosterAdmission(record));
+    const validRecords = [...sourceRecords, ...linkedSpeakerRecords];
+    const scope: SpeakerOrganizerAccessScope = {
+      tenantId,
+      eventId,
+      role,
+      submissionIds: [
+        ...new Set([
+          ...validRecords
+            .map((record) => textValue(record, "id", APPLICATION_ID))
+            .filter(isNonEmpty),
+          ...organizerRoster.map((record) => record.submissionId).filter(isNonEmpty),
+        ]),
+      ],
+      participantIds: [
+        ...new Set([
+          ...sourceRecords.flatMap((record) => portalParticipantIds(record)),
+          ...organizerRoster.map((record) => record.participantId).filter(isNonEmpty),
+        ]),
+      ],
+    };
+
+    const recordsById = new Map(
+      records
+        .map((record) => [textValue(record, "id", APPLICATION_ID), record] as const)
+        .filter((entry): entry is readonly [string, JsonRecord] => entry[0] !== null),
+    );
+    const decisions = portalDecisionProjections(decisionRecords);
+    const submissions: SpeakerSubmission[] = [];
+    for (const requestedId of scope.submissionIds) {
+      const sourceId = originalCfpSubmissionId(requestedId) ?? requestedId;
+      const source = recordsById.get(sourceId);
+      if (source !== undefined && !isSpeakerSubmissionRecord(source)) {
+        const projected = portalSubmissionFromRecord(source, requestedId, decisions);
+        if (projected !== null && projected.eventId === eventId) submissions.push(projected);
+        continue;
+      }
+      const speaker = recordsById.get(requestedId);
+      if (
+        speaker !== undefined &&
+        isSpeakerSubmissionRecord(speaker) &&
+        eventReference(speaker) === eventId
+      ) {
+        const validated = speakerSubmissionFromRecord(speaker);
+        if (validated !== null) submissions.push(validated);
+      }
+    }
+
+    const roster = scopedRoster
+      .filter((entry) => {
+        const entryScope = resolveOrganizationScope(entry);
+        if (entryScope.status === "conflict") return false;
+        return isCrmRosterAdmission(entry)
+          ? entryScope.status === "resolved" && entryScope.organizationId === tenantId
+          : matchesOrganizationScope(entry, tenantId, true);
+      })
+      .map(({ tenantId: _tenantId, authorAccountId: _authorAccountId, ...entry }) => clone(entry));
+    const participantIds = [
+      ...new Set([
+        ...scope.participantIds,
+        ...roster
+          .filter((entry) => isCrmRosterAdmission(entry))
+          .map((entry) => entry.participantId)
+          .filter(isNonEmpty),
+      ]),
+    ];
+    const allowedParticipants = new Set(participantIds);
+    const profileIds = participantIds.map(
+      (participantId) => `speaker-profile:${eventId}:${participantId}`,
+    );
+
+    const [profileRecords, taskRecords, assetRecords] = await Promise.all([
+      resources.profiles === true
+        ? listApplicationIdsInBatches(this.#profiles, profileIds)
+        : Promise.resolve([]),
+      resources.tasks === true && participantIds.length > 0
+        ? listEventScopedJson(this.#tasks, "Owner JSON", eventId)
+        : Promise.resolve([]),
+      resources.assets === true && participantIds.length > 0
+        ? listEventScopedJson(this.#assets, "Settings JSON", eventId)
+        : Promise.resolve([]),
+    ]);
+    const profiles = profileRecords
+      .filter(
+        (profile) =>
+          speakerProfileScoped(profile, tenantId, eventId, tenantId) &&
+          allowedParticipants.has(profile.participantId),
+      )
+      .map((profile) => untagged(profile));
+    const tasks = taskRecords
+      .filter((task) => task.eventId === eventId && allowedParticipants.has(task.participantId))
+      .map((task) => untagged(task));
+    const assets = assetRecords
+      .filter(
+        (asset) =>
+          entityType(asset) === "speaker_asset" &&
+          asset.eventId === eventId &&
+          allowedParticipants.has(asset.participantId) &&
+          (asset.tenantId === undefined || asset.tenantId === tenantId),
+      )
+      .map((asset) => clone(untagged(asset)));
+
+    return { scope, submissions, roster, profiles, tasks, assets };
+  }
 
   async getAccessScope(eventId: string, accountId: string): Promise<SpeakerAccessScope> {
     const [result, account, event, submissionRecords, decisionRecords, profileRecords] =
@@ -2367,8 +2532,9 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
   }
 
   async listTasks(eventId: string, participantIds: readonly string[]): Promise<SpeakerTask[]> {
+    if (participantIds.length === 0) return [];
     const allowed = new Set(participantIds);
-    return (await this.#tasks.list())
+    return (await listEventScopedJson(this.#tasks, "Owner JSON", eventId))
       .filter((task) => task.eventId === eventId && allowed.has(task.participantId))
       .map((task) => untagged(task));
   }
@@ -2620,7 +2786,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
   }
 
   async listAssetHistory(eventId: string, versionFamilyId: string): Promise<SpeakerAsset[]> {
-    return (await this.#assets.list())
+    return (await listEventScopedJson(this.#assets, "Settings JSON", eventId))
       .filter(
         (asset) =>
           entityType(asset) === "speaker_asset" &&
@@ -2632,7 +2798,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
   }
 
   async listAssetComments(eventId: string, assetId: string): Promise<SpeakerAssetComment[]> {
-    return (await this.#assetComments.list())
+    return (await listEventScopedJson(this.#assetComments, "Settings JSON", eventId))
       .filter((comment) => comment.eventId === eventId && comment.assetId === assetId)
       .map(({ tenantId: _tenantId, authorAccountId: _authorAccountId, ...comment }) =>
         clone(comment),
@@ -5919,7 +6085,9 @@ export class AirtableSessionRepository implements SessionRepository {
   }
 
   async listSessions(tenantId: string, eventId: string): Promise<readonly Session[]> {
-    return this.scopedList(this.#sessions, tenantId, eventId);
+    return (await listEventScopedJson(this.#sessions, "Metadata JSON", eventId))
+      .filter((value) => scopedRecord(value, tenantId, eventId))
+      .map((value) => untagged(value));
   }
 
   async putSession(session: Session, expectedVersion: number | null): Promise<void> {

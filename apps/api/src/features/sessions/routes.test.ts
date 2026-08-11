@@ -106,6 +106,50 @@ describe("organizer session settings domain", () => {
     ).rejects.toMatchObject({ code: "NOT_FOUND", status: 404 });
     expect(updated.roomId).toBe(room.id);
   });
+  it("starts session list reads before agenda initialization settles", async () => {
+    const { repository, service: seedService } = setup();
+    const seeded = await seedService.createSession(actor(), {
+      eventId: "event-a",
+      id: "deferred-session",
+      title: "Deferred session",
+      durationMinutes: 30,
+      status: "Accepted",
+      speakerIds: ["speaker-1"],
+    });
+
+    let resolveInitialization!: () => void;
+    const initialization = new Promise<void>((resolve) => {
+      resolveInitialization = resolve;
+    });
+    let listStarted = false;
+    const originalListSessions = repository.listSessions.bind(repository);
+    repository.listSessions = async (tenantId, eventId) => {
+      listStarted = true;
+      return originalListSessions(tenantId, eventId);
+    };
+    const service = new SessionService(repository, {
+      agendaCatalogSynchronizer: {
+        async ensureInitialized() {
+          await initialization;
+          return undefined;
+        },
+        async synchronize() {
+          return undefined;
+        },
+      },
+    });
+
+    const pagePromise = service.listSessionsPage(actor(), { eventId: "event-a" });
+    await Promise.resolve();
+    const startedBeforeInitializationSettled = listStarted;
+    resolveInitialization();
+    const page = await pagePromise;
+
+    expect(startedBeforeInitializationSettled).toBe(true);
+    expect(page.items).toHaveLength(1);
+    expect(page.items[0]).not.toHaveProperty("history");
+    expect(page.items[0]?.id).toBe(seeded.id);
+  });
 
   it("audits eligibility changes, validates rooms and rosters, and filters safely", async () => {
     const { service } = setup();
