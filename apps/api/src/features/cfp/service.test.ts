@@ -252,6 +252,24 @@ class BatchedMemoryRepository extends MemoryRepository {
       .map((form) => structuredClone(form));
   }
 }
+class OrganizerReadModelRepository extends MemoryRepository {
+  readonly organizerReadModelCalls: Array<{ tenantId: string; eventId: string }> = [];
+
+  async getOrganizerSubmissionsReadModel(tenantId: string, eventId: string) {
+    this.organizerReadModelCalls.push({ tenantId, eventId });
+    return {
+      submissions: [...this.submissions.values()].map((submission) => structuredClone(submission)),
+      forms: [...this.forms.values()].map((form) => structuredClone(form)),
+    };
+  }
+
+  override async listSubmissionsForEvent(
+    _tenantId: string,
+    _eventId: string,
+  ): Promise<Submission[]> {
+    throw new Error("The legacy submission listing must not be used.");
+  }
+}
 
 class DualRejectingOrganizerRepository extends MemoryRepository {
   override async getEvent(_tenantId: string, _eventId: string): Promise<EventCfp | null> {
@@ -264,6 +282,16 @@ class DualRejectingOrganizerRepository extends MemoryRepository {
     _eventId: string,
   ): Promise<Submission[]> {
     throw new CfpError("CONFLICT", "submission read failed");
+  }
+}
+class DualRejectingReadModelRepository extends MemoryRepository {
+  override async getEvent(_tenantId: string, _eventId: string): Promise<EventCfp | null> {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    return null;
+  }
+
+  async getOrganizerSubmissionsReadModel(): Promise<never> {
+    throw new CfpError("CONFLICT", "organizer read failed");
   }
 }
 
@@ -1169,9 +1197,67 @@ describe("CFP submission lifecycle", () => {
     });
     expect(records[0]?.submission.participants).toEqual(buildOrganizerSubmission().participants);
   });
+  it("uses one organizer submission read model for scoped enrichment", async () => {
+    const repository = new OrganizerReadModelRepository();
+    repository.forms.set(
+      "form_other_event",
+      buildForm({ id: "form_other_event", eventId: "event_other" }),
+    );
+    repository.forms.set(
+      "form_other_tenant",
+      buildForm({ id: "form_other_tenant", tenantId: "tenant_other" }),
+    );
+    repository.submissions.set("submission_a", buildOrganizerSubmission({ id: "submission_a" }));
+    repository.submissions.set("submission_b", buildOrganizerSubmission({ id: "submission_b" }));
+    repository.submissions.set(
+      "submission_wrong_tenant",
+      buildOrganizerSubmission({ id: "submission_wrong_tenant", tenantId: "tenant_other" }),
+    );
+    repository.submissions.set(
+      "submission_wrong_event",
+      buildOrganizerSubmission({ id: "submission_wrong_event", eventId: "event_other" }),
+    );
+    repository.submissions.set(
+      "submission_wrong_form_event",
+      buildOrganizerSubmission({
+        id: "submission_wrong_form_event",
+        formId: "form_other_event",
+      }),
+    );
+    const { service } = createFixture(undefined, undefined, repository);
+
+    const records = await service.listOrganizerSubmissions({
+      tenantId: "tenant_1",
+      eventId: "event_1",
+    });
+
+    expect(repository.organizerReadModelCalls).toEqual([
+      { tenantId: "tenant_1", eventId: "event_1" },
+    ]);
+    expect(records.map(({ submission }) => submission.id)).toEqual([
+      "submission_a",
+      "submission_b",
+    ]);
+    expect(records[0]).toEqual({
+      submission: expect.objectContaining({ id: "submission_a" }),
+      submissionFields: repository.forms.get("form_1")?.submissionFields,
+      participantFields: repository.forms.get("form_1")?.participantFields,
+    });
+  });
 
   it("prioritizes event ownership failure when both organizer reads reject", async () => {
     const repository = new DualRejectingOrganizerRepository();
+    const { service } = createFixture(undefined, undefined, repository);
+
+    await expect(
+      service.listOrganizerSubmissions({ tenantId: "tenant_other", eventId: "event_1" }),
+    ).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      message: "The event was not found.",
+    });
+  });
+  it("prioritizes event ownership failure when the batch organizer read rejects", async () => {
+    const repository = new DualRejectingReadModelRepository();
     const { service } = createFixture(undefined, undefined, repository);
 
     await expect(

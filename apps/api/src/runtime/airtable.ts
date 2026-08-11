@@ -29,6 +29,7 @@ import {
   type CfpFileAssetGateway,
   type CfpFileUploadAuthorization,
   type CfpIdempotencyCoordinator,
+  type CfpOrganizerSubmissionsReadModel,
   type CfpRepository,
   CfpService,
 } from "../features/cfp/service";
@@ -4074,6 +4075,19 @@ export class AirtableCfpRepository implements CfpRepository {
       }
     }
     return [...byId.values()].map((submission) => untagged(submission));
+  }
+  async getOrganizerSubmissionsReadModel(
+    tenantId: string,
+    eventId: string,
+  ): Promise<CfpOrganizerSubmissionsReadModel> {
+    const [submissions, forms] = await Promise.all([
+      this.listSubmissionsForEvent(tenantId, eventId),
+      this.#forms.list(),
+    ]);
+    return {
+      submissions,
+      forms: forms.map((form) => untagged(form)),
+    };
   }
 
   async countOwnedSubmissions(input: {

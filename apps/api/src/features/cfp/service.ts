@@ -68,6 +68,10 @@ export interface CfpRepository {
     expectedVersion: number | null,
     audit?: AuditEntry,
   ): Promise<void>;
+  getOrganizerSubmissionsReadModel?(
+    tenantId: string,
+    eventId: string,
+  ): Promise<CfpOrganizerSubmissionsReadModel>;
   listSubmissionsForEvent?(tenantId: string, eventId: string): Promise<Submission[]>;
 }
 
@@ -189,7 +193,10 @@ export interface CfpOrganizerSubmission {
   submissionFields: CfpForm["submissionFields"];
   participantFields: CfpForm["participantFields"];
 }
-
+export interface CfpOrganizerSubmissionsReadModel {
+  readonly submissions: readonly Submission[];
+  readonly forms: readonly CfpForm[];
+}
 export interface PublicCfpEvent {
   id: EventCfp["id"];
   slug: EventCfp["slug"];
@@ -664,22 +671,41 @@ export class CfpService {
     eventId: string;
   }): Promise<CfpOrganizerSubmission[]> {
     const eventRead = this.#getEvent(input.tenantId, input.eventId);
-    const listSubmissions = this.#repository.listSubmissionsForEvent;
-    if (listSubmissions === undefined) {
-      await eventRead;
-      throw new CfpError("NOT_FOUND", "The CFP submissions were not found.");
+    const readModel = this.#repository.getOrganizerSubmissionsReadModel;
+    let submissions: readonly Submission[];
+    let batchForms: readonly CfpForm[] | undefined;
+    if (readModel !== undefined) {
+      const [eventResult, readModelResult] = await Promise.allSettled([
+        eventRead,
+        readModel.call(this.#repository, input.tenantId, input.eventId),
+      ]);
+      if (eventResult.status === "rejected") {
+        throw eventResult.reason;
+      }
+      if (readModelResult.status === "rejected") {
+        throw readModelResult.reason;
+      }
+      submissions = readModelResult.value.submissions;
+      batchForms = readModelResult.value.forms;
+    } else {
+      const listSubmissions = this.#repository.listSubmissionsForEvent;
+      if (listSubmissions === undefined) {
+        await eventRead;
+        throw new CfpError("NOT_FOUND", "The CFP submissions were not found.");
+      }
+      const [eventResult, submissionsResult] = await Promise.allSettled([
+        eventRead,
+        listSubmissions.call(this.#repository, input.tenantId, input.eventId),
+      ]);
+      if (eventResult.status === "rejected") {
+        throw eventResult.reason;
+      }
+      if (submissionsResult.status === "rejected") {
+        throw submissionsResult.reason;
+      }
+      submissions = submissionsResult.value;
     }
-    const [eventResult, submissionsResult] = await Promise.allSettled([
-      eventRead,
-      listSubmissions.call(this.#repository, input.tenantId, input.eventId),
-    ]);
-    if (eventResult.status === "rejected") {
-      throw eventResult.reason;
-    }
-    if (submissionsResult.status === "rejected") {
-      throw submissionsResult.reason;
-    }
-    const submissions = submissionsResult.value;
+
     const scopedSubmissions = submissions.filter(
       (submission) =>
         submission.tenantId === input.tenantId && submission.eventId === input.eventId,
@@ -687,22 +713,30 @@ export class CfpService {
     const formIds = [...new Set(scopedSubmissions.map((submission) => submission.formId))];
     const formsById = new Map<string, CfpForm>();
     if (formIds.length > 0) {
-      const listFormsByIds = this.#repository.listFormsByIds;
-      if (listFormsByIds !== undefined) {
-        const forms = await listFormsByIds.call(this.#repository, formIds);
-        for (const form of forms) {
+      if (batchForms !== undefined) {
+        for (const form of batchForms) {
           if (form.tenantId === input.tenantId) {
             formsById.set(form.id, form);
           }
         }
       } else {
-        const forms = await Promise.all(
-          formIds.map((formId) => this.#getForm(input.tenantId, formId)),
-        );
-        for (const [index, formId] of formIds.entries()) {
-          const form = forms[index];
-          if (form !== undefined) {
-            formsById.set(formId, form);
+        const listFormsByIds = this.#repository.listFormsByIds;
+        if (listFormsByIds !== undefined) {
+          const forms = await listFormsByIds.call(this.#repository, formIds);
+          for (const form of forms) {
+            if (form.tenantId === input.tenantId) {
+              formsById.set(form.id, form);
+            }
+          }
+        } else {
+          const forms = await Promise.all(
+            formIds.map((formId) => this.#getForm(input.tenantId, formId)),
+          );
+          for (const [index, formId] of formIds.entries()) {
+            const form = forms[index];
+            if (form !== undefined) {
+              formsById.set(formId, form);
+            }
           }
         }
       }
