@@ -50,6 +50,7 @@ export type CrmRouteService = Pick<
   | "listNotes"
   | "addContactToEvent"
   | "sendPersonalizedOutreach"
+  | "recordOutreachDeliveryStatus"
   | "analytics"
 >;
 

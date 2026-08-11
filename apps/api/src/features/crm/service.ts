@@ -16,8 +16,8 @@ import {
   type CrmEventProjectionResult,
   type CrmHistoryEntry,
   type CrmImportResult,
-  type CrmImportRowResult,
   type CrmImportRow,
+  type CrmImportRowResult,
   type CrmMergeResult,
   type CrmMergeScalarField,
   type CrmNote,
@@ -1618,6 +1618,8 @@ export class CrmService {
         failedCount: 0,
         terminal: false,
         failureReason: null,
+        providerMessageId: null,
+        completedAt: null,
         idempotencyKey: key,
         createdBy: identifier(actor.userId, "actor userId"),
         createdAt: nowIso(this.#clock),
@@ -1704,6 +1706,87 @@ export class CrmService {
       return clone(saved);
     });
   }
+  async recordOutreachDeliveryStatus(input: {
+    readonly organizationId: string;
+    readonly outreachId: string;
+    readonly idempotencyKey: string;
+    readonly status: "delivered" | "failed" | "bounced" | "complained";
+    readonly providerMessageId?: string;
+    readonly reason?: string;
+    readonly occurredAt?: string;
+  }): Promise<CrmOutreachCommand> {
+    const organizationId = identifier(input.organizationId, "organizationId");
+    const outreachId = identifier(input.outreachId, "outreachId");
+    const idempotencyKey = text(input.idempotencyKey, "idempotencyKey", 512);
+    const providerMessageId = optionalText(
+      input.providerMessageId,
+      "providerMessageId",
+      512,
+    );
+    const reason = optionalText(input.reason, "reason", 2_000);
+    const occurredAt =
+      input.occurredAt === undefined
+        ? nowIso(this.#clock)
+        : (() => {
+            const parsed = new Date(input.occurredAt);
+            if (!Number.isFinite(parsed.getTime())) throw invalid("occurredAt must be an ISO instant.");
+            return parsed.toISOString();
+          })();
+    const repository = this.requireRepository();
+    const current = await repository.getOutreachByIdempotencyKey(
+      organizationId,
+      idempotencyKey,
+    );
+    if (current === null || current.id !== outreachId) throw notFound("The outreach was not found.");
+    if (current.terminal) {
+      if (
+        current.status === input.status &&
+        (providerMessageId === undefined ||
+          providerMessageId === current.providerMessageId) &&
+        (reason === undefined || reason === current.failureReason)
+      ) {
+        return clone(current);
+      }
+      throw conflict("A terminal outreach delivery cannot move to another state.");
+    }
+
+    const failed = input.status !== "delivered";
+    const next: CrmOutreachCommand = {
+      ...current,
+      status: input.status,
+      queuedCount: 0,
+      sentCount: failed ? 0 : 1,
+      failedCount: failed ? 1 : 0,
+      terminal: true,
+      failureReason: failed ? (reason ?? "The delivery failed.") : null,
+      providerMessageId: providerMessageId ?? current.providerMessageId ?? null,
+      completedAt: occurredAt,
+    };
+    const saved = await repository.updateOutreach(next);
+    assertTenant(saved, organizationId);
+    await repository.appendHistory({
+      id: this.#generateId("history"),
+      organizationId,
+      contactId: saved.contactId,
+      kind: "communication",
+      eventId: saved.eventId,
+      sessionId: null,
+      title: `Outreach ${saved.status}`,
+      detail: saved.failureReason,
+      occurredAt,
+      metadata: {
+        sendId: saved.id,
+        recipientEmail: saved.recipientEmail,
+        status: saved.status,
+        providerMessageId: saved.providerMessageId ?? null,
+        queuedCount: saved.queuedCount,
+        sentCount: saved.sentCount,
+        failedCount: saved.failedCount,
+        terminal: saved.terminal,
+      },
+    });
+    return clone(saved);
+  }
 
   async outreach(actor: CrmActor, input: SendCrmOutreachInput): Promise<CrmOutreachCommand> {
     return this.sendPersonalizedOutreach(actor, input);
@@ -1736,8 +1819,12 @@ export class CrmService {
     const outreach =
       repository.listOutreach === undefined ? [] : await repository.listOutreach(organization);
     const outreachCounts = { queued: 0, sent: 0, failed: 0 };
-    for (const command of outreach.filter((candidate) => candidate.organizationId === organization))
-      outreachCounts[command.status] += 1;
+    for (const command of outreach.filter((candidate) => candidate.organizationId === organization)) {
+      if (command.status === "queued") outreachCounts.queued += 1;
+      else if (command.status === "sent" || command.status === "delivered")
+        outreachCounts.sent += 1;
+      else outreachCounts.failed += 1;
+    }
     return {
       organizationId: organization,
       totalContacts: contacts.length,
@@ -2131,6 +2218,19 @@ export class InMemoryCrmRepository implements CrmRepository {
     const key = this.commandKey(command.organizationId, command.idempotencyKey);
     const existing = this.#outreach.get(key);
     if (existing !== undefined) return clone(existing);
+    this.#outreach.set(key, clone(command));
+    return clone(command);
+  }
+  async updateOutreach(command: CrmOutreachCommand): Promise<CrmOutreachCommand> {
+    const key = this.commandKey(command.organizationId, command.idempotencyKey);
+    const existing = this.#outreach.get(key);
+    if (
+      existing === undefined ||
+      existing.id !== command.id ||
+      existing.contactId !== command.contactId
+    ) {
+      throw new CrmRepositoryConflictError("The outreach delivery identity does not match.");
+    }
     this.#outreach.set(key, clone(command));
     return clone(command);
   }

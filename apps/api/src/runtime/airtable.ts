@@ -6779,6 +6779,21 @@ export class AirtableCrmRepository implements CrmRepository {
     }
     return clone(stored);
   }
+  async updateOutreach(command: CrmOutreachCommand): Promise<CrmOutreachCommand> {
+    const organization = crmOrganization(command.organizationId);
+    const key = requiredId(command.idempotencyKey, "idempotencyKey");
+    const existing = await this.getOutreachByIdempotencyKey(organization, key);
+    if (
+      existing === null ||
+      existing.id !== command.id ||
+      existing.contactId !== command.contactId
+    ) {
+      throw new CrmRepositoryConflictError("The outreach delivery identity does not match.");
+    }
+    const stored = { ...clone(command), organizationId: organization, idempotencyKey: key };
+    await this.#outreach.update(command.id, stored);
+    return clone(stored);
+  }
 
   async getOutreachByIdempotencyKey(
     organizationId: string,
@@ -7136,27 +7151,32 @@ export class AirtableCrmOutreachBoundary implements CrmOutreachBoundary {
     }
     const idempotencyKey = `crm-outreach:${command.organizationId}:${command.idempotencyKey}`;
     const escapedBody = speakerDeliveryHtml(command.renderedBody).replaceAll("\n", "<br />");
-    const result = await enqueueCloudflareOutbox({
+    await enqueueCloudflareOutbox({
       database: this.database,
       queue: this.outboxQueue,
       tenantId: command.organizationId,
       topic: "communications",
       deduplicationKey: idempotencyKey,
       payload: {
-        from: DEFAULT_OPEN_SEND_SENDERS.speakers,
-        to: [recipient],
-        subject: command.subject,
-        html: `<p>${escapedBody}</p>`,
-        text: command.renderedBody,
-        idempotencyKey,
+        effect: "send_crm_outreach",
+        outreachId: command.id,
         contactId: command.contactId,
         eventId: command.eventId,
+        idempotencyKey: command.idempotencyKey,
+        payload: {
+          from: DEFAULT_OPEN_SEND_SENDERS.speakers,
+          to: [recipient],
+          subject: command.subject,
+          html: `<p>${escapedBody}</p>`,
+          text: command.renderedBody,
+          idempotencyKey,
+        },
       },
       now: command.createdAt,
     });
     return {
       ...clone(command),
-      status: result.inserted ? "queued" : "sent",
+      status: "queued",
     };
   }
 }
@@ -7392,12 +7412,18 @@ class AirtableCommunicationDeliveryAdapter implements CommunicationDeliveryAdapt
       topic: "communications",
       deduplicationKey: request.idempotencyKey,
       payload: {
-        from: request.from,
-        to: [request.to],
-        subject: request.subject,
-        html: request.html,
-        text: request.text,
-        idempotencyKey: request.idempotencyKey,
+        effect: "send_communication",
+        sendId: request.sendId,
+        recipientId: request.recipientId,
+        eventId: request.eventId,
+        payload: {
+          from: request.from,
+          to: [request.to],
+          subject: request.subject,
+          html: request.html,
+          text: request.text,
+          idempotencyKey: request.idempotencyKey,
+        },
       },
     });
     return { status: "queued" as const };
