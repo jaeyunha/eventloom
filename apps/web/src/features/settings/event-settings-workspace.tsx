@@ -77,10 +77,17 @@ const subtleTextStyle: CSSProperties = {
   lineHeight: 1.5,
 };
 
+export type EventSettingsDetailsStatus = "loading" | "loaded" | "error";
+
 export type EventSettingsWorkspaceState =
   | { readonly status: "loading" }
   | { readonly status: "error" | "config-error"; readonly message: string }
-  | { readonly status: "loaded"; readonly data: EventSettingsData };
+  | {
+      readonly status: "loaded";
+      readonly data: EventSettingsData;
+      readonly detailsStatus?: EventSettingsDetailsStatus;
+      readonly detailsMessage?: string;
+    };
 
 export interface EventSettingsWorkspaceActions {
   updateSettings(input: {
@@ -161,6 +168,74 @@ function normalizeData(
     levels: data.levels ?? [],
     tags: data.tags ?? [],
     audit: data.audit ?? [],
+  };
+}
+
+export function canCommitEventSettingsAsyncCompletion(
+  requestId: number,
+  currentRequestId: number,
+  mounted: boolean,
+  aborted = false,
+): boolean {
+  return mounted && !aborted && requestId === currentRequestId;
+}
+
+export async function loadEventSettingsProgressively(
+  api: EventSettingsApi,
+  organizationId: string,
+  eventId: string,
+  onCore: (data: EventSettingsData) => void,
+  signal?: AbortSignal,
+): Promise<EventSettingsData> {
+  const corePromise = Promise.all([
+    api.getSettings(eventId, signal),
+    api.listRooms(eventId, signal),
+  ]);
+  const detailsResultPromise = Promise.all([
+    api.listTracks(eventId, signal),
+    api.listFormats(eventId, signal),
+    api.listLevels(eventId, signal),
+    api.listTags(eventId, signal),
+    api.listAudit(eventId, undefined, signal),
+  ]).then(
+    ([tracks, formats, levels, tags, audit]) => ({
+      status: "loaded" as const,
+      tracks,
+      formats,
+      levels,
+      tags,
+      audit,
+    }),
+    (error: unknown) => ({ status: "error" as const, error }),
+  );
+
+  const [settings, rooms] = await corePromise;
+  const core = normalizeData(
+    {
+      organizationId,
+      eventId,
+      settings,
+      rooms,
+      tracks: [],
+      formats: [],
+      levels: [],
+      tags: [],
+      audit: [],
+    },
+    organizationId,
+    eventId,
+  );
+  onCore(core);
+
+  const detailsResult = await detailsResultPromise;
+  if (detailsResult.status === "error") throw detailsResult.error;
+  return {
+    ...core,
+    tracks: detailsResult.tracks,
+    formats: detailsResult.formats,
+    levels: detailsResult.levels,
+    tags: detailsResult.tags,
+    audit: detailsResult.audit,
   };
 }
 
@@ -1066,6 +1141,11 @@ export function EventSettingsWorkspaceView({
   onRetry,
 }: EventSettingsWorkspaceViewProps) {
   const data = state.status === "loaded" ? state.data : null;
+  const detailsStatus = state.status === "loaded" ? (state.detailsStatus ?? "loaded") : "loaded";
+  const detailsMessage =
+    state.status === "loaded"
+      ? (state.detailsMessage ?? "The event library and audit history could not be loaded.")
+      : null;
   return (
     <main id="event-settings-content" tabIndex={-1}>
       <header className={styles.pageHeader}>
@@ -1189,27 +1269,42 @@ export function EventSettingsWorkspaceView({
                     organization boundaries.
                   </p>
                 </div>
-                <div style={twoColumnStyle}>
-                  <TaxonomySection
-                    kind="track"
-                    resources={data.tracks}
-                    busy={busy}
-                    actions={actions}
-                  />
-                  <TaxonomySection
-                    kind="format"
-                    resources={data.formats}
-                    busy={busy}
-                    actions={actions}
-                  />
-                  <TaxonomySection
-                    kind="level"
-                    resources={data.levels}
-                    busy={busy}
-                    actions={actions}
-                  />
-                  <TaxonomySection kind="tag" resources={data.tags} busy={busy} actions={actions} />
-                </div>
+                {detailsStatus === "loading" ? (
+                  <p role="status" aria-live="polite" style={subtleTextStyle}>
+                    Loading event library…
+                  </p>
+                ) : detailsStatus === "error" ? (
+                  <p role="alert" style={subtleTextStyle}>
+                    Event library unavailable. {detailsMessage}
+                  </p>
+                ) : (
+                  <div style={twoColumnStyle}>
+                    <TaxonomySection
+                      kind="track"
+                      resources={data.tracks}
+                      busy={busy}
+                      actions={actions}
+                    />
+                    <TaxonomySection
+                      kind="format"
+                      resources={data.formats}
+                      busy={busy}
+                      actions={actions}
+                    />
+                    <TaxonomySection
+                      kind="level"
+                      resources={data.levels}
+                      busy={busy}
+                      actions={actions}
+                    />
+                    <TaxonomySection
+                      kind="tag"
+                      resources={data.tags}
+                      busy={busy}
+                      actions={actions}
+                    />
+                  </div>
+                )}
               </section>
               <InformationalGroup
                 id="communications"
@@ -1223,7 +1318,31 @@ export function EventSettingsWorkspaceView({
                 description="Calendar delivery follows the published agenda and the event timezone."
                 detail="Calendar invitations are generated only from published agenda changes. Draft settings never leak to public or participant calendar feeds."
               />
-              <AuditSection audit={data.audit} />
+              {detailsStatus === "loaded" ? (
+                <AuditSection audit={data.audit} />
+              ) : (
+                <section className={styles.panel} aria-labelledby="audit-heading">
+                  <header className={styles.panelHeader}>
+                    <div className={styles.panelHeading}>
+                      <p className={styles.panelEyebrow}>Safety and history</p>
+                      <h2 id="audit-heading" className={styles.panelTitle}>
+                        Settings audit history
+                      </h2>
+                    </div>
+                  </header>
+                  <div className={styles.panelContent}>
+                    <p
+                      role={detailsStatus === "error" ? "alert" : "status"}
+                      aria-live="polite"
+                      style={{ ...subtleTextStyle, margin: 0 }}
+                    >
+                      {detailsStatus === "loading"
+                        ? "Loading settings audit history…"
+                        : `Settings audit history unavailable. ${detailsMessage}`}
+                    </p>
+                  </div>
+                </section>
+              )}
             </>
           ) : null}
         </div>
@@ -1239,12 +1358,21 @@ export interface EventSettingsWorkspaceProps {
   readonly initialData?: EventSettingsData;
 }
 
-export function EventSettingsWorkspace({
+export function eventSettingsWorkspaceScopeKey(organizationId: string, eventId: string): string {
+  return `${organizationId}\u0000${eventId}`;
+}
+
+export function EventSettingsWorkspace(props: Readonly<EventSettingsWorkspaceProps>) {
+  const scopeKey = eventSettingsWorkspaceScopeKey(props.organizationId, props.eventId);
+  return <ScopedEventSettingsWorkspace key={scopeKey} {...props} />;
+}
+
+function ScopedEventSettingsWorkspace({
   organizationId,
   eventId,
   api: providedApi,
   initialData,
-}: EventSettingsWorkspaceProps) {
+}: Readonly<EventSettingsWorkspaceProps>) {
   const [state, setState] = useState<EventSettingsWorkspaceState>(() => {
     if (initialData) {
       try {
@@ -1258,6 +1386,7 @@ export function EventSettingsWorkspace({
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const requestVersion = useRef(0);
+  const mountedRef = useRef(true);
 
   const api = useMemo(() => {
     if (providedApi) return providedApi;
@@ -1268,11 +1397,26 @@ export function EventSettingsWorkspace({
     }
   }, [organizationId, providedApi]);
 
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      requestVersion.current += 1;
+    };
+  }, []);
+
   const load = useCallback(
     async (signal?: AbortSignal) => {
       const requestId = ++requestVersion.current;
+      const requestIsCurrent = () =>
+        canCommitEventSettingsAsyncCompletion(
+          requestId,
+          requestVersion.current,
+          mountedRef.current,
+          signal?.aborted ?? false,
+        );
       if (!organizationId.trim() || !eventId.trim()) {
-        if (requestId === requestVersion.current) {
+        if (requestIsCurrent()) {
           setState({
             status: "config-error",
             message: "An organization and event context are required.",
@@ -1281,7 +1425,7 @@ export function EventSettingsWorkspace({
         return;
       }
       if (!api) {
-        if (requestId === requestVersion.current) {
+        if (requestIsCurrent()) {
           setState({
             status: "config-error",
             message: "The organizer API URL is not configured for event settings.",
@@ -1291,19 +1435,36 @@ export function EventSettingsWorkspace({
       }
       setState((current) => (current.status === "loaded" ? current : { status: "loading" }));
       setNotice(null);
+      let coreCommitted = false;
       try {
-        const loaded = await api.getOverview(eventId, signal);
-        if (!signal?.aborted && requestId === requestVersion.current) {
-          setState({ status: "loaded", data: normalizeData(loaded, organizationId, eventId) });
+        const loaded = await loadEventSettingsProgressively(
+          api,
+          organizationId,
+          eventId,
+          (core) => {
+            if (!requestIsCurrent()) return;
+            coreCommitted = true;
+            setState({ status: "loaded", data: core, detailsStatus: "loading" });
+          },
+          signal,
+        );
+        if (requestIsCurrent()) {
+          setState({ status: "loaded", data: loaded, detailsStatus: "loaded" });
         }
       } catch (error) {
-        if (
-          !(error instanceof DOMException && error.name === "AbortError") &&
-          !signal?.aborted &&
-          requestId === requestVersion.current
-        ) {
-          setState({ status: "error", message: messageFrom(error) });
+        if (!requestIsCurrent() || (error instanceof DOMException && error.name === "AbortError")) {
+          return;
         }
+        setState((current) => {
+          if (coreCommitted && current.status === "loaded") {
+            return {
+              ...current,
+              detailsStatus: "error",
+              detailsMessage: messageFrom(error),
+            };
+          }
+          return { status: "error", message: messageFrom(error) };
+        });
       }
     },
     [api, eventId, organizationId],
@@ -1318,16 +1479,23 @@ export function EventSettingsWorkspace({
   const currentData = state.status === "loaded" ? state.data : null;
 
   const refresh = useCallback(async () => {
+    if (!mountedRef.current) return;
     const requestId = ++requestVersion.current;
     if (!api) throw new TypeError("The organizer API URL is not configured for event settings.");
     const loaded = await api.getOverview(eventId);
-    if (requestId === requestVersion.current) {
-      setState({ status: "loaded", data: normalizeData(loaded, organizationId, eventId) });
+    if (
+      canCommitEventSettingsAsyncCompletion(requestId, requestVersion.current, mountedRef.current)
+    ) {
+      setState({
+        status: "loaded",
+        data: normalizeData(loaded, organizationId, eventId),
+        detailsStatus: "loaded",
+      });
     }
   }, [api, eventId, organizationId]);
 
   async function mutate(operation: () => Promise<void>, successMessage: string): Promise<void> {
-    if (!currentData) return;
+    if (!currentData || !mountedRef.current) return;
     if (!api) {
       const error = new TypeError("The organizer API URL is not configured for event settings.");
       setNotice(`Unable to complete this change. ${error.message}`);
@@ -1338,12 +1506,14 @@ export function EventSettingsWorkspace({
     setNotice(null);
     try {
       const outcome = await persistEventSettingsMutation(operation, refresh);
+      if (!mountedRef.current) return;
       setNotice(
         outcome === "refreshed"
           ? successMessage
           : `${successMessage} The saved change could not be refreshed; reload to see the latest settings.`,
       );
     } catch (error) {
+      if (!mountedRef.current) throw error;
       const message =
         error instanceof EventSettingsApiError && error.code === "VERSION_CONFLICT"
           ? "This event settings record changed in another organizer session. Reload before saving again."
@@ -1353,10 +1523,10 @@ export function EventSettingsWorkspace({
       } catch {
         // Keep the loaded state and original mutation error when the recovery read is unavailable.
       }
-      setNotice(`Unable to complete this change. ${message}`);
+      if (mountedRef.current) setNotice(`Unable to complete this change. ${message}`);
       throw error;
     } finally {
-      setBusy(false);
+      if (mountedRef.current) setBusy(false);
     }
   }
 

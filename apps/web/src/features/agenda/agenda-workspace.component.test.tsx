@@ -13,6 +13,7 @@ import {
   AgendaWorkspace,
   agendaWorkspaceDataMatchesEvent,
   agendaWorkspaceScopeKey,
+  canCommitAgendaAsyncCompletion,
   deriveAgendaViewGroups,
   isAgendaAsyncScopeTokenCurrent,
   serializeAgendaSuggestionOptions,
@@ -257,7 +258,7 @@ function renderBoard(
 }
 
 describe("agenda organizer workspace", () => {
-  it("invalidates deferred work when the organization-event scope changes", async () => {
+  it("invalidates stale, aborted, and unmounted deferred work", async () => {
     const scopeA = agendaWorkspaceScopeKey("organization-1", "event-a");
     const scopeB = agendaWorkspaceScopeKey("organization-1", "event-b");
     const workspaceA = AgendaWorkspace({
@@ -277,7 +278,7 @@ describe("agenda organizer workspace", () => {
       resolveDeferred = resolve;
     });
     const completion = deferred.then((value) => {
-      if (isAgendaAsyncScopeTokenCurrent(token, currentScope, currentGeneration)) {
+      if (canCommitAgendaAsyncCompletion(token, currentScope, currentGeneration, true)) {
         commit = value;
       }
     });
@@ -292,6 +293,9 @@ describe("agenda organizer workspace", () => {
     expect(workspaceB.key).toBe(scopeB);
     expect(commit).toBeNull();
     expect(isAgendaAsyncScopeTokenCurrent(token, currentScope, currentGeneration)).toBe(false);
+    expect(canCommitAgendaAsyncCompletion(token, scopeA, 1, true)).toBe(true);
+    expect(canCommitAgendaAsyncCompletion(token, scopeA, 1, false)).toBe(false);
+    expect(canCommitAgendaAsyncCompletion(token, scopeA, 1, true, true)).toBe(false);
     expect(agendaWorkspaceDataMatchesEvent(data, data.event.id)).toBe(true);
     expect(agendaWorkspaceDataMatchesEvent(data, "event-b")).toBe(false);
   });

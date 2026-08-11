@@ -1449,6 +1449,16 @@ export function isAgendaAsyncScopeTokenCurrent(
   return token.scopeKey === scopeKey && token.generation === generation;
 }
 
+export function canCommitAgendaAsyncCompletion(
+  token: AgendaAsyncScopeToken,
+  scopeKey: string,
+  generation: number,
+  mounted: boolean,
+  aborted = false,
+): boolean {
+  return mounted && !aborted && isAgendaAsyncScopeTokenCurrent(token, scopeKey, generation);
+}
+
 export function agendaWorkspaceDataMatchesEvent(
   data: AgendaWorkspaceData,
   eventId: string,
@@ -1526,9 +1536,11 @@ function ScopedAgendaWorkspace({
   const suggestionApi = suggestionApiFor(activeApi);
 
   function operationIsCurrent(token: AgendaAsyncScopeToken): boolean {
-    return (
-      mountedRef.current &&
-      isAgendaAsyncScopeTokenCurrent(token, scopeKey, operationGenerationRef.current)
+    return canCommitAgendaAsyncCompletion(
+      token,
+      scopeKey,
+      operationGenerationRef.current,
+      mountedRef.current,
     );
   }
 
@@ -1564,9 +1576,13 @@ function ScopedAgendaWorkspace({
       const token = { scopeKey, generation: loadGenerationRef.current + 1 };
       loadGenerationRef.current = token.generation;
       const loadIsCurrent = () =>
-        mountedRef.current &&
-        !signal?.aborted &&
-        isAgendaAsyncScopeTokenCurrent(token, scopeKey, loadGenerationRef.current);
+        canCommitAgendaAsyncCompletion(
+          token,
+          scopeKey,
+          loadGenerationRef.current,
+          mountedRef.current,
+          signal?.aborted ?? false,
+        );
 
       if (loadIsCurrent()) {
         setLoading(true);

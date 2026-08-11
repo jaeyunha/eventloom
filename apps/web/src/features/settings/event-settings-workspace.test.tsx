@@ -15,7 +15,11 @@ import {
   validateRoomInput,
 } from "./api";
 import {
+  canCommitEventSettingsAsyncCompletion,
+  EventSettingsWorkspace,
   EventSettingsWorkspaceView,
+  eventSettingsWorkspaceScopeKey,
+  loadEventSettingsProgressively,
   persistEventSettingsMutation,
   validateRoomForm,
 } from "./event-settings-workspace";
@@ -98,6 +102,16 @@ function response<T>(data: T, status = 200): Response {
   });
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("event settings mutation persistence", () => {
   it("keeps a durable write successful when its authoritative refresh fails", async () => {
     let writes = 0;
@@ -127,6 +141,102 @@ describe("event settings mutation persistence", () => {
       ),
     ).rejects.toThrow("write failed");
     expect(refreshed).toBe(false);
+  });
+});
+
+describe("event settings progressive loading", () => {
+  it("starts every independent read together and exposes core settings before optional details", async () => {
+    const paths = [
+      "/sessions/settings",
+      "/sessions/rooms",
+      "/sessions/tracks",
+      "/sessions/formats",
+      "/sessions/levels",
+      "/sessions/tags",
+      "/sessions/audit",
+    ] as const;
+    const pending = new Map(paths.map((path) => [path, deferred<Response>()]));
+    const calls: string[] = [];
+    const fetcher = async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const path = paths.find((candidate) => url.endsWith(candidate));
+      if (!path) throw new Error(`Unexpected request ${url}`);
+      calls.push(path);
+      const request = pending.get(path);
+      if (!request) throw new Error(`Missing deferred request ${path}`);
+      return request.promise;
+    };
+    const api = createEventSettingsApi("", "org_a", fetcher);
+    const coreRendered = deferred<EventSettingsData>();
+    let settled = false;
+
+    const completion = loadEventSettingsProgressively(api, "org_a", "event-a", (core) =>
+      coreRendered.resolve(core),
+    ).then((loaded) => {
+      settled = true;
+      return loaded;
+    });
+
+    expect(calls).toEqual(paths);
+    pending.get("/sessions/settings")?.resolve(response(settings));
+    pending.get("/sessions/rooms")?.resolve(response(rooms));
+
+    const core = await coreRendered.promise;
+    expect(core.settings.version).toBe(3);
+    expect(core.rooms).toEqual(rooms);
+    expect(core.tracks).toEqual([]);
+    expect(core.audit).toEqual([]);
+    expect(settled).toBe(false);
+
+    const coreMarkup = renderToStaticMarkup(
+      createElement(EventSettingsWorkspaceView, {
+        organizationId: "org_a",
+        eventId: "event-a",
+        state: { status: "loaded", data: core, detailsStatus: "loading" },
+      }),
+    );
+    expect(coreMarkup).toContain("Session settings");
+    expect(coreMarkup).toContain("Main room");
+    expect(coreMarkup).toContain("Loading event library");
+    expect(coreMarkup).toContain("Loading settings audit history");
+    expect(coreMarkup).not.toContain("One track");
+
+    pending.get("/sessions/tracks")?.resolve(response(overview.tracks));
+    pending.get("/sessions/formats")?.resolve(response(overview.formats));
+    pending.get("/sessions/levels")?.resolve(response(overview.levels));
+    pending.get("/sessions/tags")?.resolve(response(overview.tags));
+    pending.get("/sessions/audit")?.resolve(response(audit));
+
+    await expect(completion).resolves.toMatchObject({
+      tracks: overview.tracks,
+      formats: overview.formats,
+      audit,
+    });
+  });
+
+  it("rejects stale, aborted, and unmounted completions across event scopes", async () => {
+    const scopeA = eventSettingsWorkspaceScopeKey("org_a", "event-a");
+    const scopeB = eventSettingsWorkspaceScopeKey("org_a", "event-b");
+    const workspaceA = EventSettingsWorkspace({ organizationId: "org_a", eventId: "event-a" });
+    const workspaceB = EventSettingsWorkspace({ organizationId: "org_a", eventId: "event-b" });
+    const pendingCompletion = deferred<string>();
+    let currentRequestId = 1;
+    let committed: string | null = null;
+    const completion = pendingCompletion.promise.then((value) => {
+      if (canCommitEventSettingsAsyncCompletion(1, currentRequestId, true)) committed = value;
+    });
+
+    currentRequestId = 2;
+    pendingCompletion.resolve("event-a");
+    await completion;
+
+    expect(workspaceA.key).toBe(scopeA);
+    expect(workspaceB.key).toBe(scopeB);
+    expect(scopeA).not.toBe(scopeB);
+    expect(committed).toBeNull();
+    expect(canCommitEventSettingsAsyncCompletion(2, 2, true)).toBe(true);
+    expect(canCommitEventSettingsAsyncCompletion(2, 2, false)).toBe(false);
+    expect(canCommitEventSettingsAsyncCompletion(2, 2, true, true)).toBe(false);
   });
 });
 
