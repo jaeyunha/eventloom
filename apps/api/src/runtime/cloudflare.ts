@@ -97,6 +97,14 @@ interface SessionRow {
   readonly expires_at: string;
 }
 
+interface SessionScopeRow extends SessionRow {
+  readonly scope_type: "session" | "membership" | "speaker_grant";
+  readonly scope_order: number;
+  readonly organization_id: string | null;
+  readonly role: string | null;
+  readonly speaker_profile_id: string | null;
+}
+
 interface MembershipRow {
   readonly organization_id: string;
   readonly role: string;
@@ -319,46 +327,87 @@ export class D1BetterAuthGateway implements BetterAuthGateway {
 
   async resolveSession(sessionToken: string): Promise<AuthSession | null> {
     const tokenDigest = await sha256(sessionToken);
-    const row = await this.database
+    const result = await this.database
       .prepare(
-        `SELECT sessions.id AS session_id,
-                sessions.user_id AS user_id,
-                users.email AS email,
-                users.email_verified AS email_verified,
-                sessions.expires_at AS expires_at
-           FROM auth_sessions AS sessions
-           JOIN auth_users AS users ON users.id = sessions.user_id
-          WHERE sessions.token_digest = ?
-          LIMIT 1`,
+        `WITH session_base AS (
+           SELECT sessions.id AS session_id,
+                  sessions.user_id AS user_id,
+                  users.email AS email,
+                  users.email_verified AS email_verified,
+                  sessions.expires_at AS expires_at
+             FROM auth_sessions AS sessions
+             JOIN auth_users AS users ON users.id = sessions.user_id
+            WHERE sessions.token_digest = ?
+            LIMIT 1
+         )
+         SELECT session_id,
+                user_id,
+                email,
+                email_verified,
+                expires_at,
+                'session' AS scope_type,
+                0 AS scope_order,
+                NULL AS organization_id,
+                NULL AS role,
+                NULL AS speaker_profile_id
+           FROM session_base
+         UNION ALL
+         SELECT base.session_id,
+                base.user_id,
+                base.email,
+                base.email_verified,
+                base.expires_at,
+                'membership' AS scope_type,
+                1 AS scope_order,
+                memberships.organization_id,
+                memberships.role,
+                NULL AS speaker_profile_id
+           FROM session_base AS base
+           JOIN organization_memberships AS memberships
+             ON memberships.user_id = base.user_id
+         UNION ALL
+         SELECT base.session_id,
+                base.user_id,
+                base.email,
+                base.email_verified,
+                base.expires_at,
+                'speaker_grant' AS scope_type,
+                2 AS scope_order,
+                grants.organization_id,
+                NULL AS role,
+                grants.speaker_profile_id
+           FROM session_base AS base
+           JOIN speaker_grants AS grants
+             ON grants.user_id = base.user_id
+            AND grants.revoked_at IS NULL
+          ORDER BY scope_order, organization_id, speaker_profile_id`,
       )
       .bind(tokenDigest)
-      .first<SessionRow>();
+      .all<SessionScopeRow>();
+    const row = result.results.find((candidate) => candidate.scope_type === "session") ?? null;
     if (row === null) return null;
     const expiresAt = validDate(row.expires_at);
     if (expiresAt === null || !nonEmpty(row.session_id) || !nonEmpty(row.user_id)) return null;
 
-    const [membershipResult, speakerGrantResult] = await Promise.all([
-      this.database
-        .prepare(
-          `SELECT organization_id, role
-             FROM organization_memberships
-            WHERE user_id = ?
-            ORDER BY organization_id`,
-        )
-        .bind(row.user_id)
-        .all<MembershipRow>(),
-      this.database
-        .prepare(
-          `SELECT organization_id, speaker_profile_id
-             FROM speaker_grants
-            WHERE user_id = ? AND revoked_at IS NULL
-            ORDER BY organization_id, speaker_profile_id`,
-        )
-        .bind(row.user_id)
-        .all<SpeakerGrantRow>(),
-    ]);
+    const membershipRows: MembershipRow[] = result.results.flatMap((scope) =>
+      scope.scope_type === "membership" && scope.organization_id !== null && scope.role !== null
+        ? [{ organization_id: scope.organization_id, role: scope.role }]
+        : [],
+    );
+    const speakerGrantRows: SpeakerGrantRow[] = result.results.flatMap((scope) =>
+      scope.scope_type === "speaker_grant" &&
+      scope.organization_id !== null &&
+      scope.speaker_profile_id !== null
+        ? [
+            {
+              organization_id: scope.organization_id,
+              speaker_profile_id: scope.speaker_profile_id,
+            },
+          ]
+        : [],
+    );
 
-    let memberships = membershipsFrom(membershipResult.results);
+    let memberships = membershipsFrom(membershipRows);
     const organizerAutojoin = this.#organizerAutojoin;
     const emailDomain = normalizedEmailDomain(row.email);
     if (
@@ -412,7 +461,7 @@ export class D1BetterAuthGateway implements BetterAuthGateway {
       emailVerified: row.email_verified === 1,
       expiresAt,
       memberships,
-      speakerGrants: speakerGrantsFrom(speakerGrantResult.results),
+      speakerGrants: speakerGrantsFrom(speakerGrantRows),
     };
   }
 

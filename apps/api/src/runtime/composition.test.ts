@@ -193,6 +193,7 @@ interface AutojoinDatabaseState {
     created_at: string;
     updated_at: string;
   }>;
+  operationCount: number;
 }
 
 function autojoinDatabase(input: {
@@ -204,6 +205,7 @@ function autojoinDatabase(input: {
     organization_id: string;
     speaker_profile_id: string;
   }[];
+  readonly delayMs?: number;
 }): {
   readonly database: NonNullable<RuntimeBindings["DB"]>;
   readonly state: AutojoinDatabaseState;
@@ -214,7 +216,15 @@ function autojoinDatabase(input: {
     memberships: [...(input.memberships ?? [])],
     speakerGrants: [...(input.speakerGrants ?? [])],
     inserts: [],
+    operationCount: 0,
   };
+  const delayMs = input.delayMs ?? 0;
+  async function delayOperation(): Promise<void> {
+    state.operationCount += 1;
+    if (delayMs > 0) {
+      await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
   const database = {
     prepare(query: string) {
       return {
@@ -224,6 +234,7 @@ function autojoinDatabase(input: {
         bind(...values: unknown[]) {
           return {
             async first<T>() {
+              await delayOperation();
               if (query.includes("FROM api_keys")) {
                 return {
                   id: "api-key-autojoin",
@@ -244,6 +255,49 @@ function autojoinDatabase(input: {
               } as T;
             },
             async all<T>() {
+              await delayOperation();
+              if (query.includes("FROM auth_sessions") && query.includes("scope_type")) {
+                return {
+                  results: [
+                    {
+                      session_id: "session-autojoin",
+                      user_id: "user-autojoin",
+                      email: state.email,
+                      email_verified: state.emailVerified ? 1 : 0,
+                      expires_at: "2099-01-01T00:00:00.000Z",
+                      scope_type: "session",
+                      scope_order: 0,
+                      organization_id: null,
+                      role: null,
+                      speaker_profile_id: null,
+                    },
+                    ...state.memberships.map((membership) => ({
+                      session_id: "session-autojoin",
+                      user_id: "user-autojoin",
+                      email: state.email,
+                      email_verified: state.emailVerified ? 1 : 0,
+                      expires_at: "2099-01-01T00:00:00.000Z",
+                      scope_type: "membership",
+                      scope_order: 1,
+                      organization_id: membership.organization_id,
+                      role: membership.role,
+                      speaker_profile_id: null,
+                    })),
+                    ...state.speakerGrants.map((speakerGrant) => ({
+                      session_id: "session-autojoin",
+                      user_id: "user-autojoin",
+                      email: state.email,
+                      email_verified: state.emailVerified ? 1 : 0,
+                      expires_at: "2099-01-01T00:00:00.000Z",
+                      scope_type: "speaker_grant",
+                      scope_order: 2,
+                      organization_id: speakerGrant.organization_id,
+                      role: null,
+                      speaker_profile_id: speakerGrant.speaker_profile_id,
+                    })),
+                  ] as T[],
+                };
+              }
               if (query.includes("FROM organization_memberships")) {
                 return { results: state.memberships as T[] };
               }
@@ -288,6 +342,7 @@ function autojoinDatabase(input: {
               return { results: [] as T[] };
             },
             async run() {
+              await delayOperation();
               if (query.includes("INSERT INTO organization_memberships")) {
                 const [organizationId, userId, createdAt, updatedAt] = values;
                 const row = {
@@ -730,6 +785,31 @@ describe("production CFP receipt effects", () => {
   });
 });
 describe("production organizer autojoin", () => {
+  it("loads a valid session and scopes with one delayed D1 operation", async () => {
+    const { database, state } = autojoinDatabase({
+      email: "member@example.com",
+      emailVerified: true,
+      memberships: [{ organization_id: "org-membership", role: "reviewer" }],
+      speakerGrants: [{ organization_id: "org-speaker", speaker_profile_id: "speaker-1" }],
+      delayMs: 300,
+    });
+    const gateway = new D1BetterAuthGateway(database);
+    const startedAt = Date.now();
+    const session = await gateway.resolveSession("session-token");
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(state.operationCount).toBe(1);
+    expect(elapsedMs).toBeLessThanOrEqual(500);
+    expect(session).toMatchObject({
+      sessionId: "session-autojoin",
+      userId: "user-autojoin",
+      email: "member@example.com",
+      emailVerified: true,
+      expiresAt: new Date("2099-01-01T00:00:00.000Z"),
+      memberships: [{ organizationId: "org-membership", role: "reviewer" }],
+      speakerGrants: [{ organizationId: "org-speaker", speakerProfileId: "speaker-1" }],
+    });
+  });
   async function resolveSession(input: {
     readonly email: string;
     readonly emailVerified: boolean;
