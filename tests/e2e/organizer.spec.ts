@@ -566,16 +566,45 @@ test("verified organizer login opens the organization overview", async ({ authSe
   ).toBeVisible();
   await expect(page.getByRole("link", { name: "Events", exact: true })).toBeVisible();
   expect(api.verifiedLogins).toEqual([ORGANIZER_EMAIL]);
-  for (const suffix of ["core", "activity"]) {
-    expect(
-      api.requests.some(
-        (request) =>
-          request.method() === "GET" &&
-          new URL(request.url()).pathname ===
-            `/api/admin/organizations/${ORGANIZATION_ID}/overview/${suffix}`,
+  const overviewRequests = api.requests
+    .filter((request) => request.method() === "GET")
+    .map((request) => new URL(request.url()).pathname);
+  expect(overviewRequests).toEqual(
+    expect.arrayContaining([
+      `/api/admin/organizations/${ORGANIZATION_ID}/overview/core`,
+      `/api/admin/organizations/${ORGANIZATION_ID}/overview/activity`,
+    ]),
+  );
+});
+test("organization overview reflows without document overflow", async ({ authSession, page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await installOrganizerApi(page, authSession);
+  await page.goto("/admin");
+
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Organization overview" }),
+  ).toBeVisible();
+  await expect(
+    page
+      .getByRole("region", { name: "Events" })
+      .getByRole("heading", { level: 2, name: "Open Sessionboard Conference" }),
+  ).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
       ),
-    ).toBe(true);
-  }
+    )
+    .toBe(true);
+
+  await page.setViewportSize({ width: 768, height: 1024 });
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+      ),
+    )
+    .toBe(true);
 });
 
 test("dedicated Events page creates an event with canonical timezone and dates", async ({

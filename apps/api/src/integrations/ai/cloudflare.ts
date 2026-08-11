@@ -828,12 +828,7 @@ function formatAgendaMinutes(value: number): string {
 function evaluationResponseFormat(
   input: EvaluationSuggestionProviderInput,
 ): Record<string, unknown> {
-  const criteria = input.round.rubric.criteria;
-  const evidence = [
-    "title",
-    "abstract",
-    ...Object.keys(input.submission.answers).map((id) => `answers.${id}`),
-  ];
+  const criteria = scoreableEvaluationCriteria(input);
   return {
     type: "json_schema",
     name: "evaluation_proposal",
@@ -844,7 +839,8 @@ function evaluationResponseFormat(
       properties: {
         candidates: {
           type: "array",
-          minItems: 1,
+          minItems: criteria.length,
+          maxItems: criteria.length,
           items: {
             type: "object",
             additionalProperties: false,
@@ -858,7 +854,14 @@ function evaluationResponseFormat(
               evidence: {
                 type: "array",
                 minItems: 1,
-                items: { type: "string", enum: evidence },
+                maxItems: 3,
+                items: {
+                  type: "string",
+                  minLength: 1,
+                  maxLength: 2_000,
+                  description:
+                    "A concise written rationale that quotes or specifically paraphrases the supplied abstract; never a source field label.",
+                },
               },
             },
             required: ["criterionId", "value", "evidence"],
