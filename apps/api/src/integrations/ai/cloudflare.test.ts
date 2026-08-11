@@ -347,15 +347,17 @@ describe("Cloudflare Workers AI advisory providers", () => {
     await expect(providers.agenda.suggest?.(request)).resolves.toEqual({ placements: [] });
   });
 
-  it("returns evaluation candidates with exact rubric/submission revisions and validates evidence references", async () => {
+  it("returns stable, abstract-grounded evaluation candidates with explicit AI attribution", async () => {
     const ai = new FakeAi();
+    const writtenEvidence =
+      "The abstract promises a concrete audience outcome, supporting a strong quality score.";
     ai.enqueue(
       json({
         candidates: [
           {
             criterionId: "quality",
             value: 4,
-            evidence: ["abstract", "answers.topic"],
+            evidence: [writtenEvidence],
           },
         ],
       }),
@@ -364,32 +366,121 @@ describe("Cloudflare Workers AI advisory providers", () => {
       model: "evaluation-model",
       now: () => new Date("2026-08-09T12:00:00.000Z"),
     });
+    const provenance = {
+      provider: "cloudflare-workers-ai",
+      model: "evaluation-model",
+      generatedAt: "2026-08-09T12:00:00.000Z",
+      sourceReferences: ["abstract"],
+      promptVersion: "cloudflare-workers-ai-v1",
+    };
 
-    await expect(providers.evaluations.generate?.(evaluationInput)).resolves.toMatchObject({
-      candidates: [{ criterionId: "quality", value: 4, evidence: ["abstract", "answers.topic"] }],
-      provenance: {
-        provider: "cloudflare-workers-ai",
-        model: "evaluation-model",
-        generatedAt: "2026-08-09T12:00:00.000Z",
-      },
+    await expect(providers.evaluations.generate(evaluationInput)).resolves.toEqual({
+      candidates: [
+        {
+          id: "ai:assignment-1:quality:11:23",
+          criterionId: "quality",
+          value: 4,
+          evidence: [writtenEvidence],
+          provenance,
+        },
+      ],
+      provenance,
     });
     const prompt = promptOf(ai);
     expect(prompt).toContain('"tenantId":"tenant-1"');
     expect(prompt).toContain('"rubricRevision":11');
     expect(prompt).toContain('"submissionRevision":23');
+    expect(prompt).toContain('"abstract":"A concrete audience outcome."');
+    expect(prompt).toContain("exactly one candidate for every supplied criterion");
+    expect(prompt).toContain("written rationales");
+    expect(prompt).not.toContain("Submission title");
+    expect(prompt).not.toContain("Accessible design");
     expect(prompt).not.toContain("private@example.test");
     expect(prompt).not.toContain("Private biography");
+  });
+
+  it("rejects ungrounded evaluation evidence, unknown criteria, and invalid scores", async () => {
+    const ai = new FakeAi();
+    const providers = createCloudflareAiProviders(ai);
 
     ai.enqueue(
-      json({ candidates: [{ criterionId: "unknown", value: 4, evidence: ["abstract"] }] }),
+      json({ candidates: [{ criterionId: "quality", value: 4, evidence: ["abstract"] }] }),
     );
-    await expect(providers.evaluations.generate?.(evaluationInput)).rejects.toMatchObject({
+    await expect(providers.evaluations.generate(evaluationInput)).rejects.toMatchObject({
       code: "AI_INVALID_OUTPUT",
     });
+
     ai.enqueue(
-      json({ candidates: [{ criterionId: "quality", value: 4, evidence: ["answers.private"] }] }),
+      json({
+        candidates: [
+          {
+            criterionId: "unknown",
+            value: 4,
+            evidence: ["The abstract describes a concrete outcome."],
+          },
+        ],
+      }),
     );
-    await expect(providers.evaluations.generate?.(evaluationInput)).rejects.toMatchObject({
+    await expect(providers.evaluations.generate(evaluationInput)).rejects.toMatchObject({
+      code: "AI_INVALID_OUTPUT",
+    });
+
+    ai.enqueue(
+      json({
+        candidates: [
+          {
+            criterionId: "quality",
+            value: 6,
+            evidence: ["The abstract describes a concrete outcome."],
+          },
+        ],
+      }),
+    );
+    await expect(providers.evaluations.generate(evaluationInput)).rejects.toMatchObject({
+      code: "AI_INVALID_OUTPUT",
+    });
+  });
+
+  it("requires exactly one evaluation candidate for every scoreable criterion", async () => {
+    const ai = new FakeAi();
+    const providers = createCloudflareAiProviders(ai);
+    const twoCriteriaInput: EvaluationSuggestionProviderInput = {
+      ...evaluationInput,
+      round: {
+        ...evaluationInput.round,
+        rubric: {
+          ...evaluationInput.round.rubric,
+          criteria: [
+            ...evaluationInput.round.rubric.criteria,
+            {
+              id: "impact",
+              label: "Impact",
+              description: "How meaningful is the audience outcome?",
+              minimum: 1,
+              maximum: 5,
+              weight: 1,
+              required: true,
+            },
+          ],
+        },
+      },
+    };
+    const evidence = ["The abstract states a concrete audience outcome."];
+
+    ai.enqueue(json({ candidates: [{ criterionId: "quality", value: 4, evidence }] }));
+    await expect(providers.evaluations.generate(twoCriteriaInput)).rejects.toMatchObject({
+      code: "AI_INVALID_OUTPUT",
+    });
+
+    ai.enqueue(
+      json({
+        candidates: [
+          { criterionId: "quality", value: 4, evidence },
+          { criterionId: "quality", value: 3, evidence },
+        ],
+      }),
+    );
+    await expect(providers.evaluations.generate(twoCriteriaInput)).rejects.toMatchObject({
       code: "AI_INVALID_OUTPUT",
     });
   });
