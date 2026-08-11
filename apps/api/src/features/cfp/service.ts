@@ -67,6 +67,7 @@ export interface CfpRepository {
     expectedVersion: number | null,
     audit?: AuditEntry,
   ): Promise<void>;
+  listSubmissionsForEvent?(tenantId: string, eventId: string): Promise<Submission[]>;
 }
 
 export interface CfpReusableField {
@@ -181,6 +182,11 @@ export interface CfpReceipt {
   submissionId: string;
   version: number;
   submittedAt: string;
+}
+export interface CfpOrganizerSubmission {
+  submission: Submission;
+  submissionFields: CfpForm["submissionFields"];
+  participantFields: CfpForm["participantFields"];
 }
 
 export interface PublicCfpEvent {
@@ -652,7 +658,39 @@ export class CfpService {
         );
       });
   }
+  async listOrganizerSubmissions(input: {
+    tenantId: string;
+    eventId: string;
+  }): Promise<CfpOrganizerSubmission[]> {
+    await this.#getEvent(input.tenantId, input.eventId);
+    const listSubmissions = this.#repository.listSubmissionsForEvent;
+    if (listSubmissions === undefined) {
+      throw new CfpError("NOT_FOUND", "The CFP submissions were not found.");
+    }
+    const submissions = await listSubmissions.call(
+      this.#repository,
+      input.tenantId,
+      input.eventId,
+    );
 
+    const records: CfpOrganizerSubmission[] = [];
+    for (const submission of submissions) {
+      if (submission.tenantId !== input.tenantId || submission.eventId !== input.eventId) {
+        continue;
+      }
+      const form = await this.#getForm(input.tenantId, submission.formId);
+      if (form.eventId !== input.eventId) {
+        continue;
+      }
+      ensureSubmissionSchemaVersion(submission, form);
+      records.push({
+        submission,
+        submissionFields: form.submissionFields,
+        participantFields: form.participantFields,
+      });
+    }
+    return records;
+  }
   async getPublishedCfp(input: {
     tenantId: string;
     eventId: string;
@@ -712,6 +750,7 @@ export class CfpService {
   }
   async getReceipt(input: {
     tenantId: string;
+    eventId?: string;
     submissionId: string;
     ownerAccountId: string;
   }): Promise<CfpReceipt> {
@@ -729,6 +768,7 @@ export class CfpService {
 
   async loadDraft(input: {
     tenantId: string;
+    eventId?: string;
     submissionId: string;
     ownerAccountId: string;
   }): Promise<Submission> {
@@ -1078,6 +1118,7 @@ export class CfpService {
 
   async saveDraft(input: {
     tenantId: string;
+    eventId?: string;
     submissionId: string;
     ownerAccountId: string;
     expectedVersion: number;
@@ -1114,7 +1155,10 @@ export class CfpService {
             ...current,
             version: current.version + 1,
             completedSteps: addCompletedStep(current.completedSteps, input.completedStep),
-            answers: input.answers ?? current.answers,
+            answers:
+              input.answers === undefined
+                ? current.answers
+                : { ...current.answers, ...input.answers },
             participants: input.participants ?? current.participants,
             secondaryContacts: input.secondaryContacts ?? current.secondaryContacts,
             updatedAt: this.#clock.now().toISOString(),
@@ -1152,6 +1196,7 @@ export class CfpService {
 
   async review(input: {
     tenantId: string;
+    eventId?: string;
     submissionId: string;
     ownerAccountId: string;
     idempotencyKey: string;
@@ -1193,6 +1238,7 @@ export class CfpService {
 
   async submit(input: {
     tenantId: string;
+    eventId?: string;
     submissionId: string;
     ownerAccountId: string;
     expectedVersion: number;
@@ -1673,12 +1719,16 @@ export class CfpService {
 
   async #getOwnedSubmission(input: {
     tenantId: string;
+    eventId?: string;
     submissionId: string;
     ownerAccountId: string;
   }): Promise<Submission> {
     const submission = await this.#getSubmission(input.tenantId, input.submissionId);
     if (submission.ownerAccountId !== input.ownerAccountId) {
       throw new CfpError("FORBIDDEN", "The submission is not owned by this account.");
+    }
+    if (input.eventId !== undefined && submission.eventId !== input.eventId) {
+      throw new CfpError("FORBIDDEN", "The submission does not belong to this event.");
     }
     return submission;
   }

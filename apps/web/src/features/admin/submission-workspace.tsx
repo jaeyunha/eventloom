@@ -5,7 +5,9 @@ import { type FormEvent, useEffect, useMemo, useState } from "react";
 import styles from "./submission-workspace.module.css";
 
 export type SubmissionStatus =
+  | "draft"
   | "submitted"
+  | "reopened"
   | "under_review"
   | "accepted"
   | "waitlisted"
@@ -19,6 +21,7 @@ export interface SubmissionParticipant {
   role: string;
   organization: string;
   answers?: Readonly<Record<string, unknown>>;
+  biography?: string;
 }
 
 export interface SubmissionAnswer {
@@ -382,7 +385,9 @@ const seededSubmissions: SubmissionRecord[] = [
 export { seededSubmissions };
 
 const statusLabels: Record<SubmissionStatus, string> = {
+  draft: "Draft",
   submitted: "Submitted",
+  reopened: "Reopened",
   under_review: "Under review",
   accepted: "Accepted",
   waitlisted: "Waitlisted",
@@ -391,7 +396,9 @@ const statusLabels: Record<SubmissionStatus, string> = {
 };
 
 const statusTone: Record<SubmissionStatus, string> = {
+  draft: styles.toneNeutral ?? "",
   submitted: styles.toneInfo ?? "",
+  reopened: styles.toneWarning ?? "",
   under_review: styles.toneWarning ?? "",
   accepted: styles.toneSuccess ?? "",
   waitlisted: styles.toneNeutral ?? "",
@@ -432,15 +439,16 @@ function apiBaseUrl(): string {
   return value ? value.replace(/\/+$/u, "") : "";
 }
 
-async function submissionRequest<T>(
+async function apiRequest<T>(
   baseUrl: string,
+  prefix: string,
   path: string,
   init: RequestInit = {},
 ): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set("accept", "application/json");
   if (init.body !== undefined) headers.set("content-type", "application/json");
-  const response = await fetch(`${baseUrl}/api/admin/evaluations${path}`, {
+  const response = await fetch(`${baseUrl}${prefix}${path}`, {
     ...init,
     credentials: "include",
     headers,
@@ -468,13 +476,34 @@ async function submissionRequest<T>(
   return body as T;
 }
 
+async function evaluationRequest<T>(
+  baseUrl: string,
+  path: string,
+  init: RequestInit = {},
+): Promise<T> {
+  return apiRequest(baseUrl, "/api/admin/evaluations", path, init);
+}
+
+async function canonicalSubmissionRequest<T>(
+  baseUrl: string,
+  organizationId: string,
+  eventId: string,
+  init: RequestInit = {},
+): Promise<T> {
+  return apiRequest(
+    baseUrl,
+    "/api/cfp",
+    `/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}/submissions`,
+    init,
+  );
+}
+
 function localDemoEnabled(): boolean {
   return (
     process.env.NEXT_PUBLIC_APP_ENV === "local" ||
     (process.env.NEXT_PUBLIC_APP_ENV !== "production" && process.env.NODE_ENV === "test")
   );
 }
-
 interface SubmissionFieldOption {
   readonly value: string;
   readonly label?: string;
@@ -516,28 +545,45 @@ export interface AcceptedHandoffMetadata {
   readonly primarySpeaker: SubmissionParticipant | null;
   readonly coSpeakers: readonly SubmissionParticipant[];
 }
-export interface ServerSubmissionRecord {
-  id: string;
-  tenantId: string;
-  eventId: string;
-  title: string;
-  abstract: string;
-  answers: Readonly<Record<string, unknown>>;
-  fieldDefinitions?: readonly SubmissionFieldDefinition[];
-  participants: readonly {
-    id: string;
-    displayName: string;
-    email: string;
-    biography: string;
-    role?: string;
-    organization?: string;
-    answers?: Readonly<Record<string, unknown>>;
+export interface CanonicalSubmissionParticipant {
+  readonly id: string;
+  readonly firstName: string;
+  readonly lastName: string;
+  readonly email: string;
+  readonly role: "primary" | "co_speaker";
+  readonly biography: string;
+  readonly answers: Readonly<Record<string, unknown>>;
+}
+
+export interface CanonicalSubmission {
+  readonly id: string;
+  readonly tenantId: string;
+  readonly eventId: string;
+  readonly formId: string;
+  readonly ownerAccountId: string;
+  readonly formVersion: number;
+  readonly version: number;
+  readonly status: "draft" | "submitted" | "reopened" | "withdrawn";
+  readonly completedSteps: readonly string[];
+  readonly answers: Readonly<Record<string, unknown>>;
+  readonly participants: readonly CanonicalSubmissionParticipant[];
+  readonly secondaryContacts: readonly {
+    readonly id: string;
+    readonly name: string;
+    readonly email: string;
   }[];
-  status: string;
-  version: number;
-  submittedAt: string | null;
-  updatedAt: string;
-  reopenedAt: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly submittedAt?: string | null;
+  readonly reopenedAt?: string | null;
+  readonly withdrawnAt?: string | null;
+  readonly finalDecisionAt?: string | null;
+}
+
+export interface CanonicalSubmissionEnvelope {
+  readonly submission: CanonicalSubmission;
+  readonly submissionFields: readonly SubmissionFieldDefinition[];
+  readonly participantFields: readonly SubmissionFieldDefinition[];
 }
 
 function answerText(value: unknown): string | null {
@@ -562,6 +608,12 @@ function optionValue(value: unknown): string | null {
 }
 
 function fieldAnswer(value: unknown, definition: SubmissionFieldDefinition | undefined): string {
+  if (Array.isArray(value)) {
+    const values = value
+      .map((candidate) => fieldAnswer(candidate, definition))
+      .filter((candidate) => candidate !== "—");
+    return values.length === 0 ? "—" : values.join(", ");
+  }
   const raw = answerText(value);
   if (raw === null) return "—";
   const comparable = optionValue(value) ?? raw;
@@ -576,7 +628,6 @@ function fieldAnswer(value: unknown, definition: SubmissionFieldDefinition | und
     return option.label;
   }
   if (
-    definition !== undefined &&
     typeof value === "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -614,66 +665,96 @@ export function getAcceptedHandoffMetadata(
   };
 }
 
-export function mapServerSubmission(record: ServerSubmissionRecord): SubmissionRecord {
-  const status: SubmissionStatus =
-    record.status === "accepted" ||
-    record.status === "waitlisted" ||
-    record.status === "declined" ||
-    record.status === "withdrawn" ||
-    record.status === "under_review"
-      ? record.status
-      : record.status === "reopened"
-        ? "under_review"
-        : "submitted";
-  const definitions = new Map(
-    (record.fieldDefinitions ?? []).map((definition) => [definition.key, definition]),
+function participantFieldValue(
+  participant: CanonicalSubmissionParticipant,
+  key: string,
+): unknown {
+  if (key === "firstName") return participant.firstName;
+  if (key === "lastName") return participant.lastName;
+  if (key === "email") return participant.email;
+  if (key === "biography") return participant.biography;
+  return participant.answers[key];
+}
+
+function participantOrganization(
+  participant: CanonicalSubmissionParticipant,
+  definitions: readonly SubmissionFieldDefinition[],
+): string {
+  const definition = definitions.find((candidate) =>
+    ["organization", "company", "participantCompany"].includes(candidate.key),
   );
-  const answers = Object.entries(record.answers).map(([question, answer]) => ({
-    question: definitions.get(question)?.label?.trim() || question,
-    answer: fieldAnswer(answer, definitions.get(question)),
-  }));
-  const abstract = answerText(record.answers.abstract) ?? record.abstract;
+  if (definition === undefined) return "";
+  const value = fieldAnswer(participantFieldValue(participant, definition.key), definition);
+  return value === "—" ? "" : value;
+}
+
+export function mapCanonicalSubmission(
+  envelope: CanonicalSubmissionEnvelope,
+): SubmissionRecord {
+  const { submission, submissionFields, participantFields } = envelope;
+  const definitions = new Map(submissionFields.map((definition) => [definition.key, definition]));
+  const answer = (key: string): string =>
+    fieldAnswer(submission.answers[key], definitions.get(key));
+  const title = answer("title");
+  const abstractValue =
+    submission.answers.abstract === undefined
+      ? fieldAnswer(submission.answers.description, definitions.get("description"))
+      : answer("abstract");
+  const submittedAt = submission.submittedAt ?? null;
+  const reopenedAt = submission.reopenedAt ?? null;
   const timeline: SubmissionTimelineEntry[] = [];
-  if (record.submittedAt !== null) {
+  if (submittedAt !== null) {
     timeline.push({
       label: "Submitted",
-      at: record.submittedAt,
+      at: submittedAt,
       detail: "The submission was submitted through the CFP.",
     });
   }
-  if (record.reopenedAt !== null) {
+  if (reopenedAt !== null) {
     timeline.push({
       label: "Reopened",
-      at: record.reopenedAt,
-      detail: "An organizer reopened this submission through the evaluation workspace.",
+      at: reopenedAt,
+      detail: "An organizer reopened this canonical submission.",
     });
   }
+
   return {
-    eventId: record.eventId,
-    id: record.id,
-    title: record.title,
-    status,
-    track: fieldAnswer(record.answers.track, definitions.get("track")),
-    format: fieldAnswer(record.answers.format, definitions.get("format")),
-    version: record.version,
-    submittedAt: record.submittedAt ?? record.updatedAt,
-    updatedAt: record.updatedAt,
-    participants: record.participants.map((participant) => ({
+    eventId: submission.eventId,
+    id: submission.id,
+    title: title === "—" ? "Untitled submission" : title,
+    status: submission.status,
+    track: answer("track"),
+    format: answer("format"),
+    version: submission.version,
+    submittedAt: submittedAt ?? submission.updatedAt,
+    updatedAt: submission.updatedAt,
+    participants: submission.participants.map((participant) => ({
       id: participant.id,
-      name: participant.displayName,
+      name:
+        `${participant.firstName} ${participant.lastName}`.trim() ||
+        participant.email,
       email: participant.email,
       role: participantRole(participant.role),
-      organization: participant.organization ?? "",
-      answers: participant.answers ?? {},
+      organization: participantOrganization(participant, participantFields),
+      biography: participant.biography,
+      answers: Object.fromEntries(
+        participantFields.map((definition) => [
+          definition.label?.trim() || definition.key,
+          fieldAnswer(participantFieldValue(participant, definition.key), definition),
+        ]),
+      ),
     })),
     participantProgress: {
-      completed: record.participants.filter(
+      completed: submission.participants.filter(
         (participant) => participant.biography.trim().length > 0,
       ).length,
-      total: record.participants.length,
+      total: submission.participants.length,
     },
-    abstract,
-    answers,
+    abstract: abstractValue,
+    answers: submissionFields.map((definition) => ({
+      question: definition.label?.trim() || definition.key,
+      answer: fieldAnswer(submission.answers[definition.key], definition),
+    })),
     timeline,
     reviewSummary: {
       completed: 0,
@@ -684,30 +765,30 @@ export function mapServerSubmission(record: ServerSubmissionRecord): SubmissionR
     },
     reviewAssignments: [],
     organizerNotes:
-      "Authoritative submission record. Review details load from the evaluation plan.",
+      "Authoritative CFP submission record. Review details load from the evaluation plan.",
     reopenAudit:
-      record.reopenedAt === null
+      reopenedAt === null
         ? []
         : [
             {
-              at: record.reopenedAt,
+              at: reopenedAt,
               organizer: "Organizer",
               reason: "Recorded in the server audit log.",
             },
           ],
   };
 }
-export async function enrichServerSubmission(
+export async function enrichCanonicalSubmission(
   baseUrl: string,
-  record: ServerSubmissionRecord,
+  envelope: CanonicalSubmissionEnvelope,
 ): Promise<SubmissionRecord> {
-  const submission = mapServerSubmission(record);
-  const planResult = await submissionRequest<{
+  const submission = mapCanonicalSubmission(envelope);
+  const planResult = await evaluationRequest<{
     plans: readonly {
       id: string;
       rounds: readonly { id: string; sequence?: number | undefined }[];
     }[];
-  }>(baseUrl, `/plans?eventId=${encodeURIComponent(record.eventId)}`).catch(() => ({
+  }>(baseUrl, `/plans?eventId=${encodeURIComponent(submission.eventId)}`).catch(() => ({
     plans: [],
   }));
   const plan = planResult.plans[0];
@@ -716,7 +797,7 @@ export async function enrichServerSubmission(
     (left, right) => (right.sequence ?? 0) - (left.sequence ?? 0),
   )[0];
   const [assignmentResult, decision, aggregate] = await Promise.all([
-    submissionRequest<{
+    evaluationRequest<{
       assignments: readonly {
         reviewerId: string;
         submissionId: string;
@@ -725,24 +806,24 @@ export async function enrichServerSubmission(
     }>(baseUrl, `/plans/${encodeURIComponent(plan.id)}/assignments`).catch(() => ({
       assignments: [],
     })),
-    submissionRequest<EvaluationDecisionRecord | null>(
+    evaluationRequest<EvaluationDecisionRecord | null>(
       baseUrl,
-      `/plans/${encodeURIComponent(plan.id)}/submissions/${encodeURIComponent(record.id)}/decision`,
+      `/plans/${encodeURIComponent(plan.id)}/submissions/${encodeURIComponent(submission.id)}/decision`,
     ).catch(() => null),
     round === undefined
       ? Promise.resolve(null)
-      : submissionRequest<{
+      : evaluationRequest<{
           submittedReviewCount: number;
           expectedReviewCount: number;
           averageWeightedTotal: number | null;
           possibleWeightedTotal: number;
         }>(
           baseUrl,
-          `/plans/${encodeURIComponent(plan.id)}/rounds/${encodeURIComponent(round.id)}/submissions/${encodeURIComponent(record.id)}/aggregate`,
+          `/plans/${encodeURIComponent(plan.id)}/rounds/${encodeURIComponent(round.id)}/submissions/${encodeURIComponent(submission.id)}/aggregate`,
         ).catch(() => null),
   ]);
   const assignments = assignmentResult.assignments.filter(
-    (assignment) => assignment.submissionId === record.id,
+    (assignment) => assignment.submissionId === submission.id,
   );
   const decisionTimeline =
     decision === null
@@ -906,14 +987,22 @@ export function SubmissionListWorkspace({
   useEffect(() => {
     if (localDemoEnabled()) return;
     let active = true;
+    if (organizationId === undefined || organizationId.trim().length === 0) {
+      setLoading(false);
+      setLoadError("An organization-scoped route is required to load canonical CFP submissions.");
+      return () => {
+        active = false;
+      };
+    }
     setLoading(true);
     setLoadError(null);
-    void submissionRequest<readonly ServerSubmissionRecord[]>(
+    void canonicalSubmissionRequest<readonly CanonicalSubmissionEnvelope[]>(
       baseUrl,
-      `/events/${encodeURIComponent(eventId)}/submissions`,
+      organizationId,
+      eventId,
     )
       .then((records) => {
-        if (active) setSubmissions(records.map(mapServerSubmission));
+        if (active) setSubmissions(records.map(mapCanonicalSubmission));
       })
       .catch((reason: unknown) => {
         if (active) {
@@ -928,7 +1017,7 @@ export function SubmissionListWorkspace({
     return () => {
       active = false;
     };
-  }, [baseUrl, eventId]);
+  }, [baseUrl, eventId, organizationId]);
 
   const tracks = useMemo(
     () => [...new Set(submissions.map((submission) => submission.track))].sort(),
@@ -1043,9 +1132,10 @@ export function SubmissionListWorkspace({
             <span>accepted</span>
           </div>
           <div className={styles.summaryNote}>
-            <span>{loading ? "Loading server submissions…" : "Server-backed organizer view"}</span>
+            <span>{loading ? "Loading canonical CFP submissions…" : "Canonical CFP organizer view"}</span>
             <small>
-              {loadError ?? "Review assignments and decisions are read from the evaluation API."}
+              {loadError ??
+                "Submission content comes from CFP; review assignments and decisions are optional evaluation enrichment."}
             </small>
           </div>
         </section>
@@ -1322,7 +1412,7 @@ function DecisionControl({
     setBusy(true);
     setError(null);
     try {
-      const decision = await submissionRequest<EvaluationDecisionRecord>(
+      const decision = await evaluationRequest<EvaluationDecisionRecord>(
         baseUrl,
         `/plans/${encodeURIComponent(submission.evaluationPlanId)}/submissions/${encodeURIComponent(submission.id)}/decision`,
         {
@@ -1529,23 +1619,34 @@ export function SubmissionDetailWorkspace({
   useEffect(() => {
     if (localDemoEnabled()) return;
     let active = true;
-    void submissionRequest<readonly ServerSubmissionRecord[]>(
+    if (organizationId === undefined || organizationId.trim().length === 0) {
+      setLoading(false);
+      setLoadError("An organization-scoped route is required to load a canonical CFP submission.");
+      return () => {
+        active = false;
+      };
+    }
+    void canonicalSubmissionRequest<readonly CanonicalSubmissionEnvelope[]>(
       baseUrl,
-      `/events/${encodeURIComponent(eventId)}/submissions`,
+      organizationId,
+      eventId,
     )
       .then((records) => {
         if (!active) return null;
-        const record = records.find((candidate) => candidate.id === submissionId);
-        return record === undefined ? null : enrichServerSubmission(baseUrl, record);
+        const envelope = records.find(
+          (candidate) => candidate.submission.id === submissionId,
+        );
+        return envelope === undefined ? null : enrichCanonicalSubmission(baseUrl, envelope);
       })
       .then((loaded) => {
         if (active) setSubmission(loaded);
       })
       .catch((reason: unknown) => {
-        if (active)
+        if (active) {
           setLoadError(
             reason instanceof Error ? reason.message : "Submission could not be loaded.",
           );
+        }
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -1553,7 +1654,7 @@ export function SubmissionDetailWorkspace({
     return () => {
       active = false;
     };
-  }, [baseUrl, eventId, submissionId]);
+  }, [baseUrl, eventId, organizationId, submissionId]);
 
   if (loading) {
     return (
@@ -1561,7 +1662,7 @@ export function SubmissionDetailWorkspace({
         <div className={styles.notFound} role="status">
           <p className={styles.eyebrow}>Organizer workspace</p>
           <h1>Loading submission</h1>
-          <p>Loading the authoritative submission record from the evaluation API.</p>
+          <p>Loading the authoritative submission record from the CFP API.</p>
         </div>
       </div>
     );
@@ -1690,9 +1791,11 @@ export function SubmissionDetailWorkspace({
                     <div>
                       <strong>{participant.name}</strong>
                       <span>
-                        {participant.role} · {participant.organization}
+                        {participant.role}
+                        {participant.organization ? ` · ${participant.organization}` : ""}
                       </span>
                       <a href={`mailto:${participant.email}`}>{participant.email}</a>
+                      {participant.biography ? <span>Biography: {participant.biography}</span> : null}
                       {Object.entries(participant.answers ?? {}).map(([question, answer]) => (
                         <span key={`${participant.id}-${question}`}>
                           {question}: {answerText(answer) ?? "—"}
@@ -1795,7 +1898,7 @@ function ReopenControl({
     setBusy(true);
     setError(null);
     try {
-      await submissionRequest(
+      await evaluationRequest(
         baseUrl,
         `/events/${encodeURIComponent(submission.eventId)}/submissions/${encodeURIComponent(submission.id)}/reopen`,
         {

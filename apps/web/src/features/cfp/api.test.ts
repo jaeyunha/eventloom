@@ -40,6 +40,107 @@ describe("CFP authenticated session", () => {
 
     await expect(api.getSession()).resolves.toBeNull();
   });
+  it("falls back from invalid credentials to sign-up and hands off verified session data", async () => {
+    const requests: Array<{ url: string; init: RequestInit | undefined }> = [];
+    const api = createCfpApi("https://web.example.com", (async (input, init) => {
+      requests.push({ url: String(input), init });
+      if (requests.length === 1) {
+        return Response.json(
+          { error: { code: "INVALID_EMAIL_OR_PASSWORD", message: "Invalid credentials." } },
+          { status: 401 },
+        );
+      }
+      return Response.json({
+        token: "signup-token",
+        user: {
+          email: "Ada@Example.com",
+          name: "Ada Speaker",
+          emailVerified: true,
+        },
+      });
+    }) as typeof fetch);
+
+    await expect(
+      api.authenticateAccount({
+        email: " Ada@Example.com ",
+        password: "StrongPass1!",
+        name: "Ada Speaker",
+        verificationCallbackUrl: "https://web.example.com/cfp/evaluator-2026/account",
+      }),
+    ).resolves.toEqual({
+      status: "authenticated",
+      session: {
+        email: "ada@example.com",
+        name: "Ada Speaker",
+        firstName: "Ada",
+        lastName: "Speaker",
+      },
+    });
+    expect(requests.map((request) => request.url)).toEqual([
+      "https://web.example.com/api/auth/sign-in/email",
+      "https://web.example.com/api/auth/sign-up/email",
+    ]);
+    expect(requests.every((request) => request.init?.credentials === "include")).toBe(true);
+    expect(requests[0]?.init?.method).toBe("POST");
+    expect(requests[1]?.init?.method).toBe("POST");
+    expect(JSON.parse(String(requests[0]?.init?.body))).toEqual({
+      email: "ada@example.com",
+      password: "StrongPass1!",
+    });
+    expect(JSON.parse(String(requests[1]?.init?.body))).toEqual({
+      email: "ada@example.com",
+      password: "StrongPass1!",
+      name: "Ada Speaker",
+      callbackURL: "https://web.example.com/cfp/evaluator-2026/account",
+    });
+  });
+
+  it("fails closed when a successful sign-in omits a usable verified session", async () => {
+    let requestCount = 0;
+    const api = createCfpApi("https://web.example.com", (async () => {
+      requestCount += 1;
+      return Response.json({ token: "token-without-user" });
+    }) as typeof fetch);
+
+    await expect(
+      api.authenticateAccount({
+        email: "ada@example.com",
+        password: "StrongPass1!",
+        name: "Ada Speaker",
+      }),
+    ).rejects.toMatchObject({
+      code: "AUTH_SESSION_NOT_CREATED",
+      status: 200,
+    });
+    expect(requestCount).toBe(1);
+  });
+
+  it("keeps sign-up verification required when the returned user is unverified", async () => {
+    const api = createCfpApi("https://web.example.com", (async (input) => {
+      if (String(input).endsWith("/sign-in/email")) {
+        return Response.json(
+          { error: { code: "INVALID_EMAIL_OR_PASSWORD" } },
+          { status: 401 },
+        );
+      }
+      return Response.json({
+        token: null,
+        user: {
+          email: "ada@example.com",
+          name: "Ada Speaker",
+          emailVerified: false,
+        },
+      });
+    }) as typeof fetch);
+
+    await expect(
+      api.authenticateAccount({
+        email: "ada@example.com",
+        password: "StrongPass1!",
+        name: "Ada Speaker",
+      }),
+    ).resolves.toEqual({ status: "verification_required" });
+  });
 });
 it("parses the published dynamic schema without dropping rules or reusable metadata", async () => {
   const fetcher = (async () =>

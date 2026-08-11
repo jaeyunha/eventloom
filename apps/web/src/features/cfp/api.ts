@@ -329,15 +329,20 @@ const formSchema = z
 export type CfpEventConfiguration = z.infer<typeof eventSchema>;
 export type CfpFormConfiguration = z.infer<typeof formSchema>;
 
-export interface CfpAccountAuthentication {
-  status: "authenticated" | "verification_required";
-}
 export interface CfpAuthenticatedSession {
   email: string;
   name: string;
   firstName: string;
   lastName: string;
 }
+export type CfpAccountAuthentication =
+  | {
+      status: "authenticated";
+      session: CfpAuthenticatedSession;
+    }
+  | {
+      status: "verification_required";
+    };
 export interface CfpApi {
   uploadFile?(input: {
     organizationId: string;
@@ -580,16 +585,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function hasAuthSession(body: unknown): boolean {
-  if (typeof body !== "object" || body === null || Array.isArray(body)) return false;
-  const responseBody = body as AuthResponseBody;
-  const token = responseBody.token;
-  if (typeof token === "string" && token.trim().length > 0) return true;
+function authResponsePayload(body: unknown): Record<string, unknown> | null {
   const payload = isRecord(body) && Object.hasOwn(body, "data") ? body.data : body;
-  if (isRecord(payload) && typeof payload.token === "string" && payload.token.trim().length > 0) {
-    return true;
-  }
-  return isRecord(payload) && isRecord(payload.user) && isRecord(payload.session);
+  return isRecord(payload) ? payload : null;
+}
+
+function hasAuthSession(body: unknown): boolean {
+  const payload = authResponsePayload(body);
+  if (payload === null) return false;
+  if (typeof payload.token === "string" && payload.token.trim().length > 0) return true;
+  if (isRecord(payload.session)) return true;
+  return isRecord(payload.user) && payload.user.emailVerified === true;
+}
+
+function hasUnverifiedAuthUser(body: unknown): boolean {
+  const payload = authResponsePayload(body);
+  return isRecord(payload?.user) && payload.user.emailVerified === false;
 }
 export const CFP_REQUEST_TIMEOUT_MS = 20_000;
 
@@ -643,13 +654,14 @@ async function withCfpRequestTimeout<T>(
 }
 
 function authenticatedSessionFrom(body: unknown): CfpAuthenticatedSession | null {
-  const payload = isRecord(body) && Object.hasOwn(body, "data") ? body.data : body;
-  if (payload === null || payload === undefined) return null;
-  if (!isRecord(payload)) return null;
-  if (payload.session === null || payload.user === null) return null;
-
-  const user = isRecord(payload.user) ? payload.user : payload;
-  if (user.emailVerified === false) return null;
+  const payload = authResponsePayload(body);
+  if (payload === null) return null;
+  const user = isRecord(payload.user) ? payload.user : null;
+  if (user === null) return null;
+  const hasSessionCredential =
+    (typeof payload.token === "string" && payload.token.trim().length > 0) ||
+    isRecord(payload.session);
+  if (!hasSessionCredential || user.emailVerified !== true) return null;
   const email = typeof user.email === "string" ? user.email.trim().toLowerCase() : "";
   if (!email) return null;
 
@@ -869,7 +881,9 @@ export function createCfpApi(baseUrl: string, fetcher: Fetcher = fetch): CfpApi 
       });
 
       if (signIn.response.ok) {
-        if (hasAuthSession(signIn.body)) return { status: "authenticated" };
+        const session = authenticatedSessionFrom(signIn.body);
+        if (session !== null) return { status: "authenticated", session };
+        if (hasUnverifiedAuthUser(signIn.body)) return { status: "verification_required" };
         throw authError(
           signIn.response,
           signIn.body,
@@ -896,6 +910,9 @@ export function createCfpApi(baseUrl: string, fetcher: Fetcher = fetch): CfpApi 
         ...(input.verificationCallbackUrl ? { callbackURL: input.verificationCallbackUrl } : {}),
       });
       if (!signUp.response.ok) {
+        if (isEmailNotVerifiedError(signUp.response, signUp.body)) {
+          return { status: "verification_required" };
+        }
         throw authError(
           signUp.response,
           signUp.body,
@@ -903,8 +920,17 @@ export function createCfpApi(baseUrl: string, fetcher: Fetcher = fetch): CfpApi 
           "We could not create your account.",
         );
       }
-      if (hasAuthSession(signUp.body)) return { status: "authenticated" };
-      return { status: "verification_required" };
+      const session = authenticatedSessionFrom(signUp.body);
+      if (session !== null) return { status: "authenticated", session };
+      if (hasUnverifiedAuthUser(signUp.body) || !hasAuthSession(signUp.body)) {
+        return { status: "verification_required" };
+      }
+      throw authError(
+        signUp.response,
+        signUp.body,
+        "AUTH_SESSION_NOT_CREATED",
+        "Your sign-up session could not be established.",
+      );
     },
 
     loadDraft(input) {

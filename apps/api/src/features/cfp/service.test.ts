@@ -204,7 +204,11 @@ class MemoryRepository implements CfpRepository {
     const found = this.submissions.get(submissionId);
     return found?.tenantId === tenantId ? structuredClone(found) : null;
   }
-
+  async listSubmissionsForEvent(tenantId: string, eventId: string): Promise<Submission[]> {
+    return [...this.submissions.values()]
+      .filter((submission) => submission.tenantId === tenantId && submission.eventId === eventId)
+      .map((submission) => structuredClone(submission));
+  }
   async countOwnedSubmissions(input: {
     tenantId: string;
     eventId: string;
@@ -988,6 +992,166 @@ describe("CFP submission lifecycle", () => {
       tenantId: "tenant_1",
       ownerAccountId: "speaker_account",
       answers: { title: "Reliable APIs" },
+    });
+  });
+  it("saves and reloads a title-only incomplete draft for its owner", async () => {
+    const { service } = createFixture();
+    const created = await service.createDraft({
+      tenantId: "tenant_1",
+      eventId: "event_1",
+      formId: "form_1",
+      ownerAccountId: "account_1",
+      idempotencyKey: "title-only-create",
+    });
+    const accountStep = await service.saveDraft({
+      tenantId: "tenant_1",
+      eventId: "event_1",
+      submissionId: created.id,
+      ownerAccountId: "account_1",
+      expectedVersion: created.version,
+      formVersion: created.formVersion,
+      completedStep: "account",
+      idempotencyKey: "title-only-account",
+    });
+    const saved = await service.saveDraft({
+      tenantId: "tenant_1",
+      eventId: "event_1",
+      submissionId: created.id,
+      ownerAccountId: "account_1",
+      expectedVersion: accountStep.version,
+      formVersion: accountStep.formVersion,
+      completedStep: "submission",
+      answers: { title: "Title-only draft" },
+      idempotencyKey: "title-only-save",
+    });
+
+    const loaded = await service.loadDraft({
+      tenantId: "tenant_1",
+      eventId: "event_1",
+      submissionId: saved.id,
+      ownerAccountId: "account_1",
+    });
+    expect(loaded).toEqual(saved);
+    expect(loaded).toMatchObject({
+      status: "draft",
+      completedSteps: ["welcome", "account", "submission"],
+      answers: { title: "Title-only draft" },
+    });
+    await expect(
+      service.loadDraft({
+        tenantId: "tenant_1",
+        eventId: "event_other",
+        submissionId: saved.id,
+        ownerAccountId: "account_1",
+      }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+    const edited = await service.saveDraft({
+      tenantId: "tenant_1",
+      eventId: "event_1",
+      submissionId: loaded.id,
+      ownerAccountId: "account_1",
+      expectedVersion: loaded.version,
+      formVersion: loaded.formVersion,
+      answers: { abstract: "A partial edit must preserve the saved title." },
+      idempotencyKey: "title-only-edit",
+    });
+    const reloaded = await service.loadDraft({
+      tenantId: "tenant_1",
+      eventId: "event_1",
+      submissionId: edited.id,
+      ownerAccountId: "account_1",
+    });
+    expect(reloaded).toEqual(edited);
+    expect(reloaded.answers).toEqual({
+      title: "Title-only draft",
+      abstract: "A partial edit must preserve the saved title.",
+    });
+  });
+
+  it("lists canonical organizer submissions with scoped forms and schema versions", async () => {
+    const { service, repository } = createFixture();
+    const organizerForm = buildForm();
+    repository.forms.set(organizerForm.id, structuredClone(organizerForm));
+    const canonicalSubmission: Submission = {
+      id: "submission_canonical",
+      tenantId: "tenant_1",
+      eventId: "event_1",
+      formId: organizerForm.id,
+      ownerAccountId: "account_1",
+      formVersion: organizerForm.version,
+      version: 4,
+      status: "submitted",
+      completedSteps: ["welcome", "account", "submission", "participant", "review"],
+      answers: {
+        title: "Canonical submission",
+        abstract: "Exact server-owned answers",
+        format: "talk",
+      },
+      participants: [
+        {
+          id: "participant_primary",
+          firstName: "Ada",
+          lastName: "Lovelace",
+          email: "ada@example.com",
+          role: "primary",
+          biography: "Primary speaker",
+          answers: { firstName: "Ada" },
+        },
+        {
+          id: "participant_co",
+          firstName: "Grace",
+          lastName: "Hopper",
+          email: "grace@example.com",
+          role: "co_speaker",
+          biography: "Co-speaker",
+          answers: { firstName: "Grace" },
+        },
+      ],
+      secondaryContacts: [],
+      createdAt: "2026-08-08T12:00:00.000Z",
+      updatedAt: "2026-08-08T12:30:00.000Z",
+      submittedAt: "2026-08-08T12:30:00.000Z",
+    };
+    repository.submissions.set(canonicalSubmission.id, structuredClone(canonicalSubmission));
+    repository.submissions.set(
+      "submission_other_event",
+      structuredClone({
+        ...canonicalSubmission,
+        id: "submission_other_event",
+        eventId: "event_other",
+      }),
+    );
+
+    const records = await service.listOrganizerSubmissions({
+      tenantId: "tenant_1",
+      eventId: "event_1",
+    });
+    expect(records).toEqual([
+      {
+        submission: canonicalSubmission,
+        submissionFields: organizerForm.submissionFields,
+        participantFields: organizerForm.participantFields,
+      },
+    ]);
+    expect(records[0]?.submission.participants).toEqual(canonicalSubmission.participants);
+
+    repository.submissions.set(
+      "submission_stale_schema",
+      structuredClone({
+        ...canonicalSubmission,
+        id: "submission_stale_schema",
+        formVersion: organizerForm.version + 1,
+      }),
+    );
+    await expect(
+      service.listOrganizerSubmissions({ tenantId: "tenant_1", eventId: "event_1" }),
+    ).rejects.toMatchObject({
+      code: "CONFLICT",
+      details: {
+        submissionFormVersion: organizerForm.version + 1,
+        currentFormVersion: organizerForm.version,
+      },
     });
   });
 });

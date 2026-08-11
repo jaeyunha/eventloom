@@ -1202,7 +1202,7 @@ export function CfpWizard({
   async function saveAndNavigate(
     nextDraft: CfpDraft,
     targetStep: CfpStep | "complete",
-    beforePersist?: () => Promise<void>,
+    beforePersist?: (draft: CfpDraft) => Promise<CfpDraft | void>,
   ): Promise<void> {
     if (staleFormConflict) return;
     if (step === "welcome" && submissionsClosed) {
@@ -1214,13 +1214,18 @@ export function CfpWizard({
     setDraft(nextDraft);
     draftRevisionRef.current += 1;
     operation.localRevision = draftRevisionRef.current;
+    let draftToPersist = nextDraft;
     let keepForRetry = false;
     try {
       setSaveState("saving");
-      await beforePersist?.();
+      const preparedDraft = await beforePersist?.(draftToPersist);
+      if (preparedDraft !== undefined) {
+        draftToPersist = preparedDraft;
+        setDraft(preparedDraft);
+      }
       if (!mutationGateRef.current?.isCurrent(operation.lease)) return;
       if (targetStep === "complete") {
-        const saved = await persistServerDraft(nextDraft, "review", operation);
+        const saved = await persistServerDraft(draftToPersist, "review", operation);
         if (!mutationGateRef.current?.isCurrent(operation.lease)) return;
         if (draftRevisionRef.current !== operation.localRevision) {
           setSaveError(
@@ -1281,7 +1286,7 @@ export function CfpWizard({
               : step === "participants"
                 ? "participant"
                 : undefined;
-        await persistServerDraft(nextDraft, completedStep, operation);
+        await persistServerDraft(draftToPersist, completedStep, operation);
       }
       if (!mutationGateRef.current?.isCurrent(operation.lease)) return;
       if (draftRevisionRef.current !== operation.localRevision) {
@@ -1376,11 +1381,11 @@ export function CfpWizard({
     if (step === "account") nextDraft = syncPrimaryParticipant(draft);
     const authenticateBeforePersist =
       step === "account" && !authenticatedSession && process.env.NEXT_PUBLIC_APP_ENV !== "local"
-        ? async () => {
+        ? async (candidateDraft: CfpDraft) => {
             const authentication = await api.authenticateAccount({
-              email: nextDraft.account.email,
+              email: candidateDraft.account.email,
               password,
-              name: `${nextDraft.account.firstName} ${nextDraft.account.lastName}`.trim(),
+              name: `${candidateDraft.account.firstName} ${candidateDraft.account.lastName}`.trim(),
               ...(typeof window === "undefined"
                 ? {}
                 : { verificationCallbackUrl: window.location.href }),
@@ -1388,6 +1393,10 @@ export function CfpWizard({
             if (authentication.status === "verification_required") {
               throw new CfpVerificationRequiredError();
             }
+            setAuthenticatedSession(authentication.session);
+            return syncPrimaryParticipant(
+              draftWithAuthenticatedSession(candidateDraft, authentication.session),
+            );
           }
         : undefined;
     if (step === "review") {
@@ -3129,6 +3138,7 @@ export function CfpComplete({
     organizationId: string;
     eventId: string;
     formId: string;
+    canEdit: boolean;
   } | null>(null);
   const api = useMemo(
     () => providedApi ?? createCfpApi(process.env.NEXT_PUBLIC_API_URL ?? ""),
@@ -3201,6 +3211,7 @@ export function CfpComplete({
           organizationId: identity.organizationId,
           eventId: identity.eventId,
           formId: activeFormId,
+          canEdit: !cfpIsClosed(published.event),
         });
         setConfirmationDetails({
           eventName: published.event.name,
@@ -3221,6 +3232,21 @@ export function CfpComplete({
       active = false;
     };
   }, [api, eventSlug, formId, organizationId, router]);
+  function editSubmission(): void {
+    if (completionIdentity === null || !completionIdentity.canEdit) return;
+    const pointer = window.localStorage.getItem(
+      getCfpSubmissionPointerStorageKey(
+        completionIdentity.organizationId,
+        completionIdentity.eventId,
+        completionIdentity.formId,
+      ),
+    );
+    if (!pointer) {
+      router.replace(getCfpStepRoute(eventSlug, "review"));
+      return;
+    }
+    router.push(getCfpStepRoute(eventSlug, "submission"));
+  }
   function submitAnotherSession(): void {
     if (completionIdentity === null) return;
     clearCfpSubmissionState(eventSlug, completionIdentity, window.localStorage);
@@ -3263,6 +3289,11 @@ export function CfpComplete({
           completed.
         </p>
         <a href="/portal/submissions">View submission status dashboard</a>
+        {completionIdentity?.canEdit ? (
+          <Button className={styles.textButton} onClick={editSubmission} variant="ghost">
+            Edit submission
+          </Button>
+        ) : null}
         <Button className={styles.textButton} onClick={submitAnotherSession} variant="ghost">
           Submit another session
         </Button>

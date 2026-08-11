@@ -78,6 +78,18 @@ class FakeCfpService implements CfpRouteService {
     this.#record("saveForm", { input, expectedVersion });
     return structuredClone(input as CfpForm);
   }
+  async listOrganizerSubmissions(
+    input: Parameters<CfpService["listOrganizerSubmissions"]>[0],
+  ): Promise<Awaited<ReturnType<CfpService["listOrganizerSubmissions"]>>> {
+    this.#record("listOrganizerSubmissions", input);
+    return [
+      {
+        submission: structuredClone(submission),
+        submissionFields: structuredClone(form.submissionFields),
+        participantFields: structuredClone(form.participantFields),
+      },
+    ];
+  }
 
   async createDraft(
     input: Parameters<CfpService["createDraft"]>[0],
@@ -442,5 +454,39 @@ describe("CFP API routes", () => {
       },
     });
     expect(response.headers.get("cache-control")).toBe("private, no-store");
+  });
+  it("authorizes organizers and preserves the canonical organizer submissions envelope", async () => {
+    const { app, service } = createFixture();
+    const organizerResponse = await app.request(
+      `${basePath}/submissions`,
+      { method: "GET", headers: requestHeaders("organizer") },
+      environment,
+    );
+    const applicantResponse = await app.request(
+      `${basePath}/submissions`,
+      { method: "GET", headers: requestHeaders("applicant") },
+      environment,
+    );
+
+    expect(organizerResponse.status).toBe(200);
+    await expect(organizerResponse.json()).resolves.toEqual({
+      data: [
+        {
+          submission,
+          submissionFields: [],
+          participantFields: [],
+        },
+      ],
+    });
+    expect(service.calls).toEqual([
+      {
+        method: "listOrganizerSubmissions",
+        input: { tenantId: "org_1", eventId: "event_1" },
+      },
+    ]);
+    expect(applicantResponse.status).toBe(403);
+    await expect(applicantResponse.json()).resolves.toMatchObject({
+      error: { code: "ACCESS_DENIED" },
+    });
   });
 });
