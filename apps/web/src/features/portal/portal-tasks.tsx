@@ -18,9 +18,9 @@ import {
   formatPortalFileSize,
   InlineMutationError,
   PageHeading,
-  portalAssetStateLabel,
   PortalContentState,
   Progress,
+  portalAssetStateLabel,
   TaskStatusBadge,
 } from "./portal-ui";
 import type { PortalAssetKind, PortalTask } from "./types";
@@ -176,7 +176,7 @@ function TaskCard({ task }: Readonly<{ task: PortalTask }>) {
   }
 
   async function handleDownload() {
-    if (!asset || asset.state !== "ready") return;
+    if (asset?.state !== "ready") return;
     setDownloading(true);
     try {
       const grant = await downloadAsset(asset.id);

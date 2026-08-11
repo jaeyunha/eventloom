@@ -13,8 +13,8 @@ import {
   formatPortalFileSize,
   InlineMutationError,
   PageHeading,
-  portalAssetStateLabel,
   PortalContentState,
+  portalAssetStateLabel,
 } from "./portal-ui";
 import type { PortalDownloadGrant, PortalProfile } from "./types";
 
@@ -125,7 +125,7 @@ function PortalProfileContent() {
     let cancelled = false;
     setHeadshotGrant(null);
     setHeadshotError(null);
-    if (!headshot || headshot.state !== "ready" || !can("asset-read")) {
+    if (headshot?.state !== "ready" || !can("asset-read")) {
       setHeadshotLoading(false);
       return;
     }
@@ -272,7 +272,7 @@ function PortalProfileContent() {
   }
 
   async function handleHeadshotDownload() {
-    if (!headshot || headshot.state !== "ready") return;
+    if (headshot?.state !== "ready") return;
     setHeadshotDownloading(true);
     try {
       const grant = await downloadAsset(headshot.id);
