@@ -1,34 +1,51 @@
 {
   "workstream": "organizer-overview-latency",
   "measuredAt": "2026-08-11",
-  "method": "scripts/eval/measure-overview-latency.mjs (read-only GETs against the dev Airtable base, same request shape as AirtableOrganizerOverviewRepository.getOverview)",
-  "base": "dev Airtable base from root .env (sparse: 3 events, 3 submissions; production base holds 19 submissions / 34 tasks, so production numbers are strictly worse)",
-  "currentUnfilteredScans": {
-    "description": "getOverview today: six tables listed with NO filterByFormula, full-base scans, then a SEQUENTIAL agendas listByIds after the parallel batch",
-    "run1": {
-      "perTableMs": { "Events": 2768, "Submissions": 2839, "Review Plans": 2807, "Evaluations": 2783, "Speaker Tasks": 2877, "Sessions": 2896 },
-      "wallMs": 2920,
-      "serialSumMs": 16970
-    },
-    "run2": {
-      "perTableMs": { "Events": 1055, "Submissions": 1005, "Review Plans": 1087, "Evaluations": 1055, "Speaker Tasks": 968, "Sessions": 936 },
-      "wallMs": 1110,
-      "serialSumMs": 6106
-    },
-    "note": "per-request time varies 1-3s even for 1-page, 3-record tables; production adds the agendas listByIds waterfall (+~1-3s) and more pages per table. Matches the observed 6-8s."
+  "method": "scripts/eval/measure-overview-latency.mjs; read-only Airtable GETs using the current split repository query shape",
+  "environment": {
+    "kind": "local-development",
+    "dataSource": "configured development Airtable base",
+    "scopedEventCount": 3,
+    "credentialsRecorded": false
   },
-  "proposedServerSideFilter": {
-    "description": "Events filtered by organizationId via FIND on Settings JSON; remaining tables filtered by event ids via FIND on their JSON field; all in parallel",
-    "eventsMatchedForOrg": ["devflow-conf-2027", "1499337d-b843-4ee8-a530-4573c39e022f"],
-    "wallMs": 702,
-    "serialSumMs": 1920,
-    "perTableMs": { "Events": 282, "Submissions": 321, "Review Plans": 262, "Evaluations": 419, "Speaker Tasks": 341, "Sessions": 295 }
+  "currentMeasurements": {
+    "core": {
+      "description": "One organization-scoped Events query used by GET /overview/core.",
+      "wallMs": 962,
+      "requests": [
+        { "table": "Events", "ms": 962, "pages": 1, "records": 3, "kb": 3 }
+      ]
+    },
+    "activity": {
+      "description": "Organization-scoped event discovery followed by six parallel scoped secondary reads used by GET /overview/activity.",
+      "wallMs": 1258,
+      "serialSumMs": 5147,
+      "requests": [
+        { "table": "Events", "ms": 287, "pages": 1, "records": 3, "kb": 3 },
+        { "table": "Submissions", "ms": 278, "pages": 1, "records": 12, "kb": 23 },
+        { "table": "Review Plans", "ms": 863, "pages": 1, "records": 1, "kb": 2 },
+        { "table": "Evaluations", "ms": 918, "pages": 1, "records": 5, "kb": 8 },
+        { "table": "Speaker Tasks", "ms": 888, "pages": 1, "records": 14, "kb": 18 },
+        { "table": "Sessions", "ms": 944, "pages": 1, "records": 5, "kb": 13 },
+        { "table": "Agenda Versions", "ms": 969, "pages": 1, "records": 2, "kb": 46 }
+      ]
+    }
   },
-  "rootCauses": [
-    "Airtable: six unfiltered full-table scans per overview request (apps/api/src/runtime/airtable.ts:4154-4163)",
-    "Airtable: agendas listByIds runs sequentially AFTER the parallel batch (airtable.ts:4218) - a request waterfall",
-    "API: no caching of the organization overview projection; every navigation refetches (routes/organizer-overview.ts)",
-    "Web: single blocking full-page loading state, no skeleton, no per-panel independence (features/admin/organizer-overview.tsx:350)",
-    "Reviews: N+1 aggregate requests, one per submission (features/reviews/review-workspace.tsx:753-761)"
-  ]
+  "historicalBeforeRemediation": {
+    "description": "The prior monolithic probe observed 2920 ms and 1110 ms wall samples before core/activity separation. Those diagnostic samples are retained only as historical context and are not current or release evidence.",
+    "samplesMs": [2920, 1110]
+  },
+  "sourceEvidence": [
+    "Core and activity are separate authorized routes.",
+    "Core awaits only the scoped Events query.",
+    "Activity secondary reads run in parallel after scoped event discovery.",
+    "The browser starts both reads independently and retains same-organization snapshots on refresh failure."
+  ],
+  "limitations": [
+    "This is one local read-only sample per split endpoint shape, not a percentile distribution.",
+    "It does not measure browser rendering, the Next gateway, Worker execution, network geography, or production load.",
+    "The development fixture is sparse; these values do not prove the public performance targets or deployed release readiness.",
+    "No production or staging credential, tenant payload, or provider response is stored in this artifact."
+  ],
+  "releaseClaim": "diagnostic-source-evidence-only"
 }
