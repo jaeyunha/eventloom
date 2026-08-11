@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { EvaluationError } from "./errors";
-import { InMemoryEvaluationRepository, InMemorySubmissionReviewSource } from "./repository";
+import {
+  InMemoryEvaluationRepository,
+  InMemorySubmissionReviewSource,
+  type ReviewerWorkspaceRecords,
+  type SubmissionReviewLookup,
+} from "./repository";
 import {
   type EvaluationDecisionProjectionInput,
   EvaluationService,
@@ -8,6 +13,7 @@ import {
 } from "./service";
 import type {
   EvaluationActor,
+  EvaluationAssignment,
   EvaluationReviewerProjection,
   ReviewRound,
   SubmissionReviewMaterial,
@@ -31,6 +37,91 @@ function reviewer(userId: string, tenant = tenantId): EvaluationActor {
     kind: "human",
     grants: [{ eventId, role: "reviewer" }],
   };
+}
+class StaleAssignmentRepository extends InMemoryEvaluationRepository {
+  override async getAssignment(
+    tenantId: string,
+    assignmentId: string,
+  ): Promise<EvaluationAssignment | null> {
+    const assignment = await super.getAssignment(tenantId, assignmentId);
+    return assignment === null ? null : { ...assignment, status: "assigned" };
+  }
+}
+class WorkspaceBatchRepository extends InMemoryEvaluationRepository {
+  planListCalls = 0;
+  workspaceCalls = 0;
+  assignmentListCalls = 0;
+  reviewListCalls = 0;
+  batchGate: Promise<void> | null = null;
+
+  override async listPlans(tenantId: string, requestedEventId?: string) {
+    this.planListCalls += 1;
+    const gate = this.batchGate;
+    if (gate !== null) await gate;
+    return super.listPlans(tenantId, requestedEventId);
+  }
+
+  override async listReviewerWorkspaceRecords(
+    requestedTenantId: string,
+    reviewerId: string,
+    eventIds: readonly string[],
+  ): Promise<ReviewerWorkspaceRecords> {
+    this.workspaceCalls += 1;
+    const gate = this.batchGate;
+    if (gate !== null) await gate;
+    return super.listReviewerWorkspaceRecords(requestedTenantId, reviewerId, eventIds);
+  }
+
+  override async listAssignments(requestedTenantId: string, planId: string) {
+    this.assignmentListCalls += 1;
+    return super.listAssignments(requestedTenantId, planId);
+  }
+
+  override async listReviews(requestedTenantId: string, planId: string) {
+    this.reviewListCalls += 1;
+    return super.listReviews(requestedTenantId, planId);
+  }
+
+  resetCounts(): void {
+    this.planListCalls = 0;
+    this.workspaceCalls = 0;
+    this.assignmentListCalls = 0;
+    this.reviewListCalls = 0;
+  }
+}
+
+class WorkspaceBatchSource extends InMemorySubmissionReviewSource {
+  singleCalls = 0;
+  batchCalls = 0;
+  lastLookups: readonly SubmissionReviewLookup[] = [];
+  omitMaterials = false;
+  failure: Error | null = null;
+
+  override async getSubmissionForReview(
+    requestedTenantId: string,
+    requestedEventId: string,
+    submissionId: string,
+  ) {
+    this.singleCalls += 1;
+    return super.getSubmissionForReview(requestedTenantId, requestedEventId, submissionId);
+  }
+
+  override async getSubmissionsForReview(
+    requestedTenantId: string,
+    lookups: readonly SubmissionReviewLookup[],
+  ) {
+    this.batchCalls += 1;
+    this.lastLookups = structuredClone(lookups);
+    if (this.failure !== null) throw this.failure;
+    if (this.omitMaterials) return [];
+    return [...(await super.getSubmissionsForReview(requestedTenantId, lookups))].reverse();
+  }
+
+  resetCounts(): void {
+    this.singleCalls = 0;
+    this.batchCalls = 0;
+    this.lastLookups = [];
+  }
 }
 
 const round: ReviewRound = {
@@ -89,16 +180,21 @@ async function fixture(
   options: Pick<EvaluationServiceOptions, "acceptanceHandoff" | "decisionProjection"> & {
     blindReview?: boolean;
     reviewsPerSubmission?: number;
+    maxAssignmentsPerReviewer?: number;
     submissionMaterial?: SubmissionReviewMaterial;
     reviewerProjection?: EvaluationReviewerProjection;
+    repository?: InMemoryEvaluationRepository;
+    submissions?: InMemorySubmissionReviewSource;
   } = {},
 ) {
   let currentTime = new Date(nowIso);
-  const repository = new InMemoryEvaluationRepository();
-  const submissions = new InMemorySubmissionReviewSource([
-    options.submissionMaterial ?? submission,
-    { ...submission, id: "submission-2", title: "Another session" },
-  ]);
+  const repository = options.repository ?? new InMemoryEvaluationRepository();
+  const submissions =
+    options.submissions ??
+    new InMemorySubmissionReviewSource([
+      options.submissionMaterial ?? submission,
+      { ...submission, id: "submission-2", title: "Another session" },
+    ]);
   const service = new EvaluationService(repository, submissions, {
     clock: () => new Date(currentTime),
     ...(options.acceptanceHandoff === undefined
@@ -116,7 +212,7 @@ async function fixture(
     closesAt: "2026-08-12T12:00:00.000Z",
     assignmentRule: {
       reviewsPerSubmission: options.reviewsPerSubmission ?? 2,
-      maxAssignmentsPerReviewer: 1,
+      maxAssignmentsPerReviewer: options.maxAssignmentsPerReviewer ?? 1,
     },
     rounds: [round],
     ...(options.reviewerProjection === undefined
@@ -269,6 +365,180 @@ describe("evaluation plans and assignments", () => {
     ]);
     expect(context.submission.answers).not.toHaveProperty("speakerEmail");
     expect(JSON.stringify(context.submission)).not.toContain("private.pdf");
+  });
+  it("batches reviewer workspace reads concurrently with stable ordering and safe errors", async () => {
+    const repository = new WorkspaceBatchRepository();
+    const submissions = new WorkspaceBatchSource([
+      { ...submission, version: 3 },
+      { ...submission, id: "submission-2", title: "Another session", version: 4 },
+    ]);
+    const { service } = await fixture({
+      repository,
+      submissions,
+      reviewsPerSubmission: 1,
+      maxAssignmentsPerReviewer: 2,
+    });
+    await assignOne(service);
+    await service.assignReviewers(organizer, {
+      planId: "plan-1",
+      roundId: round.id,
+      submissionId: "submission-2",
+      reviewerIds: ["reviewer-1"],
+    });
+    repository.resetCounts();
+    submissions.resetCounts();
+
+    let releaseBatchReads = () => {};
+    repository.batchGate = new Promise<void>((resolve) => {
+      releaseBatchReads = resolve;
+    });
+    const pending = service.listReviewerWorkspace(reviewer("reviewer-1"), eventId);
+
+    expect(repository.planListCalls).toBe(1);
+    expect(repository.workspaceCalls).toBe(1);
+    releaseBatchReads();
+    const workspace = await pending;
+
+    expect(repository.assignmentListCalls).toBe(0);
+    expect(repository.reviewListCalls).toBe(0);
+    expect(submissions.singleCalls).toBe(0);
+    expect(submissions.batchCalls).toBe(1);
+    expect(submissions.lastLookups).toEqual([
+      { eventId, submissionId: "submission-1" },
+      { eventId, submissionId: "submission-2" },
+    ]);
+    expect(workspace.assignments.map((entry) => entry.submission.title)).toEqual([
+      "A useful session",
+      "Another session",
+    ]);
+    expect(
+      workspace.assignments.every(
+        (entry) =>
+          entry.assignment.tenantId === tenantId &&
+          entry.submission.participants.length === 0 &&
+          !JSON.stringify(entry.submission).includes("speaker@example.com"),
+      ),
+    ).toBe(true);
+
+    repository.batchGate = null;
+    submissions.omitMaterials = true;
+    await expectEvaluationError(
+      service.listReviewerWorkspace(reviewer("reviewer-1"), eventId),
+      "EVALUATION_NOT_FOUND",
+    );
+
+    submissions.omitMaterials = false;
+    const failure = new Error("workspace source unavailable");
+    submissions.failure = failure;
+    await expect(service.listReviewerWorkspace(reviewer("reviewer-1"), eventId)).rejects.toBe(
+      failure,
+    );
+  });
+  it("hard-deletes outstanding assignments with no or draft reviews", async () => {
+    const { service, repository } = await fixture({ reviewsPerSubmission: 2 });
+    const assigned = await assignOne(service);
+
+    await service.unassignAssignment(organizer, "plan-1", assigned.id);
+    await expect(repository.getAssignment(tenantId, assigned.id)).resolves.toBeNull();
+
+    const inProgress = await assignOne(service, "reviewer-2");
+    const draft = await service.saveReview(reviewer("reviewer-2"), inProgress.id, {
+      scores: [{ criterionId: "quality", value: 4, origin: "human" }],
+    });
+    expect(draft.submittedAt).toBeNull();
+    await expect(repository.getAssignment(tenantId, inProgress.id)).resolves.toMatchObject({
+      status: "in_progress",
+    });
+
+    await service.unassignAssignment(organizer, "plan-1", inProgress.id);
+    await expect(repository.getAssignment(tenantId, inProgress.id)).resolves.toBeNull();
+    await expect(repository.getReview(tenantId, inProgress.id)).resolves.toBeNull();
+    const reassigned = await assignOne(service, "reviewer-2");
+    expect(reassigned).toMatchObject({ id: inProgress.id, status: "assigned", version: 1 });
+    await expect(repository.getReview(tenantId, reassigned.id)).resolves.toBeNull();
+  });
+
+  it("requires organizer authorization and isolates plan, event, and tenant assignment scope", async () => {
+    const { service, repository } = await fixture({ reviewsPerSubmission: 2 });
+    const assignment = await assignOne(service);
+
+    await expectEvaluationError(
+      service.unassignAssignment(reviewer("reviewer-1"), "plan-1", assignment.id),
+      "EVALUATION_FORBIDDEN",
+    );
+    await expectEvaluationError(
+      service.unassignAssignment(organizer, "missing-plan", assignment.id),
+      "EVALUATION_NOT_FOUND",
+    );
+
+    await repository.putAssignments([
+      { ...assignment, id: "assignment-other-plan", planId: "plan-2" },
+      { ...assignment, id: "assignment-other-event", eventId: "event-2" },
+    ]);
+    await expectEvaluationError(
+      service.unassignAssignment(organizer, "plan-1", "assignment-other-plan"),
+      "EVALUATION_NOT_FOUND",
+    );
+    await expectEvaluationError(
+      service.unassignAssignment(organizer, "plan-1", "assignment-other-event"),
+      "EVALUATION_NOT_FOUND",
+    );
+    await expectEvaluationError(
+      service.unassignAssignment({ ...organizer, tenantId: "tenant-2" }, "plan-1", assignment.id),
+      "EVALUATION_NOT_FOUND",
+    );
+  });
+
+  it("rejects submitted reviews, including stale assignment status, and other non-outstanding statuses", async () => {
+    const { service, repository } = await fixture({ reviewsPerSubmission: 2 });
+    const assignment = await assignOne(service);
+    const draft = await service.saveReview(reviewer("reviewer-1"), assignment.id, {
+      scores: [
+        { criterionId: "quality", value: 4, origin: "human" },
+        { criterionId: "relevance", value: 8, origin: "human" },
+      ],
+    });
+    const submitted = await service.submitReview(
+      reviewer("reviewer-1"),
+      assignment.id,
+      draft.version,
+    );
+    expect(submitted.submittedAt).not.toBeNull();
+
+    await expectEvaluationError(
+      service.unassignAssignment(organizer, "plan-1", assignment.id),
+      "EVALUATION_CONFLICT",
+    );
+    await expect(repository.getAssignment(tenantId, assignment.id)).resolves.toMatchObject({
+      status: "submitted",
+    });
+
+    const abstained = await assignOne(service, "reviewer-2");
+    await repository.putAssignments([
+      { ...abstained, id: "assignment-abstained", status: "abstained" },
+    ]);
+    await expectEvaluationError(
+      service.unassignAssignment(organizer, "plan-1", "assignment-abstained"),
+      "EVALUATION_CONFLICT",
+    );
+
+    const staleRepository = new StaleAssignmentRepository();
+    const { service: staleService } = await fixture({
+      repository: staleRepository,
+      reviewsPerSubmission: 1,
+    });
+    const staleAssignment = await assignOne(staleService);
+    const staleDraft = await staleService.saveReview(reviewer("reviewer-1"), staleAssignment.id, {
+      scores: [
+        { criterionId: "quality", value: 4, origin: "human" },
+        { criterionId: "relevance", value: 8, origin: "human" },
+      ],
+    });
+    await staleService.submitReview(reviewer("reviewer-1"), staleAssignment.id, staleDraft.version);
+    await expectEvaluationError(
+      staleService.unassignAssignment(organizer, "plan-1", staleAssignment.id),
+      "EVALUATION_CONFLICT",
+    );
   });
 });
 

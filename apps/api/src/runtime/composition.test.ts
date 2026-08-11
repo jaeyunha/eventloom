@@ -5,6 +5,7 @@ import type { CfpForm, EventCfp, Submission } from "../features/cfp/model";
 import type { CfpRepository } from "../features/cfp/service";
 import { CommunicationService } from "../features/communications/service";
 import type { CommunicationActor, CommunicationRecipient } from "../features/communications/types";
+import { EvaluationService } from "../features/evaluations/service";
 import { SessionService } from "../features/sessions/service";
 import type {
   PrivateAssetCapabilityBinding,
@@ -31,6 +32,7 @@ import {
   AirtableSessionRepository,
   AirtableSpeakerReminderDeliveryAdapter,
   AirtableSpeakerRepository,
+  AirtableSubmissionReviewSource,
   CloudflareCfpEffects,
   createAirtableDependencies,
 } from "./airtable";
@@ -53,6 +55,8 @@ class FormulaRecordingTransport implements AirtableTransport {
   readonly fake = new FakeAirtableTransport();
   readonly requests: AirtableRequest[] = [];
 
+  constructor(private readonly delayMs = 0) {}
+
   seed(record: Parameters<FakeAirtableTransport["seed"]>[0]): void {
     this.fake.seed(record);
   }
@@ -62,12 +66,15 @@ class FormulaRecordingTransport implements AirtableTransport {
       ...request,
       ...(request.query === undefined ? {} : { query: { ...request.query } }),
     });
+    if (this.delayMs > 0) {
+      await new Promise<void>((resolve) => setTimeout(resolve, this.delayMs));
+    }
     const formula = request.query?.filterByFormula;
     if (typeof formula !== "string") return this.fake.request<TBody>(request);
-    const delegatedFormula = formula.startsWith("AND(")
-      ? formula.slice(4, -1).split(",")[0]
-      : formula.startsWith("FIND(")
-        ? undefined
+    const delegatedFormula = formula.includes("FIND(")
+      ? undefined
+      : formula.startsWith("AND(")
+        ? formula.slice(4, -1).split(",")[0]
         : formula;
     return this.fake.request<TBody>({
       ...request,
@@ -3444,6 +3451,242 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
         appliedAt: "2026-08-09T01:00:00.000Z",
       }),
     ).rejects.toThrow("speaker content changed");
+  });
+  it("batches reviewer workspace Airtable reads under the warm latency budget", async () => {
+    const tenantId = "tenant-workspace";
+    const eventId = "event-workspace";
+    const reviewerId = "reviewer-workspace";
+    const planId = "plan-workspace";
+    const formId = "form-workspace";
+    const now = "2026-08-10T12:00:00.000Z";
+    const transport = new FormulaRecordingTransport(220);
+    const reviewRound = {
+      id: "round-workspace",
+      name: "Committee review",
+      sequence: 1,
+      closesAt: null,
+      rubric: {
+        id: "rubric-workspace",
+        name: "Workspace rubric",
+        criteria: [
+          {
+            id: "quality",
+            label: "Quality",
+            description: "Proposal quality",
+            minimum: 1,
+            maximum: 5,
+            weight: 1,
+            required: true,
+          },
+        ],
+      },
+    };
+    const plan = {
+      id: planId,
+      tenantId,
+      eventId,
+      name: "Core reviewer queue",
+      status: "open",
+      blindReview: true,
+      closesAt: null,
+      assignmentRule: { reviewsPerSubmission: 2, maxAssignmentsPerReviewer: 10 },
+      rounds: [reviewRound],
+      reviewerProjection: { fieldIds: [], fileIds: [] },
+      gradingLockedAt: now,
+      version: 2,
+      createdAt: now,
+      updatedAt: now,
+    };
+    transport.seed({
+      baseId: "base-test",
+      table: "Review Plans",
+      fields: {
+        "Application ID": planId,
+        "Rounds JSON": JSON.stringify(plan),
+      },
+    });
+
+    const assignments = [
+      {
+        id: `${planId}:round-workspace:submission-zulu:${reviewerId}`,
+        tenantId,
+        eventId,
+        planId,
+        roundId: reviewRound.id,
+        submissionId: "submission-zulu",
+        reviewerId,
+        status: "assigned",
+        planVersion: 2,
+        rubricRevision: 2,
+        submissionRevision: 3,
+        version: 1,
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        id: `${planId}:round-workspace:submission-alpha:${reviewerId}`,
+        tenantId,
+        eventId,
+        planId,
+        roundId: reviewRound.id,
+        submissionId: "submission-alpha",
+        reviewerId,
+        status: "assigned",
+        planVersion: 2,
+        rubricRevision: 2,
+        submissionRevision: 4,
+        version: 1,
+        createdAt: now,
+        updatedAt: now,
+      },
+    ];
+    for (const assignment of [
+      ...assignments,
+      {
+        ...assignments[0],
+        id: "foreign-tenant-assignment",
+        tenantId: "tenant-other",
+      },
+    ]) {
+      transport.seed({
+        baseId: "base-test",
+        table: "Evaluations",
+        fields: {
+          "Application ID": assignment.id,
+          "Scores JSON": JSON.stringify({
+            ...assignment,
+            entityType: "evaluation_assignment",
+          }),
+        },
+      });
+    }
+
+    transport.seed({
+      baseId: "base-test",
+      table: "CFP Forms",
+      fields: {
+        "Application ID": formId,
+        "Fields JSON": JSON.stringify({
+          id: formId,
+          tenantId,
+          eventId,
+          name: "Workspace form",
+          version: 1,
+          status: "published",
+          welcomeContent: "",
+          settings: {
+            speakerLimit: 5,
+            maxSubmissionsPerAccount: 5,
+            remindersEnabled: false,
+            adminNotificationsEnabled: false,
+            confirmationMessage: "",
+            successContent: "",
+          },
+          sections: [],
+          submissionFields: [
+            {
+              id: "field-speaker-email",
+              key: "speakerEmail",
+              label: "Speaker email",
+              kind: "email",
+              required: true,
+            },
+          ],
+          participantFields: [],
+          rules: [],
+        }),
+      },
+    });
+    for (const [id, title, version] of [
+      ["submission-zulu", "Zulu session", 3],
+      ["submission-alpha", "Alpha session", 4],
+    ] as const) {
+      transport.seed({
+        baseId: "base-test",
+        table: "Submissions",
+        fields: {
+          "Application ID": id,
+          "Answers JSON": JSON.stringify({
+            id,
+            tenantId,
+            eventId,
+            formId,
+            ownerAccountId: "speaker-account",
+            formVersion: 1,
+            version,
+            status: "submitted",
+            completedSteps: ["welcome"],
+            answers: {
+              title,
+              abstract: `${title} abstract`,
+              speakerEmail: "hidden@example.com",
+            },
+            participants: [
+              {
+                id: `${id}-participant`,
+                firstName: "Hidden",
+                lastName: "Speaker",
+                email: "hidden@example.com",
+                biography: "Private biography",
+                answers: {},
+              },
+            ],
+            secondaryContacts: [],
+            createdAt: now,
+            updatedAt: now,
+            submittedAt: now,
+          }),
+        },
+      });
+    }
+
+    const service = new EvaluationService(
+      new AirtableEvaluationRepository({ baseId: "base-test", transport }),
+      new AirtableSubmissionReviewSource(
+        new AirtableCfpRepository({ baseId: "base-test", transport }),
+      ),
+    );
+    transport.requests.length = 0;
+    const startedAt = performance.now();
+    const workspace = await service.listReviewerWorkspace(
+      {
+        tenantId,
+        userId: reviewerId,
+        kind: "human",
+        grants: [{ eventId, role: "reviewer" }],
+      },
+      eventId,
+    );
+    const elapsedMs = performance.now() - startedAt;
+
+    expect(elapsedMs).toBeLessThan(1_000);
+    expect(workspace.assignments.map((entry) => entry.submission.title)).toEqual([
+      "Alpha session",
+      "Zulu session",
+    ]);
+    expect(workspace.assignments).toHaveLength(2);
+    expect(
+      workspace.assignments.every(
+        (entry) =>
+          entry.assignment.tenantId === tenantId &&
+          entry.submission.identityRedacted &&
+          entry.submission.participants.length === 0 &&
+          !JSON.stringify(entry.submission).includes("hidden@example.com"),
+      ),
+    ).toBe(true);
+
+    const reads = transport.requests.filter((request) => request.method === "GET");
+    expect(reads.map((request) => request.table).sort()).toEqual([
+      "CFP Forms",
+      "Evaluations",
+      "Review Plans",
+      "Submissions",
+    ]);
+    const evaluationsRead = reads.find((request) => request.table === "Evaluations");
+    expect(evaluationsRead?.query?.filterByFormula).toContain("AND(");
+    expect(evaluationsRead?.query?.filterByFormula).toContain(tenantId);
+    expect(evaluationsRead?.query?.filterByFormula).toContain(reviewerId);
+    expect(evaluationsRead?.query?.filterByFormula).toContain(eventId);
   });
   it("queues reviewer reminders through the shared outbox with stable idempotency", async () => {
     const transport = new FakeAirtableTransport();

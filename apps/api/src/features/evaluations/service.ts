@@ -994,14 +994,21 @@ export class EvaluationService {
     if (normalizedEventId !== undefined && !hasRole(actor, normalizedEventId, "reviewer")) {
       throw forbidden();
     }
-    if (
-      normalizedEventId === undefined &&
-      !actor.grants.some((grant) => grant.role === "reviewer")
-    ) {
+    const reviewerEventIds = [
+      ...new Set(
+        actor.grants.filter((grant) => grant.role === "reviewer").map((grant) => grant.eventId),
+      ),
+    ];
+    if (normalizedEventId === undefined && reviewerEventIds.length === 0) {
       throw forbidden();
     }
-
-    const reviewerPlans = (await this.#repository.listPlans(actor.tenantId, normalizedEventId))
+    const allowedEventIds =
+      normalizedEventId === undefined ? reviewerEventIds : [normalizedEventId];
+    const [listedPlans, workspaceRecords] = await Promise.all([
+      this.#repository.listPlans(actor.tenantId, normalizedEventId),
+      this.#repository.listReviewerWorkspaceRecords(actor.tenantId, actor.userId, allowedEventIds),
+    ]);
+    const reviewerPlans = listedPlans
       .filter(
         (plan) =>
           (normalizedEventId === undefined || plan.eventId === normalizedEventId) &&
@@ -1015,88 +1022,64 @@ export class EvaluationService {
 
     const openPlans = reviewerPlans.filter((plan) => plan.status === "open");
     const plans = openPlans.length > 0 ? openPlans : reviewerPlans;
-    const planRecords = await Promise.all(
-      plans.map(async (plan) => {
-        const [allAssignments, reviews] = await Promise.all([
-          this.#repository.listAssignments(actor.tenantId, plan.id),
-          this.#repository.listReviews(actor.tenantId, plan.id),
-        ]);
-        const ownAssignmentIds = new Set(
-          allAssignments
-            .filter(
-              (assignment) =>
-                assignment.planId === plan.id &&
-                assignment.eventId === plan.eventId &&
-                assignment.reviewerId === actor.userId &&
-                assignment.status !== "abstained",
-            )
-            .map((assignment) => assignment.id),
-        );
-        const reviewsByAssignment = new Map(
-          reviews
-            .filter(
-              (review) =>
-                ownAssignmentIds.has(review.assignmentId) &&
-                review.planId === plan.id &&
-                review.eventId === plan.eventId &&
-                review.reviewerId === actor.userId,
-            )
-            .map((review) => [review.assignmentId, review] as const),
-        );
-        return {
-          plan,
-          assignments: allAssignments
-            .filter((assignment) => ownAssignmentIds.has(assignment.id))
-            .map((assignment) => {
-              const review = reviewsByAssignment.get(assignment.id);
-              const authoritativeAssignment =
-                review?.submittedAt === null || review === undefined
-                  ? assignment
-                  : { ...assignment, status: "submitted" as const };
-              return { assignment: authoritativeAssignment, review };
-            }),
-        };
-      }),
-    );
+    const planRecords = plans.map((plan) => {
+      const assignments = workspaceRecords.assignments.filter(
+        (assignment) =>
+          assignment.tenantId === actor.tenantId &&
+          assignment.planId === plan.id &&
+          assignment.eventId === plan.eventId &&
+          assignment.reviewerId === actor.userId &&
+          assignment.status !== "abstained",
+      );
+      const ownAssignmentIds = new Set(assignments.map((assignment) => assignment.id));
+      const reviewsByAssignment = new Map(
+        workspaceRecords.reviews
+          .filter(
+            (review) =>
+              review.tenantId === actor.tenantId &&
+              ownAssignmentIds.has(review.assignmentId) &&
+              review.planId === plan.id &&
+              review.eventId === plan.eventId &&
+              review.reviewerId === actor.userId,
+          )
+          .map((review) => [review.assignmentId, review] as const),
+      );
+      return {
+        plan,
+        assignments: assignments.map((assignment) => {
+          const review = reviewsByAssignment.get(assignment.id);
+          const authoritativeAssignment =
+            review?.submittedAt === null || review === undefined
+              ? assignment
+              : { ...assignment, status: "submitted" as const };
+          return { assignment: authoritativeAssignment, review };
+        }),
+      };
+    });
     const candidates = planRecords.flatMap(({ plan, assignments }) =>
       assignments.map(({ assignment, review }) => ({ plan, assignment, review })),
     );
     if (candidates.length === 0) return { assignments: [] };
 
-    const materialByKey = new Map<string, SubmissionReviewMaterial>();
-    const materialKeys = [
-      ...new Set(
-        candidates.map(({ assignment }) => `${assignment.eventId}\u0000${assignment.submissionId}`),
-      ),
-    ];
-    await Promise.all(
-      materialKeys.map(async (key) => {
-        const separator = key.indexOf("\u0000");
-        const event = key.slice(0, separator);
-        const submissionId = key.slice(separator + 1);
-        const material = await this.#submissions.getSubmissionForReview(
-          actor.tenantId,
-          event,
-          submissionId,
-        );
-        if (material !== null) materialByKey.set(key, material);
-      }),
-    );
-
-    const source = this.#submissions as SubmissionReviewSource & EvaluationSubmissionSource;
-    const submissionRecordsByEvent = new Map<string, readonly EvaluationSubmissionRecord[]>();
-    const listSubmissionsForOrganizer = source.listSubmissionsForOrganizer;
-    if (listSubmissionsForOrganizer !== undefined) {
-      const eventIds = [...new Set(candidates.map(({ assignment }) => assignment.eventId))];
-      await Promise.all(
-        eventIds.map(async (currentEventId) => {
-          submissionRecordsByEvent.set(
-            currentEventId,
-            await listSubmissionsForOrganizer.call(source, actor.tenantId, currentEventId),
-          );
-        }),
-      );
+    const lookupByKey = new Map<
+      string,
+      { readonly eventId: string; readonly submissionId: string }
+    >();
+    for (const { assignment } of candidates) {
+      const key = `${assignment.eventId}\u0000${assignment.submissionId}`;
+      if (!lookupByKey.has(key)) {
+        lookupByKey.set(key, {
+          eventId: assignment.eventId,
+          submissionId: assignment.submissionId,
+        });
+      }
     }
+    const materials = await this.#submissions.getSubmissionsForReview(actor.tenantId, [
+      ...lookupByKey.values(),
+    ]);
+    const materialByKey = new Map<string, SubmissionReviewMaterial>(
+      materials.map((material) => [`${material.eventId}\u0000${material.id}`, material]),
+    );
 
     const contexts = await Promise.all(
       candidates.map(async ({ plan, assignment, review }) => {
@@ -1110,23 +1093,12 @@ export class EvaluationService {
           throw notFound("The assigned submission was not found.");
         }
         const materialRevision = material.version ?? material.revision;
-        const listedRevision = submissionRecordsByEvent
-          .get(assignment.eventId)
-          ?.find((submission) => submission.id === assignment.submissionId);
         const submissionRevision =
           materialRevision !== undefined &&
           Number.isSafeInteger(materialRevision) &&
           materialRevision > 0
             ? materialRevision
-            : listedRevision?.version !== undefined &&
-                Number.isSafeInteger(listedRevision.version) &&
-                listedRevision.version > 0
-              ? listedRevision.version
-              : listedRevision?.revision !== undefined &&
-                  Number.isSafeInteger(listedRevision.revision) &&
-                  listedRevision.revision > 0
-                ? listedRevision.revision
-                : 1;
+            : 1;
         const round = findRound(plan, assignment.roundId);
         const suggestions = await this.#listSuggestionsForAssignment(
           actor,
@@ -1179,7 +1151,30 @@ export class EvaluationService {
           left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
       );
   }
-
+  async unassignAssignment(
+    actor: EvaluationActor,
+    planId: string,
+    assignmentId: string,
+  ): Promise<void> {
+    const plan = await this.#getPlan(actor.tenantId, planId);
+    requireHumanOrganizer(actor, plan.eventId);
+    const assignment = await this.#getAssignment(actor.tenantId, assignmentId);
+    if (
+      assignment.tenantId !== actor.tenantId ||
+      assignment.planId !== plan.id ||
+      assignment.eventId !== plan.eventId
+    ) {
+      throw notFound("The evaluation assignment was not found.");
+    }
+    const review = await this.#repository.getReview(actor.tenantId, assignment.id);
+    if (review !== null && review.submittedAt !== null) {
+      throw conflict("A submitted review cannot be unassigned.");
+    }
+    if (assignment.status !== "assigned" && assignment.status !== "in_progress") {
+      throw conflict("Only outstanding assignments can be unassigned.");
+    }
+    await this.#repository.deleteAssignment(actor.tenantId, assignment.id, assignment.version);
+  }
   async getReviewContext(actor: EvaluationActor, assignmentId: string): Promise<ReviewContext> {
     const assignment = await this.#getAssignment(actor.tenantId, assignmentId);
     requireHumanReviewer(actor, assignment);

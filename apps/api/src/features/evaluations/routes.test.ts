@@ -246,6 +246,74 @@ describe("evaluation HTTP routes", () => {
     expect(body.submission.participants).toEqual([]);
     expect(body.submission.answers).toEqual({ topic: "Visible" });
   });
+  it("deletes an outstanding assignment with a 204 empty response", async () => {
+    const app = createTestApp();
+    await jsonRequest(app, "/evaluations/plans", "POST", planRequest);
+    await jsonRequest(app, "/evaluations/plans/plan-1/open", "POST", { expectedVersion: 1 });
+    const assigned = await jsonRequest(app, "/evaluations/plans/plan-1/assignments", "POST", {
+      roundId: "round-1",
+      submissionId: "submission-1",
+      reviewerIds: ["reviewer-1"],
+    });
+    const assignmentId = ((await assigned.json()) as { assignments: Array<{ id: string }> })
+      .assignments[0]?.id;
+    if (assignmentId === undefined) throw new Error("Expected an assignment fixture.");
+
+    const removed = await app.request(`/evaluations/plans/plan-1/assignments/${assignmentId}`, {
+      method: "DELETE",
+    });
+    expect(removed.status).toBe(204);
+    expect(await removed.text()).toBe("");
+
+    const listed = await app.request("/evaluations/plans/plan-1/assignments");
+    await expect(listed.json()).resolves.toEqual({ assignments: [] });
+  });
+
+  it("rejects forbidden and submitted assignment deletions safely", async () => {
+    const app = createTestApp();
+    await jsonRequest(app, "/evaluations/plans", "POST", planRequest);
+    await jsonRequest(app, "/evaluations/plans/plan-1/open", "POST", { expectedVersion: 1 });
+    const assigned = await jsonRequest(app, "/evaluations/plans/plan-1/assignments", "POST", {
+      roundId: "round-1",
+      submissionId: "submission-1",
+      reviewerIds: ["reviewer-1"],
+    });
+    const assignmentId = ((await assigned.json()) as { assignments: Array<{ id: string }> })
+      .assignments[0]?.id;
+    if (assignmentId === undefined) throw new Error("Expected an assignment fixture.");
+    const path = `/evaluations/plans/plan-1/assignments/${assignmentId}`;
+
+    const forbidden = await app.request(path, {
+      method: "DELETE",
+      headers: { "x-test-actor": "reviewer" },
+    });
+    expect(forbidden.status).toBe(403);
+    await expect(forbidden.json()).resolves.toMatchObject({
+      error: { code: "EVALUATION_FORBIDDEN" },
+    });
+
+    const saved = await jsonRequest(
+      app,
+      `/evaluations/assignments/${assignmentId}/review`,
+      "PUT",
+      { scores: [{ criterionId: "quality", value: 4, origin: "human" }] },
+      "reviewer",
+    );
+    const savedBody = (await saved.json()) as { version: number };
+    await jsonRequest(
+      app,
+      `/evaluations/assignments/${assignmentId}/review/submit`,
+      "POST",
+      { expectedVersion: savedBody.version },
+      "reviewer",
+    );
+
+    const submitted = await app.request(path, { method: "DELETE" });
+    expect(submitted.status).toBe(409);
+    await expect(submitted.json()).resolves.toMatchObject({
+      error: { code: "EVALUATION_CONFLICT" },
+    });
+  });
   it("loads the authenticated reviewer workspace in one redacted batch", async () => {
     const app = createTestApp({}, {}, [
       {

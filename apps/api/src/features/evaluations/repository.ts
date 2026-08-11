@@ -8,6 +8,16 @@ import type {
   SubmissionReviewMaterial,
 } from "./types";
 
+export interface ReviewerWorkspaceRecords {
+  readonly assignments: readonly EvaluationAssignment[];
+  readonly reviews: readonly EvaluationReview[];
+}
+
+export interface SubmissionReviewLookup {
+  readonly eventId: string;
+  readonly submissionId: string;
+}
+
 export interface EvaluationRepository {
   getPlan(tenantId: string, planId: string): Promise<EvaluationPlan | null>;
   listPlans(tenantId: string, eventId?: string): Promise<readonly EvaluationPlan[]>;
@@ -15,8 +25,18 @@ export interface EvaluationRepository {
   getAssignment(tenantId: string, assignmentId: string): Promise<EvaluationAssignment | null>;
   listAssignments(tenantId: string, planId: string): Promise<readonly EvaluationAssignment[]>;
   putAssignments(assignments: readonly EvaluationAssignment[]): Promise<void>;
+  deleteAssignment(
+    tenantId: string,
+    assignmentId: string,
+    expectedAssignmentVersion: number,
+  ): Promise<void>;
   getReview(tenantId: string, assignmentId: string): Promise<EvaluationReview | null>;
   listReviews(tenantId: string, planId: string): Promise<readonly EvaluationReview[]>;
+  listReviewerWorkspaceRecords(
+    tenantId: string,
+    reviewerId: string,
+    eventIds: readonly string[],
+  ): Promise<ReviewerWorkspaceRecords>;
   putReview(review: EvaluationReview, expectedVersion: number | null): Promise<void>;
   saveReviewDraft(
     assignment: EvaluationAssignment,
@@ -53,6 +73,10 @@ export interface SubmissionReviewSource {
     eventId: string,
     submissionId: string,
   ): Promise<SubmissionReviewMaterial | null>;
+  getSubmissionsForReview(
+    tenantId: string,
+    lookups: readonly SubmissionReviewLookup[],
+  ): Promise<readonly SubmissionReviewMaterial[]>;
 }
 
 function storageKey(tenantId: string, id: string): string {
@@ -129,6 +153,26 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
     }
   }
 
+  async deleteAssignment(
+    tenantId: string,
+    assignmentId: string,
+    expectedAssignmentVersion: number,
+  ): Promise<void> {
+    const assignmentStorageKey = storageKey(tenantId, assignmentId);
+    assertVersion(
+      this.#assignments.get(assignmentStorageKey)?.version ?? null,
+      expectedAssignmentVersion,
+      "Assignment",
+    );
+    const reviewStorageKey = storageKey(tenantId, assignmentId);
+    const review = this.#reviews.get(reviewStorageKey);
+    if (review !== undefined && review.submittedAt !== null) {
+      throw conflict("A submitted review cannot be unassigned.");
+    }
+    this.#assignments.delete(assignmentStorageKey);
+    this.#reviews.delete(reviewStorageKey);
+  }
+
   async getReview(tenantId: string, assignmentId: string): Promise<EvaluationReview | null> {
     const review = this.#reviews.get(storageKey(tenantId, assignmentId));
     return review === undefined ? null : clone(review);
@@ -138,6 +182,31 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
     return [...this.#reviews.values()]
       .filter((review) => review.tenantId === tenantId && review.planId === planId)
       .map(clone);
+  }
+  async listReviewerWorkspaceRecords(
+    tenantId: string,
+    reviewerId: string,
+    eventIds: readonly string[],
+  ): Promise<ReviewerWorkspaceRecords> {
+    const allowedEventIds = new Set(eventIds);
+    return {
+      assignments: [...this.#assignments.values()]
+        .filter(
+          (assignment) =>
+            assignment.tenantId === tenantId &&
+            assignment.reviewerId === reviewerId &&
+            allowedEventIds.has(assignment.eventId),
+        )
+        .map(clone),
+      reviews: [...this.#reviews.values()]
+        .filter(
+          (review) =>
+            review.tenantId === tenantId &&
+            review.reviewerId === reviewerId &&
+            allowedEventIds.has(review.eventId),
+        )
+        .map(clone),
+    };
   }
 
   async putReview(review: EvaluationReview, expectedVersion: number | null): Promise<void> {
@@ -263,6 +332,19 @@ export class InMemorySubmissionReviewSource implements SubmissionReviewSource {
       return null;
     }
     return clone(submission);
+  }
+  async getSubmissionsForReview(
+    tenantId: string,
+    lookups: readonly SubmissionReviewLookup[],
+  ): Promise<readonly SubmissionReviewMaterial[]> {
+    const materials: SubmissionReviewMaterial[] = [];
+    for (const lookup of lookups) {
+      const submission = this.#submissions.get(storageKey(tenantId, lookup.submissionId));
+      if (submission !== undefined && submission.eventId === lookup.eventId) {
+        materials.push(clone(submission));
+      }
+    }
+    return materials;
   }
 
   set(submission: SubmissionReviewMaterial): void {

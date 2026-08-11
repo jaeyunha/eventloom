@@ -62,6 +62,8 @@ import type {
 import { conflict } from "../features/evaluations/errors";
 import type {
   EvaluationRepository,
+  ReviewerWorkspaceRecords,
+  SubmissionReviewLookup,
   SubmissionReviewSource,
 } from "../features/evaluations/repository";
 import type {
@@ -571,6 +573,27 @@ function organizationScopeFormula(
   const clauses = needles.map((needle) => `FIND(${JSON.stringify(needle)},{${jsonField}})>0`);
   return clauses.length === 1 ? (clauses[0] as string) : `OR(${clauses.join(",")})`;
 }
+function jsonContainsAllFormula(jsonField: string, values: readonly string[]): string {
+  const clauses = values.map((value) => `FIND(${JSON.stringify(value)},{${jsonField}})>0`);
+  if (clauses.length === 0) {
+    throw new TypeError("At least one JSON value is required.");
+  }
+  return clauses.length === 1 ? (clauses[0] as string) : `AND(${clauses.join(",")})`;
+}
+
+function reviewerWorkspaceFormula(
+  jsonField: string,
+  tenantId: string,
+  reviewerId: string,
+  eventIds: readonly string[],
+): string {
+  const eventClauses = eventIds.map(
+    (eventId) => `FIND(${JSON.stringify(eventId)},{${jsonField}})>0`,
+  );
+  const eventFormula =
+    eventClauses.length === 1 ? (eventClauses[0] as string) : `OR(${eventClauses.join(",")})`;
+  return `AND(${jsonContainsAllFormula(jsonField, [tenantId, reviewerId])},${eventFormula})`;
+}
 
 /** A typed Airtable repository whose only opaque identifier is Airtable's internal record id. */
 export class AirtableJsonStore<T extends object> {
@@ -672,6 +695,21 @@ export class AirtableJsonStore<T extends object> {
     if (uniqueIds.length === 0) return [];
     return this.list({ filterByFormula: applicationIdsFormula(uniqueIds) });
   }
+}
+const AIRTABLE_APPLICATION_ID_BATCH_SIZE = 50;
+
+async function listApplicationIdsInBatches<T extends object>(
+  store: Pick<AirtableJsonStore<T>, "listByIds">,
+  ids: readonly string[],
+): Promise<readonly T[]> {
+  const uniqueIds = [...new Set(ids)];
+  if (uniqueIds.length === 0) return [];
+  const batches: string[][] = [];
+  for (let index = 0; index < uniqueIds.length; index += AIRTABLE_APPLICATION_ID_BATCH_SIZE) {
+    batches.push(uniqueIds.slice(index, index + AIRTABLE_APPLICATION_ID_BATCH_SIZE));
+  }
+  const results = await Promise.all(batches.map((batch) => store.listByIds(batch)));
+  return results.flat();
 }
 export async function listEventScopedJson<T extends object>(
   store: Pick<AirtableJsonStore<T>, "list">,
@@ -3715,6 +3753,10 @@ export class AirtableCfpRepository implements CfpRepository {
     const form = await this.#forms.find(formId);
     return form !== undefined && form.tenantId === tenantId ? untagged(form) : null;
   }
+  async listFormsByIds(ids: readonly string[]): Promise<readonly CfpForm[]> {
+    const forms = await listApplicationIdsInBatches(this.#forms, ids);
+    return forms.map((form) => untagged(form));
+  }
 
   async listForms(tenantId: string, eventId: string): Promise<CfpForm[]> {
     return (await this.#forms.list())
@@ -3741,6 +3783,12 @@ export class AirtableCfpRepository implements CfpRepository {
       submission.tenantId === tenantId
       ? untagged(submission)
       : null;
+  }
+  async listSubmissionsByIds(ids: readonly string[]): Promise<readonly Submission[]> {
+    const submissions = await listApplicationIdsInBatches(this.#submissions, ids);
+    return submissions
+      .filter((submission) => !isSpeakerSubmissionRecord(submission))
+      .map((submission) => untagged(submission));
   }
   async listSubmissionsForEvent(tenantId: string, eventId: string): Promise<Submission[]> {
     const byId = new Map<string, Submission>();
@@ -3812,6 +3860,7 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
   readonly #plans: AirtableJsonStore<EvaluationPlan>;
   readonly #assignments: AirtableJsonStore<EvaluationAssignment>;
   readonly #reviews: AirtableJsonStore<EvaluationReview>;
+  readonly #evaluations: AirtableJsonStore<JsonRecord>;
   readonly #conflicts: AirtableJsonStore<EvaluationConflictDeclaration>;
   readonly #decisions: AirtableJsonStore<EvaluationDecision>;
 
@@ -3826,6 +3875,11 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
       jsonField: "Rounds JSON",
     });
     this.#assignments = new AirtableJsonStore({
+      ...shared,
+      table: "Evaluations",
+      jsonField: "Scores JSON",
+    });
+    this.#evaluations = new AirtableJsonStore<JsonRecord>({
       ...shared,
       table: "Evaluations",
       jsonField: "Scores JSON",
@@ -3852,7 +3906,13 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
     return plan !== undefined && plan.tenantId === tenantId ? untagged(plan) : null;
   }
   async listPlans(tenantId: string, eventId?: string): Promise<readonly EvaluationPlan[]> {
-    return (await this.#plans.list())
+    const plans = await this.#plans.list({
+      filterByFormula: jsonContainsAllFormula(
+        "Rounds JSON",
+        eventId === undefined ? [tenantId] : [tenantId, eventId],
+      ),
+    });
+    return plans
       .filter(
         (plan) => plan.tenantId === tenantId && (eventId === undefined || plan.eventId === eventId),
       )
@@ -3925,6 +3985,35 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
     }
   }
 
+  async deleteAssignment(
+    tenantId: string,
+    assignmentId: string,
+    expectedAssignmentVersion: number,
+  ): Promise<void> {
+    const assignment = await this.#assignments.findWithRecordId(assignmentId);
+    if (
+      assignment === undefined ||
+      !isEvaluationAssignmentRecord(assignment.entity) ||
+      assignment.entity.tenantId !== tenantId ||
+      assignment.entity.version !== expectedAssignmentVersion
+    ) {
+      throw conflict("Assignment changed since it was loaded.");
+    }
+
+    const review = await this.#reviews.findWithRecordId(`review:${assignmentId}`);
+    if (
+      review !== undefined &&
+      isEvaluationReviewRecord(review.entity) &&
+      review.entity.tenantId === tenantId
+    ) {
+      if (review.entity.submittedAt !== null) {
+        throw conflict("A submitted review cannot be unassigned.");
+      }
+      await this.#reviews.deleteByRecordId(review.recordId);
+    }
+    await this.#assignments.deleteByRecordId(assignment.recordId);
+  }
+
   async getReview(tenantId: string, assignmentId: string): Promise<EvaluationReview | null> {
     const review = await this.#reviews.find(`review:${assignmentId}`);
     return review !== undefined && isEvaluationReviewRecord(review) && review.tenantId === tenantId
@@ -3941,6 +4030,62 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
           review.planId === planId,
       )
       .map((review) => untagged(review));
+  }
+  async listReviewerWorkspaceRecords(
+    tenantId: string,
+    reviewerId: string,
+    eventIds: readonly string[],
+  ): Promise<ReviewerWorkspaceRecords> {
+    const allowedEventIds = new Set(eventIds);
+    if (allowedEventIds.size === 0) return { assignments: [], reviews: [] };
+    const records = await this.#evaluations.list({
+      filterByFormula: reviewerWorkspaceFormula("Scores JSON", tenantId, reviewerId, [
+        ...allowedEventIds,
+      ]),
+    });
+    const assignmentsById = new Map<string, EvaluationAssignment>();
+    const reviewsByAssignment = new Map<string, EvaluationReview>();
+    for (const record of records) {
+      const assignmentRecord = isEvaluationAssignmentRecord(record);
+      const reviewRecord = isEvaluationReviewRecord(record);
+      if (!assignmentRecord && !reviewRecord) continue;
+      if (
+        resolvedOrganizationId(record) !== tenantId ||
+        record.reviewerId !== reviewerId ||
+        typeof record.eventId !== "string" ||
+        !allowedEventIds.has(record.eventId)
+      ) {
+        continue;
+      }
+      const value = untagged(record);
+      if (assignmentRecord) {
+        const assignment = value as unknown as EvaluationAssignment;
+        const current = assignmentsById.get(assignment.id);
+        if (
+          current === undefined ||
+          assignment.version > current.version ||
+          (assignment.version === current.version &&
+            assignment.updatedAt.localeCompare(current.updatedAt) > 0)
+        ) {
+          assignmentsById.set(assignment.id, clone(assignment));
+        }
+      } else {
+        const review = value as unknown as EvaluationReview;
+        const current = reviewsByAssignment.get(review.assignmentId);
+        if (
+          current === undefined ||
+          review.version > current.version ||
+          (review.version === current.version &&
+            review.updatedAt.localeCompare(current.updatedAt) > 0)
+        ) {
+          reviewsByAssignment.set(review.assignmentId, clone(review));
+        }
+      }
+    }
+    return {
+      assignments: [...assignmentsById.values()],
+      reviews: [...reviewsByAssignment.values()],
+    };
   }
 
   async putReview(review: EvaluationReview, expectedVersion: number | null): Promise<void> {
@@ -4088,6 +4233,72 @@ export class AirtableSubmissionReviewSource
     const submission = await this.#cfp.getSubmission(tenantId, submissionId);
     if (submission === null || submission.eventId !== eventId) return null;
     const form = await this.#cfp.getForm(tenantId, submission.formId);
+    return this.toReviewMaterial(tenantId, eventId, submission, form);
+  }
+
+  async getSubmissionsForReview(
+    tenantId: string,
+    lookups: readonly SubmissionReviewLookup[],
+  ): Promise<readonly SubmissionReviewMaterial[]> {
+    const uniqueLookups = [
+      ...new Map(
+        lookups.map((lookup) => [`${lookup.eventId}\u0000${lookup.submissionId}`, lookup] as const),
+      ).values(),
+    ];
+    if (uniqueLookups.length === 0) return [];
+    const submissions = await this.#cfp.listSubmissionsByIds(
+      uniqueLookups.map((lookup) => lookup.submissionId),
+    );
+    const lookupKeys = new Set(
+      uniqueLookups.map((lookup) => `${lookup.eventId}\u0000${lookup.submissionId}`),
+    );
+    const submissionsByKey = new Map<string, Submission>();
+    for (const submission of submissions) {
+      if (submission.tenantId !== tenantId) continue;
+      const key = `${submission.eventId}\u0000${submission.id}`;
+      if (!lookupKeys.has(key)) continue;
+      const current = submissionsByKey.get(key);
+      if (
+        current === undefined ||
+        submission.version > current.version ||
+        (submission.version === current.version &&
+          submission.updatedAt.localeCompare(current.updatedAt) > 0)
+      ) {
+        submissionsByKey.set(key, submission);
+      }
+    }
+    const matchedSubmissions = [...submissionsByKey.values()];
+    const forms = await this.#cfp.listFormsByIds([
+      ...new Set(matchedSubmissions.map((submission) => submission.formId)),
+    ]);
+    const formsById = new Map<string, CfpForm>();
+    for (const form of forms) {
+      if (form.tenantId !== tenantId) continue;
+      const current = formsById.get(form.id);
+      if (current === undefined || form.version > current.version) {
+        formsById.set(form.id, form);
+      }
+    }
+    return uniqueLookups.flatMap((lookup) => {
+      const submission = submissionsByKey.get(`${lookup.eventId}\u0000${lookup.submissionId}`);
+      if (submission === undefined) return [];
+      return [
+        this.toReviewMaterial(
+          tenantId,
+          lookup.eventId,
+          submission,
+          formsById.get(submission.formId),
+        ),
+      ];
+    });
+  }
+
+  private toReviewMaterial(
+    tenantId: string,
+    eventId: string,
+    submission: Submission,
+    form: CfpForm | undefined | null,
+  ): SubmissionReviewMaterial {
     const answers = isRecord(submission.answers) ? submission.answers : {};
     const identityFieldIds =
       form?.submissionFields
@@ -4107,6 +4318,7 @@ export class AirtableSubmissionReviewSource
         email: participant.email,
         biography: participant.biography,
       })),
+      version: submission.version,
     };
   }
 

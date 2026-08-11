@@ -644,6 +644,14 @@ export function createEvaluationRoutes(
     });
     return context.json({ assignments }, 201);
   });
+  routes.delete("/plans/:planId/assignments/:assignmentId", async (context) => {
+    await service.unassignAssignment(
+      actor(context),
+      context.req.param("planId"),
+      context.req.param("assignmentId"),
+    );
+    return context.body(null, 204);
+  });
 
   routes.get("/plans/:planId/assignments", async (context) =>
     context.json({
