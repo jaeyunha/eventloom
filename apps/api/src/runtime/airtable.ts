@@ -92,13 +92,13 @@ import {
   type EventRepository,
   EventRepositoryConflictError,
 } from "../features/events/types";
+import { publicApiV1Contract } from "../features/public-api/contract";
 import type {
   IdempotencyBeginResult,
   IdempotencyStore,
   IdempotencyStoredResponse,
 } from "../features/public-api/idempotency";
 import { createIdempotencyCoordinator } from "../features/public-api/idempotency";
-import { publicApiV1Contract } from "../features/public-api/contract";
 import type {
   PublicApiCreateInput,
   PublicApiGetInput,
@@ -212,6 +212,11 @@ import type {
   PublishedSpeakerProjection,
   PublishedSpeakerRouteDependencies,
 } from "../routes/public-speakers";
+import {
+  matchesOrganizationScope,
+  resolvedOrganizationId,
+  resolveOrganizationScope,
+} from "./organization-scope";
 
 const APPLICATION_ID = "Application ID";
 const DEFAULT_JSON_FIELD = "Settings JSON";
@@ -249,10 +254,16 @@ function tagged<T extends object>(value: T, kind: string): T {
 function untagged<T extends object>(value: T): T {
   if (!isRecord(value)) return value;
   const { entityType: _kind, ...rest } = value;
-  if (typeof rest.tenantId === "string" && typeof rest.organizationId === "string") {
-    delete rest.organizationId;
+  const record = rest as JsonRecord;
+  const scope = resolveOrganizationScope(record);
+  if (scope.status === "conflict") {
+    throw new TypeError("The Airtable record contains conflicting organization scope.");
   }
-  return rest as T;
+  if (scope.status === "resolved" && Object.hasOwn(record, "tenantId")) {
+    record.tenantId = scope.organizationId;
+    delete record.organizationId;
+  }
+  return record as T;
 }
 
 function requiredId(value: unknown, label = "id"): string {
@@ -267,27 +278,6 @@ function recordId(value: object): string {
   return requiredId(candidate);
 }
 
-function organizationIdOf(value: object): string | undefined {
-  if (!isRecord(value)) return undefined;
-  const candidate = value.organizationId ?? value.tenantId;
-  return typeof candidate === "string" && candidate.trim().length > 0
-    ? candidate.trim()
-    : undefined;
-}
-function authoritativeOrganizationId(value: object): string | undefined {
-  if (!isRecord(value)) return undefined;
-  const organization =
-    typeof value.organizationId === "string" && value.organizationId.trim().length > 0
-      ? value.organizationId.trim()
-      : undefined;
-  const tenant =
-    typeof value.tenantId === "string" && value.tenantId.trim().length > 0
-      ? value.tenantId.trim()
-      : undefined;
-  if (organization !== undefined && tenant !== undefined && organization !== tenant)
-    return undefined;
-  return organization ?? tenant;
-}
 function isEvaluationAssignmentRecord(value: object): boolean {
   const kind = entityType(value);
   return (
@@ -340,8 +330,9 @@ function belongsToOrganization(
   organizationId: string,
   eventIds: ReadonlySet<string>,
 ): boolean {
-  const recordOrganizationId = organizationIdOf(record);
-  if (recordOrganizationId !== undefined) return recordOrganizationId === organizationId;
+  const scope = resolveOrganizationScope(record);
+  if (scope.status === "resolved") return scope.organizationId === organizationId;
+  if (scope.status === "conflict") return false;
   const eventId = eventReference(record);
   return eventId !== null && eventIds.has(eventId);
 }
@@ -425,12 +416,11 @@ function encodeJson(
 ): AirtableFields {
   const record = value as JsonRecord;
   const id = recordId(value);
-  const organizationId =
-    typeof record.organizationId === "string"
-      ? record.organizationId
-      : typeof record.tenantId === "string"
-        ? record.tenantId
-        : undefined;
+  const scope = resolveOrganizationScope(record);
+  if (scope.status === "conflict") {
+    throw new TypeError("The Airtable record contains conflicting organization scope.");
+  }
+  const organizationId = scope.status === "resolved" ? scope.organizationId : undefined;
   const indexed = Object.fromEntries(
     Object.entries(indexedFields).flatMap(([field, property]) => {
       const indexedValue = record[property];
@@ -463,23 +453,34 @@ function decodeJson<T extends object>(fields: Readonly<AirtableFields>, jsonFiel
     try {
       const parsed: unknown = JSON.parse(payload);
       if (isRecord(parsed)) {
+        const payloadScope = resolveOrganizationScope(parsed);
+        if (payloadScope.status === "conflict") {
+          throw new TypeError("The Airtable payload contains conflicting organization scope.");
+        }
+        const indexedScope = resolveOrganizationScope({
+          organizationId: fields["Organization ID"],
+        });
+        if (
+          indexedScope.status === "resolved" &&
+          payloadScope.status === "resolved" &&
+          indexedScope.organizationId !== payloadScope.organizationId
+        ) {
+          throw new TypeError(
+            "The Airtable payload conflicts with its indexed organization scope.",
+          );
+        }
         const organizationId =
-          typeof fields["Organization ID"] === "string"
-            ? fields["Organization ID"]
-            : typeof parsed.organizationId === "string"
-              ? parsed.organizationId
+          indexedScope.status === "resolved"
+            ? indexedScope.organizationId
+            : payloadScope.status === "resolved"
+              ? payloadScope.organizationId
               : undefined;
-        const tenantId =
-          organizationId ?? (typeof parsed.tenantId === "string" ? parsed.tenantId : undefined);
         const id = typeof fields[APPLICATION_ID] === "string" ? fields[APPLICATION_ID] : parsed.id;
         requiredId(id);
         return {
           ...parsed,
           ...(id === undefined ? {} : { id }),
-          ...(tenantId === undefined ? {} : { tenantId }),
-          ...(organizationId === undefined && tenantId === undefined
-            ? {}
-            : { organizationId: organizationId ?? tenantId }),
+          ...(organizationId === undefined ? {} : { tenantId: organizationId, organizationId }),
         } as T;
       }
       throw new TypeError("The Airtable payload is not valid JSON.");
@@ -753,7 +754,7 @@ class AirtablePublishedSpeakerProjectionStore implements PublishedSpeakerRouteDe
 }
 
 function byOrganization(value: object, organizationId: string): boolean {
-  return organizationIdOf(value) === organizationId;
+  return resolvedOrganizationId(value) === organizationId;
 }
 function scalarCompare(left: unknown, right: unknown): number {
   if (left === right) return 0;
@@ -1371,7 +1372,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     const normalizedEmail = email.trim().toLowerCase();
     if (eventId.trim().length === 0 || normalizedEmail.length === 0) return null;
     const event = await this.#events.find(eventId);
-    const tenantId = event === undefined ? undefined : authoritativeOrganizationId(event);
+    const tenantId = event === undefined ? undefined : resolvedOrganizationId(event);
     if (tenantId === undefined) return null;
     const [decisions, submissionRecords] = await Promise.all([
       this.#decisions.list().then(portalDecisionProjections),
@@ -1401,7 +1402,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
         record === undefined ||
         isSpeakerSubmissionRecord(record) ||
         eventReference(record) !== eventId ||
-        authoritativeOrganizationId(record) !== tenantId ||
+        resolvedOrganizationId(record) !== tenantId ||
         portalRecordStatus(record, decisions) !== "accepted"
       ) {
         continue;
@@ -1430,7 +1431,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     if (eventId.trim().length === 0 || accountId.trim().length === 0) return null;
     const event = await this.#events.find(eventId);
     if (event === undefined || event.id !== eventId) return null;
-    const tenantId = authoritativeOrganizationId(event);
+    const tenantId = resolvedOrganizationId(event);
     if (tenantId === undefined) return null;
 
     const membership = await this.#database
@@ -1462,7 +1463,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       (record) =>
         !isSpeakerSubmissionRecord(record) &&
         eventReference(record) === eventId &&
-        authoritativeOrganizationId(record) === tenantId,
+        resolvedOrganizationId(record) === tenantId,
     );
     const sourceIds = new Set(
       sourceRecords.map((record) => textValue(record, "id", APPLICATION_ID)).filter(isNonEmpty),
@@ -1473,14 +1474,11 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       if (id === null) return false;
       const sourceId = originalCfpSubmissionId(id);
       if (sourceId !== null) return sourceIds.has(sourceId);
-      return authoritativeOrganizationId(record) === tenantId;
+      return resolvedOrganizationId(record) === tenantId;
     });
-    const rosterRecords = rosterRecordsForEvent.filter((record) => {
-      const recordTenantId = authoritativeOrganizationId(record);
-      return (
-        record.eventId === eventId && (recordTenantId === undefined || recordTenantId === tenantId)
-      );
-    });
+    const rosterRecords = rosterRecordsForEvent.filter(
+      (record) => record.eventId === eventId && matchesOrganizationScope(record, tenantId, true),
+    );
     const organizerRosterRecords = rosterRecords.filter((record) => !isCrmRosterAdmission(record));
     const validRecords = [...sourceRecords, ...linkedSpeakerRecords];
     const sourceParticipantIds = new Set(
@@ -1531,9 +1529,13 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     ]);
     const accountEmail =
       typeof account?.email === "string" ? account.email.trim().toLowerCase() : undefined;
-    const eventOrganizationId = event === undefined ? undefined : organizationIdOf(event);
+    const eventScope = resolveOrganizationScope(event);
+    const eventOrganizationId =
+      eventScope.status === "resolved" ? eventScope.organizationId : undefined;
     const scopedGrants = result.results.filter(
-      (row) => eventOrganizationId === undefined || row.organization_id === eventOrganizationId,
+      (row) =>
+        eventScope.status === "missing" ||
+        (eventScope.status === "resolved" && row.organization_id === eventScope.organizationId),
     );
     const grants = new Set(
       scopedGrants
@@ -1547,15 +1549,19 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     ]);
     const records = submissionRecords as unknown as JsonRecord[];
     const decisions = portalDecisionProjections(decisionRecords);
-    const ownedRecords = records.filter(
-      (record) =>
-        !isSpeakerSubmissionRecord(record) &&
-        textValue(record, "eventId", "Event ID") === eventId &&
-        textValue(record, "ownerAccountId", "Owner Account ID") === accountId &&
-        (eventOrganizationId === undefined ||
-          recordTenantId(record) === undefined ||
-          recordTenantId(record) === eventOrganizationId),
-    );
+    const ownedRecords = records.filter((record) => {
+      if (
+        eventScope.status === "conflict" ||
+        isSpeakerSubmissionRecord(record) ||
+        textValue(record, "eventId", "Event ID") !== eventId ||
+        textValue(record, "ownerAccountId", "Owner Account ID") !== accountId
+      ) {
+        return false;
+      }
+      return eventOrganizationId === undefined
+        ? resolveOrganizationScope(record).status !== "conflict"
+        : matchesOrganizationScope(record, eventOrganizationId, true);
+    });
     const profiles = profileRecords.filter(
       (profile) =>
         profile.eventId === eventId &&
@@ -1692,19 +1698,25 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     for (const event of events) {
       const eventId = typeof event.id === "string" ? event.id : null;
       if (eventId === null) continue;
-      const organizationId = organizationIdOf(event);
+      const eventScope = resolveOrganizationScope(event);
+      if (eventScope.status === "conflict") continue;
+      const organizationId =
+        eventScope.status === "resolved" ? eventScope.organizationId : undefined;
       const eventGrants = grants.results.filter(
         (grant) => organizationId === undefined || organizationId === grant.organization_id,
       );
-      const ownerRecords = records.filter(
-        (record) =>
-          !isSpeakerSubmissionRecord(record) &&
-          textValue(record, "eventId", "Event ID") === eventId &&
-          textValue(record, "ownerAccountId", "Owner Account ID") === accountId &&
-          (organizationId === undefined ||
-            recordTenantId(record) === undefined ||
-            recordTenantId(record) === organizationId),
-      );
+      const ownerRecords = records.filter((record) => {
+        if (
+          isSpeakerSubmissionRecord(record) ||
+          textValue(record, "eventId", "Event ID") !== eventId ||
+          textValue(record, "ownerAccountId", "Owner Account ID") !== accountId
+        ) {
+          return false;
+        }
+        return organizationId === undefined
+          ? resolveOrganizationScope(record).status !== "conflict"
+          : matchesOrganizationScope(record, organizationId, true);
+      });
       const eventProfiles = profiles.filter(
         (profile) =>
           profile.eventId === eventId &&
@@ -2360,16 +2372,21 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       this.#events.find(eventId),
       listEventScopedJson(this.#roster, "Members JSON", eventId),
     ]);
-    const tenantId = event === undefined ? undefined : authoritativeOrganizationId(event);
+    const eventScope = resolveOrganizationScope(event);
+    if (eventScope.status === "conflict") return [];
+    const organizationId = eventScope.status === "resolved" ? eventScope.organizationId : undefined;
     return roster
       .filter((entry) => {
-        const recordTenantId = authoritativeOrganizationId(entry);
+        const entryScope = resolveOrganizationScope(entry);
+        if (entryScope.status === "conflict") return false;
         const crmRoster = isCrmRosterAdmission(entry);
         return (
           entry.eventId === eventId &&
           (crmRoster
-            ? tenantId !== undefined && recordTenantId === tenantId
-            : tenantId === undefined || recordTenantId === undefined || recordTenantId === tenantId)
+            ? organizationId !== undefined &&
+              entryScope.status === "resolved" &&
+              entryScope.organizationId === organizationId
+            : organizationId === undefined || matchesOrganizationScope(entry, organizationId, true))
         );
       })
       .map(({ tenantId: _tenantId, authorAccountId: _authorAccountId, ...entry }) => clone(entry));
@@ -2389,10 +2406,12 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     expectedVersion: number | null,
   ): Promise<RepositoryResult<SpeakerRosterEntry>> {
     const event = await this.#events.find(entry.eventId);
-    const tenantId = event === undefined ? undefined : authoritativeOrganizationId(event);
+    const eventScope = resolveOrganizationScope(event);
+    if (eventScope.status === "conflict") return { ok: false, reason: "invalid_state" };
+    const organizationId = eventScope.status === "resolved" ? eventScope.organizationId : undefined;
     const persistedEntry = {
       ...entry,
-      ...(tenantId === undefined ? {} : { tenantId }),
+      ...(organizationId === undefined ? {} : { tenantId: organizationId }),
     };
     const existing = await this.#roster.find(entry.id);
     if (expectedVersion === null) {
@@ -3418,7 +3437,7 @@ function eventDateOnly(value: string, timeZone: string): string | null {
 
 function eventRecord(value: JsonRecord): Event {
   const id = requiredId(value.id);
-  const organizationId = organizationIdOf(value);
+  const organizationId = resolvedOrganizationId(value);
   if (organizationId === undefined) {
     throw new TypeError("An Airtable event record must contain an organization id.");
   }
@@ -3497,7 +3516,7 @@ function eventRecord(value: JsonRecord): Event {
 }
 function cfpEventFromRecord(value: JsonRecord): EventCfp {
   const id = requiredId(value.id);
-  const tenantId = organizationIdOf(value);
+  const tenantId = resolvedOrganizationId(value);
   if (tenantId === undefined) {
     throw new TypeError("An Airtable CFP event record must contain an organization id.");
   }
@@ -3594,7 +3613,7 @@ export class AirtableEventRepository implements EventRepository {
       .filter(
         (entry) =>
           entityType(entry) === "event_audit" &&
-          organizationIdOf(entry) === organizationId &&
+          resolvedOrganizationId(entry) === organizationId &&
           eventReference(entry) === eventId,
       )
       .map((entry) => {
@@ -4713,7 +4732,7 @@ export class AirtableOrganizerOverviewRepository implements OrganizerOverviewRou
       filterByFormula: organizationScopeFormula("Settings JSON", organizationId, []),
     });
     const events = allEvents
-      .filter((event) => organizationIdOf(event) === organizationId)
+      .filter((event) => resolvedOrganizationId(event) === organizationId)
       .map((event) => this.eventView(event))
       .sort((left, right) => left.id.localeCompare(right.id));
     const eventIds = new Set(events.map((event) => event.id));
@@ -4751,7 +4770,8 @@ export class AirtableOrganizerOverviewRepository implements OrganizerOverviewRou
     const plans = allPlans.filter(
       (plan) =>
         belongsToOrganization(plan, organizationId, eventIds) ||
-        (organizationIdOf(plan) === organizationId && eventIds.has(eventReference(plan) ?? "")),
+        (resolvedOrganizationId(plan) === organizationId &&
+          eventIds.has(eventReference(plan) ?? "")),
     );
     const planIds = new Set(plans.map((plan) => textValue(plan, "id")).filter(isNonEmpty));
     const assignments = allEvaluations.filter(
@@ -5254,12 +5274,13 @@ export class CloudflareCfpEffects implements CfpEffects {
 
 function scopedRecord(value: object, tenantId: string, eventId: string): boolean {
   return (
-    organizationIdOf(value) === tenantId && eventReference(isRecord(value) ? value : {}) === eventId
+    resolvedOrganizationId(value) === tenantId &&
+    eventReference(isRecord(value) ? value : {}) === eventId
   );
 }
 
 function recordTenantId(value: object): string | undefined {
-  return organizationIdOf(value);
+  return resolvedOrganizationId(value);
 }
 
 function asStringArray(value: unknown): readonly string[] {
@@ -5413,13 +5434,7 @@ export class AirtableSessionRepository implements SessionRepository {
     };
     const descriptionField = fields.Description;
     const id = textField(APPLICATION_ID) ?? (typeof parsed.id === "string" ? parsed.id : undefined);
-    const organizationId =
-      textField("Organization ID") ??
-      (typeof parsed.organizationId === "string"
-        ? parsed.organizationId
-        : typeof parsed.tenantId === "string"
-          ? parsed.tenantId
-          : undefined);
+    const organizationId = resolvedOrganizationId(parsed);
     const eventId =
       textField("Event ID") ?? (typeof parsed.eventId === "string" ? parsed.eventId : undefined);
     const name = textField("Name") ?? (typeof parsed.name === "string" ? parsed.name : undefined);
@@ -6914,16 +6929,11 @@ export class AirtableCrmRepository implements CrmRepository {
     const profileId = `speaker-profile:${projection.eventId}:${contact.id}`;
     const rosterId = `roster:${projection.eventId}:${canonicalSubmissionId}:${contact.id}`;
     const profile = await this.#speakerProfiles.find(profileId);
-    const profileOrganization =
-      profile === undefined ? undefined : authoritativeOrganizationId(profile);
-    if (
-      profile !== undefined &&
-      profileOrganization === undefined &&
-      (Object.hasOwn(profile, "organizationId") || Object.hasOwn(profile, "tenantId"))
-    ) {
+    const profileScope = resolveOrganizationScope(profile);
+    if (profileScope.status === "conflict") {
       throw new CrmRepositoryConflictError("The speaker profile has conflicting tenant data.");
     }
-    if (profileOrganization !== undefined && profileOrganization !== organizationId) {
+    if (profileScope.status === "resolved" && profileScope.organizationId !== organizationId) {
       throw new CrmRepositoryConflictError("The speaker profile belongs to another organization.");
     }
     const socialLinks = {
@@ -6970,16 +6980,11 @@ export class AirtableCrmRepository implements CrmRepository {
     }
 
     const storedRoster = await this.#speakerRoster.find(rosterId);
-    const rosterOrganization =
-      storedRoster === undefined ? undefined : authoritativeOrganizationId(storedRoster);
-    if (
-      storedRoster !== undefined &&
-      rosterOrganization === undefined &&
-      (Object.hasOwn(storedRoster, "organizationId") || Object.hasOwn(storedRoster, "tenantId"))
-    ) {
+    const rosterScope = resolveOrganizationScope(storedRoster);
+    if (rosterScope.status === "conflict") {
       throw new CrmRepositoryConflictError("The speaker roster has conflicting tenant data.");
     }
-    if (rosterOrganization !== undefined && rosterOrganization !== organizationId) {
+    if (rosterScope.status === "resolved" && rosterScope.organizationId !== organizationId) {
       throw new CrmRepositoryConflictError("The speaker roster belongs to another organization.");
     }
     const rosterChanged =
@@ -7059,19 +7064,11 @@ function crmNestedTenant(value: unknown, organizationId: string): void {
     if (candidate === null || typeof candidate !== "object" || visited.has(candidate)) return;
     visited.add(candidate);
     if (isRecord(candidate)) {
-      const directOrganization =
-        typeof candidate.organizationId === "string" ? candidate.organizationId.trim() : undefined;
-      const directTenant =
-        typeof candidate.tenantId === "string" ? candidate.tenantId.trim() : undefined;
-      if (
-        directOrganization !== undefined &&
-        directTenant !== undefined &&
-        directOrganization !== directTenant
-      ) {
+      const scope = resolveOrganizationScope(candidate);
+      if (scope.status === "conflict") {
         throw new CrmRepositoryConflictError("The command result contains conflicting tenants.");
       }
-      const candidateOrganization = authoritativeOrganizationId(candidate);
-      if (candidateOrganization !== undefined && candidateOrganization !== organizationId) {
+      if (scope.status === "resolved" && scope.organizationId !== organizationId) {
         throw new CrmRepositoryConflictError("The command result contains another organization.");
       }
       for (const nested of Object.values(candidate)) visit(nested);
@@ -7759,16 +7756,14 @@ class AirtablePublicRepository implements PublicApiRepository {
         filterByFormula: organizationScopeFormula(this.#jsonField, input.organizationId, []),
       })
     )
-      .filter((record) => {
-        const tenant = record.organizationId ?? record.tenantId;
-        return (
-          tenant === input.organizationId &&
+      .filter(
+        (record) =>
+          matchesOrganizationScope(record, input.organizationId) &&
           Object.entries(input.filters).every(
             ([key, value]) => String(record[key] ?? "") === value,
           ) &&
-          isAfterCursor(record, input)
-        );
-      })
+          isAfterCursor(record, input),
+      )
       .sort((left, right) => {
         const primary = scalarCompare(left[input.sort], right[input.sort]);
         const byId = scalarCompare(left.id, right.id);
@@ -7785,8 +7780,7 @@ class AirtablePublicRepository implements PublicApiRepository {
   async get(input: PublicApiGetInput): Promise<JsonRecord | null> {
     const record = await this.#store.find(input.id);
     if (record === undefined) return null;
-    const tenant = record.organizationId ?? record.tenantId;
-    return tenant === input.organizationId ? publicRecord(record) : null;
+    return matchesOrganizationScope(record, input.organizationId) ? publicRecord(record) : null;
   }
 
   async create(input: PublicApiCreateInput<JsonRecord>): Promise<JsonRecord> {
@@ -7844,10 +7838,8 @@ class AirtableAgendaPublicRepository implements PublicApiRepository {
 
   private async project(state: AgendaState): Promise<JsonRecord | null> {
     const event = await this.#events.find(state.eventId);
-    const eventRecord: unknown = event;
-    const organizationId =
-      event?.tenantId ?? (isRecord(eventRecord) ? eventRecord.organizationId : undefined);
-    if (typeof organizationId !== "string" || organizationId.length === 0) return null;
+    const organizationId = resolvedOrganizationId(event);
+    if (organizationId === undefined) return null;
     const currentRevision =
       state.currentPublishedRevisionId === null
         ? null
@@ -8418,10 +8410,8 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
       engine: agendaEngine,
       async organizationIdForEvent(eventId: string) {
         const event = await events.find(eventId);
-        const eventRecord: unknown = event;
-        const organizationId =
-          event?.tenantId ?? (isRecord(eventRecord) ? eventRecord.organizationId : undefined);
-        return typeof organizationId === "string" ? organizationId : null;
+        const organizationId = resolvedOrganizationId(event);
+        return organizationId ?? null;
       },
       async eventMetadataForEvent(eventId: string) {
         const rawEvent = await events.find(eventId);
@@ -8449,10 +8439,8 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
         ]);
         const rawEventRecord: unknown = rawEvent;
         const rawEventView: JsonRecord = isRecord(rawEventRecord) ? rawEventRecord : {};
-        const organizationId =
-          rawEvent?.tenantId ??
-          (isRecord(rawEventRecord) ? rawEventRecord.organizationId : undefined);
-        if (typeof organizationId !== "string" || organizationId.trim().length === 0) {
+        const organizationId = resolvedOrganizationId(rawEvent);
+        if (organizationId === undefined) {
           throw new Error("The published event organization could not be resolved.");
         }
         if (rawEvent === undefined || agendaState === null) {
