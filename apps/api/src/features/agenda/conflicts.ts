@@ -3,6 +3,7 @@ import type {
   AgendaConflict,
   AgendaCustomRule,
   AgendaEntry,
+  AgendaSession,
   AgendaValidationReport,
   AgendaWarning,
 } from "./types";
@@ -63,19 +64,27 @@ export function detectAgendaConflicts(input: ConflictDetectionInput): AgendaVali
       );
 
       if (isOverlap && left.roomId === right.roomId) {
+        const roomName = rooms.get(left.roomId)?.name ?? left.roomId;
         conflicts.push({
           id: conflictId("room", entryIds, left.roomId),
           kind: "room",
           entryIds,
-          message: `Entries ${left.id} and ${right.id} overlap in the same room`,
+          message: `Sessions "${leftSession.title}" and "${rightSession.title}" overlap in room "${roomName}"`,
         });
       }
       if (isOverlap && sharedParticipants.length > 0) {
+        const participantNames = sharedParticipants.map((participantId) =>
+          participantName(participantId, leftSession, rightSession),
+        );
+        const participantList = participantNames.map((name) => `"${name}"`).join(", ");
+        const participantLabel = participantNames.length === 1 ? "Speaker" : "Speakers";
+        const participantVerb = participantNames.length === 1 ? "is" : "are";
+        const sessionList = `"${leftSession.title}" and "${rightSession.title}"`;
         conflicts.push({
           id: conflictId("participant", entryIds, sharedParticipants.join("-")),
           kind: "participant",
           entryIds,
-          message: `Participants ${sharedParticipants.join(", ")} are scheduled in overlapping sessions`,
+          message: `${participantLabel} ${participantList} ${participantVerb} scheduled in overlapping sessions ${sessionList}`,
         });
       }
 
@@ -153,6 +162,30 @@ function gapBetween(left: AgendaEntry, right: AgendaEntry): number {
 function intersection(left: readonly string[], right: readonly string[]): string[] {
   const rightValues = new Set(right);
   return [...new Set(left.filter((value) => rightValues.has(value)))].sort();
+}
+
+function participantName(
+  participantId: string,
+  leftSession: AgendaSession,
+  rightSession: AgendaSession,
+): string {
+  return (
+    participantNameForSession(participantId, leftSession) ??
+    participantNameForSession(participantId, rightSession) ??
+    participantId
+  );
+}
+
+function participantNameForSession(
+  participantId: string,
+  session: AgendaSession,
+): string | undefined {
+  const participantIndex = session.participantIds.indexOf(participantId);
+  if (participantIndex < 0) {
+    return undefined;
+  }
+  const name = session.speakerNames?.[participantIndex]?.trim();
+  return name === undefined || name.length === 0 ? undefined : name;
 }
 
 function conflictId(kind: string, entryIds: readonly string[], discriminator: string): string {

@@ -515,6 +515,8 @@ export function AgendaBoard({
   const currentRevision = data.currentPublishedRevision;
   const isBusyFor = (operation: AgendaBusyOperation): boolean =>
     busy && (busyOperation === undefined || busyOperation === null || busyOperation === operation);
+  const settingsHref = `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(data.event.id)}/settings`;
+  const hasRooms = data.rooms.length > 0;
 
   useEffect(() => {
     const suggestionId = suggestionRun?.id;
@@ -846,6 +848,11 @@ export function AgendaBoard({
               Schedule accepted sessions in a private draft. Public embeds continue to use the last
               published revision until you publish again.
             </p>
+            <p>
+              <a className={styles.secondaryButton} href={settingsHref}>
+                Rooms and tracks settings
+              </a>
+            </p>
           </div>
           <div className={styles.draftStatus}>
             <span className={styles.statusDot} aria-hidden="true" />
@@ -887,7 +894,7 @@ export function AgendaBoard({
               <button
                 className={styles.primaryButton}
                 type="button"
-                disabled={data.unscheduledSessions.length === 0 || busy}
+                disabled={data.unscheduledSessions.length === 0 || busy || !hasRooms}
                 onClick={() => setShowAddForm((current) => !current)}
                 aria-expanded={showAddForm}
                 aria-controls="add-session-panel"
@@ -895,6 +902,13 @@ export function AgendaBoard({
                 Add accepted session
               </button>
             </div>
+            {!hasRooms ? (
+              <p className={styles.formError} role="status">
+                Scheduling is unavailable until you create a room.{" "}
+                <a href={settingsHref}>Create a room in Rooms and tracks settings</a> before
+                scheduling accepted sessions.
+              </p>
+            ) : null}
 
             <div className={viewStyles.viewSwitcher}>
               <span id="agenda-view-label" className={viewStyles.viewLabel}>
@@ -928,7 +942,7 @@ export function AgendaBoard({
               </div>
             </div>
 
-            {showAddForm ? (
+            {showAddForm && hasRooms ? (
               <div id="add-session-panel" className={styles.addPanel}>
                 <h3>Schedule a session</h3>
                 <EntryForm
@@ -999,19 +1013,21 @@ export function AgendaBoard({
                 </fieldset>
               ) : null}
             </section>
-            <AgendaSuggestionPanel
-              run={suggestionRun ?? null}
-              currentDraftVersion={data.draft.version}
-              busy={busy}
-              busyOperation={busyOperation}
-              eligibleUnscheduledCount={data.unscheduledSessions.length}
-              selectedChangeIds={selectedSuggestionChanges}
-              onSelectionChange={setSelectedSuggestionChanges}
-              onGenerate={onGenerateSuggestion}
-              onRegenerate={onRegenerateSuggestion}
-              onReject={onRejectSuggestion}
-              onApply={onApplySuggestion}
-            />
+            {hasRooms ? (
+              <AgendaSuggestionPanel
+                run={suggestionRun ?? null}
+                currentDraftVersion={data.draft.version}
+                busy={busy}
+                busyOperation={busyOperation}
+                eligibleUnscheduledCount={data.unscheduledSessions.length}
+                selectedChangeIds={selectedSuggestionChanges}
+                onSelectionChange={setSelectedSuggestionChanges}
+                onGenerate={onGenerateSuggestion}
+                onRegenerate={onRegenerateSuggestion}
+                onReject={onRejectSuggestion}
+                onApply={onApplySuggestion}
+              />
+            ) : null}
 
             {preview?.conflicts.length ? (
               <section className={styles.conflictPanel} aria-labelledby="conflicts-heading">
@@ -1459,8 +1475,8 @@ function ScopedAgendaWorkspace({
 }: Readonly<ScopedAgendaWorkspaceProps>) {
   const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
   const api = useMemo(
-    () => providedApi ?? (apiBaseUrl ? createAgendaApi(apiBaseUrl, organizationId) : null),
-    [apiBaseUrl, organizationId, providedApi],
+    () => providedApi ?? createAgendaApi("", organizationId),
+    [organizationId, providedApi],
   );
   const localDemoApiRef = useRef<{ eventId: string; api: AgendaApi } | null>(null);
   const resolveLocalDemoApi = useCallback(
@@ -1868,7 +1884,7 @@ function ScopedAgendaWorkspace({
               entry,
             }),
           "Session saved to the private agenda draft.",
-          false,
+          true,
           "save",
         )
       }
@@ -1881,7 +1897,7 @@ function ScopedAgendaWorkspace({
               expectedVersion: current.draft.version,
             }),
           "Session removed from the private agenda draft.",
-          false,
+          true,
           "remove",
         )
       }

@@ -344,6 +344,16 @@ describe("agenda organizer workspace", () => {
     expect(markup).toContain("Publish immutable revision");
     expect(markup).toMatch(/<button[^>]*disabled=""[^>]*>Publish immutable revision<\/button>/);
   });
+  it("routes organizers to durable room settings before scheduling without a room", () => {
+    const markup = renderBoard({ ...data, rooms: [] }, undefined, null);
+
+    expect(markup).toContain(
+      'href="/admin/organizations/organization-1/events/evt_open/settings"',
+    );
+    expect(markup).toContain("Scheduling is unavailable until you create a room.");
+    expect(markup).toMatch(/<button[^>]*disabled=""[^>]*>Add accepted session<\/button>/);
+    expect(markup).not.toContain("Generate private suggestions");
+  });
   it("renders one native existing-session-times group with preservation selected by default", () => {
     const markup = renderToStaticMarkup(
       createElement(AgendaSuggestionPanel, {
