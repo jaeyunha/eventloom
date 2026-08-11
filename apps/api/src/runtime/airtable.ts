@@ -5331,6 +5331,16 @@ export class AirtableSessionRepository implements SessionRepository {
   readonly #submissions: AirtableJsonStore<JsonRecord>;
   private static decodeSession(fields: Readonly<AirtableFields>): Session {
     const parsed = decodeJson<Session>(fields, "Metadata JSON") as Session & JsonRecord;
+    const storedMetadata = (() => {
+      const raw = fields["Metadata JSON"];
+      if (typeof raw !== "string" || raw.trim().length === 0) return null;
+      try {
+        const value = JSON.parse(raw) as unknown;
+        return isRecord(value) ? value : null;
+      } catch {
+        return null;
+      }
+    })();
     const scalarText = (...keys: readonly string[]): string | undefined =>
       textValue(fields as JsonRecord, ...keys) ?? undefined;
     const jsonArray = (key: string, fallback: readonly string[]): readonly string[] => {
@@ -5356,10 +5366,10 @@ export class AirtableSessionRepository implements SessionRepository {
     const tenantId = scalarText("Organization ID") ?? parsed.tenantId;
     const eventId = scalarText("Event ID") ?? parsed.eventId;
     const canonicalPayload =
-      typeof parsed.tenantId === "string" &&
-      parsed.tenantId.trim().length > 0 &&
-      typeof parsed.eventId === "string" &&
-      parsed.eventId.trim().length > 0;
+      typeof storedMetadata?.tenantId === "string" &&
+      storedMetadata.tenantId.trim().length > 0 &&
+      typeof storedMetadata.eventId === "string" &&
+      storedMetadata.eventId.trim().length > 0;
     const title = canonicalPayload ? parsed.title : (scalarText("Title") ?? parsed.title);
     const description = canonicalPayload
       ? parsed.description
