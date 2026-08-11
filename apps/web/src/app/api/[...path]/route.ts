@@ -5,6 +5,56 @@ export const dynamic = "force-dynamic";
 interface ApiProxyContext {
   params: Promise<{ path: string[] }>;
 }
+const API_PROXY_DEADLINE_MS = 15_000;
+
+function gatewayTimeout(request: NextRequest): Response {
+  return Response.json(
+    {
+      error: {
+        code: "INTEGRATION_UNAVAILABLE",
+        message: "The upstream API did not respond before the gateway deadline.",
+        traceId: request.headers.get("x-request-id") ?? crypto.randomUUID(),
+      },
+    },
+    {
+      status: 504,
+      headers: { "cache-control": "no-store" },
+    },
+  );
+}
+
+function relayBody(
+  body: ReadableStream<Uint8Array>,
+  cleanup: () => void,
+): ReadableStream<Uint8Array> {
+  const reader = body.getReader();
+  let finished = false;
+  const finish = (): void => {
+    if (finished) return;
+    finished = true;
+    cleanup();
+  };
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const result = await reader.read();
+        if (result.done) {
+          finish();
+          controller.close();
+          return;
+        }
+        controller.enqueue(result.value);
+      } catch (error) {
+        finish();
+        controller.error(error);
+      }
+    },
+    async cancel(reason) {
+      finish();
+      await reader.cancel(reason);
+    },
+  });
+}
 
 function upstreamOrigin(): string {
   const value = process.env.API_UPSTREAM_ORIGIN?.trim();
@@ -35,14 +85,46 @@ async function proxy(request: NextRequest, context: ApiProxyContext): Promise<Re
   headers.set("x-forwarded-host", request.nextUrl.host);
   headers.set("x-forwarded-proto", request.nextUrl.protocol.slice(0, -1));
 
+  const upstreamController = new AbortController();
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    upstreamController.abort(
+      new DOMException("The upstream API request timed out.", "TimeoutError"),
+    );
+  }, API_PROXY_DEADLINE_MS);
+  const abortUpstream = (): void => {
+    clearTimeout(timeout);
+    upstreamController.abort(request.signal.reason);
+  };
+  if (request.signal.aborted) {
+    abortUpstream();
+  } else {
+    request.signal.addEventListener("abort", abortUpstream, { once: true });
+  }
+  const cleanup = (): void => {
+    clearTimeout(timeout);
+    request.signal.removeEventListener("abort", abortUpstream);
+  };
+
   const hasBody = request.method !== "GET" && request.method !== "HEAD";
-  const upstream = await fetch(target, {
-    method: request.method,
-    headers,
-    redirect: "manual",
-    cache: "no-store",
-    ...(hasBody ? { body: request.body, duplex: "half" } : {}),
-  });
+  let upstream: Response;
+  try {
+    upstream = await fetch(target, {
+      method: request.method,
+      headers,
+      redirect: "manual",
+      cache: "no-store",
+      signal: upstreamController.signal,
+      ...(hasBody ? { body: request.body, duplex: "half" } : {}),
+    });
+  } catch (error) {
+    cleanup();
+    if (timedOut) {
+      return gatewayTimeout(request);
+    }
+    throw error;
+  }
 
   const responseHeaders = new Headers(upstream.headers);
   // The runtime already decompressed upstream.body; forwarding the original
@@ -50,7 +132,9 @@ async function proxy(request: NextRequest, context: ApiProxyContext): Promise<Re
   responseHeaders.delete("content-encoding");
   responseHeaders.delete("content-length");
   responseHeaders.set("cache-control", "no-store");
-  return new Response(upstream.body, {
+  const body = upstream.body;
+  if (body === null) cleanup();
+  return new Response(body === null ? null : relayBody(body, cleanup), {
     status: upstream.status,
     statusText: upstream.statusText,
     headers: responseHeaders,

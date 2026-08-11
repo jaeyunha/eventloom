@@ -34,7 +34,7 @@ function usage() {
     "",
     "Required deployment variables:",
     "  NEXT_PUBLIC_APP_URL   The exact HTTPS workers.dev origin for staging/production.",
-    "  NEXT_PUBLIC_API_URL   The exact HTTPS origin of the separate API Worker.",
+    "  API_UPSTREAM_ORIGIN   The exact HTTPS origin of the separate API Worker.",
     "  NEXT_PUBLIC_ORGANIZATION_ID  The explicit organization tenant ID; required for staging/production.",
   ].join("\n");
 }
@@ -139,18 +139,18 @@ function resolveOrigins(environment) {
         { local: true },
       ),
       apiOrigin: parseOrigin(
-        process.env.NEXT_PUBLIC_API_URL ?? defaults.apiOrigin,
-        "NEXT_PUBLIC_API_URL",
+        process.env.API_UPSTREAM_ORIGIN ?? defaults.apiOrigin,
+        "API_UPSTREAM_ORIGIN",
         { local: true },
       ),
     };
   }
 
   const appOrigin = parseOrigin(process.env.NEXT_PUBLIC_APP_URL, "NEXT_PUBLIC_APP_URL");
-  const apiOrigin = parseOrigin(process.env.NEXT_PUBLIC_API_URL, "NEXT_PUBLIC_API_URL");
+  const apiOrigin = parseOrigin(process.env.API_UPSTREAM_ORIGIN, "API_UPSTREAM_ORIGIN");
   if (appOrigin !== defaults.appOrigin || apiOrigin !== defaults.apiOrigin) {
     throw new Error(
-      "NEXT_PUBLIC_APP_URL and NEXT_PUBLIC_API_URL must match the pinned web/API origins for this environment.",
+      "NEXT_PUBLIC_APP_URL and API_UPSTREAM_ORIGIN must match the pinned web/API origins for this environment.",
     );
   }
   return { appOrigin, apiOrigin };
@@ -204,20 +204,17 @@ function containsWorkerArtifact(directory) {
 }
 
 function deploymentEnvironment(environment, origins, organizationId) {
-  const publicApiOrigin = environment === "local" ? origins.apiOrigin : origins.appOrigin;
   return {
     ...process.env,
     APP_ENV: environment,
     API_UPSTREAM_ORIGIN: origins.apiOrigin,
     NEXT_PUBLIC_APP_ENV: environment,
     NEXT_PUBLIC_APP_URL: origins.appOrigin,
-    NEXT_PUBLIC_API_URL: publicApiOrigin,
     NEXT_PUBLIC_ORGANIZATION_ID: organizationId,
   };
 }
 
 function wranglerVariables(environment, origins, organizationId) {
-  const publicApiOrigin = environment === "local" ? origins.apiOrigin : origins.appOrigin;
   return [
     "--var",
     `APP_ENV:${environment}`,
@@ -228,8 +225,6 @@ function wranglerVariables(environment, origins, organizationId) {
     "--var",
     `NEXT_PUBLIC_APP_URL:${origins.appOrigin}`,
     "--var",
-    `NEXT_PUBLIC_API_URL:${publicApiOrigin}`,
-    "--var",
     `NEXT_PUBLIC_ORGANIZATION_ID:${organizationId}`,
   ];
 }
@@ -239,7 +234,7 @@ function main() {
   const origins = resolveOrigins(environment);
   const organizationId = resolveOrganizationId(environment);
   if (origins.appOrigin === origins.apiOrigin) {
-    throw new Error("NEXT_PUBLIC_APP_URL and NEXT_PUBLIC_API_URL must identify separate services.");
+    throw new Error("NEXT_PUBLIC_APP_URL and API_UPSTREAM_ORIGIN must identify separate services.");
   }
 
   if (!dryRun) {

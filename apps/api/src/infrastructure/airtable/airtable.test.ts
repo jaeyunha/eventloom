@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   type AirtableMapper,
-  applicationIdFormula,
   AirtableRepository,
   AirtableRepositoryError,
   type AirtableRequest,
+  applicationIdFormula,
   FakeAirtableTransport,
   FetchAirtableTransport,
   RetryingAirtableTransport,
@@ -160,6 +160,36 @@ describe("AirtableRepository", () => {
 
     expect(result.items.map(({ id }) => id)).toEqual(["evt_a"]);
     expect(transport.requests[0]?.query?.filterByFormula).toBe("{Event ID}='event-a'");
+  });
+  it("supports scoped FIND filters over JSON payload fields", async () => {
+    const transport = new FakeAirtableTransport();
+    transport.seed({
+      baseId: "app_test",
+      table: "Events",
+      fields: {
+        "Application ID": "evt_a",
+        Name: "Event A",
+        Active: true,
+        "Payload JSON": JSON.stringify({ eventId: "event-a" }),
+      },
+    });
+    transport.seed({
+      baseId: "app_test",
+      table: "Events",
+      fields: {
+        "Application ID": "evt_b",
+        Name: "Event B",
+        Active: true,
+        "Payload JSON": JSON.stringify({ eventId: "event-b" }),
+      },
+    });
+    const repository = createRepository(transport);
+
+    const result = await repository.list({
+      filterByFormula: 'FIND("event-a",{Payload JSON})>0',
+    });
+
+    expect(result.items.map(({ id }) => id)).toEqual(["evt_a"]);
   });
 
   it("rejects internal Airtable IDs and duplicate application IDs", async () => {

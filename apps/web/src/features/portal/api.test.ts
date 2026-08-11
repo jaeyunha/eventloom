@@ -50,6 +50,20 @@ describe("speaker portal API adapter", () => {
     expect(calls[0]?.init).toMatchObject({ credentials: "include" });
   });
 
+  it("uses the same-origin gateway without a browser API origin", async () => {
+    let requestedUrl = "";
+    let requestInit: RequestInit | undefined;
+    const api = createPortalApi("", async (input, init) => {
+      requestedUrl = String(input);
+      requestInit = init;
+      return jsonResponse({ data: emptyPortal });
+    });
+
+    await expect(api.getPortal("event-1")).resolves.toEqual(emptyPortal);
+    expect(requestedUrl).toBe("/api/speaker/events/event-1/portal");
+    expect(requestInit).toMatchObject({ credentials: "include" });
+  });
+
   it("sends optimistic profile versions and preserves structured API errors", async () => {
     const requests: RequestInit[] = [];
     const fetcher = async (_input: RequestInfo | URL, init?: RequestInit) => {

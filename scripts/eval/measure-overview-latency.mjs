@@ -1,13 +1,13 @@
 /**
- * Phase 0 measurement: organizer-overview latency against the real Airtable base.
+ * Read-only organizer-overview latency probe against the configured Airtable base.
  *
- * Read-only (GET requests only). Times the current unfiltered full-table scans
- * used by AirtableOrganizerOverviewRepository.getOverview, then times a
- * server-side-filtered variant to project the improvement.
+ * Measures the current split repository shape:
+ * - core: one organization-scoped Events read;
+ * - activity: scoped event discovery followed by parallel scoped secondary reads.
  *
  * Usage: node scripts/eval/measure-overview-latency.mjs
  * Reads AIRTABLE_ACCESS_TOKEN / AIRTABLE_BASE_ID / NEXT_PUBLIC_ORGANIZATION_ID
- * from the repository root .env.
+ * from the repository root .env and never prints credential values.
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -29,16 +29,17 @@ if (!token || !baseId) {
   process.exit(1);
 }
 
-const TABLES = [
-  { name: "Events", jsonField: "Settings JSON" },
+const eventsTable = { name: "Events", jsonField: "Settings JSON" };
+const activityTables = [
   { name: "Submissions", jsonField: "Answers JSON" },
   { name: "Review Plans", jsonField: "Rounds JSON" },
   { name: "Evaluations", jsonField: "Scores JSON" },
   { name: "Speaker Tasks", jsonField: "Owner JSON" },
   { name: "Sessions", jsonField: "Metadata JSON" },
 ];
+const agendaTable = { name: "Agenda Versions", jsonField: "Conflicts JSON" };
 
-async function listAll(table, { filterByFormula } = {}) {
+async function listAll(table, { filterByFormula, onRecord } = {}) {
   const started = performance.now();
   let offset;
   let pages = 0;
@@ -59,7 +60,9 @@ async function listAll(table, { filterByFormula } = {}) {
     const text = await response.text();
     bytes += text.length;
     const payload = JSON.parse(text);
-    records += payload.records?.length ?? 0;
+    const pageRecords = payload.records ?? [];
+    for (const record of pageRecords) onRecord?.(record);
+    records += pageRecords.length;
     pages += 1;
     offset = payload.offset;
   } while (offset);
@@ -74,67 +77,69 @@ async function listAll(table, { filterByFormula } = {}) {
 
 function report(label, results, wallMs) {
   console.log(`\n== ${label} ==`);
-  for (const r of results) {
+  for (const result of results) {
     console.log(
-      `  ${r.table.padEnd(16)} ${String(r.ms).padStart(6)} ms  ${String(r.pages).padStart(2)} pages  ${String(r.records).padStart(4)} records  ${String(r.kb).padStart(5)} KB`,
+      `  ${result.table.padEnd(16)} ${String(result.ms).padStart(6)} ms  ${String(result.pages).padStart(2)} pages  ${String(result.records).padStart(4)} records  ${String(result.kb).padStart(5)} KB`,
     );
   }
-  const serial = results.reduce((sum, r) => sum + r.ms, 0);
-  console.log(`  wall (Promise.all): ${Math.round(wallMs)} ms | serial sum: ${serial} ms`);
+  const serial = results.reduce((sum, result) => sum + result.ms, 0);
+  console.log(`  wall: ${Math.round(wallMs)} ms | serial sum: ${serial} ms`);
 }
 
-// 1. Current behavior: six unfiltered full-table scans in parallel.
-const wallStart = performance.now();
-const unfiltered = await Promise.all(TABLES.map((table) => listAll(table)));
-report(
-  "CURRENT: unfiltered full-table scans (getOverview today)",
-  unfiltered,
-  performance.now() - wallStart,
-);
+function resolvedOrganizationId(record) {
+  const organization = typeof record.organizationId === "string" ? record.organizationId : null;
+  const tenant = typeof record.tenantId === "string" ? record.tenantId : null;
+  if (organization && tenant && organization !== tenant) return null;
+  return organization ?? tenant;
+}
 
-// 2. Server-side filtering: events by org, then each table by event ids.
-const orgFormula = `FIND(${JSON.stringify(`"organizationId":"${organizationId}"`)},{Settings JSON})>0`;
-const filteredEvents = await listAll(TABLES[0], { filterByFormula: orgFormula });
-
-const eventsRaw = await (async () => {
-  // Re-fetch ids from the filtered events page(s) to build the event-id formula.
-  const ids = [];
-  let offset;
-  do {
-    const url = new URL(`https://api.airtable.com/v0/${baseId}/${encodeURIComponent("Events")}`);
-    url.searchParams.set("pageSize", "100");
-    url.searchParams.set("filterByFormula", orgFormula);
-    if (offset) url.searchParams.set("offset", offset);
-    const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-    const payload = await response.json();
-    for (const record of payload.records ?? []) {
-      try {
-        const settings = JSON.parse(record.fields["Settings JSON"] ?? "{}");
-        if (typeof settings.id === "string") ids.push(settings.id);
-      } catch {
-        // skip malformed rows
-      }
+function collectEventId(record, values) {
+  try {
+    const event = JSON.parse(record.fields?.[eventsTable.jsonField] ?? "{}");
+    if (resolvedOrganizationId(event) === organizationId && typeof event.id === "string") {
+      values.push(event.id);
     }
-    offset = payload.offset;
-  } while (offset);
-  return ids;
-})();
+  } catch {
+    // The production repository also rejects malformed rows after Airtable decoding.
+  }
+}
 
-console.log(`\nEvents for org "${organizationId}": ${eventsRaw.length} (${eventsRaw.join(", ")})`);
+const organizationFormula = `FIND(${JSON.stringify(organizationId)},{${eventsTable.jsonField}})>0`;
 
-const eventFormulaFor = (jsonField) =>
-  eventsRaw.length === 1
-    ? `FIND(${JSON.stringify(eventsRaw[0])},{${jsonField}})>0`
-    : `OR(${eventsRaw.map((id) => `FIND(${JSON.stringify(id)},{${jsonField}})>0`).join(",")})`;
+const coreEventIds = [];
+const coreStart = performance.now();
+const coreEvents = await listAll(eventsTable, {
+  filterByFormula: organizationFormula,
+  onRecord: (record) => collectEventId(record, coreEventIds),
+});
+report("CURRENT CORE: organization-scoped events", [coreEvents], performance.now() - coreStart);
 
-const filteredStart = performance.now();
-const filtered = await Promise.all(
-  TABLES.slice(1).map((table) =>
-    listAll(table, { filterByFormula: eventFormulaFor(table.jsonField) }),
+const activityStart = performance.now();
+const activityEventIds = [];
+const activityEvents = await listAll(eventsTable, {
+  filterByFormula: organizationFormula,
+  onRecord: (record) => collectEventId(record, activityEventIds),
+});
+const needles = [organizationId, ...activityEventIds];
+const scopedFormulaFor = (jsonField) =>
+  needles.length === 1
+    ? `FIND(${JSON.stringify(needles[0])},{${jsonField}})>0`
+    : `OR(${needles.map((id) => `FIND(${JSON.stringify(id)},{${jsonField}})>0`).join(",")})`;
+const agendaFormula =
+  activityEventIds.length === 0
+    ? "FALSE()"
+    : activityEventIds.length === 1
+      ? `{Application ID}=${JSON.stringify(activityEventIds[0])}`
+      : `OR(${activityEventIds.map((id) => `{Application ID}=${JSON.stringify(id)}`).join(",")})`;
+const secondary = await Promise.all([
+  ...activityTables.map((table) =>
+    listAll(table, { filterByFormula: scopedFormulaFor(table.jsonField) }),
   ),
-);
+  listAll(agendaTable, { filterByFormula: agendaFormula }),
+]);
 report(
-  "PROPOSED: server-side filtered scans (events by org, rest by event ids)",
-  [filteredEvents, ...filtered],
-  performance.now() - filteredStart + filteredEvents.ms,
+  "CURRENT ACTIVITY: event discovery plus parallel scoped sources",
+  [activityEvents, ...secondary],
+  performance.now() - activityStart,
 );
+console.log(`\nScoped events discovered: ${activityEventIds.length}`);

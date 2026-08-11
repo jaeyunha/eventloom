@@ -16,13 +16,13 @@ import { RichTextArea } from "../../components/ui/rich-text";
 import { SearchableSelect } from "../../components/ui/searchable-select";
 import { Stepper } from "../../components/ui/stepper";
 import {
-  CfpMutationGate,
-  type CfpMutationLease,
   type CfpApi,
   CfpApiError,
   type CfpAuthenticatedSession,
   type CfpFileUploadResult,
   type CfpFormField,
+  CfpMutationGate,
+  type CfpMutationLease,
   type CfpPublishedForm,
   type CfpServerSubmission,
   createCfpApi,
@@ -786,10 +786,7 @@ export function CfpWizard({
       return null;
     }
   }, [eventSlug, organizationId, formId]);
-  const api = useMemo(
-    () => providedApi ?? createCfpApi(process.env.NEXT_PUBLIC_API_URL ?? ""),
-    [providedApi],
-  );
+  const api = useMemo(() => providedApi ?? createCfpApi(""), [providedApi]);
   const [draft, setDraft] = useState<CfpDraft>(initialDraft);
   const [dynamicAnswers, setDynamicAnswers] = useState<DynamicAnswers>({});
   const [participantAnswers, setParticipantAnswers] = useState<ParticipantAnswers>({});
@@ -1202,7 +1199,7 @@ export function CfpWizard({
   async function saveAndNavigate(
     nextDraft: CfpDraft,
     targetStep: CfpStep | "complete",
-    beforePersist?: (draft: CfpDraft) => Promise<CfpDraft | void>,
+    beforePersist?: (draft: CfpDraft) => Promise<CfpDraft | undefined>,
   ): Promise<void> {
     if (staleFormConflict) return;
     if (step === "welcome" && submissionsClosed) {
@@ -3140,10 +3137,7 @@ export function CfpComplete({
     formId: string;
     canEdit: boolean;
   } | null>(null);
-  const api = useMemo(
-    () => providedApi ?? createCfpApi(process.env.NEXT_PUBLIC_API_URL ?? ""),
-    [providedApi],
-  );
+  const api = useMemo(() => providedApi ?? createCfpApi(""), [providedApi]);
 
   useEffect(() => {
     let active = true;

@@ -227,9 +227,9 @@ export function PortalProvider({
   apiBaseUrl: providedApiBaseUrl,
 }: Readonly<PortalProviderProps>) {
   const configuredEventId = process.env.NEXT_PUBLIC_PORTAL_EVENT_ID?.trim();
-  const apiBaseUrl = (providedApiBaseUrl ?? process.env.NEXT_PUBLIC_API_URL)?.trim();
-  const api = useMemo<PortalApi | null>(
-    () => providedApi ?? (apiBaseUrl ? createPortalApi(apiBaseUrl) : null),
+  const apiBaseUrl = providedApiBaseUrl?.trim() ?? "";
+  const api = useMemo<PortalApi>(
+    () => providedApi ?? createPortalApi(apiBaseUrl),
     [apiBaseUrl, providedApi],
   );
   const [contexts, setContexts] = useState<PortalContext[]>([]);
@@ -263,10 +263,6 @@ export function PortalProvider({
 
   const loadWorkspaceFor = useCallback(
     async (target: PortalContext, nextView: PortalView, signal?: AbortSignal): Promise<void> => {
-      if (!api) {
-        setWorkspaceLoading(false);
-        return;
-      }
       const generation = ++loadGeneration.current;
       setWorkspaceLoading(true);
       setWorkspaceError(null);
@@ -492,11 +488,6 @@ export function PortalProvider({
 
   const hydrate = useCallback(
     async (target: PortalContext, signal?: AbortSignal): Promise<boolean> => {
-      if (!api) {
-        setLoading(false);
-        setError("The speaker portal API URL is not configured.");
-        return false;
-      }
       const generation = ++loadGeneration.current;
       setContext(target);
       setCapabilities(normalizeCapabilities(target.capabilities));
@@ -568,15 +559,6 @@ export function PortalProvider({
 
   const loadInitial = useCallback(
     async (signal?: AbortSignal): Promise<void> => {
-      if (!api) {
-        setContexts([]);
-        setContext(null);
-        setView(null);
-        clearWorkspace();
-        setError("The speaker portal API URL is not configured.");
-        setLoading(false);
-        return;
-      }
       setLoading(true);
       setError(null);
       try {
@@ -679,8 +661,8 @@ export function PortalProvider({
       socialLinks: Readonly<Record<string, string>>;
       headshot?: File;
     }) => {
-      if (!api || !context) {
-        setMutationError("The speaker portal API URL is not configured.");
+      if (!context) {
+        setMutationError("No authorized portal context is available.");
         return false;
       }
       if (!can("profile-self")) {
@@ -811,8 +793,8 @@ export function PortalProvider({
 
   const transitionTask = useCallback(
     async (task: PortalTask, toStatus: PortalTaskStatus, note?: string) => {
-      if (!api || !context) {
-        setMutationError("The speaker portal API URL is not configured.");
+      if (!context) {
+        setMutationError("No authorized portal context is available.");
         return false;
       }
       if (!can("task-response")) {
@@ -867,8 +849,8 @@ export function PortalProvider({
 
   const uploadTask = useCallback(
     async (task: PortalTask, file: File) => {
-      if (!api || !context) {
-        setMutationError("The speaker portal API URL is not configured.");
+      if (!context) {
+        setMutationError("No authorized portal context is available.");
         return false;
       }
       if (!can("task-response") || !can("asset-write")) {
@@ -964,8 +946,8 @@ export function PortalProvider({
       displayName: string;
       role: "co_speaker";
     }) => {
-      if (!api || !context) {
-        setMutationError("The speaker portal API URL is not configured.");
+      if (!context) {
+        setMutationError("No authorized portal context is available.");
         return false;
       }
       if (!can("roster-manage")) {
@@ -1020,8 +1002,8 @@ export function PortalProvider({
       email?: string;
       status?: PortalRosterMember["status"];
     }) => {
-      if (!api || !context) {
-        setMutationError("The speaker portal API URL is not configured.");
+      if (!context) {
+        setMutationError("No authorized portal context is available.");
         return false;
       }
       if (!can("roster-manage")) {
@@ -1070,8 +1052,8 @@ export function PortalProvider({
 
   const removeRosterEntry = useCallback(
     async (input: { submissionId: string; participantId: string }) => {
-      if (!api || !context) {
-        setMutationError("The speaker portal API URL is not configured.");
+      if (!context) {
+        setMutationError("No authorized portal context is available.");
         return false;
       }
       if (!can("roster-manage")) {
@@ -1127,8 +1109,8 @@ export function PortalProvider({
       file: File;
       supersedesAssetId?: string;
     }) => {
-      if (!api || !context) {
-        setMutationError("The speaker portal API URL is not configured.");
+      if (!context) {
+        setMutationError("No authorized portal context is available.");
         return false;
       }
       if (!can("asset-write")) {
@@ -1180,8 +1162,8 @@ export function PortalProvider({
       state: Extract<PortalAsset["state"], "ready" | "rejected">;
       rejectionReason?: string;
     }) => {
-      if (!api || !context) {
-        setMutationError("The speaker portal API URL is not configured.");
+      if (!context) {
+        setMutationError("No authorized portal context is available.");
         return false;
       }
       if (!can("asset-write") || !api.finalizeAsset) {

@@ -12,14 +12,8 @@ interface MemberSetupPageProps {
 export default async function MemberSetupPage({ params, searchParams }: MemberSetupPageProps) {
   const [{ organizationId }, query] = await Promise.all([params, searchParams]);
   const token = Array.isArray(query.token) ? query.token[0] : query.token;
-  const apiBaseUrl =
-    process.env.API_UPSTREAM_ORIGIN?.trim() ?? process.env.NEXT_PUBLIC_API_URL?.trim();
 
   return (
-    <MemberSetup
-      organizationId={organizationId}
-      token={typeof token === "string" ? token : null}
-      {...(apiBaseUrl === undefined ? {} : { apiBaseUrl })}
-    />
+    <MemberSetup organizationId={organizationId} token={typeof token === "string" ? token : null} />
   );
 }

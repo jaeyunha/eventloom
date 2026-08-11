@@ -2,7 +2,8 @@ import type { Page, Request, Route } from "@playwright/test";
 import type {
   OrganizerEventCreateInput,
   OrganizerEventRecord,
-  OrganizerOverviewData,
+  OrganizerOverviewActivityData,
+  OrganizerOverviewCoreData,
 } from "../../apps/web/src/features/admin/organizer-overview";
 import type { AgendaEntry, AgendaWorkspaceData } from "../../apps/web/src/features/agenda/types";
 import type {
@@ -244,15 +245,11 @@ function settingsFor(event: OrganizerEventRecord): EventSettingsData {
   };
 }
 
-function overviewFor(events: readonly OrganizerEventRecord[]): OrganizerOverviewData {
+function overviewCoreFor(events: readonly OrganizerEventRecord[]): OrganizerOverviewCoreData {
   return {
     organizationId: ORGANIZATION_ID,
     metrics: {
       eventCount: events.length,
-      submissionCount: events.length,
-      pendingReviewCount: 1,
-      outstandingSpeakerTaskCount: 2,
-      publishedSessionCount: events.length,
     },
     events: events.map((event) => ({
       id: event.id,
@@ -262,6 +259,20 @@ function overviewFor(events: readonly OrganizerEventRecord[]): OrganizerOverview
       startsAt: event.startsAt,
       endsAt: event.endsAt,
     })),
+  };
+}
+
+function overviewActivityFor(
+  events: readonly OrganizerEventRecord[],
+): OrganizerOverviewActivityData {
+  return {
+    organizationId: ORGANIZATION_ID,
+    metrics: {
+      submissionCount: events.length,
+      pendingReviewCount: 1,
+      outstandingSpeakerTaskCount: 2,
+      publishedSessionCount: events.length,
+    },
     actionItems: [
       {
         id: `agenda:${PRIMARY_EVENT_ID}`,
@@ -369,8 +380,12 @@ async function installOrganizerApi(
     expectAuthenticated(request, session);
 
     const expectedPrefix = `/api/admin/organizations/${ORGANIZATION_ID}`;
-    if (request.method() === "GET" && url.pathname === `${expectedPrefix}/overview`) {
-      await fulfillJson(route, overviewFor(events));
+    if (request.method() === "GET" && url.pathname === `${expectedPrefix}/overview/core`) {
+      await fulfillJson(route, overviewCoreFor(events));
+      return;
+    }
+    if (request.method() === "GET" && url.pathname === `${expectedPrefix}/overview/activity`) {
+      await fulfillJson(route, overviewActivityFor(events));
       return;
     }
 
@@ -551,13 +566,16 @@ test("verified organizer login opens the organization overview", async ({ authSe
   ).toBeVisible();
   await expect(page.getByRole("link", { name: "Events", exact: true })).toBeVisible();
   expect(api.verifiedLogins).toEqual([ORGANIZER_EMAIL]);
-  expect(
-    api.requests.some(
-      (request) =>
-        request.method() === "GET" &&
-        new URL(request.url()).pathname === `/api/admin/organizations/${ORGANIZATION_ID}/overview`,
-    ),
-  ).toBe(true);
+  for (const suffix of ["core", "activity"]) {
+    expect(
+      api.requests.some(
+        (request) =>
+          request.method() === "GET" &&
+          new URL(request.url()).pathname ===
+            `/api/admin/organizations/${ORGANIZATION_ID}/overview/${suffix}`,
+      ),
+    ).toBe(true);
+  }
 });
 
 test("dedicated Events page creates an event with canonical timezone and dates", async ({

@@ -33,6 +33,34 @@ describe("CFP authenticated session", () => {
     expect(requestInit?.method).toBe("GET");
     expect(requestInit?.credentials).toBe("include");
   });
+  it("uses the same-origin gateway when no API origin is configured", async () => {
+    let requestedUrl = "";
+    let requestInit: RequestInit | undefined;
+    const api = createCfpApi("", (async (input, init) => {
+      requestedUrl = String(input);
+      requestInit = init;
+      return Response.json({
+        data: {
+          id: "event-1",
+          tenantId: "org-1",
+          version: 1,
+          slug: "event-1",
+          name: "Event",
+          timezone: "UTC",
+          opensAt: "2026-01-01T00:00:00.000Z",
+          closesAt: "2026-02-01T00:00:00.000Z",
+        },
+      });
+    }) as typeof fetch);
+
+    await expect(
+      api.getEvent({ organizationId: "org-1", eventId: "event-1" }),
+    ).resolves.toMatchObject({
+      id: "event-1",
+    });
+    expect(requestedUrl).toBe("/api/cfp/organizations/org-1/events/event-1/config");
+    expect(requestInit?.credentials).toBe("include");
+  });
 
   it("treats an anonymous session response as unauthenticated", async () => {
     const api = createCfpApi("https://web.example.com", (async () =>
@@ -139,6 +167,7 @@ describe("CFP authenticated session", () => {
     ).resolves.toEqual({ status: "verification_required" });
   });
 });
+
 it("parses the published dynamic schema without dropping rules or reusable metadata", async () => {
   const fetcher = (async () =>
     Response.json({

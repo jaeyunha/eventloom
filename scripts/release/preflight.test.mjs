@@ -22,7 +22,7 @@ function configurationFor(environment, index) {
     APP_ENV: environment,
     WEB_ORIGIN: webOrigin,
     NEXT_PUBLIC_APP_URL: webOrigin,
-    NEXT_PUBLIC_API_URL: apiOrigin,
+    API_UPSTREAM_ORIGIN: apiOrigin,
     API_URL: apiOrigin,
     BETTER_AUTH_SECRET: `${environment}-${"a".repeat(40)}`,
     BETTER_AUTH_URL: apiOrigin,

@@ -605,11 +605,9 @@ describe("deliverables workspace", () => {
         tasks: [],
         assets: [],
         profiles: [],
-        apiConfigured: false,
         capabilityMessages: ["Task tracking unavailable", "Bulk reminder sending is unavailable"],
       }),
     );
-    expect(markup).toContain("Deliverables API is not configured");
     expect(markup).toContain("This content changed elsewhere. Reload before trying again.");
     expect(markup).toContain("Task tracking unavailable");
     expect(markup).toContain("Bulk reminder sending is unavailable");

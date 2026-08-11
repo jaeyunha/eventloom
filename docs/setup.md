@@ -10,7 +10,7 @@ The current deployment contract is pinned to these origins:
 
 | Environment | Web origin | API origin | Current hosting state |
 | --- | --- | --- | --- |
-| Local | `http://127.0.0.1:3015` | `http://127.0.0.1:8787` | Local processes; browser calls the API directly |
+| Local | `http://127.0.0.1:3015` | `http://127.0.0.1:8787` | Local processes; browser uses same-origin `/api/*` through the web proxy |
 | Staging | `https://open-sessionboard-web-staging.ashleyha0317.workers.dev` | `https://open-sessionboard-api-staging.ashleyha0317.workers.dev` | Cloudflare Workers with `workers_dev = true` |
 | Production | `https://open-sessionboard-web-production.ashleyha0317.workers.dev` | `https://open-sessionboard-api-production.ashleyha0317.workers.dev` | Cloudflare Workers with `workers_dev = true` |
 
@@ -42,7 +42,6 @@ APP_ENV=local
 WEB_ORIGIN=http://127.0.0.1:3015
 NEXT_PUBLIC_APP_ENV=local
 NEXT_PUBLIC_APP_URL=http://127.0.0.1:3015
-NEXT_PUBLIC_API_URL=http://127.0.0.1:8787
 NEXT_PUBLIC_ORGANIZATION_ID=ai-engineer
 API_URL=http://127.0.0.1:8787
 API_UPSTREAM_ORIGIN=http://127.0.0.1:8787
@@ -80,7 +79,7 @@ curl --fail http://127.0.0.1:3015/health
 curl --fail http://127.0.0.1:8787/api/health
 ```
 
-`API_UPSTREAM_ORIGIN` is the server-side API destination used by the web `/api/*` proxy. In local development it is the direct loopback API. In staging and production the browser uses the web origin for `/api/*`, while the web Worker forwards those requests to the pinned API origin; do not expose or replace that upstream setting with a secret.
+`API_UPSTREAM_ORIGIN` is the server-only API Worker destination used by the web `/api/*` proxy. In local, staging, and production, browsers always call same-origin `/api/*` through the web origin; the web Worker forwards those requests to the configured API origin. `NEXT_PUBLIC_APP_URL` remains browser-visible, while `API_URL` remains the API deployment/preflight origin; never expose or replace `API_UPSTREAM_ORIGIN` with a browser variable or a secret.
 
 ## Advisory AI providers
 
@@ -129,13 +128,13 @@ Use `production open-sessionboard:production` for production. The command requir
 
 ## Guarded web deployment
 
-The web deploy script accepts only the pinned Workers origins for non-local environments. It requires all three public variables plus a deployment token. The API URL supplied to the script is the API Worker origin for validation; the script injects the web origin as the browser-visible `NEXT_PUBLIC_API_URL` and sets `API_UPSTREAM_ORIGIN` to the API Worker so production requests use the same-origin proxy.
+The web deploy script accepts only the pinned Workers origins for non-local environments. It requires the exact `NEXT_PUBLIC_APP_URL`, server-only `API_UPSTREAM_ORIGIN`, explicit `NEXT_PUBLIC_ORGANIZATION_ID`, and deployment token. `API_UPSTREAM_ORIGIN` is validated as the API Worker origin and configured for the server-side proxy; browsers always use same-origin `/api/*` through the browser-visible `NEXT_PUBLIC_APP_URL`.
 
 A no-side-effect build/Wrangler check is available before the guarded deployment:
 
 ```bash
 NEXT_PUBLIC_APP_URL='https://open-sessionboard-web-staging.ashleyha0317.workers.dev' \
-NEXT_PUBLIC_API_URL='https://open-sessionboard-api-staging.ashleyha0317.workers.dev' \
+API_UPSTREAM_ORIGIN='https://open-sessionboard-api-staging.ashleyha0317.workers.dev' \
 NEXT_PUBLIC_ORGANIZATION_ID='<explicit-staging-organization-id>' \
 node scripts/cloudflare/deploy-web.mjs staging --dry-run
 ```
@@ -145,7 +144,7 @@ Deploy staging only after the API and release gates authorize it. The shell guar
 ```bash
 set -eu
 export NEXT_PUBLIC_APP_URL='https://open-sessionboard-web-staging.ashleyha0317.workers.dev'
-export NEXT_PUBLIC_API_URL='https://open-sessionboard-api-staging.ashleyha0317.workers.dev'
+export API_UPSTREAM_ORIGIN='https://open-sessionboard-api-staging.ashleyha0317.workers.dev'
 : "${NEXT_PUBLIC_ORGANIZATION_ID:?set the explicit staging organization application ID}"
 : "${CLOUDFLARE_API_TOKEN:?set the staging deployment token from the secret manager}"
 node scripts/cloudflare/deploy-web.mjs staging open-sessionboard-web:staging
@@ -156,13 +155,13 @@ The production form is identical except for the pinned production origins and co
 ```bash
 set -eu
 export NEXT_PUBLIC_APP_URL='https://open-sessionboard-web-production.ashleyha0317.workers.dev'
-export NEXT_PUBLIC_API_URL='https://open-sessionboard-api-production.ashleyha0317.workers.dev'
+export API_UPSTREAM_ORIGIN='https://open-sessionboard-api-production.ashleyha0317.workers.dev'
 : "${NEXT_PUBLIC_ORGANIZATION_ID:?set the explicit production organization application ID}"
 : "${CLOUDFLARE_API_TOKEN:?set the production deployment token from the secret manager}"
 node scripts/cloudflare/deploy-web.mjs production open-sessionboard-web:production
 ```
 
-The web deployment receives only public URLs, environment, and the explicit tenant ID. Never pass Airtable, OpenSend, Better Auth, or other private values to the web bundle.
+The web deployment receives the public app URL, server-only API upstream origin, environment, and explicit tenant ID. Never pass Airtable, OpenSend, Better Auth, or other private values to the web bundle.
 
 ## Airtable and OpenSend
 

@@ -1,7 +1,8 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  AdminShell,
   eventNavigationFor,
   qualifiedEventContext,
   sessionHasOrganizerMembership,
@@ -11,23 +12,24 @@ import {
   createOrganizerOverviewApi,
   type OrganizerEventFormValues,
   type OrganizerEventRecord,
+  type OrganizerOverviewActivityData,
+  type OrganizerOverviewCoreData,
   OrganizerEventsView,
-  type OrganizerOverviewData,
   OrganizerOverviewView,
   parseOrganizerEventsResponse,
-  parseOrganizerOverviewResponse,
+  parseOrganizerOverviewActivityResponse,
+  parseOrganizerOverviewCoreResponse,
   resolveOrganizerOverviewConfig,
   validateOrganizerEventForm,
 } from "./organizer-overview";
+vi.mock("next/navigation", () => ({
+  usePathname: () => "/admin",
+}));
 
-const loadedData: OrganizerOverviewData = {
+const loadedCore: OrganizerOverviewCoreData = {
   organizationId: "ai-engineer",
   metrics: {
     eventCount: 1,
-    submissionCount: 2,
-    pendingReviewCount: 1,
-    outstandingSpeakerTaskCount: 0,
-    publishedSessionCount: 3,
   },
   events: [
     {
@@ -39,6 +41,16 @@ const loadedData: OrganizerOverviewData = {
       endsAt: "2026-09-18T00:00:00.000Z",
     },
   ],
+};
+
+const loadedActivity: OrganizerOverviewActivityData = {
+  organizationId: "ai-engineer",
+  metrics: {
+    submissionCount: 2,
+    pendingReviewCount: 1,
+    outstandingSpeakerTaskCount: 0,
+    publishedSessionCount: 3,
+  },
   actionItems: [
     {
       id: "agenda:event-live",
@@ -81,12 +93,22 @@ const eventRecord: OrganizerEventRecord = {
 };
 
 function markup(state: Parameters<typeof OrganizerOverviewView>[0]["state"]): string {
-  return renderToStaticMarkup(createElement(OrganizerOverviewView, { state }));
+  return renderToStaticMarkup(
+    createElement(OrganizerOverviewView, {
+      state,
+      onRetryCore: () => undefined,
+      onRetryActivity: () => undefined,
+    }),
+  );
 }
 
 describe("organizer overview", () => {
   it("renders the dashboard hierarchy, live metrics, prioritized actions, and event destinations", () => {
-    const output = markup({ status: "loaded", data: loadedData });
+    const output = markup({
+      status: "loaded",
+      core: { status: "loaded", data: loadedCore },
+      activity: { status: "loaded", data: loadedActivity },
+    });
 
     expect(output).toContain("Organization overview");
     expect(output).toContain("Live organization metrics");
@@ -102,19 +124,26 @@ describe("organizer overview", () => {
   });
 
   it("renders explicit empty states for events and action items", () => {
-    const emptyData: OrganizerOverviewData = {
+    const emptyCore: OrganizerOverviewCoreData = {
+      organizationId: "empty-org",
+      metrics: { eventCount: 0 },
+      events: [],
+    };
+    const emptyActivity: OrganizerOverviewActivityData = {
       organizationId: "empty-org",
       metrics: {
-        eventCount: 0,
         submissionCount: 0,
         pendingReviewCount: 0,
         outstandingSpeakerTaskCount: 0,
         publishedSessionCount: 0,
       },
-      events: [],
       actionItems: [],
     };
-    const output = markup({ status: "loaded", data: emptyData });
+    const output = markup({
+      status: "loaded",
+      core: { status: "loaded", data: emptyCore },
+      activity: { status: "loaded", data: emptyActivity },
+    });
 
     expect(output).toContain("all caught up");
     expect(output).toContain("No action items are waiting for this organization.");
@@ -124,7 +153,11 @@ describe("organizer overview", () => {
   });
 
   it("renders the accessible dashboard skeleton and understandable failure states", () => {
-    const loading = markup({ status: "loading" });
+    const loading = markup({
+      status: "loading",
+      core: { status: "loading", data: null },
+      activity: { status: "loading", data: null },
+    });
     expect(loading).toContain("Organization overview");
     expect(loading).toContain("Loading organizer overview");
     expect(loading).toContain('aria-busy="true"');
@@ -133,9 +166,18 @@ describe("organizer overview", () => {
     expect(loading).toContain("Events");
     expect(loading).not.toContain("128");
 
-    expect(markup({ status: "error", message: "The API is unavailable." })).toContain(
-      "The API is unavailable.",
-    );
+    expect(
+      markup({
+        status: "error",
+        message: "The API is unavailable.",
+        core: {
+          status: "error",
+          data: null,
+          message: "The API is unavailable.",
+        },
+        activity: { status: "loading", data: null },
+      }),
+    ).toContain("The API is unavailable.");
     expect(
       markup({
         status: "config-error",
@@ -144,97 +186,199 @@ describe("organizer overview", () => {
     ).toContain("NEXT_PUBLIC_ORGANIZATION_ID");
   });
 
+  it("renders core content while activity is deferred or fails locally", () => {
+    const deferred = markup({
+      status: "loaded",
+      core: { status: "loaded", data: loadedCore },
+      activity: { status: "loading", data: null },
+    });
+    expect(deferred).toContain("Live program");
+    expect(deferred).toContain("Loading action items…");
+
+    const failed = markup({
+      status: "loaded",
+      core: { status: "loaded", data: loadedCore },
+      activity: {
+        status: "error",
+        data: null,
+        message: "Activity is unavailable.",
+      },
+    });
+    expect(failed).toContain("Live program");
+    expect(failed).toContain("Action items unavailable");
+    expect(failed).toContain("Activity is unavailable.");
+    expect(failed).toContain("Retry activity");
+    expect(failed).not.toContain("Unable to load organizer overview");
+  });
+
+  it("retains same-organization snapshots across scoped refresh failures", () => {
+    const output = markup({
+      status: "loaded",
+      core: {
+        status: "error",
+        data: loadedCore,
+        message: "Core refresh failed.",
+      },
+      activity: {
+        status: "error",
+        data: loadedActivity,
+        message: "Activity refresh failed.",
+      },
+    });
+    expect(output).toContain("Live program");
+    expect(output).toContain("Publish the remaining session");
+    expect(output).toContain("Showing previous event data.");
+    expect(output).toContain("Stale action items.");
+    expect(output).toContain("Retry core");
+    expect(output).toContain("Retry activity");
+  });
+
   it("uses local-organization only for local configuration", () => {
     expect(
       resolveOrganizerOverviewConfig({
-        NEXT_PUBLIC_API_URL: "http://localhost:8787/",
         NEXT_PUBLIC_APP_ENV: "local",
       }),
-    ).toEqual({ apiBaseUrl: "http://localhost:8787", organizationId: "local-organization" });
+    ).toEqual({
+      apiBaseUrl: "",
+      organizationId: "local-organization",
+    });
     expect(
       resolveOrganizerOverviewConfig({
-        NEXT_PUBLIC_API_URL: "http://localhost:8787/",
         NEXT_PUBLIC_APP_ENV: "local",
         NEXT_PUBLIC_ORGANIZATION_ID: "ai-engineer",
       }),
-    ).toEqual({ apiBaseUrl: "http://localhost:8787", organizationId: "ai-engineer" });
+    ).toEqual({
+      apiBaseUrl: "",
+      organizationId: "ai-engineer",
+    });
     expect(
       resolveOrganizerOverviewConfig({
-        NEXT_PUBLIC_API_URL: "https://api.example.test",
         NEXT_PUBLIC_APP_ENV: "production",
         NEXT_PUBLIC_ORGANIZATION_ID: "ai-engineer",
       }),
-    ).toEqual({ apiBaseUrl: "https://api.example.test", organizationId: "ai-engineer" });
+    ).toEqual({
+      apiBaseUrl: "",
+      organizationId: "ai-engineer",
+    });
     expect(
       resolveOrganizerOverviewConfig({
-        NEXT_PUBLIC_API_URL: "https://api.example.test",
         NEXT_PUBLIC_APP_ENV: "production",
       }),
-    ).toMatchObject({ error: expect.stringContaining("NEXT_PUBLIC_ORGANIZATION_ID") });
+    ).toMatchObject({
+      error: expect.stringContaining("NEXT_PUBLIC_ORGANIZATION_ID"),
+    });
   });
 
-  it("fetches the credentialed, tenant-qualified overview endpoint", async () => {
-    let requestedUrl = "";
+  it("fetches the exact credentialed core and activity endpoints", async () => {
+    const requestedUrls: string[] = [];
     let requestedInit: RequestInit | undefined;
     const api = createOrganizerOverviewApi(
       "https://api.example.test/",
       "ai-engineer",
       async (url, init) => {
-        requestedUrl = String(url);
+        const requestedUrl = String(url);
+        requestedUrls.push(requestedUrl);
         requestedInit = init;
-        return new Response(JSON.stringify({ data: loadedData }), {
+        const data = requestedUrl.endsWith("/core") ? loadedCore : loadedActivity;
+        return new Response(JSON.stringify({ data }), {
           status: 200,
           headers: { "content-type": "application/json" },
         });
       },
     );
 
-    await expect(api.getOverview()).resolves.toEqual(loadedData);
-    expect(requestedUrl).toBe(
-      "https://api.example.test/api/admin/organizations/ai-engineer/overview",
-    );
+    await expect(api.getCore()).resolves.toEqual(loadedCore);
+    await expect(api.getActivity()).resolves.toEqual(loadedActivity);
+    expect(requestedUrls).toEqual([
+      "https://api.example.test/api/admin/organizations/ai-engineer/overview/core",
+      "https://api.example.test/api/admin/organizations/ai-engineer/overview/activity",
+    ]);
     expect(requestedInit?.credentials).toBe("include");
     expect(requestedInit?.cache).toBe("no-store");
   });
 
-  it("deduplicates concurrent overview reads without caching settled identity data", async () => {
-    let requestCount = 0;
-    let release: (() => void) | undefined;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
+  it("deduplicates each endpoint independently without caching settled snapshots", async () => {
+    let coreRequestCount = 0;
+    let activityRequestCount = 0;
+    let releaseCore: (() => void) | undefined;
+    let releaseActivity: (() => void) | undefined;
+    const coreGate = new Promise<void>((resolve) => {
+      releaseCore = resolve;
     });
-    const api = createOrganizerOverviewApi("https://api.example.test", "ai-engineer", async () => {
-      requestCount += 1;
-      await gate;
-      return new Response(JSON.stringify({ data: loadedData }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
+    const activityGate = new Promise<void>((resolve) => {
+      releaseActivity = resolve;
     });
+    const api = createOrganizerOverviewApi(
+      "https://api.example.test",
+      "ai-engineer",
+      async (url) => {
+        if (String(url).endsWith("/core")) {
+          coreRequestCount += 1;
+          await coreGate;
+          return new Response(JSON.stringify({ data: loadedCore }), {
+            status: 200,
+          });
+        }
+        activityRequestCount += 1;
+        await activityGate;
+        return new Response(JSON.stringify({ data: loadedActivity }), {
+          status: 200,
+        });
+      },
+    );
 
-    const first = api.getOverview();
-    const second = api.getOverview();
-    expect(first).toBe(second);
-    expect(requestCount).toBe(1);
-    release?.();
-    await expect(Promise.all([first, second])).resolves.toEqual([loadedData, loadedData]);
+    const firstCore = api.getCore();
+    const secondCore = api.getCore();
+    const firstActivity = api.getActivity();
+    const secondActivity = api.getActivity();
+    expect(firstCore).toBe(secondCore);
+    expect(firstActivity).toBe(secondActivity);
+    expect(coreRequestCount).toBe(1);
+    expect(activityRequestCount).toBe(1);
 
-    await expect(api.getOverview()).resolves.toEqual(loadedData);
-    expect(requestCount).toBe(2);
+    releaseCore?.();
+    releaseActivity?.();
+    await expect(
+      Promise.all([firstCore, secondCore, firstActivity, secondActivity]),
+    ).resolves.toEqual([loadedCore, loadedCore, loadedActivity, loadedActivity]);
+
+    await expect(api.getCore()).resolves.toEqual(loadedCore);
+    await expect(api.getActivity()).resolves.toEqual(loadedActivity);
+    expect(coreRequestCount).toBe(2);
+    expect(activityRequestCount).toBe(2);
   });
 
-  it("rejects malformed API envelopes", () => {
-    expect(() => parseOrganizerOverviewResponse({ data: { events: [], actionItems: [] } })).toThrow(
-      "organizer overview response",
-    );
+  it("rejects malformed, incomplete, and cross-tenant split envelopes", () => {
+    expect(() =>
+      parseOrganizerOverviewCoreResponse({
+        data: { organizationId: "ai-engineer", events: [] },
+      }),
+    ).toThrow("organizer overview core response");
+    expect(() =>
+      parseOrganizerOverviewActivityResponse({
+        data: { organizationId: "ai-engineer", metrics: {}, actionItems: [] },
+      }),
+    ).toThrow("invalid metrics.submissionCount");
+    expect(() =>
+      parseOrganizerOverviewCoreResponse(
+        { data: { ...loadedCore, organizationId: "other-organization" } },
+        "ai-engineer",
+      ),
+    ).toThrow("another organization");
   });
   it("renders dedicated event management rows with organization-qualified agenda and settings links", () => {
     const output = renderToStaticMarkup(
       createElement(OrganizerEventsView, {
         state: {
           status: "loaded",
-          data: { organizationId: eventRecord.organizationId, events: [eventRecord] },
+          data: {
+            organizationId: eventRecord.organizationId,
+            events: [eventRecord],
+          },
         },
+        onCreate: async () => undefined,
+        onUpdate: async () => undefined,
+        onArchive: async () => undefined,
       }),
     );
 
@@ -243,6 +387,31 @@ describe("organizer overview", () => {
     expect(output).toContain("/admin/organizations/ai-engineer/events/event-live/agenda");
     expect(output).toContain("/admin/organizations/ai-engineer/events/event-live/settings");
     expect(output).toContain("America/Los_Angeles");
+  });
+  it("retains event records after refresh failure and disables stale mutations", () => {
+    const output = renderToStaticMarkup(
+      createElement(OrganizerEventsView, {
+        state: {
+          status: "error",
+          message: "The refresh failed.",
+          data: {
+            organizationId: eventRecord.organizationId,
+            events: [eventRecord],
+          },
+        },
+        onRetry: () => undefined,
+        onCreate: async () => undefined,
+        onUpdate: async () => undefined,
+        onArchive: async () => undefined,
+      }),
+    );
+
+    expect(output).toContain("Live program");
+    expect(output).toContain("Showing previous event data. The refresh failed.");
+    expect(output).toContain("Retry event refresh");
+    expect(output).not.toContain(">Create event<");
+    expect(output).not.toContain(">Edit<");
+    expect(output).not.toContain(">Archive<");
   });
 
   it("sends canonical event create fields and parses the event envelope", async () => {
@@ -290,6 +459,19 @@ describe("organizer overview", () => {
       defaultCalendarSettings: eventRecord.defaultCalendarSettings,
     });
   });
+  it("uses the same-origin gateway when no browser API origin is configured", async () => {
+    let requestedUrl = "";
+    const api = createOrganizerEventsApi("", "ai-engineer", async (url) => {
+      requestedUrl = String(url);
+      return new Response(JSON.stringify({ data: [eventRecord] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+
+    await expect(api.listEvents()).resolves.toEqual([eventRecord]);
+    expect(requestedUrl).toBe("/api/admin/organizations/ai-engineer/events");
+  });
 
   it("rejects legacy calendar timezone aliases and validates complete event form input", () => {
     expect(() =>
@@ -297,7 +479,10 @@ describe("organizer overview", () => {
         data: [
           {
             ...eventRecord,
-            defaultCalendarSettings: { ...eventRecord.defaultCalendarSettings, timezone: "UTC" },
+            defaultCalendarSettings: {
+              ...eventRecord.defaultCalendarSettings,
+              timezone: "UTC",
+            },
           },
         ],
       }),
@@ -388,9 +573,10 @@ describe("admin navigation", () => {
     }
 
     expect(
-      eventNavigationFor({ organizationId: "ai-engineer", eventId: "event-live" }).some(
-        (item) => item.href === "/admin/organizations/ai-engineer/members",
-      ),
+      eventNavigationFor({
+        organizationId: "ai-engineer",
+        eventId: "event-live",
+      }).some((item) => item.href === "/admin/organizations/ai-engineer/members"),
     ).toBe(true);
   });
 
@@ -399,6 +585,16 @@ describe("admin navigation", () => {
       qualifiedEventContext("/admin/organizations/org%2Flive/events/event%2Flive/agenda"),
     ).toEqual({ organizationId: "org/live", eventId: "event/live" });
     expect(qualifiedEventContext("/admin/events/event-live/agenda")).toBeNull();
+  });
+  it("mounts protected page content while organizer access is still being checked", () => {
+    const output = renderToStaticMarkup(
+      createElement(AdminShell, null, createElement("p", null, "Primary organizer content")),
+    );
+
+    expect(output).toContain("Open Sessionboard");
+    expect(output).toContain("Primary organizer content");
+    expect(output).toContain('aria-busy="true"');
+    expect(output).toContain("Checking organizer access");
   });
   it("accepts only owner or admin membership for the selected organization", () => {
     const session = {

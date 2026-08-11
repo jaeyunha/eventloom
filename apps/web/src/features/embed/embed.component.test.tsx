@@ -350,12 +350,16 @@ describe("public embeds", () => {
     expect(firstLee).toBeGreaterThan(firstBrown);
   });
   it("connects long biographies to an accessible expansion control", () => {
+    const firstSpeaker = gallery.speakers[0];
+    if (!firstSpeaker) {
+      throw new Error("Expected the first published speaker fixture.");
+    }
     const longBiography = "Published biography details. ".repeat(20);
     const longBiographyProgram: PublishedProgram = {
       agenda,
       speakers: {
         ...gallery,
-        speakers: [{ ...gallery.speakers[0]!, biography: longBiography }],
+        speakers: [{ ...firstSpeaker, biography: longBiography }],
       },
     };
 
@@ -369,14 +373,18 @@ describe("public embeds", () => {
     expect(markup).toContain("Show more");
   });
   it("renders distinct canonical speakers that share a display name", () => {
+    const firstSpeaker = gallery.speakers[0];
+    if (!firstSpeaker) {
+      throw new Error("Expected the first published speaker fixture.");
+    }
     const duplicateNameProgram: PublishedProgram = {
       agenda,
       speakers: {
         ...gallery,
         speakers: [
-          gallery.speakers[0]!,
+          firstSpeaker,
           {
-            ...gallery.speakers[0]!,
+            ...firstSpeaker,
             id: "speaker_morgan_2",
             jobTitle: "Principal Engineer",
           },

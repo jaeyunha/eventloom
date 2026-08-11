@@ -20,11 +20,6 @@ import {
 import { EvaluationService } from "../features/evaluations/service";
 import type { EvaluationActor } from "../features/evaluations/types";
 import type {
-  IdempotencyCoordinator,
-  IdempotencyOutcome,
-} from "../features/public-api/idempotency";
-import { IdempotencyConflictError } from "../features/public-api/idempotency";
-import type {
   PublicApiCreateInput,
   PublicApiGetInput,
   PublicApiListInput,
@@ -60,7 +55,8 @@ import type {
 } from "../routes/integrations";
 import type {
   OrganizerOverviewActionItem,
-  OrganizerOverviewData,
+  OrganizerOverviewActivityData,
+  OrganizerOverviewCoreData,
   OrganizerOverviewEvent,
   OrganizerOverviewRouteDependencies,
 } from "../routes/organizer-overview";
@@ -914,23 +910,26 @@ class LocalOrganizerOverviewRepository implements OrganizerOverviewRouteDependen
     this.#assignments = options.assignments ?? [];
   }
 
-  async getOverview(organizationId: string): Promise<OrganizerOverviewData> {
-    const events = this.#publicRepository
-      .listStored(organizationId, "events")
-      .map((event) => this.eventView(event))
-      .sort((left, right) => left.id.localeCompare(right.id));
-    const eventIds = new Set(events.map((event) => event.id));
+  async getOverviewCore(organizationId: string): Promise<OrganizerOverviewCoreData> {
+    const { events } = this.scopedEvents(organizationId);
+    return {
+      organizationId,
+      metrics: { eventCount: events.length },
+      events,
+    };
+  }
+
+  async getOverviewActivity(organizationId: string): Promise<OrganizerOverviewActivityData> {
+    const { events, eventIds } = this.scopedEvents(organizationId);
     if (events.length === 0) {
       return {
         organizationId,
         metrics: {
-          eventCount: 0,
           submissionCount: 0,
           pendingReviewCount: 0,
           outstandingSpeakerTaskCount: 0,
           publishedSessionCount: 0,
         },
-        events: [],
         actionItems: [],
       };
     }
@@ -1045,17 +1044,25 @@ class LocalOrganizerOverviewRepository implements OrganizerOverviewRouteDependen
     return {
       organizationId,
       metrics: {
-        eventCount: events.length,
         submissionCount: submissions.length,
         pendingReviewCount: pendingAssignments.length,
         outstandingSpeakerTaskCount: tasks.length,
         publishedSessionCount,
       },
-      events,
       actionItems,
     };
   }
 
+  private scopedEvents(organizationId: string): {
+    readonly events: OrganizerOverviewEvent[];
+    readonly eventIds: ReadonlySet<string>;
+  } {
+    const events = this.#publicRepository
+      .listStored(organizationId, "events")
+      .map((event) => this.eventView(event))
+      .sort((left, right) => left.id.localeCompare(right.id));
+    return { events, eventIds: new Set(events.map((event) => event.id)) };
+  }
   private eventView(record: Record<string, unknown>): OrganizerOverviewEvent {
     const id = textValue(record, "id") ?? "unknown";
     return {
@@ -1109,40 +1116,6 @@ function compareNullableDates(left: string | null, right: string | null): number
   if (left === null) return 1;
   if (right === null) return -1;
   return Date.parse(left) - Date.parse(right);
-}
-class LocalIdempotencyCoordinator implements IdempotencyCoordinator {
-  readonly #records = new Map<
-    string,
-    { fingerprint: string; promise: Promise<unknown>; completed: boolean }
-  >();
-
-  async run<T>(
-    scope: string,
-    key: string,
-    fingerprint: string,
-    operation: () => Promise<T>,
-  ): Promise<IdempotencyOutcome<T>> {
-    const storageKey = `${scope}\u0000${key}`;
-    const existing = this.#records.get(storageKey);
-    if (existing !== undefined) {
-      if (existing.fingerprint !== fingerprint) throw new IdempotencyConflictError();
-      return { value: (await existing.promise) as T, replayed: true };
-    }
-    const record = {
-      fingerprint,
-      completed: false,
-      promise: Promise.resolve().then(operation) as Promise<unknown>,
-    };
-    this.#records.set(storageKey, record);
-    try {
-      const value = (await record.promise) as T;
-      record.completed = true;
-      return { value, replayed: false };
-    } catch (error) {
-      this.#records.delete(storageKey);
-      throw error;
-    }
-  }
 }
 
 function eventIdFrom(request: Request): string {
@@ -1279,41 +1252,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
       },
     },
     publicApi: {
-      resources: [
-        {
-          name: "events",
-          repository: publicRepository,
-          readScope: "events:read",
-          writeScope: "events:write",
-          sortFields: ["id", "name", "updatedAt"],
-          defaultSort: "id",
-        },
-        {
-          name: "speakers",
-          repository: publicRepository,
-          readScope: "submissions:read",
-          writeScope: "submissions:write",
-          sortFields: ["id", "displayName", "updatedAt"],
-          defaultSort: "id",
-        },
-        {
-          name: "agenda",
-          repository: publicRepository,
-          readScope: "agenda:read",
-          writeScope: "agenda:write",
-          sortFields: ["id", "updatedAt"],
-          defaultSort: "id",
-        },
-        {
-          name: "sessions",
-          repository: publicRepository,
-          readScope: "agenda:read",
-          writeScope: "agenda:write",
-          sortFields: ["id", "title", "updatedAt"],
-          defaultSort: "id",
-        },
-      ],
-      idempotency: new LocalIdempotencyCoordinator(),
+      resources: [],
     },
     integrations: {
       getEvent: integrationRepository.getEvent.bind(integrationRepository),

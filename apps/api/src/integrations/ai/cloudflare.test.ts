@@ -530,7 +530,7 @@ describe("Cloudflare Workers AI advisory providers", () => {
           {
             criterionId: "quality",
             value: 4,
-            evidence: ["The abstract describes a concrete architecture and measured result."],
+            evidence: ["The abstract states a concrete audience outcome."],
           },
         ],
       }),

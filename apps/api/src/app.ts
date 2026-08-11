@@ -47,7 +47,10 @@ import {
   createSpeakerTaskAdminRoutes,
   type SpeakerRouteDependencies,
 } from "./features/speaker/routes";
-import { createWebhookSubscriptionRoutes } from "./integrations/webhooks/routes";
+import {
+  createWebhookSubscriptionRoutes,
+  webhookSubscriptionOpenApiPaths,
+} from "./integrations/webhooks/routes";
 import type { WebhookSubscriptionRepository } from "./integrations/webhooks/types";
 import {
   type AgendaRouteDependencies,
@@ -529,7 +532,28 @@ export function createApp<
     );
   }
   if (dependencies.publicApi !== undefined) {
-    app.route("/api/v1", createPublicApiV1Routes(dependencies.publicApi));
+    const configuredOpenApiPaths = dependencies.publicApi.openApi?.paths ?? {};
+    app.route(
+      "/api/v1",
+      createPublicApiV1Routes({
+        ...dependencies.publicApi,
+        openApi: {
+          ...dependencies.publicApi.openApi,
+          ...(dependencies.publicApi.openApi?.description === undefined &&
+          dependencies.publicApi.resources.length === 0 &&
+          dependencies.webhooks !== undefined
+            ? {
+                description:
+                  "Tenant-scoped public-v1 webhook administration. Generic program-resource routes are not mounted.",
+              }
+            : {}),
+          paths:
+            dependencies.webhooks === undefined
+              ? configuredOpenApiPaths
+              : { ...configuredOpenApiPaths, ...webhookSubscriptionOpenApiPaths },
+        },
+      }),
+    );
   }
   if (dependencies.integrations !== undefined) {
     app.route(

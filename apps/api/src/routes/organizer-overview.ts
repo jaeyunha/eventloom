@@ -4,8 +4,11 @@ import { z } from "zod";
 import { requireOrganizationRole } from "../features/auth/authorization";
 import { AuthAccessError, type AuthPrincipal } from "../features/auth/types";
 
-export interface OrganizerOverviewMetrics {
+export interface OrganizerOverviewCoreMetrics {
   readonly eventCount: number;
+}
+
+export interface OrganizerOverviewActivityMetrics {
   readonly submissionCount: number;
   readonly pendingReviewCount: number;
   readonly outstandingSpeakerTaskCount: number;
@@ -35,15 +38,21 @@ export interface OrganizerOverviewActionItem {
   readonly href: string;
 }
 
-export interface OrganizerOverviewData {
+export interface OrganizerOverviewCoreData {
   readonly organizationId: string;
-  readonly metrics: OrganizerOverviewMetrics;
+  readonly metrics: OrganizerOverviewCoreMetrics;
   readonly events: readonly OrganizerOverviewEvent[];
+}
+
+export interface OrganizerOverviewActivityData {
+  readonly organizationId: string;
+  readonly metrics: OrganizerOverviewActivityMetrics;
   readonly actionItems: readonly OrganizerOverviewActionItem[];
 }
 
 export interface OrganizerOverviewRouteDependencies {
-  readonly getOverview: (organizationId: string) => Promise<OrganizerOverviewData>;
+  readonly getOverviewCore: (organizationId: string) => Promise<OrganizerOverviewCoreData>;
+  readonly getOverviewActivity: (organizationId: string) => Promise<OrganizerOverviewActivityData>;
 }
 
 interface OrganizerOverviewRouteEnvironment {
@@ -97,10 +106,21 @@ export function createOrganizerOverviewRoutes(
 ): Hono<OrganizerOverviewRouteEnvironment> {
   const routes = new Hono<OrganizerOverviewRouteEnvironment>();
 
-  routes.get("/", async (context) => {
+  routes.get("/core", async (context) => {
     const id = organizationId(context);
     requireOrganizer(context, id);
-    const data = await dependencies.getOverview(id);
+    const data = await dependencies.getOverviewCore(id);
+    if (data.organizationId !== id) {
+      throw new Error("The organizer overview returned another organization.");
+    }
+    context.header("cache-control", "private, no-store");
+    return context.json({ data });
+  });
+
+  routes.get("/activity", async (context) => {
+    const id = organizationId(context);
+    requireOrganizer(context, id);
+    const data = await dependencies.getOverviewActivity(id);
     if (data.organizationId !== id) {
       throw new Error("The organizer overview returned another organization.");
     }

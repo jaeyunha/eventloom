@@ -37,6 +37,10 @@ const projection: PublishedSpeakerProjection = {
     },
   ],
 };
+const publishedSpeaker = projection.speakers[0];
+if (publishedSpeaker === undefined) {
+  throw new Error("The published speaker fixture must contain one speaker.");
+}
 
 describe("published speaker projection route", () => {
   it("serves an anonymous immutable projection at the embed contract", async () => {
@@ -67,7 +71,7 @@ describe("published speaker projection route", () => {
       },
       speakers: [
         {
-          ...projection.speakers[0]!,
+          ...publishedSpeaker,
           photoUrl:
             "https://assets.sessionboard.namuh.co/public/speaker-1.webp?signature=private-token",
           email: "private@example.test",
@@ -104,7 +108,7 @@ describe("published speaker projection route", () => {
       ...projection,
       speakers: [
         {
-          ...projection.speakers[0]!,
+          ...publishedSpeaker,
           photoUrl: "https://assets.sessionboard.namuh.co/public/speaker-1.webp",
         },
       ],

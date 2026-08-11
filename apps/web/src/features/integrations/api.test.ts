@@ -92,4 +92,27 @@ describe("integration admin API", () => {
     });
     await expect(rejection).rejects.not.toHaveProperty("credential");
   });
+  it("routes an empty base URL through the same-origin integrations gateway", async () => {
+    let requestedUrl = "";
+    let requestInit: RequestInit | undefined;
+    const api = createIntegrationAdminApi("", async (input, init) => {
+      requestedUrl = String(input);
+      requestInit = init;
+      return response({ id: "webhook-1", secret: "secret-1" });
+    });
+
+    await expect(
+      api.createWebhook({
+        eventId: "event/a",
+        endpointUrl: "https://hooks.example.test/sessionboard",
+        events: ["submission.created"],
+      }),
+    ).resolves.toEqual({ id: "webhook-1", secret: "secret-1" });
+
+    expect(requestedUrl).toBe("/api/admin/events/event%2Fa/webhooks");
+    expect(requestedUrl.startsWith("/api/")).toBe(true);
+    expect(requestedUrl).not.toMatch(/^\/\//);
+    expect(requestedUrl).not.toMatch(/^https?:\/\//);
+    expect(requestInit?.credentials).toBe("include");
+  });
 });

@@ -389,9 +389,57 @@ interface ApiEnvelope<T> {
 
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
+export interface ReviewAutosaveQueue {
+  enqueue(operation: () => Promise<void>): Promise<void>;
+  whenIdle(): Promise<void>;
+  isPending(): boolean;
+}
+
+export function createReviewAutosaveQueue(
+  onPendingChange: (pending: boolean) => void = () => undefined,
+): ReviewAutosaveQueue {
+  let tail = Promise.resolve();
+  let pendingCount = 0;
+  return {
+    enqueue(operation) {
+      pendingCount += 1;
+      onPendingChange(true);
+      const result = tail.then(operation);
+      const settled = result.finally(() => {
+        pendingCount -= 1;
+        onPendingChange(pendingCount > 0);
+      });
+      tail = settled.catch(() => undefined);
+      return settled;
+    },
+    whenIdle() {
+      return tail;
+    },
+    isPending() {
+      return pendingCount > 0;
+    },
+  };
+}
+
+export function reviewerNavigationDisabled(
+  destinationAvailable: boolean,
+  autosavePending: boolean,
+  draftBusy: boolean,
+  submitBusy: boolean,
+): boolean {
+  return !destinationAvailable || autosavePending || draftBusy || submitBusy;
+}
+
+export function reviewerSelectionBlocked(
+  pendingAssignmentId: string | null,
+  selectedAssignmentId: string | null,
+  nextAssignmentId: string | null,
+): boolean {
+  return pendingAssignmentId !== null && nextAssignmentId !== selectedAssignmentId;
+}
+
 function apiBaseUrl(): string {
-  const configured = process.env.NEXT_PUBLIC_API_URL?.trim();
-  return configured ? configured.replace(/\/+$/u, "") : "";
+  return "";
 }
 
 function browserSameOrigin(): string {
@@ -711,7 +759,7 @@ function selectApiPlan(plans: readonly ApiPlan[], preferredPlanId?: string): Api
       right.id.localeCompare(left.id),
   )[0];
 }
-async function loadOrganizerData(
+export async function loadOrganizerData(
   eventId: string,
   baseUrl: string,
   preferredPlanId?: string,
@@ -786,46 +834,40 @@ async function loadOrganizerData(
     });
     return mapPlan(plan, eventId, pendingAggregates, mappedProgress, {});
   }
-  const aggregateEntries = await Promise.all(
-    uniqueSubmissions.map(async (submission) => {
-      let aggregate: ApiAggregate | null = null;
-      if (round !== undefined) {
-        try {
-          aggregate = await evaluationRequest<ApiAggregate>(
+  const aggregates =
+    round === undefined
+      ? []
+      : (
+          await evaluationRequest<{ aggregates: readonly ApiAggregate[] }>(
             baseUrl,
-            `/plans/${encodeURIComponent(plan.id)}/rounds/${encodeURIComponent(round.id)}/submissions/${encodeURIComponent(submission.id)}/aggregate`,
-          );
-        } catch (reason: unknown) {
-          if (
-            !(reason instanceof EvaluationRequestError) ||
-            (reason.status !== 404 && reason.status !== 409)
-          ) {
-            throw reason;
-          }
-        }
-      }
-      const submissionAssignments = assignments.filter(
-        (assignment) =>
-          assignment.submissionId === submission.id && assignment.roundId === round?.id,
-      );
-      return {
-        id: submission.id,
-        reference: submission.id,
-        title: submission.title,
-        countedScore: aggregate?.averageWeightedTotal?.toFixed(1) ?? "—",
-        possibleScore: aggregate?.possibleWeightedTotal?.toFixed(1) ?? "—",
-        countedReviews: aggregate?.submittedReviewCount ?? 0,
-        expectedReviews:
-          aggregate?.expectedReviewCount ??
-          submissionAssignments.filter((assignment) => assignment.status !== "abstained").length,
-        conflicts: submissionAssignments.filter((assignment) => assignment.status === "abstained")
-          .length,
-        abstentions: submissionAssignments.filter((assignment) => assignment.status === "abstained")
-          .length,
-        participants: submission.participants ?? [],
-      };
-    }),
+            `/plans/${encodeURIComponent(plan.id)}/rounds/${encodeURIComponent(round.id)}/aggregates`,
+          )
+        ).aggregates;
+  const aggregateBySubmissionId = new Map(
+    aggregates.map((aggregate) => [aggregate.submissionId, aggregate] as const),
   );
+  const aggregateEntries = uniqueSubmissions.map((submission) => {
+    const aggregate = aggregateBySubmissionId.get(submission.id);
+    const submissionAssignments = assignments.filter(
+      (assignment) => assignment.submissionId === submission.id && assignment.roundId === round?.id,
+    );
+    return {
+      id: submission.id,
+      reference: submission.id,
+      title: submission.title,
+      countedScore: aggregate?.averageWeightedTotal?.toFixed(1) ?? "—",
+      possibleScore: aggregate?.possibleWeightedTotal?.toFixed(1) ?? "—",
+      countedReviews: aggregate?.submittedReviewCount ?? 0,
+      expectedReviews:
+        aggregate?.expectedReviewCount ??
+        submissionAssignments.filter((assignment) => assignment.status !== "abstained").length,
+      conflicts: submissionAssignments.filter((assignment) => assignment.status === "abstained")
+        .length,
+      abstentions: submissionAssignments.filter((assignment) => assignment.status === "abstained")
+        .length,
+      participants: submission.participants ?? [],
+    };
+  });
   const decisions = Object.fromEntries(
     await Promise.all(
       uniqueSubmissions.map(async (submission) => {
@@ -2567,6 +2609,36 @@ function OrganizerAuthoring({
     </section>
   );
 }
+export function OrganizerDetailStatus({
+  loading,
+  error,
+  onRetry,
+}: Readonly<{
+  loading: boolean;
+  error: string | null;
+  onRetry: () => void;
+}>) {
+  if (!loading && error === null) return null;
+  return (
+    <aside className={styles.authorityNotice} role={error === null ? "status" : "alert"}>
+      <span className={styles.noticeIcon} aria-hidden="true">
+        {error === null ? "…" : "!"}
+      </span>
+      <div>
+        <h2>{error === null ? "Loading review details" : "Review details need attention"}</h2>
+        <p>
+          {error === null ? "The plan is usable while aggregate scores and decisions load." : error}
+        </p>
+        {error === null ? null : (
+          <button className={styles.secondaryButton} type="button" onClick={onRetry}>
+            Retry review details
+          </button>
+        )}
+      </div>
+    </aside>
+  );
+}
+
 function OrganizerWorkspace({
   seed,
   baseUrl,
@@ -2583,37 +2655,79 @@ function OrganizerWorkspace({
   reviewerMembersError: string | null;
 }>) {
   const [authoritativeSeed, setAuthoritativeSeed] = useState(seed);
+  const [detailLoading, setDetailLoading] = useState(true);
+  const [detailError, setDetailError] = useState<string | null>(null);
   const refreshSequenceRef = useRef(0);
 
   useEffect(() => {
-    refreshSequenceRef.current += 1;
+    const sequence = refreshSequenceRef.current + 1;
+    refreshSequenceRef.current = sequence;
+    let active = true;
     setAuthoritativeSeed(seed);
-  }, [seed]);
+    setDetailLoading(true);
+    setDetailError(null);
+    void loadOrganizerData(seed.eventId, baseUrl, seed.planId)
+      .then((nextSeed) => {
+        if (active && refreshSequenceRef.current === sequence) {
+          setAuthoritativeSeed(nextSeed);
+        }
+      })
+      .catch((reason: unknown) => {
+        if (active && refreshSequenceRef.current === sequence) {
+          setDetailError(
+            reason instanceof Error ? reason.message : "The review details could not be loaded.",
+          );
+        }
+      })
+      .finally(() => {
+        if (active && refreshSequenceRef.current === sequence) setDetailLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [baseUrl, seed]);
 
   async function refreshAuthoritativeSeed(): Promise<void> {
     const sequence = refreshSequenceRef.current + 1;
     refreshSequenceRef.current = sequence;
+    setDetailLoading(true);
+    setDetailError(null);
     try {
       const nextSeed = await loadOrganizerData(seed.eventId, baseUrl, seed.planId);
-      if (refreshSequenceRef.current === sequence) setAuthoritativeSeed(nextSeed);
-    } catch {
-      // Keep the last authoritative snapshot visible when a refresh is unavailable.
+      if (refreshSequenceRef.current === sequence) {
+        setAuthoritativeSeed(nextSeed);
+      }
+    } catch (reason: unknown) {
+      if (refreshSequenceRef.current === sequence) {
+        setDetailError(
+          reason instanceof Error ? reason.message : "The review details could not be loaded.",
+        );
+      }
+    } finally {
+      if (refreshSequenceRef.current === sequence) setDetailLoading(false);
     }
   }
 
   return (
-    <OrganizerWorkspaceView
-      seed={authoritativeSeed}
-      baseUrl={baseUrl}
-      organizationId={organizationId}
-      reviewerMembers={reviewerMembers}
-      reviewerMembersLoading={reviewerMembersLoading}
-      reviewerMembersError={reviewerMembersError}
-      onAuthoritativePlan={(plan) =>
-        setAuthoritativeSeed((current) => seedWithAuthoritativePlan(current, plan))
-      }
-      onAssignmentsPersisted={refreshAuthoritativeSeed}
-    />
+    <>
+      <OrganizerDetailStatus
+        loading={detailLoading}
+        error={detailError}
+        onRetry={() => void refreshAuthoritativeSeed()}
+      />
+      <OrganizerWorkspaceView
+        seed={authoritativeSeed}
+        baseUrl={baseUrl}
+        organizationId={organizationId}
+        reviewerMembers={reviewerMembers}
+        reviewerMembersLoading={reviewerMembersLoading}
+        reviewerMembersError={reviewerMembersError}
+        onAuthoritativePlan={(plan) =>
+          setAuthoritativeSeed((current) => seedWithAuthoritativePlan(current, plan))
+        }
+        onAssignmentsPersisted={refreshAuthoritativeSeed}
+      />
+    </>
   );
 }
 
@@ -3366,6 +3480,10 @@ function ReviewerQueueWorkspace({
   baseUrl: string;
 }>) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const pendingAutosaveAssignmentRef = useRef<string | null>(null);
+  const [pendingAutosaveAssignmentId, setPendingAutosaveAssignmentId] = useState<string | null>(
+    null,
+  );
   const [recusedIds, setRecusedIds] = useState<ReadonlySet<string>>(() => new Set());
   const [submittedAtById, setSubmittedAtById] = useState<Readonly<Record<string, string>>>({});
   const [draftsById, setDraftsById] = useState<Readonly<Record<string, EvaluatorDraftSnapshot>>>(
@@ -3393,6 +3511,27 @@ function ReviewerQueueWorkspace({
     selectedBase === null
       ? -1
       : visibleEntries.findIndex((entry) => entry.assignment.id === selectedBase.id);
+  function updateAutosavePending(assignmentId: string, pending: boolean): void {
+    if (pending) {
+      pendingAutosaveAssignmentRef.current = assignmentId;
+      setPendingAutosaveAssignmentId(assignmentId);
+      return;
+    }
+    if (pendingAutosaveAssignmentRef.current === assignmentId) {
+      pendingAutosaveAssignmentRef.current = null;
+    }
+    setPendingAutosaveAssignmentId((current) => (current === assignmentId ? null : current));
+  }
+
+  function selectAssignment(nextAssignmentId: string | null): boolean {
+    if (
+      reviewerSelectionBlocked(pendingAutosaveAssignmentRef.current, selectedId, nextAssignmentId)
+    ) {
+      return false;
+    }
+    setSelectedId(nextAssignmentId);
+    return true;
+  }
 
   return (
     <div className={styles.workspace} id="review-workspace">
@@ -3478,9 +3617,18 @@ function ReviewerQueueWorkspace({
                   <Link
                     className={styles.primaryButton}
                     href={`#scorecard-${encodeURIComponent(assignment.id)}`}
-                    onClick={() => setSelectedId(assignment.id)}
+                    onClick={(event) => {
+                      if (!selectAssignment(assignment.id)) event.preventDefault();
+                    }}
                     aria-label={`Open scorecard for ${assignment.title}`}
                     aria-current={isSelected ? "location" : undefined}
+                    aria-disabled={
+                      reviewerSelectionBlocked(
+                        pendingAutosaveAssignmentId,
+                        selectedId,
+                        assignment.id,
+                      ) || undefined
+                    }
                   >
                     {isSelected ? "Scorecard open" : "Open scorecard"}
                   </Link>
@@ -3505,7 +3653,10 @@ function ReviewerQueueWorkspace({
             <button
               className={styles.secondaryButton}
               type="button"
-              onClick={() => setSelectedId(null)}
+              onClick={() => {
+                selectAssignment(null);
+              }}
+              disabled={reviewerSelectionBlocked(pendingAutosaveAssignmentId, selectedId, null)}
             >
               Back to reviewer queue
             </button>
@@ -3518,17 +3669,22 @@ function ReviewerQueueWorkspace({
             queuePosition={{ position: selectedIndex + 1, total: visibleEntries.length }}
             onPrevious={
               selectedIndex > 0
-                ? () => setSelectedId(visibleEntries[selectedIndex - 1]?.assignment.id ?? null)
+                ? () => {
+                    selectAssignment(visibleEntries[selectedIndex - 1]?.assignment.id ?? null);
+                  }
                 : undefined
             }
             onNext={
               selectedIndex >= 0 && selectedIndex < visibleEntries.length - 1
-                ? () => setSelectedId(visibleEntries[selectedIndex + 1]?.assignment.id ?? null)
+                ? () => {
+                    selectAssignment(visibleEntries[selectedIndex + 1]?.assignment.id ?? null);
+                  }
                 : undefined
             }
             onDraftChange={(snapshot) =>
               setDraftsById((current) => ({ ...current, [selected.id]: snapshot }))
             }
+            onAutosavePendingChange={(pending) => updateAutosavePending(selected.id, pending)}
             onAbstain={() => {
               setRecusedIds((current) => new Set([...current, selected.id]));
               setSelectedId(null);
@@ -3558,6 +3714,7 @@ function EvaluatorWorkspace({
   onPrevious,
   onNext,
   onDraftChange,
+  onAutosavePendingChange,
 }: Readonly<{
   assignment: EvaluatorAssignment;
   baseUrl: string;
@@ -3568,6 +3725,7 @@ function EvaluatorWorkspace({
   onPrevious?: (() => void) | undefined;
   onNext?: (() => void) | undefined;
   onDraftChange?: ((snapshot: EvaluatorDraftSnapshot) => void) | undefined;
+  onAutosavePendingChange?: ((pending: boolean) => void) | undefined;
 }>) {
   const initiallySubmitted =
     assignment.submittedAt !== null ||
@@ -3587,7 +3745,13 @@ function EvaluatorWorkspace({
   const reviewVersionRef = useRef<number | undefined>(assignment.reviewVersion);
   const criterionRefs = useRef<Record<string, HTMLElement | null>>({});
   const [showValidation, setShowValidation] = useState(false);
-  const autosaveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const [autosavePending, setAutosavePending] = useState(false);
+  const [autosaveQueue] = useState(() =>
+    createReviewAutosaveQueue((pending) => {
+      setAutosavePending(pending);
+      onAutosavePendingChange?.(pending);
+    }),
+  );
   const [autosaveState, setAutosaveState] = useState(
     initiallySubmitted ? "Review submitted" : "Autosave ready",
   );
@@ -3821,7 +3985,7 @@ function EvaluatorWorkspace({
     nextConfirmed: ReadonlySet<string>,
     nextResponses: Readonly<Record<string, string>>,
   ): void {
-    autosaveQueueRef.current = autosaveQueueRef.current.then(async () => {
+    void autosaveQueue.enqueue(async () => {
       setAutosaveState("Saving draft…");
       try {
         await persistReview(nextScores, nextComment, nextConfirmed, nextResponses);
@@ -3844,7 +4008,7 @@ function EvaluatorWorkspace({
     setSubmitError(null);
     setAutosaveState("Saving draft…");
     try {
-      await autosaveQueueRef.current;
+      await autosaveQueue.whenIdle();
       await persistReview();
       setAutosaveState("Draft saved");
     } catch (reason: unknown) {
@@ -3990,7 +4154,7 @@ function EvaluatorWorkspace({
     setSubmitBusy(true);
     submitBusyRef.current = true;
     try {
-      await autosaveQueueRef.current;
+      await autosaveQueue.whenIdle();
       const review = await persistReview();
       const submittedReview = await evaluationRequest<NonNullable<ApiReviewContext["review"]>>(
         baseUrl,
@@ -4278,7 +4442,12 @@ function EvaluatorWorkspace({
               className={styles.secondaryButton}
               type="button"
               onClick={onPrevious}
-              disabled={onPrevious === undefined || draftBusy || submitBusy}
+              disabled={reviewerNavigationDisabled(
+                onPrevious !== undefined,
+                autosavePending,
+                draftBusy,
+                submitBusy,
+              )}
             >
               Previous
             </button>
@@ -4286,7 +4455,12 @@ function EvaluatorWorkspace({
               className={styles.secondaryButton}
               type="button"
               onClick={onNext}
-              disabled={onNext === undefined || draftBusy || submitBusy}
+              disabled={reviewerNavigationDisabled(
+                onNext !== undefined,
+                autosavePending,
+                draftBusy,
+                submitBusy,
+              )}
             >
               Next
             </button>

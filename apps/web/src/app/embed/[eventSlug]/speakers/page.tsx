@@ -24,8 +24,7 @@ export default async function SpeakerGalleryPage({
   searchParams,
 }: SpeakerGalleryPageProps) {
   const [{ eventSlug }, query] = await Promise.all([params, searchParams]);
-  const apiBaseUrl =
-    process.env.API_UPSTREAM_ORIGIN?.trim() ?? process.env.NEXT_PUBLIC_API_URL?.trim();
+  const apiBaseUrl = process.env.API_UPSTREAM_ORIGIN?.trim();
   if (!apiBaseUrl) {
     return <EmbedUnavailable message="The public program endpoint is not configured." />;
   }

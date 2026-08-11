@@ -469,6 +469,11 @@ function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/u, "");
 }
 
+function withApiPath(baseUrl: string, path: string): string {
+  const normalizedBaseUrl = trimTrailingSlash(baseUrl);
+  return normalizedBaseUrl ? `${normalizedBaseUrl}${path}` : path;
+}
+
 function segment(value: string): string {
   const normalized = value.trim();
   if (!normalized) throw new TypeError("A CFP route identifier is required.");
@@ -736,9 +741,9 @@ async function authRequest(
 }
 
 export function createCfpApi(baseUrl: string, fetcher: Fetcher = fetch): CfpApi {
-  const apiBase = `${trimTrailingSlash(baseUrl)}/api/cfp`;
-  const publicBase = `${trimTrailingSlash(baseUrl)}/api/public/cfp`;
-  const authBase = `${trimTrailingSlash(baseUrl)}/api/auth`;
+  const apiBase = withApiPath(baseUrl, "/api/cfp");
+  const publicBase = withApiPath(baseUrl, "/api/public/cfp");
+  const authBase = withApiPath(baseUrl, "/api/auth");
 
   async function request<T>(url: string, schema: z.ZodType<T>, init: RequestInit = {}): Promise<T> {
     const headers = new Headers(init.headers);

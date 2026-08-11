@@ -103,10 +103,9 @@ const SOURCE_ORDER: readonly ReportRelationship[] = [
   "evaluationProgress",
 ];
 
-function apiBaseUrl(explicit: string | undefined): string | null {
-  const value = explicit ?? process.env.NEXT_PUBLIC_API_URL;
-  const normalized = value?.trim().replace(/\/+$/u, "");
-  return normalized && normalized.length > 0 ? normalized : null;
+function apiBaseUrl(explicit: string | undefined): string {
+  const normalized = (explicit ?? "").trim().replace(/\/+$/u, "");
+  return normalized;
 }
 
 function optionForField(key: string): FieldOption | undefined {
@@ -365,11 +364,6 @@ export function ReportsWorkspace({
   useEffect(() => {
     setApi(null);
     if (testMode) return;
-    if (baseUrl === null) {
-      setLoading(false);
-      setRequestError("The reports API is not configured.");
-      return;
-    }
     const reportsApi = createReportsApi(baseUrl, organizationId, eventId);
     setApi(reportsApi);
     let active = true;

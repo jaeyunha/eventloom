@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import type { AuthPrincipal } from "../auth/types";
+import { publicApiV1Contract } from "./contract";
 import {
   AtomicIdempotencyCoordinator,
   type IdempotencyBeginResult,
@@ -70,8 +71,10 @@ class EventRepository implements PublicApiRepository<EventRecord, EventMutation,
   ];
   creates = 0;
   updates = 0;
+  lastFilters: Readonly<Record<string, string>> | undefined;
 
   async list(input: PublicApiListInput) {
+    this.lastFilters = input.filters;
     const rows = this.records
       .filter((record) => record.organizationId === input.organizationId)
       .sort((left, right) => {
@@ -90,6 +93,7 @@ class EventRepository implements PublicApiRepository<EventRecord, EventMutation,
     return {
       items: rows.slice(start, start + input.limit + 1),
       hasMore: start + input.limit < rows.length,
+      nextCursor: null,
     };
   }
 
@@ -142,6 +146,13 @@ const apiKey: AuthPrincipal = {
   scopes: ["events:read", "events:write"],
 };
 
+const otherApiKey: AuthPrincipal = {
+  kind: "apiKey",
+  apiKeyId: "key-2",
+  organizationId: "org-2",
+  scopes: ["events:read", "events:write"],
+};
+
 function fixture(principal: AuthPrincipal | null = apiKey) {
   const repository = new EventRepository();
   const store = new TestIdempotencyStore();
@@ -154,6 +165,7 @@ function fixture(principal: AuthPrincipal | null = apiKey) {
   app.route(
     "/api/v1",
     createPublicApiV1Routes<EventRecord, EventMutation, EventMutation>({
+      contract: publicApiV1Contract,
       idempotency: new AtomicIdempotencyCoordinator(store),
       resources: [
         {
@@ -185,13 +197,51 @@ describe("public API v1", () => {
     expect(firstBody.data[0]?.id).toBe("event-a");
     expect(secondBody.data[0]?.id).toBe("event-b");
   });
+  it("enforces resource filter fields and rejects unrelated query keys", async () => {
+    const { app, repository } = fixture();
+    const unsupportedQueries = [
+      `filter=${encodeURIComponent(JSON.stringify({ status: "draft", unsupported: "x" }))}`,
+      "filter.unsupported=x",
+      "filter%5Bunsupported%5D=x",
+      "unrelated=x",
+    ];
 
-  it("denies unauthenticated, cross-tenant, and missing-scope access", async () => {
+    for (const query of unsupportedQueries) {
+      const response = await app.request(`/api/v1/organizations/org-1/events?${query}`);
+      const body = (await response.json()) as { error: { code: string } };
+      expect(response.status).toBe(400);
+      expect(body.error.code).toBe("VALIDATION_FAILED");
+    }
+
+    const declared = await app.request(
+      `/api/v1/organizations/org-1/events?filter=${encodeURIComponent(JSON.stringify({ status: "draft" }))}`,
+    );
+    expect(declared.status).toBe(200);
+    expect(repository.lastFilters).toEqual({ status: "draft" });
+  });
+
+  it("rejects a cursor bound to another organization", async () => {
+    const first = await fixture(apiKey).app.request(
+      "/api/v1/organizations/org-1/events?sort=name&limit=1",
+    );
+    const firstBody = (await first.json()) as {
+      page: { nextCursor: string | null };
+    };
+    const crossOrganization = await fixture(otherApiKey).app.request(
+      `/api/v1/organizations/org-2/events?sort=name&limit=1&cursor=${encodeURIComponent(firstBody.page.nextCursor ?? "")}`,
+    );
+    expect(first.status).toBe(200);
+    expect(firstBody.page.nextCursor).toEqual(expect.any(String));
+    expect(crossOrganization.status).toBe(400);
+  });
+  it("denies unauthenticated, cross-organization, and missing-scope access", async () => {
     const unauthenticated = await fixture(null).app.request("/api/v1/organizations/org-1/events", {
       headers: { "x-request-id": "trace-test" },
     });
     const browserSession = await fixture(user).app.request("/api/v1/organizations/org-1/events");
-    const crossTenant = await fixture(apiKey).app.request("/api/v1/organizations/org-2/events");
+    const crossOrganization = await fixture(apiKey).app.request(
+      "/api/v1/organizations/org-2/events",
+    );
     const missingScope = await fixture({
       ...apiKey,
       scopes: ["events:read"],
@@ -205,7 +255,7 @@ describe("public API v1", () => {
     });
     expect(unauthenticated.status).toBe(401);
     expect(browserSession.status).toBe(403);
-    expect(crossTenant.status).toBe(403);
+    expect(crossOrganization.status).toBe(403);
     expect(missingScope.status).toBe(403);
   });
 
@@ -235,12 +285,26 @@ describe("public API v1", () => {
       headers: { "content-type": "application/json", "idempotency-key": "update-1" },
       body: JSON.stringify({ name: "No version" }),
     });
+    const bodyOnly = await app.request("/api/v1/organizations/org-1/events/event-a", {
+      method: "PATCH",
+      headers: { "content-type": "application/json", "idempotency-key": "update-body" },
+      body: JSON.stringify({ name: "Body version", expectedVersion: 1 }),
+    });
+    const invalidVersion = await app.request("/api/v1/organizations/org-1/events/event-a", {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json",
+        "idempotency-key": "update-zero",
+        "if-match": "0",
+      },
+      body: JSON.stringify({ name: "Zero version" }),
+    });
     const updated = await app.request("/api/v1/organizations/org-1/events/event-a", {
       method: "PATCH",
       headers: {
         "content-type": "application/json",
         "idempotency-key": "update-1",
-        "if-match": '"1"',
+        "if-match": 'W/"1"',
       },
       body: JSON.stringify({ name: "Updated" }),
     });
@@ -253,10 +317,32 @@ describe("public API v1", () => {
       },
       body: JSON.stringify({ name: "Stale" }),
     });
+    const put = await app.request("/api/v1/organizations/org-1/events/event-a", {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json",
+        "idempotency-key": "update-put",
+        "if-match": "2",
+      },
+      body: JSON.stringify({ name: "Replacement" }),
+    });
     expect(missing.status).toBe(412);
+    expect(bodyOnly.status).toBe(412);
+    expect(invalidVersion.status).toBe(412);
     expect(updated.status).toBe(200);
     expect(stale.status).toBe(412);
     expect(repository.updates).toBe(1);
+    expect(put.status).toBe(404);
+  });
+  it("rejects identifiers and cursors beyond the documented bounds", async () => {
+    const { app } = fixture();
+    const cursor = await app.request(
+      `/api/v1/organizations/org-1/events?cursor=${"x".repeat(2_049)}`,
+    );
+    const identifier = await app.request(`/api/v1/organizations/org-1/events/${"x".repeat(201)}`);
+
+    expect(cursor.status).toBe(400);
+    expect(identifier.status).toBe(400);
   });
 
   it("returns safe trace-bearing errors and a small OpenAPI document", async () => {
@@ -268,11 +354,37 @@ describe("public API v1", () => {
     const body = (await malformed.json()) as {
       error: { code: string; message: string; traceId: string };
     };
-    const document = (await openapi.json()) as { openapi: string; paths: Record<string, unknown> };
+    const document = (await openapi.json()) as {
+      openapi: string;
+      paths: Record<string, unknown>;
+    };
     expect(malformed.status).toBe(400);
     expect(body.error.traceId).toBe("trace-test");
     expect(body.error.message).not.toContain("base64");
     expect(document.openapi).toBe("3.1.0");
     expect(document.paths["/api/v1/organizations/{organizationId}/events"]).toBeDefined();
+    const collectionPath = document.paths["/api/v1/organizations/{organizationId}/events"] as {
+      get: {
+        parameters: Array<{ name: string; schema: Record<string, unknown> }>;
+      };
+    };
+    expect(
+      collectionPath.get.parameters.find(({ name }) => name === "cursor")?.schema,
+    ).toMatchObject({ minLength: 1, maxLength: 2_048 });
+    expect(collectionPath.get.parameters.find(({ name }) => name === "sort")?.schema).toMatchObject(
+      {
+        enum: ["id", "name", "updatedAt"],
+        default: "id",
+      },
+    );
+    expect(
+      collectionPath.get.parameters.find(({ name }) => name === "direction")?.schema,
+    ).toMatchObject({ enum: ["asc", "desc"], default: "asc" });
+    const updatePath = document.paths["/api/v1/organizations/{organizationId}/events/{id}"] as {
+      patch?: unknown;
+      put?: unknown;
+    };
+    expect(updatePath.patch).toBeDefined();
+    expect(updatePath.put).toBeUndefined();
   });
 });

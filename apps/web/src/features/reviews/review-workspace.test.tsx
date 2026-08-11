@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { createElement, isValidElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
@@ -5,16 +7,26 @@ import ReviewerPage from "../../app/review/page";
 import {
   buildEvaluationPlanCreateDto,
   createEvaluationPlan,
+  createReviewAutosaveQueue,
   type EvaluatorAssignment,
+  loadEvaluatorQueue,
+  loadOrganizerData,
+  OrganizerDetailStatus,
   parseNumericAuthoringValue,
   type ReviewPlanSeed,
   type ReviewRound,
   ReviewWorkspace,
-  loadEvaluatorQueue,
-  reviewerDisplayLabel,
   type RubricCriterion,
+  reviewerDisplayLabel,
+  reviewerNavigationDisabled,
+  reviewerSelectionBlocked,
   validateCreateEvaluationPlanForm,
 } from "./review-workspace";
+
+const workspaceStyles = readFileSync(
+  fileURLToPath(new URL("./review-workspace.module.css", import.meta.url)),
+  "utf8",
+);
 
 const testCriteria: readonly RubricCriterion[] = [
   {
@@ -233,6 +245,7 @@ describe("review workspace", () => {
     );
     expect(markup).not.toContain("NaN");
   });
+
   it("resolves Sam's persisted reviewer ID to a named progress label", () => {
     expect(
       reviewerDisplayLabel("sam-whitfield", [
@@ -249,6 +262,76 @@ describe("review workspace", () => {
         },
       ]),
     ).toBe("Sam Whitfield");
+  });
+  it("keeps reviewer navigation disabled until the autosave queue is idle", async () => {
+    const pendingStates: boolean[] = [];
+    let resolveSave: (() => void) | undefined;
+    const deferredSave = new Promise<void>((resolve) => {
+      resolveSave = resolve;
+    });
+    const queue = createReviewAutosaveQueue((pending) => pendingStates.push(pending));
+    const saving = queue.enqueue(() => deferredSave);
+
+    expect(queue.isPending()).toBe(true);
+    expect(reviewerNavigationDisabled(true, queue.isPending(), false, false)).toBe(true);
+    expect(reviewerSelectionBlocked("assignment-a", "assignment-a", "assignment-b")).toBe(true);
+    expect(reviewerSelectionBlocked("assignment-a", "assignment-a", null)).toBe(true);
+    expect(reviewerSelectionBlocked("assignment-a", "assignment-a", "assignment-a")).toBe(false);
+
+    if (resolveSave === undefined) throw new Error("Expected a deferred autosave resolver.");
+    resolveSave();
+    await saving;
+
+    expect(queue.isPending()).toBe(false);
+    expect(reviewerNavigationDisabled(true, queue.isPending(), false, false)).toBe(false);
+    expect(reviewerNavigationDisabled(false, queue.isPending(), false, false)).toBe(true);
+    expect(reviewerSelectionBlocked(null, "assignment-a", "assignment-b")).toBe(false);
+    expect(pendingStates).toEqual([true, false]);
+  });
+  it("wraps long authoritative submission references without widening the page", () => {
+    const longReference = `submission-${"authoritative-id-".repeat(20)}`;
+    const assignment = {
+      ...testAssignment("summit-2026"),
+      id: longReference,
+      reference: longReference,
+    };
+    const markup = renderToStaticMarkup(
+      createElement(ReviewWorkspace, {
+        mode: "evaluator",
+        initialState: { queue: [{ assignment }] },
+      }),
+    );
+
+    expect(markup).toContain(longReference);
+    expect(workspaceStyles).toMatch(/\.decisionSummary\s*>\s*\*\s*\{[^}]*min-inline-size:\s*0/u);
+    expect(workspaceStyles).toMatch(
+      /\.referenceBadge\s*\{[^}]*max-inline-size:[^;}]+;[^}]*white-space:\s*normal;[^}]*overflow-wrap:\s*anywhere;/u,
+    );
+  });
+  it("keeps the organizer plan usable while review details load or fail", () => {
+    const retry = vi.fn();
+    const loadingMarkup = renderToStaticMarkup(
+      createElement(OrganizerDetailStatus, {
+        loading: true,
+        error: null,
+        onRetry: retry,
+      }),
+    );
+    const errorMarkup = renderToStaticMarkup(
+      createElement(OrganizerDetailStatus, {
+        loading: false,
+        error: "Aggregate details are temporarily unavailable.",
+        onRetry: retry,
+      }),
+    );
+
+    expect(loadingMarkup).toContain(
+      "The plan is usable while aggregate scores and decisions load.",
+    );
+    expect(loadingMarkup).toContain('role="status"');
+    expect(errorMarkup).toContain("Aggregate details are temporarily unavailable.");
+    expect(errorMarkup).toContain("Retry review details");
+    expect(errorMarkup).toContain('role="alert"');
   });
   it("renders an accessible first-plan form for an organizer event with no plans", () => {
     const markup = renderToStaticMarkup(
@@ -780,7 +863,161 @@ describe("review workspace", () => {
     expect(evaluatorMarkup).toContain("Declare conflict and abstain");
   });
 
-  it("hydrates the reviewer queue through the same-origin gateway with canonical titles and statuses", async () => {
+  it("loads organizer aggregates once per round and joins them by submission", async () => {
+    const requests: string[] = [];
+    const plan = {
+      id: "plan-batch",
+      eventId: "summit-2026",
+      name: "Batch review",
+      status: "open",
+      blindReview: false,
+      closesAt: "2099-08-20T00:00:00.000Z",
+      assignmentRule: { reviewsPerSubmission: 1, maxAssignmentsPerReviewer: 5 },
+      version: 1,
+      createdAt: "2026-08-10T00:00:00.000Z",
+      updatedAt: "2026-08-10T01:00:00.000Z",
+      rounds: [
+        {
+          id: "round-batch",
+          name: "Batch round",
+          sequence: 1,
+          opensAt: null,
+          closesAt: "2099-08-18T00:00:00.000Z",
+          rubric: { id: "rubric-batch", name: "Batch rubric", criteria: testCriteria },
+        },
+      ],
+    };
+    const assignments = [
+      {
+        id: "assignment-a",
+        eventId: "summit-2026",
+        planId: plan.id,
+        roundId: "round-batch",
+        submissionId: "submission-a",
+        reviewerId: "reviewer-1",
+        status: "submitted",
+        version: 1,
+      },
+      {
+        id: "assignment-b",
+        eventId: "summit-2026",
+        planId: plan.id,
+        roundId: "round-batch",
+        submissionId: "submission-b",
+        reviewerId: "reviewer-2",
+        status: "in_progress",
+        version: 1,
+      },
+      {
+        id: "assignment-c",
+        eventId: "summit-2026",
+        planId: plan.id,
+        roundId: "round-batch",
+        submissionId: "submission-c",
+        reviewerId: "reviewer-3",
+        status: "assigned",
+        version: 1,
+      },
+    ];
+    const json = (body: unknown) =>
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = new URL(String(input));
+        requests.push(url.toString());
+        const path = url.pathname.replace("/api/admin/evaluations", "");
+        if (path === "/plans") return json({ plans: [plan] });
+        if (path === `/plans/${plan.id}/progress`) {
+          return json({
+            total: 3,
+            assigned: 3,
+            inProgress: 1,
+            submitted: 1,
+            abstained: 0,
+            completionPercent: 33,
+            reviewers: [],
+          });
+        }
+        if (path === "/events/summit-2026/submissions") {
+          return json([
+            { id: "submission-a", title: "Submission A", abstract: "A" },
+            { id: "submission-b", title: "Submission B", abstract: "B" },
+            { id: "submission-c", title: "Submission C", abstract: "C" },
+          ]);
+        }
+        if (path === `/plans/${plan.id}/assignments`) return json({ assignments });
+        if (path === `/plans/${plan.id}/rounds/round-batch/aggregates`) {
+          return json({
+            aggregates: [
+              {
+                submissionId: "submission-b",
+                submittedReviewCount: 2,
+                expectedReviewCount: 3,
+                averageWeightedTotal: 3,
+                possibleWeightedTotal: 5,
+              },
+              {
+                submissionId: "submission-a",
+                submittedReviewCount: 1,
+                expectedReviewCount: 1,
+                averageWeightedTotal: 4.5,
+                possibleWeightedTotal: 5,
+              },
+            ],
+          });
+        }
+        if (/^\/plans\/plan-batch\/submissions\/[^/]+\/decision$/u.test(path)) {
+          return json(null);
+        }
+        throw new Error(`Unexpected evaluation request: ${url.toString()}`);
+      }),
+    );
+
+    try {
+      const seed = await loadOrganizerData("summit-2026", "https://api.example");
+      const aggregateRequests = requests.filter((request) =>
+        new URL(request).pathname.endsWith("/aggregates"),
+      );
+      const singularAggregateRequests = requests.filter((request) =>
+        /\/submissions\/[^/]+\/aggregate$/u.test(new URL(request).pathname),
+      );
+
+      expect(aggregateRequests).toHaveLength(1);
+      expect(singularAggregateRequests).toHaveLength(0);
+      expect(seed.aggregates).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "submission-a",
+            countedScore: "4.5",
+            possibleScore: "5.0",
+            countedReviews: 1,
+            expectedReviews: 1,
+          }),
+          expect.objectContaining({
+            id: "submission-b",
+            countedScore: "3.0",
+            possibleScore: "5.0",
+            countedReviews: 2,
+            expectedReviews: 3,
+          }),
+          expect.objectContaining({
+            id: "submission-c",
+            countedScore: "—",
+            possibleScore: "—",
+            countedReviews: 0,
+            expectedReviews: 1,
+          }),
+        ]),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+  it("hydrates the reviewer queue from one batch context request with canonical titles and statuses", async () => {
     const requests: string[] = [];
     vi.stubGlobal(
       "fetch",

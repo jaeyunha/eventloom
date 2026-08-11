@@ -6,10 +6,10 @@ import type {
 } from "../../features/agenda/types";
 import type {
   EvaluationAiSuggestionProvider,
+  EvaluationSuggestionProvenance,
   EvaluationSuggestionProviderCandidate,
   EvaluationSuggestionProviderInput,
   EvaluationSuggestionProviderResult,
-  EvaluationSuggestionProvenance,
 } from "../../features/evaluations/types";
 import type {
   RemixField,

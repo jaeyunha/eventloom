@@ -275,6 +275,17 @@ async function evaluationPlanCsv(
       ),
     ),
   );
+  const aggregatesByRound = new Map(
+    await Promise.all(
+      plan.rounds.map(async (round) => {
+        const aggregates = await service.listAggregates(currentActor, plan.id, round.id);
+        return [
+          round.id,
+          new Map(aggregates.map((aggregate) => [aggregate.submissionId, aggregate] as const)),
+        ] as const;
+      }),
+    ),
+  );
   const roundColumns = plan.rounds.flatMap((round) => [
     `round_${round.id}_submitted_reviews`,
     `round_${round.id}_expected_reviews`,
@@ -303,10 +314,18 @@ async function evaluationPlanCsv(
         const roundValues = (
           await Promise.all(
             plan.rounds.map(async (round) => {
-              const [aggregate, reviews] = await Promise.all([
-                service.getAggregate(currentActor, plan.id, round.id, submission.id),
-                service.listSubmittedReviews(currentActor, plan.id, round.id, submission.id),
-              ]);
+              const aggregate = aggregatesByRound.get(round.id)?.get(submission.id);
+              if (aggregate === undefined) {
+                throw new Error(
+                  `The aggregate for submission ${submission.id} and round ${round.id} is unavailable.`,
+                );
+              }
+              const reviews = await service.listSubmittedReviews(
+                currentActor,
+                plan.id,
+                round.id,
+                submission.id,
+              );
               const criterionValues = round.rubric.criteria.map((criterion) => {
                 const values = reviews
                   .flatMap((review) => {

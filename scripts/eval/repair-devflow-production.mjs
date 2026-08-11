@@ -3805,8 +3805,7 @@ export async function readRepairInvariantReport({
     finalReviewRound.rubric.id !== initialReviewRound?.rubric?.id &&
     Array.isArray(finalCriteria) &&
     finalCriteria.some(
-      (criterion) =>
-        criterion?.id === "final-recommendation" && criterion.inputType === "dropdown",
+      (criterion) => criterion?.id === "final-recommendation" && criterion.inputType === "dropdown",
     ) &&
     finalCriteria.some(
       (criterion) => criterion?.id === "program-notes" && criterion.inputType === "free_text",

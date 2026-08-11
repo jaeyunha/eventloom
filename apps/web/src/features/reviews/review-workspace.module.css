@@ -506,6 +506,9 @@
   border-bottom: 1px solid var(--color-border);
 }
 
+.decisionSummary > * {
+  min-inline-size: 0;
+}
 .scorePill,
 .referenceBadge,
 .uncountedPill,
@@ -684,8 +687,11 @@
 }
 
 .referenceBadge {
+  max-inline-size: min(100%, 24rem);
   background: var(--color-brand-soft);
   color: var(--color-brand-strong);
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .submissionAbstract {

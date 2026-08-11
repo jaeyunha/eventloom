@@ -797,8 +797,7 @@ export function createDeliverablesApi(
   fetcher: DeliverablesFetcher = fetch,
 ): DeliverablesApi {
   const normalizedBaseUrl = trimTrailingSlash(baseUrl.trim());
-  if (normalizedBaseUrl.length === 0)
-    throw new TypeError("An API URL is required for deliverables requests.");
+
   const organizationScope = organizationId.trim();
   const eventScope = eventId.trim();
   const organizationSegment = segment(organizationScope, "organization ID");

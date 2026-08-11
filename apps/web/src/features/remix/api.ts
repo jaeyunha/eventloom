@@ -302,7 +302,6 @@ export function createRemixApi(
   fetcher: RemixFetcher = fetch,
 ): RemixApi {
   const normalizedBaseUrl = trimTrailingSlash(baseUrl.trim());
-  if (normalizedBaseUrl.length === 0) throw new TypeError("A remix API base URL is required.");
   const organizationPath = segment(organizationId, "Organization id");
 
   function eventBase(eventId: string): string {

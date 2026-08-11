@@ -85,7 +85,7 @@ export class FakeAirtableTransport implements AirtableTransport {
     if (formula !== undefined) {
       const conditions = parseFilterFormula(formula);
       records = records.filter((record) =>
-        conditions.some((condition) => record.fields[condition.field] === condition.value),
+        conditions.some((condition) => matchesFilter(record, condition)),
       );
     }
 
@@ -195,20 +195,59 @@ function compareValues(left: unknown, right: unknown): number {
   return String(left ?? "").localeCompare(String(right ?? ""));
 }
 
-function parseEqualityFormula(formula: string): { field: string; value: string } {
+interface ParsedFilter {
+  readonly kind: "equals" | "contains";
+  readonly field: string;
+  readonly value: string;
+}
+
+function matchesFilter(record: FakeRecord, filter: ParsedFilter): boolean {
+  const fieldValue = record.fields[filter.field];
+  return filter.kind === "equals"
+    ? fieldValue === filter.value
+    : typeof fieldValue === "string" && fieldValue.includes(filter.value);
+}
+
+function parseEqualityFormula(formula: string): ParsedFilter {
   const match = /^\{(.+)\}='((?:\\.|[^'])*)'$/.exec(formula);
   if (match === null || match[1] === undefined || match[2] === undefined) {
     throw new TypeError(`The fake transport does not support formula: ${formula}`);
   }
   return {
+    kind: "equals",
     field: unescapeFormula(match[1]),
     value: unescapeFormula(match[2]),
   };
 }
 
-function parseFilterFormula(formula: string): readonly { field: string; value: string }[] {
+function parseFindFormula(formula: string): ParsedFilter {
+  const match = /^FIND\(("(?:\\.|[^"\\])*"),\{(.+)\}\)>0$/u.exec(formula);
+  if (match === null || match[1] === undefined || match[2] === undefined) {
+    throw new TypeError(`The fake transport does not support formula: ${formula}`);
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(match[1]);
+  } catch {
+    throw new TypeError(`The fake transport does not support formula: ${formula}`);
+  }
+  if (typeof value !== "string") {
+    throw new TypeError(`The fake transport does not support formula: ${formula}`);
+  }
+  return {
+    kind: "contains",
+    field: unescapeFormula(match[2]),
+    value,
+  };
+}
+
+function parseFilterClause(formula: string): ParsedFilter {
+  return formula.startsWith("FIND(") ? parseFindFormula(formula) : parseEqualityFormula(formula);
+}
+
+function parseFilterFormula(formula: string): readonly ParsedFilter[] {
   if (!formula.startsWith("OR(") || !formula.endsWith(")")) {
-    return [parseEqualityFormula(formula)];
+    return [parseFilterClause(formula)];
   }
   const inner = formula.slice(3, -1);
   const clauses: string[] = [];
@@ -238,7 +277,7 @@ function parseFilterFormula(formula: string): readonly { field: string; value: s
   if (quoted || clauses.some((clause) => clause.length === 0)) {
     throw new TypeError(`The fake transport does not support formula: ${formula}`);
   }
-  return clauses.map(parseEqualityFormula);
+  return clauses.map(parseFilterClause);
 }
 
 function unescapeFormula(value: string): string {

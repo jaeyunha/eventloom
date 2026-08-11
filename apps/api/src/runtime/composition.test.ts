@@ -3,14 +3,14 @@ import { createApp } from "../app";
 import type { AgendaState, PublishedAgendaRevision } from "../features/agenda/types";
 import type { CfpForm, EventCfp, Submission } from "../features/cfp/model";
 import type { CfpRepository } from "../features/cfp/service";
+import { CommunicationService } from "../features/communications/service";
+import type { CommunicationActor, CommunicationRecipient } from "../features/communications/types";
+import { SessionService } from "../features/sessions/service";
 import type {
   PrivateAssetCapabilityBinding,
   PrivateUploadGrant,
   SpeakerAsset,
 } from "../features/speaker/types";
-import { CommunicationService } from "../features/communications/service";
-import type { CommunicationActor, CommunicationRecipient } from "../features/communications/types";
-import { SessionService } from "../features/sessions/service";
 import {
   type AirtableRequest,
   type AirtableTransport,
@@ -25,8 +25,8 @@ import {
   AirtableEvaluationAcceptanceHandoff,
   AirtableEvaluationReminderBoundary,
   AirtableEvaluationRepository,
-  AirtableRemixContentGateway,
   AirtableEventRepository,
+  AirtableRemixContentGateway,
   AirtableSessionRepository,
   AirtableSpeakerReminderDeliveryAdapter,
   AirtableSpeakerRepository,
@@ -891,25 +891,29 @@ describe("local runtime composition", () => {
       },
     });
   });
-  it("serves the organizer overview from local repositories", async () => {
+  it("serves the organizer overview core and activity from local repositories", async () => {
     const app = createRuntimeApp(localBindings);
-    const response = await app.request(
-      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/overview`,
+    const coreResponse = await app.request(
+      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/overview/core`,
+      { headers: organizerHeaders() },
+      localBindings,
+    );
+    const activityResponse = await app.request(
+      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/overview/activity`,
       { headers: organizerHeaders() },
       localBindings,
     );
 
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
+    expect(coreResponse.status).toBe(200);
+    expect(activityResponse.status).toBe(200);
+    expect(coreResponse.headers.get("cache-control")).toBe("private, no-store");
+    expect(activityResponse.headers.get("cache-control")).toBe("private, no-store");
+
+    const coreBody = (await coreResponse.json()) as { data: Record<string, unknown> };
+    expect(coreBody).toMatchObject({
       data: {
         organizationId: LOCAL_ORGANIZATION_ID,
-        metrics: {
-          eventCount: 2,
-          submissionCount: 1,
-          pendingReviewCount: 0,
-          outstandingSpeakerTaskCount: 2,
-          publishedSessionCount: 0,
-        },
+        metrics: { eventCount: 2 },
         events: [
           { id: "demo-event", name: "Open Sessionboard Demo" },
           {
@@ -917,12 +921,36 @@ describe("local runtime composition", () => {
             name: "Open Sessionboard Conference",
           },
         ],
+      },
+    });
+    expect(coreBody.data).not.toHaveProperty("actionItems");
+    expect(coreBody.data.metrics).not.toHaveProperty("submissionCount");
+
+    const activityBody = (await activityResponse.json()) as { data: Record<string, unknown> };
+    expect(activityBody).toMatchObject({
+      data: {
+        organizationId: LOCAL_ORGANIZATION_ID,
+        metrics: {
+          submissionCount: 1,
+          pendingReviewCount: 0,
+          outstandingSpeakerTaskCount: 2,
+          publishedSessionCount: 0,
+        },
         actionItems: [
           { id: "speaker_tasks:demo-event", count: 2 },
           { id: "agenda:demo-event", count: 2 },
         ],
       },
     });
+    expect(activityBody.data).not.toHaveProperty("events");
+    expect(activityBody.data.metrics).not.toHaveProperty("eventCount");
+
+    const legacyResponse = await app.request(
+      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/overview`,
+      { headers: organizerHeaders() },
+      localBindings,
+    );
+    expect(legacyResponse.status).toBe(404);
   });
   it("serves seeded integration admin data for the current organizer workspace", async () => {
     const app = createRuntimeApp(localBindings);
@@ -1095,12 +1123,19 @@ describe("local runtime composition", () => {
 
   it("denies anonymous, reviewer, and wrong-tenant organizer overview access", async () => {
     const app = createRuntimeApp(localBindings);
-    const path = `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/overview`;
-    const anonymous = await app.request(path, undefined, localBindings);
-    const wrongTenant = await app.request(
-      "/api/admin/organizations/another-organization/overview",
-      { headers: organizerHeaders() },
-      localBindings,
+    const suffixes = ["core", "activity"] as const;
+    const basePath = `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/overview`;
+    const anonymous = await Promise.all(
+      suffixes.map((suffix) => app.request(`${basePath}/${suffix}`, undefined, localBindings)),
+    );
+    const wrongTenant = await Promise.all(
+      suffixes.map((suffix) =>
+        app.request(
+          `/api/admin/organizations/another-organization/overview/${suffix}`,
+          { headers: organizerHeaders() },
+          localBindings,
+        ),
+      ),
     );
     const reviewerApp = createApp({
       authenticator: {
@@ -1119,28 +1154,93 @@ describe("local runtime composition", () => {
         }),
       },
       organizerOverview: {
-        getOverview: async (organizationId: string) => ({
+        getOverviewCore: async (organizationId: string) => ({
+          organizationId,
+          metrics: { eventCount: 0 },
+          events: [],
+        }),
+        getOverviewActivity: async (organizationId: string) => ({
           organizationId,
           metrics: {
-            eventCount: 0,
             submissionCount: 0,
             pendingReviewCount: 0,
             outstandingSpeakerTaskCount: 0,
             publishedSessionCount: 0,
           },
-          events: [],
           actionItems: [],
         }),
       },
     });
-    const reviewer = await reviewerApp.request(path, undefined, localBindings);
+    const reviewer = await Promise.all(
+      suffixes.map((suffix) =>
+        reviewerApp.request(`${basePath}/${suffix}`, undefined, localBindings),
+      ),
+    );
 
-    expect(anonymous.status).toBe(401);
-    expect(wrongTenant.status).toBe(403);
-    expect(reviewer.status).toBe(403);
+    expect(anonymous.map((response) => response.status)).toEqual([401, 401]);
+    expect(wrongTenant.map((response) => response.status)).toEqual([403, 403]);
+    expect(reviewer.map((response) => response.status)).toEqual([403, 403]);
   });
 
-  it("returns explicit empty overview data without repository fiction", async () => {
+  it("keeps core overview independent from activity failures", async () => {
+    let coreCalls = 0;
+    let activityCalls = 0;
+    const app = createApp({
+      authenticator: {
+        authenticate: async () => ({
+          kind: "user" as const,
+          sessionId: "overview-session",
+          userId: "owner",
+          email: "owner@example.test",
+          memberships: [{ organizationId: "organization-1", role: "owner" as const }],
+          speakerGrants: [],
+        }),
+      },
+      organizerOverview: {
+        getOverviewCore: async (organizationId: string) => {
+          coreCalls += 1;
+          return {
+            organizationId,
+            metrics: { eventCount: 1 },
+            events: [
+              {
+                id: "event-1",
+                name: "Event",
+                slug: null,
+                status: "active",
+                startsAt: null,
+                endsAt: null,
+              },
+            ],
+          };
+        },
+        getOverviewActivity: async () => {
+          activityCalls += 1;
+          throw new Error("activity unavailable");
+        },
+      },
+    });
+
+    const core = await app.request(
+      "/api/admin/organizations/organization-1/overview/core",
+      undefined,
+      localBindings,
+    );
+    expect(core.status).toBe(200);
+    expect(coreCalls).toBe(1);
+    expect(activityCalls).toBe(0);
+
+    const activity = await app.request(
+      "/api/admin/organizations/organization-1/overview/activity",
+      undefined,
+      localBindings,
+    );
+    expect(activity.status).toBe(500);
+    expect(coreCalls).toBe(1);
+    expect(activityCalls).toBe(1);
+  });
+
+  it("returns explicit empty split overview data without repository fiction", async () => {
     const app = createApp({
       authenticator: {
         authenticate: async () => ({
@@ -1153,38 +1253,52 @@ describe("local runtime composition", () => {
         }),
       },
       organizerOverview: {
-        getOverview: async (organizationId: string) => ({
+        getOverviewCore: async (organizationId: string) => ({
+          organizationId,
+          metrics: { eventCount: 0 },
+          events: [],
+        }),
+        getOverviewActivity: async (organizationId: string) => ({
           organizationId,
           metrics: {
-            eventCount: 0,
             submissionCount: 0,
             pendingReviewCount: 0,
             outstandingSpeakerTaskCount: 0,
             publishedSessionCount: 0,
           },
-          events: [],
           actionItems: [],
         }),
       },
     });
-    const response = await app.request(
-      "/api/admin/organizations/empty-organization/overview",
+    const core = await app.request(
+      "/api/admin/organizations/empty-organization/overview/core",
+      undefined,
+      localBindings,
+    );
+    const activity = await app.request(
+      "/api/admin/organizations/empty-organization/overview/activity",
       undefined,
       localBindings,
     );
 
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({
+    expect(core.status).toBe(200);
+    await expect(core.json()).resolves.toEqual({
+      data: {
+        organizationId: "empty-organization",
+        metrics: { eventCount: 0 },
+        events: [],
+      },
+    });
+    expect(activity.status).toBe(200);
+    await expect(activity.json()).resolves.toEqual({
       data: {
         organizationId: "empty-organization",
         metrics: {
-          eventCount: 0,
           submissionCount: 0,
           pendingReviewCount: 0,
           outstandingSpeakerTaskCount: 0,
           publishedSessionCount: 0,
         },
-        events: [],
         actionItems: [],
       },
     });
@@ -1336,115 +1450,73 @@ describe("local runtime composition", () => {
     expect(publishedBody.data.revision).not.toHaveProperty("publishedBy");
   });
 
-  it("preserves authentication and tenant boundaries for scoped APIs", async () => {
+  it("withholds unsafe generic resources and advertises only mounted webhooks locally", async () => {
     const app = createRuntimeApp(localBindings);
-    const path = `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/events`;
-    const anonymous = await app.request(path, undefined, localBindings);
-    const authorized = await app.request(
-      path,
-      { headers: { authorization: `Bearer ${LOCAL_API_KEY}` } },
-      localBindings,
-    );
-    const wrongTenant = await app.request(
-      "/api/v1/organizations/another-organization/events",
-      { headers: { authorization: `Bearer ${LOCAL_API_KEY}` } },
-      localBindings,
-    );
-    const invalidSpeakerCredential = await app.request(
-      "/api/speaker/events/current/portal",
-      { headers: { authorization: "Bearer invalid-local-key" } },
-      localBindings,
-    );
-
-    expect(anonymous.status).toBe(401);
-    expect(authorized.status).toBe(200);
-    await expect(authorized.json()).resolves.toMatchObject({
-      data: [{ id: "demo-event" }, { id: "open-sessionboard-conf" }],
-    });
-    expect(wrongTenant.status).toBe(403);
-    expect(invalidSpeakerCredential.status).toBe(401);
-  });
-  it("mounts sessions with scoped list, get, create, and optimistic update access", async () => {
-    const app = createRuntimeApp(localBindings);
-    const base = `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/sessions`;
     const apiHeaders = { authorization: `Bearer ${LOCAL_API_KEY}` };
-    const anonymous = await app.request(base, undefined, localBindings);
-    const listed = await app.request(base, { headers: apiHeaders }, localBindings);
-    const fetched = await app.request(
-      `${base}/local-session-keynote`,
-      {
-        headers: apiHeaders,
-      },
-      localBindings,
-    );
-    const created = await app.request(
-      base,
+    const genericRequests = [
+      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/events`,
+      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event`,
+      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/speakers`,
+      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/agenda`,
+      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/sessions`,
+      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/sessions/local-session-keynote`,
+    ];
+
+    for (const path of genericRequests) {
+      const response = await app.request(path, { headers: apiHeaders }, localBindings);
+      expect(response.status).toBe(404);
+      await expect(response.json()).resolves.toMatchObject({
+        error: { code: "NOT_FOUND", traceId: expect.any(String) },
+      });
+    }
+
+    const eventCreate = await app.request(
+      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/events`,
       {
         method: "POST",
-        headers: {
-          ...apiHeaders,
-          "content-type": "application/json",
-          "idempotency-key": "local-session-create-1",
-        },
-        body: JSON.stringify({
-          id: "local-session-created",
-          eventId: "demo-event",
-          title: "Created local session",
-        }),
+        headers: { ...apiHeaders, "content-type": "application/json" },
+        body: JSON.stringify({ name: "Unsafe generic create" }),
       },
       localBindings,
     );
-    const updated = await app.request(
-      `${base}/local-session-created`,
+    const sessionUpdate = await app.request(
+      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/sessions/local-session-keynote`,
       {
         method: "PATCH",
-        headers: {
-          ...apiHeaders,
-          "content-type": "application/json",
-          "idempotency-key": "local-session-update-1",
-        },
-        body: JSON.stringify({
-          expectedVersion: 1,
-          title: "Updated local session",
-        }),
+        headers: { ...apiHeaders, "content-type": "application/json" },
+        body: JSON.stringify({ title: "Unsafe generic update" }),
       },
       localBindings,
     );
-    const wrongTenant = await app.request(
-      "/api/v1/organizations/another-organization/sessions",
+    expect(eventCreate.status).toBe(404);
+    expect(sessionUpdate.status).toBe(404);
+
+    const webhooks = await app.request(
+      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/webhooks`,
       { headers: apiHeaders },
       localBindings,
     );
+    expect(webhooks.status).toBe(200);
 
-    expect(anonymous.status).toBe(401);
-    expect(listed.status).toBe(200);
-    await expect(listed.json()).resolves.toMatchObject({
-      data: [
-        {
-          id: "local-session-keynote",
-          title: "Opening keynote: Systems that earn trust",
-        },
-        { id: "local-session-workshop" },
-      ],
+    const discovery = await app.request("/api/v1/openapi.json", undefined, localBindings);
+    expect(discovery.status).toBe(200);
+    const document = (await discovery.json()) as { paths: Record<string, Record<string, unknown>> };
+    expect(Object.keys(document.paths).sort()).toEqual([
+      "/api/v1/organizations/{organizationId}/webhooks",
+      "/api/v1/organizations/{organizationId}/webhooks/{subscriptionId}",
+    ]);
+    expect(
+      Object.keys(document.paths["/api/v1/organizations/{organizationId}/webhooks"] ?? {}),
+    ).toEqual(expect.arrayContaining(["get", "post"]));
+    expect(document.paths["/api/v1/organizations/{organizationId}/webhooks"]).toMatchObject({
+      get: { security: [{ apiKey: ["webhooks:read"] }] },
+      post: { security: [{ apiKey: ["webhooks:write"] }] },
     });
-    expect(fetched.status).toBe(200);
-    await expect(fetched.json()).resolves.toMatchObject({
-      id: "local-session-keynote",
-      eventId: "demo-event",
-    });
-    expect(created.status).toBe(201);
-    await expect(created.json()).resolves.toMatchObject({
-      id: "local-session-created",
-      organizationId: LOCAL_ORGANIZATION_ID,
-      version: 1,
-    });
-    expect(updated.status).toBe(200);
-    await expect(updated.json()).resolves.toMatchObject({
-      id: "local-session-created",
-      title: "Updated local session",
-      version: 2,
-    });
-    expect(wrongTenant.status).toBe(403);
+    expect(
+      Object.keys(
+        document.paths["/api/v1/organizations/{organizationId}/webhooks/{subscriptionId}"] ?? {},
+      ),
+    ).toEqual(expect.arrayContaining(["get", "patch", "put", "delete"]));
   });
 
   it("seeds an open CFP with deterministic draft creation", async () => {
@@ -1476,7 +1548,7 @@ describe("local runtime composition", () => {
     expect(replay).toEqual(draft);
   });
 
-  it("mounts production Airtable reads and writes without exposing record ids", async () => {
+  it("does not query or mutate raw Airtable tables through generic public-v1 routes", async () => {
     const transport = new FormulaRecordingTransport();
     transport.seed({
       baseId: "base-test",
@@ -1487,28 +1559,19 @@ describe("local runtime composition", () => {
         "Settings JSON": JSON.stringify({
           id: "event-airtable",
           organizationId: LOCAL_ORGANIZATION_ID,
-          name: "Airtable Event",
+          name: "Private Airtable Event",
           version: 1,
-          updatedAt: "2026-08-09T00:00:00.000Z",
         }),
       },
     });
     transport.seed({
       baseId: "base-test",
-      table: "Sessions",
+      table: "Participants",
       recordId: "rec00000000000002",
       fields: {
-        "Application ID": "session-airtable",
-        "Organization ID": LOCAL_ORGANIZATION_ID,
-        "Event ID": "event-airtable",
-        "Metadata JSON": JSON.stringify({
-          id: "session-airtable",
-          organizationId: LOCAL_ORGANIZATION_ID,
-          eventId: "stale-event-id",
-          title: "Airtable Session",
-          version: 1,
-          updatedAt: "2026-08-09T00:00:00.000Z",
-        }),
+        "Application ID": "participant-airtable",
+        "First Name": "Private",
+        Email: "private@example.test",
       },
     });
     const digestBytes = new Uint8Array(
@@ -1518,89 +1581,35 @@ describe("local runtime composition", () => {
     const database = productionD1(digest);
     const bindings = productionBindings(transport, database);
     const app = createRuntimeApp(bindings);
+    const headers = { authorization: "Bearer production-api-key" };
 
-    const listed = await app.request(
-      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/events`,
-      { headers: { authorization: "Bearer production-api-key" } },
-      bindings,
-    );
-    const created = await app.request(
+    for (const resource of ["events", "sessions", "speakers", "agenda"]) {
+      const response = await app.request(
+        `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/${resource}`,
+        { headers },
+        bindings,
+      );
+      expect(response.status).toBe(404);
+      await expect(response.json()).resolves.toMatchObject({
+        error: { code: "NOT_FOUND", traceId: expect.any(String) },
+      });
+    }
+
+    const create = await app.request(
       `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/events`,
       {
         method: "POST",
-        headers: {
-          authorization: "Bearer production-api-key",
-          "content-type": "application/json",
-          "idempotency-key": "production-create-1",
-        },
-        body: JSON.stringify({
-          id: "created-event",
-          name: "Created Event",
-          tenantId: "another-organization",
-        }),
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify({ name: "Must not be written" }),
       },
       bindings,
     );
-    const sessionsListed = await app.request(
-      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/sessions`,
-      { headers: { authorization: "Bearer production-api-key" } },
-      bindings,
-    );
-    const sessionsCreated = await app.request(
-      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/sessions`,
-      {
-        method: "POST",
-        headers: {
-          authorization: "Bearer production-api-key",
-          "content-type": "application/json",
-          "idempotency-key": "production-session-create-1",
-        },
-        body: JSON.stringify({
-          id: "created-session",
-          eventId: "event-airtable",
-          title: "Created Session",
-          tenantId: "another-organization",
-        }),
-      },
-      bindings,
-    );
-
-    expect(listed.status).toBe(200);
-    await expect(listed.json()).resolves.toMatchObject({
-      data: [{ id: "event-airtable", name: "Airtable Event" }],
-    });
-    expect(created.status).toBe(201);
-    const createdPayload = await created.json();
-    expect(createdPayload).toMatchObject({
-      id: "created-event",
-      name: "Created Event",
-      organizationId: LOCAL_ORGANIZATION_ID,
-      version: 1,
-      tenantId: LOCAL_ORGANIZATION_ID,
-    });
-    expect(JSON.stringify(createdPayload)).not.toContain("rec00000000000001");
+    expect(create.status).toBe(404);
     expect(
-      transport.requests.some((request) => request.method === "POST" && request.table === "Events"),
-    ).toBe(true);
-    expect(sessionsListed.status).toBe(200);
-    await expect(sessionsListed.json()).resolves.toMatchObject({
-      data: [{ id: "session-airtable", eventId: "event-airtable", title: "Airtable Session" }],
-    });
-    expect(sessionsCreated.status).toBe(201);
-    await expect(sessionsCreated.json()).resolves.toMatchObject({
-      id: "created-session",
-      organizationId: LOCAL_ORGANIZATION_ID,
-      version: 1,
-      tenantId: LOCAL_ORGANIZATION_ID,
-    });
-    expect(
-      transport.requests.some(
-        (request) =>
-          request.method === "POST" &&
-          request.table === "Sessions" &&
-          JSON.stringify(request.body).includes("Metadata JSON"),
+      transport.requests.some((request) =>
+        ["Events", "Sessions", "Participants", "Agenda Versions"].includes(request.table),
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
   it("persists CRM state in Airtable, queues outreach, and projects event speakers without sessions", async () => {
     const transport = new FakeAirtableTransport();
@@ -1809,9 +1818,16 @@ describe("local runtime composition", () => {
       table: "Published Speaker Projections",
       fields: {
         "Application ID": `published:${eventId}`,
+        "Organization ID": organizationId,
+        "Event Slug": eventId,
         "Projection JSON": JSON.stringify({
           id: `published:${eventId}`,
           organizationId,
+          eventId,
+          eventSlug: eventId,
+          revisionId: "revision-devflow-1",
+          revisionNumber: 1,
+          publishedAt: updatedAt,
           event: {
             slug: eventId,
             name: "Devflow Conference",
@@ -2112,6 +2128,51 @@ describe("local runtime composition", () => {
     expect(publicationPayload.data.speakers.map((speaker) => speaker.id)).not.toContain(
       selectedContact.data.id,
     );
+
+    const projectionRead = [...transport.requests]
+      .reverse()
+      .find(
+        (request) => request.method === "GET" && request.table === "Published Speaker Projections",
+      );
+    expect(projectionRead?.query).toMatchObject({
+      pageSize: 2,
+      filterByFormula: `{Event Slug}='${eventId}'`,
+    });
+
+    transport.seed({
+      baseId: "base-test",
+      table: "Published Speaker Projections",
+      recordId: "rec00000000000099",
+      fields: {
+        "Application ID": `published:other:${eventId}`,
+        "Organization ID": "other-organization",
+        "Event Slug": eventId,
+        "Projection JSON": JSON.stringify({
+          id: `published:other:${eventId}`,
+          organizationId: "other-organization",
+          eventId: "other-event",
+          eventSlug: eventId,
+          revisionId: "revision-other-1",
+          revisionNumber: 1,
+          publishedAt: updatedAt,
+          event: {
+            slug: eventId,
+            name: "Ambiguous Event",
+            timeZone: "UTC",
+            startsOn: "2026-08-09",
+            endsOn: "2026-08-10",
+            venueName: null,
+          },
+          revision: {
+            id: "revision-other-1",
+            number: 1,
+            publishedAt: updatedAt,
+          },
+          speakers: [],
+        }),
+      },
+    });
+    await expect(dependencies.publishedSpeakers?.getPublishedSpeakers(eventId)).resolves.toBeNull();
   });
   it("requires the fixed origin pair and OpenSend credentials", () => {
     const bindings = productionBindings(new FakeAirtableTransport(), productionD1("unused"));
@@ -2601,14 +2662,20 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
     }
 
     await dependencies.agenda.afterPublish(eventId, revision);
-    expect(
-      transport.requests.some(
-        (request) =>
-          request.table === "Published Speaker Projections" &&
-          JSON.stringify(request.body ?? {}).includes("Priya Raman") &&
-          JSON.stringify(request.body ?? {}).includes(revision.id),
-      ),
-    ).toBe(true);
+    const projectionWrite = transport.requests.find(
+      (request) => request.method === "POST" && request.table === "Published Speaker Projections",
+    );
+    expect(projectionWrite?.body).toMatchObject({
+      fields: {
+        "Application ID": `published-speakers:${organizationId}:${eventId}`,
+        "Organization ID": organizationId,
+        "Event Slug": "published-cache-event",
+        "Revision ID": revision.id,
+        "Revision Number": revision.revisionNumber,
+        "Published At": revision.publishedAt,
+      },
+    });
+    expect(JSON.stringify(projectionWrite?.body ?? {})).toContain("Priya Raman");
 
     expect([...state.outbox.values()]).toContainEqual(
       expect.objectContaining({
