@@ -348,10 +348,6 @@ function deliveryAction(status: CommunicationDeliveryStatus): CommunicationAudit
     : (`delivery_${status}` as CommunicationAuditEntry["action"]);
 }
 
-function isFailureDeliveryStatus(status: CommunicationDeliveryStatus): boolean {
-  return status === "failed" || status === "bounced" || status === "complained";
-}
-
 interface CommunicationDeliverySummary {
   status: CommunicationSendStatus;
   recipientCount: number;
