@@ -104,6 +104,19 @@ export interface ImportCrmContactsInput {
   readonly idempotencyKey: string;
   readonly mode?: "upsert" | "create" | undefined;
 }
+export interface CrmImportColumnMapping {
+  readonly sourceColumn: string;
+  readonly targetField: string;
+  readonly custom: boolean;
+}
+
+export interface CrmImportRowResult {
+  readonly rowNumber: number;
+  readonly identity: string | null;
+  readonly status: "created" | "updated" | "skipped";
+  readonly contactId: string | null;
+  readonly reason: string | null;
+}
 
 export interface CrmImportResult {
   readonly id: string;
@@ -112,6 +125,8 @@ export interface CrmImportResult {
   readonly updated: number;
   readonly skipped: number;
   readonly contacts: readonly CrmContact[];
+  readonly mapping: readonly CrmImportColumnMapping[];
+  readonly rows: readonly CrmImportRowResult[];
   readonly idempotent: boolean;
   readonly createdAt: string;
   readonly idempotencyKey?: string;
@@ -213,7 +228,8 @@ export type CrmHistoryKind =
   | "submission"
   | "attendance"
   | "note"
-  | "pipeline";
+  | "pipeline"
+  | "communication";
 
 export interface CrmHistoryEntry {
   readonly id: string;
@@ -270,6 +286,11 @@ export interface CrmEventProjection {
   readonly createdAt: string;
   readonly updatedAt: string;
 }
+export interface CrmEventProjectionResult {
+  readonly projection: CrmEventProjection;
+  readonly idempotent: boolean;
+  readonly outcome: "created" | "existing";
+}
 
 export interface SendCrmOutreachInput {
   readonly organizationId: string;
@@ -289,10 +310,17 @@ export interface CrmOutreachCommand {
   readonly organizationId: string;
   readonly contactId: string;
   readonly eventId: string | null;
+  readonly recipientEmail: string;
+  readonly templateSubject: string;
   readonly subject: string;
   readonly body: string;
   readonly renderedBody: string;
   readonly status: CrmOutreachStatus;
+  readonly queuedCount: number;
+  readonly sentCount: number;
+  readonly failedCount: number;
+  readonly terminal: boolean;
+  readonly failureReason: string | null;
   readonly idempotencyKey: string;
   readonly createdBy: string;
   readonly createdAt: string;

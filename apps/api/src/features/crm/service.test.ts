@@ -85,6 +85,35 @@ describe("CrmService", () => {
       csv: "name,email,topics\nGrace Hopper,grace@example.com,compiler\nAlan Turing,alan@example.com,security",
     });
     expect(first.created).toBe(2);
+    expect(first.mapping).toEqual([
+      { sourceColumn: "name", targetField: "displayName", custom: false },
+      { sourceColumn: "email", targetField: "email", custom: false },
+      { sourceColumn: "topics", targetField: "custom.topics", custom: true },
+    ]);
+    expect(first.rows).toEqual([
+      {
+        rowNumber: 1,
+        identity: "grace@example.com",
+        status: "created",
+        contactId: first.contacts[0]?.id,
+        reason: null,
+      },
+      {
+        rowNumber: 2,
+        identity: "alan@example.com",
+        status: "created",
+        contactId: first.contacts[1]?.id,
+        reason: null,
+      },
+    ]);
+    const createOnly = await crm.importCsv(actor, {
+      organizationId: "org-a",
+      idempotencyKey: "csv-create-only",
+      mode: "create",
+      csv: "name,email\nGrace Duplicate, GRACE@example.com\nNo identity,",
+    });
+    expect(createOnly).toMatchObject({ created: 0, updated: 0, skipped: 2 });
+    expect(createOnly.rows.map((row) => row.status)).toEqual(["skipped", "skipped"]);
     expect(replay.id).toBe(first.id);
     expect(replay.idempotent).toBe(true);
 
@@ -325,6 +354,22 @@ describe("CrmService", () => {
         })
       ).idempotent,
     ).toBe(true);
+    const existingEvent = await crm.addContactToEvent(actor, {
+      organizationId: "org-a",
+      contactId: contact.id,
+      eventId: "event-a",
+      idempotencyKey: "event-2",
+    });
+    expect(existingEvent).toMatchObject({ idempotent: true, outcome: "existing" });
+    await expect(
+      crm.addContactToEvent(actor, {
+        organizationId: "org-a",
+        contactId: contact.id,
+        eventId: "event-a",
+        role: "speaker",
+        idempotencyKey: "event-1",
+      }),
+    ).rejects.toMatchObject({ code: "CRM_CONFLICT" });
     const outreach = await crm.sendPersonalizedOutreach(actor, {
       organizationId: "org-a",
       contactId: contact.id,
@@ -333,14 +378,32 @@ describe("CrmService", () => {
       idempotencyKey: "outreach-1",
     });
     expect(outreach.renderedBody).toBe("Hi Grace");
+    expect(outreach).toMatchObject({
+      subject: "Hello",
+      status: "failed",
+      queuedCount: 0,
+      sentCount: 0,
+      failedCount: 1,
+      terminal: true,
+    });
     const history = await crm.getContactHistory(actor, "org-a", contact.id);
     expect(history.map((entry) => entry.kind)).toEqual(
-      expect.arrayContaining(["pipeline", "note", "event"]),
+      expect.arrayContaining(["pipeline", "note", "event", "communication"]),
     );
     expect((await crm.analytics(actor, "org-a")).contactsByEvent).toEqual([
       { eventId: "event-a", count: 1 },
     ]);
     expect(event.projection.contactId).toBe(contact.id);
+    expect(event.outcome).toBe("created");
+    await expect(
+      crm.sendPersonalizedOutreach(actor, {
+        organizationId: "org-a",
+        contactId: contact.id,
+        subject: "Hello {{unknownTag}}",
+        body: "Body",
+        idempotencyKey: "outreach-unknown",
+      }),
+    ).rejects.toMatchObject({ code: "CRM_INVALID_INPUT" });
   });
   it("keeps same-name event projections keyed by contact identity", async () => {
     const repository = new InMemoryCrmRepository();
@@ -420,10 +483,24 @@ describe("CrmService", () => {
     const first = await crm.sendPersonalizedOutreach(actor, input);
     const replay = await crm.sendPersonalizedOutreach(actor, input);
     expect(first.status).toBe("queued");
+    expect(first).toMatchObject({
+      status: "queued",
+      queuedCount: 1,
+      sentCount: 0,
+      failedCount: 0,
+      terminal: false,
+      recipientEmail: "recipient@example.com",
+      subject: "Follow up",
+    });
     expect(replay).toEqual(first);
     expect(sent).toEqual(["outreach-boundary-1"]);
     await expect(
       repository.getOutreachByIdempotencyKey("org-a", input.idempotencyKey),
     ).resolves.toEqual(expect.objectContaining({ contactId: contact.id, status: "queued" }));
+    expect(
+      (await repository.listHistory("org-a", contact.id)).filter(
+        (entry) => entry.kind === "communication",
+      ),
+    ).toHaveLength(1);
   });
 });

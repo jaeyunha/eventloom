@@ -304,6 +304,15 @@ describe("communications domain", () => {
       data: { message: "<script>alert('x')</script>" },
     });
     expect(preview.recipientCount).toBe(2);
+    expect(
+      preview.recipientPreviews.map((recipient) => ({
+        recipientId: recipient.recipientId,
+        subject: recipient.subject,
+      })),
+    ).toEqual([
+      { recipientId: "participant-1", subject: "Updated One" },
+      { recipientId: "participant-2", subject: "Updated Two" },
+    ]);
     expect(preview.html).toContain("&lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt;");
     expect(preview.html).not.toContain("<script>");
     await expectCode(
@@ -361,6 +370,15 @@ describe("communications domain", () => {
     expect(replay.id).toBe(first.id);
     expect(adapter.requests).toHaveLength(2);
     expect(first.deliveries.map((delivery) => delivery.status)).toEqual(["queued", "failed"]);
+    expect(first).toMatchObject({
+      status: "queued",
+      recipientCount: 2,
+      queuedCount: 1,
+      deliveredCount: 0,
+      failedCount: 1,
+      terminal: false,
+    });
+    expect(first.deliveries[1]?.failureReason).toBe("temporary provider failure");
 
     const delivered = await service.recordDeliveryStatus(organizer, {
       eventId,
@@ -377,9 +395,37 @@ describe("communications domain", () => {
       reason: "Mailbox unavailable",
     });
     expect(delivered.deliveries[0]?.status).toBe("delivered");
+    expect(delivered).toMatchObject({
+      status: "partial",
+      queuedCount: 0,
+      deliveredCount: 1,
+      failedCount: 1,
+      terminal: true,
+    });
     expect(bounced.deliveries[1]?.status).toBe("bounced");
     expect(bounced.history.some((entry) => entry.action === "delivery_bounced")).toBe(true);
     expect(bounced.deliveries[1]?.history.at(-1)?.reason).toBe("Mailbox unavailable");
+    expect(bounced).toMatchObject({
+      status: "partial",
+      recipientCount: 2,
+      queuedCount: 0,
+      deliveredCount: 1,
+      failedCount: 1,
+      terminal: true,
+    });
+    const history = await service.listDeliveryHistory(organizer, eventId, first.id);
+    expect(history).toMatchObject({
+      recipientCount: 2,
+      queuedCount: 0,
+      deliveredCount: 1,
+      failedCount: 1,
+      terminal: true,
+    });
+    expect(history.deliveries[1]?.history.map((entry) => entry.status)).toEqual([
+      "queued",
+      "failed",
+      "bounced",
+    ]);
   });
 
   it("starts authorization, template, and recipient reads together and bounds preview calls", async () => {

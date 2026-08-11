@@ -82,6 +82,24 @@ const preview: CommunicationPreview = {
   recipientCount: recipients.length,
   recipientIds: recipients.map((recipient) => recipient.id),
   recipients,
+  recipientPreviews: [
+    {
+      recipientId: "recipient-1",
+      email: "ada@example.test",
+      displayName: "Ada Lovelace",
+      subject: "Hello Ada Lovelace",
+      html: "<p>Hello Ada Lovelace</p>",
+      text: "Hello Ada Lovelace",
+    },
+    {
+      recipientId: "recipient-2",
+      email: "grace@example.test",
+      displayName: "Grace Hopper",
+      subject: "Hello Grace Hopper",
+      html: "<p>Hello Grace Hopper</p>",
+      text: "Hello Grace Hopper",
+    },
+  ],
   template: {
     id: "group-1",
     name: "Group template",
@@ -114,6 +132,10 @@ const send: CommunicationSend = {
   data: {},
   status: "partial",
   recipientCount: 2,
+  queuedCount: 0,
+  deliveredCount: 1,
+  failedCount: 1,
+  terminal: true,
   recipients,
   deliveries: [
     {
@@ -222,14 +244,49 @@ describe("communications organizer workspace", () => {
     expect(markup).toContain("Ada Lovelace");
     expect(markup).toContain("Grace Hopper");
     expect(markup).toContain("Escaped HTML source (not executed)");
+    expect(markup).toContain("Per-recipient email previews");
+    expect(markup).toContain("Hello Grace Hopper");
     expect(markup).toContain("Confirm operational email send");
     expect(markup).toContain("Confirm and send");
     expect(markup).toContain("Delivered");
     expect(markup).toContain("Failed");
     expect(markup).toContain("Provider timeout");
+    expect(markup).toContain("1 delivered");
+    expect(markup).toContain("1 failed");
+    expect(markup).toContain("0 queued");
+    expect(markup).toContain("provider-1");
     expect(markup).toContain("Audit history");
     expect(markup).toContain("send_created");
     expect(markup).toContain(senders.speakers);
+  });
+  it("labels queued sends as in progress instead of completed", () => {
+    const queuedSend: CommunicationSend = {
+      ...send,
+      status: "queued",
+      queuedCount: 2,
+      deliveredCount: 0,
+      failedCount: 0,
+      terminal: false,
+      deliveries: send.deliveries.map((delivery) => ({
+        ...delivery,
+        status: "queued",
+        providerMessageId: null,
+        failureReason: null,
+      })),
+    };
+    const markup = renderToStaticMarkup(
+      createElement(CommunicationsWorkspaceView, {
+        eventId: "event-1",
+        organizationId: "org-1",
+        templates: [],
+        send: queuedSend,
+        onRetryFailed: async () => undefined,
+      }),
+    );
+
+    expect(markup).toContain("In progress");
+    expect(markup).toContain("2 queued");
+    expect(markup).not.toContain("Retry failed recipients");
   });
 
   it("escapes template preview text without executing markup", () => {

@@ -126,6 +126,15 @@ export interface CommunicationDeliveryHistoryEntry {
   reason: string | null;
   actorId: string;
 }
+export interface CommunicationRecipientPreview {
+  recipientId: string;
+  email: string;
+  displayName: string;
+  subject: string;
+  html: string;
+  text: string;
+}
+
 
 export interface CommunicationDelivery {
   recipientId: string;
@@ -160,6 +169,8 @@ export interface CommunicationPreview {
   recipientCount: number;
   recipientIds: readonly string[];
   recipients: readonly CommunicationRecipientSnapshot[];
+  recipientPreviews: readonly CommunicationRecipientPreview[];
+
   template: CommunicationTemplateSnapshot;
   subject: string;
   html: string;
@@ -183,6 +194,10 @@ export interface CommunicationSend {
   data: CommunicationRenderData;
   status: CommunicationSendStatus;
   recipientCount: number;
+  queuedCount: number;
+  deliveredCount: number;
+  failedCount: number;
+  terminal: boolean;
   recipients: readonly CommunicationRecipientSnapshot[];
   deliveries: readonly CommunicationDelivery[];
   history: readonly CommunicationAuditEntry[];
@@ -254,6 +269,7 @@ export interface CommunicationDeliveryRequest {
 export interface CommunicationDeliveryResult {
   status?: CommunicationDeliveryStatus;
   providerMessageId?: string;
+  reason?: string;
 }
 
 export interface CommunicationDeliveryAdapter {
