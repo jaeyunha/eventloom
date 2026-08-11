@@ -80,6 +80,14 @@ export interface CommunicationRecipientSnapshot {
   readonly audiences: readonly CommunicationAudience[];
   readonly data: Readonly<Record<string, unknown>>;
 }
+export interface CommunicationRecipientPreview {
+  readonly recipientId: string;
+  readonly email: string;
+  readonly displayName: string;
+  readonly subject: string;
+  readonly html: string;
+  readonly text: string;
+}
 
 export interface CommunicationPreview {
   readonly id: string;
@@ -93,6 +101,7 @@ export interface CommunicationPreview {
   readonly recipientCount: number;
   readonly recipientIds: readonly string[];
   readonly recipients: readonly CommunicationRecipientSnapshot[];
+  readonly recipientPreviews: readonly CommunicationRecipientPreview[];
   readonly template: CommunicationTemplateSnapshot;
   readonly subject: string;
   readonly html: string;
@@ -147,12 +156,25 @@ export interface CommunicationSend {
   readonly data: Readonly<Record<string, unknown>>;
   readonly status: CommunicationSendStatus;
   readonly recipientCount: number;
+  readonly queuedCount: number;
+  readonly deliveredCount: number;
+  readonly failedCount: number;
+  readonly terminal: boolean;
   readonly recipients: readonly CommunicationRecipientSnapshot[];
   readonly deliveries: readonly CommunicationDelivery[];
   readonly history: readonly CommunicationAuditEntry[];
   readonly createdBy: string;
   readonly createdAt: string;
   readonly updatedAt: string;
+}
+export interface CommunicationDeliveryHistory {
+  readonly history: readonly CommunicationAuditEntry[];
+  readonly deliveries: readonly CommunicationDelivery[];
+  readonly recipientCount: number;
+  readonly queuedCount: number;
+  readonly deliveredCount: number;
+  readonly failedCount: number;
+  readonly terminal: boolean;
 }
 
 export class CommunicationApiError extends Error {
@@ -309,8 +331,8 @@ export interface CommunicationApi {
     action?: "accept" | "waitlist" | "reject" | "task" | "withdrawal";
   }): Promise<CommunicationSend>;
   getSend(eventId: string, sendId: string): Promise<CommunicationSend>;
-  getHistory(eventId: string, sendId: string): Promise<readonly CommunicationAuditEntry[]>;
-  listDeliveryHistory(eventId: string, sendId: string): Promise<readonly CommunicationAuditEntry[]>;
+  getHistory(eventId: string, sendId: string): Promise<CommunicationDeliveryHistory>;
+  listDeliveryHistory(eventId: string, sendId: string): Promise<CommunicationDeliveryHistory>;
   retryFailed(eventId: string, sendId: string): Promise<CommunicationSend>;
 }
 
@@ -457,12 +479,11 @@ export function createCommunicationApi(
     getSend(eventId, sendId) {
       return request<CommunicationSend>(eventId, `/sends/${segment(sendId, "send ID")}`);
     },
-    async getHistory(eventId, sendId) {
-      const raw = await request<unknown>(eventId, `/sends/${segment(sendId, "send ID")}/history`);
-      if (Array.isArray(raw)) return raw as readonly CommunicationAuditEntry[];
-      if (isRecord(raw) && Array.isArray(raw.history))
-        return raw.history as readonly CommunicationAuditEntry[];
-      return [];
+    getHistory(eventId, sendId) {
+      return request<CommunicationDeliveryHistory>(
+        eventId,
+        `/sends/${segment(sendId, "send ID")}/history`,
+      );
     },
     listDeliveryHistory(eventId, sendId) {
       return this.getHistory(eventId, sendId);

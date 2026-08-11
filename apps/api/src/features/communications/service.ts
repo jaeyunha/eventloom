@@ -11,6 +11,7 @@ import type {
   CommunicationGrant,
   CommunicationPreview,
   CommunicationRecipient,
+  CommunicationRecipientPreview,
   CommunicationRecipientSnapshot,
   CommunicationRenderData,
   CommunicationRepository,
@@ -347,33 +348,74 @@ function deliveryAction(status: CommunicationDeliveryStatus): CommunicationAudit
     : (`delivery_${status}` as CommunicationAuditEntry["action"]);
 }
 
-function sendStatus(deliveries: readonly CommunicationDelivery[]): CommunicationSendStatus {
-  if (deliveries.every((delivery) => delivery.status === "delivered")) {
-    return "delivered";
+function isFailureDeliveryStatus(status: CommunicationDeliveryStatus): boolean {
+  return status === "failed" || status === "bounced" || status === "complained";
+}
+
+interface CommunicationDeliverySummary {
+  status: CommunicationSendStatus;
+  recipientCount: number;
+  queuedCount: number;
+  deliveredCount: number;
+  failedCount: number;
+  terminal: boolean;
+}
+
+function summarizeDeliveries(
+  deliveries: readonly CommunicationDelivery[],
+  recipientCount = deliveries.length,
+): CommunicationDeliverySummary {
+  const normalizedRecipientCount = Math.max(recipientCount, deliveries.length);
+  const missingDeliveryCount = normalizedRecipientCount - deliveries.length;
+  let queuedCount = missingDeliveryCount;
+  let deliveredCount = 0;
+  let failedCount = 0;
+  for (const delivery of deliveries) {
+    if (delivery.status === "queued") {
+      queuedCount += 1;
+    } else if (delivery.status === "delivered") {
+      deliveredCount += 1;
+    } else {
+      failedCount += 1;
+    }
   }
-  if (deliveries.every((delivery) => delivery.status === "failed")) {
-    return "failed";
-  }
-  if (deliveries.every((delivery) => delivery.status === "queued")) {
-    return "queued";
-  }
-  return "partial";
+  const terminal = queuedCount === 0;
+  const status: CommunicationSendStatus =
+    !terminal
+      ? "queued"
+      : normalizedRecipientCount > 0 && deliveredCount === normalizedRecipientCount
+        ? "delivered"
+        : normalizedRecipientCount > 0 && failedCount === normalizedRecipientCount
+          ? "failed"
+          : "partial";
+  return {
+    status,
+    recipientCount: normalizedRecipientCount,
+    queuedCount,
+    deliveredCount,
+    failedCount,
+    terminal,
+  };
 }
 
 function copySend(send: CommunicationSend): CommunicationSend {
+  const recipients = send.recipients.map((recipient) => ({
+    ...recipient,
+    audiences: [...recipient.audiences],
+    data: cloneData(recipient.data),
+  }));
+  const deliveries = send.deliveries.map((delivery) => ({
+    ...delivery,
+    history: delivery.history.map((entry) => ({ ...entry })),
+  }));
+  const summary = summarizeDeliveries(deliveries, recipients.length);
   return {
     ...send,
+    ...summary,
     data: cloneData(send.data),
     template: { ...send.template },
-    recipients: send.recipients.map((recipient) => ({
-      ...recipient,
-      audiences: [...recipient.audiences],
-      data: cloneData(recipient.data),
-    })),
-    deliveries: send.deliveries.map((delivery) => ({
-      ...delivery,
-      history: delivery.history.map((entry) => ({ ...entry })),
-    })),
+    recipients,
+    deliveries,
     history: send.history.map((entry) => ({ ...entry, details: cloneData(entry.details) })),
   };
 }
@@ -388,6 +430,7 @@ function copyPreview(preview: CommunicationPreview): CommunicationPreview {
       audiences: [...recipient.audiences],
       data: cloneData(recipient.data),
     })),
+    recipientPreviews: preview.recipientPreviews.map((recipient) => ({ ...recipient })),
     template: { ...preview.template },
   };
 }
@@ -604,11 +647,25 @@ export class CommunicationService {
       this.assertRecipientScope(recipient, actor, input.eventId),
     );
     const data = cloneData(input.data);
-    const first = snapshots[0];
-    const rendered = renderCommunicationTemplate(
-      template,
-      renderDataForRecipient(data, first ?? this.emptyRecipient(actor.tenantId, input.eventId)),
-    );
+    const recipientPreviews: CommunicationRecipientPreview[] = snapshots.map((recipient) => {
+      const renderedRecipient = renderCommunicationTemplate(
+        template,
+        renderDataForRecipient(data, recipient),
+      );
+      return {
+        recipientId: recipient.id,
+        email: recipient.email,
+        displayName: recipient.displayName,
+        ...renderedRecipient,
+      };
+    });
+    const firstPreview = recipientPreviews[0];
+    const rendered =
+      firstPreview ??
+      renderCommunicationTemplate(
+        template,
+        renderDataForRecipient(data, this.emptyRecipient(actor.tenantId, input.eventId)),
+      );
     const now = this.clock();
     const preview: CommunicationPreview = {
       id: createId("preview"),
@@ -622,6 +679,7 @@ export class CommunicationService {
       recipientCount: snapshots.length,
       recipientIds: snapshots.map((recipient) => recipient.id),
       recipients: snapshots,
+      recipientPreviews,
       template: templateSnapshot(template),
       subject: rendered.subject,
       html: rendered.html,
@@ -658,7 +716,7 @@ export class CommunicationService {
       idempotencyKey,
     );
     if (existing !== undefined) {
-      return existing;
+      return copySend(existing);
     }
     if (this.deliveryAdapter === undefined) {
       throw unavailable("Operational email delivery is not configured.");
@@ -693,7 +751,7 @@ export class CommunicationService {
     if (recipients.length === 0) {
       throw invalidInput("The selected audience has no recipients.");
     }
-    const send = await this.createSend(actor, {
+    const created = await this.createSend(actor, {
       eventId: input.eventId,
       purpose: preview.purpose,
       audience: preview.audience,
@@ -703,7 +761,7 @@ export class CommunicationService {
       idempotencyKey,
       previewId: preview.id,
     });
-    return this.deliverSend(actor, send);
+    return created.created ? this.deliverSend(actor, created.send) : copySend(created.send);
   }
   async sendOrganizerGroup(
     actor: CommunicationActor,
@@ -736,7 +794,7 @@ export class CommunicationService {
       idempotencyKey,
     );
     if (existing !== undefined) {
-      return existing;
+      return copySend(existing);
     }
     if (this.deliveryAdapter === undefined) {
       throw unavailable("Operational email delivery is not configured.");
@@ -762,7 +820,7 @@ export class CommunicationService {
     const snapshots = recipients.map((recipient) =>
       this.assertRecipientScope(recipient, actor, input.eventId),
     );
-    const send = await this.createSend(actor, {
+    const created = await this.createSend(actor, {
       eventId: input.eventId,
       purpose,
       audience: null,
@@ -772,7 +830,7 @@ export class CommunicationService {
       idempotencyKey,
       previewId: null,
     });
-    return this.deliverSend(actor, send);
+    return created.created ? this.deliverSend(actor, created.send) : copySend(created.send);
   }
 
   async sendDecision(
@@ -859,9 +917,25 @@ export class CommunicationService {
     actor: CommunicationActor,
     eventId: string,
     sendId: string,
-  ): Promise<readonly CommunicationAuditEntry[]> {
+  ): Promise<{
+    history: readonly CommunicationAuditEntry[];
+    deliveries: readonly CommunicationDelivery[];
+    recipientCount: number;
+    queuedCount: number;
+    deliveredCount: number;
+    failedCount: number;
+    terminal: boolean;
+  }> {
     const send = await this.getSend(actor, eventId, sendId);
-    return send.history;
+    return {
+      history: send.history,
+      deliveries: send.deliveries,
+      recipientCount: send.recipientCount,
+      queuedCount: send.queuedCount,
+      deliveredCount: send.deliveredCount,
+      failedCount: send.failedCount,
+      terminal: send.terminal,
+    };
   }
 
   async recordDeliveryStatus(
@@ -880,11 +954,23 @@ export class CommunicationService {
       throw notFound("The delivery recipient was not found.");
     }
     const status = input.status;
-    if (status === "queued" && delivery.status !== "queued" && delivery.status !== "failed") {
-      throw conflict("A terminal delivery state cannot return to queued.");
+    const terminalStatus =
+      delivery.status === "delivered" ||
+      delivery.status === "bounced" ||
+      delivery.status === "complained";
+    if (terminalStatus && status !== delivery.status) {
+      throw conflict("A terminal delivery state cannot move to another state.");
     }
-    if (delivery.status === "delivered" && status !== "delivered") {
-      throw conflict("A delivered message cannot move to another state.");
+    if (
+      status === delivery.status &&
+      (input.providerMessageId === undefined ||
+        input.providerMessageId === delivery.providerMessageId) &&
+      (input.reason === undefined || input.reason === delivery.failureReason)
+    ) {
+      return copySend(send);
+    }
+    if (status === "queued" && delivery.status !== "queued" && delivery.status !== "failed") {
+      throw conflict("Only a failed delivery can be queued for retry.");
     }
     const occurredAt =
       input.occurredAt === undefined
@@ -906,7 +992,7 @@ export class CommunicationService {
         status === "failed" || status === "bounced" || status === "complained"
           ? (input.reason ?? delivery.failureReason)
           : null,
-      attempts: status === "queued" ? delivery.attempts : delivery.attempts + 1,
+      attempts: delivery.attempts,
       history: [...delivery.history, historyEntry],
     };
     const audit: CommunicationAuditEntry = {
@@ -926,16 +1012,13 @@ export class CommunicationService {
         reason: input.reason ?? null,
       },
     };
+    const deliveries = send.deliveries.map((candidate) =>
+      candidate.recipientId === input.recipientId ? nextDelivery : candidate,
+    );
     const next: CommunicationSend = {
       ...send,
-      status: sendStatus(
-        send.deliveries.map((candidate) =>
-          candidate.recipientId === input.recipientId ? nextDelivery : candidate,
-        ),
-      ),
-      deliveries: send.deliveries.map((candidate) =>
-        candidate.recipientId === input.recipientId ? nextDelivery : candidate,
-      ),
+      ...summarizeDeliveries(deliveries, send.recipientCount),
+      deliveries,
       history: [...send.history, audit],
       updatedAt: occurredAt,
     };
@@ -1069,7 +1152,7 @@ export class CommunicationService {
       idempotencyKey: string;
       previewId: string | null;
     },
-  ): Promise<CommunicationSend> {
+  ): Promise<{ send: CommunicationSend; created: boolean }> {
     const now = this.clock().toISOString();
     const history: CommunicationAuditEntry[] = [];
     const deliveries: CommunicationDelivery[] = [];
@@ -1124,6 +1207,7 @@ export class CommunicationService {
       },
       ...history.map((entry) => ({ ...entry, sendId })),
     ];
+    const summary = summarizeDeliveries(deliveries, input.recipients.length);
     const send: CommunicationSend = {
       id: sendId,
       tenantId: actor.tenantId,
@@ -1136,8 +1220,7 @@ export class CommunicationService {
       idempotencyKey: input.idempotencyKey,
       previewId: input.previewId,
       data: cloneData(input.data),
-      status: "queued",
-      recipientCount: input.recipients.length,
+      ...summary,
       recipients: input.recipients,
       deliveries,
       history: sendHistory,
@@ -1146,7 +1229,7 @@ export class CommunicationService {
       updatedAt: now,
     };
     try {
-      return await this.repository.saveSend(send);
+      return { send: await this.repository.saveSend(send), created: true };
     } catch (error) {
       if (error instanceof CommunicationError && error.code === "COMMUNICATION_CONFLICT") {
         const existing = await this.repository.findSendByIdempotency(
@@ -1155,7 +1238,7 @@ export class CommunicationService {
           input.idempotencyKey,
         );
         if (existing !== undefined) {
-          return existing;
+          return { send: existing, created: false };
         }
       }
       throw error;
@@ -1212,6 +1295,7 @@ export class CommunicationService {
         ...(result.providerMessageId === undefined
           ? {}
           : { providerMessageId: result.providerMessageId }),
+        ...(result.reason === undefined ? {} : { reason: result.reason }),
       });
       await this.repository.saveSend(current);
     }
@@ -1275,7 +1359,7 @@ export class CommunicationService {
     );
     return {
       ...send,
-      status: sendStatus(deliveries),
+      ...summarizeDeliveries(deliveries, send.recipientCount),
       deliveries,
       history: [...send.history, audit],
       updatedAt: occurredAt,

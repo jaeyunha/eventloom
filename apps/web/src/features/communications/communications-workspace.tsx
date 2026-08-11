@@ -455,17 +455,30 @@ function RecipientPreview({ preview }: Readonly<{ preview: CommunicationPreview 
           </tbody>
         </table>
       </div>
-      <div style={{ display: "grid", gap: "0.45rem" }}>
-        <h3>Email preview</h3>
-        <p>
-          <strong>Subject:</strong> {preview.subject}
-        </p>
-        <p style={mutedStyle}>Escaped HTML source (not executed):</p>
-        <pre style={preStyle}>{escapeHtmlForPreview(preview.html)}</pre>
-        <p style={mutedStyle}>Plain-text body:</p>
-        <pre style={{ ...preStyle, background: "var(--color-canvas, #f5f6f9)", color: "inherit" }}>
-          {preview.text}
-        </pre>
+      <div style={{ display: "grid", gap: "0.75rem" }}>
+        <h3>Per-recipient email previews</h3>
+        {preview.recipientPreviews.map((recipient) => (
+          <article key={recipient.recipientId} style={cardStyle}>
+            <h4>
+              {recipient.displayName} · {recipient.email}
+            </h4>
+            <p>
+              <strong>Subject:</strong> {recipient.subject}
+            </p>
+            <p style={mutedStyle}>Escaped HTML source (not executed):</p>
+            <pre style={preStyle}>{escapeHtmlForPreview(recipient.html)}</pre>
+            <p style={mutedStyle}>Plain-text body:</p>
+            <pre
+              style={{
+                ...preStyle,
+                background: "var(--color-canvas, #f5f6f9)",
+                color: "inherit",
+              }}
+            >
+              {recipient.text}
+            </pre>
+          </article>
+        ))}
       </div>
     </>
   );
@@ -477,7 +490,7 @@ function DeliveryHistory({
   busy,
 }: Readonly<{ send: CommunicationSend; onRetryFailed?: () => Promise<void>; busy: boolean }>) {
   const recipientById = new Map(send.recipients.map((recipient) => [recipient.id, recipient]));
-  const failed = send.deliveries.some((delivery) => delivery.status === "failed");
+  const failed = send.terminal && send.deliveries.some((delivery) => delivery.status === "failed");
   return (
     <section style={cardStyle} aria-labelledby="delivery-history-heading">
       <div style={rowStyle}>
@@ -492,6 +505,10 @@ function DeliveryHistory({
         {send.recipientCount === 1 ? "" : "s"} · sender{" "}
         <strong>{senderLabel(send.template)}</strong>
       </p>
+      <p role="status">
+        {send.terminal ? "Terminal" : "In progress"} · {send.queuedCount} queued ·{" "}
+        {send.deliveredCount} delivered · {send.failedCount} failed
+      </p>
       <div style={{ overflowX: "auto" }}>
         <table>
           <caption>Delivery status for every recipient</caption>
@@ -500,6 +517,7 @@ function DeliveryHistory({
               <th scope="col">Recipient</th>
               <th scope="col">Status</th>
               <th scope="col">Attempts</th>
+              <th scope="col">Provider id</th>
               <th scope="col">Failure</th>
             </tr>
           </thead>
@@ -515,6 +533,7 @@ function DeliveryHistory({
                   </th>
                   <td>{statusLabel(delivery.status)}</td>
                   <td>{delivery.attempts}</td>
+                  <td>{delivery.providerMessageId ?? "—"}</td>
                   <td>{delivery.failureReason ?? "—"}</td>
                 </tr>
               );
@@ -1091,7 +1110,9 @@ export function CommunicationsWorkspace({
       setSendConfirmationOpen(false);
       idempotencyKeyRef.current = null;
       setProviderState("available");
-      setStatusMessage(`Send ${next.id} recorded with status ${statusLabel(next.status)}.`);
+      setStatusMessage(
+        `Send ${next.id}: ${next.deliveredCount} delivered, ${next.failedCount} failed, ${next.queuedCount} queued; ${next.terminal ? "terminal" : "still in progress"}.`,
+      );
     } catch (reason) {
       setError(messageFromError(reason));
       const state = stateFromError(reason);
@@ -1111,7 +1132,7 @@ export function CommunicationsWorkspace({
       setSend(next);
       setProviderState("available");
       setStatusMessage(
-        `Failed recipients were retried; send status is ${statusLabel(next.status)}.`,
+        `Retry result: ${next.deliveredCount} delivered, ${next.failedCount} failed, ${next.queuedCount} queued; ${next.terminal ? "terminal" : "still in progress"}.`,
       );
     } catch (reason) {
       setError(messageFromError(reason));

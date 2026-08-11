@@ -76,6 +76,7 @@ describe("organization CRM workspace", () => {
         selectedContact: contact,
         selectedContactId: contact.id,
         initialImportOpen: true,
+        initialImportCsv: "Name,Email,Topics\nAda Lovelace,ada@example.test,computing",
         selectedContactIds: [contact.id],
         segments: [
           {
@@ -123,7 +124,50 @@ describe("organization CRM workspace", () => {
           ],
         },
         analytics,
-        outreachPreview: { subject: "Hello", body: "Hi Ada", count: 1, sample: "Hi Ada" },
+        importResult: {
+          id: "import-1",
+          created: 1,
+          updated: 0,
+          skipped: 1,
+          idempotent: false,
+          mapping: [
+            { sourceColumn: "Name", targetField: "displayName", custom: false },
+            { sourceColumn: "Email", targetField: "email", custom: false },
+            { sourceColumn: "Topics", targetField: "custom.Topics", custom: true },
+          ],
+          rows: [
+            {
+              rowNumber: 1,
+              identity: "ada@example.test",
+              status: "created",
+              contactId: contact.id,
+              reason: null,
+            },
+            {
+              rowNumber: 2,
+              identity: null,
+              status: "skipped",
+              contactId: null,
+              reason: "Email is required as the canonical import identity.",
+            },
+          ],
+        },
+        outreachPreview: {
+          subject: "Hello {{first_name}}",
+          body: "Hi {{first_name}}",
+          count: 1,
+          recipients: [
+            {
+              contactId: contact.id,
+              email: "ada@example.test",
+              displayName: "Ada Lovelace",
+              subject: "Hello Ada",
+              body: "Hi Ada",
+              unknownTags: [],
+              idempotencyKey: "outreach-preview-1",
+            },
+          ],
+        },
         outreachRecipients: [contact],
         onSelectionChange: vi.fn(),
         onFindDuplicates: vi.fn(),
@@ -134,8 +178,33 @@ describe("organization CRM workspace", () => {
         onAddNote: vi.fn(async () => undefined),
         onAddToEvent: vi.fn(async () => undefined),
         lastAddedEventId: event.id,
+        lastEventResult: {
+          idempotent: false,
+          outcome: "created",
+          projection: {
+            id: "event-contact-1",
+            eventId: event.id,
+            contactId: contact.id,
+            role: "prospect",
+          },
+        },
         onPreviewOutreach: vi.fn(async () => undefined),
         onSendOutreach: vi.fn(async () => undefined),
+        outreachResults: [
+          {
+            id: "send-1",
+            contactId: contact.id,
+            recipientEmail: "ada@example.test",
+            subject: "Hello Ada",
+            renderedBody: "Hi Ada",
+            status: "sent",
+            queuedCount: 0,
+            sentCount: 1,
+            failedCount: 0,
+            terminal: true,
+            failureReason: null,
+          },
+        ],
         onCreateSegment: vi.fn(async () => undefined),
         onSelectSegment: vi.fn(),
       }),
@@ -145,6 +214,11 @@ describe("organization CRM workspace", () => {
     expect(markup).toContain("Search contacts");
     expect(markup).toContain("CSV file");
     expect(markup).toContain("Hide import");
+    expect(markup).toContain("Detected CSV column mapping");
+    expect(markup).toContain("custom.Topics (custom field)");
+    expect(markup).toContain("Import result");
+    expect(markup).toContain("1 created");
+    expect(markup).toContain("1 skipped");
     expect(markup).toContain("Ada Lovelace");
     expect(markup).toContain("Select Ada Lovelace");
     expect(markup).toContain("Custom fields");
@@ -162,11 +236,51 @@ describe("organization CRM workspace", () => {
     expect(markup).toContain("Mathematician and founder");
     expect(markup).toContain("Notes and cross-event history");
     expect(markup).toContain("{{first_name}}");
+    expect(markup).toContain("Hello Ada");
+    expect(markup).toContain("Outreach delivery result");
+    expect(markup).toContain("1 sent");
     expect(markup).toContain("Qualified speakers");
     expect(markup).toContain("Pipeline board");
     expect(markup).toContain("CRM analytics");
     expect(markup).toContain("View contacts");
     expect(markup).toContain("Open event workspace");
+    expect(markup).toContain("Canonical relationship created");
+  });
+  it("shows every recipient preview and blocks unknown outreach merge tags", () => {
+    const markup = renderToStaticMarkup(
+      createElement(CrmWorkspaceView, {
+        organizationId: "org/one",
+        contacts: [contact],
+        selectedContact: contact,
+        segments: [],
+        events: [],
+        history: [],
+        pipelineHistory: [],
+        notes: [],
+        duplicates: null,
+        analytics: null,
+        outreachPreview: {
+          subject: "Hello {{unknownTag}}",
+          body: "Body",
+          count: 1,
+          recipients: [
+            {
+              contactId: contact.id,
+              email: contact.email ?? "",
+              displayName: contact.displayName,
+              subject: "Hello {{unknownTag}}",
+              body: "Body",
+              unknownTags: ["unknownTag"],
+              idempotencyKey: "outreach-preview-invalid",
+            },
+          ],
+        },
+        onSendOutreach: async () => undefined,
+      }),
+    );
+
+    expect(markup).toContain("Sending is blocked");
+    expect(markup).toContain("Unknown merge tags: unknownTag");
   });
 
   it("seeds saved segments from active directory filters and exposes selected-contact context", () => {

@@ -288,9 +288,9 @@ export function createCommunicationRoutes(
   routes.get("/sends/:sendId/history", async (context) => {
     const current = actor(context);
     const eventId = eventIdFor(context, {});
-    return context.json({
-      history: await service.listDeliveryHistory(current, eventId, context.req.param("sendId")),
-    });
+    return context.json(
+      await service.listDeliveryHistory(current, eventId, context.req.param("sendId")),
+    );
   });
 
   routes.post("/sends/:sendId/retry", async (context) => {
