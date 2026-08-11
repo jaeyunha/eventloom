@@ -275,6 +275,27 @@ describe("review workspace", () => {
       ]),
     ).toBe("Sam Whitfield");
   });
+  it("keeps reviewer navigation disabled until the autosave queue is idle", async () => {
+    const pendingStates: boolean[] = [];
+    let resolveSave: (() => void) | undefined;
+    const deferredSave = new Promise<void>((resolve) => {
+      resolveSave = resolve;
+    });
+    const queue = createReviewAutosaveQueue((pending) => pendingStates.push(pending));
+    const saving = queue.enqueue(() => deferredSave);
+
+    expect(queue.isPending()).toBe(true);
+    expect(reviewerNavigationDisabled(true, queue.isPending(), false, false)).toBe(true);
+
+    if (resolveSave === undefined) throw new Error("Expected a deferred autosave resolver.");
+    resolveSave();
+    await saving;
+
+    expect(queue.isPending()).toBe(false);
+    expect(reviewerNavigationDisabled(true, queue.isPending(), false, false)).toBe(false);
+    expect(reviewerNavigationDisabled(false, queue.isPending(), false, false)).toBe(true);
+    expect(pendingStates).toEqual([true, false]);
+  });
   it("renders an accessible first-plan form for an organizer event with no plans", () => {
     const markup = renderToStaticMarkup(
       createElement(ReviewWorkspace, {
