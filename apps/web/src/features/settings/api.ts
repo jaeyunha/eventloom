@@ -361,8 +361,6 @@ export function createEventSettingsApi(
   fetcher: Fetcher = fetch,
 ): EventSettingsApi {
   const normalizedBaseUrl = trimTrailingSlash(baseUrl.trim());
-  if (normalizedBaseUrl.length === 0)
-    throw new TypeError("An API URL is required for event settings requests.");
   const adminBaseUrl = `${normalizedBaseUrl}/api/admin/organizations/${segment(organizationId, "organization ID")}/events`;
   const normalizedOrganizationId = organizationId.trim();
 
