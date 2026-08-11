@@ -49,6 +49,7 @@ class StaleAssignmentRepository extends InMemoryEvaluationRepository {
   }
 }
 class WorkspaceBatchRepository extends InMemoryEvaluationRepository {
+  planGate: Promise<void> | null = null;
   planListCalls = 0;
   organizerWorkspaceCalls = 0;
   decisionCalls = 0;
@@ -60,6 +61,8 @@ class WorkspaceBatchRepository extends InMemoryEvaluationRepository {
 
   override async listPlans(tenantId: string, requestedEventId?: string) {
     this.planListCalls += 1;
+    const gate = this.planGate;
+    if (gate !== null) await gate;
     return super.listPlans(tenantId, requestedEventId);
   }
 
@@ -99,6 +102,7 @@ class WorkspaceBatchRepository extends InMemoryEvaluationRepository {
   }
 
   resetCounts(): void {
+    this.planGate = null;
     this.planListCalls = 0;
     this.workspaceCalls = 0;
     this.assignmentListCalls = 0;
@@ -462,7 +466,7 @@ describe("evaluation plans and assignments", () => {
       failure,
     );
   });
-  it("batches organizer workspace reads with authoritative review progress", async () => {
+  it("starts organizer hydration while plan discovery is gated and uses authoritative review progress", async () => {
     const repository = new WorkspaceBatchRepository();
     const submissions = new WorkspaceBatchSource([
       submission,
@@ -507,6 +511,7 @@ describe("evaluation plans and assignments", () => {
     const gate = new Promise<void>((resolve) => {
       releaseBatchReads = resolve;
     });
+    repository.planGate = gate;
     repository.batchGate = gate;
     submissions.organizerBatchGate = gate;
     const pending = service.getOrganizerWorkspace(organizer, eventId);
@@ -586,7 +591,7 @@ describe("evaluation plans and assignments", () => {
     });
   });
 
-  it("returns missing-plan before attempting organizer hydration", async () => {
+  it("returns missing-plan deterministically when organizer hydration fails", async () => {
     const repository = new WorkspaceBatchRepository();
     repository.organizerWorkspaceFailure = new Error("Decision row could not be decoded.");
     const submissions = new WorkspaceBatchSource([submission]);
@@ -598,10 +603,10 @@ describe("evaluation plans and assignments", () => {
     );
 
     expect(repository.planListCalls).toBe(1);
-    expect(repository.organizerWorkspaceCalls).toBe(0);
+    expect(repository.organizerWorkspaceCalls).toBe(1);
     expect(repository.assignmentListCalls).toBe(0);
     expect(repository.reviewListCalls).toBe(0);
-    expect(submissions.organizerListCalls).toBe(0);
+    expect(submissions.organizerListCalls).toBe(1);
   });
   it("hard-deletes outstanding assignments with no or draft reviews", async () => {
     const { service, repository } = await fixture({ reviewsPerSubmission: 2 });

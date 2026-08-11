@@ -806,7 +806,17 @@ export class EvaluationService {
     requireHumanOrganizer(actor, normalizedEventId);
     const normalizedPreferredPlanId =
       preferredPlanId === undefined ? undefined : requireText(preferredPlanId, "Plan id", 100);
-    const listedPlans = await this.#repository.listPlans(actor.tenantId, normalizedEventId);
+    const listedPlansPromise = this.#repository.listPlans(actor.tenantId, normalizedEventId);
+    const listedSubmissionsPromise = this.listOrganizerSubmissions(actor, normalizedEventId);
+    const batchedWorkspaceRecordsPromise = this.#repository.listOrganizerWorkspaceRecords(
+      actor.tenantId,
+      normalizedEventId,
+    );
+    const hydrationPromise = Promise.allSettled([
+      listedSubmissionsPromise,
+      batchedWorkspaceRecordsPromise,
+    ]);
+    const listedPlans = await listedPlansPromise;
     const plans = listedPlans.filter(
       (plan) => plan.tenantId === actor.tenantId && plan.eventId === normalizedEventId,
     );
@@ -825,12 +835,15 @@ export class EvaluationService {
     if (plan === undefined) {
       throw notFound("No evaluation plan was found for this event.");
     }
-    const [listedSubmissions, batchedWorkspaceRecords] = await Promise.all([
-      this.listOrganizerSubmissions(actor, normalizedEventId),
-      this.#repository
-        .listOrganizerWorkspaceRecords(actor.tenantId, normalizedEventId)
-        .catch(() => null),
-    ]);
+    const [listedSubmissionsResult, batchedWorkspaceRecordsResult] = await hydrationPromise;
+    if (listedSubmissionsResult.status === "rejected") {
+      throw listedSubmissionsResult.reason;
+    }
+    const listedSubmissions = listedSubmissionsResult.value;
+    const batchedWorkspaceRecords =
+      batchedWorkspaceRecordsResult.status === "fulfilled"
+        ? batchedWorkspaceRecordsResult.value
+        : null;
     let workspaceRecords: OrganizerWorkspaceRecords;
     if (batchedWorkspaceRecords === null) {
       const [assignments, reviews] = await Promise.all([

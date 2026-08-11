@@ -3958,7 +3958,7 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
     const roundId = "round-organizer-workspace";
     const now = "2026-08-10T12:00:00.000Z";
     const later = "2026-08-10T12:05:00.000Z";
-    const transport = new FormulaRecordingTransport(220);
+    const transport = new FormulaRecordingTransport(700);
     const reviewRound = {
       id: roundId,
       name: "Organizer review",
@@ -4280,7 +4280,7 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
     );
     const elapsedMs = performance.now() - startedAt;
 
-    expect(elapsedMs).toBeLessThan(1_000);
+    expect(elapsedMs).toBeLessThan(1_100);
     expect(workspace.plan).toMatchObject({ id: planId, tenantId, eventId });
     expect(workspace.submissions.map((submission) => submission.id).sort()).toEqual([
       "submission-organizer-alpha",
