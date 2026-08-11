@@ -62,6 +62,41 @@ const TRACK_OPTIONS = ["Track 1", "Track 2", "Track 3", "Community"];
 const LEVEL_OPTIONS = ["Introductory", "Intermediate", "Advanced", "All levels"];
 const LANGUAGE_OPTIONS = ["English"];
 const TAG_OPTIONS = ["Tag A", "Tag B", "Tag C", "Leadership"];
+const CFP_COMPLETION_HANDOFF_PREFIX = "open-sessionboard:cfp-completion:v1";
+
+export function getCfpCompletionHandoffStorageKey(
+  organizationId: string,
+  eventId: string,
+  formId: string,
+): string {
+  return `${CFP_COMPLETION_HANDOFF_PREFIX}:${encodeURIComponent(
+    organizationId,
+  )}:${encodeURIComponent(eventId)}:${encodeURIComponent(formId)}`;
+}
+
+export function canResumeCfpSubmission(
+  status: CfpServerSubmission["status"],
+  step: CfpStep,
+): boolean {
+  return (
+    status === "draft" || status === "reopened" || (status === "submitted" && step === "submission")
+  );
+}
+
+export function rotateCfpCompletionIdentity(
+  identity: { organizationId: string; eventId: string; formId: string },
+  submissionId: string,
+  localStorage: Pick<Storage, "removeItem">,
+  sessionStorage: Pick<Storage, "setItem">,
+): void {
+  localStorage.removeItem(
+    getCfpSubmissionPointerStorageKey(identity.organizationId, identity.eventId, identity.formId),
+  );
+  sessionStorage.setItem(
+    getCfpCompletionHandoffStorageKey(identity.organizationId, identity.eventId, identity.formId),
+    submissionId.trim(),
+  );
+}
 type FormFieldOption =
   | string
   | {
@@ -536,6 +571,38 @@ function publishedOptions(form: CfpPublishedForm, key: string, fallback: string[
   const options = field ? fieldOptions(field).map((option) => option.label) : [];
   return options.length > 0 ? options : fallback;
 }
+function reviewValueString(value: unknown): string {
+  if (Array.isArray(value)) {
+    const items = value
+      .map((item) => reviewValueString(item))
+      .filter((item) => item !== "Not specified");
+    return items.length > 0 ? items.join(", ") : "Not specified";
+  }
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (typeof value === "string" && value.trim().length > 0) return value;
+  return "Not specified";
+}
+
+export function cfpReviewAudienceLevel(
+  form: CfpPublishedForm | undefined,
+  answers: DynamicAnswers,
+  legacyLevel: string,
+): { label: string; value: string } {
+  const customField = form?.submissionFields.find((field) => field.id === "field-audience-level");
+  if (customField !== undefined) {
+    return {
+      label: customField.label,
+      value: reviewValueString(answers[customField.key]),
+    };
+  }
+  return { label: "Level", value: reviewValueString(legacyLevel) };
+}
+export function cfpConfirmationEmailMessage(recipient: string): string {
+  const delivery =
+    recipient.trim().length > 0 ? ` is queued for ${recipient.trim()}` : " is queued";
+  return `A confirmation email${delivery} and will include the event name and talk title.`;
+}
 
 function submissionValue(draft: CfpDraft, answers: DynamicAnswers, key: string): unknown {
   switch (key) {
@@ -926,6 +993,15 @@ export function CfpWizard({
           identity.eventId,
           activeFormId,
         );
+        if (step === "welcome" || step === "account") {
+          window.sessionStorage.removeItem(
+            getCfpCompletionHandoffStorageKey(
+              identity.organizationId,
+              identity.eventId,
+              activeFormId,
+            ),
+          );
+        }
         const pointer = window.localStorage.getItem(pointerKey);
         if (pointer) {
           try {
@@ -936,17 +1012,35 @@ export function CfpWizard({
               signal: controller.signal,
             });
             if (!active) return;
-            submissionIdRef.current = saved.id;
-            versionRef.current = saved.version;
-            formVersionRef.current = saved.formVersion;
-            setStaleFormConflict(null);
-            setDynamicAnswers(submissionAnswersFromServer(saved));
-            setParticipantAnswers(participantAnswersFromServer(saved));
-            setDraft(
-              session
-                ? draftWithAuthenticatedSession(draftFromSubmission(eventSlug, saved), session)
-                : draftFromSubmission(eventSlug, saved),
-            );
+            if (canResumeCfpSubmission(saved.status, step)) {
+              submissionIdRef.current = saved.id;
+              versionRef.current = saved.version;
+              formVersionRef.current = saved.formVersion;
+              setStaleFormConflict(null);
+              setDynamicAnswers(submissionAnswersFromServer(saved));
+              setParticipantAnswers(participantAnswersFromServer(saved));
+              setDraft(
+                session
+                  ? draftWithAuthenticatedSession(draftFromSubmission(eventSlug, saved), session)
+                  : draftFromSubmission(eventSlug, saved),
+              );
+            } else {
+              window.localStorage.removeItem(pointerKey);
+              submissionIdRef.current = null;
+              versionRef.current = 1;
+              formVersionRef.current = publishedCfp.form.version;
+              setStaleFormConflict(null);
+              setDynamicAnswers({});
+              setParticipantAnswers({});
+              setFileUploadStates({});
+              setErrors({});
+              setPassword("");
+              setSaveState("idle");
+              setSaveError(null);
+              setDraft(
+                session ? draftWithAuthenticatedSession(initialDraft, session) : initialDraft,
+              );
+            }
           } catch (error) {
             if (isCfpSchemaVersionConflict(error)) {
               formVersionRef.current = null;
@@ -1012,7 +1106,7 @@ export function CfpWizard({
       controller.abort();
       mutationGateRef.current?.invalidate();
     };
-  }, [api, eventSlug, identity, initialDraft]);
+  }, [api, eventSlug, identity, initialDraft, step]);
 
   function updateDraft(update: (current: CfpDraft) => CfpDraft): void {
     setDraft((current) => ({ ...update(current), updatedAt: new Date().toISOString() }));
@@ -1261,6 +1355,18 @@ export function CfpWizard({
         if (result.submission.formVersion !== formVersion) {
           throw new CfpApiError("CONFLICT", "The submission schema version is stale.", 409);
         }
+        const activeFormId = identity.formId ?? published?.form.id;
+        if (!activeFormId) throw new Error("The published CFP form is unavailable.");
+        rotateCfpCompletionIdentity(
+          {
+            organizationId: identity.organizationId,
+            eventId: identity.eventId,
+            formId: activeFormId,
+          },
+          result.submission.id,
+          window.localStorage,
+          window.sessionStorage,
+        );
         versionRef.current = result.submission.version;
         if (draftRevisionRef.current === submitRevision) {
           setDynamicAnswers(submissionAnswersFromServer(result.submission));
@@ -1602,7 +1708,14 @@ export function CfpWizard({
               updateDraft={updateDraft}
             />
           ) : null}
-          {step === "review" ? <ReviewStep draft={draft} eventSlug={eventSlug} /> : null}
+          {step === "review" ? (
+            <ReviewStep
+              draft={draft}
+              eventSlug={eventSlug}
+              {...(published === null ? {} : { form: published.form })}
+              answers={dynamicAnswers}
+            />
+          ) : null}
 
           <div className={styles.actions}>
             {step !== "welcome" ? (
@@ -3049,8 +3162,19 @@ function SecondaryContacts({ draft, errors, updateDraft }: StepFormProps) {
   );
 }
 
-function ReviewStep({ draft, eventSlug }: { draft: CfpDraft; eventSlug: string }) {
+function ReviewStep({
+  draft,
+  eventSlug,
+  form,
+  answers,
+}: {
+  draft: CfpDraft;
+  eventSlug: string;
+  form?: CfpPublishedForm;
+  answers: DynamicAnswers;
+}) {
   const router = useRouter();
+  const audienceLevel = cfpReviewAudienceLevel(form, answers, draft.submission.level);
   return (
     <div>
       <h1>Review your submission</h1>
@@ -3072,7 +3196,7 @@ function ReviewStep({ draft, eventSlug }: { draft: CfpDraft; eventSlug: string }
         <ReviewValue label="Format" value={draft.submission.format} />
         <ReviewValue label="Tags" value={draft.submission.tags.join(", ")} />
         <ReviewValue label="Track" value={draft.submission.track} />
-        <ReviewValue label="Level" value={draft.submission.level || "Not specified"} />
+        <ReviewValue label={audienceLevel.label} value={audienceLevel.value} />
         <ReviewValue label="Language" value={draft.submission.language || "Not specified"} />
       </section>
       <section className={styles.reviewCard}>
@@ -3135,6 +3259,7 @@ export function CfpComplete({
     organizationId: string;
     eventId: string;
     formId: string;
+    submissionId: string;
     canEdit: boolean;
   } | null>(null);
   const api = useMemo(() => providedApi ?? createCfpApi(""), [providedApi]);
@@ -3158,21 +3283,22 @@ export function CfpComplete({
           ...(identity.formId === undefined ? {} : { formId: identity.formId }),
         });
         const activeFormId = identity.formId ?? published.form.id;
-        const pointer = window.localStorage.getItem(
-          getCfpSubmissionPointerStorageKey(
+        const handoff = window.sessionStorage.getItem(
+          getCfpCompletionHandoffStorageKey(
             identity.organizationId,
             identity.eventId,
             activeFormId,
           ),
         );
-        if (!pointer) {
+        const submissionId = handoff?.trim() ?? "";
+        if (!submissionId) {
           router.replace(getCfpStepRoute(eventSlug, "review"));
           return;
         }
         const receipt = await api.getReceipt({
           organizationId: identity.organizationId,
           eventId: identity.eventId,
-          submissionId: pointer,
+          submissionId,
         });
         if (!active) return;
         if (!receipt.submissionId || !receipt.submittedAt) {
@@ -3185,7 +3311,7 @@ export function CfpComplete({
           const submission = await api.loadDraft({
             organizationId: identity.organizationId,
             eventId: identity.eventId,
-            submissionId: pointer,
+            submissionId,
           });
           const title = submission.answers.title;
           submissionTitle = typeof title === "string" ? title : "";
@@ -3205,6 +3331,7 @@ export function CfpComplete({
           organizationId: identity.organizationId,
           eventId: identity.eventId,
           formId: activeFormId,
+          submissionId,
           canEdit: !cfpIsClosed(published.event),
         });
         setConfirmationDetails({
@@ -3228,22 +3355,26 @@ export function CfpComplete({
   }, [api, eventSlug, formId, organizationId, router]);
   function editSubmission(): void {
     if (completionIdentity === null || !completionIdentity.canEdit) return;
-    const pointer = window.localStorage.getItem(
+    window.localStorage.setItem(
       getCfpSubmissionPointerStorageKey(
         completionIdentity.organizationId,
         completionIdentity.eventId,
         completionIdentity.formId,
       ),
+      completionIdentity.submissionId,
     );
-    if (!pointer) {
-      router.replace(getCfpStepRoute(eventSlug, "review"));
-      return;
-    }
     router.push(getCfpStepRoute(eventSlug, "submission"));
   }
   function submitAnotherSession(): void {
     if (completionIdentity === null) return;
     clearCfpSubmissionState(eventSlug, completionIdentity, window.localStorage);
+    window.sessionStorage.removeItem(
+      getCfpCompletionHandoffStorageKey(
+        completionIdentity.organizationId,
+        completionIdentity.eventId,
+        completionIdentity.formId,
+      ),
+    );
     router.push(getCfpStepRoute(eventSlug, "welcome"));
   }
 
@@ -3269,12 +3400,8 @@ export function CfpComplete({
             : "Submission received"}
         </h1>
         <p>
-          {confirmationDetails?.eventName ?? "Your event"} received your proposal. A confirmation
-          email
-          {confirmationDetails?.recipient
-            ? ` is queued for ${confirmationDetails.recipient}`
-            : " is queued"}
-          and will include the event name and talk title.
+          {confirmationDetails?.eventName ?? "Your event"} received your proposal.{" "}
+          {cfpConfirmationEmailMessage(confirmationDetails?.recipient ?? "")}
         </p>
         <p>{confirmationDetails?.confirmationMessage ?? "Your proposal has been received."}</p>
         <p>{confirmationDetails?.successContent ?? "Thank you for contributing to the program."}</p>

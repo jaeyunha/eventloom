@@ -2,7 +2,11 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { filterSubmissions, submissionStatusPresentation } from "./model";
+import {
+  filterSubmissions,
+  portalSubmissionEditTarget,
+  submissionStatusPresentation,
+} from "./model";
 import styles from "./portal.module.css";
 import { usePortal } from "./portal-provider";
 import {
@@ -112,7 +116,7 @@ export function PortalSubmissions() {
 }
 
 function PortalSubmissionsContent() {
-  const { eventQuery, view } = usePortal();
+  const { eventQuery, view, context, can } = usePortal();
   const [search, setSearch] = useState("");
   if (!view) {
     return null;
@@ -172,6 +176,9 @@ function PortalSubmissionsContent() {
           <div className={styles.submissionGrid}>
             {submissions.map((submission) => {
               const presentation = submissionStatusPresentation(submission.status);
+              const editTarget = can("submission-edit")
+                ? portalSubmissionEditTarget(context, submission)
+                : null;
               return (
                 <article key={submission.id} className={styles.submissionTile}>
                   <div className={styles.submissionTileTop}>
@@ -187,6 +194,20 @@ function PortalSubmissionsContent() {
                   </div>
                   <footer>
                     <span>Updated {formatPortalDate(submission.updatedAt) ?? "recently"}</span>
+                    {editTarget === null ? null : (
+                      <Link
+                        href={editTarget.href}
+                        aria-label={`Edit proposal ${portalSubmissionDisplayTitle(submission, view.submissions)}`}
+                        onClick={() =>
+                          window.localStorage.setItem(
+                            editTarget.pointerKey,
+                            canonicalPortalSubmissionId(submission.id),
+                          )
+                        }
+                      >
+                        Edit proposal
+                      </Link>
+                    )}
                     <Link
                       href={`/portal/submissions/${encodeURIComponent(submission.id)}${eventQuery}`}
                       aria-label={`View session status for ${portalSubmissionDisplayTitle(submission, view.submissions)}`}

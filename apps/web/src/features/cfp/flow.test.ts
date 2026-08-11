@@ -1,10 +1,17 @@
 import { describe, expect, it } from "vitest";
+import { CfpMutationGate, type CfpPublishedForm } from "./api";
+import {
+  canResumeCfpSubmission,
+  cfpConfirmationEmailMessage,
+  cfpReviewAudienceLevel,
+  getCfpCompletionHandoffStorageKey,
+  rotateCfpCompletionIdentity,
+} from "./cfp-wizard";
 import {
   clearCfpSubmissionState,
   getCfpDraftStorageKey,
   getCfpSubmissionPointerStorageKey,
 } from "./draft-persistence";
-import { CfpMutationGate } from "./api";
 import { getCfpStepRoute, getNextCfpStep, getPreviousCfpStep } from "./routes";
 import {
   createEmptyDraft,
@@ -25,6 +32,46 @@ describe("CFP flow", () => {
     expect(getNextCfpStep("participants")).toBe("review");
     expect(getNextCfpStep("review")).toBe("complete");
     expect(getPreviousCfpStep("review")).toBe("participants");
+  });
+  it("rotates completed submission identity and only resumes editable records", () => {
+    const identity = { organizationId: "org-1", eventId: "event-1", formId: "form-1" };
+    const pointerKey = getCfpSubmissionPointerStorageKey("org-1", "event-1", "form-1");
+    const completionKey = getCfpCompletionHandoffStorageKey("org-1", "event-1", "form-1");
+    const localValues = new Map([[pointerKey, "submission-1"]]);
+    const sessionValues = new Map<string, string>();
+
+    rotateCfpCompletionIdentity(
+      identity,
+      " submission-1 ",
+      { removeItem: (key) => localValues.delete(key) },
+      { setItem: (key, value) => sessionValues.set(key, value) },
+    );
+
+    expect(localValues.has(pointerKey)).toBe(false);
+    expect(sessionValues.get(completionKey)).toBe("submission-1");
+    expect(canResumeCfpSubmission("draft", "welcome")).toBe(true);
+    expect(canResumeCfpSubmission("reopened", "account")).toBe(true);
+    expect(canResumeCfpSubmission("submitted", "submission")).toBe(true);
+    expect(canResumeCfpSubmission("submitted", "welcome")).toBe(false);
+  });
+  it("reviews the stable audience answer and formats confirmation copy", () => {
+    const form = {
+      submissionFields: [
+        {
+          id: "field-audience-level",
+          key: "audienceLevel",
+          label: "Audience level",
+        },
+      ],
+    } as CfpPublishedForm;
+
+    expect(cfpReviewAudienceLevel(form, { audienceLevel: "Advanced" }, "")).toEqual({
+      label: "Audience level",
+      value: "Advanced",
+    });
+    expect(cfpConfirmationEmailMessage("speaker@example.test")).toBe(
+      "A confirmation email is queued for speaker@example.test and will include the event name and talk title.",
+    );
   });
 
   it("prefills the primary participant from the account without overwriting edits", () => {
