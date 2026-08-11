@@ -103,6 +103,42 @@ class CrmCountingTransport extends FormulaRecordingTransport {
   }
 }
 
+class OrderedCrmProjectionTransport extends CrmCountingTransport {
+  readonly writeStarts: string[] = [];
+  readonly profileWriteStarted: Promise<void>;
+  #resolveProfileWriteStarted!: () => void;
+  #releaseProfileWrite!: () => void;
+  readonly #profileWriteRelease: Promise<void>;
+
+  constructor(delayMs = 0) {
+    super(delayMs);
+    this.profileWriteStarted = new Promise((resolve) => {
+      this.#resolveProfileWriteStarted = resolve;
+    });
+    this.#profileWriteRelease = new Promise((resolve) => {
+      this.#releaseProfileWrite = resolve;
+    });
+  }
+
+  releaseProfileWrite(): void {
+    this.#releaseProfileWrite();
+  }
+
+  override async request<TBody = unknown>(request: AirtableRequest) {
+    if (
+      (request.method === "POST" || request.method === "PATCH") &&
+      (request.table === "Speaker Profiles" || request.table === "Session Roster")
+    ) {
+      this.writeStarts.push(request.table);
+      if (request.table === "Speaker Profiles") {
+        this.#resolveProfileWriteStarted();
+        await this.#profileWriteRelease;
+      }
+    }
+    return super.request<TBody>(request);
+  }
+}
+
 function organizerHeaders(): HeadersInit {
   return { cookie: `better-auth.session_token=${LOCAL_SESSION_TOKEN}` };
 }
@@ -1747,7 +1783,7 @@ describe("local runtime composition", () => {
     );
   });
   it("persists CRM state in Airtable, queues outreach, and projects event speakers without sessions", async () => {
-    const transport = new CrmCountingTransport(5);
+    const transport = new OrderedCrmProjectionTransport(5);
     const eventId = "crm-event";
     const organizationId = "crm-organization";
     transport.seed({
@@ -1828,7 +1864,7 @@ describe("local runtime composition", () => {
     const projectionRequestStart = transport.requests.length;
     transport.maxInFlight = 0;
 
-    const projection = await app.request(
+    const projectionPending = app.request(
       `${base}/contacts/${createdBody.data.id}/events`,
       {
         method: "POST",
@@ -1837,13 +1873,18 @@ describe("local runtime composition", () => {
       },
       { APP_ENV: "production", WEB_ORIGIN: "https://example.test" },
     );
+    await transport.profileWriteStarted;
+    expect(transport.writeStarts).toEqual(["Speaker Profiles"]);
+    transport.releaseProfileWrite();
+    const projection = await projectionPending;
     expect(projection.status).toBe(200);
+    expect(transport.writeStarts).toEqual(["Speaker Profiles", "Session Roster"]);
     const projectionRequests = transport.requests.slice(projectionRequestStart);
     expect(
       projectionRequests.filter(
         (request) => request.method === "GET" && request.table === "CRM Contacts",
       ),
-    ).toHaveLength(1);
+    ).toHaveLength(2);
     const projectionReads = projectionRequests.filter(
       (request) => request.method === "GET" && request.table === "CRM Event Projections",
     );

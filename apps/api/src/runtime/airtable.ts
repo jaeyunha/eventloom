@@ -7132,14 +7132,18 @@ export class AirtableCrmRepository implements CrmRepository {
       );
     }
     const eventRepository = this.#events;
-    const [event, existing] = await Promise.all([
+    const [authoritativeContact, event, existing] = await Promise.all([
+      this.getContact(organization, contactId),
       eventRepository?.getEvent(organization, eventId) ?? Promise.resolve(null),
       this.#findProjection(organization, eventId, contactId),
     ]);
+    if (authoritativeContact === null) {
+      throw new CrmRepositoryConflictError("The projected contact was not found.");
+    }
     if (eventRepository !== undefined && event === null) {
       throw new CrmRepositoryConflictError("The event does not belong to this organization.");
     }
-    const context = { contact, event };
+    const context = { contact: authoritativeContact, event };
     if (existing !== null) {
       await this.#projectCanonicalSpeaker(organization, existing, context);
       return clone(existing);
@@ -7469,7 +7473,7 @@ export class AirtableCrmRepository implements CrmRepository {
       profile.biography !== (contact.notes ?? "") ||
       JSON.stringify(profile.socialLinks ?? profile.social ?? {}) !== JSON.stringify(socialLinks) ||
       profile.status !== "active";
-    const writes: Promise<unknown>[] = [];
+    let writeProfile: (() => Promise<unknown>) | undefined;
     if (profileChanged) {
       const profileBase: JsonRecord = profile === undefined ? {} : { ...profile };
       delete profileBase.email;
@@ -7493,12 +7497,10 @@ export class AirtableCrmRepository implements CrmRepository {
         version: profile?.version === undefined ? 1 : profile.version + 1,
         updatedAt: contact.updatedAt,
       };
-      if (profile === undefined)
-        writes.push(this.#speakerProfiles.create(tagged(profileValue, "speaker_profile")));
-      else
-        writes.push(
-          this.#speakerProfiles.update(profileId, tagged(profileValue, "speaker_profile")),
-        );
+      writeProfile =
+        profile === undefined
+          ? () => this.#speakerProfiles.create(tagged(profileValue, "speaker_profile"))
+          : () => this.#speakerProfiles.update(profileId, tagged(profileValue, "speaker_profile"));
     }
 
     const rosterScope = resolveOrganizationScope(storedRoster);
@@ -7550,10 +7552,12 @@ export class AirtableCrmRepository implements CrmRepository {
         createdAt: storedRoster?.createdAt ?? projection.createdAt,
         updatedAt: contact.updatedAt,
       };
-      if (storedRoster === undefined) writes.push(this.#speakerRoster.create(clone(rosterValue)));
-      else writes.push(this.#speakerRoster.update(rosterId, clone(rosterValue)));
+      await writeProfile?.();
+      if (storedRoster === undefined) await this.#speakerRoster.create(clone(rosterValue));
+      else await this.#speakerRoster.update(rosterId, clone(rosterValue));
+    } else {
+      await writeProfile?.();
     }
-    await Promise.all(writes);
   }
 }
 

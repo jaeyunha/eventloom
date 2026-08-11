@@ -2845,6 +2845,12 @@ export function CrmWorkspaceView({
 type CrmWorkspaceContactFilter = NonNullable<Parameters<CrmApi["listContacts"]>[0]>;
 
 type CrmWorkspaceReadKind = "contacts" | "segments" | "events" | "analytics";
+const CRM_WORKSPACE_READ_KINDS: readonly CrmWorkspaceReadKind[] = [
+  "contacts",
+  "segments",
+  "events",
+  "analytics",
+];
 
 interface CrmWorkspaceReadHandlers {
   readonly setContacts: (contacts: readonly CrmContact[]) => void;
@@ -2866,6 +2872,20 @@ export function createCrmWorkspaceReadCoordinator(api: CrmApi, handlers: CrmWork
     analytics: 0,
   };
   let disposed = false;
+  const errors: Record<CrmWorkspaceReadKind, string | null> = {
+    contacts: null,
+    segments: null,
+    events: null,
+    analytics: null,
+  };
+
+  function setReadError(kind: CrmWorkspaceReadKind, error: string | null): void {
+    errors[kind] = error;
+    const messages = CRM_WORKSPACE_READ_KINDS.flatMap((candidate) =>
+      errors[candidate] === null ? [] : [errors[candidate]],
+    );
+    handlers.setError(messages.length === 0 ? null : messages.join("\n"));
+  }
 
   function isCurrent(kind: CrmWorkspaceReadKind, generation: number): boolean {
     return !disposed && generations[kind] === generation;
@@ -2874,12 +2894,12 @@ export function createCrmWorkspaceReadCoordinator(api: CrmApi, handlers: CrmWork
   async function loadContacts(filter: CrmWorkspaceContactFilter): Promise<void> {
     const generation = ++generations.contacts;
     handlers.setContactsLoading(true);
-    handlers.setError(null);
+    setReadError("contacts", null);
     try {
       const nextContacts = await api.listContacts(filter);
       if (isCurrent("contacts", generation)) handlers.setContacts(nextContacts);
     } catch (reason) {
-      if (isCurrent("contacts", generation)) handlers.setError(messageFromError(reason));
+      if (isCurrent("contacts", generation)) setReadError("contacts", messageFromError(reason));
     } finally {
       if (isCurrent("contacts", generation)) handlers.setContactsLoading(false);
     }
@@ -2888,12 +2908,12 @@ export function createCrmWorkspaceReadCoordinator(api: CrmApi, handlers: CrmWork
   async function loadSegments(): Promise<void> {
     const generation = ++generations.segments;
     handlers.setSegmentsLoading(true);
-    handlers.setError(null);
+    setReadError("segments", null);
     try {
       const nextSegments = await api.listSegments();
       if (isCurrent("segments", generation)) handlers.setSegments(nextSegments);
     } catch (reason) {
-      if (isCurrent("segments", generation)) handlers.setError(messageFromError(reason));
+      if (isCurrent("segments", generation)) setReadError("segments", messageFromError(reason));
     } finally {
       if (isCurrent("segments", generation)) handlers.setSegmentsLoading(false);
     }
@@ -2902,12 +2922,12 @@ export function createCrmWorkspaceReadCoordinator(api: CrmApi, handlers: CrmWork
   async function loadEvents(): Promise<void> {
     const generation = ++generations.events;
     handlers.setEventsLoading(true);
-    handlers.setError(null);
+    setReadError("events", null);
     try {
       const nextEvents = await api.listEvents();
       if (isCurrent("events", generation)) handlers.setEvents(nextEvents);
     } catch (reason) {
-      if (isCurrent("events", generation)) handlers.setError(messageFromError(reason));
+      if (isCurrent("events", generation)) setReadError("events", messageFromError(reason));
     } finally {
       if (isCurrent("events", generation)) handlers.setEventsLoading(false);
     }
@@ -2916,12 +2936,12 @@ export function createCrmWorkspaceReadCoordinator(api: CrmApi, handlers: CrmWork
   async function loadAnalytics(): Promise<void> {
     const generation = ++generations.analytics;
     handlers.setAnalyticsLoading(true);
-    handlers.setError(null);
+    setReadError("analytics", null);
     try {
       const nextAnalytics = await api.analytics();
       if (isCurrent("analytics", generation)) handlers.setAnalytics(nextAnalytics);
     } catch (reason) {
-      if (isCurrent("analytics", generation)) handlers.setError(messageFromError(reason));
+      if (isCurrent("analytics", generation)) setReadError("analytics", messageFromError(reason));
     } finally {
       if (isCurrent("analytics", generation)) handlers.setAnalyticsLoading(false);
     }
@@ -2944,6 +2964,13 @@ export function createCrmWorkspaceReadCoordinator(api: CrmApi, handlers: CrmWork
       disposed = true;
     },
   };
+}
+
+export async function refreshCrmAnalyticsAfterContactSave(
+  existingContact: CrmContact | undefined,
+  loadAnalytics: () => Promise<void>,
+): Promise<void> {
+  if (existingContact === undefined) await loadAnalytics();
 }
 export interface CrmWorkspaceProps {
   readonly organizationId: string;
@@ -3144,15 +3171,16 @@ export function CrmWorkspace({
   );
 
   async function saveContact(draft: ContactDraft): Promise<void> {
+    const existingContact = selectedContact;
     setBusy(true);
     setError(null);
     setStatusMessage(null);
     try {
       const input = draftInput(draft);
-      const next = selectedContact
-        ? await api.updateContact(selectedContact.id, {
+      const next = existingContact
+        ? await api.updateContact(existingContact.id, {
             ...input,
-            expectedVersion: selectedContact.version,
+            expectedVersion: existingContact.version,
           })
         : await api.createContact(input);
       setSelectedContact(next);
@@ -3164,9 +3192,9 @@ export function CrmWorkspace({
       });
       setOutreachRecipients([next]);
       setStatusMessage(
-        selectedContact ? "Contact changes saved." : "Contact added to the organization directory.",
+        existingContact ? "Contact changes saved." : "Contact added to the organization directory.",
       );
-      await loadAnalytics();
+      await refreshCrmAnalyticsAfterContactSave(existingContact, loadAnalytics);
     } catch (reason) {
       setError(messageFromError(reason));
     } finally {

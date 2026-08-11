@@ -11,6 +11,7 @@ import {
   CrmWorkspaceView,
   createCrmApi,
   createCrmWorkspaceReadCoordinator,
+  refreshCrmAnalyticsAfterContactSave,
 } from "./crm-workspace";
 
 type TestFetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -543,5 +544,66 @@ describe("CRM workspace read coordination", () => {
     expect(api.listEvents).toHaveBeenCalledTimes(1);
     expect(api.analytics).toHaveBeenCalledTimes(1);
     coordinator.dispose();
+  });
+  it("keeps resource failures visible until that same resource succeeds", async () => {
+    const contactsRead = deferred<readonly CrmContact[]>();
+    const api = {
+      listContacts: vi
+        .fn()
+        .mockImplementationOnce(() => contactsRead.promise)
+        .mockResolvedValue([contact]),
+      listSegments: vi.fn(async () => []),
+      listEvents: vi.fn(async () => []),
+      analytics: vi.fn(async () => analytics),
+    } as unknown as CrmApi;
+    const handlers = readHandlers();
+    const coordinator = createCrmWorkspaceReadCoordinator(api, handlers);
+
+    const contactsLoad = coordinator.loadContacts({ status: "active" });
+    contactsRead.reject(new Error("Contacts unavailable"));
+    await contactsLoad;
+
+    expect(handlers.setError).toHaveBeenLastCalledWith("Contacts unavailable");
+
+    await coordinator.loadSegments();
+    expect(handlers.setError).toHaveBeenLastCalledWith("Contacts unavailable");
+
+    await coordinator.loadContacts({ status: "active" });
+    expect(handlers.setError).toHaveBeenLastCalledWith(null);
+    coordinator.dispose();
+  });
+
+  it("aggregates concurrent resource failures in stable read-kind order", async () => {
+    const api = {
+      listContacts: vi.fn(async () => {
+        throw new Error("Contacts unavailable");
+      }),
+      listSegments: vi.fn(async () => {
+        throw new Error("Segments unavailable");
+      }),
+      listEvents: vi.fn(async () => []),
+      analytics: vi.fn(async () => analytics),
+    } as unknown as CrmApi;
+    const handlers = readHandlers();
+    const coordinator = createCrmWorkspaceReadCoordinator(api, handlers);
+
+    await Promise.all([coordinator.loadSegments(), coordinator.loadContacts({ status: "active" })]);
+
+    expect(handlers.setError).toHaveBeenLastCalledWith(
+      "Contacts unavailable\nSegments unavailable",
+    );
+    coordinator.dispose();
+  });
+});
+
+describe("CRM contact analytics refresh", () => {
+  it("skips analytics for profile-only edits and refreshes after creates", async () => {
+    const loadAnalytics = vi.fn(async () => undefined);
+
+    await refreshCrmAnalyticsAfterContactSave(contact, loadAnalytics);
+    expect(loadAnalytics).not.toHaveBeenCalled();
+
+    await refreshCrmAnalyticsAfterContactSave(undefined, loadAnalytics);
+    expect(loadAnalytics).toHaveBeenCalledTimes(1);
   });
 });
