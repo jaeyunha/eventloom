@@ -519,7 +519,7 @@ describe("evaluation HTTP routes", () => {
     expect(repository.organizerWorkspaceCalls).toBe(1);
   });
 
-  it("returns missing-plan without reading decisions", async () => {
+  it("returns missing-plan even when concurrent decision hydration fails", async () => {
     const repository = new DecisionReadFailureRepository();
     const app = createTestApp({}, {}, undefined, repository);
 
@@ -529,7 +529,7 @@ describe("evaluation HTTP routes", () => {
     await expect(response.json()).resolves.toMatchObject({
       error: { code: "EVALUATION_NOT_FOUND" },
     });
-    expect(repository.organizerWorkspaceCalls).toBe(0);
+    expect(repository.organizerWorkspaceCalls).toBe(1);
   });
   it("moves Sam from 0/2 to 2/2 with two blind, complete scorecards", async () => {
     const submissions: readonly SubmissionReviewMaterial[] = [
