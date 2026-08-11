@@ -178,6 +178,18 @@ describe("agenda validation", () => {
     );
     expect(trackReport.conflicts).toEqual([]);
     expect(travelReport.conflicts).toEqual([]);
+    expect(trackReport.warnings.find((warning) => warning.kind === "track")).toEqual({
+      id: "track:entry-1:entry-2:track-a",
+      kind: "track",
+      entryIds: ["entry-1", "entry-2"],
+      message: 'Track "Track A" contains overlapping sessions',
+    });
+    expect(travelReport.warnings.find((warning) => warning.kind === "travel")).toEqual({
+      id: "travel:entry-1:entry-3:speaker-1",
+      kind: "travel",
+      entryIds: ["entry-1", "entry-3"],
+      message: 'Speaker "Ada Lovelace" has 5 minutes to change rooms; 15 required',
+    });
   });
   it("requires reasoned warning overrides before atomic publication", async () => {
     const engine = createEngine();

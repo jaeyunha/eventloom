@@ -19,6 +19,7 @@ export function detectAgendaConflicts(input: ConflictDetectionInput): AgendaVali
   const warnings: AgendaWarning[] = [];
   const sessions = new Map(input.sessions.map((session) => [session.id, session]));
   const rooms = new Map(input.rooms.map((room) => [room.id, room]));
+  const tracks = new Map(input.tracks.map((track) => [track.id, track]));
 
   for (const entry of input.entries) {
     const session = sessions.get(entry.sessionId);
@@ -62,6 +63,9 @@ export function detectAgendaConflicts(input: ConflictDetectionInput): AgendaVali
         leftSession.participantIds,
         rightSession.participantIds,
       );
+      const participantNames = sharedParticipants.map((participantId) =>
+        participantName(participantId, leftSession, rightSession),
+      );
 
       if (isOverlap && left.roomId === right.roomId) {
         const roomName = rooms.get(left.roomId)?.name ?? left.roomId;
@@ -73,9 +77,6 @@ export function detectAgendaConflicts(input: ConflictDetectionInput): AgendaVali
         });
       }
       if (isOverlap && sharedParticipants.length > 0) {
-        const participantNames = sharedParticipants.map((participantId) =>
-          participantName(participantId, leftSession, rightSession),
-        );
         const participantList = participantNames.map((name) => `"${name}"`).join(", ");
         const participantLabel = participantNames.length === 1 ? "Speaker" : "Speakers";
         const participantVerb = participantNames.length === 1 ? "is" : "are";
@@ -100,11 +101,14 @@ export function detectAgendaConflicts(input: ConflictDetectionInput): AgendaVali
 
       const sharedTracks = intersection(left.trackIds, right.trackIds);
       if (isOverlap && sharedTracks.length > 0) {
+        const trackNames = sharedTracks.map((trackId) => tracks.get(trackId)?.name ?? trackId);
+        const trackLabel = trackNames.length === 1 ? "Track" : "Tracks";
+        const trackVerb = trackNames.length === 1 ? "contains" : "contain";
         warnings.push({
           id: conflictId("track", entryIds, sharedTracks.join("-")),
           kind: "track",
           entryIds,
-          message: `Tracks ${sharedTracks.join(", ")} contain overlapping sessions`,
+          message: `${trackLabel} ${trackNames.map((name) => `"${name}"`).join(", ")} ${trackVerb} overlapping sessions`,
         });
       }
 
@@ -116,11 +120,14 @@ export function detectAgendaConflicts(input: ConflictDetectionInput): AgendaVali
       ) {
         const gapMinutes = gapBetween(left, right) / (60 * 1000);
         if (gapMinutes < input.minimumTravelMinutes) {
+          const participantList = participantNames.map((name) => `"${name}"`).join(", ");
+          const participantLabel = participantNames.length === 1 ? "Speaker" : "Speakers";
+          const participantVerb = participantNames.length === 1 ? "has" : "have";
           warnings.push({
             id: conflictId("travel", entryIds, sharedParticipants.join("-")),
             kind: "travel",
             entryIds,
-            message: `Participants ${sharedParticipants.join(", ")} have ${gapMinutes} minutes to change rooms; ${input.minimumTravelMinutes} required`,
+            message: `${participantLabel} ${participantList} ${participantVerb} ${gapMinutes} minutes to change rooms; ${input.minimumTravelMinutes} required`,
           });
         }
       }

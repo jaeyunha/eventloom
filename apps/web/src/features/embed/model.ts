@@ -43,25 +43,48 @@ export interface PublishedEntryPresenter {
   readonly speaker: PublishedSpeaker | null;
 }
 
+function presenterNameKey(displayName: string): string {
+  return displayName.normalize("NFKC").trim().replace(/\s+/gu, " ").toLocaleLowerCase("en");
+}
+
 export function publishedEntryPresenters(
   entry: PublishedAgendaEntry,
   speakers: readonly PublishedSpeaker[],
 ): readonly PublishedEntryPresenter[] {
   const linkedSpeakers = publishedEntrySpeakers(entry, speakers);
-  if (linkedSpeakers.length > 0) {
-    return linkedSpeakers.map((speaker) => ({
+  const linkedNameCounts = new Map<string, number>();
+  for (const speaker of linkedSpeakers) {
+    const nameKey = presenterNameKey(speaker.displayName);
+    linkedNameCounts.set(nameKey, (linkedNameCounts.get(nameKey) ?? 0) + 1);
+  }
+
+  const publishedNamePresenters = entry.speakerNames.flatMap((displayName, index) => {
+    const trimmedDisplayName = displayName.trim();
+    if (trimmedDisplayName.length === 0) return [];
+
+    const nameKey = presenterNameKey(trimmedDisplayName);
+    const linkedNameCount = linkedNameCounts.get(nameKey) ?? 0;
+    if (linkedNameCount > 0) {
+      linkedNameCounts.set(nameKey, linkedNameCount - 1);
+      return [];
+    }
+    return [
+      {
+        key: `published-name:${entry.id}:${index}`,
+        displayName: trimmedDisplayName,
+        speaker: null,
+      },
+    ];
+  });
+
+  return [
+    ...linkedSpeakers.map((speaker) => ({
       key: `speaker:${speaker.id}`,
       displayName: speaker.displayName,
       speaker,
-    }));
-  }
-  return entry.speakerNames
-    .map((displayName, index) => ({
-      key: `published-name:${entry.id}:${index}`,
-      displayName: displayName.trim(),
-      speaker: null,
-    }))
-    .filter((presenter) => presenter.displayName.length > 0);
+    })),
+    ...publishedNamePresenters,
+  ];
 }
 
 const surnameSuffixes = new Set([

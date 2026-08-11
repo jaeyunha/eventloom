@@ -196,6 +196,38 @@ describe("published embed model", () => {
       },
     ]);
   });
+  it("keeps unmatched published names alongside linked canonical speakers", () => {
+    const entry = entries[0];
+    if (!entry) {
+      throw new Error("Expected the first agenda entry fixture.");
+    }
+    const firstSpeaker = speakers[0];
+    if (!firstSpeaker) {
+      throw new Error("Expected the first speaker fixture.");
+    }
+    const panelEntry: PublishedAgendaEntry = {
+      ...entry,
+      speakerNames: ["  MORGAN   LEE  ", "Morgan Lee", "Guest Expert"],
+    };
+
+    expect(publishedEntryPresenters(panelEntry, [firstSpeaker])).toEqual([
+      {
+        key: "speaker:speaker_morgan",
+        displayName: "Morgan Lee",
+        speaker: firstSpeaker,
+      },
+      {
+        key: "published-name:entry_evening:1",
+        displayName: "Morgan Lee",
+        speaker: null,
+      },
+      {
+        key: "published-name:entry_evening:2",
+        displayName: "Guest Expert",
+        speaker: null,
+      },
+    ]);
+  });
 
   it("shows the end day for a published range that crosses midnight", () => {
     expect(
