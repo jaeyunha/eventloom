@@ -325,8 +325,12 @@ SESSION_DIGEST=$(printf '%s\0%s' "$GIT_COMMON_DIR" "$WORKTREE_NAME" | \
   git -C "$REPO_ROOT" hash-object --stdin)
 SESSION_DIGEST=${SESSION_DIGEST:0:12}
 GJC_TMUX_SESSION="gjc-${REPO_NAME}-${BRANCH_SLUG}-${SESSION_DIGEST}"
-GJC_MESSAGE="Prompt: $PROMPT"
-GJC_COMMAND="cd $(shell_quote "$WORKTREE_PATH") && exec env $(shell_quote "GJC_TMUX_SESSION=$GJC_TMUX_SESSION") gjc --tmux $(shell_quote "$GJC_MESSAGE")"
+GJC_PROMPT_DIR="$GIT_COMMON_DIR/gjc-worktree-prompts"
+GJC_PROMPT_FILE="$GJC_PROMPT_DIR/$SESSION_DIGEST.txt"
+mkdir -p "$GJC_PROMPT_DIR"
+printf 'Prompt: %s\n' "$PROMPT" > "$GJC_PROMPT_FILE"
+chmod go-rwx "$GJC_PROMPT_FILE" 2>/dev/null || true
+GJC_COMMAND="cd $(shell_quote "$WORKTREE_PATH") && exec env $(shell_quote "GJC_TMUX_SESSION=$GJC_TMUX_SESSION") gjc --tmux \"\$(cat $(shell_quote "$GJC_PROMPT_FILE"))\""
 
 SELECTED_LAUNCHER=$LAUNCHER
 if [ "$SELECTED_LAUNCHER" = auto ]; then

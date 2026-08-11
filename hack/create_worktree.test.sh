@@ -100,8 +100,8 @@ if grep -q 'CUSTOM_LOCAL_VALUE' "$LOCAL_WORKTREE/.env"; then
   fail 'refresh did not replace local environment'
 fi
 
-# Forced cmux launch forwards the worktree, deterministic GJC command, prompt,
-# and focus flag without executing GJC in the test process.
+# Forced cmux launch forwards a short prompt-file command and focus flag without
+# executing GJC in the test process.
 FAKE_BIN="$TMP/bin"
 CMUX_LOG="$TMP/cmux.log"
 mkdir -p "$FAKE_BIN"
@@ -123,7 +123,12 @@ grep -Fx open-sessionboard/cmux-lane "$CMUX_LOG" >/dev/null || fail 'cmux worksp
 grep -Fx -- --focus "$CMUX_LOG" >/dev/null || fail 'cmux focus flag is missing'
 grep -Fx true "$CMUX_LOG" >/dev/null || fail 'cmux focus value is wrong'
 grep -F 'gjc --tmux' "$CMUX_LOG" >/dev/null || fail 'GJC tmux command is missing'
-grep -F 'Review agenda safely' "$CMUX_LOG" >/dev/null || fail 'GJC prompt was not forwarded'
+grep -F 'gjc-worktree-prompts' "$CMUX_LOG" >/dev/null || fail 'GJC prompt file is missing'
+if grep -F 'Review agenda safely' "$CMUX_LOG" >/dev/null; then
+  fail 'GJC prompt was embedded in the cmux command'
+fi
+grep -Rl 'Review agenda safely' "$REPO/.git/gjc-worktree-prompts" >/dev/null || \
+  fail 'GJC prompt file does not contain the prompt'
 
 # Traversal and invalid bases fail closed.
 if (cd "$REPO" && OPEN_SESSIONBOARD_WORKTREE_OVERRIDE_BASE="$OVERRIDE" \
