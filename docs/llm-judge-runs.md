@@ -44,6 +44,19 @@ The partial report records **54.0% overall** and **92.5% coverage across complet
 
 The judge provider returned an HTTP 520 response with Cloudflare HTML during judging. This is retained for incident diagnosis only, not as an Open Sessionboard product score. Its report may change if stored evidence is later rescored, so any future rescore must be recorded as a separate entry with the rescore time and provider status.
 
+## 2026-08-11 — OpenAI Responses local integration diagnostic
+
+- Status: local synthetic diagnostic; not deployed or release evidence
+- Commit: `b940452`
+- Provider path: OpenAI Responses API using the ignored backend-only `OPENAI_API_KEY`
+- Live checks: real Responses adapter and real-provider local agenda proposal lifecycle passed
+- Focused deterministic checks: 60 passed, 2 opt-in live checks skipped by default
+- Full unit/integration gate: 638 passed, 2 opt-in live checks skipped by default
+- Typecheck/lint/format: passed
+- API Wrangler dry-run build: passed
+
+The live checks used synthetic prompts and local seeded records. They establish that the backend key reaches the API-only adapter, the raw Responses REST output is parsed, and a real provider proposal passes through the local agenda suggestion lifecycle. They do not prove the deployed staging UI, Cloudflare Workers AI, evaluation/remix workflows, human apply/reject behavior, persistence across deployed reloads, or release acceptance.
+
 ## Current release status
 
 No complete post-reset, post-deployment LLM judge run has been accepted. No area is release-verified. A release-valid evaluator run must:
