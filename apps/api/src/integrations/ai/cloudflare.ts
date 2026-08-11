@@ -9,6 +9,7 @@ import type {
   EvaluationSuggestionProviderCandidate,
   EvaluationSuggestionProviderInput,
   EvaluationSuggestionProviderResult,
+  EvaluationSuggestionProvenance,
 } from "../../features/evaluations/types";
 import type {
   RemixField,
@@ -69,6 +70,37 @@ export interface CloudflareAiProviderOptions {
   readonly requestTimeoutMs?: number;
 }
 
+/**
+ * The concrete evaluation candidate emitted by this adapter. Its stable id and
+ * source revisions let the evaluation service retain the original AI score when
+ * a human later accepts or overrides it.
+ */
+export interface CloudflareEvaluationSuggestionProviderCandidate
+  extends EvaluationSuggestionProviderCandidate {
+  readonly id: string;
+  readonly criterionId: string;
+  readonly provenance: EvaluationSuggestionProvenance;
+}
+
+/** Complete, explicitly attributed advisory evaluation output. */
+export interface CloudflareEvaluationSuggestionProviderResult
+  extends EvaluationSuggestionProviderResult {
+  readonly candidates: readonly CloudflareEvaluationSuggestionProviderCandidate[];
+  readonly provenance: EvaluationSuggestionProvenance;
+}
+
+export type CloudflareEvaluationSuggestionProducer = (
+  input: EvaluationSuggestionProviderInput,
+) => Promise<CloudflareEvaluationSuggestionProviderResult>;
+
+export interface CloudflareEvaluationAiSuggestionProvider
+  extends EvaluationAiSuggestionProvider {
+  readonly generate: CloudflareEvaluationSuggestionProducer;
+  readonly suggest: CloudflareEvaluationSuggestionProducer;
+  readonly produce: CloudflareEvaluationSuggestionProducer;
+  readonly generateSuggestions: CloudflareEvaluationSuggestionProducer;
+}
+
 export type CloudflareAiProviderErrorCode = "AI_UNAVAILABLE" | "AI_RETRYABLE" | "AI_INVALID_OUTPUT";
 
 export interface CloudflareAiProviderCause {
@@ -98,7 +130,7 @@ export class CloudflareAiProviderError extends Error {
 
 export interface CloudflareAiProviders {
   readonly agenda: AgendaSuggestionProvider;
-  readonly evaluations: EvaluationAiSuggestionProvider;
+  readonly evaluations: CloudflareEvaluationAiSuggestionProvider;
   readonly remix: RemixProvider;
 }
 
@@ -154,9 +186,7 @@ export function createCloudflareAiProviders(
     }
   };
 
-  const evaluationGenerate = async (
-    input: EvaluationSuggestionProviderInput,
-  ): Promise<EvaluationSuggestionProviderResult> => {
+  const evaluationGenerate: CloudflareEvaluationSuggestionProducer = async (input) => {
     const prompt = evaluationPrompt(input);
     const output = await invoke(
       prompt,
@@ -861,7 +891,7 @@ function evaluationPrompt(input: EvaluationSuggestionProviderInput): string {
     rubric: {
       id: input.round.rubric.id,
       name: input.round.rubric.name,
-      criteria: input.round.rubric.criteria.map((criterion) => ({
+      criteria: scoreableEvaluationCriteria(input).map((criterion) => ({
         id: criterion.id,
         label: criterion.label,
         description: criterion.description,
@@ -869,21 +899,32 @@ function evaluationPrompt(input: EvaluationSuggestionProviderInput): string {
         maximum: criterion.maximum,
         weight: criterion.weight,
         required: criterion.required,
+        inputType: criterion.inputType ?? "numeric",
+        ...(criterion.options === undefined
+          ? {}
+          : {
+              options: criterion.options.map((option) => ({
+                label: option.label,
+                value: option.value,
+              })),
+            }),
       })),
     },
     submission: {
-      id: input.submission.id,
-      title: input.submission.title,
       abstract: input.submission.abstract,
-      answers: input.submission.answers,
-      identityRedacted: input.submission.identityRedacted,
     },
   };
   return promptText(
     "evaluation",
     context,
     payload,
-    "Return only {candidates:[{criterionId,value,evidence}]} JSON. criterionId must be one supplied rubric criterion ID. Each evidence value must be exactly title, abstract, or answers.<visible-answer-id>.",
+    "Return only {candidates:[{criterionId,value,evidence}]} JSON with exactly one candidate for every supplied criterion. value must be a numeric score within that criterion's bounds. evidence must contain 1 to 3 concise written rationales that quote or specifically paraphrase the supplied abstract. Do not return source labels such as abstract, title, or answers.<id>; AI output is advisory and must not make a decision.",
+  );
+}
+
+function scoreableEvaluationCriteria(input: EvaluationSuggestionProviderInput) {
+  return input.round.rubric.criteria.filter(
+    (criterion) => (criterion.inputType ?? "numeric") !== "free_text",
   );
 }
 
@@ -894,74 +935,73 @@ function parseEvaluationOutput(
   model: string | null,
   promptVersion: string | null,
   now: () => Date,
-): EvaluationSuggestionProviderResult {
-  if (!isRecord(raw) || !hasOnlyKeys(raw, ["candidates"])) throw invalidOutput();
-  const criteria = new Map(
-    input.round.rubric.criteria.map((criterion) => [criterion.id, criterion]),
-  );
-  const values: Array<{ value: unknown; criterionIdHint?: string }> = [];
-  if (Array.isArray(raw.candidates)) {
-    values.push(...raw.candidates.map((value) => ({ value })));
-  } else if (isRecord(raw.candidates)) {
-    for (const [criterionIdHint, candidates] of Object.entries(raw.candidates)) {
-      if (!criteria.has(criterionIdHint) || !Array.isArray(candidates)) throw invalidOutput();
-      values.push(...candidates.map((value) => ({ value, criterionIdHint })));
-    }
-  } else {
+): CloudflareEvaluationSuggestionProviderResult {
+  if (!isRecord(raw) || !hasOnlyKeys(raw, ["candidates"]) || !Array.isArray(raw.candidates)) {
     throw invalidOutput();
   }
-  if (values.length === 0) throw invalidOutput();
-  const allowedEvidence = new Set([
-    "title",
-    "abstract",
-    ...Object.keys(input.submission.answers).map((id) => `answers.${id}`),
-  ]);
-  const candidates: EvaluationSuggestionProviderCandidate[] = values.map(
-    ({ value, criterionIdHint }) => {
-      if (!isRecord(value) || !hasOnlyKeys(value, ["id", "criterionId", "value", "evidence"]))
-        throw invalidOutput();
-      const normalizedCriterionId = boundedString(value.criterionId ?? criterionIdHint, 200);
-      if (normalizedCriterionId === null) throw invalidOutput();
-      if (
-        criterionIdHint !== undefined &&
-        value.criterionId !== undefined &&
-        normalizedCriterionId !== criterionIdHint
-      ) {
+  const criteria = new Map(
+    scoreableEvaluationCriteria(input).map((criterion) => [criterion.id, criterion]),
+  );
+  if (criteria.size === 0 || raw.candidates.length !== criteria.size) throw invalidOutput();
+
+  const provenance: EvaluationSuggestionProvenance = {
+    provider: "cloudflare-workers-ai",
+    model: model ?? "unavailable",
+    generatedAt: safeNow(now),
+    sourceReferences: ["abstract"],
+    promptVersion: promptVersion ?? DEFAULT_PROMPT_VERSION,
+  };
+  const seenCriteria = new Set<string>();
+  const candidates: CloudflareEvaluationSuggestionProviderCandidate[] = raw.candidates.map(
+    (value) => {
+      if (!isRecord(value) || !hasOnlyKeys(value, ["criterionId", "value", "evidence"])) {
         throw invalidOutput();
       }
-      const criterion = criteria.get(normalizedCriterionId);
+      const criterionId = boundedString(value.criterionId, 200);
+      if (criterionId === null || seenCriteria.has(criterionId)) throw invalidOutput();
+      const criterion = criteria.get(criterionId);
       if (criterion === undefined) throw invalidOutput();
+      seenCriteria.add(criterionId);
+
       if (
         typeof value.value !== "number" ||
         !Number.isFinite(value.value) ||
         value.value < criterion.minimum ||
         value.value > criterion.maximum
-      )
+      ) {
         throw invalidOutput();
+      }
       if (
         !Array.isArray(value.evidence) ||
         value.evidence.length === 0 ||
-        value.evidence.length > 20
-      )
+        value.evidence.length > 3
+      ) {
         throw invalidOutput();
-      const evidence = value.evidence.map((reference) => boundedString(reference, 300));
-      if (evidence.some((reference) => reference === null || !allowedEvidence.has(reference)))
-        throw invalidOutput();
-      const normalizedEvidence = evidence as string[];
-      let candidateId: string | undefined;
-      if (value.id !== undefined) {
-        const normalizedCandidateId = boundedString(value.id, 200);
-        if (normalizedCandidateId === null) throw invalidOutput();
-        candidateId = normalizedCandidateId;
       }
+      const evidence = value.evidence.map((entry) => boundedString(entry, 2_000));
+      if (
+        evidence.some(
+          (entry) =>
+            entry === null ||
+            entry === "abstract" ||
+            entry === "title" ||
+            entry.startsWith("answers."),
+        )
+      ) {
+        throw invalidOutput();
+      }
+
       return {
-        ...(candidateId === undefined ? {} : { id: candidateId }),
-        criterionId: normalizedCriterionId,
+        id: `ai:${input.assignmentId}:${criterionId}:${input.rubricRevision}:${input.submissionRevision}`,
+        criterionId,
         value: value.value,
-        evidence: normalizedEvidence,
+        evidence: evidence as string[],
+        provenance,
       };
     },
   );
+  if (seenCriteria.size !== criteria.size) throw invalidOutput();
+
   const sourceReferences = [...new Set(candidates.flatMap((candidate) => candidate.evidence))];
   return {
     candidates,

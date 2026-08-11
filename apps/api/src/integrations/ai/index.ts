@@ -5,6 +5,10 @@ export type {
   CloudflareAiProviderErrorCode,
   CloudflareAiProviderOptions,
   CloudflareAiProviders,
+  CloudflareEvaluationAiSuggestionProvider,
+  CloudflareEvaluationSuggestionProducer,
+  CloudflareEvaluationSuggestionProviderCandidate,
+  CloudflareEvaluationSuggestionProviderResult,
 } from "./cloudflare";
 export {
   CloudflareAiProviderError,
