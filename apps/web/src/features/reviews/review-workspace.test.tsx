@@ -492,6 +492,24 @@ describe("review workspace", () => {
     expect(errorMarkup).toContain("Aggregate details are temporarily unavailable.");
     expect(errorMarkup).toContain("Retry review details");
     expect(errorMarkup).toContain('role="alert"');
+    const retryTree = OrganizerDetailStatus({
+      loading: false,
+      error: "Aggregate details are temporarily unavailable.",
+      onRetry: retry,
+    });
+    expect(isValidElement(retryTree)).toBe(true);
+    if (!isValidElement(retryTree)) throw new Error("Expected review detail status.");
+    const retryButton = (retryTree.props.children as readonly unknown[]).find(
+      (child) =>
+        isValidElement(child) &&
+        (child.props as Record<string, unknown>).children === "Retry review details",
+    );
+    expect(isValidElement(retryButton)).toBe(true);
+    if (!isValidElement(retryButton)) throw new Error("Expected review detail retry button.");
+    const onRetryClick = (retryButton.props as Record<string, unknown>).onClick;
+    expect(onRetryClick).toBeTypeOf("function");
+    (onRetryClick as () => void)();
+    expect(retry).toHaveBeenCalledOnce();
   });
   it("propagates created-plan refresh failures and permits an authoritative retry", async () => {
     const authoritative = testPlan("event-empty");
@@ -1463,6 +1481,37 @@ describe("review workspace", () => {
   it("keeps organizer authoring controls safe when React defers event updaters", async () => {
     vi.resetModules();
     const actualReact = await vi.importActual<typeof import("react")>("react");
+    const assignmentRequests: Array<{ readonly url: string; readonly body: string }> = [];
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/plans/plan-test/assignments") && init?.method === "POST") {
+        assignmentRequests.push({ url, body: String(init.body) });
+        return new Response(
+          JSON.stringify({
+            data: {
+              assignments: [
+                {
+                  id: "assignment-persisted",
+                  eventId: "event-empty",
+                  planId: "plan-test",
+                  roundId: "round-initial",
+                  submissionId: "submission-042",
+                  reviewerId: "reviewer-a",
+                  status: "assigned",
+                  version: 1,
+                },
+              ],
+            },
+          }),
+          { status: 201, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify({ error: { message: "Authoritative refresh unavailable in harness." } }),
+        { status: 503, headers: { "content-type": "application/json" } },
+      );
+    });
+
     const stateSlots: Array<MockStateSlot | undefined> = [];
     const refSlots: Array<{ current: unknown } | undefined> = [];
     const pendingUpdates: Array<() => void> = [];
@@ -1567,6 +1616,12 @@ describe("review workspace", () => {
         (onClick as () => void)();
         for (const apply of pendingUpdates.splice(0)) apply();
       }
+      async function flushAsyncUpdates(): Promise<void> {
+        for (let index = 0; index < 12; index += 1) {
+          await Promise.resolve();
+          for (const apply of pendingUpdates.splice(0)) apply();
+        }
+      }
 
       let tree = renderTree();
       const reviewerMembersSlot = stateSlots[6];
@@ -1663,7 +1718,68 @@ describe("review workspace", () => {
             .props as Record<string, unknown>
         ).checked,
       ).toBe(false);
+      const assignmentSubmission = findHost(
+        tree,
+        (props) => props.id === "assignment-submission-id",
+      );
+      fireChange(assignmentSubmission, { value: "submission-042" });
+      tree = renderTree();
+
+      const assignmentReviewers = findHost(tree, (props) => props.id === "assignment-reviewer-ids");
+      fireChange(assignmentReviewers, {
+        value: "",
+        selectedOptions: [{ value: "reviewer-a" }],
+      });
+      tree = renderTree();
+
+      const previewButton = findHost(
+        tree,
+        (props) => props.children === "Preview reviewer assignment replacement",
+      );
+      expect((previewButton.props as Record<string, unknown>).disabled).toBe(false);
+      fireClick(previewButton);
+      tree = renderTree();
+      expect(
+        hostElements(tree).some(
+          (element) =>
+            (element.props as Record<string, unknown>).role === "status" &&
+            String((element.props as Record<string, unknown>).children).includes(
+              "1 reviewer(s) will replace",
+            ),
+        ),
+      ).toBe(true);
+
+      const replaceButton = findHost(
+        tree,
+        (props) => props.children === "Replace reviewer assignments",
+      );
+      expect((replaceButton.props as Record<string, unknown>).disabled).toBe(false);
+      fireClick(replaceButton);
+      await flushAsyncUpdates();
+      tree = renderTree();
+
+      expect(assignmentRequests).toEqual([
+        {
+          url: "/api/admin/evaluations/plans/plan-test/assignments",
+          body: JSON.stringify({
+            roundId: "round-initial",
+            submissionId: "submission-042",
+            reviewerIds: ["reviewer-a"],
+            expectedVersion: 3,
+          }),
+        },
+      ]);
+      expect(
+        hostElements(tree).some(
+          (element) =>
+            (element.props as Record<string, unknown>).role === "status" &&
+            String((element.props as Record<string, unknown>).children).includes(
+              "Reviewer set replacement persisted for submission-042: assignment-persisted",
+            ),
+        ),
+      ).toBe(true);
     } finally {
+      fetchMock.mockRestore();
       vi.doUnmock("react");
       vi.resetModules();
     }

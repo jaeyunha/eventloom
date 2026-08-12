@@ -376,6 +376,76 @@ describe("organizer submission workspace", () => {
       fetchMock.mockRestore();
     }
   });
+  it("distinguishes submitted-review failures from an authoritative zero result", async () => {
+    let reviewsFail = true;
+    const reviewRequests: string[] = [];
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("/plans?eventId=")) {
+        return Response.json({
+          data: {
+            plans: [{ id: "plan-1", rounds: [{ id: "round-final", sequence: 2 }] }],
+          },
+        });
+      }
+      if (url.endsWith("/assignments")) {
+        return Response.json({
+          data: {
+            assignments: [
+              {
+                id: "assignment-1",
+                reviewerId: "reviewer-1",
+                submissionId: canonicalEnvelope.submission.id,
+                status: "submitted",
+              },
+            ],
+          },
+        });
+      }
+      if (url.endsWith("/decision")) return Response.json({ data: null });
+      if (url.endsWith("/aggregate")) {
+        return Response.json({
+          data: {
+            submittedReviewCount: 1,
+            expectedReviewCount: 1,
+            averageWeightedTotal: 4,
+            possibleWeightedTotal: 5,
+          },
+        });
+      }
+      if (url.endsWith("/reviews")) {
+        reviewRequests.push(url);
+        return reviewsFail
+          ? Response.json(
+              { error: { message: "Submitted review read unavailable." } },
+              { status: 503 },
+            )
+          : Response.json({ data: { reviews: [] } });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    try {
+      const failed = await enrichCanonicalSubmission("", canonicalEnvelope);
+      expect(failed.submittedReviewRead).toEqual({
+        status: "error",
+        message: "Submitted review read unavailable.",
+      });
+      expect(failed.reviewAssignments[0]).not.toHaveProperty("criterionScores");
+      expect(failed.reviewAssignments[0]).not.toHaveProperty("comment");
+
+      reviewsFail = false;
+      const empty = await enrichCanonicalSubmission("", canonicalEnvelope);
+      expect(empty.submittedReviewRead).toEqual({ status: "ready", count: 0 });
+      expect(reviewRequests).toEqual([
+        "/api/admin/evaluations/plans/plan-1/rounds/round-final/submissions/submission-devflow-1/reviews",
+        "/api/admin/evaluations/plans/plan-1/rounds/round-final/submissions/submission-devflow-1/reviews",
+      ]);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
   it("projects persisted accepted and rejected decisions into canonical statuses", async () => {
     let decisionStatus: "accepted" | "rejected" = "accepted";
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
@@ -517,6 +587,42 @@ describe("organizer submission workspace", () => {
     expect(markup).toContain("Human-authored reason");
     expect(markup).toContain("Overall rating: 5");
     expect(markup).toContain("Reviewer comment: Strong evidence and a clear audience fit.");
+  });
+  it("renders an explicit submitted-review failure retry instead of the zero state", () => {
+    const seeded = getSeededSubmission("summit-2026", "sub-001");
+    expect(seeded).toBeDefined();
+    if (seeded === undefined) return;
+    const previous = seeded.submittedReviewRead;
+
+    try {
+      seeded.submittedReviewRead = {
+        status: "error",
+        message: "Submitted review read unavailable.",
+      };
+      const errorMarkup = renderToStaticMarkup(
+        createElement(SubmissionDetailWorkspace, {
+          eventId: "summit-2026",
+          submissionId: "sub-001",
+        }),
+      );
+      expect(errorMarkup).toContain('role="alert"');
+      expect(errorMarkup).toContain("Submitted reviews could not be loaded");
+      expect(errorMarkup).toContain("Retry submitted reviews");
+      expect(errorMarkup).not.toContain("No submitted reviews yet.");
+
+      seeded.submittedReviewRead = { status: "ready", count: 0 };
+      const emptyMarkup = renderToStaticMarkup(
+        createElement(SubmissionDetailWorkspace, {
+          eventId: "summit-2026",
+          submissionId: "sub-001",
+        }),
+      );
+      expect(emptyMarkup).toContain("No submitted reviews yet.");
+      expect(emptyMarkup).not.toContain("Retry submitted reviews");
+    } finally {
+      if (previous === undefined) delete seeded.submittedReviewRead;
+      else seeded.submittedReviewRead = previous;
+    }
   });
   it("exposes versioned decisions, queued audience notifications, and post-close lock guidance", () => {
     const markup = renderToStaticMarkup(
