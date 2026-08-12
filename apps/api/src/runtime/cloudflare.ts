@@ -56,8 +56,10 @@ import { AirtableJsonStore, createAirtableDependencies, D1IdempotencyStore } fro
 export type RuntimeBindings = ApiBindings &
   Partial<Omit<CloudflareBindings, keyof ApiBindings>> & {
     readonly API_ORIGIN?: string;
+    readonly RUNTIME_PROFILE?: string;
     readonly AIRTABLE_ACCESS_TOKEN?: string;
     readonly AIRTABLE_BASE_ID?: string;
+    readonly AIRTABLE_BASE_DEV_ID?: string;
     readonly BETTER_AUTH_SECRET?: string;
     readonly OPENSEND_API_KEY?: string;
     readonly OPENSEND_SENDING_API_KEY?: string;
@@ -2038,6 +2040,10 @@ export class D1ApiKeyAuthenticatorGateway implements D1ApiKeyGateway {
 }
 
 const fixedOrigins = {
+  local: {
+    web: "http://127.0.0.1:3015",
+    api: "http://127.0.0.1:8787",
+  },
   staging: {
     web: "https://open-sessionboard-web-staging.ashleyha0317.workers.dev",
     api: "https://open-sessionboard-api-staging.ashleyha0317.workers.dev",
@@ -2048,8 +2054,29 @@ const fixedOrigins = {
   },
 } as const;
 
+const LOCAL_BETTER_AUTH_SECRET = "open-sessionboard-integrated-local-auth-secret-v1";
+const LOCAL_OPENSEND_API_URL = "http://127.0.0.1:8026";
+const LOCAL_OPENSEND_API_KEY = "local-development";
+const LOCAL_CACHE_INVALIDATION_URL = "http://127.0.0.1:3015/api/internal/cache-invalidation";
+const LOCAL_CACHE_INVALIDATION_TOKEN = "local-cache-invalidation";
+
 function authEnvironment(value: string): keyof typeof fixedOrigins | null {
-  return value === "staging" || value === "production" ? value : null;
+  return value === "local" || value === "staging" || value === "production" ? value : null;
+}
+
+export function runtimeBindingsForEnvironment(source: RuntimeBindings): RuntimeBindings {
+  if (source.APP_ENV !== "local") return source;
+  return {
+    ...source,
+    API_ORIGIN: fixedOrigins.local.api,
+    AIRTABLE_BASE_ID: source.AIRTABLE_BASE_DEV_ID?.trim() ?? "",
+    BETTER_AUTH_SECRET: LOCAL_BETTER_AUTH_SECRET,
+    OPENSEND_API_URL: LOCAL_OPENSEND_API_URL,
+    OPENSEND_API_KEY: LOCAL_OPENSEND_API_KEY,
+    OPENSEND_SENDING_API_KEY: LOCAL_OPENSEND_API_KEY,
+    CACHE_INVALIDATION_URL: LOCAL_CACHE_INVALIDATION_URL,
+    CACHE_INVALIDATION_TOKEN: LOCAL_CACHE_INVALIDATION_TOKEN,
+  };
 }
 
 function configuredApiOrigin(bindings: RuntimeBindings): string | null {
@@ -2148,9 +2175,8 @@ function selectedAiProvider(bindings: RuntimeBindings): SelectedAiProvider | nul
   }
   return null;
 }
-export function inspectProductionRuntime(
-  bindings: RuntimeBindings,
-): RuntimeConfigurationInspection {
+export function inspectProductionRuntime(source: RuntimeBindings): RuntimeConfigurationInspection {
+  const bindings = runtimeBindingsForEnvironment(source);
   const issues: string[] = [];
   const cloudflare = inspectCloudflareBindings(bindings);
   if (!cloudflare.success) issues.push(...cloudflare.issues);
@@ -2159,10 +2185,18 @@ export function inspectProductionRuntime(
   if (environment !== null) {
     const origins = fixedOrigins[environment];
     if (bindings.WEB_ORIGIN !== origins.web) {
-      issues.push("WEB_ORIGIN does not match the fixed deployment origin.");
+      issues.push(
+        environment === "local"
+          ? "WEB_ORIGIN must match the integrated local web origin."
+          : "WEB_ORIGIN does not match the fixed deployment origin.",
+      );
     }
     if (bindings.API_ORIGIN !== undefined && bindings.API_ORIGIN !== origins.api) {
-      issues.push("API_ORIGIN does not match the fixed deployment origin.");
+      issues.push(
+        environment === "local"
+          ? "API_ORIGIN must match the integrated local API origin."
+          : "API_ORIGIN does not match the fixed deployment origin.",
+      );
     }
   }
   const aiSelection = aiProviderSelection(bindings.AI_PROVIDER);
@@ -2198,19 +2232,26 @@ export function inspectProductionRuntime(
     );
   }
 
+  if (source.APP_ENV === "local" && !nonEmpty(source.AIRTABLE_BASE_DEV_ID)) {
+    issues.push("AIRTABLE_BASE_DEV_ID is required for integrated local development");
+  }
   if (!nonEmpty(bindings.AIRTABLE_ACCESS_TOKEN)) {
-    issues.push("AIRTABLE_ACCESS_TOKEN is required outside local development");
+    issues.push("AIRTABLE_ACCESS_TOKEN is required for the integrated runtime");
   }
   if (!nonEmpty(bindings.AIRTABLE_BASE_ID)) {
-    issues.push("AIRTABLE_BASE_ID is required outside local development");
+    issues.push(
+      source.APP_ENV === "local"
+        ? "AIRTABLE_BASE_DEV_ID is required for integrated local development"
+        : "AIRTABLE_BASE_ID is required outside local development",
+    );
   }
   if (!nonEmpty(bindings.BETTER_AUTH_SECRET) || bindings.BETTER_AUTH_SECRET.trim().length < 32) {
-    issues.push("BETTER_AUTH_SECRET must contain at least 32 characters outside local development");
+    issues.push("BETTER_AUTH_SECRET must contain at least 32 characters");
   }
 
   const openSendKey = (bindings.OPENSEND_API_KEY ?? bindings.OPENSEND_SENDING_API_KEY)?.trim();
   if (!openSendKey || !nonEmpty(bindings.OPENSEND_API_URL)) {
-    issues.push("OPENSEND_API_URL and OPENSEND_API_KEY are required outside local development");
+    issues.push("OPENSEND_API_URL and OPENSEND_API_KEY are required");
   }
   const configuredSenders = [
     ["AUTH_FROM_EMAIL", bindings.AUTH_FROM_EMAIL, DEFAULT_OPEN_SEND_SENDERS.auth],
@@ -2225,7 +2266,7 @@ export function inspectProductionRuntime(
 
   const apiOrigin = configuredApiOrigin(bindings);
   if (apiOrigin === null || !nonEmpty(bindings.WEB_ORIGIN)) {
-    issues.push("Better Auth web and API origins are required outside local development");
+    issues.push("Better Auth web and API origins are required");
   } else {
     try {
       createBetterAuthRuntimeConfiguration({
@@ -2244,8 +2285,9 @@ export function inspectProductionRuntime(
   return { success: issues.length === 0, issues };
 }
 
-export function createCloudflareDependencies(bindings: RuntimeBindings): ApiDependencies {
-  const inspection = inspectProductionRuntime(bindings);
+export function createCloudflareDependencies(source: RuntimeBindings): ApiDependencies {
+  const inspection = inspectProductionRuntime(source);
+  const bindings = runtimeBindingsForEnvironment(source);
   if (!inspection.success) {
     throw new TypeError("The production runtime is not configured.");
   }
@@ -2331,7 +2373,12 @@ export function createCloudflareDependencies(bindings: RuntimeBindings): ApiDepe
   const authenticator = new RequestAuthenticator(
     new D1BetterAuthGateway(bindings.DB, betterAuthRuntime, organizerAutojoin),
     new D1ApiKeyAuthenticatorGateway(bindings.DB),
-    { sessionCookieName: "__Secure-better-auth.session_token" },
+    {
+      sessionCookieName:
+        new URL(bindings.WEB_ORIGIN).protocol === "https:"
+          ? "__Secure-better-auth.session_token"
+          : "better-auth.session_token",
+    },
   );
   const transport =
     bindings.AIRTABLE_TRANSPORT ??

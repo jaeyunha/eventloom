@@ -506,10 +506,7 @@ async function canonicalSubmissionRequest<T>(
 }
 
 function localDemoEnabled(): boolean {
-  return (
-    process.env.NEXT_PUBLIC_APP_ENV === "local" ||
-    (process.env.NEXT_PUBLIC_APP_ENV !== "production" && process.env.NODE_ENV === "test")
-  );
+  return process.env.NODE_ENV === "test" || process.env.NEXT_PUBLIC_RUNTIME_PROFILE === "fixture";
 }
 interface SubmissionFieldOption {
   readonly value: string;

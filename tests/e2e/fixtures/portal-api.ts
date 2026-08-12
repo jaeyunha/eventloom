@@ -614,11 +614,14 @@ function errorPayload(
   return { error: { code, message, traceId: "e2e-portal-trace" } };
 }
 
+const webPort = process.env.PLAYWRIGHT_WEB_PORT?.trim() || "3015";
+const apiPort = process.env.PLAYWRIGHT_API_PORT?.trim() || "8787";
+const e2eApiOrigin = `http://127.0.0.1:${apiPort}`;
 const corsHeaders = {
   "access-control-allow-credentials": "true",
   "access-control-allow-headers": "accept,content-type",
   "access-control-allow-methods": "GET,PATCH,POST,PUT,DELETE,OPTIONS",
-  "access-control-allow-origin": "http://127.0.0.1:3015",
+  "access-control-allow-origin": `http://127.0.0.1:${webPort}`,
 };
 
 async function fulfillJson(route: Route, payload: unknown, status = 200): Promise<void> {
@@ -673,6 +676,7 @@ export async function installPortalApi(
   session: E2eAuthSession,
   options: PortalApiOptions = {},
 ): Promise<PortalApiHarness> {
+  const apiOrigin = e2eApiOrigin;
   const scenarios = cloneScenarios();
   let activeScenario = scenarios[0];
   if (!activeScenario) throw new Error("Missing E2E portal scenario");
@@ -1016,7 +1020,7 @@ export async function installPortalApi(
       syncView(state);
       const grant = {
         method: "PUT" as const,
-        url: `http://127.0.0.1:8787/api/speaker/assets/capabilities/upload/${encodeURIComponent(id)}/opaque-upload-token-${state.nextAssetNumber}`,
+        url: `${apiOrigin}/api/speaker/assets/capabilities/upload/${encodeURIComponent(id)}/opaque-upload-token-${state.nextAssetNumber}`,
         headers: { "content-type": contentType },
         expiresAt: "2026-08-09T02:00:00.000Z",
       };
@@ -1218,7 +1222,7 @@ export async function installPortalApi(
       downloadNumber += 1;
       await send(route, {
         method: "GET",
-        url: `http://127.0.0.1:8787/api/speaker/assets/capabilities/download/${encodeURIComponent(asset.id)}/opaque-download-token-${downloadNumber}`,
+        url: `${apiOrigin}/api/speaker/assets/capabilities/download/${encodeURIComponent(asset.id)}/opaque-download-token-${downloadNumber}`,
         expiresAt: "2026-08-09T02:00:00.000Z",
       });
       return;

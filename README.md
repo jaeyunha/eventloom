@@ -84,19 +84,20 @@ Both mirrors remain private until the release gate passes. Forge is retained for
 
 ## Local development
 
-Prerequisites are Bun, Node.js for the repository's ESM operational scripts, a Cloudflare account for deployed resources, an Airtable base, and an OpenSend key.
+Normal `make dev` runs the production-shaped integrated runtime with a dedicated development Airtable base, Wrangler-local D1/Durable Objects/R2/Queue, real local Better Auth, and Mailpit-captured email. Staging and production keep isolated deployed resources.
 
 ```bash
 bun install
 cp .env.example .env
-bun run dev
+# Set AIRTABLE_ACCESS_TOKEN to a development-base-restricted token.
+# Set AIRTABLE_BASE_DEV_ID to the dedicated development base.
+bunx wrangler d1 migrations apply DB --cwd apps/api --local
+make dev
 ```
 
-The Next.js web application runs on port `3015`; the Hono Worker runs on port `8787`. Set `API_UPSTREAM_ORIGIN=http://127.0.0.1:8787`. The web health endpoint is `http://127.0.0.1:3015/health`; the API health endpoint is `http://127.0.0.1:8787/api/health`.
+The web app runs at `http://127.0.0.1:3015`, the API at `http://127.0.0.1:8787`, and the Mailpit inbox at `http://127.0.0.1:8025`. Integrated local mode never reads `AIRTABLE_BASE_ID` or deployed OpenSend credentials. Use `RUNTIME_PROFILE=fixture NEXT_PUBLIC_RUNTIME_PROFILE=fixture make dev` only for deterministic fixture work; Playwright selects both variables explicitly.
 
-For isolated agent work, `./hack/create_worktree.sh <name> <base-ref>` now creates a sanitized local `.env` by default with only loopback URLs and `ai-engineer`; it never copies provider credentials. Use `--env-mode copy` only for the guarded integration/release worktree. Do not use `--env-mode symlink` for isolated agent work.
-
-Local, staging, and production must use separate Airtable bases, D1 databases, Durable Objects, R2 buckets, Queues, secrets, API keys, and OpenSend credentials. Staging uses synthetic data and suppressed or sandboxed recipients. See [`docs/setup.md`](docs/setup.md).
+For isolated agent work, `./hack/create_worktree.sh <name> <base-ref>` creates a sanitized local `.env` by default and never copies provider credentials. Use `--env-mode copy` only for guarded integration/release work. Local, staging, and production resources and credentials must remain separate. See [`docs/setup.md`](docs/setup.md).
 
 ## Quality commands
 

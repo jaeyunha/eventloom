@@ -9,7 +9,9 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "bun run --filter @open-sessionboard/contracts build && bun run --parallel --filter './apps/*' dev",
+    "dev": "bun run dev:infra && bun run --filter @open-sessionboard/contracts build && concurrently --kill-others-on-fail --names api,web,mail \"bun run --filter @open-sessionboard/api dev\" \"bun run --filter @open-sessionboard/web dev\" \"bun run dev:mail\"",
+    "dev:infra": "docker compose -f compose.dev.yaml up -d --wait mailpit",
+    "dev:mail": "bun run scripts/dev/mailpit-opensend-bridge.ts",
     "build": "bun run --filter '*' build",
     "cloudflare:web:build": "bun run --filter @open-sessionboard/web cloudflare:build",
     "cloudflare:web:deploy": "node scripts/cloudflare/deploy-web.mjs",
@@ -23,10 +25,13 @@
     "postinstall": "bun run --filter @open-sessionboard/contracts build"
   },
   "devDependencies": {
+    "@types/nodemailer": "7.0.4",
     "@biomejs/biome": "2.5.7",
+    "concurrently": "9.2.1",
     "@playwright/test": "1.62.1",
     "@types/node": "26.2.0",
     "typescript": "5.9.3",
+    "nodemailer": "7.0.11",
     "vitest": "4.1.10"
   }
 }

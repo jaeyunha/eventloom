@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev --env-file ../../.env --ip 127.0.0.1 --port 8787",
+    "dev:fixture": "node ../../scripts/dev/run-fixture-api.mjs",
     "build": "wrangler deploy --dry-run --env='' --outdir dist",
     "typecheck": "tsc --noEmit"
   },

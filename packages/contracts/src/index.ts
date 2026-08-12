@@ -14,6 +14,7 @@ export const healthResponseSchema = z.object({
   service: z.enum(serviceNames),
   version: z.string().min(1),
   environment: deploymentEnvironmentSchema,
+  runtimeProfile: z.enum(["integrated", "fixture"]).optional(),
   timestamp: z.iso.datetime(),
   traceId: z.uuid(),
 });

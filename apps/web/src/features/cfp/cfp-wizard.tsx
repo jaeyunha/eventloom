@@ -394,6 +394,10 @@ function mergeSecondaryContact(
   };
 }
 
+function fixtureRuntimeEnabled(): boolean {
+  return process.env.NODE_ENV === "test" || process.env.NEXT_PUBLIC_RUNTIME_PROFILE === "fixture";
+}
+
 function configuredCfpIdentity(
   eventSlug: string,
   organizationId?: string,
@@ -407,9 +411,7 @@ function configuredCfpIdentity(
     throw new Error("CFP identity is not configured because the event slug is missing.");
   }
   if (!resolvedOrganizationId) {
-    const localMode =
-      process.env.NEXT_PUBLIC_APP_ENV === "local" || process.env.APP_ENV === "local";
-    if (localMode) {
+    if (fixtureRuntimeEnabled()) {
       return {
         organizationId: "local-organization",
         eventId: normalizedEventSlug,
@@ -1483,7 +1485,7 @@ export function CfpWizard({
     let nextDraft = draft;
     if (step === "account") nextDraft = syncPrimaryParticipant(draft);
     const authenticateBeforePersist =
-      step === "account" && !authenticatedSession && process.env.NEXT_PUBLIC_APP_ENV !== "local"
+      step === "account" && !authenticatedSession && !fixtureRuntimeEnabled()
         ? async (candidateDraft: CfpDraft) => {
             const authentication = await api.authenticateAccount({
               email: candidateDraft.account.email,
@@ -1731,8 +1733,7 @@ export function CfpWizard({
               <span />
             )}
             <div className={styles.forwardActions}>
-              {step !== "welcome" &&
-              (step !== "account" || process.env.NEXT_PUBLIC_APP_ENV === "local") ? (
+              {step !== "welcome" && (step !== "account" || fixtureRuntimeEnabled()) ? (
                 <Button
                   className={styles.draftButton}
                   onClick={() => void saveNow()}

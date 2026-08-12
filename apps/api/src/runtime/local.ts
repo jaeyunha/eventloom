@@ -19,6 +19,7 @@ import {
 } from "../features/evaluations/repository";
 import { EvaluationService } from "../features/evaluations/service";
 import type { EvaluationActor } from "../features/evaluations/types";
+import type { EvaluationAssignment, EvaluationPlan } from "../features/evaluations/types";
 import type {
   PublicApiCreateInput,
   PublicApiGetInput,
@@ -61,6 +62,47 @@ import type {
   OrganizerOverviewRouteDependencies,
 } from "../routes/organizer-overview";
 import { createLocalCfpService } from "./cfp";
+import { EventService, InMemoryEventRepository } from "../features/events/service";
+import type { Event, EventAuditEntry, EventEmbedConfiguration } from "../features/events/types";
+import {
+  InMemoryCommunicationRepository,
+  CommunicationService,
+} from "../features/communications/service";
+import type {
+  CommunicationRecipient,
+  CommunicationTemplate,
+} from "../features/communications/types";
+import { InMemoryReportRepository, ReportService } from "../features/reports/service";
+import type { ReportDefinition, ReportProgramRecord } from "../features/reports/types";
+import { RemixService } from "../features/remix/service";
+import type {
+  ContentRemixCandidate,
+  RemixAuditEntry,
+  RemixContentGateway,
+  RemixRepository,
+  RemixSessionRecord,
+  RemixSpeakerRecord,
+} from "../features/remix/types";
+import {
+  InMemoryMemberAuthBoundary,
+  InMemoryMemberIdentityRepository,
+  InMemoryMemberInvitationDelivery,
+  InMemoryReviewerPoolRepository,
+  MemberService,
+} from "../features/members/service";
+import type { MemberMembership, MemberUser, ReviewerPool } from "../features/members/types";
+import { InMemorySessionRepository, SessionService } from "../features/sessions/service";
+import type {
+  Format,
+  Level,
+  Room,
+  Session,
+  SessionAuditEntry,
+  SessionSettings,
+  Tag,
+  Track,
+} from "../features/sessions/types";
+import type { PublishedSpeakerProjection } from "../routes/public-speakers";
 
 export {
   LOCAL_API_KEY,
@@ -99,6 +141,113 @@ const LOCAL_SPEAKER_CAPABILITIES = [
   "resource-read",
 ] as const satisfies readonly SpeakerPortalCapability[];
 
+const LOCAL_EVENT_START = "2026-09-18T16:00:00.000Z";
+const LOCAL_EVENT_END = "2026-09-18T23:00:00.000Z";
+const LOCAL_EVENT_TIME_ZONE = "America/Los_Angeles";
+const LOCAL_EVENT_VENUE = "Open Sessionboard Hall";
+
+const LOCAL_PUBLIC_EMBED: EventEmbedConfiguration = {
+  id: "public-schedule",
+  name: "Public schedule",
+  widgetId: "agenda",
+  enabled: true,
+  theme: "light",
+  outputFormat: "styled-html",
+  layout: "comfortable",
+  accent: "#4f5ee8",
+  backgroundColor: "#ffffff",
+  textColor: "#20232b",
+  customCss: "",
+  displayFields: ["title", "date-time", "room", "speakers", "track", "summary"],
+  tracks: ["local-track-main", "local-track-practice"],
+  statuses: ["Accepted"],
+};
+
+export const LOCAL_ORGANIZER_ACCOUNT_ID = "local-organizer";
+export const LOCAL_REVIEWER_ACCOUNT_ID = "local-reviewer";
+export const LOCAL_ORGANIZER_EMAIL = "organizer@local.open-sessionboard.test";
+export const LOCAL_REVIEWER_EMAIL = "reviewer@local.open-sessionboard.test";
+export const LOCAL_SPEAKER_EMAIL = "speaker@local.open-sessionboard.test";
+export const LOCAL_ORGANIZER_PASSWORD = "organizer-local";
+export const LOCAL_REVIEWER_PASSWORD = "reviewer-local";
+export const LOCAL_SPEAKER_PASSWORD = "speaker-local";
+
+export const LOCAL_ORGANIZER_SESSION_TOKEN = LOCAL_SESSION_TOKEN;
+export const LOCAL_REVIEWER_SESSION_TOKEN = "local-reviewer-session";
+export const LOCAL_SPEAKER_SESSION_TOKEN = "local-speaker-session";
+
+type LocalPersona = {
+  readonly key: "organizer" | "reviewer" | "speaker";
+  readonly sessionToken: string;
+  readonly sessionId: string;
+  readonly userId: string;
+  readonly email: string;
+  readonly name: string;
+  readonly password: string;
+  readonly memberships: readonly { organizationId: string; role: "owner" | "reviewer" }[];
+  readonly speakerGrants: readonly { organizationId: string; speakerProfileId: string }[];
+};
+
+const LOCAL_PERSONAS: readonly LocalPersona[] = [
+  {
+    key: "organizer",
+    sessionToken: LOCAL_ORGANIZER_SESSION_TOKEN,
+    sessionId: "local-organizer-session-id",
+    userId: LOCAL_ORGANIZER_ACCOUNT_ID,
+    email: LOCAL_ORGANIZER_EMAIL,
+    name: "Local Organizer",
+    password: LOCAL_ORGANIZER_PASSWORD,
+    memberships: [{ organizationId: LOCAL_ORGANIZATION_ID, role: "owner" }],
+    speakerGrants: [],
+  },
+  {
+    key: "reviewer",
+    sessionToken: LOCAL_REVIEWER_SESSION_TOKEN,
+    sessionId: "local-reviewer-session-id",
+    userId: LOCAL_REVIEWER_ACCOUNT_ID,
+    email: LOCAL_REVIEWER_EMAIL,
+    name: "Local Reviewer",
+    password: LOCAL_REVIEWER_PASSWORD,
+    memberships: [{ organizationId: LOCAL_ORGANIZATION_ID, role: "reviewer" }],
+    speakerGrants: [],
+  },
+  {
+    key: "speaker",
+    sessionToken: LOCAL_SPEAKER_SESSION_TOKEN,
+    sessionId: "local-speaker-session-id",
+    userId: LOCAL_SPEAKER_ACCOUNT_ID,
+    email: LOCAL_SPEAKER_EMAIL,
+    name: "Alex Rivera",
+    password: LOCAL_SPEAKER_PASSWORD,
+    memberships: [],
+    speakerGrants: [
+      { organizationId: LOCAL_ORGANIZATION_ID, speakerProfileId: "local-participant" },
+    ],
+  },
+];
+
+function localPersonaForToken(token: string): LocalPersona | null {
+  return LOCAL_PERSONAS.find((persona) => persona.sessionToken === token) ?? null;
+}
+
+function localPersonaForCredentials(email: string, password: string): LocalPersona | null {
+  return (
+    LOCAL_PERSONAS.find(
+      (persona) => persona.email === email.trim().toLowerCase() && persona.password === password,
+    ) ?? null
+  );
+}
+
+function localCookieToken(request: Request): string | null {
+  const prefix = `${LOCAL_SESSION_COOKIE}=`;
+  const value = request.headers
+    .get("cookie")
+    ?.split(";")
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(prefix))
+    ?.slice(prefix.length);
+  return value === undefined || value.length === 0 ? null : value;
+}
 function clone<T>(value: T): T {
   return structuredClone(value);
 }
@@ -106,20 +255,16 @@ function clone<T>(value: T): T {
 function localAuthenticator(): RequestAuthenticator {
   const sessions: BetterAuthGateway = {
     async resolveSession(token) {
-      if (token !== LOCAL_SESSION_TOKEN) return null;
+      const persona = localPersonaForToken(token);
+      if (persona === null) return null;
       return {
-        sessionId: "local-session-id",
-        userId: LOCAL_SPEAKER_ACCOUNT_ID,
-        email: "speaker@local.open-sessionboard.test",
+        sessionId: persona.sessionId,
+        userId: persona.userId,
+        email: persona.email,
         emailVerified: true,
         expiresAt: FAR_FUTURE,
-        memberships: [{ organizationId: LOCAL_ORGANIZATION_ID, role: "owner" }],
-        speakerGrants: [
-          {
-            organizationId: LOCAL_ORGANIZATION_ID,
-            speakerProfileId: "local-participant",
-          },
-        ],
+        memberships: persona.memberships,
+        speakerGrants: persona.speakerGrants,
       };
     },
     async requestMagicLink() {},
@@ -148,50 +293,42 @@ function localAuthenticator(): RequestAuthenticator {
 
 const LOCAL_SESSION_COOKIE = "better-auth.session_token";
 
-function localSessionPayload(): Record<string, unknown> {
+function localSessionPayload(persona: LocalPersona = LOCAL_PERSONAS[0]!): Record<string, unknown> {
   return {
     session: {
-      id: "local-session-id",
-      userId: LOCAL_SPEAKER_ACCOUNT_ID,
+      id: persona.sessionId,
+      userId: persona.userId,
       expiresAt: FAR_FUTURE.toISOString(),
     },
     user: {
-      id: LOCAL_SPEAKER_ACCOUNT_ID,
-      email: "speaker@local.open-sessionboard.test",
-      name: "Local Organizer",
+      id: persona.userId,
+      email: persona.email,
+      name: persona.name,
       emailVerified: true,
     },
-    memberships: [{ organizationId: LOCAL_ORGANIZATION_ID, role: "owner" }],
-    speakerGrants: [
-      { organizationId: LOCAL_ORGANIZATION_ID, speakerProfileId: "local-participant" },
-    ],
+    memberships: persona.memberships,
+    speakerGrants: persona.speakerGrants,
   };
 }
 
-function localAuthCookieHeader(): string {
-  return `${LOCAL_SESSION_COOKIE}=${LOCAL_SESSION_TOKEN}; Path=/; HttpOnly; SameSite=Lax`;
+function localAuthCookieHeader(sessionToken: string): string {
+  return `${LOCAL_SESSION_COOKIE}=${sessionToken}; Path=/; HttpOnly; SameSite=Lax`;
 }
 
+function localPersonaForRequest(request: Request): LocalPersona | null {
+  const token = localCookieToken(request);
+  return token === null ? null : localPersonaForToken(token);
+}
 function localAuthJson(payload: unknown, init: ResponseInit = {}): Response {
   const headers = new Headers(init.headers);
   headers.set("content-type", "application/json; charset=utf-8");
   return new Response(JSON.stringify(payload), { ...init, headers });
 }
 
-function hasLocalSessionCookie(request: Request): boolean {
-  return (
-    request.headers
-      .get("cookie")
-      ?.split(";")
-      .map((part) => part.trim())
-      .includes(`${LOCAL_SESSION_COOKIE}=${LOCAL_SESSION_TOKEN}`) ?? false
-  );
-}
-
 /**
  * Email/password sign-in for local development only. Local mode has no
- * better-auth instance or user database; any credentials issue the fixed
- * local organizer session so the real login form works end to end.
+ * better-auth instance or user database; deterministic fixture credentials issue
+ * one of the organizer, reviewer, or speaker sessions.
  */
 function localAuthRoutes(): { handler: (request: Request) => Promise<Response> } {
   return {
@@ -201,19 +338,29 @@ function localAuthRoutes(): { handler: (request: Request) => Promise<Response> }
         (path === "/api/auth/sign-in/email" || path === "/api/auth/sign-up/email") &&
         request.method === "POST"
       ) {
+        const body: { email?: unknown; password?: unknown } = await request
+          .clone()
+          .json<{ email?: unknown; password?: unknown }>()
+          .catch(() => ({}));
+        const persona =
+          typeof body.email === "string" && typeof body.password === "string"
+            ? localPersonaForCredentials(body.email, body.password)
+            : null;
+        if (persona === null) {
+          return localAuthJson({ error: { code: "INVALID_EMAIL_OR_PASSWORD" } }, { status: 401 });
+        }
         return localAuthJson(
-          { token: LOCAL_SESSION_TOKEN, ...localSessionPayload() },
-          { headers: { "set-cookie": localAuthCookieHeader() } },
+          { token: persona.sessionToken, ...localSessionPayload(persona) },
+          { headers: { "set-cookie": localAuthCookieHeader(persona.sessionToken) } },
         );
       }
       if (path === "/api/auth/sign-in/magic-link" && request.method === "POST") {
         return localAuthJson({ status: true });
       }
       if (path === "/api/auth/get-session" && request.method === "GET") {
-        if (!hasLocalSessionCookie(request)) {
-          return localAuthJson(null, { status: 401 });
-        }
-        return localAuthJson(localSessionPayload());
+        const persona = localPersonaForRequest(request);
+        if (persona === null) return localAuthJson(null, { status: 401 });
+        return localAuthJson(localSessionPayload(persona));
       }
       if (path === "/api/auth/sign-out" && request.method === "POST") {
         return localAuthJson(
@@ -244,6 +391,7 @@ class LocalSpeakerRepository implements SpeakerRepository {
 
   #seed(eventId: string): void {
     if (this.#submissions.has(eventId)) return;
+    if (eventId !== "demo-event") return;
     this.#submissions.set(eventId, [
       {
         id: "local-submission",
@@ -292,7 +440,7 @@ class LocalSpeakerRepository implements SpeakerRepository {
         owner: "speaker",
         title: "Upload presentation slides",
         description: "Upload the final PDF or presentation file for the event team.",
-        status: "not_started",
+        status: "submitted",
         dueAt: "2026-09-10T23:59:00.000Z",
         dependencyIds: ["local-biography-task"],
         reminderOffsetsMinutes: [10_080, 1_440],
@@ -301,7 +449,33 @@ class LocalSpeakerRepository implements SpeakerRepository {
         updatedAt: SEEDED_AT,
       },
     ]);
-    this.#assets.set(eventId, []);
+    this.#assets.set(eventId, [
+      {
+        id: "local-slides-asset",
+        tenantId: LOCAL_ORGANIZATION_ID,
+        eventId,
+        submissionId: "local-submission",
+        participantId: "local-participant",
+        participantName: "Alex Rivera",
+        sessionTitle: "Designing reliable community systems",
+        taskId: "local-slides-task",
+        kind: "slides",
+        objectKey: `private/${LOCAL_ORGANIZATION_ID}/${eventId}/local-slides-asset.pdf`,
+        fileName: "reliable-community-systems.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 182_000,
+        state: "ready",
+        createdAt: SEEDED_AT,
+        version: 1,
+        versionFamilyId: "local-slides",
+        finalizedAt: SEEDED_AT,
+        reviewState: "approved",
+        reviewedAt: SEEDED_AT,
+        reviewedBy: LOCAL_SPEAKER_ACCOUNT_ID,
+        reviewVersion: 1,
+        commentThreadId: "local-slides-comments",
+      },
+    ]);
   }
   listStoredSubmissions(eventId: string): SpeakerSubmission[] {
     return clone(this.#submissions.get(eventId) ?? []);
@@ -313,13 +487,17 @@ class LocalSpeakerRepository implements SpeakerRepository {
 
   async getAccessScope(eventId: string, accountId: string): Promise<SpeakerAccessScope> {
     this.#seed(eventId);
-    if (accountId !== LOCAL_SPEAKER_ACCOUNT_ID) {
+    if (
+      eventId !== "demo-event" ||
+      (accountId !== LOCAL_SPEAKER_ACCOUNT_ID && accountId !== LOCAL_ORGANIZER_ACCOUNT_ID)
+    ) {
       return { submissionIds: [], participantIds: [] };
     }
+    const organizer = accountId === LOCAL_ORGANIZER_ACCOUNT_ID;
     return {
       tenantId: LOCAL_ORGANIZATION_ID,
-      role: "owner",
-      organizer: true,
+      role: organizer ? "owner" : "speaker",
+      organizer,
       submissionIds: ["local-submission"],
       participantIds: ["local-participant"],
       capabilities: LOCAL_SPEAKER_CAPABILITIES,
@@ -527,7 +705,7 @@ function localAgendaEngine(suggestionProvider?: CloudflareAiProviders["agenda"])
         sessions: [
           {
             id: "local-session-keynote",
-            title: "Opening keynote: Systems that earn trust",
+            title: "Designing reliable community systems",
             status: "accepted",
             participantIds: ["local-participant"],
             resourceIds: [],
@@ -537,7 +715,7 @@ function localAgendaEngine(suggestionProvider?: CloudflareAiProviders["agenda"])
             id: "local-session-workshop",
             title: "A practical guide to resilient programs",
             status: "accepted",
-            participantIds: ["local-participant-two"],
+            participantIds: ["local-participant"],
             resourceIds: [],
             capacityRequired: 36,
           },
@@ -616,8 +794,10 @@ class LocalPublicApiRepository implements PublicApiRepository {
         name: "Open Sessionboard Conference",
         slug: "open-sessionboard-conf",
         timeZone: "America/Los_Angeles",
+        startsAt: "2026-09-17T16:00:00.000Z",
+        endsAt: "2026-09-18T23:00:00.000Z",
         publishedAgendaRevisionId: "agenda-local-revision-1",
-        status: "published",
+        status: "active",
         updatedAt: SEEDED_AT,
       },
       {
@@ -626,9 +806,12 @@ class LocalPublicApiRepository implements PublicApiRepository {
         organizationId: LOCAL_ORGANIZATION_ID,
         name: "Open Sessionboard Demo",
         slug: "demo-event",
-        timeZone: "America/Los_Angeles",
+        timeZone: LOCAL_EVENT_TIME_ZONE,
+        startsAt: LOCAL_EVENT_START,
+        endsAt: LOCAL_EVENT_END,
+        venue: LOCAL_EVENT_VENUE,
         publishedAgendaRevisionId: "agenda-local-revision-2",
-        status: "published",
+        status: "active",
         updatedAt: SEEDED_AT,
       },
     ]);
@@ -651,6 +834,14 @@ class LocalPublicApiRepository implements PublicApiRepository {
         revision: 1,
         publishedAt: SEEDED_AT,
       },
+      {
+        id: "demo-event",
+        version: 1,
+        organizationId: LOCAL_ORGANIZATION_ID,
+        revision: 2,
+        publishedAt: SEEDED_AT,
+        sessionIds: ["local-session-keynote", "local-session-workshop"],
+      },
     ]);
     this.#seed("sessions", [
       {
@@ -658,7 +849,7 @@ class LocalPublicApiRepository implements PublicApiRepository {
         version: 1,
         organizationId: LOCAL_ORGANIZATION_ID,
         eventId: "demo-event",
-        title: "Opening keynote: Systems that earn trust",
+        title: "Designing reliable community systems",
         status: "accepted",
         updatedAt: SEEDED_AT,
       },
@@ -897,6 +1088,453 @@ interface LocalOverviewAssignment {
   readonly status: string;
   readonly dueAt?: string;
 }
+function localEventSeed(
+  id: string,
+  name: string,
+  slug: string,
+  embedConfigurations: readonly EventEmbedConfiguration[] = [],
+): Event {
+  return {
+    id,
+    organizationId: LOCAL_ORGANIZATION_ID,
+    slug,
+    name,
+    status: "active",
+    timeZone: LOCAL_EVENT_TIME_ZONE,
+    startsAt: id === "demo-event" ? LOCAL_EVENT_START : "2026-09-17T16:00:00.000Z",
+    endsAt: id === "demo-event" ? LOCAL_EVENT_END : "2026-09-18T23:00:00.000Z",
+    venue: id === "demo-event" ? LOCAL_EVENT_VENUE : "Open Sessionboard Hall",
+    cfpSettings: {
+      enabled: true,
+      opensAt: "2026-08-01T07:00:00.000Z",
+      closesAt: "2026-09-15T07:00:00.000Z",
+    },
+    defaultCalendarSettings: {
+      durationMinutes: 60,
+      timeZone: LOCAL_EVENT_TIME_ZONE,
+      location: id === "demo-event" ? LOCAL_EVENT_VENUE : "Open Sessionboard Hall",
+    },
+    embedConfigurations: embedConfigurations.map(clone),
+    version: 1,
+    createdAt: SEEDED_AT,
+    updatedAt: SEEDED_AT,
+    createdBy: LOCAL_ORGANIZER_ACCOUNT_ID,
+    updatedBy: LOCAL_ORGANIZER_ACCOUNT_ID,
+  };
+}
+
+function localSessionSeed(): {
+  readonly sessions: readonly Session[];
+  readonly rooms: readonly Room[];
+  readonly tracks: readonly Track[];
+  readonly formats: readonly Format[];
+  readonly levels: readonly Level[];
+  readonly tags: readonly Tag[];
+  readonly settings: readonly SessionSettings[];
+  readonly audit: readonly SessionAuditEntry[];
+  readonly speakerIds: Readonly<Record<string, readonly string[]>>;
+} {
+  const history = [
+    {
+      id: "local-session-keynote:v1",
+      action: "created" as const,
+      version: 1,
+      actorId: LOCAL_ORGANIZER_ACCOUNT_ID,
+      occurredAt: SEEDED_AT,
+      title: "Designing reliable community systems",
+      description: "A practical session about building systems communities can trust.",
+      contentStatus: "Approved" as const,
+      newStatus: "Accepted",
+      newContentStatus: "Approved" as const,
+    },
+  ];
+  const sessions: Session[] = [
+    {
+      id: "local-session-keynote",
+      tenantId: LOCAL_ORGANIZATION_ID,
+      eventId: "demo-event",
+      title: "Designing reliable community systems",
+      description: "A practical session about building systems communities can trust.",
+      status: "Accepted",
+      contentStatus: "Approved",
+      durationMinutes: 60,
+      capacityRequired: 120,
+      roomId: "local-room-main",
+      trackId: "local-track-main",
+      trackIds: ["local-track-main"],
+      formatId: "local-format-talk",
+      levelId: "local-level-all",
+      tagIds: ["local-tag-reliable"],
+      speakerIds: ["local-participant"],
+      speakerRoster: [{ id: "local-participant", displayName: "Alex Rivera", role: "speaker" }],
+      resourceIds: [],
+      version: 1,
+      createdAt: SEEDED_AT,
+      updatedAt: SEEDED_AT,
+      createdBy: LOCAL_ORGANIZER_ACCOUNT_ID,
+      updatedBy: LOCAL_ORGANIZER_ACCOUNT_ID,
+      history,
+    },
+    {
+      id: "local-session-workshop",
+      tenantId: LOCAL_ORGANIZATION_ID,
+      eventId: "demo-event",
+      title: "A practical guide to resilient programs",
+      description: "A workshop for turning program intent into reliable operations.",
+      status: "Accepted",
+      contentStatus: "Approved",
+      durationMinutes: 60,
+      capacityRequired: 36,
+      roomId: "local-room-studio",
+      trackId: "local-track-practice",
+      trackIds: ["local-track-practice"],
+      formatId: "local-format-workshop",
+      levelId: "local-level-all",
+      tagIds: ["local-tag-practice"],
+      speakerIds: ["local-participant"],
+      speakerRoster: [{ id: "local-participant", displayName: "Alex Rivera", role: "speaker" }],
+      resourceIds: [],
+      version: 1,
+      createdAt: SEEDED_AT,
+      updatedAt: SEEDED_AT,
+      createdBy: LOCAL_ORGANIZER_ACCOUNT_ID,
+      updatedBy: LOCAL_ORGANIZER_ACCOUNT_ID,
+      history,
+    },
+  ];
+  const rooms: Room[] = [
+    {
+      id: "local-room-main",
+      tenantId: LOCAL_ORGANIZATION_ID,
+      eventId: "demo-event",
+      name: "Main Hall",
+      capacity: 200,
+      resources: [],
+      resourceIds: [],
+      version: 1,
+      createdAt: SEEDED_AT,
+      updatedAt: SEEDED_AT,
+      createdBy: LOCAL_ORGANIZER_ACCOUNT_ID,
+      updatedBy: LOCAL_ORGANIZER_ACCOUNT_ID,
+      history: [],
+    },
+    {
+      id: "local-room-studio",
+      tenantId: LOCAL_ORGANIZATION_ID,
+      eventId: "demo-event",
+      name: "Workshop Studio",
+      capacity: 48,
+      resources: [],
+      resourceIds: [],
+      version: 1,
+      createdAt: SEEDED_AT,
+      updatedAt: SEEDED_AT,
+      createdBy: LOCAL_ORGANIZER_ACCOUNT_ID,
+      updatedBy: LOCAL_ORGANIZER_ACCOUNT_ID,
+      history: [],
+    },
+  ];
+  const tracks: Track[] = [
+    {
+      id: "local-track-main",
+      tenantId: LOCAL_ORGANIZATION_ID,
+      eventId: "demo-event",
+      name: "Main stage",
+      description: "Featured program sessions.",
+      version: 1,
+      createdAt: SEEDED_AT,
+      updatedAt: SEEDED_AT,
+      createdBy: LOCAL_ORGANIZER_ACCOUNT_ID,
+      updatedBy: LOCAL_ORGANIZER_ACCOUNT_ID,
+      history: [],
+    },
+    {
+      id: "local-track-practice",
+      tenantId: LOCAL_ORGANIZATION_ID,
+      eventId: "demo-event",
+      name: "Practice",
+      description: "Hands-on program sessions.",
+      version: 1,
+      createdAt: SEEDED_AT,
+      updatedAt: SEEDED_AT,
+      createdBy: LOCAL_ORGANIZER_ACCOUNT_ID,
+      updatedBy: LOCAL_ORGANIZER_ACCOUNT_ID,
+      history: [],
+    },
+  ];
+  const format = (id: string, name: string): Format => ({
+    id,
+    tenantId: LOCAL_ORGANIZATION_ID,
+    eventId: "demo-event",
+    name,
+    description: "",
+    version: 1,
+    createdAt: SEEDED_AT,
+    updatedAt: SEEDED_AT,
+    createdBy: LOCAL_ORGANIZER_ACCOUNT_ID,
+    updatedBy: LOCAL_ORGANIZER_ACCOUNT_ID,
+    history: [],
+  });
+  const level: Level = {
+    ...format("local-level-all", "All levels"),
+    id: "local-level-all",
+  };
+  const tags: Tag[] = [
+    { ...format("local-tag-reliable", "Reliable systems"), id: "local-tag-reliable" },
+    { ...format("local-tag-practice", "Practice"), id: "local-tag-practice" },
+  ];
+  const settings: SessionSettings = {
+    id: "local-session-settings",
+    tenantId: LOCAL_ORGANIZATION_ID,
+    eventId: "demo-event",
+    statuses: ["Draft", "Submitted", "Accepted", "Waitlisted", "Rejected", "Withdrawn"],
+    agendaEligibleStatuses: ["Accepted"],
+    version: 1,
+    createdAt: SEEDED_AT,
+    updatedAt: SEEDED_AT,
+    createdBy: LOCAL_ORGANIZER_ACCOUNT_ID,
+    updatedBy: LOCAL_ORGANIZER_ACCOUNT_ID,
+    history: [
+      {
+        id: "local-session-settings:v1",
+        action: "settings.updated",
+        version: 1,
+        actorId: LOCAL_ORGANIZER_ACCOUNT_ID,
+        occurredAt: SEEDED_AT,
+      },
+    ],
+  };
+  const audit: SessionAuditEntry[] = sessions.map((session) => ({
+    id: `${session.id}:v1`,
+    tenantId: LOCAL_ORGANIZATION_ID,
+    eventId: "demo-event",
+    entityType: "session",
+    entityId: session.id,
+    action: "created",
+    version: 1,
+    actorId: LOCAL_ORGANIZER_ACCOUNT_ID,
+    occurredAt: SEEDED_AT,
+    after: session,
+  }));
+  return {
+    sessions,
+    rooms,
+    tracks,
+    formats: [format("local-format-talk", "Talk"), format("local-format-workshop", "Workshop")],
+    levels: [level],
+    tags,
+    settings: [settings],
+    audit,
+    speakerIds: {
+      [`${LOCAL_ORGANIZATION_ID}\u0000demo-event`]: ["local-participant"],
+    },
+  };
+}
+class LocalRemixRepository implements RemixRepository {
+  readonly #candidates = new Map<string, ContentRemixCandidate>();
+  readonly #audit = new Map<string, RemixAuditEntry[]>();
+
+  async getCandidateById(tenantId: string, candidateId: string) {
+    const candidate = this.#candidates.get(`${tenantId}\u0000${candidateId}`);
+    return candidate === undefined ? null : clone(candidate);
+  }
+
+  async getCandidate(tenantId: string, eventId: string, candidateId: string) {
+    const candidate = await this.getCandidateById(tenantId, candidateId);
+    return candidate?.eventId === eventId ? candidate : null;
+  }
+
+  async listCandidates(tenantId: string, eventId: string) {
+    return clone(
+      [...this.#candidates.values()].filter(
+        (candidate) => candidate.tenantId === tenantId && candidate.eventId === eventId,
+      ),
+    );
+  }
+
+  async saveCandidate(candidate: ContentRemixCandidate, expectedVersion: number | null) {
+    const key = `${candidate.tenantId}\u0000${candidate.id}`;
+    const current = this.#candidates.get(key);
+    if ((current?.version ?? null) !== expectedVersion) {
+      throw new Error("The remix candidate changed.");
+    }
+    this.#candidates.set(key, clone(candidate));
+  }
+
+  async appendAudit(entry: RemixAuditEntry) {
+    const key = `${entry.tenantId}\u0000${entry.eventId}`;
+    const entries = this.#audit.get(key) ?? [];
+    entries.push(clone(entry));
+    this.#audit.set(key, entries);
+  }
+
+  async listAudit(tenantId: string, eventId: string) {
+    return clone(this.#audit.get(`${tenantId}\u0000${eventId}`) ?? []);
+  }
+}
+
+class LocalRemixContentGateway implements RemixContentGateway {
+  constructor(
+    private readonly sessions: SessionService,
+    private readonly sessionRepository: InMemorySessionRepository,
+    private readonly speakers: LocalSpeakerRepository,
+  ) {}
+
+  async listSessions(input: {
+    tenantId: string;
+    eventId: string;
+  }): Promise<readonly RemixSessionRecord[]> {
+    const sessions = await this.sessionRepository.listSessions(input.tenantId, input.eventId);
+    return sessions.map((session) => ({
+      kind: "session",
+      id: session.id,
+      eventId: session.eventId,
+      revision: session.version,
+      title: session.title,
+      description: session.description,
+      tags: [...session.tagIds],
+      tracks: [...session.trackIds],
+    }));
+  }
+
+  async listSpeakers(input: {
+    tenantId: string;
+    eventId: string;
+  }): Promise<readonly RemixSpeakerRecord[]> {
+    const profiles = await this.speakers.listProfiles(input.eventId, ["local-participant"]);
+    return profiles.map((profile) => ({
+      kind: "speaker",
+      id: profile.participantId,
+      eventId: profile.eventId,
+      revision: profile.version,
+      biography: profile.biography,
+    }));
+  }
+
+  async getSession(input: {
+    tenantId: string;
+    eventId: string;
+    sourceId: string;
+  }): Promise<RemixSessionRecord | null> {
+    const session = await this.sessionRepository.getSession(
+      input.tenantId,
+      input.eventId,
+      input.sourceId,
+    );
+    return session === null
+      ? null
+      : {
+          kind: "session",
+          id: session.id,
+          eventId: session.eventId,
+          revision: session.version,
+          title: session.title,
+          description: session.description,
+          tags: [...session.tagIds],
+          tracks: [...session.trackIds],
+        };
+  }
+
+  async getSpeaker(input: {
+    tenantId: string;
+    eventId: string;
+    sourceId: string;
+  }): Promise<RemixSpeakerRecord | null> {
+    const profile = await this.speakers.getProfile(input.eventId, input.sourceId);
+    return profile === null
+      ? null
+      : {
+          kind: "speaker",
+          id: profile.participantId,
+          eventId: profile.eventId,
+          revision: profile.version,
+          biography: profile.biography,
+        };
+  }
+
+  async applyRevision(input: {
+    tenantId: string;
+    eventId: string;
+    sourceType: "session" | "speaker";
+    sourceId: string;
+    expectedSourceRevision: number;
+    fields: readonly ("title" | "description" | "tags" | "tracks" | "biography")[];
+    content:
+      | { title: string; description: string; tags: readonly string[]; tracks: readonly string[] }
+      | { biography: string };
+    candidateId: string;
+    actorId: string;
+    appliedAt: string;
+  }) {
+    if (input.sourceType === "session") {
+      const content = input.content as {
+        title: string;
+        description: string;
+        tags: readonly string[];
+        tracks: readonly string[];
+      };
+      const current = await this.sessionRepository.getSession(
+        input.tenantId,
+        input.eventId,
+        input.sourceId,
+      );
+      if (current === null) throw new Error("The session content was not found.");
+      const updated = await this.sessions.updateSession(
+        {
+          tenantId: input.tenantId,
+          userId: input.actorId,
+          role: "owner",
+          kind: "user",
+        },
+        {
+          tenantId: input.tenantId,
+          eventId: input.eventId,
+          sessionId: input.sourceId,
+          expectedVersion: input.expectedSourceRevision,
+          title: content.title,
+          description: content.description,
+          tagIds: [...content.tags],
+          trackIds: [...content.tracks],
+        },
+      );
+      return {
+        id: `revision:${input.candidateId}`,
+        tenantId: input.tenantId,
+        eventId: input.eventId,
+        sourceType: input.sourceType,
+        sourceId: input.sourceId,
+        sourceRevision: updated.version,
+        fields: [...input.fields],
+        content: clone(content),
+        candidateId: input.candidateId,
+        appliedBy: input.actorId,
+        appliedAt: input.appliedAt,
+      };
+    }
+    const content = input.content as { biography: string };
+    const result = await this.speakers.updateBiography({
+      eventId: input.eventId,
+      participantId: input.sourceId,
+      biography: content.biography,
+      expectedVersion: input.expectedSourceRevision,
+      updatedAt: input.appliedAt,
+    });
+    if (!result.ok) throw new Error("The speaker content was not found.");
+    return {
+      id: `revision:${input.candidateId}`,
+      tenantId: input.tenantId,
+      eventId: input.eventId,
+      sourceType: input.sourceType,
+      sourceId: input.sourceId,
+      sourceRevision: result.value.version,
+      fields: [...input.fields],
+      content: clone(content),
+      candidateId: input.candidateId,
+      appliedBy: input.actorId,
+      appliedAt: input.appliedAt,
+    };
+  }
+}
 
 class LocalOrganizerOverviewRepository implements OrganizerOverviewRouteDependencies {
   readonly #publicRepository: LocalPublicApiRepository;
@@ -1121,6 +1759,90 @@ function compareNullableDates(left: string | null, right: string | null): number
   return Date.parse(left) - Date.parse(right);
 }
 
+async function seedLocalCfp(service: ReturnType<typeof createLocalCfpService>): Promise<void> {
+  const draft = await service.createDraft({
+    tenantId: LOCAL_ORGANIZATION_ID,
+    eventId: "demo-event",
+    formId: "main-cfp",
+    ownerAccountId: LOCAL_SPEAKER_ACCOUNT_ID,
+    idempotencyKey: "local-seeded-submission",
+  });
+  let version = draft.version;
+  const steps = ["welcome", "account", "submission"] as const;
+  for (let index = 0; index < steps.length; index += 1) {
+    const completedStep = steps[index]!;
+    const saved = await service.saveDraft({
+      tenantId: LOCAL_ORGANIZATION_ID,
+      eventId: "demo-event",
+      submissionId: draft.id,
+      ownerAccountId: LOCAL_SPEAKER_ACCOUNT_ID,
+      expectedVersion: version,
+      completedStep,
+      ...(completedStep === "submission"
+        ? {
+            answers: {
+              title: "Designing reliable community systems",
+              abstract: "A practical session about building systems that communities can trust.",
+              format: "Workshop",
+            },
+          }
+        : {}),
+      idempotencyKey: `local-seeded-submission-step-${index}`,
+    });
+    version = saved.version;
+  }
+  const participantSaved = await service.saveDraft({
+    tenantId: LOCAL_ORGANIZATION_ID,
+    eventId: "demo-event",
+    submissionId: draft.id,
+    ownerAccountId: LOCAL_SPEAKER_ACCOUNT_ID,
+    expectedVersion: version,
+    completedStep: "participant",
+    participants: [
+      {
+        id: "local-participant",
+        firstName: "Alex",
+        lastName: "Rivera",
+        email: LOCAL_SPEAKER_EMAIL,
+        role: "primary",
+        biography: "Alex builds dependable, accessible systems for communities.",
+        answers: {},
+      },
+    ],
+    secondaryContacts: [],
+    idempotencyKey: "local-seeded-submission-participant",
+  });
+  version = participantSaved.version;
+  const review = await service.review({
+    tenantId: LOCAL_ORGANIZATION_ID,
+    eventId: "demo-event",
+    submissionId: draft.id,
+    ownerAccountId: LOCAL_SPEAKER_ACCOUNT_ID,
+    idempotencyKey: "local-seeded-submission-review",
+  });
+  if (!review.canSubmit) return;
+  await service.submit({
+    tenantId: LOCAL_ORGANIZATION_ID,
+    eventId: "demo-event",
+    submissionId: draft.id,
+    ownerAccountId: LOCAL_SPEAKER_ACCOUNT_ID,
+    expectedVersion: version,
+    idempotencyKey: "local-seeded-submission-submit",
+  });
+}
+
+function localCfpServiceWithSeed(
+  service: ReturnType<typeof createLocalCfpService>,
+): ReturnType<typeof createLocalCfpService> {
+  const seeded = seedLocalCfp(service).catch(() => undefined);
+  return new Proxy(service, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+      if (typeof value !== "function") return value;
+      return (...args: unknown[]) => seeded.then(() => value.apply(target, args));
+    },
+  });
+}
 function eventIdFrom(request: Request): string {
   const pathMatch = /\/(?:events|event)\/([^/]+)/u.exec(new URL(request.url).pathname)?.[1];
   return pathMatch === undefined ? "demo-event" : decodeURIComponent(pathMatch);
@@ -1137,7 +1859,111 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
     })(),
   });
   const publicRepository = new LocalPublicApiRepository();
+  const eventRepository = new InMemoryEventRepository({
+    events: [
+      localEventSeed(
+        "open-sessionboard-conf",
+        "Open Sessionboard Conference",
+        "open-sessionboard-conf",
+      ),
+      localEventSeed("demo-event", "Open Sessionboard Demo", "demo-event", [LOCAL_PUBLIC_EMBED]),
+    ],
+    audit: [
+      {
+        id: "event:open-sessionboard-conf:v1",
+        organizationId: LOCAL_ORGANIZATION_ID,
+        eventId: "open-sessionboard-conf",
+        action: "created",
+        version: 1,
+        actorId: LOCAL_ORGANIZER_ACCOUNT_ID,
+        occurredAt: SEEDED_AT,
+      },
+      {
+        id: "event:demo-event:v1",
+        organizationId: LOCAL_ORGANIZATION_ID,
+        eventId: "demo-event",
+        action: "created",
+        version: 1,
+        actorId: LOCAL_ORGANIZER_ACCOUNT_ID,
+        occurredAt: SEEDED_AT,
+      },
+    ] satisfies readonly EventAuditEntry[],
+  });
+  const eventService = new EventService(eventRepository, {
+    clock: () => new Date(SEEDED_AT),
+    generateId: (() => {
+      let sequence = 0;
+      return () => `local-event-id-${++sequence}`;
+    })(),
+  });
+  const sessionRepository = new InMemorySessionRepository(localSessionSeed());
+  const agendaEngine = localAgendaEngine(aiProviders?.agenda);
+  const sessionService = new SessionService(sessionRepository, {
+    clock: () => new Date(SEEDED_AT),
+  });
   const evaluationRepository = new InMemoryEvaluationRepository();
+  const evaluationPlan: EvaluationPlan = {
+    id: "local-evaluation-plan",
+    tenantId: LOCAL_ORGANIZATION_ID,
+    eventId: "demo-event",
+    name: "Demo CFP review",
+    status: "open",
+    blindReview: true,
+    closesAt: "2026-09-12T23:59:00.000Z",
+    assignmentRule: {
+      reviewsPerSubmission: 1,
+      maxAssignmentsPerReviewer: 5,
+      autoDistribute: false,
+    },
+    rounds: [
+      {
+        id: "local-review-round",
+        name: "Initial review",
+        sequence: 1,
+        closesAt: "2026-09-12T23:59:00.000Z",
+        blindReview: true,
+        anonymization: "single",
+        reviewerPool: { reviewerIds: [LOCAL_REVIEWER_ACCOUNT_ID], name: "Local reviewers" },
+        rubric: {
+          id: "local-rubric",
+          name: "Demo rubric",
+          criteria: [
+            {
+              id: "local-rubric-fit",
+              label: "Program fit",
+              description: "How well does the proposal fit the event?",
+              minimum: 1,
+              maximum: 5,
+              weight: 1,
+              required: true,
+            },
+          ],
+        },
+      },
+    ],
+    reviewerProjection: { fieldIds: ["format", "level"], fileIds: [] },
+    version: 1,
+    createdAt: SEEDED_AT,
+    updatedAt: SEEDED_AT,
+  };
+  const evaluationAssignment: EvaluationAssignment = {
+    id: "local-review-assignment",
+    tenantId: LOCAL_ORGANIZATION_ID,
+    eventId: "demo-event",
+    planId: evaluationPlan.id,
+    roundId: "local-review-round",
+    submissionId: "local-submission",
+    reviewerId: LOCAL_REVIEWER_ACCOUNT_ID,
+    status: "assigned",
+    planVersion: 1,
+    rubricRevision: 1,
+    submissionRevision: 1,
+    version: 1,
+    createdAt: SEEDED_AT,
+    updatedAt: SEEDED_AT,
+  };
+  void evaluationRepository.putPlan(evaluationPlan, null);
+  void evaluationRepository.putAssignmentsForTesting([evaluationAssignment]);
   const evaluationSubmissions = new InMemorySubmissionReviewSource([
     {
       id: "local-submission",
@@ -1163,11 +1989,94 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
       ? {}
       : { aiSuggestionProvider: aiProviders.evaluations }),
   });
-  const agendaEngine = localAgendaEngine(aiProviders?.agenda);
   const organizerOverview = new LocalOrganizerOverviewRepository({
     publicRepository,
     speakerRepository,
+    assignments: [
+      {
+        id: "local-review-assignment",
+        tenantId: LOCAL_ORGANIZATION_ID,
+        eventId: "demo-event",
+        status: "assigned",
+        dueAt: "2026-09-12T23:59:00.000Z",
+      },
+    ],
   });
+  const localMemberUsers: MemberUser[] = [
+    {
+      userId: LOCAL_ORGANIZER_ACCOUNT_ID,
+      email: LOCAL_ORGANIZER_EMAIL,
+      name: "Local Organizer",
+      emailVerified: true,
+      createdAt: SEEDED_AT,
+      updatedAt: SEEDED_AT,
+    },
+    {
+      userId: LOCAL_REVIEWER_ACCOUNT_ID,
+      email: LOCAL_REVIEWER_EMAIL,
+      name: "Local Reviewer",
+      emailVerified: true,
+      createdAt: SEEDED_AT,
+      updatedAt: SEEDED_AT,
+    },
+    {
+      userId: LOCAL_SPEAKER_ACCOUNT_ID,
+      email: LOCAL_SPEAKER_EMAIL,
+      name: "Alex Rivera",
+      emailVerified: true,
+      createdAt: SEEDED_AT,
+      updatedAt: SEEDED_AT,
+    },
+  ];
+  const localMemberMemberships: MemberMembership[] = [
+    {
+      organizationId: LOCAL_ORGANIZATION_ID,
+      userId: LOCAL_ORGANIZER_ACCOUNT_ID,
+      role: "owner",
+      createdAt: SEEDED_AT,
+      updatedAt: SEEDED_AT,
+    },
+    {
+      organizationId: LOCAL_ORGANIZATION_ID,
+      userId: LOCAL_REVIEWER_ACCOUNT_ID,
+      role: "reviewer",
+      createdAt: SEEDED_AT,
+      updatedAt: SEEDED_AT,
+    },
+  ];
+  const reviewerPool: ReviewerPool = {
+    organizationId: LOCAL_ORGANIZATION_ID,
+    eventId: "demo-event",
+    roundId: "local-review-round",
+    reviewerIds: [LOCAL_REVIEWER_ACCOUNT_ID],
+    grants: [{ reviewerId: LOCAL_REVIEWER_ACCOUNT_ID, maxAssignments: 5, assignedCount: 1 }],
+    version: 1,
+    createdAt: SEEDED_AT,
+    updatedAt: SEEDED_AT,
+  };
+  const memberIdentity = new InMemoryMemberIdentityRepository({
+    users: localMemberUsers,
+    memberships: localMemberMemberships,
+  });
+  const memberService = new MemberService(
+    {
+      identity: memberIdentity,
+      auth: new InMemoryMemberAuthBoundary({
+        baseUrl: "http://localhost:3015/setup",
+        clock: () => new Date(SEEDED_AT),
+        generateToken: () => "local-member-setup-token",
+      }),
+      invitationDelivery: new InMemoryMemberInvitationDelivery(),
+      reviewerPools: new InMemoryReviewerPoolRepository({ pools: [reviewerPool] }),
+    },
+    {
+      clock: () => new Date(SEEDED_AT),
+      generateId: (() => {
+        let sequence = 0;
+        return () => `local-member-id-${++sequence}`;
+      })(),
+    },
+  );
   const webhookIds = { whs: 0, whd: 0 };
   const integrationRepository = new LocalIntegrationAdminRepository(publicRepository);
   const webhookRepository = new InMemoryWebhookRepository(
@@ -1203,28 +2112,234 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
     },
   );
 
+  const communicationTemplate: CommunicationTemplate = {
+    id: "local-template-accepted",
+    tenantId: LOCAL_ORGANIZATION_ID,
+    eventId: "demo-event",
+    name: "Accepted proposal",
+    purpose: "decision",
+    version: 1,
+    status: "approved",
+    sender: "speakers@sessionboard.namuh.co",
+    subject: "Your proposal was accepted",
+    html: "<p>Your proposal was accepted.</p>",
+    text: "Your proposal was accepted.",
+    variables: [],
+    createdBy: LOCAL_ORGANIZER_ACCOUNT_ID,
+    createdAt: SEEDED_AT,
+    updatedAt: SEEDED_AT,
+    approvedBy: LOCAL_ORGANIZER_ACCOUNT_ID,
+    approvedAt: SEEDED_AT,
+  };
+  const communicationRepository = new InMemoryCommunicationRepository({
+    templates: [communicationTemplate],
+    recipients: [
+      {
+        id: "local-recipient-speaker",
+        participantId: "local-participant",
+        tenantId: LOCAL_ORGANIZATION_ID,
+        eventId: "demo-event",
+        email: LOCAL_SPEAKER_EMAIL,
+        displayName: "Alex Rivera",
+        audiences: ["accepted_participants", "all_participants"],
+        data: { firstName: "Alex", sessionTitle: "Designing reliable community systems" },
+      } satisfies CommunicationRecipient,
+    ],
+    authorizedAudiences: {
+      [`${LOCAL_ORGANIZATION_ID}:demo-event`]: ["accepted_participants", "all_participants"],
+    },
+  });
+  const communicationService = new CommunicationService(communicationRepository, undefined, {
+    clock: () => new Date(SEEDED_AT),
+  });
+  const reportRecords: ReportProgramRecord[] = [
+    {
+      tenantId: LOCAL_ORGANIZATION_ID,
+      eventId: "demo-event",
+      session: {
+        id: "local-session-keynote",
+        title: "Designing reliable community systems",
+        abstract: "A practical session about building systems that communities can trust.",
+        status: "Accepted",
+        room: "Main Hall",
+        track: "Main stage",
+      },
+      participants: [
+        {
+          id: "local-participant",
+          displayName: "Alex Rivera",
+          biography: "Alex builds dependable, accessible systems for communities.",
+        },
+      ],
+      speakers: [
+        {
+          id: "local-participant",
+          displayName: "Alex Rivera",
+          biography: "Alex builds dependable, accessible systems for communities.",
+        },
+      ],
+      evaluationProgress: [
+        {
+          planId: "local-evaluation-plan",
+          planName: "Demo CFP review",
+          planVersion: 1,
+          total: 1,
+          assigned: 1,
+          inProgress: 0,
+          submitted: 0,
+          completionPercent: 0,
+        },
+      ],
+    },
+  ];
+  const reportRepository = new InMemoryReportRepository(reportRecords);
+  const reportDefinition: ReportDefinition = {
+    id: "local-program-report",
+    tenantId: LOCAL_ORGANIZATION_ID,
+    eventId: "demo-event",
+    name: "Program and review progress",
+    description: "Accepted sessions and aggregate evaluation progress.",
+    relationships: ["sessions", "participants", "evaluationProgress"],
+    fields: [
+      "sessions.title",
+      "sessions.status",
+      "participants.displayName",
+      "evaluationProgress.completionPercent",
+    ],
+    order: [
+      "sessions.title",
+      "sessions.status",
+      "participants.displayName",
+      "evaluationProgress.completionPercent",
+    ],
+    filters: [],
+    sort: [{ field: "sessions.title", direction: "asc" }],
+    version: 1,
+    createdBy: LOCAL_ORGANIZER_ACCOUNT_ID,
+    createdAt: SEEDED_AT,
+    updatedAt: SEEDED_AT,
+  };
+  void reportRepository.createDefinition(reportDefinition);
+  const reportService = new ReportService(reportRepository, {
+    clock: () => new Date(SEEDED_AT),
+  });
+  const reportSeedActor = {
+    tenantId: LOCAL_ORGANIZATION_ID,
+    userId: LOCAL_ORGANIZER_ACCOUNT_ID,
+    kind: "human" as const,
+    grants: [{ eventId: "demo-event", role: "organizer" as const }],
+  };
+  const reportSeed = reportService
+    .runDefinition(reportSeedActor, "local-program-report", { format: "csv" })
+    .catch(() => undefined);
+  const reportRouteService = new Proxy(reportService, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+      if (typeof value !== "function") return value;
+      return (...args: unknown[]) => reportSeed.then(() => value.apply(target, args));
+    },
+  });
+  const remixService = new RemixService(
+    new LocalRemixRepository(),
+    new LocalRemixContentGateway(sessionService, sessionRepository, speakerRepository),
+    aiProviders?.remix,
+    {
+      clock: { now: () => new Date(SEEDED_AT) },
+      idGenerator: {
+        nextId: (prefix) => `${prefix}_local_${prefix === "candidate" ? "1" : "1"}`,
+      },
+    },
+  );
+  const cfpService = localCfpServiceWithSeed(createLocalCfpService());
   return {
+    events: { service: eventService },
+    sessions: { service: sessionService },
+    members: { service: memberService },
+    communications: {
+      service: communicationService,
+      async actorFor(principal: AuthPrincipal, organizationId: string, eventId: string) {
+        if (principal.kind !== "user") return null;
+        const membership = principal.memberships.find(
+          (candidate) =>
+            candidate.organizationId === organizationId &&
+            (candidate.role === "owner" || candidate.role === "admin"),
+        );
+        return membership === undefined
+          ? null
+          : {
+              tenantId: organizationId,
+              userId: principal.userId,
+              kind: "human" as const,
+              grants: [{ eventId, role: "organizer" as const }],
+            };
+      },
+    },
+    reports: {
+      service: reportRouteService,
+      async actorFor(principal: AuthPrincipal, organizationId: string, eventId: string) {
+        if (principal.kind !== "user") return null;
+        const membership = principal.memberships.find(
+          (candidate) =>
+            candidate.organizationId === organizationId &&
+            (candidate.role === "owner" || candidate.role === "admin"),
+        );
+        return membership === undefined
+          ? null
+          : {
+              tenantId: organizationId,
+              userId: principal.userId,
+              kind: "human" as const,
+              canViewPersonalData: false,
+              grants: [{ eventId, role: "organizer" as const, canViewPersonalData: false }],
+            };
+      },
+    },
+    remix: {
+      service: remixService,
+      async actorFor(principal: AuthPrincipal, organizationId: string, eventId: string) {
+        if (principal.kind !== "user") return null;
+        const membership = principal.memberships.find(
+          (candidate) =>
+            candidate.organizationId === organizationId &&
+            (candidate.role === "owner" || candidate.role === "admin"),
+        );
+        return membership === undefined
+          ? null
+          : {
+              tenantId: organizationId,
+              userId: principal.userId,
+              kind: "human" as const,
+              grants: [{ eventId, role: "organizer" as const }],
+            };
+      },
+    },
     authenticator,
     auth: localAuthRoutes(),
     organizerOverview,
     speaker: {
       service: speakerService,
       async authenticate(request) {
-        const hasCredential =
-          request.headers.has("authorization") ||
-          request.headers
-            .get("cookie")
-            ?.split(";")
-            .some((part) => part.trim().startsWith("better-auth.session_token=")) === true;
         const principal = await authenticator.authenticate(request).catch(() => null);
-        if (principal?.kind === "user") return { accountId: principal.userId };
-        return hasCredential ? null : { accountId: LOCAL_SPEAKER_ACCOUNT_ID };
+        return principal?.kind === "user" ? { accountId: principal.userId } : null;
       },
     },
     agenda: {
       engine: agendaEngine,
       async organizationIdForEvent(eventId) {
-        return eventId.trim().length === 0 ? null : LOCAL_ORGANIZATION_ID;
+        const event = await eventRepository.getEvent(LOCAL_ORGANIZATION_ID, eventId);
+        return event?.organizationId ?? null;
+      },
+      async eventMetadataForEvent(eventId) {
+        const event = await eventRepository.getEvent(LOCAL_ORGANIZATION_ID, eventId);
+        if (event === null) return null;
+        return {
+          slug: event.slug,
+          name: event.name,
+          timeZone: event.timeZone,
+          startsOn: event.startsAt.slice(0, 10),
+          endsOn: event.endsAt.slice(0, 10),
+          venueName: event.venue,
+        };
       },
     },
     evaluations: {
@@ -1243,14 +2358,69 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
           typeof body?.eventId === "string" && body.eventId.trim().length > 0
             ? body.eventId
             : eventIdFrom(request);
+        const role =
+          membership.role === "owner" || membership.role === "admin" ? "organizer" : "reviewer";
+        if (role === "reviewer" && eventId !== "demo-event") return null;
         return {
           tenantId: LOCAL_ORGANIZATION_ID,
           userId: principal.userId,
           kind: "human",
-          grants: [
-            { eventId, role: "organizer" },
-            { eventId, role: "reviewer" },
-          ],
+          grants: [{ eventId, role }],
+        };
+      },
+    },
+    publishedSpeakers: {
+      async getPublishedSpeakers(eventSlug: string): Promise<PublishedSpeakerProjection | null> {
+        const event = (await eventRepository.listEvents(LOCAL_ORGANIZATION_ID)).find(
+          (candidate) => candidate.slug === eventSlug,
+        );
+        if (event === undefined) return null;
+        const revision = await agendaEngine.getPublishedAgenda(event.id);
+        if (revision === null) return null;
+        const sessions = await sessionRepository.listSessions(LOCAL_ORGANIZATION_ID, event.id);
+        const sessionById = new Map(sessions.map((session) => [session.id, session]));
+        const speakerSessions = new Map<string, Array<{ id: string; title: string }>>();
+        for (const entry of revision.entries) {
+          const session = sessionById.get(entry.sessionId);
+          if (session === undefined) continue;
+          for (const participantId of session.speakerIds) {
+            const entries = speakerSessions.get(participantId) ?? [];
+            entries.push({ id: session.id, title: session.title });
+            speakerSessions.set(participantId, entries);
+          }
+        }
+        const profiles = await speakerRepository.listProfiles(event.id, [
+          ...speakerSessions.keys(),
+        ]);
+        return {
+          event: {
+            slug: event.slug,
+            name: event.name,
+            timeZone: event.timeZone,
+            startsOn: event.startsAt.slice(0, 10),
+            endsOn: event.endsAt.slice(0, 10),
+            venueName: event.venue,
+          },
+          revision: {
+            id: revision.id,
+            number: revision.revisionNumber,
+            publishedAt: revision.publishedAt,
+          },
+          speakers: profiles.map((profile) => {
+            const speakerSessionList = speakerSessions.get(profile.participantId) ?? [];
+            return {
+              id: profile.participantId,
+              displayName: profile.displayName,
+              pronouns: null,
+              jobTitle: profile.jobTitle ?? null,
+              organization: profile.company ?? null,
+              biography: profile.biography,
+              photoUrl: null,
+              sessionIds: speakerSessionList.map((session) => session.id),
+              sessionTitles: speakerSessionList.map((session) => session.title),
+              trackNames: [],
+            };
+          }),
         };
       },
     },
@@ -1271,7 +2441,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
         integrationRepository.retryCalendarDelivery.bind(integrationRepository),
     } satisfies IntegrationAdminRouteDependencies,
     webhooks: webhookRepository,
-    cfp: { service: createLocalCfpService() },
+    cfp: { service: cfpService },
   } as ApiDependencies & {
     cfp: { service: ReturnType<typeof createLocalCfpService> };
   };

@@ -45,11 +45,17 @@ import {
   type OrganizerAutojoinConfiguration,
   type RuntimeBindings,
 } from "./cloudflare";
-import { createRuntimeApp, createRuntimeWorker } from "./composition";
-import { LOCAL_API_KEY, LOCAL_ORGANIZATION_ID, LOCAL_SESSION_TOKEN } from "./local";
+import { createRuntimeApp, createRuntimeDependencies, createRuntimeWorker } from "./composition";
+import {
+  LOCAL_API_KEY,
+  LOCAL_ORGANIZATION_ID,
+  LOCAL_SESSION_TOKEN,
+  LOCAL_SPEAKER_SESSION_TOKEN,
+} from "./local";
 
 const localBindings: RuntimeBindings = {
   APP_ENV: "local",
+  RUNTIME_PROFILE: "fixture",
   WEB_ORIGIN: "http://localhost:3015",
 };
 class FormulaRecordingTransport implements AirtableTransport {
@@ -142,6 +148,9 @@ class OrderedCrmProjectionTransport extends CrmCountingTransport {
 
 function organizerHeaders(): HeadersInit {
   return { cookie: `better-auth.session_token=${LOCAL_SESSION_TOKEN}` };
+}
+function speakerHeaders(): HeadersInit {
+  return { cookie: `better-auth.session_token=${LOCAL_SPEAKER_SESSION_TOKEN}` };
 }
 function productionD1(digest: string): NonNullable<RuntimeBindings["DB"]> {
   const row = {
@@ -1008,14 +1017,70 @@ describe("production organizer autojoin", () => {
   });
 });
 
-describe("local runtime composition", () => {
+describe("integrated local runtime composition", () => {
+  function bindingsFor(transport: AirtableTransport): RuntimeBindings {
+    return {
+      ...productionBindings(transport, productionD1("unused")),
+      APP_ENV: "local",
+      RUNTIME_PROFILE: "integrated",
+      WEB_ORIGIN: "http://127.0.0.1:3015",
+      API_ORIGIN: "https://production-origin-must-be-ignored.example",
+      AIRTABLE_BASE_ID: "production-base-must-not-be-used",
+      AIRTABLE_BASE_DEV_ID: "development-base",
+      BETTER_AUTH_SECRET: "production-secret-must-not-be-used",
+      OPENSEND_API_URL: "https://production-mail-must-not-be-used.example",
+      OPENSEND_API_KEY: "production-mail-key-must-not-be-used",
+    };
+  }
+
+  it("uses the production repository graph with only the dedicated development base", async () => {
+    const transport = new FormulaRecordingTransport();
+    const bindings = bindingsFor(transport);
+    const dependencies = createRuntimeDependencies(bindings);
+
+    expect(dependencies.events).toBeDefined();
+    expect(dependencies.sessions).toBeDefined();
+    expect(dependencies.communications).toBeDefined();
+    expect(dependencies.members).toBeDefined();
+
+    await dependencies.events?.service.listEvents(
+      {
+        organizationId: LOCAL_ORGANIZATION_ID,
+        userId: "local-integrated-owner",
+        role: "owner",
+        kind: "human",
+      },
+      { organizationId: LOCAL_ORGANIZATION_ID, includeArchived: false },
+    );
+
+    expect(transport.requests.length).toBeGreaterThan(0);
+    expect(transport.requests.every((request) => request.baseId === "development-base")).toBe(true);
+    expect(
+      transport.requests.some((request) => request.baseId === "production-base-must-not-be-used"),
+    ).toBe(false);
+  });
+
+  it("fails closed without AIRTABLE_BASE_DEV_ID even when AIRTABLE_BASE_ID exists", () => {
+    const bindings = bindingsFor(new FakeAirtableTransport());
+    const { AIRTABLE_BASE_DEV_ID: _developmentBase, ...withoutDevelopmentBase } = bindings;
+    const inspection = inspectProductionRuntime(withoutDevelopmentBase);
+
+    expect(inspection.success).toBe(false);
+    expect(inspection.issues).toContain(
+      "AIRTABLE_BASE_DEV_ID is required for integrated local development",
+    );
+    expect(() => createRuntimeApp(withoutDevelopmentBase)).toThrow();
+  });
+});
+
+describe("fixture local runtime composition", () => {
   it("serves health and a seeded speaker portal without external credentials", async () => {
     const app = createRuntimeApp(localBindings);
 
     const health = await app.request("/api/health", undefined, localBindings);
     const portal = await app.request(
-      "/api/speaker/events/current/portal",
-      undefined,
+      "/api/speaker/events/demo-event/portal",
+      { headers: speakerHeaders() },
       localBindings,
     );
 
@@ -1074,13 +1139,13 @@ describe("local runtime composition", () => {
         organizationId: LOCAL_ORGANIZATION_ID,
         metrics: {
           submissionCount: 1,
-          pendingReviewCount: 0,
+          pendingReviewCount: 1,
           outstandingSpeakerTaskCount: 2,
-          publishedSessionCount: 0,
+          publishedSessionCount: 2,
         },
         actionItems: [
+          { id: "reviews:demo-event", count: 1 },
           { id: "speaker_tasks:demo-event", count: 2 },
-          { id: "agenda:demo-event", count: 2 },
         ],
       },
     });
@@ -1448,13 +1513,13 @@ describe("local runtime composition", () => {
 
   it("keeps local speaker mutations stateful and version checked", async () => {
     const app = createRuntimeApp(localBindings);
-    const path = "/api/speaker/events/current/profiles/local-participant";
+    const path = "/api/speaker/events/demo-event/profiles/local-participant";
 
     const updated = await app.request(
       path,
       {
         method: "PATCH",
-        headers: { "content-type": "application/json" },
+        headers: { ...speakerHeaders(), "content-type": "application/json" },
         body: JSON.stringify({
           biography: "Updated local biography.",
           expectedVersion: 1,
@@ -1466,7 +1531,7 @@ describe("local runtime composition", () => {
       path,
       {
         method: "PATCH",
-        headers: { "content-type": "application/json" },
+        headers: { ...speakerHeaders(), "content-type": "application/json" },
         body: JSON.stringify({
           biography: "Stale update.",
           expectedVersion: 1,
@@ -1547,11 +1612,11 @@ describe("local runtime composition", () => {
       data: {
         event: {
           slug: "demo-event",
-          name: "Demo Event",
+          name: "Open Sessionboard Demo",
           timeZone: "America/Los_Angeles",
           startsOn: "2026-09-18",
           endsOn: "2026-09-18",
-          venueName: null,
+          venueName: "Open Sessionboard Hall",
         },
         revision: {
           id: "revision_local_3",
@@ -1562,7 +1627,7 @@ describe("local runtime composition", () => {
           {
             id: "local-entry-keynote",
             sessionId: "local-session-keynote",
-            title: "Opening keynote: Systems that earn trust",
+            title: "Designing reliable community systems",
             summary: "",
             format: "Session",
             speakerNames: [],

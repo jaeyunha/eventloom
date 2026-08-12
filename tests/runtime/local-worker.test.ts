@@ -4,6 +4,7 @@ import { apiErrorSchema, healthResponseSchema } from "../../packages/contracts/s
 
 type RuntimeBindings = {
   APP_ENV: "local" | "staging" | "production";
+  RUNTIME_PROFILE?: "integrated" | "fixture";
   WEB_ORIGIN: string;
   DB: unknown;
   AGENDA_COORDINATOR: unknown;
@@ -28,7 +29,14 @@ const organizerHeaders = {
   cookie: "better-auth.session_token=local-session",
   "x-request-id": traceId,
 };
-const speakerHeaders = organizerHeaders;
+const reviewerHeaders = {
+  cookie: "better-auth.session_token=local-reviewer-session",
+  "x-request-id": traceId,
+};
+const speakerHeaders = {
+  cookie: "better-auth.session_token=local-speaker-session",
+  "x-request-id": traceId,
+};
 
 function createBindingFakes(): Omit<RuntimeBindings, "APP_ENV" | "WEB_ORIGIN"> {
   const statement = {
@@ -62,6 +70,7 @@ function createBindingFakes(): Omit<RuntimeBindings, "APP_ENV" | "WEB_ORIGIN"> {
 
 const localBindings: RuntimeBindings = {
   APP_ENV: "local",
+  RUNTIME_PROFILE: "fixture",
   WEB_ORIGIN: webOrigin,
   ...createBindingFakes(),
 };
@@ -202,6 +211,222 @@ describe.sequential("composed local Worker", () => {
     expect(portal.profiles.every((profile) => profile.eventId === eventId)).toBe(true);
     expect(portal.tasks.every((task) => task.eventId === eventId)).toBe(true);
   });
+  it("keeps organizer, reviewer, and speaker personas on separate authorization paths", async () => {
+    const signIn = async (email: string, password: string) => {
+      const response = await runtimeRequest(
+        "/api/auth/sign-in/email",
+        jsonRequest("POST", { email, password }),
+      );
+      expect(response.status).toBe(200);
+      return response;
+    };
+    const organizerSignIn = await signIn(
+      "organizer@local.open-sessionboard.test",
+      "organizer-local",
+    );
+    const reviewerSignIn = await signIn("reviewer@local.open-sessionboard.test", "reviewer-local");
+    const speakerSignIn = await signIn("speaker@local.open-sessionboard.test", "speaker-local");
+
+    expect((await organizerSignIn.json()).token).toBe("local-session");
+    expect((await reviewerSignIn.json()).token).toBe("local-reviewer-session");
+    expect((await speakerSignIn.json()).token).toBe("local-speaker-session");
+
+    const reviewerWorkspace = await runtimeRequest(
+      "/api/admin/evaluations/reviewer/workspace?eventId=demo-event",
+      { headers: reviewerHeaders },
+    );
+    const reviewerData = await jsonData<{
+      assignments: Array<{ assignment: { reviewerId: string; status: string } }>;
+    }>(reviewerWorkspace);
+    expect(reviewerWorkspace.status).toBe(200);
+    expect(reviewerData.assignments).toEqual([
+      expect.objectContaining({
+        assignment: expect.objectContaining({ reviewerId: "local-reviewer", status: "assigned" }),
+      }),
+    ]);
+
+    const reviewerEvents = await runtimeRequest(
+      `/api/admin/organizations/${organizationId}/events`,
+      { headers: reviewerHeaders },
+    );
+    await errorResponse(reviewerEvents, 403, "ACCESS_DENIED");
+
+    const reviewerOrganizerWorkspace = await runtimeRequest(
+      "/api/admin/evaluations/organizer/workspace?eventId=demo-event",
+      { headers: reviewerHeaders },
+    );
+    await errorResponse(reviewerOrganizerWorkspace, 403, "ACCESS_DENIED");
+
+    const speakerEvents = await runtimeRequest(
+      `/api/admin/organizations/${organizationId}/events`,
+      { headers: speakerHeaders },
+    );
+    await errorResponse(speakerEvents, 403, "ACCESS_DENIED");
+
+    const reviewerPortal = await runtimeRequest(`/api/speaker/events/${eventId}/portal`, {
+      headers: reviewerHeaders,
+    });
+    await errorResponse(reviewerPortal, 404, "NOT_FOUND");
+    const speakerPortal = await runtimeRequest(`/api/speaker/events/${eventId}/portal`, {
+      headers: speakerHeaders,
+    });
+    expect(speakerPortal.status).toBe(200);
+  });
+  it("serves one event lifecycle across organizer surfaces and public projections", async () => {
+    const eventResponse = await runtimeRequest(
+      `/api/admin/organizations/${organizationId}/events`,
+      { headers: organizerHeaders },
+    );
+    const events = await jsonData<Array<Record<string, unknown>>>(eventResponse);
+    expect(eventResponse.status).toBe(200);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: eventId, status: "active", slug: eventId }),
+      ]),
+    );
+
+    const eventDetailResponse = await runtimeRequest(
+      `/api/admin/organizations/${organizationId}/events/${eventId}`,
+      { headers: organizerHeaders },
+    );
+    const eventDetail = await jsonData<Record<string, any>>(eventDetailResponse);
+    expect(eventDetailResponse.status).toBe(200);
+    expect(eventDetail).toMatchObject({
+      id: eventId,
+      status: "active",
+      cfpSettings: { enabled: true },
+      embedConfigurations: [expect.objectContaining({ enabled: true, widgetId: "agenda" })],
+    });
+    const overviewResponse = await runtimeRequest(
+      `/api/admin/organizations/${organizationId}/overview/activity`,
+      { headers: organizerHeaders },
+    );
+    const overview = await jsonData<{
+      metrics: {
+        submissionCount: number;
+        pendingReviewCount: number;
+        outstandingSpeakerTaskCount: number;
+        publishedSessionCount: number;
+      };
+    }>(overviewResponse);
+    expect(overviewResponse.status).toBe(200);
+    expect(overview.metrics).toMatchObject({
+      submissionCount: 1,
+      pendingReviewCount: 1,
+      outstandingSpeakerTaskCount: 2,
+      publishedSessionCount: 2,
+    });
+
+    const sessionsResponse = await runtimeRequest(
+      `/api/admin/organizations/${organizationId}/events/${eventId}/sessions`,
+      { headers: organizerHeaders },
+    );
+    const sessions = await jsonData<Array<Record<string, unknown>>>(sessionsResponse);
+    const settingsResponse = await runtimeRequest(
+      `/api/admin/organizations/${organizationId}/events/${eventId}/sessions/settings`,
+      { headers: organizerHeaders },
+    );
+    const settings = await jsonData<Record<string, unknown>>(settingsResponse);
+    const auditResponse = await runtimeRequest(
+      `/api/admin/organizations/${organizationId}/events/${eventId}/sessions/audit`,
+      { headers: organizerHeaders },
+    );
+    const audit = await jsonData<Array<Record<string, unknown>>>(auditResponse);
+    expect(sessionsResponse.status).toBe(200);
+    expect(sessions.length).toBeGreaterThanOrEqual(2);
+    expect(sessions.every((session) => session.status === "Accepted")).toBe(true);
+    expect(settingsResponse.status).toBe(200);
+    expect(settings).toMatchObject({ agendaEligibleStatuses: ["Accepted"] });
+    expect(auditResponse.status).toBe(200);
+    expect(audit.length).toBeGreaterThan(0);
+
+    const membersResponse = await runtimeRequest(
+      `/api/admin/organizations/${organizationId}/members`,
+      { headers: organizerHeaders },
+    );
+    const members = await jsonData<Array<Record<string, unknown>>>(membersResponse);
+    expect(membersResponse.status).toBe(200);
+    expect(members).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ userId: "local-organizer", role: "owner" }),
+        expect.objectContaining({ userId: "local-reviewer", role: "reviewer" }),
+      ]),
+    );
+
+    const cfpResponse = await runtimeRequest(
+      `/api/cfp/organizations/${organizationId}/events/${eventId}/submissions`,
+      { headers: organizerHeaders },
+    );
+    const cfpSubmissions = await jsonData<Array<Record<string, unknown>>>(cfpResponse);
+    expect(cfpResponse.status).toBe(200);
+    expect(cfpSubmissions.length).toBeGreaterThan(0);
+    expect(cfpSubmissions.some((submission) => submission.status === "submitted")).toBe(true);
+
+    const publicCfpResponse = await runtimeRequest(
+      `/api/public/cfp/organizations/${organizationId}/events/${eventId}`,
+    );
+    expect(publicCfpResponse.status).toBe(200);
+
+    const organizerEvaluation = await runtimeRequest(
+      "/api/admin/evaluations/organizer/workspace?eventId=demo-event",
+      { headers: organizerHeaders },
+    );
+    expect(organizerEvaluation.status).toBe(200);
+
+    const deliverablesResponse = await runtimeRequest(
+      `/api/speaker/events/${eventId}/organizer/deliverables`,
+      { headers: organizerHeaders },
+    );
+    const deliverables = await jsonData<Record<string, any>>(deliverablesResponse);
+    const filesResponse = await runtimeRequest(`/api/speaker/events/${eventId}/organizer/assets`, {
+      headers: organizerHeaders,
+    });
+    const files = await jsonData<Array<Record<string, unknown>>>(filesResponse);
+    expect(deliverablesResponse.status).toBe(200);
+    expect(JSON.stringify(deliverables)).toContain("local-slides-task");
+    expect(filesResponse.status).toBe(200);
+    expect(files).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "local-slides-asset", state: "ready" }),
+      ]),
+    );
+
+    const communicationsResponse = await runtimeRequest(
+      `/api/admin/organizations/${organizationId}/events/${eventId}/communications/templates`,
+      { headers: organizerHeaders },
+    );
+    const communications = await communicationsResponse.json();
+    expect(communicationsResponse.status).toBe(200);
+    expect(JSON.stringify(communications)).toContain("local-template-accepted");
+
+    const reportsResponse = await runtimeRequest(
+      `/api/admin/organizations/${organizationId}/events/${eventId}/reports`,
+      { headers: organizerHeaders },
+    );
+    const reports = await reportsResponse.json();
+    expect(reportsResponse.status).toBe(200);
+    expect(JSON.stringify(reports)).toContain("local-program-report");
+
+    const remixRecordsResponse = await runtimeRequest(
+      `/api/admin/organizations/${organizationId}/events/${eventId}/remix/records?sourceType=session`,
+      { headers: organizerHeaders },
+    );
+    const remixRecords = await remixRecordsResponse.json();
+    expect(remixRecordsResponse.status).toBe(200);
+    expect(JSON.stringify(remixRecords)).toContain("local-session-keynote");
+
+    const publicAgendaResponse = await runtimeRequest(`/api/public/events/${eventId}/agenda`);
+    const publicAgenda = await jsonData<{ eventId: string; entries: unknown[] }>(
+      publicAgendaResponse,
+    );
+    const publicSpeakersResponse = await runtimeRequest(`/api/public/events/${eventId}/speakers`);
+    const publicSpeakers = await publicSpeakersResponse.json();
+    expect(publicAgendaResponse.status).toBe(200);
+    expect(publicAgenda.eventId).toBe(eventId);
+    expect(publicAgenda.entries.length).toBeGreaterThan(0);
+    expect(publicSpeakersResponse.status).toBe(200);
+    expect(JSON.stringify(publicSpeakers)).toContain("Alex Rivera");
+  });
 
   it("rejects agenda conflicts and stale writes, then publishes the immutable public projection", async () => {
     const adminBase = `/api/admin/organizations/${organizationId}/events/${eventId}/agenda`;
@@ -329,7 +554,7 @@ describe.sequential("composed local Worker", () => {
     const createInit = {
       method: "POST",
       headers: {
-        ...organizerHeaders,
+        ...speakerHeaders,
         "idempotency-key": "runtime-cfp-create-1",
       },
     } satisfies RequestInit;
@@ -342,7 +567,7 @@ describe.sequential("composed local Worker", () => {
 
     const missingIdempotencyKey = await runtimeRequest(createPath, {
       method: "POST",
-      headers: organizerHeaders,
+      headers: speakerHeaders,
     });
     await errorResponse(missingIdempotencyKey, 400, "VALIDATION_FAILED");
 
@@ -375,7 +600,7 @@ describe.sequential("composed local Worker", () => {
               ? {
                   answers: {
                     title: "Reliable local runtime verification",
-                    format: "talk",
+                    format: "Workshop",
                     abstract:
                       "A complete deterministic CFP submission exercised without credentials.",
                   },
@@ -383,7 +608,7 @@ describe.sequential("composed local Worker", () => {
               : {}),
           },
           {
-            ...organizerHeaders,
+            ...speakerHeaders,
             "idempotency-key": `runtime-cfp-step-${completedStep}`,
           },
         ),
@@ -412,7 +637,7 @@ describe.sequential("composed local Worker", () => {
           ],
           secondaryContacts: [],
         },
-        { ...organizerHeaders, "idempotency-key": "runtime-cfp-participants-1" },
+        { ...speakerHeaders, "idempotency-key": "runtime-cfp-participants-1" },
       ),
     );
     const participants = await jsonData<{ version: number }>(participantsResponse);
@@ -424,7 +649,7 @@ describe.sequential("composed local Worker", () => {
       jsonRequest(
         "PATCH",
         { expectedVersion: version, completedStep: "review" },
-        { ...organizerHeaders, "idempotency-key": "runtime-cfp-review-step-1" },
+        { ...speakerHeaders, "idempotency-key": "runtime-cfp-review-step-1" },
       ),
     );
     const reviewStep = await jsonData<{ version: number }>(reviewStepResponse);
@@ -433,7 +658,7 @@ describe.sequential("composed local Worker", () => {
 
     const reviewResponse = await runtimeRequest(`${cfpBase}/submissions/${created.id}/review`, {
       method: "POST",
-      headers: { ...organizerHeaders, "idempotency-key": "runtime-cfp-review-1" },
+      headers: { ...speakerHeaders, "idempotency-key": "runtime-cfp-review-1" },
     });
     const review = await jsonData<{ canSubmit: boolean; issues: unknown[] }>(reviewResponse);
     expect(reviewResponse.status).toBe(200);
@@ -442,7 +667,7 @@ describe.sequential("composed local Worker", () => {
     const submitInit = jsonRequest(
       "POST",
       { expectedVersion: version },
-      { ...organizerHeaders, "idempotency-key": "runtime-cfp-submit-1" },
+      { ...speakerHeaders, "idempotency-key": "runtime-cfp-submit-1" },
     );
     const submitResponse = await runtimeRequest(
       `${cfpBase}/submissions/${created.id}/submit`,

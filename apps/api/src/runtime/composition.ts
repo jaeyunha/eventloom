@@ -14,6 +14,7 @@ import {
 import {
   createCloudflareDependencies,
   inspectProductionRuntime,
+  runtimeBindingsForEnvironment,
   type RuntimeBindings,
 } from "./cloudflare";
 import { createLocalDependencies } from "./local";
@@ -95,7 +96,16 @@ function createLocalAiProviders(apiKey: string, bindings: RuntimeBindings) {
 }
 
 export function createRuntimeDependencies(bindings: RuntimeBindings): ApiDependencies {
-  if (bindings.APP_ENV === "local") {
+  const profile = bindings.RUNTIME_PROFILE?.trim().toLowerCase() || "integrated";
+  if (profile !== "integrated" && profile !== "fixture") {
+    throw new RuntimeConfigurationError(["RUNTIME_PROFILE must be integrated or fixture"]);
+  }
+  if (profile === "fixture") {
+    if (bindings.APP_ENV !== "local") {
+      throw new RuntimeConfigurationError([
+        "RUNTIME_PROFILE=fixture is allowed only with APP_ENV=local",
+      ]);
+    }
     const aiSelection = bindings.AI_PROVIDER?.trim().toLowerCase() || "auto";
     const useOpenAi =
       (aiSelection === "openai" || aiSelection === "auto") &&
@@ -103,7 +113,7 @@ export function createRuntimeDependencies(bindings: RuntimeBindings): ApiDepende
       bindings.OPENAI_API_KEY.trim().length > 0;
     if (aiSelection !== "auto" && aiSelection !== "openai" && aiSelection !== "disabled") {
       throw new RuntimeConfigurationError([
-        "Local AI_PROVIDER must be auto, openai, or disabled; Workers AI requires deployed bindings.",
+        "Fixture AI_PROVIDER must be auto, openai, or disabled.",
       ]);
     }
     const aiProviders = useOpenAi
@@ -111,7 +121,11 @@ export function createRuntimeDependencies(bindings: RuntimeBindings): ApiDepende
       : undefined;
     return createLocalDependencies(aiProviders);
   }
-  if (bindings.APP_ENV !== "staging" && bindings.APP_ENV !== "production") {
+  if (
+    bindings.APP_ENV !== "local" &&
+    bindings.APP_ENV !== "staging" &&
+    bindings.APP_ENV !== "production"
+  ) {
     throw new RuntimeConfigurationError(["APP_ENV must be local, staging, or production"]);
   }
   const inspection = inspectProductionRuntime(bindings);
@@ -259,12 +273,7 @@ export function createRuntimeApp(bindings: RuntimeBindings) {
 
 export function createRuntimeWorker(): ExportedHandler<RuntimeBindings> {
   const runtimes = new WeakMap<object, RuntimeApplication>();
-  let localRuntime: RuntimeApplication | undefined;
   const runtimeFor = (bindings: RuntimeBindings): RuntimeApplication => {
-    if (bindings.APP_ENV === "local") {
-      if (localRuntime === undefined) localRuntime = createRuntimeApplication(bindings);
-      return localRuntime;
-    }
     const cached = runtimes.get(bindings);
     if (cached !== undefined) return cached;
     const runtime = createRuntimeApplication(bindings);
@@ -286,6 +295,12 @@ export function createRuntimeWorker(): ExportedHandler<RuntimeBindings> {
       return runtime.app.fetch(request, bindings, executionContext);
     },
     async queue(batch, bindings, executionContext) {
+      if (bindings.APP_ENV === "local" && bindings.RUNTIME_PROFILE?.trim() === "fixture") {
+        for (const message of batch.messages) {
+          message.retry({ delaySeconds: 60 });
+        }
+        return;
+      }
       const inspection = inspectProductionRuntime(bindings);
       if (!inspection.success) {
         for (const message of batch.messages) {
@@ -294,9 +309,15 @@ export function createRuntimeWorker(): ExportedHandler<RuntimeBindings> {
         return;
       }
       const runtime = runtimeFor(bindings);
-      await consumeOutboxQueue(batch, bindings as OutboxConsumerBindings, executionContext, {
-        statusRecorder: createOutboxDeliveryStatusRecorder(runtime.dependencies),
-      });
+      const effectiveBindings = runtimeBindingsForEnvironment(bindings);
+      await consumeOutboxQueue(
+        batch,
+        effectiveBindings as OutboxConsumerBindings,
+        executionContext,
+        {
+          statusRecorder: createOutboxDeliveryStatusRecorder(runtime.dependencies),
+        },
+      );
     },
     async scheduled(controller, bindings) {
       let runtime: RuntimeApplication;

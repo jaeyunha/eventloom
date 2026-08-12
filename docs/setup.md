@@ -19,6 +19,7 @@ The current deployment contract is pinned to these origins:
 ## Prerequisites and isolation
 
 - Bun 1.3.14 (the version pinned by `packageManager`).
+- Docker with Compose for the local Mailpit email sink.
 - A Cloudflare account with Workers, D1, Durable Objects, R2, and Queues enabled.
 - A dedicated Airtable base and restricted personal access token per environment.
 - An OpenSend sending-scoped key per environment. Staging must be suppressed, sandboxed, or recipient-allowlisted.
@@ -28,6 +29,8 @@ Keep local, staging, and production separate. Never copy an Airtable base/token,
 
 ## Local development
 
+Normal local development is the **integrated** runtime: the browser uses the real Next.js-to-Hono gateway, program records use a dedicated development Airtable base, authentication and operational state use Wrangler-local D1, agenda coordination uses the local Durable Object, private files use local R2, and asynchronous effects use the local Queue. Email follows the production OpenSend HTTP contract but terminates in Mailpit; it never reaches the public internet.
+
 Install dependencies and create the ignored environment file:
 
 ```bash
@@ -35,51 +38,59 @@ bun install
 cp .env.example .env
 ```
 
-Use loopback addresses consistently for local browser, callback, and API configuration. Set at least:
+Use loopback addresses consistently and set at least:
 
 ```dotenv
 APP_ENV=local
+RUNTIME_PROFILE=integrated
 WEB_ORIGIN=http://127.0.0.1:3015
 NEXT_PUBLIC_APP_ENV=local
+NEXT_PUBLIC_RUNTIME_PROFILE=integrated
 NEXT_PUBLIC_APP_URL=http://127.0.0.1:3015
 NEXT_PUBLIC_ORGANIZATION_ID=ai-engineer
 API_URL=http://127.0.0.1:8787
 API_UPSTREAM_ORIGIN=http://127.0.0.1:8787
 BETTER_AUTH_URL=http://127.0.0.1:8787
-BETTER_AUTH_SECRET=<at-least-32-random-bytes>
-AIRTABLE_ACCESS_TOKEN=<local-base-token>
-AIRTABLE_BASE_ID=<local-base-id>
-OPENSEND_API_URL=https://opensend.namuh.co
-OPENSEND_API_KEY=<local-or-suppressed-sending-key>
-AUTH_FROM_EMAIL=auth@sessionboard.namuh.co
-SPEAKERS_FROM_EMAIL=speakers@sessionboard.namuh.co
-CALENDAR_FROM_EMAIL=calendar@sessionboard.namuh.co
+CACHE_INVALIDATION_TOKEN=local-cache-invalidation
+AIRTABLE_ACCESS_TOKEN=<development-base-restricted-token>
+AIRTABLE_BASE_DEV_ID=<development-base-id>
 AI_PROVIDER=openai
-OPENAI_API_KEY=<backend-only-openai-key>
-OPENAI_MODEL=gpt-5.6-terra
-OPENAI_AGENDA_MODEL=gpt-5.6-sol
-OPENAI_EVALUATION_MODEL=gpt-5.6-sol
-OPENAI_REMIX_MODEL=gpt-5.6-terra
-OPENAI_AGENDA_REASONING_EFFORT=medium
-OPENAI_EVALUATION_REASONING_EFFORT=medium
-OPENAI_REMIX_REASONING_EFFORT=low
+OPENAI_API_KEY=<optional-backend-only-openai-key>
 ```
 
-The angle-bracket values are operator placeholders, not credentials to commit. Apply local D1 migrations and start both services from the repository root:
+`AIRTABLE_BASE_DEV_ID` is mandatory in integrated local mode. The API deliberately ignores `AIRTABLE_BASE_ID`, `BETTER_AUTH_SECRET`, `OPENSEND_API_URL`, and `OPENSEND_API_KEY` when `APP_ENV=local`; those names belong to deployed environments. Restrict the development Airtable token to the development base with record read/write and schema read/write scopes. Never use a token that can reach production.
+
+Apply local D1 migrations, then start the integrated stack:
 
 ```bash
 bunx wrangler d1 migrations apply DB --cwd apps/api --local
 make dev
 ```
 
-Check each service independently:
+`make dev` starts Mailpit through Docker Compose, the OpenSend-compatible loopback bridge, the API Worker, and the web app. Mailpit captures verification, magic-link, communication, and calendar messages:
+
+- Inbox/API: `http://127.0.0.1:8025`
+- SMTP: `127.0.0.1:1025`
+- OpenSend-compatible bridge: `http://127.0.0.1:8026`
+
+Check every local boundary:
 
 ```bash
 curl --fail http://127.0.0.1:3015/health
 curl --fail http://127.0.0.1:8787/api/health
+curl --fail http://127.0.0.1:8026/health
+curl --fail http://127.0.0.1:8025/readyz
 ```
 
-`API_UPSTREAM_ORIGIN` is the server-only API Worker destination used by the web `/api/*` proxy. In local, staging, and production, browsers always call same-origin `/api/*` through the web origin; the web Worker forwards those requests to the configured API origin. `NEXT_PUBLIC_APP_URL` remains browser-visible, while `API_URL` remains the API deployment/preflight origin; never expose or replace `API_UPSTREAM_ORIGIN` with a browser variable or a secret.
+The old deterministic repositories remain available only as an explicit test profile:
+
+```bash
+RUNTIME_PROFILE=fixture NEXT_PUBLIC_RUNTIME_PROFILE=fixture make dev
+```
+
+Fixture mode is for deterministic tests and UI-state work; it is not persistence, provider, or performance evidence. The checked-in Playwright suite selects it explicitly. Staging remains required for deployed Worker behavior, remote Cloudflare services, isolated real-provider checks, and release evidence.
+
+`API_UPSTREAM_ORIGIN` is the server-only API Worker destination used by the web `/api/*` proxy. In local, staging, and production, browsers always call same-origin `/api/*` through the web origin; the web Worker forwards those requests to the configured API origin. `NEXT_PUBLIC_APP_URL` remains browser-visible, while `API_URL` remains the API deployment/preflight origin.
 
 ## Advisory AI providers
 
