@@ -401,7 +401,11 @@ function adminAgendaPreviewView(
     validatedAt: new Date().toISOString(),
   };
 }
-function adminAgendaWorkspaceView(state: AgendaState, published: PublishedAgendaRevision | null) {
+function adminAgendaWorkspaceView(
+  state: AgendaState,
+  published: PublishedAgendaRevision | null,
+  eventMetadata: AgendaEventMetadata | null = null,
+) {
   const publicEvent = published === null ? null : publishedAgendaView(published).event;
   const sessionById = new Map(state.sessions.map((session) => [session.id, session]));
   const roomById = new Map(state.rooms.map((room) => [room.id, room]));
@@ -411,15 +415,19 @@ function adminAgendaWorkspaceView(state: AgendaState, published: PublishedAgenda
     .map((entry) => entry.startsAtLocal.slice(0, 10))
     .filter((date) => /^\d{4}-\d{2}-\d{2}$/u.test(date))
     .sort();
-  const startsOn = publicEvent?.startsOn ?? localDates[0] ?? new Date().toISOString().slice(0, 10);
-  const endsOn = publicEvent?.endsOn ?? localDates.at(-1) ?? startsOn;
+  const startsOn =
+    eventMetadata?.startsOn ??
+    publicEvent?.startsOn ??
+    localDates[0] ??
+    new Date().toISOString().slice(0, 10);
+  const endsOn = eventMetadata?.endsOn ?? publicEvent?.endsOn ?? localDates.at(-1) ?? startsOn;
   const trackColors = ["#4f46e5", "#0f766e", "#b45309", "#be123c", "#6d28d9"];
 
   return {
     event: {
       id: state.eventId,
-      name: publicEvent?.name ?? state.eventId,
-      timeZone: state.timeZone,
+      name: eventMetadata?.name ?? publicEvent?.name ?? state.eventId,
+      timeZone: eventMetadata?.timeZone ?? state.timeZone,
       startsOn,
       endsOn,
     },
@@ -521,12 +529,16 @@ export function createAgendaAdminRoutes(
     if (state === null) {
       return errorResponse(context, 404, "NOT_FOUND", "The event agenda was not found.");
     }
+    const eventMetadata =
+      dependencies.eventMetadataForEvent === undefined
+        ? null
+        : await dependencies.eventMetadataForEvent(eventId);
     const published =
       state.currentPublishedRevisionId === null
         ? null
         : (state.revisions.find((revision) => revision.id === state.currentPublishedRevisionId) ??
           null);
-    return context.json({ data: adminAgendaWorkspaceView(state, published) });
+    return context.json({ data: adminAgendaWorkspaceView(state, published, eventMetadata) });
   });
 
   routes.post("/", async (context) => {
