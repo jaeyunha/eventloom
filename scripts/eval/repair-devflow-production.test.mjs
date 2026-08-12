@@ -542,6 +542,50 @@ test("builds the strict six-identity ledger and exact canonical graph", () => {
     true,
   );
 });
+test("serializes a complete canonical communication template", () => {
+  const manifest = build();
+  const operation = manifest.operations.find((candidate) => candidate.table === "Email Templates");
+  assert.ok(operation);
+
+  const template = manifest.graph.communication.template;
+  const settings = JSON.parse(operation.fields["Settings JSON"]);
+  const templateFields = [
+    "id",
+    "tenantId",
+    "eventId",
+    "name",
+    "purpose",
+    "version",
+    "status",
+    "sender",
+    "subject",
+    "html",
+    "text",
+    "variables",
+    "createdBy",
+    "createdAt",
+    "updatedAt",
+    "approvedBy",
+    "approvedAt",
+  ];
+  assert.deepEqual(Object.keys(settings).sort(), [...templateFields].sort());
+  assert.deepEqual(settings, template);
+  assert.equal(operation.fields["Application ID"], template.id);
+  assert.equal(operation.fields["Organization ID"], template.tenantId);
+  assert.equal(operation.fields["Event ID"], template.eventId);
+  assert.equal(operation.fields.Name, template.name);
+  assert.equal(operation.fields.Purpose, template.purpose);
+  assert.equal(operation.fields.Status, template.status);
+  assert.equal(operation.fields.Sender, template.sender);
+  assert.equal(operation.fields.Subject, template.subject);
+  assert.equal(operation.fields.HTML, template.html);
+  assert.equal(operation.fields.Text, template.text);
+  assert.deepEqual(JSON.parse(operation.fields["Variables JSON"]), template.variables);
+  assert.equal(operation.fields.Version, template.version);
+  assert.equal(template.status, "draft");
+  assert.equal(template.approvedBy, null);
+  assert.equal(template.approvedAt, null);
+});
 
 test("rejects incomplete session metadata and unresolved publication revisions", async () => {
   const incompleteSession = build();
