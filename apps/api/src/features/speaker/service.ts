@@ -6150,10 +6150,21 @@ export class SpeakerService {
     return this.createOrganizerSpeakerWithProjection(input, projection);
   }
 
+  private createOrganizerSpeakerWithProjection(
+    input: Parameters<SpeakerService["createOrganizerSpeaker"]>[0],
+    projection: OrganizerSpeakerMutationProjection,
+    materializeResponse?: true,
+  ): Promise<SpeakerWorkspaceRoster>;
+  private createOrganizerSpeakerWithProjection(
+    input: Parameters<SpeakerService["createOrganizerSpeaker"]>[0],
+    projection: OrganizerSpeakerMutationProjection,
+    materializeResponse: false,
+  ): Promise<undefined>;
   private async createOrganizerSpeakerWithProjection(
     input: Parameters<SpeakerService["createOrganizerSpeaker"]>[0],
     projection: OrganizerSpeakerMutationProjection,
-  ): Promise<SpeakerWorkspaceRoster> {
+    materializeResponse = true,
+  ): Promise<SpeakerWorkspaceRoster | undefined> {
     const scope = projection.scope;
     const displayName = importText(input.displayName, "The speaker name", 200);
     const email = importEmail(input.email);
@@ -6179,19 +6190,21 @@ export class SpeakerService {
       status,
       travelLogistics,
     });
-    const cached = this.speakerCreateCache.get(cacheKey);
-    if (cached !== undefined) {
-      if (
-        explicitIdempotencyKey !== undefined &&
-        this.speakerCreateFingerprints.get(cacheKey) !== fingerprint
-      ) {
-        throw new SpeakerServiceError(
-          "VERSION_CONFLICT",
-          409,
-          "The idempotency key has already been used for another speaker.",
-        );
+    if (materializeResponse) {
+      const cached = this.speakerCreateCache.get(cacheKey);
+      if (cached !== undefined) {
+        if (
+          explicitIdempotencyKey !== undefined &&
+          this.speakerCreateFingerprints.get(cacheKey) !== fingerprint
+        ) {
+          throw new SpeakerServiceError(
+            "VERSION_CONFLICT",
+            409,
+            "The idempotency key has already been used for another speaker.",
+          );
+        }
+        return structuredClone(cached);
       }
-      return structuredClone(cached);
     }
     const entries = projection.entries;
     const matchingEmailEntries = entries.filter(
@@ -6354,6 +6367,7 @@ export class SpeakerService {
         }
       }
       this.overlayOrganizerSpeakerMutationProjection(projection, undefined, writtenProfile);
+      if (!materializeResponse) return;
       const roster = this.materializeOrganizerSpeakerMutationProjection(
         input.organizationId,
         input.eventId,
@@ -6396,6 +6410,13 @@ export class SpeakerService {
     const result = await this.repository.saveRoster(entry, null);
     if (!result.ok) {
       if (result.reason === "version_conflict" || result.reason === "invalid_state") {
+        if (!materializeResponse) {
+          throw new SpeakerServiceError(
+            "VERSION_CONFLICT",
+            409,
+            "The speaker roster changed. Reload it before saving.",
+          );
+        }
         const projectedEntry = projection.entries.find(
           (candidate) => candidate.participantId === participantId,
         );
@@ -6505,14 +6526,17 @@ export class SpeakerService {
         throw notFound();
       }
     }
-    const organizerCacheKey = this.organizerSpeakerCacheKey(input.organizationId, input.eventId);
-    this.organizerSpeakerCache.set(organizerCacheKey, [
-      ...(this.organizerSpeakerCache.get(organizerCacheKey) ?? []).filter(
-        (candidate) => candidate.participantId !== participantId,
-      ),
-      storedEntry,
-    ]);
+    if (materializeResponse) {
+      const organizerCacheKey = this.organizerSpeakerCacheKey(input.organizationId, input.eventId);
+      this.organizerSpeakerCache.set(organizerCacheKey, [
+        ...(this.organizerSpeakerCache.get(organizerCacheKey) ?? []).filter(
+          (candidate) => candidate.participantId !== participantId,
+        ),
+        storedEntry,
+      ]);
+    }
     this.overlayOrganizerSpeakerMutationProjection(projection, storedEntry, writtenProfile);
+    if (!materializeResponse) return;
     const roster = this.materializeOrganizerSpeakerMutationProjection(
       input.organizationId,
       input.eventId,
@@ -7045,8 +7069,21 @@ export class SpeakerService {
           status: row.status ?? "pending",
         },
         projection,
+        false,
       );
     }
+    const importedEmails = new Set(rows.map((row) => row.email));
+    const importedEntries = projection.entries.filter(
+      (entry) => entry.email !== undefined && importedEmails.has(entry.email.trim().toLowerCase()),
+    );
+    const importedParticipantIds = new Set(importedEntries.map((entry) => entry.participantId));
+    const organizerCacheKey = this.organizerSpeakerCacheKey(input.organizationId, input.eventId);
+    this.organizerSpeakerCache.set(organizerCacheKey, [
+      ...(this.organizerSpeakerCache.get(organizerCacheKey) ?? []).filter(
+        (entry) => !importedParticipantIds.has(entry.participantId),
+      ),
+      ...importedEntries,
+    ]);
     const roster = this.materializeOrganizerSpeakerMutationProjection(
       input.organizationId,
       input.eventId,
