@@ -249,6 +249,184 @@ describe("agenda API adapter", () => {
       ],
     });
   });
+  it("accepts an equal-version no-op save and reloads the authoritative workspace", async () => {
+    const unchangedWorkspace = {
+      ...workspace,
+      draft: {
+        ...workspace.draft,
+        entries: [
+          {
+            id: "entry_existing",
+            sessionId: "session_existing",
+            title: "Existing session",
+            format: "Talk",
+            speakerNames: ["Avery"],
+            roomId: "room_existing",
+            roomName: "Existing room",
+            trackIds: ["track_existing"],
+            trackNames: ["Existing track"],
+            startsAtLocal: "2026-09-18T09:00",
+            endsAtLocal: "2026-09-18T10:00",
+          },
+        ],
+      },
+    } satisfies AgendaWorkspaceData;
+    const calls: Array<{ input: RequestInfo | URL; init: RequestInit | undefined }> = [];
+    const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ input, init });
+      const path = String(input);
+      const data = path.endsWith("/agenda/draft")
+        ? { eventId: "evt/open", version: unchangedWorkspace.draft.version }
+        : unchangedWorkspace;
+      return new Response(JSON.stringify({ data }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+    const api = createAgendaApi("https://api.example.com", "org_open", fetcher);
+
+    await expect(
+      api.saveEntry({
+        eventId: "evt/open",
+        expectedVersion: 2,
+        entry: {
+          id: "entry_existing",
+          sessionId: "session_existing",
+          roomId: "room_existing",
+          trackIds: ["track_existing"],
+          startsAtLocal: "2026-09-18T09:00",
+          endsAtLocal: "2026-09-18T10:00",
+        },
+      }),
+    ).resolves.toStrictEqual(unchangedWorkspace);
+    expect(calls.map((call) => String(call.input))).toEqual([
+      "https://api.example.com/api/admin/organizations/org_open/events/evt%2Fopen/agenda",
+      "https://api.example.com/api/admin/organizations/org_open/events/evt%2Fopen/agenda/draft",
+      "https://api.example.com/api/admin/organizations/org_open/events/evt%2Fopen/agenda",
+    ]);
+  });
+
+  it("rejects a lower-version mutation response without reloading it as authoritative", async () => {
+    const calls: Array<{ input: RequestInfo | URL; init: RequestInit | undefined }> = [];
+    const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ input, init });
+      const path = String(input);
+      if (path.endsWith("/agenda/draft")) {
+        return new Response(
+          JSON.stringify({ data: { eventId: "evt/open", version: workspace.draft.version - 1 } }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ data: workspace }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+    const api = createAgendaApi("https://api.example.com", "org_open", fetcher);
+
+    await expect(
+      api.removeEntry({ eventId: "evt/open", entryId: "missing", expectedVersion: 2 }),
+    ).rejects.toThrow("invalid revision");
+    expect(calls.map((call) => String(call.input))).toEqual([
+      "https://api.example.com/api/admin/organizations/org_open/events/evt%2Fopen/agenda",
+      "https://api.example.com/api/admin/organizations/org_open/events/evt%2Fopen/agenda/draft",
+    ]);
+  });
+  it("preserves a real draft revision conflict instead of treating it as a no-op", async () => {
+    const calls: string[] = [];
+    const fetcher = async (input: RequestInfo | URL) => {
+      const path = String(input);
+      calls.push(path);
+      if (path.endsWith("/agenda/draft")) {
+        return new Response(
+          JSON.stringify({
+            error: {
+              code: "PRECONDITION_FAILED",
+              message: "The agenda draft revision is stale.",
+              traceId: "trace_stale_draft",
+              details: [
+                {
+                  path: ["expectedVersion"],
+                  code: "stale",
+                  message: "Expected draft version 2; current draft version is 3.",
+                },
+              ],
+            },
+          }),
+          { status: 412, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ data: workspace }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+    const api = createAgendaApi("https://api.example.com", "org_open", fetcher);
+
+    const error = await api
+      .saveEntry({
+        eventId: "evt/open",
+        expectedVersion: 2,
+        entry: {
+          sessionId: "session_new",
+          roomId: "room_new",
+          trackIds: [],
+          startsAtLocal: "2026-09-18T09:00",
+          endsAtLocal: "2026-09-18T10:00",
+        },
+      })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(AgendaApiError);
+    expect(error).toMatchObject({
+      code: "PRECONDITION_FAILED",
+      status: 412,
+      traceId: "trace_stale_draft",
+      details: [{ path: ["expectedVersion"], code: "stale" }],
+    });
+    expect(calls).toEqual([
+      "https://api.example.com/api/admin/organizations/org_open/events/evt%2Fopen/agenda",
+      "https://api.example.com/api/admin/organizations/org_open/events/evt%2Fopen/agenda/draft",
+    ]);
+  });
+
+  it("preserves the rendered expected version when the preflight workspace is newer", async () => {
+    const preflightWorkspace = {
+      ...workspace,
+      draft: { ...workspace.draft, version: 5 },
+    } satisfies AgendaWorkspaceData;
+    const calls: Array<{ input: RequestInfo | URL; init: RequestInit | undefined }> = [];
+    const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ input, init });
+      const path = String(input);
+      if (path.endsWith("/agenda/draft")) {
+        return new Response(
+          JSON.stringify({
+            data: { eventId: "evt/open", version: preflightWorkspace.draft.version },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ data: preflightWorkspace }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+    const api = createAgendaApi("https://api.example.com", "org_open", fetcher);
+
+    await api.saveEntry({
+      eventId: "evt/open",
+      expectedVersion: 2,
+      entry: {
+        sessionId: "session_new",
+        roomId: "room_new",
+        trackIds: [],
+        startsAtLocal: "2026-09-18T09:00",
+        endsAtLocal: "2026-09-18T10:00",
+      },
+    });
+    expect(JSON.parse(String(calls[1]?.init?.body))).toMatchObject({ expectedVersion: 2 });
+  });
   it("rejects missing organization context instead of inferring a tenant", () => {
     expect(() => createAgendaApi("https://api.example.com", "   ")).toThrow(
       "An organization ID is required",
