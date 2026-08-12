@@ -217,6 +217,7 @@ async function fixture(
     reviewerProjection?: EvaluationReviewerProjection;
     repository?: InMemoryEvaluationRepository;
     submissions?: InMemorySubmissionReviewSource;
+    reviewRound?: ReviewRound;
   } = {},
 ) {
   let currentTime = new Date(nowIso);
@@ -246,7 +247,7 @@ async function fixture(
       reviewsPerSubmission: options.reviewsPerSubmission ?? 2,
       maxAssignmentsPerReviewer: options.maxAssignmentsPerReviewer ?? 1,
     },
-    rounds: [round],
+    rounds: [options.reviewRound ?? round],
     ...(options.reviewerProjection === undefined
       ? {}
       : { reviewerProjection: options.reviewerProjection }),
@@ -303,7 +304,10 @@ describe("evaluation plans and assignments", () => {
     expect(replacement).toHaveLength(2);
     expect(replacement[0]?.reviewerId).toBe("reviewer-2");
     expect(replacement[0]?.id).toBe(initial[1]?.id);
-    await expect(repository.getAssignment(tenantId, initial[0]?.id ?? "")).resolves.toBeNull();
+    await expect(repository.getAssignment(tenantId, initial[0]?.id ?? "")).resolves.toMatchObject({
+      status: "superseded",
+      successorAssignmentId: null,
+    });
     await expect(repository.getAssignment(tenantId, initial[1]?.id ?? "")).resolves.toMatchObject({
       reviewerId: "reviewer-2",
     });
@@ -331,8 +335,13 @@ describe("evaluation plans and assignments", () => {
       reviewerIds: [],
     });
 
-    await expect(repository.getAssignment(tenantId, assignment.id)).resolves.toBeNull();
-    await expect(repository.getReview(tenantId, assignment.id)).resolves.toBeNull();
+    await expect(repository.getAssignment(tenantId, assignment.id)).resolves.toMatchObject({
+      status: "superseded",
+      supersededReason: expect.any(String),
+    });
+    await expect(repository.getReview(tenantId, assignment.id)).resolves.toMatchObject({
+      assignmentId: assignment.id,
+    });
     await expect(service.listReviewerWorkspace(reviewer("reviewer-1"), eventId)).resolves.toEqual({
       assignments: [],
     });
@@ -342,6 +351,260 @@ describe("evaluation plans and assignments", () => {
     });
   });
 
+  it("retains replacement lineage and review evidence while isolating reviewer workspaces", async () => {
+    const { service, repository } = await fixture({ reviewsPerSubmission: 2 });
+    const original = await assignOne(service, "reviewer-1");
+    const review = await service.saveReview(reviewer("reviewer-1"), original.id, {
+      scores: [{ criterionId: "quality", value: 4, origin: "human" }],
+      comment: "Retained evidence.",
+    });
+    const currentAssignment = await repository.getAssignment(tenantId, original.id);
+    if (currentAssignment === null) throw new Error("Expected retained assignment fixture.");
+
+    const result = await service.replaceAssignment(organizer, original.id, {
+      replacementReviewerId: "reviewer-2",
+      expectedVersion: currentAssignment.version,
+      reason: "Reviewer conflict disclosed after assignment.",
+    });
+
+    expect(result.replacedAssignment).toMatchObject({
+      id: original.id,
+      status: "superseded",
+      successorAssignmentId: result.successorAssignment.id,
+      supersededReason: "Reviewer conflict disclosed after assignment.",
+    });
+    expect(result.replacedAssignment.lineage).toMatchObject({
+      predecessorAssignmentId: null,
+      successorAssignmentId: result.successorAssignment.id,
+      reason: "Reviewer conflict disclosed after assignment.",
+    });
+    expect(result.successorAssignment).toMatchObject({
+      reviewerId: "reviewer-2",
+      predecessorAssignmentId: original.id,
+      status: "assigned",
+    });
+    expect(result.successorAssignment.lineage).toMatchObject({
+      predecessorAssignmentId: original.id,
+      successorAssignmentId: null,
+      reason: "Reviewer conflict disclosed after assignment.",
+    });
+    expect(result.history).toEqual([
+      expect.objectContaining({
+        assignment: expect.objectContaining({ id: original.id, status: "superseded" }),
+        review: expect.objectContaining({ id: review.id, assignmentId: original.id }),
+      }),
+    ]);
+    await expect(repository.getReview(tenantId, original.id)).resolves.toMatchObject({
+      id: review.id,
+    });
+    await expect(service.listReviewerWorkspace(reviewer("reviewer-1"), eventId)).resolves.toEqual({
+      assignments: [],
+    });
+    await expect(service.listReviewerWorkspace(reviewer("reviewer-2"), eventId)).resolves.toMatchObject({
+      assignments: [
+        expect.objectContaining({
+          assignment: expect.objectContaining({ id: result.successorAssignment.id }),
+        }),
+      ],
+    });
+    await expect(service.getOrganizerWorkspace(organizer, eventId)).resolves.toMatchObject({
+      assignments: [
+        expect.objectContaining({ id: result.successorAssignment.id, status: "assigned" }),
+      ],
+    });
+    const organizerRecords = await repository.listOrganizerWorkspaceRecords(tenantId, eventId);
+    expect(organizerRecords.assignments.map((candidate) => candidate.id)).toEqual([
+      result.successorAssignment.id,
+    ]);
+    expect(organizerRecords.reviews).toEqual([
+      expect.objectContaining({ assignmentId: original.id, id: review.id }),
+    ]);
+  });
+
+  it("rejects a stale replacement without mutating the retained assignment or review", async () => {
+    const { service, repository } = await fixture();
+    const original = await assignOne(service, "reviewer-1");
+    const draft = await service.saveReview(reviewer("reviewer-1"), original.id, {
+      scores: [{ criterionId: "quality", value: 4, origin: "human" }],
+    });
+    const currentAssignment = await repository.getAssignment(tenantId, original.id);
+    if (currentAssignment === null) throw new Error("Expected retained assignment fixture.");
+    await service.replaceAssignment(organizer, original.id, {
+      replacementReviewerId: "reviewer-2",
+      expectedVersion: currentAssignment.version,
+      reason: "Replace the first reviewer.",
+    });
+
+    await expectEvaluationError(
+      service.replaceAssignment(organizer, original.id, {
+        replacementReviewerId: "reviewer-3",
+        expectedVersion: original.version,
+        reason: "Stale replacement attempt.",
+      }),
+      "EVALUATION_CONFLICT",
+    );
+    await expect(repository.getAssignment(tenantId, original.id)).resolves.toMatchObject({
+      status: "superseded",
+      successorAssignmentId: expect.any(String),
+    });
+    await expect(repository.getReview(tenantId, original.id)).resolves.toMatchObject({
+      id: draft.id,
+      assignmentId: original.id,
+    });
+  });
+
+  it("reports distribution deficits and reviewer exclusions", async () => {
+    const { service, plan } = await fixture({
+      reviewsPerSubmission: 1,
+      maxAssignmentsPerReviewer: 1,
+    });
+    const assignment = await assignOne(service, "reviewer-1");
+    await service.declareConflict(
+      reviewer("reviewer-1"),
+      assignment.id,
+      "Reviewer has a conflict.",
+    );
+
+    const preview = await service.previewDistribution(organizer, {
+      planId: plan.id,
+      roundId: round.id,
+      submissionIds: [submission.id],
+      reviewerIds: ["reviewer-1"],
+      expectedVersion: plan.version,
+    });
+
+    expect(preview.desiredAssignments).toEqual([]);
+    expect(preview.deficits).toEqual([
+      {
+        submissionId: submission.id,
+        missingReviewCount: 1,
+        reason: "insufficient_eligible_reviewers",
+      },
+    ]);
+    expect(preview.exclusions).toEqual([
+      {
+        submissionId: submission.id,
+        reviewerId: "reviewer-1",
+        reason: "declared_conflict",
+      },
+    ]);
+  });
+  it("reports track-filter exclusions without creating assignments", async () => {
+    const { service, plan } = await fixture({
+      reviewsPerSubmission: 1,
+      maxAssignmentsPerReviewer: 2,
+      submissionMaterial: { ...submission, trackIds: ["track-other"] },
+      reviewRound: { ...round, trackFilter: "track-required" },
+    });
+
+    const preview = await service.previewDistribution(organizer, {
+      planId: plan.id,
+      roundId: round.id,
+      submissionIds: [submission.id],
+      reviewerIds: ["reviewer-1"],
+      expectedVersion: plan.version,
+    });
+
+    expect(preview.desiredAssignments).toEqual([]);
+    expect(preview.deficits).toEqual([
+      {
+        submissionId: submission.id,
+        missingReviewCount: 1,
+        reason: "submission_outside_track",
+      },
+    ]);
+    expect(preview.exclusions).toEqual([
+      {
+        submissionId: submission.id,
+        reviewerId: "reviewer-1",
+        reason: "outside_track",
+      },
+    ]);
+  });
+  it("produces deterministic distribution fingerprints and rejects stale applies", async () => {
+    const { service, plan } = await fixture({
+      reviewsPerSubmission: 1,
+      maxAssignmentsPerReviewer: 2,
+    });
+    const preview = await service.previewDistribution(organizer, {
+      planId: plan.id,
+      roundId: round.id,
+      submissionIds: [submission.id, "submission-2"],
+      reviewerIds: ["reviewer-2", "reviewer-1"],
+      expectedVersion: plan.version,
+    });
+    const reordered = await service.previewDistribution(organizer, {
+      planId: plan.id,
+      roundId: round.id,
+      submissionIds: ["submission-2", submission.id],
+      reviewerIds: ["reviewer-1", "reviewer-2"],
+      expectedVersion: plan.version,
+    });
+    expect(reordered).toEqual(preview);
+    expect(preview.desiredAssignments).toEqual([
+      expect.objectContaining({ submissionId: submission.id, reviewerId: "reviewer-1" }),
+      expect.objectContaining({ submissionId: "submission-2", reviewerId: "reviewer-2" }),
+    ]);
+    expect(preview.deficits).toEqual([]);
+    expect(preview.exclusions).toEqual([]);
+    expect(preview.fingerprint).toEqual(expect.any(String));
+    expect(preview.fingerprint.length).toBeGreaterThan(0);
+
+    await assignOne(service, "reviewer-1");
+    await expectEvaluationError(
+      service.applyDistribution(organizer, {
+        planId: plan.id,
+        roundId: round.id,
+        submissionIds: [submission.id, "submission-2"],
+        reviewerIds: ["reviewer-1", "reviewer-2"],
+        expectedVersion: plan.version,
+        fingerprint: preview.fingerprint,
+      }),
+      "EVALUATION_CONFLICT",
+    );
+  });
+  it("applies a submission-scoped distribution without touching unrelated assignments", async () => {
+    const { service, repository, plan } = await fixture({
+      reviewsPerSubmission: 1,
+      maxAssignmentsPerReviewer: 2,
+    });
+    const unrelated = await service.assignReviewers(organizer, {
+      planId: plan.id,
+      roundId: round.id,
+      submissionId: "submission-2",
+      reviewerIds: ["reviewer-9"],
+    });
+    const preview = await service.previewDistribution(organizer, {
+      planId: plan.id,
+      roundId: round.id,
+      submissionIds: [submission.id],
+      reviewerIds: ["reviewer-1"],
+      expectedVersion: plan.version,
+    });
+
+    await expect(
+      service.applyDistribution(organizer, {
+        planId: plan.id,
+        roundId: round.id,
+        submissionIds: [submission.id],
+        reviewerIds: ["reviewer-1"],
+        expectedVersion: plan.version,
+        fingerprint: preview.fingerprint,
+      }),
+    ).resolves.toMatchObject({
+      activeAssignments: [
+        expect.objectContaining({
+          submissionId: submission.id,
+          reviewerId: "reviewer-1",
+        }),
+      ],
+    });
+    await expect(repository.getAssignment(tenantId, unrelated[0]?.id ?? "")).resolves.toMatchObject({
+      status: "assigned",
+      submissionId: "submission-2",
+      reviewerId: "reviewer-9",
+    });
+  });
   it("denies unassigned and cross-tenant reviewers", async () => {
     const { service } = await fixture();
     const assignment = await assignOne(service);
@@ -636,12 +899,14 @@ describe("evaluation plans and assignments", () => {
     expect(repository.reviewListCalls).toBe(0);
     expect(submissions.organizerListCalls).toBe(1);
   });
-  it("hard-deletes outstanding assignments with no or draft reviews", async () => {
+  it("supersedes assignments and retains review evidence during organizer cleanup", async () => {
     const { service, repository } = await fixture({ reviewsPerSubmission: 2 });
     const assigned = await assignOne(service);
 
     await service.unassignAssignment(organizer, "plan-1", assigned.id);
-    await expect(repository.getAssignment(tenantId, assigned.id)).resolves.toBeNull();
+    await expect(repository.getAssignment(tenantId, assigned.id)).resolves.toMatchObject({
+      status: "superseded",
+    });
 
     const inProgress = await assignOne(service, "reviewer-2");
     const draft = await service.saveReview(reviewer("reviewer-2"), inProgress.id, {
@@ -653,10 +918,15 @@ describe("evaluation plans and assignments", () => {
     });
 
     await service.unassignAssignment(organizer, "plan-1", inProgress.id);
-    await expect(repository.getAssignment(tenantId, inProgress.id)).resolves.toBeNull();
-    await expect(repository.getReview(tenantId, inProgress.id)).resolves.toBeNull();
+    await expect(repository.getAssignment(tenantId, inProgress.id)).resolves.toMatchObject({
+      status: "superseded",
+    });
+    await expect(repository.getReview(tenantId, inProgress.id)).resolves.toMatchObject({
+      id: draft.id,
+    });
     const reassigned = await assignOne(service, "reviewer-2");
-    expect(reassigned).toMatchObject({ id: inProgress.id, status: "assigned", version: 1 });
+    expect(reassigned).toMatchObject({ status: "assigned", version: 1 });
+    expect(reassigned.id).not.toBe(inProgress.id);
     await expect(repository.getReview(tenantId, reassigned.id)).resolves.toBeNull();
   });
   it("allows organizer cleanup after the evaluation plan closes", async () => {
@@ -666,7 +936,9 @@ describe("evaluation plans and assignments", () => {
 
     await service.unassignAssignment(organizer, plan.id, assignment.id);
 
-    await expect(repository.getAssignment(tenantId, assignment.id)).resolves.toBeNull();
+    await expect(repository.getAssignment(tenantId, assignment.id)).resolves.toMatchObject({
+      status: "superseded",
+    });
   });
 
   it("requires organizer authorization and isolates plan, event, and tenant assignment scope", async () => {
@@ -700,7 +972,7 @@ describe("evaluation plans and assignments", () => {
     );
   });
 
-  it("removes submitted assignments through replacement while preserving conflict history", async () => {
+  it("supersedes submitted assignments while preserving review evidence", async () => {
     const { service, repository } = await fixture({ reviewsPerSubmission: 2 });
     const assignment = await assignOne(service);
     const draft = await service.saveReview(reviewer("reviewer-1"), assignment.id, {
@@ -717,8 +989,13 @@ describe("evaluation plans and assignments", () => {
     expect(submitted.submittedAt).not.toBeNull();
 
     await service.unassignAssignment(organizer, "plan-1", assignment.id);
-    await expect(repository.getAssignment(tenantId, assignment.id)).resolves.toBeNull();
-    await expect(repository.getReview(tenantId, assignment.id)).resolves.toBeNull();
+    await expect(repository.getAssignment(tenantId, assignment.id)).resolves.toMatchObject({
+      status: "superseded",
+    });
+    await expect(repository.getReview(tenantId, assignment.id)).resolves.toMatchObject({
+      id: submitted.id,
+      assignmentId: assignment.id,
+    });
 
     const abstained = await assignOne(service, "reviewer-2");
     await repository.putAssignmentsForTesting([
@@ -748,7 +1025,11 @@ describe("evaluation plans and assignments", () => {
       assignment: { status: "submitted" },
     });
     await staleService.unassignAssignment(organizer, "plan-1", staleAssignment.id);
-    await expect(staleRepository.getAssignment(tenantId, staleAssignment.id)).resolves.toBeNull();
+    await expect(staleRepository.listAssignments(tenantId, "plan-1")).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: staleAssignment.id, status: "superseded" }),
+      ]),
+    );
   });
   it("rounds bounded completion percentages for display", async () => {
     const submissions = new InMemorySubmissionReviewSource([
@@ -823,6 +1104,43 @@ describe("review drafts, AI assistance, and aggregates", () => {
         }),
       ]),
     );
+  });
+  it("keys aggregates by round and rubric revision snapshots", async () => {
+    const { service, repository, plan } = await fixture({ reviewsPerSubmission: 1 });
+    const assignment = await assignOne(service);
+    const draft = await service.saveReview(reviewer("reviewer-1"), assignment.id, {
+      scores: [
+        { criterionId: "quality", value: 4, origin: "human" },
+        { criterionId: "relevance", value: 8, origin: "human" },
+      ],
+    });
+    await service.submitReview(reviewer("reviewer-1"), assignment.id, draft.version);
+
+    const aggregate = await service.getAggregate(organizer, plan.id, round.id, submission.id);
+    expect(aggregate).toMatchObject({
+      roundRevision: expect.any(Number),
+      rubricRevision: expect.any(Number),
+      submittedReviewCount: 1,
+    });
+
+    const currentReview = await repository.getReview(tenantId, assignment.id);
+    if (currentReview === null) throw new Error("Expected submitted review fixture.");
+    await repository.putReview(
+      {
+        ...currentReview,
+        roundRevision: aggregate.roundRevision + 1,
+        rubricRevision: aggregate.rubricRevision + 1,
+      },
+      currentReview.version,
+    );
+    await expect(
+      service.getAggregate(organizer, plan.id, round.id, submission.id),
+    ).resolves.toMatchObject({
+      roundRevision: aggregate.roundRevision,
+      rubricRevision: aggregate.rubricRevision,
+      submittedReviewCount: 0,
+      averageWeightedTotal: null,
+    });
   });
   it("does not count an AI suggestion until the assigned human confirms it", async () => {
     const { service } = await fixture({ reviewsPerSubmission: 1 });
@@ -1406,7 +1724,7 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
       service.generateAiSuggestions(reviewer("reviewer-1"), {
         assignmentId: assignment.id,
       }),
-      "EVALUATION_FORBIDDEN",
+      "EVALUATION_ADVISORY_UNAVAILABLE",
     );
   });
 
