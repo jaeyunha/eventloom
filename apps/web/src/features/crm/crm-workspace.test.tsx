@@ -279,6 +279,80 @@ describe("organization CRM workspace", () => {
     expect(markup).toContain("Open event workspace");
     expect(markup).toContain("Canonical relationship created");
   });
+  it("replaces stale directory controls with an accessible loading state", () => {
+    const markup = renderToStaticMarkup(
+      createElement(CrmWorkspaceView, {
+        organizationId: "org/one",
+        contacts: [contact],
+        segments: [],
+        events: [],
+        history: [],
+        pipelineHistory: [],
+        notes: [],
+        duplicates: null,
+        analytics: null,
+        loading: true,
+      }),
+    );
+
+    expect(markup).toContain("Updating the contact directory for the current filters…");
+    expect(markup).toContain('aria-label="Loading contact directory"');
+    expect(markup).toContain('aria-busy="true"');
+    expect(markup).toContain('role="status"');
+    expect(markup).toContain('aria-label="Loading organization CRM data"');
+    expect(markup).toContain('aria-live="polite"');
+    expect(markup).not.toContain('aria-label="Select Ada Lovelace"');
+    expect(markup).not.toContain("Organization CRM contact directory");
+    expect(markup).not.toContain("1 contact shown");
+  });
+
+  it("exposes direct outreach, duplicate review, and analytics drill-down targets", () => {
+    const markup = renderToStaticMarkup(
+      createElement(CrmWorkspaceView, {
+        organizationId: "org/one",
+        contacts: [contact],
+        selectedContact: contact,
+        selectedContactId: contact.id,
+        segments: [],
+        events: [event],
+        history: [],
+        pipelineHistory: [],
+        notes: [],
+        duplicates: {
+          contactId: contact.id,
+          matches: [
+            {
+              contact: {
+                ...contact,
+                id: "contact-2",
+                email: "ada.duplicate@example.test",
+                version: 1,
+              },
+              score: 0.95,
+              matchedFields: ["displayName", "company"],
+            },
+          ],
+        },
+        analytics,
+      }),
+    );
+
+    expect(markup).toContain("Open outreach composer");
+    expect(markup).toContain('aria-controls="crm-outreach-composer"');
+    expect(markup).toMatch(/<section id="crm-outreach-composer"/u);
+    expect(markup).toContain("Review possible duplicates");
+    expect(markup).toContain('aria-controls="crm-duplicate-review"');
+    expect(markup).toContain('id="crm-duplicate-review"');
+    expect(markup).toContain('aria-labelledby="crm-duplicate-review-title"');
+    expect(markup).toMatch(/<section id="crm-duplicate-review"/u);
+    expect(markup).toContain("Contact snapshot");
+    expect(markup).toContain('href="#crm-analytics"');
+    expect(markup).toContain('id="crm-analytics"');
+    expect(markup).toMatch(/<section id="crm-analytics"/u);
+    expect(markup.indexOf("Contact snapshot")).toBeLessThan(markup.indexOf("Contact directory"));
+    expect(markup).toContain("View contacts");
+  });
+
   it("shows every recipient preview and blocks unknown outreach merge tags", () => {
     const markup = renderToStaticMarkup(
       createElement(CrmWorkspaceView, {
