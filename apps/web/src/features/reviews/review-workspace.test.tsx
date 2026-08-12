@@ -6,27 +6,34 @@ import { describe, expect, it, vi } from "vitest";
 import ReviewerPage from "../../app/review/page";
 import {
   assignmentCompletionPercent,
+  applyReviewAssignments,
   buildEvaluationPlanCreateDto,
   createEvaluationPlan,
   createReviewAutosaveQueue,
-  type EvaluatorAssignment,
+  distributionPreviewKey,
   loadCreatedOrganizerPlan,
   loadEvaluatorQueue,
   loadOrganizerData,
+  loadRoundAggregates,
+  mapRoundAggregates,
   normalizeCompletionPercent,
   OrganizerDetailStatus,
   parseNumericAuthoringValue,
+  previewReviewAssignments,
+  type DistributionPreviewInput,
+  replaceSingleReviewAssignment,
+  reminderDeliveryMessage,
+  ReviewWorkspace,
+  type EvaluatorAssignment,
   type ReviewPlanSeed,
   type ReviewRound,
-  ReviewWorkspace,
   type RubricCriterion,
-  replaceReviewAssignments,
   reviewerDisplayLabel,
   reviewerIdsForAssignmentTarget,
   reviewerNavigationDisabled,
   reviewerSelectionBlocked,
-  unassignReviewAssignment,
   validateCreateEvaluationPlanForm,
+  validateSuggestionEditValue,
 } from "./review-workspace";
 
 const workspaceStyles = readFileSync(
@@ -354,92 +361,157 @@ describe("review workspace", () => {
     expect(markup).not.toContain("Unassign");
   });
 
-  it("posts complete reviewer-set replacements, including an empty set, and propagates errors", async () => {
+  it("posts exact authoritative preview and apply requests and invalidates keys when inputs change", async () => {
     const requests: Array<{ input: string; method: string | undefined; body: string | undefined }> =
       [];
-    await replaceReviewAssignments(
+    const input: DistributionPreviewInput = {
+      roundId: "round-1",
+      submissionIds: ["submission-1", "submission-2"],
+      reviewerIds: ["reviewer-2", "reviewer-1"],
+      expectedVersion: 3,
+    };
+    const preview = {
+      scope: {
+        tenantId: "tenant-1",
+        eventId: "event-1",
+        planId: "plan-test",
+        roundId: "round-1",
+        planVersion: 3,
+      },
+      desiredAssignments: [
+        { submissionId: "submission-1", reviewerId: "reviewer-1" },
+      ],
+      deficits: [{ submissionId: "submission-2", missingReviewCount: 1, reason: "cap" }],
+      exclusions: [
+        { submissionId: "submission-2", reviewerId: "reviewer-2", reason: "reviewer_cap" },
+      ],
+      expectedActiveVersions: [],
+      submissionRevisions: [{ submissionId: "submission-1", revision: 4 }],
+      fingerprint: "fingerprint-1",
+    };
+    await previewReviewAssignments("https://api.example", "plan-test", input, async (request, init) => {
+      requests.push({ input: String(request), method: init?.method, body: String(init?.body) });
+      return new Response(JSON.stringify({ data: preview }), { status: 200 });
+    });
+    await applyReviewAssignments(
       "https://api.example",
       "plan-test",
-      {
-        roundId: "round-1",
-        submissionId: "submission-1",
-        reviewerIds: [],
-        expectedVersion: 3,
-      },
-      async (input, init) => {
-        requests.push({ input: String(input), method: init?.method, body: String(init?.body) });
-        return new Response(JSON.stringify({ data: { assignments: [] } }), {
-          status: 201,
-          headers: { "content-type": "application/json" },
-        });
+      { ...input, fingerprint: preview.fingerprint },
+      async (request, init) => {
+        requests.push({ input: String(request), method: init?.method, body: String(init?.body) });
+        return new Response(
+          JSON.stringify({
+            data: {
+              scope: preview.scope,
+              activeAssignments: [],
+              supersededAssignments: [],
+              history: [],
+            },
+          }),
+          { status: 200 },
+        );
       },
     );
-
     expect(requests).toEqual([
       {
-        input: "https://api.example/api/admin/evaluations/plans/plan-test/assignments",
+        input: "https://api.example/api/admin/evaluations/plans/plan-test/distribution/preview",
         method: "POST",
-        body: JSON.stringify({
-          roundId: "round-1",
-          submissionId: "submission-1",
-          reviewerIds: [],
-          expectedVersion: 3,
-        }),
+        body: JSON.stringify(input),
+      },
+      {
+        input: "https://api.example/api/admin/evaluations/plans/plan-test/distribution/apply",
+        method: "POST",
+        body: JSON.stringify({ ...input, fingerprint: preview.fingerprint }),
       },
     ]);
-
-    await expect(
-      replaceReviewAssignments(
-        "https://api.example",
-        "plan-test",
-        {
-          roundId: "round-1",
-          submissionId: "submission-1",
-          reviewerIds: ["reviewer-2"],
-        },
-        async () =>
-          new Response(
-            JSON.stringify({ error: { message: "Assignment replacement is forbidden." } }),
-            {
-              status: 403,
-              headers: { "content-type": "application/json" },
-            },
-          ),
-      ),
-    ).rejects.toThrow("Assignment replacement is forbidden.");
+    expect(distributionPreviewKey(input)).not.toBe(
+      distributionPreviewKey({ ...input, expectedVersion: 4 }),
+    );
+    expect(distributionPreviewKey(input)).not.toBe(
+      distributionPreviewKey({ ...input, reviewerIds: ["reviewer-1"] }),
+    );
   });
 
-  it("uses the dedicated plan-scoped unassign endpoint and propagates errors", async () => {
-    const requests: Array<{ input: string; method: string | undefined }> = [];
-    await unassignReviewAssignment(
+  it("posts atomic single-assignment replacement and preserves returned lineage", async () => {
+    const requests: Array<{ input: string; method: string | undefined; body: string | undefined }> =
+      [];
+    const replacement = await replaceSingleReviewAssignment(
       "https://api.example",
       "plan-test",
-      "assignment-test",
-      async (input, init) => {
-        requests.push({ input: String(input), method: init?.method });
-        return new Response(null, { status: 204 });
+      "assignment-old",
+      {
+        replacementReviewerId: "reviewer-new",
+        expectedVersion: 7,
+        reason: "Conflict of interest declared by the assigned reviewer.",
+      },
+      async (request, init) => {
+        requests.push({ input: String(request), method: init?.method, body: String(init?.body) });
+        return new Response(
+          JSON.stringify({
+            data: {
+              scope: {
+                tenantId: "tenant-1",
+                eventId: "event-1",
+                planId: "plan-test",
+                roundId: "round-1",
+                submissionId: "submission-1",
+              },
+              replacedAssignment: {
+                id: "assignment-old",
+                status: "superseded",
+                predecessorAssignmentId: null,
+                successorAssignmentId: "assignment-new",
+              },
+              successorAssignment: {
+                id: "assignment-new",
+                status: "assigned",
+                predecessorAssignmentId: "assignment-old",
+                successorAssignmentId: null,
+              },
+              activeAssignments: [],
+              history: [],
+            },
+          }),
+          { status: 200 },
+        );
       },
     );
-
+    expect(replacement.successorAssignment.predecessorAssignmentId).toBe("assignment-old");
     expect(requests).toEqual([
       {
         input:
-          "https://api.example/api/admin/evaluations/plans/plan-test/assignments/assignment-test",
-        method: "DELETE",
+          "https://api.example/api/admin/evaluations/plans/plan-test/assignments/assignment-old/replace",
+        method: "POST",
+        body: JSON.stringify({
+          replacementReviewerId: "reviewer-new",
+          expectedVersion: 7,
+          reason: "Conflict of interest declared by the assigned reviewer.",
+        }),
       },
     ]);
-    await expect(
-      unassignReviewAssignment(
-        "https://api.example",
-        "plan-test",
-        "assignment-test",
-        async () =>
-          new Response(JSON.stringify({ error: { message: "Assignment removal is forbidden." } }), {
-            status: 403,
-            headers: { "content-type": "application/json" },
-          }),
-      ),
-    ).rejects.toThrow("Assignment removal is forbidden.");
+  });
+
+  it("renders queued reminder state without claiming delivery and reports durable facts", () => {
+    expect(
+      reminderDeliveryMessage({
+        queued: 2,
+        facts: [
+          {
+            runId: "run-1",
+            outboxId: "outbox-1",
+            providerId: "provider-1",
+            status: "queued",
+            timestamp: "2026-08-12T10:00:00.000Z",
+          },
+        ],
+      }),
+    ).toContain("pending/unconfirmed");
+    expect(
+      reminderDeliveryMessage({
+        queued: 1,
+        facts: [{ runId: "run-2", status: "delivered", timestamp: "2026-08-12T11:00:00.000Z" }],
+      }),
+    ).toContain("delivery confirmed");
   });
   it("derives the authoritative reviewer set for an assignment target", () => {
     const target = testPlan("summit-2026").assignments[0];
@@ -1488,26 +1560,51 @@ describe("review workspace", () => {
     const assignmentRequests: Array<{ readonly url: string; readonly body: string }> = [];
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const url = String(input);
-      if (url.endsWith("/plans/plan-test/assignments") && init?.method === "POST") {
+      if (
+        (url.endsWith("/plans/plan-test/distribution/preview") ||
+          url.endsWith("/plans/plan-test/distribution/apply")) &&
+        init?.method === "POST"
+      ) {
         assignmentRequests.push({ url, body: String(init.body) });
+        const assignment = {
+          id: "assignment-persisted",
+          eventId: "event-empty",
+          planId: "plan-test",
+          roundId: "round-initial",
+          submissionId: "submission-042",
+          reviewerId: "reviewer-a",
+          status: "assigned",
+          version: 1,
+        };
+        const preview = {
+          scope: {
+            tenantId: "tenant-1",
+            eventId: "event-empty",
+            planId: "plan-test",
+            roundId: "round-initial",
+            planVersion: 3,
+          },
+          desiredAssignments: [
+            { submissionId: "submission-042", reviewerId: "reviewer-a" },
+          ],
+          deficits: [],
+          exclusions: [],
+          expectedActiveVersions: [],
+          submissionRevisions: [{ submissionId: "submission-042", revision: 2 }],
+          fingerprint: "fingerprint-authoritative",
+        };
         return new Response(
           JSON.stringify({
-            data: {
-              assignments: [
-                {
-                  id: "assignment-persisted",
-                  eventId: "event-empty",
-                  planId: "plan-test",
-                  roundId: "round-initial",
-                  submissionId: "submission-042",
-                  reviewerId: "reviewer-a",
-                  status: "assigned",
-                  version: 1,
+            data: url.endsWith("/preview")
+              ? preview
+              : {
+                  scope: preview.scope,
+                  activeAssignments: [assignment],
+                  supersededAssignments: [],
+                  history: [],
                 },
-              ],
-            },
           }),
-          { status: 201, headers: { "content-type": "application/json" } },
+          { status: 200, headers: { "content-type": "application/json" } },
         );
       }
       return new Response(
@@ -1587,15 +1684,19 @@ describe("review workspace", () => {
         refCursor = 0;
         return resolveNode(reviewModule.ReviewWorkspace(reviewProps));
       }
+      let findHostCall = 0;
 
       function findHost(
         tree: unknown,
         predicate: (props: Record<string, unknown>) => boolean,
       ): ReactElement {
+        findHostCall += 1;
         const element = hostElements(tree).find((candidate) =>
           predicate(candidate.props as Record<string, unknown>),
         );
-        if (element === undefined) throw new Error("Expected organizer authoring control.");
+        if (element === undefined) {
+          throw new Error(`Expected organizer authoring control at lookup ${findHostCall}.`);
+        }
         return element;
       }
 
@@ -1669,11 +1770,22 @@ describe("review workspace", () => {
         },
       ];
       tree = renderTree();
-      const setupTab = findHost(tree, (props) => props["aria-controls"] === "review-panel-setup");
+      const setupTab = hostElements(tree).find(
+        (element) => (element.props as Record<string, unknown>)["aria-controls"] === "review-panel-setup",
+      );
+      if (setupTab === undefined) throw new Error("Expected the plan setup tab.");
       fireClick(setupTab);
       tree = renderTree();
 
-      const roundName = findHost(tree, (props) => props.id === "round-initial-name");
+      const roundName = hostElements(tree).find(
+        (element) => (element.props as Record<string, unknown>).id === "round-initial-name",
+      );
+      if (roundName === undefined) {
+        const visibleIds = hostElements(tree)
+          .map((element) => (element.props as Record<string, unknown>).id)
+          .filter((id): id is string => typeof id === "string");
+        throw new Error(`Expected round authoring control; visible ids: ${visibleIds.join(", ")}`);
+      }
       fireChange(roundName, { value: "Final review" });
       tree = renderTree();
       expect(
@@ -1750,38 +1862,47 @@ describe("review workspace", () => {
 
       const previewButton = findHost(
         tree,
-        (props) => props.children === "Preview reviewer assignment replacement",
+        (props) => props.children === "Preview authoritative reviewer distribution",
       );
       expect((previewButton.props as Record<string, unknown>).disabled).toBe(false);
       fireClick(previewButton);
+      await flushAsyncUpdates();
       tree = renderTree();
       expect(
         hostElements(tree).some(
           (element) =>
             (element.props as Record<string, unknown>).role === "status" &&
-            String((element.props as Record<string, unknown>).children).includes(
-              "1 reviewer(s) will replace",
-            ),
+            renderToStaticMarkup(element).includes("fingerprint-authoritative"),
         ),
       ).toBe(true);
 
-      const replaceButton = findHost(
+      const applyButton = findHost(
         tree,
-        (props) => props.children === "Replace reviewer assignments",
+        (props) => props.children === "Apply authoritative reviewer distribution",
       );
-      expect((replaceButton.props as Record<string, unknown>).disabled).toBe(false);
-      fireClick(replaceButton);
+      expect((applyButton.props as Record<string, unknown>).disabled).toBe(false);
+      fireClick(applyButton);
       await flushAsyncUpdates();
       tree = renderTree();
 
       expect(assignmentRequests).toEqual([
         {
-          url: "/api/admin/evaluations/plans/plan-test/assignments",
+          url: "/api/admin/evaluations/plans/plan-test/distribution/preview",
           body: JSON.stringify({
             roundId: "round-initial",
-            submissionId: "submission-042",
+            submissionIds: ["submission-042"],
             reviewerIds: ["reviewer-a"],
             expectedVersion: 3,
+          }),
+        },
+        {
+          url: "/api/admin/evaluations/plans/plan-test/distribution/apply",
+          body: JSON.stringify({
+            roundId: "round-initial",
+            submissionIds: ["submission-042"],
+            reviewerIds: ["reviewer-a"],
+            expectedVersion: 3,
+            fingerprint: "fingerprint-authoritative",
           }),
         },
       ]);
@@ -1790,7 +1911,7 @@ describe("review workspace", () => {
           (element) =>
             (element.props as Record<string, unknown>).role === "status" &&
             String((element.props as Record<string, unknown>).children).includes(
-              "Reviewer set replacement persisted for submission-042: assignment-persisted",
+              "Distribution applied atomically. Active assignments: assignment-persisted.",
             ),
         ),
       ).toBe(true);
