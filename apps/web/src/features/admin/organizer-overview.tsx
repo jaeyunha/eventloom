@@ -987,19 +987,6 @@ export function OrganizerOverviewView({
       </header>
 
       <div className={styles.overviewStack}>
-        <ActionItems state={activity} onRetry={onRetryActivity} />
-
-        <Card role="region" aria-labelledby="overview-events-title">
-          <CardHeader className="flex-row items-start justify-between">
-            <div>
-              <CardDescription>Current and upcoming</CardDescription>
-              <CardTitle id="overview-events-title">Events</CardTitle>
-            </div>
-            <Badge variant="secondary">{core.events.length} total</Badge>
-          </CardHeader>
-          <EventsTable data={core} />
-        </Card>
-
         <section className={styles.metricsSection} aria-labelledby="overview-metrics-title">
           <div className={styles.sectionIntro}>
             <div>
@@ -1022,6 +1009,19 @@ export function OrganizerOverviewView({
             <ActivityMetricCards state={activity} onRetry={onRetryActivity} />
           </div>
         </section>
+
+        <ActionItems state={activity} onRetry={onRetryActivity} />
+
+        <Card role="region" aria-labelledby="overview-events-title">
+          <CardHeader className="flex-row items-start justify-between">
+            <div>
+              <CardDescription>Current and upcoming</CardDescription>
+              <CardTitle id="overview-events-title">Events</CardTitle>
+            </div>
+            <Badge variant="secondary">{core.events.length} total</Badge>
+          </CardHeader>
+          <EventsTable data={core} />
+        </Card>
       </div>
     </>
   );

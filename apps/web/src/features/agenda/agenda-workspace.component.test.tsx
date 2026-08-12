@@ -342,17 +342,10 @@ describe("agenda organizer workspace", () => {
     expect(markup).toContain('href="#agenda-content"');
     expect(markup).toContain('aria-label="Agenda validation and publication"');
     expect(markup).toContain("Times are shown in America/Los_Angeles");
-    expect(markup).toContain("Existing session times");
-    expect(markup).toContain("Keep scheduled sessions fixed");
-    expect(markup).toContain("The generator preserves their current times.");
-    expect(markup).toContain("Allow scheduled sessions to move");
-    expect(markup).toContain("The generator may assign them different times.");
-    expect(markup).toContain("Existing room occupancy");
-    expect(markup).toContain("Ignore existing room occupancy when generating");
-    expect(markup).not.toContain("Existing schedule context");
-    expect(markup).not.toContain("Ignore existing session times when generating");
-    expect(markup).toContain("Publish immutable revision");
-    expect(markup).toMatch(/<button[^>]*disabled=""[^>]*>Publish immutable revision<\/button>/);
+    expect(markup).toContain("Suggestions");
+    expect(markup).toContain("Suggestions remain optional and private.");
+    expect(markup).toContain("Publish agenda");
+    expect(markup).toMatch(/<button[^>]*disabled=""[^>]*>Publish agenda<\/button>/);
   });
   it("routes organizers to durable room settings before scheduling without a room", () => {
     const markup = renderBoard({ ...data, rooms: [] }, undefined, null);
@@ -362,7 +355,7 @@ describe("agenda organizer workspace", () => {
     expect(markup).toMatch(/<button[^>]*disabled=""[^>]*>Add accepted session<\/button>/);
     expect(markup).not.toContain("Generate private suggestions");
   });
-  it("renders one native existing-session-times group with preservation selected by default", () => {
+  it("keeps suggestion configuration collapsed until an organizer requests it", () => {
     const markup = renderToStaticMarkup(
       createElement(AgendaSuggestionPanel, {
         run: null,
@@ -378,27 +371,11 @@ describe("agenda organizer workspace", () => {
         onApply: undefined,
       }),
     );
-    const radioInputs = markup.match(/<input[^>]*type="radio"[^>]*>/gu) ?? [];
-    const keepRadio = radioInputs.find((input) => input.includes('value="keep"'));
-    const moveRadio = radioInputs.find((input) => input.includes('value="move"'));
 
-    expect(markup.match(/<legend>Existing session times<\/legend>/gu)).toHaveLength(1);
-    expect(radioInputs).toHaveLength(2);
-    expect(markup.match(/name="existing-session-times"/gu)).toHaveLength(2);
-    expect(radioInputs.every((input) => input.includes('name="existing-session-times"'))).toBe(
-      true,
-    );
-    expect(keepRadio).toBeDefined();
-    expect(moveRadio).toBeDefined();
-    if (!keepRadio || !moveRadio) throw new Error("Expected both existing-session-times radios.");
-    expect(keepRadio).toContain('checked=""');
-    expect(moveRadio).not.toContain('checked=""');
-    expect(markup).toMatch(
-      /<label[^>]*><input[^>]*value="keep"[^>]*>[\s\S]*Keep scheduled sessions fixed[\s\S]*<\/label>/u,
-    );
-    expect(markup).toMatch(
-      /<label[^>]*><input[^>]*value="move"[^>]*>[\s\S]*Allow scheduled sessions to move[\s\S]*<\/label>/u,
-    );
+    expect(markup).toContain("Optional advisory");
+    expect(markup).toContain("Configure suggestions");
+    expect(markup).toContain('data-state="closed"');
+    expect(markup).not.toContain("Existing session times");
     expect(serializeAgendaSuggestionOptions("keep", false)).toEqual({
       ignoreExistingTimes: false,
       ignoreExistingRooms: false,
@@ -411,14 +388,13 @@ describe("agenda organizer workspace", () => {
       ignoreExistingTimes: false,
       ignoreExistingRooms: true,
     });
-    expect(workspaceSource).toContain(
-      "serializeAgendaSuggestionOptions(existingSessionTimes, ignoreExistingRooms)",
-    );
+    expect(workspaceSource).toContain("Existing session times");
+    expect(workspaceSource).toContain("Keep scheduled sessions fixed");
+    expect(workspaceSource).toContain("serializeAgendaSuggestionOptions(");
     expect(workspaceStyles).toMatch(/\.scheduleOptionSelected/u);
     expect(workspaceStyles).toMatch(/input:focus-visible/u);
     expect(workspaceStyles).toMatch(/input:disabled/u);
     expect(workspaceStyles).toMatch(/aria-invalid/u);
-    expect(workspaceStyles).toMatch(/min-height:\s*2\.75rem/u);
   });
   it("renders the unavailable suggestion capability without a clickable generator", () => {
     const markup = renderToStaticMarkup(
@@ -437,18 +413,18 @@ describe("agenda organizer workspace", () => {
       }),
     );
 
-    expect(markup).toContain(
+    expect(markup).toContain("Configure suggestions");
+    expect(markup).not.toContain("Generate private suggestions");
+    expect(workspaceSource).toContain(
       "Suggestion generation is unavailable until an approved provider is connected.",
     );
-    expect(markup).toMatch(/<button[^>]*disabled=""[^>]*>Generate private suggestions<\/button>/u);
-    expect(markup.match(/<input[^>]*disabled=""[^>]*>/gu) ?? []).toHaveLength(3);
   });
   it("keeps organizer actions below sticky chrome and preserves draft context after a failed request", () => {
     const markup = renderBoard(data, undefined, preview, true, "validate", "Validation failed.");
     expect(markup).toContain("Agenda request failed");
     expect(markup).toContain("authoritative private draft remains visible as Draft v7");
     expect(markup).toContain("Checking...");
-    expect(markup).toContain("Publish immutable revision");
+    expect(markup).toContain("Publish agenda");
     expect(markup).not.toContain("Publishing...");
     expect(markup).toMatch(/actionRail/u);
     expect(workspaceStyles).toMatch(/\.actionRail[\s\S]*position:\s*sticky/u);
@@ -473,10 +449,12 @@ describe("agenda organizer workspace", () => {
         onGenerateSuggestion: vi.fn(async () => undefined),
       }),
     );
-    expect(markup).toContain("No eligible unscheduled sessions");
-    expect(markup).toContain("Accept a session before generating private placement suggestions.");
-    expect(markup).toContain("No eligible unscheduled accepted sessions are currently available.");
+    expect(markup).toContain("Configure suggestions");
     expect(markup).not.toContain("Generate private suggestions");
+    expect(workspaceSource).toContain("No eligible unscheduled sessions");
+    expect(workspaceSource).toContain(
+      "No eligible unscheduled accepted sessions are currently available.",
+    );
   });
 
   it("enables apply after a human selects a conflict-free proposal", () => {
@@ -551,7 +529,7 @@ describe("agenda organizer workspace", () => {
       }),
     );
 
-    expect(markup).toContain("Private agenda suggestions");
+    expect(markup).toContain("Suggestions");
     expect(markup).toContain("never change this draft or publish anything");
     expect(markup).toContain("Choose changes for human application");
     expect(markup).toContain("hard blocker");

@@ -18,6 +18,7 @@
   background: var(--admin-canvas);
   color: var(--admin-ink);
 }
+/* The submission list follows the same restrained neutral system as the surrounding organizer workspaces. */
 
 .workspaceRoot * {
   box-sizing: border-box;
@@ -885,5 +886,135 @@
 
   .detailAside {
     grid-template-columns: 1fr;
+  }
+}
+/* Submission list redesign */
+
+.metricGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.metricCard {
+  min-height: 6rem;
+  border: 1px solid var(--admin-border);
+  border-radius: 0.65rem;
+  background: var(--admin-surface);
+  box-shadow: none;
+}
+
+.metricCard > div {
+  padding: 0.9rem 1rem;
+}
+
+.metricValue {
+  margin-top: 0.15rem;
+  color: var(--admin-ink);
+  font-size: 1.65rem;
+  letter-spacing: -0.04em;
+}
+
+.listContent {
+  padding-top: 0;
+}
+
+.toolbar {
+  display: grid;
+  grid-template-columns: minmax(15rem, 1.6fr) repeat(3, minmax(8.5rem, 0.75fr)) auto;
+  gap: 0.6rem;
+  align-items: end;
+  margin: 0;
+  padding: 0 0 0.9rem;
+  border: 0;
+}
+
+.toolbarSearch,
+.toolbarField {
+  display: grid;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+.toolbarLabel {
+  color: var(--admin-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.toolbarSearch input {
+  min-height: 2rem;
+}
+
+.toolbarField [data-slot="select-trigger"] {
+  width: 100%;
+  min-height: 2rem;
+}
+
+.emptyCardContent {
+  padding-top: 0;
+}
+
+.emptyState {
+  min-height: 10rem;
+  padding: 2.75rem 1.25rem;
+}
+
+.emptyState h3 {
+  color: var(--admin-ink);
+  font-size: 1rem;
+}
+
+.emptyState p {
+  margin-top: 0.2rem;
+}
+
+.emptyState [data-slot="empty-content"] {
+  display: flex;
+  flex-direction: row;
+  justify-content: center;
+  max-width: none;
+}
+
+.submissionTable {
+  min-width: 60rem;
+}
+
+.submissionTable [data-slot="table-head"],
+.submissionTable [data-slot="table-cell"] {
+  padding: 0.75rem 0.65rem;
+}
+
+.statusBadge {
+  font-weight: 700;
+}
+
+@media (max-width: 58rem) {
+  .toolbar {
+    grid-template-columns: repeat(3, minmax(8rem, 1fr));
+  }
+
+  .toolbarSearch {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 46rem) {
+  .metricGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .toolbarSearch {
+    grid-column: auto;
+  }
+
+  .emptyState [data-slot="empty-content"] {
+    flex-direction: column;
+    align-items: stretch;
   }
 }

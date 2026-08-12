@@ -151,6 +151,89 @@ describe.sequential("composed local Worker", () => {
     expect(error.error.message).not.toContain("not-a-route");
   });
 
+  it("serves seeded local organizer data for Events, People, CRM, and CFP review", async () => {
+    const eventsResponse = await runtimeRequest(
+      `/api/admin/organizations/${organizationId}/events`,
+      { headers: organizerHeaders },
+    );
+    const events = await jsonData<Array<{ id: string; organizationId: string }>>(eventsResponse);
+    expect(eventsResponse.status).toBe(200);
+    expect(events.map((event) => event.id)).toEqual(
+      expect.arrayContaining(["demo-event", "open-sessionboard-conf"]),
+    );
+    expect(events.every((event) => event.organizationId === organizationId)).toBe(true);
+
+    const membersResponse = await runtimeRequest(
+      `/api/admin/organizations/${organizationId}/members`,
+      { headers: organizerHeaders },
+    );
+    const members = await jsonData<Array<{ userId: string; role: string }>>(membersResponse);
+    expect(membersResponse.status).toBe(200);
+    expect(members).toContainEqual(
+      expect.objectContaining({ userId: "local-speaker", role: "owner" }),
+    );
+
+    const contactsResponse = await runtimeRequest(
+      `/api/admin/organizations/${organizationId}/crm/contacts?status=active`,
+      { headers: organizerHeaders },
+    );
+    expect(contactsResponse.status).toBe(200);
+    expect(await jsonData<unknown[]>(contactsResponse)).toEqual([]);
+
+    const cfpResponse = await runtimeRequest(
+      `/api/public/cfp/organizations/${organizationId}/events/${eventId}`,
+    );
+    expect(cfpResponse.status).toBe(200);
+    expect(await jsonData<{ event: { id: string } }>(cfpResponse)).toMatchObject({
+      event: { id: eventId },
+    });
+
+    const evaluationResponse = await runtimeRequest(
+      `/api/admin/evaluations/organizer/workspace?eventId=${eventId}`,
+      { headers: organizerHeaders },
+    );
+    expect(evaluationResponse.status).toBe(200);
+    expect(
+      await jsonData<{ plan: { id: string; eventId: string; status: string } }>(evaluationResponse),
+    ).toMatchObject({
+      plan: {
+        id: "local-evaluation-plan",
+        eventId,
+        status: "open",
+      },
+    });
+
+    const speakerContentPath = `/api/speaker/events/${eventId}/organizer/content/speaker/local-participant`;
+    const speakerContentResponse = await runtimeRequest(speakerContentPath, {
+      headers: organizerHeaders,
+    });
+    expect(speakerContentResponse.status).toBe(200);
+    expect(
+      await jsonData<{ entityId: string; version: number; biography: string }>(
+        speakerContentResponse,
+      ),
+    ).toMatchObject({
+      entityId: "local-participant",
+      version: 1,
+    });
+
+    const speakerHistoryResponse = await runtimeRequest(`${speakerContentPath}/history`, {
+      headers: organizerHeaders,
+    });
+    expect(speakerHistoryResponse.status).toBe(200);
+    expect(
+      await jsonData<Array<{ entityId: string; version: number; action: string }>>(
+        speakerHistoryResponse,
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        entityId: "local-participant",
+        version: 1,
+        action: "created",
+      }),
+    ]);
+  });
+
   it("enforces auth boundaries while exposing a useful seeded speaker portal", async () => {
     const unauthenticatedAgenda = await runtimeRequest(
       `/api/admin/organizations/${organizationId}/events/${eventId}/agenda/draft`,
@@ -159,7 +242,7 @@ describe.sequential("composed local Worker", () => {
     await errorResponse(unauthenticatedAgenda, 401, "AUTHENTICATION_REQUIRED");
 
     const unauthenticatedPublicApi = await runtimeRequest(
-      `/api/v1/organizations/${organizationId}/events`,
+      `/api/v1/organizations/${organizationId}/webhooks`,
       { headers: { "x-request-id": traceId } },
     );
     await errorResponse(unauthenticatedPublicApi, 401, "AUTHENTICATION_REQUIRED");
@@ -168,28 +251,20 @@ describe.sequential("composed local Worker", () => {
       authorization: "Bearer local-api-key",
       "x-request-id": traceId,
     };
-    const crossTenant = await runtimeRequest("/api/v1/organizations/another-organization/events", {
-      headers: apiKeyHeaders,
-    });
-    await errorResponse(crossTenant, 403, "TENANT_SCOPE_VIOLATION");
-
-    const speakersResponse = await runtimeRequest(
-      `/api/v1/organizations/${organizationId}/speakers`,
+    const crossTenant = await runtimeRequest(
+      "/api/v1/organizations/another-organization/webhooks",
       { headers: apiKeyHeaders },
     );
-    const speakers = await jsonData<Array<Record<string, unknown>>>(speakersResponse);
-    const agendaProjectionResponse = await runtimeRequest(
-      `/api/v1/organizations/${organizationId}/agenda`,
-      { headers: apiKeyHeaders },
-    );
-    const agendaProjection =
-      await jsonData<Array<Record<string, unknown>>>(agendaProjectionResponse);
+    await errorResponse(crossTenant, 403, "ACCESS_DENIED");
 
-    expect(speakersResponse.status).toBe(200);
-    expect(speakers.length).toBeGreaterThan(0);
-    expect(JSON.stringify(speakers)).not.toContain("email");
+    const agendaProjectionResponse = await runtimeRequest(`/api/public/events/${eventId}/agenda`);
+    const agendaProjection = await jsonData<{ entries: Array<Record<string, unknown>> }>(
+      agendaProjectionResponse,
+    );
+
     expect(agendaProjectionResponse.status).toBe(200);
-    expect(agendaProjection.length).toBeGreaterThan(0);
+    expect(agendaProjection.entries.length).toBeGreaterThan(0);
+    expect(JSON.stringify(agendaProjection)).not.toContain("email");
 
     const portalResponse = await runtimeRequest(`/api/speaker/events/${eventId}/portal`, {
       headers: speakerHeaders,
@@ -495,11 +570,15 @@ describe.sequential("composed local Worker", () => {
     expect(unchanged.version).toBe(draft.version);
     expect(unchanged.entries).toHaveLength(draft.entries.length);
 
+    const updatedEntries = inputEntries.map((entry, index) =>
+      index === 0 ? { ...entry, endsAtLocal: "2026-09-18T09:45:00" } : entry,
+    );
+
     const updateResponse = await runtimeRequest(
       `${adminBase}/draft`,
       jsonRequest(
         "PUT",
-        { expectedVersion: draft.version, entries: inputEntries },
+        { expectedVersion: draft.version, entries: updatedEntries },
         organizerHeaders,
       ),
     );
@@ -511,7 +590,7 @@ describe.sequential("composed local Worker", () => {
       `${adminBase}/draft`,
       jsonRequest("PUT", { expectedVersion: draft.version, entries: [] }, organizerHeaders),
     );
-    await errorResponse(staleResponse, 409, "CONFLICT");
+    await errorResponse(staleResponse, 412, "PRECONDITION_FAILED");
 
     const publishResponse = await runtimeRequest(
       `${adminBase}/publish`,
@@ -528,19 +607,17 @@ describe.sequential("composed local Worker", () => {
 
     const publicResponse = await runtimeRequest(`/api/public/events/${eventId}/agenda`);
     const publicAgenda = await jsonData<{
-      revisionId: string;
-      eventId: string;
-      sourceDraftVersion: number;
+      event: { slug: string };
+      revision: { id: string; number: number; publishedAt: string };
       entries: unknown[];
     }>(publicResponse);
     const serialized = JSON.stringify(publicAgenda);
 
     expect(publicResponse.status).toBe(200);
-    expect(publicResponse.headers.get("cache-control")).toContain("max-age=60");
+    expect(publicResponse.headers.get("cache-control")).toContain("s-maxage=60");
     expect(publicAgenda).toMatchObject({
-      revisionId: publication.id,
-      eventId,
-      sourceDraftVersion: updated.version,
+      event: { slug: eventId },
+      revision: { id: publication.id },
     });
     expect(publicAgenda.entries).toHaveLength(draft.entries.length);
     expect(serialized).not.toContain("publishedBy");
@@ -600,7 +677,7 @@ describe.sequential("composed local Worker", () => {
               ? {
                   answers: {
                     title: "Reliable local runtime verification",
-                    format: "Workshop",
+                    format: "Breakout Session",
                     abstract:
                       "A complete deterministic CFP submission exercised without credentials.",
                   },

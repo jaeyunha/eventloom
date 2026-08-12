@@ -51,19 +51,16 @@
 }
 
 .card {
-  padding: 1.25rem;
-  border: 1px solid var(--color-border, #dfe2e8);
-  border-radius: 0.875rem;
-  background: var(--color-surface, #fff);
-  box-shadow: var(--shadow-card, 0 8px 24px rgb(29 34 51 / 6%));
+  padding: 0;
 }
 
 .cardHeader {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-  margin-bottom: 1rem;
+  margin-bottom: 0;
+  padding: 1.25rem 1.25rem 0.85rem;
+}
+
+.cardContent {
+  padding: 0 1.25rem 1.25rem;
 }
 
 .card h2 {
@@ -229,6 +226,7 @@
   border-radius: 0.65rem;
   background: var(--color-canvas, #f5f6f9);
 }
+
 .bulkToolbar,
 .filterSummary,
 .importPreview,
@@ -248,6 +246,68 @@
   flex-wrap: wrap;
   align-items: center;
   justify-content: flex-start;
+}
+
+.summaryBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--color-border, #dfe2e8);
+  border-radius: 0.75rem;
+  background: var(--color-surface, #fff);
+}
+
+.summaryBar h2 {
+  margin: 0.15rem 0 0;
+  font-size: 1rem;
+}
+
+.emptyDirectory {
+  display: grid;
+  gap: 0.65rem;
+  margin: 0.5rem 0 1rem;
+  padding: 1.25rem;
+  border: 1px dashed var(--color-border-strong, #cdd1da);
+  border-radius: 0.75rem;
+  background: var(--color-surface, #fff);
+}
+
+.emptyDirectory h3,
+.emptyDirectory p {
+  margin: 0;
+}
+
+.emptyDirectory p {
+  max-width: 38rem;
+  color: var(--color-muted, #697181);
+}
+.error {
+  color: #b42318;
+}
+
+.alertAction {
+  margin-top: 0.65rem;
+}
+
+.errorDetails {
+  margin-top: 0.65rem;
+}
+
+.errorDetails summary {
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.errorDetails pre {
+  max-width: 100%;
+  margin: 0.5rem 0 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  color: inherit;
 }
 
 .importFileName {
@@ -319,10 +379,6 @@
 
 .alert {
   padding: 1rem;
-  border: 1px solid #b42318;
-  border-radius: 0.65rem;
-  background: #fff5f4;
-  color: #8f1d14;
 }
 
 .alert p {
@@ -397,16 +453,8 @@
   min-height: 1.4rem;
   padding: 0.15rem 0.45rem;
   border-radius: 99rem;
-  background: rgb(80 101 232 / 11%);
-  color: var(--color-brand-strong, #3344aa);
   font-size: 0.75rem;
   font-weight: 750;
-}
-
-.stageBadge {
-  background: rgb(37 39 45 / 8%);
-  color: var(--color-ink, #25272d);
-  text-transform: capitalize;
 }
 
 .emptyState {
@@ -475,6 +523,7 @@
   flex: 1 1 25rem;
   margin: 0;
 }
+
 .mergeReview {
   display: grid;
   gap: 0.85rem;
@@ -695,6 +744,7 @@
   border-radius: 0.5rem;
   background: var(--color-surface, #fff);
 }
+
 .pipelineCardButton {
   display: grid;
   width: 100%;
@@ -831,6 +881,11 @@
   .twoColumn > :last-child {
     grid-column: auto;
   }
+
+  .summaryBar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }
 
 @media (max-width: 34rem) {
@@ -838,8 +893,7 @@
     padding: 1rem 0.65rem 2rem;
   }
 
-  .hero,
-  .card {
+  .hero {
     padding: 1rem;
   }
 

@@ -52,12 +52,7 @@ describe("organization member API adapter", () => {
     const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
     const scopedOwner = { ...owner, organizationId: "org/1" };
     const scopedReviewer = { ...reviewer, organizationId: "org/1" };
-    const scopedPool = {
-      ...pool,
-      organizationId: "org/1",
-      eventId: "event/1",
-      roundId: "round/1",
-    };
+    const scopedPool = { ...pool, organizationId: "org/1", eventId: "event/1", roundId: "round/1" };
     const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
       calls.push(init === undefined ? { input } : { input, init });
       const url = String(input);
@@ -123,6 +118,7 @@ describe("organization member API adapter", () => {
     });
     expect(calls[0]?.init).toMatchObject({ credentials: "include", cache: "no-store" });
   });
+
   it("uses a same-origin API path when the base URL is empty", async () => {
     const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
     const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -130,9 +126,7 @@ describe("organization member API adapter", () => {
       return new Response(JSON.stringify({ data: [owner] }), { status: 200 });
     };
     const api = createMemberApi("", owner.organizationId, fetcher);
-
     await expect(api.listMembers()).resolves.toEqual([owner]);
-
     expect(String(calls[0]?.input)).toBe("/api/admin/organizations/org-1/members");
     expect(calls[0]?.init).toMatchObject({ credentials: "include" });
   });
@@ -171,7 +165,6 @@ describe("organization member API adapter", () => {
         },
       }),
     );
-
     await expect(api.inviteMember({ email: reviewer.email, role: "reviewer" })).rejects.toThrow(
       "does not match",
     );
@@ -179,15 +172,8 @@ describe("organization member API adapter", () => {
 
   it("rejects a nullable invitation response with the wrong member role", async () => {
     const api = createMemberApi("https://api.example.test", "org-1", async () =>
-      Response.json({
-        data: {
-          member: reviewer,
-          invitation: null,
-          created: false,
-        },
-      }),
+      Response.json({ data: { member: reviewer, invitation: null, created: false } }),
     );
-
     await expect(api.inviteMember({ email: reviewer.email, role: "admin" })).rejects.toThrow(
       "does not match",
     );
@@ -207,7 +193,6 @@ describe("member invitation setup", () => {
     expect(isPublicMemberSetupPath("/admin/organizations/org-1/members/setup/")).toBe(true);
     expect(isPublicMemberSetupPath("/admin/organizations/org-1/members")).toBe(false);
     expect(isPublicMemberSetupPath("/admin/organizations/org-1/events/event-1")).toBe(false);
-
     expect(
       sessionHasOrganizerMembership(
         { memberships: [{ organizationId: "org-2", role: "owner" }] },
@@ -270,7 +255,6 @@ describe("member invitation setup", () => {
       name: "Review Person",
       password: "StrongPass1!",
     });
-
     expect(destination).toBe("/review");
     expect(calls).toEqual([
       "activate:one-time-token:StrongPass1!",
@@ -315,7 +299,6 @@ describe("member invitation setup", () => {
       token: "one-time-token",
       password: "StrongPass1!",
     });
-
     await expect(result).rejects.toBeInstanceOf(MemberSetupActivatedSignInRequiredError);
     await expect(result).rejects.toMatchObject({ email: reviewer.email });
     expect(activationCount).toBe(1);
@@ -323,18 +306,11 @@ describe("member invitation setup", () => {
 
   it("renders accessible setup and missing-token states without exposing a token", () => {
     const setup = renderToStaticMarkup(
-      createElement(MemberSetup, {
-        organizationId: "org-1",
-        token: "secret-token",
-      }),
+      createElement(MemberSetup, { organizationId: "org-1", token: "secret-token" }),
     );
     const missing = renderToStaticMarkup(
-      createElement(MemberSetup, {
-        organizationId: "org-1",
-        token: null,
-      }),
+      createElement(MemberSetup, { organizationId: "org-1", token: null }),
     );
-
     expect(setup).toContain("Set up organization access");
     expect(setup).toContain("Accept invitation and sign in");
     expect(setup).toContain("new-password");
@@ -344,7 +320,7 @@ describe("member invitation setup", () => {
 });
 
 describe("member workspace", () => {
-  it("renders reviewer provisioning, role separation, pool setup, and accessible states", () => {
+  it("defaults to a concise People directory and keeps administrative work behind tabs", () => {
     const markup = renderToStaticMarkup(
       createElement(MemberWorkspace, {
         organizationId: "org-1",
@@ -354,18 +330,18 @@ describe("member workspace", () => {
       }),
     );
 
-    expect(markup).toContain("Members and evaluators");
-    expect(markup).toContain("Invite an organization member");
-    expect(markup).toContain("one-time setup");
-    expect(markup).toContain("Search members");
-    expect(markup).toContain("Evaluator");
-    expect(markup).toContain("Evaluator pool and assignment caps");
-    expect(markup).toContain("Event ID");
-    expect(markup).toContain("Round ID");
-    expect(markup).toContain("open the assigned review dashboard");
-    expect(markup).toContain("Organizations");
-    expect(markup).toContain("Switch organization");
-    expect(markup).toContain("Create organization");
-    expect(markup).toContain("Update current organization");
+    expect(markup).toContain("People");
+    expect(markup).toContain("People directory");
+    expect(markup).toContain("Invite member");
+    expect(markup).toContain("Reviewer pools");
+    expect(markup).toContain("Organization settings");
+    expect(markup).toContain("Search people");
+    expect(markup).not.toContain("CEP-10");
+    expect(markup).not.toContain("ABS-02");
+    expect(markup).not.toContain("CFP-10");
+    expect(markup).not.toContain("Members and evaluators");
+    expect(markup).not.toContain("Organization configuration (JSON)");
+    expect(markup).not.toContain("Event ID");
+    expect(markup).not.toContain("Round ID");
   });
 });

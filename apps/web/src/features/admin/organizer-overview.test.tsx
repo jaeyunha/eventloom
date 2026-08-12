@@ -119,6 +119,8 @@ describe("organizer overview", () => {
     expect(output).toContain(">1</");
     expect(output).toContain(">2</");
     expect(output).toContain("Needs attention");
+    expect(output.indexOf("Metrics")).toBeLessThan(output.indexOf("Needs attention"));
+    expect(output.indexOf("Metrics")).toBeLessThan(output.indexOf(">Events</"));
     expect(output).toContain("1 task");
     expect(output).toContain("Priority queued");
     expect(output).toContain("Publish the remaining session");
