@@ -229,6 +229,7 @@ const LOCAL_PUBLIC_EMBED: EventEmbedConfiguration = {
   displayFields: ["title", "date-time", "room", "speakers", "track", "summary"],
   trackIds: ["local-track-main", "local-track-practice"],
   statuses: ["Accepted"],
+  revision: 1,
 };
 
 export const LOCAL_ORGANIZER_ACCOUNT_ID = "local-organizer";
