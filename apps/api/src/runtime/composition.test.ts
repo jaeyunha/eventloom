@@ -5058,18 +5058,16 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       reviews: [historicalReview],
     });
     await expect(
-      repository.listReviewerWorkspaceRecords(
-        tenantId,
-        desiredAssignments[4]?.reviewerId ?? "",
-        [eventId],
-      ),
+      repository.listReviewerWorkspaceRecords(tenantId, desiredAssignments[4]?.reviewerId ?? "", [
+        eventId,
+      ]),
     ).resolves.toEqual({
       assignments: [desiredAssignments[4]],
       reviews: [],
     });
-    await expect(
-      repository.getReview(tenantId, previousAssignments[0]?.id ?? ""),
-    ).resolves.toEqual(historicalReview);
+    await expect(repository.getReview(tenantId, previousAssignments[0]?.id ?? "")).resolves.toEqual(
+      historicalReview,
+    );
 
     const planPatch = transport.requests.find(
       (request) =>
@@ -5078,9 +5076,7 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
         request.recordId === "rec00000000000200",
     );
     const planFields = (
-      planPatch?.body as
-        | { readonly fields?: Readonly<Record<string, unknown>> }
-        | undefined
+      planPatch?.body as { readonly fields?: Readonly<Record<string, unknown>> } | undefined
     )?.fields;
     const storedPlan = JSON.parse(String(planFields?.["Rounds JSON"])) as {
       readonly assignmentGenerationSnapshot?: {
