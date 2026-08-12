@@ -770,6 +770,146 @@ describe.sequential("composed local Worker", () => {
     expect(submitReplay).toEqual(submitted);
   });
 
+  it("completes a seeded speaker task upload and authorized local download", async () => {
+    const fileBody = "deterministic local speaker bytes";
+    const uploadPayload = {
+      participantId: "local-participant",
+      submissionId: "local-submission",
+      taskId: "local-slides-task",
+      kind: "slides" as const,
+      fileName: "local-speaker-slides.pdf",
+      contentType: "application/pdf",
+      sizeBytes: new TextEncoder().encode(fileBody).byteLength,
+    };
+    const uploadResponse = await runtimeRequest(
+      `/api/speaker/events/${eventId}/uploads`,
+      jsonRequest("POST", uploadPayload, speakerHeaders),
+    );
+    const upload = await jsonData<{
+      asset: { id: string; state: string; version: number };
+      grant: {
+        method: "PUT";
+        url: string;
+        headers: Record<string, string>;
+        expiresAt: string;
+      };
+    }>(uploadResponse);
+    expect(uploadResponse.status).toBe(201);
+    expect(upload.asset).toMatchObject({ state: "pending_upload", version: 2 });
+    expect(upload.grant).toMatchObject({ method: "PUT" });
+    expect(upload.grant.url).toMatch(
+      /^\/api\/speaker\/assets\/capabilities\/upload\/[^/]+\/[^/]+$/u,
+    );
+    expect(upload.grant.url).not.toMatch(/^https?:/u);
+
+    const wrongTokenUrl = upload.grant.url.replace(/[^/]+$/u, "wrong-token");
+    const wrongTokenResponse = await runtimeRequest(wrongTokenUrl, {
+      method: "PUT",
+      headers: { ...upload.grant.headers, ...speakerHeaders },
+      body: fileBody,
+    });
+    await errorResponse(wrongTokenResponse, 404, "CAPABILITY_INVALID");
+
+    const reviewerResponse = await runtimeRequest(
+      `/api/speaker/events/${eventId}/uploads`,
+      jsonRequest("POST", uploadPayload, reviewerHeaders),
+    );
+    await errorResponse(reviewerResponse, 404, "NOT_FOUND");
+
+    const putResponse = await runtimeRequest(upload.grant.url, {
+      method: "PUT",
+      headers: { ...upload.grant.headers, ...speakerHeaders },
+      body: fileBody,
+    });
+    const receipt = await jsonData<{
+      contentType: string;
+      sizeBytes: number;
+      uploadedAt: string;
+    }>(putResponse);
+    expect(putResponse.status).toBe(201);
+    expect(receipt).toMatchObject({
+      contentType: "application/pdf",
+      sizeBytes: uploadPayload.sizeBytes,
+    });
+
+    const finalizeResponse = await runtimeRequest(
+      `/api/speaker/events/${eventId}/assets/${upload.asset.id}/finalize`,
+      jsonRequest("POST", { state: "ready" }, speakerHeaders),
+    );
+    const finalized = await jsonData<{ id: string; state: string; version: number }>(
+      finalizeResponse,
+    );
+    expect(finalizeResponse.status).toBe(200);
+    expect(finalized).toMatchObject({
+      id: upload.asset.id,
+      state: "ready",
+      version: 2,
+    });
+
+    const taskResponse = await runtimeRequest(`/api/speaker/events/${eventId}/tasks`, {
+      headers: speakerHeaders,
+    });
+    const tasks = await jsonData<Array<{ id: string; status: string; version: number }>>(
+      taskResponse,
+    );
+    expect(taskResponse.status).toBe(200);
+    expect(tasks).toContainEqual(
+      expect.objectContaining({ id: "local-slides-task", status: "submitted", version: 1 }),
+    );
+
+    const deliverablesResponse = await runtimeRequest(
+      `/api/speaker/events/${eventId}/organizer/deliverables?taskId=local-slides-task`,
+      { headers: organizerHeaders },
+    );
+    const deliverables = await jsonData<{
+      items: Array<{
+        task: { id: string };
+        currentAsset?: { id: string; state: string; version: number };
+      }>;
+    }>(deliverablesResponse);
+    expect(deliverablesResponse.status).toBe(200);
+    expect(deliverables.items).toContainEqual(
+      expect.objectContaining({
+        task: { id: "local-slides-task" },
+        currentAsset: { id: upload.asset.id, state: "ready", version: 2 },
+      }),
+    );
+
+    const downloadGrantResponse = await runtimeRequest(
+      `/api/speaker/events/${eventId}/organizer/assets/${upload.asset.id}/download`,
+      { method: "POST", headers: organizerHeaders },
+    );
+    const downloadGrant = await jsonData<{
+      method: "GET";
+      url: string;
+      expiresAt: string;
+    }>(downloadGrantResponse);
+    expect(downloadGrantResponse.status).toBe(200);
+    expect(downloadGrant).toMatchObject({ method: "GET" });
+    expect(downloadGrant.url).toMatch(
+      /^\/api\/speaker\/assets\/capabilities\/download\/[^/]+\/[^/]+$/u,
+    );
+    expect(downloadGrant.url).not.toMatch(/^https?:/u);
+
+    const downloadResponse = await runtimeRequest(downloadGrant.url, {
+      headers: organizerHeaders,
+    });
+    const downloadedBytes = new Uint8Array(await downloadResponse.arrayBuffer());
+    expect(downloadResponse.status).toBe(200);
+    expect(downloadResponse.headers.get("content-type")).toBe("application/pdf");
+    expect([...downloadedBytes]).toEqual([...new TextEncoder().encode(fileBody)]);
+
+    const replayResponse = await runtimeRequest(downloadGrant.url, {
+      headers: organizerHeaders,
+    });
+    await errorResponse(replayResponse, 409, "CAPABILITY_REPLAY");
+
+    const reviewerDownloadResponse = await runtimeRequest(
+      `/api/speaker/events/${eventId}/organizer/assets/${upload.asset.id}/download`,
+      { method: "POST", headers: reviewerHeaders },
+    );
+    await errorResponse(reviewerDownloadResponse, 404, "NOT_FOUND");
+  });
   it("fails closed outside local mode when provider configuration is absent", async () => {
     const response = await runtimeRequest(
       `/api/speaker/events/${eventId}/portal`,

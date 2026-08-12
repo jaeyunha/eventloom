@@ -2,6 +2,7 @@
 
 import type { CSSProperties } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Label } from "@/components/ui/label";
 import styles from "@/features/admin/admin-shell.module.css";
 import {
   createOrganizerEventsApi,
@@ -583,11 +584,13 @@ function WidgetChooser({
       </legend>
       <div style={{ display: "grid", gap: "0.45rem" }}>
         {EMBED_WIDGETS.map((widget) => (
-          <label
+          <Label
             key={widget.id}
+            htmlFor={`embed-widget-${widget.id}`}
             style={{ display: "flex", gap: "0.55rem", alignItems: "flex-start", cursor: "pointer" }}
           >
             <input
+              id={`embed-widget-${widget.id}`}
               type="radio"
               name="embed-widget"
               value={widget.id}
@@ -600,7 +603,7 @@ function WidgetChooser({
               </strong>
               <span style={subtleTextStyle}>{widget.description}</span>
             </span>
-          </label>
+          </Label>
         ))}
       </div>
     </fieldset>
@@ -666,13 +669,19 @@ function EmbedConfigurationLibrary({
           ))}
         </select>
       </label>
-      <div style={{ display: "grid", gap: "0.4rem", marginTop: "0.7rem" }}>
+      <div
+        role="group"
+        aria-label="Saved configuration availability"
+        style={{ display: "grid", gap: "0.4rem", marginTop: "0.7rem" }}
+      >
         {configurations.map((configuration) => (
-          <label
+          <Label
             key={`${configuration.id}-enabled`}
+            htmlFor={`embed-configuration-${configuration.id}-enabled`}
             style={{ display: "flex", gap: "0.5rem", alignItems: "center", cursor: "pointer" }}
           >
             <input
+              id={`embed-configuration-${configuration.id}-enabled`}
               type="checkbox"
               aria-label={`${configuration.enabled ? "Disable" : "Enable"} ${configuration.name}`}
               checked={configuration.enabled}
@@ -682,7 +691,7 @@ function EmbedConfigurationLibrary({
             <span style={fieldLabelStyle}>
               {configuration.enabled ? "Enabled" : "Disabled"} · {configuration.name}
             </span>
-          </label>
+          </Label>
         ))}
       </div>
 
@@ -804,8 +813,9 @@ function EmbedControls({
         </legend>
         <div style={{ display: "grid", gap: "0.45rem" }}>
           {EMBED_OUTPUT_FORMATS.map((option) => (
-            <label
+            <Label
               key={option.value}
+              htmlFor={`embed-output-format-${option.value}`}
               style={{
                 display: "flex",
                 gap: "0.55rem",
@@ -814,6 +824,7 @@ function EmbedControls({
               }}
             >
               <input
+                id={`embed-output-format-${option.value}`}
                 type="radio"
                 name="embed-output-format"
                 value={option.value}
@@ -828,7 +839,7 @@ function EmbedControls({
                 </strong>
                 <span style={subtleTextStyle}>{option.description}</span>
               </span>
-            </label>
+            </Label>
           ))}
         </div>
       </fieldset>
@@ -958,8 +969,9 @@ function EmbedControls({
           {EMBED_DISPLAY_FIELDS.map((field) => {
             const checked = field.required || displayFields.includes(field.id);
             return (
-              <label
+              <Label
                 key={field.id}
+                htmlFor={`embed-field-${field.id}`}
                 style={{
                   display: "flex",
                   gap: "0.55rem",
@@ -969,6 +981,7 @@ function EmbedControls({
                 }}
               >
                 <input
+                  id={`embed-field-${field.id}`}
                   type="checkbox"
                   name={`embed-field-${field.id}`}
                   value={field.id}
@@ -983,7 +996,7 @@ function EmbedControls({
                   {field.label}
                   {field.required ? " (required)" : ""}
                 </span>
-              </label>
+              </Label>
             );
           })}
         </div>
@@ -1231,7 +1244,14 @@ export function EmbedWorkspaceView({
   loading = false,
   errorMessage = null,
 }: EmbedWorkspaceViewProps) {
-  const initialServerConfigurations = eventEmbedConfigurations(initialConfigurations);
+  const serverConfigurationList = useMemo<readonly EmbedConfiguration[] | null>(
+    () =>
+      initialConfigurations === undefined
+        ? null
+        : eventEmbedConfigurations(initialConfigurations),
+    [initialConfigurations],
+  );
+  const initialServerConfigurations = serverConfigurationList ?? [];
   const initialConfiguration =
     initialServerConfigurations.find((configuration) => configuration.enabled) ??
     initialServerConfigurations[0];
@@ -1314,13 +1334,9 @@ export function EmbedWorkspaceView({
     setStatuses(configuration.statuses);
   }, []);
 
-  const serverConfigurationList = useMemo(
-    () => eventEmbedConfigurations(initialConfigurations),
-    [initialConfigurations],
-  );
 
   useEffect(() => {
-    if (initialConfigurations === undefined) return;
+    if (serverConfigurationList === null) return;
     setConfigurations(serverConfigurationList);
     setEventVersionState(eventVersion ?? null);
     const activeConfiguration =
@@ -1332,13 +1348,7 @@ export function EmbedWorkspaceView({
     } else {
       resetBuilder();
     }
-  }, [
-    applyConfiguration,
-    eventVersion,
-    initialConfigurations,
-    resetBuilder,
-    serverConfigurationList,
-  ]);
+  }, [applyConfiguration, eventVersion, resetBuilder, serverConfigurationList]);
 
   const persistConfigurations = useCallback(
     async (nextConfigurations: readonly EmbedConfiguration[]): Promise<boolean> => {

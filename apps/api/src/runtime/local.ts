@@ -61,6 +61,7 @@ import type {
   UpdateBiographyCommand,
   UpdateSpeakerProfileCommand,
   UpdateSpeakerContentCommand,
+  PrivateAssetCapabilityBinding,
 } from "../features/speaker/types";
 import type { CloudflareAiProviders } from "../integrations/ai";
 import { InMemoryWebhookRepository } from "../integrations/webhooks/types";
@@ -843,21 +844,219 @@ class LocalSpeakerRepository implements SpeakerRepository {
   }
 }
 
+type LocalPrivateAssetRecord = {
+  readonly binding: PrivateAssetCapabilityBinding;
+  readonly kind: "upload" | "download";
+  readonly token: string;
+  state: "pending" | "uploaded" | "consumed";
+};
+
+type LocalPrivateAssetObject = {
+  readonly contentType: string;
+  readonly bytes: Uint8Array;
+};
+
 class LocalPrivateAssetGateway implements PrivateAssetGateway {
-  async createUploadGrant(command: CreatePrivateUploadGrantCommand) {
+  readonly #capabilities = new Map<string, LocalPrivateAssetRecord>();
+  readonly #objects = new Map<string, LocalPrivateAssetObject>();
+  #sequence = 0;
+
+  async createUploadGrant(_command: CreatePrivateUploadGrantCommand) {
+    throw new Error("A fully bound local upload capability is required.");
+  }
+
+  async createDownloadGrant(_command: {
+    objectKey: string;
+    fileName: string;
+    expiresAt: string;
+  }) {
+    throw new Error("A fully bound local download capability is required.");
+  }
+
+  async registerUploadCapability(binding: PrivateAssetCapabilityBinding) {
+    const token = await this.token("upload", binding);
+    this.#capabilities.set(binding.capabilityId, {
+      binding: { ...binding },
+      kind: "upload",
+      token,
+      state: "pending",
+    });
     return {
       method: "PUT" as const,
-      url: `https://uploads.local.open-sessionboard.test/${encodeURIComponent(command.objectKey)}`,
-      headers: { "content-type": command.contentType },
-      expiresAt: command.expiresAt,
+      url: `/api/speaker/assets/capabilities/upload/${encodeURIComponent(binding.capabilityId)}/${token}`,
+      headers: {
+        "content-type": binding.contentType,
+        "content-length": String(binding.sizeBytes),
+      },
+      expiresAt: binding.expiresAt,
     };
   }
 
-  async createDownloadGrant(command: { objectKey: string; fileName: string; expiresAt: string }) {
+  async registerDownloadCapability(binding: PrivateAssetCapabilityBinding) {
+    const object = this.#objects.get(binding.objectKey);
+    if (
+      object === undefined ||
+      object.bytes.byteLength !== binding.sizeBytes ||
+      object.contentType.trim().toLowerCase() !== binding.contentType.trim().toLowerCase()
+    ) {
+      throw new Error("The requested private asset is not available.");
+    }
+    const token = await this.token("download", binding);
+    this.#capabilities.set(binding.capabilityId, {
+      binding: { ...binding },
+      kind: "download",
+      token,
+      state: "uploaded",
+    });
     return {
-      url: `https://downloads.local.open-sessionboard.test/${encodeURIComponent(command.objectKey)}?file=${encodeURIComponent(command.fileName)}`,
-      expiresAt: command.expiresAt,
+      method: "GET" as const,
+      url: `/api/speaker/assets/capabilities/download/${encodeURIComponent(binding.capabilityId)}/${token}`,
+      expiresAt: binding.expiresAt,
     };
+  }
+
+  async consumeUploadCapability(capabilityId: string, token: string, request: Request) {
+    const capability = this.#capabilities.get(capabilityId);
+    if (
+      capability === undefined ||
+      capability.kind !== "upload" ||
+      capability.state !== "pending" ||
+      capability.token !== token ||
+      this.expired(capability.binding.expiresAt)
+    ) {
+      throw new Error("The upload capability is invalid or has expired.");
+    }
+    if (request.method !== "PUT") throw new Error("The upload capability requires PUT.");
+
+    const contentType = request.headers.get("content-type")?.trim().toLowerCase() ?? "";
+    const declaredLength = request.headers.get("content-length");
+    if (
+      contentType !== capability.binding.contentType.trim().toLowerCase() ||
+      (declaredLength !== null &&
+        (!/^\d+$/u.test(declaredLength) ||
+          Number(declaredLength) !== capability.binding.sizeBytes))
+    ) {
+      throw new Error("The uploaded object metadata is not allowed.");
+    }
+    const body = new Uint8Array(await request.arrayBuffer());
+    if (body.byteLength !== capability.binding.sizeBytes) {
+      throw new Error("The uploaded object size does not match the capability.");
+    }
+
+    capability.state = "uploaded";
+    this.#objects.set(capability.binding.objectKey, {
+      contentType: capability.binding.contentType,
+      bytes: body.slice(),
+    });
+    return {
+      contentType: capability.binding.contentType,
+      sizeBytes: capability.binding.sizeBytes,
+      uploadedAt: new Date(SEEDED_AT).toISOString(),
+    };
+  }
+
+  async consumeDownloadCapability(capabilityId: string, token: string) {
+    const capability = this.#capabilities.get(capabilityId);
+    if (
+      capability === undefined ||
+      capability.kind !== "download" ||
+      capability.state !== "uploaded" ||
+      capability.token !== token ||
+      this.expired(capability.binding.expiresAt)
+    ) {
+      throw new Error("The download capability is invalid or has expired.");
+    }
+    const object = this.#objects.get(capability.binding.objectKey);
+    if (
+      object === undefined ||
+      object.bytes.byteLength !== capability.binding.sizeBytes ||
+      object.contentType.trim().toLowerCase() !== capability.binding.contentType.trim().toLowerCase()
+    ) {
+      throw new Error("The requested private asset is not available.");
+    }
+
+    capability.state = "consumed";
+    return {
+      body: this.body(object.bytes),
+      contentType: object.contentType,
+      sizeBytes: object.bytes.byteLength,
+      fileName: capability.binding.fileName,
+    };
+  }
+
+  async inspectObject(
+    command: Pick<PrivateAssetCapabilityBinding, "objectKey" | "contentType" | "sizeBytes">,
+  ) {
+    const object = this.#objects.get(command.objectKey);
+    if (
+      object === undefined ||
+      object.bytes.byteLength !== command.sizeBytes ||
+      object.contentType.trim().toLowerCase() !== command.contentType.trim().toLowerCase()
+    ) {
+      return null;
+    }
+    return {
+      contentType: object.contentType,
+      sizeBytes: object.bytes.byteLength,
+    };
+  }
+
+  async readObject(binding: PrivateAssetCapabilityBinding) {
+    const object = this.#objects.get(binding.objectKey);
+    if (
+      object === undefined ||
+      object.bytes.byteLength !== binding.sizeBytes ||
+      object.contentType.trim().toLowerCase() !== binding.contentType.trim().toLowerCase()
+    ) {
+      return null;
+    }
+    return {
+      body: this.body(object.bytes),
+      contentType: object.contentType,
+      sizeBytes: object.bytes.byteLength,
+      fileName: binding.fileName,
+    };
+  }
+
+  private expired(expiresAt: string): boolean {
+    const timestamp = Date.parse(expiresAt);
+    return !Number.isFinite(timestamp) || timestamp <= Date.parse(SEEDED_AT);
+  }
+
+  private body(bytes: Uint8Array): ReadableStream<Uint8Array> {
+    const copy = bytes.slice();
+    return new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(copy);
+        controller.close();
+      },
+    });
+  }
+
+  private async token(kind: "upload" | "download", binding: PrivateAssetCapabilityBinding) {
+    const sequence = ++this.#sequence;
+    const payload = JSON.stringify([
+      "local-private-asset-capability-v1",
+      kind,
+      sequence,
+      binding.capabilityId,
+      binding.tenantId,
+      binding.eventId,
+      binding.submissionId,
+      binding.participantId,
+      binding.taskId ?? "",
+      binding.objectKey,
+      binding.contentType,
+      binding.sizeBytes,
+      binding.fileName,
+      binding.expiresAt,
+    ]);
+    const digest = new Uint8Array(
+      await crypto.subtle.digest("SHA-256", new TextEncoder().encode(payload)),
+    );
+    return `local-capability-${[...digest]
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("")}`;
   }
 }
 

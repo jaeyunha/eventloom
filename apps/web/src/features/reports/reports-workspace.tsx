@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   createReportsApi,
   type ReportDefinition,
@@ -302,6 +302,28 @@ function csvRows(run: ReportRun): readonly string[][] {
 function sourceFieldKeys(relationships: readonly ReportRelationship[]): readonly string[] {
   return fieldsForRelationships(relationships).map((field) => field.key);
 }
+interface RowKeyState<T extends object> {
+  readonly map: WeakMap<T, string>;
+  nextId: number;
+}
+
+function stableRowKey<T extends object>(state: RowKeyState<T>, prefix: string, row: T): string {
+  const existing = state.map.get(row);
+  if (existing !== undefined) return existing;
+  const key = `${prefix}-${state.nextId}`;
+  state.nextId += 1;
+  state.map.set(row, key);
+  return key;
+}
+
+function carryRowKey<T extends object>(
+  state: RowKeyState<T>,
+  previous: T,
+  next: T,
+): void {
+  const existing = state.map.get(previous);
+  if (existing !== undefined) state.map.set(next, existing);
+}
 
 export function normalizeDraft(next: ReportDefinitionInput): ReportDefinitionInput {
   const relationships = arrayValue(next.relationships);
@@ -360,6 +382,14 @@ export function ReportsWorkspace({
   const [evaluationPlanVersion, setEvaluationPlanVersion] = useState("3");
   const [deleteCandidate, setDeleteCandidate] = useState<ReportDefinition | null>(null);
   const [api, setApi] = useState<ReportsApi | null>(null);
+  const filterKeyState = useRef<RowKeyState<ReportFilter>>({
+    map: new WeakMap(),
+    nextId: 0,
+  });
+  const sortKeyState = useRef<RowKeyState<ReportSort>>({
+    map: new WeakMap(),
+    nextId: 0,
+  });
 
   useEffect(() => {
     setApi(null);
@@ -462,12 +492,18 @@ export function ReportsWorkspace({
   }
 
   function updateFilter(index: number, update: Partial<ReportFilter>): void {
-    updateDraft((current) => ({
-      ...current,
-      filters: current.filters.map((filter, filterIndex) =>
-        filterIndex === index ? { ...filter, ...update } : filter,
-      ),
-    }));
+    updateDraft((current) => {
+      const currentFilter = current.filters[index];
+      if (currentFilter === undefined) return current;
+      const nextFilter = { ...currentFilter, ...update };
+      carryRowKey(filterKeyState.current, currentFilter, nextFilter);
+      return {
+        ...current,
+        filters: current.filters.map((filter, filterIndex) =>
+          filterIndex === index ? nextFilter : filter,
+        ),
+      };
+    });
   }
 
   function removeFilter(index: number): void {
@@ -487,12 +523,16 @@ export function ReportsWorkspace({
   }
 
   function updateSort(index: number, update: Partial<ReportSort>): void {
-    updateDraft((current) => ({
-      ...current,
-      sort: current.sort.map((sort, sortIndex) =>
-        sortIndex === index ? { ...sort, ...update } : sort,
-      ),
-    }));
+    updateDraft((current) => {
+      const currentSort = current.sort[index];
+      if (currentSort === undefined) return current;
+      const nextSort = { ...currentSort, ...update };
+      carryRowKey(sortKeyState.current, currentSort, nextSort);
+      return {
+        ...current,
+        sort: current.sort.map((sort, sortIndex) => (sortIndex === index ? nextSort : sort)),
+      };
+    });
   }
 
   function removeSort(index: number): void {
@@ -994,7 +1034,7 @@ export function ReportsWorkspace({
             <p>Filters are applied server-side to the selected event projection.</p>
             {draft.filters.map((filter, index) => (
               <div
-                key={`filter-${filter.field}-${filter.operator}-${JSON.stringify(filter.value)}`}
+                key={stableRowKey(filterKeyState.current, "filter", filter)}
                 style={{
                   display: "flex",
                   flexWrap: "wrap",
@@ -1073,7 +1113,7 @@ export function ReportsWorkspace({
             <legend>Sorting</legend>
             {draft.sort.map((sort, index) => (
               <div
-                key={`sort-${sort.field}-${sort.direction}`}
+                key={stableRowKey(sortKeyState.current, "sort", sort)}
                 style={{
                   display: "flex",
                   flexWrap: "wrap",
