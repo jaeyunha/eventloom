@@ -1,5 +1,17 @@
 import type { ApiScope } from "@open-sessionboard/contracts";
 import type { ApiDependencies } from "../app";
+import { EventService, InMemoryEventRepository } from "../features/events/service";
+import type { Event } from "../features/events/types";
+import {
+  InMemoryMemberAuthBoundary,
+  InMemoryMemberIdentityRepository,
+  InMemoryMemberInvitationDelivery,
+  InMemoryReviewerPoolRepository,
+  MemberService,
+} from "../features/members/service";
+import type { OrganizationRecord } from "../features/members/service";
+import type { MemberRepositorySeed } from "../features/members/types";
+import { CrmService, InMemoryCrmRepository } from "../features/crm/service";
 import { AgendaEngine } from "../features/agenda/engine";
 import {
   InMemoryAgendaMutationLock,
@@ -77,6 +89,96 @@ import {
 } from "./constants";
 
 const SEEDED_AT = "2026-08-08T12:00:00.000Z";
+const LOCAL_EVENTS: readonly Event[] = [
+  {
+    id: "demo-event",
+    organizationId: LOCAL_ORGANIZATION_ID,
+    slug: "demo-event",
+    name: "Open Sessionboard Demo",
+    status: "active",
+    timeZone: "America/Los_Angeles",
+    startsAt: "2026-09-18T16:00:00.000Z",
+    endsAt: "2026-09-18T23:00:00.000Z",
+    venue: "Main Hall",
+    cfpSettings: {
+      enabled: true,
+      opensAt: "2026-08-01T07:00:00.000Z",
+      closesAt: "2026-09-15T07:00:00.000Z",
+    },
+    defaultCalendarSettings: {
+      durationMinutes: 30,
+      timeZone: "America/Los_Angeles",
+      location: "Main Hall",
+    },
+    embedConfigurations: [],
+    version: 1,
+    createdAt: SEEDED_AT,
+    updatedAt: SEEDED_AT,
+    createdBy: LOCAL_SPEAKER_ACCOUNT_ID,
+    updatedBy: LOCAL_SPEAKER_ACCOUNT_ID,
+  },
+  {
+    id: "open-sessionboard-conf",
+    organizationId: LOCAL_ORGANIZATION_ID,
+    slug: "open-sessionboard-conf",
+    name: "Open Sessionboard Conference",
+    status: "active",
+    timeZone: "America/Los_Angeles",
+    startsAt: "2026-09-25T16:00:00.000Z",
+    endsAt: "2026-09-25T23:00:00.000Z",
+    venue: "Conference Center",
+    cfpSettings: {
+      enabled: true,
+      opensAt: "2026-08-01T07:00:00.000Z",
+      closesAt: "2026-09-22T07:00:00.000Z",
+    },
+    defaultCalendarSettings: {
+      durationMinutes: 30,
+      timeZone: "America/Los_Angeles",
+      location: "Conference Center",
+    },
+    embedConfigurations: [],
+    version: 1,
+    createdAt: SEEDED_AT,
+    updatedAt: SEEDED_AT,
+    createdBy: LOCAL_SPEAKER_ACCOUNT_ID,
+    updatedBy: LOCAL_SPEAKER_ACCOUNT_ID,
+  },
+];
+
+const LOCAL_MEMBER_SEED: MemberRepositorySeed & {
+  readonly organizations: readonly OrganizationRecord[];
+} = {
+  organizations: [
+    {
+      organizationId: LOCAL_ORGANIZATION_ID,
+      slug: LOCAL_ORGANIZATION_ID,
+      name: "Local Organization",
+      config: {},
+      createdAt: SEEDED_AT,
+      updatedAt: SEEDED_AT,
+    },
+  ],
+  users: [
+    {
+      userId: LOCAL_SPEAKER_ACCOUNT_ID,
+      email: "speaker@local.open-sessionboard.test",
+      name: "Local Organizer",
+      emailVerified: true,
+      createdAt: SEEDED_AT,
+      updatedAt: SEEDED_AT,
+    },
+  ],
+  memberships: [
+    {
+      organizationId: LOCAL_ORGANIZATION_ID,
+      userId: LOCAL_SPEAKER_ACCOUNT_ID,
+      role: "owner",
+      createdAt: SEEDED_AT,
+      updatedAt: SEEDED_AT,
+    },
+  ],
+};
 const FAR_FUTURE = new Date("2099-01-01T00:00:00.000Z");
 const LOCAL_API_KEY_SCOPES: readonly ApiKeyScope[] = [
   "events:read",
@@ -327,6 +429,17 @@ class LocalSpeakerRepository implements SpeakerRepository {
         "local-participant": LOCAL_SPEAKER_CAPABILITIES,
       },
       primaryParticipantId: "local-participant",
+    };
+  }
+  async getOrganizerAccessScope(eventId: string, accountId: string) {
+    this.#seed(eventId);
+    if (accountId !== LOCAL_SPEAKER_ACCOUNT_ID) return null;
+    return {
+      tenantId: LOCAL_ORGANIZATION_ID,
+      eventId,
+      role: "owner" as const,
+      submissionIds: ["local-submission"],
+      participantIds: ["local-participant"],
     };
   }
 
@@ -1137,6 +1250,38 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
     })(),
   });
   const publicRepository = new LocalPublicApiRepository();
+  let eventSequence = 0;
+  const eventService = new EventService(new InMemoryEventRepository({ events: LOCAL_EVENTS }), {
+    clock: () => new Date(SEEDED_AT),
+    generateId: () => `local-event-${++eventSequence}`,
+  });
+  let memberSequence = 0;
+  const memberIdentity = new InMemoryMemberIdentityRepository(LOCAL_MEMBER_SEED);
+  const memberService = new MemberService(
+    {
+      identity: memberIdentity,
+      organizations: memberIdentity,
+      auth: new InMemoryMemberAuthBoundary({
+        baseUrl: "http://127.0.0.1:3015/member-setup",
+        clock: () => new Date(SEEDED_AT),
+        generateToken: () => `local-member-token-${++memberSequence}`,
+      }),
+      invitationDelivery: new InMemoryMemberInvitationDelivery(),
+      reviewerPools: new InMemoryReviewerPoolRepository(LOCAL_MEMBER_SEED),
+    },
+    {
+      clock: () => new Date(SEEDED_AT),
+      generateId: () => `local-member-${++memberSequence}`,
+    },
+  );
+  let crmSequence = 0;
+  const crmService = new CrmService(
+    { repository: new InMemoryCrmRepository() },
+    {
+      clock: () => new Date(SEEDED_AT),
+      generateId: (prefix) => `${prefix}-local-${++crmSequence}`,
+    },
+  );
   const evaluationRepository = new InMemoryEvaluationRepository();
   const evaluationSubmissions = new InMemorySubmissionReviewSource([
     {
@@ -1207,6 +1352,9 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
     authenticator,
     auth: localAuthRoutes(),
     organizerOverview,
+    events: { service: eventService },
+    members: { service: memberService },
+    crm: { service: crmService },
     speaker: {
       service: speakerService,
       async authenticate(request) {

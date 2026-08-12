@@ -1241,6 +1241,30 @@
   .calendarMonthControls {
     flex-wrap: wrap;
   }
+  .calendarGrid {
+    min-width: 0;
+  }
+  .weekday {
+    padding: 0.5rem 0.1rem;
+    text-align: center;
+  }
+  .calendarCells tr,
+  .calendarCell {
+    height: 4.25rem;
+  }
+  .calendarCell {
+    padding: 0.3rem 0.2rem;
+  }
+  .calendarEvent {
+    min-height: 1.25rem;
+    padding: 0.18rem 0.2rem;
+  }
+  .calendarEventName {
+    font-size: 0.58rem;
+  }
+  .calendarEventStatus {
+    display: none;
+  }
   .overviewTableWrap {
     display: none;
   }

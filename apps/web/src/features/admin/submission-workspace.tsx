@@ -1,6 +1,33 @@
 "use client";
 
 import Link from "next/link";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 import styles from "./submission-workspace.module.css";
 
@@ -403,17 +430,6 @@ const statusLabels: Record<SubmissionStatus, string> = {
   withdrawn: "Withdrawn",
 };
 
-const statusTone: Record<SubmissionStatus, string> = {
-  draft: styles.toneNeutral ?? "",
-  submitted: styles.toneInfo ?? "",
-  reopened: styles.toneWarning ?? "",
-  under_review: styles.toneWarning ?? "",
-  accepted: styles.toneSuccess ?? "",
-  waitlisted: styles.toneNeutral ?? "",
-  declined: styles.toneDanger ?? "",
-  withdrawn: styles.toneNeutral ?? "",
-};
-
 const reviewStatusLabels: Record<ReviewAssignment["status"], string> = {
   complete: "Complete",
   in_progress: "In progress",
@@ -733,7 +749,7 @@ export function mapCanonicalSubmission(envelope: CanonicalSubmissionEnvelope): S
     timeline.push({
       label: "Reopened",
       at: reopenedAt,
-      detail: "An organizer reopened this canonical submission.",
+      detail: "An organizer reopened this submission.",
     });
   }
 
@@ -781,8 +797,7 @@ export function mapCanonicalSubmission(envelope: CanonicalSubmissionEnvelope): S
       recommendation: "Evaluation data loads from the plan.",
     },
     reviewAssignments: [],
-    organizerNotes:
-      "Authoritative CFP submission record. Review details load from the evaluation plan.",
+    organizerNotes: "Submission details are ready. Review information loads with the event.",
     reopenAudit:
       reopenedAt === null
         ? []
@@ -1020,11 +1035,18 @@ function initials(name: string): string {
 }
 
 function StatusBadge({ status }: Readonly<{ status: SubmissionStatus }>) {
+  const variant =
+    status === "accepted"
+      ? "default"
+      : status === "declined" || status === "withdrawn"
+        ? "destructive"
+        : status === "under_review" || status === "submitted" || status === "reopened"
+          ? "secondary"
+          : "outline";
   return (
-    <span className={`${styles.statusBadge} ${statusTone[status]}`}>
-      <span className={styles.statusDot} aria-hidden="true" />
+    <Badge variant={variant} className={styles.statusBadge}>
       {statusLabels[status]}
-    </span>
+    </Badge>
   );
 }
 
@@ -1092,7 +1114,7 @@ export function SubmissionListWorkspace({
     let active = true;
     if (organizationId === undefined || organizationId.trim().length === 0) {
       setLoading(false);
-      setLoadError("An organization-scoped route is required to load canonical CFP submissions.");
+      setLoadError("An organization-scoped route is required to load submissions.");
       return () => {
         active = false;
       };
@@ -1226,256 +1248,320 @@ export function SubmissionListWorkspace({
             Review and manage proposals for <strong>{eventName}</strong>.
           </p>
         </div>
-        <Link className={styles.backLink} href="/admin/events">
-          Back to events
-        </Link>
+        <Button asChild variant="outline">
+          <Link href="/admin/events">Back to events</Link>
+        </Button>
       </header>
 
       <div id="submission-list-content" className={styles.workspaceMain} tabIndex={-1}>
-        <section className={styles.summaryBar} aria-label="Submission summary">
-          <div>
-            <strong>{submissions.length}</strong>
-            <span>total submissions</span>
-          </div>
-          <div>
-            <strong>
-              {submissions.filter((submission) => submission.status === "under_review").length}
-            </strong>
-            <span>in review</span>
-          </div>
-          <div>
-            <strong>
-              {submissions.filter((submission) => submission.status === "accepted").length}
-            </strong>
-            <span>accepted</span>
-          </div>
-          <div className={styles.summaryNote}>
-            <span>
-              {loading ? "Loading canonical CFP submissions…" : "Canonical CFP organizer view"}
-            </span>
-            <small>
-              {loadError ??
-                "Submission content comes from CFP; review assignments and decisions are optional evaluation enrichment."}
-            </small>
-          </div>
+        <section className={styles.metricGrid} aria-label="Submission summary">
+          <Card size="sm" className={styles.metricCard}>
+            <CardHeader>
+              <CardDescription>Total submissions</CardDescription>
+              <CardTitle className={styles.metricValue}>{submissions.length}</CardTitle>
+            </CardHeader>
+          </Card>
+          <Card size="sm" className={styles.metricCard}>
+            <CardHeader>
+              <CardDescription>Needs review</CardDescription>
+              <CardTitle className={styles.metricValue}>
+                {submissions.filter((submission) => submission.status === "under_review").length}
+              </CardTitle>
+            </CardHeader>
+          </Card>
+          <Card size="sm" className={styles.metricCard}>
+            <CardHeader>
+              <CardDescription>Accepted</CardDescription>
+              <CardTitle className={styles.metricValue}>
+                {submissions.filter((submission) => submission.status === "accepted").length}
+              </CardTitle>
+            </CardHeader>
+          </Card>
         </section>
 
-        <section className={styles.listPanel} aria-labelledby="submission-table-heading">
-          <div className={styles.panelHeader}>
+        <Card
+          id="submission-list-card"
+          className={styles.listPanel}
+          aria-labelledby="submission-table-heading"
+        >
+          <CardHeader className={styles.panelHeader}>
             <div>
-              <p className={styles.eyebrow}>Event intake</p>
-              <h2 id="submission-table-heading">All submissions</h2>
-              <p className={styles.mutedText}>
-                {filteredSubmissions.length} of {submissions.length} shown
-                {selectedVisibleCount > 0 ? ` · ${selectedVisibleCount} selected` : ""}
-              </p>
+              <CardDescription>{eventName}</CardDescription>
+              <CardTitle id="submission-table-heading">
+                {submissions.length === 0 ? "Submission inbox" : "All submissions"}
+              </CardTitle>
+              {listState !== "empty" ? (
+                <p className={styles.mutedText}>
+                  {filteredSubmissions.length} of {submissions.length} shown
+                  {selectedVisibleCount > 0 ? ` · ${selectedVisibleCount} selected` : ""}
+                </p>
+              ) : null}
             </div>
-            <label className={styles.searchField} htmlFor="submission-search">
-              <span>Search submissions</span>
-              <input
-                id="submission-search"
-                type="search"
-                value={search}
-                placeholder="Title, track, format, or participant"
-                onChange={(event) => setSearch(event.currentTarget.value)}
-              />
-            </label>
-          </div>
+          </CardHeader>
 
-          <fieldset className={styles.filters} aria-label="Submission filters">
-            <div className={styles.filterField}>
-              <label htmlFor="submission-status">Status</label>
-              <select
-                id="submission-status"
-                value={status}
-                onChange={(event) =>
-                  setStatus(event.currentTarget.value as SubmissionStatus | "all")
-                }
-              >
-                <option value="all">All statuses</option>
-                {Object.entries(statusLabels).map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className={styles.filterField}>
-              <label htmlFor="submission-track">Track</label>
-              <select
-                id="submission-track"
-                value={track}
-                onChange={(event) => setTrack(event.currentTarget.value)}
-              >
-                <option value="all">All tracks</option>
-                {tracks.map((value) => (
-                  <option key={value} value={value}>
-                    {value}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className={styles.filterField}>
-              <label htmlFor="submission-format">Format</label>
-              <select
-                id="submission-format"
-                value={format}
-                onChange={(event) => setFormat(event.currentTarget.value)}
-              >
-                <option value="all">All formats</option>
-                {formats.map((value) => (
-                  <option key={value} value={value}>
-                    {value}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <button
-              className={styles.clearButton}
-              type="button"
-              onClick={() => {
-                setSearch("");
-                setStatus("all");
-                setTrack("all");
-                setFormat("all");
-              }}
-            >
-              Clear filters
-            </button>
-          </fieldset>
+          {submissions.length > 0 ? (
+            <CardContent className={styles.listContent}>
+              <fieldset className={styles.toolbar} aria-label="Submission filters">
+                <legend className={styles.srOnly}>Filter submissions</legend>
+                <label className={styles.toolbarSearch} htmlFor="submission-search">
+                  <span className={styles.toolbarLabel}>Search</span>
+                  <Input
+                    id="submission-search"
+                    type="search"
+                    value={search}
+                    placeholder="Title, track, format, or participant"
+                    onChange={(event) => setSearch(event.currentTarget.value)}
+                  />
+                </label>
+                <div className={styles.toolbarField}>
+                  <span className={styles.toolbarLabel}>Status</span>
+                  <Select
+                    value={status}
+                    onValueChange={(value) => setStatus(value as SubmissionStatus | "all")}
+                  >
+                    <SelectTrigger id="submission-status" aria-label="Filter by status">
+                      <SelectValue placeholder="All statuses" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All statuses</SelectItem>
+                      {Object.entries(statusLabels).map(([value, label]) => (
+                        <SelectItem key={value} value={value}>
+                          {label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className={styles.toolbarField}>
+                  <span className={styles.toolbarLabel}>Track</span>
+                  <Select value={track} onValueChange={setTrack}>
+                    <SelectTrigger id="submission-track" aria-label="Filter by track">
+                      <SelectValue placeholder="All tracks" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All tracks</SelectItem>
+                      {tracks.map((value) => (
+                        <SelectItem key={value} value={value}>
+                          {value}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className={styles.toolbarField}>
+                  <span className={styles.toolbarLabel}>Format</span>
+                  <Select value={format} onValueChange={setFormat}>
+                    <SelectTrigger id="submission-format" aria-label="Filter by format">
+                      <SelectValue placeholder="All formats" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All formats</SelectItem>
+                      {formats.map((value) => (
+                        <SelectItem key={value} value={value}>
+                          {value}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Button
+                  className={styles.clearButton}
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setSearch("");
+                    setStatus("all");
+                    setTrack("all");
+                    setFormat("all");
+                  }}
+                >
+                  Clear filters
+                </Button>
+              </fieldset>
 
-          {listState === "loading" ? (
-            <div className={styles.emptyState} role="status">
-              <h3>Loading submissions</h3>
-              <p>Authoritative CFP submissions are loading.</p>
-            </div>
-          ) : listState === "failure" ? (
-            <div className={styles.emptyState} role="alert">
-              <h3>Unable to load submissions</h3>
-              <p>{loadError ?? "Submissions could not be loaded."}</p>
-            </div>
-          ) : listState === "empty" ? (
-            <div className={styles.emptyState} role="status">
-              <h3>No submissions yet</h3>
-              <p>No submissions have been submitted for this event yet.</p>
-            </div>
-          ) : listState === "filtered_empty" ? (
-            <div className={styles.emptyState} role="status">
-              <h3>No matching submissions</h3>
-              <p>
-                Try a different search or clear the filters to see this event&apos;s server
-                submissions.
-              </p>
-            </div>
-          ) : (
-            <div className={styles.tableWrap}>
-              <table className={styles.submissionTable}>
-                <caption className={styles.srOnly}>Submissions for {eventName}</caption>
-                <thead>
-                  <tr>
-                    <th className={styles.checkboxColumn} scope="col">
-                      <label className={styles.checkboxLabel}>
-                        <input
-                          type="checkbox"
-                          checked={allVisibleSelected}
-                          onChange={toggleAllVisible}
-                          aria-label="Select all visible submissions"
-                        />
-                        <span className={styles.srOnly}>Select all visible submissions</span>
-                      </label>
-                    </th>
-                    <SortableHeader
-                      sortKey="title"
-                      activeKey={sortKey}
-                      direction={sortDirection}
-                      onSort={toggleSort}
-                    >
-                      Submission
-                    </SortableHeader>
-                    <SortableHeader
-                      sortKey="status"
-                      activeKey={sortKey}
-                      direction={sortDirection}
-                      onSort={toggleSort}
-                    >
-                      Status
-                    </SortableHeader>
-                    <th scope="col">Participants</th>
-                    <th scope="col">Review progress</th>
-                    <th scope="col">Track / format</th>
-                    <SortableHeader
-                      sortKey="updatedAt"
-                      activeKey={sortKey}
-                      direction={sortDirection}
-                      onSort={toggleSort}
-                    >
-                      Updated
-                    </SortableHeader>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredSubmissions.map((submission) => (
-                    <tr key={submission.id}>
-                      <td className={styles.checkboxColumn}>
-                        <label className={styles.checkboxLabel}>
-                          <input
-                            type="checkbox"
-                            checked={selected.has(submission.id)}
-                            onChange={() => toggleSelected(submission.id)}
-                            aria-label={`Select ${submission.title}`}
-                          />
-                          <span className={styles.srOnly}>Select {submission.title}</span>
-                        </label>
-                      </td>
-                      <th scope="row" className={styles.titleCell}>
-                        <Link
-                          className={styles.submissionLink}
-                          href={submissionHref(eventId, submission.id, organizationId)}
+              {listState === "loading" ? (
+                <div className={styles.emptyState} role="status" aria-live="polite">
+                  <h3>Loading submissions</h3>
+                  <p>We&apos;re getting the latest proposals for this event.</p>
+                </div>
+              ) : listState === "failure" ? (
+                <div className={styles.emptyState} role="alert">
+                  <h3>Unable to load submissions</h3>
+                  <p>{loadError ?? "Submissions could not be loaded."}</p>
+                </div>
+              ) : listState === "filtered_empty" ? (
+                <div className={styles.emptyState} role="status">
+                  <h3>No matching submissions</h3>
+                  <p>Try a different search or clear the filters to see more proposals.</p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setSearch("");
+                      setStatus("all");
+                      setTrack("all");
+                      setFormat("all");
+                    }}
+                  >
+                    Clear filters
+                  </Button>
+                </div>
+              ) : (
+                <div className={styles.tableWrap}>
+                  <Table className={styles.submissionTable}>
+                    <TableCaption className={styles.srOnly}>
+                      Submissions for {eventName}
+                    </TableCaption>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className={styles.checkboxColumn} scope="col">
+                          <label className={styles.checkboxLabel}>
+                            <input
+                              type="checkbox"
+                              checked={allVisibleSelected}
+                              onChange={toggleAllVisible}
+                              aria-label="Select all visible submissions"
+                            />
+                            <span className={styles.srOnly}>Select all visible submissions</span>
+                          </label>
+                        </TableHead>
+                        <SortableHeader
+                          sortKey="title"
+                          activeKey={sortKey}
+                          direction={sortDirection}
+                          onSort={toggleSort}
                         >
-                          {submission.title}
-                        </Link>
-                        <span className={styles.submissionMeta}>
-                          {submission.id} · v{submission.version}
-                        </span>
-                      </th>
-                      <td>
-                        <StatusBadge status={submission.status} />
-                      </td>
-                      <td>
-                        <ProgressMeter
-                          completed={submission.participantProgress.completed}
-                          total={submission.participantProgress.total}
-                          label={`${submission.title} participant profile progress`}
-                        />
-                      </td>
-                      <td>
-                        <ProgressMeter
-                          completed={submission.reviewSummary.completed}
-                          total={submission.reviewSummary.total}
-                          label={`${submission.title} review progress`}
-                        />
-                      </td>
-                      <td>
-                        <span className={styles.trackValue}>{submission.track}</span>
-                        <span className={styles.submissionMeta}>{submission.format}</span>
-                      </td>
-                      <td>
-                        <time dateTime={submission.updatedAt}>
-                          {formatDate(submission.updatedAt)}
-                        </time>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                          Submission
+                        </SortableHeader>
+                        <SortableHeader
+                          sortKey="status"
+                          activeKey={sortKey}
+                          direction={sortDirection}
+                          onSort={toggleSort}
+                        >
+                          Status
+                        </SortableHeader>
+                        <TableHead scope="col">Participants</TableHead>
+                        <TableHead scope="col">Review progress</TableHead>
+                        <TableHead scope="col">Track / format</TableHead>
+                        <SortableHeader
+                          sortKey="updatedAt"
+                          activeKey={sortKey}
+                          direction={sortDirection}
+                          onSort={toggleSort}
+                        >
+                          Updated
+                        </SortableHeader>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {filteredSubmissions.map((submission) => (
+                        <TableRow key={submission.id}>
+                          <TableCell className={styles.checkboxColumn}>
+                            <label className={styles.checkboxLabel}>
+                              <input
+                                type="checkbox"
+                                checked={selected.has(submission.id)}
+                                onChange={() => toggleSelected(submission.id)}
+                                aria-label={`Select ${submission.title}`}
+                              />
+                              <span className={styles.srOnly}>Select {submission.title}</span>
+                            </label>
+                          </TableCell>
+                          <TableHead scope="row" className={styles.titleCell}>
+                            <Link
+                              className={styles.submissionLink}
+                              href={submissionHref(eventId, submission.id, organizationId)}
+                            >
+                              {submission.title}
+                            </Link>
+                            <span className={styles.submissionMeta}>
+                              {submission.id} · v{submission.version}
+                            </span>
+                          </TableHead>
+                          <TableCell>
+                            <StatusBadge status={submission.status} />
+                          </TableCell>
+                          <TableCell>
+                            <ProgressMeter
+                              completed={submission.participantProgress.completed}
+                              total={submission.participantProgress.total}
+                              label={`${submission.title} participant profile progress`}
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <ProgressMeter
+                              completed={submission.reviewSummary.completed}
+                              total={submission.reviewSummary.total}
+                              label={`${submission.title} review progress`}
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <span className={styles.trackValue}>{submission.track}</span>
+                            <span className={styles.submissionMeta}>{submission.format}</span>
+                          </TableCell>
+                          <TableCell>
+                            <time dateTime={submission.updatedAt}>
+                              {formatDate(submission.updatedAt)}
+                            </time>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          ) : listState === "loading" ? (
+            <CardContent>
+              <div className={styles.emptyState} role="status" aria-live="polite">
+                <h3>Loading submissions</h3>
+                <p>We&apos;re getting the latest proposals for this event.</p>
+              </div>
+            </CardContent>
+          ) : listState === "failure" ? (
+            <CardContent>
+              <div className={styles.emptyState} role="alert">
+                <h3>Unable to load submissions</h3>
+                <p>{loadError ?? "Submissions could not be loaded."}</p>
+              </div>
+            </CardContent>
+          ) : (
+            <CardContent className={styles.emptyCardContent}>
+              <Empty className={styles.emptyState} role="status">
+                <EmptyHeader>
+                  <EmptyTitle>No submissions yet</EmptyTitle>
+                  <EmptyDescription>
+                    Share the public call for proposals to start collecting sessions for {eventName}
+                    .
+                  </EmptyDescription>
+                </EmptyHeader>
+                <EmptyContent>
+                  <Button asChild>
+                    <Link href={`/cfp/${encodeURIComponent(eventId)}`}>Open public CFP</Link>
+                  </Button>
+                  <Button asChild variant="outline">
+                    <Link
+                      href={
+                        organizationId === undefined
+                          ? `/admin/events/${encodeURIComponent(eventId)}/cfp`
+                          : `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}/cfp`
+                      }
+                    >
+                      Configure CFP
+                    </Link>
+                  </Button>
+                </EmptyContent>
+              </Empty>
+            </CardContent>
           )}
-        </section>
+        </Card>
       </div>
     </div>
   );
 }
-
 function SortableHeader({
   sortKey,
   activeKey,
@@ -1491,7 +1577,7 @@ function SortableHeader({
 }>) {
   const active = activeKey === sortKey;
   return (
-    <th
+    <TableHead
       scope="col"
       aria-sort={active ? (direction === "asc" ? "ascending" : "descending") : "none"}
     >
@@ -1504,7 +1590,7 @@ function SortableHeader({
         {children}
         <span aria-hidden="true">{active ? (direction === "asc" ? "↑" : "↓") : "↕"}</span>
       </button>
-    </th>
+    </TableHead>
   );
 }
 
@@ -1707,8 +1793,7 @@ function AcceptedHandoffSummary({ submission }: Readonly<{ submission: Submissio
       <p className={styles.eyebrow}>Session and agenda handoff</p>
       <h2 id="accepted-handoff-heading">Accepted session handoff</h2>
       <p className={styles.mutedText}>
-        The canonical acceptance handoff is ready. These values come from the persisted submission
-        and are carried into the organizer session record without re-entry.
+        The accepted session is ready to move into your event program.
       </p>
       <dl className={styles.answerList}>
         <div>
@@ -1756,7 +1841,7 @@ export function SubmissionDetailWorkspace({
     let active = true;
     if (organizationId === undefined || organizationId.trim().length === 0) {
       setLoading(false);
-      setLoadError("An organization-scoped route is required to load a canonical CFP submission.");
+      setLoadError("An organization-scoped route is required to load submissions.");
       return () => {
         active = false;
       };
@@ -1795,7 +1880,7 @@ export function SubmissionDetailWorkspace({
         <div className={styles.notFound} role="status">
           <p className={styles.eyebrow}>Organizer workspace</p>
           <h1>Loading submission</h1>
-          <p>Loading the authoritative submission record from the CFP API.</p>
+          <p>Loading this submission.</p>
         </div>
       </div>
     );
