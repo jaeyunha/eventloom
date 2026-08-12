@@ -191,7 +191,7 @@ describe("OpenSendOutboxProcessor", () => {
     expect(await repository.find(job.id)).toEqual(job);
     expect(queue.enqueued).toEqual([{ jobId: job.id, delayMs: 0 }]);
   });
-  it("delivers once and preserves an observable receipt for duplicate queue delivery", async () => {
+  it("provider-accepts once and preserves an observable receipt for duplicate queue delivery", async () => {
     const repository = new InMemoryOpenSendOutboxRepository();
     await repository.insert(
       createOpenSendOutboxJob({
@@ -215,18 +215,18 @@ describe("OpenSendOutboxProcessor", () => {
     });
 
     await expect(processor.process("outbox-1")).resolves.toEqual({
-      outcome: "delivered",
+      outcome: "provider_accepted",
       providerMessageId: "provider-1",
     });
     await expect(processor.process("outbox-1")).resolves.toEqual({ outcome: "skipped" });
 
     expect(sends).toBe(1);
     expect(await repository.find("outbox-1")).toMatchObject({
-      status: "delivered",
+      status: "provider_accepted",
       attemptCount: 1,
       providerMessageId: "provider-1",
       lastError: null,
-      attempts: [{ outcome: "delivered", providerMessageId: "provider-1" }],
+      attempts: [{ outcome: "provider_accepted", providerMessageId: "provider-1" }],
     });
   });
 
@@ -267,12 +267,14 @@ describe("OpenSendOutboxProcessor", () => {
     await expect(processor.process("outbox-2")).resolves.toEqual({ outcome: "skipped" });
 
     now = new Date("2026-08-08T12:00:05.000Z");
-    await expect(processor.process("outbox-2")).resolves.toMatchObject({ outcome: "delivered" });
+    await expect(processor.process("outbox-2")).resolves.toMatchObject({
+      outcome: "provider_accepted",
+    });
     expect(seenKeys).toEqual(["email-job-0001", "email-job-0001"]);
     expect(await repository.find("outbox-2")).toMatchObject({
-      status: "delivered",
+      status: "provider_accepted",
       attemptCount: 2,
-      attempts: [{ outcome: "retry_scheduled" }, { outcome: "delivered" }],
+      attempts: [{ outcome: "retry_scheduled" }, { outcome: "provider_accepted" }],
     });
   });
 

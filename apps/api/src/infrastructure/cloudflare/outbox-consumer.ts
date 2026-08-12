@@ -389,12 +389,18 @@ export type OutboxCommunicationStatusTarget =
       readonly outreachId: string;
       readonly contactId: string;
       readonly idempotencyKey: string;
+    }
+  | {
+      readonly kind: "reminder";
+      readonly eventId: string;
+      readonly runId: string;
+      readonly dispatchId: string;
     };
 
 export interface OutboxCommunicationStatusUpdate {
   readonly tenantId: string;
   readonly target: OutboxCommunicationStatusTarget;
-  readonly status: "delivered" | "failed" | "bounced" | "complained";
+  readonly status: "delivered" | "provider_accepted" | "failed" | "bounced" | "complained";
   readonly providerMessageId?: string;
   readonly reason?: string;
   readonly occurredAt: string;
@@ -633,7 +639,8 @@ function emailPayloadEnvelope(value: unknown): unknown {
   if (!isRecord(value)) return value;
   return value.effect === "send_email" ||
     value.effect === "send_communication" ||
-    value.effect === "send_crm_outreach"
+    value.effect === "send_crm_outreach" ||
+    value.effect === "send_reminder"
     ? value.payload
     : value;
 }
@@ -670,6 +677,14 @@ function communicationStatusTarget(value: unknown): OutboxCommunicationStatusTar
       outreachId: payloadString(value, "outreachId"),
       contactId: payloadString(value, "contactId"),
       idempotencyKey: payloadString(value, "idempotencyKey"),
+    };
+  }
+  if (value.effect === "send_reminder") {
+    return {
+      kind: "reminder",
+      eventId: payloadString(value, "eventId"),
+      runId: payloadString(value, "runId"),
+      dispatchId: payloadString(value, "dispatchId"),
     };
   }
   return null;
@@ -1063,7 +1078,10 @@ export class OutboxConsumer {
     try {
       const receipt = await this.dispatch(job, context, queueMessage.transient);
       await this.recordCommunicationStatus(job, {
-        status: "delivered",
+        status:
+          isRecord(job.payload) && job.payload.effect === "send_reminder"
+            ? "provider_accepted"
+            : "delivered",
         ...(receipt?.providerMessageId === undefined
           ? {}
           : { providerMessageId: receipt.providerMessageId }),
@@ -1154,7 +1172,7 @@ export class OutboxConsumer {
   private async recordCommunicationStatus(
     job: OutboxJob,
     input: {
-      readonly status: "delivered" | "failed" | "bounced" | "complained";
+      readonly status: "delivered" | "provider_accepted" | "failed" | "bounced" | "complained";
       readonly providerMessageId?: string;
       readonly reason?: string;
     },

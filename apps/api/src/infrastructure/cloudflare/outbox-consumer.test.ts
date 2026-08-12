@@ -177,6 +177,120 @@ describe("Cloudflare outbox consumer", () => {
     });
     expect(repository.get("job-1")?.state).toBe("delivered");
   });
+  it("records reminder provider acceptance before acknowledging the generic outbox job", async () => {
+    const reminder = {
+      from: "speakers@sessionboard.namuh.co",
+      to: ["recipient@example.com"],
+      subject: "Reminder",
+      html: "<p>Reminder</p>",
+      text: "Reminder",
+      idempotencyKey: "reminder-idem-1",
+    };
+    const repository = new InMemoryOutboxJobRepository([
+      job({
+        payload: {
+          effect: "send_reminder",
+          runId: "run-1",
+          dispatchId: "dispatch-1",
+          eventId: "event-1",
+          payload: reminder,
+        },
+      }),
+    ]);
+    const send = vi.fn(async (payload: unknown) => {
+      expect(payload).toEqual(reminder);
+      return { providerMessageId: "provider-reminder-1" };
+    });
+    const statusRecorder = {
+      recordCommunicationStatus: vi.fn(async () => {
+        expect(repository.get("job-1")?.state).toBe("processing");
+      }),
+    };
+    const queueMessage = message(queueBody());
+
+    await run(queueMessage, repository, { communications: send }, bindings(), statusRecorder);
+
+    expect(statusRecorder.recordCommunicationStatus).toHaveBeenCalledWith({
+      tenantId: "tenant-1",
+      target: {
+        kind: "reminder",
+        eventId: "event-1",
+        runId: "run-1",
+        dispatchId: "dispatch-1",
+      },
+      status: "provider_accepted",
+      providerMessageId: "provider-reminder-1",
+      occurredAt: NOW.toISOString(),
+    });
+    expect(queueMessage.acked).toBe(true);
+    expect(queueMessage.retries).toEqual([]);
+    expect(repository.get("job-1")?.state).toBe("delivered");
+  });
+  it("records terminal reminder rejection as failed", async () => {
+    const repository = new InMemoryOutboxJobRepository([
+      job({
+        payload: {
+          effect: "send_reminder",
+          runId: "run-1",
+          dispatchId: "dispatch-1",
+          eventId: "event-1",
+          payload: job().payload,
+        },
+      }),
+    ]);
+    const statusRecorder = { recordCommunicationStatus: vi.fn(async () => undefined) };
+    const send = vi.fn(async () => {
+      throw new OutboxDeliveryError("REQUEST_REJECTED", "provider rejected the reminder", {
+        retryable: false,
+      });
+    });
+    const queueMessage = message(queueBody());
+
+    await run(queueMessage, repository, { communications: send }, bindings(), statusRecorder);
+
+    expect(statusRecorder.recordCommunicationStatus).toHaveBeenCalledWith({
+      tenantId: "tenant-1",
+      target: {
+        kind: "reminder",
+        eventId: "event-1",
+        runId: "run-1",
+        dispatchId: "dispatch-1",
+      },
+      status: "failed",
+      reason: "REQUEST_REJECTED",
+      occurredAt: NOW.toISOString(),
+    });
+    expect(queueMessage.acked).toBe(true);
+    expect(queueMessage.retries).toEqual([]);
+    expect(repository.get("job-1")?.state).toBe("failed");
+  });
+  it("keeps retryable reminder failures nonterminal", async () => {
+    const repository = new InMemoryOutboxJobRepository([
+      job({
+        payload: {
+          effect: "send_reminder",
+          runId: "run-1",
+          dispatchId: "dispatch-1",
+          eventId: "event-1",
+          payload: job().payload,
+        },
+      }),
+    ]);
+    const statusRecorder = { recordCommunicationStatus: vi.fn(async () => undefined) };
+    const send = vi.fn(async () => {
+      throw new OutboxDeliveryError("PROVIDER_UNAVAILABLE", "provider unavailable", {
+        retryable: true,
+      });
+    });
+    const queueMessage = message(queueBody());
+
+    await run(queueMessage, repository, { communications: send }, bindings(), statusRecorder);
+
+    expect(statusRecorder.recordCommunicationStatus).not.toHaveBeenCalled();
+    expect(queueMessage.acked).toBe(false);
+    expect(queueMessage.retries).toEqual([1]);
+    expect(repository.get("job-1")?.state).toBe("queued");
+  });
   it("persists CRM outreach completion with its command correlation", async () => {
     const repository = new InMemoryOutboxJobRepository([
       job({

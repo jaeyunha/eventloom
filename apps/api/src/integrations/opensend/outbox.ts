@@ -9,13 +9,13 @@ export type OpenSendOutboxStatus =
   | "queued"
   | "processing"
   | "retry_scheduled"
-  | "delivered"
+  | "provider_accepted"
   | "failed";
 
 export interface OpenSendDeliveryAttempt {
   readonly attempt: number;
   readonly completedAt: string;
-  readonly outcome: "delivered" | "retry_scheduled" | "failed";
+  readonly outcome: "provider_accepted" | "retry_scheduled" | "failed";
   readonly providerMessageId: string | null;
   readonly errorCode: OpenSendErrorCode | "UNEXPECTED_ERROR" | null;
   readonly responseStatus: number | null;
@@ -68,7 +68,7 @@ export interface OpenSendOutboxProcessorOptions {
 
 export type OpenSendProcessResult =
   | { readonly outcome: "skipped" }
-  | { readonly outcome: "delivered"; readonly providerMessageId: string }
+  | { readonly outcome: "provider_accepted"; readonly providerMessageId: string }
   | { readonly outcome: "retry_scheduled"; readonly delayMs: number }
   | { readonly outcome: "failed"; readonly errorCode: string };
 
@@ -154,7 +154,7 @@ export class OpenSendOutboxProcessor {
       const completedAt = this.#now().toISOString();
       await this.#repository.save({
         ...job,
-        status: "delivered",
+        status: "provider_accepted",
         attemptCount: attempt,
         nextAttemptAt: null,
         leaseExpiresAt: null,
@@ -165,7 +165,7 @@ export class OpenSendOutboxProcessor {
           {
             attempt,
             completedAt,
-            outcome: "delivered",
+            outcome: "provider_accepted",
             providerMessageId: result.providerMessageId,
             errorCode: null,
             responseStatus: null,
@@ -174,7 +174,7 @@ export class OpenSendOutboxProcessor {
         ],
         updatedAt: completedAt,
       });
-      return { outcome: "delivered", providerMessageId: result.providerMessageId };
+      return { outcome: "provider_accepted", providerMessageId: result.providerMessageId };
     } catch (cause) {
       const error = normalizeDeliveryError(cause);
       const completedAt = this.#now();

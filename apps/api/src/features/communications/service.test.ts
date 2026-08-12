@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { CommunicationError } from "./service";
-import { CommunicationService, InMemoryCommunicationRepository } from "./service";
+import {
+  CommunicationService,
+  InMemoryCommunicationRepository,
+  InMemoryReminderRepository,
+} from "./service";
 import type {
   CommunicationActor,
   CommunicationAudience,
@@ -11,6 +15,9 @@ import type {
   CommunicationSenderIdentity,
   CommunicationTemplate,
   CommunicationTemplatePurpose,
+  ReminderCandidate,
+  ReminderOutboxDelivery,
+  ReminderRuntime,
 } from "./types";
 
 const tenantId = "tenant-1";
@@ -485,5 +492,244 @@ describe("communications domain", () => {
       }),
       "COMMUNICATION_FORBIDDEN",
     );
+  });
+});
+const automation: CommunicationActor = {
+  tenantId,
+  userId: "reminder-cron",
+  kind: "automation",
+  grants: [{ eventId, role: "delivery" }],
+};
+
+function reminderCandidate(
+  overrides: Partial<ReminderCandidate> = {},
+): ReminderCandidate {
+  return {
+    id: "candidate-1",
+    organizationId: tenantId,
+    eventId,
+    recipientApplicationId: "application-1",
+    normalizedEmail: "recipient@example.test",
+    displayName: "Recipient",
+    subject: { type: "task", taskId: "task-1" },
+    eligibilityReason: "due",
+    cadenceWindow: "2026-08-09T12:00:00.000Z",
+    nextEligibleAt: null,
+    eligible: true,
+    renderedMessage: {
+      from: "speakers@sessionboard.namuh.co",
+      subject: "Reminder",
+      html: "<p>Reminder</p>",
+      text: "Reminder",
+    },
+    ...overrides,
+  } as ReminderCandidate;
+}
+
+class FakeReminderOutbox implements ReminderOutboxDelivery {
+  readonly requests: Parameters<ReminderOutboxDelivery["enqueue"]>[0][] = [];
+  fail = false;
+
+  async enqueue(request: Parameters<ReminderOutboxDelivery["enqueue"]>[0]) {
+    this.requests.push(request);
+    if (this.fail) throw new Error("outbox unavailable");
+    return { outboxJobId: `job-${this.requests.length}` };
+  }
+}
+
+function reminderFixture(
+  candidates: readonly ReminderCandidate[],
+  audienceRevision = "revision-1",
+  clock: () => Date = () => new Date(now),
+): {
+  service: CommunicationService;
+  repository: InMemoryReminderRepository;
+  outbox: FakeReminderOutbox;
+  runtime: ReminderRuntime;
+} {
+  const repository = new InMemoryReminderRepository();
+  const outbox = new FakeReminderOutbox();
+  const runtime: ReminderRuntime = {
+    repository,
+    source: {
+      async listCandidates() {
+        return {
+          audienceType: "combined",
+          audienceRevision,
+          candidates,
+        };
+      },
+    },
+    outbox,
+  };
+  return {
+    service: new CommunicationService(new InMemoryCommunicationRepository(), undefined, {
+      clock,
+      reminders: runtime,
+    }),
+    repository,
+    outbox,
+    runtime,
+  };
+}
+
+describe("reminder domain", () => {
+  it("uses one hourly automatic run and one cadence dispatch across later Cron runs", async () => {
+    const candidate = reminderCandidate();
+    const { service, repository, outbox } = reminderFixture([candidate]);
+    const first = await service.runAutomaticReminders(automation, {
+      eventId,
+      scheduledAt: "2026-08-09T12:05:00.000Z",
+    });
+    const replay = await service.runAutomaticReminders(automation, {
+      eventId,
+      scheduledAt: "2026-08-09T12:55:00.000Z",
+    });
+    const later = await service.runAutomaticReminders(automation, {
+      eventId,
+      scheduledAt: "2026-08-09T13:05:00.000Z",
+    });
+    expect(replay.id).toBe(first.id);
+    expect(later.id).not.toBe(first.id);
+    expect(outbox.requests).toHaveLength(1);
+    expect(await repository.listDispatches(tenantId, eventId)).toHaveLength(1);
+  });
+
+  it("persists missing-email skips and keeps queue success queued", async () => {
+    const missing = reminderCandidate({ normalizedEmail: null });
+    const queued = reminderCandidate({
+      id: "candidate-2",
+      recipientApplicationId: "application-2",
+      subject: { type: "review", reviewAssignmentId: "assignment-1" },
+    });
+    const { service, repository } = reminderFixture([missing, queued]);
+    const run = await service.runManualReminders(organizer, {
+      eventId,
+      idempotencyKey: "manual-1",
+      expectedAudienceRevision: "revision-1",
+    });
+    const dispatches = await repository.listDispatches(tenantId, eventId, run.id);
+    expect(dispatches.map((dispatch) => dispatch.status)).toEqual(["skipped", "queued"]);
+    expect(dispatches[0]?.skipMetadata).toEqual({ reason: "missing_email" });
+    expect(run.queuedCount).toBe(1);
+  });
+
+  it("durably fails automatic runs when a runtime component is missing", async () => {
+    const repository = new InMemoryReminderRepository();
+    const service = new CommunicationService(new InMemoryCommunicationRepository(), undefined, {
+      clock: () => new Date(now),
+      reminders: { repository },
+    });
+    const failed = await service.runAutomaticReminders(automation, {
+      eventId,
+      scheduledAt: now,
+    });
+    expect(failed.state).toBe("failed");
+    expect(failed.configurationFailure).toContain("candidate source");
+    expect(await repository.listRuns(tenantId, eventId)).toHaveLength(1);
+  });
+
+  it("fails stale manual audience revisions durably before reporting a conflict", async () => {
+    const { service, repository } = reminderFixture([], "revision-2");
+    await expectCode(
+      service.runManualReminders(organizer, {
+        eventId,
+        idempotencyKey: "stale-manual",
+        expectedAudienceRevision: "revision-1",
+      }),
+      "COMMUNICATION_CONFLICT",
+    );
+    const [run] = await repository.listRuns(tenantId, eventId);
+    expect(run).toMatchObject({ state: "failed", audienceRevision: "revision-2" });
+  });
+
+  it("uses one source and outbox boundary for task and review candidates", async () => {
+    const task = reminderCandidate();
+    const review = reminderCandidate({
+      id: "candidate-review",
+      recipientApplicationId: "application-2",
+      subject: { type: "review", reviewAssignmentId: "assignment-1" },
+    });
+    const { service, outbox } = reminderFixture([task, review]);
+    await service.runManualReminders(organizer, {
+      eventId,
+      idempotencyKey: "task-review",
+      expectedAudienceRevision: "revision-1",
+    });
+    expect(outbox.requests.map((request) => request.subject)).toEqual(["Reminder", "Reminder"]);
+  });
+
+  it("enforces provider status transitions and correlates provider IDs", async () => {
+    const second = reminderCandidate({
+      id: "candidate-2",
+      recipientApplicationId: "application-2",
+      subject: { type: "review", reviewAssignmentId: "assignment-2" },
+    });
+    const { service, repository } = reminderFixture([reminderCandidate(), second]);
+    await service.runAutomaticReminders(automation, { eventId, scheduledAt: now });
+    const dispatches = await repository.listDispatches(tenantId, eventId);
+    const first = dispatches[0];
+    const other = dispatches[1];
+    if (first === undefined || other === undefined) throw new Error("Expected reminder dispatches.");
+    await expectCode(
+      service.recordReminderDispatchStatus(automation, {
+        eventId,
+        dispatchId: first.id,
+        status: "delivered",
+        providerMessageId: "provider-1",
+      }),
+      "COMMUNICATION_CONFLICT",
+    );
+    await service.recordReminderDispatchStatus(automation, {
+      eventId,
+      dispatchId: first.id,
+      status: "provider_accepted",
+      providerMessageId: "provider-1",
+    });
+    const delivered = await service.recordReminderDispatchStatus(automation, {
+      eventId,
+      providerMessageId: "provider-1",
+      status: "delivered",
+    });
+    await service.recordReminderDispatchStatus(automation, {
+      eventId,
+      dispatchId: other.id,
+      status: "provider_accepted",
+      providerMessageId: "provider-2",
+    });
+    const bounced = await service.recordReminderDispatchStatus(automation, {
+      eventId,
+      providerMessageId: "provider-2",
+      status: "bounced",
+    });
+    expect(delivered.status).toBe("delivered");
+    expect(bounced.status).toBe("bounced");
+  });
+
+  it("distinguishes automatic/manual facts and computes a future next eligibility", async () => {
+    let current = new Date(now);
+    const candidate = reminderCandidate({
+      nextEligibleAt: "2026-08-10T12:00:00.000Z",
+    });
+    const { service } = reminderFixture([candidate], "revision-1", () => current);
+    const manual = await service.runManualReminders(organizer, {
+      eventId,
+      idempotencyKey: "facts-manual",
+      expectedAudienceRevision: "revision-1",
+    });
+    current = new Date("2026-08-09T13:00:00.000Z");
+    const automatic = await service.runAutomaticReminders(automation, {
+      eventId,
+      scheduledAt: current.toISOString(),
+    });
+    const facts = await service.getReminderFacts(organizer, {
+      eventId,
+      recipientApplicationId: candidate.recipientApplicationId,
+      subject: candidate.subject,
+    });
+    expect(facts.lastManual?.id).toBe(manual.id);
+    expect(facts.lastAutomatic?.id).toBe(automatic.id);
+    expect(facts.lastOutcome?.status).toBe("queued");
+    expect(facts.nextEligibleAt).toBe(candidate.nextEligibleAt);
   });
 });

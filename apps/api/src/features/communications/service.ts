@@ -22,6 +22,16 @@ import type {
   CommunicationTemplate,
   CommunicationTemplatePurpose,
   CommunicationTemplateSnapshot,
+  ReminderCandidate,
+  ReminderCandidateSourceResult,
+  ReminderDispatch,
+  ReminderDispatchStatus,
+  ReminderFacts,
+  ReminderRepository,
+  ReminderRun,
+  ReminderRuntime,
+  ReminderSubject,
+  ReminderTriggerType,
 } from "./types";
 import { COMMUNICATION_AUDIENCES, COMMUNICATION_TEMPLATE_PURPOSES } from "./types";
 
@@ -111,6 +121,60 @@ export interface RecordCommunicationDeliveryInput {
 export interface CommunicationServiceOptions {
   clock?: () => Date;
   previewLifetimeMs?: number;
+  reminders?: ReminderRuntime;
+}
+export interface ReminderPreviewInput {
+  organizationId?: string;
+  eventId: string;
+  triggerType?: ReminderTriggerType;
+  scheduledAt?: string;
+}
+
+export interface RunManualRemindersInput {
+  organizationId?: string;
+  eventId: string;
+  idempotencyKey: string;
+  expectedAudienceRevision: string;
+  scheduledAt?: string;
+}
+
+export interface RunAutomaticRemindersInput {
+  organizationId?: string;
+  eventId: string;
+  scheduledAt: string;
+}
+
+export interface ReminderListRunsInput {
+  organizationId?: string;
+  eventId: string;
+}
+
+export interface ReminderListDispatchesInput {
+  organizationId?: string;
+  eventId: string;
+  runId?: string;
+}
+
+export interface ReminderFactsInput {
+  organizationId?: string;
+  eventId: string;
+  recipientApplicationId: string;
+  subject: ReminderSubject;
+}
+
+export interface RecordReminderDispatchStatusInput {
+  organizationId?: string;
+  eventId: string;
+  dispatchId?: string;
+  providerMessageId?: string;
+  status: ReminderDispatchStatus;
+  failureMetadata?: Readonly<Record<string, unknown>>;
+}
+
+export interface ReminderPreview {
+  audienceType: ReminderCandidateSourceResult["audienceType"];
+  audienceRevision: string;
+  candidates: readonly ReminderCandidate[];
 }
 
 function invalidInput(message: string): CommunicationError {
@@ -429,10 +493,146 @@ function copyPreview(preview: CommunicationPreview): CommunicationPreview {
     template: { ...preview.template },
   };
 }
+function cloneReminderMetadata(
+  metadata: Readonly<Record<string, unknown>> | null,
+): Readonly<Record<string, unknown>> | null {
+  return metadata === null
+    ? null
+    : (JSON.parse(JSON.stringify(metadata)) as Readonly<Record<string, unknown>>);
+}
+
+function cloneReminderSubject(subject: ReminderSubject): ReminderSubject {
+  return subject.type === "task"
+    ? { type: "task", taskId: subject.taskId }
+    : { type: "review", reviewAssignmentId: subject.reviewAssignmentId };
+}
+
+function copyReminderCandidate(candidate: ReminderCandidate): ReminderCandidate {
+  return {
+    ...candidate,
+    subject: cloneReminderSubject(candidate.subject),
+    renderedMessage: { ...candidate.renderedMessage },
+  };
+}
+
+function copyReminderRun(run: ReminderRun): ReminderRun {
+  return { ...run };
+}
+
+function copyReminderDispatch(dispatch: ReminderDispatch): ReminderDispatch {
+  return {
+    ...dispatch,
+    subject: cloneReminderSubject(dispatch.subject),
+    skipMetadata: cloneReminderMetadata(dispatch.skipMetadata),
+    failureMetadata: cloneReminderMetadata(dispatch.failureMetadata),
+  };
+}
+
+function reminderSubjectKey(subject: ReminderSubject): string {
+  return subject.type === "task" ? `task:${subject.taskId}` : `review:${subject.reviewAssignmentId}`;
+}
+
+function reminderRunId(
+  organizationId: string,
+  eventId: string,
+  triggerType: ReminderTriggerType,
+  key: string,
+): string {
+  return `reminder-run:${organizationId}:${eventId}:${triggerType}:${key}`;
+}
+
+function reminderDispatchId(idempotencyKey: string): string {
+  return `reminder-dispatch:${idempotencyKey}`;
+}
+
+function reminderIdempotencyKey(
+  organizationId: string,
+  eventId: string,
+  triggerType: ReminderTriggerType,
+  candidate: ReminderCandidate,
+): string {
+  return [
+    "reminder",
+    organizationId,
+    eventId,
+    triggerType,
+    reminderSubjectKey(candidate.subject),
+    candidate.recipientApplicationId,
+    candidate.cadenceWindow,
+  ].join(":");
+}
+
+function reminderHourWindow(scheduledAt: string): string {
+  const parsed = Date.parse(scheduledAt);
+  if (!Number.isFinite(parsed)) {
+    throw invalidInput("scheduledAt must be an ISO-8601 instant.");
+  }
+  return new Date(Math.floor(parsed / 3_600_000) * 3_600_000).toISOString();
+}
+
+function reminderScope(
+  actor: CommunicationActor,
+  organizationId: string | undefined,
+  eventId: string,
+): { organizationId: string; eventId: string } {
+  const normalizedEventId = requireText(eventId, "Event id", 200);
+  const normalizedOrganizationId = requireText(
+    organizationId ?? actor.tenantId,
+    "Organization id",
+    200,
+  );
+  if (normalizedOrganizationId !== actor.tenantId) {
+    throw forbidden("The actor cannot access this organization.");
+  }
+  return { organizationId: normalizedOrganizationId, eventId: normalizedEventId };
+}
+
+function requireAutomationDelivery(actor: CommunicationActor, eventId: string): void {
+  if (actor.kind !== "automation" || !hasGrant(actor, eventId, "delivery")) {
+    throw forbidden("An automation delivery actor must perform this reminder action.");
+  }
+}
+
+function reminderErrorMessage(error: unknown): string {
+  return error instanceof Error && error.message.length > 0 ? error.message : String(error);
+}
+
+function isReminderTerminal(status: ReminderDispatchStatus): boolean {
+  return (
+    status === "skipped" ||
+    status === "failed" ||
+    status === "bounced" ||
+    status === "delivered"
+  );
+}
+
+function reminderCountStatus(status: ReminderDispatchStatus): {
+  eligible: number;
+  queued: number;
+  skipped: number;
+  failed: number;
+} {
+  return {
+    eligible:
+      status === "eligible" ||
+      status === "queued" ||
+      status === "provider_accepted" ||
+      status === "delivered" ||
+      status === "failed" ||
+      status === "bounced"
+        ? 1
+        : 0,
+    queued:
+      status === "queued" || status === "provider_accepted" || status === "delivered" ? 1 : 0,
+    skipped: status === "skipped" ? 1 : 0,
+    failed: status === "failed" || status === "bounced" ? 1 : 0,
+  };
+}
 
 export class CommunicationService {
   private readonly clock: () => Date;
   private readonly previewLifetimeMs: number;
+  private reminders: ReminderRuntime | undefined;
 
   constructor(
     private readonly repository: CommunicationRepository,
@@ -444,6 +644,7 @@ export class CommunicationService {
     if (!Number.isSafeInteger(this.previewLifetimeMs) || this.previewLifetimeMs < 1_000) {
       throw new Error("previewLifetimeMs must be at least one second.");
     }
+    this.reminders = options.reminders;
   }
 
   async createTemplate(
@@ -1360,6 +1561,551 @@ export class CommunicationService {
       updatedAt: occurredAt,
     };
   }
+  configureReminders(runtime: ReminderRuntime): void {
+    if (this.reminders !== undefined && this.reminders !== runtime) {
+      throw conflict("Reminder runtime has already been configured.");
+    }
+    this.reminders = runtime;
+  }
+
+  async previewReminders(
+    actor: CommunicationActor,
+    input: ReminderPreviewInput,
+  ): Promise<ReminderPreview> {
+    requireOrganizer(actor, input.eventId);
+    const scope = reminderScope(actor, input.organizationId, input.eventId);
+    const runtime = this.reminders;
+    if (runtime?.source === undefined) {
+      throw unavailable("The reminder candidate source is not configured.");
+    }
+    const triggerType = input.triggerType ?? "manual";
+    const scheduledAt = requireIsoInstant(
+      input.scheduledAt ?? this.clock().toISOString(),
+      "scheduledAt",
+    );
+    const result = await runtime.source.listCandidates({
+      ...scope,
+      triggerType,
+      scheduledAt,
+    });
+    return {
+      audienceType: result.audienceType,
+      audienceRevision: result.audienceRevision,
+      candidates: result.candidates.map(copyReminderCandidate),
+    };
+  }
+
+  async runManualReminders(
+    actor: CommunicationActor,
+    input: RunManualRemindersInput,
+  ): Promise<ReminderRun> {
+    requireOrganizer(actor, input.eventId);
+    const idempotencyKey = requireText(input.idempotencyKey, "Idempotency key", 300);
+    const expectedAudienceRevision = requireText(
+      input.expectedAudienceRevision,
+      "Expected audience revision",
+      300,
+    );
+    const scheduledAt = requireIsoInstant(
+      input.scheduledAt ?? this.clock().toISOString(),
+      "scheduledAt",
+    );
+    return this.executeReminderRun(actor, {
+      ...input,
+      idempotencyKey,
+      expectedAudienceRevision,
+      scheduledAt,
+      triggerType: "manual",
+    });
+  }
+
+  async runAutomaticReminders(
+    actor: CommunicationActor,
+    input: RunAutomaticRemindersInput,
+  ): Promise<ReminderRun> {
+    requireAutomationDelivery(actor, input.eventId);
+    const scheduledAt = requireIsoInstant(input.scheduledAt, "scheduledAt");
+    return this.executeReminderRun(actor, {
+      ...input,
+      scheduledAt,
+      triggerType: "automatic",
+    });
+  }
+
+  async listReminderRuns(
+    actor: CommunicationActor,
+    input: string | ReminderListRunsInput,
+  ): Promise<readonly ReminderRun[]> {
+    const eventId = typeof input === "string" ? input : input.eventId;
+    requireOrganizer(actor, eventId);
+    const scope = reminderScope(actor, typeof input === "string" ? undefined : input.organizationId, eventId);
+    const runtime = this.requireReminderRepository();
+    return (await runtime.listRuns(scope.organizationId, scope.eventId)).map(copyReminderRun);
+  }
+
+  async listReminderDispatches(
+    actor: CommunicationActor,
+    input: string | ReminderListDispatchesInput,
+    runId?: string,
+  ): Promise<readonly ReminderDispatch[]> {
+    const eventId = typeof input === "string" ? input : input.eventId;
+    requireOrganizer(actor, eventId);
+    const scope = reminderScope(actor, typeof input === "string" ? undefined : input.organizationId, eventId);
+    const runtime = this.requireReminderRepository();
+    const filterRunId = typeof input === "string" ? runId : input.runId;
+    return (await runtime.listDispatches(scope.organizationId, scope.eventId, filterRunId)).map(
+      copyReminderDispatch,
+    );
+  }
+
+  async getReminderFacts(
+    actor: CommunicationActor,
+    input: ReminderFactsInput,
+  ): Promise<ReminderFacts> {
+    requireOrganizer(actor, input.eventId);
+    const scope = reminderScope(actor, input.organizationId, input.eventId);
+    const runtime = this.requireReminderRepository();
+    const [runs, dispatches] = await Promise.all([
+      runtime.listRuns(scope.organizationId, scope.eventId),
+      runtime.listDispatches(scope.organizationId, scope.eventId),
+    ]);
+    const runsById = new Map(runs.map((run) => [run.id, run]));
+    const matching = dispatches
+      .filter(
+        (dispatch) =>
+          dispatch.recipient === input.recipientApplicationId &&
+          reminderSubjectKey(dispatch.subject) === reminderSubjectKey(input.subject),
+      )
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+    let lastAutomatic: ReminderRun | null = null;
+    let lastManual: ReminderRun | null = null;
+    for (const dispatch of matching) {
+      const run = runsById.get(dispatch.runId);
+      if (run?.triggerType === "automatic" && lastAutomatic === null) {
+        lastAutomatic = copyReminderRun(run);
+      }
+      if (run?.triggerType === "manual" && lastManual === null) {
+        lastManual = copyReminderRun(run);
+      }
+      if (lastAutomatic !== null && lastManual !== null) break;
+    }
+    let nextEligibleAt: string | null = null;
+    const source = this.reminders?.source;
+    if (source !== undefined) {
+      try {
+        const sourceResult = await source.listCandidates({
+          ...scope,
+          triggerType: "automatic",
+          scheduledAt: this.clock().toISOString(),
+        });
+        for (const candidate of sourceResult.candidates) {
+          const candidateNext = candidate.nextEligibleAt;
+          if (
+            candidate.recipientApplicationId === input.recipientApplicationId &&
+            reminderSubjectKey(candidate.subject) === reminderSubjectKey(input.subject) &&
+            candidateNext !== null &&
+            Number.isFinite(Date.parse(candidateNext)) &&
+            Date.parse(candidateNext) > this.clock().getTime() &&
+            (nextEligibleAt === null || candidateNext < nextEligibleAt)
+          ) {
+            nextEligibleAt = candidateNext;
+          }
+        }
+      } catch {
+        nextEligibleAt = null;
+      }
+    }
+    return {
+      lastAutomatic,
+      lastManual,
+      nextEligibleAt,
+      lastOutcome: matching[0] === undefined ? null : copyReminderDispatch(matching[0]),
+    };
+  }
+
+  async recordReminderDispatchStatus(
+    actor: CommunicationActor,
+    input: RecordReminderDispatchStatusInput,
+  ): Promise<ReminderDispatch> {
+    requireAutomationDelivery(actor, input.eventId);
+    const scope = reminderScope(actor, input.organizationId, input.eventId);
+    const runtime = this.requireReminderRepository();
+    const dispatchId = input.dispatchId === undefined ? undefined : requireText(input.dispatchId, "Dispatch id", 300);
+    const providerMessageId =
+      input.providerMessageId === undefined
+        ? undefined
+        : requireText(input.providerMessageId, "Provider message id", 300);
+    const dispatch =
+      dispatchId === undefined
+        ? providerMessageId === undefined
+          ? undefined
+          : await runtime.findDispatchByProviderMessageId(
+              scope.organizationId,
+              scope.eventId,
+              providerMessageId,
+            )
+        : await runtime.getDispatch(scope.organizationId, scope.eventId, dispatchId);
+    if (dispatch === undefined) {
+      throw notFound("The reminder dispatch was not found.");
+    }
+    if (
+      providerMessageId !== undefined &&
+      dispatch.providerMessageId !== null &&
+      dispatch.providerMessageId !== providerMessageId
+    ) {
+      throw conflict("The provider message id does not match the reminder dispatch.");
+    }
+    if (providerMessageId !== undefined) {
+      const duplicate = await runtime.findDispatchByProviderMessageId(
+        scope.organizationId,
+        scope.eventId,
+        providerMessageId,
+      );
+      if (duplicate !== undefined && duplicate.id !== dispatch.id) {
+        throw conflict("The provider message id belongs to another reminder dispatch.");
+      }
+    }
+    if (
+      (input.status === "provider_accepted" ||
+        input.status === "delivered" ||
+        input.status === "bounced") &&
+      providerMessageId === undefined
+    ) {
+      throw invalidInput("A provider message id is required for this reminder status.");
+    }
+    const currentProviderMessageId = providerMessageId ?? dispatch.providerMessageId;
+    const validTransition =
+      (dispatch.status === "queued" &&
+        (input.status === "provider_accepted" || input.status === "failed")) ||
+      (dispatch.status === "provider_accepted" &&
+        (input.status === "delivered" || input.status === "failed" || input.status === "bounced")) ||
+      (dispatch.status === input.status &&
+        currentProviderMessageId === dispatch.providerMessageId);
+    if (!validTransition) {
+      throw conflict(`Cannot transition reminder dispatch from ${dispatch.status} to ${input.status}.`);
+    }
+    const now = this.clock().toISOString();
+    const next: ReminderDispatch = {
+      ...dispatch,
+      providerMessageId: currentProviderMessageId,
+      status: input.status,
+      failureMetadata:
+        input.failureMetadata === undefined
+          ? dispatch.failureMetadata
+          : cloneReminderMetadata(input.failureMetadata),
+      updatedAt: now,
+      providerAcceptedAt:
+        input.status === "provider_accepted" ? (dispatch.providerAcceptedAt ?? now) : dispatch.providerAcceptedAt,
+      deliveredAt: input.status === "delivered" ? now : dispatch.deliveredAt,
+      failedAt: input.status === "failed" ? now : dispatch.failedAt,
+      bouncedAt: input.status === "bounced" ? now : dispatch.bouncedAt,
+      completedAt:
+        input.status === "failed" || input.status === "delivered" || input.status === "bounced"
+          ? now
+          : dispatch.completedAt,
+    };
+    const saved = await runtime.updateDispatch(next);
+    await this.refreshReminderRun(saved.runId, scope.organizationId, scope.eventId);
+    return copyReminderDispatch(saved);
+  }
+
+  private requireReminderRepository(): ReminderRepository {
+    const runtime = this.reminders;
+    if (runtime?.repository === undefined) {
+      throw unavailable("The reminder repository is not configured.");
+    }
+    return runtime.repository;
+  }
+
+  private async executeReminderRun(
+    actor: CommunicationActor,
+    input: {
+      organizationId?: string;
+      eventId: string;
+      scheduledAt: string;
+      triggerType: ReminderTriggerType;
+      idempotencyKey?: string;
+      expectedAudienceRevision?: string;
+    },
+  ): Promise<ReminderRun> {
+    const scope = reminderScope(actor, input.organizationId, input.eventId);
+    const runtime = this.reminders;
+    if (runtime?.repository === undefined) {
+      throw unavailable("The reminder repository is not configured.");
+    }
+    const runKey =
+      input.triggerType === "manual"
+        ? requireText(input.idempotencyKey ?? "", "Idempotency key", 300)
+        : reminderHourWindow(input.scheduledAt);
+    const id = reminderRunId(scope.organizationId, scope.eventId, input.triggerType, runKey);
+    const existing = await runtime.repository.getRun(scope.organizationId, scope.eventId, id);
+    if (existing !== undefined) {
+      return copyReminderRun(existing);
+    }
+    const now = this.clock().toISOString();
+    let run: ReminderRun = {
+      id,
+      organizationId: scope.organizationId,
+      eventId: scope.eventId,
+      triggerType: input.triggerType,
+      audienceType: "combined",
+      audienceRevision: input.expectedAudienceRevision ?? "",
+      candidateCount: 0,
+      eligibleCount: 0,
+      queuedCount: 0,
+      skippedCount: 0,
+      failedCount: 0,
+      state: "pending",
+      configurationFailure: null,
+      actorId: actor.userId,
+      startedAt: now,
+      completedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    run = await runtime.repository.insertRun(run);
+    run = await runtime.repository.updateRun({ ...run, state: "running", updatedAt: this.clock().toISOString() });
+    if (runtime.source === undefined || runtime.outbox === undefined) {
+      return this.finishReminderRun(
+        run,
+        runtime.source === undefined
+          ? "The reminder candidate source is not configured."
+          : "The reminder outbox is not configured.",
+        runtime.repository,
+      );
+    }
+    let sourceResult: ReminderCandidateSourceResult;
+    try {
+      sourceResult = await runtime.source.listCandidates({
+        ...scope,
+        triggerType: input.triggerType,
+        scheduledAt: input.scheduledAt,
+      });
+    } catch (error) {
+      return this.finishReminderRun(
+        run,
+        `Candidate source failed: ${reminderErrorMessage(error)}`,
+        runtime.repository,
+      );
+    }
+    run = await runtime.repository.updateRun({
+      ...run,
+      audienceType: sourceResult.audienceType,
+      audienceRevision: sourceResult.audienceRevision,
+      updatedAt: this.clock().toISOString(),
+    });
+    if (
+      input.triggerType === "manual" &&
+      sourceResult.audienceRevision !== input.expectedAudienceRevision
+    ) {
+      const failed = await this.finishReminderRun(
+        run,
+        `Audience revision ${sourceResult.audienceRevision} does not match expected revision ${input.expectedAudienceRevision}.`,
+        runtime.repository,
+      );
+      throw conflict(failed.configurationFailure ?? "The reminder audience revision is stale.");
+    }
+    const observed: ReminderDispatch[] = [];
+    for (const candidate of sourceResult.candidates) {
+      const idempotencyKey = reminderIdempotencyKey(
+        scope.organizationId,
+        scope.eventId,
+        input.triggerType,
+        candidate,
+      );
+      const existingDispatch = await runtime.repository.findDispatchByIdempotency(
+        scope.organizationId,
+        scope.eventId,
+        idempotencyKey,
+      );
+      if (existingDispatch !== undefined) {
+        observed.push(existingDispatch);
+        continue;
+      }
+      const dispatchNow = this.clock().toISOString();
+      let dispatch: ReminderDispatch = {
+        id: reminderDispatchId(idempotencyKey),
+        runId: run.id,
+        organizationId: scope.organizationId,
+        eventId: scope.eventId,
+        recipient: candidate.recipientApplicationId,
+        subject: cloneReminderSubject(candidate.subject),
+        eligibilityReason: candidate.eligibilityReason,
+        cadenceWindow: candidate.cadenceWindow,
+        idempotencyKey,
+        providerMessageId: null,
+        status: "candidate",
+        skipMetadata: null,
+        failureMetadata: null,
+        createdAt: dispatchNow,
+        updatedAt: dispatchNow,
+        eligibleAt: null,
+        skippedAt: null,
+        queuedAt: null,
+        providerAcceptedAt: null,
+        deliveredAt: null,
+        failedAt: null,
+        bouncedAt: null,
+        completedAt: null,
+        outboxJobId: null,
+      };
+      try {
+        dispatch = await runtime.repository.insertDispatch(dispatch);
+      } catch (error) {
+        const duplicate = await runtime.repository.findDispatchByIdempotency(
+          scope.organizationId,
+          scope.eventId,
+          idempotencyKey,
+        );
+        if (duplicate !== undefined) {
+          observed.push(duplicate);
+          continue;
+        }
+        throw error;
+      }
+      if (candidate.normalizedEmail === null || candidate.normalizedEmail.trim().length === 0) {
+        dispatch = await runtime.repository.updateDispatch({
+          ...dispatch,
+          status: "skipped",
+          skipMetadata: { reason: "missing_email" },
+          skippedAt: this.clock().toISOString(),
+          completedAt: this.clock().toISOString(),
+          updatedAt: this.clock().toISOString(),
+        });
+        observed.push(dispatch);
+        continue;
+      }
+      if (!candidate.eligible) {
+        const skippedAt = this.clock().toISOString();
+        dispatch = await runtime.repository.updateDispatch({
+          ...dispatch,
+          status: "skipped",
+          skipMetadata: { reason: candidate.eligibilityReason },
+          skippedAt,
+          completedAt: skippedAt,
+          updatedAt: skippedAt,
+        });
+        observed.push(dispatch);
+        continue;
+      }
+      const eligibleAt = this.clock().toISOString();
+      dispatch = await runtime.repository.updateDispatch({
+        ...dispatch,
+        status: "eligible",
+        eligibleAt,
+        updatedAt: eligibleAt,
+      });
+      try {
+        const result = await runtime.outbox.enqueue({
+          dispatchId: dispatch.id,
+          runId: dispatch.runId,
+          organizationId: dispatch.organizationId,
+          eventId: dispatch.eventId,
+          recipient: candidate.normalizedEmail.trim(),
+          from: candidate.renderedMessage.from,
+          subject: candidate.renderedMessage.subject,
+          html: candidate.renderedMessage.html,
+          text: candidate.renderedMessage.text,
+          idempotencyKey: dispatch.idempotencyKey,
+        });
+        const outboxJobId = result.outboxJobId.trim();
+        if (outboxJobId.length === 0) throw new Error("The reminder outbox returned an empty job id.");
+        const queuedAt = this.clock().toISOString();
+        dispatch = await runtime.repository.updateDispatch({
+          ...dispatch,
+          status: "queued",
+          outboxJobId,
+          queuedAt,
+          updatedAt: queuedAt,
+        });
+      } catch (error) {
+        const failedAt = this.clock().toISOString();
+        dispatch = await runtime.repository.updateDispatch({
+          ...dispatch,
+          status: "failed",
+          failureMetadata: { reason: reminderErrorMessage(error) },
+          failedAt,
+          completedAt: failedAt,
+          updatedAt: failedAt,
+        });
+      }
+      observed.push(dispatch);
+    }
+    const finishedAt = this.clock().toISOString();
+    const counts = observed.reduce(
+      (summary, dispatch) => {
+        const count = reminderCountStatus(dispatch.status);
+        summary.eligibleCount += count.eligible;
+        summary.queuedCount += count.queued;
+        summary.skippedCount += count.skipped;
+        summary.failedCount += count.failed;
+        return summary;
+      },
+      { eligibleCount: 0, queuedCount: 0, skippedCount: 0, failedCount: 0 },
+    );
+    run = await runtime.repository.updateRun({
+      ...run,
+      candidateCount: sourceResult.candidates.length,
+      ...counts,
+      state: "completed",
+      completedAt: finishedAt,
+      updatedAt: finishedAt,
+    });
+    return copyReminderRun(run);
+  }
+
+  private async finishReminderRun(
+    run: ReminderRun,
+    configurationFailure: string,
+    repository: ReminderRepository,
+  ): Promise<ReminderRun> {
+    const completedAt = this.clock().toISOString();
+    const failed = await repository.updateRun({
+      ...run,
+      state: "failed",
+      configurationFailure,
+      completedAt,
+      updatedAt: completedAt,
+    });
+    return copyReminderRun(failed);
+  }
+
+  private async refreshReminderRun(
+    runId: string,
+    organizationId: string,
+    eventId: string,
+  ): Promise<void> {
+    const runtime = this.reminders;
+    if (runtime?.repository === undefined) return;
+    const run = await runtime.repository.getRun(organizationId, eventId, runId);
+    if (run === undefined) return;
+    const dispatches = await runtime.repository.listDispatches(organizationId, eventId, runId);
+    const counts = dispatches.reduce(
+      (summary, dispatch) => {
+        const count = reminderCountStatus(dispatch.status);
+        summary.candidateCount += 1;
+        summary.eligibleCount += count.eligible;
+        summary.queuedCount += count.queued;
+        summary.skippedCount += count.skipped;
+        summary.failedCount += count.failed;
+        return summary;
+      },
+      { candidateCount: 0, eligibleCount: 0, queuedCount: 0, skippedCount: 0, failedCount: 0 },
+    );
+    const nextState =
+      run.state === "completed" || run.state === "failed"
+        ? run.state
+        : dispatches.every((dispatch) => isReminderTerminal(dispatch.status) || dispatch.status === "queued")
+          ? "completed"
+          : "running";
+    await runtime.repository.updateRun({
+      ...run,
+      ...counts,
+      state: nextState,
+      completedAt: nextState === "completed" && run.completedAt === null ? this.clock().toISOString() : run.completedAt,
+      updatedAt: this.clock().toISOString(),
+    });
+  }
 }
 
 export interface InMemoryCommunicationRepositoryOptions {
@@ -1584,10 +2330,190 @@ export class InMemoryCommunicationRepository implements CommunicationRepository 
     return `${tenantId}:${eventId}:${recipientId}`;
   }
 }
+export interface InMemoryReminderRepositoryOptions {
+  runs?: readonly ReminderRun[];
+  dispatches?: readonly ReminderDispatch[];
+}
+
+export class InMemoryReminderRepository implements ReminderRepository {
+  private readonly runs = new Map<string, ReminderRun>();
+  private readonly dispatches = new Map<string, ReminderDispatch>();
+
+  constructor(options: InMemoryReminderRepositoryOptions = {}) {
+    for (const run of options.runs ?? []) {
+      this.runs.set(run.id, copyReminderRun(run));
+    }
+    for (const dispatch of options.dispatches ?? []) {
+      this.dispatches.set(dispatch.id, copyReminderDispatch(dispatch));
+    }
+  }
+
+  async getRun(
+    organizationId: string,
+    eventId: string,
+    runId: string,
+  ): Promise<ReminderRun | undefined> {
+    const run = this.runs.get(runId);
+    return run === undefined || run.organizationId !== organizationId || run.eventId !== eventId
+      ? undefined
+      : copyReminderRun(run);
+  }
+
+  async listRuns(organizationId: string, eventId: string): Promise<readonly ReminderRun[]> {
+    return [...this.runs.values()]
+      .filter((run) => run.organizationId === organizationId && run.eventId === eventId)
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+      .map(copyReminderRun);
+  }
+
+  async insertRun(run: ReminderRun): Promise<ReminderRun> {
+    if (this.runs.has(run.id)) {
+      throw conflict("The reminder run id already exists.");
+    }
+    this.runs.set(run.id, copyReminderRun(run));
+    return copyReminderRun(run);
+  }
+
+  async updateRun(run: ReminderRun): Promise<ReminderRun> {
+    const existing = this.runs.get(run.id);
+    if (
+      existing === undefined ||
+      existing.organizationId !== run.organizationId ||
+      existing.eventId !== run.eventId
+    ) {
+      throw notFound("The reminder run was not found.");
+    }
+    this.runs.set(run.id, copyReminderRun(run));
+    return copyReminderRun(run);
+  }
+
+  async getDispatch(
+    organizationId: string,
+    eventId: string,
+    dispatchId: string,
+  ): Promise<ReminderDispatch | undefined> {
+    const dispatch = this.dispatches.get(dispatchId);
+    return dispatch === undefined ||
+      dispatch.organizationId !== organizationId ||
+      dispatch.eventId !== eventId
+      ? undefined
+      : copyReminderDispatch(dispatch);
+  }
+
+  async findDispatchByIdempotency(
+    organizationId: string,
+    eventId: string,
+    idempotencyKey: string,
+  ): Promise<ReminderDispatch | undefined> {
+    const dispatch = [...this.dispatches.values()].find(
+      (candidate) =>
+        candidate.organizationId === organizationId &&
+        candidate.eventId === eventId &&
+        candidate.idempotencyKey === idempotencyKey,
+    );
+    return dispatch === undefined ? undefined : copyReminderDispatch(dispatch);
+  }
+
+  async findDispatchByProviderMessageId(
+    organizationId: string,
+    eventId: string,
+    providerMessageId: string,
+  ): Promise<ReminderDispatch | undefined> {
+    const dispatch = [...this.dispatches.values()].find(
+      (candidate) =>
+        candidate.organizationId === organizationId &&
+        candidate.eventId === eventId &&
+        candidate.providerMessageId === providerMessageId,
+    );
+    return dispatch === undefined ? undefined : copyReminderDispatch(dispatch);
+  }
+
+  async listDispatches(
+    organizationId: string,
+    eventId: string,
+    runId?: string,
+  ): Promise<readonly ReminderDispatch[]> {
+    return [...this.dispatches.values()]
+      .filter(
+        (dispatch) =>
+          dispatch.organizationId === organizationId &&
+          dispatch.eventId === eventId &&
+          (runId === undefined || dispatch.runId === runId),
+      )
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+      .map(copyReminderDispatch);
+  }
+
+  async insertDispatch(dispatch: ReminderDispatch): Promise<ReminderDispatch> {
+    if (this.dispatches.has(dispatch.id)) {
+      throw conflict("The reminder dispatch id already exists.");
+    }
+    const duplicate = await this.findDispatchByIdempotency(
+      dispatch.organizationId,
+      dispatch.eventId,
+      dispatch.idempotencyKey,
+    );
+    if (duplicate !== undefined) {
+      throw conflict("The reminder dispatch idempotency key has already been used.");
+    }
+    if (dispatch.providerMessageId !== null) {
+      const providerDuplicate = await this.findDispatchByProviderMessageId(
+        dispatch.organizationId,
+        dispatch.eventId,
+        dispatch.providerMessageId,
+      );
+      if (providerDuplicate !== undefined) {
+        throw conflict("The provider message id has already been used.");
+      }
+    }
+    this.dispatches.set(dispatch.id, copyReminderDispatch(dispatch));
+    return copyReminderDispatch(dispatch);
+  }
+
+  async updateDispatch(dispatch: ReminderDispatch): Promise<ReminderDispatch> {
+    const existing = this.dispatches.get(dispatch.id);
+    if (
+      existing === undefined ||
+      existing.organizationId !== dispatch.organizationId ||
+      existing.eventId !== dispatch.eventId
+    ) {
+      throw notFound("The reminder dispatch was not found.");
+    }
+    const duplicate = await this.findDispatchByIdempotency(
+      dispatch.organizationId,
+      dispatch.eventId,
+      dispatch.idempotencyKey,
+    );
+    if (duplicate !== undefined && duplicate.id !== dispatch.id) {
+      throw conflict("The reminder dispatch idempotency key has already been used.");
+    }
+    if (dispatch.providerMessageId !== null) {
+      const providerDuplicate = await this.findDispatchByProviderMessageId(
+        dispatch.organizationId,
+        dispatch.eventId,
+        dispatch.providerMessageId,
+      );
+      if (providerDuplicate !== undefined && providerDuplicate.id !== dispatch.id) {
+        throw conflict("The provider message id has already been used.");
+      }
+    }
+    this.dispatches.set(dispatch.id, copyReminderDispatch(dispatch));
+    return copyReminderDispatch(dispatch);
+  }
+}
 
 export type CommunicationRepositoryGrant = CommunicationGrant;
 export type {
   CommunicationActor,
   CommunicationDeliveryAdapter,
   CommunicationRepository,
+  ReminderCandidate,
+  ReminderCandidateSource,
+  ReminderDispatch,
+  ReminderFacts,
+  ReminderRepository,
+  ReminderRun,
+  ReminderRuntime,
+  ReminderSubject,
+  ReminderTriggerType,
 } from "./types";

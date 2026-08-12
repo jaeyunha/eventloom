@@ -226,6 +226,8 @@ function createOutboxDeliveryStatusRecorder(
         if (service === undefined) {
           throw new Error("The communication delivery status service is unavailable.");
         }
+        const status =
+          input.status === "provider_accepted" ? "delivered" : input.status;
         await service.recordDeliveryStatus(
           {
             tenantId: input.tenantId,
@@ -237,7 +239,7 @@ function createOutboxDeliveryStatusRecorder(
             eventId: input.target.eventId,
             sendId: input.target.sendId,
             recipientId: input.target.recipientId,
-            status: input.status,
+            status,
             ...(input.providerMessageId === undefined
               ? {}
               : { providerMessageId: input.providerMessageId }),
@@ -247,16 +249,48 @@ function createOutboxDeliveryStatusRecorder(
         );
         return;
       }
+      if (input.target.kind === "reminder") {
+        const service = dependencies.communications?.service;
+        if (service === undefined) {
+          throw new Error("The reminder delivery status service is unavailable.");
+        }
+        if (input.status === "complained") {
+          throw new Error("The reminder delivery status is unsupported.");
+        }
+        await service.recordReminderDispatchStatus(
+          {
+            tenantId: input.tenantId,
+            userId: "outbox-consumer",
+            kind: "automation",
+            grants: [{ eventId: input.target.eventId, role: "delivery" }],
+          },
+          {
+            organizationId: input.tenantId,
+            eventId: input.target.eventId,
+            dispatchId: input.target.dispatchId,
+            status: input.status,
+            ...(input.providerMessageId === undefined
+              ? {}
+              : { providerMessageId: input.providerMessageId }),
+            ...(input.reason === undefined
+              ? {}
+              : { failureMetadata: { reason: input.reason } }),
+          },
+        );
+        return;
+      }
 
       const service = dependencies.crm?.service;
       if (service === undefined) {
         throw new Error("The CRM outreach delivery status service is unavailable.");
       }
+      const status =
+        input.status === "provider_accepted" ? "delivered" : input.status;
       await service.recordOutreachDeliveryStatus({
         organizationId: input.tenantId,
         outreachId: input.target.outreachId,
         idempotencyKey: input.target.idempotencyKey,
-        status: input.status,
+        status,
         ...(input.providerMessageId === undefined
           ? {}
           : { providerMessageId: input.providerMessageId }),
