@@ -219,7 +219,10 @@ function resolveGrantUrl(value: string, origin: string): string {
   try {
     return new URL(value).toString();
   } catch {
-    return new URL(value, `${removeTrailingSlash(origin)}/`).toString();
+    const normalizedOrigin = removeTrailingSlash(origin);
+    return normalizedOrigin.length === 0
+      ? value
+      : new URL(value, `${normalizedOrigin}/`).toString();
   }
 }
 

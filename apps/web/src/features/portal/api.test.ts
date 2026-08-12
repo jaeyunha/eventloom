@@ -149,6 +149,42 @@ describe("speaker portal API adapter", () => {
     });
   });
 
+  it("uses relative upload capabilities through the same-origin gateway", async () => {
+    const calls: Array<{ input: RequestInfo | URL; init: RequestInit | undefined }> = [];
+    const capabilityUrl = "/api/speaker/assets/capabilities/upload/capability-1/token-1";
+    const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ input, init });
+      return calls.length === 1
+        ? jsonResponse({
+            data: {
+              asset: { id: "asset-1" },
+              grant: {
+                method: "PUT",
+                url: capabilityUrl,
+                headers: { "content-type": "application/pdf" },
+                expiresAt: "2026-08-08T12:05:00.000Z",
+              },
+            },
+          })
+        : new Response(null, { status: 204 });
+    };
+    const api = createPortalApi("", fetcher);
+
+    await api.uploadTaskFile({
+      eventId: "event-1",
+      participantId: "participant-1",
+      taskId: "task-1",
+      kind: "slides",
+      file: new File(["slides"], "session.pdf", { type: "application/pdf" }),
+    });
+
+    expect(calls.map(({ input }) => String(input))).toEqual([
+      "/api/speaker/events/event-1/uploads",
+      capabilityUrl,
+    ]);
+    expect(calls[1]?.init).toMatchObject({ credentials: "omit", method: "PUT" });
+  });
+
   it("reports failed object storage uploads without submitting the task", async () => {
     let callCount = 0;
     const fetcher = async () => {

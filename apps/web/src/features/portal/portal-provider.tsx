@@ -12,6 +12,7 @@ import {
 } from "react";
 import { createPortalApi, type PortalApi, PortalApiError } from "./api";
 import {
+  portalSubmissionIdsMatch,
   scopePortalContextToPrimaryParticipant,
   scopePortalViewToPrimaryParticipant,
 } from "./model";
@@ -175,7 +176,7 @@ function taskMutationMatches(
   return (
     updated.id === original.id &&
     updated.eventId === eventId &&
-    updated.submissionId === original.submissionId &&
+    portalSubmissionIdsMatch(updated.submissionId, original.submissionId) &&
     updated.participantId === original.participantId &&
     updated.owner === "speaker" &&
     updated.status === expectedStatus &&
@@ -214,6 +215,215 @@ function normalizeCapabilities(value: readonly PortalCapability[] | undefined): 
 function contextName(context: PortalContext): string {
   return context.name.trim() || "Event";
 }
+function submissionIdAuthorized(target: PortalContext, submissionId: string): boolean {
+  return target.submissionIds.some((authorizedId) =>
+    portalSubmissionIdsMatch(authorizedId, submissionId),
+  );
+}
+
+function submissionBelongsToPortalContext(
+  submission: PortalView["submissions"][number],
+  target: PortalContext,
+): boolean {
+  return (
+    submission.eventId === target.eventId &&
+    target.primaryParticipantId !== undefined &&
+    submission.participantIds.includes(target.primaryParticipantId) &&
+    submissionIdAuthorized(target, submission.id)
+  );
+}
+
+export function portalContextResponseForTarget(
+  target: PortalContext,
+  candidate: PortalContext | undefined,
+): PortalContext {
+  if (
+    candidate === undefined ||
+    candidate.id !== target.id ||
+    candidate.eventId !== target.eventId ||
+    candidate.primaryParticipantId !== target.primaryParticipantId
+  ) {
+    throw new PortalApiError(
+      "CONTEXT_MISMATCH",
+      "The portal response does not match the selected event and speaker.",
+      409,
+    );
+  }
+  return candidate;
+}
+
+export function createPortalProviderApi(
+  providedApi?: PortalApi,
+  providedApiBaseUrl?: string,
+): PortalApi {
+  return providedApi ?? createPortalApi(providedApiBaseUrl?.trim() ?? "");
+}
+function taskBelongsToPortalContext(task: PortalTask, target: PortalContext): boolean {
+  return (
+    task.eventId === target.eventId &&
+    task.owner === "speaker" &&
+    task.participantId === target.primaryParticipantId &&
+    submissionIdAuthorized(target, task.submissionId)
+  );
+}
+
+export function assetBelongsToPortalContext(
+  asset: PortalAsset,
+  target: PortalContext,
+  tasks: readonly PortalTask[],
+): boolean {
+  if (
+    asset.eventId !== target.eventId ||
+    asset.participantId !== target.primaryParticipantId ||
+    (asset.submissionId !== undefined && !submissionIdAuthorized(target, asset.submissionId))
+  ) {
+    return false;
+  }
+  if (asset.taskId === undefined) {
+    return true;
+  }
+  const task = tasks.find((candidate) => candidate.id === asset.taskId);
+  return (
+    task !== undefined &&
+    taskBelongsToPortalContext(task, target) &&
+    (asset.submissionId === undefined ||
+      portalSubmissionIdsMatch(asset.submissionId, task.submissionId))
+  );
+}
+
+export function profileAssetBelongsToPortalContext(
+  asset: PortalAsset,
+  target: PortalContext,
+): boolean {
+  return (
+    asset.eventId === target.eventId &&
+    asset.participantId === target.primaryParticipantId &&
+    asset.kind === "headshot" &&
+    asset.taskId === undefined &&
+    (asset.submissionId === undefined || submissionIdAuthorized(target, asset.submissionId))
+  );
+}
+function acceptedSubmissionId(
+  submissionId: string,
+  target: PortalContext,
+  view: PortalView | null,
+): string | null {
+  return (
+    view?.submissions.find(
+      (submission) =>
+        submission.status === "accepted" &&
+        submissionBelongsToPortalContext(submission, target) &&
+        portalSubmissionIdsMatch(submission.id, submissionId),
+    )?.id ?? null
+  );
+}
+function assetIdAuthorized(
+  assetId: string,
+  target: PortalContext,
+  view: PortalView | null,
+  workspaceAssets: readonly PortalAsset[],
+): boolean {
+  const asset =
+    workspaceAssets.find((candidate) => candidate.id === assetId) ??
+    view?.assets?.find((candidate) => candidate.id === assetId);
+  return asset !== undefined && assetBelongsToPortalContext(asset, target, view?.tasks ?? []);
+}
+function taskIdAuthorized(taskId: string, target: PortalContext, view: PortalView | null): boolean {
+  const task = view?.tasks.find((candidate) => candidate.id === taskId);
+  return task !== undefined && taskBelongsToPortalContext(task, target);
+}
+interface PortalRosterLoadResult {
+  entries: readonly (readonly [string, PortalRosterEnvelope])[];
+  failures: readonly unknown[];
+}
+
+export async function loadPortalRosters(
+  api: PortalApi,
+  target: PortalContext,
+  nextView: PortalView,
+  signal?: AbortSignal,
+): Promise<PortalRosterLoadResult> {
+  const failures: unknown[] = [];
+  const safely = async <T,>(operation: () => Promise<T>, fallback: T): Promise<T> => {
+    try {
+      return await operation();
+    } catch (operationError) {
+      if (!isAbort(operationError)) {
+        failures.push(operationError);
+      }
+      return fallback;
+    }
+  };
+  const acceptedSubmissions = nextView.submissions.filter(
+    (submission) =>
+      submission.status === "accepted" && submissionBelongsToPortalContext(submission, target),
+  );
+  const includedRoster = nextView.roster;
+  if (includedRoster !== undefined && !hasPortalCapability(target.capabilities, "roster-manage")) {
+    const matchingSubmission = acceptedSubmissions.find((submission) =>
+      portalSubmissionIdsMatch(submission.id, includedRoster.submissionId),
+    );
+    const roster = await safely(
+      async () => {
+        if (
+          includedRoster.eventId !== target.eventId ||
+          matchingSubmission === undefined ||
+          !target.submissionIds.some((authorizedId) =>
+            portalSubmissionIdsMatch(authorizedId, includedRoster.submissionId),
+          )
+        ) {
+          throw new PortalApiError(
+            "CONTEXT_MISMATCH",
+            "The roster response belongs to a different event or session.",
+            409,
+          );
+        }
+        return includedRoster;
+      },
+      undefined as PortalRosterEnvelope | undefined,
+    );
+    return {
+      entries:
+        roster === undefined || matchingSubmission === undefined
+          ? []
+          : ([[matchingSubmission.id, roster]] as const),
+      failures,
+    };
+  }
+
+  const getRoster = api.getRoster;
+  if (!getRoster) {
+    return { entries: [], failures };
+  }
+  const rosterResults = await Promise.all(
+    acceptedSubmissions.map(async (submission) => {
+      const roster = await safely(async () => {
+        const result = await getRoster(target.eventId, submission.id, signal);
+        if (
+          result.eventId !== target.eventId ||
+          !portalSubmissionIdsMatch(result.submissionId, submission.id) ||
+          !target.submissionIds.some((authorizedId) =>
+            portalSubmissionIdsMatch(authorizedId, result.submissionId),
+          )
+        ) {
+          throw new PortalApiError(
+            "CONTEXT_MISMATCH",
+            "The roster response belongs to a different event or session.",
+            409,
+          );
+        }
+        return result;
+      }, undefined);
+      return [submission.id, roster] as const;
+    }),
+  );
+  return {
+    entries: rosterResults.filter(
+      (entry): entry is readonly [string, PortalRosterEnvelope] => entry[1] !== undefined,
+    ),
+    failures,
+  };
+}
 
 interface PortalProviderProps {
   children: ReactNode;
@@ -227,9 +437,9 @@ export function PortalProvider({
   apiBaseUrl: providedApiBaseUrl,
 }: Readonly<PortalProviderProps>) {
   const configuredEventId = process.env.NEXT_PUBLIC_PORTAL_EVENT_ID?.trim();
-  const apiBaseUrl = (providedApiBaseUrl ?? process.env.NEXT_PUBLIC_API_URL)?.trim();
-  const api = useMemo<PortalApi | null>(
-    () => providedApi ?? (apiBaseUrl ? createPortalApi(apiBaseUrl) : null),
+  const apiBaseUrl = providedApiBaseUrl?.trim() ?? "";
+  const api = useMemo<PortalApi>(
+    () => createPortalProviderApi(providedApi, apiBaseUrl),
     [apiBaseUrl, providedApi],
   );
   const [contexts, setContexts] = useState<PortalContext[]>([]);
@@ -284,8 +494,9 @@ export function PortalProvider({
         wiki: [],
       };
       const failures: unknown[] = [];
-      const submissions = nextView.submissions;
-      const formTasks = nextView.tasks.filter((task) => task.type === "form");
+      const formTasks = nextView.tasks.filter(
+        (task) => task.type === "form" && taskBelongsToPortalContext(task, target),
+      );
 
       const safely = async <T,>(operation: () => Promise<T>, fallback: T): Promise<T> => {
         try {
@@ -298,64 +509,20 @@ export function PortalProvider({
         }
       };
 
-      const rosterLoad = (async () => {
-        const includedRoster = nextView.roster;
-        if (
-          includedRoster !== undefined &&
-          !hasPortalCapability(target.capabilities, "roster-manage")
-        ) {
-          const roster = await safely(
-            async () => {
-              if (
-                includedRoster.eventId !== target.eventId ||
-                !target.submissionIds.includes(includedRoster.submissionId)
-              ) {
-                throw new PortalApiError(
-                  "CONTEXT_MISMATCH",
-                  "The roster response belongs to a different event or session.",
-                  409,
-                );
-              }
-              return includedRoster;
-            },
-            undefined as PortalRosterEnvelope | undefined,
-          );
-          return roster === undefined ? [] : ([[roster.submissionId, roster]] as const);
-        }
-        const getRoster = api.getRoster;
-        if (!getRoster) {
-          return [] as readonly (readonly [string, PortalRosterEnvelope])[];
-        }
-        const rosterResults = await Promise.all(
-          submissions.map(async (submission) => {
-            const roster = await safely(async () => {
-              const result = await getRoster(target.eventId, submission.id, signal);
-              if (result.eventId !== target.eventId || result.submissionId !== submission.id) {
-                throw new PortalApiError(
-                  "CONTEXT_MISMATCH",
-                  "The roster response belongs to a different event or session.",
-                  409,
-                );
-              }
-              return result;
-            }, undefined);
-            return [submission.id, roster] as const;
-          }),
-        );
-        return rosterResults.filter(
-          (entry): entry is readonly [string, PortalRosterEnvelope] => entry[1] !== undefined,
-        );
-      })();
-
+      const rosterLoad = loadPortalRosters(api, target, nextView, signal);
       const includedAssets = nextView.assets;
       const listAssets = api.listAssets;
       const assetsLoad =
         includedAssets !== undefined
           ? safely(async () => {
-              if (includedAssets.some((asset) => asset.eventId !== target.eventId)) {
+              if (
+                includedAssets.some(
+                  (asset) => !assetBelongsToPortalContext(asset, target, nextView.tasks),
+                )
+              ) {
                 throw new PortalApiError(
                   "CONTEXT_MISMATCH",
-                  "The file response belongs to a different event.",
+                  "The file response belongs to a different event, speaker, or session.",
                   409,
                 );
               }
@@ -367,10 +534,14 @@ export function PortalProvider({
                   target.eventId,
                   signal === undefined ? undefined : { signal },
                 );
-                if (assets.some((asset) => asset.eventId !== target.eventId)) {
+                if (
+                  assets.some(
+                    (asset) => !assetBelongsToPortalContext(asset, target, nextView.tasks),
+                  )
+                ) {
                   throw new PortalApiError(
                     "CONTEXT_MISMATCH",
-                    "The file response belongs to a different event.",
+                    "The file response belongs to a different event, speaker, or session.",
                     409,
                   );
                 }
@@ -427,7 +598,8 @@ export function PortalProvider({
                           if (
                             result === undefined ||
                             result.eventId !== target.eventId ||
-                            result.taskId !== task.id
+                            result.taskId !== task.id ||
+                            result.participantId !== target.primaryParticipantId
                           ) {
                             throw new PortalApiError(
                               "CONTEXT_MISMATCH",
@@ -452,14 +624,15 @@ export function PortalProvider({
               }[],
             );
 
-      const [rosterResults, assets, resources, wiki, taskResults] = await Promise.all([
+      const [rosterLoadResult, assets, resources, wiki, taskResults] = await Promise.all([
         rosterLoad,
         assetsLoad,
         resourcesLoad,
         wikiLoad,
         taskLoad,
       ]);
-      for (const [submissionId, roster] of rosterResults) {
+      failures.push(...rosterLoadResult.failures);
+      for (const [submissionId, roster] of rosterLoadResult.entries) {
         nextWorkspace.rosters[submissionId] = roster;
       }
       nextWorkspace.assets = assets;
@@ -511,17 +684,7 @@ export function PortalProvider({
         if (signal?.aborted || generation !== loadGeneration.current) {
           return false;
         }
-        const serverContext = nextView.context ?? target;
-        if (
-          serverContext.eventId !== target.eventId ||
-          serverContext.primaryParticipantId !== target.primaryParticipantId
-        ) {
-          throw new PortalApiError(
-            "CONTEXT_MISMATCH",
-            "The portal response does not match the selected event and speaker.",
-            409,
-          );
-        }
+        const serverContext = portalContextResponseForTarget(target, nextView.context);
         const nextCapabilities = normalizeCapabilities(
           nextView.capabilities ?? serverContext.capabilities,
         );
@@ -719,11 +882,7 @@ export function PortalProvider({
               ? { supersedesAssetId: input.profile.headshotAssetId }
               : {}),
           });
-          if (
-            pending.eventId !== targetContext.eventId ||
-            pending.participantId !== input.profile.participantId ||
-            pending.kind !== "headshot"
-          ) {
+          if (!profileAssetBelongsToPortalContext(pending, targetContext)) {
             throw new PortalApiError(
               "CONTEXT_MISMATCH",
               "The headshot upload belongs to a different event or participant.",
@@ -736,9 +895,8 @@ export function PortalProvider({
             state: "ready",
           });
           if (
-            finalizedHeadshot.eventId !== targetContext.eventId ||
-            finalizedHeadshot.participantId !== input.profile.participantId ||
-            finalizedHeadshot.kind !== "headshot" ||
+            finalizedHeadshot.id !== pending.id ||
+            !profileAssetBelongsToPortalContext(finalizedHeadshot, targetContext) ||
             finalizedHeadshot.state !== "ready"
           ) {
             throw new PortalApiError(
@@ -820,6 +978,15 @@ export function PortalProvider({
         return false;
       }
       const targetContext = context;
+      if (
+        !taskBelongsToPortalContext(task, context) ||
+        !view?.tasks.some(
+          (candidate) => candidate.id === task.id && taskBelongsToPortalContext(candidate, context),
+        )
+      ) {
+        setMutationError("This task does not belong to the active speaker.");
+        return false;
+      }
       const generation = loadGeneration.current;
       setBusyTaskIds((current) => new Set(current).add(task.id));
       setMutationError(null);
@@ -862,7 +1029,7 @@ export function PortalProvider({
         });
       }
     },
-    [api, can, context],
+    [api, can, context, view],
   );
 
   const uploadTask = useCallback(
@@ -877,6 +1044,15 @@ export function PortalProvider({
       }
       if (!api.finalizeAsset) {
         setMutationError("File finalization is not available yet.");
+        return false;
+      }
+      if (
+        !taskBelongsToPortalContext(task, context) ||
+        !view?.tasks.some(
+          (candidate) => candidate.id === task.id && taskBelongsToPortalContext(candidate, context),
+        )
+      ) {
+        setMutationError("This task does not belong to the active speaker.");
         return false;
       }
       const kind = task.acceptedAssetKinds?.[0];
@@ -905,7 +1081,8 @@ export function PortalProvider({
           finalized.eventId !== targetContext.eventId ||
           finalized.participantId !== task.participantId ||
           finalized.taskId !== task.id ||
-          finalized.state !== "ready"
+          finalized.state !== "ready" ||
+          !assetBelongsToPortalContext(finalized, targetContext, view?.tasks ?? [])
         ) {
           throw new PortalApiError(
             "CONTEXT_MISMATCH",
@@ -954,7 +1131,7 @@ export function PortalProvider({
         });
       }
     },
-    [api, can, context],
+    [api, can, context, view],
   );
 
   const addRosterEntry = useCallback(
@@ -977,14 +1154,23 @@ export function PortalProvider({
         return false;
       }
       const targetContext = context;
+      const rosterSubmissionId = acceptedSubmissionId(input.submissionId, context, view);
+      if (rosterSubmissionId === null) {
+        setMutationError("This roster does not belong to an active accepted session.");
+        return false;
+      }
       const generation = loadGeneration.current;
       setBusyRoster(true);
       setMutationError(null);
       try {
-        const roster = await api.addRosterEntry({ eventId: targetContext.eventId, ...input });
+        const roster = await api.addRosterEntry({
+          eventId: targetContext.eventId,
+          ...input,
+          submissionId: rosterSubmissionId,
+        });
         if (
           roster.eventId !== targetContext.eventId ||
-          roster.submissionId !== input.submissionId
+          !portalSubmissionIdsMatch(roster.submissionId, rosterSubmissionId)
         ) {
           throw new PortalApiError(
             "CONTEXT_MISMATCH",
@@ -997,7 +1183,7 @@ export function PortalProvider({
         }
         setWorkspace((current) => ({
           ...current,
-          rosters: { ...current.rosters, [input.submissionId]: roster },
+          rosters: { ...current.rosters, [rosterSubmissionId]: roster },
         }));
         return true;
       } catch (addError) {
@@ -1009,7 +1195,7 @@ export function PortalProvider({
         setBusyRoster(false);
       }
     },
-    [api, can, context],
+    [api, can, context, view],
   );
 
   const updateRosterEntry = useCallback(
@@ -1033,14 +1219,24 @@ export function PortalProvider({
         return false;
       }
       const targetContext = context;
+      const rosterSubmissionId = acceptedSubmissionId(input.submissionId, context, view);
+      if (rosterSubmissionId === null) {
+        setMutationError("This roster does not belong to an active accepted session.");
+        return false;
+      }
       const generation = loadGeneration.current;
       setBusyRoster(true);
       setMutationError(null);
       try {
-        const roster = await api.updateRosterEntry({ eventId: targetContext.eventId, ...input });
+        const roster = await api.updateRosterEntry({
+          eventId: targetContext.eventId,
+          ...input,
+          submissionId: rosterSubmissionId,
+        });
         if (
           roster.eventId !== targetContext.eventId ||
-          roster.submissionId !== input.submissionId
+          !portalSubmissionIdsMatch(roster.submissionId, rosterSubmissionId) ||
+          !submissionIdAuthorized(targetContext, roster.submissionId)
         ) {
           throw new PortalApiError(
             "CONTEXT_MISMATCH",
@@ -1053,7 +1249,7 @@ export function PortalProvider({
         }
         setWorkspace((current) => ({
           ...current,
-          rosters: { ...current.rosters, [input.submissionId]: roster },
+          rosters: { ...current.rosters, [rosterSubmissionId]: roster },
         }));
         return true;
       } catch (updateError) {
@@ -1065,7 +1261,7 @@ export function PortalProvider({
         setBusyRoster(false);
       }
     },
-    [api, can, context],
+    [api, can, context, view],
   );
 
   const removeRosterEntry = useCallback(
@@ -1083,14 +1279,24 @@ export function PortalProvider({
         return false;
       }
       const targetContext = context;
+      const rosterSubmissionId = acceptedSubmissionId(input.submissionId, context, view);
+      if (rosterSubmissionId === null) {
+        setMutationError("This roster does not belong to an active accepted session.");
+        return false;
+      }
       const generation = loadGeneration.current;
       setBusyRoster(true);
       setMutationError(null);
       try {
-        const roster = await api.removeRosterEntry({ eventId: targetContext.eventId, ...input });
+        const roster = await api.removeRosterEntry({
+          eventId: targetContext.eventId,
+          ...input,
+          submissionId: rosterSubmissionId,
+        });
         if (
           roster.eventId !== targetContext.eventId ||
-          roster.submissionId !== input.submissionId
+          !portalSubmissionIdsMatch(roster.submissionId, rosterSubmissionId) ||
+          !submissionIdAuthorized(targetContext, roster.submissionId)
         ) {
           throw new PortalApiError(
             "CONTEXT_MISMATCH",
@@ -1103,7 +1309,7 @@ export function PortalProvider({
         }
         setWorkspace((current) => ({
           ...current,
-          rosters: { ...current.rosters, [input.submissionId]: roster },
+          rosters: { ...current.rosters, [rosterSubmissionId]: roster },
         }));
         return true;
       } catch (removeError) {
@@ -1115,7 +1321,7 @@ export function PortalProvider({
         setBusyRoster(false);
       }
     },
-    [api, can, context],
+    [api, can, context, view],
   );
 
   const uploadWorkspaceFile = useCallback(
@@ -1140,16 +1346,57 @@ export function PortalProvider({
         return false;
       }
       const targetContext = context;
+      const uploadSubmissionId =
+        input.submissionId === undefined
+          ? null
+          : acceptedSubmissionId(input.submissionId, context, view);
+      const inputTask =
+        input.taskId === undefined
+          ? undefined
+          : view?.tasks.find((task) => task.id === input.taskId);
+      const supersededAsset =
+        input.supersedesAssetId === undefined
+          ? undefined
+          : (workspace.assets.find((asset) => asset.id === input.supersedesAssetId) ??
+            view?.assets?.find((asset) => asset.id === input.supersedesAssetId));
+      if (
+        input.participantId !== context.primaryParticipantId ||
+        uploadSubmissionId === null ||
+        (input.taskId !== undefined &&
+          (inputTask === undefined || !taskBelongsToPortalContext(inputTask, context))) ||
+        (inputTask !== undefined &&
+          !portalSubmissionIdsMatch(uploadSubmissionId, inputTask.submissionId)) ||
+        (input.supersedesAssetId !== undefined &&
+          (supersededAsset === undefined ||
+            !assetBelongsToPortalContext(supersededAsset, context, view?.tasks ?? []) ||
+            supersededAsset.submissionId === undefined ||
+            !portalSubmissionIdsMatch(uploadSubmissionId, supersededAsset.submissionId) ||
+            supersededAsset.kind !== input.kind))
+      ) {
+        setMutationError("This file does not belong to the active speaker.");
+        return false;
+      }
       const generation = loadGeneration.current;
       const busyKey = input.supersedesAssetId ?? `${input.kind}:${input.file.name}`;
       setBusyAssetIds((current) => new Set(current).add(busyKey));
       setMutationError(null);
       try {
-        const asset = await api.uploadFile({ eventId: targetContext.eventId, ...input });
-        if (asset.eventId !== targetContext.eventId) {
+        const asset = await api.uploadFile({
+          eventId: targetContext.eventId,
+          ...input,
+          submissionId: uploadSubmissionId,
+        });
+        if (
+          !assetBelongsToPortalContext(asset, targetContext, view?.tasks ?? []) ||
+          asset.participantId !== input.participantId ||
+          asset.submissionId === undefined ||
+          !portalSubmissionIdsMatch(asset.submissionId, uploadSubmissionId) ||
+          (input.taskId !== undefined && asset.taskId !== input.taskId) ||
+          asset.supersedesAssetId !== input.supersedesAssetId
+        ) {
           throw new PortalApiError(
             "CONTEXT_MISMATCH",
-            "The file response belongs to a different event.",
+            "The file response belongs to a different speaker or session.",
             409,
           );
         }
@@ -1171,7 +1418,7 @@ export function PortalProvider({
         });
       }
     },
-    [api, can, context],
+    [api, can, context, view, workspace.assets],
   );
 
   const finalizeAsset = useCallback(
@@ -1189,15 +1436,28 @@ export function PortalProvider({
         return false;
       }
       const targetContext = context;
+      const knownAsset =
+        workspace.assets.find((candidate) => candidate.id === input.assetId) ??
+        view?.assets?.find((candidate) => candidate.id === input.assetId);
+      if (
+        knownAsset === undefined ||
+        !assetBelongsToPortalContext(knownAsset, context, view?.tasks ?? [])
+      ) {
+        setMutationError("This file does not belong to the active speaker.");
+        return false;
+      }
       const generation = loadGeneration.current;
       setBusyAssetIds((current) => new Set(current).add(input.assetId));
       setMutationError(null);
       try {
         const asset = await api.finalizeAsset({ eventId: targetContext.eventId, ...input });
-        if (asset.eventId !== targetContext.eventId) {
+        if (
+          asset.id !== input.assetId ||
+          !assetBelongsToPortalContext(asset, targetContext, view?.tasks ?? [])
+        ) {
           throw new PortalApiError(
             "CONTEXT_MISMATCH",
-            "The file response belongs to a different event.",
+            "The file response belongs to a different speaker or session.",
             409,
           );
         }
@@ -1224,7 +1484,7 @@ export function PortalProvider({
         });
       }
     },
-    [api, can, context],
+    [api, can, context, view, workspace.assets],
   );
 
   const loadAssetHistory = useCallback(
@@ -1233,9 +1493,23 @@ export function PortalProvider({
         return [];
       }
       const targetContext = context;
+      if (!assetIdAuthorized(assetId, context, view, workspace.assets)) {
+        return [];
+      }
       const generation = loadGeneration.current;
       try {
         const history = await api.getAssetHistory(targetContext.eventId, assetId);
+        if (
+          history.some(
+            (entry) => !assetBelongsToPortalContext(entry, targetContext, view?.tasks ?? []),
+          )
+        ) {
+          throw new PortalApiError(
+            "CONTEXT_MISMATCH",
+            "The file history belongs to a different speaker or session.",
+            409,
+          );
+        }
         if (!isPortalGenerationCurrent(generation, loadGeneration.current)) {
           return [];
         }
@@ -1251,7 +1525,7 @@ export function PortalProvider({
         return [];
       }
     },
-    [api, can, context],
+    [api, can, context, view, workspace.assets],
   );
 
   const loadAssetComments = useCallback(
@@ -1260,9 +1534,19 @@ export function PortalProvider({
         return [];
       }
       const targetContext = context;
+      if (!assetIdAuthorized(assetId, context, view, workspace.assets)) {
+        return [];
+      }
       const generation = loadGeneration.current;
       try {
         const comments = await api.listAssetComments(targetContext.eventId, assetId);
+        if (comments.some((comment) => comment.assetId !== assetId)) {
+          throw new PortalApiError(
+            "CONTEXT_MISMATCH",
+            "The file comments belong to a different file.",
+            409,
+          );
+        }
         if (!isPortalGenerationCurrent(generation, loadGeneration.current)) {
           return [];
         }
@@ -1278,7 +1562,7 @@ export function PortalProvider({
         return [];
       }
     },
-    [api, can, context],
+    [api, can, context, view, workspace.assets],
   );
 
   const addAssetComment = useCallback(
@@ -1292,10 +1576,21 @@ export function PortalProvider({
         return false;
       }
       const targetContext = context;
+      if (!assetIdAuthorized(input.assetId, context, view, workspace.assets)) {
+        setMutationError("This file does not belong to the active speaker.");
+        return false;
+      }
       const generation = loadGeneration.current;
       setMutationError(null);
       try {
         const comment = await api.addAssetComment({ eventId: targetContext.eventId, ...input });
+        if (comment.assetId !== input.assetId) {
+          throw new PortalApiError(
+            "CONTEXT_MISMATCH",
+            "The file comment belongs to a different file.",
+            409,
+          );
+        }
         if (!isPortalGenerationCurrent(generation, loadGeneration.current)) {
           return false;
         }
@@ -1314,7 +1609,7 @@ export function PortalProvider({
         return false;
       }
     },
-    [api, can, context],
+    [api, can, context, view, workspace.assets],
   );
 
   const downloadAsset = useCallback(
@@ -1328,6 +1623,10 @@ export function PortalProvider({
         return null;
       }
       const targetContext = context;
+      if (!assetIdAuthorized(assetId, context, view, workspace.assets)) {
+        setMutationError("This file does not belong to the active speaker.");
+        return null;
+      }
       const generation = loadGeneration.current;
       try {
         const grant = await api.getDownloadGrant(targetContext.eventId, assetId);
@@ -1343,7 +1642,7 @@ export function PortalProvider({
         return null;
       }
     },
-    [api, can, context],
+    [api, can, context, view, workspace.assets],
   );
 
   const loadTaskForm = useCallback(
@@ -1352,9 +1651,19 @@ export function PortalProvider({
         return null;
       }
       const targetContext = context;
+      if (!taskIdAuthorized(taskId, context, view)) {
+        return null;
+      }
       const generation = loadGeneration.current;
       try {
         const form = await api.getTaskForm({ eventId: targetContext.eventId, taskId });
+        if (form.taskId !== taskId) {
+          throw new PortalApiError(
+            "CONTEXT_MISMATCH",
+            "The task form belongs to a different task.",
+            409,
+          );
+        }
         if (!isPortalGenerationCurrent(generation, loadGeneration.current)) {
           return null;
         }
@@ -1370,7 +1679,7 @@ export function PortalProvider({
         return null;
       }
     },
-    [api, can, context],
+    [api, can, context, view],
   );
 
   const loadTaskResponse = useCallback(
@@ -1379,13 +1688,16 @@ export function PortalProvider({
         return null;
       }
       const targetContext = context;
+      if (!taskIdAuthorized(taskId, context, view)) {
+        return null;
+      }
       const generation = loadGeneration.current;
       try {
         const response = await api.getTaskResponse({ eventId: targetContext.eventId, taskId });
         if (
           response.eventId !== targetContext.eventId ||
           response.taskId !== taskId ||
-          response.participantId.length === 0
+          response.participantId !== targetContext.primaryParticipantId
         ) {
           throw new PortalApiError(
             "CONTEXT_MISMATCH",
@@ -1415,7 +1727,7 @@ export function PortalProvider({
         return null;
       }
     },
-    [api, can, context],
+    [api, can, context, view],
   );
 
   const saveTaskResponse = useCallback(
@@ -1434,6 +1746,10 @@ export function PortalProvider({
         return false;
       }
       const targetContext = context;
+      if (!taskIdAuthorized(input.taskId, context, view)) {
+        setMutationError("This task does not belong to the active speaker.");
+        return false;
+      }
       const generation = loadGeneration.current;
       setBusyTaskIds((current) => new Set(current).add(input.taskId));
       setMutationError(null);
@@ -1442,7 +1758,7 @@ export function PortalProvider({
         if (
           response.eventId !== targetContext.eventId ||
           response.taskId !== input.taskId ||
-          response.participantId.length === 0
+          response.participantId !== targetContext.primaryParticipantId
         ) {
           throw new PortalApiError(
             "CONTEXT_MISMATCH",
@@ -1475,7 +1791,7 @@ export function PortalProvider({
         });
       }
     },
-    [api, can, context],
+    [api, can, context, view],
   );
 
   const value = useMemo<PortalContextValue>(

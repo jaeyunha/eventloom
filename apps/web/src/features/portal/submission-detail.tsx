@@ -1,10 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { portalSubmissionEditTarget, submissionStatusPresentation } from "./model";
+import {
+  portalSubmissionEditTarget,
+  portalSubmissionIdsMatch,
+  submissionStatusPresentation,
+} from "./model";
 import styles from "./portal.module.css";
 import { usePortal } from "./portal-provider";
-import { portalSubmissionIdsMatch } from "./portal-submissions";
 import {
   EmptyState,
   formatPortalDate,

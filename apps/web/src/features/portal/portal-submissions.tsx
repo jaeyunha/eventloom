@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { filterSubmissions, submissionStatusPresentation } from "./model";
+import { filterSubmissions, portalSubmissionIdsMatch, submissionStatusPresentation } from "./model";
 import styles from "./portal.module.css";
 import { usePortal } from "./portal-provider";
 import {
@@ -12,17 +12,6 @@ import {
   PortalContentState,
   SubmissionStatusBadge,
 } from "./portal-ui";
-
-export function portalSubmissionIdsMatch(left: string, right: string): boolean {
-  const normalizedLeft = left.trim();
-  const normalizedRight = right.trim();
-  if (normalizedLeft.length === 0 || normalizedRight.length === 0) return false;
-  return (
-    normalizedLeft === normalizedRight ||
-    normalizedLeft === `speaker-submission:${normalizedRight}` ||
-    normalizedRight === `speaker-submission:${normalizedLeft}`
-  );
-}
 
 export function PortalSubmissions() {
   return (

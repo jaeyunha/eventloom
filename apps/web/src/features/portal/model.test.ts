@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   filterSubmissions,
   filterTasks,
+  findSubmissionForTask,
   isTaskBlocked,
   portalIdentityProfile,
   portalProfileHeadshot,
   portalSubmissionEditTarget,
+  portalSubmissionIdsMatch,
   portalTaskAsset,
   scopePortalContextToPrimaryParticipant,
   scopePortalViewToPrimaryParticipant,
@@ -59,6 +61,51 @@ const portal: PortalView = {
 };
 
 describe("speaker portal view model", () => {
+  it("matches raw and prefixed submission IDs without matching unrelated values", () => {
+    expect(portalSubmissionIdsMatch("submission-1", "speaker-submission:submission-1")).toBe(true);
+    expect(portalSubmissionIdsMatch(" speaker-submission:submission-1 ", "submission-1")).toBe(
+      true,
+    );
+    expect(portalSubmissionIdsMatch("submission-1", "submission-2")).toBe(false);
+    expect(portalSubmissionIdsMatch("", "speaker-submission:")).toBe(false);
+    expect(portalSubmissionIdsMatch("speaker-submission:", "speaker-submission:")).toBe(false);
+  });
+  it("resolves canonical submission links across raw and prefixed IDs", () => {
+    const linkedTask = task({
+      eventId: "event-1",
+      submissionId: "submission-1",
+      participantId: "participant-1",
+    });
+    expect(
+      findSubmissionForTask(linkedTask, [
+        {
+          id: "speaker-submission:submission-1",
+          eventId: "event-1",
+          title: "Canonical session",
+          status: "accepted",
+          participantIds: ["participant-1"],
+          updatedAt: "2026-08-08T12:00:00.000Z",
+        },
+      ]),
+    ).toMatchObject({ id: "speaker-submission:submission-1" });
+    expect(
+      portalTaskAsset(linkedTask, [
+        {
+          id: "asset-1",
+          eventId: "event-1",
+          participantId: "participant-1",
+          submissionId: "speaker-submission:submission-1",
+          taskId: linkedTask.id,
+          kind: "slides",
+          fileName: "slides.pdf",
+          contentType: "application/pdf",
+          sizeBytes: 10,
+          state: "ready",
+          createdAt: "2026-08-08T12:00:00.000Z",
+        },
+      ]),
+    ).toMatchObject({ id: "asset-1" });
+  });
   it("presents human-readable submission decisions", () => {
     expect(submissionStatusPresentation("accepted")).toMatchObject({
       label: "Accepted",
@@ -156,10 +203,13 @@ describe("speaker portal view model", () => {
       eventId: "event-1",
       name: "DevFlow Conf 2027",
       capabilities: ["profile-self", "task-response", "asset-read"],
-      submissionIds: ["session-priya", "session-marcus"],
+      submissionIds: ["speaker-submission:session-priya", "session-marcus"],
       participantIds: [marcusParticipantId, priyaParticipantId],
       primaryParticipantId: priyaParticipantId,
     } as const;
+    expect(scopePortalContextToPrimaryParticipant(context).submissionIds).toEqual(
+      context.submissionIds,
+    );
     const priyaProfile = {
       id: "profile-priya",
       eventId: "event-1",
@@ -220,7 +270,7 @@ describe("speaker portal view model", () => {
         id: "asset-slides-v2",
         eventId: "event-1",
         participantId: priyaParticipantId,
-        submissionId: "session-priya",
+        submissionId: "speaker-submission:session-priya",
         taskId: priyaTask.id,
         kind: "slides",
         fileName: "slides-v2.pdf",
@@ -345,6 +395,72 @@ describe("speaker portal view model", () => {
     expect(portalProfileHeadshot(priyaProfile, scoped.assets ?? [])?.id).toBe("asset-headshot");
     expect(portalTaskAsset(priyaTask, scoped.assets ?? [])?.id).toBe("asset-slides-v2");
   });
+  it("fails closed when authorization has no submission or event match", () => {
+    const context = {
+      id: "portal:event-1",
+      eventId: "event-1",
+      name: "DevFlow Conf 2027",
+      capabilities: [],
+      submissionIds: [],
+      participantIds: ["participant-priya"],
+      primaryParticipantId: "participant-priya",
+    } as const;
+    const view: PortalView = {
+      submissions: [
+        {
+          id: "submission-1",
+          eventId: "event-1",
+          title: "Unscoped session",
+          status: "accepted",
+          participantIds: ["participant-priya"],
+          updatedAt: "2026-08-09T00:00:00.000Z",
+        },
+        {
+          id: "submission-2",
+          eventId: "event-2",
+          title: "Different event",
+          status: "accepted",
+          participantIds: ["participant-priya"],
+          updatedAt: "2026-08-09T00:00:00.000Z",
+        },
+      ],
+      profiles: [],
+      tasks: [
+        task({ id: "task-unscoped", submissionId: "submission-1" }),
+        task({ id: "task-other-event", eventId: "event-2", submissionId: "submission-2" }),
+      ],
+      outstandingTaskCount: 2,
+      assets: [
+        {
+          id: "asset-unscoped",
+          eventId: "event-1",
+          participantId: "participant-priya",
+          submissionId: "submission-1",
+          kind: "slides",
+          fileName: "slides.pdf",
+          contentType: "application/pdf",
+          sizeBytes: 10,
+          state: "ready",
+          createdAt: "2026-08-09T00:00:00.000Z",
+        },
+      ],
+      roster: {
+        organizationId: "organization-1",
+        eventId: "event-1",
+        submissionId: "submission-1",
+        capabilities: { manage: false, invite: false },
+        members: [],
+      },
+    };
+
+    expect(scopePortalContextToPrimaryParticipant(context).submissionIds).toEqual([]);
+    expect(scopePortalViewToPrimaryParticipant(view, context)).toMatchObject({
+      submissions: [],
+      tasks: [],
+      assets: [],
+      outstandingTaskCount: 0,
+    });
+  });
 
   it("fails closed when the server-selected participant is not authorized", () => {
     const context = {
@@ -385,6 +501,7 @@ describe("speaker portal view model", () => {
     const submission = {
       ...baseSubmission,
       id: "submission-1",
+      eventId: context.eventId,
       status: "submitted",
       formId: "devflow-conf-2027-cfp",
     } as const;
