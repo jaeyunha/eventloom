@@ -1,9 +1,26 @@
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import type { AuthPrincipal } from "../auth/types";
-import { createEventRoutes, type EventRouteEnvironment } from "./routes";
-import { EventService, InMemoryEventRepository } from "./service";
-import type { Event, EventActor } from "./types";
+import {
+  createEventRoutes,
+  type EventRouteDependencies,
+  type EventRouteEnvironment,
+} from "./routes";
+import {
+  EventService,
+  InMemoryEventRepository,
+  InMemoryProgramPublicationRepository,
+  ProgramPublicationService,
+  resolvePublishedProgram,
+} from "./service";
+import type {
+  Event,
+  EventActor,
+  EventEmbedConfiguration,
+  ProgramAgendaProjection,
+  ProgramPublicationManifest,
+  ProgramSpeakerProjection,
+} from "./types";
 
 const firstNow = new Date("2026-08-09T12:00:00.000Z");
 
@@ -48,8 +65,9 @@ function embedConfiguration(
     textColor: "#20232B",
     customCss: "",
     displayFields: ["title", "date-time", "room"],
-    tracks: ["Track A"],
+    trackIds: ["track-a"],
     statuses: ["Approved"],
+    revision: 1,
     ...overrides,
   };
 }
@@ -71,6 +89,7 @@ function principal(
 function appFor(
   service: EventService,
   currentPrincipal: AuthPrincipal | null = principal(),
+  publication?: EventRouteDependencies["publication"],
 ): Hono<EventRouteEnvironment> {
   const app = new Hono<EventRouteEnvironment>();
   app.use("*", async (context, next) => {
@@ -78,7 +97,10 @@ function appFor(
     context.set("traceId", "trace-events");
     await next();
   });
-  app.route("/api/admin/organizations/:organizationId/events", createEventRoutes({ service }));
+  app.route(
+    "/api/admin/organizations/:organizationId/events",
+    createEventRoutes({ service, ...(publication === undefined ? {} : { publication }) }),
+  );
   return app;
 }
 
@@ -432,5 +454,392 @@ describe("organizer event routes", () => {
     expect(
       (await service.getEvent(actor(), { organizationId: "org-a", eventId: created.id })).name,
     ).toBe("Summit 2026");
+  });
+});
+const rebuildInput = {
+  trigger: "initial-publication" as const,
+  agendaProjectionId: "agenda-projection-1",
+  agendaRevisionNumber: 7,
+  agendaSourceHash: "agenda-hash-7",
+  speakerProjectionId: "speaker-projection-1",
+  speakerRevisionNumber: 11,
+  speakerSourceHash: "speaker-hash-11",
+  approvedContentRevision: 3,
+  approvedProfileRevision: 5,
+  releasedAssetRevision: 2,
+};
+
+function publicationService(options: { enqueueFailure?: Error } = {}) {
+  const repository = new InMemoryProgramPublicationRepository();
+  const enqueued: unknown[] = [];
+  const invalidated: unknown[] = [];
+  let id = 0;
+  const service = new ProgramPublicationService(
+    repository,
+    {
+      eventRepository: {
+        getEvent: async (organizationId, eventId) =>
+          organizationId === "org-a" && eventId === "event-publication"
+            ? {
+                id: eventId,
+                organizationId,
+                slug: "publication-event",
+                name: "Publication event",
+                status: "active",
+                timeZone: "UTC",
+                startsAt: "2026-09-18T09:00:00.000Z",
+                endsAt: "2026-09-18T17:00:00.000Z",
+                venue: null,
+                cfpSettings: { enabled: false, opensAt: null, closesAt: null },
+                defaultCalendarSettings: {
+                  durationMinutes: 30,
+                  timeZone: "UTC",
+                  location: null,
+                },
+                embedConfigurations: [],
+                version: 1,
+                createdAt: firstNow.toISOString(),
+                updatedAt: firstNow.toISOString(),
+                createdBy: "organizer-1",
+                updatedBy: "organizer-1",
+              }
+            : null,
+      },
+      enqueue: {
+        enqueue: async (input) => {
+          enqueued.push(input);
+          if (options.enqueueFailure !== undefined) throw options.enqueueFailure;
+          return { id: `job-${input.revision}` };
+        },
+      },
+      cacheInvalidation: {
+        invalidate: async (input) => {
+          invalidated.push(input);
+        },
+      },
+    },
+    {
+      clock: () => new Date(`2026-08-12T12:00:0${id}.000Z`),
+      generateId: () => `release-${++id}`,
+    },
+  );
+  return { service, repository, enqueued, invalidated };
+}
+
+function projectionFixtures() {
+  const agendaProjection: ProgramAgendaProjection = {
+    id: "agenda-projection-1",
+    revisionNumber: 7,
+    sourceHash: "agenda-hash-7",
+    entries: [
+      {
+        id: "entry-a",
+        sessionId: "session-a",
+        trackIds: ["track-a"],
+        status: "Approved",
+        title: "Stable track session",
+        summary: "Public summary",
+        roomName: "Auditorium",
+        trackNames: ["Track A"],
+        speakerNames: ["Alex Rivera"],
+        privateNote: "never public",
+      } as ProgramAgendaProjection["entries"][number],
+      {
+        id: "entry-b",
+        sessionId: "session-b",
+        trackIds: ["track-b"],
+        status: "Approved",
+        title: "Other track",
+      },
+      {
+        id: "entry-draft",
+        sessionId: "session-draft",
+        trackIds: ["track-a"],
+        status: "Draft",
+        title: "Private draft",
+      },
+    ],
+  };
+  const speakerProjection: ProgramSpeakerProjection = {
+    id: "speaker-projection-1",
+    revisionNumber: 11,
+    sourceHash: "speaker-hash-11",
+    speakers: [
+      {
+        id: "speaker-a",
+        participantId: "participant-a",
+        sessionIds: ["session-a"],
+        displayName: "Alex Rivera",
+        company: "Public Co",
+        bio: "Published biography",
+        avatarUrl: "/api/public/events/summit-2026/speakers/speaker-a/headshot",
+        email: "never-public@example.test",
+        objectKey: "private/org-a/headshot.webp",
+      } as ProgramSpeakerProjection["speakers"][number],
+      {
+        id: "speaker-b",
+        participantId: "participant-b",
+        sessionIds: ["session-b"],
+        displayName: "Other Speaker",
+      },
+    ],
+  };
+  return { agendaProjection, speakerProjection };
+}
+
+describe("program publication and saved embeds", () => {
+  it("versions saved configurations independently and filters renamed tracks by stable id", async () => {
+    const { service } = createService();
+    const created = await service.createEvent(actor(), createInput({ id: "stable-embed" }));
+    const saved = await service.updateEvent(actor(), {
+      eventId: created.id,
+      expectedVersion: created.version,
+      embedConfigurations: [embedConfiguration()],
+    });
+    expect(saved.embedConfigurations[0]?.revision).toBe(1);
+
+    const unchanged = await service.updateEvent(actor(), {
+      eventId: created.id,
+      expectedVersion: saved.version,
+      embedConfigurations: [embedConfiguration({ revision: 1 })],
+    });
+    expect(unchanged.embedConfigurations[0]?.revision).toBe(1);
+
+    const changed = await service.updateEvent(actor(), {
+      eventId: created.id,
+      expectedVersion: unchanged.version,
+      embedConfigurations: [
+        embedConfiguration({ revision: 1, displayFields: ["title", "date-time", "track"] }),
+      ],
+    });
+    expect(changed.embedConfigurations[0]?.revision).toBe(2);
+    await expect(
+      service.updateEvent(actor(), {
+        eventId: created.id,
+        expectedVersion: changed.version,
+        embedConfigurations: [embedConfiguration({ revision: 1 })],
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT", status: 409 });
+    await expect(
+      service.updateEvent(actor(), {
+        eventId: created.id,
+        expectedVersion: changed.version,
+        embedConfigurations: [],
+      }),
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR", status: 400 });
+
+    const { agendaProjection, speakerProjection } = projectionFixtures();
+    const manifest: ProgramPublicationManifest = {
+      id: "release-served",
+      organizationId: "org-a",
+      eventId: created.id,
+      revision: 9,
+      lifecycle: "served",
+      agendaProjectionId: agendaProjection.id,
+      agendaRevisionNumber: agendaProjection.revisionNumber,
+      agendaSourceHash: agendaProjection.sourceHash,
+      speakerProjectionId: speakerProjection.id,
+      speakerRevisionNumber: speakerProjection.revisionNumber,
+      speakerSourceHash: speakerProjection.sourceHash,
+      approvedContentRevision: 3,
+      approvedProfileRevision: 5,
+      releasedAssetRevision: 2,
+      actorId: "organizer-1",
+      publishedAt: "2026-08-12T12:00:00.000Z",
+      parentServedRevision: 8,
+      rollbackTargetRevision: null,
+      cacheRevision: 12,
+      sourceTrigger: "approved-content-change",
+      failureReason: null,
+    };
+    const configuration = changed.embedConfigurations[0] as EventEmbedConfiguration;
+    const first = resolvePublishedProgram({
+      manifest,
+      agendaProjection,
+      speakerProjection,
+      configuration,
+    });
+    const renamed = resolvePublishedProgram({
+      manifest,
+      agendaProjection: {
+        ...agendaProjection,
+        entries: agendaProjection.entries.map((entry) =>
+          entry.id === "entry-a" ? { ...entry, trackNames: ["Renamed Track"] } : entry,
+        ),
+      },
+      speakerProjection,
+      configuration,
+    });
+
+    expect(first.agenda.map((entry) => entry.sessionId)).toEqual(["session-a"]);
+    expect(renamed.agenda).toMatchObject([{ trackNames: ["Renamed Track"] }]);
+    expect(first.speakers.map((speaker) => speaker.id)).toEqual(["speaker-a"]);
+    expect(JSON.stringify(first)).not.toContain("privateNote");
+    expect(JSON.stringify(first)).not.toContain("never-public@example.test");
+    expect(JSON.stringify(first)).not.toContain("private/org-a");
+  });
+
+  it("fails closed on the first rebuild failure and keeps the prior served release on refresh failure", async () => {
+    const failed = publicationService({ enqueueFailure: new Error("queue unavailable") });
+    const firstFailure = await failed.service.requestRebuild(actor(), {
+      ...rebuildInput,
+      eventId: "event-publication",
+    });
+    expect(firstFailure).toMatchObject({
+      servedManifest: null,
+      pendingRevision: null,
+      releases: [{ lifecycle: "failed", failureReason: "queue unavailable" }],
+    });
+
+    const active = publicationService();
+    const pending = await active.service.requestRebuild(actor(), {
+      ...rebuildInput,
+      eventId: "event-publication",
+    });
+    const served = await active.service.completeRebuild({
+      organizationId: "org-a",
+      eventId: "event-publication",
+      releaseId: pending.pendingReleaseId ?? "",
+      revision: pending.pendingRevision ?? 0,
+      expectedPublicationVersion: pending.version,
+    });
+    const refresh = await active.service.requestRebuild(actor(), {
+      ...rebuildInput,
+      eventId: "event-publication",
+      trigger: "confirmed-profile-change",
+      parentServedRevision: served.servedRevision,
+      speakerRevisionNumber: 12,
+      speakerSourceHash: "speaker-hash-12",
+    });
+    const refreshFailed = await active.service.failRebuild({
+      organizationId: "org-a",
+      eventId: "event-publication",
+      releaseId: refresh.pendingReleaseId ?? "",
+      revision: refresh.pendingRevision ?? 0,
+      expectedPublicationVersion: refresh.version,
+      reason: "projection incomplete",
+    });
+
+    expect(refreshFailed.servedManifest).toEqual(served.servedManifest);
+    expect(refreshFailed.releases.at(-1)).toMatchObject({
+      lifecycle: "failed",
+      failureReason: "projection incomplete",
+    });
+    expect(active.enqueued).toHaveLength(2);
+  });
+
+  it("rejects stale completion and creates a new cache revision when rolling back", async () => {
+    const active = publicationService();
+    const firstPending = await active.service.requestRebuild(actor(), {
+      ...rebuildInput,
+      eventId: "event-publication",
+    });
+    const firstServed = await active.service.completeRebuild({
+      organizationId: "org-a",
+      eventId: "event-publication",
+      releaseId: firstPending.pendingReleaseId ?? "",
+      revision: firstPending.pendingRevision ?? 0,
+      expectedPublicationVersion: firstPending.version,
+    });
+    const refresh = await active.service.requestRebuild(actor(), {
+      ...rebuildInput,
+      eventId: "event-publication",
+      trigger: "released-schedule-change",
+      parentServedRevision: firstServed.servedRevision,
+      agendaRevisionNumber: 8,
+      agendaSourceHash: "agenda-hash-8",
+    });
+    await expect(
+      active.service.completeRebuild({
+        organizationId: "org-a",
+        eventId: "event-publication",
+        releaseId: firstPending.pendingReleaseId ?? "",
+        revision: firstPending.pendingRevision ?? 0,
+        expectedPublicationVersion: refresh.version,
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    const refreshed = await active.service.completeRebuild({
+      organizationId: "org-a",
+      eventId: "event-publication",
+      releaseId: refresh.pendingReleaseId ?? "",
+      revision: refresh.pendingRevision ?? 0,
+      expectedPublicationVersion: refresh.version,
+    });
+    const rolledBack = await active.service.rollback(actor(), {
+      eventId: "event-publication",
+      targetRevision: 1,
+      expectedServedRevision: refreshed.servedRevision,
+      expectedPublicationVersion: refreshed.version,
+    });
+
+    expect(rolledBack.servedManifest).toMatchObject({
+      revision: 3,
+      agendaRevisionNumber: 7,
+      rollbackTargetRevision: 1,
+      parentServedRevision: 2,
+      cacheRevision: 3,
+    });
+    expect(active.invalidated).toEqual([
+      expect.objectContaining({ revision: 1, cacheRevision: 1 }),
+      expect.objectContaining({ revision: 2, cacheRevision: 2 }),
+      expect.objectContaining({ revision: 3, cacheRevision: 3 }),
+    ]);
+  });
+
+  it("exposes organizer publication state and preview through strict private routes", async () => {
+    const { service: eventService } = createService();
+    const active = publicationService();
+    const app = appFor(eventService, principal(), active.service);
+    const base = "http://localhost/api/admin/organizations/org-a/events/event-publication";
+    const response = await app.request(`${base}/publication/rebuild`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(rebuildInput),
+    });
+    expect(response.status).toBe(202);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    const pending = await responseData<{ version: number; pendingReleaseId: string; pendingRevision: number }>(
+      response,
+    );
+    const served = await active.service.completeRebuild({
+      organizationId: "org-a",
+      eventId: "event-publication",
+      releaseId: pending.pendingReleaseId,
+      revision: pending.pendingRevision,
+      expectedPublicationVersion: pending.version,
+    });
+    const { agendaProjection, speakerProjection } = projectionFixtures();
+    const safeAgendaProjection = structuredClone(agendaProjection) as unknown as {
+      entries: Array<Record<string, unknown>>;
+    };
+    for (const entry of safeAgendaProjection.entries) delete entry.privateNote;
+    const safeSpeakerProjection = structuredClone(speakerProjection) as unknown as {
+      speakers: Array<Record<string, unknown>>;
+    };
+    for (const speaker of safeSpeakerProjection.speakers) {
+      delete speaker.email;
+      delete speaker.objectKey;
+    }
+    const preview = await app.request(`${base}/publication/preview`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        manifest: served.servedManifest,
+        agendaProjection: safeAgendaProjection,
+        speakerProjection: safeSpeakerProjection,
+        configuration: embedConfiguration({
+          displayFields: ["title", "date-time", "room", "speakers", "track", "summary"],
+        }),
+      }),
+    });
+
+    expect(preview.status).toBe(200);
+    await expect(responseData(preview)).resolves.toMatchObject({
+      configurationRevision: 1,
+      programRevision: 1,
+      cacheRevision: 1,
+      agenda: [{ sessionId: "session-a" }],
+      speakers: [{ id: "speaker-a" }],
+    });
   });
 });

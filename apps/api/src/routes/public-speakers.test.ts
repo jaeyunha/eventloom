@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ApiBindings } from "../app";
 import { createApp } from "../app";
-import { type PublishedSpeakerProjection, publishedSpeakerPhotoPath } from "./public-speakers";
+import type { ProgramPublicationManifest } from "../features/events/types";
+import {
+  type PublishedSpeakerProjection,
+  type PublishedSpeakerRouteDependencies,
+  invalidatePublishedSpeakerCache,
+  publishedSpeakerPhotoPath,
+} from "./public-speakers";
 
 const bindings: ApiBindings = {
   APP_ENV: "local",
@@ -36,18 +42,75 @@ const projection: PublishedSpeakerProjection = {
       trackNames: ["Main stage"],
     },
   ],
+  sourceHash: "speaker-hash-1",
 };
-const publishedSpeaker = projection.speakers[0];
-if (publishedSpeaker === undefined) {
-  throw new Error("The published speaker fixture must contain one speaker.");
+const publishedSpeaker = projection.speakers[0]!;
+
+const manifest: ProgramPublicationManifest = {
+  id: "program-release-1",
+  organizationId: "organization-1",
+  eventId: "event-1",
+  revision: 101,
+  cacheRevision: 1001,
+  lifecycle: "served",
+  agendaProjectionId: "agenda-publication-1",
+  agendaRevisionNumber: 1,
+  agendaSourceHash: "agenda-hash-1",
+  speakerProjectionId: projection.revision.id,
+  speakerRevisionNumber: projection.revision.number,
+  speakerSourceHash: "speaker-hash-1",
+  approvedContentRevision: 1,
+  approvedProfileRevision: 1,
+  releasedAssetRevision: 1,
+  sourceTrigger: "initial-publication",
+  actorId: "organizer-1",
+  publishedAt: "2026-08-09T12:00:00.000Z",
+  parentServedRevision: null,
+  rollbackTargetRevision: null,
+  failureReason: null,
+};
+
+function manifestWith(
+  overrides: Partial<ProgramPublicationManifest> = {},
+): ProgramPublicationManifest {
+  return { ...manifest, ...overrides };
+}
+
+function releaseProjection(currentManifest: ProgramPublicationManifest = manifest): PublishedSpeakerProjection {
+  const { sourceHash: _sourceHash, ...publicProjection } = projection;
+  return {
+    ...publicProjection,
+    revision: {
+      id: currentManifest.id,
+      number: currentManifest.revision,
+      publishedAt: currentManifest.publishedAt,
+    },
+  };
+}
+
+function dependencies(
+  overrides: Partial<PublishedSpeakerRouteDependencies> = {},
+): PublishedSpeakerRouteDependencies {
+  return {
+    getProgramPublicationManifest: async () => manifest,
+    getPublishedSpeakers: async () => projection,
+    ...overrides,
+  };
+}
+
+function speakerPath(speakerId = publishedSpeaker.id): string {
+  return publishedSpeakerPhotoPath(projection.event.slug, speakerId);
 }
 
 describe("published speaker projection route", () => {
-  it("serves an anonymous immutable projection at the embed contract", async () => {
-    const getPublishedSpeakers = vi.fn(async (eventSlug: string) =>
-      eventSlug === projection.event.slug ? projection : null,
+  it("binds public JSON to the served program release and exact child revision", async () => {
+    const getProgramPublicationManifest = vi.fn(async () => manifest);
+    const getPublishedSpeakers = vi.fn(
+      async (_eventSlug: string, _revisionId?: string, _revisionNumber?: number) => projection,
     );
-    const app = createApp({ publishedSpeakers: { getPublishedSpeakers } });
+    const app = createApp({
+      publishedSpeakers: dependencies({ getProgramPublicationManifest, getPublishedSpeakers }),
+    });
 
     const response = await app.request(
       "/api/public/events/open-sessionboard-conf/speakers",
@@ -59,16 +122,74 @@ describe("published speaker projection route", () => {
     expect(response.headers.get("cache-control")).toBe(
       "public, max-age=0, s-maxage=60, stale-while-revalidate=30, must-revalidate",
     );
-    await expect(response.json()).resolves.toEqual({ data: projection });
-    expect(getPublishedSpeakers).toHaveBeenCalledWith("open-sessionboard-conf");
+    expect(response.headers.get("x-sessionboard-program-revision")).toBe("101");
+    expect(response.headers.get("x-sessionboard-cache-revision")).toBe("1001");
+    await expect(response.json()).resolves.toEqual({ data: releaseProjection() });
+    expect(getProgramPublicationManifest).toHaveBeenCalledWith("open-sessionboard-conf");
+    expect(getPublishedSpeakers).toHaveBeenCalledWith(
+      "open-sessionboard-conf",
+      manifest.speakerProjectionId,
+      manifest.speakerRevisionNumber,
+    );
   });
+
+  it.each([
+    ["absent", undefined],
+    ["missing", null],
+    ["pending", manifestWith({ lifecycle: "pending" })],
+    ["failed", manifestWith({ lifecycle: "failed", failureReason: "build failed" })],
+  ])("fails closed for %s program manifests", async (_name, currentManifest) => {
+    const getPublishedSpeakers = vi.fn(async () => projection);
+    const app = createApp({
+      publishedSpeakers: {
+        getPublishedSpeakers,
+        ...(currentManifest === undefined
+          ? {}
+          : { getProgramPublicationManifest: async () => currentManifest }),
+      },
+    });
+
+    const response = await app.request(
+      "/api/public/events/open-sessionboard-conf/speakers",
+      undefined,
+      bindings,
+    );
+
+    expect(response.status).toBe(404);
+    expect(getPublishedSpeakers).not.toHaveBeenCalled();
+  });
+
+  it("rejects a projection whose child revision is not the manifest binding", async () => {
+    const getPublishedSpeakers = vi.fn(async () => projection);
+    const app = createApp({
+      publishedSpeakers: dependencies({
+        getPublishedSpeakers,
+        getProgramPublicationManifest: async () =>
+          manifestWith({
+            speakerProjectionId: "speaker-publication-other",
+            speakerRevisionNumber: 2,
+          }),
+      }),
+    });
+
+    const response = await app.request(
+      "/api/public/events/open-sessionboard-conf/speakers",
+      undefined,
+      bindings,
+    );
+
+    expect(response.status).toBe(404);
+    expect(getPublishedSpeakers).toHaveBeenCalledWith(
+      projection.event.slug,
+      "speaker-publication-other",
+      2,
+    );
+  });
+
   it("strips private fields and signed headshot URLs from the public projection", async () => {
     const unsafeProjection = {
       ...projection,
-      event: {
-        ...projection.event,
-        privateDraft: "never public",
-      },
+      event: { ...projection.event, privateDraft: "never public" },
       speakers: [
         {
           ...publishedSpeaker,
@@ -80,7 +201,7 @@ describe("published speaker projection route", () => {
       ],
     } as unknown as PublishedSpeakerProjection;
     const app = createApp({
-      publishedSpeakers: { getPublishedSpeakers: async () => unsafeProjection },
+      publishedSpeakers: dependencies({ getPublishedSpeakers: async () => unsafeProjection }),
     });
 
     const response = await app.request(
@@ -103,14 +224,14 @@ describe("published speaker projection route", () => {
     expect(JSON.stringify(body)).not.toContain("private-token");
   });
 
-  it("keeps only the exact stable same-origin headshot URL for the event and speaker", async () => {
-    const photoUrl = publishedSpeakerPhotoPath(projection.event.slug, publishedSpeaker.id);
+  it("keeps only the exact stable same-origin headshot URL", async () => {
+    const photoUrl = speakerPath();
     const approvedProjection: PublishedSpeakerProjection = {
       ...projection,
       speakers: [{ ...publishedSpeaker, photoUrl }],
     };
     const app = createApp({
-      publishedSpeakers: { getPublishedSpeakers: async () => approvedProjection },
+      publishedSpeakers: dependencies({ getPublishedSpeakers: async () => approvedProjection }),
     });
 
     const response = await app.request(
@@ -123,9 +244,10 @@ describe("published speaker projection route", () => {
       data: { speakers: [{ photoUrl }] },
     });
   });
+
   it("rejects stable-looking headshot URLs for another event or speaker", async () => {
     const app = createApp({
-      publishedSpeakers: {
+      publishedSpeakers: dependencies({
         getPublishedSpeakers: async () => ({
           ...projection,
           speakers: [
@@ -135,7 +257,7 @@ describe("published speaker projection route", () => {
             },
           ],
         }),
-      },
+      }),
     });
 
     const response = await app.request(
@@ -148,82 +270,215 @@ describe("published speaker projection route", () => {
       data: { speakers: [{ photoUrl: null }] },
     });
   });
-  it("serves only headshot bytes resolved from the immutable publication dependency", async () => {
+
+  it("proves headshot membership and approved photo before reading private bytes", async () => {
     const body = new TextEncoder().encode("image").buffer as ArrayBuffer;
-    const getPublishedSpeakerHeadshot = vi.fn(async (eventSlug: string, speakerId: string) =>
-      eventSlug === projection.event.slug && speakerId === publishedSpeaker.id
-        ? {
-            body,
-            contentType: "image/webp" as const,
-            sizeBytes: body.byteLength,
-          }
-        : null,
-    );
+    const approvedProjection: PublishedSpeakerProjection = {
+      ...projection,
+      speakers: [{ ...publishedSpeaker, photoUrl: speakerPath() }],
+    };
+    const getPublishedSpeakerHeadshot = vi.fn(async () => ({
+      body,
+      contentType: "image/webp" as const,
+      sizeBytes: body.byteLength,
+    }));
     const app = createApp({
-      publishedSpeakers: {
-        getPublishedSpeakers: async () => projection,
+      publishedSpeakers: dependencies({
+        getPublishedSpeakers: async () => approvedProjection,
         getPublishedSpeakerHeadshot,
-      },
+      }),
     });
 
-    const response = await app.request(
-      `${publishedSpeakerPhotoPath(projection.event.slug, publishedSpeaker.id)}`,
-      undefined,
-      bindings,
-    );
-    const missing = await app.request(
-      `${publishedSpeakerPhotoPath(projection.event.slug, "speaker-other")}`,
-      undefined,
-      bindings,
-    );
+    const response = await app.request(speakerPath(), undefined, bindings);
+    const unlisted = await app.request(speakerPath("speaker-other"), undefined, bindings);
+    const nullPhotoApp = createApp({
+      publishedSpeakers: dependencies({
+        getPublishedSpeakers: async () => projection,
+        getPublishedSpeakerHeadshot,
+      }),
+    });
+    const nullPhoto = await nullPhotoApp.request(speakerPath(), undefined, bindings);
 
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("image/webp");
     expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(response.headers.get("x-sessionboard-program-revision")).toBe("101");
     expect(new Uint8Array(await response.arrayBuffer())).toEqual(new TextEncoder().encode("image"));
-    expect(missing.status).toBe(404);
+    expect(unlisted.status).toBe(404);
+    expect(nullPhoto.status).toBe(404);
+    expect(getPublishedSpeakerHeadshot).toHaveBeenCalledTimes(1);
     expect(getPublishedSpeakerHeadshot).toHaveBeenCalledWith(
       projection.event.slug,
       publishedSpeaker.id,
+      manifest.revision,
+      manifest.speakerProjectionId,
+      manifest.speakerRevisionNumber,
     );
   });
-  it("caches successful projections without crossing event slugs", async () => {
-    const otherProjection: PublishedSpeakerProjection = {
-      ...projection,
-      event: { ...projection.event, slug: "other-event", name: "Other Event" },
-    };
-    const getPublishedSpeakers = vi.fn(async (eventSlug: string) => {
-      if (eventSlug === projection.event.slug) return projection;
-      if (eventSlug === otherProjection.event.slug) return otherProjection;
-      return null;
-    });
-    const app = createApp({ publishedSpeakers: { getPublishedSpeakers } });
 
-    const first = await app.request(
-      "/api/public/events/open-sessionboard-conf/speakers",
-      undefined,
-      bindings,
-    );
-    const cached = await app.request(
-      "/api/public/events/open-sessionboard-conf/speakers",
-      undefined,
-      bindings,
-    );
-    const other = await app.request("/api/public/events/other-event/speakers", undefined, bindings);
+  it("does not read headshot bytes for a missing or mismatched projection", async () => {
+    const getPublishedSpeakerHeadshot = vi.fn(async () => null);
+    const getPublishedSpeakers = vi.fn(async () => projection);
+    const app = createApp({
+      publishedSpeakers: dependencies({
+        getPublishedSpeakers,
+        getPublishedSpeakerHeadshot,
+        getProgramPublicationManifest: async () =>
+          manifestWith({ speakerRevisionNumber: 2 }),
+      }),
+    });
+
+    const response = await app.request(speakerPath(), undefined, bindings);
+
+    expect(response.status).toBe(404);
+    expect(getPublishedSpeakerHeadshot).not.toHaveBeenCalled();
+  });
+
+  it("automatically isolates a higher program revision at the same public URL", async () => {
+    let currentManifest = manifest;
+    const getProgramPublicationManifest = vi.fn(async () => currentManifest);
+    const getPublishedSpeakers = vi.fn(async () => projection);
+    const app = createApp({
+      publishedSpeakers: dependencies({ getProgramPublicationManifest, getPublishedSpeakers }),
+    });
+    const path = "/api/public/events/open-sessionboard-conf/speakers";
+
+    const first = await app.request(path, undefined, bindings);
+    currentManifest = manifestWith({
+      id: "program-release-2",
+      revision: 102,
+      cacheRevision: 1002,
+      publishedAt: "2026-08-10T12:00:00.000Z",
+    });
+    const newer = await app.request(path, undefined, bindings);
+    const cachedNewer = await app.request(path, undefined, bindings);
 
     expect(first.status).toBe(200);
-    expect(cached.status).toBe(200);
-    expect(other.status).toBe(200);
-    await expect(other.json()).resolves.toMatchObject({
-      data: { event: { slug: "other-event", name: "Other Event" } },
+    expect(newer.status).toBe(200);
+    expect(cachedNewer.status).toBe(200);
+    await expect(newer.json()).resolves.toMatchObject({
+      data: { revision: { id: "program-release-2", number: 102 } },
     });
+    expect(getProgramPublicationManifest).toHaveBeenCalledTimes(3);
     expect(getPublishedSpeakers).toHaveBeenCalledTimes(2);
   });
-  it("prefers an unexpired isolate-memory speaker entry before consulting Cache API", async () => {
+
+  it("supports rollback to a lower child revision under a higher release and cache revision", async () => {
+    const lowerChildProjection: PublishedSpeakerProjection = {
+      ...projection,
+      revision: {
+        id: "speaker-publication-rollback",
+        number: 3,
+        publishedAt: "2026-08-11T12:00:00.000Z",
+      },
+      speakers: [{ ...publishedSpeaker, biography: "Rolled back biography." }],
+      sourceHash: "speaker-hash-rollback",
+    };
+    let currentManifest = manifestWith({
+      id: "program-release-4",
+      revision: 104,
+      cacheRevision: 1004,
+      speakerProjectionId: projection.revision.id,
+      speakerRevisionNumber: projection.revision.number,
+    });
+    const getPublishedSpeakers = vi.fn(
+      async (_slug: string, revisionId?: string, revisionNumber?: number) =>
+        revisionId === lowerChildProjection.revision.id &&
+        revisionNumber === lowerChildProjection.revision.number
+          ? lowerChildProjection
+          : projection,
+    );
+    const app = createApp({
+      publishedSpeakers: dependencies({
+        getPublishedSpeakers,
+        getProgramPublicationManifest: async () => currentManifest,
+      }),
+    });
+    const path = "/api/public/events/open-sessionboard-conf/speakers";
+
+    expect((await app.request(path, undefined, bindings)).status).toBe(200);
+    currentManifest = manifestWith({
+      id: "program-release-5",
+      revision: 105,
+      cacheRevision: 1005,
+      publishedAt: "2026-08-12T12:00:00.000Z",
+      speakerProjectionId: lowerChildProjection.revision.id,
+      speakerRevisionNumber: lowerChildProjection.revision.number,
+      speakerSourceHash: lowerChildProjection.sourceHash ?? "",
+    });
+    const rollback = await app.request(path, undefined, bindings);
+
+    expect(rollback.status).toBe(200);
+    await expect(rollback.json()).resolves.toMatchObject({
+      data: {
+        revision: { id: "program-release-5", number: 105 },
+        speakers: [{ biography: "Rolled back biography." }],
+      },
+    });
+    expect(getPublishedSpeakers).toHaveBeenLastCalledWith(
+      projection.event.slug,
+      lowerChildProjection.revision.id,
+      lowerChildProjection.revision.number,
+    );
+  });
+
+  it("prevents an older deferred cache write from becoming current", async () => {
+    let resolveOldPut!: () => void;
+    const oldPut = new Promise<void>((resolve) => {
+      resolveOldPut = resolve;
+    });
+    let currentManifest = manifest;
+    const match = vi.fn(async () => undefined as Response | undefined);
+    const put = vi.fn(async (_request: Request, response: Response) => {
+      if (put.mock.calls.length === 1) await oldPut;
+      cachedResponse = response.clone();
+    });
+    const deleteCache = vi.fn(async () => true);
+    let cachedResponse: Response | undefined;
+    vi.stubGlobal("caches", { default: { match, put, delete: deleteCache } });
+
+    const getPublishedSpeakers = vi.fn(async () => projection);
+    const routeDependencies = dependencies({
+      getPublishedSpeakers,
+      getProgramPublicationManifest: async () => currentManifest,
+    });
+
+    try {
+      const app = createApp({ publishedSpeakers: routeDependencies });
+      const path = "/api/public/events/open-sessionboard-conf/speakers";
+      expect((await app.request(path, undefined, bindings)).status).toBe(200);
+      await vi.waitFor(() => expect(put).toHaveBeenCalledTimes(1));
+
+      currentManifest = manifestWith({
+        id: "program-release-2",
+        revision: 102,
+        cacheRevision: 1002,
+        publishedAt: "2026-08-10T12:00:00.000Z",
+      });
+      await invalidatePublishedSpeakerCache(routeDependencies, projection.event.slug, 102, 1002);
+      const newer = await app.request(path, undefined, bindings);
+      expect(newer.status).toBe(200);
+      await expect(newer.json()).resolves.toMatchObject({
+        data: { revision: { id: "program-release-2", number: 102 } },
+      });
+      expect(put).toHaveBeenCalledTimes(1);
+
+      resolveOldPut();
+      await vi.waitFor(() => expect(put).toHaveBeenCalledTimes(2));
+      if (cachedResponse === undefined) throw new Error("Expected the current cached response.");
+      await expect(cachedResponse.clone().json()).resolves.toMatchObject({
+        data: { revision: { id: "program-release-2", number: 102 } },
+      });
+    } finally {
+      resolveOldPut();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("prefers an unexpired isolate-memory entry before consulting Cache API", async () => {
     const match = vi.fn(async () => undefined as Response | undefined);
     const put = vi.fn(async () => undefined);
-    const deleteCache = vi.fn(async () => true);
-    vi.stubGlobal("caches", { default: { match, put, delete: deleteCache } });
+    vi.stubGlobal("caches", { default: { match, put } });
     let releaseMatch: ((value: Response | undefined) => void) | undefined;
     const blockedMatch = new Promise<Response | undefined>((resolve) => {
       releaseMatch = resolve;
@@ -231,18 +486,14 @@ describe("published speaker projection route", () => {
 
     try {
       const getPublishedSpeakers = vi.fn(async () => projection);
-      const app = createApp({ publishedSpeakers: { getPublishedSpeakers } });
+      const app = createApp({ publishedSpeakers: dependencies({ getPublishedSpeakers }) });
       const path = "/api/public/events/open-sessionboard-conf/speakers";
-
-      const first = await app.request(path, undefined, bindings);
-      expect(first.status).toBe(200);
+      expect((await app.request(path, undefined, bindings)).status).toBe(200);
 
       match.mockImplementation(() => blockedMatch);
       const second = await Promise.race([
         app.request(path, undefined, bindings),
-        new Promise<"timed-out">((resolve) => {
-          setTimeout(() => resolve("timed-out"), 100);
-        }),
+        new Promise<"timed-out">((resolve) => setTimeout(() => resolve("timed-out"), 100)),
       ]);
 
       expect(second).not.toBe("timed-out");
@@ -255,25 +506,20 @@ describe("published speaker projection route", () => {
     }
   });
 
-  it("does not wait for a pending speaker Cache API put before responding", async () => {
+  it("does not wait for a pending Cache API put before responding", async () => {
     let resolvePut!: () => void;
     const putDeferred = new Promise<void>((resolve) => {
       resolvePut = resolve;
     });
     const match = vi.fn(async () => undefined as Response | undefined);
     const put = vi.fn(() => putDeferred);
-    const deleteCache = vi.fn(async () => true);
-    vi.stubGlobal("caches", { default: { match, put, delete: deleteCache } });
+    vi.stubGlobal("caches", { default: { match, put } });
 
     try {
-      const app = createApp({
-        publishedSpeakers: { getPublishedSpeakers: async () => projection },
-      });
+      const app = createApp({ publishedSpeakers: dependencies() });
       const response = await Promise.race([
         app.request("/api/public/events/open-sessionboard-conf/speakers", undefined, bindings),
-        new Promise<"timed-out">((resolve) => {
-          setTimeout(() => resolve("timed-out"), 100);
-        }),
+        new Promise<"timed-out">((resolve) => setTimeout(() => resolve("timed-out"), 100)),
       ]);
 
       expect(response).not.toBe("timed-out");
@@ -285,70 +531,12 @@ describe("published speaker projection route", () => {
       vi.unstubAllGlobals();
     }
   });
-  it("keeps a newer speaker revision after an older deferred put settles", async () => {
-    let now = Date.now();
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-    let cachedResponse: Response | undefined;
-    let putCount = 0;
-    let resolveOldPut!: () => void;
-    const oldPut = new Promise<void>((resolve) => {
-      resolveOldPut = resolve;
-    });
-    const match = vi.fn(async () => undefined as Response | undefined);
-    const put = vi.fn(async (_request: Request, response: Response) => {
-      putCount += 1;
-      if (putCount === 1) await oldPut;
-      cachedResponse = response.clone();
-    });
-    const deleteCache = vi.fn(async () => true);
-    vi.stubGlobal("caches", { default: { match, put, delete: deleteCache } });
 
-    const newerProjection: PublishedSpeakerProjection = {
-      ...projection,
-      revision: {
-        id: "speaker-publication-2",
-        number: 2,
-        publishedAt: "2026-08-10T12:00:00.000Z",
-      },
-    };
-    let currentProjection = projection;
-    const dependencies = {
-      getPublishedSpeakers: vi.fn(async () => currentProjection),
-    };
-
-    try {
-      const app = createApp({ publishedSpeakers: dependencies });
-      const path = "/api/public/events/open-sessionboard-conf/speakers";
-
-      expect((await app.request(path, undefined, bindings)).status).toBe(200);
-      await vi.waitFor(() => expect(put).toHaveBeenCalledTimes(1));
-
-      now += 60_001;
-      currentProjection = newerProjection;
-      const newerResponse = await app.request(path, undefined, bindings);
-      expect(newerResponse.status).toBe(200);
-      await expect(newerResponse.json()).resolves.toMatchObject({
-        data: { revision: { number: 2 } },
-      });
-      expect(put).toHaveBeenCalledTimes(1);
-
-      resolveOldPut();
-      await vi.waitFor(() => expect(put).toHaveBeenCalledTimes(2));
-      if (cachedResponse === undefined) throw new Error("Expected the newer cached response.");
-      await expect(cachedResponse.clone().json()).resolves.toMatchObject({
-        data: { revision: { number: 2 } },
-      });
-    } finally {
-      resolveOldPut();
-      vi.unstubAllGlobals();
-      vi.restoreAllMocks();
-    }
-  });
-  it("does not cache speaker projection errors", async () => {
+  it("does not cache projection errors", async () => {
     const getPublishedSpeakers = vi.fn(async () => {
       throw new Error("speaker read failed");
     });
-    const app = createApp({ publishedSpeakers: { getPublishedSpeakers } });
+    const app = createApp({ publishedSpeakers: dependencies({ getPublishedSpeakers }) });
 
     const first = await app.request(
       "/api/public/events/open-sessionboard-conf/speakers",
@@ -364,21 +552,5 @@ describe("published speaker projection route", () => {
     expect(first.status).toBe(500);
     expect(second.status).toBe(500);
     expect(getPublishedSpeakers).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not expose a projection when the published source has no current revision", async () => {
-    const getPublishedSpeakers = vi.fn(async () => null);
-    const app = createApp({ publishedSpeakers: { getPublishedSpeakers } });
-
-    const response = await app.request(
-      "/api/public/events/open-sessionboard-conf/speakers",
-      undefined,
-      bindings,
-    );
-
-    expect(response.status).toBe(404);
-    await expect(response.json()).resolves.toMatchObject({
-      error: { code: "NOT_FOUND" },
-    });
   });
 });

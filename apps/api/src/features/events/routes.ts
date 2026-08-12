@@ -1,7 +1,12 @@
 import { type Context, Hono } from "hono";
 import { ZodError, z } from "zod";
 import { AuthAccessError, type AuthPrincipal } from "../auth/types";
-import { type EventService, EventServiceError, type EventServiceErrorCode } from "./service";
+import {
+  type EventService,
+  EventServiceError,
+  type EventServiceErrorCode,
+  type ProgramPublicationService,
+} from "./service";
 import {
   type CreateEventInput,
   type EventEmbedConfigurationInput,
@@ -13,8 +18,10 @@ import {
   type EventActor,
   type EventCfpSettingsInput,
   type EventDefaultCalendarSettingsInput,
+  type ProgramPublicationPreviewRequest,
   eventStatuses,
   type UpdateEventInput,
+  programPublicationSourceTriggers,
 } from "./types";
 
 export interface EventRouteEnvironment {
@@ -31,6 +38,10 @@ export type EventRouteService = Pick<
 
 export interface EventRouteDependencies {
   readonly service: EventRouteService;
+  readonly publication?: Pick<
+    ProgramPublicationService,
+    "getState" | "requestRebuild" | "rollback" | "resolvePreview"
+  >;
 }
 
 type EventContext = Context<EventRouteEnvironment>;
@@ -74,8 +85,9 @@ const embedConfigurationSchema = z
     textColor: z.string().regex(/^#[0-9a-f]{6}$/i),
     customCss: z.string().max(20_000),
     displayFields: z.array(z.enum(eventEmbedDisplayFields)).max(eventEmbedDisplayFields.length),
-    tracks: z.array(z.string().trim().min(1).max(128)).max(100),
+    trackIds: z.array(z.string().trim().min(1).max(128)).max(100),
     statuses: z.array(z.string().trim().min(1).max(128)).max(100),
+    revision: z.number().int().positive().optional(),
   })
   .strict();
 const embedConfigurationsSchema = z.array(embedConfigurationSchema).max(100).optional();
@@ -110,6 +122,106 @@ const updateEventSchema = z
   })
   .strict();
 const archiveEventSchema = z.object({ expectedVersion: expectedVersionSchema }).strict();
+const programRebuildSchema = z
+  .object({
+    trigger: z.enum(programPublicationSourceTriggers),
+    agendaProjectionId: identifierSchema,
+    agendaRevisionNumber: expectedVersionSchema,
+    agendaSourceHash: z.string().trim().min(1).max(256),
+    speakerProjectionId: identifierSchema,
+    speakerRevisionNumber: expectedVersionSchema,
+    speakerSourceHash: z.string().trim().min(1).max(256),
+    approvedContentRevision: expectedVersionSchema,
+    approvedProfileRevision: expectedVersionSchema,
+    releasedAssetRevision: expectedVersionSchema,
+    parentServedRevision: expectedVersionSchema.nullable().optional(),
+  })
+  .strict();
+const programRollbackSchema = z
+  .object({
+    targetRevision: expectedVersionSchema,
+    expectedServedRevision: expectedVersionSchema.nullable(),
+    expectedPublicationVersion: expectedVersionSchema.optional(),
+  })
+  .strict();
+const programManifestSchema = z
+  .object({
+    id: identifierSchema,
+    organizationId: identifierSchema,
+    eventId: identifierSchema,
+    revision: expectedVersionSchema,
+    lifecycle: z.enum(["pending", "served", "failed"]),
+    agendaProjectionId: identifierSchema,
+    agendaRevisionNumber: expectedVersionSchema,
+    agendaSourceHash: z.string().trim().min(1).max(256),
+    speakerProjectionId: identifierSchema,
+    speakerRevisionNumber: expectedVersionSchema,
+    speakerSourceHash: z.string().trim().min(1).max(256),
+    approvedContentRevision: expectedVersionSchema,
+    approvedProfileRevision: expectedVersionSchema,
+    releasedAssetRevision: expectedVersionSchema,
+    actorId: identifierSchema,
+    publishedAt: instantSchema,
+    parentServedRevision: expectedVersionSchema.nullable(),
+    rollbackTargetRevision: expectedVersionSchema.nullable(),
+    cacheRevision: expectedVersionSchema,
+    sourceTrigger: z.enum(programPublicationSourceTriggers),
+    failureReason: z.string().trim().min(1).max(2_000).nullable(),
+  })
+  .strict();
+const programAgendaEntrySchema = z
+  .object({
+    id: identifierSchema,
+    sessionId: identifierSchema,
+    trackIds: z.array(identifierSchema).max(100),
+    status: z.string().trim().min(1).max(128),
+    title: z.string().trim().min(1).max(1_000),
+    summary: z.string().max(20_000).optional(),
+    format: z.string().trim().min(1).max(500).optional(),
+    startsAt: instantSchema.optional(),
+    endsAt: instantSchema.optional(),
+    startsAtLocal: z.string().trim().min(1).max(64).optional(),
+    endsAtLocal: z.string().trim().min(1).max(64).optional(),
+    timeZone: identifierSchema.optional(),
+    roomName: z.string().max(500).optional(),
+    trackNames: z.array(z.string().max(500)).max(100).optional(),
+    speakerNames: z.array(z.string().max(500)).max(100).optional(),
+  })
+  .strict();
+const programSpeakerSchema = z
+  .object({
+    id: identifierSchema,
+    participantId: identifierSchema,
+    sessionIds: z.array(identifierSchema).max(100),
+    displayName: z.string().trim().min(1).max(500),
+    title: z.string().max(500).optional(),
+    company: z.string().max(500).optional(),
+    bio: z.string().max(20_000).optional(),
+    avatarUrl: z.string().max(2_000).nullable().optional(),
+  })
+  .strict();
+const programPreviewSchema = z
+  .object({
+    manifest: programManifestSchema,
+    agendaProjection: z
+      .object({
+        id: identifierSchema,
+        revisionNumber: expectedVersionSchema,
+        sourceHash: z.string().trim().min(1).max(256),
+        entries: z.array(programAgendaEntrySchema).max(2_000),
+      })
+      .strict(),
+    speakerProjection: z
+      .object({
+        id: identifierSchema,
+        revisionNumber: expectedVersionSchema,
+        sourceHash: z.string().trim().min(1).max(256),
+        speakers: z.array(programSpeakerSchema).max(2_000),
+      })
+      .strict(),
+    configuration: embedConfigurationSchema.extend({ revision: expectedVersionSchema }),
+  })
+  .strict();
 type CreateEventBody = z.infer<typeof createEventSchema>;
 type UpdateEventBody = z.infer<typeof updateEventSchema>;
 
@@ -136,11 +248,12 @@ function embedConfigurationsInput(
   value: CreateEventBody["embedConfigurations"],
 ): readonly EventEmbedConfigurationInput[] | undefined {
   if (value === undefined) return undefined;
-  return value.map((configuration) => ({
+  return value.map(({ revision, ...configuration }) => ({
     ...configuration,
     displayFields: [...configuration.displayFields],
-    tracks: [...configuration.tracks],
+    trackIds: [...configuration.trackIds],
     statuses: [...configuration.statuses],
+    ...(revision === undefined ? {} : { revision }),
   }));
 }
 
@@ -315,6 +428,68 @@ export function createEventRoutes(
     return context.json({ data }, 201);
   });
 
+  routes.get("/:eventId/publication", async (context) => {
+    const organizationId = routeParam(context, "organizationId");
+    const actor = organizer(context, organizationId);
+    if (dependencies.publication === undefined) {
+      throw new EventServiceError("NOT_FOUND", 404, "Program publication is not configured.");
+    }
+    const data = await dependencies.publication.getState(actor, {
+      organizationId,
+      eventId: routeParam(context, "eventId"),
+    });
+    return context.json({ data });
+  });
+
+  routes.post("/:eventId/publication/rebuild", async (context) => {
+    const organizationId = routeParam(context, "organizationId");
+    const actor = organizer(context, organizationId);
+    if (dependencies.publication === undefined) {
+      throw new EventServiceError("NOT_FOUND", 404, "Program publication is not configured.");
+    }
+    const input = await body(context, programRebuildSchema);
+    const { parentServedRevision, ...rebuild } = input;
+    const data = await dependencies.publication.requestRebuild(actor, {
+      ...rebuild,
+      ...(parentServedRevision === undefined ? {} : { parentServedRevision }),
+      organizationId,
+      eventId: routeParam(context, "eventId"),
+    });
+    return context.json({ data }, 202);
+  });
+
+  routes.post("/:eventId/publication/rollback", async (context) => {
+    const organizationId = routeParam(context, "organizationId");
+    const actor = organizer(context, organizationId);
+    if (dependencies.publication === undefined) {
+      throw new EventServiceError("NOT_FOUND", 404, "Program publication is not configured.");
+    }
+    const input = await body(context, programRollbackSchema);
+    const { expectedPublicationVersion, ...rollback } = input;
+    const data = await dependencies.publication.rollback(actor, {
+      ...rollback,
+      ...(expectedPublicationVersion === undefined ? {} : { expectedPublicationVersion }),
+      organizationId,
+      eventId: routeParam(context, "eventId"),
+    });
+    return context.json({ data });
+  });
+
+  routes.post("/:eventId/publication/preview", async (context) => {
+    const organizationId = routeParam(context, "organizationId");
+    const actor = organizer(context, organizationId);
+    if (dependencies.publication === undefined) {
+      throw new EventServiceError("NOT_FOUND", 404, "Program publication is not configured.");
+    }
+    const input = await body(context, programPreviewSchema);
+    const previewRequest = {
+      ...input,
+      organizationId,
+      eventId: routeParam(context, "eventId"),
+    } as unknown as ProgramPublicationPreviewRequest;
+    const data = dependencies.publication.resolvePreview(actor, previewRequest);
+    return context.json({ data });
+  });
   routes.get("/:eventId", async (context) => {
     const organizationId = routeParam(context, "organizationId");
     const actor = organizer(context, organizationId);
