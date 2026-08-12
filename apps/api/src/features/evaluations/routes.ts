@@ -828,12 +828,25 @@ export function createEvaluationRoutes(
 
   routes.put("/plans/:planId/submissions/:submissionId/decision", async (context) => {
     const body = decisionSchema.parse(await context.req.json());
+    const scheduleAcceptance = (operation: Promise<void>): boolean => {
+      try {
+        context.executionCtx.waitUntil(operation);
+        return true;
+      } catch {
+        // Hono tests and local invocations may not attach an execution context.
+        return false;
+      }
+    };
     return context.json(
-      await service.recordDecision(actor(context), {
-        planId: context.req.param("planId"),
-        submissionId: context.req.param("submissionId"),
-        ...body,
-      }),
+      await service.recordDecision(
+        actor(context),
+        {
+          planId: context.req.param("planId"),
+          submissionId: context.req.param("submissionId"),
+          ...body,
+        },
+        scheduleAcceptance,
+      ),
     );
   });
 

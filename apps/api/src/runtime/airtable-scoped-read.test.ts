@@ -242,6 +242,65 @@ describe("scoped adapter read ordering", () => {
       "participant-accepted": expect.arrayContaining(["asset-read", "submission-edit"]),
     });
   });
+  it("removes proposal editing when the event CFP is closed", async () => {
+    const starts: string[] = [];
+    const transport = new DelayedAirtableTransport(starts);
+    transport.seed({
+      baseId: "base-test",
+      table: "Events",
+      fields: {
+        "Application ID": "event-closed",
+        "Settings JSON": JSON.stringify({
+          id: "event-closed",
+          organizationId: "tenant-1",
+          name: "Closed event",
+          cfpSettings: {
+            enabled: true,
+            opensAt: "2025-01-01T00:00:00.000Z",
+            closesAt: "2025-02-01T00:00:00.000Z",
+          },
+        }),
+      },
+    });
+    transport.seed({
+      baseId: "base-test",
+      table: "Submissions",
+      fields: {
+        "Application ID": "submission-closed",
+        "Answers JSON": JSON.stringify({
+          id: "submission-closed",
+          tenantId: "tenant-1",
+          organizationId: "tenant-1",
+          eventId: "event-closed",
+          formId: "form-1",
+          ownerAccountId: "account-1",
+          title: "Closed proposal",
+          status: "submitted",
+          participants: [
+            {
+              id: "participant-closed",
+              email: "speaker@example.test",
+              role: "primary",
+            },
+          ],
+          updatedAt: "2025-01-15T00:00:00.000Z",
+        }),
+      },
+    });
+    const repository = new AirtableSpeakerRepository({
+      baseId: "base-test",
+      transport,
+      database: delayedDatabase(starts),
+    });
+
+    const projections = await repository.listPortalContextScopes("account-1");
+
+    expect(projections).toHaveLength(1);
+    expect(projections[0]?.context.capabilities).not.toContain("submission-edit");
+    expect(projections[0]?.scope.capabilitiesByParticipant).toEqual({
+      "participant-closed": [],
+    });
+  });
   it("fails closed when an unscoped event resolves granted profiles from multiple tenants", async () => {
     const starts: string[] = [];
     const transport = new DelayedAirtableTransport(starts);

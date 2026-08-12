@@ -6,6 +6,7 @@ import {
   getAcceptedHandoffMetadata,
   getSeededSubmission,
   mapCanonicalSubmission,
+  loadOrganizerEventName,
   SubmissionDetailWorkspace,
   SubmissionListWorkspace,
 } from "./submission-workspace";
@@ -215,6 +216,23 @@ describe("organizer submission workspace", () => {
     });
     expect(record.participants[0]?.organization).toBe("Latticework Systems");
   });
+  it("loads the authoritative event name instead of presenting a raw event UUID", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(Response.json({ data: { name: "Forward Summit 2028" } }));
+
+    try {
+      await expect(
+        loadOrganizerEventName("", "organization-1", "82b23d61-c2f8-4f6b-a89a-9bba98c3555c"),
+      ).resolves.toBe("Forward Summit 2028");
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/admin/organizations/organization-1/events/82b23d61-c2f8-4f6b-a89a-9bba98c3555c",
+        expect.objectContaining({ credentials: "include", cache: "no-store" }),
+      );
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
   it("uses the same-origin gateway and keeps canonical submissions visible when aggregates fail", async () => {
     const requests: string[] = [];
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
@@ -236,8 +254,20 @@ describe("organizer submission workspace", () => {
         });
       }
       if (url.endsWith("/assignments")) {
-        return Response.json({ data: { assignments: [] } });
+        return Response.json({
+          data: {
+            assignments: [
+              {
+                id: "assignment-1",
+                reviewerId: "reviewer-1",
+                submissionId: "submission-devflow-1",
+                status: "submitted",
+              },
+            ],
+          },
+        });
       }
+
       if (url.endsWith("/decision")) {
         return Response.json({ data: null });
       }
@@ -247,6 +277,24 @@ describe("organizer submission workspace", () => {
           { status: 500 },
         );
       }
+      if (url.endsWith("/reviews")) {
+        return Response.json({
+          data: {
+            reviews: [
+              {
+                assignmentId: "assignment-1",
+                submissionId: "submission-devflow-1",
+                comment: "Ready for the committee.",
+                scores: {
+                  overall_rating: { value: 4 },
+                  recommendation: { value: "accept" },
+                },
+              },
+            ],
+          },
+        });
+      }
+
       throw new Error(`Unexpected request: ${url}`);
     });
 
@@ -256,9 +304,21 @@ describe("organizer submission workspace", () => {
         id: "submission-devflow-1",
         title: "Taming 40-Minute CI: Incremental Builds at Monorepo Scale",
         evaluationPlanId: "plan-1",
-        reviewSummary: { completed: 0, total: 0, averageScore: null, maxScore: 0 },
+        reviewSummary: { completed: 0, total: 1, averageScore: null, maxScore: 0 },
+        reviewAssignments: [
+          {
+            reviewer: "reviewer-1",
+            status: "complete",
+            criterionScores: [
+              { criterion: "Overall Rating", value: 4 },
+              { criterion: "Recommendation", value: "accept" },
+            ],
+            comment: "Ready for the committee.",
+          },
+        ],
       });
-      expect(requests).toHaveLength(4);
+      expect(requests).toHaveLength(5);
+
       expect(requests.every((request) => request.startsWith("/api/admin/evaluations/"))).toBe(true);
       expect(
         requests.some((request) =>
@@ -325,6 +385,8 @@ describe("organizer submission workspace", () => {
     expect(markup).toContain("Assignment &amp; conflicts");
     expect(markup).toContain("Organizer notes");
     expect(markup).toContain("Human-authored reason");
+    expect(markup).toContain("Overall rating: 5");
+    expect(markup).toContain("Reviewer comment: Strong evidence and a clear audience fit.");
   });
   it("exposes versioned decisions, queued audience notifications, and post-close lock guidance", () => {
     const markup = renderToStaticMarkup(

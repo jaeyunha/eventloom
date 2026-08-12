@@ -1160,6 +1160,14 @@ function ReviewNavigation({
       <Link className={styles.navLink} href={`${reviewBase}/evaluate`}>
         Assigned review
       </Link>
+      {resolvedOrganizationId === null ? null : (
+        <Link
+          className={styles.navLink}
+          href={`/admin/organizations/${encodeURIComponent(resolvedOrganizationId)}/members`}
+        >
+          Invite reviewers
+        </Link>
+      )}
     </nav>
   );
 }
@@ -3507,7 +3515,7 @@ function DecisionEditor({
         ) : null}
         {saved ? (
           <p className={styles.submittedMessage} role="status">
-            Decision saved on the server.
+            Decision saved on the server. Submitter notification queued.
           </p>
         ) : null}
         <button

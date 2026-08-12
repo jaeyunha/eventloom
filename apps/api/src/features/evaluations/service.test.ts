@@ -1177,6 +1177,49 @@ describe("decision outcome projection", () => {
     await expect(pending).resolves.toMatchObject({ status: "accepted" });
     expect(concurrent).toBe(true);
   });
+  it("returns after durable projection while scheduled acceptance onboarding continues", async () => {
+    let markAcceptanceStarted: (() => void) | undefined;
+    const acceptanceStarted = new Promise<void>((resolve) => {
+      markAcceptanceStarted = resolve;
+    });
+    let releaseAcceptance: (() => void) | undefined;
+    const acceptanceReleased = new Promise<void>((resolve) => {
+      releaseAcceptance = resolve;
+    });
+    const scheduled: Promise<void>[] = [];
+    const { service } = await fixture({
+      decisionProjection: {
+        projectDecision: async () => undefined,
+      },
+      acceptanceHandoff: {
+        accept: async () => {
+          markAcceptanceStarted?.();
+          await acceptanceReleased;
+        },
+      },
+    });
+
+    const decision = await service.recordDecision(
+      organizer,
+      {
+        planId: "plan-1",
+        submissionId: submission.id,
+        status: "accepted",
+        reason: "Committee consensus",
+        idempotencyKey: "decision-scheduled-acceptance",
+      },
+      (operation) => {
+        scheduled.push(operation);
+        return true;
+      },
+    );
+
+    expect(decision.status).toBe("accepted");
+    await acceptanceStarted;
+    expect(scheduled).toHaveLength(1);
+    releaseAcceptance?.();
+    await scheduled[0];
+  });
 
   it("surfaces projection failures and retries the persisted decision without duplicate success", async () => {
     let shouldFail = true;

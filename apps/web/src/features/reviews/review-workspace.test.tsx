@@ -635,6 +635,9 @@ describe("review workspace", () => {
     expect(markup).toContain(
       'href="/admin/organizations/org-selected/events/summit-2026/reviews/evaluate"',
     );
+    expect(markup).toContain('href="/admin/organizations/org-selected/members"');
+    expect(markup).toContain("Invite reviewers");
+
     expect(markup).not.toContain('href="/admin/events/summit-2026/reviews"');
   });
 
@@ -671,11 +674,22 @@ describe("review workspace", () => {
   });
 
   it("renders bounded rubric controls and human-authority decision safeguards", () => {
+    const decidedPlan: ReviewPlanSeed = {
+      ...testPlan("summit-2026"),
+      decisionBySubmission: {
+        "submission-042": {
+          status: "accepted",
+          reason: "The committee approved this proposal.",
+          version: 1,
+        },
+      },
+    };
+
     const organizerMarkup = renderToStaticMarkup(
       createElement(ReviewWorkspace, {
         eventId: "summit-2026",
         mode: "organizer",
-        initialState: organizerState,
+        initialState: { organizer: decidedPlan },
       }),
     );
     const evaluatorMarkup = renderToStaticMarkup(
@@ -693,6 +707,9 @@ describe("review workspace", () => {
     expect(organizerMarkup).toContain("Confirm human decision");
     expect(organizerMarkup).toContain(
       "AI suggestions cannot accept, waitlist, reject, or publish a decision.",
+    );
+    expect(organizerMarkup).toContain(
+      "Decision saved on the server. Submitter notification queued.",
     );
     expect(organizerMarkup).toContain("AI suggestions never count and never decide an outcome");
     expect(organizerMarkup).toContain("until a human");

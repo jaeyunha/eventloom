@@ -2224,6 +2224,7 @@ export class EvaluationService {
   async recordDecision(
     actor: EvaluationActor,
     input: RecordDecisionInput,
+    scheduleAcceptance?: (operation: Promise<void>) => boolean,
   ): Promise<EvaluationDecision> {
     const plan = await this.#getPlan(actor.tenantId, input.planId);
     requireHumanOrganizer(actor, plan.eventId);
@@ -2251,22 +2252,14 @@ export class EvaluationService {
       }
       const repeatedVersion =
         current.history.findIndex((transition) => transition.idempotencyKey === idempotencyKey) + 1;
-      await Promise.all([
-        this.#runDecisionProjection({
+      await this.#runDecisionWork(
+        {
           decision: current,
           transition: repeatedTransition,
           decisionVersion: repeatedVersion,
-        }),
-        ...(repeatedTransition.to === "accepted"
-          ? [
-              this.#runAcceptanceHandoff({
-                decision: current,
-                transition: repeatedTransition,
-                decisionVersion: repeatedVersion,
-              }),
-            ]
-          : []),
-      ]);
+        },
+        scheduleAcceptance,
+      );
       return current;
     }
     if (current === null && input.expectedVersion !== undefined) {
@@ -2296,23 +2289,35 @@ export class EvaluationService {
       updatedAt: now,
     };
     await this.#repository.putDecision(decision, current?.version ?? null);
-    await Promise.all([
-      this.#runDecisionProjection({
+    await this.#runDecisionWork(
+      {
         decision,
         transition,
         decisionVersion: decision.version,
-      }),
-      ...(transition.to === "accepted"
-        ? [
-            this.#runAcceptanceHandoff({
-              decision,
-              transition,
-              decisionVersion: decision.version,
-            }),
-          ]
-        : []),
-    ]);
+      },
+      scheduleAcceptance,
+    );
     return decision;
+  }
+  async #runDecisionWork(
+    input: {
+      readonly decision: EvaluationDecision;
+      readonly transition: EvaluationDecisionTransition;
+      readonly decisionVersion: number;
+    },
+    scheduleAcceptance?: (operation: Promise<void>) => boolean,
+  ): Promise<void> {
+    const projection = this.#runDecisionProjection(input);
+    if (input.transition.to !== "accepted") {
+      await projection;
+      return;
+    }
+    const acceptance = this.#runAcceptanceHandoff(input);
+    if (scheduleAcceptance?.(acceptance) === true) {
+      await projection;
+      return;
+    }
+    await Promise.all([projection, acceptance]);
   }
   async #assignmentContext(
     assignment: EvaluationAssignment,

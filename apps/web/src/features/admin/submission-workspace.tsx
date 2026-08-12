@@ -39,6 +39,8 @@ export interface ReviewAssignment {
   reviewer: string;
   status: "complete" | "in_progress" | "not_started" | "abstained";
   score?: number;
+  criterionScores?: readonly { criterion: string; value: number | string }[];
+  comment?: string;
   conflict?: string;
 }
 
@@ -139,7 +141,13 @@ const seededSubmissions: SubmissionRecord[] = [
       recommendation: "Strong accept",
     },
     reviewAssignments: [
-      { reviewer: "Avery Patel", status: "complete", score: 5 },
+      {
+        reviewer: "Avery Patel",
+        status: "complete",
+        score: 5,
+        criterionScores: [{ criterion: "Overall rating", value: 5 }],
+        comment: "Strong evidence and a clear audience fit.",
+      },
       { reviewer: "Sam Rivera", status: "complete", score: 4 },
       { reviewer: "Lee Okafor", status: "in_progress" },
     ],
@@ -787,6 +795,21 @@ export function mapCanonicalSubmission(envelope: CanonicalSubmissionEnvelope): S
           ],
   };
 }
+interface SubmittedReview {
+  readonly assignmentId: string;
+  readonly submissionId: string;
+  readonly comment: string;
+  readonly scores: Readonly<Record<string, { readonly value: number | string }>>;
+}
+
+function rubricCriterionLabel(criterionId: string): string {
+  return criterionId
+    .split(/[-_]/u)
+    .filter(Boolean)
+    .map((part) => `${part[0]?.toLocaleUpperCase() ?? ""}${part.slice(1)}`)
+    .join(" ");
+}
+
 export async function enrichCanonicalSubmission(
   baseUrl: string,
   envelope: CanonicalSubmissionEnvelope,
@@ -805,9 +828,10 @@ export async function enrichCanonicalSubmission(
   const round = [...plan.rounds].sort(
     (left, right) => (right.sequence ?? 0) - (left.sequence ?? 0),
   )[0];
-  const [assignmentResult, decision, aggregate] = await Promise.all([
+  const [assignmentResult, decision, aggregate, submittedReviewResult] = await Promise.all([
     evaluationRequest<{
       assignments: readonly {
+        id: string;
         reviewerId: string;
         submissionId: string;
         status: "assigned" | "in_progress" | "submitted" | "abstained";
@@ -830,10 +854,23 @@ export async function enrichCanonicalSubmission(
           baseUrl,
           `/plans/${encodeURIComponent(plan.id)}/rounds/${encodeURIComponent(round.id)}/submissions/${encodeURIComponent(submission.id)}/aggregate`,
         ).catch(() => null),
+    round === undefined
+      ? Promise.resolve({ reviews: [] as readonly SubmittedReview[] })
+      : evaluationRequest<{ reviews: readonly SubmittedReview[] }>(
+          baseUrl,
+          `/plans/${encodeURIComponent(plan.id)}/rounds/${encodeURIComponent(round.id)}/submissions/${encodeURIComponent(submission.id)}/reviews`,
+        ).catch(() => ({ reviews: [] })),
   ]);
+
   const assignments = assignmentResult.assignments.filter(
     (assignment) => assignment.submissionId === submission.id,
   );
+  const submittedReviewByAssignment = new Map(
+    submittedReviewResult.reviews
+      .filter((review) => review.submissionId === submission.id)
+      .map((review) => [review.assignmentId, review] as const),
+  );
+
   const decisionTimeline =
     decision === null
       ? []
@@ -869,20 +906,35 @@ export async function enrichCanonicalSubmission(
         ? `${decision.status[0]?.toLocaleUpperCase() ?? ""}${decision.status.slice(1)}`
         : "Awaiting human decision",
     },
-    reviewAssignments: assignments.map((assignment) => ({
-      reviewer: assignment.reviewerId,
-      status:
-        assignment.status === "submitted"
-          ? "complete"
-          : assignment.status === "in_progress"
-            ? "in_progress"
-            : assignment.status === "abstained"
-              ? "abstained"
-              : "not_started",
-      ...(assignment.status === "abstained"
-        ? { conflict: "Reviewer declared a conflict and abstained." }
-        : {}),
-    })),
+    reviewAssignments: assignments.map((assignment) => {
+      const submittedReview = submittedReviewByAssignment.get(assignment.id);
+      return {
+        reviewer: assignment.reviewerId,
+        status:
+          assignment.status === "submitted"
+            ? "complete"
+            : assignment.status === "in_progress"
+              ? "in_progress"
+              : assignment.status === "abstained"
+                ? "abstained"
+                : "not_started",
+        ...(submittedReview === undefined
+          ? {}
+          : {
+              criterionScores: Object.entries(submittedReview.scores).map(
+                ([criterionId, score]) => ({
+                  criterion: rubricCriterionLabel(criterionId),
+                  value: score.value,
+                }),
+              ),
+              comment: submittedReview.comment,
+            }),
+        ...(assignment.status === "abstained"
+          ? { conflict: "Reviewer declared a conflict and abstained." }
+          : {}),
+      };
+    }),
+
     organizerNotes: decision?.history.at(-1)?.reason ?? submission.organizerNotes,
   };
 }
@@ -894,11 +946,37 @@ function eventTitle(eventId: string): string {
   if (eventId === "forge-2025") {
     return "Forge Community Day 2025";
   }
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(eventId)) {
+    return "Selected event";
+  }
   return eventId
     .split(/[-_]/u)
     .filter(Boolean)
     .map((part) => part[0]?.toLocaleUpperCase() + part.slice(1))
     .join(" ");
+}
+
+export async function loadOrganizerEventName(
+  baseUrl: string,
+  organizationId: string,
+  eventId: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const response = await fetch(
+    `${baseUrl.replace(/\/+$/u, "")}/api/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}`,
+    {
+      credentials: "include",
+      cache: "no-store",
+      ...(signal === undefined ? {} : { signal }),
+    },
+  );
+  if (!response.ok) throw new Error(`The event request failed (HTTP ${response.status}).`);
+  const payload = (await response.json()) as { readonly data?: { readonly name?: unknown } };
+  const name = payload.data?.name;
+  if (typeof name !== "string" || name.trim().length === 0) {
+    throw new TypeError("The event response does not contain a name.");
+  }
+  return name.trim();
 }
 
 function submissionListHref(eventId: string, organizationId?: string): string {
@@ -992,6 +1070,7 @@ export function SubmissionListWorkspace({
   const [loading, setLoading] = useState(!localDemoEnabled());
   const [loadError, setLoadError] = useState<string | null>(null);
   const baseUrl = apiBaseUrl();
+  const [eventName, setEventName] = useState(() => eventTitle(eventId));
 
   useEffect(() => {
     if (localDemoEnabled()) return;
@@ -1005,6 +1084,13 @@ export function SubmissionListWorkspace({
     }
     setLoading(true);
     setLoadError(null);
+    const eventController = new AbortController();
+    void loadOrganizerEventName(baseUrl, organizationId, eventId, eventController.signal)
+      .then((name) => {
+        if (active) setEventName(name);
+      })
+      .catch(() => undefined);
+
     void canonicalSubmissionRequest<readonly CanonicalSubmissionEnvelope[]>(
       baseUrl,
       organizationId,
@@ -1024,6 +1110,7 @@ export function SubmissionListWorkspace({
         if (active) setLoading(false);
       });
     return () => {
+      eventController.abort();
       active = false;
     };
   }, [baseUrl, eventId, organizationId]);
@@ -1101,8 +1188,6 @@ export function SubmissionListWorkspace({
       return next;
     });
   }
-
-  const eventName = eventTitle(eventId);
 
   return (
     <div className={styles.workspaceRoot}>
@@ -1851,6 +1936,18 @@ export function SubmissionDetailWorkspace({
                           : ` · ${assignment.score}/${submission.reviewSummary.maxScore}`}
                       </span>
                     </div>
+                    {assignment.criterionScores && assignment.criterionScores.length > 0 ? (
+                      <ul>
+                        {assignment.criterionScores.map((score) => (
+                          <li key={score.criterion}>
+                            {score.criterion}: {score.value}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    {assignment.comment ? (
+                      <p className={styles.mutedText}>Reviewer comment: {assignment.comment}</p>
+                    ) : null}
                     {assignment.conflict ? (
                       <p className={styles.conflictNotice}>Conflict: {assignment.conflict}</p>
                     ) : null}

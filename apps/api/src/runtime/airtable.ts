@@ -931,6 +931,28 @@ function portalRecordStatus(
       : (decisions.get(id) ?? (originalId === null ? undefined : decisions.get(originalId)));
   return projected?.status ?? textValue(record, "status", "Status");
 }
+function portalSubmissionEditingAllowed(
+  event: unknown,
+  records: readonly JsonRecord[],
+  decisions: ReadonlyMap<string, PortalDecisionProjection>,
+  now = Date.now(),
+): boolean {
+  const eventRecord = isRecord(event) ? event : {};
+  const cfpSettings = isRecord(eventRecord.cfpSettings) ? eventRecord.cfpSettings : {};
+  const eventClosesAt = textValue(cfpSettings, "closesAt") ?? textValue(eventRecord, "closesAt");
+  const recordClosesAt = records
+    .map((record) => textValue(record, "closeAt", "closesAt"))
+    .find((value): value is string => value !== null);
+  const closesAt = eventClosesAt ?? recordClosesAt;
+  if (closesAt !== undefined) {
+    const closeTime = Date.parse(closesAt);
+    if (Number.isFinite(closeTime) && closeTime <= now) return false;
+  }
+  return records.some((record) => {
+    const status = portalRecordStatus(record, decisions);
+    return status === "draft" || status === "submitted" || status === "under_review";
+  });
+}
 
 function portalParticipantIds(record: JsonRecord): string[] {
   if (Array.isArray(record.participantIds)) {
@@ -1875,10 +1897,8 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       return { submissionIds: [], participantIds: [] };
     }
     const acceptedParticipants = new Set(acceptedRecords.flatMap(portalParticipantIds));
-    const submissionEditingAllowed = ownedRecords.some((record) => {
-      const status = portalRecordStatus(record, decisions);
-      return status === "draft" || status === "submitted" || status === "under_review";
-    });
+    const submissionEditingAllowed = portalSubmissionEditingAllowed(event, ownedRecords, decisions);
+
     const capabilities: readonly SpeakerPortalCapability[] = [
       ...(acceptedParticipants.size > 0 ? ACCEPTED_PORTAL_CAPABILITIES : []),
       ...(submissionEditingAllowed ? (["submission-edit"] as const) : []),
@@ -2045,14 +2065,11 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       );
       const acceptedRecords = [...acceptedOwnerRecords, ...grantSubmissions];
       const acceptedParticipants = new Set(acceptedRecords.flatMap(portalParticipantIds));
-      const submissionEditingAllowed = ownerRecords.some((record) => {
-        const recordStatus = portalRecordStatus(record, decisions);
-        return (
-          recordStatus === "draft" ||
-          recordStatus === "submitted" ||
-          recordStatus === "under_review"
-        );
-      });
+      const submissionEditingAllowed = portalSubmissionEditingAllowed(
+        event,
+        ownerRecords,
+        decisions,
+      );
       const capabilities: readonly SpeakerPortalCapability[] = [
         ...(acceptedParticipants.size > 0 ? ACCEPTED_PORTAL_CAPABILITIES : []),
         ...(submissionEditingAllowed ? (["submission-edit"] as const) : []),
@@ -4864,31 +4881,32 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
         throw new Error("An accepted submission must contain at least one speaker.");
       }
       acceptedSubmission = submission;
-      const [session] = await Promise.all([
+      const [session, , profiles] = await Promise.all([
         this.#ensureCanonicalSession(input, submission),
         this.#speakers.ensureAcceptedSubmission({
           submission,
           updatedAt: input.decidedAt,
         }),
+        Promise.all(
+          submission.participants.map(async (participant) => {
+            const [profile] = await Promise.all([
+              this.#speakers.ensureProfile({
+                eventId: input.eventId,
+                participant,
+                organizationId: input.tenantId,
+                updatedAt: input.decidedAt,
+              }),
+              this.#speakers.ensureProfileTask({
+                eventId: input.eventId,
+                submissionId: input.submissionId,
+                participantId: participant.id,
+                updatedAt: input.decidedAt,
+              }),
+            ]);
+            return profile.id;
+          }),
+        ),
       ]);
-
-      const profiles = await Promise.all(
-        submission.participants.map(async (participant) => {
-          const profile = await this.#speakers.ensureProfile({
-            eventId: input.eventId,
-            participant,
-            organizationId: input.tenantId,
-            updatedAt: input.decidedAt,
-          });
-          await this.#speakers.ensureProfileTask({
-            eventId: input.eventId,
-            submissionId: input.submissionId,
-            participantId: participant.id,
-            updatedAt: input.decidedAt,
-          });
-          return profile.id;
-        }),
-      );
 
       const recipients = submission.participants
         .map((participant) => participant.email.trim())
@@ -5108,12 +5126,6 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
     await Promise.all(
       submission.participants.map(async (participant) => {
         const email = participant.email.trim();
-        await this.#speakers.ensureProfile({
-          eventId: input.eventId,
-          participant,
-          organizationId: input.tenantId,
-          updatedAt: input.decidedAt,
-        });
         const provisioned = await this.#speakers.ensureVerifiedSpeakerGrant({
           organizationId: input.tenantId,
           eventId: input.eventId,
