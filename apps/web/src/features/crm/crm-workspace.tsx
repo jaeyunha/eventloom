@@ -480,6 +480,13 @@ function formatDate(value: string | undefined): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
+function focusAndScroll(target: HTMLElement | null): void {
+  if (target === null) return;
+  if (typeof target.scrollIntoView === "function") {
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  target.focus({ preventScroll: true });
+}
 
 function messageFromError(error: unknown): string {
   if (error instanceof CrmApiError) {
@@ -959,6 +966,7 @@ function DirectoryTable({
   contacts,
   selectedContactId,
   selectedContactIds,
+  loading,
   onSelect,
   onToggleSelection,
   onToggleAll,
@@ -966,10 +974,24 @@ function DirectoryTable({
   contacts: readonly CrmContact[];
   selectedContactId: string | null;
   selectedContactIds: readonly string[];
+  loading: boolean;
   onSelect: (contactId: string) => void;
   onToggleSelection: (contactId: string) => void;
   onToggleAll: (checked: boolean) => void;
 }>) {
+  if (loading) {
+    return (
+      <div
+        className={styles.loading}
+        role="status"
+        aria-live="polite"
+        aria-busy="true"
+        aria-label="Loading contact directory"
+      >
+        Updating the contact directory for the current filters…
+      </div>
+    );
+  }
   return contacts.length === 0 ? (
     <p className={styles.emptyState}>
       No contacts match these filters. Add a contact or import a CSV directory.
@@ -989,6 +1011,7 @@ function DirectoryTable({
                   contacts.every((contact) => selectedContactIds.includes(contact.id))
                 }
                 onChange={(event) => onToggleAll(event.currentTarget.checked)}
+                disabled={loading}
               />
             </th>
             <th scope="col">Contact</th>
@@ -1012,6 +1035,7 @@ function DirectoryTable({
                   aria-label={`Select ${displayName(contact)}`}
                   checked={selectedContactIds.includes(contact.id)}
                   onChange={() => onToggleSelection(contact.id)}
+                  disabled={loading}
                 />
               </td>
               <th scope="row">
@@ -1019,6 +1043,7 @@ function DirectoryTable({
                   className={styles.tableLink}
                   type="button"
                   onClick={() => onSelect(contact.id)}
+                  disabled={loading}
                 >
                   {displayName(contact)}
                 </button>
@@ -1044,6 +1069,7 @@ function DirectoryTable({
                   className={styles.secondaryButtonSmall}
                   type="button"
                   onClick={() => onSelect(contact.id)}
+                  disabled={loading}
                 >
                   Open
                 </button>
@@ -1609,6 +1635,8 @@ export function CrmWorkspaceView({
     {},
   );
   const mergeSubmitRef = useRef(false);
+  const duplicateReviewRef = useRef<HTMLDivElement>(null);
+  const outreachComposerRef = useRef<HTMLDivElement>(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [showImport, setShowImport] = useState(initialImportOpen);
   const [noteError, setNoteError] = useState<string | null>(null);
@@ -1794,6 +1822,13 @@ export function CrmWorkspaceView({
       setMergeSubmitting(false);
     }
   }
+  function focusDuplicateReview(): void {
+    focusAndScroll(duplicateReviewRef.current);
+  }
+
+  function focusOutreachComposer(): void {
+    focusAndScroll(outreachComposerRef.current);
+  }
   return (
     <div className={styles.page}>
       <a className={styles.skipLink} href="#crm-content">
@@ -1826,6 +1861,36 @@ export function CrmWorkspaceView({
         </div>
       </header>
       <main id="crm-content" className={styles.content} tabIndex={-1}>
+        <section className={styles.bulkToolbar} aria-labelledby="crm-analytics-summary-title">
+          <div>
+            <p className={styles.eyebrow}>CRM analytics</p>
+            <h2 id="crm-analytics-summary-title">Contact snapshot</h2>
+            {analytics ? (
+              <>
+                <p className={styles.resultCount}>
+                  {analytics.totalContacts} total contacts · {analytics.activeContacts} active
+                </p>
+                <p className={styles.muted}>
+                  Pipeline:{" "}
+                  {CRM_PIPELINE_STAGES.map(
+                    (stage) => `${stage}: ${analytics.contactsByPipelineStage[stage] ?? 0}`,
+                  ).join(" · ")}
+                </p>
+                <p className={styles.muted}>
+                  Sources:{" "}
+                  {Object.entries(analytics.contactsBySource)
+                    .map(([source, count]) => `${source}: ${count}`)
+                    .join(" · ") || "No source counts yet"}
+                </p>
+              </>
+            ) : (
+              <p className={styles.muted}>Analytics are not available yet.</p>
+            )}
+          </div>
+          <a className={styles.secondaryButton} href="#crm-analytics" aria-controls="crm-analytics">
+            Open CRM analytics
+          </a>
+        </section>
         {error ? (
           <div className={styles.alert} role="alert">
             <strong>CRM action was not completed.</strong>
@@ -1836,7 +1901,13 @@ export function CrmWorkspaceView({
           {statusMessage}
         </div>
         {loading ? (
-          <div className={styles.loading} role="status" aria-busy="true">
+          <div
+            className={styles.loading}
+            role="status"
+            aria-live="polite"
+            aria-busy="true"
+            aria-label="Loading organization CRM data"
+          >
             Loading organization CRM data…
           </div>
         ) : null}
@@ -1931,7 +2002,12 @@ export function CrmWorkspaceView({
               <button
                 className={styles.primaryButton}
                 type="button"
-                onClick={() => setOutreachSegmentId("__selected__")}
+                onClick={() => {
+                  setOutreachSegmentId("__selected__");
+                  focusOutreachComposer();
+                }}
+                aria-controls="crm-outreach-composer"
+                disabled={loading}
               >
                 Communicate with selected
               </button>
@@ -2097,13 +2173,16 @@ export function CrmWorkspaceView({
               </ol>
             </section>
           ) : null}
-          <p className={styles.resultCount}>
-            {contacts.length} contact{contacts.length === 1 ? "" : "s"} shown
-          </p>
+          {!loading ? (
+            <p className={styles.resultCount}>
+              {contacts.length} contact{contacts.length === 1 ? "" : "s"} shown
+            </p>
+          ) : null}
           <DirectoryTable
             contacts={contacts}
             selectedContactId={selectedContactId}
             selectedContactIds={selectedContactIds}
+            loading={loading}
             onSelect={(id) => {
               setShowAddForm(false);
               setMergeCompleted(false);
@@ -2146,7 +2225,28 @@ export function CrmWorkspaceView({
           <Card
             title={displayName(selectedContact)}
             eyebrow="Pipeline card detail · identity, tags, custom fields, and notes"
-            actions={<span className={styles.stageBadge}>{selectedContact.pipelineStage}</span>}
+            actions={
+              <div className={styles.actions}>
+                <span className={styles.stageBadge}>{selectedContact.pipelineStage}</span>
+                {mergeCandidates.length > 0 ? (
+                  <>
+                    <span className={styles.muted}>
+                      {mergeCandidates.length} possible duplicate
+                      {mergeCandidates.length === 1 ? "" : "s"}
+                    </span>
+                    <button
+                      className={styles.secondaryButtonSmall}
+                      type="button"
+                      onClick={focusDuplicateReview}
+                      aria-controls="crm-duplicate-review"
+                      disabled={busy}
+                    >
+                      Review possible duplicates
+                    </button>
+                  </>
+                ) : null}
+              </div>
+            }
           >
             <div className={styles.detailGrid}>
               <div className={styles.detailIdentity}>
@@ -2229,6 +2329,18 @@ export function CrmWorkspaceView({
             </div>
             <div className={styles.detailActions}>
               <button
+                className={styles.primaryButton}
+                type="button"
+                onClick={() => {
+                  setOutreachSegmentId("");
+                  focusOutreachComposer();
+                }}
+                aria-controls="crm-outreach-composer"
+                disabled={busy || loading}
+              >
+                Open outreach composer
+              </button>
+              <button
                 className={styles.secondaryButton}
                 type="button"
                 onClick={onFindDuplicates}
@@ -2247,8 +2359,14 @@ export function CrmWorkspaceView({
                 </div>
               ) : null}
               {duplicates && mergeCandidates.length > 0 ? (
-                <div className={styles.duplicateBox}>
-                  <strong>
+                <section
+                  id="crm-duplicate-review"
+                  ref={duplicateReviewRef}
+                  className={styles.duplicateBox}
+                  tabIndex={-1}
+                  aria-labelledby="crm-duplicate-review-title"
+                >
+                  <strong id="crm-duplicate-review-title">
                     {mergeCandidates.length} possible duplicate
                     {mergeCandidates.length === 1 ? "" : "s"}
                   </strong>
@@ -2476,7 +2594,7 @@ export function CrmWorkspaceView({
                       </div>
                     </section>
                   ) : null}
-                </div>
+                </section>
               ) : duplicates ? (
                 <p className={styles.muted}>No eligible duplicates found.</p>
               ) : null}
@@ -2655,169 +2773,177 @@ export function CrmWorkspaceView({
           </div>
         )}
         {selectedContact || selectedContactIds.length > 0 ? (
-          <Card
-            title="Personalized outreach"
-            eyebrow={
-              selectedContactIds.length > 0
-                ? `Communicate with ${selectedContactIds.length} selected contacts`
-                : "Preview before sending"
-            }
+          <section
+            id="crm-outreach-composer"
+            ref={outreachComposerRef}
+            tabIndex={-1}
+            aria-label="Personalized outreach composer"
           >
-            <form className={styles.form} onSubmit={(event) => void previewOutreach(event)}>
-              <label className={styles.field}>
-                <span>Audience</span>
-                <select
-                  aria-label="Outreach audience"
-                  value={outreachSegmentId}
-                  onChange={(event) => setOutreachSegmentId(event.currentTarget.value)}
-                >
-                  <option value="">This contact</option>
-                  {selectedContactIds.length > 0 ? (
-                    <option value="__selected__">
-                      Selected directory contacts ({selectedContactIds.length})
-                    </option>
-                  ) : null}
-                  {segments.map((segment) => (
-                    <option key={segment.id} value={segment.id}>
-                      Segment: {segment.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {selectedContactIds.length > 0 ? (
+            <Card
+              title="Personalized outreach"
+              eyebrow={
+                outreachSegmentId === "__selected__" && selectedContactIds.length > 0
+                  ? `Communicate with ${selectedContactIds.length} selected contacts`
+                  : "Preview before sending"
+              }
+            >
+              <form className={styles.form} onSubmit={(event) => void previewOutreach(event)}>
                 <label className={styles.field}>
-                  <span>Segment context (optional)</span>
+                  <span>Audience</span>
                   <select
-                    aria-label="Outreach segment context"
-                    value={outreachContextSegmentId}
-                    onChange={(event) => setOutreachContextSegmentId(event.currentTarget.value)}
+                    aria-label="Outreach audience"
+                    value={outreachSegmentId}
+                    onChange={(event) => setOutreachSegmentId(event.currentTarget.value)}
                   >
-                    <option value="">No segment context</option>
+                    <option value="">This contact</option>
+                    {selectedContactIds.length > 0 ? (
+                      <option value="__selected__">
+                        Selected directory contacts ({selectedContactIds.length})
+                      </option>
+                    ) : null}
                     {segments.map((segment) => (
                       <option key={segment.id} value={segment.id}>
-                        {segment.name}
+                        Segment: {segment.name}
                       </option>
                     ))}
                   </select>
                 </label>
-              ) : null}
-              <label className={styles.field}>
-                <span>Event context (optional)</span>
-                <select
-                  aria-label="Outreach event"
-                  value={outreachEventId}
-                  onChange={(event) => setOutreachEventId(event.currentTarget.value)}
-                >
-                  <option value="">No event</option>
-                  {events.map((event) => (
-                    <option value={event.id} key={event.id}>
-                      {event.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className={styles.field}>
-                <span>Subject</span>
-                <input
-                  value={outreachSubject}
-                  onChange={(event) => setOutreachSubject(event.currentTarget.value)}
-                  required
-                />
-              </label>
-              <label className={styles.field}>
-                <span>Message</span>
-                <textarea
-                  rows={5}
-                  value={outreachBody}
-                  onChange={(event) => setOutreachBody(event.currentTarget.value)}
-                  required
-                />
-                <small className={styles.muted}>
-                  Use <code>{"{{first_name}}"}</code> for safe per-contact personalization.
-                </small>
-              </label>
-              <button className={styles.primaryButton} type="submit" disabled={busy}>
-                {busy ? "Preparing…" : "Preview personalized outreach"}
-              </button>
-            </form>
-            {outreachPreview ? (
-              <div className={styles.previewBox}>
-                <h3>Outreach preview</h3>
-                <p>
-                  <strong>{outreachPreview.count}</strong> recipient
-                  {outreachPreview.count === 1 ? "" : "s"} will receive this message.
-                </p>
-                {outreachPreview.eventId ? <p>Event context: {outreachPreview.eventId}</p> : null}
-                {outreachPreview.segmentId ? (
-                  <p>Segment context: {outreachPreview.segmentId}</p>
+                {selectedContactIds.length > 0 ? (
+                  <label className={styles.field}>
+                    <span>Segment context (optional)</span>
+                    <select
+                      aria-label="Outreach segment context"
+                      value={outreachContextSegmentId}
+                      onChange={(event) => setOutreachContextSegmentId(event.currentTarget.value)}
+                    >
+                      <option value="">No segment context</option>
+                      {segments.map((segment) => (
+                        <option key={segment.id} value={segment.id}>
+                          {segment.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                 ) : null}
-                {outreachHasUnknownTags ? (
-                  <p className={styles.error} role="alert">
-                    Sending is blocked because one or more recipients have unknown merge tags.
-                  </p>
-                ) : null}
-                <div className={styles.timeline}>
-                  {outreachPreview.recipients.map((recipient) => (
-                    <article key={recipient.contactId}>
-                      <h4>
-                        {recipient.displayName} · {recipient.email}
-                      </h4>
-                      <p>
-                        <strong>Subject:</strong> {recipient.subject}
-                      </p>
-                      <pre>{recipient.body}</pre>
-                      {recipient.unknownTags.length > 0 ? (
-                        <p className={styles.error}>
-                          Unknown merge tags: {recipient.unknownTags.join(", ")}
-                        </p>
-                      ) : null}
-                    </article>
-                  ))}
-                </div>
-                <button
-                  className={styles.primaryButton}
-                  aria-label="Send Now"
-                  type="button"
-                  onClick={() => onSendOutreach?.()}
-                  disabled={
-                    busy ||
-                    outreachPreview.count === 0 ||
-                    outreachHasUnknownTags ||
-                    onSendOutreach === undefined
-                  }
-                >
-                  {busy
-                    ? "Queueing…"
-                    : `Queue outreach (Send Now to ${outreachPreview.count} contact${outreachPreview.count === 1 ? "" : "s"})`}
+                <label className={styles.field}>
+                  <span>Event context (optional)</span>
+                  <select
+                    aria-label="Outreach event"
+                    value={outreachEventId}
+                    onChange={(event) => setOutreachEventId(event.currentTarget.value)}
+                  >
+                    <option value="">No event</option>
+                    {events.map((event) => (
+                      <option value={event.id} key={event.id}>
+                        {event.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className={styles.field}>
+                  <span>Subject</span>
+                  <input
+                    value={outreachSubject}
+                    onChange={(event) => setOutreachSubject(event.currentTarget.value)}
+                    required
+                  />
+                </label>
+                <label className={styles.field}>
+                  <span>Message</span>
+                  <textarea
+                    rows={5}
+                    value={outreachBody}
+                    onChange={(event) => setOutreachBody(event.currentTarget.value)}
+                    required
+                  />
+                  <small className={styles.muted}>
+                    Use <code>{"{{first_name}}"}</code> for safe per-contact personalization.
+                  </small>
+                </label>
+                <button className={styles.primaryButton} type="submit" disabled={busy}>
+                  {busy ? "Preparing…" : "Preview personalized outreach"}
                 </button>
-              </div>
-            ) : null}
-            {outreachResults.length > 0 ? (
-              <section className={styles.previewBox} aria-labelledby="crm-outreach-result-title">
-                <h3 id="crm-outreach-result-title">Outreach delivery result</h3>
-                <p className={styles.resultCount}>
-                  {outreachResults.reduce((count, result) => count + result.sentCount, 0)} sent ·{" "}
-                  {outreachResults.reduce((count, result) => count + result.queuedCount, 0)} queued
-                  · {outreachResults.reduce((count, result) => count + result.failedCount, 0)}{" "}
-                  failed
-                </p>
-                <ol className={styles.historyList}>
-                  {outreachResults.map((result) => (
-                    <li key={result.id}>
-                      <strong>
-                        {result.recipientEmail}: {result.status}
-                      </strong>
-                      <small>
-                        send {result.id}
-                        {result.terminal ? " · terminal" : " · awaiting delivery"}
-                        {result.failureReason ? ` · ${result.failureReason}` : ""}
-                      </small>
-                    </li>
-                  ))}
-                </ol>
-              </section>
-            ) : null}
-          </Card>
+              </form>
+              {outreachPreview ? (
+                <div className={styles.previewBox}>
+                  <h3>Outreach preview</h3>
+                  <p>
+                    <strong>{outreachPreview.count}</strong> recipient
+                    {outreachPreview.count === 1 ? "" : "s"} will receive this message.
+                  </p>
+                  {outreachPreview.eventId ? <p>Event context: {outreachPreview.eventId}</p> : null}
+                  {outreachPreview.segmentId ? (
+                    <p>Segment context: {outreachPreview.segmentId}</p>
+                  ) : null}
+                  {outreachHasUnknownTags ? (
+                    <p className={styles.error} role="alert">
+                      Sending is blocked because one or more recipients have unknown merge tags.
+                    </p>
+                  ) : null}
+                  <div className={styles.timeline}>
+                    {outreachPreview.recipients.map((recipient) => (
+                      <article key={recipient.contactId}>
+                        <h4>
+                          {recipient.displayName} · {recipient.email}
+                        </h4>
+                        <p>
+                          <strong>Subject:</strong> {recipient.subject}
+                        </p>
+                        <pre>{recipient.body}</pre>
+                        {recipient.unknownTags.length > 0 ? (
+                          <p className={styles.error}>
+                            Unknown merge tags: {recipient.unknownTags.join(", ")}
+                          </p>
+                        ) : null}
+                      </article>
+                    ))}
+                  </div>
+                  <button
+                    className={styles.primaryButton}
+                    aria-label="Send Now"
+                    type="button"
+                    onClick={() => onSendOutreach?.()}
+                    disabled={
+                      busy ||
+                      outreachPreview.count === 0 ||
+                      outreachHasUnknownTags ||
+                      onSendOutreach === undefined
+                    }
+                  >
+                    {busy
+                      ? "Queueing…"
+                      : `Queue outreach (Send Now to ${outreachPreview.count} contact${outreachPreview.count === 1 ? "" : "s"})`}
+                  </button>
+                </div>
+              ) : null}
+              {outreachResults.length > 0 ? (
+                <section className={styles.previewBox} aria-labelledby="crm-outreach-result-title">
+                  <h3 id="crm-outreach-result-title">Outreach delivery result</h3>
+                  <p className={styles.resultCount}>
+                    {outreachResults.reduce((count, result) => count + result.sentCount, 0)} sent ·{" "}
+                    {outreachResults.reduce((count, result) => count + result.queuedCount, 0)}{" "}
+                    queued ·{" "}
+                    {outreachResults.reduce((count, result) => count + result.failedCount, 0)}{" "}
+                    failed
+                  </p>
+                  <ol className={styles.historyList}>
+                    {outreachResults.map((result) => (
+                      <li key={result.id}>
+                        <strong>
+                          {result.recipientEmail}: {result.status}
+                        </strong>
+                        <small>
+                          send {result.id}
+                          {result.terminal ? " · terminal" : " · awaiting delivery"}
+                          {result.failureReason ? ` · ${result.failureReason}` : ""}
+                        </small>
+                      </li>
+                    ))}
+                  </ol>
+                </section>
+              ) : null}
+            </Card>
+          </section>
         ) : null}
         <SegmentManager
           segments={segments}
@@ -2832,11 +2958,13 @@ export function CrmWorkspaceView({
           onSelect={(id) => onSelectContact?.(id)}
           onEnroll={onEnrollPipeline ?? (async () => undefined)}
         />
-        <AnalyticsPanel
-          analytics={analytics}
-          events={events}
-          onEventDrillThrough={onAnalyticsEventDrillThrough ?? (() => undefined)}
-        />
+        <section id="crm-analytics" tabIndex={-1} aria-label="CRM analytics panel">
+          <AnalyticsPanel
+            analytics={analytics}
+            events={events}
+            onEventDrillThrough={onAnalyticsEventDrillThrough ?? (() => undefined)}
+          />
+        </section>
       </main>
     </div>
   );
