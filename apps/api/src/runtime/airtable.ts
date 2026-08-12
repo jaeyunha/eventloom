@@ -54,8 +54,12 @@ import type {
   CrmContact,
   CrmEventProjection,
   CrmHistoryEntry,
+  CrmMergeReconciliationInput,
+  CrmMergeReconciliationResult,
   CrmImportResult,
   CrmNote,
+  CrmParticipantConflict,
+  CrmParticipantContactLink,
   CrmOutreachBoundary,
   CrmOutreachCommand,
   CrmPipelineEntry,
@@ -8336,7 +8340,8 @@ export class AirtableCrmRepository implements CrmRepository {
             })
           ).filter(
             (projection) =>
-              projection.organizationId === organization && projection.contactId === next.id,
+              projection.organizationId === organization &&
+              crmProjectionContactId(projection) === next.id,
           );
     const eventRepository = this.#events;
     const eventIds = [...new Set(projections.map((projection) => projection.eventId))];
@@ -8583,11 +8588,11 @@ export class AirtableCrmRepository implements CrmRepository {
   async getProjection(
     organizationId: string,
     eventId: string,
-    contactId: string,
+    crmContactId: string,
   ): Promise<CrmEventProjection | null> {
     const organization = crmOrganization(organizationId);
     const event = requiredId(eventId, "eventId");
-    const contact = requiredId(contactId, "contactId");
+    const contact = requiredId(crmContactId, "crmContactId");
     return this.#findProjection(organization, event, contact);
   }
 
@@ -8597,7 +8602,11 @@ export class AirtableCrmRepository implements CrmRepository {
   ): Promise<CrmEventProjection> {
     const organization = crmOrganization(projection.organizationId);
     const eventId = requiredId(projection.eventId, "eventId");
-    const contactId = requiredId(projection.contactId, "contactId");
+    const contactId = requiredId(
+      projection.crmContactId ?? projection.contactId,
+      "crmContactId",
+    );
+    const participantId = requiredId(projection.participantId ?? contactId, "participantId");
     if (projection.organizationId !== organization) {
       throw new CrmRepositoryConflictError("The projection tenant data is invalid.");
     }
@@ -8629,6 +8638,8 @@ export class AirtableCrmRepository implements CrmRepository {
       id: canonicalRelationship ? `event-contact:existing:${eventId}:${contactId}` : projection.id,
       organizationId: organization,
       eventId,
+      participantId,
+      crmContactId: contactId,
       contactId,
     };
     try {
@@ -8657,14 +8668,253 @@ export class AirtableCrmRepository implements CrmRepository {
       })
     )
       .filter((projection) => projection.organizationId === organization)
+      .map((projection) => {
+        const crmContactId = projection.crmContactId ?? projection.contactId;
+        return {
+          ...clone(projection),
+          participantId: projection.participantId ?? crmContactId,
+          crmContactId,
+          contactId: crmContactId,
+        };
+      })
       .sort(
         (left, right) =>
           left.eventId.localeCompare(right.eventId) ||
-          left.contactId.localeCompare(right.contactId),
-      )
-      .map(clone);
+          left.participantId.localeCompare(right.participantId),
+      );
   }
 
+  async listParticipantContactLinks(
+    organizationId: string,
+  ): Promise<readonly CrmParticipantContactLink[]> {
+    return (await this.listProjections(organizationId)).map(
+      ({ contactId: _contactId, ...link }) => link,
+    );
+  }
+
+  async reconcileContactMerge(
+    input: CrmMergeReconciliationInput,
+  ): Promise<CrmMergeReconciliationResult> {
+    const organizationId = crmOrganization(input.organizationId);
+    const survivorId = requiredId(input.survivorId, "survivorId");
+    const retiredIds = [...new Set(input.retiredIds.map((id) => requiredId(id, "retiredId")))].sort(
+      (left, right) => left.localeCompare(right),
+    );
+    const auditId = requiredId(input.auditId, "auditId");
+    if (retiredIds.length === 0 || retiredIds.includes(survivorId)) {
+      throw new CrmRepositoryConflictError(
+        "Retired CRM contacts must be unique and different from the survivor.",
+      );
+    }
+
+    const prior = await this.getCommandResult<CrmMergeReconciliationResult>(
+      organizationId,
+      "reconcile-contact-merge",
+      auditId,
+    );
+    if (prior !== null) {
+      if (
+        prior.survivorId !== survivorId ||
+        JSON.stringify(prior.retiredIds) !== JSON.stringify(retiredIds)
+      ) {
+        throw new CrmRepositoryConflictError(
+          "The CRM merge audit was already used for another reconciliation.",
+        );
+      }
+      return clone(prior);
+    }
+
+    const lookupContactIds = [...retiredIds, survivorId];
+    const [survivor, retiredContacts, projections, segments, notesByContact, pipelineByContact] =
+      await Promise.all([
+        this.getContact(organizationId, survivorId),
+        Promise.all(retiredIds.map((id) => this.getContact(organizationId, id))),
+        this.listProjections(organizationId),
+        this.listSegments(organizationId),
+        Promise.all(lookupContactIds.map((id) => this.listNotes(organizationId, id))),
+        Promise.all(
+          lookupContactIds.map((id) => this.listPipelineHistory(organizationId, id)),
+        ),
+      ]);
+    if (survivor === null || survivor.status !== "active") {
+      throw new CrmRepositoryConflictError("The CRM merge survivor is not active.");
+    }
+    for (const [index, retiredId] of retiredIds.entries()) {
+      const retired = retiredContacts[index];
+      if (
+        retired === undefined ||
+        retired === null ||
+        retired.status !== "merged" ||
+        retired.mergedIntoId !== survivorId ||
+        retired.mergeAuditId !== auditId
+      ) {
+        throw new CrmRepositoryConflictError(
+          `Retired CRM contact ${retiredId} does not match this merge audit.`,
+        );
+      }
+    }
+
+    const retiredSet = new Set(retiredIds);
+    const participantConflicts = crmParticipantMergeConflicts(
+      projections,
+      new Set([survivorId, ...retiredIds]),
+    );
+    if (participantConflicts.length > 0) {
+      throw new CrmRepositoryConflictError(
+        "The merge would reconcile distinct participants in one event.",
+        participantConflicts,
+      );
+    }
+
+    const projectionTargets = projections
+      .filter((projection) => {
+        const activeContactId = crmProjectionContactId(projection);
+        return (
+          retiredSet.has(activeContactId) ||
+          (projection.mergeAuditId === auditId &&
+            projection.sourceCrmContactId !== undefined &&
+            retiredSet.has(projection.sourceCrmContactId))
+        );
+      })
+      .sort((left, right) => left.id.localeCompare(right.id));
+    const noteTargets = notesByContact
+      .flat()
+      .filter(
+        (note, index, values) =>
+          values.findIndex((candidate) => candidate.id === note.id) === index &&
+          (retiredSet.has(note.contactId) ||
+            (note.mergeAuditId === auditId &&
+              note.sourceCrmContactId !== undefined &&
+              retiredSet.has(note.sourceCrmContactId))),
+      )
+      .sort((left, right) => left.id.localeCompare(right.id));
+    const pipelineTargets = pipelineByContact
+      .flat()
+      .filter(
+        (entry, index, values) =>
+          values.findIndex((candidate) => candidate.id === entry.id) === index &&
+          (retiredSet.has(entry.contactId) ||
+            (entry.mergeAuditId === auditId &&
+              entry.sourceCrmContactId !== undefined &&
+              retiredSet.has(entry.sourceCrmContactId))),
+      )
+      .sort((left, right) => left.id.localeCompare(right.id));
+    const segmentTargets = segments
+      .filter(
+        (segment) =>
+          segment.mergeAuditIds?.includes(auditId) === true ||
+          crmReplaceContactReference(segment.rules, retiredSet, survivorId).changed,
+      )
+      .sort((left, right) => left.id.localeCompare(right.id));
+
+    for (const projection of projectionTargets) {
+      const stored = await this.#projections.findWithRecordId(projection.id);
+      if (stored === undefined || stored.entity.organizationId !== organizationId) {
+        throw new CrmRepositoryConflictError("A CRM participant link changed during reconciliation.");
+      }
+      const activeContactId = crmProjectionContactId(stored.entity);
+      if (
+        activeContactId === survivorId &&
+        stored.entity.mergeAuditId === auditId &&
+        stored.entity.sourceCrmContactId !== undefined &&
+        retiredSet.has(stored.entity.sourceCrmContactId)
+      ) {
+        continue;
+      }
+      if (!retiredSet.has(activeContactId)) {
+        throw new CrmRepositoryConflictError("A CRM participant link changed during reconciliation.");
+      }
+      const participantId = crmProjectionParticipantId(stored.entity);
+      const next: CrmEventProjection = {
+        ...stored.entity,
+        participantId,
+        crmContactId: survivorId,
+        contactId: survivorId,
+        sourceCrmContactId: stored.entity.sourceCrmContactId ?? activeContactId,
+        mergeAuditId: auditId,
+      };
+      await this.#projections.updateByRecordId(next.id, stored.recordId, next);
+    }
+
+    for (const note of noteTargets) {
+      const stored = await this.#notes.findWithRecordId(note.id);
+      if (stored === undefined || stored.entity.organizationId !== organizationId) {
+        throw new CrmRepositoryConflictError("A CRM note changed during reconciliation.");
+      }
+      if (stored.entity.contactId === survivorId && stored.entity.mergeAuditId === auditId) continue;
+      if (!retiredSet.has(stored.entity.contactId)) {
+        throw new CrmRepositoryConflictError("A CRM note changed during reconciliation.");
+      }
+      const next: CrmNote = {
+        ...stored.entity,
+        contactId: survivorId,
+        sourceCrmContactId: stored.entity.sourceCrmContactId ?? stored.entity.contactId,
+        mergeAuditId: auditId,
+      };
+      await this.#notes.updateByRecordId(next.id, stored.recordId, next);
+    }
+
+    for (const entry of pipelineTargets) {
+      const stored = await this.#pipeline.findWithRecordId(entry.id);
+      if (stored === undefined || stored.entity.organizationId !== organizationId) {
+        throw new CrmRepositoryConflictError("CRM pipeline history changed during reconciliation.");
+      }
+      if (stored.entity.contactId === survivorId && stored.entity.mergeAuditId === auditId) continue;
+      if (!retiredSet.has(stored.entity.contactId)) {
+        throw new CrmRepositoryConflictError("CRM pipeline history changed during reconciliation.");
+      }
+      const next: CrmPipelineEntry = {
+        ...stored.entity,
+        contactId: survivorId,
+        sourceCrmContactId: stored.entity.sourceCrmContactId ?? stored.entity.contactId,
+        mergeAuditId: auditId,
+      };
+      await this.#pipeline.updateByRecordId(next.id, stored.recordId, next);
+    }
+
+    for (const segment of segmentTargets) {
+      const stored = await this.#segments.findWithRecordId(segment.id);
+      if (stored === undefined || stored.entity.organizationId !== organizationId) {
+        throw new CrmRepositoryConflictError("A CRM segment changed during reconciliation.");
+      }
+      if (stored.entity.mergeAuditIds?.includes(auditId) === true) continue;
+      const replaced = crmReplaceContactReference(
+        stored.entity.rules,
+        retiredSet,
+        survivorId,
+      );
+      if (!replaced.changed) {
+        throw new CrmRepositoryConflictError("A CRM segment changed during reconciliation.");
+      }
+      const next: CrmSegment = {
+        ...stored.entity,
+        rules: replaced.value as CrmSegment["rules"],
+        mergeAuditIds: [...new Set([...(stored.entity.mergeAuditIds ?? []), auditId])],
+        version: stored.entity.version + 1,
+      };
+      await this.#segments.updateByRecordId(next.id, stored.recordId, next);
+    }
+
+    const result: CrmMergeReconciliationResult = {
+      survivorId,
+      retiredIds,
+      rewired: {
+        participantContactLinks: projectionTargets.length,
+        notes: noteTargets.length,
+        segments: segmentTargets.length,
+        pipelineHistory: pipelineTargets.length,
+      },
+      participantConflicts: [],
+      auditId,
+    };
+    await this.saveCommandResult(
+      organizationId,
+      "reconcile-contact-merge",
+      auditId,
+      result,
+    );
+    return clone(result);
+  }
   async saveOutreach(command: CrmOutreachCommand): Promise<CrmOutreachCommand> {
     const organization = crmOrganization(command.organizationId);
     const key = requiredId(command.idempotencyKey, "idempotencyKey");
@@ -8876,19 +9126,25 @@ export class AirtableCrmRepository implements CrmRepository {
   async #findProjection(
     organizationId: string,
     eventId: string,
-    contactId: string,
+    crmContactId: string,
   ): Promise<CrmEventProjection | null> {
     const projection = (
       await this.#projections.list({
-        filterByFormula: jsonContainsAllFormula("Projection JSON", [contactId]),
+        filterByFormula: jsonContainsAllFormula("Projection JSON", [crmContactId]),
       })
     ).find(
       (candidate) =>
         candidate.organizationId === organizationId &&
         candidate.eventId === eventId &&
-        candidate.contactId === contactId,
+        crmProjectionContactId(candidate) === crmContactId,
     );
-    return projection === undefined ? null : clone(projection);
+    if (projection === undefined) return null;
+    return {
+      ...clone(projection),
+      participantId: crmProjectionParticipantId(projection),
+      crmContactId,
+      contactId: crmContactId,
+    };
   }
 
   async #findCanonicalSpeakerRelationship(
@@ -9110,6 +9366,75 @@ export class AirtableCrmRepository implements CrmRepository {
   }
 }
 
+function crmProjectionContactId(projection: CrmEventProjection): string {
+  return projection.crmContactId ?? projection.contactId;
+}
+
+function crmProjectionParticipantId(projection: CrmEventProjection): string {
+  return projection.participantId ?? crmProjectionContactId(projection);
+}
+
+function crmParticipantMergeConflicts(
+  projections: readonly CrmEventProjection[],
+  contactIds: ReadonlySet<string>,
+): readonly CrmParticipantConflict[] {
+  const byEvent = new Map<string, Map<string, Set<string>>>();
+  for (const projection of projections) {
+    const crmContactId = crmProjectionContactId(projection);
+    if (!contactIds.has(crmContactId)) continue;
+    const participants = byEvent.get(projection.eventId) ?? new Map<string, Set<string>>();
+    const participantId = crmProjectionParticipantId(projection);
+    const participantContacts = participants.get(participantId) ?? new Set<string>();
+    participantContacts.add(crmContactId);
+    participants.set(participantId, participantContacts);
+    byEvent.set(projection.eventId, participants);
+  }
+  const conflicts: CrmParticipantConflict[] = [];
+  for (const [eventId, participants] of byEvent) {
+    if (participants.size < 2) continue;
+    conflicts.push({
+      eventId,
+      participantIds: [...participants.keys()].sort((left, right) => left.localeCompare(right)),
+      crmContactIds: [...new Set([...participants.values()].flatMap((ids) => [...ids]))].sort(
+        (left, right) => left.localeCompare(right),
+      ),
+      reason: "distinct-participants-share-merged-contacts",
+    });
+  }
+  return conflicts.sort((left, right) => left.eventId.localeCompare(right.eventId));
+}
+
+function crmReplaceContactReference(
+  value: unknown,
+  retiredIds: ReadonlySet<string>,
+  survivorId: string,
+): { readonly value: unknown; readonly changed: boolean } {
+  if (typeof value === "string") {
+    return retiredIds.has(value)
+      ? { value: survivorId, changed: true }
+      : { value, changed: false };
+  }
+  if (Array.isArray(value)) {
+    let changed = false;
+    const output = value.map((item) => {
+      const replaced = crmReplaceContactReference(item, retiredIds, survivorId);
+      changed ||= replaced.changed;
+      return replaced.value;
+    });
+    return { value: changed ? output : value, changed };
+  }
+  if (isRecord(value)) {
+    let changed = false;
+    const output: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value)) {
+      const replaced = crmReplaceContactReference(item, retiredIds, survivorId);
+      changed ||= replaced.changed;
+      output[key] = replaced.value;
+    }
+    return { value: changed ? output : value, changed };
+  }
+  return { value, changed: false };
+}
 function crmOrganization(value: string): string {
   const normalized = value.trim();
   if (normalized.length === 0) throw new TypeError("organizationId must be a non-empty string.");

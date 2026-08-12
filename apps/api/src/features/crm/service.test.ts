@@ -1,5 +1,7 @@
+import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import { CrmService, InMemoryCrmRepository } from "./service";
+import { createCrmRoutes, type CrmRouteEnvironment } from "./routes";
 import type { CrmActor, CrmContact } from "./types";
 
 const actor: CrmActor = { kind: "user", organizationId: "org-a", userId: "owner-a", role: "owner" };
@@ -19,6 +21,26 @@ function service() {
       generateId: (prefix) => `${prefix}-${++sequence}`,
     },
   );
+}
+
+function crmRouteApp(crm: CrmService): Hono<CrmRouteEnvironment> {
+  const app = new Hono<CrmRouteEnvironment>();
+  app.use("*", async (context, next) => {
+    context.set("authPrincipal", {
+      kind: "user",
+      sessionId: "crm-test-session",
+      userId: actor.userId,
+      email: "owner@example.test",
+      memberships: [{ organizationId: actor.organizationId, role: "owner" }],
+      speakerGrants: [],
+    });
+    await next();
+  });
+  app.route(
+    "/api/admin/organizations/:organizationId/crm",
+    createCrmRoutes({ service: crm }),
+  );
+  return app;
 }
 
 class FailPrimaryMergeRepository extends InMemoryCrmRepository {
@@ -198,8 +220,8 @@ describe("CrmService", () => {
       mode: "create",
       csv: "name,email\nGrace Duplicate, GRACE@example.com\nNo identity,",
     });
-    expect(createOnly).toMatchObject({ created: 0, updated: 0, skipped: 2 });
-    expect(createOnly.rows.map((row) => row.status)).toEqual(["skipped", "skipped"]);
+    expect(createOnly).toMatchObject({ created: 0, updated: 0, skipped: 1, errors: 1 });
+    expect(createOnly.rows.map((row) => row.status)).toEqual(["skipped", "error"]);
     expect(replay.id).toBe(first.id);
     expect(replay.idempotent).toBe(true);
 
@@ -906,4 +928,394 @@ describe("CrmService", () => {
       });
     },
   );
+  it("previews CSV without mutation and persists authoritative row outcomes across reload", async () => {
+    const repository = new InMemoryCrmRepository();
+    let sequence = 0;
+    const crm = new CrmService(
+      { repository },
+      {
+        clock: () => new Date("2026-01-01T00:00:00.000Z"),
+        generateId: (prefix) => `${prefix}-${++sequence}`,
+      },
+    );
+    const existing = await crm.createContact(actor, {
+      organizationId: "org-a",
+      displayName: "Existing",
+      email: "existing@example.com",
+    });
+    const rows = [
+      { displayName: "Created", email: "created@example.com" },
+      { displayName: "Updated", email: "existing@example.com", company: "Northstar" },
+      { displayName: "Updated", email: "existing@example.com", company: "Northstar" },
+      { displayName: "Malformed", email: "not-an-email" },
+    ] as const;
+    const before = await repository.listContacts("org-a");
+    const preview = await crm.previewImport(actor, {
+      organizationId: "org-a",
+      rows,
+    });
+    expect(preview.preview).toBe(true);
+    expect(preview.rows.map((row) => row.status)).toEqual([
+      "created",
+      "updated",
+      "skipped",
+      "error",
+    ]);
+    expect(preview.errors).toBe(1);
+    expect(await repository.listContacts("org-a")).toEqual(before);
+
+    const committed = await crm.importContacts(actor, {
+      organizationId: "org-a",
+      rows,
+      idempotencyKey: "csv-reconcile-1",
+    });
+    expect(committed).toMatchObject({ created: 1, updated: 1, skipped: 1, errors: 1 });
+    expect(committed.rows.map((row) => row.rowNumber)).toEqual([1, 2, 3, 4]);
+    const reloaded = new CrmService(
+      { repository },
+      {
+        clock: () => new Date("2026-01-01T00:00:00.000Z"),
+        generateId: (prefix) => `${prefix}-reload-${++sequence}`,
+      },
+    );
+    const replay = await reloaded.importContacts(actor, {
+      organizationId: "org-a",
+      rows,
+      idempotencyKey: "csv-reconcile-1",
+    });
+    expect(replay).toEqual({ ...committed, idempotent: true });
+    expect(replay.contacts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: existing.id, company: "Northstar" }),
+      ]),
+    );
+  });
+
+  it("reconciles safe CRM relationships while retaining tombstone provenance", async () => {
+    const repository = new InMemoryCrmRepository();
+    let sequence = 0;
+    const crm = new CrmService(
+      { repository },
+      {
+        clock: () => new Date("2026-01-01T00:00:00.000Z"),
+        generateId: (prefix) => `${prefix}-${++sequence}`,
+      },
+    );
+    const survivor = await crm.createContact(actor, {
+      organizationId: "org-a",
+      displayName: "Survivor",
+      email: "survivor@example.com",
+    });
+    const retired = await crm.createContact(actor, {
+      organizationId: "org-a",
+      displayName: "Retired",
+      email: "retired@example.com",
+    });
+    await crm.addNote(actor, {
+      organizationId: "org-a",
+      contactId: retired.id,
+      body: "Historical note",
+    });
+    await crm.setPipelineStage(actor, {
+      organizationId: "org-a",
+      contactId: retired.id,
+      stage: "qualified",
+    });
+    const projection = await crm.addContactToEvent(actor, {
+      organizationId: "org-a",
+      contactId: retired.id,
+      participantId: "participant-a",
+      eventId: "event-a",
+      idempotencyKey: "link-retired",
+    });
+    const segment = await crm.createSegment(actor, {
+      organizationId: "org-a",
+      name: "Retired segment",
+      rules: [{ field: "custom.contactId", operator: "eq", value: retired.id }],
+    });
+    const outreach = await crm.sendPersonalizedOutreach(actor, {
+      organizationId: "org-a",
+      contactId: retired.id,
+      subject: "Historical recipient",
+      body: "Do not rewire",
+      idempotencyKey: "retired-recipient-snapshot",
+    });
+
+    const preview = await crm.previewMergeContacts(actor, {
+      organizationId: "org-a",
+      primaryContactId: survivor.id,
+      duplicateContactIds: [retired.id],
+    });
+    expect(preview.canCommit).toBe(true);
+    expect(preview.rewired).toEqual({
+      participantContactLinks: 1,
+      notes: 1,
+      segments: 1,
+      pipelineHistory: 1,
+    });
+    expect((await repository.getContact("org-a", retired.id))?.status).toBe("active");
+
+    const merged = await crm.mergeContacts(actor, {
+      organizationId: "org-a",
+      primaryContactId: survivor.id,
+      duplicateContactIds: [retired.id],
+      idempotencyKey: "merge-reconcile-1",
+    });
+    expect(merged).toMatchObject({
+      survivorId: survivor.id,
+      retiredIds: [retired.id],
+      auditId: expect.any(String),
+      rewired: {
+        participantContactLinks: 1,
+        notes: 1,
+        segments: 1,
+        pipelineHistory: 1,
+      },
+    });
+    expect(merged.merged[0]).toMatchObject({
+      id: retired.id,
+      status: "merged",
+      mergedIntoId: survivor.id,
+      mergeAuditId: merged.auditId,
+    });
+    expect((await repository.listNotes("org-a", survivor.id))[0]).toMatchObject({
+      body: "Historical note",
+      contactId: survivor.id,
+      sourceCrmContactId: retired.id,
+      mergeAuditId: merged.auditId,
+    });
+    expect((await repository.listPipelineHistory("org-a", survivor.id))[0]).toMatchObject({
+      contactId: survivor.id,
+      sourceCrmContactId: retired.id,
+      mergeAuditId: merged.auditId,
+    });
+    expect((await repository.listParticipantContactLinks("org-a"))[0]).toMatchObject({
+      participantId: "participant-a",
+      eventId: "event-a",
+      crmContactId: survivor.id,
+      sourceCrmContactId: retired.id,
+      mergeAuditId: merged.auditId,
+    });
+    expect(await repository.getProjection("org-a", "event-a", retired.id)).toBeNull();
+    expect(await repository.getProjection("org-a", "event-a", survivor.id)).toMatchObject({
+      participantId: "participant-a",
+      crmContactId: survivor.id,
+    });
+    expect(await repository.getSegment("org-a", segment.id)).toMatchObject({
+      rules: [expect.objectContaining({ value: survivor.id })],
+      mergeAuditIds: [merged.auditId],
+    });
+    expect(await repository.getOutreachByIdempotencyKey(
+      "org-a",
+      "retired-recipient-snapshot",
+    )).toMatchObject({
+      id: outreach.id,
+      contactId: retired.id,
+      recipientEmail: "retired@example.com",
+    });
+    expect(projection.projection.participantId).toBe("participant-a");
+  });
+
+  it("fails same-event distinct-participant collisions before any CRM mutation", async () => {
+    const repository = new InMemoryCrmRepository();
+    let sequence = 0;
+    const crm = new CrmService(
+      { repository },
+      {
+        clock: () => new Date("2026-01-01T00:00:00.000Z"),
+        generateId: (prefix) => `${prefix}-collision-${++sequence}`,
+      },
+    );
+    const survivor = await crm.createContact(actor, {
+      organizationId: "org-a",
+      displayName: "Survivor",
+      email: "collision-survivor@example.com",
+    });
+    const retired = await crm.createContact(actor, {
+      organizationId: "org-a",
+      displayName: "Retired",
+      email: "collision-retired@example.com",
+    });
+    await crm.addContactToEvent(actor, {
+      organizationId: "org-a",
+      contactId: survivor.id,
+      participantId: "participant-one",
+      eventId: "event-collision",
+      idempotencyKey: "collision-one",
+    });
+    await crm.addContactToEvent(actor, {
+      organizationId: "org-a",
+      contactId: retired.id,
+      participantId: "participant-two",
+      eventId: "event-collision",
+      idempotencyKey: "collision-two",
+    });
+
+    const preview = await crm.previewMergeContacts(actor, {
+      organizationId: "org-a",
+      primaryContactId: survivor.id,
+      duplicateContactIds: [retired.id],
+    });
+    expect(preview.participantConflicts).toEqual([
+      expect.objectContaining({
+        eventId: "event-collision",
+        participantIds: ["participant-one", "participant-two"],
+      }),
+    ]);
+    await expect(
+      crm.mergeContacts(actor, {
+        organizationId: "org-a",
+        primaryContactId: survivor.id,
+        duplicateContactIds: [retired.id],
+        idempotencyKey: "collision-commit",
+      }),
+    ).rejects.toMatchObject({
+      code: "CRM_CONFLICT",
+      details: { participantConflicts: expect.any(Array) },
+    });
+    expect(await crm.getContact(actor, "org-a", survivor.id)).toMatchObject({ status: "active" });
+    expect(await crm.getContact(actor, "org-a", retired.id)).toMatchObject({ status: "active" });
+    expect((await repository.listParticipantContactLinks("org-a")).map((link) => link.crmContactId)).toEqual(
+      expect.arrayContaining([survivor.id, retired.id]),
+    );
+  });
+  it("exposes read-only import preview and requires idempotency for route commits", async () => {
+    const repository = new InMemoryCrmRepository();
+    const crm = new CrmService(
+      { repository },
+      {
+        clock: () => new Date("2026-01-01T00:00:00.000Z"),
+        generateId: (prefix) => `${prefix}-route`,
+      },
+    );
+    const app = crmRouteApp(crm);
+    const base = "/api/admin/organizations/org-a/crm";
+
+    const preview = await app.request(`${base}/contacts/import/preview`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        csv: "name,email\nRoute Preview,route-preview@example.com",
+      }),
+    });
+    expect(preview.status).toBe(200);
+    await expect(preview.json()).resolves.toMatchObject({
+      data: {
+        preview: true,
+        created: 1,
+        updated: 0,
+        skipped: 0,
+        errors: 0,
+        rows: [{ rowNumber: 1, status: "created" }],
+      },
+    });
+    expect(await repository.listContacts("org-a")).toEqual([]);
+
+    const missingKey = await app.request(`${base}/contacts/import`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        csv: "name,email\nRoute Commit,route-commit@example.com",
+      }),
+    });
+    expect(missingKey.status).toBe(400);
+    await expect(missingKey.json()).resolves.toMatchObject({
+      error: { code: "VALIDATION_FAILED" },
+    });
+
+    const committed = await app.request(`${base}/contacts/import`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "idempotency-key": "route-import-commit",
+      },
+      body: JSON.stringify({
+        csv: "name,email\nRoute Commit,route-commit@example.com",
+      }),
+    });
+    expect(committed.status).toBe(201);
+    await expect(committed.json()).resolves.toMatchObject({
+      data: {
+        preview: false,
+        created: 1,
+        rows: [{ rowNumber: 1, status: "created" }],
+      },
+    });
+  });
+
+  it("returns participant merge collisions through route preview and commit", async () => {
+    const repository = new InMemoryCrmRepository();
+    let sequence = 0;
+    const crm = new CrmService(
+      { repository },
+      {
+        clock: () => new Date("2026-01-01T00:00:00.000Z"),
+        generateId: (prefix) => `${prefix}-route-${++sequence}`,
+      },
+    );
+    const survivor = await crm.createContact(actor, {
+      organizationId: "org-a",
+      displayName: "Route Survivor",
+      email: "route-survivor@example.com",
+    });
+    const retired = await crm.createContact(actor, {
+      organizationId: "org-a",
+      displayName: "Route Retired",
+      email: "route-retired@example.com",
+    });
+    await crm.addContactToEvent(actor, {
+      organizationId: "org-a",
+      contactId: survivor.id,
+      participantId: "route-participant-one",
+      eventId: "route-event",
+      idempotencyKey: "route-link-one",
+    });
+    await crm.addContactToEvent(actor, {
+      organizationId: "org-a",
+      contactId: retired.id,
+      participantId: "route-participant-two",
+      eventId: "route-event",
+      idempotencyKey: "route-link-two",
+    });
+    const app = crmRouteApp(crm);
+    const mergePath =
+      `/api/admin/organizations/org-a/crm/contacts/${survivor.id}/merge`;
+
+    const preview = await app.request(`${mergePath}/preview`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ duplicateContactIds: [retired.id] }),
+    });
+    expect(preview.status).toBe(200);
+    await expect(preview.json()).resolves.toMatchObject({
+      data: {
+        canCommit: false,
+        participantConflicts: [
+          {
+            eventId: "route-event",
+            participantIds: ["route-participant-one", "route-participant-two"],
+          },
+        ],
+      },
+    });
+
+    const committed = await app.request(mergePath, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "idempotency-key": "route-merge-collision",
+      },
+      body: JSON.stringify({ duplicateContactIds: [retired.id] }),
+    });
+    expect(committed.status).toBe(409);
+    await expect(committed.json()).resolves.toMatchObject({
+      error: {
+        code: "CONFLICT",
+        details: { participantConflicts: expect.any(Array) },
+      },
+    });
+    expect(await repository.getContact("org-a", retired.id)).toMatchObject({
+      status: "active",
+    });
+  });
 });
