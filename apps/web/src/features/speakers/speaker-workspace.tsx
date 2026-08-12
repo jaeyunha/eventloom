@@ -1,10 +1,13 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { type ChangeEvent, type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import styles from "../admin/admin-shell.module.css";
 import {
   createSpeakerApi,
+  ORGANIZER_HEADSHOT_ACCEPTED_TYPES,
+  ORGANIZER_HEADSHOT_MAX_BYTES,
   type SpeakerApi,
   SpeakerApiError,
   type SpeakerAsset,
@@ -12,6 +15,7 @@ import {
   type SpeakerEmailPreview,
   type SpeakerEmailSend,
   type SpeakerEmailTemplate,
+  type SpeakerHeadshotReplacement,
   type SpeakerImportPreview,
   type SpeakerInvitationPreview,
   type SpeakerInvitationResult,
@@ -31,7 +35,6 @@ import {
 export interface SpeakerWorkspaceProps {
   readonly organizationId: string;
   readonly eventId: string;
-  readonly baseUrl?: string;
   readonly api?: SpeakerApi;
 }
 
@@ -213,11 +216,6 @@ function editDraftFor(speaker: SpeakerRecord): EditDraft {
   };
 }
 
-function apiBaseUrl(explicit: string | undefined): string {
-  const normalized = (explicit ?? "").trim().replace(/\/+$/u, "");
-  return normalized;
-}
-
 function errorMessage(reason: unknown): string {
   if (reason instanceof SpeakerApiError) {
     if (
@@ -264,9 +262,37 @@ function assetSize(value: number): string {
   if (value < 1_048_576) return `${Math.round(value / 102.4) / 10} KB`;
   return `${Math.round(value / 104_857.6) / 10} MB`;
 }
+export type OrganizerHeadshotUploadStatus = "idle" | "busy" | "success" | "error";
+
+export function validateOrganizerHeadshotFile(file: File): string | null {
+  const contentType = file.type.trim().toLowerCase();
+  if (
+    !ORGANIZER_HEADSHOT_ACCEPTED_TYPES.includes(
+      contentType as (typeof ORGANIZER_HEADSHOT_ACCEPTED_TYPES)[number],
+    )
+  ) {
+    return "Choose a JPEG, PNG, or WebP image.";
+  }
+  if (file.size > ORGANIZER_HEADSHOT_MAX_BYTES) {
+    return "Headshots must be 5 MB or smaller.";
+  }
+  return null;
+}
 
 export function taskComplete(status: string): boolean {
   return status === "completed" || status === "submitted" || status === "waived";
+}
+
+export function organizerHeadshotPreviewPath(value: string): string | null {
+  const candidate = value.trim();
+  if (!candidate.startsWith("/api/")) return null;
+  try {
+    const base = "https://same-origin.invalid";
+    const resolved = new URL(candidate, base);
+    return resolved.origin === base && resolved.pathname.startsWith("/api/") ? candidate : null;
+  } catch {
+    return null;
+  }
 }
 
 function taskSummaryFor(tasks: readonly SpeakerTask[]): SpeakerRecord["taskSummary"] {
@@ -668,6 +694,103 @@ export function SpeakerAssetMetadata({ asset }: Readonly<{ asset: SpeakerAsset }
     </span>
   );
 }
+export interface SpeakerHeadshotProps {
+  readonly speakerName: string;
+  readonly asset: SpeakerAsset | null;
+  readonly imageUrl: string | null;
+  readonly loading: boolean;
+  readonly error: string | null;
+  readonly revision: number;
+  readonly onRetry?: () => void;
+  readonly onImageError?: () => void;
+}
+
+export function SpeakerHeadshot({
+  speakerName,
+  asset,
+  imageUrl,
+  loading,
+  error,
+  revision,
+  onRetry,
+  onImageError,
+}: SpeakerHeadshotProps) {
+  const label = `${speakerName} headshot`;
+  const safeImageUrl = imageUrl === null ? null : organizerHeadshotPreviewPath(imageUrl);
+  const isReadyImage =
+    asset !== null &&
+    asset.status === "ready" &&
+    safeImageUrl !== null &&
+    ORGANIZER_HEADSHOT_ACCEPTED_TYPES.includes(
+      asset.contentType.trim().toLowerCase() as (typeof ORGANIZER_HEADSHOT_ACCEPTED_TYPES)[number],
+    );
+  return (
+    <div
+      role="img"
+      aria-label={label}
+      style={{
+        display: "grid",
+        placeItems: "center",
+        minHeight: "12rem",
+        padding: "0.75rem",
+        border: "1px solid var(--admin-border)",
+        borderRadius: "var(--admin-radius-sm)",
+        background: "var(--admin-surface)",
+        overflow: "hidden",
+      }}
+    >
+      {isReadyImage ? (
+        <Image
+          key={`${asset.assetId}:${revision}`}
+          src={safeImageUrl}
+          alt={`${speakerName} headshot`}
+          width={640}
+          height={360}
+          unoptimized
+          style={{ display: "block", width: "100%", maxHeight: "18rem", objectFit: "cover" }}
+          onError={onImageError}
+        />
+      ) : (
+        <div style={{ display: "grid", gap: "0.35rem", textAlign: "center" }}>
+          <strong>
+            {loading
+              ? "Loading headshot…"
+              : error
+                ? "Headshot unavailable"
+                : asset === null
+                  ? "No headshot uploaded"
+                  : asset.status !== "ready"
+                    ? "Headshot is not ready"
+                    : "Headshot preview unavailable"}
+          </strong>
+          <span style={mutedStyle}>
+            {error ??
+              (loading
+                ? "Requesting a secure preview from the organizer API."
+                : "A secure preview is not available for this speaker.")}
+          </span>
+          {onRetry && !loading && (error !== null || asset !== null) ? (
+            <button className={styles.secondaryButton} type="button" onClick={onRetry}>
+              Retry headshot preview
+            </button>
+          ) : null}
+        </div>
+      )}
+    </div>
+  );
+}
+function speakerAssetFromHeadshot(replacement: SpeakerHeadshotReplacement): SpeakerAsset {
+  const asset = replacement.asset;
+  return {
+    assetId: asset.id,
+    fileName: asset.fileName,
+    contentType: asset.contentType,
+    byteSize: asset.sizeBytes,
+    status: asset.state === "pending_upload" ? "pending" : asset.state,
+    uploadedAt: asset.createdAt,
+    downloadUrl: null,
+  };
+}
 
 export interface SpeakerInvitationControlsProps {
   readonly previewBusy: boolean;
@@ -915,10 +1038,8 @@ function ProfileFields({
 export function SpeakerWorkspace({
   organizationId,
   eventId,
-  baseUrl: explicitBaseUrl,
   api: providedApi,
 }: SpeakerWorkspaceProps) {
-  const baseUrl = apiBaseUrl(explicitBaseUrl);
   const [api, setApi] = useState<SpeakerApi | null>(providedApi ?? null);
   const [roster, setRoster] = useState<SpeakerRosterEnvelope | null>(null);
   const [progress, setProgress] = useState<SpeakerProgressEnvelope | null>(null);
@@ -979,6 +1100,17 @@ export function SpeakerWorkspace({
   >([]);
   const [detailBusy, setDetailBusy] = useState(false);
   const [detailNotice, setDetailNotice] = useState<string | null>(null);
+  const [headshotUploadStatus, setHeadshotUploadStatus] =
+    useState<OrganizerHeadshotUploadStatus>("idle");
+  const [headshotUploadMessage, setHeadshotUploadMessage] = useState<string | null>(null);
+  const [headshotPreviewUrl, setHeadshotPreviewUrl] = useState<string | null>(null);
+  const [headshotPreviewError, setHeadshotPreviewError] = useState<string | null>(null);
+  const [headshotPreviewLoading, setHeadshotPreviewLoading] = useState(false);
+  const [headshotPreviewRevision, setHeadshotPreviewRevision] = useState(0);
+  const [headshotPreviewRetry, setHeadshotPreviewRetry] = useState(0);
+  const [headshotAssetsByParticipant, setHeadshotAssetsByParticipant] = useState<
+    Readonly<Record<string, SpeakerAsset>>
+  >({});
   const [downloadUrls, setDownloadUrls] = useState<Readonly<Record<string, string>>>({});
   const [downloadErrors, setDownloadErrors] = useState<Readonly<Record<string, string>>>({});
   const [downloadBusyAssetId, setDownloadBusyAssetId] = useState<string | null>(null);
@@ -989,6 +1121,7 @@ export function SpeakerWorkspace({
   const [taskBusy, setTaskBusy] = useState(false);
   const [saveBusy, setSaveBusy] = useState(false);
   const rosterRequestRef = useRef(0);
+  const headshotRequestRef = useRef(0);
   const importRequestRef = useRef(0);
   const secondaryLoadRef = useRef<{ api: SpeakerApi; key: string } | null>(null);
   const progressLoadRef = useRef<{ api: SpeakerApi; key: string; requestId: number } | null>(null);
@@ -1002,12 +1135,12 @@ export function SpeakerWorkspace({
       return;
     }
     try {
-      setApi(createSpeakerApi(baseUrl, organizationId, eventId));
+      setApi(createSpeakerApi("", organizationId, eventId));
     } catch (reason: unknown) {
       setApi(null);
       setError(errorMessage(reason));
     }
-  }, [baseUrl, eventId, organizationId, providedApi]);
+  }, [eventId, organizationId, providedApi]);
 
   useEffect(() => {
     if (api === null) {
@@ -1198,6 +1331,19 @@ export function SpeakerWorkspace({
 
   const speakers = roster?.speakers ?? [];
   const selectedSpeaker = speakers.find((speaker) => speaker.participantId === selectedId) ?? null;
+  const cachedHeadshotAsset =
+    selectedSpeaker === null
+      ? null
+      : (headshotAssetsByParticipant[selectedSpeaker.participantId] ?? null);
+  const selectedHeadshotAsset =
+    selectedSpeaker === null || selectedSpeaker.headshotAssetId === null
+      ? null
+      : (selectedSpeaker.assets.find(
+          (asset) => asset.assetId === selectedSpeaker.headshotAssetId,
+        ) ??
+        (cachedHeadshotAsset?.assetId === selectedSpeaker.headshotAssetId
+          ? cachedHeadshotAsset
+          : null));
   const duplicateEmailWarnings = useMemo(() => duplicateEmailConflicts(speakers), [speakers]);
   const emailAnyBusy = emailSaveBusy || emailPreviewBusy || emailSendBusy || emailHistoryBusy;
   const statusOptions = useMemo(() => {
@@ -1262,6 +1408,86 @@ export function SpeakerWorkspace({
     .filter((participantId) => selectedSpeakerIds.includes(participantId));
   const allVisibleSelected =
     filteredSpeakers.length > 0 && selectedVisibleSpeakerIds.length === filteredSpeakers.length;
+  useEffect(() => {
+    const participantId = selectedSpeaker?.participantId;
+    const assetId = selectedSpeaker?.headshotAssetId;
+    const requestId = headshotRequestRef.current + headshotPreviewRetry + 1;
+    headshotRequestRef.current = requestId;
+    let active = true;
+    setHeadshotPreviewUrl(null);
+    setHeadshotPreviewError(null);
+
+    if (api === null || participantId === undefined || assetId === undefined || assetId === null) {
+      setHeadshotPreviewLoading(false);
+      return () => {
+        active = false;
+      };
+    }
+
+    setHeadshotPreviewLoading(true);
+    void (async () => {
+      try {
+        if (selectedHeadshotAsset === null) {
+          const assets = await withTimeout(
+            (signal) => api.getAssets(participantId, signal),
+            "Headshot metadata load",
+          );
+          if (!active || requestId !== headshotRequestRef.current) return;
+          const linked = assets.find((asset) => asset.assetId === assetId);
+          if (linked === undefined) {
+            setHeadshotPreviewError("The linked headshot file is unavailable.");
+            return;
+          }
+          setHeadshotAssetsByParticipant((current) => ({
+            ...current,
+            [participantId]: linked,
+          }));
+          return;
+        }
+
+        if (selectedHeadshotAsset.status !== "ready") {
+          throw new Error("The linked headshot is not ready yet.");
+        }
+        const contentType = selectedHeadshotAsset.contentType.trim().toLowerCase();
+        if (
+          !ORGANIZER_HEADSHOT_ACCEPTED_TYPES.includes(
+            contentType as (typeof ORGANIZER_HEADSHOT_ACCEPTED_TYPES)[number],
+          )
+        ) {
+          throw new Error("The linked asset is not a supported headshot image.");
+        }
+        const grant = await withTimeout(
+          (signal) => api.getDownloadGrant(selectedHeadshotAsset.assetId, signal),
+          "Headshot preview",
+        );
+        const previewPath = organizerHeadshotPreviewPath(grant.url);
+        if (previewPath === null) {
+          throw new Error("The private headshot preview did not return a same-origin API path.");
+        }
+        if (!active || requestId !== headshotRequestRef.current) return;
+        setHeadshotPreviewUrl(previewPath);
+        setHeadshotPreviewRevision((current) => current + 1);
+      } catch (reason: unknown) {
+        if (active && requestId === headshotRequestRef.current) {
+          setHeadshotPreviewError(errorMessage(reason));
+        }
+      } finally {
+        if (active && requestId === headshotRequestRef.current) {
+          setHeadshotPreviewLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [
+    api,
+    headshotPreviewRetry,
+    selectedHeadshotAsset,
+    selectedSpeaker?.headshotAssetId,
+    selectedSpeaker?.participantId,
+  ]);
 
   function clearRosterFilters(): void {
     setQuery("");
@@ -1512,6 +1738,8 @@ export function SpeakerWorkspace({
 
   function beginEdit(speaker: SpeakerRecord): void {
     setSelectedId(speaker.participantId);
+    setHeadshotUploadStatus("idle");
+    setHeadshotUploadMessage(null);
     setEditDraft(editDraftFor(speaker));
     setEditError(null);
     setInvitationPreview(null);
@@ -2087,6 +2315,98 @@ export function SpeakerWorkspace({
       setDownloadErrors((current) => ({ ...current, [assetId]: errorMessage(reason) }));
     } finally {
       setDownloadBusyAssetId((current) => (current === assetId ? null : current));
+    }
+  }
+  function retryHeadshotPreview(): void {
+    setHeadshotPreviewRetry((current) => current + 1);
+  }
+
+  function markHeadshotPreviewFailed(): void {
+    setHeadshotPreviewUrl(null);
+    setHeadshotPreviewLoading(false);
+    setHeadshotPreviewError("The secure headshot preview could not be rendered.");
+  }
+
+  async function uploadOrganizerHeadshot(event: ChangeEvent<HTMLInputElement>): Promise<void> {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    input.value = "";
+    if (file === undefined) return;
+    const validationError = validateOrganizerHeadshotFile(file);
+    if (validationError !== null) {
+      setHeadshotUploadStatus("error");
+      setHeadshotUploadMessage(validationError);
+      return;
+    }
+    if (api === null || selectedSpeaker === null || api.replaceHeadshot === undefined) {
+      setHeadshotUploadStatus("error");
+      setHeadshotUploadMessage(
+        "Organizer headshot upload is unavailable until the private upload API is provisioned.",
+      );
+      return;
+    }
+
+    const participantId = selectedSpeaker.participantId;
+    const expectedVersion = selectedSpeaker.version;
+    const supersedesAssetId = selectedSpeaker.headshotAssetId ?? undefined;
+    setHeadshotUploadStatus("busy");
+    setHeadshotUploadMessage(`Uploading ${file.name}…`);
+    try {
+      const replacement = await api.replaceHeadshot({
+        participantId,
+        file,
+        expectedVersion,
+        ...(supersedesAssetId === undefined ? {} : { supersedesAssetId }),
+      });
+      if (
+        replacement.asset.eventId !== eventId ||
+        replacement.asset.participantId !== participantId ||
+        replacement.asset.state !== "ready" ||
+        replacement.profile.participantId !== participantId ||
+        replacement.profile.headshotAssetId !== replacement.asset.id
+      ) {
+        throw new TypeError(
+          "The headshot replacement response did not match the selected speaker.",
+        );
+      }
+      const nextAsset = speakerAssetFromHeadshot(replacement);
+      setRoster((current) =>
+        current === null
+          ? current
+          : mergeSpeaker(current, participantId, {
+              headshotAssetId: replacement.asset.id,
+              assets: [
+                ...(
+                  current.speakers.find((speaker) => speaker.participantId === participantId)
+                    ?.assets ?? []
+                ).filter((asset) => asset.assetId !== nextAsset.assetId),
+                nextAsset,
+              ],
+              version: replacement.profile.version,
+              updatedAt: replacement.profile.updatedAt,
+            }),
+      );
+      setHeadshotAssetsByParticipant((current) => ({
+        ...current,
+        [participantId]: nextAsset,
+      }));
+      setHeadshotPreviewUrl(null);
+      setHeadshotPreviewError(null);
+      setHeadshotPreviewRevision((current) => current + 1);
+      setEditDraft((current) =>
+        current === null
+          ? current
+          : {
+              ...current,
+              headshotAssetId: replacement.asset.id,
+              expectedVersion: replacement.profile.version,
+            },
+      );
+      setHeadshotUploadStatus("success");
+      setHeadshotUploadMessage(`Headshot uploaded for ${selectedSpeaker.displayName}.`);
+    } catch (reason: unknown) {
+      setHeadshotUploadStatus("error");
+      setHeadshotUploadMessage(errorMessage(reason));
     }
   }
 
@@ -3259,6 +3579,48 @@ export function SpeakerWorkspace({
               error={detailNotice.includes("unavailable") || detailNotice.includes("could not")}
             />
           ) : null}
+          <section
+            style={{ ...panelStyle, boxShadow: "none", padding: "0.85rem" }}
+            aria-labelledby="speaker-headshot-heading"
+            aria-busy={headshotPreviewLoading || headshotUploadStatus === "busy"}
+          >
+            <h3 id="speaker-headshot-heading" style={{ margin: 0, fontSize: "0.9rem" }}>
+              Headshot
+            </h3>
+            <SpeakerHeadshot
+              speakerName={selectedSpeaker.displayName}
+              asset={selectedHeadshotAsset}
+              imageUrl={headshotPreviewUrl}
+              loading={headshotPreviewLoading}
+              error={headshotPreviewError}
+              revision={headshotPreviewRevision}
+              onRetry={retryHeadshotPreview}
+              onImageError={markHeadshotPreviewFailed}
+            />
+            <label style={fieldStyle}>
+              <span style={labelStyle}>Upload or replace headshot</span>
+              <input
+                type="file"
+                accept={ORGANIZER_HEADSHOT_ACCEPTED_TYPES.join(",")}
+                onChange={(event) => void uploadOrganizerHeadshot(event)}
+                disabled={
+                  headshotUploadStatus === "busy" ||
+                  api === null ||
+                  api.replaceHeadshot === undefined
+                }
+              />
+            </label>
+            <p style={mutedStyle}>
+              Accepted headshot types: JPEG, PNG, or WebP; maximum size 5 MB. Uploads use the
+              event-scoped organizer private upload flow.
+            </p>
+            {headshotUploadMessage ? (
+              <FormMessage
+                message={headshotUploadMessage}
+                error={headshotUploadStatus === "error"}
+              />
+            ) : null}
+          </section>
           {editDraft ? (
             <form
               onSubmit={(event) => void saveSpeaker(event)}
@@ -3280,28 +3642,6 @@ export function SpeakerWorkspace({
                   ))}
                 </select>
               </label>
-              <div style={{ ...panelStyle, boxShadow: "none", padding: "0.85rem" }}>
-                <h3 style={{ margin: 0, fontSize: "0.9rem" }}>Headshot</h3>
-                {selectedSpeaker.headshotAssetId ? (
-                  <p style={mutedStyle}>
-                    A headshot is linked to this profile. View the uploaded asset below.
-                  </p>
-                ) : (
-                  <p style={mutedStyle}>No headshot has been uploaded yet.</p>
-                )}
-                <button
-                  className={styles.secondaryButton}
-                  type="button"
-                  disabled
-                  title="Headshot upload is provided by the speaker portal."
-                >
-                  Upload or replace headshot
-                </button>
-                <p style={mutedStyle}>
-                  Headshot upload and replacement are speaker-portal actions; organizer upload is
-                  not available from this API.
-                </p>
-              </div>
               {editError ? <FormMessage message={editError} error /> : null}
               <div style={inlineStyle}>
                 <button
