@@ -262,30 +262,33 @@ describe("evaluation HTTP routes", () => {
     expect(body.submission.participants).toEqual([]);
     expect(body.submission.answers).toEqual({ topic: "Visible" });
   });
-  it("deletes an outstanding assignment with a 204 empty response", async () => {
+  it("replaces the active assignment set with an empty authoritative projection", async () => {
     const app = createTestApp();
     await jsonRequest(app, "/evaluations/plans", "POST", planRequest);
     await jsonRequest(app, "/evaluations/plans/plan-1/open", "POST", { expectedVersion: 1 });
-    const assigned = await jsonRequest(app, "/evaluations/plans/plan-1/assignments", "POST", {
+    await jsonRequest(app, "/evaluations/plans/plan-1/assignments", "POST", {
       roundId: "round-1",
       submissionId: "submission-1",
       reviewerIds: ["reviewer-1"],
     });
-    const assignmentId = ((await assigned.json()) as { assignments: Array<{ id: string }> })
-      .assignments[0]?.id;
-    if (assignmentId === undefined) throw new Error("Expected an assignment fixture.");
 
-    const removed = await app.request(`/evaluations/plans/plan-1/assignments/${assignmentId}`, {
-      method: "DELETE",
+    const removed = await jsonRequest(app, "/evaluations/plans/plan-1/assignments", "POST", {
+      roundId: "round-1",
+      submissionId: "submission-1",
+      reviewerIds: [],
     });
-    expect(removed.status).toBe(204);
-    expect(await removed.text()).toBe("");
+    expect(removed.status).toBe(201);
+    await expect(removed.json()).resolves.toEqual({ assignments: [] });
 
     const listed = await app.request("/evaluations/plans/plan-1/assignments");
     await expect(listed.json()).resolves.toEqual({ assignments: [] });
+    const mine = await app.request("/evaluations/plans/plan-1/assignments/mine", {
+      headers: { "x-test-actor": "reviewer" },
+    });
+    await expect(mine.json()).resolves.toEqual({ assignments: [] });
   });
 
-  it("rejects forbidden and submitted assignment deletions safely", async () => {
+  it("rejects forbidden deletion and removes submitted assignments from every projection", async () => {
     const app = createTestApp();
     await jsonRequest(app, "/evaluations/plans", "POST", planRequest);
     await jsonRequest(app, "/evaluations/plans/plan-1/open", "POST", { expectedVersion: 1 });
@@ -325,10 +328,15 @@ describe("evaluation HTTP routes", () => {
     );
 
     const submitted = await app.request(path, { method: "DELETE" });
-    expect(submitted.status).toBe(409);
-    await expect(submitted.json()).resolves.toMatchObject({
-      error: { code: "EVALUATION_CONFLICT" },
+    expect(submitted.status).toBe(204);
+    expect(await submitted.text()).toBe("");
+
+    const listed = await app.request("/evaluations/plans/plan-1/assignments");
+    await expect(listed.json()).resolves.toEqual({ assignments: [] });
+    const mine = await app.request("/evaluations/plans/plan-1/assignments/mine", {
+      headers: { "x-test-actor": "reviewer" },
     });
+    await expect(mine.json()).resolves.toEqual({ assignments: [] });
   });
   it("loads the authenticated reviewer workspace in one redacted batch", async () => {
     const app = createTestApp({}, {}, [

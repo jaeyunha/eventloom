@@ -513,7 +513,38 @@ async function evaluationRequest<T>(
   }
   return body as T;
 }
-export async function deleteReviewAssignment(
+export interface ReplaceReviewAssignmentsInput {
+  readonly roundId: string;
+  readonly submissionId: string;
+  readonly reviewerIds: readonly string[];
+  readonly expectedVersion?: number | undefined;
+}
+
+export async function replaceReviewAssignments(
+  baseUrl: string,
+  planId: string,
+  input: ReplaceReviewAssignmentsInput,
+  fetcher: Fetcher = fetch,
+): Promise<readonly ReviewPlanAssignment[]> {
+  const result = await evaluationRequest<{
+    assignments: readonly ApiAssignment[];
+  }>(
+    baseUrl,
+    `/plans/${encodeURIComponent(planId)}/assignments`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        roundId: input.roundId,
+        submissionId: input.submissionId,
+        reviewerIds: input.reviewerIds,
+        ...(input.expectedVersion === undefined ? {} : { expectedVersion: input.expectedVersion }),
+      }),
+    },
+    fetcher,
+  );
+  return result.assignments;
+}
+export async function unassignReviewAssignment(
   baseUrl: string,
   planId: string,
   assignmentId: string,
@@ -589,6 +620,36 @@ function withScorecardResponses(
     .join("\n")}`;
 }
 
+export function normalizeCompletionPercent(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(100, Math.max(0, Math.round(value)));
+}
+
+function normalizeReviewerProgress(reviewer: ReviewerProgressSummary): ReviewerProgressSummary {
+  return {
+    ...reviewer,
+    completionPercent: normalizeCompletionPercent(reviewer.completionPercent),
+  };
+}
+export function assignmentCompletionPercent(
+  assignments: readonly ReviewPlanAssignment[],
+  roundId?: string,
+): number {
+  const relevantAssignments =
+    roundId === undefined
+      ? assignments
+      : assignments.filter((assignment) => assignment.roundId === roundId);
+  const activeAssignments = relevantAssignments.filter(
+    (assignment) => assignment.status !== "abstained",
+  );
+  const submitted = activeAssignments.filter(
+    (assignment) => assignment.status === "submitted",
+  ).length;
+  return normalizeCompletionPercent(
+    activeAssignments.length === 0 ? 0 : (submitted / activeAssignments.length) * 100,
+  );
+}
+
 function mapPlan(
   plan: ApiPlan,
   eventId: string,
@@ -597,6 +658,12 @@ function mapPlan(
   decisions: Readonly<Record<string, ApiDecision | null>>,
   assignments: readonly ReviewPlanAssignment[] = [],
 ): ReviewPlanSeed {
+  const reviewerProgress = progress.reviewers?.map(normalizeReviewerProgress);
+  const activeAssignments = assignments.filter((assignment) => assignment.status !== "abstained");
+  const submittedAssignments = activeAssignments.filter(
+    (assignment) => assignment.status === "submitted",
+  ).length;
+  const abstainedAssignments = assignments.length - activeAssignments.length;
   const now = Date.now();
   return {
     planId: plan.id,
@@ -645,9 +712,7 @@ function mapPlan(
             : "open",
       opensAt: dateLabel(round.opensAt ?? plan.createdAt),
       closesAt: dateLabel(round.closesAt),
-      completionPercent:
-        progress.reviewers?.find((reviewer) => reviewer.roundId === round.id)?.completionPercent ??
-        (round.sequence === 1 ? progress.completionPercent : 0),
+      completionPercent: assignmentCompletionPercent(assignments, round.id),
       blindReview: round.blindReview === true || plan.blindReview,
       anonymization: round.anonymization,
       reviewerPool: round.reviewerPool,
@@ -657,14 +722,15 @@ function mapPlan(
     aggregates,
     assignments,
     progress: {
-      totalAssignments: progress.total,
-      assigned: progress.assigned,
-      inProgress: progress.inProgress,
-      submitted: progress.submitted,
-      abstained: progress.abstained,
-      conflicts: progress.abstained,
-      completionPercent: progress.completionPercent,
-      reviewers: progress.reviewers ?? [],
+      totalAssignments: assignments.length,
+      assigned: activeAssignments.length,
+      inProgress: activeAssignments.filter((assignment) => assignment.status === "in_progress")
+        .length,
+      submitted: submittedAssignments,
+      abstained: abstainedAssignments,
+      conflicts: abstainedAssignments,
+      completionPercent: assignmentCompletionPercent(assignments),
+      reviewers: reviewerProgress ?? [],
     },
   };
 }
@@ -741,8 +807,9 @@ function deriveReviewerProgress(
       if (assignment.status === "submitted") current.submitted += 1;
     }
     current.outstanding = Math.max(0, current.assigned - current.submitted);
-    current.completionPercent =
-      current.assigned === 0 ? 0 : Math.round((current.submitted / current.assigned) * 100);
+    current.completionPercent = normalizeCompletionPercent(
+      current.assigned === 0 ? 0 : (current.submitted / current.assigned) * 100,
+    );
     grouped.set(key, current);
   }
   return [...grouped.values()].sort(
@@ -1094,11 +1161,12 @@ function formatAssignmentStatus(status: EvaluatorAssignment["assignmentStatus"])
 }
 
 function ProgressBar({ label, value }: Readonly<{ label: string; value: number }>) {
+  const normalizedValue = normalizeCompletionPercent(value);
   return (
     <div className={styles.progressBlock}>
       <div className={styles.progressLabel}>
         <span>{label}</span>
-        <strong>{value}%</strong>
+        <strong>{normalizedValue}%</strong>
       </div>
       <div
         className={styles.progressTrack}
@@ -1106,9 +1174,9 @@ function ProgressBar({ label, value }: Readonly<{ label: string; value: number }
         aria-label={label}
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-valuenow={value}
+        aria-valuenow={normalizedValue}
       >
-        <span style={{ width: `${value}%` }} />
+        <span style={{ width: `${normalizedValue}%` }} />
       </div>
     </div>
   );
@@ -1735,11 +1803,26 @@ function OrganizerAuthoring({
   const reviewerDirectoryReady = !reviewerMembersLoading && reviewerMembersError === null;
 
   useEffect(() => {
-    const allowedReviewerIds = new Set(reviewerMembers.map((member) => member.userId));
-    setAssignmentReviewerIds((current) =>
-      current.filter((reviewerId) => allowedReviewerIds.has(reviewerId)),
+    const authoritativeReviewerIds = reviewerIdsForAssignmentTarget(
+      seed.assignments,
+      assignmentRoundId,
+      assignmentSubmissionId,
     );
-  }, [reviewerMembers]);
+    if (!reviewerDirectoryReady) {
+      setAssignmentReviewerIds(authoritativeReviewerIds);
+      return;
+    }
+    const allowedReviewerIds = new Set(reviewerMembers.map((member) => member.userId));
+    setAssignmentReviewerIds(
+      authoritativeReviewerIds.filter((reviewerId) => allowedReviewerIds.has(reviewerId)),
+    );
+  }, [
+    assignmentRoundId,
+    assignmentSubmissionId,
+    reviewerDirectoryReady,
+    reviewerMembers,
+    seed.assignments,
+  ]);
 
   function updateRound(
     roundIndex: number,
@@ -1894,14 +1977,16 @@ function OrganizerAuthoring({
     const round = rounds.find((candidate) => candidate.id === assignmentRoundId);
     const reviewerIds = [...assignmentReviewerIds];
     const submissionId = assignmentSubmissionId.trim();
-    if (round === undefined || submissionId.length === 0 || reviewerIds.length === 0) {
-      setAssignmentPreview("Enter a round, submission id, and at least one reviewer to preview.");
+    if (round === undefined || submissionId.length === 0) {
+      setAssignmentPreview(
+        "Enter a round and submission id to preview a complete reviewer-set replacement.",
+      );
       return;
     }
     if (!reviewerDirectoryReady) {
       setAssignmentPreview(
         reviewerMembersError ??
-          "Load the active, verified organization reviewers before previewing assignments.",
+          "Load the active, verified organization reviewers before previewing a replacement.",
       );
       return;
     }
@@ -1911,30 +1996,31 @@ function OrganizerAuthoring({
     }
     const pool = round.reviewerPool?.reviewerIds;
     const inPoolCount = pool?.filter((reviewerId) => reviewerIds.includes(reviewerId)).length ?? 0;
-    setAssignmentPreview(
-      `${reviewerIds.length} reviewer(s) will receive ${submissionId} in ${round.name}${
-        pool === undefined
-          ? ". No round pool is configured."
-          : `; ${inPoolCount} of ${reviewerIds.length} are in the configured pool.`
-      }`,
-    );
+    const replacementSummary =
+      reviewerIds.length === 0
+        ? `No reviewers selected; all active reviewer assignments for ${submissionId} in ${round.name} will be cleared.`
+        : `${reviewerIds.length} reviewer(s) will replace the complete active reviewer set for ${submissionId} in ${round.name}.`;
+    const poolSummary =
+      pool === undefined
+        ? " No round pool is configured."
+        : reviewerIds.length === 0
+          ? " The round reviewer pool remains unchanged."
+          : ` ${inPoolCount} of ${reviewerIds.length} selected reviewer(s) are in the configured pool.`;
+    setAssignmentPreview(`${replacementSummary}${poolSummary}`);
   }
 
   async function assignReviewers(): Promise<void> {
     const round = rounds.find((candidate) => candidate.id === assignmentRoundId);
     const reviewerIds = [...assignmentReviewerIds];
-    if (
-      round === undefined ||
-      assignmentSubmissionId.trim().length === 0 ||
-      reviewerIds.length === 0
-    ) {
-      setMessage("Provide a round, submission id, and at least one reviewer id.");
+    const submissionId = assignmentSubmissionId.trim();
+    if (round === undefined || submissionId.length === 0) {
+      setMessage("Provide a round and submission id.");
       return;
     }
     if (!reviewerDirectoryReady) {
       setMessage(
         reviewerMembersError ??
-          "Load the active, verified organization reviewers before assigning reviews.",
+          "Load the active, verified organization reviewers before replacing assignments.",
       );
       return;
     }
@@ -1944,35 +2030,37 @@ function OrganizerAuthoring({
     }
     const configuredPool = round.reviewerPool?.reviewerIds;
     if (
+      reviewerIds.length > 0 &&
       configuredPool !== undefined &&
       reviewerIds.some((reviewerId) => !configuredPool.includes(reviewerId))
     ) {
-      setMessage("Every assigned reviewer must belong to this round's reviewer pool.");
+      setMessage("Every selected reviewer must belong to this round's reviewer pool.");
       return;
     }
     setBusy(true);
     setMessage(null);
     try {
-      const result = await evaluationRequest<{
-        assignments: readonly ApiAssignment[];
-      }>(baseUrl, `/plans/${encodeURIComponent(seed.planId)}/assignments`, {
-        method: "POST",
-        body: JSON.stringify({
-          roundId: round.id,
-          submissionId: assignmentSubmissionId.trim(),
-          reviewerIds,
-          expectedVersion: version,
-        }),
+      const assignments = await replaceReviewAssignments(baseUrl, seed.planId, {
+        roundId: round.id,
+        submissionId,
+        reviewerIds,
+        expectedVersion: version,
       });
-      const assignmentIds = result.assignments.map((assignment) => assignment.id);
+      const assignmentIds = assignments.map((assignment) => assignment.id);
       setAssignmentPreview(
-        `${result.assignments.length} reviewer assignment(s) persisted: ${assignmentIds.join(", ")}`,
+        reviewerIds.length === 0
+          ? `Reviewer set replacement persisted; all active assignments for ${submissionId} were cleared.`
+          : `Reviewer set replacement persisted for ${submissionId}: ${assignmentIds.join(", ")}`,
       );
-      setMessage(`${result.assignments.length} reviewer assignment(s) saved.`);
+      setMessage(
+        reviewerIds.length === 0
+          ? "Reviewer assignments replaced; no active reviewers remain."
+          : `${assignments.length} reviewer assignment(s) now make up the complete active reviewer set.`,
+      );
       await onAssignmentsPersisted?.();
     } catch (reason: unknown) {
       setMessage(
-        reason instanceof Error ? reason.message : "Reviewer assignments could not be saved.",
+        reason instanceof Error ? reason.message : "Reviewer assignments could not be replaced.",
       );
     } finally {
       setBusy(false);
@@ -2117,14 +2205,15 @@ function OrganizerAuthoring({
         <div className={styles.formField}>
           <span className={styles.cardLabel}>Assignment tooling</span>
           <span className={styles.fieldHint}>
-            The plan cap is {maxAssignmentsPerReviewer} assignments per reviewer. Preview before
-            confirming a persisted assignment.
+            The plan cap is {maxAssignmentsPerReviewer} assignments per reviewer. Choose the
+            complete reviewer set; an empty selection clears all active assignments. Preview before
+            posting the replacement.
           </span>
         </div>
       </div>
       <div className={styles.summaryGrid}>
         <div className={styles.formField}>
-          <label htmlFor="assignment-submission-id">Submission id to assign</label>
+          <label htmlFor="assignment-submission-id">Submission for reviewer-set replacement</label>
           <select
             id="assignment-submission-id"
             value={assignmentSubmissionId}
@@ -2141,12 +2230,14 @@ function OrganizerAuthoring({
           </select>
           <span className={styles.fieldHint}>
             {seed.aggregates.length === 0
-              ? "No submissions are available for assignment."
-              : "Choose a submission from the authoritative event material."}
+              ? "No submissions are available for reviewer-set replacement."
+              : "Choose a submission from the authoritative event material; the reviewer selection replaces its complete active set."}
           </span>
         </div>
         <div className={styles.formField}>
-          <label htmlFor="assignment-reviewer-ids">Verified organization reviewers</label>
+          <label htmlFor="assignment-reviewer-ids">
+            Verified organization reviewers (complete replacement set)
+          </label>
           <select
             id="assignment-reviewer-ids"
             multiple
@@ -2172,7 +2263,7 @@ function OrganizerAuthoring({
               : (reviewerMembersError ??
                 (reviewerMembers.length === 0
                   ? "No active, verified organization reviewers are available."
-                  : "Names and email addresses are display-only; assignments submit each member user ID."))}
+                  : "Selection replaces every active assignment for this round and submission; leave it empty to clear all. Names and email addresses are display-only; assignments submit each member user ID."))}
           </span>
         </div>
       </div>
@@ -2180,9 +2271,9 @@ function OrganizerAuthoring({
         className={styles.secondaryButton}
         type="button"
         onClick={previewAssignments}
-        disabled={busy}
+        disabled={busy || !reviewerDirectoryReady}
       >
-        Preview assignments
+        Preview reviewer assignment replacement
       </button>
       {assignmentPreview ? (
         <p className={styles.fieldHint} role="status">
@@ -2193,9 +2284,9 @@ function OrganizerAuthoring({
         className={styles.secondaryButton}
         type="button"
         onClick={() => void assignReviewers()}
-        disabled={busy}
+        disabled={busy || !reviewerDirectoryReady}
       >
-        Assign reviewers
+        Replace reviewer assignments
       </button>
       <div className={styles.scoreList}>
         {rounds.map((round, roundIndex) => (
@@ -2944,8 +3035,8 @@ function OrganizerWorkspaceView({
             <div className={styles.progressPanel}>
               <ProgressBar label="Submitted reviews" value={seed.progress.completionPercent} />
               <p className={styles.progressMeta}>
-                {seed.progress.submitted} of {seed.progress.totalAssignments} assigned reviews
-                submitted · {seed.progress.inProgress} in progress
+                {seed.progress.submitted} of {seed.progress.assigned} assigned reviews submitted ·{" "}
+                {seed.progress.inProgress} in progress
               </p>
             </div>
             <ul className={styles.indicatorList}>
@@ -3225,7 +3316,7 @@ function ReviewerProgressDashboard({
                   <td>{reviewer.assigned}</td>
                   <td>{reviewer.submitted}</td>
                   <td>{reviewer.outstanding}</td>
-                  <td>{reviewer.completionPercent}%</td>
+                  <td>{normalizeCompletionPercent(reviewer.completionPercent)}%</td>
                 </tr>
               );
             })}
@@ -3280,6 +3371,27 @@ function reviewerAssignmentStatusLabel(status: ReviewPlanAssignment["status"]): 
   return "Assigned";
 }
 
+export function reviewerIdsForAssignmentTarget(
+  assignments: readonly ReviewPlanAssignment[],
+  roundId: string,
+  submissionId: string,
+  excludedReviewerId?: string,
+): readonly string[] {
+  return [
+    ...new Set(
+      assignments
+        .filter(
+          (assignment) =>
+            assignment.roundId === roundId &&
+            assignment.submissionId === submissionId &&
+            assignment.status !== "abstained" &&
+            assignment.reviewerId !== excludedReviewerId,
+        )
+        .map((assignment) => assignment.reviewerId),
+    ),
+  ].sort((left, right) => left.localeCompare(right));
+}
+
 function ReviewerAssignmentList({
   seed,
   baseUrl,
@@ -3298,13 +3410,16 @@ function ReviewerAssignmentList({
 
   async function unassign(assignment: ReviewPlanAssignment): Promise<void> {
     if (busyAssignmentId !== null) return;
-    if (typeof window !== "undefined" && !window.confirm("Unassign this reviewer assignment?")) {
+    if (
+      typeof window !== "undefined" &&
+      !window.confirm("Remove this reviewer from the active reviewer set?")
+    ) {
       return;
     }
     setBusyAssignmentId(assignment.id);
     setMessage(null);
     try {
-      await deleteReviewAssignment(baseUrl, seed.planId, assignment.id);
+      await unassignReviewAssignment(baseUrl, seed.planId, assignment.id);
       await onAssignmentsPersisted?.();
       setMessage("Reviewer assignment unassigned.");
     } catch (reason: unknown) {
@@ -3361,15 +3476,19 @@ function ReviewerAssignmentList({
                     <td>{round?.name ?? assignment.roundId}</td>
                     <td>{reviewerAssignmentStatusLabel(assignment.status)}</td>
                     <td>
-                      <button
-                        className={styles.dangerButton}
-                        type="button"
-                        onClick={() => void unassign(assignment)}
-                        disabled={busyAssignmentId !== null}
-                        aria-label={`Unassign ${reviewer} from ${aggregate?.title ?? assignment.submissionId}`}
-                      >
-                        {busy ? "Unassigning…" : "Unassign"}
-                      </button>
+                      {assignment.status === "abstained" ? (
+                        <span className={styles.mutedLabel}>Protected conflict history</span>
+                      ) : (
+                        <button
+                          className={styles.dangerButton}
+                          type="button"
+                          onClick={() => void unassign(assignment)}
+                          disabled={busyAssignmentId !== null}
+                          aria-label={`Unassign ${reviewer} from ${aggregate?.title ?? assignment.submissionId}`}
+                        >
+                          {busy ? "Unassigning…" : "Unassign"}
+                        </button>
+                      )}
                     </td>
                   </tr>
                 );
