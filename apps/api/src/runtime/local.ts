@@ -46,6 +46,8 @@ import { SpeakerService } from "../features/speaker/service";
 import type {
   CreatePrivateUploadGrantCommand,
   PrivateAssetGateway,
+  PrivateDownloadGrant,
+  PrivateUploadGrant,
   RepositoryResult,
   SpeakerAccessScope,
   SpeakerAsset,
@@ -861,7 +863,7 @@ class LocalPrivateAssetGateway implements PrivateAssetGateway {
   readonly #objects = new Map<string, LocalPrivateAssetObject>();
   #sequence = 0;
 
-  async createUploadGrant(_command: CreatePrivateUploadGrantCommand): Promise<never> {
+  async createUploadGrant(_command: CreatePrivateUploadGrantCommand): Promise<PrivateUploadGrant> {
     throw new Error("A fully bound local upload capability is required.");
   }
 
@@ -869,7 +871,7 @@ class LocalPrivateAssetGateway implements PrivateAssetGateway {
     objectKey: string;
     fileName: string;
     expiresAt: string;
-  }): Promise<never> {
+  }): Promise<PrivateDownloadGrant> {
     throw new Error("A fully bound local download capability is required.");
   }
 
