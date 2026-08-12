@@ -216,11 +216,20 @@ function removeTrailingSlash(value: string): string {
 }
 
 function resolveGrantUrl(value: string, origin: string): string {
+  const fallbackOrigin =
+    removeTrailingSlash(origin) ||
+    (typeof window === "undefined" ? "" : removeTrailingSlash(window.location.origin));
+  let url: URL;
   try {
-    return new URL(value).toString();
+    url = fallbackOrigin ? new URL(value, `${fallbackOrigin}/`) : new URL(value);
   } catch {
-    return new URL(value, `${removeTrailingSlash(origin)}/`).toString();
+    throw new TypeError("The upload grant URL is invalid.");
   }
+  const hostname = url.hostname.toLowerCase();
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && isLocalHostname(hostname))) {
+    throw new TypeError("The upload grant URL must use HTTPS.");
+  }
+  return url.toString();
 }
 
 function routeSegment(value: string): string {
