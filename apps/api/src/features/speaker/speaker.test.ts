@@ -12,6 +12,7 @@ import type {
   SpeakerAsset,
   SpeakerAssetComment,
   SpeakerEventResource,
+  SpeakerImportRow,
   SpeakerOrganizerAccessScope,
   SpeakerOrganizerReadModel,
   SpeakerOrganizerReadResources,
@@ -1678,6 +1679,62 @@ describe("SpeakerService organizer speaker writes", () => {
     expect(taskEnvelope.eventId).toBe("event-1");
   });
 
+  it("updates from one organizer projection and returns the persisted profile", async () => {
+    const repository = new CountingOrganizerReadModelRepository();
+    repository.organizerScopes.set("event-1:account-1", {
+      tenantId: "org-1",
+      eventId: "event-1",
+      role: "owner",
+      submissionIds: ["submission-1"],
+      participantIds: ["participant-1"],
+    });
+    repository.submissions.push(submission("submission-1", "participant-1"));
+    repository.profiles.push({
+      ...profile("participant-1"),
+      displayName: "Old Name",
+      email: "old@example.test",
+      jobTitle: "Old Title",
+      company: "Old Company",
+      biography: "Old biography",
+      version: 4,
+    });
+    const service = new SpeakerService(repository, new FakePrivateAssetGateway(), {
+      now: () => new Date(now),
+    });
+
+    const updated = await service.updateOrganizerSpeaker({
+      organizationId: "org-1",
+      eventId: "event-1",
+      accountId: "account-1",
+      participantId: "participant-1",
+      expectedVersion: 4,
+      displayName: "Persisted Name",
+      email: "persisted@example.test",
+      jobTitle: "Persisted Title",
+      company: "Persisted Company",
+      biography: "Persisted biography",
+      socialLinks: { website: "https://persisted.example.test" },
+      status: "confirmed",
+    });
+
+    expect(updated.speakers).toEqual([
+      expect.objectContaining({
+        participantId: "participant-1",
+        displayName: "Persisted Name",
+        email: "persisted@example.test",
+        jobTitle: "Persisted Title",
+        company: "Persisted Company",
+        biography: "Persisted biography",
+        status: "confirmed",
+        version: 5,
+      }),
+    ]);
+    expect(repository.roster).toEqual([]);
+    expect(repository.readModelReads).toBe(1);
+    expect(repository.readModelResources).toEqual([{ profiles: true, tasks: true, assets: true }]);
+    expect(repository.rosterReads).toBe(0);
+    expect(repository.profileReads).toBe(0);
+  });
   it("persists manual speakers, profile changes, and single-assignee task changes across services", async () => {
     const { repository, gateway, service } = createOrganizerFixture();
     const created = await service.createOrganizerSpeaker({
@@ -1848,6 +1905,94 @@ describe("SpeakerService organizer speaker writes", () => {
     expect(repository.roster).toHaveLength(2);
     expect(repository.profiles).toHaveLength(2);
     expect(new Set(repository.roster.map((entry) => entry.participantId)).size).toBe(2);
+  });
+  it("commits multiple rows from one mutable projection and replays the final roster", async () => {
+    const { repository, service } = createOrganizerFixture();
+    const rows: SpeakerImportRow[] = [
+      {
+        rowNumber: 2,
+        displayName: "Jordan Lee",
+        email: "jordan@example.test",
+        jobTitle: "Developer Advocate",
+        company: "Example Co",
+        biography: "Builds developer communities.",
+        socialLinks: {},
+        status: "confirmed",
+      },
+      {
+        rowNumber: 3,
+        displayName: "Sam Rivera",
+        email: "sam@example.test",
+        jobTitle: "Staff Engineer",
+        company: "Example Co",
+        biography: "Builds reliable APIs.",
+        socialLinks: {},
+        status: "pending",
+      },
+    ];
+
+    const first = await service.commitSpeakerImport({
+      organizationId: "org-1",
+      eventId: "event-1",
+      accountId: "account-1",
+      rows,
+      idempotencyKey: "manual-import-projection",
+    });
+    const replay = await service.commitSpeakerImport({
+      organizationId: "org-1",
+      eventId: "event-1",
+      accountId: "account-1",
+      rows,
+      idempotencyKey: "manual-import-projection",
+    });
+
+    expect(first.speakers.map((speaker) => speaker.email)).toEqual([
+      "jordan@example.test",
+      "sam@example.test",
+    ]);
+    expect(replay).toEqual(first);
+    expect(repository.roster).toHaveLength(2);
+    expect(repository.profiles).toHaveLength(2);
+    expect(repository.rosterEventReads).toBe(1);
+  });
+  it("validates every canonical import identity before persisting any row", async () => {
+    const { repository, service } = createOrganizerFixture();
+    repository.verifiedEmails.set("participant-1", "ambiguous@example.test");
+    repository.verifiedEmails.set("participant-2", "ambiguous@example.test");
+
+    await expect(
+      service.commitSpeakerImport({
+        organizationId: "org-1",
+        eventId: "event-1",
+        accountId: "account-1",
+        idempotencyKey: "canonical-import-preflight",
+        rows: [
+          {
+            rowNumber: 2,
+            displayName: "Jordan Lee",
+            email: "jordan@example.test",
+            jobTitle: "Developer Advocate",
+            company: "Example Co",
+            biography: "Builds developer communities.",
+            socialLinks: {},
+          },
+          {
+            rowNumber: 3,
+            displayName: "Ambiguous Speaker",
+            email: "ambiguous@example.test",
+            jobTitle: "Staff Engineer",
+            company: "Example Co",
+            biography: "Has an ambiguous canonical identity.",
+            socialLinks: {},
+          },
+        ],
+      }),
+    ).rejects.toSatisfy((error: unknown) => {
+      expectServiceError(error, "VALIDATION_ERROR");
+      return true;
+    });
+    expect(repository.roster).toEqual([]);
+    expect(repository.profiles).toEqual([]);
   });
   it("does not create organizer tasks from stale profile projections", async () => {
     const { repository, service } = createOrganizerFixture();
