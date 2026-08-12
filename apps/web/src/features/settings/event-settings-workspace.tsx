@@ -27,7 +27,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import shellStyles from "../admin/admin-shell.module.css";
-import styles from "./event-settings-workspace.module.css";
 import {
   createEventSettingsApi,
   defaultAgendaEligibleStatuses,
@@ -43,6 +42,7 @@ import {
   type SessionSettingsRecord,
   type TaxonomyInput,
 } from "./api";
+import styles from "./event-settings-workspace.module.css";
 
 export type EventSettingsDetailsStatus = "loading" | "loaded" | "error";
 

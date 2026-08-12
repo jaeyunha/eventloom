@@ -9,7 +9,7 @@ test("web and API foundations run as independent healthy services", async ({ pag
       name: "Move from a call for speakers to a published agenda with care.",
     }),
   ).toBeVisible();
-  await expect(page.getByRole("link", { name: "Open the CFP" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Open the CFP" })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Sign in", exact: true }).first()).toBeVisible();
 
   const webHealth = await request.get("/health");

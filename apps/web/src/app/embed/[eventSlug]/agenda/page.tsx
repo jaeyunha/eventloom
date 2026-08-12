@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { getPublishedProgramOrLocalDemo } from "@/features/embed/demo/projections";
 import { EmbedFrame, EmbedUnavailable } from "@/features/embed/embed-frame";
-import { embedTheme } from "@/features/embed/model";
+import { parseEmbedQuery } from "@/features/embed/model";
 import { PublicAgendaView } from "@/features/embed/public-agenda";
 
 export const metadata: Metadata = {
@@ -22,7 +22,7 @@ export default async function PublicAgendaPage({ params, searchParams }: PublicA
     return <EmbedUnavailable message="The public program endpoint is not configured." />;
   }
 
-  const theme = embedTheme(query.theme);
+  const embedQuery = parseEmbedQuery(query);
   try {
     const program = await getPublishedProgramOrLocalDemo(
       apiBaseUrl,
@@ -30,8 +30,24 @@ export default async function PublicAgendaPage({ params, searchParams }: PublicA
       process.env.APP_ENV,
     );
     return (
-      <EmbedFrame event={program.agenda.event} eventSlug={eventSlug} theme={theme} view="agenda">
-        <PublicAgendaView program={program} />
+      <EmbedFrame
+        event={program.agenda.event}
+        eventSlug={eventSlug}
+        theme={embedQuery.theme}
+        view="agenda"
+        layout={embedQuery.layout}
+        accent={embedQuery.accent}
+        backgroundColor={embedQuery.backgroundColor}
+        textColor={embedQuery.textColor}
+        tracks={embedQuery.tracks}
+        displayFields={embedQuery.displayFields}
+      >
+        <PublicAgendaView
+          program={program}
+          tracks={embedQuery.tracks}
+          layout={embedQuery.layout}
+          displayFields={embedQuery.displayFields}
+        />
       </EmbedFrame>
     );
   } catch {

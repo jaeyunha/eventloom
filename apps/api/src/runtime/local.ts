@@ -1,16 +1,5 @@
 import type { ApiScope } from "@open-sessionboard/contracts";
 import type { ApiDependencies } from "../app";
-import { EventService, InMemoryEventRepository } from "../features/events/service";
-import type { Event, EventAuditEntry, EventEmbedConfiguration } from "../features/events/types";
-import {
-  InMemoryMemberAuthBoundary,
-  InMemoryMemberIdentityRepository,
-  InMemoryMemberInvitationDelivery,
-  InMemoryReviewerPoolRepository,
-  MemberService,
-} from "../features/members/service";
-import type { MemberMembership, MemberUser, ReviewerPool } from "../features/members/types";
-import { CrmService, InMemoryCrmRepository } from "../features/crm/service";
 import { AgendaEngine } from "../features/agenda/engine";
 import {
   InMemoryAgendaMutationLock,
@@ -25,6 +14,15 @@ import type {
   D1ApiKeyGateway,
 } from "../features/auth/types";
 import {
+  CommunicationService,
+  InMemoryCommunicationRepository,
+} from "../features/communications/service";
+import type {
+  CommunicationRecipient,
+  CommunicationTemplate,
+} from "../features/communications/types";
+import { CrmService, InMemoryCrmRepository } from "../features/crm/service";
+import {
   InMemoryEvaluationRepository,
   InMemorySubmissionReviewSource,
 } from "../features/evaluations/repository";
@@ -34,6 +32,16 @@ import type {
   EvaluationAssignment,
   EvaluationPlan,
 } from "../features/evaluations/types";
+import { EventService, InMemoryEventRepository } from "../features/events/service";
+import type { Event, EventAuditEntry, EventEmbedConfiguration } from "../features/events/types";
+import {
+  InMemoryMemberAuthBoundary,
+  InMemoryMemberIdentityRepository,
+  InMemoryMemberInvitationDelivery,
+  InMemoryReviewerPoolRepository,
+  MemberService,
+} from "../features/members/service";
+import type { MemberMembership, MemberUser, ReviewerPool } from "../features/members/types";
 import type {
   PublicApiCreateInput,
   PublicApiGetInput,
@@ -42,13 +50,37 @@ import type {
   PublicApiRepository,
   PublicApiUpdateInput,
 } from "../features/public-api/routes";
+import { RemixService } from "../features/remix/service";
+import type {
+  ContentRemixCandidate,
+  RemixAuditEntry,
+  RemixContentGateway,
+  RemixRepository,
+  RemixSessionRecord,
+  RemixSpeakerRecord,
+} from "../features/remix/types";
+import { InMemoryReportRepository, ReportService } from "../features/reports/service";
+import type { ReportDefinition, ReportProgramRecord } from "../features/reports/types";
+import { InMemorySessionRepository, SessionService } from "../features/sessions/service";
+import type {
+  Format,
+  Level,
+  Room,
+  Session,
+  SessionAuditEntry,
+  SessionSettings,
+  Tag,
+  Track,
+} from "../features/sessions/types";
 import { SpeakerService } from "../features/speaker/service";
 import type {
   CreatePrivateUploadGrantCommand,
+  PrivateAssetCapabilityBinding,
   PrivateAssetGateway,
   PrivateDownloadGrant,
   PrivateUploadGrant,
   RepositoryResult,
+  RestoreSpeakerContentVersionCommand,
   SpeakerAccessScope,
   SpeakerAsset,
   SpeakerContentHistoryEntry,
@@ -59,11 +91,9 @@ import type {
   SpeakerSubmission,
   SpeakerTask,
   TransitionSpeakerTaskCommand,
-  RestoreSpeakerContentVersionCommand,
   UpdateBiographyCommand,
-  UpdateSpeakerProfileCommand,
   UpdateSpeakerContentCommand,
-  PrivateAssetCapabilityBinding,
+  UpdateSpeakerProfileCommand,
 } from "../features/speaker/types";
 import type { CloudflareAiProviders } from "../integrations/ai";
 import { InMemoryWebhookRepository } from "../integrations/webhooks/types";
@@ -82,38 +112,8 @@ import type {
   OrganizerOverviewEvent,
   OrganizerOverviewRouteDependencies,
 } from "../routes/organizer-overview";
-import { createLocalCfpService } from "./cfp";
-import {
-  InMemoryCommunicationRepository,
-  CommunicationService,
-} from "../features/communications/service";
-import type {
-  CommunicationRecipient,
-  CommunicationTemplate,
-} from "../features/communications/types";
-import { InMemoryReportRepository, ReportService } from "../features/reports/service";
-import type { ReportDefinition, ReportProgramRecord } from "../features/reports/types";
-import { RemixService } from "../features/remix/service";
-import type {
-  ContentRemixCandidate,
-  RemixAuditEntry,
-  RemixContentGateway,
-  RemixRepository,
-  RemixSessionRecord,
-  RemixSpeakerRecord,
-} from "../features/remix/types";
-import { InMemorySessionRepository, SessionService } from "../features/sessions/service";
-import type {
-  Format,
-  Level,
-  Room,
-  Session,
-  SessionAuditEntry,
-  SessionSettings,
-  Tag,
-  Track,
-} from "../features/sessions/types";
 import type { PublishedSpeakerProjection } from "../routes/public-speakers";
+import { createLocalCfpService } from "./cfp";
 
 export {
   LOCAL_API_KEY,
@@ -130,63 +130,6 @@ import {
 } from "./constants";
 
 const SEEDED_AT = "2026-08-08T12:00:00.000Z";
-const LOCAL_EVENTS: readonly Event[] = [
-  {
-    id: "demo-event",
-    organizationId: LOCAL_ORGANIZATION_ID,
-    slug: "demo-event",
-    name: "Open Sessionboard Demo",
-    status: "active",
-    timeZone: "America/Los_Angeles",
-    startsAt: "2026-09-18T16:00:00.000Z",
-    endsAt: "2026-09-18T23:00:00.000Z",
-    venue: "Main Hall",
-    cfpSettings: {
-      enabled: true,
-      opensAt: "2026-08-01T07:00:00.000Z",
-      closesAt: "2026-09-15T07:00:00.000Z",
-    },
-    defaultCalendarSettings: {
-      durationMinutes: 30,
-      timeZone: "America/Los_Angeles",
-      location: "Main Hall",
-    },
-    embedConfigurations: [],
-    version: 1,
-    createdAt: SEEDED_AT,
-    updatedAt: SEEDED_AT,
-    createdBy: LOCAL_SPEAKER_ACCOUNT_ID,
-    updatedBy: LOCAL_SPEAKER_ACCOUNT_ID,
-  },
-  {
-    id: "open-sessionboard-conf",
-    organizationId: LOCAL_ORGANIZATION_ID,
-    slug: "open-sessionboard-conf",
-    name: "Open Sessionboard Conference",
-    status: "active",
-    timeZone: "America/Los_Angeles",
-    startsAt: "2026-09-25T16:00:00.000Z",
-    endsAt: "2026-09-25T23:00:00.000Z",
-    venue: "Conference Center",
-    cfpSettings: {
-      enabled: true,
-      opensAt: "2026-08-01T07:00:00.000Z",
-      closesAt: "2026-09-22T07:00:00.000Z",
-    },
-    defaultCalendarSettings: {
-      durationMinutes: 30,
-      timeZone: "America/Los_Angeles",
-      location: "Conference Center",
-    },
-    embedConfigurations: [],
-    version: 1,
-    createdAt: SEEDED_AT,
-    updatedAt: SEEDED_AT,
-    createdBy: LOCAL_SPEAKER_ACCOUNT_ID,
-    updatedBy: LOCAL_SPEAKER_ACCOUNT_ID,
-  },
-];
-
 const FAR_FUTURE = new Date("2099-01-01T00:00:00.000Z");
 const LOCAL_API_KEY_SCOPES: readonly ApiKeyScope[] = [
   "events:read",
@@ -362,7 +305,7 @@ function localAuthenticator(): RequestAuthenticator {
 
 const LOCAL_SESSION_COOKIE = "better-auth.session_token";
 
-function localSessionPayload(persona: LocalPersona = LOCAL_PERSONAS[0]!): Record<string, unknown> {
+function localSessionPayload(persona: LocalPersona): Record<string, unknown> {
   return {
     session: {
       id: persona.sessionId,
@@ -622,9 +565,25 @@ class LocalSpeakerRepository implements SpeakerRepository {
       primaryParticipantId: "local-participant",
     };
   }
+  async listPortalContexts(accountId: string) {
+    if (accountId !== LOCAL_SPEAKER_ACCOUNT_ID) return [];
+    return [
+      {
+        id: "portal:demo-event:local-participant",
+        eventId: "demo-event",
+        name: "Open Sessionboard Demo",
+        slug: "demo-event",
+        status: "active",
+        capabilities: LOCAL_SPEAKER_CAPABILITIES,
+        submissionIds: ["local-submission"],
+        participantIds: ["local-participant"],
+        primaryParticipantId: "local-participant",
+      },
+    ];
+  }
   async getOrganizerAccessScope(eventId: string, accountId: string) {
+    if (eventId !== "demo-event" || accountId !== LOCAL_ORGANIZER_ACCOUNT_ID) return null;
     this.#seed(eventId);
-    if (accountId !== LOCAL_SPEAKER_ACCOUNT_ID) return null;
     return {
       tenantId: LOCAL_ORGANIZATION_ID,
       eventId,
@@ -1410,18 +1369,30 @@ class LocalIntegrationAdminRepository {
     });
   }
 
-  async getEvent(eventId: string): Promise<IntegrationEvent | null> {
-    return clone(this.#events.get(eventId) ?? null);
+  async getEvent(organizationId: string, eventId: string): Promise<IntegrationEvent | null> {
+    const event = this.#events.get(eventId);
+    return event?.organizationId === organizationId ? clone(event) : null;
   }
 
-  async getDeliveryStatus(eventId: string): Promise<IntegrationDeliveryStatus> {
+  async getDeliveryStatus(
+    organizationId: string,
+    eventId: string,
+  ): Promise<IntegrationDeliveryStatus> {
+    if (organizationId !== LOCAL_ORGANIZATION_ID) {
+      throw new Error("The local integration organization was not seeded.");
+    }
     const status = this.#delivery.get(eventId);
     if (status === undefined) throw new Error("The local integration event was not seeded.");
     return clone(status);
   }
 
-  async saveCredential(eventId: string, _provider: "opensend", secret: string): Promise<void> {
-    const status = await this.getDeliveryStatus(eventId);
+  async saveCredential(
+    organizationId: string,
+    eventId: string,
+    _provider: "opensend",
+    secret: string,
+  ): Promise<void> {
+    const status = await this.getDeliveryStatus(organizationId, eventId);
     this.#delivery.set(eventId, {
       ...status,
       openSend: {
@@ -1432,16 +1403,24 @@ class LocalIntegrationAdminRepository {
     });
   }
 
-  async listApiKeys(eventId: string): Promise<readonly IntegrationApiKeySummary[]> {
+  async listApiKeys(
+    organizationId: string,
+    eventId: string,
+  ): Promise<readonly IntegrationApiKeySummary[]> {
+    if (organizationId !== LOCAL_ORGANIZATION_ID) return [];
     return clone(this.#apiKeys.get(eventId) ?? []);
   }
 
   async createApiKey(input: {
+    readonly organizationId: string;
     readonly eventId: string;
     readonly label: string;
     readonly scopes: readonly ApiScope[];
     readonly expiresAt: string | null;
   }): Promise<IntegrationApiKeyCreation> {
+    if (input.organizationId !== LOCAL_ORGANIZATION_ID) {
+      throw new Error("The local integration organization was not seeded.");
+    }
     const secret = `osb_${crypto.randomUUID().replaceAll("-", "")}${crypto.randomUUID().replaceAll("-", "")}`;
     const summary: IntegrationApiKeySummary = {
       id: `local-created-key-${++this.#apiKeySequence}`,
@@ -1459,7 +1438,8 @@ class LocalIntegrationAdminRepository {
     return { summary: clone(summary), secret };
   }
 
-  async revokeApiKey(eventId: string, apiKeyId: string): Promise<boolean> {
+  async revokeApiKey(organizationId: string, eventId: string, apiKeyId: string): Promise<boolean> {
+    if (organizationId !== LOCAL_ORGANIZATION_ID) return false;
     const keys = this.#apiKeys.get(eventId);
     const index = keys?.findIndex((key) => key.id === apiKeyId) ?? -1;
     if (keys === undefined || index < 0) return false;
@@ -1478,7 +1458,7 @@ class LocalIntegrationAdminRepository {
   }
 
   async retryCalendarDelivery(eventId: string, deliveryId: string): Promise<boolean> {
-    const status = await this.getDeliveryStatus(eventId);
+    const status = await this.getDeliveryStatus(LOCAL_ORGANIZATION_ID, eventId);
     if (status.calendar.lastFailure?.deliveryId !== deliveryId) return false;
     this.#delivery.set(eventId, {
       ...status,
@@ -2181,8 +2161,7 @@ async function seedLocalCfp(service: ReturnType<typeof createLocalCfpService>): 
   });
   let version = draft.version;
   const steps = ["welcome", "account", "submission"] as const;
-  for (let index = 0; index < steps.length; index += 1) {
-    const completedStep = steps[index]!;
+  for (const [index, completedStep] of steps.entries()) {
     const saved = await service.saveDraft({
       tenantId: LOCAL_ORGANIZATION_ID,
       eventId: "demo-event",
@@ -2246,7 +2225,7 @@ async function seedLocalCfp(service: ReturnType<typeof createLocalCfpService>): 
 function localCfpServiceWithSeed(
   service: ReturnType<typeof createLocalCfpService>,
 ): ReturnType<typeof createLocalCfpService> {
-  const seeded = seedLocalCfp(service).catch(() => undefined);
+  const seeded = seedLocalCfp(service);
   return new Proxy(service, {
     get(target, property, receiver) {
       const value = Reflect.get(target, property, receiver);

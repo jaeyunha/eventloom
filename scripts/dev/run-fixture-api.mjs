@@ -7,7 +7,13 @@ import { fileURLToPath } from "node:url";
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(scriptDirectory, "../..");
 const apiDirectory = join(repositoryRoot, "apps/api");
-const sourceEnvironment = readFileSync(join(repositoryRoot, ".env"), "utf8");
+let sourceEnvironment;
+try {
+  sourceEnvironment = readFileSync(join(repositoryRoot, ".env"), "utf8");
+} catch (error) {
+  if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") throw error;
+  sourceEnvironment = readFileSync(join(repositoryRoot, ".env.example"), "utf8");
+}
 const fixtureLine = "RUNTIME_PROFILE=fixture";
 const fixtureEnvironment = /^RUNTIME_PROFILE=.*$/m.test(sourceEnvironment)
   ? sourceEnvironment.replace(/^RUNTIME_PROFILE=.*$/m, fixtureLine)

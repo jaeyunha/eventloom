@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { getPublishedProgramOrLocalDemo } from "@/features/embed/demo/projections";
 import { EmbedFrame, EmbedUnavailable } from "@/features/embed/embed-frame";
-import { embedTheme } from "@/features/embed/model";
+import { parseEmbedQuery } from "@/features/embed/model";
 import { PublicItineraryView } from "@/features/embed/public-itinerary";
 import { PublicSessionsView } from "@/features/embed/public-sessions";
 import { PublicSpeakersListView } from "@/features/embed/public-speakers-list";
@@ -34,9 +34,20 @@ export default async function PublicWidgetPage({ params, searchParams }: PublicW
       eventSlug,
       process.env.APP_ENV,
     );
-    const theme = embedTheme(query.theme);
+    const embedQuery = parseEmbedQuery(query);
     return (
-      <EmbedFrame event={program.agenda.event} eventSlug={eventSlug} theme={theme} view={view}>
+      <EmbedFrame
+        event={program.agenda.event}
+        eventSlug={eventSlug}
+        theme={embedQuery.theme}
+        view={view}
+        layout={embedQuery.layout}
+        accent={embedQuery.accent}
+        backgroundColor={embedQuery.backgroundColor}
+        textColor={embedQuery.textColor}
+        tracks={embedQuery.tracks}
+        displayFields={embedQuery.displayFields}
+      >
         {view === "sessions" ? (
           <PublicSessionsView program={program} />
         ) : view === "speakers-list" ? (

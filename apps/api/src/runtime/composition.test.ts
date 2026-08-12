@@ -43,7 +43,6 @@ import {
   D1ApiKeyAuthenticatorGateway,
   D1BetterAuthGateway,
   inspectProductionRuntime,
-  type OrganizerAutojoinConfiguration,
   type RuntimeBindings,
 } from "./cloudflare";
 import { createRuntimeApp, createRuntimeDependencies, createRuntimeWorker } from "./composition";
@@ -232,15 +231,12 @@ function productionBindings(
     BETTER_AUTH_SECRET: "test-secret-that-is-at-least-32-characters-long",
     OPENSEND_API_URL: "https://opensend.namuh.co",
     OPENSEND_API_KEY: "opensend-test-key",
+    CACHE_INVALIDATION_URL:
+      "https://open-sessionboard-web-production.ashleyha0317.workers.dev/api/internal/cache-invalidation",
+    CACHE_INVALIDATION_TOKEN: "shared-cache-invalidation-token",
     AIRTABLE_TRANSPORT: transport,
-    ORGANIZER_AUTOJOIN_DOMAINS: "swyx.io",
-    ORGANIZER_AUTOJOIN_ORGANIZATION_ID: "ai-engineer",
   };
 }
-const AUTOJOIN_CONFIGURATION: OrganizerAutojoinConfiguration = {
-  domains: ["swyx.io"],
-  organizationId: "ai-engineer",
-};
 
 interface AutojoinDatabaseState {
   readonly email: string;
@@ -848,7 +844,7 @@ describe("production CFP receipt effects", () => {
     expect(JSON.stringify(payload)).not.toContain("unverified.form@example.test");
   });
 });
-describe("production organizer autojoin", () => {
+describe("production authenticated tenant scope", () => {
   it("loads a valid session and scopes with one delayed D1 operation", async () => {
     const { database, state } = autojoinDatabase({
       email: "member@example.com",
@@ -885,39 +881,27 @@ describe("production organizer autojoin", () => {
     }[];
   }) {
     const { database, state } = autojoinDatabase(input);
-    const gateway = new D1BetterAuthGateway(database, undefined, AUTOJOIN_CONFIGURATION);
+    const gateway = new D1BetterAuthGateway(database);
     const session = await gateway.resolveSession("session-token");
     return { session, state };
   }
 
-  it("autojoin exact-domain verified sessions idempotently as admin without changing speaker grants", async () => {
+  it("does not derive an organization membership from the user's email domain", async () => {
     const input = {
       email: " Host@SWYX.IO ",
       emailVerified: true,
       speakerGrants: [{ organization_id: "ai-engineer", speaker_profile_id: "speaker-1" }],
     } as const;
     const { database, state } = autojoinDatabase(input);
-    const gateway = new D1BetterAuthGateway(database, undefined, AUTOJOIN_CONFIGURATION);
+    const gateway = new D1BetterAuthGateway(database);
 
-    const first = await gateway.resolveSession("session-token");
-    const second = await gateway.resolveSession("session-token");
-
-    expect(first).toMatchObject({
+    await expect(gateway.resolveSession("session-token")).resolves.toMatchObject({
       email: input.email,
       emailVerified: true,
-      memberships: [{ organizationId: "ai-engineer", role: "admin" }],
+      memberships: [],
       speakerGrants: [{ organizationId: "ai-engineer", speakerProfileId: "speaker-1" }],
     });
-    expect(first?.memberships.some(({ role }) => role === "owner")).toBe(false);
-    expect(second?.memberships).toEqual(first?.memberships);
-    expect(state.inserts).toHaveLength(1);
-    expect(state.inserts[0]).toMatchObject({
-      organization_id: "ai-engineer",
-      user_id: "user-autojoin",
-      role: "admin",
-    });
-    expect(state.inserts[0]?.created_at).toBe(state.inserts[0]?.updated_at);
-    expect(Number.isFinite(Date.parse(state.inserts[0]?.created_at ?? ""))).toBe(true);
+    expect(state.inserts).toHaveLength(0);
   });
 
   it("does not autojoin a verified evaluator while an invitation is unfinished", async () => {
@@ -989,32 +973,10 @@ describe("production organizer autojoin", () => {
     expect(state.inserts).toHaveLength(0);
   });
 
-  it("allows disabled autojoin but fails closed for partial or invalid configuration", () => {
+  it("accepts integrated runtime configuration without tenant autojoin settings", () => {
     const bindings = productionBindings(new FakeAirtableTransport(), productionD1("unused"));
-    const {
-      ORGANIZER_AUTOJOIN_DOMAINS: _withoutDomains,
-      ORGANIZER_AUTOJOIN_ORGANIZATION_ID: _withoutOrganization,
-      ...withoutAutojoin
-    } = bindings;
-    const { ORGANIZER_AUTOJOIN_DOMAINS: _domains, ...withoutDomains } = bindings;
-    const { ORGANIZER_AUTOJOIN_ORGANIZATION_ID: _organization, ...withoutOrganization } = bindings;
-
-    expect(inspectProductionRuntime(withoutAutojoin).success).toBe(true);
-    expect(() => createRuntimeApp(withoutAutojoin)).not.toThrow();
-    expect(inspectProductionRuntime(withoutDomains).success).toBe(false);
-    expect(inspectProductionRuntime(withoutOrganization).success).toBe(false);
-    expect(
-      inspectProductionRuntime({
-        ...bindings,
-        ORGANIZER_AUTOJOIN_DOMAINS: "swyx.io.attacker",
-      }).success,
-    ).toBe(false);
-    expect(
-      inspectProductionRuntime({
-        ...bindings,
-        ORGANIZER_AUTOJOIN_ORGANIZATION_ID: "another-org",
-      }).success,
-    ).toBe(false);
+    expect(inspectProductionRuntime(bindings).success).toBe(true);
+    expect(() => createRuntimeApp(bindings)).not.toThrow();
   });
 });
 
@@ -1098,6 +1060,43 @@ describe("fixture local runtime composition", () => {
         profiles: [{ participantId: "local-participant", displayName: "Alex Rivera" }],
       },
     });
+
+    const contexts = await app.request(
+      "/api/speaker/portal/contexts",
+      { headers: speakerHeaders() },
+      localBindings,
+    );
+    expect(contexts.status).toBe(200);
+    await expect(contexts.json()).resolves.toMatchObject({
+      data: [
+        {
+          eventId: "demo-event",
+          submissionIds: ["local-submission"],
+          participantIds: ["local-participant"],
+          primaryParticipantId: "local-participant",
+        },
+      ],
+    });
+  });
+  it("serves the seeded canonical submission list to its organization organizer", async () => {
+    const app = createRuntimeApp(localBindings);
+    const response = await app.request(
+      `/api/cfp/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event/submissions`,
+      { headers: organizerHeaders() },
+      localBindings,
+    );
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      data: [
+        {
+          submission: {
+            tenantId: LOCAL_ORGANIZATION_ID,
+            eventId: "demo-event",
+            ownerAccountId: expect.any(String),
+          },
+        },
+      ],
+    });
   });
   it("serves the organizer overview core and activity from local repositories", async () => {
     const app = createRuntimeApp(localBindings);
@@ -1163,7 +1162,7 @@ describe("fixture local runtime composition", () => {
   it("serves seeded integration admin data for the current organizer workspace", async () => {
     const app = createRuntimeApp(localBindings);
     const response = await app.request(
-      "/api/admin/events/demo-event/integrations",
+      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event/integrations`,
       { headers: organizerHeaders() },
       localBindings,
     );
@@ -1205,13 +1204,13 @@ describe("fixture local runtime composition", () => {
     expect(body.data).not.toHaveProperty("accelevents");
 
     const anonymous = await app.request(
-      "/api/admin/events/demo-event/integrations",
+      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event/integrations`,
       undefined,
       localBindings,
     );
     expect(anonymous.status).toBe(401);
     const credential = await app.request(
-      "/api/admin/events/demo-event/integrations/opensend/credential",
+      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event/integrations/opensend/credential`,
       {
         method: "PUT",
         headers: { ...organizerHeaders(), "content-type": "application/json" },
@@ -1222,7 +1221,7 @@ describe("fixture local runtime composition", () => {
     expect(credential.status).toBe(204);
 
     const createdKey = await app.request(
-      "/api/admin/events/demo-event/api-keys",
+      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event/api-keys`,
       {
         method: "POST",
         headers: { ...organizerHeaders(), "content-type": "application/json" },
@@ -1242,14 +1241,14 @@ describe("fixture local runtime composition", () => {
     expect(createdKeyBody.data.secret.length).toBeGreaterThan(32);
 
     const revokedKey = await app.request(
-      `/api/admin/events/demo-event/api-keys/${createdKeyBody.data.id}`,
+      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event/api-keys/${createdKeyBody.data.id}`,
       { method: "DELETE", headers: organizerHeaders() },
       localBindings,
     );
     expect(revokedKey.status).toBe(204);
 
     const createdWebhook = await app.request(
-      "/api/admin/events/demo-event/webhooks",
+      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event/webhooks`,
       {
         method: "POST",
         headers: { ...organizerHeaders(), "content-type": "application/json" },
@@ -1267,7 +1266,7 @@ describe("fixture local runtime composition", () => {
     expect(createdWebhookBody.data.secret.length).toBeGreaterThan(32);
 
     const pausedWebhook = await app.request(
-      `/api/admin/events/demo-event/webhooks/${createdWebhookBody.data.id}`,
+      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event/webhooks/${createdWebhookBody.data.id}`,
       {
         method: "PATCH",
         headers: { ...organizerHeaders(), "content-type": "application/json" },
@@ -1278,7 +1277,7 @@ describe("fixture local runtime composition", () => {
     expect(pausedWebhook.status).toBe(204);
 
     const rotatedWebhook = await app.request(
-      `/api/admin/events/demo-event/webhooks/${createdWebhookBody.data.id}/rotate-secret`,
+      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event/webhooks/${createdWebhookBody.data.id}/rotate-secret`,
       {
         method: "POST",
         headers: { ...organizerHeaders(), "content-type": "application/json" },
@@ -1289,14 +1288,14 @@ describe("fixture local runtime composition", () => {
     expect(rotatedWebhook.status).toBe(200);
 
     const deletedWebhook = await app.request(
-      `/api/admin/events/demo-event/webhooks/${createdWebhookBody.data.id}`,
+      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event/webhooks/${createdWebhookBody.data.id}`,
       { method: "DELETE", headers: organizerHeaders() },
       localBindings,
     );
     expect(deletedWebhook.status).toBe(204);
 
     const retry = await app.request(
-      "/api/admin/events/demo-event/integrations/calendar/deliveries/calendar-local-failure-demo-event/retry",
+      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event/integrations/calendar/deliveries/calendar-local-failure-demo-event/retry`,
       {
         method: "POST",
         headers: { ...organizerHeaders(), "content-type": "application/json" },
@@ -1307,7 +1306,7 @@ describe("fixture local runtime composition", () => {
     expect(retry.status).toBe(204);
 
     const refreshed = await app.request(
-      "/api/admin/events/demo-event/integrations",
+      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event/integrations`,
       { headers: organizerHeaders() },
       localBindings,
     );
@@ -1327,6 +1326,26 @@ describe("fixture local runtime composition", () => {
         webhooks: [expect.objectContaining({ id: "local-webhook-demo" })],
       },
     });
+  });
+
+  it("returns a private 404 for mismatched and legacy integration scopes", async () => {
+    const app = createRuntimeApp(localBindings);
+    const mismatched = await app.request(
+      "/api/admin/organizations/another-organization/events/demo-event/integrations",
+      { headers: organizerHeaders() },
+      localBindings,
+    );
+    expect(mismatched.status).toBe(404);
+    await expect(mismatched.json()).resolves.toMatchObject({
+      error: { code: "NOT_FOUND", message: "The event was not found." },
+    });
+
+    const legacy = await app.request(
+      "/api/admin/events/demo-event/integrations",
+      { headers: organizerHeaders() },
+      localBindings,
+    );
+    expect(legacy.status).toBe(404);
   });
 
   it("denies anonymous, reviewer, and wrong-tenant organizer overview access", async () => {

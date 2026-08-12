@@ -364,7 +364,7 @@ describe.sequential("composed local Worker", () => {
       `/api/admin/organizations/${organizationId}/events/${eventId}`,
       { headers: organizerHeaders },
     );
-    const eventDetail = await jsonData<Record<string, any>>(eventDetailResponse);
+    const eventDetail = await jsonData<Record<string, unknown>>(eventDetailResponse);
     expect(eventDetailResponse.status).toBe(200);
     expect(eventDetail).toMatchObject({
       id: eventId,
@@ -452,7 +452,7 @@ describe.sequential("composed local Worker", () => {
       `/api/speaker/events/${eventId}/organizer/deliverables`,
       { headers: organizerHeaders },
     );
-    const deliverables = await jsonData<Record<string, any>>(deliverablesResponse);
+    const deliverables = await jsonData<Record<string, unknown>>(deliverablesResponse);
     const filesResponse = await runtimeRequest(`/api/speaker/events/${eventId}/organizer/assets`, {
       headers: organizerHeaders,
     });

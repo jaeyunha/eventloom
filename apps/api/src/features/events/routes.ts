@@ -9,6 +9,9 @@ import {
 } from "./service";
 import {
   type CreateEventInput,
+  type EventActor,
+  type EventCfpSettingsInput,
+  type EventDefaultCalendarSettingsInput,
   type EventEmbedConfigurationInput,
   eventEmbedDisplayFields,
   eventEmbedLayouts,

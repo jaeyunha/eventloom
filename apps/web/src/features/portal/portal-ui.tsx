@@ -1,11 +1,17 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname, useSearchParams } from "next/navigation";
 import { type ReactNode, useState } from "react";
 import { submissionStatusPresentation, taskStatusPresentation } from "./model";
 import styles from "./portal.module.css";
 import { portalContextLabel, usePortal } from "./portal-provider";
-import type { PortalAssetState, PortalSubmissionStatus, PortalTaskStatus } from "./types";
+import type {
+  PortalAssetState,
+  PortalCapability,
+  PortalSubmissionStatus,
+  PortalTaskStatus,
+} from "./types";
 
 export const portalNavigation = [
   { href: "/portal", label: "Home", icon: "⌂" },
@@ -38,8 +44,37 @@ function portalNavigationHref(href: string, eventQuery: string): string {
   return href.includes("?") ? `${href}&${eventQuery.slice(1)}` : `${href}${eventQuery}`;
 }
 
+export function portalRouteAuthorized(input: {
+  readonly pathname: string;
+  readonly workspace: string | null;
+  readonly submissionCount: number;
+  readonly can: (capability: PortalCapability) => boolean;
+}): boolean {
+  const { pathname, workspace, can } = input;
+  if (pathname === "/portal" && workspace === null) return true;
+  if (pathname.startsWith("/portal/submissions")) return true;
+  if (pathname === "/portal/tasks" || workspace === "tasks") return can("task-response");
+  if (pathname === "/portal/profile") return can("profile-self");
+  if (workspace === "co-speakers") return can("roster-manage");
+  if (workspace === "files") return can("asset-read");
+  if (workspace === "resources" || workspace === "wiki") return can("resource-read");
+  return true;
+}
+
+export function portalContentMode(input: {
+  readonly loading: boolean;
+  readonly error: string | null;
+  readonly hasView: boolean;
+  readonly routeAuthorized: boolean;
+}): "children" | "no-access" {
+  if (input.loading || (input.error !== null && !input.hasView)) return "children";
+  return input.routeAuthorized ? "children" : "no-access";
+}
+
 export function PortalFrame({ children }: Readonly<{ children: ReactNode }>) {
-  const { eventQuery, view, contexts, context, switchContext, loading } = usePortal();
+  const { eventQuery, view, contexts, context, switchContext, loading, error, can } = usePortal();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const displayName =
     view?.profiles.find((candidate) => candidate.participantId === context?.primaryParticipantId)
@@ -49,6 +84,30 @@ export function PortalFrame({ children }: Readonly<{ children: ReactNode }>) {
     .slice(0, 2)
     .map((part) => part[0]?.toLocaleUpperCase())
     .join("");
+  const visibleNavigation = portalNavigation.filter((item) => {
+    if (item.href === "/portal" || item.href === "/portal/submissions") return true;
+    if (item.href === "/portal/tasks") return can("task-response");
+    if (item.href === "/portal/profile") return can("profile-self");
+    if (item.href.includes("workspace=co-speakers")) return can("roster-manage");
+    if (item.href.includes("workspace=files")) return can("asset-read");
+    if (item.href.includes("workspace=resources") || item.href.includes("workspace=wiki")) {
+      return can("resource-read");
+    }
+    return false;
+  });
+  const workspace = searchParams.get("workspace");
+  const routeAuthorized = portalRouteAuthorized({
+    pathname,
+    workspace,
+    submissionCount: context?.submissionIds.length ?? 0,
+    can,
+  });
+  const contentMode = portalContentMode({
+    loading,
+    error,
+    hasView: view !== null,
+    routeAuthorized,
+  });
 
   async function selectContext(contextId: string) {
     setAccountMenuOpen(false);
@@ -117,7 +176,7 @@ export function PortalFrame({ children }: Readonly<{ children: ReactNode }>) {
         {context ? (
           <nav className={styles.portalNav} aria-label="Speaker portal">
             <p className={styles.navLabel}>Your event</p>
-            {portalNavigation.map((item) => (
+            {visibleNavigation.map((item) => (
               <Link
                 key={item.href}
                 className={styles.navItem}
@@ -136,7 +195,19 @@ export function PortalFrame({ children }: Readonly<{ children: ReactNode }>) {
           </nav>
         ) : null}
         <main id="portal-content" className={styles.portalMain} tabIndex={-1}>
-          {children}
+          {contentMode === "children" ? (
+            children
+          ) : (
+            <section className={styles.statePanel} role="alert">
+              <h1>This workspace is not available</h1>
+              <p>
+                Your account does not have access to this speaker workspace for the selected event.
+              </p>
+              <Link href={portalNavigationHref("/portal/submissions", eventQuery)}>
+                View your submissions
+              </Link>
+            </section>
+          )}
         </main>
       </div>
     </div>

@@ -73,16 +73,13 @@ export default function Home() {
               deliberate workflow for conference teams and speakers.
             </p>
             <div className="home-actions">
-              <a className="home-button home-button-primary" href="/cfp/devflow-conf-2027">
-                Open the CFP
-              </a>
-              <a className="home-button home-button-secondary" href="/login">
+              <a className="home-button home-button-primary" href="/login">
                 Sign in
               </a>
             </div>
             <p className="home-note">
-              Submitters create or use an account during the CFP. Accepted speakers return to the
-              portal for profiles, tasks, and files.
+              Organizers share event-specific CFP and public program links. Accepted speakers return
+              to the portal for profiles, tasks, and files.
             </p>
           </div>
 

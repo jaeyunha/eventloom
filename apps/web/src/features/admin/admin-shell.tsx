@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import {
   CalendarDays,
   ChartNoAxesColumn,
@@ -10,18 +9,28 @@ import {
   Folder,
   LayoutDashboard,
   ListChecks,
+  type LucideIcon,
   Mail,
   PanelsTopLeft,
+  Search,
   Settings,
   Sparkles,
   Star,
   Upload,
   Users,
-  type LucideIcon,
 } from "lucide-react";
+import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { type ReactNode, useEffect, useState } from "react";
+import { createContext, type ReactNode, useContext, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import {
   Sidebar,
   SidebarContent,
@@ -40,6 +49,7 @@ import {
 } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { sessionHasAuthenticatedUser } from "../auth/session";
+import styles from "./admin-shell.module.css";
 
 interface AdminNavigationItem {
   href: string;
@@ -47,6 +57,27 @@ interface AdminNavigationItem {
   icon: string;
   match(pathname: string): boolean;
 }
+
+interface AdminNavigationGroup {
+  label: string;
+  items: readonly AdminNavigationItem[];
+}
+
+const navigationGroupOrder = [
+  { label: "Workspace", itemLabels: ["Overview", "Events", "Members", "Settings"] },
+  {
+    label: "Program operations",
+    itemLabels: ["CFP Form", "Submissions", "Reviews", "Agenda"],
+  },
+  {
+    label: "People & content",
+    itemLabels: ["Speakers", "Deliverables", "Files", "CRM"],
+  },
+  {
+    label: "Publish & measure",
+    itemLabels: ["Communications", "Reports", "Content remix", "Embeds", "Integrations"],
+  },
+] as const;
 
 const navigation: readonly AdminNavigationItem[] = [
   {
@@ -62,6 +93,13 @@ const navigation: readonly AdminNavigationItem[] = [
     match: (pathname: string) => pathname === "/admin/events",
   },
 ] as const;
+const OrganizerOrganizationContext = createContext<string | null>(null);
+const ORGANIZER_ORGANIZATION_STORAGE_KEY = "open-sessionboard.organizer-organization";
+
+export function useOrganizerOrganizationId(): string | null {
+  return useContext(OrganizerOrganizationContext);
+}
+
 export function qualifiedEventContext(
   pathname: string,
 ): { organizationId: string; eventId: string } | null {
@@ -145,20 +183,33 @@ function organizationIdFromPathname(pathname: string): string | null {
   }
 }
 
+function groupedNavigation(items: readonly AdminNavigationItem[]): readonly AdminNavigationGroup[] {
+  const itemsByLabel = new Map(items.map((item) => [item.label, item]));
+  return navigationGroupOrder
+    .map((group) => ({
+      label: group.label,
+      items: group.itemLabels.flatMap((label) => {
+        const item = itemsByLabel.get(label);
+        return item ? [item] : [];
+      }),
+    }))
+    .filter((group) => group.items.length > 0);
+}
+
 export function isPublicMemberSetupPath(pathname: string): boolean {
   return /^\/admin\/organizations\/[^/]+\/members\/setup\/?$/u.test(pathname);
 }
 
 function organizationIdForNavigation(
   eventContext: { organizationId: string; eventId: string } | null,
+  authenticatedOrganizationId: string | null,
 ): string | null {
   if (eventContext !== null) {
     const contextualOrganizationId = eventContext.organizationId.trim();
     return contextualOrganizationId.length > 0 ? contextualOrganizationId : null;
   }
-  const configuredOrganizationId = process.env.NEXT_PUBLIC_ORGANIZATION_ID?.trim() ?? "";
-  if (configuredOrganizationId.length > 0) return configuredOrganizationId;
-  return process.env.NEXT_PUBLIC_APP_ENV === "local" ? "local-organization" : null;
+  const normalizedOrganizationId = authenticatedOrganizationId?.trim() ?? "";
+  return normalizedOrganizationId.length > 0 ? normalizedOrganizationId : null;
 }
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -176,27 +227,47 @@ export function sessionHasOrganizerMembership(
   value: unknown,
   organizationId: string | null,
 ): boolean {
-  const selectedOrganizationId = organizationId?.trim() ?? "";
-  return sessionMemberships(value).some((membership) => {
-    if (!isRecord(membership)) return false;
-    const membershipOrganizationId =
+  return organizerOrganizationIdFromSession(value, organizationId) !== null;
+}
+
+export function organizerOrganizationIdsFromSession(value: unknown): readonly string[] {
+  const organizationIds = new Set<string>();
+  for (const membership of sessionMemberships(value)) {
+    if (!isRecord(membership)) continue;
+    const organizationId =
       typeof membership.organizationId === "string"
         ? membership.organizationId.trim()
         : typeof membership.organization_id === "string"
           ? membership.organization_id.trim()
           : "";
     const role = typeof membership.role === "string" ? membership.role.trim().toLowerCase() : "";
-    if (role !== "owner" && role !== "admin") return false;
-    return (
-      selectedOrganizationId.length === 0 || membershipOrganizationId === selectedOrganizationId
-    );
-  });
+    if ((role === "owner" || role === "admin") && organizationId.length > 0) {
+      organizationIds.add(organizationId);
+    }
+  }
+  return [...organizationIds].sort((left, right) => left.localeCompare(right));
+}
+
+export function organizerOrganizationIdFromSession(
+  value: unknown,
+  requiredOrganizationId: string | null,
+  preferredOrganizationId: string | null = null,
+): string | null {
+  const selectedOrganizationId = requiredOrganizationId?.trim() ?? "";
+  const organizationIds = organizerOrganizationIdsFromSession(value);
+  if (selectedOrganizationId.length > 0) {
+    return organizationIds.includes(selectedOrganizationId) ? selectedOrganizationId : null;
+  }
+  const preferred = preferredOrganizationId?.trim() ?? "";
+  if (preferred.length > 0 && organizationIds.includes(preferred)) return preferred;
+  return organizationIds[0] ?? null;
 }
 
 export function eventNavigationFor(
   eventContext: { organizationId: string; eventId: string } | null,
+  authenticatedOrganizationId: string | null = null,
 ): readonly AdminNavigationItem[] {
-  const organizationId = organizationIdForNavigation(eventContext);
+  const organizationId = organizationIdForNavigation(eventContext, authenticatedOrganizationId);
   const organizationItems = organizationId === null ? [] : [membersNavigationItem(organizationId)];
   const scopedEventContext =
     eventContext !== null &&
@@ -224,6 +295,7 @@ export function eventNavigationFor(
     eventNavigationItem(eventBasePath, "reports", "Reports", "reports"),
     eventNavigationItem(eventBasePath, "remix", "Content remix", "remix"),
     eventNavigationItem(eventBasePath, "embeds", "Embeds", "embeds"),
+    eventNavigationItem(eventBasePath, "integrations", "Integrations", "integrations"),
   ];
   const itemsByHref = new Map(navigation.map((item) => [item.href, item]));
   for (const item of eventItems) {
@@ -235,20 +307,36 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
   const pathname = usePathname();
   const publicMemberSetup = isPublicMemberSetupPath(pathname);
   const eventContext = qualifiedEventContext(pathname);
-  const eventNavigation = eventNavigationFor(eventContext);
   const requiredOrganizationId = organizationIdFromPathname(pathname);
-  const currentOrganizationId =
-    organizationIdFromPathname(pathname) ?? organizationIdForNavigation(eventContext);
+  const [authenticatedOrganizationId, setAuthenticatedOrganizationId] = useState<string | null>(
+    null,
+  );
+  const [availableOrganizationIds, setAvailableOrganizationIds] = useState<readonly string[]>([]);
+  const currentOrganizationId = organizationIdForNavigation(
+    eventContext,
+    authenticatedOrganizationId,
+  );
+  const eventNavigation = eventNavigationFor(eventContext, authenticatedOrganizationId);
   const navigationWithCrm =
     currentOrganizationId === null
       ? eventNavigation
       : [...eventNavigation, crmNavigationItem(currentOrganizationId)];
+  const navigationGroups = groupedNavigation(navigationWithCrm);
   const [authentication, setAuthentication] = useState<"checking" | "authenticated" | "denied">(
     "checking",
   );
+  const accessScopeKey = requiredOrganizationId ?? "__organizer-workspace__";
+  const [verifiedAccessScopeKey, setVerifiedAccessScopeKey] = useState<string | null>(null);
+  const effectiveAuthentication =
+    authentication === "authenticated" && verifiedAccessScopeKey !== accessScopeKey
+      ? "checking"
+      : authentication;
+  const [commandOpen, setCommandOpen] = useState(false);
+  const [commandQuery, setCommandQuery] = useState("");
 
   useEffect(() => {
     if (publicMemberSetup) {
+      setVerifiedAccessScopeKey(accessScopeKey);
       setAuthentication("authenticated");
       return;
     }
@@ -266,17 +354,44 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
           window.location.replace("/login");
           return;
         }
-        if (!sessionHasOrganizerMembership(session, requiredOrganizationId)) {
+        const organizationIds = organizerOrganizationIdsFromSession(session);
+        const preferredOrganizationId =
+          requiredOrganizationId === null
+            ? window.localStorage.getItem(ORGANIZER_ORGANIZATION_STORAGE_KEY)
+            : null;
+        const organizationId = organizerOrganizationIdFromSession(
+          session,
+          requiredOrganizationId,
+          preferredOrganizationId,
+        );
+        if (organizationId === null) {
+          setAvailableOrganizationIds([]);
+          setAuthenticatedOrganizationId(null);
           setAuthentication("denied");
+          setVerifiedAccessScopeKey(null);
           return;
         }
+        setAvailableOrganizationIds(organizationIds);
+        setAuthenticatedOrganizationId(organizationId);
+        setVerifiedAccessScopeKey(accessScopeKey);
         setAuthentication("authenticated");
       })
       .catch(() => {
         if (!controller.signal.aborted) window.location.replace("/login");
       });
     return () => controller.abort();
-  }, [publicMemberSetup, requiredOrganizationId]);
+  }, [accessScopeKey, publicMemberSetup, requiredOrganizationId]);
+
+  useEffect(() => {
+    function handleKeyboard(event: KeyboardEvent): void {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setCommandOpen(true);
+      }
+    }
+    window.addEventListener("keydown", handleKeyboard);
+    return () => window.removeEventListener("keydown", handleKeyboard);
+  }, []);
 
   if (publicMemberSetup) return <>{children}</>;
 
@@ -289,9 +404,38 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
     }).catch(() => undefined);
     window.location.assign("/");
   }
+
+  const commandItems = [
+    {
+      href: "/admin/events",
+      label: "Go to events",
+      keywords: "events programs calendar",
+    },
+    ...(eventContext
+      ? [
+          {
+            href: `/admin/organizations/${encodeURIComponent(eventContext.organizationId)}/events/${encodeURIComponent(eventContext.eventId)}/reviews`,
+            label: "Open reviews",
+            keywords: "reviews submissions evaluate",
+          },
+          {
+            href: `/admin/organizations/${encodeURIComponent(eventContext.organizationId)}/events/${encodeURIComponent(eventContext.eventId)}/agenda`,
+            label: "Open agenda",
+            keywords: "agenda schedule sessions",
+          },
+        ]
+      : []),
+  ];
+  const normalizedCommandQuery = commandQuery.trim().toLocaleLowerCase();
+  const visibleCommandItems = normalizedCommandQuery
+    ? commandItems.filter((item) =>
+        `${item.label} ${item.keywords}`.toLocaleLowerCase().includes(normalizedCommandQuery),
+      )
+    : commandItems;
+
   return (
     <TooltipProvider>
-      <SidebarProvider>
+      <SidebarProvider className={styles.adminShell}>
         <a
           className="fixed left-3 top-3 z-50 -translate-y-24 rounded-md bg-foreground px-3 py-2 text-sm font-medium text-background transition-transform focus:translate-y-0"
           href="#admin-content"
@@ -300,57 +444,140 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
         </a>
 
         <Sidebar aria-label="Organizer workspace" collapsible="icon">
-          <SidebarHeader>
+          <SidebarHeader className={styles.sidebarHeader}>
             <SidebarMenu>
               <SidebarMenuItem>
                 <SidebarMenuButton asChild size="lg" tooltip="Open Sessionboard">
                   <Link href="/admin" aria-label="Open Sessionboard organizer overview">
-                    <span className="flex size-8 items-center justify-center rounded-md bg-sidebar-primary text-xs font-semibold text-sidebar-primary-foreground">
-                      OS
-                    </span>
-                    <span className="grid flex-1 text-left text-sm leading-tight">
-                      <strong className="truncate font-semibold">Open Sessionboard</strong>
-                      <span className="truncate text-xs text-muted-foreground">
-                        Organizer workspace
-                      </span>
+                    <span className={styles.brandMark}>OS</span>
+                    <span className={styles.brandCopy}>
+                      <strong>Open Sessionboard</strong>
+                      <span>Organizer workspace</span>
                     </span>
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>
+            <Dialog
+              open={commandOpen}
+              onOpenChange={(open) => {
+                setCommandOpen(open);
+                if (open) setCommandQuery("");
+              }}
+            >
+              <DialogTrigger asChild>
+                <button
+                  aria-keyshortcuts="Meta+K Control+K"
+                  className={styles.commandButton}
+                  type="button"
+                >
+                  <Search aria-hidden="true" />
+                  <span>Search or jump to</span>
+                  <kbd>⌘ K</kbd>
+                </button>
+              </DialogTrigger>
+              <DialogContent
+                aria-label="Jump to a page or action"
+                className={styles.commandDialog}
+                showCloseButton={false}
+              >
+                <DialogHeader className="sr-only">
+                  <DialogTitle>Jump to a page or action</DialogTitle>
+                  <DialogDescription>
+                    Filter organizer pages and choose a destination.
+                  </DialogDescription>
+                </DialogHeader>
+                <label className={styles.commandSearch}>
+                  <Search aria-hidden="true" />
+                  <span className="sr-only">Search pages and actions</span>
+                  <input
+                    autoFocus
+                    placeholder="Search pages and actions…"
+                    type="search"
+                    value={commandQuery}
+                    onChange={(event) => setCommandQuery(event.currentTarget.value)}
+                  />
+                </label>
+                <div className={styles.commandResults}>
+                  {visibleCommandItems.map((item) => (
+                    <Link href={item.href} key={item.href} onClick={() => setCommandOpen(false)}>
+                      <span>{item.label}</span>
+                    </Link>
+                  ))}
+                  {visibleCommandItems.length === 0 ? (
+                    <p className={styles.commandEmpty}>No matching pages or actions.</p>
+                  ) : null}
+                </div>
+              </DialogContent>
+            </Dialog>
           </SidebarHeader>
 
           <nav className="flex min-h-0 flex-1 flex-col" aria-label="Organizer navigation">
             <SidebarContent>
-              <SidebarGroup>
-                <SidebarGroupLabel>Workspace</SidebarGroupLabel>
-                <SidebarGroupContent>
-                  <SidebarMenu>
-                    {navigationWithCrm.map((item) => {
-                      const current = item.match(pathname);
-                      return (
-                        <SidebarMenuItem key={item.href}>
-                          <SidebarMenuButton asChild isActive={current} tooltip={item.label}>
-                            <Link href={item.href} aria-current={current ? "page" : undefined}>
-                              <NavigationIcon name={item.icon} />
-                              <span>{item.label}</span>
-                            </Link>
-                          </SidebarMenuButton>
-                        </SidebarMenuItem>
-                      );
-                    })}
-                  </SidebarMenu>
-                </SidebarGroupContent>
-              </SidebarGroup>
+              {navigationGroups.map((group) => (
+                <SidebarGroup className={styles.sidebarGroup} key={group.label}>
+                  <SidebarGroupLabel className={styles.sidebarGroupLabel}>
+                    {group.label}
+                  </SidebarGroupLabel>
+                  <SidebarGroupContent>
+                    <SidebarMenu>
+                      {group.items.map((item) => {
+                        const current = item.match(pathname);
+                        return (
+                          <SidebarMenuItem key={item.href}>
+                            <SidebarMenuButton
+                              asChild
+                              className={styles.sidebarMenuButton}
+                              isActive={current}
+                              tooltip={item.label}
+                            >
+                              <Link href={item.href} aria-current={current ? "page" : undefined}>
+                                <NavigationIcon name={item.icon} />
+                                <span>{item.label}</span>
+                              </Link>
+                            </SidebarMenuButton>
+                          </SidebarMenuItem>
+                        );
+                      })}
+                    </SidebarMenu>
+                  </SidebarGroupContent>
+                </SidebarGroup>
+              ))}
             </SidebarContent>
           </nav>
 
           <SidebarFooter>
             <div className="grid gap-1 rounded-md border bg-background p-2 group-data-[collapsible=icon]:hidden">
-              <span className="truncate text-xs text-muted-foreground">Organization</span>
-              <strong className="truncate text-sm font-medium">
-                {currentOrganizationId ?? "Workspace not selected"}
-              </strong>
+              <label
+                className="truncate text-xs text-muted-foreground"
+                htmlFor="organizer-organization"
+              >
+                Organization
+              </label>
+              {availableOrganizationIds.length > 1 && currentOrganizationId !== null ? (
+                <select
+                  className={styles.organizationSelect}
+                  id="organizer-organization"
+                  value={currentOrganizationId}
+                  onChange={(event) => {
+                    const organizationId = event.currentTarget.value;
+                    if (!availableOrganizationIds.includes(organizationId)) return;
+                    window.localStorage.setItem(ORGANIZER_ORGANIZATION_STORAGE_KEY, organizationId);
+                    setAuthenticatedOrganizationId(organizationId);
+                    if (requiredOrganizationId !== null) window.location.assign("/admin");
+                  }}
+                >
+                  {availableOrganizationIds.map((organizationId) => (
+                    <option key={organizationId} value={organizationId}>
+                      {organizationId}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <strong className="truncate text-sm font-medium">
+                  {currentOrganizationId ?? "Workspace not selected"}
+                </strong>
+              )}
               <Button asChild className="mt-1 justify-start" size="sm" variant="ghost">
                 <Link href="/admin/events">View all events</Link>
               </Button>
@@ -368,30 +595,29 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
           <SidebarRail />
         </Sidebar>
 
-        <SidebarInset>
-          <header className="flex h-14 shrink-0 items-center gap-3 border-b px-4">
+        <SidebarInset className={styles.adminInset}>
+          <header className={styles.workspaceHeader}>
             <SidebarTrigger />
-            <div className="min-w-0">
-              <p className="truncate text-sm font-medium">Organizer workspace</p>
-              <p className="truncate text-xs text-muted-foreground">
-                {currentOrganizationId ?? "Choose an event workspace"}
-              </p>
+            <div className={styles.breadcrumbs}>
+              <span>{currentOrganizationId ?? "Organization"}</span>
+              <span aria-hidden="true">/</span>
+              <strong>Overview</strong>
             </div>
           </header>
 
           <main
             id="admin-content"
-            className="min-w-0 flex-1 bg-muted/30"
+            className={styles.adminMain}
             tabIndex={-1}
-            aria-busy={authentication === "checking" ? true : undefined}
+            aria-busy={effectiveAuthentication === "checking" ? true : undefined}
           >
-            <div className="mx-auto w-full max-w-[90rem] p-4 sm:p-6 lg:p-8">
-              {authentication === "checking" ? (
+            <div className={styles.adminContent}>
+              {effectiveAuthentication === "checking" ? (
                 <p className="sr-only" role="status">
                   Checking organizer access
                 </p>
               ) : null}
-              {authentication === "denied" ? (
+              {effectiveAuthentication === "denied" ? (
                 <section
                   className="rounded-lg border bg-card p-6 text-card-foreground"
                   role="alert"
@@ -401,9 +627,11 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
                     An owner or administrator membership is required for this organization.
                   </p>
                 </section>
-              ) : (
-                children
-              )}
+              ) : effectiveAuthentication === "authenticated" && currentOrganizationId !== null ? (
+                <OrganizerOrganizationContext.Provider value={currentOrganizationId}>
+                  {children}
+                </OrganizerOrganizationContext.Provider>
+              ) : null}
             </div>
           </main>
         </SidebarInset>

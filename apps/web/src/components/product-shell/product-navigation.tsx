@@ -1,8 +1,4 @@
-const productNavigationLinks = [
-  { href: "/cfp/devflow-conf-2027", label: "Call for speakers" },
-  { href: "/embed/devflow-conf-2027/sessions", label: "Public program" },
-  { href: "/login", label: "Sign in" },
-] as const;
+const productNavigationLinks = [{ href: "/login", label: "Sign in" }] as const;
 
 export function ProductNavigation() {
   return (

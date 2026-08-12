@@ -19,7 +19,8 @@ export function PortalAuthGuard({ children }: Readonly<{ children: ReactNode }>)
       signal: controller.signal,
     })
       .then(async (response) => {
-        if (!response.ok || !sessionHasAuthenticatedUser(await response.json().catch(() => null))) {
+        const session = await response.json().catch(() => null);
+        if (!response.ok || !sessionHasAuthenticatedUser(session)) {
           redirectToLogin();
           return;
         }
@@ -34,7 +35,7 @@ export function PortalAuthGuard({ children }: Readonly<{ children: ReactNode }>)
   if (authentication === "checking") {
     return (
       <main className={styles.portalRoot} aria-busy="true" aria-live="polite">
-        <div className={styles.statePanel}>Checking speaker access…</div>
+        <div className={styles.statePanel}>Checking account access…</div>
       </main>
     );
   }

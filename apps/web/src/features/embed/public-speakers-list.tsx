@@ -42,33 +42,13 @@ function SpeakerHeadshot({ speaker }: Readonly<{ speaker: PublishedSpeaker }>) {
     <div
       aria-label={`${speaker.displayName} headshot`}
       role="img"
-      style={{
-        display: "grid",
-        width: "5.25rem",
-        height: "5.25rem",
-        flex: "0 0 auto",
-        placeItems: "center",
-        overflow: "hidden",
-        border: "1px solid var(--embed-border)",
-        borderRadius: "50%",
-        background:
-          "linear-gradient(135deg, rgb(79 94 232 / 15%), rgb(16 155 107 / 13%)), var(--embed-surface-muted)",
-        color: "var(--embed-brand-strong)",
-        fontSize: "1.45rem",
-        fontWeight: 850,
-      }}
+      className={styles.speakerHeadshot}
     >
       {photoUrl ? (
         <span
           aria-hidden="true"
-          style={{
-            display: "block",
-            width: "100%",
-            height: "100%",
-            backgroundImage: `url(${JSON.stringify(photoUrl)})`,
-            backgroundPosition: "center",
-            backgroundSize: "cover",
-          }}
+          className={styles.speakerHeadshotPhoto}
+          style={{ backgroundImage: `url(${JSON.stringify(photoUrl)})` }}
         />
       ) : (
         <span aria-hidden="true">{initials}</span>
@@ -98,35 +78,15 @@ function SpeakerEntry({
 
   return (
     <li>
-      <article
-        className={styles.speakerCard}
-        style={{
-          display: "grid",
-          gridTemplateColumns: "minmax(5.25rem, 6.5rem) minmax(0, 1fr)",
-          gap: "1rem",
-          alignItems: "start",
-          padding: "1rem",
-        }}
-      >
+      <article className={styles.speakerCard}>
         <SpeakerHeadshot speaker={speaker} />
-        <div className={styles.speakerCopy} style={{ padding: 0 }}>
+        <div className={styles.speakerCopy}>
           <h3>
             {onSelect ? (
               <button
                 type="button"
                 id={`speaker-list-trigger-${speaker.id}`}
                 onClick={(event) => onSelect(event.currentTarget)}
-                style={{
-                  padding: 0,
-                  border: 0,
-                  background: "none",
-                  color: "var(--embed-brand-strong)",
-                  font: "inherit",
-                  fontWeight: 800,
-                  textAlign: "left",
-                  textDecoration: "underline",
-                  cursor: "pointer",
-                }}
               >
                 {speaker.displayName}
               </button>
@@ -306,11 +266,7 @@ export function PublicSpeakersListView({ program }: Readonly<{ program: Publishe
           <p>Try another name or clear the search to browse every published speaker.</p>
         </div>
       ) : (
-        <ul
-          className={styles.publicSessionList}
-          aria-label="Published speakers and sessions"
-          style={{ gap: "1rem" }}
-        >
+        <ul className={styles.publicSessionList} aria-label="Published speakers and sessions">
           {speakers.map((speaker) => (
             <SpeakerEntry
               key={speaker.id}

@@ -11,9 +11,9 @@ import {
   CardHeader,
   CardTitle,
 } from "../../components/ui/card";
-import { Progress } from "../../components/ui/progress";
 import { Checkbox } from "../../components/ui/checkbox";
 import { Field, FieldContent, FieldDescription, FieldLabel } from "../../components/ui/field";
+import { Progress } from "../../components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import {
   activeVerifiedReviewers,
@@ -472,7 +472,7 @@ function browserSameOrigin(): string {
 }
 
 function configuredOrganizationId(explicit: string | undefined): string | null {
-  const value = (explicit ?? process.env.NEXT_PUBLIC_ORGANIZATION_ID)?.trim() ?? "";
+  const value = explicit?.trim() ?? "";
   return value.length > 0 ? value : null;
 }
 export function reviewerDisplayLabel(
@@ -1278,10 +1278,8 @@ function ReviewNavigation({
   }
   if (eventId === undefined) return null;
   const resolvedOrganizationId = configuredOrganizationId(organizationId);
-  const reviewBase =
-    resolvedOrganizationId === null
-      ? `/admin/events/${encodeURIComponent(eventId)}/reviews`
-      : `/admin/organizations/${encodeURIComponent(resolvedOrganizationId)}/events/${encodeURIComponent(eventId)}/reviews`;
+  if (resolvedOrganizationId === null) return null;
+  const reviewBase = `/admin/organizations/${encodeURIComponent(resolvedOrganizationId)}/events/${encodeURIComponent(eventId)}/reviews`;
   return (
     <nav className={styles.reviewNavigation} aria-label="Review workspace">
       <Button asChild size="sm">

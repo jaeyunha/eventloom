@@ -607,57 +607,30 @@ export function createCfpPublicRoutes(
     await next();
   });
 
-  routes.get("/organizations/:organizationId/events/:eventId/forms/:formId", async (context) => {
+  routes.get("/organizations/:organizationId/events/:eventSlug/forms/:formId", async (context) => {
     const service = dependencies.service.getPublishedCfp;
     if (service === undefined) {
       throw new CfpError("NOT_FOUND", "The published CFP form was not found.");
     }
     const data = await service.call(dependencies.service, {
       tenantId: routeParam(context, "organizationId"),
-      eventId: routeParam(context, "eventId"),
+      eventSlug: routeParam(context, "eventSlug"),
       formId: routeParam(context, "formId"),
     });
     return context.json({ data });
   });
 
-  routes.get("/organizations/:organizationId/events/:eventId", async (context) => {
+  routes.get("/organizations/:organizationId/events/:eventSlug", async (context) => {
     const service = dependencies.service.getPublishedCfp;
     if (service === undefined) {
       throw new CfpError("NOT_FOUND", "The published CFP form was not found.");
     }
     const data = await service.call(dependencies.service, {
       tenantId: routeParam(context, "organizationId"),
-      eventId: routeParam(context, "eventId"),
+      eventSlug: routeParam(context, "eventSlug"),
     });
     return context.json({ data });
   });
-  routes.get("/organizations/:organizationId/events/:eventId/cfp", async (context) => {
-    const service = dependencies.service.getPublishedCfp;
-    if (service === undefined) {
-      throw new CfpError("NOT_FOUND", "The published CFP form was not found.");
-    }
-    const data = await service.call(dependencies.service, {
-      tenantId: routeParam(context, "organizationId"),
-      eventId: routeParam(context, "eventId"),
-    });
-    return context.json({ data });
-  });
-
-  routes.get(
-    "/organizations/:organizationId/events/:eventId/cfp/forms/:formId",
-    async (context) => {
-      const service = dependencies.service.getPublishedCfp;
-      if (service === undefined) {
-        throw new CfpError("NOT_FOUND", "The published CFP form was not found.");
-      }
-      const data = await service.call(dependencies.service, {
-        tenantId: routeParam(context, "organizationId"),
-        eventId: routeParam(context, "eventId"),
-        formId: routeParam(context, "formId"),
-      });
-      return context.json({ data });
-    },
-  );
   routes.get(
     "/organizations/:organizationId/events/:eventId/submissions/:submissionId/draft",
     async (context) => {

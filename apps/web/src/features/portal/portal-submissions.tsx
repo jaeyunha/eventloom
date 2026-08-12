@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import type { CfpSubmissionPointerIdentity } from "../cfp/draft-persistence";
+import { getCfpStepRoute } from "../cfp/routes";
 import {
   filterSubmissions,
   portalSubmissionEditTarget,
@@ -137,7 +138,7 @@ export function portalSubmissionActionTargets(
   }
   return {
     editHref: editTarget.href,
-    newProposalHref: `/cfp/${encodeURIComponent(eventSlug)}`,
+    newProposalHref: getCfpStepRoute(organizationId, eventSlug, "welcome"),
     pointerKey: editTarget.pointerKey,
     identity: { organizationId, eventId: context.eventId, formId },
   };

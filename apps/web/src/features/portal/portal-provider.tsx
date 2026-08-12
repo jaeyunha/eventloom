@@ -508,8 +508,7 @@ export function PortalProvider({
   const searchParams = useSearchParams();
   const requestedEventId =
     searchParams?.get("eventId")?.trim() || searchParams?.get("event")?.trim() || undefined;
-  const configuredEventId =
-    requestedEventId ?? process.env.NEXT_PUBLIC_PORTAL_EVENT_ID?.trim() ?? undefined;
+  const configuredEventId = requestedEventId;
   const apiBaseUrl = providedApiBaseUrl?.trim() ?? "";
   const api = useMemo<PortalApi>(
     () => createPortalProviderApi(providedApi, apiBaseUrl),

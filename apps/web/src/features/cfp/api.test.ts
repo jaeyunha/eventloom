@@ -93,7 +93,8 @@ describe("CFP authenticated session", () => {
         email: " Ada@Example.com ",
         password: "StrongPass1!",
         name: "Ada Speaker",
-        verificationCallbackUrl: "https://web.example.com/cfp/evaluator-2026/account",
+        verificationCallbackUrl:
+          "https://web.example.com/cfp/organizations/org-1/events/evaluator-2026/account",
       }),
     ).resolves.toEqual({
       status: "authenticated",
@@ -119,7 +120,7 @@ describe("CFP authenticated session", () => {
       email: "ada@example.com",
       password: "StrongPass1!",
       name: "Ada Speaker",
-      callbackURL: "https://web.example.com/cfp/evaluator-2026/account",
+      callbackURL: "https://web.example.com/cfp/organizations/org-1/events/evaluator-2026/account",
     });
   });
 

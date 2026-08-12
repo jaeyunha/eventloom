@@ -2,12 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import styles from "./embed.module.css";
-import {
-  formatPublishedDateTimeRange,
-  formatPublishedTime,
-  publicAgendaDays,
-  publishedEntryPresenters,
-} from "./model";
+import { formatPublishedDateTimeRange, publicAgendaDays, publishedEntryPresenters } from "./model";
 import type { PublishedAgendaEntry, PublishedProgram, PublishedSpeaker } from "./types";
 
 const DESCRIPTION_LIMIT = 190;
@@ -170,19 +165,6 @@ function createCalendar(
   return `${lines.join("\r\n")}\r\n`;
 }
 
-function WidgetLinks({ eventSlug }: Readonly<{ eventSlug: string }>) {
-  const encodedSlug = encodeURIComponent(eventSlug);
-  return (
-    <nav className={styles.feedLinks} aria-label="Published program views">
-      <a href={`/embed/${encodedSlug}/sessions`}>Sessions</a>
-      <a href={`/embed/${encodedSlug}/itinerary`} aria-current="page">
-        Itinerary
-      </a>
-      <a href={`/embed/${encodedSlug}/agenda`}>Agenda</a>
-      <a href={`/embed/${encodedSlug}/speakers`}>Speakers</a>
-    </nav>
-  );
-}
 export function PublicItineraryView({ program }: Readonly<{ program: PublishedProgram }>) {
   const { agenda, speakers } = program;
   const storageKey = `open-sessionboard:public-schedule:${agenda.event.slug}`;
@@ -342,7 +324,6 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
           <h2 id="itinerary-heading">Itinerary</h2>
           <p>Chronological sessions from the immutable published agenda.</p>
         </div>
-        <WidgetLinks eventSlug={agenda.event.slug} />
       </div>
 
       <search>
@@ -366,7 +347,7 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
             {filtersOpen ? "Hide filters" : "Filters"}
           </button>
           <button
-            className={styles.clearButton}
+            className={`${styles.clearButton} ${styles.scheduleToggle}`}
             type="button"
             aria-pressed={personalOnly}
             onClick={togglePersonalView}
@@ -375,7 +356,11 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
               ? `All sessions (${agenda.entries.length})`
               : `My schedule (${selectedIds.length})`}
           </button>
-          <button className={styles.clearButton} type="button" onClick={downloadCalendar}>
+          <button
+            className={`${styles.clearButton} ${styles.exportButton}`}
+            type="button"
+            onClick={downloadCalendar}
+          >
             Download calendar (.ics)
           </button>
           {hasFilters ? (
@@ -435,12 +420,12 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
         <span>{selectedIds.length} saved</span>
       </div>
       {exportMessage ? (
-        <p role="status" aria-live="polite">
+        <p className={styles.exportMessage} role="status" aria-live="polite">
           {exportMessage}
         </p>
       ) : null}
 
-      <div role="tablist" aria-label="Event days" className={styles.feedLinks}>
+      <div role="tablist" aria-label="Event days" className={styles.itineraryTabs}>
         {days.map((day) => {
           const panelId = `itinerary-panel-${day.date}`;
           const tabId = `itinerary-tab-${day.date}`;
@@ -499,189 +484,156 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
         </div>
       ) : (
         <div className={styles.publicDays}>
-          {visibleDays.map((day) => {
-            const byTime = new Map<string, PublishedAgendaEntry[]>();
-            const sortedEntries = [...day.entries].sort((left, right) => {
-              const leftStart = Date.parse(left.startsAt);
-              const rightStart = Date.parse(right.startsAt);
-              if (!Number.isNaN(leftStart) && !Number.isNaN(rightStart)) {
-                return leftStart - rightStart;
-              }
-              return left.startsAt.localeCompare(right.startsAt);
-            });
-            for (const entry of sortedEntries) {
-              const time = formatPublishedTime(entry.startsAt, agenda.event.timeZone);
-              const group = byTime.get(time) ?? [];
-              group.push(entry);
-              byTime.set(time, group);
-            }
-            return (
-              <section
-                key={day.date}
-                id={`itinerary-panel-${day.date}`}
-                role="tabpanel"
-                aria-labelledby={`itinerary-tab-${day.date}`}
-              >
-                <header className={styles.publicDayHeading}>
-                  <h3 id={`itinerary-day-${day.date}`}>{day.label}</h3>
-                </header>
-                <div className={styles.publicSessionList}>
-                  {[...byTime].map(([time, entries]) => (
-                    <section
-                      key={`${day.date}-${time}`}
-                      aria-labelledby={`itinerary-time-${day.date}-${time}`}
-                    >
-                      <h4 id={`itinerary-time-${day.date}-${time}`}>{time}</h4>
-                      <ol className={styles.publicSessionList}>
-                        {entries.map((entry) => {
-                          const presenters = publishedEntryPresenters(
-                            entry,
-                            program.speakers.speakers,
-                          );
-                          const isDescriptionExpanded = expandedDescriptions.has(entry.id);
-                          const isDetailsExpanded = expandedDetails.has(entry.id);
-                          const isSelected = selectedSet.has(entry.id);
-                          const hasLongDescription = entry.summary.length > DESCRIPTION_LIMIT;
-                          const hasDescription = entry.summary.trim().length > 0;
-                          return (
-                            <li key={entry.id}>
-                              <article className={styles.publicSessionCard}>
-                                <div className={styles.publicSessionTime}>
-                                  <time dateTime={entry.startsAt}>
-                                    {formatPublishedDateTimeRange(
-                                      entry.startsAt,
-                                      entry.endsAt,
-                                      agenda.event.timeZone,
-                                    )}
-                                  </time>
-                                </div>
-                                <div className={styles.publicSessionCopy}>
-                                  <div className={styles.publicSessionMeta}>
-                                    {entry.trackNames
-                                      .filter((trackName) => trackName.trim().length > 0)
-                                      .map((trackName) => (
-                                        <span key={trackName}>Track: {trackName}</span>
-                                      ))}
-                                    {entry.format.trim() ? (
-                                      <span>Format: {entry.format}</span>
-                                    ) : null}
-                                  </div>
-                                  <h4>{entry.title}</h4>
-                                  {hasDescription ? (
-                                    <p id={`itinerary-summary-${entry.id}`}>
-                                      {isDescriptionExpanded || !hasLongDescription
-                                        ? entry.summary
-                                        : truncateDescription(entry.summary)}
-                                    </p>
-                                  ) : (
-                                    <p>No description was published.</p>
-                                  )}
-                                  {hasLongDescription ? (
-                                    <button
-                                      className={styles.clearButton}
-                                      type="button"
-                                      aria-expanded={isDescriptionExpanded}
-                                      aria-controls={`itinerary-summary-${entry.id}`}
-                                      onClick={() =>
-                                        setExpandedDescriptions((current) => {
-                                          const next = new Set(current);
-                                          if (next.has(entry.id)) next.delete(entry.id);
-                                          else next.add(entry.id);
-                                          return next;
-                                        })
-                                      }
-                                    >
-                                      {isDescriptionExpanded ? "Show less" : "Show more"}
-                                    </button>
-                                  ) : null}
-                                  <p className={styles.publicSpeakers}>
-                                    <strong>Speakers</strong>
-                                  </p>
-                                  {presenters.length > 0 ? (
-                                    <ul>
-                                      {presenters.map((presenter) => (
-                                        <li key={presenter.key}>
-                                          {presenter.speaker
-                                            ? `${presenter.displayName} (${speakerRole(
-                                                presenter.speaker,
-                                              )})`
-                                            : presenter.displayName}
-                                        </li>
-                                      ))}
-                                    </ul>
-                                  ) : (
-                                    <p>No speakers listed</p>
-                                  )}
-                                  <p>
-                                    <strong>Format:</strong>{" "}
-                                    {entry.format || "Format not published"}
-                                    {entry.trackNames.length > 0 ? (
-                                      <>
-                                        {" · "}
-                                        <strong>Track:</strong> {entry.trackNames.join(", ")}
-                                      </>
-                                    ) : null}
-                                  </p>
-                                  <div
-                                    id={`itinerary-details-${entry.id}`}
-                                    hidden={!isDetailsExpanded}
-                                  >
-                                    <p>
-                                      <strong>Session details:</strong>{" "}
-                                      {formatPublishedDateTimeRange(
-                                        entry.startsAt,
-                                        entry.endsAt,
-                                        agenda.event.timeZone,
-                                      )}
-                                    </p>
-                                    <p>
-                                      <strong>Room:</strong>{" "}
-                                      {entry.roomName || "Room not published"}
-                                    </p>
-                                    <p>
-                                      {entry.summary || "No additional description was published."}
-                                    </p>
-                                  </div>
-                                  <button
-                                    className={styles.clearButton}
-                                    type="button"
-                                    aria-expanded={isDetailsExpanded}
-                                    aria-controls={`itinerary-details-${entry.id}`}
-                                    onClick={() =>
-                                      setExpandedDetails((current) => {
-                                        const next = new Set(current);
-                                        if (next.has(entry.id)) next.delete(entry.id);
-                                        else next.add(entry.id);
-                                        return next;
-                                      })
-                                    }
-                                  >
-                                    {isDetailsExpanded ? "Hide Details" : "View Details"}
-                                  </button>
-                                </div>
-                                <div className={styles.publicRoom}>
-                                  <span>Location</span>
-                                  <strong>{entry.roomName || "Location to be announced"}</strong>
-                                  <button
-                                    className={styles.clearButton}
-                                    type="button"
-                                    aria-pressed={isSelected}
-                                    onClick={() => toggleSelected(entry.id)}
-                                  >
-                                    {isSelected ? "Remove from my schedule" : "Add to my schedule"}
-                                  </button>
-                                </div>
-                              </article>
-                            </li>
-                          );
-                        })}
-                      </ol>
-                    </section>
-                  ))}
-                </div>
-              </section>
-            );
-          })}
+          {visibleDays.map((day) => (
+            <section
+              key={day.date}
+              id={`itinerary-panel-${day.date}`}
+              role="tabpanel"
+              aria-labelledby={`itinerary-tab-${day.date}`}
+            >
+              <ol className={styles.publicSessionList}>
+                {[...day.entries]
+                  .sort((left, right) => {
+                    const leftStart = Date.parse(left.startsAt);
+                    const rightStart = Date.parse(right.startsAt);
+                    if (!Number.isNaN(leftStart) && !Number.isNaN(rightStart)) {
+                      return leftStart - rightStart;
+                    }
+                    return left.startsAt.localeCompare(right.startsAt);
+                  })
+                  .map((entry) => {
+                    const presenters = publishedEntryPresenters(entry, program.speakers.speakers);
+                    const isDescriptionExpanded = expandedDescriptions.has(entry.id);
+                    const isDetailsExpanded = expandedDetails.has(entry.id);
+                    const isSelected = selectedSet.has(entry.id);
+                    const hasLongDescription = entry.summary.length > DESCRIPTION_LIMIT;
+                    const hasDescription = entry.summary.trim().length > 0;
+                    return (
+                      <li key={entry.id}>
+                        <article className={styles.publicSessionCard}>
+                          <div className={styles.publicSessionTime}>
+                            <time dateTime={entry.startsAt}>
+                              {formatPublishedDateTimeRange(
+                                entry.startsAt,
+                                entry.endsAt,
+                                agenda.event.timeZone,
+                              )}
+                            </time>
+                          </div>
+                          <div className={styles.publicSessionCopy}>
+                            <div className={styles.publicSessionMeta}>
+                              {entry.trackNames
+                                .filter((trackName) => trackName.trim().length > 0)
+                                .map((trackName) => (
+                                  <span key={trackName}>Track: {trackName}</span>
+                                ))}
+                              {entry.format.trim() ? <span>Format: {entry.format}</span> : null}
+                            </div>
+                            <h4>{entry.title}</h4>
+                            {hasDescription ? (
+                              <p id={`itinerary-summary-${entry.id}`}>
+                                {isDescriptionExpanded || !hasLongDescription
+                                  ? entry.summary
+                                  : truncateDescription(entry.summary)}
+                              </p>
+                            ) : (
+                              <p>No description was published.</p>
+                            )}
+                            {hasLongDescription ? (
+                              <button
+                                className={styles.clearButton}
+                                type="button"
+                                aria-expanded={isDescriptionExpanded}
+                                aria-controls={`itinerary-summary-${entry.id}`}
+                                onClick={() =>
+                                  setExpandedDescriptions((current) => {
+                                    const next = new Set(current);
+                                    if (next.has(entry.id)) next.delete(entry.id);
+                                    else next.add(entry.id);
+                                    return next;
+                                  })
+                                }
+                              >
+                                {isDescriptionExpanded ? "Show less" : "Show more"}
+                              </button>
+                            ) : null}
+                            <p className={styles.publicSpeakers}>
+                              <strong>Speakers</strong>
+                            </p>
+                            {presenters.length > 0 ? (
+                              <ul>
+                                {presenters.map((presenter) => (
+                                  <li key={presenter.key}>
+                                    {presenter.speaker
+                                      ? `${presenter.displayName} (${speakerRole(
+                                          presenter.speaker,
+                                        )})`
+                                      : presenter.displayName}
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <p>No speakers listed</p>
+                            )}
+                            <p>
+                              <strong>Format:</strong> {entry.format || "Format not published"}
+                              {entry.trackNames.length > 0 ? (
+                                <>
+                                  {" · "}
+                                  <strong>Track:</strong> {entry.trackNames.join(", ")}
+                                </>
+                              ) : null}
+                            </p>
+                            <div id={`itinerary-details-${entry.id}`} hidden={!isDetailsExpanded}>
+                              <p>
+                                <strong>Session details:</strong>{" "}
+                                {formatPublishedDateTimeRange(
+                                  entry.startsAt,
+                                  entry.endsAt,
+                                  agenda.event.timeZone,
+                                )}
+                              </p>
+                              <p>
+                                <strong>Room:</strong> {entry.roomName || "Room not published"}
+                              </p>
+                              <p>{entry.summary || "No additional description was published."}</p>
+                            </div>
+                            <button
+                              className={styles.clearButton}
+                              type="button"
+                              aria-expanded={isDetailsExpanded}
+                              aria-controls={`itinerary-details-${entry.id}`}
+                              onClick={() =>
+                                setExpandedDetails((current) => {
+                                  const next = new Set(current);
+                                  if (next.has(entry.id)) next.delete(entry.id);
+                                  else next.add(entry.id);
+                                  return next;
+                                })
+                              }
+                            >
+                              {isDetailsExpanded ? "Hide Details" : "View Details"}
+                            </button>
+                          </div>
+                          <div className={styles.publicRoom}>
+                            <span>Location</span>
+                            <strong>{entry.roomName || "Location to be announced"}</strong>
+                            <button
+                              className={styles.clearButton}
+                              type="button"
+                              aria-pressed={isSelected}
+                              onClick={() => toggleSelected(entry.id)}
+                            >
+                              {isSelected ? "Remove from my schedule" : "Add to my schedule"}
+                            </button>
+                          </div>
+                        </article>
+                      </li>
+                    );
+                  })}
+              </ol>
+            </section>
+          ))}
         </div>
       )}
     </section>

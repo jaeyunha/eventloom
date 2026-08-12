@@ -72,6 +72,7 @@ describe("integration admin UI", () => {
     const markup = renderToStaticMarkup(
       createElement(IntegrationAdmin, {
         eventId: "event-a",
+        organizationId: "org-a",
         section: "overview",
         initialSnapshot: snapshot,
       }),
@@ -85,12 +86,37 @@ describe("integration admin UI", () => {
     expect(markup).toContain("Webhooks");
     expect(markup).toContain("Needs attention");
     expect(markup).toContain("Source-of-truth boundary");
+    expect(markup).not.toContain("Integration settings unavailable");
+    expect(markup).not.toContain('role="alert"');
+  });
+
+  it("keeps scoped tabs inside the selected organization and event", () => {
+    const markup = renderToStaticMarkup(
+      createElement(IntegrationAdmin, {
+        eventId: "event-a",
+        organizationId: "ai-engineer",
+        section: "overview",
+        initialSnapshot: snapshot,
+      }),
+    );
+
+    expect(markup).toContain(
+      "/admin/organizations/ai-engineer/events/event-a/integrations/api-keys",
+    );
+    expect(markup).toContain(
+      "/admin/organizations/ai-engineer/events/event-a/integrations/webhooks",
+    );
+    expect(markup).toContain(
+      "/admin/organizations/ai-engineer/events/event-a/integrations/delivery",
+    );
+    expect(markup).not.toContain('href="/admin/events/event-a/integrations');
   });
 
   it("renders the scoped API-key surface", () => {
     const markup = renderToStaticMarkup(
       createElement(IntegrationAdmin, {
         eventId: "event-a",
+        organizationId: "org-a",
         section: "api-keys",
         initialSnapshot: snapshot,
       }),
@@ -106,6 +132,7 @@ describe("integration admin UI", () => {
     const markup = renderToStaticMarkup(
       createElement(IntegrationAdmin, {
         eventId: "event-a",
+        organizationId: "org-a",
         section: "delivery",
         initialSnapshot: snapshot,
       }),
@@ -122,6 +149,7 @@ describe("integration admin UI", () => {
     const markup = renderToStaticMarkup(
       createElement(IntegrationAdmin, {
         eventId: "event-a",
+        organizationId: "org-a",
         section: "webhooks",
         initialSnapshot: snapshot,
       }),

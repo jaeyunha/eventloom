@@ -166,6 +166,15 @@ export function speakerInitials(displayName: string): string {
 
 export function publicPhotoUrl(value: string | null): string | null {
   if (!value) return null;
+  if (value.includes("?") || value.includes("#")) return null;
+  if (value.startsWith("/api/public/")) {
+    // Same-origin published-projection headshots must stay relative, traversal-free, and credential-free.
+    if (value.includes("://") || value.includes("..") || value.includes("\\")) {
+      return null;
+    }
+    return value;
+  }
+  if (value.startsWith("//")) return null;
   try {
     const url = new URL(value);
     if (
@@ -173,7 +182,8 @@ export function publicPhotoUrl(value: string | null): string | null {
       url.username.length > 0 ||
       url.password.length > 0 ||
       url.search.length > 0 ||
-      url.hash.length > 0
+      url.hash.length > 0 ||
+      url.pathname.startsWith("/api/public/")
     ) {
       return null;
     }
@@ -181,6 +191,166 @@ export function publicPhotoUrl(value: string | null): string | null {
   } catch {
     return null;
   }
+}
+
+export type EmbedLayout = "comfortable" | "compact" | "list" | "grid" | "timeline";
+
+export type EmbedDisplayField =
+  | "title"
+  | "date-time"
+  | "room"
+  | "speakers"
+  | "format"
+  | "track"
+  | "summary"
+  | "company"
+  | "bio";
+
+export const EMBED_LAYOUTS: readonly EmbedLayout[] = [
+  "comfortable",
+  "compact",
+  "list",
+  "grid",
+  "timeline",
+];
+
+export const EMBED_DISPLAY_FIELDS: readonly EmbedDisplayField[] = [
+  "title",
+  "date-time",
+  "room",
+  "speakers",
+  "format",
+  "track",
+  "summary",
+  "company",
+  "bio",
+];
+
+const REQUIRED_EMBED_DISPLAY_FIELDS: readonly EmbedDisplayField[] = ["title", "date-time"];
+
+export interface EmbedQuery {
+  readonly theme: EmbedTheme;
+  readonly layout: EmbedLayout | null;
+  readonly displayFields: readonly EmbedDisplayField[] | null;
+  readonly tracks: readonly string[];
+  readonly accent: string | null;
+  readonly backgroundColor: string | null;
+  readonly textColor: string | null;
+}
+
+type EmbedQuerySource = Readonly<Record<string, string | string[] | undefined>> | URLSearchParams;
+
+function embedQueryHas(source: EmbedQuerySource, key: string): boolean {
+  if (source instanceof URLSearchParams) return source.has(key);
+  const value = source[key];
+  return value !== undefined;
+}
+
+function embedQueryFirst(source: EmbedQuerySource, key: string): string | null {
+  if (source instanceof URLSearchParams) return source.get(key);
+  const value = source[key];
+  if (value === undefined) return null;
+  return Array.isArray(value) ? (value[0] ?? null) : value;
+}
+
+function embedQueryCsv(source: EmbedQuerySource, key: string): string | null {
+  if (source instanceof URLSearchParams) return source.get(key);
+  const value = source[key];
+  if (value === undefined) return null;
+  if (Array.isArray(value)) return value.length === 0 ? null : value.join(",");
+  return value;
+}
+
+function isEmbedLayout(value: string): value is EmbedLayout {
+  return (EMBED_LAYOUTS as readonly string[]).includes(value);
+}
+
+function isEmbedDisplayField(value: string): value is EmbedDisplayField {
+  return (EMBED_DISPLAY_FIELDS as readonly string[]).includes(value);
+}
+
+function normalizeEmbedHexColor(value: string | null): string | null {
+  if (value === null) return null;
+  const candidate = value.trim().toLowerCase();
+  return /^#[0-9a-f]{6}$/u.test(candidate) ? candidate : null;
+}
+
+function normalizeEmbedCsvTracks(value: string | null): readonly string[] {
+  if (value === null) return [];
+  const seen = new Set<string>();
+  const tracks: string[] = [];
+  for (const raw of value.split(",")) {
+    const trimmed = raw.trim();
+    if (trimmed.length > 0 && !seen.has(trimmed)) {
+      seen.add(trimmed);
+      tracks.push(trimmed);
+    }
+  }
+  return tracks;
+}
+
+function normalizeEmbedDisplayFields(value: string | null): readonly EmbedDisplayField[] {
+  const ordered: EmbedDisplayField[] = [];
+  const seen = new Set<EmbedDisplayField>();
+  if (value !== null) {
+    for (const raw of value.split(",")) {
+      const trimmed = raw.trim();
+      if (isEmbedDisplayField(trimmed) && !seen.has(trimmed)) {
+        seen.add(trimmed);
+        ordered.push(trimmed);
+      }
+    }
+  }
+  for (const required of REQUIRED_EMBED_DISPLAY_FIELDS) {
+    if (!seen.has(required)) {
+      seen.add(required);
+      ordered.push(required);
+    }
+  }
+  return ordered;
+}
+
+export function parseEmbedQuery(source: EmbedQuerySource): EmbedQuery {
+  const theme = embedTheme(embedQueryFirst(source, "theme") ?? undefined);
+  const layoutValue = embedQueryFirst(source, "layout");
+  const layout = layoutValue !== null && isEmbedLayout(layoutValue) ? layoutValue : null;
+  const displayFieldsValue = embedQueryCsv(source, "displayFields");
+  const displayFields = embedQueryHas(source, "displayFields")
+    ? normalizeEmbedDisplayFields(displayFieldsValue)
+    : null;
+  return {
+    theme,
+    layout,
+    displayFields,
+    tracks: normalizeEmbedCsvTracks(embedQueryCsv(source, "tracks")),
+    accent: normalizeEmbedHexColor(embedQueryFirst(source, "accent")),
+    backgroundColor: normalizeEmbedHexColor(embedQueryFirst(source, "backgroundColor")),
+    textColor: normalizeEmbedHexColor(embedQueryFirst(source, "textColor")),
+  };
+}
+
+export function serializeEmbedQuery(query: EmbedQuery): string {
+  const params = new URLSearchParams();
+  if (query.theme !== "auto") params.set("theme", query.theme);
+  if (query.layout) params.set("layout", query.layout);
+  if (query.displayFields) {
+    params.set("displayFields", query.displayFields.join(","));
+  }
+  if (query.tracks.length > 0) params.set("tracks", query.tracks.join(","));
+  if (query.accent) params.set("accent", query.accent);
+  if (query.backgroundColor) params.set("backgroundColor", query.backgroundColor);
+  if (query.textColor) params.set("textColor", query.textColor);
+  const serialized = params.toString();
+  return serialized ? `?${serialized}` : "";
+}
+
+export function escapeXmlValue(value: string): string {
+  return value
+    .replace(/&/gu, "&amp;")
+    .replace(/</gu, "&lt;")
+    .replace(/>/gu, "&gt;")
+    .replace(/"/gu, "&quot;")
+    .replace(/'/gu, "&apos;");
 }
 
 export function filterSpeakers(

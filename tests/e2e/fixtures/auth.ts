@@ -1,6 +1,7 @@
 import { type BrowserContext, test as base, expect } from "@playwright/test";
 
 export const E2E_SESSION_COOKIE = "open-sessionboard.session";
+const e2eWebBaseUrl = `http://127.0.0.1:${process.env.PLAYWRIGHT_WEB_PORT?.trim() || "3015"}`;
 
 export type E2eRole = "organizer" | "reviewer" | "speaker" | "submitter";
 
@@ -60,7 +61,7 @@ async function installAuthenticatedSession(
     {
       name: E2E_SESSION_COOKIE,
       value: session.token,
-      url: "http://127.0.0.1:3015",
+      url: e2eWebBaseUrl,
       httpOnly: true,
       sameSite: "Lax",
       secure: false,
@@ -68,7 +69,7 @@ async function installAuthenticatedSession(
     {
       name: "better-auth.session_token",
       value: "local-session",
-      url: "http://127.0.0.1:3015",
+      url: e2eWebBaseUrl,
       httpOnly: true,
       sameSite: "Lax",
       secure: false,
@@ -87,9 +88,9 @@ async function installAuthenticatedSession(
         },
         memberships:
           session.role === "organizer"
-            ? [{ organizationId: "ai-engineer", role: "owner" }]
+            ? [{ organizationId: "local-organization", role: "owner" }]
             : session.role === "reviewer"
-              ? [{ organizationId: "ai-engineer", role: "reviewer" }]
+              ? [{ organizationId: "local-organization", role: "reviewer" }]
               : [],
         speakerGrants: [],
       }),

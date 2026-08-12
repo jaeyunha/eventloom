@@ -10,7 +10,9 @@ import {
   PortalFrame,
   Progress,
   portalAssetStateLabel,
+  portalContentMode,
   portalNavigation,
+  portalRouteAuthorized,
   SubmissionStatusBadge,
   signOutAndRedirect,
   TaskStatusBadge,
@@ -19,6 +21,7 @@ import { groupPortalAssetVersions } from "./portal-workspace";
 import type { PortalAsset, PortalContext, PortalProfile, PortalView } from "./types";
 
 vi.mock("next/navigation", () => ({
+  usePathname: () => "/portal",
   useSearchParams: () => new URLSearchParams(),
 }));
 
@@ -52,6 +55,104 @@ function portalStartupView(context: PortalContext): PortalView {
 }
 
 describe("speaker portal UI components", () => {
+  it("separates submitter submission access from accepted-speaker capabilities", () => {
+    const noCapabilities = () => false;
+    expect(
+      portalRouteAuthorized({
+        pathname: "/portal/submissions",
+        workspace: null,
+        submissionCount: 1,
+        can: noCapabilities,
+      }),
+    ).toBe(true);
+    expect(
+      portalRouteAuthorized({
+        pathname: "/portal/submissions/submission-1",
+        workspace: null,
+        submissionCount: 1,
+        can: noCapabilities,
+      }),
+    ).toBe(true);
+    for (const [pathname, workspace] of [
+      ["/portal/tasks", null],
+      ["/portal/profile", null],
+      ["/portal", "files"],
+    ] as const) {
+      expect(
+        portalRouteAuthorized({
+          pathname,
+          workspace,
+          submissionCount: 1,
+          can: noCapabilities,
+        }),
+      ).toBe(false);
+    }
+    const acceptedCapabilities = new Set(["task-response", "profile-self", "asset-read"]);
+    for (const [pathname, workspace] of [
+      ["/portal/tasks", null],
+      ["/portal/profile", null],
+      ["/portal", "files"],
+    ] as const) {
+      expect(
+        portalRouteAuthorized({
+          pathname,
+          workspace,
+          submissionCount: 1,
+          can: (capability) => acceptedCapabilities.has(capability),
+        }),
+      ).toBe(true);
+    }
+  });
+
+  it("renders no-access rather than redirecting authenticated users without matching context grants", () => {
+    expect(
+      portalRouteAuthorized({
+        pathname: "/portal/tasks",
+        workspace: null,
+        submissionCount: 0,
+        can: () => false,
+      }),
+    ).toBe(false);
+  });
+
+  it("allows an authenticated account to reach an empty submissions workspace", () => {
+    expect(
+      portalRouteAuthorized({
+        pathname: "/portal/submissions",
+        workspace: null,
+        submissionCount: 0,
+        can: () => false,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps load failures in the retry UI and reserves no-access for successful denial", () => {
+    expect(
+      portalContentMode({
+        loading: false,
+        error: "The portal could not be loaded.",
+        hasView: false,
+        routeAuthorized: false,
+      }),
+    ).toBe("children");
+    expect(
+      portalContentMode({
+        loading: false,
+        error: null,
+        hasView: true,
+        routeAuthorized: false,
+      }),
+    ).toBe("no-access");
+    expect(
+      portalContentMode({
+        loading: false,
+        error: null,
+        hasView: true,
+        routeAuthorized: true,
+      }),
+    ).toBe("children");
+  });
+
   it("round-trips the complete profile DTO and validates social profile URLs", async () => {
     const requests: Array<{ input: RequestInfo | URL; init: RequestInit | undefined }> = [];
     const updatedProfile: PortalProfile & {
