@@ -161,9 +161,12 @@ import type {
   PrivateUploadGrant,
   PrivateUploadReceipt,
   RepositoryResult,
+  RestoreSpeakerContentVersionCommand,
   SpeakerAccessScope,
   SpeakerAsset,
   SpeakerAssetComment,
+  SpeakerContentHistoryEntry,
+  SpeakerContentRecord,
   SpeakerEventResource,
   SpeakerInvitationDeliveryInput,
   SpeakerInvitationDeliveryReceipt,
@@ -187,6 +190,7 @@ import type {
   SpeakerWikiPage,
   TransitionSpeakerTaskCommand,
   UpdateBiographyCommand,
+  UpdateSpeakerContentCommand,
   UpdateSpeakerProfileCommand,
 } from "../features/speaker/types";
 import {
@@ -1428,12 +1432,166 @@ function normalizeSpeakerEmailRecord<T extends object>(
   }
   return record as T;
 }
+type StoredSpeakerProfile = SpeakerProfile &
+  JsonRecord & {
+    tenantId?: string;
+    updatedBy?: string;
+    contentHistory?: readonly SpeakerContentHistoryEntry[];
+  };
+
+function speakerContentRecord(
+  profile: StoredSpeakerProfile,
+  tenantId: string,
+): SpeakerContentRecord {
+  return {
+    id: profile.id,
+    tenantId,
+    eventId: profile.eventId,
+    entityType: "speaker",
+    entityId: profile.participantId,
+    biography: profile.biography,
+    ...(profile.socialLinks === undefined ? {} : { socialLinks: clone(profile.socialLinks) }),
+    ...(profile.headshotAssetId === undefined ? {} : { headshotAssetId: profile.headshotAssetId }),
+    ...(profile.status === undefined ? {} : { status: profile.status }),
+    version: profile.version,
+    updatedAt: profile.updatedAt,
+    updatedBy: profile.updatedBy ?? "system:speaker-profile",
+  };
+}
+
+function sessionContentRecord(session: Session): SpeakerContentRecord {
+  return {
+    id: session.id,
+    tenantId: session.tenantId,
+    eventId: session.eventId,
+    entityType: "session",
+    entityId: session.id,
+    title: session.title,
+    description: session.description,
+    status: session.contentStatus ?? session.status,
+    version: session.version,
+    updatedAt: session.updatedAt,
+    updatedBy: session.updatedBy,
+  };
+}
+function sessionContentSnapshotForHistory(
+  session: Session,
+): NonNullable<Session["history"][number]["snapshot"]> {
+  return {
+    id: session.id,
+    tenantId: session.tenantId,
+    eventId: session.eventId,
+    title: session.title,
+    description: session.description,
+    status: session.status,
+    ...(session.contentStatus === undefined ? {} : { contentStatus: session.contentStatus }),
+    durationMinutes: session.durationMinutes,
+    capacityRequired: session.capacityRequired,
+    ...(session.roomId === undefined ? {} : { roomId: session.roomId }),
+    ...(session.trackId === undefined ? {} : { trackId: session.trackId }),
+    trackIds: clone(session.trackIds),
+    ...(session.formatId === undefined ? {} : { formatId: session.formatId }),
+    ...(session.levelId === undefined ? {} : { levelId: session.levelId }),
+    tagIds: clone(session.tagIds),
+    speakerIds: clone(session.speakerIds),
+    speakerRoster: clone(session.speakerRoster),
+    resourceIds: clone(session.resourceIds),
+  };
+}
+
+function ensuredSpeakerContentHistory(
+  profile: StoredSpeakerProfile,
+  tenantId: string,
+): SpeakerContentHistoryEntry[] {
+  const existing = speakerContentHistory(profile);
+  if (existing.length > 0) return existing;
+  const snapshot = speakerContentRecord(profile, tenantId);
+  return [
+    {
+      id: contentHistoryId(
+        tenantId,
+        profile.eventId,
+        "speaker",
+        profile.participantId,
+        profile.version,
+      ),
+      eventId: profile.eventId,
+      entityType: "speaker",
+      entityId: profile.participantId,
+      action: "created",
+      version: profile.version,
+      actorAccountId: snapshot.updatedBy,
+      occurredAt: profile.updatedAt,
+      snapshot,
+    },
+  ];
+}
+
+function contentHistoryId(
+  tenantId: string,
+  eventId: string,
+  entityType: "session" | "speaker",
+  entityId: string,
+  version: number,
+): string {
+  return `speaker-content-history:${tenantId}:${eventId}:${entityType}:${entityId}:v${version}`;
+}
+
+function speakerContentHistory(profile: StoredSpeakerProfile): SpeakerContentHistoryEntry[] {
+  return Array.isArray(profile.contentHistory)
+    ? profile.contentHistory.map((entry) => clone(entry))
+    : [];
+}
+
+function sessionContentHistory(session: Session): SpeakerContentHistoryEntry[] {
+  return session.history.flatMap((entry) => {
+    const snapshot = entry.snapshot;
+    if (snapshot === undefined) return [];
+    if (
+      entry.action !== "created" &&
+      entry.action !== "updated" &&
+      entry.action !== "restored" &&
+      entry.action !== "approved" &&
+      entry.action !== "needs_changes"
+    ) {
+      return [];
+    }
+    const content: SpeakerContentRecord = {
+      id: snapshot.id,
+      tenantId: snapshot.tenantId,
+      eventId: snapshot.eventId,
+      entityType: "session",
+      entityId: snapshot.id,
+      title: snapshot.title,
+      description: snapshot.description,
+      status: snapshot.contentStatus ?? snapshot.status,
+      version: entry.version,
+      updatedAt: entry.occurredAt,
+      updatedBy: entry.actorId,
+    };
+    return [
+      {
+        id: entry.id,
+        eventId: snapshot.eventId,
+        entityType: "session",
+        entityId: snapshot.id,
+        action: entry.action,
+        version: entry.version,
+        actorAccountId: entry.actorId,
+        ...(entry.actorLabel === undefined ? {} : { actorLabel: entry.actorLabel }),
+        occurredAt: entry.occurredAt,
+        snapshot: content,
+      },
+    ];
+  });
+}
 
 /** Speaker records and task state are business records in Airtable. */
 export class AirtableSpeakerRepository implements SpeakerRepository {
   readonly #submissions: AirtableJsonStore<SpeakerSubmission>;
   readonly #profiles: AirtableJsonStore<SpeakerProfile>;
   readonly #tasks: AirtableJsonStore<SpeakerTask>;
+  readonly #sessions: AirtableJsonStore<Session>;
   readonly #assets: AirtableJsonStore<SpeakerAsset>;
   readonly #database: D1Database;
   readonly #events: AirtableJsonStore<JsonRecord>;
@@ -1457,6 +1615,11 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       ...shared,
       table: "Events",
       jsonField: "Settings JSON",
+    });
+    this.#sessions = new AirtableJsonStore({
+      ...shared,
+      table: "Sessions",
+      jsonField: "Metadata JSON",
     });
     this.#roster = new AirtableJsonStore({
       ...shared,
@@ -2396,7 +2559,6 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
           ? {}
           : { displayName }),
         ...(email.length === 0 || existing.email === email ? {} : { email }),
-        ...(existing.status === "accepted" ? {} : { status: "accepted" }),
       };
       if (
         updated.displayName === existing.displayName &&
@@ -2689,6 +2851,373 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     }
     await this.#profiles.update(profile.id, tagged(updated, "speaker_profile"));
     return { ok: true, value: clone(updated) };
+  }
+  async getContent(
+    eventId: string,
+    entityType: "session" | "speaker",
+    entityId: string,
+  ): Promise<SpeakerContentRecord | null> {
+    const event = await this.#events.find(eventId);
+    const tenantId = event === undefined ? undefined : resolvedOrganizationId(event);
+    if (tenantId === undefined) return null;
+
+    if (entityType === "session") {
+      const session = await this.#sessions.find(entityId);
+      if (
+        session === undefined ||
+        session.id !== entityId ||
+        session.eventId !== eventId ||
+        session.tenantId !== tenantId
+      ) {
+        return null;
+      }
+      return clone(sessionContentRecord(session));
+    }
+
+    const profile = await this.getProfile(eventId, entityId, tenantId);
+    if (profile === null || resolvedOrganizationId(profile) !== tenantId) return null;
+    return clone(speakerContentRecord(profile as StoredSpeakerProfile, tenantId));
+  }
+
+  async listContentHistory(
+    eventId: string,
+    entityType: "session" | "speaker",
+    entityId: string,
+  ): Promise<SpeakerContentHistoryEntry[]> {
+    const current = await this.getContent(eventId, entityType, entityId);
+    if (current === null || current.tenantId === undefined) return [];
+
+    const history =
+      entityType === "session"
+        ? await (async () => {
+            const session = await this.#sessions.find(entityId);
+            return session === undefined ? [] : sessionContentHistory(session);
+          })()
+        : await (async () => {
+            const profile = await this.#profiles.find(`speaker-profile:${eventId}:${entityId}`);
+            return profile === undefined
+              ? []
+              : speakerContentHistory(profile as StoredSpeakerProfile);
+          })();
+
+    return history
+      .filter(
+        (entry) =>
+          entry.eventId === eventId &&
+          entry.entityType === entityType &&
+          entry.entityId === entityId &&
+          Number.isSafeInteger(entry.version) &&
+          entry.version > 0 &&
+          entry.snapshot.tenantId === current.tenantId &&
+          entry.snapshot.eventId === eventId &&
+          entry.snapshot.entityType === entityType &&
+          entry.snapshot.entityId === entityId &&
+          entry.snapshot.version === entry.version,
+      )
+      .sort(
+        (left, right) =>
+          left.version - right.version || left.occurredAt.localeCompare(right.occurredAt),
+      )
+      .map((entry) => clone(entry));
+  }
+
+  async updateContent(
+    command: UpdateSpeakerContentCommand,
+  ): Promise<RepositoryResult<SpeakerContentRecord>> {
+    const event = await this.#events.find(command.eventId);
+    const tenantId = event === undefined ? undefined : resolvedOrganizationId(event);
+    if (tenantId === undefined) return { ok: false, reason: "not_found" };
+
+    if (command.entityType === "session") {
+      if (
+        command.biography !== undefined ||
+        command.socialLinks !== undefined ||
+        command.headshotAssetId !== undefined
+      ) {
+        return { ok: false, reason: "invalid_state" };
+      }
+      const current = await this.#sessions.find(command.entityId);
+      if (
+        current === undefined ||
+        current.id !== command.entityId ||
+        current.eventId !== command.eventId ||
+        current.tenantId !== tenantId
+      ) {
+        return { ok: false, reason: "not_found" };
+      }
+      if (current.version !== command.expectedVersion) {
+        return { ok: false, reason: "version_conflict" };
+      }
+
+      const requestedContentStatus =
+        command.status === "Approved" || command.status === "Needs changes"
+          ? command.status
+          : undefined;
+      const nextVersion = current.version + 1;
+      const nextBase: Session = {
+        ...current,
+        ...(command.title === undefined ? {} : { title: command.title }),
+        ...(command.description === undefined && command.abstract === undefined
+          ? {}
+          : { description: command.description ?? command.abstract ?? current.description }),
+        ...(command.status === undefined || requestedContentStatus !== undefined
+          ? {}
+          : { status: command.status }),
+        ...(requestedContentStatus === undefined ? {} : { contentStatus: requestedContentStatus }),
+        version: nextVersion,
+        updatedAt: command.updatedAt,
+        updatedBy: command.accountId,
+        history: clone(current.history),
+      };
+      const existingHistory = [...current.history];
+      if (!sessionContentHistory(current).some((entry) => entry.version === current.version)) {
+        existingHistory.push({
+          id: contentHistoryId(
+            tenantId,
+            command.eventId,
+            "session",
+            command.entityId,
+            current.version,
+          ),
+          action: "created",
+          version: current.version,
+          actorId: current.updatedBy,
+          occurredAt: current.updatedAt,
+          actorLabel: current.updatedBy,
+          snapshot: sessionContentSnapshotForHistory(current),
+        });
+      }
+      const action =
+        requestedContentStatus === "Approved"
+          ? "approved"
+          : requestedContentStatus === "Needs changes"
+            ? "needs_changes"
+            : "updated";
+      const updated: Session = {
+        ...nextBase,
+        history: [
+          ...existingHistory,
+          {
+            id: contentHistoryId(
+              tenantId,
+              command.eventId,
+              "session",
+              command.entityId,
+              nextVersion,
+            ),
+            action,
+            version: nextVersion,
+            actorId: command.accountId,
+            actorLabel: command.accountId,
+            occurredAt: command.updatedAt,
+            snapshot: sessionContentSnapshotForHistory(nextBase),
+          },
+        ],
+      };
+      await this.#sessions.update(current.id, updated);
+      return { ok: true, value: clone(sessionContentRecord(updated)) };
+    }
+
+    if (
+      command.title !== undefined ||
+      command.description !== undefined ||
+      command.abstract !== undefined
+    ) {
+      return { ok: false, reason: "invalid_state" };
+    }
+    const profile = await this.getProfile(command.eventId, command.entityId, tenantId);
+    if (profile === null || resolvedOrganizationId(profile) !== tenantId) {
+      return { ok: false, reason: "not_found" };
+    }
+    if (profile.version !== command.expectedVersion) {
+      return { ok: false, reason: "version_conflict" };
+    }
+    if (command.headshotAssetId !== undefined && command.headshotAssetId !== null) {
+      const asset = await this.getAsset(command.eventId, command.headshotAssetId);
+      if (
+        asset === null ||
+        asset.tenantId !== tenantId ||
+        asset.participantId !== command.entityId ||
+        asset.kind !== "headshot" ||
+        asset.state !== "ready"
+      ) {
+        return { ok: false, reason: "not_found" };
+      }
+    }
+
+    const stored = profile as StoredSpeakerProfile;
+    const nextVersion = stored.version + 1;
+    const updated: StoredSpeakerProfile = {
+      ...stored,
+      tenantId,
+      ...(command.biography === undefined ? {} : { biography: command.biography }),
+      ...(command.socialLinks === undefined ? {} : { socialLinks: clone(command.socialLinks) }),
+      ...(command.status === undefined ? {} : { status: command.status }),
+      version: nextVersion,
+      updatedAt: command.updatedAt,
+      updatedBy: command.accountId,
+    };
+    if (command.headshotAssetId === null) {
+      delete updated.headshotAssetId;
+    } else if (command.headshotAssetId !== undefined) {
+      updated.headshotAssetId = command.headshotAssetId;
+    }
+    const snapshot = speakerContentRecord(updated, tenantId);
+    updated.contentHistory = [
+      ...ensuredSpeakerContentHistory(stored, tenantId),
+      {
+        id: contentHistoryId(tenantId, command.eventId, "speaker", command.entityId, nextVersion),
+        eventId: command.eventId,
+        entityType: "speaker",
+        entityId: command.entityId,
+        action: "updated",
+        version: nextVersion,
+        actorAccountId: command.accountId,
+        actorLabel: command.accountId,
+        occurredAt: command.updatedAt,
+        snapshot,
+      },
+    ];
+    await this.#profiles.update(stored.id, tagged(updated, "speaker_profile"));
+    return { ok: true, value: clone(snapshot) };
+  }
+
+  async restoreContentVersion(
+    command: RestoreSpeakerContentVersionCommand,
+  ): Promise<RepositoryResult<SpeakerContentRecord>> {
+    const event = await this.#events.find(command.eventId);
+    const tenantId = event === undefined ? undefined : resolvedOrganizationId(event);
+    if (tenantId === undefined) return { ok: false, reason: "not_found" };
+
+    const current = await this.getContent(command.eventId, command.entityType, command.entityId);
+    if (current === null || current.tenantId !== tenantId) {
+      return { ok: false, reason: "not_found" };
+    }
+    if (command.expectedVersion === undefined || current.version !== command.expectedVersion) {
+      return { ok: false, reason: "version_conflict" };
+    }
+    const history = await this.listContentHistory(
+      command.eventId,
+      command.entityType,
+      command.entityId,
+    );
+    const target = history.find(
+      (entry) =>
+        entry.version === command.version &&
+        entry.snapshot.version === command.version &&
+        entry.snapshot.tenantId === tenantId &&
+        entry.snapshot.eventId === command.eventId &&
+        entry.snapshot.entityType === command.entityType &&
+        entry.snapshot.entityId === command.entityId,
+    );
+    if (target === undefined) return { ok: false, reason: "not_found" };
+
+    const nextVersion = current.version + 1;
+    if (command.entityType === "session") {
+      const session = await this.#sessions.find(command.entityId);
+      if (
+        session === undefined ||
+        session.eventId !== command.eventId ||
+        session.tenantId !== tenantId ||
+        session.version !== current.version
+      ) {
+        return { ok: false, reason: "version_conflict" };
+      }
+      const restoredStatus = target.snapshot.status;
+      const restoredContentStatus =
+        restoredStatus === "Approved" || restoredStatus === "Needs changes"
+          ? restoredStatus
+          : undefined;
+      const restoredBase: Session = {
+        ...session,
+        ...(target.snapshot.title === undefined ? {} : { title: target.snapshot.title }),
+        ...(target.snapshot.description === undefined
+          ? {}
+          : { description: target.snapshot.description }),
+        ...(restoredStatus === undefined || restoredContentStatus !== undefined
+          ? {}
+          : { status: restoredStatus }),
+        ...(restoredContentStatus === undefined ? {} : { contentStatus: restoredContentStatus }),
+        version: nextVersion,
+        updatedAt: command.updatedAt,
+        updatedBy: command.accountId,
+        history: clone(session.history),
+      };
+      const restored: Session = {
+        ...restoredBase,
+        history: [
+          ...session.history,
+          {
+            id: contentHistoryId(
+              tenantId,
+              command.eventId,
+              "session",
+              command.entityId,
+              nextVersion,
+            ),
+            action: "restored",
+            version: nextVersion,
+            actorId: command.accountId,
+            actorLabel: command.accountId,
+            occurredAt: command.updatedAt,
+            snapshot: sessionContentSnapshotForHistory(restoredBase),
+          },
+        ],
+      };
+      await this.#sessions.update(session.id, restored);
+      return { ok: true, value: clone(sessionContentRecord(restored)) };
+    }
+
+    const profile = await this.getProfile(command.eventId, command.entityId, tenantId);
+    if (
+      profile === null ||
+      resolvedOrganizationId(profile) !== tenantId ||
+      profile.version !== current.version
+    ) {
+      return { ok: false, reason: "version_conflict" };
+    }
+    const stored = profile as StoredSpeakerProfile;
+    const restored: StoredSpeakerProfile = {
+      ...stored,
+      tenantId,
+      biography: target.snapshot.biography ?? "",
+      version: nextVersion,
+      updatedAt: command.updatedAt,
+      updatedBy: command.accountId,
+    };
+    if (target.snapshot.socialLinks === undefined) {
+      delete restored.socialLinks;
+    } else {
+      restored.socialLinks = clone(target.snapshot.socialLinks);
+    }
+    if (target.snapshot.headshotAssetId === undefined) {
+      delete restored.headshotAssetId;
+    } else {
+      restored.headshotAssetId = target.snapshot.headshotAssetId;
+    }
+    if (target.snapshot.status === undefined) {
+      delete restored.status;
+    } else {
+      restored.status = target.snapshot.status;
+    }
+    const snapshot = speakerContentRecord(restored, tenantId);
+    restored.contentHistory = [
+      ...speakerContentHistory(stored),
+      {
+        id: contentHistoryId(tenantId, command.eventId, "speaker", command.entityId, nextVersion),
+        eventId: command.eventId,
+        entityType: "speaker",
+        entityId: command.entityId,
+        action: "restored",
+        version: nextVersion,
+        actorAccountId: command.accountId,
+        actorLabel: command.accountId,
+        occurredAt: command.updatedAt,
+        snapshot,
+      },
+    ];
+    await this.#profiles.update(stored.id, tagged(restored, "speaker_profile"));
+    return { ok: true, value: clone(snapshot) };
   }
 
   async listTasks(eventId: string, participantIds: readonly string[]): Promise<SpeakerTask[]> {

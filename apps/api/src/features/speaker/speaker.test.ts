@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { FakeAirtableTransport } from "../../infrastructure/airtable";
+import { AirtableSpeakerRepository } from "../../runtime/airtable";
 import { createSpeakerRoutes } from "./routes";
 import { SpeakerService, SpeakerServiceError } from "./service";
 import type {
@@ -3141,6 +3143,117 @@ describe("SpeakerService capability and canonical task scope", () => {
       ({ id }) => id === "reused-participant-cross-submission-task",
     );
     expect(crossSubmissionTask?.status).toBe("not_started");
+  });
+});
+describe("Airtable speaker acceptance initialization", () => {
+  it("preserves organizer-managed profile state and initializes accepted only for a new profile", async () => {
+    const transport = new FakeAirtableTransport();
+    const organizationId = "tenant-acceptance";
+    const eventId = "event-acceptance";
+    const participantId = "participant-existing";
+    const existingProfileId = `speaker-profile:${eventId}:${participantId}`;
+    transport.seed({
+      baseId: "base-test",
+      table: "Events",
+      fields: {
+        "Application ID": eventId,
+        "Settings JSON": JSON.stringify({
+          id: eventId,
+          organizationId,
+          name: "Acceptance Event",
+        }),
+      },
+    });
+    transport.seed({
+      baseId: "base-test",
+      table: "Speaker Profiles",
+      fields: {
+        "Application ID": existingProfileId,
+        Version: 3,
+        Biography: JSON.stringify({
+          id: existingProfileId,
+          tenantId: organizationId,
+          eventId,
+          participantId,
+          displayName: "Organizer Managed",
+          email: "managed@example.test",
+          jobTitle: "Principal Engineer",
+          company: "Example Co",
+          biography: "Organizer biography",
+          socialLinks: { website: "https://example.test/speaker" },
+          headshotAssetId: "asset-headshot",
+          travelLogistics: {
+            travelRequired: true,
+            arrivalAt: "2027-05-01T10:00:00.000Z",
+            departureAt: "2027-05-03T10:00:00.000Z",
+            accommodation: "Conference hotel",
+            dietaryRequirements: "Vegetarian",
+            accessibilityNeeds: "Step-free access",
+            travelNotes: "Late arrival",
+          },
+          status: "confirmed",
+          version: 3,
+          updatedAt: "2026-08-01T00:00:00.000Z",
+        }),
+      },
+    });
+    const repository = new AirtableSpeakerRepository({
+      baseId: "base-test",
+      transport,
+      database: {} as ConstructorParameters<typeof AirtableSpeakerRepository>[0]["database"],
+    });
+
+    const existing = await repository.ensureProfile({
+      organizationId,
+      eventId,
+      participant: {
+        id: participantId,
+        firstName: "Updated",
+        lastName: "Name",
+        email: "updated@example.test",
+        role: "primary",
+        biography: "CFP biography",
+        answers: {},
+      },
+      updatedAt: now,
+    });
+    expect(existing).toMatchObject({
+      displayName: "Updated Name",
+      email: "updated@example.test",
+      biography: "Organizer biography",
+      status: "confirmed",
+      headshotAssetId: "asset-headshot",
+      jobTitle: "Principal Engineer",
+      company: "Example Co",
+      socialLinks: { website: "https://example.test/speaker" },
+      travelLogistics: {
+        travelRequired: true,
+        accommodation: "Conference hotel",
+        dietaryRequirements: "Vegetarian",
+      },
+      version: 4,
+    });
+
+    const created = await repository.ensureProfile({
+      organizationId,
+      eventId,
+      participant: {
+        id: "participant-new",
+        firstName: "New",
+        lastName: "Speaker",
+        email: "new@example.test",
+        role: "co_speaker",
+        biography: "New biography",
+        answers: {},
+      },
+      updatedAt: now,
+    });
+    expect(created).toMatchObject({
+      participantId: "participant-new",
+      biography: "New biography",
+      status: "accepted",
+      version: 1,
+    });
   });
 });
 

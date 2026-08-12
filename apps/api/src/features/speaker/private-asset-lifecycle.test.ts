@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { R2PrivateAssetGateway } from "../../runtime/airtable";
+import { FakeAirtableTransport } from "../../infrastructure/airtable";
+import { AirtableSpeakerRepository, R2PrivateAssetGateway } from "../../runtime/airtable";
 import { createSpeakerRoutes } from "./routes";
 import { SpeakerService } from "./service";
 import type {
@@ -1441,6 +1442,209 @@ describe("organizer content-management contracts", () => {
     expect(repository.assets.find((asset) => asset.id === "asset-pending")?.state).toBe("ready");
   });
 });
+describe("Airtable speaker content revisions", () => {
+  it("persists immutable session and speaker history, restores by scoped version, and rejects cross-event access", async () => {
+    const transport = new FakeAirtableTransport();
+    const tenantId = "tenant-content";
+    const eventId = "event-content";
+    const otherEventId = "event-content-other";
+    for (const id of [eventId, otherEventId]) {
+      transport.seed({
+        baseId: "base-test",
+        table: "Events",
+        fields: {
+          "Application ID": id,
+          "Settings JSON": JSON.stringify({ id, organizationId: tenantId, name: id }),
+        },
+      });
+    }
+    transport.seed({
+      baseId: "base-test",
+      table: "Sessions",
+      fields: {
+        "Application ID": "session-content",
+        "Metadata JSON": JSON.stringify({
+          id: "session-content",
+          tenantId,
+          eventId,
+          title: "Original session",
+          description: "Original abstract",
+          status: "Draft",
+          durationMinutes: 45,
+          capacityRequired: 0,
+          trackIds: [],
+          tagIds: [],
+          speakerIds: ["participant-content"],
+          speakerRoster: [],
+          resourceIds: [],
+          version: 1,
+          createdAt: now,
+          updatedAt: now,
+          createdBy: "seed",
+          updatedBy: "seed",
+          history: [],
+        }),
+      },
+    });
+    const profileId = `speaker-profile:${eventId}:participant-content`;
+    transport.seed({
+      baseId: "base-test",
+      table: "Speaker Profiles",
+      fields: {
+        "Application ID": profileId,
+        Version: 1,
+        Biography: JSON.stringify({
+          id: profileId,
+          tenantId,
+          eventId,
+          participantId: "participant-content",
+          displayName: "Content Speaker",
+          biography: "Original biography",
+          socialLinks: { website: "https://example.test/original" },
+          headshotAssetId: "headshot-original",
+          status: "confirmed",
+          travelLogistics: {
+            travelRequired: false,
+            arrivalAt: null,
+            departureAt: null,
+            accommodation: "",
+            dietaryRequirements: "",
+            accessibilityNeeds: "",
+            travelNotes: "Keep this",
+          },
+          version: 1,
+          updatedAt: now,
+        }),
+      },
+    });
+    const database = {} as ConstructorParameters<typeof AirtableSpeakerRepository>[0]["database"];
+    const repository = new AirtableSpeakerRepository({
+      baseId: "base-test",
+      transport,
+      database,
+    });
+
+    const sessionUpdate = await repository.updateContent({
+      eventId,
+      accountId: "organizer-1",
+      entityType: "session",
+      entityId: "session-content",
+      expectedVersion: 1,
+      description: "Updated abstract",
+      updatedAt: "2026-08-09T01:00:00.000Z",
+    });
+    expect(sessionUpdate).toMatchObject({
+      ok: true,
+      value: { description: "Updated abstract", version: 2, updatedBy: "organizer-1" },
+    });
+    const sessionHistoryBeforeRestore = await repository.listContentHistory(
+      eventId,
+      "session",
+      "session-content",
+    );
+    expect(sessionHistoryBeforeRestore).toMatchObject([
+      {
+        action: "created",
+        version: 1,
+        actorAccountId: "seed",
+        snapshot: { tenantId, eventId, entityId: "session-content", version: 1 },
+      },
+      {
+        action: "updated",
+        version: 2,
+        actorAccountId: "organizer-1",
+        occurredAt: "2026-08-09T01:00:00.000Z",
+        snapshot: { description: "Updated abstract", version: 2 },
+      },
+    ]);
+    await expect(
+      repository.restoreContentVersion({
+        eventId: otherEventId,
+        accountId: "organizer-2",
+        entityType: "session",
+        entityId: "session-content",
+        version: 1,
+        expectedVersion: 2,
+        updatedAt: "2026-08-09T02:00:00.000Z",
+      }),
+    ).resolves.toEqual({ ok: false, reason: "not_found" });
+
+    const sessionRestore = await repository.restoreContentVersion({
+      eventId,
+      accountId: "organizer-2",
+      entityType: "session",
+      entityId: "session-content",
+      version: 1,
+      expectedVersion: 2,
+      updatedAt: "2026-08-09T02:00:00.000Z",
+    });
+    expect(sessionRestore).toMatchObject({
+      ok: true,
+      value: { description: "Original abstract", version: 3, updatedBy: "organizer-2" },
+    });
+
+    const speakerUpdate = await repository.updateContent({
+      eventId,
+      accountId: "organizer-1",
+      entityType: "speaker",
+      entityId: "participant-content",
+      expectedVersion: 1,
+      biography: "Updated biography",
+      socialLinks: { website: "https://example.test/updated" },
+      updatedAt: "2026-08-09T01:30:00.000Z",
+    });
+    expect(speakerUpdate).toMatchObject({
+      ok: true,
+      value: { biography: "Updated biography", version: 2, updatedBy: "organizer-1" },
+    });
+    const speakerRestore = await repository.restoreContentVersion({
+      eventId,
+      accountId: "organizer-2",
+      entityType: "speaker",
+      entityId: "participant-content",
+      version: 1,
+      expectedVersion: 2,
+      updatedAt: "2026-08-09T02:30:00.000Z",
+    });
+    expect(speakerRestore).toMatchObject({
+      ok: true,
+      value: {
+        biography: "Original biography",
+        socialLinks: { website: "https://example.test/original" },
+        headshotAssetId: "headshot-original",
+        status: "confirmed",
+        version: 3,
+        updatedBy: "organizer-2",
+      },
+    });
+
+    const reloaded = new AirtableSpeakerRepository({
+      baseId: "base-test",
+      transport,
+      database,
+    });
+    const sessionHistory = await reloaded.listContentHistory(eventId, "session", "session-content");
+    expect(sessionHistory).toHaveLength(3);
+    expect(sessionHistory.slice(0, 2)).toEqual(sessionHistoryBeforeRestore);
+    expect(sessionHistory[2]).toMatchObject({
+      action: "restored",
+      version: 3,
+      actorAccountId: "organizer-2",
+      occurredAt: "2026-08-09T02:00:00.000Z",
+      snapshot: { description: "Original abstract", version: 3 },
+    });
+    await expect(
+      reloaded.listContentHistory(otherEventId, "speaker", "participant-content"),
+    ).resolves.toEqual([]);
+    await expect(
+      reloaded.listContentHistory(eventId, "speaker", "participant-content"),
+    ).resolves.toMatchObject([
+      { action: "created", version: 1 },
+      { action: "updated", version: 2, actorAccountId: "organizer-1" },
+      { action: "restored", version: 3, actorAccountId: "organizer-2" },
+    ]);
+  });
+});
 describe("organizer immutable content history", () => {
   it("records attributed session edits and restores an earlier version with optimistic concurrency", async () => {
     const repository = new LifecycleRepository();
@@ -1453,6 +1657,7 @@ describe("organizer immutable content history", () => {
     });
     let current: SpeakerContentRecord = {
       id: "session-content-1",
+      tenantId: "tenant-1",
       eventId: "event-1",
       entityType: "session",
       entityId: "session-1",
@@ -1547,6 +1752,31 @@ describe("organizer immutable content history", () => {
       expectedVersion: first.version,
       description: "Live demo of remote build caching. Attendees should bring a laptop.",
     });
+    history.push({
+      id: "content-history-cross-event",
+      eventId: "event-2",
+      entityType: "session",
+      entityId: "session-1",
+      action: "updated",
+      version: 99,
+      actorAccountId: "other-organizer",
+      occurredAt: now,
+      snapshot: {
+        ...structuredClone(current),
+        eventId: "event-2",
+        version: 99,
+      },
+    });
+    await expect(
+      service.restoreContentVersion({
+        eventId: "event-1",
+        accountId: "organizer",
+        entityType: "session",
+        entityId: "session-1",
+        version: 99,
+        expectedVersion: second.version,
+      }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
     await expect(
       service.listSessionContentHistory("event-1", "organizer", "session-1"),
     ).resolves.toHaveLength(3);
@@ -1823,6 +2053,74 @@ describe("organizer deliverables exports", () => {
     expect(manifest.entries.map((entry) => entry.path)).toEqual(
       first.manifest.entries.map((entry) => entry.path),
     );
+  });
+  it("exports the latest ready revision when a newer family version is pending", async () => {
+    const repository = new LifecycleRepository();
+    repository.organizerScopes.set("event-1:organizer", {
+      tenantId: "tenant-1",
+      eventId: "event-1",
+      submissionIds: ["submission-1"],
+      participantIds: ["participant-1"],
+      role: "owner",
+    });
+    repository.assets.push(
+      {
+        id: "asset-family-v1-ready",
+        tenantId: "tenant-1",
+        eventId: "event-1",
+        submissionId: "submission-1",
+        participantId: "participant-1",
+        taskId: "upload-task",
+        kind: "slides",
+        objectKey: "opaque/export/family-v1",
+        fileName: "slides-v1.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 8,
+        state: "ready",
+        createdAt: "2026-08-09T01:00:00.000Z",
+        version: 1,
+        versionFamilyId: "pending-family",
+      },
+      {
+        id: "asset-family-v2-pending",
+        tenantId: "tenant-1",
+        eventId: "event-1",
+        submissionId: "submission-1",
+        participantId: "participant-1",
+        taskId: "upload-task",
+        kind: "slides",
+        objectKey: "opaque/export/family-v2",
+        fileName: "slides-v2.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 8,
+        state: "pending_upload",
+        createdAt: "2026-08-09T02:00:00.000Z",
+        version: 2,
+        versionFamilyId: "pending-family",
+        supersedesAssetId: "asset-family-v1-ready",
+      },
+    );
+    const gateway = new CapabilityGateway();
+    gateway.objects.set("opaque/export/family-v1", {
+      body: new TextEncoder().encode("ready-v1"),
+      contentType: "application/pdf",
+    });
+    const service = new SpeakerService(repository, gateway, { now: () => new Date(now) });
+
+    const exported = await service.exportDeliverables({
+      eventId: "event-1",
+      accountId: "organizer",
+      assetIds: ["asset-family-v2-pending"],
+    });
+
+    expect(exported.manifest.entries).toMatchObject([
+      {
+        assetId: "asset-family-v1-ready",
+        version: 1,
+      },
+    ]);
+    expect(new TextDecoder().decode(exported.body)).toContain("ready-v1");
+    expect(new TextDecoder().decode(exported.body)).not.toContain("family-v2");
   });
 
   it("fails closed for missing gateway reads and bounded selections", async () => {

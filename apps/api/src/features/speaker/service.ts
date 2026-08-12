@@ -2766,12 +2766,13 @@ export class SpeakerService {
     }
     const familyKey = (asset: SpeakerAsset): string =>
       `${asset.participantId}\u0000${asset.taskId ?? ""}\u0000${asset.versionFamilyId ?? asset.id}`;
-    const currentByFamily = new Map<string, SpeakerAsset>();
+    const readyByFamily = new Map<string, SpeakerAsset>();
     for (const asset of assets) {
+      if (asset.state !== "ready") continue;
       const key = familyKey(asset);
-      const current = currentByFamily.get(key);
+      const current = readyByFamily.get(key);
       if (current === undefined || assetVersionCompare(asset, current) < 0) {
-        currentByFamily.set(key, asset);
+        readyByFamily.set(key, asset);
       }
     }
     const selectedCurrentIds =
@@ -2781,7 +2782,7 @@ export class SpeakerService {
             assetIds.flatMap((assetId) => {
               const selected = assetById.get(assetId);
               if (selected === undefined) return [];
-              const current = currentByFamily.get(familyKey(selected));
+              const current = readyByFamily.get(familyKey(selected));
               return current === undefined ? [] : [current.id];
             }),
           );
@@ -2798,8 +2799,7 @@ export class SpeakerService {
       basePath: string;
     }[] = [];
 
-    for (const asset of currentByFamily.values()) {
-      if (asset.state !== "ready") continue;
+    for (const asset of readyByFamily.values()) {
       if (selectedCurrentIds !== undefined && !selectedCurrentIds.has(asset.id)) continue;
       if (participantFilter !== undefined && !participantFilter.has(asset.participantId)) continue;
       const task = asset.taskId === undefined ? undefined : taskById.get(asset.taskId);
@@ -4651,7 +4651,13 @@ export class SpeakerService {
           entry.eventId === eventId &&
           entry.entityType === entityType &&
           entry.entityId === entityId &&
-          (entry.snapshot.tenantId === undefined || entry.snapshot.tenantId === scope.tenantId),
+          Number.isSafeInteger(entry.version) &&
+          entry.version > 0 &&
+          entry.snapshot.tenantId === scope.tenantId &&
+          entry.snapshot.eventId === eventId &&
+          entry.snapshot.entityType === entityType &&
+          entry.snapshot.entityId === entityId &&
+          entry.snapshot.version === entry.version,
       )
       .sort(
         (left, right) =>
@@ -4758,19 +4764,19 @@ export class SpeakerService {
       );
     }
     const history = await this.readContentHistory(input.eventId, input.entityType, input.entityId);
-    const target = history.find((entry) => entry.version === input.version);
-    if (
-      target === undefined ||
-      target.eventId !== input.eventId ||
-      target.entityType !== input.entityType ||
-      target.entityId !== input.entityId ||
-      target.snapshot.eventId !== input.eventId ||
-      target.snapshot.entityType !== input.entityType ||
-      target.snapshot.entityId !== input.entityId ||
-      (target.snapshot.tenantId !== undefined && target.snapshot.tenantId !== scope.tenantId)
-    ) {
-      throw notFound();
-    }
+    const target = history.find(
+      (entry) =>
+        entry.version === input.version &&
+        entry.eventId === input.eventId &&
+        entry.entityType === input.entityType &&
+        entry.entityId === input.entityId &&
+        entry.snapshot.tenantId === scope.tenantId &&
+        entry.snapshot.eventId === input.eventId &&
+        entry.snapshot.entityType === input.entityType &&
+        entry.snapshot.entityId === input.entityId &&
+        entry.snapshot.version === input.version,
+    );
+    if (target === undefined) throw notFound();
     const command = {
       ...input,
       expectedVersion: input.expectedVersion ?? current.version,
@@ -8173,7 +8179,7 @@ export class SpeakerService {
       content.eventId !== eventId ||
       content.entityType !== entityType ||
       content.entityId !== entityId ||
-      (content.tenantId !== undefined && content.tenantId !== scope.tenantId)
+      content.tenantId !== scope.tenantId
     ) {
       throw notFound();
     }
