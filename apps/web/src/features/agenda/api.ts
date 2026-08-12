@@ -261,7 +261,7 @@ export function createAgendaApi(
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ expectedVersion, entries }),
     });
-    if (draft.eventId !== eventId || draft.version <= expectedVersion) {
+    if (draft.eventId !== eventId || draft.version < expectedVersion) {
       throw new Error("The agenda draft mutation returned an invalid revision.");
     }
     return loadWorkspace(eventId);

@@ -266,11 +266,22 @@ async function responseData<T>(response: Response): Promise<T> {
 
 async function responseError(response: Response): Promise<{
   code: string;
-  details?: readonly { message: string }[];
+  details?: readonly {
+    path?: readonly (string | number)[];
+    code?: string;
+    message: string;
+  }[];
 }> {
   return (
     (await response.json()) as {
-      error: { code: string; details?: readonly { message: string }[] };
+      error: {
+        code: string;
+        details?: readonly {
+          path?: readonly (string | number)[];
+          code?: string;
+          message: string;
+        }[];
+      };
     }
   ).error;
 }
@@ -433,6 +444,16 @@ describe("canonical agenda draft routes", () => {
       version: 3,
       entries: [{ roomId: "room-small", startsAtLocal: "2026-08-10T11:00:00" }],
     });
+    const unchanged = await app.request(`${root}/draft`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ expectedVersion: 3, entries: [updatedEntry] }),
+    });
+    expect(unchanged.status).toBe(200);
+    expect(await responseData<AgendaDraft>(unchanged)).toMatchObject({
+      version: 3,
+      entries: [{ roomId: "room-small", startsAtLocal: "2026-08-10T11:00:00" }],
+    });
 
     const published = await app.request(`${root}/publish`, {
       method: "POST",
@@ -464,8 +485,17 @@ describe("canonical agenda draft routes", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ expectedVersion: 1, entries: [] }),
     });
-    expect(stale.status).toBe(409);
-    expect(await responseError(stale)).toMatchObject({ code: "CONFLICT" });
+    expect(stale.status).toBe(412);
+    expect(await responseError(stale)).toMatchObject({
+      code: "PRECONDITION_FAILED",
+      details: [
+        {
+          path: ["expectedVersion"],
+          code: "stale",
+          message: "Expected draft version 1; current draft version is 4.",
+        },
+      ],
+    });
 
     const publicationAlias = await app.request(`${root}/publications`, {
       method: "POST",

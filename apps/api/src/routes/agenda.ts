@@ -201,14 +201,17 @@ function conflictDetails(error: AgendaValidationError): ValidationIssue[] {
     message: conflict.message,
   }));
 }
-function staleRevisionDetails(message: string): ValidationIssue[] {
+function staleRevisionDetails(
+  message: string,
+  field: "baseDraftVersion" | "expectedVersion",
+): ValidationIssue[] {
   const match = /^Expected draft version (\d+), current version is (\d+)$/u.exec(message);
   if (match === null) {
-    return [{ path: ["baseDraftVersion"], code: "stale", message }];
+    return [{ path: [field], code: "stale", message }];
   }
   return [
     {
-      path: ["baseDraftVersion"],
+      path: [field],
       code: "stale",
       message: `Expected draft version ${match[1]}; current draft version is ${match[2]}.`,
     },
@@ -237,17 +240,21 @@ function agendaErrorResponse(context: AgendaContext, error: AgendaError): Respon
       );
     case "AGENDA_ALREADY_EXISTS":
       return errorResponse(context, 409, "CONFLICT", error.message);
-    case "CONCURRENT_MODIFICATION":
-      if (context.req.path.includes("/suggestions")) {
-        return errorResponse(
-          context,
-          412,
-          "PRECONDITION_FAILED",
-          "The agenda suggestion base draft revision is stale.",
-          staleRevisionDetails(error.message),
-        );
-      }
-      return errorResponse(context, 409, "CONFLICT", error.message);
+    case "CONCURRENT_MODIFICATION": {
+      const suggestionRoute = context.req.path.includes("/suggestions");
+      return errorResponse(
+        context,
+        412,
+        "PRECONDITION_FAILED",
+        suggestionRoute
+          ? "The agenda suggestion base draft revision is stale."
+          : "The agenda draft revision is stale.",
+        staleRevisionDetails(
+          error.message,
+          suggestionRoute ? "baseDraftVersion" : "expectedVersion",
+        ),
+      );
+    }
     case "PUBLICATION_BLOCKED":
       return errorResponse(context, 409, "CONFLICT", error.message);
     case "SUGGESTION_NOT_FOUND":
