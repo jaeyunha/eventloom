@@ -3,6 +3,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
   createSpeakerApi,
+  ORGANIZER_HEADSHOT_ACCEPTED_TYPES,
+  ORGANIZER_HEADSHOT_MAX_BYTES,
   type SpeakerApi,
   type SpeakerAsset,
   type SpeakerRecord,
@@ -13,15 +15,18 @@ import {
   createSpeakerTaskAssignment,
   duplicateEmailConflicts,
   filterSpeakerRoster,
+  organizerHeadshotPreviewPath,
   retainInvitationHistory,
   SpeakerAssetDownload,
   SpeakerAssetMetadata,
+  SpeakerHeadshot,
   SpeakerInvitationControls,
-  speakerOnboardingTaskDefinitions,
-  speakerInvitationReady,
-  speakerProgressMatches,
   SpeakerWorkspace,
+  speakerInvitationReady,
+  speakerOnboardingTaskDefinitions,
+  speakerProgressMatches,
   travelLogisticsFor,
+  validateOrganizerHeadshotFile,
   validateSpeakerTaskAssignment,
 } from "./speaker-workspace";
 
@@ -52,6 +57,15 @@ const readyAsset: SpeakerAsset = {
   fileName: "slides.pdf",
   contentType: "application/pdf",
   byteSize: 1_024,
+  status: "ready",
+  uploadedAt: "2026-08-09T00:00:00.000Z",
+  downloadUrl: null,
+};
+const headshotAsset: SpeakerAsset = {
+  assetId: "asset-headshot",
+  fileName: "priya.webp",
+  contentType: "image/webp",
+  byteSize: 2_048,
   status: "ready",
   uploadedAt: "2026-08-09T00:00:00.000Z",
   downloadUrl: null,
@@ -111,6 +125,122 @@ describe("speaker API adapter", () => {
       idempotencyKey: "import-once",
     });
     expect(calls[0]?.init).toMatchObject({ credentials: "include", cache: "no-store" });
+  });
+  it("keeps default speaker requests on the same-origin API gateway", async () => {
+    const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+    const api = createSpeakerApi("", "org-1", "event-1", async (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      return new Response(JSON.stringify({ data: roster }), { status: 200 });
+    });
+
+    await expect(api.list()).resolves.toEqual(roster);
+
+    expect(String(calls[0]?.input)).toBe("/api/admin/organizations/org-1/events/event-1/speakers");
+    expect(calls[0]?.init).toMatchObject({ credentials: "include", cache: "no-store" });
+  });
+  it("replaces and relinks a headshot entirely through same-origin API paths", async () => {
+    const pendingAsset = {
+      id: "asset-headshot-v2",
+      eventId: "event-1",
+      participantId: "participant-1",
+      kind: "headshot" as const,
+      fileName: "speaker.png",
+      contentType: "image/png",
+      sizeBytes: 2,
+      state: "pending_upload" as const,
+      createdAt: "2026-08-10T00:00:00.000Z",
+    };
+    const finalizedAsset = { ...pendingAsset, state: "ready" as const };
+    const profile = {
+      id: "profile-1",
+      eventId: "event-1",
+      participantId: "participant-1",
+      displayName: "Priya Raman",
+      biography: "Build systems engineer.",
+      headshotAssetId: finalizedAsset.id,
+      version: 4,
+      updatedAt: "2026-08-10T00:01:00.000Z",
+    };
+    const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+    const api = createSpeakerApi("", "org-1", "event-1", async (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      switch (calls.length) {
+        case 1:
+          return Response.json({
+            data: {
+              asset: pendingAsset,
+              grant: {
+                method: "PUT",
+                url: "/api/speaker/assets/capabilities/upload/asset-headshot-v2/opaque-token",
+                headers: { "content-type": "image/png" },
+                expiresAt: "2026-08-10T00:05:00.000Z",
+              },
+            },
+          });
+        case 2:
+          return new Response(null, { status: 204 });
+        case 3:
+          return Response.json({ data: finalizedAsset });
+        default:
+          return Response.json({ data: profile });
+      }
+    });
+    if (api.replaceHeadshot === undefined)
+      throw new Error("Expected organizer headshot replacement.");
+
+    const replacement = await api.replaceHeadshot({
+      participantId: "participant-1",
+      file: new File(["ok"], "speaker.png", { type: "image/png" }),
+      expectedVersion: 3,
+    });
+
+    expect(replacement).toEqual({ asset: finalizedAsset, profile });
+    expect(calls.map(({ input }) => String(input))).toEqual([
+      "/api/speaker/events/event-1/organizer/profiles/participant-1/headshot",
+      "/api/speaker/assets/capabilities/upload/asset-headshot-v2/opaque-token",
+      "/api/speaker/events/event-1/organizer/assets/asset-headshot-v2/finalize",
+      "/api/speaker/events/event-1/organizer/profiles/participant-1",
+    ]);
+    expect(calls[1]?.init).toMatchObject({ method: "PUT", credentials: "omit" });
+    expect(JSON.parse(String(calls[3]?.init?.body))).toEqual({
+      headshotAssetId: "asset-headshot-v2",
+      expectedVersion: 3,
+    });
+  });
+  it("rejects provider upload URLs outside the same-origin API gateway", async () => {
+    const api = createSpeakerApi("", "org-1", "event-1", async () =>
+      Response.json({
+        data: {
+          asset: {
+            id: "asset-headshot-v2",
+            eventId: "event-1",
+            participantId: "participant-1",
+            kind: "headshot",
+            fileName: "speaker.png",
+            contentType: "image/png",
+            sizeBytes: 2,
+            state: "pending_upload",
+            createdAt: "2026-08-10T00:00:00.000Z",
+          },
+          grant: {
+            method: "PUT",
+            url: "https://uploads.example.test/headshot",
+            headers: { "content-type": "image/png" },
+            expiresAt: "2026-08-10T00:05:00.000Z",
+          },
+        },
+      }),
+    );
+    if (api.replaceHeadshot === undefined)
+      throw new Error("Expected organizer headshot replacement.");
+
+    await expect(
+      api.replaceHeadshot({
+        participantId: "participant-1",
+        file: new File(["ok"], "speaker.png", { type: "image/png" }),
+        expectedVersion: 3,
+      }),
+    ).rejects.toThrow("same-origin /api/* path");
   });
   it("posts an idempotent manual speaker with status and logistics metadata", async () => {
     const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
@@ -569,11 +699,13 @@ describe("speaker workspace contracts", () => {
         state: "ready" as const,
       },
     ];
+    const readyPreview = preview[0];
+    if (readyPreview === undefined) throw new Error("Expected a ready invitation preview.");
     expect(speakerInvitationReady(preview, speaker)).toBe(true);
     expect(speakerInvitationReady(preview, { ...speaker, email: "changed@example.test" })).toBe(
       false,
     );
-    expect(speakerInvitationReady([{ ...preview[0]!, state: "blocked" }], speaker)).toBe(false);
+    expect(speakerInvitationReady([{ ...readyPreview, state: "blocked" }], speaker)).toBe(false);
     expect(speakerInvitationReady(preview, { ...speaker, status: "revoked" })).toBe(false);
     const first = retainInvitationHistory(
       [],
@@ -622,6 +754,77 @@ describe("speaker workspace contracts", () => {
 });
 
 describe("speaker workspace", () => {
+  it("validates organizer headshots at the browser boundary", () => {
+    expect(
+      validateOrganizerHeadshotFile(new File(["ok"], "headshot.jpg", { type: "image/jpeg" })),
+    ).toBe(null);
+    expect(
+      validateOrganizerHeadshotFile(new File(["ok"], "headshot.png", { type: "IMAGE/PNG" })),
+    ).toBeNull();
+    expect(
+      validateOrganizerHeadshotFile(new File(["bad"], "headshot.gif", { type: "image/gif" })),
+    ).toContain("JPEG, PNG, or WebP");
+    expect(
+      validateOrganizerHeadshotFile(
+        new File([new Uint8Array(ORGANIZER_HEADSHOT_MAX_BYTES + 1)], "large.webp", {
+          type: ORGANIZER_HEADSHOT_ACCEPTED_TYPES[2],
+        }),
+      ),
+    ).toContain("5 MB");
+  });
+
+  it("accepts only relative same-origin API paths for headshot previews", () => {
+    expect(
+      organizerHeadshotPreviewPath(
+        "/api/speaker/assets/capabilities/download/asset-headshot/opaque-token",
+      ),
+    ).toBe("/api/speaker/assets/capabilities/download/asset-headshot/opaque-token");
+    expect(organizerHeadshotPreviewPath("https://downloads.example.test/headshot")).toBeNull();
+    expect(organizerHeadshotPreviewPath("//downloads.example.test/headshot")).toBeNull();
+    expect(organizerHeadshotPreviewPath("/api/../private/headshot")).toBeNull();
+  });
+
+  it("renders a secure headshot preview and a graceful unavailable fallback", () => {
+    const imageMarkup = renderToStaticMarkup(
+      createElement(SpeakerHeadshot, {
+        speakerName: speaker.displayName,
+        asset: headshotAsset,
+        imageUrl: "/api/speaker/events/event-1/organizer/assets/asset-headshot/download",
+        loading: false,
+        error: null,
+        revision: 2,
+      }),
+    );
+    const externalMarkup = renderToStaticMarkup(
+      createElement(SpeakerHeadshot, {
+        speakerName: speaker.displayName,
+        asset: headshotAsset,
+        imageUrl: "https://downloads.example.test/headshot",
+        loading: false,
+        error: null,
+        revision: 2,
+      }),
+    );
+    const fallbackMarkup = renderToStaticMarkup(
+      createElement(SpeakerHeadshot, {
+        speakerName: speaker.displayName,
+        asset: null,
+        imageUrl: null,
+        loading: false,
+        error: null,
+        revision: 0,
+      }),
+    );
+
+    expect(imageMarkup).toContain('alt="Priya Raman headshot"');
+    expect(imageMarkup).toContain(
+      "/api/speaker/events/event-1/organizer/assets/asset-headshot/download",
+    );
+    expect(fallbackMarkup).toContain("No headshot uploaded");
+    expect(fallbackMarkup).not.toContain("<img");
+    expect(externalMarkup).toContain("Headshot preview unavailable");
+    expect(externalMarkup).not.toContain("<img");
+  });
   it("does not request a grant on initial asset render and keeps non-ready assets unavailable", () => {
     const requests: SpeakerAsset[] = [];
     const readyMarkup = renderToStaticMarkup(
@@ -712,7 +915,6 @@ describe("speaker workspace", () => {
       createElement(SpeakerWorkspace, {
         organizationId: "org-1",
         eventId: "event-1",
-        baseUrl: "https://api.example.test",
       }),
     );
 

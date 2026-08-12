@@ -1,3 +1,15 @@
+import {
+  createDeliverablesApi,
+  type DeliverableHeadshotReplacement,
+  type DeliverableHeadshotReplacementInput,
+} from "../deliverables/api";
+
+export type SpeakerHeadshotReplacementInput = DeliverableHeadshotReplacementInput;
+export type SpeakerHeadshotReplacement = DeliverableHeadshotReplacement;
+
+export const ORGANIZER_HEADSHOT_ACCEPTED_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
+export const ORGANIZER_HEADSHOT_MAX_BYTES = 5 * 1024 * 1024;
+
 export type SpeakerStatus =
   | "pending"
   | "invited"
@@ -397,6 +409,7 @@ export interface SpeakerApi {
   getSessions(participantId: string, signal?: AbortSignal): Promise<readonly SpeakerSession[]>;
   getAssets(participantId: string, signal?: AbortSignal): Promise<readonly SpeakerAsset[]>;
   getDownloadGrant(assetId: string, signal?: AbortSignal): Promise<SpeakerDownloadGrant>;
+  replaceHeadshot(input: SpeakerHeadshotReplacementInput): Promise<SpeakerHeadshotReplacement>;
   previewImport(file: File, signal?: AbortSignal): Promise<SpeakerImportPreview>;
   commitImport(
     input: SpeakerImportCommitInput,
@@ -461,7 +474,6 @@ export function createSpeakerApi(
   const normalizedBaseUrl = baseWithoutTrailingSlash(baseUrl.trim());
   const normalizedOrganizationId = organizationId.trim();
   const normalizedEventId = eventId.trim();
-  if (normalizedBaseUrl.length === 0) throw new TypeError("A speaker API base URL is required.");
   if (normalizedOrganizationId.length === 0) {
     throw new TypeError("An organization ID is required for speaker requests.");
   }
@@ -471,6 +483,30 @@ export function createSpeakerApi(
 
   const eventApiBase = `${normalizedBaseUrl}/api/admin/organizations/${pathSegment(normalizedOrganizationId)}/events/${pathSegment(normalizedEventId)}`;
   const apiBase = `${eventApiBase}/speakers`;
+  const organizerHeadshotBaseUrl =
+    normalizedBaseUrl.length > 0
+      ? normalizedBaseUrl
+      : typeof window === "undefined"
+        ? "http://localhost"
+        : window.location.origin;
+  const organizerHeadshotOrigin = new URL(organizerHeadshotBaseUrl).origin;
+  const organizerHeadshotFetcher = (input: RequestInfo | URL, init?: RequestInit) => {
+    const resolved = new URL(String(input), `${organizerHeadshotBaseUrl}/`);
+    if (resolved.origin !== organizerHeadshotOrigin || !resolved.pathname.startsWith("/api/")) {
+      throw new TypeError("Organizer headshot requests must use a same-origin /api/* path.");
+    }
+    return fetcher(`${resolved.pathname}${resolved.search}`, init);
+  };
+  const organizerHeadshotApi = createDeliverablesApi(
+    organizerHeadshotBaseUrl,
+    normalizedOrganizationId,
+    normalizedEventId,
+    organizerHeadshotFetcher,
+  );
+  const replaceHeadshot = organizerHeadshotApi.replaceHeadshot;
+  if (replaceHeadshot === undefined) {
+    throw new TypeError("The organizer headshot replacement adapter is unavailable.");
+  }
 
   async function requestAt<T>(base: string, path: string, init?: RequestInit): Promise<T> {
     const response = await fetcher(`${base}${path}`, {
@@ -565,6 +601,7 @@ export function createSpeakerApi(
         },
       );
     },
+    replaceHeadshot,
     previewImport(file, signal) {
       const body = new FormData();
       body.append("file", file);
