@@ -509,6 +509,7 @@ interface SubmissionFieldOption {
 }
 
 export interface SubmissionFieldDefinition {
+  readonly id?: string;
   readonly key: string;
   readonly label?: string;
   readonly options?: readonly (string | SubmissionFieldOption)[];
@@ -664,12 +665,26 @@ export function getAcceptedHandoffMetadata(
   };
 }
 
-function participantFieldValue(participant: CanonicalSubmissionParticipant, key: string): unknown {
-  if (key === "firstName") return participant.firstName;
-  if (key === "lastName") return participant.lastName;
-  if (key === "email") return participant.email;
-  if (key === "biography") return participant.biography;
-  return participant.answers[key];
+function canonicalFieldValue(
+  answers: Readonly<Record<string, unknown>>,
+  definition: SubmissionFieldDefinition,
+): unknown {
+  if (Object.hasOwn(answers, definition.key)) return answers[definition.key];
+  if (definition.id !== undefined && Object.hasOwn(answers, definition.id)) {
+    return answers[definition.id];
+  }
+  return undefined;
+}
+
+function participantFieldValue(
+  participant: CanonicalSubmissionParticipant,
+  definition: SubmissionFieldDefinition,
+): unknown {
+  if (definition.key === "firstName") return participant.firstName;
+  if (definition.key === "lastName") return participant.lastName;
+  if (definition.key === "email") return participant.email;
+  if (definition.key === "biography") return participant.biography;
+  return canonicalFieldValue(participant.answers, definition);
 }
 
 function participantOrganization(
@@ -680,20 +695,22 @@ function participantOrganization(
     ["organization", "company", "participantCompany"].includes(candidate.key),
   );
   if (definition === undefined) return "";
-  const value = fieldAnswer(participantFieldValue(participant, definition.key), definition);
+  const value = fieldAnswer(participantFieldValue(participant, definition), definition);
   return value === "—" ? "" : value;
 }
 
 export function mapCanonicalSubmission(envelope: CanonicalSubmissionEnvelope): SubmissionRecord {
   const { submission, submissionFields, participantFields } = envelope;
   const definitions = new Map(submissionFields.map((definition) => [definition.key, definition]));
-  const answer = (key: string): string =>
-    fieldAnswer(submission.answers[key], definitions.get(key));
+  const answer = (key: string): string => {
+    const definition = definitions.get(key);
+    return definition === undefined
+      ? fieldAnswer(submission.answers[key], undefined)
+      : fieldAnswer(canonicalFieldValue(submission.answers, definition), definition);
+  };
   const title = answer("title");
-  const abstractValue =
-    submission.answers.abstract === undefined
-      ? fieldAnswer(submission.answers.description, definitions.get("description"))
-      : answer("abstract");
+  const abstractAnswer = answer("abstract");
+  const abstractValue = abstractAnswer === "—" ? answer("description") : abstractAnswer;
   const submittedAt = submission.submittedAt ?? null;
   const reopenedAt = submission.reopenedAt ?? null;
   const timeline: SubmissionTimelineEntry[] = [];
@@ -732,7 +749,7 @@ export function mapCanonicalSubmission(envelope: CanonicalSubmissionEnvelope): S
       answers: Object.fromEntries(
         participantFields.map((definition) => [
           definition.label?.trim() || definition.key,
-          fieldAnswer(participantFieldValue(participant, definition.key), definition),
+          fieldAnswer(participantFieldValue(participant, definition), definition),
         ]),
       ),
     })),
@@ -745,7 +762,7 @@ export function mapCanonicalSubmission(envelope: CanonicalSubmissionEnvelope): S
     abstract: abstractValue,
     answers: submissionFields.map((definition) => ({
       question: definition.label?.trim() || definition.key,
-      answer: fieldAnswer(submission.answers[definition.key], definition),
+      answer: fieldAnswer(canonicalFieldValue(submission.answers, definition), definition),
     })),
     timeline,
     reviewSummary: {

@@ -2251,18 +2251,22 @@ export class EvaluationService {
       }
       const repeatedVersion =
         current.history.findIndex((transition) => transition.idempotencyKey === idempotencyKey) + 1;
-      await this.#runDecisionProjection({
-        decision: current,
-        transition: repeatedTransition,
-        decisionVersion: repeatedVersion,
-      });
-      if (repeatedTransition.to === "accepted") {
-        await this.#runAcceptanceHandoff({
+      await Promise.all([
+        this.#runDecisionProjection({
           decision: current,
           transition: repeatedTransition,
           decisionVersion: repeatedVersion,
-        });
-      }
+        }),
+        ...(repeatedTransition.to === "accepted"
+          ? [
+              this.#runAcceptanceHandoff({
+                decision: current,
+                transition: repeatedTransition,
+                decisionVersion: repeatedVersion,
+              }),
+            ]
+          : []),
+      ]);
       return current;
     }
     if (current === null && input.expectedVersion !== undefined) {
@@ -2292,18 +2296,22 @@ export class EvaluationService {
       updatedAt: now,
     };
     await this.#repository.putDecision(decision, current?.version ?? null);
-    await this.#runDecisionProjection({
-      decision,
-      transition,
-      decisionVersion: decision.version,
-    });
-    if (transition.to === "accepted") {
-      await this.#runAcceptanceHandoff({
+    await Promise.all([
+      this.#runDecisionProjection({
         decision,
         transition,
         decisionVersion: decision.version,
-      });
-    }
+      }),
+      ...(transition.to === "accepted"
+        ? [
+            this.#runAcceptanceHandoff({
+              decision,
+              transition,
+              decisionVersion: decision.version,
+            }),
+          ]
+        : []),
+    ]);
     return decision;
   }
   async #assignmentContext(

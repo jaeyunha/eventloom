@@ -762,6 +762,20 @@ describe("canonical agenda draft routes", () => {
     });
     expect(moved.status).toBe(200);
     expect((await responseData<AgendaDraft>(moved)).version).toBe(2);
+    const staleSpeakerState = await engine.repository.load("event-a");
+    if (staleSpeakerState === null) throw new Error("Expected agenda state.");
+    await engine.repository.compareAndSwap("event-a", staleSpeakerState.stateVersion, {
+      ...staleSpeakerState,
+      stateVersion: staleSpeakerState.stateVersion + 1,
+      draft: {
+        ...staleSpeakerState.draft,
+        entries: staleSpeakerState.draft.entries.map((entry) =>
+          entry.id === "entry-2"
+            ? ({ ...entry, speakerNames: ["participant-1"] } as typeof entry)
+            : entry,
+        ),
+      },
+    });
 
     const preview = await app.request(`${root}/preview`);
     expect(preview.status).toBe(200);
@@ -769,20 +783,26 @@ describe("canonical agenda draft routes", () => {
       conflicts: [],
     });
     const workspace = await app.request(root);
-    expect(
-      (
-        await responseData<{
-          unscheduledSessions: readonly {
-            id: string;
-            title: string;
-            durationMinutes: number;
-            format: string;
-            speakerNames: readonly string[];
-            capacityRequired: number;
-          }[];
-        }>(workspace)
-      ).unscheduledSessions,
-    ).toEqual([
+    const workspaceData = await responseData<{
+      draft: {
+        entries: readonly {
+          id: string;
+          speakerNames: readonly string[];
+        }[];
+      };
+      unscheduledSessions: readonly {
+        id: string;
+        title: string;
+        durationMinutes: number;
+        format: string;
+        speakerNames: readonly string[];
+        capacityRequired: number;
+      }[];
+    }>(workspace);
+    expect(workspaceData.draft.entries.find((entry) => entry.id === "entry-2")).toMatchObject({
+      speakerNames: ["Grace Hopper"],
+    });
+    expect(workspaceData.unscheduledSessions).toEqual([
       {
         id: "session-3",
         title: "Deep dive",

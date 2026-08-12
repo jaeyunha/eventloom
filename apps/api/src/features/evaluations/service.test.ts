@@ -1132,6 +1132,51 @@ describe("decision outcome projection", () => {
     });
     expect(onboarded).toHaveLength(1);
   });
+  it("runs acceptance onboarding alongside the durable decision projection", async () => {
+    const started = new Set<string>();
+    let markBothStarted: (() => void) | undefined;
+    const bothStarted = new Promise<void>((resolve) => {
+      markBothStarted = resolve;
+    });
+    let releaseWork: (() => void) | undefined;
+    const workReleased = new Promise<void>((resolve) => {
+      releaseWork = resolve;
+    });
+    const markStarted = (name: string) => {
+      started.add(name);
+      if (started.size === 2) markBothStarted?.();
+    };
+    const { service } = await fixture({
+      decisionProjection: {
+        projectDecision: async () => {
+          markStarted("projection");
+          await workReleased;
+        },
+      },
+      acceptanceHandoff: {
+        accept: async () => {
+          markStarted("acceptance");
+          await workReleased;
+        },
+      },
+    });
+
+    const pending = service.recordDecision(organizer, {
+      planId: "plan-1",
+      submissionId: submission.id,
+      status: "accepted",
+      reason: "Committee consensus",
+      idempotencyKey: "decision-concurrent-effects",
+    });
+    const concurrent = await Promise.race([
+      bothStarted.then(() => true),
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), 100)),
+    ]);
+    releaseWork?.();
+
+    await expect(pending).resolves.toMatchObject({ status: "accepted" });
+    expect(concurrent).toBe(true);
+  });
 
   it("surfaces projection failures and retries the persisted decision without duplicate success", async () => {
     let shouldFail = true;

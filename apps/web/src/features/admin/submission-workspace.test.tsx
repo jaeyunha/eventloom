@@ -173,6 +173,48 @@ describe("organizer submission workspace", () => {
       answer: editedAbstract,
     });
   });
+  it("reads canonical answers stored under immutable field ids after form revisions", () => {
+    const submissionFields = canonicalEnvelope.submissionFields.map((definition) => ({
+      ...definition,
+      id: `field-${definition.key}`,
+    }));
+    const participantFields = canonicalEnvelope.participantFields.map((definition) => ({
+      ...definition,
+      id: `field-${definition.key}`,
+    }));
+    const answers = Object.fromEntries(
+      Object.entries(canonicalEnvelope.submission.answers).map(([key, value]) => [
+        `field-${key}`,
+        value,
+      ]),
+    );
+    const participants = canonicalEnvelope.submission.participants.map((participant) => ({
+      ...participant,
+      answers: Object.fromEntries(
+        Object.entries(participant.answers).map(([key, value]) => [`field-${key}`, value]),
+      ),
+    }));
+
+    const record = mapCanonicalSubmission({
+      ...canonicalEnvelope,
+      submission: {
+        ...canonicalEnvelope.submission,
+        answers,
+        participants,
+      },
+      submissionFields,
+      participantFields,
+    });
+
+    expect(record).toMatchObject({
+      title: "Taming 40-Minute CI: Incremental Builds at Monorepo Scale",
+      abstract:
+        "Our monorepo CI took 40 minutes on a good day. This talk walks through how we cut it to 6 minutes.",
+      track: "Platform & Infra",
+      format: "Workshop",
+    });
+    expect(record.participants[0]?.organization).toBe("Latticework Systems");
+  });
   it("uses the same-origin gateway and keeps canonical submissions visible when aggregates fail", async () => {
     const requests: string[] = [];
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {

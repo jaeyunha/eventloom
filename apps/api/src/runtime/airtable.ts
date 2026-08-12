@@ -4539,7 +4539,8 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
 
   async putDecision(decision: EvaluationDecision, expectedVersion: number | null): Promise<void> {
     const id = `decision:${decision.planId}:${decision.submissionId}`;
-    const existing = await this.#decisions.find(id);
+    const existingRecord = await this.#decisions.findWithRecordId(id);
+    const existing = existingRecord?.entity;
     if (
       (existing?.version ?? null) !== expectedVersion ||
       (existing && existing.tenantId !== decision.tenantId)
@@ -4547,8 +4548,8 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
       throw conflict("Decision changed since it was loaded.");
     }
     const storedDecision = tagged({ ...decision, id }, "evaluation_decision");
-    if (existing === undefined) await this.#decisions.create(storedDecision);
-    else await this.#decisions.update(id, storedDecision);
+    if (existingRecord === undefined) await this.#decisions.create(storedDecision);
+    else await this.#decisions.updateByRecordId(id, existingRecord.recordId, storedDecision);
   }
 
   async findPlanForTenant(tenantId: string, planId: string): Promise<EvaluationPlan | null> {
@@ -4853,6 +4854,7 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
     const scope = `${input.tenantId}:evaluation-acceptance`;
     const transitionKey = input.idempotencyKey.trim();
     const key = `acceptance:${input.submissionId}:${transitionKey}`;
+    let acceptedSubmission: Submission | undefined;
     await idempotency.run(scope, key, async () => {
       const submission = await this.#cfp.getSubmission(input.tenantId, input.submissionId);
       if (submission === null || submission.eventId !== input.eventId) {
@@ -4861,82 +4863,90 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
       if (submission.participants.length === 0) {
         throw new Error("An accepted submission must contain at least one speaker.");
       }
-      const session = await this.#ensureCanonicalSession(input, submission);
-      await this.#speakers.ensureAcceptedSubmission({
-        submission,
-        updatedAt: input.decidedAt,
-      });
-
-      const profiles: string[] = [];
-      for (const participant of submission.participants) {
-        const profile = await this.#speakers.ensureProfile({
-          eventId: input.eventId,
-          participant,
-          organizationId: input.tenantId,
+      acceptedSubmission = submission;
+      const [session] = await Promise.all([
+        this.#ensureCanonicalSession(input, submission),
+        this.#speakers.ensureAcceptedSubmission({
+          submission,
           updatedAt: input.decidedAt,
-        });
-        await this.#speakers.ensureProfileTask({
-          eventId: input.eventId,
-          submissionId: input.submissionId,
-          participantId: participant.id,
-          updatedAt: input.decidedAt,
-        });
-        profiles.push(profile.id);
-      }
+        }),
+      ]);
 
-      await this.#database
-        .prepare(
-          `INSERT INTO audit_events
-             (id, tenant_id, actor_type, actor_id, action, resource_type, resource_id,
-              trace_id, details_json, occurred_at)
-           VALUES (?, ?, 'user', ?, 'evaluation_accepted', 'submission', ?, NULL, ?, ?)
-           ON CONFLICT (id) DO NOTHING`,
-        )
-        .bind(
-          `evaluation-accepted:${input.submissionId}:${transitionKey}`,
-          input.tenantId,
-          input.decidedBy,
-          input.submissionId,
-          JSON.stringify({
-            planId: input.planId,
-            decisionId: input.decisionId,
-            reason: input.reason,
-            idempotencyKey: input.idempotencyKey,
-            profileIds: profiles,
-            sessionId: session.id,
-          }),
-          input.decidedAt,
-        )
-        .run();
+      const profiles = await Promise.all(
+        submission.participants.map(async (participant) => {
+          const profile = await this.#speakers.ensureProfile({
+            eventId: input.eventId,
+            participant,
+            organizationId: input.tenantId,
+            updatedAt: input.decidedAt,
+          });
+          await this.#speakers.ensureProfileTask({
+            eventId: input.eventId,
+            submissionId: input.submissionId,
+            participantId: participant.id,
+            updatedAt: input.decidedAt,
+          });
+          return profile.id;
+        }),
+      );
 
       const recipients = submission.participants
         .map((participant) => participant.email.trim())
         .filter((email) => email.length > 0);
-      if (recipients.length > 0) {
-        await this.#enqueue(
+      await Promise.all([
+        this.#database
+          .prepare(
+            `INSERT INTO audit_events
+               (id, tenant_id, actor_type, actor_id, action, resource_type, resource_id,
+                trace_id, details_json, occurred_at)
+             VALUES (?, ?, 'user', ?, 'evaluation_accepted', 'submission', ?, NULL, ?, ?)
+             ON CONFLICT (id) DO NOTHING`,
+          )
+          .bind(
+            `evaluation-accepted:${input.submissionId}:${transitionKey}`,
+            input.tenantId,
+            input.decidedBy,
+            input.submissionId,
+            JSON.stringify({
+              planId: input.planId,
+              decisionId: input.decisionId,
+              reason: input.reason,
+              idempotencyKey: input.idempotencyKey,
+              profileIds: profiles,
+              sessionId: session.id,
+            }),
+            input.decidedAt,
+          )
+          .run(),
+        ...(recipients.length > 0
+          ? [
+              this.#enqueue(
+                input,
+                "communications",
+                `evaluation-accepted:${input.submissionId}:${transitionKey}`,
+                {
+                  from: DEFAULT_OPEN_SEND_SENDERS.speakers,
+                  to: recipients,
+                  subject: "Your session was accepted",
+                  html: "<p>Your session was accepted. Sign in to complete your speaker profile.</p>",
+                  text: "Your session was accepted. Sign in to complete your speaker profile.",
+                  idempotencyKey: `evaluation-accepted:${input.submissionId}:${transitionKey}`,
+                },
+              ),
+            ]
+          : []),
+        this.#enqueue(
           input,
-          "communications",
-          `evaluation-accepted:${input.submissionId}:${transitionKey}`,
-          {
-            from: DEFAULT_OPEN_SEND_SENDERS.speakers,
-            to: recipients,
-            subject: "Your session was accepted",
-            html: "<p>Your session was accepted. Sign in to complete your speaker profile.</p>",
-            text: "Your session was accepted. Sign in to complete your speaker profile.",
-            idempotencyKey: `evaluation-accepted:${input.submissionId}:${transitionKey}`,
-          },
-        );
-      }
-      await this.#enqueue(
-        input,
-        "cache-invalidation",
-        `evaluation-projection:${input.eventId}:${input.submissionId}:${transitionKey}`,
-        { eventId: input.eventId },
-      );
+          "cache-invalidation",
+          `evaluation-projection:${input.eventId}:${input.submissionId}:${transitionKey}`,
+          { eventId: input.eventId },
+        ),
+      ]);
       return { accepted: true };
     });
 
-    const submission = await this.#cfp.getSubmission(input.tenantId, input.submissionId);
+    const submission =
+      acceptedSubmission ?? (await this.#cfp.getSubmission(input.tenantId, input.submissionId));
     if (submission === null || submission.eventId !== input.eventId) return;
     await this.#ensureSpeakerGrants(input, submission);
   }
@@ -5095,25 +5105,27 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
     input: EvaluationAcceptanceHandoffInput,
     submission: Submission,
   ): Promise<void> {
-    for (const participant of submission.participants) {
-      const email = participant.email.trim();
-      await this.#speakers.ensureProfile({
-        eventId: input.eventId,
-        participant,
-        organizationId: input.tenantId,
-        updatedAt: input.decidedAt,
-      });
-      const provisioned = await this.#speakers.ensureVerifiedSpeakerGrant({
-        organizationId: input.tenantId,
-        eventId: input.eventId,
-        participantId: participant.id,
-        email,
-        createdAt: input.decidedAt,
-      });
-      if (!provisioned) {
-        throw new Error(`Speaker grant provisioning failed for participant ${participant.id}.`);
-      }
-    }
+    await Promise.all(
+      submission.participants.map(async (participant) => {
+        const email = participant.email.trim();
+        await this.#speakers.ensureProfile({
+          eventId: input.eventId,
+          participant,
+          organizationId: input.tenantId,
+          updatedAt: input.decidedAt,
+        });
+        const provisioned = await this.#speakers.ensureVerifiedSpeakerGrant({
+          organizationId: input.tenantId,
+          eventId: input.eventId,
+          participantId: participant.id,
+          email,
+          createdAt: input.decidedAt,
+        });
+        if (!provisioned) {
+          throw new Error(`Speaker grant provisioning failed for participant ${participant.id}.`);
+        }
+      }),
+    );
   }
 
   async #enqueue(

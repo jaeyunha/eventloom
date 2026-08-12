@@ -343,6 +343,22 @@ function agendaSessionSpeakerNames(session: unknown): readonly string[] {
   const names = agendaStrings(record, "speakerNames").filter((name) => name.trim().length > 0);
   return names.length > 0 ? names : agendaStrings(record, "participantIds");
 }
+function agendaEntrySpeakerNames(entry: unknown, session: unknown): readonly string[] {
+  const stored = agendaStrings(agendaRecord(entry), "speakerNames").filter(
+    (name) => name.trim().length > 0,
+  );
+  const current = agendaSessionSpeakerNames(session);
+  const participantIds = agendaStrings(agendaRecord(session), "participantIds");
+  const storedAreParticipantIds =
+    stored.length > 0 &&
+    stored.length === participantIds.length &&
+    stored.every((name, index) => name === participantIds[index]);
+  return storedAreParticipantIds && current.some((name, index) => name !== participantIds[index])
+    ? current
+    : stored.length > 0
+      ? stored
+      : current;
+}
 
 function agendaSessionFormat(session: unknown): string {
   const record = agendaRecord(session);
@@ -410,10 +426,7 @@ function adminAgendaWorkspaceView(state: AgendaState, published: PublishedAgenda
           sessionId: entry.sessionId,
           title: agendaText(stored, "title", session?.title ?? entry.sessionId),
           format: agendaText(stored, "format", agendaSessionFormat(session)),
-          speakerNames:
-            agendaStrings(stored, "speakerNames").length > 0
-              ? agendaStrings(stored, "speakerNames")
-              : agendaSessionSpeakerNames(session),
+          speakerNames: agendaEntrySpeakerNames(stored, session),
           roomId: entry.roomId,
           roomName: agendaText(
             stored,
