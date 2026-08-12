@@ -7,6 +7,7 @@ import type {
   PrivateUploadGrant,
   PrivateUploadReceipt,
   RepositoryResult,
+  SpeakerAcceptedParticipantLookup,
   SpeakerAccessScope,
   SpeakerAsset,
   SpeakerAssetAuditEntry,
@@ -1476,6 +1477,15 @@ function portalScopeForPrimary(
         }),
   };
 }
+type OrganizerSpeakerMutationProjection = {
+  scope: SpeakerAccessScope & { tenantId: string; organizer: true };
+  acceptedSubmissions: readonly SpeakerSubmission[];
+  entries: SpeakerRosterEntry[];
+  profiles: SpeakerProfile[];
+  tasks: readonly SpeakerTask[];
+  assets: readonly SpeakerAsset[];
+  canonicalParticipantsByEmail: Map<string, SpeakerAcceptedParticipantLookup | null>;
+};
 
 export class SpeakerService {
   private readonly now: () => Date;
@@ -6098,200 +6108,12 @@ export class SpeakerService {
     eventId: string,
     accountId: string,
   ): Promise<SpeakerWorkspaceRoster> {
-    const getOrganizerReadModel = this.repository.getOrganizerReadModel;
-    let scope: SpeakerAccessScope & { tenantId: string; organizer: true };
-    let acceptedSubmissions: readonly SpeakerSubmission[];
-    let rosterProjection: { entries: SpeakerRosterEntry[]; profiles: SpeakerProfile[] };
-    let readModel: SpeakerOrganizerReadModel | undefined;
-
-    if (getOrganizerReadModel !== undefined) {
-      const model = await getOrganizerReadModel.call(this.repository, eventId, accountId, {
-        profiles: true,
-        tasks: true,
-        assets: true,
-      });
-      const isReadModelCollection = (value: unknown): value is readonly object[] =>
-        Array.isArray(value) &&
-        value.every((candidate) => candidate !== null && typeof candidate === "object");
-      if (
-        model === null ||
-        typeof model !== "object" ||
-        !isReadModelCollection(model.submissions) ||
-        !isReadModelCollection(model.roster) ||
-        !isReadModelCollection(model.profiles) ||
-        !isReadModelCollection(model.tasks) ||
-        !isReadModelCollection(model.assets)
-      ) {
-        throw notFound();
-      }
-      scope = this.readModelScope(model, eventId);
-      if (scope.tenantId !== organizationId) throw notFound();
-      readModel = model;
-      const submissions = model.submissions.filter((candidate) =>
-        organizerRecordTenantMatches(candidate, scope.tenantId),
-      );
-      const modelRoster = model.roster.filter((candidate) =>
-        organizerRecordTenantMatches(candidate, scope.tenantId),
-      );
-      const cachedRoster =
-        this.organizerSpeakerCache.get(this.organizerSpeakerCacheKey(organizationId, eventId)) ??
-        [];
-      const roster = [
-        ...modelRoster,
-        ...cachedRoster.filter(
-          (entry) =>
-            entry.eventId === eventId &&
-            entry.authorAccountId === accountId &&
-            organizerRecordTenantMatches(entry, scope.tenantId) &&
-            !modelRoster.some((candidate) => candidate.id === entry.id),
-        ),
-      ];
-      const profiles = model.profiles.filter(
-        (candidate) =>
-          organizerRecordTenantMatches(candidate, scope.tenantId) &&
-          candidate.eventId === eventId &&
-          scope.participantIds.includes(candidate.participantId),
-      );
-      acceptedSubmissions = this.acceptedOrganizerSubmissionsFrom(eventId, scope, submissions);
-      rosterProjection = {
-        entries: this.organizerRosterEntriesFromReadModel(eventId, scope, roster, profiles),
-        profiles,
-      };
-    } else {
-      scope = await this.requireOrganizerOrganizationScope(organizationId, eventId, accountId);
-      [acceptedSubmissions, rosterProjection] = await Promise.all([
-        this.acceptedOrganizerSubmissions(eventId, scope),
-        this.organizerRosterProjection(organizationId, eventId, scope, accountId),
-      ]);
-    }
-
-    const acceptedParticipantIds = new Set(
-      acceptedSubmissions.flatMap((submission) =>
-        submission.participantIds.filter((participantId) =>
-          scope.participantIds.includes(participantId),
-        ),
-      ),
-    );
-    const entries = rosterProjection.entries.filter(
-      (entry) => acceptedParticipantIds.has(entry.participantId) || isCrmRosterEntry(entry),
-    );
-    const crmParticipantIds = entries.filter(isCrmRosterEntry).map((entry) => entry.participantId);
-    const participantIds = unique([...acceptedParticipantIds, ...crmParticipantIds]);
-    const profileByParticipant = new Map(
-      rosterProjection.profiles
-        .filter(
-          (profile) =>
-            profile.eventId === eventId && participantIds.includes(profile.participantId),
-        )
-        .map((profile) => [profile.participantId, profile]),
-    );
-    const acceptedSubmissionIds = new Set(
-      acceptedSubmissions.map((submission) => canonicalSpeakerSubmissionId(submission.id)),
-    );
-    const manualByParticipant = new Map(
-      entries.filter(isOrganizerManagedRosterEntry).map((entry) => [entry.participantId, entry]),
-    );
-
-    let taskCandidates: readonly SpeakerTask[];
-    let assetCandidates: readonly SpeakerAsset[];
-    if (readModel === undefined) {
-      [taskCandidates, assetCandidates] = await Promise.all([
-        this.repository.listTasks(eventId, participantIds),
-        this.assetsForParticipants(eventId, participantIds),
-      ]);
-    } else {
-      taskCandidates = readModel.tasks.filter((candidate) =>
-        organizerRecordTenantMatches(candidate, scope.tenantId),
-      );
-      assetCandidates = readModel.assets.filter((candidate) =>
-        organizerRecordTenantMatches(candidate, scope.tenantId),
-      );
-    }
-    const tasks = taskCandidates.filter(
-      (task) =>
-        task.eventId === eventId &&
-        participantIds.includes(task.participantId) &&
-        task.owner === "speaker" &&
-        (acceptedSubmissionIds.has(canonicalSpeakerSubmissionId(task.submissionId)) ||
-          (manualByParticipant.get(task.participantId) !== undefined &&
-            sameSpeakerSubmission(
-              manualByParticipant.get(task.participantId)?.submissionId ?? "",
-              task.submissionId,
-            ))),
-    );
-    const assets = assetCandidates.filter(
-      (asset) =>
-        asset.eventId === eventId &&
-        participantIds.includes(asset.participantId) &&
-        (asset.tenantId === undefined || asset.tenantId === scope.tenantId) &&
-        ((asset.submissionId === undefined && acceptedParticipantIds.has(asset.participantId)) ||
-          acceptedSubmissionIds.has(canonicalSpeakerSubmissionId(asset.submissionId ?? "")) ||
-          (asset.submissionId !== undefined &&
-            manualByParticipant.get(asset.participantId) !== undefined &&
-            sameSpeakerSubmission(
-              manualByParticipant.get(asset.participantId)?.submissionId ?? "",
-              asset.submissionId,
-            ))),
-    );
-    const records = await Promise.all(
-      entries.map((entry) =>
-        this.organizerSpeakerRecord(
-          eventId,
-          entry.participantId,
-          entry,
-          profileByParticipant.get(entry.participantId),
-          acceptedSubmissions,
-          tasks,
-          assets,
-        ),
-      ),
-    );
-    const recordsByIdentity = new Map<string, SpeakerWorkspaceRecord>();
-    for (const record of records) {
-      const normalizedEmail = record.email.trim().toLowerCase();
-      const identityKey =
-        normalizedEmail.length > 0
-          ? `email:${normalizedEmail}`
-          : `participant:${record.participantId}`;
-      const current = recordsByIdentity.get(identityKey);
-      if (current === undefined) {
-        recordsByIdentity.set(identityKey, record);
-        continue;
-      }
-      const preferred =
-        record.version > current.version ||
-        (record.version === current.version &&
-          record.updatedAt.localeCompare(current.updatedAt) > 0)
-          ? record
-          : current;
-      const sessionsByTitle = new Map<string, SpeakerWorkspaceSession>();
-      for (const session of [...current.sessions, ...record.sessions]) {
-        const titleKey = session.title.trim().toLowerCase();
-        if (!sessionsByTitle.has(titleKey)) sessionsByTitle.set(titleKey, session);
-      }
-      const assetsById = new Map(
-        [...current.assets, ...record.assets].map((asset) => [asset.assetId, asset]),
-      );
-      recordsByIdentity.set(identityKey, {
-        ...preferred,
-        sessions: [...sessionsByTitle.values()],
-        taskSummary: {
-          total: current.taskSummary.total + record.taskSummary.total,
-          completed: current.taskSummary.completed + record.taskSummary.completed,
-          overdue: current.taskSummary.overdue + record.taskSummary.overdue,
-        },
-        assets: [...assetsById.values()],
-      });
-    }
-    return {
+    const projection = await this.organizerSpeakerMutationProjection(
       organizationId,
       eventId,
-      speakers: [...recordsByIdentity.values()].sort(
-        (left, right) =>
-          left.displayName.localeCompare(right.displayName) ||
-          left.participantId.localeCompare(right.participantId),
-      ),
-    };
+      accountId,
+    );
+    return this.materializeOrganizerSpeakerMutationProjection(organizationId, eventId, projection);
   }
 
   async getOrganizerSpeaker(
@@ -6320,11 +6142,19 @@ export class SpeakerService {
     travelLogistics?: Partial<SpeakerTravelLogistics>;
     idempotencyKey?: string | undefined;
   }): Promise<SpeakerWorkspaceRoster> {
-    const scope = await this.requireOrganizerOrganizationScope(
+    const projection = await this.organizerSpeakerMutationProjection(
       input.organizationId,
       input.eventId,
       input.accountId,
     );
+    return this.createOrganizerSpeakerWithProjection(input, projection);
+  }
+
+  private async createOrganizerSpeakerWithProjection(
+    input: Parameters<SpeakerService["createOrganizerSpeaker"]>[0],
+    projection: OrganizerSpeakerMutationProjection,
+  ): Promise<SpeakerWorkspaceRoster> {
+    const scope = projection.scope;
     const displayName = importText(input.displayName, "The speaker name", 200);
     const email = importEmail(input.email);
     const jobTitle = importText(input.jobTitle, "The speaker job title", 160);
@@ -6363,12 +6193,7 @@ export class SpeakerService {
       }
       return structuredClone(cached);
     }
-    const entries = await this.organizerRosterEntries(
-      input.organizationId,
-      input.eventId,
-      scope,
-      input.accountId,
-    );
+    const entries = projection.entries;
     const matchingEmailEntries = entries.filter(
       (entry) => entry.email?.trim().toLowerCase() === email,
     );
@@ -6381,8 +6206,9 @@ export class SpeakerService {
     }
     const existingIdentity = matchingEmailEntries[0];
     const canonicalLookup = this.repository.findAcceptedParticipantByEmail;
-    const canonicalResult =
-      canonicalLookup === undefined
+    const canonicalResult = projection.canonicalParticipantsByEmail.has(email)
+      ? (projection.canonicalParticipantsByEmail.get(email) ?? null)
+      : canonicalLookup === undefined
         ? null
         : await canonicalLookup.call(this.repository, input.eventId, scope.submissionIds, email);
     if (canonicalResult !== null && "ambiguous" in canonicalResult) {
@@ -6420,16 +6246,15 @@ export class SpeakerService {
           : canonicalSpeakerSubmissionId(canonical.submissionId)
         : canonicalSpeakerSubmissionId(existingIdentity.submissionId);
     if (!manual && !(existingIdentity !== undefined && isCrmRosterEntry(existingIdentity))) {
-      const submissions = await this.repository.listSubmissions(input.eventId, scope.submissionIds);
-      const submission = submissions.find(
+      const submission = projection.acceptedSubmissions.find(
         (candidate) =>
           candidate.eventId === input.eventId &&
-          candidate.status === "accepted" &&
           sameSpeakerSubmission(candidate.id, canonicalSubmissionId) &&
           candidate.participantIds.includes(participantId),
       );
       if (submission === undefined) throw notFound();
     }
+    let writtenProfile: SpeakerProfile | undefined;
     const existing = entries.find((entry) => entry.participantId === participantId);
     if (existing !== undefined) {
       if (existing.email !== undefined && existing.email.trim().toLowerCase() !== email) {
@@ -6439,7 +6264,14 @@ export class SpeakerService {
           "A speaker with that canonical participant already exists.",
         );
       }
-      const currentProfile = await this.repository.getProfile(input.eventId, participantId);
+      let currentProfile =
+        projection.profiles.find(
+          (profile) => profile.eventId === input.eventId && profile.participantId === participantId,
+        ) ?? null;
+      if (currentProfile === null) {
+        currentProfile = await this.repository.getProfile(input.eventId, participantId);
+        if (currentProfile !== null) projection.profiles.push(currentProfile);
+      }
       const needsProfile =
         currentProfile === null ||
         currentProfile.displayName !== displayName ||
@@ -6455,7 +6287,7 @@ export class SpeakerService {
         const updatedAt = this.now().toISOString();
         const ensureOrganizerProfile = this.repository.ensureOrganizerSpeakerProfile;
         if (ensureOrganizerProfile !== undefined) {
-          await ensureOrganizerProfile.call(this.repository, {
+          writtenProfile = await ensureOrganizerProfile.call(this.repository, {
             organizationId: input.organizationId,
             eventId: input.eventId,
             participantId,
@@ -6492,6 +6324,7 @@ export class SpeakerService {
               "The speaker profile changed. Reload it before saving.",
             );
           }
+          writtenProfile = profileResult.value;
         } else if (currentProfile === null && this.repository.createProfile !== undefined) {
           const profileResult = await this.repository.createProfile({
             id: `profile:${input.eventId}:${participantId}`,
@@ -6515,14 +6348,16 @@ export class SpeakerService {
               "The speaker profile could not be created.",
             );
           }
+          writtenProfile = profileResult.value;
         } else {
           throw notFound();
         }
       }
-      const roster = await this.listOrganizerSpeakerRoster(
+      this.overlayOrganizerSpeakerMutationProjection(projection, undefined, writtenProfile);
+      const roster = this.materializeOrganizerSpeakerMutationProjection(
         input.organizationId,
         input.eventId,
-        input.accountId,
+        projection,
       );
       this.speakerCreateCache.set(cacheKey, structuredClone(roster));
       this.speakerCreateFingerprints.set(cacheKey, fingerprint);
@@ -6561,6 +6396,19 @@ export class SpeakerService {
     const result = await this.repository.saveRoster(entry, null);
     if (!result.ok) {
       if (result.reason === "version_conflict" || result.reason === "invalid_state") {
+        const projectedEntry = projection.entries.find(
+          (candidate) => candidate.participantId === participantId,
+        );
+        if (projectedEntry?.email?.trim().toLowerCase() === email) {
+          const projectedRoster = this.materializeOrganizerSpeakerMutationProjection(
+            input.organizationId,
+            input.eventId,
+            projection,
+          );
+          this.speakerCreateCache.set(cacheKey, structuredClone(projectedRoster));
+          this.speakerCreateFingerprints.set(cacheKey, fingerprint);
+          return projectedRoster;
+        }
         const concurrentRoster = await this.listOrganizerSpeakerRoster(
           input.organizationId,
           input.eventId,
@@ -6585,7 +6433,7 @@ export class SpeakerService {
     const storedEntry = result.value;
     const ensureOrganizerProfile = this.repository.ensureOrganizerSpeakerProfile;
     if (ensureOrganizerProfile !== undefined) {
-      await ensureOrganizerProfile.call(this.repository, {
+      writtenProfile = await ensureOrganizerProfile.call(this.repository, {
         organizationId: input.organizationId,
         eventId: input.eventId,
         participantId,
@@ -6600,7 +6448,10 @@ export class SpeakerService {
         updatedAt: now,
       });
     } else {
-      const currentProfile = await this.repository.getProfile(input.eventId, participantId);
+      const currentProfile =
+        projection.profiles.find(
+          (profile) => profile.eventId === input.eventId && profile.participantId === participantId,
+        ) ?? null;
       if (currentProfile !== null && this.repository.updateProfile !== undefined) {
         const profileResult = await this.repository.updateProfile({
           eventId: input.eventId,
@@ -6624,6 +6475,7 @@ export class SpeakerService {
             "The speaker profile changed. Reload it before saving.",
           );
         }
+        writtenProfile = profileResult.value;
       } else if (currentProfile === null && this.repository.createProfile !== undefined) {
         const profile: SpeakerProfile = {
           id: `profile:${input.eventId}:${participantId}`,
@@ -6648,6 +6500,7 @@ export class SpeakerService {
             "The speaker profile could not be created.",
           );
         }
+        writtenProfile = profileResult.value;
       } else {
         throw notFound();
       }
@@ -6659,10 +6512,11 @@ export class SpeakerService {
       ),
       storedEntry,
     ]);
-    const roster = await this.listOrganizerSpeakerRoster(
+    this.overlayOrganizerSpeakerMutationProjection(projection, storedEntry, writtenProfile);
+    const roster = this.materializeOrganizerSpeakerMutationProjection(
       input.organizationId,
       input.eventId,
-      input.accountId,
+      projection,
     );
     this.speakerCreateCache.set(cacheKey, structuredClone(roster));
     this.speakerCreateFingerprints.set(cacheKey, fingerprint);
@@ -6684,18 +6538,15 @@ export class SpeakerService {
     travelLogistics?: Partial<SpeakerTravelLogistics>;
     status: string;
   }): Promise<SpeakerWorkspaceRoster> {
-    const scope = await this.requireOrganizerOrganizationScope(
+    const projection = await this.organizerSpeakerMutationProjection(
       input.organizationId,
       input.eventId,
       input.accountId,
+      input.participantId,
     );
+    const scope = projection.scope;
     assertExpectedVersion(input.expectedVersion);
-    const entries = await this.organizerRosterEntries(
-      input.organizationId,
-      input.eventId,
-      scope,
-      input.accountId,
-    );
+    const entries = projection.entries;
     const existing = entries.find((entry) => entry.participantId === input.participantId);
     if (
       !scope.participantIds.includes(input.participantId) &&
@@ -6703,7 +6554,15 @@ export class SpeakerService {
     ) {
       throw notFound();
     }
-    const currentProfile = await this.repository.getProfile(input.eventId, input.participantId);
+    let currentProfile =
+      projection.profiles.find(
+        (profile) =>
+          profile.eventId === input.eventId && profile.participantId === input.participantId,
+      ) ?? null;
+    if (currentProfile === null) {
+      currentProfile = await this.repository.getProfile(input.eventId, input.participantId);
+      if (currentProfile !== null) projection.profiles.push(currentProfile);
+    }
     if (existing === undefined && currentProfile === null) throw notFound();
     const displayName = importText(input.displayName, "The speaker name", 200);
     const email = importEmail(input.email);
@@ -6735,6 +6594,9 @@ export class SpeakerService {
         "A speaker with that email already exists.",
       );
     }
+
+    let persistedEntry: SpeakerRosterEntry | undefined;
+    let persistedProfile: SpeakerProfile | undefined;
     if (
       existing !== undefined &&
       !existing.id.startsWith("profile-roster:") &&
@@ -6747,8 +6609,7 @@ export class SpeakerService {
           "The speaker has changed. Reload it before saving.",
         );
       }
-      if (this.repository.saveRoster === undefined) throw notFound();
-      const updated = {
+      const updated: SpeakerRosterEntry = {
         ...existing,
         displayName,
         email,
@@ -6775,16 +6636,10 @@ export class SpeakerService {
         }
         throw notFound();
       }
-      const cacheKey = this.organizerSpeakerCacheKey(input.organizationId, input.eventId);
-      this.organizerSpeakerCache.set(cacheKey, [
-        ...(this.organizerSpeakerCache.get(cacheKey) ?? []).filter(
-          (candidate) => candidate.participantId !== input.participantId,
-        ),
-        result.value,
-      ]);
+      persistedEntry = result.value;
       const ensureOrganizerProfile = this.repository.ensureOrganizerSpeakerProfile;
       if (ensureOrganizerProfile !== undefined) {
-        await ensureOrganizerProfile.call(this.repository, {
+        persistedProfile = await ensureOrganizerProfile.call(this.repository, {
           organizationId: input.organizationId,
           eventId: input.eventId,
           participantId: input.participantId,
@@ -6823,6 +6678,7 @@ export class SpeakerService {
             "The speaker profile changed. Reload it before saving.",
           );
         }
+        persistedProfile = profileResult.value;
       }
     } else {
       if (currentProfile === null || currentProfile.version !== input.expectedVersion) {
@@ -6861,36 +6717,29 @@ export class SpeakerService {
         }
         throw notFound();
       }
-      const cacheKey = this.organizerSpeakerCacheKey(input.organizationId, input.eventId);
-      const cached = this.organizerSpeakerCache.get(cacheKey) ?? [];
-      const cachedEntry = cached.find((entry) => entry.participantId === input.participantId);
-      if (cachedEntry !== undefined) {
+      persistedProfile = result.value;
+    }
+
+    this.overlayOrganizerSpeakerMutationProjection(projection, persistedEntry, persistedProfile);
+    const cacheKey = this.organizerSpeakerCacheKey(input.organizationId, input.eventId);
+    const cached = this.organizerSpeakerCache.get(cacheKey) ?? [];
+    const cachedEntry = cached.find((entry) => entry.participantId === input.participantId);
+    if (persistedEntry !== undefined || cachedEntry !== undefined) {
+      const projectedEntry = projection.entries.find(
+        (entry) => entry.participantId === input.participantId,
+      );
+      if (projectedEntry !== undefined) {
         this.organizerSpeakerCache.set(cacheKey, [
           ...cached.filter((entry) => entry.participantId !== input.participantId),
-          {
-            ...cachedEntry,
-            displayName,
-            email,
-            jobTitle,
-            company,
-            biography,
-            socialLinks,
-            ...(travelLogistics === undefined ? {} : { travelLogistics }),
-            workflowStatus: isCrmRosterEntry(cachedEntry) ? crmRosterWorkflowStatus : status,
-            organizerStatus: status,
-            status:
-              status === "revoked"
-                ? "revoked"
-                : status === "active"
-                  ? "active"
-                  : cachedEntry.status,
-            version: result.value.version,
-            updatedAt: result.value.updatedAt,
-          },
+          projectedEntry,
         ]);
       }
     }
-    return this.listOrganizerSpeakerRoster(input.organizationId, input.eventId, input.accountId);
+    return this.materializeOrganizerSpeakerMutationProjection(
+      input.organizationId,
+      input.eventId,
+      projection,
+    );
   }
 
   async previewSpeakerImport(input: {
@@ -7034,15 +6883,15 @@ export class SpeakerService {
     if (key.length === 0 || key.length > 300) {
       throw new SpeakerServiceError("VALIDATION_ERROR", 400, "An idempotency key is required.");
     }
-    await this.requireOrganizerOrganizationScope(
-      input.organizationId,
-      input.eventId,
-      input.accountId,
-    );
     const cacheKey = `${input.organizationId}:${input.eventId}:${input.accountId}:${key}`;
     const fingerprint = JSON.stringify(input.rows);
     const cached = this.speakerImportCache.get(cacheKey);
     if (cached !== undefined) {
+      await this.requireOrganizerOrganizationScope(
+        input.organizationId,
+        input.eventId,
+        input.accountId,
+      );
       if (this.speakerImportFingerprints.get(cacheKey) !== fingerprint) {
         throw new SpeakerServiceError(
           "VERSION_CONFLICT",
@@ -7052,37 +6901,156 @@ export class SpeakerService {
       }
       return structuredClone(cached);
     }
-    const preview = await this.previewSpeakerImport({
-      organizationId: input.organizationId,
-      eventId: input.eventId,
-      accountId: input.accountId,
-      csv: this.csvFromImportRows(input.rows),
-    });
-    if (preview.validRows.length !== input.rows.length || preview.invalidRows.length > 0) {
+
+    const projection = await this.organizerSpeakerMutationProjection(
+      input.organizationId,
+      input.eventId,
+      input.accountId,
+    );
+    if (input.rows.length > speakerImportMaximumRows) {
+      throw new SpeakerServiceError("VALIDATION_ERROR", 400, "The CSV contains too many rows.");
+    }
+    if (input.rows.length === 0) {
       throw new SpeakerServiceError(
         "VALIDATION_ERROR",
         400,
         "The import rows are invalid or stale.",
       );
     }
-    for (const row of input.rows) {
-      await this.createOrganizerSpeaker({
-        organizationId: input.organizationId,
-        eventId: input.eventId,
-        accountId: input.accountId,
-        displayName: row.displayName,
-        email: row.email,
-        jobTitle: row.jobTitle,
-        company: row.company,
-        biography: row.biography,
-        socialLinks: row.socialLinks,
-        status: row.status ?? "pending",
+    const seenEmails = new Set(
+      projection.entries
+        .map((entry) => entry.email?.trim().toLowerCase())
+        .filter((email): email is string => email !== undefined),
+    );
+    const rows: SpeakerImportRow[] = [];
+    let invalid = false;
+    for (let index = 0; index < input.rows.length; index += 1) {
+      const source = input.rows[index];
+      if (source === undefined) {
+        invalid = true;
+        continue;
+      }
+      try {
+        const displayName = importText(source.displayName, "The speaker name", 200);
+        const email = importEmail(source.email);
+        const jobTitle = importText(source.jobTitle, "The speaker job title", 160);
+        const company = importText(source.company, "The speaker company", 200);
+        const biography = importText(source.biography, "The speaker biography", 20_000);
+        if (seenEmails.has(email)) {
+          invalid = true;
+          continue;
+        }
+        const socialLinkValues: Record<string, string> = {};
+        for (const key of ["twitter", "linkedin", "website"]) {
+          const value = source.socialLinks[key]?.trim();
+          if (value !== undefined && value.length > 0) socialLinkValues[key] = value;
+        }
+        const socialLinks = normalizeSocialLinks(socialLinkValues) ?? {};
+        const status =
+          source.status === undefined || source.status.trim().length === 0
+            ? undefined
+            : importText(source.status, "The speaker status", 80);
+        seenEmails.add(email);
+        rows.push({
+          rowNumber: index + 1,
+          displayName,
+          email,
+          jobTitle,
+          company,
+          biography,
+          socialLinks,
+          ...(status === undefined ? {} : { status }),
+        });
+      } catch {
+        invalid = true;
+      }
+    }
+    if (invalid || rows.length !== input.rows.length) {
+      throw new SpeakerServiceError(
+        "VALIDATION_ERROR",
+        400,
+        "The import rows are invalid or stale.",
+      );
+    }
+    const canonicalLookup = this.repository.findAcceptedParticipantByEmail;
+    if (canonicalLookup !== undefined) {
+      const canonicalResults = await Promise.all(
+        rows.map((row) =>
+          canonicalLookup.call(
+            this.repository,
+            input.eventId,
+            projection.scope.submissionIds,
+            row.email,
+          ),
+        ),
+      );
+      rows.forEach((row, index) => {
+        projection.canonicalParticipantsByEmail.set(row.email, canonicalResults[index] ?? null);
       });
     }
-    const roster = await this.listOrganizerSpeakerRoster(
+    const canonicalParticipantIds = new Set<string>();
+    for (const row of rows) {
+      const canonicalResult = projection.canonicalParticipantsByEmail.get(row.email) ?? null;
+      if (canonicalResult === null) continue;
+      if ("ambiguous" in canonicalResult) {
+        throw new SpeakerServiceError(
+          "VALIDATION_ERROR",
+          400,
+          "Multiple accepted participants use this verified email.",
+        );
+      }
+      const participantId = canonicalResult.participantId.trim();
+      const canonicalEmail = importEmail(canonicalResult.email);
+      if (participantId.length === 0 || canonicalEmail !== row.email) {
+        throw new SpeakerServiceError("VALIDATION_ERROR", 400, "The speaker identity is invalid.");
+      }
+      const submissionId = canonicalSpeakerSubmissionId(canonicalResult.submissionId);
+      const submission = projection.acceptedSubmissions.find(
+        (candidate) =>
+          candidate.eventId === input.eventId &&
+          sameSpeakerSubmission(candidate.id, submissionId) &&
+          candidate.participantIds.includes(participantId),
+      );
+      if (submission === undefined) throw notFound();
+      const existing = projection.entries.find((entry) => entry.participantId === participantId);
+      if (existing?.email !== undefined && existing.email.trim().toLowerCase() !== row.email) {
+        throw new SpeakerServiceError(
+          "VERSION_CONFLICT",
+          409,
+          "A speaker with that canonical participant already exists.",
+        );
+      }
+      if (canonicalParticipantIds.has(participantId)) {
+        throw new SpeakerServiceError(
+          "VALIDATION_ERROR",
+          400,
+          "Multiple import rows resolve to the same speaker.",
+        );
+      }
+      canonicalParticipantIds.add(participantId);
+    }
+
+    for (const row of rows) {
+      await this.createOrganizerSpeakerWithProjection(
+        {
+          organizationId: input.organizationId,
+          eventId: input.eventId,
+          accountId: input.accountId,
+          displayName: row.displayName,
+          email: row.email,
+          jobTitle: row.jobTitle,
+          company: row.company,
+          biography: row.biography,
+          socialLinks: row.socialLinks,
+          status: row.status ?? "pending",
+        },
+        projection,
+      );
+    }
+    const roster = this.materializeOrganizerSpeakerMutationProjection(
       input.organizationId,
       input.eventId,
-      input.accountId,
+      projection,
     );
     this.speakerImportCache.set(cacheKey, structuredClone(roster));
     this.speakerImportFingerprints.set(cacheKey, fingerprint);
@@ -7457,6 +7425,288 @@ export class SpeakerService {
   private organizerSpeakerCacheKey(organizationId: string, eventId: string): string {
     return `${organizationId}:${eventId}`;
   }
+  private async organizerSpeakerMutationProjection(
+    organizationId: string,
+    eventId: string,
+    accountId: string,
+    includeProfileParticipantId?: string,
+  ): Promise<OrganizerSpeakerMutationProjection> {
+    const getOrganizerReadModel = this.repository.getOrganizerReadModel;
+    let scope: SpeakerAccessScope & { tenantId: string; organizer: true };
+    let acceptedSubmissions: readonly SpeakerSubmission[];
+    let rosterProjection: { entries: SpeakerRosterEntry[]; profiles: SpeakerProfile[] };
+    let model: SpeakerOrganizerReadModel | undefined;
+
+    if (getOrganizerReadModel !== undefined) {
+      const readModel = await getOrganizerReadModel.call(this.repository, eventId, accountId, {
+        profiles: true,
+        tasks: true,
+        assets: true,
+      });
+      const isReadModelCollection = (value: unknown): value is readonly object[] =>
+        Array.isArray(value) &&
+        value.every((candidate) => candidate !== null && typeof candidate === "object");
+      if (
+        readModel === null ||
+        typeof readModel !== "object" ||
+        !isReadModelCollection(readModel.submissions) ||
+        !isReadModelCollection(readModel.roster) ||
+        !isReadModelCollection(readModel.profiles) ||
+        !isReadModelCollection(readModel.tasks) ||
+        !isReadModelCollection(readModel.assets)
+      ) {
+        throw notFound();
+      }
+      scope = this.readModelScope(readModel, eventId);
+      if (scope.tenantId !== organizationId) throw notFound();
+      model = readModel;
+      const submissions = readModel.submissions.filter((candidate) =>
+        organizerRecordTenantMatches(candidate, scope.tenantId),
+      );
+      const modelRoster = readModel.roster.filter((candidate) =>
+        organizerRecordTenantMatches(candidate, scope.tenantId),
+      );
+      const cachedRoster =
+        this.organizerSpeakerCache.get(this.organizerSpeakerCacheKey(organizationId, eventId)) ??
+        [];
+      const roster = [
+        ...modelRoster,
+        ...cachedRoster.filter(
+          (entry) =>
+            entry.eventId === eventId &&
+            entry.authorAccountId === accountId &&
+            organizerRecordTenantMatches(entry, scope.tenantId) &&
+            !modelRoster.some((candidate) => candidate.id === entry.id),
+        ),
+      ];
+      const profileParticipantIds = new Set([
+        ...scope.participantIds,
+        ...(includeProfileParticipantId === undefined ? [] : [includeProfileParticipantId]),
+      ]);
+      const profiles = readModel.profiles.filter(
+        (candidate) =>
+          organizerRecordTenantMatches(candidate, scope.tenantId) &&
+          candidate.eventId === eventId &&
+          profileParticipantIds.has(candidate.participantId),
+      );
+      acceptedSubmissions = this.acceptedOrganizerSubmissionsFrom(eventId, scope, submissions);
+      rosterProjection = {
+        entries: this.organizerRosterEntriesFromReadModel(eventId, scope, roster, profiles),
+        profiles: [...profiles],
+      };
+    } else {
+      scope = await this.requireOrganizerOrganizationScope(organizationId, eventId, accountId);
+      [acceptedSubmissions, rosterProjection] = await Promise.all([
+        this.acceptedOrganizerSubmissions(eventId, scope),
+        this.organizerRosterProjection(organizationId, eventId, scope, accountId),
+      ]);
+    }
+
+    const acceptedParticipantIds = new Set(
+      acceptedSubmissions.flatMap((submission) =>
+        submission.participantIds.filter((participantId) =>
+          scope.participantIds.includes(participantId),
+        ),
+      ),
+    );
+    const entries = rosterProjection.entries.filter(
+      (entry) => acceptedParticipantIds.has(entry.participantId) || isCrmRosterEntry(entry),
+    );
+    const crmParticipantIds = entries.filter(isCrmRosterEntry).map((entry) => entry.participantId);
+    const participantIds = unique([...acceptedParticipantIds, ...crmParticipantIds]);
+    const acceptedSubmissionIds = new Set(
+      acceptedSubmissions.map((submission) => canonicalSpeakerSubmissionId(submission.id)),
+    );
+    const manualByParticipant = new Map(
+      entries.filter(isOrganizerManagedRosterEntry).map((entry) => [entry.participantId, entry]),
+    );
+
+    let taskCandidates: readonly SpeakerTask[];
+    let assetCandidates: readonly SpeakerAsset[];
+    if (model === undefined) {
+      [taskCandidates, assetCandidates] = await Promise.all([
+        this.repository.listTasks(eventId, participantIds),
+        this.assetsForParticipants(eventId, participantIds),
+      ]);
+    } else {
+      taskCandidates = model.tasks.filter((candidate) =>
+        organizerRecordTenantMatches(candidate, scope.tenantId),
+      );
+      assetCandidates = model.assets.filter((candidate) =>
+        organizerRecordTenantMatches(candidate, scope.tenantId),
+      );
+    }
+    const tasks = taskCandidates.filter(
+      (task) =>
+        task.eventId === eventId &&
+        participantIds.includes(task.participantId) &&
+        task.owner === "speaker" &&
+        (acceptedSubmissionIds.has(canonicalSpeakerSubmissionId(task.submissionId)) ||
+          (manualByParticipant.get(task.participantId) !== undefined &&
+            sameSpeakerSubmission(
+              manualByParticipant.get(task.participantId)?.submissionId ?? "",
+              task.submissionId,
+            ))),
+    );
+    const assets = assetCandidates.filter(
+      (asset) =>
+        asset.eventId === eventId &&
+        participantIds.includes(asset.participantId) &&
+        (asset.tenantId === undefined || asset.tenantId === scope.tenantId) &&
+        ((asset.submissionId === undefined && acceptedParticipantIds.has(asset.participantId)) ||
+          acceptedSubmissionIds.has(canonicalSpeakerSubmissionId(asset.submissionId ?? "")) ||
+          (asset.submissionId !== undefined &&
+            manualByParticipant.get(asset.participantId) !== undefined &&
+            sameSpeakerSubmission(
+              manualByParticipant.get(asset.participantId)?.submissionId ?? "",
+              asset.submissionId,
+            ))),
+    );
+    return {
+      scope,
+      acceptedSubmissions,
+      entries,
+      profiles: rosterProjection.profiles,
+      tasks,
+      assets,
+      canonicalParticipantsByEmail: new Map(),
+    };
+  }
+
+  private materializeOrganizerSpeakerMutationProjection(
+    organizationId: string,
+    eventId: string,
+    projection: OrganizerSpeakerMutationProjection,
+  ): SpeakerWorkspaceRoster {
+    const profileByParticipant = new Map(
+      projection.profiles
+        .filter(
+          (profile) =>
+            profile.eventId === eventId &&
+            projection.entries.some((entry) => entry.participantId === profile.participantId),
+        )
+        .map((profile) => [profile.participantId, profile]),
+    );
+    const records = projection.entries.map((entry) =>
+      this.organizerSpeakerRecord(
+        eventId,
+        entry.participantId,
+        entry,
+        profileByParticipant.get(entry.participantId),
+        projection.acceptedSubmissions,
+        projection.tasks,
+        projection.assets,
+      ),
+    );
+    const recordsByIdentity = new Map<string, SpeakerWorkspaceRecord>();
+    for (const record of records) {
+      const normalizedEmail = record.email.trim().toLowerCase();
+      const identityKey =
+        normalizedEmail.length > 0
+          ? `email:${normalizedEmail}`
+          : `participant:${record.participantId}`;
+      const current = recordsByIdentity.get(identityKey);
+      if (current === undefined) {
+        recordsByIdentity.set(identityKey, record);
+        continue;
+      }
+      const preferred =
+        record.version > current.version ||
+        (record.version === current.version &&
+          record.updatedAt.localeCompare(current.updatedAt) > 0)
+          ? record
+          : current;
+      const sessionsByTitle = new Map<string, SpeakerWorkspaceSession>();
+      for (const session of [...current.sessions, ...record.sessions]) {
+        const titleKey = session.title.trim().toLowerCase();
+        if (!sessionsByTitle.has(titleKey)) sessionsByTitle.set(titleKey, session);
+      }
+      const assetsById = new Map(
+        [...current.assets, ...record.assets].map((asset) => [asset.assetId, asset]),
+      );
+      recordsByIdentity.set(identityKey, {
+        ...preferred,
+        sessions: [...sessionsByTitle.values()],
+        taskSummary: {
+          total: current.taskSummary.total + record.taskSummary.total,
+          completed: current.taskSummary.completed + record.taskSummary.completed,
+          overdue: current.taskSummary.overdue + record.taskSummary.overdue,
+        },
+        assets: [...assetsById.values()],
+      });
+    }
+    return {
+      organizationId,
+      eventId,
+      speakers: [...recordsByIdentity.values()].sort(
+        (left, right) =>
+          left.displayName.localeCompare(right.displayName) ||
+          left.participantId.localeCompare(right.participantId),
+      ),
+    };
+  }
+
+  private overlayOrganizerSpeakerMutationProjection(
+    projection: OrganizerSpeakerMutationProjection,
+    entry: SpeakerRosterEntry | undefined,
+    profile: SpeakerProfile | undefined,
+  ): void {
+    if (entry !== undefined) {
+      const index = projection.entries.findIndex(
+        (candidate) => candidate.participantId === entry.participantId,
+      );
+      if (index < 0) projection.entries.push(entry);
+      else projection.entries[index] = entry;
+    }
+    if (profile === undefined) return;
+    const profileIndex = projection.profiles.findIndex(
+      (candidate) =>
+        candidate.eventId === profile.eventId && candidate.participantId === profile.participantId,
+    );
+    if (profileIndex < 0) projection.profiles.push(profile);
+    else projection.profiles[profileIndex] = profile;
+    const entryIndex = projection.entries.findIndex(
+      (candidate) =>
+        candidate.participantId === profile.participantId &&
+        candidate.id.startsWith("profile-roster:"),
+    );
+    const currentEntry = projection.entries[entryIndex];
+    if (entryIndex < 0 || currentEntry === undefined) return;
+    const profileSocialLinks = profile.socialLinks ?? profile.social;
+    const updatedEntry: SpeakerRosterEntry = {
+      ...currentEntry,
+      displayName: profile.displayName,
+      ...(profile.email === undefined ? {} : { email: profile.email }),
+      ...(profile.jobTitle === undefined ? {} : { jobTitle: profile.jobTitle }),
+      ...(profile.company === undefined ? {} : { company: profile.company }),
+      ...(profile.biography === undefined ? {} : { biography: profile.biography }),
+      ...(profileSocialLinks === undefined ? {} : { socialLinks: profileSocialLinks }),
+      ...(profile.headshotAssetId === undefined
+        ? {}
+        : { headshotAssetId: profile.headshotAssetId }),
+      ...(profile.travelLogistics === undefined
+        ? {}
+        : { travelLogistics: profile.travelLogistics }),
+      ...(profile.status === undefined
+        ? {}
+        : {
+            workflowStatus: profile.status,
+            organizerStatus: profile.status,
+            status:
+              profile.status === "revoked"
+                ? "revoked"
+                : profile.status === "active"
+                  ? "active"
+                  : currentEntry.status,
+          }),
+      version: Math.max(currentEntry.version, profile.version),
+      updatedAt:
+        profile.updatedAt.localeCompare(currentEntry.updatedAt) > 0
+          ? profile.updatedAt
+          : currentEntry.updatedAt,
+    };
+    projection.entries[entryIndex] = updatedEntry;
+  }
 
   private async assertOrganizerAssetAccess(
     scope: SpeakerAccessScope & { tenantId: string },
@@ -7764,38 +8014,6 @@ export class SpeakerService {
     };
   }
 
-  private csvFromImportRows(rows: readonly SpeakerImportRow[]): string {
-    const header = [
-      "displayName",
-      "email",
-      "jobTitle",
-      "company",
-      "biography",
-      "twitter",
-      "linkedin",
-      "website",
-      "status",
-    ];
-    const quoteCsvField = (value: string): string => `"${value.replaceAll('"', '""')}"`;
-    return [
-      header.join(","),
-      ...rows.map((row) =>
-        [
-          row.displayName,
-          row.email,
-          row.jobTitle,
-          row.company,
-          row.biography,
-          row.socialLinks.twitter ?? "",
-          row.socialLinks.linkedin ?? "",
-          row.socialLinks.website ?? "",
-          row.status ?? "",
-        ]
-          .map(quoteCsvField)
-          .join(","),
-      ),
-    ].join("\n");
-  }
   private async requireOrganizerOrganizationScope(
     organizationId: string,
     eventId: string,
