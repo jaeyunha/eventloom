@@ -227,7 +227,7 @@ const LOCAL_PUBLIC_EMBED: EventEmbedConfiguration = {
   textColor: "#20232b",
   customCss: "",
   displayFields: ["title", "date-time", "room", "speakers", "track", "summary"],
-  tracks: ["local-track-main", "local-track-practice"],
+  trackIds: ["local-track-main", "local-track-practice"],
   statuses: ["Accepted"],
 };
 
