@@ -46,6 +46,27 @@ function identityInputs() {
 function adapterWith(fetchImplementation) {
   return createProductionRepairAdapter({ ...CONFIG, fetchImplementation });
 }
+test("repair ledger records are isolated by operation digest", async () => {
+  const queries = [];
+  const adapter = adapterWith(async (_url, init) => {
+    queries.push(JSON.parse(init.body));
+    return d1();
+  });
+  const key = "workflow-reset:v1:delete:d1:outbox_jobs:job-1";
+  const inputDigest = "a".repeat(64);
+
+  await adapter.recordLedger({
+    key,
+    inputDigest,
+    state: "started",
+    updatedAt: "2026-08-12T00:00:00.000Z",
+  });
+
+  const durableKey = `${key}:${inputDigest}`;
+  assert.equal(queries.length, 2);
+  assert.equal(queries[0].params[2], durableKey);
+  assert.equal(queries[1].params[2], durableKey);
+});
 
 test("D1 identity lookup normalizes email and binds every value", async () => {
   const calls = [];

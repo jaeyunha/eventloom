@@ -1470,6 +1470,7 @@ export function createProductionRepairAdapter(options = {}) {
     const requestDigest = required(entry.inputDigest, "Repair ledger digest");
     if (!/^[a-f0-9]{64}$/u.test(requestDigest))
       fail("LEDGER_INVALID", "Repair ledger digest is invalid.");
+    const durableKey = `${key}:${requestDigest}`;
     const tenantId = REPAIR_ORGANIZATION_ID;
     const scope = "production-repair";
     const state =
@@ -1493,7 +1494,7 @@ export function createProductionRepairAdapter(options = {}) {
          FROM idempotency_records
         WHERE tenant_id = ? AND scope = ? AND idempotency_key = ?
         LIMIT 2`,
-      [tenantId, scope, key],
+      [tenantId, scope, durableKey],
     );
     const existing = exactRecordOrUndefined(existingQuery.rows, "repair ledger");
     if (existing !== undefined && existing.request_digest !== requestDigest) {
@@ -1514,7 +1515,7 @@ export function createProductionRepairAdapter(options = {}) {
           response_status = excluded.response_status,
           response_json = excluded.response_json,
           expires_at = excluded.expires_at`,
-      [tenantId, scope, key, requestDigest, state, 200, responseJson, createdAt, expiresAt],
+      [tenantId, scope, durableKey, requestDigest, state, 200, responseJson, createdAt, expiresAt],
     );
     return { key, state: entry.state, requestDigest };
   }
