@@ -9,6 +9,7 @@ import {
   loadOrganizerEventName,
   SubmissionDetailWorkspace,
   SubmissionListWorkspace,
+  submissionListState,
 } from "./submission-workspace";
 
 const canonicalEnvelope = {
@@ -101,6 +102,46 @@ const canonicalEnvelope = {
 } as const;
 
 describe("organizer submission workspace", () => {
+  it("distinguishes loading, failure, empty, and filtered submission list states", () => {
+    expect(
+      submissionListState({
+        loading: true,
+        loadError: null,
+        submissionCount: 0,
+        visibleCount: 0,
+      }),
+    ).toBe("loading");
+    expect(
+      submissionListState({
+        loading: false,
+        loadError: "Gateway unavailable",
+        submissionCount: 0,
+        visibleCount: 0,
+      }),
+    ).toBe("failure");
+    expect(
+      submissionListState({
+        loading: false,
+        loadError: null,
+        submissionCount: 0,
+        visibleCount: 0,
+      }),
+    ).toBe("empty");
+    expect(
+      submissionListState({
+        loading: false,
+        loadError: null,
+        submissionCount: 2,
+        visibleCount: 0,
+      }),
+    ).toBe("filtered_empty");
+
+    const markup = renderToStaticMarkup(
+      createElement(SubmissionListWorkspace, { eventId: "event-with-no-submissions" }),
+    );
+    expect(markup).toContain("No submissions yet");
+    expect(markup).not.toContain("No matching submissions");
+  });
   it("maps the exact canonical fields, edited values, and every co-speaker", () => {
     const record = mapCanonicalSubmission(canonicalEnvelope);
 
@@ -327,6 +368,72 @@ describe("organizer submission workspace", () => {
           ),
         ),
       ).toBe(true);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+  it("projects persisted accepted and rejected decisions into canonical statuses", async () => {
+    let decisionStatus: "accepted" | "rejected" = "accepted";
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("/plans?eventId=")) {
+        return Response.json({
+          data: {
+            plans: [{ id: "plan-1", rounds: [{ id: "round-final", sequence: 1 }] }],
+          },
+        });
+      }
+      if (url.endsWith("/assignments")) {
+        return Response.json({ data: { assignments: [] } });
+      }
+      if (url.endsWith("/decision")) {
+        return Response.json({
+          data: {
+            id: "decision-1",
+            tenantId: canonicalEnvelope.submission.tenantId,
+            eventId: canonicalEnvelope.submission.eventId,
+            planId: "plan-1",
+            submissionId: canonicalEnvelope.submission.id,
+            status: decisionStatus,
+            version: 2,
+            history: [
+              {
+                from: null,
+                to: decisionStatus,
+                reason: `Organizer decision: ${decisionStatus}.`,
+                decidedBy: "organizer-1",
+                decidedAt: "2027-01-03T12:00:00.000Z",
+                idempotencyKey: `decision-${decisionStatus}`,
+              },
+            ],
+            updatedAt: "2027-01-03T12:00:00.000Z",
+          },
+        });
+      }
+      if (url.endsWith("/aggregate")) {
+        return Response.json({
+          data: {
+            submittedReviewCount: 0,
+            expectedReviewCount: 0,
+            averageWeightedTotal: null,
+            possibleWeightedTotal: 0,
+          },
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    try {
+      for (const [status, expectedStatus, timelineLabel] of [
+        ["accepted", "accepted", "Accepted"],
+        ["rejected", "declined", "Rejected"],
+      ] as const) {
+        decisionStatus = status;
+        const submission = await enrichCanonicalSubmission("", canonicalEnvelope);
+        expect(submission.status).toBe(expectedStatus);
+        expect(submission.decision?.status).toBe(status);
+        expect(submission.timeline.at(-1)?.label).toBe(timelineLabel);
+      }
     } finally {
       fetchMock.mockRestore();
     }

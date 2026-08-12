@@ -14,6 +14,7 @@ import {
   taskPrimaryAction,
   validateBiography,
 } from "./model";
+import { portalSubmissionActionTargets } from "./portal-submissions";
 import type { PortalAsset, PortalTask, PortalView } from "./types";
 
 function task(overrides: Partial<PortalTask> = {}): PortalTask {
@@ -369,12 +370,13 @@ describe("speaker portal view model", () => {
       outstandingTaskCount: 0,
     });
   });
-  it("builds a pinned edit route only for editable submitted proposals", () => {
+  it("builds edit and submit-another routes only for an open editable proposal", () => {
     const context = {
       id: "portal:ai-engineer:devflow-conf-2027",
       eventId: "devflow-conf-2027",
       slug: "devflow-conf-2027",
       name: "DevFlow Conf 2027",
+      status: "active",
       capabilities: ["submission-edit"],
       submissionIds: ["submission-1"],
       participantIds: ["participant-1"],
@@ -394,6 +396,28 @@ describe("speaker portal view model", () => {
       pointerKey:
         "open-sessionboard:cfp-submission:v1:ai-engineer:devflow-conf-2027:devflow-conf-2027-cfp",
     });
+    expect(portalSubmissionActionTargets(context, submission)).toEqual({
+      editHref: "/cfp/devflow-conf-2027/submission",
+      newProposalHref: "/cfp/devflow-conf-2027",
+      pointerKey:
+        "open-sessionboard:cfp-submission:v1:ai-engineer:devflow-conf-2027:devflow-conf-2027-cfp",
+      identity: {
+        organizationId: "ai-engineer",
+        eventId: "devflow-conf-2027",
+        formId: "devflow-conf-2027-cfp",
+      },
+    });
+    expect(portalSubmissionActionTargets(context, { ...submission, status: "accepted" })).toEqual(
+      portalSubmissionActionTargets(context, submission),
+    );
+    expect(
+      portalSubmissionActionTargets(context, {
+        ...submission,
+        closeAt: "2000-01-01T00:00:00.000Z",
+      }),
+    ).toBeNull();
+    expect(portalSubmissionActionTargets({ ...context, status: "closed" }, submission)).toBeNull();
+    expect(portalSubmissionActionTargets(context, { ...submission, formId: " " })).toBeNull();
     expect(portalSubmissionEditTarget(context, { ...submission, status: "accepted" })).toBeNull();
   });
 

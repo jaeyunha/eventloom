@@ -1053,6 +1053,21 @@ function ProgressMeter({
   );
 }
 
+export type SubmissionListState = "loading" | "failure" | "empty" | "filtered_empty" | "ready";
+
+export function submissionListState(input: {
+  loading: boolean;
+  loadError: string | null;
+  submissionCount: number;
+  visibleCount: number;
+}): SubmissionListState {
+  if (input.loading) return "loading";
+  if (input.loadError !== null) return "failure";
+  if (input.submissionCount === 0) return "empty";
+  if (input.visibleCount === 0) return "filtered_empty";
+  return "ready";
+}
+
 export function SubmissionListWorkspace({
   eventId,
   organizationId,
@@ -1096,8 +1111,11 @@ export function SubmissionListWorkspace({
       organizationId,
       eventId,
     )
-      .then((records) => {
-        if (active) setSubmissions(records.map(mapCanonicalSubmission));
+      .then(async (records) => {
+        const enriched = await Promise.all(
+          records.map((record) => enrichCanonicalSubmission(baseUrl, record)),
+        );
+        if (active) setSubmissions(enriched);
       })
       .catch((reason: unknown) => {
         if (active) {
@@ -1189,6 +1207,12 @@ export function SubmissionListWorkspace({
     });
   }
 
+  const listState = submissionListState({
+    loading,
+    loadError,
+    submissionCount: submissions.length,
+    visibleCount: filteredSubmissions.length,
+  });
   return (
     <div className={styles.workspaceRoot}>
       <a className={styles.skipLink} href="#submission-list-content">
@@ -1320,7 +1344,22 @@ export function SubmissionListWorkspace({
             </button>
           </fieldset>
 
-          {filteredSubmissions.length === 0 ? (
+          {listState === "loading" ? (
+            <div className={styles.emptyState} role="status">
+              <h3>Loading submissions</h3>
+              <p>Authoritative CFP submissions are loading.</p>
+            </div>
+          ) : listState === "failure" ? (
+            <div className={styles.emptyState} role="alert">
+              <h3>Unable to load submissions</h3>
+              <p>{loadError ?? "Submissions could not be loaded."}</p>
+            </div>
+          ) : listState === "empty" ? (
+            <div className={styles.emptyState} role="status">
+              <h3>No submissions yet</h3>
+              <p>No submissions have been submitted for this event yet.</p>
+            </div>
+          ) : listState === "filtered_empty" ? (
             <div className={styles.emptyState} role="status">
               <h3>No matching submissions</h3>
               <p>

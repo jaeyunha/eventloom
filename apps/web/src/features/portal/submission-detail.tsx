@@ -1,11 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { portalSubmissionEditTarget, submissionStatusPresentation } from "./model";
+import { clearCfpSubmissionState } from "../cfp/draft-persistence";
+import { submissionStatusPresentation } from "./model";
 import styles from "./portal.module.css";
 import { usePortal } from "./portal-provider";
 import {
   canonicalPortalSubmissionId,
+  portalSubmissionActionTargets,
   portalSubmissionDisplayTitle,
   portalSubmissionIdsMatch,
 } from "./portal-submissions";
@@ -17,22 +19,13 @@ import {
   SubmissionStatusBadge,
   TaskStatusBadge,
 } from "./portal-ui";
-import type { PortalSubmission, PortalSubmissionStatus } from "./types";
+import type { PortalSubmissionStatus } from "./types";
 
 const standardJourney: readonly PortalSubmissionStatus[] = [
   "submitted",
   "under_review",
   "accepted",
 ];
-
-function portalDetailEditTarget(
-  context: Parameters<typeof portalSubmissionEditTarget>[0],
-  submission: PortalSubmission,
-): ReturnType<typeof portalSubmissionEditTarget> {
-  const target = portalSubmissionEditTarget(context, submission);
-  if (target !== null || submission.status !== "accepted") return target;
-  return portalSubmissionEditTarget(context, { ...submission, status: "submitted" });
-}
 
 export function SubmissionDetail({ submissionId }: Readonly<{ submissionId: string }>) {
   return (
@@ -69,7 +62,10 @@ function SubmissionDetailContent({ submissionId }: Readonly<{ submissionId: stri
   );
   const displayTitle = portalSubmissionDisplayTitle(submission, view.submissions);
   const currentJourneyIndex = standardJourney.indexOf(submission.status);
-  const editTarget = can("submission-edit") ? portalDetailEditTarget(context, submission) : null;
+  const actionTargets = can("submission-edit")
+    ? portalSubmissionActionTargets(context, submission)
+    : null;
+  const cfpEventSlug = context?.slug?.trim() || context?.eventId.trim() || "";
 
   return (
     <>
@@ -82,19 +78,31 @@ function SubmissionDetailContent({ submissionId }: Readonly<{ submissionId: stri
         description="Your latest session status and accepted-speaker requirements."
         action={<SubmissionStatusBadge status={submission.status} />}
       />
-      {editTarget === null ? null : (
-        <Link
-          className={styles.primaryButton}
-          href={editTarget.href}
-          onClick={() =>
-            window.localStorage.setItem(
-              editTarget.pointerKey,
-              canonicalPortalSubmissionId(submission.id),
-            )
-          }
-        >
-          Edit proposal
-        </Link>
+      {actionTargets === null ? null : (
+        <>
+          <Link
+            className={styles.primaryButton}
+            href={actionTargets.editHref}
+            onClick={() =>
+              window.localStorage.setItem(
+                actionTargets.pointerKey,
+                canonicalPortalSubmissionId(submission.id),
+              )
+            }
+          >
+            Edit proposal
+          </Link>
+          <Link
+            className={styles.secondaryButton}
+            href={actionTargets.newProposalHref}
+            onClick={() => {
+              if (context === null || cfpEventSlug.length === 0) return;
+              clearCfpSubmissionState(cfpEventSlug, actionTargets.identity, window.localStorage);
+            }}
+          >
+            Submit another proposal
+          </Link>
+        </>
       )}
 
       <section className={`${styles.panel} ${styles.statusHero}`}>
