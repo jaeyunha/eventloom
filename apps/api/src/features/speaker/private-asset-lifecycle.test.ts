@@ -60,6 +60,11 @@ class LifecycleRepository implements SpeakerRepository {
       eventId: "event-1",
       submissionId: "submission-1",
       participantId: "participant-1",
+      subject: {
+        type: "session",
+        participantId: "participant-1",
+        submissionId: "submission-1",
+      },
       type: "upload",
       owner: "speaker",
       title: "Upload slides",
@@ -267,9 +272,19 @@ class LifecycleRepository implements SpeakerRepository {
     const asset = this.assets.find(
       (candidate) => candidate.eventId === command.eventId && candidate.id === command.assetId,
     );
-    return Promise.resolve(
-      asset === undefined ? { ok: false, reason: "not_found" } : { ok: true, value: asset },
-    );
+    if (asset === undefined) return Promise.resolve({ ok: false, reason: "not_found" });
+    if ((asset.reviewVersion ?? 0) !== command.expectedVersion) {
+      return Promise.resolve({ ok: false, reason: "version_conflict" });
+    }
+    asset.reviewState = command.state;
+    if (command.note === undefined) delete asset.reviewNote;
+    else asset.reviewNote = command.note;
+    asset.reviewedAt = command.reviewedAt;
+    asset.reviewedBy = command.reviewedBy;
+    asset.reviewVersion = command.expectedVersion + 1;
+    if (command.state === "approved") asset.approvedVersionId = asset.id;
+    if (command.release) asset.releasedVersionId = asset.id;
+    return Promise.resolve({ ok: true, value: asset });
   }
   appendAssetAudit(_entry: SpeakerAssetAuditEntry): Promise<void> {
     return Promise.resolve();
@@ -325,6 +340,8 @@ class LifecycleRepository implements SpeakerRepository {
     state: "ready" | "rejected";
     finalizedAt: string;
     rejectionReason?: string;
+    latestVersionId: string;
+    currentVersionId?: string;
   }): Promise<RepositoryResult<SpeakerAsset>> {
     const asset = this.assets.find(
       (candidate) => candidate.eventId === command.eventId && candidate.id === command.assetId,
@@ -334,6 +351,9 @@ class LifecycleRepository implements SpeakerRepository {
       return Promise.resolve({ ok: false, reason: "invalid_state" });
     asset.state = command.state;
     asset.finalizedAt = command.finalizedAt;
+    asset.latestVersionId = command.latestVersionId;
+    if (command.currentVersionId === undefined) delete asset.currentVersionId;
+    else asset.currentVersionId = command.currentVersionId;
     if (command.rejectionReason !== undefined) asset.rejectionReason = command.rejectionReason;
     return Promise.resolve({ ok: true, value: asset });
   }
@@ -1102,9 +1122,9 @@ describe("speaker participant workspace authorization and projections", () => {
         accountId: "organizer",
         assetId: second.asset.id,
         body: "Priya, the updated deck is ready for review.",
-        expectedVersion: 1,
+        expectedVersion: 0,
       }),
-    ).resolves.toMatchObject({ authorLabel: "Organizer", version: 2 });
+    ).resolves.toMatchObject({ authorLabel: "Organizer", version: 1 });
     await expect(
       service.listAssetComments("event-1", "account-1", first.asset.id),
     ).resolves.toEqual([
@@ -1113,6 +1133,10 @@ describe("speaker participant workspace authorization and projections", () => {
         body: "Please use this version.",
         createdAt: now,
       }),
+    ]);
+    await expect(
+      service.listAssetComments("event-1", "account-1", second.asset.id),
+    ).resolves.toEqual([
       expect.objectContaining({
         authorLabel: "Organizer",
         body: "Priya, the updated deck is ready for review.",
@@ -1246,6 +1270,7 @@ describe("organizer content-management contracts", () => {
       reviewedAt,
       reviewedBy,
       expectedVersion,
+      release,
     }) => {
       const asset = repository.assets.find((candidate) => candidate.id === assetId);
       if (asset === undefined) return { ok: false, reason: "not_found" };
@@ -1258,6 +1283,8 @@ describe("organizer content-management contracts", () => {
         reviewedAt,
         reviewedBy,
         reviewVersion: expectedVersion + 1,
+        ...(state === "approved" ? { approvedVersionId: asset.id } : {}),
+        ...(release ? { releasedVersionId: asset.id } : {}),
       };
       repository.assets[repository.assets.indexOf(asset)] = updated;
       return { ok: true, value: updated };
@@ -1313,6 +1340,8 @@ describe("organizer content-management contracts", () => {
       createdAt: now,
       version: 1,
       versionFamilyId: "family-1",
+      latestVersionId: "asset-ready",
+      currentVersionId: "asset-ready",
     });
     repository.assets.push({
       id: "asset-pending",
@@ -1355,7 +1384,7 @@ describe("organizer content-management contracts", () => {
       dueAt: "2027-05-01",
       allowedMimeTypes: ["application/pdf"],
       maxBytes: 10_000,
-      assigneeIds: ["participant-1"],
+      assignments: [{ participantId: "participant-1", submissionId: "submission-1" }],
     });
     expect(created[0]).toMatchObject({
       title: "Upload Session Presentation",
@@ -1371,7 +1400,7 @@ describe("organizer content-management contracts", () => {
         title: "Unauthorized",
         allowedMimeTypes: ["application/pdf"],
         maxBytes: 10_000,
-        assigneeIds: ["participant-1"],
+        assignments: [{ participantId: "participant-1", submissionId: "submission-1" }],
       }),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
     const matrix = await service.listDeliverables("event-1", "organizer");
@@ -1504,6 +1533,8 @@ it("projects exactly one latest ready asset as the organizer current version", a
       version: 3,
       versionFamilyId: "family-slides",
       supersedesAssetId: "family-v2",
+      latestVersionId: "family-v3-pending",
+      currentVersionId: "family-v2",
     },
   );
   const service = new SpeakerService(repository, new CapabilityGateway(), {
@@ -1960,6 +1991,10 @@ describe("organizer deliverables exports", () => {
         createdAt: now,
         version: 2,
         versionFamilyId: "export-family",
+        supersedesAssetId: "asset-old",
+        latestVersionId: "asset-current",
+        currentVersionId: "asset-current",
+        releasedVersionId: "asset-current",
       },
       {
         id: "asset-collision",
@@ -1977,6 +2012,9 @@ describe("organizer deliverables exports", () => {
         createdAt: now,
         version: 1,
         versionFamilyId: "collision-family",
+        latestVersionId: "asset-collision",
+        currentVersionId: "asset-collision",
+        releasedVersionId: "asset-collision",
       },
       {
         id: "asset-revoked",
@@ -2175,6 +2213,9 @@ describe("organizer deliverables exports", () => {
         version: 2,
         versionFamilyId: "pending-family",
         supersedesAssetId: "asset-family-v1-ready",
+        latestVersionId: "asset-family-v2-pending",
+        currentVersionId: "asset-family-v1-ready",
+        releasedVersionId: "asset-family-v1-ready",
       },
     );
     const gateway = new CapabilityGateway();

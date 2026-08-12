@@ -7,7 +7,7 @@ import type {
   PrivateUploadGrant,
   PrivateUploadReceipt,
   RepositoryResult,
-  SpeakerAcceptedParticipantLookup,
+  ResolveEventParticipantInput,
   SpeakerAccessScope,
   SpeakerAsset,
   SpeakerAssetAuditEntry,
@@ -38,6 +38,8 @@ import type {
   SpeakerPortalCapability,
   SpeakerPortalContext,
   SpeakerPortalView,
+  SpeakerParticipantResolution,
+  SpeakerParticipantSourceType,
   SpeakerProfile,
   SpeakerReminderDelivery,
   SpeakerReminderDeliveryInput,
@@ -61,6 +63,7 @@ import type {
   SpeakerTaskResponseEnvelope,
   SpeakerTaskResponseRecord,
   SpeakerTaskStatus,
+  SpeakerTaskSubject,
   SpeakerTaskUpdateInput,
   SpeakerTravelLogistics,
   SpeakerWikiPage,
@@ -77,6 +80,7 @@ export type SpeakerServiceErrorCode =
   | "NOT_FOUND"
   | "VALIDATION_ERROR"
   | "VERSION_CONFLICT"
+  | "IDENTITY_AMBIGUOUS"
   | "INVALID_TASK_TRANSITION"
   | "TASK_DEPENDENCY_INCOMPLETE"
   | "TASK_NOT_ACTIVE"
@@ -488,15 +492,85 @@ function compareStable(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function assetVersionCompare(left: SpeakerAsset, right: SpeakerAsset): number {
-  return (
-    (right.version ?? 0) - (left.version ?? 0) ||
-    compareStable(right.createdAt, left.createdAt) ||
-    compareStable(left.id, right.id)
+type SpeakerAssetFamilyPointers = {
+  latest: SpeakerAsset;
+  current?: SpeakerAsset;
+  approved?: SpeakerAsset;
+  released?: SpeakerAsset;
+};
+
+function assetFamilyPointers(assets: readonly SpeakerAsset[]): SpeakerAssetFamilyPointers | undefined {
+  if (assets.length === 0) return undefined;
+  const byId = new Map(assets.map((asset) => [asset.id, asset]));
+  const supersededIds = new Set(
+    assets.flatMap((asset) => (asset.supersedesAssetId === undefined ? [] : [asset.supersedesAssetId])),
   );
+  const terminal = assets.filter((asset) => !supersededIds.has(asset.id));
+  if (terminal.length !== 1) return undefined;
+  const latest = terminal[0];
+  if (latest === undefined || latest.latestVersionId !== latest.id) return undefined;
+  const resolve = (id: string | undefined, requireReady = true): SpeakerAsset | undefined => {
+    if (id === undefined) return undefined;
+    const candidate = byId.get(id);
+    if (
+      candidate === undefined ||
+      (candidate.versionFamilyId ?? candidate.id) !== (latest.versionFamilyId ?? latest.id) ||
+      (requireReady && candidate.state !== "ready")
+    ) {
+      return undefined;
+    }
+    return candidate;
+  };
+  const current = resolve(latest.currentVersionId);
+  const approved = resolve(latest.approvedVersionId);
+  const released = resolve(latest.releasedVersionId);
+  if (
+    (latest.currentVersionId !== undefined && current === undefined) ||
+    (latest.approvedVersionId !== undefined && approved === undefined) ||
+    (latest.releasedVersionId !== undefined && released === undefined)
+  ) {
+    return undefined;
+  }
+  return {
+    latest,
+    ...(current === undefined ? {} : { current }),
+    ...(approved === undefined ? {} : { approved }),
+    ...(released === undefined ? {} : { released }),
+  };
 }
-function latestReadyAsset(assets: readonly SpeakerAsset[]): SpeakerAsset | undefined {
-  return assets.filter((asset) => asset.state === "ready").sort(assetVersionCompare)[0];
+function assetFamilies(assets: readonly SpeakerAsset[]): Map<string, SpeakerAsset[]> {
+  const families = new Map<string, SpeakerAsset[]>();
+  for (const asset of assets) {
+    const familyId = asset.versionFamilyId ?? asset.id;
+    families.set(familyId, [...(families.get(familyId) ?? []), asset]);
+  }
+  return families;
+}
+
+function singleCurrentAsset(assets: readonly SpeakerAsset[]): SpeakerAsset | undefined {
+  const pointers = [...assetFamilies(assets).values()]
+    .map(assetFamilyPointers)
+    .filter((value): value is SpeakerAssetFamilyPointers => value !== undefined);
+  return pointers.length === 1 ? pointers[0]?.current : undefined;
+}
+
+function speakerTaskSubject(task: SpeakerTask): SpeakerTaskSubject | undefined {
+  const subject = task.subject;
+  if (
+    subject?.type === "participant" &&
+    subject.participantId === task.participantId &&
+    task.submissionId === null
+  ) {
+    return subject;
+  }
+  if (
+    subject?.type === "session" &&
+    subject.participantId === task.participantId &&
+    task.submissionId === subject.submissionId
+  ) {
+    return subject;
+  }
+  return undefined;
 }
 
 function crc32(bytes: Uint8Array): number {
@@ -1380,14 +1454,25 @@ function submissionIsVisibleToSpeaker(
     submission.participantIds.some((participantId) => scope.participantIds.includes(participantId))
   );
 }
+function authoritativeSubmissionPrimaryParticipantId(
+  submission: SpeakerSubmission,
+): string | undefined {
+  if (
+    submission.primaryParticipantId !== undefined &&
+    submission.participantIds.includes(submission.primaryParticipantId)
+  ) {
+    return submission.primaryParticipantId;
+  }
+  return submission.participantIds.length === 1 ? submission.participantIds[0] : undefined;
+}
+
 
 function speakerOwnsAcceptedSubmission(
   scope: SpeakerAccessScope,
   submission: SpeakerSubmission,
 ): boolean {
   if (!submissionIsVisibleToSpeaker(scope, submission)) return false;
-  const primaryParticipantId =
-    submission.primaryParticipantId ?? submission.participantIds[0] ?? undefined;
+  const primaryParticipantId = authoritativeSubmissionPrimaryParticipantId(submission);
   if (primaryParticipantId === undefined) return false;
   return scope.primaryParticipantId === primaryParticipantId;
 }
@@ -1396,8 +1481,7 @@ function rosterManagementAllowed(
   scope: SpeakerAccessScope,
   submission: SpeakerSubmission,
 ): boolean {
-  const primaryParticipantId =
-    submission.primaryParticipantId ?? submission.participantIds[0] ?? undefined;
+  const primaryParticipantId = authoritativeSubmissionPrimaryParticipantId(submission);
   if (
     primaryParticipantId === undefined ||
     !capabilityAllows(scope, "roster-manage", primaryParticipantId)
@@ -1415,8 +1499,7 @@ function rosterManagementAllowedForParticipants(
   participantIds: readonly string[],
 ): boolean {
   if (!rosterManagementAllowed(scope, submission)) return false;
-  const primaryParticipantId =
-    submission.primaryParticipantId ?? submission.participantIds[0] ?? undefined;
+  const primaryParticipantId = authoritativeSubmissionPrimaryParticipantId(submission);
   return primaryParticipantId !== undefined && participantIds.includes(primaryParticipantId);
 }
 
@@ -1505,7 +1588,7 @@ type OrganizerSpeakerMutationProjection = {
   profiles: SpeakerProfile[];
   tasks: readonly SpeakerTask[];
   assets: readonly SpeakerAsset[];
-  canonicalParticipantsByEmail: Map<string, SpeakerAcceptedParticipantLookup | null>;
+  participantResolutions: Map<string, SpeakerParticipantResolution>;
 };
 
 export class SpeakerService {
@@ -1535,6 +1618,56 @@ export class SpeakerService {
     this.generateId = options.generateId ?? (() => crypto.randomUUID());
     this.delivery = options.delivery ?? options.invitationDelivery ?? options.reminderDelivery;
     this.emailDelivery = options.emailDelivery;
+  }
+  async resolveEventParticipant(
+    input: Omit<ResolveEventParticipantInput, "createParticipantId">,
+  ): Promise<SpeakerParticipantResolution> {
+    const organizationId = normalizeUserText(input.organizationId, "The organization ID", 200);
+    const eventId = normalizeUserText(input.eventId, "The event ID", 200);
+    const sourceId = normalizeUserText(input.sourceId, "The participant source ID", 300);
+    const explicitParticipantId =
+      input.explicitParticipantId === undefined
+        ? undefined
+        : normalizeUserText(input.explicitParticipantId, "The participant ID", 300);
+    const normalizedEmail =
+      input.normalizedEmail === undefined ? undefined : importEmail(input.normalizedEmail);
+    const createParticipantId = `participant:${this.generateId()}`;
+    const resolver = this.repository.resolveEventParticipant;
+    const resolution =
+      resolver === undefined
+        ? {
+            state: "resolved" as const,
+            participantId: explicitParticipantId ?? createParticipantId,
+            submissionIds: [],
+            created: explicitParticipantId === undefined,
+          }
+        : await resolver.call(this.repository, {
+            organizationId,
+            eventId,
+            sourceType: input.sourceType,
+            sourceId,
+            ...(explicitParticipantId === undefined ? {} : { explicitParticipantId }),
+            ...(normalizedEmail === undefined ? {} : { normalizedEmail }),
+            createParticipantId,
+          });
+    if (resolution.state === "ambiguous") {
+      return {
+        state: "ambiguous",
+        candidateParticipantIds: unique(
+          resolution.candidateParticipantIds.map((participantId) => participantId.trim()),
+        ).filter((participantId) => participantId.length > 0),
+      };
+    }
+    const participantId = resolution.participantId.trim();
+    if (participantId.length === 0) {
+      throw new SpeakerServiceError("VALIDATION_ERROR", 400, "The speaker identity is invalid.");
+    }
+    return {
+      state: "resolved",
+      participantId,
+      submissionIds: unique(resolution.submissionIds.map(canonicalSpeakerSubmissionId)),
+      created: resolution.created,
+    };
   }
   async listPortalContexts(accountId: string): Promise<SpeakerPortalContext[]> {
     if (accountId.trim().length === 0) throw notFound();
@@ -1576,11 +1709,7 @@ export class SpeakerService {
             scope.submissionIds.some((allowed) => sameSpeakerSubmission(allowed, submissionId)),
         ),
       );
-      if (
-        context.eventId.trim().length === 0 ||
-        contextSubmissionIds.length === 0 ||
-        participantIds.length === 0
-      ) {
+      if (context.eventId.trim().length === 0 || contextSubmissionIds.length === 0) {
         return [];
       }
       const contextScope: SpeakerAccessScope = {
@@ -1592,7 +1721,6 @@ export class SpeakerService {
         contextScope,
         context.primaryParticipantId,
       );
-      if (primaryParticipantId === undefined) return [];
       return [
         {
           context,
@@ -1628,7 +1756,8 @@ export class SpeakerService {
             const matches = submissions.filter(
               (submission) =>
                 submission.eventId === context.eventId &&
-                portalSubmissionBelongsToParticipant(submission, primaryParticipantId) &&
+                (primaryParticipantId === undefined ||
+                  portalSubmissionBelongsToParticipant(submission, primaryParticipantId)) &&
                 sameSpeakerSubmission(requestedId, submission.id),
             );
             const selected =
@@ -1636,21 +1765,20 @@ export class SpeakerService {
               matches.find(
                 (submission) => submission.id === canonicalSpeakerSubmissionId(requestedId),
               ) ??
-              matches[0];
+              (matches.length === 1 ? matches[0] : undefined);
             if (selected !== undefined) visibleById.set(selected.id, selected);
           }
           const visibleSubmissions = [...visibleById.values()];
           const submissionIds = unique(visibleSubmissions.map((submission) => submission.id));
           if (submissionIds.length === 0) return undefined;
-          const primaryScope = portalScopeForPrimary(
-            contextScope,
-            primaryParticipantId,
-            submissionIds,
-          );
+          const projectedScope =
+            primaryParticipantId === undefined
+              ? { ...contextScope, submissionIds, participantIds: [] }
+              : portalScopeForPrimary(contextScope, primaryParticipantId, submissionIds);
           const capabilities = portalCapabilitiesForSubmissions(
-            primaryScope,
+            projectedScope,
             context.capabilities,
-            [primaryParticipantId],
+            primaryParticipantId === undefined ? [] : [primaryParticipantId],
             visibleSubmissions,
           );
           return {
@@ -1661,8 +1789,9 @@ export class SpeakerService {
             ...(context.status === undefined ? {} : { status: context.status }),
             capabilities,
             submissionIds,
-            participantIds: [primaryParticipantId],
-            primaryParticipantId,
+            participantIds:
+              primaryParticipantId === undefined ? [] : [primaryParticipantId],
+            ...(primaryParticipantId === undefined ? {} : { primaryParticipantId }),
           };
         },
       ),
@@ -1678,28 +1807,32 @@ export class SpeakerService {
 
   async getPortalContext(eventId: string, accountId: string): Promise<SpeakerPortalContext> {
     const scope = await this.getScope(eventId, accountId);
-    if (scope.submissionIds.length === 0 || scope.participantIds.length === 0) throw notFound();
+    if (scope.submissionIds.length === 0) throw notFound();
     const discovered = (await this.listPortalContexts(accountId)).find(
       (context) => context.eventId === eventId,
     );
     if (discovered !== undefined) return discovered;
 
     const primaryParticipantId = portalPrimaryParticipantId(scope);
-    if (primaryParticipantId === undefined) throw notFound();
     const submissions = this.projectSubmissions(
       eventId,
       scope,
       await this.repository.listSubmissions(eventId, scope.submissionIds),
-    ).filter((submission) =>
-      portalSubmissionBelongsToParticipant(submission, primaryParticipantId),
+    ).filter(
+      (submission) =>
+        primaryParticipantId === undefined ||
+        portalSubmissionBelongsToParticipant(submission, primaryParticipantId),
     );
-    if (!submissions.some((submission) => submission.status === "accepted")) throw notFound();
+    if (submissions.length === 0) throw notFound();
     const submissionIds = submissions.map((submission) => submission.id);
-    const primaryScope = portalScopeForPrimary(scope, primaryParticipantId, submissionIds);
+    const projectedScope =
+      primaryParticipantId === undefined
+        ? { ...scope, submissionIds, participantIds: [] }
+        : portalScopeForPrimary(scope, primaryParticipantId, submissionIds);
     const capabilities = portalCapabilitiesForSubmissions(
-      primaryScope,
+      projectedScope,
       Array.isArray(scope.capabilities) ? scope.capabilities : [],
-      [primaryParticipantId],
+      primaryParticipantId === undefined ? [] : [primaryParticipantId],
       submissions,
     );
     return {
@@ -1708,44 +1841,52 @@ export class SpeakerService {
       name: eventId,
       capabilities,
       submissionIds: unique(submissionIds),
-      participantIds: [primaryParticipantId],
-      primaryParticipantId,
+      participantIds: primaryParticipantId === undefined ? [] : [primaryParticipantId],
+      ...(primaryParticipantId === undefined ? {} : { primaryParticipantId }),
     };
   }
 
   async getPortal(eventId: string, accountId: string): Promise<SpeakerPortalView> {
     const scope = await this.getScope(eventId, accountId);
-    if (scope.submissionIds.length === 0 || scope.participantIds.length === 0) throw notFound();
+    if (scope.submissionIds.length === 0) throw notFound();
     const primaryParticipantId = portalPrimaryParticipantId(scope);
-    if (primaryParticipantId === undefined) throw notFound();
     const listRosterForEvent = this.repository.listRosterForEvent;
     const prefetchedRosterPromise: Promise<readonly SpeakerRosterEntry[] | undefined> =
-      listRosterForEvent === undefined
+      primaryParticipantId === undefined || listRosterForEvent === undefined
         ? Promise.resolve(undefined)
         : listRosterForEvent.call(this.repository, eventId);
 
     const rawSubmissionsPromise = this.repository.listSubmissions(eventId, scope.submissionIds);
-    const rawProfilesPromise = this.repository.listProfiles(eventId, [primaryParticipantId]);
-    const rawTasksPromise = this.repository.listTasks(eventId, [primaryParticipantId]);
+    const rawProfilesPromise =
+      primaryParticipantId === undefined
+        ? Promise.resolve([])
+        : this.repository.listProfiles(eventId, [primaryParticipantId]);
+    const rawTasksPromise =
+      primaryParticipantId === undefined
+        ? Promise.resolve([])
+        : this.repository.listTasks(eventId, [primaryParticipantId]);
     const contextsPromise: Promise<readonly SpeakerPortalContext[]> =
       this.repository.listPortalContexts === undefined
         ? Promise.resolve([])
         : this.repository.listPortalContexts(accountId);
     const assetsPromise: Promise<readonly SpeakerAsset[] | undefined> =
+      primaryParticipantId !== undefined &&
       contextCapabilityAllows(scope, "asset-read", [primaryParticipantId]) &&
       this.repository.listAssets !== undefined
         ? this.repository.listAssets(eventId, [primaryParticipantId])
         : Promise.resolve(undefined);
+    const resourceParticipants =
+      primaryParticipantId === undefined ? [] : [primaryParticipantId];
     const resourcesPromise: Promise<readonly SpeakerEventResource[] | undefined> =
       this.repository.listEventResources === undefined
         ? Promise.resolve(undefined)
-        : contextCapabilityAllows(scope, "resource-read", [primaryParticipantId])
+        : contextCapabilityAllows(scope, "resource-read", resourceParticipants)
           ? this.repository.listEventResources(eventId)
           : Promise.resolve(undefined);
     const wikiPromise: Promise<readonly SpeakerWikiPage[] | undefined> =
       this.repository.listWikiPages === undefined
         ? Promise.resolve(undefined)
-        : contextCapabilityAllows(scope, "resource-read", [primaryParticipantId])
+        : contextCapabilityAllows(scope, "resource-read", resourceParticipants)
           ? this.repository.listWikiPages(eventId)
           : Promise.resolve(undefined);
 
@@ -1769,32 +1910,46 @@ export class SpeakerService {
       prefetchedRosterPromise,
     ]);
     const submissions = this.projectSubmissions(eventId, scope, rawSubmissions)
-      .filter((submission) =>
-        portalSubmissionBelongsToParticipant(submission, primaryParticipantId),
+      .filter(
+        (submission) =>
+          primaryParticipantId === undefined ||
+          portalSubmissionBelongsToParticipant(submission, primaryParticipantId),
       )
-      .map((submission) => ({
-        ...structuredClone(submission),
-        participantIds: [primaryParticipantId],
-        primaryParticipantId,
-      }));
+      .map((submission) =>
+        primaryParticipantId === undefined
+          ? structuredClone(submission)
+          : {
+              ...structuredClone(submission),
+              participantIds: [primaryParticipantId],
+              primaryParticipantId,
+            },
+      );
     if (submissions.length === 0) throw notFound();
-    const primaryScope = portalScopeForPrimary(
-      scope,
-      primaryParticipantId,
-      submissions.map((submission) => submission.id),
-    );
-    const profiles = this.projectProfiles(eventId, primaryScope, rawProfiles);
-    const tasks = this.projectTasks(eventId, primaryScope, rawTasks, submissions);
-    const context = this.projectPortalContext(eventId, primaryScope, submissions, contexts);
+    const projectedScope =
+      primaryParticipantId === undefined
+        ? {
+            ...scope,
+            submissionIds: submissions.map((submission) => submission.id),
+            participantIds: [],
+          }
+        : portalScopeForPrimary(
+            scope,
+            primaryParticipantId,
+            submissions.map((submission) => submission.id),
+          );
+    const profiles = this.projectProfiles(eventId, projectedScope, rawProfiles);
+    const tasks = this.projectTasks(eventId, projectedScope, rawTasks, submissions);
+    const context = this.projectPortalContext(eventId, projectedScope, submissions, contexts);
     const rosterSubmission = submissions.find((submission) => submission.status === "accepted");
     const rawRoster =
+      primaryParticipantId === undefined ||
       rosterSubmission === undefined ||
-      !submissionIsVisibleToSpeaker(primaryScope, rosterSubmission) ||
+      !submissionIsVisibleToSpeaker(projectedScope, rosterSubmission) ||
       (prefetchedRoster === undefined && this.repository.listRoster === undefined)
         ? undefined
         : await this.rosterForScope(
             eventId,
-            primaryScope,
+            projectedScope,
             rosterSubmission,
             profiles,
             prefetchedRoster,
@@ -1809,9 +1964,9 @@ export class SpeakerService {
             ),
           };
     const portalCapabilities = portalCapabilitiesForSubmissions(
-      primaryScope,
+      projectedScope,
       context.capabilities,
-      [primaryParticipantId],
+      primaryParticipantId === undefined ? [] : [primaryParticipantId],
       submissions,
     );
     const assets =
@@ -1821,11 +1976,12 @@ export class SpeakerService {
             .filter(
               (asset) =>
                 asset.eventId === eventId &&
+                primaryParticipantId !== undefined &&
                 asset.participantId === primaryParticipantId &&
                 (asset.tenantId === undefined ||
-                  primaryScope.tenantId === undefined ||
-                  asset.tenantId === primaryScope.tenantId) &&
-                speakerSubmissionAllowed(primaryScope.submissionIds, asset.submissionId),
+                  projectedScope.tenantId === undefined ||
+                  asset.tenantId === projectedScope.tenantId) &&
+                speakerSubmissionAllowed(projectedScope.submissionIds, asset.submissionId),
             )
             .map((asset) => ({ ...asset }));
     const resources =
@@ -1853,8 +2009,8 @@ export class SpeakerService {
       context: {
         ...context,
         submissionIds: unique(submissions.map((submission) => submission.id)),
-        participantIds: [primaryParticipantId],
-        primaryParticipantId,
+        participantIds: primaryParticipantId === undefined ? [] : [primaryParticipantId],
+        ...(primaryParticipantId === undefined ? {} : { primaryParticipantId }),
       },
       capabilities: portalCapabilities,
       ...(roster === undefined ? {} : { roster }),
@@ -1945,17 +2101,19 @@ export class SpeakerService {
         .map((submission) => [canonicalSpeakerSubmissionId(submission.id), submission]),
     );
     return tasks.flatMap((task) => {
+      const subject = speakerTaskSubject(task);
       if (
+        subject === undefined ||
         task.eventId !== eventId ||
         task.owner !== "speaker" ||
         !allowedParticipantIds.has(task.participantId) ||
-        task.submissionId === undefined ||
-        !speakerSubmissionAllowed(scope.submissionIds, task.submissionId) ||
         !capabilityAllows(scope, "task-response", task.participantId)
       ) {
         return [];
       }
-      const submission = acceptedSubmissions.get(canonicalSpeakerSubmissionId(task.submissionId));
+      if (subject.type === "participant") return [structuredClone(task)];
+      if (!speakerSubmissionAllowed(scope.submissionIds, subject.submissionId)) return [];
+      const submission = acceptedSubmissions.get(canonicalSpeakerSubmissionId(subject.submissionId));
       return submission === undefined || !submission.participantIds.includes(task.participantId)
         ? []
         : [{ ...structuredClone(task), sessionTitle: submission.title }];
@@ -2031,10 +2189,7 @@ export class SpeakerService {
       };
     }
 
-    const accepted = submissions.find(
-      (submission) => submission.eventId === eventId && submission.status === "accepted",
-    );
-    if (accepted === undefined) throw notFound();
+    if (!submissions.some((submission) => submission.eventId === eventId)) throw notFound();
     const capabilities = portalCapabilitiesForSubmissions(
       scope,
       Array.isArray(scope.capabilities) ? scope.capabilities : [],
@@ -2098,7 +2253,7 @@ export class SpeakerService {
     const profileByParticipant = new Map(
       profiles.map((profile) => [profile.participantId, profile]),
     );
-    const primaryParticipantId = submission.primaryParticipantId ?? submission.participantIds[0];
+    const primaryParticipantId = authoritativeSubmissionPrimaryParticipantId(submission);
     for (const participantId of missingParticipantIds) {
       const profile = profileByParticipant.get(participantId);
       const createdAt = submission.updatedAt;
@@ -2208,26 +2363,31 @@ export class SpeakerService {
     );
     return tasks
       .filter((task) => {
-        if (task.eventId !== eventId || !participantIds.has(task.participantId)) return false;
-        const submission = acceptedSubmissionsById.get(
-          canonicalSpeakerSubmissionId(task.submissionId),
-        );
-        if (submission !== undefined) {
-          return submission.participantIds.includes(task.participantId);
+        const subject = speakerTaskSubject(task);
+        if (
+          subject === undefined ||
+          task.eventId !== eventId ||
+          !participantIds.has(task.participantId)
+        ) {
+          return false;
         }
-        const manual = manualByParticipant.get(task.participantId);
-        return (
-          manual !== undefined && sameSpeakerSubmission(manual.submissionId, task.submissionId)
+        if (subject.type === "participant") return true;
+        const submission = acceptedSubmissionsById.get(
+          canonicalSpeakerSubmissionId(subject.submissionId),
         );
+        return submission?.participantIds.includes(task.participantId) ?? false;
       })
       .map((task) => {
         const participantName = participantNames.get(task.participantId);
+        const subject = speakerTaskSubject(task);
+        const sessionTitle =
+          subject?.type === "session"
+            ? acceptedSubmissionsById.get(canonicalSpeakerSubmissionId(subject.submissionId))?.title
+            : undefined;
         return {
           ...structuredClone(task),
           ...(participantName === undefined ? {} : { participantName }),
-          sessionTitle:
-            acceptedSubmissionsById.get(canonicalSpeakerSubmissionId(task.submissionId))?.title ??
-            "General",
+          sessionTitle: sessionTitle ?? "General",
         };
       })
       .sort(
@@ -2238,19 +2398,38 @@ export class SpeakerService {
 
   async createOrganizerTask(input: SpeakerTaskCreateInput): Promise<SpeakerTask[]> {
     const scope = await this.requireOrganizerScope(input.eventId, input.accountId);
-    const assigneeIds = unique(input.assigneeIds);
+    const assignments = input.assignments.map((assignment) => ({
+      participantId: assignment.participantId.trim(),
+      submissionId: assignment.submissionId?.trim() || null,
+    }));
+    const assignmentKeys = assignments.map(
+      (assignment) => `${assignment.participantId}\u0000${assignment.submissionId ?? ""}`,
+    );
+    if (
+      assignments.length === 0 ||
+      assignments.some((assignment) => assignment.participantId.length === 0) ||
+      new Set(assignmentKeys).size !== assignmentKeys.length
+    ) {
+      throw new SpeakerServiceError(
+        "VALIDATION_ERROR",
+        400,
+        "Task assignments must contain unique participant and session pairs.",
+      );
+    }
     const organizerRoster = await this.organizerRosterEntries(
       scope.tenantId,
       input.eventId,
       scope,
       input.accountId,
     );
-    const manualByParticipant = new Map(
-      organizerRoster.filter(isCrmRosterEntry).map((entry) => [entry.participantId, entry]),
+    const manualParticipantIds = new Set(
+      organizerRoster.filter(isCrmRosterEntry).map((entry) => entry.participantId),
     );
     if (
-      assigneeIds.length === 0 ||
-      assigneeIds.some((id) => !scope.participantIds.includes(id) && !manualByParticipant.has(id))
+      assignments.some(
+        ({ participantId }) =>
+          !scope.participantIds.includes(participantId) && !manualParticipantIds.has(participantId),
+      )
     ) {
       throw notFound();
     }
@@ -2294,55 +2473,46 @@ export class SpeakerService {
         acceptedByCanonicalId.set(canonicalId, candidate);
       }
     }
-    const acceptedByParticipant = new Map<string, SpeakerSubmission[]>();
-    for (const candidate of acceptedByCanonicalId.values()) {
-      for (const participantId of candidate.participantIds) {
-        if (!scope.participantIds.includes(participantId)) continue;
-        acceptedByParticipant.set(participantId, [
-          ...(acceptedByParticipant.get(participantId) ?? []),
-          candidate,
-        ]);
-      }
+    const acceptedParticipantIds = new Set(
+      [...acceptedByCanonicalId.values()].flatMap((submission) => submission.participantIds),
+    );
+    if (
+      assignments.some(
+        ({ participantId }) =>
+          !acceptedParticipantIds.has(participantId) &&
+          !manualParticipantIds.has(participantId),
+      )
+    ) {
+      throw notFound();
     }
-    const selectedSubmissionIds = assigneeIds.map((participantId) => {
-      const manual = manualByParticipant.get(participantId);
-      if (
-        manual !== undefined &&
-        (input.submissionId === undefined ||
-          sameSpeakerSubmission(manual.submissionId, input.submissionId))
-      ) {
-        return canonicalSpeakerSubmissionId(manual.submissionId);
+    for (const assignment of assignments) {
+      if (assignment.submissionId === null) continue;
+      const submission = acceptedByCanonicalId.get(
+        canonicalSpeakerSubmissionId(assignment.submissionId),
+      );
+      if (submission === undefined || !submission.participantIds.includes(assignment.participantId)) {
+        throw notFound();
       }
-      const candidates = acceptedByParticipant.get(participantId) ?? [];
-      const submission =
-        input.submissionId === undefined
-          ? candidates.length === 1
-            ? candidates[0]
-            : candidates.length === 0
-              ? undefined
-              : (() => {
-                  throw new SpeakerServiceError(
-                    "VALIDATION_ERROR",
-                    400,
-                    "A submission is required when a speaker has multiple accepted sessions.",
-                  );
-                })()
-          : candidates.find((candidate) =>
-              sameSpeakerSubmission(candidate.id, input.submissionId as string),
-            );
-      if (submission === undefined) throw notFound();
-      return canonicalSpeakerSubmissionId(submission.id);
-    });
+      assignment.submissionId = canonicalSpeakerSubmissionId(submission.id);
+    }
+
     const tasks: SpeakerTask[] = [];
     const baseId = this.generateId();
-    for (const [index, participantId] of assigneeIds.entries()) {
-      const submissionId = selectedSubmissionIds[index];
-      if (submissionId === undefined) throw notFound();
+    for (const [index, assignment] of assignments.entries()) {
+      const subject: SpeakerTaskSubject =
+        assignment.submissionId === null
+          ? { type: "participant", participantId: assignment.participantId }
+          : {
+              type: "session",
+              participantId: assignment.participantId,
+              submissionId: assignment.submissionId,
+            };
       const task: SpeakerTask = {
-        id: assigneeIds.length === 1 ? baseId : `${baseId}:${participantId}`,
+        id: assignments.length === 1 ? baseId : `${baseId}:${index + 1}`,
         eventId: input.eventId,
-        submissionId,
-        participantId,
+        submissionId: assignment.submissionId,
+        participantId: assignment.participantId,
+        subject,
         type: input.type,
         owner: "speaker",
         title,
@@ -2362,7 +2532,6 @@ export class SpeakerService {
           : { acceptedAssetKinds: unique(input.acceptedAssetKinds) as SpeakerAssetKind[] }),
         ...(allowedMimeTypes.length === 0 ? {} : { allowedMimeTypes }),
         ...(maxBytes === undefined ? {} : { maxBytes, maxSizeBytes: maxBytes }),
-        assigneeIds: [participantId],
         version: 1,
         updatedAt: this.now().toISOString(),
       };
@@ -2383,7 +2552,15 @@ export class SpeakerService {
         }
         throw notFound();
       }
-      tasks.push(result.value);
+      const persisted = await this.repository.getTask(input.eventId, task.id);
+      if (persisted === null || persisted.version !== 1 || speakerTaskSubject(persisted) === undefined) {
+        throw new SpeakerServiceError(
+          "VERSION_CONFLICT",
+          409,
+          "The task could not be verified after saving.",
+        );
+      }
+      tasks.push(persisted);
     }
     return tasks;
   }
@@ -2409,21 +2586,35 @@ export class SpeakerService {
       scope,
       input.accountId,
     );
-    const manual = roster.find(
-      (entry) =>
-        entry.participantId === current?.participantId &&
-        isCrmRosterEntry(entry) &&
-        current !== null &&
-        sameSpeakerSubmission(entry.submissionId, current.submissionId),
-    );
+    const subject = current === null ? undefined : speakerTaskSubject(current);
+    const manual =
+      current === null
+        ? undefined
+        : roster.find(
+            (entry) =>
+              entry.participantId === current.participantId && isCrmRosterEntry(entry),
+          );
+    const participantAllowed =
+      current !== null &&
+      (scope.participantIds.includes(current.participantId) || manual !== undefined);
+    const sessionAllowed =
+      subject?.type !== "session" ||
+      (scope.submissionIds.some((submissionId) =>
+        sameSpeakerSubmission(submissionId, subject.submissionId),
+      ) &&
+        (
+          await this.repository.listSubmissions(input.eventId, [subject.submissionId])
+        ).some(
+          (submission) =>
+            submission.status === "accepted" &&
+            submission.participantIds.includes(subject.participantId),
+        ));
     if (
       current === null ||
+      subject === undefined ||
       current.eventId !== input.eventId ||
-      !(
-        (scope.participantIds.includes(current.participantId) &&
-          speakerSubmissionAllowed(scope.submissionIds, current.submissionId)) ||
-        manual !== undefined
-      )
+      !participantAllowed ||
+      !sessionAllowed
     ) {
       throw notFound();
     }
@@ -2432,15 +2623,6 @@ export class SpeakerService {
         "VERSION_CONFLICT",
         409,
         "The speaker task has changed. Reload it before saving.",
-      );
-    }
-    const assigneeIds =
-      input.assigneeIds === undefined ? [current.participantId] : unique(input.assigneeIds);
-    if (assigneeIds.length !== 1 || assigneeIds[0] !== current.participantId) {
-      throw new SpeakerServiceError(
-        "VALIDATION_ERROR",
-        400,
-        "A persisted speaker task has exactly one assignee.",
       );
     }
     const allowedMimeTypes =
@@ -2497,7 +2679,6 @@ export class SpeakerService {
       ...(input.reminderOffsetsMinutes === undefined
         ? {}
         : { reminderOffsetsMinutes: [...input.reminderOffsetsMinutes] }),
-      assigneeIds,
       ...(input.status === undefined ? {} : { status: input.status }),
       version: current.version + 1,
       updatedAt: this.now().toISOString(),
@@ -2519,7 +2700,19 @@ export class SpeakerService {
       }
       throw notFound();
     }
-    return result.value;
+    const persisted = await this.repository.getTask(input.eventId, input.taskId);
+    if (
+      persisted === null ||
+      persisted.version !== input.expectedVersion + 1 ||
+      speakerTaskSubject(persisted) === undefined
+    ) {
+      throw new SpeakerServiceError(
+        "VERSION_CONFLICT",
+        409,
+        "The task could not be verified after saving.",
+      );
+    }
+    return persisted;
   }
 
   async listDeliverables(
@@ -2645,10 +2838,12 @@ export class SpeakerService {
         assetsByParticipantAndTask.get(task.participantId)?.get(task.id) ?? []
       ).filter(
         (asset) =>
-          asset.submissionId === undefined ||
-          sameSpeakerSubmission(asset.submissionId, task.submissionId),
+          (task.submissionId === null && asset.submissionId === undefined) ||
+          (task.submissionId !== null &&
+            asset.submissionId !== undefined &&
+            sameSpeakerSubmission(asset.submissionId, task.submissionId)),
       );
-      const currentAsset = latestReadyAsset(taskAssets);
+      const currentAsset = singleCurrentAsset(taskAssets);
       const status = taskStatusForAssets(task, taskAssets, this.now());
       const incomplete = !["completed", "waived", "uploaded"].includes(status);
       if (
@@ -2735,11 +2930,17 @@ export class SpeakerService {
 
     const tasks = (await this.repository.listTasks(input.eventId, [...allowedParticipantIds]))
       .filter((task) => {
-        if (task.eventId !== input.eventId || !allowedParticipantIds.has(task.participantId)) {
+        const subject = speakerTaskSubject(task);
+        if (
+          subject === undefined ||
+          task.eventId !== input.eventId ||
+          !allowedParticipantIds.has(task.participantId)
+        ) {
           return false;
         }
+        if (subject.type === "participant") return true;
         const submission = acceptedSubmissionsById.get(
-          canonicalSpeakerSubmissionId(task.submissionId),
+          canonicalSpeakerSubmissionId(subject.submissionId),
         );
         return submission?.participantIds.includes(task.participantId) ?? false;
       })
@@ -2783,26 +2984,28 @@ export class SpeakerService {
     }
     const familyKey = (asset: SpeakerAsset): string =>
       `${asset.participantId}\u0000${asset.taskId ?? ""}\u0000${asset.versionFamilyId ?? asset.id}`;
-    const readyByFamily = new Map<string, SpeakerAsset>();
+    const familyMembers = new Map<string, SpeakerAsset[]>();
     for (const asset of assets) {
-      if (asset.state !== "ready") continue;
       const key = familyKey(asset);
-      const current = readyByFamily.get(key);
-      if (current === undefined || assetVersionCompare(asset, current) < 0) {
-        readyByFamily.set(key, asset);
-      }
+      familyMembers.set(key, [...(familyMembers.get(key) ?? []), asset]);
     }
-    const selectedCurrentIds =
+    const selectedFamilyKeys =
       assetIds === undefined
         ? undefined
         : new Set(
             assetIds.flatMap((assetId) => {
               const selected = assetById.get(assetId);
-              if (selected === undefined) return [];
-              const current = readyByFamily.get(familyKey(selected));
-              return current === undefined ? [] : [current.id];
+              return selected === undefined ? [] : [familyKey(selected)];
             }),
           );
+    const selectedAssets = [...familyMembers.entries()].flatMap(([key, family]) => {
+      const pointers = assetFamilyPointers(family);
+      if (pointers === undefined) return [];
+      if (selectedFamilyKeys !== undefined) {
+        return selectedFamilyKeys.has(key) && pointers.current !== undefined ? [pointers.current] : [];
+      }
+      return pointers.released === undefined ? [] : [pointers.released];
+    });
     const participantFilter = participantIds === undefined ? undefined : new Set(participantIds);
     const taskFilter = taskIds === undefined ? undefined : new Set(taskIds);
     const now = this.now();
@@ -2816,8 +3019,7 @@ export class SpeakerService {
       basePath: string;
     }[] = [];
 
-    for (const asset of readyByFamily.values()) {
-      if (selectedCurrentIds !== undefined && !selectedCurrentIds.has(asset.id)) continue;
+    for (const asset of selectedAssets) {
       if (participantFilter !== undefined && !participantFilter.has(asset.participantId)) continue;
       const task = asset.taskId === undefined ? undefined : taskById.get(asset.taskId);
       if (asset.taskId !== undefined && task === undefined) continue;
@@ -3177,28 +3379,13 @@ export class SpeakerService {
     asset: SpeakerAsset,
   ): Promise<SpeakerAssetComment[]> {
     if (this.repository.listAssetComments === undefined) return [];
-    const listAssetComments = this.repository.listAssetComments;
-    const familyId = asset.versionFamilyId ?? asset.id;
-    const history =
-      this.repository.listAssetHistory === undefined
-        ? await this.assetsForParticipants(eventId, [asset.participantId])
-        : await this.repository.listAssetHistory(eventId, familyId);
-    const assetIds = unique(
-      history
-        .filter(
-          (candidate) =>
-            candidate.eventId === eventId &&
-            candidate.participantId === asset.participantId &&
-            (candidate.versionFamilyId ?? candidate.id) === familyId,
-        )
-        .map((candidate) => candidate.id)
-        .concat(asset.id),
-    );
-    const comments = await Promise.all(
-      assetIds.map((candidateId) => listAssetComments.call(this.repository, eventId, candidateId)),
-    );
-    return comments
-      .flat()
+    return (await this.repository.listAssetComments(eventId, asset.id))
+      .filter(
+        (comment) =>
+          comment.eventId === eventId &&
+          comment.assetId === asset.id &&
+          comment.versionId === asset.id,
+      )
       .sort(
         (left, right) =>
           left.createdAt.localeCompare(right.createdAt) ||
@@ -3220,6 +3407,7 @@ export class SpeakerService {
       id: comment.id,
       eventId,
       assetId: comment.assetId,
+      versionId: comment.versionId,
       body: comment.body,
       authorLabel: comment.authorLabel,
       createdAt: comment.createdAt,
@@ -3257,6 +3445,7 @@ export class SpeakerService {
       id: this.generateId(),
       eventId: input.eventId,
       assetId: input.assetId,
+      versionId: input.assetId,
       body: normalizeUserText(input.body, "The asset comment", 10_000, true),
       authorLabel: "Organizer",
       createdAt: now,
@@ -3284,6 +3473,7 @@ export class SpeakerService {
       id: stored.id,
       eventId: input.eventId,
       assetId: input.assetId,
+      versionId: stored.versionId,
       body: stored.body,
       authorLabel: stored.authorLabel,
       createdAt: stored.createdAt,
@@ -3309,7 +3499,7 @@ export class SpeakerService {
       capabilityId: asset.id,
       tenantId: asset.tenantId ?? scope.tenantId,
       eventId: input.eventId,
-      submissionId,
+      ...(submissionId === undefined ? {} : { submissionId }),
       participantId: asset.participantId,
       ...(asset.taskId === undefined ? {} : { taskId: asset.taskId }),
       objectKey: asset.objectKey,
@@ -3332,6 +3522,34 @@ export class SpeakerService {
     const asset = await this.repository.getAsset(input.eventId, input.assetId);
     if (asset === null || asset.state !== "ready") throw notFound();
     await this.assertOrganizerAssetAccess(scope, input.eventId, input.accountId, asset);
+    const history =
+      this.repository.listAssetHistory === undefined
+        ? await this.assetsForParticipants(input.eventId, [asset.participantId])
+        : await this.repository.listAssetHistory(
+            input.eventId,
+            asset.versionFamilyId ?? asset.id,
+          );
+    const pointers = assetFamilyPointers(
+      history.filter(
+        (candidate) =>
+          (candidate.versionFamilyId ?? candidate.id) ===
+          (asset.versionFamilyId ?? asset.id),
+      ),
+    );
+    if (pointers?.current?.id !== asset.id) {
+      throw new SpeakerServiceError(
+        "VERSION_CONFLICT",
+        409,
+        "Only the authoritative current asset version can be reviewed.",
+      );
+    }
+    if (input.release === true && input.state !== "approved") {
+      throw new SpeakerServiceError(
+        "VALIDATION_ERROR",
+        400,
+        "Only an approved asset version can be released.",
+      );
+    }
     const expectedVersion = input.expectedVersion ?? asset.reviewVersion ?? 0;
     assertExpectedVersion(expectedVersion);
     if ((asset.reviewVersion ?? 0) !== expectedVersion) {
@@ -3353,6 +3571,7 @@ export class SpeakerService {
       expectedVersion,
       reviewedAt: this.now().toISOString(),
       reviewedBy: input.accountId,
+      release: input.release === true,
     };
     const reviewAsset = this.repository.reviewAsset ?? this.repository.updateAssetReview;
     if (reviewAsset === undefined) throw notFound();
@@ -3382,7 +3601,28 @@ export class SpeakerService {
     this.assetAuditCache.set(`${input.eventId}:${input.assetId}`, [...cachedAudit, audit]);
     if (this.repository.appendAssetAudit !== undefined)
       await this.repository.appendAssetAudit(audit);
-    return result.value;
+    const persisted = await this.repository.getAsset(input.eventId, input.assetId);
+    const persistedHistory =
+      this.repository.listAssetHistory === undefined
+        ? await this.assetsForParticipants(input.eventId, [asset.participantId])
+        : await this.repository.listAssetHistory(
+            input.eventId,
+            asset.versionFamilyId ?? asset.id,
+          );
+    const persistedPointers = assetFamilyPointers(persistedHistory);
+    if (
+      persisted === null ||
+      persisted.reviewVersion !== expectedVersion + 1 ||
+      (input.state === "approved" && persistedPointers?.approved?.id !== asset.id) ||
+      (input.release === true && persistedPointers?.released?.id !== asset.id)
+    ) {
+      throw new SpeakerServiceError(
+        "VERSION_CONFLICT",
+        409,
+        "The asset review could not be verified after saving.",
+      );
+    }
+    return persisted;
   }
 
   async listAssetAudit(
@@ -3609,7 +3849,15 @@ export class SpeakerService {
       }
       throw notFound();
     }
-    return result.value;
+    const persisted = await this.repository.getProfile(input.eventId, input.participantId);
+    if (persisted === null || persisted.version !== input.expectedVersion + 1) {
+      throw new SpeakerServiceError(
+        "VERSION_CONFLICT",
+        409,
+        "The speaker profile could not be verified after saving.",
+      );
+    }
+    return persisted;
   }
 
   async updateProfile(input: EditableSpeakerProfileInput): Promise<SpeakerProfile> {
@@ -3706,7 +3954,15 @@ export class SpeakerService {
       }
       throw notFound();
     }
-    return result.value;
+    const persisted = await this.repository.getProfile(input.eventId, input.participantId);
+    if (persisted === null || persisted.version !== input.expectedVersion + 1) {
+      throw new SpeakerServiceError(
+        "VERSION_CONFLICT",
+        409,
+        "The speaker profile could not be verified after saving.",
+      );
+    }
+    return persisted;
   }
   async updateBiography(input: {
     eventId: string;
@@ -3744,7 +4000,15 @@ export class SpeakerService {
       }
       throw notFound();
     }
-    return result.value;
+    const persisted = await this.repository.getProfile(input.eventId, input.participantId);
+    if (persisted === null || persisted.version !== input.expectedVersion + 1) {
+      throw new SpeakerServiceError(
+        "VERSION_CONFLICT",
+        409,
+        "The speaker profile could not be verified after saving.",
+      );
+    }
+    return persisted;
   }
 
   async previewOutstandingReminders(input: {
@@ -3829,18 +4093,22 @@ export class SpeakerService {
     const tasks = await this.repository.listTasks(input.eventId, scope.participantIds);
     const allowedSubmissions = new Set(scope.submissionIds);
     const items = tasks
-      .filter(
-        (task) =>
+      .filter((task) => {
+        const subject = speakerTaskSubject(task);
+        return (
+          subject !== undefined &&
           task.eventId === input.eventId &&
           task.owner === "speaker" &&
           scope.participantIds.includes(task.participantId) &&
-          (allowedSubmissions.size === 0 ||
+          (subject.type === "participant" ||
+            allowedSubmissions.size === 0 ||
             [...allowedSubmissions].some((allowed) =>
-              sameSpeakerSubmission(allowed, task.submissionId),
+              sameSpeakerSubmission(allowed, subject.submissionId),
             )) &&
           (requestedTasks === undefined || requestedTasks.has(task.id)) &&
-          (requestedRecipients === undefined || requestedRecipients.has(task.participantId)),
-      )
+          (requestedRecipients === undefined || requestedRecipients.has(task.participantId))
+        );
+      })
       .map((task) => {
         const dueAt = task.dueAt ?? task.dueDate ?? null;
         const offsets = [...(task.reminderOffsetsMinutes ?? [])].filter(
@@ -4938,33 +5206,17 @@ export class SpeakerService {
     assertExpectedVersion(input.expectedVersion);
     const scope = await this.getScope(input.eventId, input.accountId);
     const task = await this.repository.getTask(input.eventId, input.taskId);
-    const acceptedSubmissions = await this.repository.listSubmissions(
-      input.eventId,
-      scope.submissionIds,
-    );
-    const taskSubmission =
-      task === null || task.submissionId === undefined
-        ? undefined
-        : acceptedSubmissions.find(
-            (submission) =>
-              sameSpeakerSubmission(submission.id, task.submissionId) &&
-              submission.participantIds.includes(task.participantId),
-          );
+    const subject = task === null ? undefined : speakerTaskSubject(task);
     if (
       !task ||
+      subject === undefined ||
       task.eventId !== input.eventId ||
       task.owner !== "speaker" ||
       !scope.participantIds.includes(task.participantId) ||
-      taskSubmission === undefined
+      (subject.type === "session" &&
+        !speakerSubmissionAllowed(scope.submissionIds, subject.submissionId))
     ) {
       throw notFound();
-    }
-    if (taskSubmission.status !== "accepted") {
-      throw new SpeakerServiceError(
-        "TASK_NOT_ACTIVE",
-        409,
-        "Speaker tasks are available only after the submission is accepted.",
-      );
     }
     assertCapability(scope, "task-response", task.participantId);
     if (task.version !== input.expectedVersion) {
@@ -5024,7 +5276,15 @@ export class SpeakerService {
       throw notFound();
     }
 
-    return { task: result.value.task, transitionId: result.value.transition.id };
+    const persisted = await this.repository.getTask(input.eventId, input.taskId);
+    if (persisted === null || persisted.version !== input.expectedVersion + 1) {
+      throw new SpeakerServiceError(
+        "VERSION_CONFLICT",
+        409,
+        "The task could not be verified after saving.",
+      );
+    }
+    return { task: persisted, transitionId: result.value.transition.id };
   }
 
   async issueUploadGrant(input: IssueUploadGrantInput): Promise<SpeakerUploadAuthorization> {
@@ -5051,29 +5311,39 @@ export class SpeakerService {
     }
 
     let task: SpeakerTask | null = null;
+    let taskSubject: SpeakerTaskSubject | undefined;
     if (input.taskId !== undefined) {
       task = await this.repository.getTask(input.eventId, input.taskId);
+      taskSubject = task === null ? undefined : speakerTaskSubject(task);
       if (
         !task ||
+        taskSubject === undefined ||
         task.eventId !== input.eventId ||
         task.participantId !== input.participantId ||
         task.owner !== "speaker" ||
-        task.type !== "upload" ||
-        task.submissionId === undefined
+        task.type !== "upload"
       ) {
         throw notFound();
       }
-      const authorizedTask = task;
-      const taskSubmission = (
-        await this.repository.listSubmissions(input.eventId, scope.submissionIds)
-      ).find(
-        (submission) =>
-          submission.eventId === input.eventId &&
-          submission.status === "accepted" &&
-          sameSpeakerSubmission(submission.id, authorizedTask.submissionId as string) &&
-          submission.participantIds.includes(authorizedTask.participantId),
-      );
-      if (taskSubmission === undefined) throw notFound();
+      if (taskSubject.type === "session") {
+        const subject = taskSubject;
+        if (
+          input.submissionId !== undefined &&
+          !sameSpeakerSubmission(input.submissionId, taskSubject.submissionId)
+        ) {
+          throw notFound();
+        }
+        const taskSubmission = (
+          await this.repository.listSubmissions(input.eventId, scope.submissionIds)
+        ).find(
+          (submission) =>
+            submission.eventId === input.eventId &&
+            submission.status === "accepted" &&
+            sameSpeakerSubmission(submission.id, subject.submissionId) &&
+            submission.participantIds.includes(subject.participantId),
+        );
+        if (taskSubmission === undefined) throw notFound();
+      }
       await this.assertTaskIsActive(task);
       if (
         ["completed", "waived"].includes(task.status) ||
@@ -5104,12 +5374,16 @@ export class SpeakerService {
       }
     }
 
-    const submissionId = await this.resolveSubmissionId(
-      input.eventId,
-      scope,
-      input.participantId,
-      input.submissionId ?? task?.submissionId,
-    );
+    const submissionId =
+      taskSubject?.type === "participant"
+        ? undefined
+        : await this.resolveSubmissionId(
+            input.eventId,
+            scope,
+            input.participantId,
+            input.submissionId ??
+              (taskSubject?.type === "session" ? taskSubject.submissionId : undefined),
+          );
     const now = this.now();
     const assetId = this.generateId();
     const fileName = normalizeFileName(input.fileName);
@@ -5117,16 +5391,20 @@ export class SpeakerService {
       ? await this.repository.getAsset(input.eventId, input.supersedesAssetId)
       : null;
     if (input.taskId !== undefined && input.supersedesAssetId === undefined) {
-      const existingAssets = await this.assetsForParticipants(input.eventId, [input.participantId]);
-      const current = existingAssets
-        .filter((candidate) => candidate.taskId === input.taskId && candidate.kind === input.kind)
-        .sort(
-          (left, right) =>
-            (right.version ?? 0) - (left.version ?? 0) ||
-            right.createdAt.localeCompare(left.createdAt) ||
-            right.id.localeCompare(left.id),
-        )[0];
-      existing = current ?? null;
+      const existingAssets = (
+        await this.assetsForParticipants(input.eventId, [input.participantId])
+      ).filter((candidate) => candidate.taskId === input.taskId && candidate.kind === input.kind);
+      const families = [...assetFamilies(existingAssets).values()]
+        .map(assetFamilyPointers)
+        .filter((value): value is SpeakerAssetFamilyPointers => value !== undefined);
+      if (families.length > 1) {
+        throw new SpeakerServiceError(
+          "VERSION_CONFLICT",
+          409,
+          "Select the asset family to version.",
+        );
+      }
+      existing = families[0]?.latest ?? null;
     }
     if (task?.status === "submitted" && existing === null) {
       throw new SpeakerServiceError(
@@ -5143,7 +5421,7 @@ export class SpeakerService {
         (existing.tenantId !== undefined &&
           scope.tenantId !== undefined &&
           existing.tenantId !== scope.tenantId) ||
-        (existing.submissionId !== undefined && existing.submissionId !== submissionId) ||
+        existing.submissionId !== submissionId ||
         existing.kind !== input.kind ||
         (input.taskId !== undefined && existing.taskId !== input.taskId) ||
         existing.state !== "ready")
@@ -5157,21 +5435,17 @@ export class SpeakerService {
         "Only a finalized asset can be superseded by a new immutable version.",
       );
     }
+    let previousPointers: SpeakerAssetFamilyPointers | undefined;
     if (existing !== null) {
-      const familyAssets = await this.assetsForParticipants(input.eventId, [input.participantId]);
-      const latest = familyAssets
-        .filter(
-          (candidate) =>
-            (candidate.versionFamilyId ?? candidate.id) ===
-            (existing?.versionFamilyId ?? existing.id),
-        )
-        .sort(
-          (left, right) =>
-            (right.version ?? 0) - (left.version ?? 0) ||
-            right.createdAt.localeCompare(left.createdAt) ||
-            right.id.localeCompare(left.id),
-        )[0];
-      if (latest !== undefined && latest.id !== existing.id) {
+      const familyAssets = (
+        await this.assetsForParticipants(input.eventId, [input.participantId])
+      ).filter(
+        (candidate) =>
+          (candidate.versionFamilyId ?? candidate.id) ===
+          (existing?.versionFamilyId ?? existing.id),
+      );
+      previousPointers = assetFamilyPointers(familyAssets);
+      if (previousPointers === undefined || previousPointers.latest.id !== existing.id) {
         throw new SpeakerServiceError(
           "VERSION_CONFLICT",
           409,
@@ -5184,7 +5458,7 @@ export class SpeakerService {
       id: assetId,
       tenantId: scope.tenantId ?? input.eventId,
       eventId: input.eventId,
-      submissionId,
+      ...(submissionId === undefined ? {} : { submissionId }),
       participantId: input.participantId,
       ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
       kind: input.kind,
@@ -5200,20 +5474,43 @@ export class SpeakerService {
       contentType,
       sizeBytes: input.sizeBytes,
       state: "pending_upload",
+      latestVersionId: assetId,
+      ...(previousPointers?.current === undefined
+        ? {}
+        : { currentVersionId: previousPointers.current.id }),
+      ...(previousPointers?.approved === undefined
+        ? {}
+        : { approvedVersionId: previousPointers.approved.id }),
+      ...(previousPointers?.released === undefined
+        ? {}
+        : { releasedVersionId: previousPointers.released.id }),
       createdAt: now.toISOString(),
       version: (existing?.version ?? 0) + 1,
       versionFamilyId,
       ...(existing === null ? {} : { supersedesAssetId: existing.id }),
       commentThreadId: `asset-comments:${versionFamilyId}`,
+      versionId: assetId,
     };
-    const storedAsset = await this.repository.createPendingAsset(asset);
+    await this.repository.createPendingAsset(asset);
+    const storedAsset = await this.repository.getAsset(input.eventId, assetId);
+    if (
+      storedAsset === null ||
+      storedAsset.latestVersionId !== assetId ||
+      storedAsset.versionId !== assetId
+    ) {
+      throw new SpeakerServiceError(
+        "VERSION_CONFLICT",
+        409,
+        "The asset could not be verified after saving.",
+      );
+    }
     this.assetCache.set(`${input.eventId}:${storedAsset.id}`, storedAsset);
     const expiresAt = new Date(now.getTime() + uploadGrantLifetimeMs).toISOString();
     const binding: PrivateAssetCapabilityBinding = {
       capabilityId: storedAsset.id,
       tenantId: storedAsset.tenantId ?? input.eventId,
       eventId: input.eventId,
-      submissionId,
+      ...(submissionId === undefined ? {} : { submissionId }),
       participantId: input.participantId,
       ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
       objectKey: storedAsset.objectKey,
@@ -5274,7 +5571,7 @@ export class SpeakerService {
       capabilityId: asset.id,
       tenantId: asset.tenantId ?? scope.tenantId ?? input.eventId,
       eventId: input.eventId,
-      submissionId,
+      ...(submissionId === undefined ? {} : { submissionId }),
       participantId: primaryParticipantId,
       ...(asset.taskId === undefined ? {} : { taskId: asset.taskId }),
       objectKey: asset.objectKey,
@@ -5388,8 +5685,7 @@ export class SpeakerService {
       const profileByParticipant = new Map(
         profiles.map((profile) => [profile.participantId, profile]),
       );
-      const primaryParticipantId =
-        target.submission.primaryParticipantId ?? target.submission.participantIds[0];
+      const primaryParticipantId = authoritativeSubmissionPrimaryParticipantId(target.submission);
       for (const participantId of missingParticipantIds) {
         const profile = profileByParticipant.get(participantId);
         const createdAt = target.submission.updatedAt;
@@ -5713,6 +6009,7 @@ export class SpeakerService {
       id: comment.id,
       eventId,
       assetId: comment.assetId,
+      versionId: comment.versionId,
       body: comment.body,
       authorLabel: comment.authorLabel,
       createdAt: comment.createdAt,
@@ -5759,6 +6056,7 @@ export class SpeakerService {
       id: this.generateId(),
       eventId: input.eventId,
       assetId: input.assetId,
+      versionId: input.assetId,
       body: normalizeUserText(input.body, "The asset comment", 10_000, true),
       authorLabel: "You",
       createdAt: now,
@@ -5786,6 +6084,7 @@ export class SpeakerService {
       id: stored.id,
       eventId: input.eventId,
       assetId: input.assetId,
+      versionId: stored.versionId,
       body: stored.body,
       authorLabel: stored.authorLabel,
       createdAt: stored.createdAt,
@@ -5797,22 +6096,15 @@ export class SpeakerService {
   async getTaskForm(eventId: string, accountId: string, taskId: string): Promise<SpeakerTaskForm> {
     const scope = await this.getScope(eventId, accountId);
     const task = await this.repository.getTask(eventId, taskId);
-    const submissions = await this.repository.listSubmissions(eventId, scope.submissionIds);
-    const taskSubmission =
-      task === null || task.submissionId === undefined
-        ? undefined
-        : submissions.find(
-            (submission) =>
-              submission.status === "accepted" &&
-              sameSpeakerSubmission(submission.id, task.submissionId) &&
-              submission.participantIds.includes(task.participantId),
-          );
+    const subject = task === null ? undefined : speakerTaskSubject(task);
     if (
       task === null ||
+      subject === undefined ||
       task.eventId !== eventId ||
       task.owner !== "speaker" ||
       !scope.participantIds.includes(task.participantId) ||
-      taskSubmission === undefined
+      (subject.type === "session" &&
+        !speakerSubmissionAllowed(scope.submissionIds, subject.submissionId))
     ) {
       throw notFound();
     }
@@ -6035,6 +6327,12 @@ export class SpeakerService {
       state: input.state,
       finalizedAt: this.now().toISOString(),
       ...(rejectionReason === undefined ? {} : { rejectionReason }),
+      latestVersionId: asset.id,
+      ...(input.state === "ready"
+        ? { currentVersionId: asset.id }
+        : asset.currentVersionId === undefined
+          ? {}
+          : { currentVersionId: asset.currentVersionId }),
     };
     const result =
       this.repository.finalizeAsset === undefined
@@ -6050,8 +6348,21 @@ export class SpeakerService {
       }
       throw notFound();
     }
-    this.assetCache.set(`${input.eventId}:${result.value.id}`, result.value);
-    return result.value;
+    const persisted = await this.repository.getAsset(input.eventId, input.assetId);
+    if (
+      persisted === null ||
+      persisted.state !== input.state ||
+      persisted.latestVersionId !== asset.id ||
+      (input.state === "ready" && persisted.currentVersionId !== asset.id)
+    ) {
+      throw new SpeakerServiceError(
+        "VERSION_CONFLICT",
+        409,
+        "The asset could not be verified after finalizing.",
+      );
+    }
+    this.assetCache.set(`${input.eventId}:${persisted.id}`, persisted);
+    return persisted;
   }
 
   async consumeUploadCapability(
@@ -6114,7 +6425,7 @@ export class SpeakerService {
       else family.push(asset);
     }
     const ready = [...assetsByFamily.values()]
-      .map((family) => latestReadyAsset(family))
+      .map((family) => assetFamilyPointers(family)?.current)
       .some(
         (asset) =>
           asset !== undefined &&
@@ -6150,7 +6461,7 @@ export class SpeakerService {
     scope: SpeakerAccessScope,
     participantId: string,
     requestedSubmissionId: string | undefined,
-  ): Promise<string> {
+  ): Promise<string | undefined> {
     const submissions = await this.repository.listSubmissions(eventId, scope.submissionIds);
     if (requestedSubmissionId !== undefined) {
       const submission = submissions.find(
@@ -6175,22 +6486,15 @@ export class SpeakerService {
         submission.status === "accepted" &&
         submission.participantIds.includes(participantId),
     );
-    if (accepted.length === 0) {
+    if (accepted.length === 0) return undefined;
+    if (accepted.length > 1) {
       throw new SpeakerServiceError(
-        "TASK_NOT_ACTIVE",
-        409,
-        "An accepted submission is required before uploading speaker assets.",
+        "VALIDATION_ERROR",
+        400,
+        "Select a session explicitly when a speaker has multiple accepted sessions.",
       );
     }
-    const firstAccepted = accepted[0];
-    if (firstAccepted === undefined) {
-      throw new SpeakerServiceError(
-        "TASK_NOT_ACTIVE",
-        409,
-        "An accepted submission is required before uploading speaker assets.",
-      );
-    }
-    return firstAccepted.id;
+    return accepted[0]?.id;
   }
 
   private updateCachedAsset(
@@ -6199,6 +6503,9 @@ export class SpeakerService {
   ): SpeakerAsset {
     asset.state = command.state;
     asset.finalizedAt = command.finalizedAt;
+    asset.latestVersionId = command.latestVersionId;
+    if (command.currentVersionId === undefined) delete asset.currentVersionId;
+    else asset.currentVersionId = command.currentVersionId;
     if (command.rejectionReason === undefined) delete asset.rejectionReason;
     else asset.rejectionReason = command.rejectionReason;
     this.assetCache.set(`${asset.eventId}:${asset.id}`, asset);
@@ -6241,7 +6548,10 @@ export class SpeakerService {
     socialLinks: Readonly<Record<string, string>>;
     status: string;
     travelLogistics?: Partial<SpeakerTravelLogistics>;
-    idempotencyKey?: string | undefined;
+    idempotencyKey: string;
+    sourceType?: SpeakerParticipantSourceType;
+    sourceId?: string;
+    explicitParticipantId?: string;
   }): Promise<SpeakerWorkspaceRoster> {
     const projection = await this.organizerSpeakerMutationProjection(
       input.organizationId,
@@ -6275,11 +6585,14 @@ export class SpeakerService {
     const status = importText(input.status, "The speaker status", 80);
     const socialLinks = normalizeSocialLinks(input.socialLinks) ?? {};
     const travelLogistics = normalizeTravelLogistics(input.travelLogistics);
-    const explicitIdempotencyKey = input.idempotencyKey?.trim();
-    const idempotencyKey = explicitIdempotencyKey || `email:${email}`;
-    if (idempotencyKey.length > 300) {
-      throw new SpeakerServiceError("VALIDATION_ERROR", 400, "The idempotency key is too long.");
-    }
+    const idempotencyKey = normalizeUserText(
+      input.idempotencyKey,
+      "The idempotency key",
+      300,
+    );
+    const sourceType = input.sourceType ?? "manual";
+    const sourceId = input.sourceId?.trim() || idempotencyKey;
+    const resolutionKey = `${sourceType}\u0000${sourceId}`;
     const cacheKey = `${input.organizationId}:${input.eventId}:${input.accountId}:${idempotencyKey}`;
     const fingerprint = JSON.stringify({
       displayName,
@@ -6290,14 +6603,14 @@ export class SpeakerService {
       socialLinks,
       status,
       travelLogistics,
+      sourceType,
+      sourceId,
+      explicitParticipantId: input.explicitParticipantId,
     });
     if (materializeResponse) {
       const cached = this.speakerCreateCache.get(cacheKey);
       if (cached !== undefined) {
-        if (
-          explicitIdempotencyKey !== undefined &&
-          this.speakerCreateFingerprints.get(cacheKey) !== fingerprint
-        ) {
+        if (this.speakerCreateFingerprints.get(cacheKey) !== fingerprint) {
           throw new SpeakerServiceError(
             "VERSION_CONFLICT",
             409,
@@ -6318,46 +6631,53 @@ export class SpeakerService {
         "The event roster contains duplicate verified speaker emails.",
       );
     }
-    const existingIdentity = matchingEmailEntries[0];
-    const canonicalLookup = this.repository.findAcceptedParticipantByEmail;
-    const canonicalResult = projection.canonicalParticipantsByEmail.has(email)
-      ? (projection.canonicalParticipantsByEmail.get(email) ?? null)
-      : canonicalLookup === undefined
-        ? null
-        : await canonicalLookup.call(this.repository, input.eventId, scope.submissionIds, email);
-    if (canonicalResult !== null && "ambiguous" in canonicalResult) {
+    const resolution =
+      projection.participantResolutions.get(resolutionKey) ??
+      (await this.resolveEventParticipant({
+        organizationId: input.organizationId,
+        eventId: input.eventId,
+        sourceType,
+        sourceId,
+        ...(input.explicitParticipantId === undefined
+          ? {}
+          : { explicitParticipantId: input.explicitParticipantId }),
+        normalizedEmail: email,
+      }));
+    projection.participantResolutions.set(resolutionKey, resolution);
+    if (resolution.state === "ambiguous") {
       throw new SpeakerServiceError(
-        "VALIDATION_ERROR",
-        400,
-        "Multiple accepted participants use this verified email.",
+        "IDENTITY_AMBIGUOUS",
+        409,
+        "Multiple event participants match this source relationship.",
       );
     }
+    const participantId = resolution.participantId;
+    const existingIdentity = entries.find((entry) => entry.participantId === participantId);
     if (
-      canonicalResult !== null &&
-      existingIdentity !== undefined &&
-      existingIdentity.participantId.trim() !== canonicalResult.participantId.trim()
+      matchingEmailEntries.some((entry) => entry.participantId !== participantId) ||
+      (existingIdentity?.email !== undefined &&
+        existingIdentity.email.trim().toLowerCase() !== email)
     ) {
       throw new SpeakerServiceError(
-        "VALIDATION_ERROR",
-        400,
-        "The verified speaker email belongs to a different participant.",
+        "IDENTITY_AMBIGUOUS",
+        409,
+        "The speaker email is already associated with another participant.",
       );
     }
-    const canonical = canonicalResult;
-    const manual = existingIdentity === undefined && canonical === null;
-    const participantId =
-      existingIdentity?.participantId.trim() ??
-      canonical?.participantId.trim() ??
-      `participant:${this.generateId()}`;
-    const canonicalEmail = canonical === null ? email : importEmail(canonical.email);
-    if (participantId.length === 0 || canonicalEmail !== email) {
-      throw new SpeakerServiceError("VALIDATION_ERROR", 400, "The speaker identity is invalid.");
-    }
+    const manual = resolution.created && existingIdentity === undefined;
     const canonicalSubmissionId =
       existingIdentity?.submissionId === undefined
-        ? canonical === null
-          ? canonicalSpeakerSubmissionId(`crm-contact:${participantId}`)
-          : canonicalSpeakerSubmissionId(canonical.submissionId)
+        ? resolution.submissionIds.length === 1
+          ? (resolution.submissionIds[0] as string)
+          : resolution.submissionIds.length > 1
+            ? (() => {
+                throw new SpeakerServiceError(
+                  "IDENTITY_AMBIGUOUS",
+                  409,
+                  "Select the participant source relationship explicitly.",
+                );
+              })()
+            : canonicalSpeakerSubmissionId(`crm-contact:${participantId}`)
         : canonicalSpeakerSubmissionId(existingIdentity.submissionId);
     if (!manual && !(existingIdentity !== undefined && isCrmRosterEntry(existingIdentity))) {
       const submission = projection.acceptedSubmissions.find(
@@ -6366,7 +6686,7 @@ export class SpeakerService {
           sameSpeakerSubmission(candidate.id, canonicalSubmissionId) &&
           candidate.participantIds.includes(participantId),
       );
-      if (submission === undefined) throw notFound();
+      if (submission === undefined && existingIdentity === undefined) throw notFound();
     }
     let writtenProfile: SpeakerProfile | undefined;
     const existing = entries.find((entry) => entry.participantId === participantId);
@@ -6498,6 +6818,8 @@ export class SpeakerService {
       biography,
       socialLinks,
       travelLogistics,
+      sourceType,
+      sourceId,
       workflowStatus: manual ? crmRosterWorkflowStatus : status,
       organizerStatus: status,
       role: "primary",
@@ -6568,6 +6890,8 @@ export class SpeakerService {
         socialLinks,
         status,
         updatedAt: now,
+        sourceType,
+        sourceId,
       });
     } else {
       const currentProfile =
@@ -6611,6 +6935,8 @@ export class SpeakerService {
           socialLinks,
           travelLogistics,
           status,
+          sourceType,
+          sourceId,
           version: 1,
           updatedAt: now,
         };
@@ -6689,6 +7015,18 @@ export class SpeakerService {
       if (currentProfile !== null) projection.profiles.push(currentProfile);
     }
     if (existing === undefined && currentProfile === null) throw notFound();
+    if (
+      existing !== undefined &&
+      currentProfile !== null &&
+      (existing.version !== currentProfile.version ||
+        existing.version !== input.expectedVersion)
+    ) {
+      throw new SpeakerServiceError(
+        "VERSION_CONFLICT",
+        409,
+        "The speaker roster and profile revisions diverged. Reload before saving.",
+      );
+    }
     const displayName = importText(input.displayName, "The speaker name", 200);
     const email = importEmail(input.email);
     const jobTitle = importText(input.jobTitle, "The speaker job title", 160);
@@ -7077,7 +7415,7 @@ export class SpeakerService {
             : importText(source.status, "The speaker status", 80);
         seenEmails.add(email);
         rows.push({
-          rowNumber: index + 1,
+          rowNumber: source.rowNumber,
           displayName,
           email,
           jobTitle,
@@ -7097,62 +7435,32 @@ export class SpeakerService {
         "The import rows are invalid or stale.",
       );
     }
-    const canonicalLookup = this.repository.findAcceptedParticipantByEmail;
-    if (canonicalLookup !== undefined) {
-      const canonicalResults = await Promise.all(
-        rows.map((row) =>
-          canonicalLookup.call(
-            this.repository,
-            input.eventId,
-            projection.scope.submissionIds,
-            row.email,
-          ),
-        ),
-      );
-      rows.forEach((row, index) => {
-        projection.canonicalParticipantsByEmail.set(row.email, canonicalResults[index] ?? null);
-      });
-    }
     const canonicalParticipantIds = new Set<string>();
     for (const row of rows) {
-      const canonicalResult = projection.canonicalParticipantsByEmail.get(row.email) ?? null;
-      if (canonicalResult === null) continue;
-      if ("ambiguous" in canonicalResult) {
+      const sourceId = `${input.idempotencyKey}:row:${row.rowNumber}`;
+      const resolution = await this.resolveEventParticipant({
+        organizationId: input.organizationId,
+        eventId: input.eventId,
+        sourceType: "csv",
+        sourceId,
+        normalizedEmail: row.email,
+      });
+      projection.participantResolutions.set(`csv\u0000${sourceId}`, resolution);
+      if (resolution.state === "ambiguous") {
         throw new SpeakerServiceError(
-          "VALIDATION_ERROR",
-          400,
-          "Multiple accepted participants use this verified email.",
-        );
-      }
-      const participantId = canonicalResult.participantId.trim();
-      const canonicalEmail = importEmail(canonicalResult.email);
-      if (participantId.length === 0 || canonicalEmail !== row.email) {
-        throw new SpeakerServiceError("VALIDATION_ERROR", 400, "The speaker identity is invalid.");
-      }
-      const submissionId = canonicalSpeakerSubmissionId(canonicalResult.submissionId);
-      const submission = projection.acceptedSubmissions.find(
-        (candidate) =>
-          candidate.eventId === input.eventId &&
-          sameSpeakerSubmission(candidate.id, submissionId) &&
-          candidate.participantIds.includes(participantId),
-      );
-      if (submission === undefined) throw notFound();
-      const existing = projection.entries.find((entry) => entry.participantId === participantId);
-      if (existing?.email !== undefined && existing.email.trim().toLowerCase() !== row.email) {
-        throw new SpeakerServiceError(
-          "VERSION_CONFLICT",
+          "IDENTITY_AMBIGUOUS",
           409,
-          "A speaker with that canonical participant already exists.",
+          "An import row matches multiple event participants.",
         );
       }
-      if (canonicalParticipantIds.has(participantId)) {
+      if (canonicalParticipantIds.has(resolution.participantId)) {
         throw new SpeakerServiceError(
-          "VALIDATION_ERROR",
-          400,
-          "Multiple import rows resolve to the same speaker.",
+          "IDENTITY_AMBIGUOUS",
+          409,
+          "Multiple import rows resolve to the same participant.",
         );
       }
-      canonicalParticipantIds.add(participantId);
+      canonicalParticipantIds.add(resolution.participantId);
     }
 
     for (const row of rows) {
@@ -7168,6 +7476,9 @@ export class SpeakerService {
           biography: row.biography,
           socialLinks: row.socialLinks,
           status: row.status ?? "pending",
+          idempotencyKey: `${input.idempotencyKey}:row:${row.rowNumber}`,
+          sourceType: "csv",
+          sourceId: `${input.idempotencyKey}:row:${row.rowNumber}`,
         },
         projection,
         false,
@@ -7224,15 +7535,15 @@ export class SpeakerService {
         : [participantId];
     const submissions = await this.repository.listSubmissions(eventId, scope.submissionIds);
     const taskAllowed = (task: SpeakerTask): boolean => {
-      const submission = submissions.find(
+      const subject = speakerTaskSubject(task);
+      if (subject === undefined) return false;
+      if (subject.type === "participant") return requested.includes(subject.participantId);
+      return submissions.some(
         (candidate) =>
           candidate.status === "accepted" &&
-          sameSpeakerSubmission(candidate.id, task.submissionId) &&
-          candidate.participantIds.includes(task.participantId),
+          sameSpeakerSubmission(candidate.id, subject.submissionId) &&
+          candidate.participantIds.includes(subject.participantId),
       );
-      if (submission !== undefined) return true;
-      const manual = manualByParticipant.get(task.participantId);
-      return manual !== undefined && sameSpeakerSubmission(manual.submissionId, task.submissionId);
     };
     const [tasks, rawAssets] = await Promise.all([
       this.repository.listTasks(eventId, requested),
@@ -7269,7 +7580,7 @@ export class SpeakerService {
             (participantId === undefined || task.participantId === participantId),
         )
         .map((task) => {
-          const latestAsset = latestReadyAsset(
+          const latestAsset = singleCurrentAsset(
             assets.filter(
               (asset) => asset.taskId === task.id && asset.participantId === task.participantId,
             ),
@@ -7302,7 +7613,7 @@ export class SpeakerService {
     const manualParticipantIds = new Set(
       roster.filter(isCrmRosterEntry).map((entry) => entry.participantId),
     );
-    const participantIds = unique(input.participantIds);
+    const participantIds = unique(input.assignments.map((assignment) => assignment.participantId));
     if (
       participantIds.length === 0 ||
       participantIds.some(
@@ -7324,7 +7635,7 @@ export class SpeakerService {
       title,
       description,
       dueAt,
-      assigneeIds: participantIds,
+      assignments: input.assignments,
     });
     return {
       organizationId: input.organizationId,
@@ -7689,19 +8000,20 @@ export class SpeakerService {
       );
     }
     const tasks = taskCandidates.filter((task) => {
+      const subject = speakerTaskSubject(task);
       if (
+        subject === undefined ||
         task.eventId !== eventId ||
         !participantIds.includes(task.participantId) ||
         task.owner !== "speaker"
       ) {
         return false;
       }
+      if (subject.type === "participant") return true;
       const submission = acceptedSubmissionById.get(
-        canonicalSpeakerSubmissionId(task.submissionId),
+        canonicalSpeakerSubmissionId(subject.submissionId),
       );
-      if (submission !== undefined) return submission.participantIds.includes(task.participantId);
-      const manual = manualByParticipant.get(task.participantId);
-      return manual !== undefined && sameSpeakerSubmission(manual.submissionId, task.submissionId);
+      return submission?.participantIds.includes(subject.participantId) ?? false;
     });
     const assets = assetCandidates.filter((asset) => {
       if (
@@ -7711,7 +8023,12 @@ export class SpeakerService {
       ) {
         return false;
       }
-      if (asset.submissionId === undefined) return acceptedParticipantIds.has(asset.participantId);
+      if (asset.submissionId === undefined) {
+        return (
+          acceptedParticipantIds.has(asset.participantId) ||
+          manualByParticipant.has(asset.participantId)
+        );
+      }
       const submission = acceptedSubmissionById.get(
         canonicalSpeakerSubmissionId(asset.submissionId),
       );
@@ -7726,7 +8043,7 @@ export class SpeakerService {
       profiles: rosterProjection.profiles,
       tasks,
       assets,
-      canonicalParticipantsByEmail: new Map(),
+      participantResolutions: new Map(),
     };
   }
 
@@ -8098,7 +8415,7 @@ export class SpeakerService {
         overdue,
       },
       assets: canonicalAssets,
-      version: Math.max(entry.version, profile?.version ?? 0),
+      version: entry.version,
       updatedAt: [entry.updatedAt, profile?.updatedAt ?? ""].sort().at(-1) ?? entry.updatedAt,
     };
   }
@@ -8124,6 +8441,10 @@ export class SpeakerService {
       commentThreadId: asset.commentThreadId ?? versionFamilyId,
       reviewState: asset.reviewState ?? null,
       reviewNote: asset.reviewNote ?? null,
+      latestVersionId: asset.latestVersionId ?? null,
+      currentVersionId: asset.currentVersionId ?? null,
+      approvedVersionId: asset.approvedVersionId ?? null,
+      releasedVersionId: asset.releasedVersionId ?? null,
       downloadUrl,
     };
   }
@@ -8345,12 +8666,22 @@ export class SpeakerService {
   }
 
   private async assertTaskIsActive(task: SpeakerTask): Promise<void> {
-    const submission = await this.repository.getSubmission(task.eventId, task.submissionId);
-    if (!submission || submission.eventId !== task.eventId || submission.status !== "accepted") {
+    const subject = speakerTaskSubject(task);
+    if (subject === undefined) {
+      throw new SpeakerServiceError("TASK_NOT_ACTIVE", 409, "The speaker task subject is invalid.");
+    }
+    if (subject.type === "participant") return;
+    const submission = await this.repository.getSubmission(task.eventId, subject.submissionId);
+    if (
+      !submission ||
+      submission.eventId !== task.eventId ||
+      submission.status !== "accepted" ||
+      !submission.participantIds.includes(subject.participantId)
+    ) {
       throw new SpeakerServiceError(
         "TASK_NOT_ACTIVE",
         409,
-        "Speaker tasks are available only after the submission is accepted.",
+        "Speaker session tasks are available only after the submission is accepted.",
       );
     }
   }

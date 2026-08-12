@@ -15,6 +15,34 @@ export type SpeakerTaskType = "form" | "upload" | "action";
 export type SpeakerAssetKind = "headshot" | "slides" | "supporting_file";
 export type SpeakerAssetState = "pending_upload" | "ready" | "rejected";
 export type SpeakerAssetReviewState = "approved" | "needs_changes";
+export type SpeakerParticipantSourceType = "cfp" | "manual" | "csv" | "crm";
+export type SpeakerParticipantIdentityState = "resolved" | "ambiguous";
+
+export interface ResolveEventParticipantInput {
+  organizationId: string;
+  eventId: string;
+  sourceType: SpeakerParticipantSourceType;
+  sourceId: string;
+  explicitParticipantId?: string;
+  normalizedEmail?: string;
+  createParticipantId: string;
+}
+
+export type SpeakerParticipantResolution =
+  | {
+      state: "resolved";
+      participantId: string;
+      submissionIds: readonly string[];
+      created: boolean;
+    }
+  | {
+      state: "ambiguous";
+      candidateParticipantIds: readonly string[];
+    };
+
+export type SpeakerTaskSubject =
+  | { type: "participant"; participantId: string }
+  | { type: "session"; participantId: string; submissionId: string };
 export type SpeakerSubmissionStatus =
   | "draft"
   | "submitted"
@@ -113,6 +141,8 @@ export interface SpeakerProfile {
   email?: string;
   /** Alias accepted by adapters that expose social profiles under `social`. */
   social?: Readonly<Record<string, string>>;
+  sourceType?: SpeakerParticipantSourceType;
+  sourceId?: string;
   id: string;
   eventId: string;
   participantId: string;
@@ -134,14 +164,14 @@ export interface SpeakerTask {
   maxBytes?: number;
   /** UI-compatible alias for maxBytes. */
   maxSizeBytes?: number;
-  /** Event-qualified assignment projection for organizer-created tasks. */
-  assigneeIds?: readonly string[];
+  /** Explicit participant or accepted-session subject. */
+  subject?: SpeakerTaskSubject;
   participantName?: string;
   /** Accepted submission title used as the event-scoped session label in organizer projections. */
   sessionTitle?: string;
   id: string;
   eventId: string;
-  submissionId: string;
+  submissionId: string | null;
   participantId: string;
   type: SpeakerTaskType;
   owner: "speaker" | "organizer";
@@ -176,6 +206,11 @@ export interface SpeakerAsset {
   reviewedAt?: string;
   reviewedBy?: string;
   reviewVersion?: number;
+  /** Explicit family pointers; selection must never depend on timestamps or row order. */
+  latestVersionId?: string;
+  currentVersionId?: string;
+  approvedVersionId?: string;
+  releasedVersionId?: string;
   id: string;
   /** Server-owned tenant binding. Legacy records may not have this field. */
   tenantId?: string;
@@ -201,6 +236,8 @@ export interface SpeakerAsset {
   supersedesAssetId?: string;
   /** Stable identifier reserved for future asset comments. */
   commentThreadId?: string;
+  /** Stable version identifier used by version-specific comments. */
+  versionId?: string;
   rejectionReason?: string;
   finalizedAt?: string;
 }
@@ -217,6 +254,8 @@ export interface SpeakerRosterEntry {
   socialLinks?: Readonly<Record<string, string>>;
   travelLogistics?: SpeakerTravelLogistics;
   headshotAssetId?: string;
+  sourceType?: SpeakerParticipantSourceType;
+  sourceId?: string;
   role: "primary" | "co_speaker";
   status: "pending" | "active" | "revoked";
   workflowStatus?: string;
@@ -253,6 +292,10 @@ export interface SpeakerWorkspaceAsset {
   commentThreadId: string;
   reviewState: SpeakerAssetReviewState | null;
   reviewNote: string | null;
+  latestVersionId: string | null;
+  currentVersionId: string | null;
+  approvedVersionId: string | null;
+  releasedVersionId: string | null;
   downloadUrl: string | null;
 }
 
@@ -368,13 +411,17 @@ export interface SpeakerTaskAssignmentInput {
   title: string;
   description: string;
   dueAt: string;
-  participantIds: readonly string[];
+  assignments: readonly {
+    participantId: string;
+    submissionId: string | null;
+  }[];
 }
 
 export interface SpeakerAssetComment {
   id: string;
   eventId: string;
   assetId: string;
+  versionId: string;
   body: string;
   authorLabel: string;
   createdAt: string;
@@ -398,8 +445,10 @@ export interface SpeakerTaskCreateInput {
   acceptedAssetKinds?: readonly SpeakerAssetKind[];
   dependencyIds?: readonly string[];
   reminderOffsetsMinutes?: readonly number[];
-  assigneeIds: readonly string[];
-  submissionId?: string;
+  assignments: readonly {
+    participantId: string;
+    submissionId: string | null;
+  }[];
 }
 
 export interface SpeakerTaskUpdateInput {
@@ -418,7 +467,6 @@ export interface SpeakerTaskUpdateInput {
   acceptedAssetKinds?: readonly SpeakerAssetKind[];
   dependencyIds?: readonly string[];
   reminderOffsetsMinutes?: readonly number[];
-  assigneeIds?: readonly string[];
   status?: SpeakerTaskStatus;
 }
 
@@ -503,6 +551,7 @@ export interface SpeakerAssetReviewInput {
   state: SpeakerAssetReviewState;
   note?: string;
   expectedVersion?: number;
+  release?: boolean;
 }
 
 export interface SpeakerAssetReviewCommand {
@@ -513,6 +562,7 @@ export interface SpeakerAssetReviewCommand {
   expectedVersion: number;
   reviewedAt: string;
   reviewedBy: string;
+  release: boolean;
 }
 
 export interface SpeakerAssetAuditEntry {
@@ -820,6 +870,8 @@ export interface FinalizeSpeakerAssetCommand {
   state: Extract<SpeakerAssetState, "ready" | "rejected">;
   finalizedAt: string;
   rejectionReason?: string;
+  latestVersionId: string;
+  currentVersionId?: string;
 }
 export interface SpeakerOrganizerAccessScope {
   tenantId: string;
@@ -866,10 +918,6 @@ export interface SpeakerReminderRecord {
   actorAccountId: string;
 }
 
-export type SpeakerAcceptedParticipantLookup =
-  | { participantId: string; submissionId: string; email: string }
-  | { ambiguous: true };
-
 export interface SpeakerOrganizerReadResources {
   profiles?: boolean;
   tasks?: boolean;
@@ -904,11 +952,9 @@ export interface SpeakerRepository {
   getProfile(eventId: string, participantId: string): Promise<SpeakerProfile | null>;
   updateBiography(command: UpdateBiographyCommand): Promise<RepositoryResult<SpeakerProfile>>;
   updateProfile?(command: UpdateSpeakerProfileCommand): Promise<RepositoryResult<SpeakerProfile>>;
-  findAcceptedParticipantByEmail?(
-    eventId: string,
-    submissionIds: readonly string[],
-    email: string,
-  ): Promise<SpeakerAcceptedParticipantLookup | null>;
+  resolveEventParticipant?(
+    input: ResolveEventParticipantInput,
+  ): Promise<SpeakerParticipantResolution>;
   ensureOrganizerSpeakerProfile?(input: {
     organizationId: string;
     eventId: string;
@@ -922,6 +968,8 @@ export interface SpeakerRepository {
     travelLogistics?: SpeakerTravelLogistics;
     status: string;
     updatedAt: string;
+    sourceType?: SpeakerParticipantSourceType;
+    sourceId?: string;
   }): Promise<SpeakerProfile>;
   listTasks(eventId: string, participantIds: readonly string[]): Promise<SpeakerTask[]>;
   createTask?(command: SpeakerTaskRepositoryCommand): Promise<RepositoryResult<SpeakerTask>>;
@@ -1033,7 +1081,7 @@ export interface PrivateAssetCapabilityBinding {
   capabilityId: string;
   tenantId: string;
   eventId: string;
-  submissionId: string;
+  submissionId?: string;
   participantId: string;
   taskId?: string;
   objectKey: string;

@@ -165,9 +165,11 @@ import type {
   PrivateUploadGrant,
   PrivateUploadReceipt,
   RepositoryResult,
+  ResolveEventParticipantInput,
   RestoreSpeakerContentVersionCommand,
   SpeakerAccessScope,
   SpeakerAsset,
+  SpeakerAssetReviewCommand,
   SpeakerAssetComment,
   SpeakerContentHistoryEntry,
   SpeakerContentRecord,
@@ -179,6 +181,7 @@ import type {
   SpeakerOrganizerReadResources,
   SpeakerPortalCapability,
   SpeakerPortalContext,
+  SpeakerParticipantResolution,
   SpeakerProfile,
   SpeakerReminderDelivery,
   SpeakerReminderDeliveryInput,
@@ -1066,43 +1069,30 @@ function portalParticipantIds(record: JsonRecord): string[] {
     return id.length === 0 ? [] : [id];
   });
 }
-function portalParticipantIdsForEmail(record: JsonRecord, email: string): string[] {
-  if (!Array.isArray(record.participants)) return [];
-  const normalizedEmail = email.trim().toLowerCase();
-  return record.participants.flatMap((participant) => {
-    if (
-      !isRecord(participant) ||
-      typeof participant.id !== "string" ||
-      typeof participant.email !== "string" ||
-      participant.email.trim().toLowerCase() !== normalizedEmail
-    ) {
-      return [];
-    }
-    const participantId = participant.id.trim();
-    return participantId.length === 0 ? [] : [participantId];
-  });
-}
 
 function portalPrimaryParticipantId(record: JsonRecord): string | undefined {
+  const participantIds = portalParticipantIds(record);
   if (
     typeof record.primaryParticipantId === "string" &&
-    record.primaryParticipantId.trim().length > 0
+    participantIds.includes(record.primaryParticipantId.trim())
   ) {
     return record.primaryParticipantId.trim();
   }
-  if (!Array.isArray(record.participants)) return undefined;
-  const primary = record.participants.find(
-    (participant) => isRecord(participant) && participant.role === "primary",
-  );
-  if (isRecord(primary) && typeof primary.id === "string" && primary.id.trim().length > 0) {
-    return primary.id.trim();
-  }
-  const first = record.participants.find(
-    (participant) => isRecord(participant) && typeof participant.id === "string",
-  );
-  return isRecord(first) && typeof first.id === "string" && first.id.trim().length > 0
-    ? first.id.trim()
-    : undefined;
+  if (!Array.isArray(record.participants)) return participantIds.length === 1 ? participantIds[0] : undefined;
+  const primaryIds = [
+    ...new Set(
+      record.participants.flatMap((participant) =>
+        isRecord(participant) &&
+        participant.role === "primary" &&
+        typeof participant.id === "string" &&
+        participant.id.trim().length > 0
+          ? [participant.id.trim()]
+          : [],
+      ),
+    ),
+  ];
+  if (primaryIds.length === 1) return primaryIds[0];
+  return primaryIds.length === 0 && participantIds.length === 1 ? participantIds[0] : undefined;
 }
 function portalCanonicalGrantedParticipantId(
   profiles: readonly SpeakerProfile[],
@@ -1113,9 +1103,26 @@ function portalCanonicalGrantedParticipantId(
         .map((profile) => profile.participantId.trim())
         .filter((participantId) => participantId.length > 0),
     ),
-  ].sort((left, right) => left.length - right.length || left.localeCompare(right));
-  return participantIds[0];
+  ];
+  return participantIds.length === 1 ? participantIds[0] : undefined;
 }
+function authoritativeAcceptedParticipantId(
+  participants: readonly SubmissionParticipant[],
+): string | undefined {
+  const primaryIds = [
+    ...new Set(
+      participants
+        .filter((participant) => participant.role === "primary")
+        .map((participant) => participant.id.trim())
+        .filter(isNonEmpty),
+    ),
+  ];
+  if (primaryIds.length === 1) return primaryIds[0];
+  return primaryIds.length === 0 && participants.length === 1
+    ? participants[0]?.id.trim() || undefined
+    : undefined;
+}
+
 
 function portalAnswerText(record: JsonRecord, ...keys: readonly string[]): string | null {
   const answers = isRecord(record.answers) ? record.answers : {};
@@ -1786,69 +1793,42 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     });
     this.#database = options.database;
   }
-  async findAcceptedParticipantByEmail(
-    eventId: string,
-    submissionIds: readonly string[],
-    email: string,
-  ): Promise<{
-    participantId: string;
-    submissionId: string;
-    email: string;
-  } | null> {
-    const normalizedEmail = email.trim().toLowerCase();
-    if (eventId.trim().length === 0 || normalizedEmail.length === 0) return null;
-    const event = await this.#events.find(eventId);
-    const tenantId = event === undefined ? undefined : resolvedOrganizationId(event);
-    if (tenantId === undefined) return null;
-    const [decisions, submissionRecords] = await Promise.all([
-      this.#decisions.list().then(portalDecisionProjections),
-      this.#submissions.list(),
-    ]);
-    const records = submissionRecords as unknown as JsonRecord[];
-    const byId = new Map(
-      records
-        .map((record) => [textValue(record, "id", APPLICATION_ID), record] as const)
-        .filter((entry): entry is readonly [string, JsonRecord] => entry[0] !== null),
+  async resolveEventParticipant(
+    input: ResolveEventParticipantInput,
+  ): Promise<SpeakerParticipantResolution> {
+    const profiles = (await this.#profiles.list()).filter(
+      (profile) =>
+        profile.eventId === input.eventId &&
+        profile.sourceType === input.sourceType &&
+        profile.sourceId === input.sourceId,
     );
-    const requestedBySource = new Map<string, string>();
-    for (const submissionId of submissionIds) {
-      const sourceId = originalCfpSubmissionId(submissionId) ?? submissionId;
-      if (submissionId === sourceId || !requestedBySource.has(sourceId)) {
-        requestedBySource.set(sourceId, submissionId);
-      }
+    const candidateParticipantIds = [
+      ...new Set(profiles.map((profile) => profile.participantId.trim()).filter(isNonEmpty)),
+    ];
+    if (
+      candidateParticipantIds.length > 1 ||
+      (input.explicitParticipantId !== undefined &&
+        candidateParticipantIds.length === 1 &&
+        candidateParticipantIds[0] !== input.explicitParticipantId)
+    ) {
+      return { state: "ambiguous", candidateParticipantIds };
     }
-    const matches: Array<{
-      participantId: string;
-      submissionId: string;
-      email: string;
-    }> = [];
-    for (const [sourceId, submissionId] of requestedBySource) {
-      const record = byId.get(sourceId);
-      if (
-        record === undefined ||
-        isSpeakerSubmissionRecord(record) ||
-        eventReference(record) !== eventId ||
-        resolvedOrganizationId(record) !== tenantId ||
-        portalRecordStatus(record, decisions) !== "accepted"
-      ) {
-        continue;
-      }
-      if (!Array.isArray(record.participants)) continue;
-      for (const participant of record.participants) {
-        if (!isRecord(participant)) continue;
-        const participantId = typeof participant.id === "string" ? participant.id.trim() : "";
-        const participantEmail =
-          typeof participant.email === "string" ? participant.email.trim().toLowerCase() : "";
-        if (participantId.length > 0 && participantEmail === normalizedEmail) {
-          matches.push({
-            participantId,
-            submissionId,
-            email: participantEmail,
-          });
-        }
-      }
-    }
-    return matches.length === 1 ? (matches[0] ?? null) : null;
+    const participantId =
+      candidateParticipantIds[0] ?? input.explicitParticipantId ?? input.createParticipantId;
+    const submissionIds = (await this.#submissions.list())
+      .filter(
+        (submission) =>
+          submission.eventId === input.eventId &&
+          submission.participantIds.includes(participantId),
+      )
+      .map((submission) => submission.id);
+    return {
+      state: "resolved",
+      participantId,
+      submissionIds,
+      created:
+        candidateParticipantIds.length === 0 && input.explicitParticipantId === undefined,
+    };
   }
   async getOrganizerAccessScope(
     eventId: string,
@@ -2132,7 +2112,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
   }
 
   async getAccessScope(eventId: string, accountId: string): Promise<SpeakerAccessScope> {
-    const [result, account, event, submissionRecords, decisionRecords, profileRecords] =
+    const [result, event, submissionRecords, decisionRecords, profileRecords] =
       await Promise.all([
         this.#database
           .prepare(
@@ -2143,22 +2123,11 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
           )
           .bind(accountId)
           .all<{ organization_id: string; speaker_profile_id: string }>(),
-        this.#database
-          .prepare(
-            `SELECT email
-               FROM auth_users
-              WHERE id = ? AND email_verified = 1
-              LIMIT 1`,
-          )
-          .bind(accountId)
-          .first<{ email?: unknown }>(),
         this.#events.find(eventId),
         this.#submissions.list(),
         this.#decisions.list(),
         this.#profiles.list(),
       ]);
-    const accountEmail =
-      typeof account?.email === "string" ? account.email.trim().toLowerCase() : undefined;
     const eventScope = resolveOrganizationScope(event);
     const eventOrganizationId =
       eventScope.status === "resolved" ? eventScope.organizationId : undefined;
@@ -2192,23 +2161,10 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
         profile.eventId === eventId &&
         (grants.has(profile.id) || grants.has(profile.participantId)),
     );
-    const accountProfiles =
-      accountEmail === undefined
-        ? []
-        : profiles.filter((profile) => profile.email?.trim().toLowerCase() === accountEmail);
+    const accountProfiles = profiles;
     const grantedParticipantId = portalCanonicalGrantedParticipantId(accountProfiles);
     const participantIds =
-      grantedParticipantId === undefined
-        ? [
-            ...new Set(
-              ownedRecords.flatMap((record) =>
-                accountEmail === undefined
-                  ? portalParticipantIds(record)
-                  : portalParticipantIdsForEmail(record, accountEmail),
-              ),
-            ),
-          ]
-        : [grantedParticipantId];
+      grantedParticipantId === undefined ? [] : [grantedParticipantId];
     const acceptedGrantRecords = records.filter(
       (record) =>
         isSpeakerSubmissionRecord(record) &&
@@ -2237,7 +2193,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
           (id): id is string => id !== null && !ownerIds.has(originalCfpSubmissionId(id) ?? id),
         ),
     ];
-    if (submissionIds.length === 0 || participantIds.length === 0) {
+    if (submissionIds.length === 0) {
       return { submissionIds: [], participantIds: [] };
     }
     const acceptedParticipants = new Set(acceptedRecords.flatMap(portalParticipantIds));
@@ -2246,21 +2202,27 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       ...(acceptedParticipants.size > 0 ? ACCEPTED_PORTAL_CAPABILITIES : []),
       ...(submissionEditingAllowed ? (["submission-edit"] as const) : []),
     ];
+    const primaryCandidates = [
+      ...new Set(
+        [...ownedRecords, ...acceptedGrantRecords]
+          .map(portalPrimaryParticipantId)
+          .filter((participantId): participantId is string =>
+            participantIds.includes(participantId ?? ""),
+          ),
+      ),
+    ];
     const primaryParticipantId =
-      ownedRecords
-        .map(portalPrimaryParticipantId)
-        .find((participantId): participantId is string => participantId !== undefined) ??
-      acceptedGrantRecords
-        .map(portalPrimaryParticipantId)
-        .find((participantId): participantId is string => participantId !== undefined) ??
-      participantIds[0];
+      primaryCandidates.length === 1 ? primaryCandidates[0] : undefined;
     const capabilitiesByParticipant = Object.fromEntries(
       participantIds.map((participantId) => [
         participantId,
         acceptedParticipants.has(participantId)
           ? [
               ...capabilities,
-              ...(participantId === primaryParticipantId ? (["roster-manage"] as const) : []),
+              ...(primaryParticipantId !== undefined &&
+              participantId === primaryParticipantId
+                ? (["roster-manage"] as const)
+                : []),
             ]
           : submissionEditingAllowed
             ? (["submission-edit"] as const)
@@ -2301,7 +2263,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
   async listPortalContextScopes(
     accountId: string,
   ): Promise<readonly { context: SpeakerPortalContext; scope: SpeakerAccessScope }[]> {
-    const [grants, account, profiles, submissionRecords, decisionRecords, events] =
+    const [grants, profiles, submissionRecords, decisionRecords, events] =
       await Promise.all([
         this.#database
           .prepare(
@@ -2312,22 +2274,11 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
           )
           .bind(accountId)
           .all<{ organization_id: string; speaker_profile_id: string }>(),
-        this.#database
-          .prepare(
-            `SELECT email
-               FROM auth_users
-              WHERE id = ? AND email_verified = 1
-              LIMIT 1`,
-          )
-          .bind(accountId)
-          .first<{ email?: unknown }>(),
         this.#profiles.list(),
         this.#submissions.list(),
         this.#decisions.list(),
         this.#events.list(),
       ]);
-    const accountEmail =
-      typeof account?.email === "string" ? account.email.trim().toLowerCase() : undefined;
     const records = submissionRecords as unknown as JsonRecord[];
     const decisions = portalDecisionProjections(decisionRecords);
     const contextScopes: Array<{ context: SpeakerPortalContext; scope: SpeakerAccessScope }> = [];
@@ -2353,7 +2304,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
           ? resolveOrganizationScope(record).status !== "conflict"
           : matchesOrganizationScope(record, organizationId, true);
       });
-      if (accountEmail === undefined) continue;
+      if (ownerRecords.length === 0 && eventGrants.length === 0) continue;
       const eventProfiles = profiles.filter(
         (profile) =>
           profile.eventId === eventId &&
@@ -2363,10 +2314,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
               grant.speaker_profile_id === profile.participantId,
           ),
       );
-      const accountProfiles =
-        accountEmail === undefined
-          ? []
-          : eventProfiles.filter((profile) => profile.email?.trim().toLowerCase() === accountEmail);
+      const accountProfiles = eventProfiles;
       const grantParticipantIds = new Set(accountProfiles.map((profile) => profile.participantId));
       const grantSubmissions = records.filter(
         (record) =>
@@ -2390,16 +2338,8 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       ];
       const grantedParticipantId = portalCanonicalGrantedParticipantId(accountProfiles);
       const participantIds =
-        grantedParticipantId === undefined
-          ? [
-              ...new Set(
-                ownerRecords.flatMap((record) =>
-                  portalParticipantIdsForEmail(record, accountEmail),
-                ),
-              ),
-            ]
-          : [grantedParticipantId];
-      if (submissionIds.length === 0 || participantIds.length === 0) continue;
+        grantedParticipantId === undefined ? [] : [grantedParticipantId];
+      if (submissionIds.length === 0) continue;
       const eventProfileIds = new Set(
         eventProfiles.flatMap((profile) => [profile.id, profile.participantId]),
       );
@@ -2427,21 +2367,27 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
         ...(acceptedParticipants.size > 0 ? ACCEPTED_PORTAL_CAPABILITIES : []),
         ...(submissionEditingAllowed ? (["submission-edit"] as const) : []),
       ];
+      const primaryCandidates = [
+        ...new Set(
+          [...ownerRecords, ...grantSubmissions]
+            .map(portalPrimaryParticipantId)
+            .filter((participantId): participantId is string =>
+              participantIds.includes(participantId ?? ""),
+            ),
+        ),
+      ];
       const primaryParticipantId =
-        ownerRecords
-          .map(portalPrimaryParticipantId)
-          .find((participantId): participantId is string => participantId !== undefined) ??
-        grantSubmissions
-          .map(portalPrimaryParticipantId)
-          .find((participantId): participantId is string => participantId !== undefined) ??
-        participantIds[0];
+        primaryCandidates.length === 1 ? primaryCandidates[0] : undefined;
       const capabilitiesByParticipant = Object.fromEntries(
         participantIds.map((participantId) => [
           participantId,
           acceptedParticipants.has(participantId)
             ? [
                 ...capabilities,
-                ...(participantId === primaryParticipantId ? (["roster-manage"] as const) : []),
+                ...(primaryParticipantId !== undefined &&
+                participantId === primaryParticipantId
+                  ? (["roster-manage"] as const)
+                  : []),
               ]
             : submissionEditingAllowed
               ? (["submission-edit"] as const)
@@ -2533,9 +2479,9 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
         "sessionTitle",
         "name",
       ) ?? id;
-    const primaryParticipantId =
-      input.submission.participants.find((participant) => participant.role === "primary")?.id ??
-      input.submission.participants[0]?.id;
+    const primaryParticipantId = authoritativeAcceptedParticipantId(
+      input.submission.participants,
+    );
     const next: SpeakerSubmission = tagged(
       {
         id,
@@ -2554,7 +2500,11 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     if (existing === undefined) {
       await this.#submissions.create(next);
       await this.ensureRosterForAcceptedSubmission(input.submission, input.updatedAt);
-      return clone(untagged(next));
+      const persisted = await this.#submissions.find(id);
+      if (persisted === undefined) {
+        throw new Error("The accepted speaker submission was not persisted.");
+      }
+      return clone(untagged(persisted));
     }
     if (existing.eventId !== next.eventId) {
       throw new Error("The accepted speaker submission belongs to another event.");
@@ -2564,16 +2514,18 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       await this.#submissions.update(id, updated);
     }
     await this.ensureRosterForAcceptedSubmission(input.submission, input.updatedAt);
-    return clone(untagged(updated));
+    const persisted = await this.#submissions.find(id);
+    if (persisted === undefined) {
+      throw new Error("The accepted speaker submission was not persisted.");
+    }
+    return clone(untagged(persisted));
   }
   private async ensureRosterForAcceptedSubmission(
     submission: Submission,
     updatedAt: string,
   ): Promise<void> {
     const existing = await this.#roster.list();
-    const primaryParticipantId =
-      submission.participants.find((participant) => participant.role === "primary")?.id ??
-      submission.participants[0]?.id;
+    const primaryParticipantId = authoritativeAcceptedParticipantId(submission.participants);
     for (const participant of submission.participants) {
       const id = `roster:${submission.eventId}:speaker-submission:${submission.id}:${participant.id}`;
       if (existing.some((entry) => entry.id === id)) continue;
@@ -2657,7 +2609,12 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
         updatedAt: input.updatedAt,
       };
       await this.#profiles.update(existing.id, tagged(persisted, "speaker_profile"));
-      return clone(persisted);
+      return (
+        (await this.getProfile(input.eventId, input.participant.id, organizationId)) ??
+        (() => {
+          throw new Error("The accepted speaker profile was not persisted.");
+        })()
+      );
     }
     const profile = tagged(
       {
@@ -2675,7 +2632,12 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       "speaker_profile",
     );
     await this.#profiles.create(profile);
-    return clone(untagged(profile));
+    return (
+      (await this.getProfile(input.eventId, input.participant.id, organizationId)) ??
+      (() => {
+        throw new Error("The accepted speaker profile was not persisted.");
+      })()
+    );
   }
   async ensureOrganizerSpeakerProfile(input: {
     readonly organizationId: string;
@@ -2690,6 +2652,8 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     readonly travelLogistics?: SpeakerTravelLogistics;
     readonly status: string;
     readonly updatedAt: string;
+    readonly sourceType?: import("../features/speaker/types").SpeakerParticipantSourceType;
+    readonly sourceId?: string;
   }): Promise<SpeakerProfile> {
     const existing = await this.getProfile(
       input.eventId,
@@ -2708,6 +2672,8 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       biography: input.biography,
       socialLinks: { ...input.socialLinks },
       status: input.status,
+      ...(input.sourceType === undefined ? {} : { sourceType: input.sourceType }),
+      ...(input.sourceId === undefined ? {} : { sourceId: input.sourceId }),
       ...(input.travelLogistics === undefined
         ? existing?.travelLogistics === undefined
           ? {}
@@ -2735,7 +2701,18 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       email: input.email,
       createdAt: input.updatedAt,
     });
-    return clone(profile);
+    const persisted = await this.getProfile(
+      input.eventId,
+      input.participantId,
+      input.organizationId,
+    );
+    if (persisted === null || persisted.version !== profile.version) {
+      throw new AirtableRepositoryError(
+        "NOT_FOUND",
+        "The speaker profile was not persisted.",
+      );
+    }
+    return persisted;
   }
   async ensureVerifiedSpeakerGrant(input: {
     readonly organizationId: string;
@@ -2898,7 +2875,10 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       updatedAt: command.updatedAt,
     };
     await this.#profiles.update(profile.id, tagged(updated, "speaker_profile"));
-    return { ok: true, value: clone(updated) };
+    const persisted = await this.getProfile(command.eventId, command.participantId, organizationId);
+    return persisted === null || persisted.version !== updated.version
+      ? { ok: false, reason: "version_conflict" }
+      : { ok: true, value: persisted };
   }
   async updateProfile(
     command: UpdateSpeakerProfileCommand,
@@ -2945,7 +2925,10 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       updated.headshotAssetId = command.headshotAssetId;
     }
     await this.#profiles.update(profile.id, tagged(updated, "speaker_profile"));
-    return { ok: true, value: clone(updated) };
+    const persisted = await this.getProfile(command.eventId, command.participantId, organizationId);
+    return persisted === null || persisted.version !== updated.version
+      ? { ok: false, reason: "version_conflict" }
+      : { ok: true, value: persisted };
   }
   async getContent(
     eventId: string,
@@ -3354,12 +3337,28 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     const requested = new Set(requestedParticipantIds);
     return storedTasks
       .filter((storedTask) => {
-        if (storedTask.eventId !== eventId || !requested.has(storedTask.participantId))
+        if (storedTask.eventId !== eventId || !requested.has(storedTask.participantId)) {
           return false;
+        }
+        const subject = storedTask.subject;
+        if (
+          subject?.type === "participant" &&
+          subject.participantId === storedTask.participantId &&
+          storedTask.submissionId === null
+        ) {
+          return true;
+        }
+        if (
+          subject?.type !== "session" ||
+          subject.participantId !== storedTask.participantId ||
+          storedTask.submissionId !== subject.submissionId
+        ) {
+          return false;
+        }
         const sourceId =
-          originalCfpSubmissionId(storedTask.submissionId) ?? storedTask.submissionId;
+          originalCfpSubmissionId(subject.submissionId) ?? subject.submissionId;
         const participants =
-          acceptedParticipantsBySubmission.get(storedTask.submissionId) ??
+          acceptedParticipantsBySubmission.get(subject.submissionId) ??
           acceptedParticipantsBySubmission.get(sourceId);
         return participants?.has(storedTask.participantId) ?? false;
       })
@@ -3374,9 +3373,11 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     if (existing !== undefined) {
       return { ok: false, reason: "version_conflict" };
     }
-    const stored = tagged(command.task, "speaker_task");
-    await this.#tasks.create(stored);
-    return { ok: true, value: clone(untagged(stored)) };
+    await this.#tasks.create(tagged(command.task, "speaker_task"));
+    const persisted = await this.getTask(command.task.eventId, command.task.id);
+    return persisted === null
+      ? { ok: false, reason: "version_conflict" }
+      : { ok: true, value: persisted };
   }
 
   async updateTask(command: SpeakerTaskRepositoryCommand): Promise<RepositoryResult<SpeakerTask>> {
@@ -3390,9 +3391,11 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     if (existing.version !== command.expectedVersion) {
       return { ok: false, reason: "version_conflict" };
     }
-    const stored = tagged(command.task, "speaker_task");
-    await this.#tasks.update(command.task.id, stored);
-    return { ok: true, value: clone(untagged(stored)) };
+    await this.#tasks.update(command.task.id, tagged(command.task, "speaker_task"));
+    const persisted = await this.getTask(command.task.eventId, command.task.id);
+    return persisted === null || persisted.version !== command.task.version
+      ? { ok: false, reason: "version_conflict" }
+      : { ok: true, value: persisted };
   }
 
   async getTask(eventId: string, taskId: string): Promise<SpeakerTask | null> {
@@ -3415,34 +3418,41 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
   > {
     const task = await this.getTask(command.eventId, command.taskId);
     if (task === null) return { ok: false, reason: "not_found" };
+    const subject = task.subject;
     if (
       command.transition.participantId !== task.participantId ||
-      task.submissionId === undefined
+      subject === undefined ||
+      subject.participantId !== task.participantId ||
+      (subject.type === "participant" && task.submissionId !== null) ||
+      (subject.type === "session" && task.submissionId !== subject.submissionId)
     ) {
       return { ok: false, reason: "not_found" };
     }
-    const [submissionRecords, decisionRecords] = await Promise.all([
-      this.#submissions.list(),
-      this.#decisions.list(),
-    ]);
-    const decisions = portalDecisionProjections(decisionRecords);
-    const sourceId = originalCfpSubmissionId(task.submissionId) ?? task.submissionId;
-    const authorized = (submissionRecords as unknown as JsonRecord[]).some((record) => {
-      const id = textValue(record, "id", APPLICATION_ID);
-      if (
-        id === null ||
-        eventReference(record) !== command.eventId ||
-        portalRecordStatus(record, decisions) !== "accepted"
-      ) {
-        return false;
-      }
-      const candidateSourceId = originalCfpSubmissionId(id) ?? id;
-      return (
-        (id === task.submissionId || candidateSourceId === sourceId) &&
-        portalParticipantIds(record).includes(task.participantId)
-      );
-    });
-    if (!authorized) return { ok: false, reason: "not_found" };
+    if (subject.type === "session") {
+      const [submissionRecords, decisionRecords] = await Promise.all([
+        this.#submissions.list(),
+        this.#decisions.list(),
+      ]);
+      const decisions = portalDecisionProjections(decisionRecords);
+      const sourceId =
+        originalCfpSubmissionId(subject.submissionId) ?? subject.submissionId;
+      const authorized = (submissionRecords as unknown as JsonRecord[]).some((record) => {
+        const id = textValue(record, "id", APPLICATION_ID);
+        if (
+          id === null ||
+          eventReference(record) !== command.eventId ||
+          portalRecordStatus(record, decisions) !== "accepted"
+        ) {
+          return false;
+        }
+        const candidateSourceId = originalCfpSubmissionId(id) ?? id;
+        return (
+          (id === subject.submissionId || candidateSourceId === sourceId) &&
+          portalParticipantIds(record).includes(task.participantId)
+        );
+      });
+      if (!authorized) return { ok: false, reason: "not_found" };
+    }
     if (task.version !== command.expectedVersion || task.status !== command.fromStatus) {
       return { ok: false, reason: "version_conflict" };
     }
@@ -3452,16 +3462,26 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       version: task.version + 1,
       updatedAt: command.transition.occurredAt,
     };
-    await this.#tasks.update(task.id, updated);
-    return {
-      ok: true,
-      value: { task: updated, transition: clone(command.transition) },
-    };
+    await this.#tasks.update(task.id, tagged(updated, "speaker_task"));
+    const persisted = await this.getTask(command.eventId, task.id);
+    return persisted === null || persisted.version !== updated.version
+      ? { ok: false, reason: "version_conflict" }
+      : {
+          ok: true,
+          value: { task: persisted, transition: clone(command.transition) },
+        };
   }
 
   async createPendingAsset(asset: SpeakerAsset): Promise<SpeakerAsset> {
     await this.#assets.create(tagged(asset, "speaker_asset"));
-    return clone(asset);
+    const persisted = await this.getAsset(asset.eventId, asset.id);
+    if (persisted === null) {
+      throw new AirtableRepositoryError(
+        "NOT_FOUND",
+        "The speaker asset was not persisted.",
+      );
+    }
+    return persisted;
   }
   async getAsset(eventId: string, assetId: string): Promise<SpeakerAsset | null> {
     const [asset, event] = await Promise.all([
@@ -3503,13 +3523,57 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       ...current,
       state: command.state,
       finalizedAt: command.finalizedAt,
+      latestVersionId: command.latestVersionId,
+      ...(command.currentVersionId === undefined
+        ? {}
+        : { currentVersionId: command.currentVersionId }),
       ...(command.rejectionReason === undefined
         ? {}
         : { rejectionReason: command.rejectionReason }),
     };
     await this.#assets.update(command.assetId, tagged(updated, "speaker_asset"));
-    return { ok: true, value: clone(updated) };
+    const persisted = await this.getAsset(command.eventId, command.assetId);
+    return persisted === null ||
+      persisted.state !== command.state ||
+      persisted.latestVersionId !== command.latestVersionId
+      ? { ok: false, reason: "version_conflict" }
+      : { ok: true, value: persisted };
   }
+  async reviewAsset(
+    command: SpeakerAssetReviewCommand,
+  ): Promise<RepositoryResult<SpeakerAsset>> {
+    const current = await this.getAsset(command.eventId, command.assetId);
+    if (current === null) return { ok: false, reason: "not_found" };
+    if (
+      current.state !== "ready" ||
+      (current.reviewVersion ?? 0) !== command.expectedVersion ||
+      current.currentVersionId !== current.id
+    ) {
+      return { ok: false, reason: "version_conflict" };
+    }
+    const updated: SpeakerAsset = {
+      ...current,
+      reviewState: command.state,
+      ...(command.note === undefined ? {} : { reviewNote: command.note }),
+      reviewedAt: command.reviewedAt,
+      reviewedBy: command.reviewedBy,
+      reviewVersion: command.expectedVersion + 1,
+      ...(command.state === "approved" ? { approvedVersionId: current.id } : {}),
+      ...(command.release ? { releasedVersionId: current.id } : {}),
+    };
+    if (command.state === "needs_changes" && updated.approvedVersionId === current.id) {
+      delete updated.approvedVersionId;
+    }
+    await this.#assets.update(command.assetId, tagged(updated, "speaker_asset"));
+    const persisted = await this.getAsset(command.eventId, command.assetId);
+    return persisted === null ||
+      persisted.reviewVersion !== command.expectedVersion + 1 ||
+      (command.state === "approved" && persisted.approvedVersionId !== current.id) ||
+      (command.release && persisted.releasedVersionId !== current.id)
+      ? { ok: false, reason: "version_conflict" }
+      : { ok: true, value: persisted };
+  }
+
 
   async listRosterForEvent(eventId: string): Promise<SpeakerRosterEntry[]> {
     const [event, roster] = await Promise.all([
@@ -3654,7 +3718,12 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
 
   async listAssetComments(eventId: string, assetId: string): Promise<SpeakerAssetComment[]> {
     return (await listEventScopedJson(this.#assetComments, "Settings JSON", eventId))
-      .filter((comment) => comment.eventId === eventId && comment.assetId === assetId)
+      .filter(
+        (comment) =>
+          comment.eventId === eventId &&
+          comment.assetId === assetId &&
+          comment.versionId === assetId,
+      )
       .map(({ tenantId: _tenantId, authorAccountId: _authorAccountId, ...comment }) =>
         clone(comment),
       );
@@ -3662,7 +3731,19 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
 
   async createAssetComment(comment: SpeakerAssetComment): Promise<SpeakerAssetComment> {
     await this.#assetComments.create(clone(comment));
-    return clone(comment);
+    const persisted = await this.#assetComments.find(comment.id);
+    if (
+      persisted === undefined ||
+      persisted.eventId !== comment.eventId ||
+      persisted.assetId !== comment.assetId ||
+      persisted.versionId !== comment.versionId
+    ) {
+      throw new AirtableRepositoryError(
+        "NOT_FOUND",
+        "The version-specific asset comment was not persisted.",
+      );
+    }
+    return clone(persisted);
   }
 
   async listEventResources(eventId: string): Promise<SpeakerEventResource[]> {
@@ -3881,7 +3962,7 @@ interface StoredPrivateCapability {
   capabilityHash: string;
   tenantId: string;
   eventId: string;
-  submissionId: string;
+  submissionId?: string;
   participantId: string;
   taskId?: string;
   objectKey: string;
@@ -3982,7 +4063,7 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
       capabilityHash: await capabilityHash(token),
       tenantId: binding.tenantId,
       eventId: binding.eventId,
-      submissionId: binding.submissionId,
+      ...(binding.submissionId === undefined ? {} : { submissionId: binding.submissionId }),
       participantId: binding.participantId,
       ...(binding.taskId === undefined ? {} : { taskId: binding.taskId }),
       objectKey: binding.objectKey,
@@ -4021,7 +4102,7 @@ export class R2PrivateAssetGateway implements PrivateAssetGateway {
       capabilityHash: await capabilityHash(token),
       tenantId: binding.tenantId,
       eventId: binding.eventId,
-      submissionId: binding.submissionId,
+      ...(binding.submissionId === undefined ? {} : { submissionId: binding.submissionId }),
       participantId: binding.participantId,
       ...(binding.taskId === undefined ? {} : { taskId: binding.taskId }),
       objectKey: binding.objectKey,
@@ -4709,6 +4790,8 @@ export class AirtableCfpFileAssetGateway implements CfpFileAssetGateway {
       state: input.state,
       finalizedAt: this.#now().toISOString(),
       ...(rejectionReason === undefined ? {} : { rejectionReason }),
+      latestVersionId: input.assetId,
+      ...(input.state === "ready" ? { currentVersionId: input.assetId } : {}),
     });
     if (!result.ok) {
       throw new CfpError("VALIDATION_FAILED", "The private upload could not be finalized.");

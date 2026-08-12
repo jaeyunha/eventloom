@@ -524,6 +524,11 @@ class LocalSpeakerRepository implements SpeakerRepository {
         eventId,
         submissionId: "local-submission",
         participantId: "local-participant",
+        subject: {
+          type: "session",
+          participantId: "local-participant",
+          submissionId: "local-submission",
+        },
         type: "form",
         owner: "speaker",
         title: "Review your speaker profile",
@@ -540,6 +545,11 @@ class LocalSpeakerRepository implements SpeakerRepository {
         eventId,
         submissionId: "local-submission",
         participantId: "local-participant",
+        subject: {
+          type: "session",
+          participantId: "local-participant",
+          submissionId: "local-submission",
+        },
         type: "upload",
         owner: "speaker",
         title: "Upload presentation slides",
