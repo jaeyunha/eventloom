@@ -2216,14 +2216,16 @@ function OrganizerAuthoring({
             <span className={styles.cardLabel}>Assignment tooling</span>
             <span className={styles.fieldHint}>
               The plan cap is {maxAssignmentsPerReviewer} assignments per reviewer. Choose the
-              complete reviewer set; an empty selection clears all active assignments. Preview before
-              posting the replacement.
+              complete reviewer set; an empty selection clears all active assignments. Preview
+              before posting the replacement.
             </span>
           </div>
         </div>
         <div className={styles.summaryGrid}>
           <div className={styles.formField}>
-            <label htmlFor="assignment-submission-id">Submission for reviewer-set replacement</label>
+            <label htmlFor="assignment-submission-id">
+              Submission for reviewer-set replacement
+            </label>
             <select
               id="assignment-submission-id"
               value={assignmentSubmissionId}
