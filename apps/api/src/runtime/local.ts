@@ -317,6 +317,9 @@ class LocalSpeakerRepository implements SpeakerRepository {
       return { submissionIds: [], participantIds: [] };
     }
     return {
+      tenantId: LOCAL_ORGANIZATION_ID,
+      role: "owner",
+      organizer: true,
       submissionIds: ["local-submission"],
       participantIds: ["local-participant"],
       capabilities: LOCAL_SPEAKER_CAPABILITIES,

@@ -1,9 +1,90 @@
 "use client";
 
+import {
+  AlertCircle,
+  CheckCircle2,
+  Eye,
+  FileText,
+  ListTodo,
+  Mail,
+  RefreshCw,
+  Search,
+  Send,
+  Upload,
+  UserPlus,
+  Users,
+} from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { type ChangeEvent, type FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import styles from "../admin/admin-shell.module.css";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "../../components/ui/accordion";
+import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert";
+import { Badge } from "../../components/ui/badge";
+import { Button } from "../../components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "../../components/ui/card";
+import { Checkbox } from "../../components/ui/checkbox";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "../../components/ui/collapsible";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../../components/ui/dialog";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "../../components/ui/empty";
+import { Field, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "../../components/ui/field";
+import { Input } from "../../components/ui/input";
+import { Progress } from "../../components/ui/progress";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../components/ui/select";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "../../components/ui/sheet";
+import {
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "../../components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
+import { Textarea } from "../../components/ui/textarea";
+import adminStyles from "../admin/admin-shell.module.css";
 import {
   createSpeakerApi,
   ORGANIZER_HEADSHOT_ACCEPTED_TYPES,
@@ -31,6 +112,7 @@ import {
   type SpeakerTravelLogistics,
   type SpeakerUpdateInput,
 } from "./api";
+import styles from "./speaker-workspace.module.css";
 
 export interface SpeakerWorkspaceProps {
   readonly organizationId: string;
@@ -83,70 +165,6 @@ export interface SpeakerOnboardingTaskDefinition {
   readonly dueAt: string | null;
   readonly participantIds: readonly string[];
 }
-const panelStyle = {
-  display: "grid",
-  gap: "1rem",
-  padding: "1.2rem",
-  border: "1px solid var(--admin-border)",
-  borderRadius: "var(--admin-radius-md)",
-  background: "var(--admin-surface)",
-  boxShadow: "var(--admin-shadow)",
-} as const;
-
-const fieldGridStyle = {
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(13rem, 1fr))",
-  gap: "0.85rem",
-} as const;
-
-const fieldStyle = { display: "grid", gap: "0.35rem" } as const;
-const labelStyle = {
-  color: "var(--admin-ink)",
-  fontSize: "0.76rem",
-  fontWeight: 760,
-} as const;
-const inputStyle = {
-  width: "100%",
-  minHeight: "2.55rem",
-  padding: "0.55rem 0.65rem",
-  border: "1px solid var(--admin-border-strong)",
-  borderRadius: "var(--admin-radius-sm)",
-  background: "var(--admin-surface)",
-  color: "var(--admin-ink)",
-  font: "inherit",
-  fontSize: "0.84rem",
-} as const;
-const textAreaStyle = { ...inputStyle, minHeight: "7rem", resize: "vertical" as const };
-const mutedStyle = {
-  margin: 0,
-  color: "var(--admin-muted)",
-  fontSize: "0.79rem",
-  lineHeight: 1.55,
-} as const;
-const inlineStyle = {
-  display: "flex",
-  flexWrap: "wrap" as const,
-  gap: "0.55rem",
-  alignItems: "center",
-} as const;
-const listStyle = {
-  display: "grid",
-  gap: "0.65rem",
-  padding: 0,
-  margin: 0,
-  listStyle: "none",
-} as const;
-const badgeStyle = {
-  display: "inline-flex",
-  alignItems: "center",
-  width: "fit-content",
-  padding: "0.2rem 0.5rem",
-  borderRadius: 999,
-  background: "var(--admin-brand-soft)",
-  color: "var(--admin-brand-strong)",
-  fontSize: "0.7rem",
-  fontWeight: 800,
-} as const;
 
 const DEFAULT_STATUS_OPTIONS = ["pending", "invited", "confirmed", "accepted", "declined"] as const;
 const ASYNC_ACTION_TIMEOUT_MS = 15_000;
@@ -603,7 +621,13 @@ function mergeSpeaker(
 }
 
 function SpeakerStatusBadge({ status }: Readonly<{ status: string }>) {
-  return <span style={badgeStyle}>{statusLabel(status)}</span>;
+  const variant =
+    status === "declined" || status === "revoked"
+      ? "destructive"
+      : status === "confirmed" || status === "accepted"
+        ? "default"
+        : "secondary";
+  return <Badge variant={variant}>{statusLabel(status)}</Badge>;
 }
 export interface SpeakerAssetDownloadProps {
   readonly asset: SpeakerAsset;
@@ -624,71 +648,43 @@ export function SpeakerAssetDownload({
 }: SpeakerAssetDownloadProps) {
   if (asset.status === "ready" && downloadUrl !== null) {
     return (
-      <a
-        className={styles.secondaryButton}
-        style={{ marginTop: "0.5rem", width: "fit-content" }}
-        href={downloadUrl}
-        target="_blank"
-        rel="noreferrer"
-        aria-label={`Download ${asset.fileName}`}
-      >
-        Download / view
-      </a>
+      <Button variant="outline" size="sm" asChild>
+        <a
+          href={downloadUrl}
+          target="_blank"
+          rel="noreferrer"
+          aria-label={`Download ${asset.fileName}`}
+        >
+          <Eye data-icon="inline-start" />
+          Download / view
+        </a>
+      </Button>
     );
   }
   if (asset.status !== "ready") {
-    return (
-      <span
-        style={{
-          display: "block",
-          marginTop: "0.5rem",
-          color: "var(--admin-muted)",
-          fontSize: "0.74rem",
-        }}
-      >
-        Download is not available for this asset.
-      </span>
-    );
+    return <span className={styles.muted}>Download is not available for this asset.</span>;
   }
   return (
     <>
-      <button
-        className={styles.secondaryButton}
+      <Button
+        variant="outline"
+        size="sm"
         type="button"
-        style={{ marginTop: "0.5rem", width: "fit-content" }}
         onClick={() => onRequest(asset)}
         disabled={disabled}
         aria-busy={busy}
         aria-label={`Download ${asset.fileName}`}
       >
+        <Eye data-icon="inline-start" />
         {busy ? "Preparing download…" : "Download / view"}
-      </button>
-      {error ? (
-        <p
-          role="alert"
-          aria-live="polite"
-          style={{
-            ...mutedStyle,
-            color: "var(--admin-danger)",
-            marginTop: "0.35rem",
-          }}
-        >
-          {error}
-        </p>
-      ) : null}
+      </Button>
+      {error ? <FormMessage message={error} error /> : null}
     </>
   );
 }
 export function SpeakerAssetMetadata({ asset }: Readonly<{ asset: SpeakerAsset }>) {
   return (
-    <span
-      style={{
-        display: "block",
-        marginTop: "0.2rem",
-        color: "var(--admin-muted)",
-        fontSize: "0.74rem",
-      }}
-    >
+    <span className={styles.muted}>
       {asset.contentType} · {assetSize(asset.byteSize)} · {statusLabel(asset.status)} · uploaded{" "}
       {dateLabel(asset.uploadedAt)}
     </span>
@@ -725,20 +721,7 @@ export function SpeakerHeadshot({
       asset.contentType.trim().toLowerCase() as (typeof ORGANIZER_HEADSHOT_ACCEPTED_TYPES)[number],
     );
   return (
-    <div
-      role="img"
-      aria-label={label}
-      style={{
-        display: "grid",
-        placeItems: "center",
-        minHeight: "12rem",
-        padding: "0.75rem",
-        border: "1px solid var(--admin-border)",
-        borderRadius: "var(--admin-radius-sm)",
-        background: "var(--admin-surface)",
-        overflow: "hidden",
-      }}
-    >
+    <div className={styles.headshot} role="img" aria-label={label}>
       {isReadyImage ? (
         <Image
           key={`${asset.assetId}:${revision}`}
@@ -747,11 +730,11 @@ export function SpeakerHeadshot({
           width={640}
           height={360}
           unoptimized
-          style={{ display: "block", width: "100%", maxHeight: "18rem", objectFit: "cover" }}
+          className={styles.headshotImage}
           onError={onImageError}
         />
       ) : (
-        <div style={{ display: "grid", gap: "0.35rem", textAlign: "center" }}>
+        <div className={styles.headshotFallback}>
           <strong>
             {loading
               ? "Loading headshot…"
@@ -763,16 +746,17 @@ export function SpeakerHeadshot({
                     ? "Headshot is not ready"
                     : "Headshot preview unavailable"}
           </strong>
-          <span style={mutedStyle}>
+          <span className={styles.muted}>
             {error ??
               (loading
                 ? "Requesting a secure preview from the organizer API."
                 : "A secure preview is not available for this speaker.")}
           </span>
           {onRetry && !loading && (error !== null || asset !== null) ? (
-            <button className={styles.secondaryButton} type="button" onClick={onRetry}>
+            <Button variant="outline" size="sm" type="button" onClick={onRetry}>
+              <RefreshCw data-icon="inline-start" />
               Retry headshot preview
-            </button>
+            </Button>
           ) : null}
         </div>
       )}
@@ -811,35 +795,41 @@ export function SpeakerInvitationControls({
 }: SpeakerInvitationControlsProps) {
   return (
     <>
-      <button
-        className={styles.secondaryButton}
+      <Button
+        variant="outline"
+        size="sm"
         type="button"
         onClick={onPreview}
         disabled={disabled || previewBusy || sendBusy}
       >
+        <Eye data-icon="inline-start" />
         {previewBusy ? "Preparing invite…" : "Preview portal invite"}
-      </button>
-      <button
-        className={styles.primaryButton}
+      </Button>
+      <Button
+        variant="default"
+        size="sm"
         type="button"
         onClick={onSend}
         disabled={disabled || sendBusy || previewBusy || !canSend}
       >
+        <Send data-icon="inline-start" />
         {sendBusy ? "Sending invite…" : "Send portal invite"}
-      </button>
+      </Button>
     </>
   );
 }
 
 function FormMessage({ message, error = false }: Readonly<{ message: string; error?: boolean }>) {
   return (
-    <p
+    <Alert
+      variant={error ? "destructive" : "default"}
       role={error ? "alert" : "status"}
       aria-live="polite"
-      style={{ ...mutedStyle, color: error ? "var(--admin-danger)" : undefined }}
     >
-      {message}
-    </p>
+      <AlertCircle />
+      <AlertTitle>{error ? "Action needs attention" : "Workspace update"}</AlertTitle>
+      <AlertDescription>{message}</AlertDescription>
+    </Alert>
   );
 }
 
@@ -853,23 +843,23 @@ function ProfileFields({
   disabled: boolean;
 }>) {
   return (
-    <>
-      <div style={fieldGridStyle}>
-        <label style={fieldStyle}>
-          <span style={labelStyle}>Name</span>
-          <input
-            style={inputStyle}
+    <FieldGroup className={styles.actionsStack}>
+      <div className={styles.fieldGrid}>
+        <Field>
+          <FieldLabel htmlFor="speaker-display-name">Name</FieldLabel>
+          <Input
+            id="speaker-display-name"
             value={draft.displayName}
             onChange={(event) => onChange("displayName", event.target.value)}
             required
             maxLength={200}
             disabled={disabled}
           />
-        </label>
-        <label style={fieldStyle}>
-          <span style={labelStyle}>Email</span>
-          <input
-            style={inputStyle}
+        </Field>
+        <Field>
+          <FieldLabel htmlFor="speaker-email">Email</FieldLabel>
+          <Input
+            id="speaker-email"
             type="email"
             value={draft.email}
             onChange={(event) => onChange("email", event.target.value)}
@@ -877,161 +867,154 @@ function ProfileFields({
             maxLength={320}
             disabled={disabled}
           />
-        </label>
-        <label style={fieldStyle}>
-          <span style={labelStyle}>Title</span>
-          <input
-            style={inputStyle}
+        </Field>
+        <Field>
+          <FieldLabel htmlFor="speaker-title">Title</FieldLabel>
+          <Input
+            id="speaker-title"
             value={draft.title}
             onChange={(event) => onChange("title", event.target.value)}
             placeholder="Principal Engineer"
             maxLength={160}
             disabled={disabled}
           />
-        </label>
-        <label style={fieldStyle}>
-          <span style={labelStyle}>Company</span>
-          <input
-            style={inputStyle}
+        </Field>
+        <Field>
+          <FieldLabel htmlFor="speaker-company">Company</FieldLabel>
+          <Input
+            id="speaker-company"
             value={draft.company}
             onChange={(event) => onChange("company", event.target.value)}
             placeholder="Organization"
             maxLength={200}
             disabled={disabled}
           />
-        </label>
+        </Field>
       </div>
-      <label style={fieldStyle}>
-        <span style={labelStyle}>Biography</span>
-        <textarea
-          style={textAreaStyle}
+      <Field>
+        <FieldLabel htmlFor="speaker-biography">Biography</FieldLabel>
+        <Textarea
+          id="speaker-biography"
           value={draft.biography}
           onChange={(event) => onChange("biography", event.target.value)}
           maxLength={20_000}
           disabled={disabled}
         />
-      </label>
-      <div style={fieldGridStyle}>
-        <label style={fieldStyle}>
-          <span style={labelStyle}>Twitter / X</span>
-          <input
-            style={inputStyle}
+      </Field>
+      <div className={styles.fieldGrid}>
+        <Field>
+          <FieldLabel htmlFor="speaker-twitter">Twitter / X</FieldLabel>
+          <Input
+            id="speaker-twitter"
             value={draft.twitter}
             onChange={(event) => onChange("twitter", event.target.value)}
             placeholder="https://x.com/…"
             maxLength={500}
             disabled={disabled}
           />
-        </label>
-        <label style={fieldStyle}>
-          <span style={labelStyle}>LinkedIn</span>
-          <input
-            style={inputStyle}
+        </Field>
+        <Field>
+          <FieldLabel htmlFor="speaker-linkedin">LinkedIn</FieldLabel>
+          <Input
+            id="speaker-linkedin"
             value={draft.linkedin}
             onChange={(event) => onChange("linkedin", event.target.value)}
             placeholder="https://linkedin.com/in/…"
             maxLength={500}
             disabled={disabled}
           />
-        </label>
-        <label style={fieldStyle}>
-          <span style={labelStyle}>Website</span>
-          <input
-            style={inputStyle}
+        </Field>
+        <Field>
+          <FieldLabel htmlFor="speaker-website">Website</FieldLabel>
+          <Input
+            id="speaker-website"
             value={draft.website}
             onChange={(event) => onChange("website", event.target.value)}
             placeholder="https://…"
             maxLength={500}
             disabled={disabled}
           />
-        </label>
+        </Field>
       </div>
-      <fieldset
-        style={{
-          display: "grid",
-          gap: "0.75rem",
-          margin: 0,
-          padding: "0.85rem",
-          border: "1px solid var(--admin-border)",
-          borderRadius: "var(--admin-radius-sm)",
-        }}
-      >
-        <legend style={{ padding: "0 0.35rem", ...labelStyle }}>Travel and logistics</legend>
-        <label style={{ ...fieldStyle, display: "flex", alignItems: "center", gap: "0.45rem" }}>
-          <input
-            type="checkbox"
+      <FieldSet className={styles.detailBlock}>
+        <FieldLegend variant="label">Travel and logistics</FieldLegend>
+        <Field orientation="horizontal">
+          <Checkbox
+            id="speaker-travel-required"
             checked={draft.travelRequired}
-            onChange={(event) => onChange("travelRequired", event.target.checked)}
+            onCheckedChange={(checked) => onChange("travelRequired", checked === true)}
             disabled={disabled}
           />
-          Speaker requires travel coordination
-        </label>
-        <div style={fieldGridStyle}>
-          <label style={fieldStyle}>
-            <span style={labelStyle}>Arrival date</span>
-            <input
-              style={inputStyle}
+          <FieldLabel htmlFor="speaker-travel-required">
+            Speaker requires travel coordination
+          </FieldLabel>
+        </Field>
+        <div className={styles.fieldGrid}>
+          <Field>
+            <FieldLabel htmlFor="speaker-arrival">Arrival date</FieldLabel>
+            <Input
+              id="speaker-arrival"
               type="date"
               value={draft.arrivalAt}
               onChange={(event) => onChange("arrivalAt", event.target.value)}
               disabled={disabled}
             />
-          </label>
-          <label style={fieldStyle}>
-            <span style={labelStyle}>Departure date</span>
-            <input
-              style={inputStyle}
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="speaker-departure">Departure date</FieldLabel>
+            <Input
+              id="speaker-departure"
               type="date"
               value={draft.departureAt}
               onChange={(event) => onChange("departureAt", event.target.value)}
               disabled={disabled}
             />
-          </label>
-          <label style={fieldStyle}>
-            <span style={labelStyle}>Accommodation</span>
-            <input
-              style={inputStyle}
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="speaker-accommodation">Accommodation</FieldLabel>
+            <Input
+              id="speaker-accommodation"
               value={draft.accommodation}
               onChange={(event) => onChange("accommodation", event.target.value)}
               maxLength={500}
               disabled={disabled}
             />
-          </label>
+          </Field>
         </div>
-        <div style={fieldGridStyle}>
-          <label style={fieldStyle}>
-            <span style={labelStyle}>Dietary requirements</span>
-            <input
-              style={inputStyle}
+        <div className={styles.fieldGrid}>
+          <Field>
+            <FieldLabel htmlFor="speaker-dietary">Dietary requirements</FieldLabel>
+            <Input
+              id="speaker-dietary"
               value={draft.dietaryRequirements}
               onChange={(event) => onChange("dietaryRequirements", event.target.value)}
               maxLength={2_000}
               disabled={disabled}
             />
-          </label>
-          <label style={fieldStyle}>
-            <span style={labelStyle}>Accessibility needs</span>
-            <input
-              style={inputStyle}
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="speaker-accessibility">Accessibility needs</FieldLabel>
+            <Input
+              id="speaker-accessibility"
               value={draft.accessibilityNeeds}
               onChange={(event) => onChange("accessibilityNeeds", event.target.value)}
               maxLength={2_000}
               disabled={disabled}
             />
-          </label>
+          </Field>
         </div>
-        <label style={fieldStyle}>
-          <span style={labelStyle}>Travel notes</span>
-          <textarea
-            style={{ ...textAreaStyle, minHeight: "4.5rem" }}
+        <Field>
+          <FieldLabel htmlFor="speaker-travel-notes">Travel notes</FieldLabel>
+          <Textarea
+            id="speaker-travel-notes"
             value={draft.travelNotes}
             onChange={(event) => onChange("travelNotes", event.target.value)}
             maxLength={5_000}
             disabled={disabled}
           />
-        </label>
-      </fieldset>
-    </>
+        </Field>
+      </FieldSet>
+    </FieldGroup>
   );
 }
 
@@ -1041,6 +1024,7 @@ export function SpeakerWorkspace({
   api: providedApi,
 }: SpeakerWorkspaceProps) {
   const [api, setApi] = useState<SpeakerApi | null>(providedApi ?? null);
+  const [activeView, setActiveView] = useState<"roster" | "tasks" | "email">("roster");
   const [roster, setRoster] = useState<SpeakerRosterEnvelope | null>(null);
   const [progress, setProgress] = useState<SpeakerProgressEnvelope | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1074,6 +1058,8 @@ export function SpeakerWorkspace({
   const [sessionFilter, setSessionFilter] = useState("all");
   const [progressFilter, setProgressFilter] = useState<ProgressFilter>("all");
   const [showAdd, setShowAdd] = useState(false);
+  const [showCsv, setShowCsv] = useState(false);
+  const [showSpeakerSheet, setShowSpeakerSheet] = useState(false);
   const [createDraft, setCreateDraft] = useState<CreateDraft>(emptyCreateDraft);
   const [createIdempotencyKey, setCreateIdempotencyKey] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<EditDraft | null>(null);
@@ -1125,8 +1111,8 @@ export function SpeakerWorkspace({
   const importRequestRef = useRef(0);
   const secondaryLoadRef = useRef<{ api: SpeakerApi; key: string } | null>(null);
   const progressLoadRef = useRef<{ api: SpeakerApi; key: string; requestId: number } | null>(null);
-  const emailSectionRef = useRef<HTMLElement | null>(null);
-  const reminderSectionRef = useRef<HTMLElement | null>(null);
+  const emailSectionRef = useRef<HTMLDivElement | null>(null);
+  const reminderSectionRef = useRef<HTMLDivElement | null>(null);
   const importBusy = importPreviewBusy || importCommitBusy;
 
   useEffect(() => {
@@ -1202,7 +1188,8 @@ export function SpeakerWorkspace({
     };
   }, [api, eventId, organizationId]);
   const secondaryContextKey = `${organizationId}:${eventId}`;
-  const progressSectionVisible = visibleProgressContext === secondaryContextKey;
+  const progressSectionVisible =
+    activeView === "tasks" || visibleProgressContext === secondaryContextKey;
   useEffect(() => {
     if (
       api === null ||
@@ -1259,11 +1246,14 @@ export function SpeakerWorkspace({
       if (!settled && progressLoadRef.current === request) progressLoadRef.current = null;
     };
   }, [api, eventId, loading, organizationId, progressSectionVisible, roster, secondaryContextKey]);
-  const secondarySectionsVisible = visibleSecondaryContext === secondaryContextKey;
+  const secondarySectionsVisible =
+    activeView === "tasks" ||
+    activeView === "email" ||
+    visibleSecondaryContext === secondaryContextKey;
   useEffect(() => {
     if (secondarySectionsVisible) return;
     const sections = [emailSectionRef.current, reminderSectionRef.current].filter(
-      (section): section is HTMLElement => section !== null,
+      (section): section is HTMLDivElement => section !== null,
     );
     if (sections.length === 0) return;
     if (typeof IntersectionObserver === "undefined") {
@@ -1380,6 +1370,14 @@ export function SpeakerWorkspace({
   const onboardingTaskDefinitions = useMemo(
     () => speakerOnboardingTaskDefinitions(progress?.rows ?? []),
     [progress?.rows],
+  );
+  const eligibleReminderItems = useMemo(
+    () => reminderEligibility?.items.filter((item) => item.eligible) ?? [],
+    [reminderEligibility],
+  );
+  const ineligibleReminderItems = useMemo(
+    () => reminderEligibility?.items.filter((item) => !item.eligible) ?? [],
+    [reminderEligibility],
   );
   const selectedInvitationPreview =
     selectedSpeaker === null
@@ -2411,1367 +2409,1338 @@ export function SpeakerWorkspace({
   }
 
   return (
-    <div>
-      <header className={styles.pageHeader}>
-        <div className={styles.pageHeaderCopy}>
+    <div className={styles.workspace}>
+      <header className={styles.header}>
+        <div className={styles.headerCopy}>
           <p className={styles.eyebrow}>Event operations · Speakers</p>
-          <h1 className={styles.pageTitle}>Speaker roster</h1>
-          <p className={styles.pageDescription}>
-            Keep speaker identity, onboarding tasks, session assignments, and portal progress in one
-            event-scoped workspace.
+          <h1 className={styles.title}>Speaker workspace</h1>
+          <p className={styles.description}>
+            Keep the event roster, speaker tasks, and communications in one focused workspace.
           </p>
-          <p style={mutedStyle}>
+          <p className={styles.muted}>
             Organization <strong>{organizationId}</strong> · Event <strong>{eventId}</strong>
-          </p>
-          <p style={mutedStyle} role="note">
-            {SPEAKER_CUSTOM_FIELDS_CONTRACT_GAP}
           </p>
         </div>
         <div className={styles.headerActions}>
-          <button
-            className={styles.secondaryButton}
-            type="button"
-            onClick={() => void reload()}
-            disabled={loading}
-          >
+          <Button variant="outline" type="button" onClick={() => void reload()} disabled={loading}>
+            <RefreshCw data-icon="inline-start" />
             {loading ? "Refreshing…" : "Refresh roster"}
-          </button>
-          <button
-            className={styles.primaryButton}
-            type="button"
-            onClick={() => setShowAdd((current) => !current)}
-          >
-            {showAdd ? "Close add form" : "Add speaker"}
-          </button>
+          </Button>
+          <Button variant="default" type="button" onClick={() => setShowAdd(true)}>
+            <UserPlus data-icon="inline-start" />
+            Add speaker
+          </Button>
         </div>
       </header>
 
       {error ? <FormMessage message={error} error /> : null}
       {notice ? <FormMessage message={notice} /> : null}
 
-      {showAdd ? (
-        <section
-          style={{ ...panelStyle, marginBottom: "1rem" }}
-          aria-labelledby="add-speaker-heading"
-        >
-          <div>
-            <h2 id="add-speaker-heading" style={{ margin: 0, fontSize: "1.05rem" }}>
-              Add speaker
-            </h2>
-            <p style={mutedStyle}>
+      <Dialog open={showAdd} onOpenChange={setShowAdd}>
+        <DialogContent className={styles.dialogContent}>
+          <DialogHeader>
+            <DialogTitle>Add speaker</DialogTitle>
+            <DialogDescription>
               Capture identity and profile details before sending an optional portal invitation.
-            </p>
-          </div>
-          <form
-            onSubmit={(event) => void createSpeaker(event)}
-            style={{ display: "grid", gap: "0.9rem" }}
-          >
+            </DialogDescription>
+          </DialogHeader>
+          <form className={styles.actionsStack} onSubmit={(event) => void createSpeaker(event)}>
             <ProfileFields draft={createDraft} onChange={updateCreate} disabled={saveBusy} />
-            <label style={fieldStyle}>
-              <span style={labelStyle}>Workflow status</span>
-              <select
-                style={inputStyle}
+            <Field>
+              <FieldLabel htmlFor="create-speaker-status">Workflow status</FieldLabel>
+              <Select
                 value={createDraft.status}
-                onChange={(event) => updateCreate("status", event.target.value)}
+                onValueChange={(value) => updateCreate("status", value)}
                 disabled={saveBusy}
               >
-                {statusOptions.map((status) => (
-                  <option key={status} value={status}>
-                    {statusLabel(status)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <div style={inlineStyle}>
-              <button
-                className={styles.primaryButton}
-                type="submit"
-                disabled={saveBusy || api === null}
-              >
-                {saveBusy ? "Saving…" : "Save speaker"}
-              </button>
-              <span style={mutedStyle}>
-                Headshot upload is completed by the speaker in their portal.
-              </span>
-            </div>
+                <SelectTrigger id="create-speaker-status" className={styles.control}>
+                  <SelectValue placeholder="Select workflow status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {statusOptions.map((status) => (
+                      <SelectItem key={status} value={status}>
+                        {statusLabel(status)}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </Field>
+            <Button variant="default" type="submit" disabled={saveBusy || api === null}>
+              <CheckCircle2 data-icon="inline-start" />
+              {saveBusy ? "Saving…" : "Save speaker"}
+            </Button>
+            <p className={styles.muted} role="note">
+              Headshot upload is completed by the speaker in their portal.{" "}
+              {SPEAKER_CUSTOM_FIELDS_CONTRACT_GAP}
+            </p>
           </form>
-        </section>
-      ) : null}
+          <DialogFooter>
+            <Button variant="outline" type="button" onClick={() => setShowAdd(false)}>
+              Cancel
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
-      <section
-        style={{ ...panelStyle, marginBottom: "1rem" }}
-        aria-labelledby="roster-heading"
-        aria-busy={loading}
+      <Tabs
+        value={activeView}
+        onValueChange={(value) => setActiveView(value as "roster" | "tasks" | "email")}
+        className={styles.tabs}
       >
-        <div
-          style={{
-            display: "flex",
-            flexWrap: "wrap",
-            justifyContent: "space-between",
-            gap: "0.8rem",
-            alignItems: "end",
-          }}
-        >
-          <div>
-            <h2 id="roster-heading" style={{ margin: 0, fontSize: "1.1rem" }}>
-              Speakers {roster ? `(${filteredSpeakers.length} of ${speakers.length})` : ""}
-            </h2>
-            <p style={mutedStyle}>
-              Search by name, email, title, company, or biography. Filters are limited to this
-              event.
-            </p>
-          </div>
-          <div style={inlineStyle}>
-            <label style={fieldStyle}>
-              <span className={styles.srOnly}>Search speakers</span>
-              <input
-                style={{ ...inputStyle, minWidth: "15rem" }}
-                aria-label="Search speakers"
-                placeholder="Search speakers"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-              />
-            </label>
-            <label style={fieldStyle}>
-              <span className={styles.srOnly}>Filter by status</span>
-              <select
-                aria-label="Filter by status"
-                style={inputStyle}
-                value={statusFilter}
-                onChange={(event) => setStatusFilter(event.target.value)}
-              >
-                <option value="all">All statuses</option>
-                {statusOptions.map((status) => (
-                  <option key={status} value={status}>
-                    {statusLabel(status)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label style={fieldStyle}>
-              <span className={styles.srOnly}>Filter by session</span>
-              <select
-                aria-label="Filter by session"
-                style={inputStyle}
-                value={sessionFilter}
-                onChange={(event) => setSessionFilter(event.target.value)}
-              >
-                <option value="all">All sessions</option>
-                {sessionOptions.map(([sessionId, title]) => (
-                  <option key={sessionId} value={sessionId}>
-                    {title}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label style={fieldStyle}>
-              <span className={styles.srOnly}>Filter by task progress</span>
-              <select
-                aria-label="Filter by task progress"
-                style={inputStyle}
-                value={progressFilter}
-                onChange={(event) => setProgressFilter(event.target.value as ProgressFilter)}
-              >
-                <option value="all">All task progress</option>
-                <option value="complete">Complete</option>
-                <option value="incomplete">Incomplete</option>
-              </select>
-            </label>
-            <button
-              className={styles.secondaryButton}
-              type="button"
-              onClick={clearRosterFilters}
-              disabled={!hasActiveRosterFilters}
-              aria-label="Clear speaker filters"
-            >
-              Clear filters
-            </button>
-          </div>
-        </div>
-        {hasActiveRosterFilters ? (
-          <p style={mutedStyle} role="status" aria-live="polite">
-            Showing {filteredSpeakers.length} of {speakers.length} speakers after filters.
-          </p>
-        ) : null}
-        <div style={{ ...inlineStyle, justifyContent: "space-between" }}>
-          <span style={mutedStyle}>
-            {selectedSpeakerIds.length} speaker{selectedSpeakerIds.length === 1 ? "" : "s"} selected
-          </span>
-          <div style={inlineStyle}>
-            <button
-              className={styles.secondaryButton}
-              type="button"
-              onClick={toggleVisibleSpeakerSelection}
-              disabled={filteredSpeakers.length === 0}
-            >
-              {allVisibleSelected ? "Deselect visible" : "Select visible"}
-            </button>
-            <button
-              className={styles.secondaryButton}
-              type="button"
-              onClick={clearSpeakerSelection}
-              disabled={selectedSpeakerIds.length === 0}
-            >
-              Clear selection
-            </button>
-          </div>
-        </div>
+        <TabsList variant="line" aria-label="Speaker workspace views">
+          <TabsTrigger id="roster-tab" aria-controls="roster-view" value="roster">
+            <Users data-icon="inline-start" />
+            Roster
+          </TabsTrigger>
+          <TabsTrigger id="tasks-tab" aria-controls="tasks-view" value="tasks">
+            <ListTodo data-icon="inline-start" />
+            Tasks
+          </TabsTrigger>
+          <TabsTrigger id="email-tab" aria-controls="email-view" value="email">
+            <Mail data-icon="inline-start" />
+            Email
+          </TabsTrigger>
+        </TabsList>
 
-        {loading ? (
-          <FormMessage
-            message={
-              roster
-                ? "Refreshing speaker roster… Showing the last loaded roster while it updates."
-                : "Loading speaker roster…"
-            }
-          />
-        ) : null}
-        {duplicateEmailWarnings.length > 0 ? (
-          <FormMessage
-            error
-            message={`Duplicate speaker email conflict: ${duplicateEmailWarnings
-              .map(
-                (conflict) =>
-                  `${conflict.email} (${conflict.speakers.map((speaker) => speaker.displayName).join(", ")})`,
-              )
-              .join("; ")}. Each authoritative speaker remains visible.`}
-          />
-        ) : null}
-        {!loading && roster && speakers.length === 0 ? (
-          <div
-            style={{
-              padding: "1.2rem",
-              border: "1px dashed var(--admin-border-strong)",
-              borderRadius: "var(--admin-radius-sm)",
-            }}
-          >
-            <strong>No speakers yet.</strong>
-            <p style={mutedStyle}>
-              Add a speaker manually or use CSV import below to start this event roster.
-            </p>
-          </div>
-        ) : null}
-        {!loading && roster && speakers.length > 0 && filteredSpeakers.length === 0 ? (
-          <FormMessage message="No speakers match the current search and filters. Clear them to restore the roster." />
-        ) : null}
-        {filteredSpeakers.length > 0 ? (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem" }}>
-              <caption
-                style={{
-                  position: "absolute",
-                  width: 1,
-                  height: 1,
-                  overflow: "hidden",
-                  clip: "rect(0 0 0 0)",
-                }}
-              >
-                Event speaker roster
-              </caption>
-              <thead>
-                <tr>
-                  <th
-                    scope="col"
-                    style={{
-                      padding: "0.65rem",
-                      borderBottom: "2px solid var(--admin-border)",
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      aria-label="Select visible speakers"
-                      checked={allVisibleSelected}
-                      onChange={toggleVisibleSpeakerSelection}
-                      disabled={filteredSpeakers.length === 0}
+        <TabsContent
+          value="roster"
+          id="roster-view"
+          aria-labelledby="roster-tab"
+          className={styles.view}
+        >
+          <section className={styles.summaryGrid} aria-label="Speaker roster summary">
+            <Card size="sm" className={styles.summary}>
+              <CardHeader>
+                <CardDescription>Speakers</CardDescription>
+                <CardTitle>{speakers.length}</CardTitle>
+              </CardHeader>
+            </Card>
+            <Card size="sm" className={styles.summary}>
+              <CardHeader>
+                <CardDescription>Visible</CardDescription>
+                <CardTitle>{filteredSpeakers.length}</CardTitle>
+              </CardHeader>
+            </Card>
+            <Card size="sm" className={styles.summary}>
+              <CardHeader>
+                <CardDescription>Invited</CardDescription>
+                <CardTitle>
+                  {speakers.filter((speaker) => speaker.status === "invited").length}
+                </CardTitle>
+              </CardHeader>
+            </Card>
+            <Card size="sm" className={styles.summary}>
+              <CardHeader>
+                <CardDescription>Needs work</CardDescription>
+                <CardTitle>
+                  {speakers.filter((speaker) => speaker.taskSummary.overdue > 0).length}
+                </CardTitle>
+              </CardHeader>
+            </Card>
+          </section>
+
+          <Card className={styles.panel} aria-busy={loading}>
+            <CardHeader className={styles.panelHeader}>
+              <div>
+                <CardTitle id="roster-heading">Roster</CardTitle>
+                <CardDescription>
+                  Search and filter this event roster, then open a speaker for profile and delivery
+                  details.
+                </CardDescription>
+              </div>
+              <Badge variant="outline">
+                {roster ? `${filteredSpeakers.length} of ${speakers.length}` : "Loading"}
+              </Badge>
+            </CardHeader>
+            <CardContent className={styles.actionsStack}>
+              <div className={styles.toolbar}>
+                <Field>
+                  <FieldLabel className={adminStyles.srOnly} htmlFor="speaker-search">
+                    Search speakers
+                  </FieldLabel>
+                  <div className={styles.inputWithIcon}>
+                    <Search aria-hidden="true" />
+                    <Input
+                      id="speaker-search"
+                      aria-label="Search speakers"
+                      placeholder="Search by name, email, title, or company"
+                      value={query}
+                      onChange={(event) => setQuery(event.target.value)}
                     />
-                  </th>
-                  {[
-                    "Speaker",
-                    "Title / company",
-                    "Status",
-                    "Sessions",
-                    "General task progress",
-                    "Actions",
-                  ].map((heading) => (
-                    <th
-                      key={heading}
-                      scope="col"
-                      style={{
-                        padding: "0.65rem",
-                        textAlign: "left",
-                        borderBottom: "2px solid var(--admin-border)",
-                        color: "var(--admin-muted)",
-                        fontSize: "0.7rem",
-                        textTransform: "uppercase",
-                        letterSpacing: "0.05em",
-                      }}
-                    >
-                      {heading}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {filteredSpeakers.map((speaker) => (
-                  <tr
-                    key={speaker.participantId}
-                    style={{
-                      background:
-                        selectedId === speaker.participantId
-                          ? "var(--admin-brand-soft)"
-                          : undefined,
-                    }}
+                  </div>
+                </Field>
+                <Field>
+                  <FieldLabel className={adminStyles.srOnly} htmlFor="speaker-status-filter">
+                    Filter by status
+                  </FieldLabel>
+                  <Select value={statusFilter} onValueChange={setStatusFilter}>
+                    <SelectTrigger id="speaker-status-filter" aria-label="Filter by status">
+                      <SelectValue placeholder="All statuses" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectItem value="all">All statuses</SelectItem>
+                        {statusOptions.map((status) => (
+                          <SelectItem key={status} value={status}>
+                            {statusLabel(status)}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field>
+                  <FieldLabel className={adminStyles.srOnly} htmlFor="speaker-session-filter">
+                    Filter by session
+                  </FieldLabel>
+                  <Select value={sessionFilter} onValueChange={setSessionFilter}>
+                    <SelectTrigger id="speaker-session-filter" aria-label="Filter by session">
+                      <SelectValue placeholder="All sessions" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectItem value="all">All sessions</SelectItem>
+                        {sessionOptions.map(([sessionId, title]) => (
+                          <SelectItem key={sessionId} value={sessionId}>
+                            {title}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field>
+                  <FieldLabel className={adminStyles.srOnly} htmlFor="speaker-progress-filter">
+                    Filter by task progress
+                  </FieldLabel>
+                  <Select
+                    value={progressFilter}
+                    onValueChange={(value) => setProgressFilter(value as ProgressFilter)}
                   >
-                    <td
-                      style={{
-                        padding: "0.75rem 0.65rem",
-                        borderBottom: "1px solid var(--admin-border)",
-                      }}
+                    <SelectTrigger
+                      id="speaker-progress-filter"
+                      aria-label="Filter by task progress"
                     >
-                      <input
-                        type="checkbox"
-                        aria-label={`Select ${speaker.displayName}`}
-                        checked={selectedSpeakerIds.includes(speaker.participantId)}
-                        onChange={() => toggleSpeakerSelection(speaker.participantId)}
-                      />
-                    </td>
-                    <th
-                      scope="row"
-                      style={{
-                        padding: "0.75rem 0.65rem",
-                        textAlign: "left",
-                        borderBottom: "1px solid var(--admin-border)",
-                        minWidth: "12rem",
-                      }}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => beginEdit(speaker)}
-                        style={{
-                          padding: 0,
-                          border: 0,
-                          background: "transparent",
-                          color: "var(--admin-brand-strong)",
-                          font: "inherit",
-                          fontWeight: 800,
-                          textAlign: "left",
-                          cursor: "pointer",
-                        }}
-                      >
-                        {speaker.displayName}
-                      </button>
-                      <span
-                        style={{
-                          display: "block",
-                          marginTop: "0.2rem",
-                          color: "var(--admin-muted)",
-                          fontSize: "0.75rem",
-                          fontWeight: 500,
-                        }}
-                      >
-                        {speaker.email}
-                      </span>
-                    </th>
-                    <td
-                      style={{
-                        padding: "0.75rem 0.65rem",
-                        borderBottom: "1px solid var(--admin-border)",
-                      }}
-                    >
-                      {speaker.jobTitle || speaker.company
-                        ? `${speaker.jobTitle ?? ""}${speaker.jobTitle && speaker.company ? " · " : ""}${speaker.company ?? ""}`
-                        : "Profile details pending"}
-                    </td>
-                    <td
-                      style={{
-                        padding: "0.75rem 0.65rem",
-                        borderBottom: "1px solid var(--admin-border)",
-                      }}
-                    >
-                      <SpeakerStatusBadge status={speaker.status} />
-                    </td>
-                    <td
-                      style={{
-                        padding: "0.75rem 0.65rem",
-                        borderBottom: "1px solid var(--admin-border)",
-                      }}
-                    >
-                      {speaker.sessions.length}
-                    </td>
-                    <td
-                      style={{
-                        padding: "0.75rem 0.65rem",
-                        borderBottom: "1px solid var(--admin-border)",
-                      }}
-                    >
-                      {speaker.taskSummary.completed} / {speaker.taskSummary.total} complete
-                      {speaker.taskSummary.overdue > 0 ? (
-                        <span
-                          style={{
-                            display: "block",
-                            color: "var(--admin-danger)",
-                            fontSize: "0.72rem",
-                          }}
+                      <SelectValue placeholder="All task progress" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectItem value="all">All task progress</SelectItem>
+                        <SelectItem value="complete">Complete</SelectItem>
+                        <SelectItem value="incomplete">Incomplete</SelectItem>
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Button
+                  variant="outline"
+                  type="button"
+                  onClick={clearRosterFilters}
+                  disabled={!hasActiveRosterFilters}
+                  aria-label="Clear speaker filters"
+                >
+                  Clear filters
+                </Button>
+              </div>
+
+              {hasActiveRosterFilters ? (
+                <p className={styles.muted} role="status" aria-live="polite">
+                  Showing {filteredSpeakers.length} of {speakers.length} speakers after filters.
+                </p>
+              ) : null}
+              <div className={styles.selectionBar}>
+                <span>
+                  {selectedSpeakerIds.length} speaker{selectedSpeakerIds.length === 1 ? "" : "s"}{" "}
+                  selected
+                </span>
+                <div className={styles.actions}>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    type="button"
+                    onClick={toggleVisibleSpeakerSelection}
+                    disabled={filteredSpeakers.length === 0}
+                  >
+                    {allVisibleSelected ? "Deselect visible" : "Select visible"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    type="button"
+                    onClick={clearSpeakerSelection}
+                    disabled={selectedSpeakerIds.length === 0}
+                  >
+                    Clear selection
+                  </Button>
+                </div>
+              </div>
+
+              {loading ? (
+                <FormMessage
+                  message={
+                    roster
+                      ? "Refreshing speaker roster… Showing the last loaded roster while it updates."
+                      : "Loading speaker roster…"
+                  }
+                />
+              ) : null}
+              {duplicateEmailWarnings.length > 0 ? (
+                <FormMessage
+                  error
+                  message={`Duplicate speaker email conflict: ${duplicateEmailWarnings
+                    .map(
+                      (conflict) =>
+                        `${conflict.email} (${conflict.speakers.map((speaker) => speaker.displayName).join(", ")})`,
+                    )
+                    .join("; ")}. Each authoritative speaker remains visible.`}
+                />
+              ) : null}
+
+              <div className={styles.rosterGrid}>
+                <div className={styles.rosterList}>
+                  {!loading && roster && speakers.length === 0 ? (
+                    <Empty className={styles.empty}>
+                      <EmptyHeader>
+                        <EmptyMedia variant="icon">
+                          <Users />
+                        </EmptyMedia>
+                        <EmptyTitle>No speakers yet</EmptyTitle>
+                        <EmptyDescription>
+                          Add a speaker or use the Import CSV control below to start this event
+                          roster.
+                        </EmptyDescription>
+                      </EmptyHeader>
+                    </Empty>
+                  ) : null}
+                  {!loading && roster && speakers.length > 0 && filteredSpeakers.length === 0 ? (
+                    <Empty className={styles.empty}>
+                      <EmptyHeader>
+                        <EmptyTitle>No matching speakers</EmptyTitle>
+                        <EmptyDescription>
+                          No speakers match the current search and filters. Clear them to restore
+                          the roster.
+                        </EmptyDescription>
+                      </EmptyHeader>
+                    </Empty>
+                  ) : null}
+                  {filteredSpeakers.length > 0 ? (
+                    <ul className={styles.speakerList} aria-label="Event speaker roster">
+                      {filteredSpeakers.map((speaker) => (
+                        <li
+                          className={`${styles.speakerRow}${selectedId === speaker.participantId ? ` ${styles.speakerRowSelected}` : ""}`}
+                          key={speaker.participantId}
                         >
-                          {speaker.taskSummary.overdue} overdue
-                        </span>
+                          <Checkbox
+                            aria-label={`Select ${speaker.displayName}`}
+                            checked={selectedSpeakerIds.includes(speaker.participantId)}
+                            onCheckedChange={() => toggleSpeakerSelection(speaker.participantId)}
+                          />
+                          <div className={styles.speakerCopy}>
+                            <Button
+                              variant="link"
+                              size="sm"
+                              className={styles.speakerName}
+                              type="button"
+                              onClick={() => beginEdit(speaker)}
+                            >
+                              {speaker.displayName}
+                            </Button>
+                            <span className={styles.speakerMeta}>{speaker.email}</span>
+                            <span className={styles.speakerMeta}>
+                              {speaker.jobTitle || speaker.company
+                                ? `${speaker.jobTitle ?? ""}${speaker.jobTitle && speaker.company ? " · " : ""}${speaker.company ?? ""}`
+                                : "Profile details pending"}
+                            </span>
+                          </div>
+                          <div className={styles.speakerStats}>
+                            <SpeakerStatusBadge status={speaker.status} />
+                            <span>
+                              {speaker.sessions.length} session
+                              {speaker.sessions.length === 1 ? "" : "s"}
+                            </span>
+                            <span>
+                              {speaker.taskSummary.completed} / {speaker.taskSummary.total} tasks
+                              {speaker.taskSummary.overdue > 0
+                                ? ` · ${speaker.taskSummary.overdue} overdue`
+                                : ""}
+                            </span>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              type="button"
+                              onClick={() => beginEdit(speaker)}
+                            >
+                              Open profile
+                            </Button>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
+
+                {selectedSpeaker ? (
+                  <Card className={styles.detail} aria-labelledby="speaker-detail-heading">
+                    <CardHeader className={styles.detailHeader}>
+                      <div>
+                        <p className={styles.eyebrow}>Speaker record</p>
+                        <CardTitle id="speaker-detail-heading">
+                          {selectedSpeaker.displayName}
+                        </CardTitle>
+                        <CardDescription>
+                          {selectedSpeaker.email} ·{" "}
+                          <SpeakerStatusBadge status={selectedSpeaker.status} />
+                        </CardDescription>
+                      </div>
+                      <div className={styles.actions}>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          type="button"
+                          onClick={() => void refreshDetails()}
+                          disabled={detailBusy || api === null}
+                        >
+                          <RefreshCw data-icon="inline-start" />
+                          {detailBusy ? "Refreshing details…" : "Refresh details"}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          type="button"
+                          onClick={() => setShowSpeakerSheet(true)}
+                        >
+                          <Eye data-icon="inline-start" />
+                          Open drawer
+                        </Button>
+                        <SpeakerInvitationControls
+                          previewBusy={invitationPreviewBusy}
+                          sendBusy={invitationSendBusy}
+                          disabled={api === null}
+                          canSend={invitationReady}
+                          onPreview={() => void previewSelectedSpeakerInvitation()}
+                          onSend={() => void sendSelectedSpeakerInvitation()}
+                        />
+                      </div>
+                    </CardHeader>
+                    <CardContent className={styles.actionsStack}>
+                      {invitationPreviewCount > 0 ? (
+                        <Alert>
+                          <Mail />
+                          <AlertTitle>Invitation preview ready</AlertTitle>
+                          <AlertDescription>
+                            {invitationPreviewCount} speaker previewed.{" "}
+                            {invitationReady ? "Eligible to send." : "Sending is blocked."} Sending
+                            remains a separate explicit action.
+                            <ul className={styles.list} aria-label="Portal invitation preview">
+                              {selectedInvitationPreview.map((preview) => (
+                                <li key={preview.participantId}>
+                                  <strong>{statusLabel(preview.state)}</strong> ·{" "}
+                                  {preview.recipientEmail || "No deliverable email"}
+                                </li>
+                              ))}
+                            </ul>
+                          </AlertDescription>
+                        </Alert>
                       ) : null}
-                    </td>
-                    <td
-                      style={{
-                        padding: "0.75rem 0.65rem",
-                        borderBottom: "1px solid var(--admin-border)",
-                      }}
-                    >
-                      <button
-                        className={styles.secondaryButton}
+                      {invitationResult &&
+                      selectedInvitationResultRecipient &&
+                      invitationResultParticipantId === selectedSpeaker.participantId ? (
+                        <FormMessage
+                          message={`Invitation ${selectedInvitationResultRecipient.status} for ${selectedInvitationResultRecipient.recipientEmail}.`}
+                          error={selectedInvitationResultRecipient.status === "failed"}
+                        />
+                      ) : null}
+                      {invitationError ? <FormMessage message={invitationError} error /> : null}
+                      {invitationHistory.length > 0 ? (
+                        <div className={styles.detailBlock}>
+                          <h3 className={styles.subheading}>Portal invitation send history</h3>
+                          <ul className={styles.list} aria-label="Portal invitation send history">
+                            {invitationHistory.map((entry) => (
+                              <li key={`${entry.result.idempotencyKey}:${entry.occurredAt}`}>
+                                <strong>{statusLabel(entry.result.status)}</strong> ·{" "}
+                                {entry.preview
+                                  .map((preview) => preview.recipientEmail || preview.participantId)
+                                  .join(", ")}{" "}
+                                · {dateTimeLabel(entry.occurredAt)} UTC
+                              </li>
+                            ))}
+                          </ul>
+                          <p className={styles.muted}>
+                            History remains available while this workspace is open; the speaker API
+                            does not expose a persistent invitation-history read endpoint.
+                          </p>
+                        </div>
+                      ) : null}
+                      {detailNotice ? (
+                        <FormMessage
+                          message={detailNotice}
+                          error={
+                            detailNotice.includes("unavailable") || detailNotice.includes("could")
+                          }
+                        />
+                      ) : null}
+                      <Card className={styles.uploadPanel}>
+                        <CardHeader>
+                          <CardTitle className={styles.subheading}>Headshot</CardTitle>
+                          <CardDescription>
+                            Secure event-scoped preview and organizer replacement.
+                          </CardDescription>
+                        </CardHeader>
+                        <CardContent className={styles.actionsStack}>
+                          <SpeakerHeadshot
+                            speakerName={selectedSpeaker.displayName}
+                            asset={selectedHeadshotAsset}
+                            imageUrl={headshotPreviewUrl}
+                            loading={headshotPreviewLoading}
+                            error={headshotPreviewError}
+                            revision={headshotPreviewRevision}
+                            onRetry={retryHeadshotPreview}
+                            onImageError={markHeadshotPreviewFailed}
+                          />
+                          <Field>
+                            <FieldLabel htmlFor="speaker-headshot-upload">
+                              Upload or replace headshot
+                            </FieldLabel>
+                            <Input
+                              id="speaker-headshot-upload"
+                              type="file"
+                              accept={ORGANIZER_HEADSHOT_ACCEPTED_TYPES.join(",")}
+                              onChange={(event) => void uploadOrganizerHeadshot(event)}
+                              disabled={
+                                headshotUploadStatus === "busy" ||
+                                api === null ||
+                                api.replaceHeadshot === undefined
+                              }
+                            />
+                          </Field>
+                          <p className={styles.muted}>
+                            Accepted headshot types: JPEG, PNG, or WebP; maximum size 5 MB. Uploads
+                            use the event-scoped organizer private upload flow.
+                          </p>
+                          {headshotUploadMessage ? (
+                            <FormMessage
+                              message={headshotUploadMessage}
+                              error={headshotUploadStatus === "error"}
+                            />
+                          ) : null}
+                        </CardContent>
+                      </Card>
+
+                      {editDraft ? (
+                        <form
+                          className={styles.detailBlock}
+                          onSubmit={(event) => void saveSpeaker(event)}
+                        >
+                          <ProfileFields
+                            draft={editDraft}
+                            onChange={updateEdit}
+                            disabled={saveBusy}
+                          />
+                          <Field>
+                            <FieldLabel htmlFor="edit-speaker-status">Workflow status</FieldLabel>
+                            <Select
+                              value={editDraft.status}
+                              onValueChange={(value) => updateEdit("status", value)}
+                              disabled={saveBusy}
+                            >
+                              <SelectTrigger id="edit-speaker-status">
+                                <SelectValue placeholder="Select workflow status" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectGroup>
+                                  {statusOptions.map((status) => (
+                                    <SelectItem key={status} value={status}>
+                                      {statusLabel(status)}
+                                    </SelectItem>
+                                  ))}
+                                </SelectGroup>
+                              </SelectContent>
+                            </Select>
+                          </Field>
+                          {editError ? <FormMessage message={editError} error /> : null}
+                          <div className={styles.actions}>
+                            <Button
+                              variant="default"
+                              type="submit"
+                              disabled={saveBusy || api === null}
+                            >
+                              <CheckCircle2 data-icon="inline-start" />
+                              {saveBusy ? "Saving…" : "Save profile changes"}
+                            </Button>
+                            <Badge variant="outline">Version {editDraft.expectedVersion}</Badge>
+                          </div>
+                        </form>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          type="button"
+                          onClick={() => beginEdit(selectedSpeaker)}
+                        >
+                          Edit profile
+                        </Button>
+                      )}
+
+                      <div className={styles.detailGrid}>
+                        <Card size="sm">
+                          <CardHeader>
+                            <CardTitle className={styles.subheading}>Session assignments</CardTitle>
+                            <CardDescription>Authoritative agenda links.</CardDescription>
+                          </CardHeader>
+                          <CardContent className={styles.actionsStack}>
+                            {selectedSpeaker.sessions.length === 0 ? (
+                              <Empty>
+                                <EmptyTitle>No sessions linked</EmptyTitle>
+                                <EmptyDescription>
+                                  No sessions are linked to this speaker yet.
+                                </EmptyDescription>
+                              </Empty>
+                            ) : (
+                              <ul className={styles.list}>
+                                {selectedSpeaker.sessions.map((session: SpeakerSession) => (
+                                  <li key={session.submissionId} className={styles.preview}>
+                                    <strong>{session.title}</strong>
+                                    <Badge variant="outline">{statusLabel(session.status)}</Badge>
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                            <div className={styles.actions}>
+                              <Button
+                                variant="outline"
+                                type="button"
+                                disabled
+                                title="Session linking is managed by the agenda service."
+                              >
+                                Assign a session
+                              </Button>
+                              <Button variant="outline" asChild>
+                                <Link
+                                  href={`/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}/agenda`}
+                                >
+                                  Open Agenda
+                                </Link>
+                              </Button>
+                            </div>
+                            <p className={styles.muted}>
+                              Session linking is managed in Agenda; this workspace shows the
+                              authoritative assignments.
+                            </p>
+                          </CardContent>
+                        </Card>
+                        <Card size="sm">
+                          <CardHeader>
+                            <CardTitle className={styles.subheading}>
+                              Uploaded deliverables
+                            </CardTitle>
+                            <CardDescription>Private event files and headshots.</CardDescription>
+                          </CardHeader>
+                          <CardContent>
+                            {selectedSpeaker.assets.length === 0 ? (
+                              <Empty>
+                                <EmptyTitle>No deliverables</EmptyTitle>
+                                <EmptyDescription>
+                                  No uploaded headshot or deliverables are available.
+                                </EmptyDescription>
+                              </Empty>
+                            ) : (
+                              <ul className={styles.list}>
+                                {selectedSpeaker.assets.map((asset: SpeakerAsset) => (
+                                  <li key={asset.assetId} className={styles.preview}>
+                                    <strong>{asset.fileName}</strong>
+                                    <SpeakerAssetMetadata asset={asset} />
+                                    <SpeakerAssetDownload
+                                      asset={asset}
+                                      downloadUrl={downloadUrls[asset.assetId] ?? null}
+                                      busy={downloadBusyAssetId === asset.assetId}
+                                      disabled={api === null || downloadBusyAssetId !== null}
+                                      error={downloadErrors[asset.assetId] ?? null}
+                                      onRequest={requestAssetDownload}
+                                    />
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </CardContent>
+                        </Card>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ) : (
+                  <Empty className={styles.empty}>
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon">
+                        <Users />
+                      </EmptyMedia>
+                      <EmptyTitle>Select a speaker</EmptyTitle>
+                      <EmptyDescription>
+                        Select a speaker to see profile and delivery details.
+                      </EmptyDescription>
+                    </EmptyHeader>
+                  </Empty>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Collapsible open={showCsv} onOpenChange={setShowCsv} className={styles.importDetails}>
+            <CollapsibleTrigger asChild>
+              <Button variant="outline" type="button">
+                <FileText data-icon="inline-start" />
+                {showCsv ? "Hide CSV import" : "Import CSV"}
+              </Button>
+            </CollapsibleTrigger>
+            <CollapsibleContent className={styles.importBody}>
+              <Card aria-busy={importBusy}>
+                <CardHeader>
+                  <CardTitle>Import speaker roster</CardTitle>
+                  <CardDescription>
+                    Preview validation before committing rows. Invalid rows are never written to
+                    this event.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className={styles.actionsStack}>
+                  <Field>
+                    <FieldLabel htmlFor="speaker-csv">Speakers CSV</FieldLabel>
+                    <Input
+                      id="speaker-csv"
+                      type="file"
+                      accept=".csv,text/csv"
+                      onChange={(event) => void previewCsv(event)}
+                      disabled={importCommitBusy || api === null}
+                    />
+                  </Field>
+                  {importFileName ? (
+                    <p className={styles.muted}>
+                      Selected file: <strong>{importFileName}</strong>
+                    </p>
+                  ) : null}
+                  {importBusy ? <FormMessage message="Validating CSV…" /> : null}
+                  {importPreview ? (
+                    <div className={styles.actionsStack}>
+                      <div className={styles.actions}>
+                        <Badge variant="secondary">{importPreview.validRows.length} valid</Badge>
+                        <Badge variant="destructive">
+                          {importPreview.invalidRows.length} invalid
+                        </Badge>
+                      </div>
+                      {importPreview.invalidRows.length > 0 ? (
+                        <ul className={styles.list} aria-label="CSV validation errors">
+                          {importPreview.invalidRows.map((issue) => (
+                            <li key={`${issue.rowNumber}-${issue.field ?? "row"}-${issue.message}`}>
+                              Row {issue.rowNumber}
+                              {issue.field ? ` · ${issue.field}` : ""}: {issue.message}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className={styles.muted}>
+                          All previewed rows passed required identity validation.
+                        </p>
+                      )}
+                      <Button
+                        variant="default"
                         type="button"
-                        onClick={() => beginEdit(speaker)}
+                        onClick={() => void commitCsv()}
+                        disabled={
+                          importCommitBusy ||
+                          importPreviewBusy ||
+                          importPreview.validRows.length === 0 ||
+                          api === null
+                        }
                       >
-                        Open profile
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : null}
-      </section>
+                        <Upload data-icon="inline-start" />
+                        {importCommitBusy
+                          ? "Importing…"
+                          : `Commit ${importPreview.validRows.length} valid row${importPreview.validRows.length === 1 ? "" : "s"}`}
+                      </Button>
+                    </div>
+                  ) : null}
+                </CardContent>
+              </Card>
+            </CollapsibleContent>
+          </Collapsible>
 
-      <section
-        style={{ ...panelStyle, marginBottom: "1rem" }}
-        aria-labelledby="import-heading"
-        aria-busy={importBusy}
-      >
-        <div>
-          <h2 id="import-heading" style={{ margin: 0, fontSize: "1.05rem" }}>
-            Import speakers from CSV
-          </h2>
-          <p style={mutedStyle}>
-            Preview validation before committing rows. Invalid rows are never written to this event.
-          </p>
-        </div>
-        <label style={fieldStyle}>
-          <span style={labelStyle}>Speakers CSV</span>
-          <input
-            type="file"
-            accept=".csv,text/csv"
-            onChange={(event) => void previewCsv(event)}
-            disabled={importCommitBusy || api === null}
-          />
-        </label>
-        {importFileName ? (
-          <p style={mutedStyle}>
-            Selected file: <strong>{importFileName}</strong>
-          </p>
-        ) : null}
-        {importBusy ? <FormMessage message="Validating CSV…" /> : null}
-        {importPreview ? (
-          <div style={{ display: "grid", gap: "0.75rem" }}>
-            <div style={inlineStyle}>
-              <span style={badgeStyle}>{importPreview.validRows.length} valid</span>
-              <span
-                style={{
-                  ...badgeStyle,
-                  background: "var(--admin-danger-soft)",
-                  color: "var(--admin-danger)",
-                }}
-              >
-                {importPreview.invalidRows.length} invalid
-              </span>
-            </div>
-            {importPreview.invalidRows.length > 0 ? (
-              <ul aria-label="CSV validation errors" style={listStyle}>
-                {importPreview.invalidRows.map((issue) => (
-                  <li
-                    key={`${issue.rowNumber}-${issue.field ?? "row"}-${issue.message}`}
-                    style={{ color: "var(--admin-danger)", fontSize: "0.78rem" }}
-                  >
-                    Row {issue.rowNumber}
-                    {issue.field ? ` · ${issue.field}` : ""}: {issue.message}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p style={mutedStyle}>All previewed rows passed required identity validation.</p>
-            )}
-            <button
-              className={styles.primaryButton}
-              type="button"
-              onClick={() => void commitCsv()}
-              disabled={
-                importCommitBusy ||
-                importPreviewBusy ||
-                importPreview.validRows.length === 0 ||
-                api === null
-              }
-            >
-              {importCommitBusy
-                ? "Importing…"
-                : `Commit ${importPreview.validRows.length} valid row${importPreview.validRows.length === 1 ? "" : "s"}`}
-            </button>
-          </div>
-        ) : null}
-      </section>
+          <Sheet open={showSpeakerSheet} onOpenChange={setShowSpeakerSheet}>
+            <SheetContent>
+              <SheetHeader>
+                <SheetTitle>
+                  {selectedSpeaker ? `${selectedSpeaker.displayName} context` : "Speaker context"}
+                </SheetTitle>
+                <SheetDescription>
+                  The full profile remains adjacent to the roster. This drawer provides a compact
+                  delivery summary.
+                </SheetDescription>
+              </SheetHeader>
+              {selectedSpeaker ? (
+                <div className={styles.sheetBody}>
+                  <Badge variant="outline">{statusLabel(selectedSpeaker.status)}</Badge>
+                  <p className={styles.muted}>{selectedSpeaker.email}</p>
+                  <h3 className={styles.subheading}>Sessions</h3>
+                  <ul className={styles.list}>
+                    {selectedSpeaker.sessions.length === 0 ? (
+                      <li className={styles.muted}>No sessions linked.</li>
+                    ) : (
+                      selectedSpeaker.sessions.map((session) => (
+                        <li key={session.submissionId}>
+                          <strong>{session.title}</strong> · {statusLabel(session.status)}
+                        </li>
+                      ))
+                    )}
+                  </ul>
+                  <h3 className={styles.subheading}>Deliverables</h3>
+                  <p className={styles.muted}>{selectedSpeaker.assets.length} uploaded file(s).</p>
+                </div>
+              ) : null}
+            </SheetContent>
+          </Sheet>
+        </TabsContent>
 
-      <section style={{ ...panelStyle, marginBottom: "1rem" }} aria-labelledby="tasks-heading">
-        <div>
-          <h2 id="tasks-heading" style={{ margin: 0, fontSize: "1.05rem" }}>
-            General speaker tasks
-          </h2>
-          <p style={mutedStyle}>
-            Create plain mark-complete onboarding tasks for multiple speakers. File requests and
-            deliverables belong in Content.
-          </p>
-          <p style={mutedStyle} role="status">
-            {onboardingTaskDefinitions.length} of {MAX_ORGANIZER_ONBOARDING_TASKS} onboarding task
-            definitions configured. The API-loaded definitions and their assignees remain visible
-            after a roster refresh.
-          </p>
-        </div>
-        {!progressSectionVisible ? (
-          <button
-            className={styles.secondaryButton}
-            type="button"
-            onClick={() => setVisibleProgressContext(secondaryContextKey)}
-            disabled={api === null || loading || roster === null}
-          >
-            Load task progress
-          </button>
-        ) : progress === null && progressError === null ? (
-          <FormMessage message="Loading task progress…" />
-        ) : null}
-        <form
-          onSubmit={(event) => void assignTask(event)}
-          style={{ display: "grid", gap: "0.85rem" }}
+        <TabsContent
+          value="tasks"
+          id="tasks-view"
+          aria-labelledby="tasks-tab"
+          className={styles.view}
         >
-          <div style={fieldGridStyle}>
-            <label style={fieldStyle}>
-              <span style={labelStyle}>Task title</span>
-              <input
-                style={inputStyle}
-                value={taskTitle}
-                onChange={(event) => setTaskTitle(event.target.value)}
-                placeholder="Confirm participation"
-                required
-                disabled={taskBusy}
-              />
-            </label>
-            <label style={fieldStyle}>
-              <span style={labelStyle}>Due date</span>
-              <input
-                style={inputStyle}
-                type="date"
-                value={taskDueAt}
-                onChange={(event) => setTaskDueAt(event.target.value)}
-                required
-                disabled={taskBusy}
-              />
-            </label>
-          </div>
-          <fieldset
-            style={{
-              margin: 0,
-              padding: "0.75rem",
-              border: "1px solid var(--admin-border)",
-              borderRadius: "var(--admin-radius-sm)",
-            }}
-          >
-            <legend style={{ padding: "0 0.35rem", ...labelStyle }}>Assign to speakers</legend>
-            {speakers.length === 0 ? (
-              <p style={mutedStyle}>Add speakers before assigning a task.</p>
-            ) : (
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fit, minmax(13rem, 1fr))",
-                  gap: "0.45rem",
-                }}
-              >
-                {speakers.map((speaker) => (
-                  <label
-                    key={speaker.participantId}
-                    style={{
-                      display: "flex",
-                      gap: "0.45rem",
-                      alignItems: "center",
-                      fontSize: "0.82rem",
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={taskAssignees.includes(speaker.participantId)}
-                      onChange={() => toggleAssignee(speaker.participantId)}
+          <Card className={styles.panel}>
+            <CardHeader className={styles.panelHeader}>
+              <div>
+                <CardTitle id="tasks-heading">Tasks</CardTitle>
+                <CardDescription>
+                  Create general mark-complete tasks and review API-backed onboarding progress in
+                  one place.
+                </CardDescription>
+              </div>
+              <Badge variant="outline">
+                {onboardingTaskDefinitions.length} / {MAX_ORGANIZER_ONBOARDING_TASKS} task
+                definitions
+              </Badge>
+            </CardHeader>
+            <CardContent className={styles.actionsStack}>
+              {!progressSectionVisible ? (
+                <Button
+                  variant="outline"
+                  type="button"
+                  onClick={() => setVisibleProgressContext(secondaryContextKey)}
+                  disabled={api === null || loading || roster === null}
+                >
+                  <RefreshCw data-icon="inline-start" />
+                  Load task progress
+                </Button>
+              ) : progress === null && progressError === null ? (
+                <FormMessage message="Loading task progress…" />
+              ) : null}
+              <form className={styles.actionsStack} onSubmit={(event) => void assignTask(event)}>
+                <div className={styles.fieldGrid}>
+                  <Field>
+                    <FieldLabel htmlFor="task-title">Task title</FieldLabel>
+                    <Input
+                      id="task-title"
+                      value={taskTitle}
+                      onChange={(event) => setTaskTitle(event.target.value)}
+                      placeholder="Confirm participation"
+                      required
                       disabled={taskBusy}
                     />
-                    {speaker.displayName}
-                  </label>
-                ))}
-              </div>
-            )}
-          </fieldset>
-          <div style={inlineStyle}>
-            <button
-              className={styles.primaryButton}
-              type="submit"
-              disabled={
-                taskBusy ||
-                api === null ||
-                speakers.length === 0 ||
-                progress === null ||
-                progressError !== null ||
-                onboardingTaskDefinitions.length >= MAX_ORGANIZER_ONBOARDING_TASKS
-              }
-            >
-              {taskBusy
-                ? "Assigning…"
-                : onboardingTaskDefinitions.length >= MAX_ORGANIZER_ONBOARDING_TASKS
-                  ? "Three onboarding tasks configured"
-                  : "Assign onboarding task"}
-            </button>
-            <span style={mutedStyle}>Task type: action / mark complete</span>
-          </div>
-        </form>
-        {onboardingTaskDefinitions.length > 0 ? (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem" }}>
-              <caption
-                style={{
-                  position: "absolute",
-                  width: 1,
-                  height: 1,
-                  overflow: "hidden",
-                  clip: "rect(0 0 0 0)",
-                }}
-              >
-                API-loaded organizer onboarding task definitions
-              </caption>
-              <thead>
-                <tr>
-                  {["Task", "Due", "Assignees"].map((heading) => (
-                    <th
-                      key={heading}
-                      scope="col"
-                      style={{
-                        padding: "0.55rem",
-                        borderBottom: "2px solid var(--admin-border)",
-                        textAlign: "left",
-                        color: "var(--admin-muted)",
-                        fontSize: "0.7rem",
-                        textTransform: "uppercase",
-                      }}
-                    >
-                      {heading}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {onboardingTaskDefinitions.map((definition) => (
-                  <tr key={definition.definitionId}>
-                    <th
-                      scope="row"
-                      style={{
-                        padding: "0.65rem 0.55rem",
-                        borderBottom: "1px solid var(--admin-border)",
-                        textAlign: "left",
-                      }}
-                    >
-                      {definition.title}
-                    </th>
-                    <td
-                      style={{
-                        padding: "0.65rem 0.55rem",
-                        borderBottom: "1px solid var(--admin-border)",
-                      }}
-                    >
-                      {dateLabel(definition.dueAt)}
-                    </td>
-                    <td
-                      style={{
-                        padding: "0.65rem 0.55rem",
-                        borderBottom: "1px solid var(--admin-border)",
-                      }}
-                    >
-                      {definition.participantIds
-                        .map((participantId) => {
-                          const assignee = speakers.find(
-                            (speaker) => speaker.participantId === participantId,
-                          );
-                          return assignee === undefined
-                            ? participantId
-                            : `${assignee.displayName} (${participantId})`;
-                        })
-                        .join(", ")}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : null}
-      </section>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="task-due-date">Due date</FieldLabel>
+                    <Input
+                      id="task-due-date"
+                      type="date"
+                      value={taskDueAt}
+                      onChange={(event) => setTaskDueAt(event.target.value)}
+                      required
+                      disabled={taskBusy}
+                    />
+                  </Field>
+                </div>
+                <FieldSet className={styles.detailBlock}>
+                  <FieldLegend variant="label">Assign to speakers</FieldLegend>
+                  {speakers.length === 0 ? (
+                    <Empty>
+                      <EmptyTitle>Add speakers first</EmptyTitle>
+                      <EmptyDescription>Add speakers before assigning a task.</EmptyDescription>
+                    </Empty>
+                  ) : (
+                    <div className={styles.checkboxGrid}>
+                      {speakers.map((speaker) => (
+                        <Field key={speaker.participantId} orientation="horizontal">
+                          <Checkbox
+                            id={`task-assignee-${speaker.participantId}`}
+                            checked={taskAssignees.includes(speaker.participantId)}
+                            onCheckedChange={() => toggleAssignee(speaker.participantId)}
+                            disabled={taskBusy}
+                          />
+                          <FieldLabel htmlFor={`task-assignee-${speaker.participantId}`}>
+                            {speaker.displayName}
+                          </FieldLabel>
+                        </Field>
+                      ))}
+                    </div>
+                  )}
+                </FieldSet>
+                <div className={styles.actions}>
+                  <Button
+                    variant="default"
+                    type="submit"
+                    disabled={
+                      taskBusy ||
+                      api === null ||
+                      speakers.length === 0 ||
+                      progress === null ||
+                      progressError !== null ||
+                      onboardingTaskDefinitions.length >= MAX_ORGANIZER_ONBOARDING_TASKS
+                    }
+                  >
+                    <ListTodo data-icon="inline-start" />
+                    {taskBusy
+                      ? "Assigning…"
+                      : onboardingTaskDefinitions.length >= MAX_ORGANIZER_ONBOARDING_TASKS
+                        ? "Three onboarding tasks configured"
+                        : "Assign onboarding task"}
+                  </Button>
+                  <Badge variant="outline">Task type: action / mark complete</Badge>
+                </div>
+              </form>
 
-      <section
-        ref={emailSectionRef}
-        style={{ ...panelStyle, marginBottom: "1rem" }}
-        aria-labelledby="bulk-email-heading"
-        aria-busy={emailAnyBusy}
-      >
-        <div>
-          <h2 id="bulk-email-heading" style={{ margin: 0, fontSize: "1.05rem" }}>
-            Bulk speaker email
-          </h2>
-          <p style={mutedStyle}>
-            Compose an event-scoped message for the {selectedSpeakerIds.length} selected speaker
-            {selectedSpeakerIds.length === 1 ? "" : "s"}. Approved templates are versioned and
-            preview merge tokens such as <code>{"{{first_name}}"}</code> before queueing.
-          </p>
-        </div>
-        <div style={fieldGridStyle}>
-          <label style={fieldStyle}>
-            <span style={labelStyle}>Template version</span>
-            <select
-              style={inputStyle}
-              aria-label="Speaker email template version"
-              value={emailTemplateId ? `${emailTemplateId}:${emailTemplateVersion ?? ""}` : ""}
-              onChange={(event) => {
-                const separator = event.target.value.lastIndexOf(":");
-                const nextId =
-                  separator < 0 ? event.target.value : event.target.value.slice(0, separator);
-                const rawVersion = separator < 0 ? "" : event.target.value.slice(separator + 1);
-                const nextVersion = Number(rawVersion);
-                const template = emailTemplates.find(
-                  (candidate) => candidate.id === nextId && candidate.version === nextVersion,
-                );
-                setEmailTemplateId(nextId ?? "");
-                setEmailCreateTemplateId(null);
-                setEmailTemplateVersion(Number.isFinite(nextVersion) ? nextVersion : undefined);
-                if (template !== undefined) {
-                  setEmailTemplateName(template.name);
-                  setEmailSubject(template.subject);
-                  setEmailHtml(template.html);
-                  setEmailText(template.text);
-                }
-              }}
-              disabled={emailSaveBusy}
-            >
-              <option value="">New template version</option>
-              {emailTemplates.map((template) => (
-                <option
-                  key={`${template.id}:${template.version}`}
-                  value={`${template.id}:${template.version}`}
+              {onboardingTaskDefinitions.length > 0 ? (
+                <Table>
+                  <TableCaption className={adminStyles.srOnly}>
+                    API-loaded organizer onboarding task definitions
+                  </TableCaption>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Task</TableHead>
+                      <TableHead>Due</TableHead>
+                      <TableHead>Assignees</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {onboardingTaskDefinitions.map((definition) => (
+                      <TableRow key={definition.definitionId}>
+                        <TableHead scope="row">{definition.title}</TableHead>
+                        <TableCell>{dateLabel(definition.dueAt)}</TableCell>
+                        <TableCell>
+                          {definition.participantIds
+                            .map((participantId) => {
+                              const assignee = speakers.find(
+                                (speaker) => speaker.participantId === participantId,
+                              );
+                              return assignee === undefined
+                                ? participantId
+                                : `${assignee.displayName} (${participantId})`;
+                            })
+                            .join(", ")}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              ) : null}
+            </CardContent>
+          </Card>
+
+          <Card className={styles.panel}>
+            <CardHeader className={styles.panelHeader}>
+              <div>
+                <CardTitle id="progress-heading">Onboarding progress</CardTitle>
+                <CardDescription>
+                  List-level general-task completion, including changes speakers make in their
+                  portal.
+                </CardDescription>
+              </div>
+              <Field>
+                <FieldLabel className={adminStyles.srOnly} htmlFor="task-progress-filter">
+                  Filter task progress
+                </FieldLabel>
+                <Select
+                  value={progressFilter}
+                  onValueChange={(value) => setProgressFilter(value as ProgressFilter)}
                 >
-                  {template.name} · v{template.version} · {template.status}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label style={fieldStyle}>
-            <span style={labelStyle}>Template name</span>
-            <input
-              style={inputStyle}
-              value={emailTemplateName}
-              onChange={(event) => setEmailTemplateName(event.target.value)}
-              maxLength={200}
-              disabled={emailSaveBusy}
-            />
-          </label>
-        </div>
-        <label style={fieldStyle}>
-          <span style={labelStyle}>Subject</span>
-          <input
-            style={inputStyle}
-            value={emailSubject}
-            onChange={(event) => setEmailSubject(event.target.value)}
-            placeholder="Update for {{first_name}}"
-            maxLength={500}
-            disabled={emailSaveBusy}
-          />
-        </label>
-        <div style={fieldGridStyle}>
-          <label style={fieldStyle}>
-            <span style={labelStyle}>HTML body</span>
-            <textarea
-              style={textAreaStyle}
-              value={emailHtml}
-              onChange={(event) => setEmailHtml(event.target.value)}
-              maxLength={100_000}
-              disabled={emailSaveBusy}
-            />
-          </label>
-          <label style={fieldStyle}>
-            <span style={labelStyle}>Text body</span>
-            <textarea
-              style={textAreaStyle}
-              value={emailText}
-              onChange={(event) => setEmailText(event.target.value)}
-              maxLength={100_000}
-              disabled={emailSaveBusy}
-            />
-          </label>
-        </div>
-        <div style={inlineStyle}>
-          <button
-            className={styles.secondaryButton}
-            type="button"
-            onClick={() => void saveEmailTemplate()}
-            disabled={emailSaveBusy || api === null}
-          >
-            {emailSaveBusy ? "Saving…" : "Save template version"}
-          </button>
-          <button
-            className={styles.primaryButton}
-            type="button"
-            onClick={() => void previewBulkEmail()}
-            disabled={emailPreviewBusy || api === null || selectedSpeakerIds.length === 0}
-          >
-            {emailPreviewBusy ? "Preparing…" : "Preview merge"}
-          </button>
-          <button
-            className={styles.primaryButton}
-            type="button"
-            onClick={() => void sendBulkEmail()}
-            disabled={emailSendBusy || api === null || emailPreview === null}
-          >
-            {emailSendBusy ? "Queueing…" : "Queue speaker email"}
-          </button>
-          <button
-            className={styles.secondaryButton}
-            type="button"
-            onClick={() => void refreshEmailHistory()}
-            disabled={emailHistoryBusy || api === null}
-            aria-label="Refresh speaker email history"
-          >
-            {emailHistoryBusy ? "Refreshing history…" : "Refresh email history"}
-          </button>
-          <span style={mutedStyle}>
-            Available merge tokens: <code>{"{{first_name}}"}</code>,{" "}
-            <code>{"{{display_name}}"}</code>, <code>{"{{email}}"}</code>.
-          </span>
-        </div>
-        {emailNotice ? (
-          <FormMessage
-            message={emailNotice}
-            error={emailNotice.includes("unavailable") || emailNotice.includes("could")}
-          />
-        ) : null}
-        {emailPreview ? (
-          <div
-            style={{
-              display: "grid",
-              gap: "0.55rem",
-              padding: "0.8rem",
-              border: "1px solid var(--admin-border)",
-              borderRadius: "var(--admin-radius-sm)",
-            }}
-          >
-            <strong>
-              Merge preview · {emailPreview.recipientIds.length} recipient
-              {emailPreview.recipientIds.length === 1 ? "" : "s"} · template v
-              {emailPreview.templateVersion}
-            </strong>
-            <p style={mutedStyle}>{emailPreview.subject}</p>
-            <ul aria-label="Speaker email merge preview recipients" style={listStyle}>
-              {emailPreview.recipients.map((recipient) => (
-                <li key={recipient.participantId}>
-                  <strong>{recipient.firstName}</strong> · {recipient.email} · {recipient.subject}
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-        {emailSends.length > 0 ? (
-          <div>
-            <h3 style={{ margin: 0, fontSize: "0.9rem" }}>Email queue history</h3>
-            <ul aria-label="Speaker email queue history" style={listStyle}>
-              {emailSends.map((send) => (
-                <li key={send.id}>
-                  <strong>{send.status}</strong> · template v{send.templateVersion} ·{" "}
-                  {send.recipientIds.length} recipient{send.recipientIds.length === 1 ? "" : "s"} ·{" "}
-                  {dateLabel(send.updatedAt)}
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-      </section>
-      <section style={{ ...panelStyle, marginBottom: "1rem" }} aria-labelledby="progress-heading">
-        <div
-          style={{
-            display: "flex",
-            flexWrap: "wrap",
-            justifyContent: "space-between",
-            gap: "0.8rem",
-            alignItems: "end",
-          }}
-        >
-          <div>
-            <h2 id="progress-heading" style={{ margin: 0, fontSize: "1.05rem" }}>
-              Onboarding progress
-            </h2>
-            <p style={mutedStyle}>
-              List-level general-task completion, including changes speakers make in their portal.
-            </p>
-          </div>
-          <label style={fieldStyle}>
-            <span className={styles.srOnly}>Filter task progress</span>
-            <select
-              aria-label="Filter task progress"
-              style={inputStyle}
-              value={progressFilter}
-              onChange={(event) => setProgressFilter(event.target.value as ProgressFilter)}
-            >
-              <option value="all">All progress</option>
-              <option value="complete">Complete</option>
-              <option value="incomplete">Incomplete</option>
-            </select>
-          </label>
-        </div>
-        {progressError ? (
-          <FormMessage message={`Progress unavailable: ${progressError}`} error />
-        ) : null}
-        {!progressError && progress && progressRows.length === 0 ? (
-          <FormMessage message="No speakers match this progress filter." />
-        ) : null}
-        {!progressError && progress && progressRows.length > 0 ? (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem" }}>
-              <caption
-                style={{
-                  position: "absolute",
-                  width: 1,
-                  height: 1,
-                  overflow: "hidden",
-                  clip: "rect(0 0 0 0)",
-                }}
-              >
-                Speaker task completion progress
-              </caption>
-              <thead>
-                <tr>
-                  <th
-                    scope="col"
-                    style={{
-                      padding: "0.55rem",
-                      borderBottom: "2px solid var(--admin-border)",
-                      textAlign: "left",
-                    }}
-                  >
-                    Speaker
-                  </th>
-                  <th
-                    scope="col"
-                    style={{
-                      padding: "0.55rem",
-                      borderBottom: "2px solid var(--admin-border)",
-                      textAlign: "left",
-                    }}
-                  >
-                    Tasks and due dates
-                  </th>
-                  <th
-                    scope="col"
-                    style={{
-                      padding: "0.55rem",
-                      borderBottom: "2px solid var(--admin-border)",
-                      textAlign: "left",
-                    }}
-                  >
-                    Progress
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {progressRows.map((row) => {
-                  const completed = row.tasks.filter((task) => taskComplete(task.status)).length;
-                  return (
-                    <tr key={row.participantId}>
-                      <th
-                        scope="row"
-                        style={{
-                          padding: "0.65rem 0.55rem",
-                          borderBottom: "1px solid var(--admin-border)",
-                          textAlign: "left",
-                          verticalAlign: "top",
-                        }}
-                      >
-                        {row.displayName}
-                      </th>
-                      <td
-                        style={{
-                          padding: "0.65rem 0.55rem",
-                          borderBottom: "1px solid var(--admin-border)",
-                        }}
-                      >
-                        <ul style={listStyle}>
-                          {row.tasks.length === 0 ? (
-                            <li style={mutedStyle}>No general tasks assigned.</li>
-                          ) : (
-                            row.tasks.map((task) => (
-                              <li key={task.taskId}>
-                                <span style={{ fontWeight: 700 }}>{task.title}</span> ·{" "}
-                                {dateLabel(task.dueAt)} ·{" "}
-                                <span
-                                  style={{
-                                    color: taskComplete(task.status)
-                                      ? "var(--admin-accent)"
-                                      : "var(--admin-muted)",
-                                  }}
-                                >
-                                  {taskStatusLabel(task.status)}
-                                </span>
-                              </li>
-                            ))
-                          )}
+                  <SelectTrigger id="task-progress-filter" aria-label="Filter task progress">
+                    <SelectValue placeholder="All progress" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectItem value="all">All progress</SelectItem>
+                      <SelectItem value="complete">Complete</SelectItem>
+                      <SelectItem value="incomplete">Incomplete</SelectItem>
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </Field>
+            </CardHeader>
+            <CardContent>
+              {progressError ? (
+                <FormMessage message={`Progress unavailable: ${progressError}`} error />
+              ) : null}
+              {!progressError && progress && progressRows.length === 0 ? (
+                <Empty>
+                  <EmptyTitle>No progress matches</EmptyTitle>
+                  <EmptyDescription>No speakers match this progress filter.</EmptyDescription>
+                </Empty>
+              ) : null}
+              {!progressError && progress && progressRows.length > 0 ? (
+                <Table>
+                  <TableCaption className={adminStyles.srOnly}>
+                    Speaker task completion progress
+                  </TableCaption>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Speaker</TableHead>
+                      <TableHead>Tasks and due dates</TableHead>
+                      <TableHead>Progress</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {progressRows.map((row) => {
+                      const completed = row.tasks.filter((task) =>
+                        taskComplete(task.status),
+                      ).length;
+                      const progressValue =
+                        row.tasks.length === 0 ? 0 : (completed / row.tasks.length) * 100;
+                      return (
+                        <TableRow key={row.participantId}>
+                          <TableHead scope="row">{row.displayName}</TableHead>
+                          <TableCell>
+                            <ul className={styles.list}>
+                              {row.tasks.length === 0 ? (
+                                <li className={styles.muted}>No general tasks assigned.</li>
+                              ) : (
+                                row.tasks.map((task) => (
+                                  <li key={task.taskId}>
+                                    <strong>{task.title}</strong> · {dateLabel(task.dueAt)} ·{" "}
+                                    <Badge
+                                      variant={taskComplete(task.status) ? "secondary" : "outline"}
+                                    >
+                                      {taskStatusLabel(task.status)}
+                                    </Badge>
+                                  </li>
+                                ))
+                              )}
+                            </ul>
+                          </TableCell>
+                          <TableCell>
+                            <div className={styles.progressCell}>
+                              <Progress
+                                value={progressValue}
+                                aria-label={`${completed} of ${row.tasks.length} tasks complete`}
+                              />
+                              <span>
+                                {completed} / {row.tasks.length} complete
+                              </span>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              ) : null}
+            </CardContent>
+          </Card>
+
+          <div ref={reminderSectionRef}>
+            <Card className={styles.panel}>
+              <CardHeader className={styles.panelHeader}>
+                <div>
+                  <CardTitle id="upcoming-reminders-heading">Upcoming reminders</CardTitle>
+                  <CardDescription>
+                    Only reminders that are currently eligible for delivery are shown here.
+                  </CardDescription>
+                </div>
+                <Badge variant="outline">
+                  {reminderEligibility === null ? "Loading" : `${eligibleReminderItems.length} due`}
+                </Badge>
+              </CardHeader>
+              <CardContent className={styles.actionsStack}>
+                {reminderEligibility === null ? (
+                  <FormMessage message="Checking upcoming reminders…" />
+                ) : eligibleReminderItems.length === 0 ? (
+                  <Empty>
+                    <EmptyTitle>No eligible reminders</EmptyTitle>
+                    <EmptyDescription>
+                      Eligible reminders will appear here when their delivery window opens.
+                    </EmptyDescription>
+                  </Empty>
+                ) : (
+                  <ul className={styles.list} aria-label="Upcoming reminders">
+                    {eligibleReminderItems.map((item) => (
+                      <li className={styles.reminderItem} key={item.taskId}>
+                        <strong>{item.title}</strong>
+                        <span>{dateLabel(item.dueAt)}</span>
+                        <Badge variant="secondary">Ready to send</Badge>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {ineligibleReminderItems.length > 0 ? (
+                  <Accordion type="single" collapsible defaultValue="">
+                    <AccordionItem value="diagnostics">
+                      <AccordionTrigger>Reminder diagnostics</AccordionTrigger>
+                      <AccordionContent>
+                        <p className={styles.muted}>
+                          Internal eligibility reasons are available for operators who need to
+                          investigate a reminder schedule.
+                        </p>
+                        <ul className={styles.list}>
+                          {ineligibleReminderItems.map((item) => (
+                            <li key={item.taskId}>
+                              <strong>{item.title}</strong> · {item.reason}
+                            </li>
+                          ))}
                         </ul>
-                      </td>
-                      <td
-                        style={{
-                          padding: "0.65rem 0.55rem",
-                          borderBottom: "1px solid var(--admin-border)",
-                          verticalAlign: "top",
-                        }}
-                      >
-                        {completed} / {row.tasks.length} complete
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                      </AccordionContent>
+                    </AccordionItem>
+                  </Accordion>
+                ) : null}
+              </CardContent>
+            </Card>
           </div>
-        ) : null}
-      </section>
-      <section
-        ref={reminderSectionRef}
-        style={{ ...panelStyle, marginBottom: "1rem" }}
-        aria-labelledby="reminder-eligibility-heading"
-      >
-        <div>
-          <h2 id="reminder-eligibility-heading" style={{ margin: 0, fontSize: "1.05rem" }}>
-            Automated reminder eligibility
-          </h2>
-          <p style={mutedStyle}>
-            Server-calculated due-date windows are observable here before any reminder is queued.
-          </p>
-        </div>
-        {reminderEligibility === null ? (
-          <FormMessage message="Reminder eligibility is unavailable for this event adapter." />
-        ) : (
-          <>
-            <p style={mutedStyle}>
-              {reminderEligibility.eligibleTaskIds.length} task
-              {reminderEligibility.eligibleTaskIds.length === 1 ? "" : "s"} currently eligible for
-              automated delivery across {reminderEligibility.eligibleRecipientIds.length} speaker
-              {reminderEligibility.eligibleRecipientIds.length === 1 ? "" : "s"}.
-            </p>
-            <ul aria-label="Automated reminder eligibility list" style={listStyle}>
-              {reminderEligibility.items.map((item) => (
-                <li key={item.taskId}>
-                  <strong>{item.title}</strong> ·{" "}
-                  {item.dueAt ? dateLabel(item.dueAt) : "No due date"} ·{" "}
-                  <span
-                    style={{ color: item.eligible ? "var(--admin-accent)" : "var(--admin-muted)" }}
-                  >
-                    {item.eligible ? `Eligible (${item.reason})` : `Not eligible (${item.reason})`}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </>
-        )}
-      </section>
+        </TabsContent>
 
-      {selectedSpeaker ? (
-        <section
-          style={{ ...panelStyle, marginBottom: "1rem" }}
-          aria-labelledby="speaker-detail-heading"
+        <TabsContent
+          value="email"
+          id="email-view"
+          aria-labelledby="email-tab"
+          className={styles.view}
         >
-          <div
-            style={{
-              display: "flex",
-              flexWrap: "wrap",
-              justifyContent: "space-between",
-              gap: "0.8rem",
-              alignItems: "start",
-            }}
-          >
-            <div>
-              <p className={styles.eyebrow} style={{ marginBottom: "0.35rem" }}>
-                Speaker record
-              </p>
-              <h2 id="speaker-detail-heading" style={{ margin: 0, fontSize: "1.3rem" }}>
-                {selectedSpeaker.displayName}
-              </h2>
-              <p style={mutedStyle}>
-                {selectedSpeaker.email} · <SpeakerStatusBadge status={selectedSpeaker.status} />
-              </p>
-            </div>
-            <div style={inlineStyle}>
-              <button
-                className={styles.secondaryButton}
-                type="button"
-                onClick={() => void refreshDetails()}
-                disabled={detailBusy || api === null}
-              >
-                {detailBusy ? "Refreshing details…" : "Refresh sessions and files"}
-              </button>
-              <SpeakerInvitationControls
-                previewBusy={invitationPreviewBusy}
-                sendBusy={invitationSendBusy}
-                disabled={api === null}
-                canSend={invitationReady}
-                onPreview={() => void previewSelectedSpeakerInvitation()}
-                onSend={() => void sendSelectedSpeakerInvitation()}
-              />
-            </div>
-          </div>
-          {invitationPreviewCount > 0 ? (
-            <div style={{ display: "grid", gap: "0.35rem" }}>
-              <FormMessage
-                message={`Invitation preview completed for ${invitationPreviewCount} speaker. ${invitationReady ? "Eligible to send." : "Sending is blocked."} Sending remains a separate explicit action.`}
-              />
-              <ul aria-label="Portal invitation preview" style={listStyle}>
-                {selectedInvitationPreview.map((preview) => (
-                  <li key={preview.participantId}>
-                    <strong>{statusLabel(preview.state)}</strong> ·{" "}
-                    {preview.recipientEmail || "No deliverable email"}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
-          {invitationResult &&
-          selectedInvitationResultRecipient &&
-          invitationResultParticipantId === selectedSpeaker.participantId ? (
-            <FormMessage
-              message={`Invitation ${selectedInvitationResultRecipient.status} for ${selectedInvitationResultRecipient.recipientEmail}.`}
-              error={selectedInvitationResultRecipient.status === "failed"}
-            />
-          ) : null}
-          {invitationError ? <FormMessage message={invitationError} error /> : null}
-          {invitationHistory.length > 0 ? (
-            <div style={{ display: "grid", gap: "0.4rem" }}>
-              <h3 style={{ margin: 0, fontSize: "0.9rem" }}>Portal invitation send history</h3>
-              <ul aria-label="Portal invitation send history" style={listStyle}>
-                {invitationHistory.map((entry) => (
-                  <li key={`${entry.result.idempotencyKey}:${entry.occurredAt}`}>
-                    <strong>{statusLabel(entry.result.status)}</strong> ·{" "}
-                    {entry.preview
-                      .map((preview) => preview.recipientEmail || preview.participantId)
-                      .join(", ")}{" "}
-                    · {dateTimeLabel(entry.occurredAt)} UTC
-                  </li>
-                ))}
-              </ul>
-              <p style={mutedStyle}>
-                History above is retained only while this speaker-workspace view remains open. The
-                speaker API does not expose a persistent portal-invitation history read endpoint;
-                delivery must be confirmed through the communications provider handoff.
-              </p>
-            </div>
-          ) : null}
-          {detailNotice ? (
-            <FormMessage
-              message={detailNotice}
-              error={detailNotice.includes("unavailable") || detailNotice.includes("could not")}
-            />
-          ) : null}
-          <section
-            style={{ ...panelStyle, boxShadow: "none", padding: "0.85rem" }}
-            aria-labelledby="speaker-headshot-heading"
-            aria-busy={headshotPreviewLoading || headshotUploadStatus === "busy"}
-          >
-            <h3 id="speaker-headshot-heading" style={{ margin: 0, fontSize: "0.9rem" }}>
-              Headshot
-            </h3>
-            <SpeakerHeadshot
-              speakerName={selectedSpeaker.displayName}
-              asset={selectedHeadshotAsset}
-              imageUrl={headshotPreviewUrl}
-              loading={headshotPreviewLoading}
-              error={headshotPreviewError}
-              revision={headshotPreviewRevision}
-              onRetry={retryHeadshotPreview}
-              onImageError={markHeadshotPreviewFailed}
-            />
-            <label style={fieldStyle}>
-              <span style={labelStyle}>Upload or replace headshot</span>
-              <input
-                type="file"
-                accept={ORGANIZER_HEADSHOT_ACCEPTED_TYPES.join(",")}
-                onChange={(event) => void uploadOrganizerHeadshot(event)}
-                disabled={
-                  headshotUploadStatus === "busy" ||
-                  api === null ||
-                  api.replaceHeadshot === undefined
-                }
-              />
-            </label>
-            <p style={mutedStyle}>
-              Accepted headshot types: JPEG, PNG, or WebP; maximum size 5 MB. Uploads use the
-              event-scoped organizer private upload flow.
-            </p>
-            {headshotUploadMessage ? (
-              <FormMessage
-                message={headshotUploadMessage}
-                error={headshotUploadStatus === "error"}
-              />
-            ) : null}
-          </section>
-          {editDraft ? (
-            <form
-              onSubmit={(event) => void saveSpeaker(event)}
-              style={{ display: "grid", gap: "0.9rem" }}
-            >
-              <ProfileFields draft={editDraft} onChange={updateEdit} disabled={saveBusy} />
-              <label style={fieldStyle}>
-                <span style={labelStyle}>Workflow status</span>
-                <select
-                  style={inputStyle}
-                  value={editDraft.status}
-                  onChange={(event) => updateEdit("status", event.target.value)}
-                  disabled={saveBusy}
-                >
-                  {statusOptions.map((status) => (
-                    <option key={status} value={status}>
-                      {statusLabel(status)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {editError ? <FormMessage message={editError} error /> : null}
-              <div style={inlineStyle}>
-                <button
-                  className={styles.primaryButton}
-                  type="submit"
-                  disabled={saveBusy || api === null}
-                >
-                  {saveBusy ? "Saving…" : "Save profile changes"}
-                </button>
-                <span style={mutedStyle}>Version {editDraft.expectedVersion}</span>
-              </div>
-            </form>
-          ) : null}
-
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(17rem, 1fr))",
-              gap: "1rem",
-            }}
-          >
-            <section
-              aria-labelledby="session-assignments-heading"
-              style={{ display: "grid", gap: "0.55rem" }}
-            >
-              <h3 id="session-assignments-heading" style={{ margin: 0, fontSize: "0.95rem" }}>
-                Session assignments
-              </h3>
-              {selectedSpeaker.sessions.length === 0 ? (
-                <p style={mutedStyle}>No sessions are linked to this speaker yet.</p>
-              ) : (
-                <ul style={listStyle}>
-                  {selectedSpeaker.sessions.map((session: SpeakerSession) => (
-                    <li
-                      key={session.submissionId}
-                      style={{
-                        padding: "0.65rem",
-                        border: "1px solid var(--admin-border)",
-                        borderRadius: "var(--admin-radius-sm)",
+          <div ref={emailSectionRef}>
+            <Card className={styles.panel} aria-busy={emailAnyBusy}>
+              <CardHeader className={styles.panelHeader}>
+                <div>
+                  <CardTitle id="bulk-email-heading">Speaker email</CardTitle>
+                  <CardDescription>
+                    Compose an event-scoped message for {selectedSpeakerIds.length} selected speaker
+                    {selectedSpeakerIds.length === 1 ? "" : "s"}. Save a draft, preview the merge,
+                    then queue the send.
+                  </CardDescription>
+                </div>
+                <Badge variant="outline">Preview required before send</Badge>
+              </CardHeader>
+              <CardContent className={styles.actionsStack}>
+                <div className={styles.fieldGrid}>
+                  <Field>
+                    <FieldLabel className={adminStyles.srOnly} htmlFor="email-template">
+                      Template / version
+                    </FieldLabel>
+                    <Select
+                      value={
+                        emailTemplateId ? `${emailTemplateId}:${emailTemplateVersion ?? ""}` : ""
+                      }
+                      onValueChange={(value) => {
+                        if (value === "new") {
+                          setEmailTemplateId("");
+                          setEmailCreateTemplateId(null);
+                          setEmailTemplateVersion(undefined);
+                          return;
+                        }
+                        const separator = value.lastIndexOf(":");
+                        const nextId = separator < 0 ? value : value.slice(0, separator);
+                        const rawVersion = separator < 0 ? "" : value.slice(separator + 1);
+                        const nextVersion = Number(rawVersion);
+                        const template = emailTemplates.find(
+                          (candidate) =>
+                            candidate.id === nextId && candidate.version === nextVersion,
+                        );
+                        setEmailTemplateId(nextId);
+                        setEmailCreateTemplateId(null);
+                        setEmailTemplateVersion(
+                          Number.isFinite(nextVersion) ? nextVersion : undefined,
+                        );
+                        if (template !== undefined) {
+                          setEmailTemplateName(template.name);
+                          setEmailSubject(template.subject);
+                          setEmailHtml(template.html);
+                          setEmailText(template.text);
+                        }
                       }}
+                      disabled={emailSaveBusy}
                     >
-                      <strong>{session.title}</strong>
-                      <span
-                        style={{
-                          display: "block",
-                          marginTop: "0.2rem",
-                          color: "var(--admin-muted)",
-                          fontSize: "0.74rem",
-                        }}
+                      <SelectTrigger
+                        id="email-template"
+                        aria-label="Speaker email template version"
                       >
-                        {statusLabel(session.status)}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <div style={inlineStyle}>
-                <button
-                  className={styles.secondaryButton}
+                        <SelectValue placeholder="New template version" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectItem value="new">New template version</SelectItem>
+                          {emailTemplates.map((template) => (
+                            <SelectItem
+                              key={`${template.id}:${template.version}`}
+                              value={`${template.id}:${template.version}`}
+                            >
+                              {template.name} · v{template.version} · {template.status}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="email-template-name">Template name</FieldLabel>
+                    <Input
+                      id="email-template-name"
+                      value={emailTemplateName}
+                      onChange={(event) => setEmailTemplateName(event.target.value)}
+                      maxLength={200}
+                      disabled={emailSaveBusy}
+                    />
+                  </Field>
+                </div>
+                <Field>
+                  <FieldLabel htmlFor="email-subject">Subject</FieldLabel>
+                  <Input
+                    id="email-subject"
+                    value={emailSubject}
+                    onChange={(event) => setEmailSubject(event.target.value)}
+                    placeholder="Update for {{first_name}}"
+                    maxLength={500}
+                    disabled={emailSaveBusy}
+                  />
+                </Field>
+                <div className={styles.fieldGrid}>
+                  <Field>
+                    <FieldLabel htmlFor="email-html">HTML body</FieldLabel>
+                    <Textarea
+                      id="email-html"
+                      value={emailHtml}
+                      onChange={(event) => setEmailHtml(event.target.value)}
+                      maxLength={100_000}
+                      disabled={emailSaveBusy}
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="email-text">Text body</FieldLabel>
+                    <Textarea
+                      id="email-text"
+                      value={emailText}
+                      onChange={(event) => setEmailText(event.target.value)}
+                      maxLength={100_000}
+                      disabled={emailSaveBusy}
+                    />
+                  </Field>
+                </div>
+              </CardContent>
+              <CardFooter className={styles.actions}>
+                <Button
+                  variant="outline"
                   type="button"
-                  disabled
-                  title="Session linking is managed by the agenda service."
+                  onClick={() => void saveEmailTemplate()}
+                  disabled={emailSaveBusy || api === null}
                 >
-                  Assign a session
-                </button>
-                <Link
-                  className={styles.secondaryButton}
-                  href={`/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}/agenda`}
+                  <CheckCircle2 data-icon="inline-start" />
+                  {emailSaveBusy ? "Saving…" : "Save draft"}
+                </Button>
+                <Button
+                  variant="secondary"
+                  type="button"
+                  onClick={() => void previewBulkEmail()}
+                  disabled={emailPreviewBusy || api === null || selectedSpeakerIds.length === 0}
                 >
-                  Open Agenda
-                </Link>
-              </div>
-              <p style={mutedStyle}>
-                This organizer speaker API exposes read-only assignments; session linking is managed
-                in Agenda.
-              </p>
-            </section>
-            <section
-              aria-labelledby="speaker-assets-heading"
-              style={{ display: "grid", gap: "0.55rem" }}
-            >
-              <h3 id="speaker-assets-heading" style={{ margin: 0, fontSize: "0.95rem" }}>
-                Uploaded deliverables
-              </h3>
-              {selectedSpeaker.assets.length === 0 ? (
-                <p style={mutedStyle}>No uploaded headshot or deliverables are available.</p>
-              ) : (
-                <ul style={listStyle}>
-                  {selectedSpeaker.assets.map((asset: SpeakerAsset) => (
-                    <li
-                      key={asset.assetId}
-                      style={{
-                        padding: "0.65rem",
-                        border: "1px solid var(--admin-border)",
-                        borderRadius: "var(--admin-radius-sm)",
-                      }}
-                    >
-                      <strong>{asset.fileName}</strong>
-                      <SpeakerAssetMetadata asset={asset} />
-                      <SpeakerAssetDownload
-                        asset={asset}
-                        downloadUrl={downloadUrls[asset.assetId] ?? null}
-                        busy={downloadBusyAssetId === asset.assetId}
-                        disabled={api === null || downloadBusyAssetId !== null}
-                        error={downloadErrors[asset.assetId] ?? null}
-                        onRequest={requestAssetDownload}
-                      />
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </section>
+                  <Eye data-icon="inline-start" />
+                  {emailPreviewBusy ? "Preparing…" : "Preview"}
+                </Button>
+                <Button
+                  variant="default"
+                  type="button"
+                  onClick={() => void sendBulkEmail()}
+                  disabled={emailSendBusy || api === null || emailPreview === null}
+                >
+                  <Send data-icon="inline-start" />
+                  {emailSendBusy ? "Queueing…" : "Send"}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  onClick={() => void refreshEmailHistory()}
+                  disabled={emailHistoryBusy || api === null}
+                  aria-label="Refresh speaker email history"
+                >
+                  <RefreshCw data-icon="inline-start" />
+                  {emailHistoryBusy ? "Refreshing history…" : "Refresh history"}
+                </Button>
+              </CardFooter>
+              <CardContent className={styles.actionsStack}>
+                <p className={styles.muted}>
+                  Merge tokens: <code className={styles.code}>{"{{first_name}}"}</code>,{" "}
+                  <code className={styles.code}>{"{{display_name}}"}</code>,{" "}
+                  <code className={styles.code}>{"{{email}}"}</code>.
+                </p>
+                {emailNotice ? (
+                  <FormMessage
+                    message={emailNotice}
+                    error={emailNotice.includes("unavailable") || emailNotice.includes("could")}
+                  />
+                ) : null}
+                {emailPreview ? (
+                  <Card size="sm" className={styles.preview}>
+                    <CardHeader>
+                      <CardTitle>
+                        Merge preview · {emailPreview.recipientIds.length} recipient
+                        {emailPreview.recipientIds.length === 1 ? "" : "s"} · template v
+                        {emailPreview.templateVersion}
+                      </CardTitle>
+                      <CardDescription>{emailPreview.subject}</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <ul
+                        className={styles.list}
+                        aria-label="Speaker email merge preview recipients"
+                      >
+                        {emailPreview.recipients.map((recipient) => (
+                          <li key={recipient.participantId}>
+                            <strong>{recipient.firstName}</strong> · {recipient.email} ·{" "}
+                            {recipient.subject}
+                          </li>
+                        ))}
+                      </ul>
+                    </CardContent>
+                  </Card>
+                ) : null}
+                {emailSends.length > 0 ? (
+                  <Card size="sm">
+                    <CardHeader>
+                      <CardTitle>Email queue history</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <Table>
+                        <TableCaption className={adminStyles.srOnly}>
+                          Speaker email queue history
+                        </TableCaption>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Status</TableHead>
+                            <TableHead>Template</TableHead>
+                            <TableHead>Recipients</TableHead>
+                            <TableHead>Updated</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {emailSends.map((send) => (
+                            <TableRow key={send.id}>
+                              <TableCell>
+                                <Badge variant="outline">{send.status}</Badge>
+                              </TableCell>
+                              <TableCell>v{send.templateVersion}</TableCell>
+                              <TableCell>{send.recipientIds.length}</TableCell>
+                              <TableCell>{dateLabel(send.updatedAt)}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </CardContent>
+                  </Card>
+                ) : null}
+              </CardContent>
+            </Card>
           </div>
-        </section>
-      ) : null}
-
-      {!loading && roster && speakers.length === 0 ? (
-        <section
-          style={{ ...panelStyle, marginBottom: "1rem" }}
-          aria-labelledby="unavailable-heading"
-        >
-          <h2 id="unavailable-heading" style={{ margin: 0, fontSize: "1rem" }}>
-            Organizer actions
-          </h2>
-          <p style={mutedStyle}>
-            Session assignments, portal invitations, task assignment, and deliverable downloads
-            become available after the organizer speaker service is mounted for this event.
-          </p>
-        </section>
-      ) : null}
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

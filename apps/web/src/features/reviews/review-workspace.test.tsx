@@ -331,7 +331,7 @@ describe("review workspace", () => {
       /\.referenceBadge\s*\{[^}]*max-inline-size:[^;}]+;[^}]*white-space:\s*normal;[^}]*overflow-wrap:\s*anywhere;/u,
     );
   });
-  it("preserves and renders authoritative reviewer assignments with unassign controls", () => {
+  it("keeps assignments out of the concise overview until the assignments view is selected", () => {
     const plan = testPlan("summit-2026");
     expect(plan.assignments).toHaveLength(2);
     const markup = renderToStaticMarkup(
@@ -342,13 +342,11 @@ describe("review workspace", () => {
       }),
     );
 
-    expect(markup).toContain("Current reviewer assignments");
-    expect(markup).toContain("Designing resilient public services");
-    expect(markup).toContain("SUB-042");
-    expect(markup).toContain("sam-whitfield");
-    expect(markup).toContain("Initial committee review");
-    expect(markup).toContain("In progress");
-    expect(markup).toContain("Unassign");
+    expect(markup).toContain("Overview");
+    expect(markup).toContain('role="tab"');
+    expect(markup).toContain("Assignments");
+    expect(markup).not.toContain("Current reviewer assignments");
+    expect(markup).not.toContain("Unassign");
   });
 
   it("deletes an assignment through the exact plan-scoped path and propagates errors", async () => {
@@ -603,7 +601,7 @@ describe("review workspace", () => {
       ),
     ).not.toThrow();
   });
-  it("renders plan status, round dates, and blind-review semantics for organizers", () => {
+  it("renders the overview status, dates, active round, and progress for organizers", () => {
     const markup = renderToStaticMarkup(
       createElement(ReviewWorkspace, {
         eventId: "summit-2026",
@@ -612,14 +610,15 @@ describe("review workspace", () => {
       }),
     );
 
-    expect(markup).toContain("Evaluation plan status");
+    expect(markup).toContain("Review at a glance");
     expect(markup).toContain("Open for review");
     expect(markup).toContain("Initial committee review");
-    expect(markup).toContain("Calibration and final review");
     expect(markup).toContain("Aug 10, 2026");
     expect(markup).toContain("Aug 24, 2026");
-    expect(markup).toContain("Blind review");
-    expect(markup).toContain("Reviewer views hide participant identity fields.");
+    expect(markup).toContain("67%");
+    expect(markup).toContain("2 conflicts declared");
+    expect(markup).not.toContain("Calibration and final review");
+    expect(markup).not.toContain("Blind review");
   });
   it("keeps organizer review navigation scoped to the selected organization", () => {
     const markup = renderToStaticMarkup(
@@ -641,7 +640,7 @@ describe("review workspace", () => {
     expect(markup).not.toContain('href="/admin/events/summit-2026/reviews"');
   });
 
-  it("renders the authoring controls after a plan is created", () => {
+  it("keeps plan setup authoring out of the default overview", () => {
     const markup = renderToStaticMarkup(
       createElement(ReviewWorkspace, {
         eventId: "event-empty",
@@ -650,13 +649,14 @@ describe("review workspace", () => {
       }),
     );
 
-    expect(markup).toContain("Author and lock the evaluation plan");
-    expect(markup).toContain("Add round");
-    expect(markup).toContain("Add criterion");
-    expect(markup).toContain("Round reviewer pool");
+    expect(markup).toContain("Plan setup");
+    expect(markup).not.toContain("Configure the evaluation plan");
+    expect(markup).not.toContain("Add round");
+    expect(markup).not.toContain("Add criterion");
+    expect(markup).not.toContain("Round reviewer pool");
   });
 
-  it("exposes assignment progress, conflicts, abstentions, and counted aggregates", () => {
+  it("keeps assignment and decision detail out of the default overview", () => {
     const markup = renderToStaticMarkup(
       createElement(ReviewWorkspace, {
         eventId: "summit-2026",
@@ -666,14 +666,14 @@ describe("review workspace", () => {
     );
 
     expect(markup).toContain('role="progressbar"');
-    expect(markup).toContain("Reviewer assignment progress");
+    expect(markup).toContain("6 reviews");
     expect(markup).toContain("2 conflicts declared");
-    expect(markup).toContain("1 abstention");
-    expect(markup).toContain("Counted aggregate scores");
-    expect(markup).toContain("Human-confirmed scores only");
+    expect(markup).not.toContain("Reviewer assignment progress");
+    expect(markup).not.toContain("Counted aggregate scores");
+    expect(markup).not.toContain("Human decisions");
   });
 
-  it("renders bounded rubric controls and human-authority decision safeguards", () => {
+  it("keeps decision editors closed until an explicit selection", () => {
     const decidedPlan: ReviewPlanSeed = {
       ...testPlan("summit-2026"),
       decisionBySubmission: {
@@ -700,19 +700,12 @@ describe("review workspace", () => {
       }),
     );
 
-    expect(organizerMarkup).toContain("Criteria and weights");
-    expect(organizerMarkup).toContain("1–5");
-    expect(organizerMarkup).toContain("Written reason");
-    expect(organizerMarkup).toContain("required");
-    expect(organizerMarkup).toContain("Confirm human decision");
-    expect(organizerMarkup).toContain(
-      "AI suggestions cannot accept, waitlist, reject, or publish a decision.",
-    );
-    expect(organizerMarkup).toContain(
-      "Decision saved on the server. Submitter notification queued.",
-    );
-    expect(organizerMarkup).toContain("AI suggestions never count and never decide an outcome");
-    expect(organizerMarkup).toContain("until a human");
+    expect(organizerMarkup).toContain("Decisions");
+    expect(organizerMarkup).toContain("Human approval required.");
+    expect(organizerMarkup).toContain("AI suggestions remain advisory");
+    expect(organizerMarkup).not.toContain("Confirm human decision");
+    expect(organizerMarkup).not.toContain("Written reason");
+    expect(organizerMarkup).not.toContain("Review decision");
     expect(evaluatorMarkup).toContain('type="number"');
     expect(evaluatorMarkup).toContain('min="1"');
     expect(evaluatorMarkup).toContain('max="5"');
@@ -921,11 +914,15 @@ describe("review workspace", () => {
     expect(evaluatorMarkup).toContain("<fieldset");
     expect(evaluatorMarkup).toContain('aria-live="polite"');
     expect(evaluatorMarkup).toContain("Autosave ready");
-    expect(organizerMarkup).toContain("criteriaList");
-    expect(organizerMarkup).toContain("criterionEditor");
+    expect(organizerMarkup).toContain('role="tablist"');
+    expect(organizerMarkup).toContain("Plan setup");
+    expect(organizerMarkup).toContain("Assignments");
+    expect(organizerMarkup).toContain("Decisions");
+    expect(organizerMarkup).not.toContain("criteriaList");
+    expect(organizerMarkup).not.toContain("criterionEditor");
     expect(organizerMarkup).not.toContain("criteria authoring</caption>");
   });
-  it("renders per-round pools, scorecard field types, sortable aggregates, and export/reminder actions", () => {
+  it("keeps advanced controls and evaluator scorecard coverage explicit", () => {
     const organizerMarkup = renderToStaticMarkup(
       createElement(ReviewWorkspace, {
         eventId: "summit-2026",
@@ -941,14 +938,12 @@ describe("review workspace", () => {
       }),
     );
 
-    expect(organizerMarkup).toContain("Round reviewer pool");
-    expect(organizerMarkup).toContain("Anonymization / blind review");
-    expect(organizerMarkup).toContain("Dropdown options");
-    expect(organizerMarkup).toContain("Free text");
-    expect(organizerMarkup).toContain("Sort aggregate score");
-    expect(organizerMarkup).toContain("Export review results CSV");
-    expect(organizerMarkup).toContain("Send reminder to selected reviewers");
-    expect(organizerMarkup).toContain("Marcus Okafor (Co-author)");
+    expect(organizerMarkup).toContain("Plan setup");
+    expect(organizerMarkup).toContain("Assignments");
+    expect(organizerMarkup).toContain("Decisions");
+    expect(organizerMarkup).not.toContain("Round reviewer pool");
+    expect(organizerMarkup).not.toContain("Sort aggregate score");
+    expect(organizerMarkup).not.toContain("Export review results CSV");
     expect(evaluatorMarkup).toContain("Choose an option");
     expect(evaluatorMarkup).toContain(
       "Written responses are stored with this scorecard criterion.",
@@ -1425,6 +1420,12 @@ describe("review workspace", () => {
         event.currentTarget = null;
         for (const apply of pendingUpdates.splice(0)) apply();
       }
+      function fireClick(element: ReactElement): void {
+        const onClick = (element.props as Record<string, unknown>).onClick;
+        if (typeof onClick !== "function") throw new Error("Expected a click handler.");
+        (onClick as () => void)();
+        for (const apply of pendingUpdates.splice(0)) apply();
+      }
 
       let tree = renderTree();
       const reviewerMembersSlot = stateSlots[6];
@@ -1455,6 +1456,9 @@ describe("review workspace", () => {
           updatedAt: "2026-08-01T00:00:00.000Z",
         },
       ];
+      tree = renderTree();
+      const setupTab = findHost(tree, (props) => props["aria-controls"] === "review-panel-setup");
+      fireClick(setupTab);
       tree = renderTree();
 
       const roundName = findHost(tree, (props) => props.id === "round-initial-name");

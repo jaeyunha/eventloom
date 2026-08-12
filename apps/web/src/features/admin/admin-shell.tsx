@@ -1,10 +1,45 @@
 "use client";
 
 import Link from "next/link";
+import {
+  CalendarDays,
+  ChartNoAxesColumn,
+  ClipboardList,
+  ContactRound,
+  FileText,
+  Folder,
+  LayoutDashboard,
+  ListChecks,
+  Mail,
+  PanelsTopLeft,
+  Settings,
+  Sparkles,
+  Star,
+  Upload,
+  Users,
+  type LucideIcon,
+} from "lucide-react";
 import { usePathname } from "next/navigation";
 import { type ReactNode, useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarInset,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  SidebarRail,
+  SidebarTrigger,
+} from "@/components/ui/sidebar";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { sessionHasAuthenticatedUser } from "../auth/session";
-import styles from "./admin-shell.module.css";
 
 interface AdminNavigationItem {
   href: string;
@@ -17,13 +52,13 @@ const navigation: readonly AdminNavigationItem[] = [
   {
     href: "/admin",
     label: "Overview",
-    icon: "⌂",
+    icon: "overview",
     match: (pathname: string) => pathname === "/admin",
   },
   {
     href: "/admin/events",
     label: "Events",
-    icon: "▦",
+    icon: "events",
     match: (pathname: string) => pathname === "/admin/events",
   },
 ] as const;
@@ -41,6 +76,29 @@ export function qualifiedEventContext(
   } catch {
     return null;
   }
+}
+const navigationIcons: Readonly<Record<string, LucideIcon>> = {
+  overview: LayoutDashboard,
+  events: CalendarDays,
+  members: Users,
+  crm: ContactRound,
+  form: FileText,
+  submissions: ClipboardList,
+  reviews: ListChecks,
+  speakers: Star,
+  deliverables: Upload,
+  files: Folder,
+  agenda: CalendarDays,
+  settings: Settings,
+  communications: Mail,
+  reports: ChartNoAxesColumn,
+  remix: Sparkles,
+  embeds: PanelsTopLeft,
+};
+
+function NavigationIcon({ name }: Readonly<{ name: string }>) {
+  const Icon = navigationIcons[name] ?? PanelsTopLeft;
+  return <Icon aria-hidden="true" />;
 }
 
 function eventNavigationItem(
@@ -62,7 +120,7 @@ function membersNavigationItem(organizationId: string): AdminNavigationItem {
   return {
     href,
     label: "Members",
-    icon: "♙",
+    icon: "members",
     match: (pathname: string) => pathname === href || pathname.startsWith(`${href}/`),
   };
 }
@@ -71,7 +129,7 @@ function crmNavigationItem(organizationId: string): AdminNavigationItem {
   return {
     href,
     label: "CRM",
-    icon: "◎",
+    icon: "crm",
     match: (pathname: string) => pathname === href || pathname.startsWith(`${href}/`),
   };
 }
@@ -154,18 +212,18 @@ export function eventNavigationFor(
   const eventBasePath = `/admin/organizations/${encodeURIComponent(scopedEventContext.organizationId)}/events/${encodeURIComponent(scopedEventContext.eventId)}`;
   const eventItems = [
     ...organizationItems,
-    eventNavigationItem(eventBasePath, "cfp", "CFP Form", "✎"),
-    eventNavigationItem(eventBasePath, "submissions", "Submissions", "▤"),
-    eventNavigationItem(eventBasePath, "reviews", "Reviews", "◌"),
-    eventNavigationItem(eventBasePath, "speakers", "Speakers", "♟"),
-    eventNavigationItem(eventBasePath, "deliverables", "Deliverables", "◇"),
-    eventNavigationItem(eventBasePath, "files", "Files", "▦"),
-    eventNavigationItem(eventBasePath, "agenda", "Agenda", "▤"),
-    eventNavigationItem(eventBasePath, "settings", "Settings", "◎"),
-    eventNavigationItem(eventBasePath, "communications", "Communications", "✉"),
-    eventNavigationItem(eventBasePath, "reports", "Reports", "▥"),
-    eventNavigationItem(eventBasePath, "remix", "Content remix", "✦"),
-    eventNavigationItem(eventBasePath, "embeds", "Embeds", "▣"),
+    eventNavigationItem(eventBasePath, "cfp", "CFP Form", "form"),
+    eventNavigationItem(eventBasePath, "submissions", "Submissions", "submissions"),
+    eventNavigationItem(eventBasePath, "reviews", "Reviews", "reviews"),
+    eventNavigationItem(eventBasePath, "speakers", "Speakers", "speakers"),
+    eventNavigationItem(eventBasePath, "deliverables", "Deliverables", "deliverables"),
+    eventNavigationItem(eventBasePath, "files", "Files", "files"),
+    eventNavigationItem(eventBasePath, "agenda", "Agenda", "agenda"),
+    eventNavigationItem(eventBasePath, "settings", "Settings", "settings"),
+    eventNavigationItem(eventBasePath, "communications", "Communications", "communications"),
+    eventNavigationItem(eventBasePath, "reports", "Reports", "reports"),
+    eventNavigationItem(eventBasePath, "remix", "Content remix", "remix"),
+    eventNavigationItem(eventBasePath, "embeds", "Embeds", "embeds"),
   ];
   const itemsByHref = new Map(navigation.map((item) => [item.href, item]));
   for (const item of eventItems) {
@@ -232,99 +290,124 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
     window.location.assign("/");
   }
   return (
-    <div className={styles.shell}>
-      <a className={styles.skipLink} href="#admin-content">
-        Skip to organizer content
-      </a>
-
-      <header className={styles.topbar}>
-        <Link
-          className={styles.brand}
-          href="/admin"
-          aria-label="Open Sessionboard organizer overview"
+    <TooltipProvider>
+      <SidebarProvider>
+        <a
+          className="fixed left-3 top-3 z-50 -translate-y-24 rounded-md bg-foreground px-3 py-2 text-sm font-medium text-background transition-transform focus:translate-y-0"
+          href="#admin-content"
         >
-          <span className={styles.brandMark} aria-hidden="true">
-            OS
-          </span>
-          <span className={styles.brandText}>
-            <strong className={styles.brandName}>Open Sessionboard</strong>
-            <small className={styles.brandMeta}>Organizer workspace</small>
-          </span>
-        </Link>
+          Skip to organizer content
+        </a>
 
-        <div className={styles.topbarActions}>
-          <section className={styles.user} aria-label="Signed in organizer">
-            <span className={styles.avatar} aria-hidden="true">
-              OR
-            </span>
-            <span className={styles.userText}>
-              <strong className={styles.userName}>Organizer</strong>
-              <small className={styles.userRole}>Signed-in organizer</small>
-            </span>
-          </section>
-          <button className={styles.signOutButton} type="button" onClick={() => void signOut()}>
-            Sign out
-          </button>
-        </div>
-      </header>
-
-      <div className={styles.body}>
-        <aside className={styles.sidebar} aria-label="Organizer workspace">
-          <nav className={styles.navigation} aria-label="Organizer navigation">
-            <p className={styles.navHeading}>Workspace</p>
-            <ul className={styles.navList}>
-              {navigationWithCrm.map((item) => {
-                const current = item.match(pathname);
-                return (
-                  <li key={item.href}>
-                    <Link
-                      className={`${styles.navItem} ${current ? styles.navItemActive : ""}`}
-                      href={item.href}
-                      aria-current={current ? "page" : undefined}
-                    >
-                      <span className={styles.navIcon} aria-hidden="true">
-                        {item.icon}
+        <Sidebar aria-label="Organizer workspace" collapsible="icon">
+          <SidebarHeader>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild size="lg" tooltip="Open Sessionboard">
+                  <Link href="/admin" aria-label="Open Sessionboard organizer overview">
+                    <span className="flex size-8 items-center justify-center rounded-md bg-sidebar-primary text-xs font-semibold text-sidebar-primary-foreground">
+                      OS
+                    </span>
+                    <span className="grid flex-1 text-left text-sm leading-tight">
+                      <strong className="truncate font-semibold">Open Sessionboard</strong>
+                      <span className="truncate text-xs text-muted-foreground">
+                        Organizer workspace
                       </span>
-                      <span>{item.label}</span>
-                    </Link>
-                  </li>
-                );
-              })}
-            </ul>
-          </nav>
-          <div className={styles.sidebarFooter}>
-            <p>{currentOrganizationId ?? "Organization workspace"}</p>
-            <span>Live event context</span>
-            <strong>Use Events to choose a workspace</strong>
-            <Link className={styles.sideLink} href="/admin/events">
-              View all events <span aria-hidden="true">→</span>
-            </Link>
-          </div>
-        </aside>
+                    </span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarHeader>
 
-        <main
-          id="admin-content"
-          className={styles.content}
-          tabIndex={-1}
-          aria-busy={authentication === "checking" ? true : undefined}
-        >
-          <div className={styles.contentInner}>
-            {authentication === "checking" ? (
-              <p className={styles.srOnly} role="status">
-                Checking organizer access
+          <nav className="flex min-h-0 flex-1 flex-col" aria-label="Organizer navigation">
+            <SidebarContent>
+              <SidebarGroup>
+                <SidebarGroupLabel>Workspace</SidebarGroupLabel>
+                <SidebarGroupContent>
+                  <SidebarMenu>
+                    {navigationWithCrm.map((item) => {
+                      const current = item.match(pathname);
+                      return (
+                        <SidebarMenuItem key={item.href}>
+                          <SidebarMenuButton asChild isActive={current} tooltip={item.label}>
+                            <Link href={item.href} aria-current={current ? "page" : undefined}>
+                              <NavigationIcon name={item.icon} />
+                              <span>{item.label}</span>
+                            </Link>
+                          </SidebarMenuButton>
+                        </SidebarMenuItem>
+                      );
+                    })}
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </SidebarGroup>
+            </SidebarContent>
+          </nav>
+
+          <SidebarFooter>
+            <div className="grid gap-1 rounded-md border bg-background p-2 group-data-[collapsible=icon]:hidden">
+              <span className="truncate text-xs text-muted-foreground">Organization</span>
+              <strong className="truncate text-sm font-medium">
+                {currentOrganizationId ?? "Workspace not selected"}
+              </strong>
+              <Button asChild className="mt-1 justify-start" size="sm" variant="ghost">
+                <Link href="/admin/events">View all events</Link>
+              </Button>
+              <Button
+                className="justify-start"
+                size="sm"
+                type="button"
+                variant="ghost"
+                onClick={() => void signOut()}
+              >
+                Sign out
+              </Button>
+            </div>
+          </SidebarFooter>
+          <SidebarRail />
+        </Sidebar>
+
+        <SidebarInset>
+          <header className="flex h-14 shrink-0 items-center gap-3 border-b px-4">
+            <SidebarTrigger />
+            <div className="min-w-0">
+              <p className="truncate text-sm font-medium">Organizer workspace</p>
+              <p className="truncate text-xs text-muted-foreground">
+                {currentOrganizationId ?? "Choose an event workspace"}
               </p>
-            ) : null}
-            {authentication === "denied" ? (
-              <div role="alert">
-                <h1>Access denied</h1>
-                <p>An owner or administrator membership is required for this organization.</p>
-              </div>
-            ) : (
-              children
-            )}
-          </div>
-        </main>
-      </div>
-    </div>
+            </div>
+          </header>
+
+          <main
+            id="admin-content"
+            className="min-w-0 flex-1 bg-muted/30"
+            tabIndex={-1}
+            aria-busy={authentication === "checking" ? true : undefined}
+          >
+            <div className="mx-auto w-full max-w-[90rem] p-4 sm:p-6 lg:p-8">
+              {authentication === "checking" ? (
+                <p className="sr-only" role="status">
+                  Checking organizer access
+                </p>
+              ) : null}
+              {authentication === "denied" ? (
+                <section
+                  className="rounded-lg border bg-card p-6 text-card-foreground"
+                  role="alert"
+                >
+                  <h1 className="text-xl font-semibold">Access denied</h1>
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    An owner or administrator membership is required for this organization.
+                  </p>
+                </section>
+              ) : (
+                children
+              )}
+            </div>
+          </main>
+        </SidebarInset>
+      </SidebarProvider>
+    </TooltipProvider>
   );
 }

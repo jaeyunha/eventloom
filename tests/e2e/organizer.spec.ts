@@ -548,7 +548,7 @@ test("verified organizer login opens the organization overview", async ({ authSe
 
   await page.goto("/login");
   await expect(
-    page.getByRole("heading", { level: 1, name: "Welcome back to the program desk." }),
+    page.getByRole("heading", { level: 1, name: "Sign in to Open Sessionboard" }),
   ).toBeVisible();
   await page.getByLabel("Email address").fill(ORGANIZER_EMAIL);
   await page.getByLabel("Password").fill(ORGANIZER_PASSWORD);
@@ -558,8 +558,10 @@ test("verified organizer login opens the organization overview", async ({ authSe
   await expect(
     page.getByRole("heading", { level: 1, name: "Organization overview" }),
   ).toBeVisible();
-  await expect(page.getByText("ai-engineer", { exact: true })).toBeVisible();
-  await expect(page.getByRole("region", { name: "Signed in organizer" })).toBeVisible();
+  await expect(
+    page.getByLabel("Organizer workspace").getByText("ai-engineer", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
   await expect(page.getByRole("heading", { level: 2, name: "Events" })).toBeVisible();
   await expect(
     page.getByText("Open Sessionboard Conference", { exact: true }).first(),
@@ -589,6 +591,21 @@ test("organization overview reflows without document overflow", async ({ authSes
       .getByRole("region", { name: "Events" })
       .getByRole("heading", { level: 2, name: "Open Sessionboard Conference" }),
   ).toBeVisible();
+  const mobileOverflow = await page.evaluate(() =>
+    [...document.querySelectorAll<HTMLElement>("body *")]
+      .map((element) => {
+        const rect = element.getBoundingClientRect();
+        return {
+          tag: element.tagName,
+          className: element.className,
+          left: rect.left,
+          right: rect.right,
+        };
+      })
+      .filter(({ left, right }) => left < -1 || right > window.innerWidth + 1)
+      .slice(0, 10),
+  );
+  expect(mobileOverflow).toEqual([]);
   await expect
     .poll(() =>
       page.evaluate(
@@ -628,6 +645,7 @@ test("dedicated Events page creates an event with canonical timezone and dates",
   await page.getByRole("button", { name: "Create event", exact: true }).click();
 
   await expect(page.getByText("Event created.", { exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: "List", exact: true }).click();
   const row = page.getByRole("row").filter({ hasText: "DevFlow Conf 2027" });
   await expect(row).toBeVisible();
   await expect(row).toContainText(`/${SECONDARY_EVENT_ID}`);
@@ -654,7 +672,10 @@ test("canonical Settings navigation stays organization and event qualified", asy
   const api = await installOrganizerApi(page, authSession);
 
   await page.goto("/admin/events");
-  await page.getByRole("link", { name: "Open Sessionboard Conference", exact: true }).click();
+  await page
+    .getByRole("link", { name: "Open Sessionboard Conference", exact: true })
+    .first()
+    .click();
   await expect(page).toHaveURL(new RegExp(`${settingsUrl(PRIMARY_EVENT_ID)}$`));
   await expect(page.getByRole("heading", { level: 1, name: "Event settings" })).toBeVisible();
   await expect(
@@ -665,7 +686,7 @@ test("canonical Settings navigation stays organization and event qualified", asy
     page.getByRole("link", { name: "Sessions and statuses", exact: true }),
   ).toHaveAttribute("href", "#session-settings");
 
-  const organizerSidebar = page.locator('aside[aria-label="Organizer workspace"]');
+  const organizerSidebar = page.getByRole("navigation", { name: "Organizer navigation" });
   await expect(organizerSidebar.getByRole("link", { name: "Agenda", exact: true })).toHaveAttribute(
     "href",
     agendaUrl(PRIMARY_EVENT_ID),

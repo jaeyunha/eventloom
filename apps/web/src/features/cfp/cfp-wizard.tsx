@@ -11,7 +11,7 @@ import {
   useState,
 } from "react";
 import { Button } from "../../components/ui/button";
-import { CharacterCount, Field, Input, Select } from "../../components/ui/field";
+import { CharacterCount, Field, Input, Select } from "./cfp-field";
 import { RichTextArea } from "../../components/ui/rich-text";
 import { SearchableSelect } from "../../components/ui/searchable-select";
 import { Stepper } from "../../components/ui/stepper";
@@ -1642,7 +1642,7 @@ export function CfpWizard({
               >
                 Reload pinned draft
               </Button>
-              <Button onClick={discardStaleDraftAndStartNew} variant="danger">
+              <Button onClick={discardStaleDraftAndStartNew} variant="destructive">
                 Discard stale draft and start new
               </Button>
             </div>
@@ -1723,7 +1723,7 @@ export function CfpWizard({
                 className={styles.backButton}
                 disabled={mutationPending}
                 onClick={goBack}
-                variant="accent"
+                variant="outline"
               >
                 ← Back
               </Button>
@@ -2684,7 +2684,7 @@ function ParticipantsStep({
           className={styles.addButton}
           disabled={draft.participants.length >= 15}
           onClick={addParticipant}
-          size="small"
+          size="sm"
           variant="secondary"
         >
           ＋ Add participant
@@ -2712,7 +2712,7 @@ function ParticipantsStep({
                     ),
                   }))
                 }
-                size="small"
+                size="sm"
                 variant="ghost"
               >
                 Remove
@@ -2932,7 +2932,7 @@ function DynamicParticipantsFields({
           className={styles.addButton}
           disabled={draft.participants.length >= 15}
           onClick={addParticipant}
-          size="small"
+          size="sm"
           variant="secondary"
         >
           ＋ Add participant
@@ -2970,7 +2970,7 @@ function DynamicParticipantsFields({
                       ),
                     }))
                   }
-                  size="small"
+                  size="sm"
                   variant="ghost"
                 >
                   Remove
@@ -3075,7 +3075,7 @@ function SecondaryContacts({ draft, errors, updateDraft }: StepFormProps) {
 
   return (
     <section className={styles.secondaryContacts}>
-      <Button className={styles.textButton} onClick={addContact} size="small" variant="ghost">
+      <Button className={styles.textButton} onClick={addContact} size="sm" variant="ghost">
         ＋ Add Secondary Contact
       </Button>
       <p>Secondary contacts can assist with tasks and communication.</p>
@@ -3093,7 +3093,7 @@ function SecondaryContacts({ draft, errors, updateDraft }: StepFormProps) {
                   ),
                 }))
               }
-              size="small"
+              size="sm"
               variant="ghost"
             >
               Remove
@@ -3185,7 +3185,7 @@ function ReviewStep({
           <Button
             className={styles.textButton}
             onClick={() => router.push(getCfpStepRoute(eventSlug, "submission"))}
-            size="small"
+            size="sm"
             variant="ghost"
           >
             ✎ Edit session
@@ -3205,7 +3205,7 @@ function ReviewStep({
           <Button
             className={styles.textButton}
             onClick={() => router.push(getCfpStepRoute(eventSlug, "participants"))}
-            size="small"
+            size="sm"
             variant="ghost"
           >
             ✎ Edit participants
