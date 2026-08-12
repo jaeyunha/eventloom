@@ -39,6 +39,16 @@ export interface PublishedSpeakerProjection {
  */
 export interface PublishedSpeakerRouteDependencies {
   readonly getPublishedSpeakers: (eventSlug: string) => Promise<PublishedSpeakerProjection | null>;
+  readonly getPublishedSpeakerHeadshot?: (
+    eventSlug: string,
+    speakerId: string,
+  ) => Promise<PublishedSpeakerHeadshot | null>;
+}
+
+export interface PublishedSpeakerHeadshot {
+  readonly body: ArrayBuffer;
+  readonly contentType: "image/jpeg" | "image/png" | "image/webp";
+  readonly sizeBytes: number;
 }
 
 interface PublishedSpeakerRouteEnvironment {
@@ -55,54 +65,55 @@ const PUBLIC_SPEAKER_CACHE_ORIGIN = "https://sessionboard-public-cache.invalid/v
 const PUBLIC_SPEAKER_CACHE_TTL_MS = 60_000;
 const PUBLIC_SPEAKER_CACHE_MAX_ENTRIES = 128;
 
-function stablePublicPhotoUrl(value: unknown): string | null {
-  if (typeof value !== "string" || value.trim().length === 0) return null;
-  try {
-    const url = new URL(value.trim());
-    if (
-      url.protocol !== "https:" ||
-      url.username.length > 0 ||
-      url.password.length > 0 ||
-      url.search.length > 0 ||
-      url.hash.length > 0
-    ) {
-      return null;
-    }
-    return url.toString();
-  } catch {
-    return null;
-  }
+export function publishedSpeakerPhotoPath(eventSlug: string, speakerId: string): string {
+  return `/api/public/events/${encodeURIComponent(eventSlug)}/speakers/${encodeURIComponent(speakerId)}/headshot`;
 }
 
-const publishedSpeakerProjectionSchema = z.object({
-  event: z.object({
-    slug: z.string().trim().min(1),
-    name: z.string(),
-    timeZone: z.string().trim().min(1),
-    startsOn: z.string(),
-    endsOn: z.string(),
-    venueName: z.string().nullable(),
-  }),
-  revision: z.object({
-    id: z.string().trim().min(1),
-    number: z.number().int().positive(),
-    publishedAt: z.string(),
-  }),
-  speakers: z.array(
-    z.object({
-      id: z.string().trim().min(1),
-      displayName: z.string().trim().min(1),
-      pronouns: z.string().nullable(),
-      jobTitle: z.string().nullable(),
-      organization: z.string().nullable(),
-      biography: z.string(),
-      photoUrl: z.unknown().transform(stablePublicPhotoUrl),
-      sessionIds: z.array(z.string().trim().min(1)),
-      sessionTitles: z.array(z.string()),
-      trackNames: z.array(z.string()),
+function stablePublicPhotoUrl(value: unknown, eventSlug: string, speakerId: string): string | null {
+  if (typeof value !== "string") return null;
+  const candidate = value.trim();
+  return candidate === publishedSpeakerPhotoPath(eventSlug, speakerId) ? candidate : null;
+}
+
+const publishedSpeakerProjectionSchema = z
+  .object({
+    event: z.object({
+      slug: z.string().trim().min(1),
+      name: z.string(),
+      timeZone: z.string().trim().min(1),
+      startsOn: z.string(),
+      endsOn: z.string(),
+      venueName: z.string().nullable(),
     }),
-  ),
-});
+    revision: z.object({
+      id: z.string().trim().min(1),
+      number: z.number().int().positive(),
+      publishedAt: z.string(),
+    }),
+    speakers: z.array(
+      z.object({
+        id: z.string().trim().min(1),
+        displayName: z.string().trim().min(1),
+        pronouns: z.string().nullable(),
+        jobTitle: z.string().nullable(),
+        organization: z.string().nullable(),
+        biography: z.string(),
+        photoUrl: z.unknown(),
+        sessionIds: z.array(z.string().trim().min(1)),
+        sessionTitles: z.array(z.string()),
+        trackNames: z.array(z.string()),
+      }),
+    ),
+  })
+  .transform(
+    (projection): PublishedSpeakerProjection => ({
+      ...projection,
+      speakers: projection.speakers.map((speaker) => ({
+        ...speaker,
+        photoUrl: stablePublicPhotoUrl(speaker.photoUrl, projection.event.slug, speaker.id),
+      })),
+    }),
+  );
 
 interface SpeakerResponseCache {
   match(request: Request): Promise<Response | undefined>;
@@ -327,6 +338,39 @@ export function createPublishedSpeakerRoutes(
       });
     }
     return response;
+  });
+
+  routes.get("/:speakerId/headshot", async (context) => {
+    const parsedSlug = eventSlugSchema.safeParse(context.req.param("eventSlug"));
+    const parsedSpeakerId = z
+      .string()
+      .trim()
+      .min(1)
+      .max(200)
+      .safeParse(context.req.param("speakerId"));
+    if (
+      !parsedSlug.success ||
+      !parsedSpeakerId.success ||
+      dependencies.getPublishedSpeakerHeadshot === undefined
+    ) {
+      return errorResponse(context, 404, "NOT_FOUND", "The published headshot was not found.");
+    }
+    const headshot = await dependencies.getPublishedSpeakerHeadshot(
+      parsedSlug.data,
+      parsedSpeakerId.data,
+    );
+    if (headshot === null) {
+      return errorResponse(context, 404, "NOT_FOUND", "The published headshot was not found.");
+    }
+    return new Response(headshot.body, {
+      status: 200,
+      headers: {
+        "cache-control": PUBLIC_SPEAKER_CACHE_CONTROL,
+        "content-length": String(headshot.sizeBytes),
+        "content-type": headshot.contentType,
+        "x-content-type-options": "nosniff",
+      },
+    });
   });
 
   routes.onError((error, context) => {

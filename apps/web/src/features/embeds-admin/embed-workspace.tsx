@@ -1,7 +1,7 @@
 "use client";
 
 import type { CSSProperties } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Label } from "@/components/ui/label";
 import styles from "@/features/admin/admin-shell.module.css";
 import {
@@ -511,6 +511,154 @@ export function normalizeEmbedSlug(value: string | undefined, fallback?: string)
   const candidate = value?.trim() || fallback?.trim() || "";
   return candidate ? candidate : null;
 }
+export type EmbedExpectedPublishedRevision = Readonly<{
+  readonly id: string;
+  readonly number: number;
+}>;
+
+export interface EmbedPublishedRevision extends EmbedExpectedPublishedRevision {
+  readonly publishedAt: string;
+}
+
+type EmbedPublicationProjection = Readonly<{
+  readonly event: Readonly<{ readonly slug: string }>;
+  readonly revision: EmbedPublishedRevision;
+}> &
+  Record<string, unknown>;
+
+export type EmbedPublicationFetcher = (
+  input: RequestInfo | URL,
+  init?: RequestInit,
+) => Promise<Response>;
+
+export interface VerifyEmbedPublicationOptions {
+  readonly eventSlug: string;
+  readonly expectedPublishedRevision?: EmbedExpectedPublishedRevision | null;
+  readonly fetcher?: EmbedPublicationFetcher;
+}
+
+export interface VerifiedEmbedPublication {
+  readonly agenda: EmbedPublicationProjection;
+  readonly speakers: EmbedPublicationProjection;
+  readonly revision: EmbedPublishedRevision;
+}
+
+function projectionVerificationError(projection: "agenda" | "speakers", message: string): Error {
+  return new Error(`The published ${projection} projection could not be verified: ${message}`);
+}
+
+async function parseEmbedProjection(
+  response: Response,
+  projection: "agenda" | "speakers",
+): Promise<EmbedPublicationProjection> {
+  if (!response.ok) {
+    throw projectionVerificationError(projection, `the server returned HTTP ${response.status}.`);
+  }
+
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    throw projectionVerificationError(projection, "the response was not valid JSON.");
+  }
+
+  if (!isRecord(payload) || !isRecord(payload.data)) {
+    throw projectionVerificationError(projection, "the response did not contain a data envelope.");
+  }
+
+  const data = payload.data;
+  if (!isRecord(data.event) || !isRecord(data.revision)) {
+    throw projectionVerificationError(
+      projection,
+      "the response omitted event or revision identity.",
+    );
+  }
+
+  const eventSlug = nonEmptyString(data.event.slug);
+  const revisionId = nonEmptyString(data.revision.id);
+  const revisionNumber = data.revision.number;
+  const publishedAt = nonEmptyString(data.revision.publishedAt);
+
+  if (!eventSlug || !revisionId || !publishedAt) {
+    throw projectionVerificationError(
+      projection,
+      "the event slug or revision identity is invalid.",
+    );
+  }
+  if (typeof revisionNumber !== "number" || !Number.isInteger(revisionNumber)) {
+    throw projectionVerificationError(projection, "the published revision number is invalid.");
+  }
+
+  return {
+    ...data,
+    event: { ...data.event, slug: eventSlug },
+    revision: {
+      ...data.revision,
+      id: revisionId,
+      number: revisionNumber,
+      publishedAt,
+    },
+  };
+}
+
+export async function verifyEmbedPublication({
+  eventSlug,
+  expectedPublishedRevision = null,
+  fetcher = fetch,
+}: VerifyEmbedPublicationOptions): Promise<VerifiedEmbedPublication> {
+  const expectedSlug = eventSlug.trim();
+  if (!expectedSlug) {
+    throw new Error("A public event slug is required before the preview can be refreshed.");
+  }
+
+  const encodedSlug = encodeURIComponent(expectedSlug);
+  const requestInit: RequestInit = {
+    cache: "no-store",
+    credentials: "same-origin",
+  };
+
+  let agendaResponse: Response;
+  let speakersResponse: Response;
+  try {
+    [agendaResponse, speakersResponse] = await Promise.all([
+      fetcher(`/api/public/events/${encodedSlug}/agenda.json`, requestInit),
+      fetcher(`/api/public/events/${encodedSlug}/speakers`, requestInit),
+    ]);
+  } catch (error) {
+    const detail = error instanceof Error && error.message ? ` ${error.message}` : "";
+    throw new Error(`The published agenda and speaker projections could not be reached.${detail}`);
+  }
+
+  const [agenda, speakers] = await Promise.all([
+    parseEmbedProjection(agendaResponse, "agenda"),
+    parseEmbedProjection(speakersResponse, "speakers"),
+  ]);
+
+  if (agenda.event.slug !== expectedSlug || speakers.event.slug !== expectedSlug) {
+    throw new Error("The published projection event slug does not match this embed event.");
+  }
+  if (agenda.event.slug !== speakers.event.slug) {
+    throw new Error("The published agenda and speaker event slugs do not match.");
+  }
+
+  if (
+    agenda.revision.id !== speakers.revision.id ||
+    agenda.revision.number !== speakers.revision.number ||
+    agenda.revision.publishedAt !== speakers.revision.publishedAt
+  ) {
+    throw new Error("The published agenda and speaker projections are from different revisions.");
+  }
+
+  if (
+    expectedPublishedRevision !== null &&
+    (agenda.revision.id !== expectedPublishedRevision.id ||
+      agenda.revision.number !== expectedPublishedRevision.number)
+  ) {
+    throw new Error("The published projections do not match the expected published revision.");
+  }
+
+  return { agenda, speakers, revision: agenda.revision };
+}
 
 export interface EmbedWorkspaceViewProps {
   readonly organizationId: string;
@@ -519,6 +667,7 @@ export interface EmbedWorkspaceViewProps {
   readonly publicOrigin?: string;
   readonly eventName?: string;
   readonly eventVersion?: number | null;
+  readonly expectedPublishedRevision?: EmbedExpectedPublishedRevision | null;
   readonly initialConfigurations?: readonly OrganizerEventEmbedConfiguration[];
   readonly api?: Pick<OrganizerEventsApi, "updateEvent">;
   readonly loading?: boolean;
@@ -753,6 +902,8 @@ function EmbedControls({
   tracks,
   statuses,
   cacheRefreshMessage,
+  cacheRefreshBusy,
+  cacheRefreshError,
   onTheme,
   onOutputFormat,
   onLayout,
@@ -777,6 +928,8 @@ function EmbedControls({
   tracks: readonly string[];
   statuses: readonly string[];
   cacheRefreshMessage: string;
+  cacheRefreshBusy: boolean;
+  cacheRefreshError: boolean;
   onTheme: (value: EmbedTheme) => void;
   onOutputFormat: (value: EmbedOutputFormat) => void;
   onLayout: (value: EmbedLayout) => void;
@@ -787,7 +940,7 @@ function EmbedControls({
   onDisplayFields: (value: readonly EmbedFieldId[]) => void;
   onTracks: (value: readonly string[]) => void;
   onStatuses: (value: readonly string[]) => void;
-  onRefresh: () => void;
+  onRefresh: () => Promise<void>;
 }>) {
   const setListValue = (value: string, onChange: (next: readonly string[]) => void): void => {
     onChange(
@@ -1052,12 +1205,21 @@ function EmbedControls({
         >
           Cache and preview
         </legend>
-        <button className={styles.secondaryButton} type="button" onClick={onRefresh}>
-          Refresh cache
+        <button
+          className={styles.secondaryButton}
+          type="button"
+          disabled={cacheRefreshBusy}
+          onClick={() => void onRefresh()}
+        >
+          {cacheRefreshBusy ? "Verifying publication…" : "Refresh embed"}
         </button>
-        <p role="status" aria-live="polite" style={{ ...subtleTextStyle, marginTop: "0.55rem" }}>
+        <p
+          role={cacheRefreshError ? "alert" : "status"}
+          aria-live="polite"
+          style={{ ...subtleTextStyle, marginTop: "0.55rem" }}
+        >
           {cacheRefreshMessage ||
-            "Manual cache refresh is available for this preview; no remote cache mutation is claimed."}
+            "Refresh verifies the current agenda and speaker publication before reloading the preview."}
         </p>
       </fieldset>
     </>
@@ -1239,6 +1401,7 @@ export function EmbedWorkspaceView({
   publicOrigin,
   eventName,
   eventVersion,
+  expectedPublishedRevision = null,
   initialConfigurations,
   api,
   loading = false,
@@ -1285,6 +1448,10 @@ export function EmbedWorkspaceView({
   );
   const [cacheRefreshMessage, setCacheRefreshMessage] = useState("");
   const [previewNonce, setPreviewNonce] = useState(0);
+  const [cacheRefreshBusy, setCacheRefreshBusy] = useState(false);
+  const [cacheRefreshError, setCacheRefreshError] = useState(false);
+  const refreshInFlight = useRef(false);
+  const expectedRevision = useRef<EmbedExpectedPublishedRevision | null>(expectedPublishedRevision);
   const [configurations, setConfigurations] = useState<readonly EmbedConfiguration[]>(
     initialServerConfigurations,
   );
@@ -1349,6 +1516,10 @@ export function EmbedWorkspaceView({
       resetBuilder();
     }
   }, [applyConfiguration, eventVersion, resetBuilder, serverConfigurationList]);
+
+  useEffect(() => {
+    expectedRevision.current = expectedPublishedRevision;
+  }, [expectedPublishedRevision]);
 
   const persistConfigurations = useCallback(
     async (nextConfigurations: readonly EmbedConfiguration[]): Promise<boolean> => {
@@ -1535,12 +1706,38 @@ export function EmbedWorkspaceView({
     widget,
   ]);
   const previewUrl = settings ? publicEmbedUrl(settings) : "";
-  const refreshPreview = () => {
-    setPreviewNonce((value) => value + 1);
-    setCacheRefreshMessage(
-      `Local preview refreshed at ${new Date().toLocaleTimeString()}. No remote cache was changed.`,
-    );
-  };
+  const refreshPreview = useCallback(async (): Promise<void> => {
+    if (refreshInFlight.current) return;
+    if (!normalizedSlug) {
+      setCacheRefreshError(true);
+      setCacheRefreshMessage("Refresh pending: this event does not have a public slug.");
+      return;
+    }
+    refreshInFlight.current = true;
+    setCacheRefreshBusy(true);
+    setCacheRefreshError(false);
+    setCacheRefreshMessage("Verifying the published agenda and speaker projections…");
+    try {
+      const verified = await verifyEmbedPublication({
+        eventSlug: normalizedSlug,
+        expectedPublishedRevision: expectedRevision.current,
+      });
+      expectedRevision.current = {
+        id: verified.revision.id,
+        number: verified.revision.number,
+      };
+      setPreviewNonce((value) => value + 1);
+      setCacheRefreshMessage(
+        `Preview refreshed from published revision ${verified.revision.number}.`,
+      );
+    } catch (error) {
+      setCacheRefreshError(true);
+      setCacheRefreshMessage(`Refresh pending: ${messageFrom(error)}`);
+    } finally {
+      refreshInFlight.current = false;
+      setCacheRefreshBusy(false);
+    }
+  }, [normalizedSlug]);
   const persistenceReady = api !== undefined && eventVersionState !== null && !persistenceBusy;
 
   return (
@@ -1568,9 +1765,10 @@ export function EmbedWorkspaceView({
           <strong>Public and self-updating</strong>
           <p>
             These widgets read the current published event projection and refresh roughly every 60
-            minutes. The manual refresh control updates this local preview only because no remote
-            cache mutation endpoint is available. Draft sessions, reviewer notes, speaker contact
-            details, private files, and other organizer-only fields never cross this boundary.
+            minutes. Refresh re-reads both public projections without browser caching and reloads
+            the preview only after their event and published revision identities match. Draft
+            sessions, reviewer notes, speaker contact details, private files, and other
+            organizer-only fields never cross this boundary.
           </p>
         </div>
       </div>
@@ -1671,6 +1869,8 @@ export function EmbedWorkspaceView({
             tracks={tracks}
             statuses={statuses}
             cacheRefreshMessage={cacheRefreshMessage}
+            cacheRefreshBusy={cacheRefreshBusy}
+            cacheRefreshError={cacheRefreshError}
             onTheme={setTheme}
             onOutputFormat={setOutputFormat}
             onAccent={setAccent}

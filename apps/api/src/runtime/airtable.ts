@@ -222,9 +222,11 @@ import type {
   OrganizerOverviewEvent,
   OrganizerOverviewRouteDependencies,
 } from "../routes/organizer-overview";
-import type {
-  PublishedSpeakerProjection,
-  PublishedSpeakerRouteDependencies,
+import {
+  type PublishedSpeakerHeadshot,
+  type PublishedSpeakerProjection,
+  type PublishedSpeakerRouteDependencies,
+  publishedSpeakerPhotoPath,
 } from "../routes/public-speakers";
 import {
   matchesOrganizationScope,
@@ -756,6 +758,26 @@ export async function listEventScopedJson<T extends object>(
 }
 export const PUBLISHED_SPEAKER_PROJECTIONS_TABLE = "Published Speaker Projections";
 
+interface PublishedSpeakerHeadshotBinding {
+  readonly speakerId: string;
+  readonly tenantId: string;
+  readonly eventId: string;
+  readonly assetId: string;
+  readonly objectKey: string;
+  readonly fileName: string;
+  readonly contentType: PublishedSpeakerHeadshot["contentType"];
+  readonly sizeBytes: number;
+}
+
+function publishedHeadshotContentType(
+  value: string,
+): PublishedSpeakerHeadshot["contentType"] | null {
+  const contentType = value.trim().toLowerCase();
+  return contentType === "image/jpeg" || contentType === "image/png" || contentType === "image/webp"
+    ? contentType
+    : null;
+}
+
 interface PublishedSpeakerProjectionRecord extends PublishedSpeakerProjection {
   readonly id: string;
   readonly organizationId: string;
@@ -764,6 +786,7 @@ interface PublishedSpeakerProjectionRecord extends PublishedSpeakerProjection {
   readonly revisionId: string;
   readonly revisionNumber: number;
   readonly publishedAt: string;
+  readonly headshots: readonly PublishedSpeakerHeadshotBinding[];
 }
 
 /**
@@ -772,10 +795,12 @@ interface PublishedSpeakerProjectionRecord extends PublishedSpeakerProjection {
  */
 class AirtablePublishedSpeakerProjectionStore implements PublishedSpeakerRouteDependencies {
   readonly #store: AirtableJsonStore<PublishedSpeakerProjectionRecord>;
+  readonly #privateFiles: R2Bucket;
 
   constructor(options: {
     readonly baseId: string;
     readonly transport: AirtableTransport;
+    readonly privateFiles: R2Bucket;
   }) {
     this.#store = new AirtableJsonStore({
       ...options,
@@ -789,6 +814,7 @@ class AirtablePublishedSpeakerProjectionStore implements PublishedSpeakerRouteDe
         "Published At": "publishedAt",
       },
     });
+    this.#privateFiles = options.privateFiles;
   }
   async putPublishedSpeakers(record: PublishedSpeakerProjectionRecord): Promise<void> {
     const existing = await this.#store.findWithRecordId(record.id);
@@ -811,19 +837,8 @@ class AirtablePublishedSpeakerProjectionStore implements PublishedSpeakerRouteDe
   }
 
   async getPublishedSpeakers(eventSlug: string): Promise<PublishedSpeakerProjection | null> {
-    const normalizedSlug = eventSlug.trim();
-    if (normalizedSlug.length === 0) return null;
-    const page = await this.#store.listPage({
-      pageSize: 2,
-      fields: [APPLICATION_ID, "Organization ID", "Event Slug", "Projection JSON"],
-      filterByFormula: applicationIdFormula("Event Slug", normalizedSlug),
-    });
-    const matches = page.items.filter(
-      (record) => record.event.slug === normalizedSlug && record.organizationId.trim().length > 0,
-    );
-    if (matches.length !== 1) return null;
-    const record = matches[0];
-    if (record === undefined) return null;
+    const record = await this.#recordForSlug(eventSlug);
+    if (record === null) return null;
     return {
       event: {
         slug: record.event.slug,
@@ -851,6 +866,60 @@ class AirtablePublishedSpeakerProjectionStore implements PublishedSpeakerRouteDe
         trackNames: [...speaker.trackNames],
       })),
     };
+  }
+
+  async getPublishedSpeakerHeadshot(
+    eventSlug: string,
+    speakerId: string,
+  ): Promise<PublishedSpeakerHeadshot | null> {
+    const record = await this.#recordForSlug(eventSlug);
+    if (record === null) return null;
+    const normalizedSpeakerId = speakerId.trim();
+    const expectedPath = publishedSpeakerPhotoPath(record.event.slug, normalizedSpeakerId);
+    const speaker = record.speakers.find(
+      (candidate) => candidate.id === normalizedSpeakerId && candidate.photoUrl === expectedPath,
+    );
+    const binding = record.headshots?.find(
+      (candidate) =>
+        candidate.speakerId === normalizedSpeakerId &&
+        candidate.tenantId === record.organizationId &&
+        candidate.eventId === record.eventId,
+    );
+    if (
+      speaker === undefined ||
+      binding === undefined ||
+      binding.sizeBytes <= 0 ||
+      !Number.isSafeInteger(binding.sizeBytes)
+    ) {
+      return null;
+    }
+    const object = await this.#privateFiles.get(binding.objectKey);
+    const contentType = object?.httpMetadata?.contentType?.trim().toLowerCase();
+    if (
+      object === null ||
+      object.body === null ||
+      object.size !== binding.sizeBytes ||
+      contentType !== binding.contentType
+    ) {
+      return null;
+    }
+    const body = await object.arrayBuffer();
+    if (body.byteLength !== binding.sizeBytes) return null;
+    return { body, contentType: binding.contentType, sizeBytes: binding.sizeBytes };
+  }
+
+  async #recordForSlug(eventSlug: string): Promise<PublishedSpeakerProjectionRecord | null> {
+    const normalizedSlug = eventSlug.trim();
+    if (normalizedSlug.length === 0) return null;
+    const page = await this.#store.listPage({
+      pageSize: 2,
+      fields: [APPLICATION_ID, "Organization ID", "Event Slug", "Projection JSON"],
+      filterByFormula: applicationIdFormula("Event Slug", normalizedSlug),
+    });
+    const matches = page.items.filter(
+      (record) => record.event.slug === normalizedSlug && record.organizationId.trim().length > 0,
+    );
+    return matches.length === 1 ? (matches[0] ?? null) : null;
   }
 }
 
@@ -8598,13 +8667,15 @@ export class AirtableCrmRepository implements CrmRepository {
     if (eventRepository !== undefined && event === null) {
       throw new CrmRepositoryConflictError("The event does not belong to this organization.");
     }
-    const context = { contact: authoritativeContact, event };
-    if (existing !== null) {
-      await this.#projectCanonicalSpeaker(organization, existing, context);
-      return clone(existing);
-    }
+    if (existing !== null) return clone(existing);
+    const canonicalRelationship = await this.#findCanonicalSpeakerRelationship(
+      organization,
+      eventId,
+      authoritativeContact,
+    );
     const stored: CrmEventProjection = {
       ...clone(projection),
+      id: canonicalRelationship ? `event-contact:existing:${eventId}:${contactId}` : projection.id,
       organizationId: organization,
       eventId,
       contactId,
@@ -8613,15 +8684,17 @@ export class AirtableCrmRepository implements CrmRepository {
       await this.#projections.create(stored);
     } catch (error) {
       const concurrent = await this.#findProjection(organization, eventId, contactId);
-      if (concurrent !== null) {
-        await this.#projectCanonicalSpeaker(organization, concurrent, context);
-        return clone(concurrent);
-      }
+      if (concurrent !== null) return clone(concurrent);
       throw new CrmRepositoryConflictError(
         error instanceof Error ? error.message : "The event projection could not be saved.",
       );
     }
-    await this.#projectCanonicalSpeaker(organization, stored, context);
+    if (!canonicalRelationship) {
+      await this.#projectCanonicalSpeaker(organization, stored, {
+        contact: authoritativeContact,
+        event,
+      });
+    }
     return clone(stored);
   }
 
@@ -8867,6 +8940,76 @@ export class AirtableCrmRepository implements CrmRepository {
     return projection === undefined ? null : clone(projection);
   }
 
+  async #findCanonicalSpeakerRelationship(
+    organizationId: string,
+    eventId: string,
+    contact: CrmContact,
+  ): Promise<boolean> {
+    const profileId = crmStableCustomId(contact, [
+      "canonicalSpeakerProfileId",
+      "speakerProfileId",
+      "speaker_profile_id",
+    ]);
+    const explicitProfile =
+      profileId === null ? undefined : await this.#speakerProfiles.find(profileId);
+    const participantId =
+      crmStableCustomId(contact, [
+        "canonicalParticipantId",
+        "speakerParticipantId",
+        "participantId",
+        "participant_id",
+      ]) ??
+      explicitProfile?.participantId ??
+      contact.id;
+    if (
+      explicitProfile !== undefined &&
+      (explicitProfile.eventId !== eventId || explicitProfile.participantId !== participantId)
+    ) {
+      throw new CrmRepositoryConflictError(
+        "The contact speaker profile identity does not match this event relationship.",
+      );
+    }
+    const [profiles, roster] = await Promise.all([
+      this.#speakerProfiles.list({
+        filterByFormula: jsonContainsAllFormula("Biography", [participantId]),
+      }),
+      this.#speakerRoster.list({
+        filterByFormula: jsonContainsAllFormula("Members JSON", [participantId]),
+      }),
+    ]);
+    const profileMatches = [
+      ...(explicitProfile === undefined ? [] : [explicitProfile]),
+      ...profiles.filter(
+        (profile) => profile.eventId === eventId && profile.participantId === participantId,
+      ),
+    ].filter(
+      (profile, index, values) =>
+        values.findIndex((candidate) => candidate.id === profile.id) === index,
+    );
+    const rosterMatches = roster.filter(
+      (entry) => entry.eventId === eventId && entry.participantId === participantId,
+    );
+    for (const value of [...profileMatches, ...rosterMatches]) {
+      const scope = resolveOrganizationScope(value);
+      if (scope.status === "conflict") {
+        throw new CrmRepositoryConflictError(
+          "The canonical speaker relationship has conflicting tenant data.",
+        );
+      }
+      if (scope.status === "resolved" && scope.organizationId !== organizationId) {
+        throw new CrmRepositoryConflictError(
+          "The canonical speaker relationship belongs to another organization.",
+        );
+      }
+    }
+    if (profileMatches.length > 1) {
+      throw new CrmRepositoryConflictError(
+        "The contact has multiple canonical speaker profiles for this event.",
+      );
+    }
+    return profileMatches.length === 1 || rosterMatches.length > 0;
+  }
+
   async #findOutreach(
     organizationId: string,
     idempotencyKey: string,
@@ -8978,6 +9121,7 @@ export class AirtableCrmRepository implements CrmRepository {
       (storedRoster.biography ?? null) !== contact.notes ||
       JSON.stringify(storedRoster.socialLinks ?? {}) !== JSON.stringify(socialLinks) ||
       storedRoster.workflowStatus !== "crm-prospect" ||
+      storedRoster.organizerStatus !== "Pending" ||
       storedRoster.status !== "active" ||
       storedRoster.role !== "primary";
     if (rosterChanged) {
@@ -9003,6 +9147,7 @@ export class AirtableCrmRepository implements CrmRepository {
         role: "primary",
         status: "active",
         workflowStatus: "crm-prospect",
+        organizerStatus: "Pending",
         version: storedRoster?.version === undefined ? 1 : storedRoster.version + 1,
         createdAt: storedRoster?.createdAt ?? projection.createdAt,
         updatedAt: contact.updatedAt,
@@ -9042,6 +9187,21 @@ function crmSocialLinks(value: unknown): Readonly<Record<string, string>> {
     }
   }
   return Object.fromEntries(entries);
+}
+
+function crmStableCustomId(contact: CrmContact, fields: readonly string[]): string | null {
+  const values = fields
+    .map((field) => contact.customFields?.[field])
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+  const unique = [...new Set(values)];
+  if (unique.length > 1) {
+    throw new CrmRepositoryConflictError(
+      "The contact contains conflicting canonical speaker identities.",
+    );
+  }
+  return unique[0] ?? null;
 }
 function crmNestedTenant(value: unknown, organizationId: string): void {
   const visited = new Set<object>();
@@ -10208,7 +10368,10 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
     jsonField: "Settings JSON",
   });
   const webhooks = new AirtableWebhookRepository(shared);
-  const publishedSpeakerProjections = new AirtablePublishedSpeakerProjectionStore(shared);
+  const publishedSpeakerProjections = new AirtablePublishedSpeakerProjectionStore({
+    ...shared,
+    privateFiles: options.privateFiles,
+  });
   const organizerOverview = new AirtableOrganizerOverviewRepository(shared);
 
   const organizerMembership = async (
@@ -10344,7 +10507,10 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
           publishedSessionIds.has(session.id),
         );
         const participantIds = [...new Set(sessions.flatMap((session) => session.participantIds))];
-        const profiles = await speakerRepository.listProfiles(eventId, participantIds);
+        const [profiles, assets] = await Promise.all([
+          speakerRepository.listProfiles(eventId, participantIds),
+          speakerRepository.listAssets(eventId, participantIds),
+        ]);
         const entriesBySessionId = new Map(
           revision.entries.map((entry) => [entry.sessionId, entry]),
         );
@@ -10366,6 +10532,40 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
           }
         }
 
+        const headshotsBySpeakerId = new Map<string, PublishedSpeakerHeadshotBinding>();
+        for (const profile of profiles) {
+          if (profile.headshotAssetId === undefined) continue;
+          const asset = assets.find(
+            (candidate) =>
+              candidate.id === profile.headshotAssetId &&
+              candidate.tenantId === organizationId &&
+              candidate.eventId === eventId &&
+              candidate.participantId === profile.participantId &&
+              candidate.kind === "headshot" &&
+              candidate.state === "ready" &&
+              candidate.reviewState === "approved",
+          );
+          if (asset === undefined) continue;
+          const contentType = publishedHeadshotContentType(asset.contentType);
+          if (
+            contentType === null ||
+            asset.sizeBytes <= 0 ||
+            !Number.isSafeInteger(asset.sizeBytes)
+          ) {
+            continue;
+          }
+          headshotsBySpeakerId.set(profile.participantId, {
+            speakerId: profile.participantId,
+            tenantId: organizationId,
+            eventId,
+            assetId: asset.id,
+            objectKey: asset.objectKey,
+            fileName: asset.fileName,
+            contentType,
+            sizeBytes: asset.sizeBytes,
+          });
+        }
+
         await publishedSpeakerProjections.putPublishedSpeakers({
           id: `published-speakers:${organizationId}:${eventId}`,
           organizationId,
@@ -10374,6 +10574,7 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
           revisionId: revision.id,
           revisionNumber: revision.revisionNumber,
           publishedAt: revision.publishedAt,
+          headshots: [...headshotsBySpeakerId.values()],
           event: {
             slug: rawEvent.slug,
             name: rawEvent.name,
@@ -10403,7 +10604,9 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
                 jobTitle: profile.jobTitle ?? null,
                 organization: profile.company ?? null,
                 biography: profile.biography,
-                photoUrl: null,
+                photoUrl: headshotsBySpeakerId.has(profile.participantId)
+                  ? publishedSpeakerPhotoPath(rawEvent.slug, profile.participantId)
+                  : null,
                 sessionIds: speakerSessions.map((session) => session.id),
                 sessionTitles: speakerSessions.map((session) => session.title),
                 trackNames: [
