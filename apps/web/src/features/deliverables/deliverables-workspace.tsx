@@ -104,10 +104,10 @@ export type DeliverablesExportUiStatus =
 export const deliverablesExportStatusLabels: Readonly<Record<DeliverablesExportUiStatus, string>> =
   {
     idle: "",
-    queued: "The authorized ZIP request is queued.",
-    preparing: "The server request is being prepared.",
-    generating: "The server is generating the ZIP from selected latest assets.",
-    ready: "The server returned a validated ZIP response.",
+    queued: "The browser queued the authorized ZIP request.",
+    preparing: "The browser is preparing the scoped export request.",
+    generating: "The export request is generating no fabricated progress; the API exposes no server job ID.",
+    ready: "The server returned a ZIP with a validated authoritative manifest.",
     "download-started": "The browser download has started.",
     failure: "The authorized ZIP request failed.",
   };
@@ -117,7 +117,7 @@ export const deliverablesExportActionLabels: Readonly<Record<DeliverablesExportU
     queued: "ZIP export queued",
     preparing: "Preparing ZIP…",
     generating: "Generating ZIP…",
-    ready: "Download ready ZIP",
+    ready: "Inspect authoritative manifest",
     "download-started": "Download started",
     failure: "Retry ZIP export",
   };
@@ -210,17 +210,14 @@ export interface DeliverablesWorkspaceViewProps {
   readonly onAddComment?: (input: {
     readonly assetId: string;
     readonly body: string;
+    readonly expectedVersion: number;
   }) => Promise<void>;
   readonly onDownloadVersion?: (assetId: string) => Promise<void>;
   readonly onExportDeliverables?: (input: DeliverableExportInput) => Promise<void>;
   readonly onExportFiles?: (
     input: DeliverableExportInput,
   ) => Promise<DeliverableExportDownload | undefined>;
-  readonly onReviewAsset?: (input: {
-    readonly assetId: string;
-    readonly state: DeliverableReviewState;
-    readonly note?: string;
-  }) => Promise<void>;
+  readonly onReviewAsset?: (input: DeliverableReviewInput) => Promise<void>;
   readonly onSendBulkReminder?: (input: {
     readonly taskIds: readonly string[];
     readonly recipientIds: readonly string[];
@@ -448,6 +445,46 @@ function reviewStateForAsset(asset: DeliverableAsset): string {
   if (asset.reviewState !== undefined) return formatStatus(asset.reviewState);
   return asset.state === "ready" ? "Pending review" : formatStatus(asset.state);
 }
+function authoritativeAssetPointerIds(
+  versions: readonly DeliverableAsset[],
+): Readonly<{
+  latest?: string;
+  current?: string;
+  approved?: string;
+  released?: string;
+}> {
+  const pointerSources = versions.filter(
+    (version) =>
+      version.latestVersionId !== undefined ||
+      version.currentVersionId !== undefined ||
+      version.approvedVersionId !== undefined ||
+      version.releasedVersionId !== undefined,
+  );
+  const source =
+    pointerSources.find((version) => version.latestVersionId === version.id) ??
+    (pointerSources.length === 1 ? pointerSources[0] : undefined);
+  return source === undefined
+    ? {}
+    : {
+        ...(source.latestVersionId === undefined ? {} : { latest: source.latestVersionId }),
+        ...(source.currentVersionId === undefined ? {} : { current: source.currentVersionId }),
+        ...(source.approvedVersionId === undefined ? {} : { approved: source.approvedVersionId }),
+        ...(source.releasedVersionId === undefined ? {} : { released: source.releasedVersionId }),
+      };
+}
+
+function authoritativeAssetBadges(
+  asset: DeliverableAsset,
+  versions: readonly DeliverableAsset[],
+): readonly string[] {
+  const pointers = authoritativeAssetPointerIds(versions);
+  return [
+    ...(pointers.latest === asset.id ? ["Latest"] : []),
+    ...(pointers.current === asset.id ? ["Current"] : []),
+    ...(pointers.approved === asset.id ? ["Approved"] : []),
+    ...(pointers.released === asset.id ? ["Released"] : []),
+  ];
+}
 
 function assetSessionId(
   asset: DeliverableAsset,
@@ -471,7 +508,8 @@ function taskRows(
   const sessionBySubmission = new Map(sessions.map((session) => [session.id, session]));
   const profileByParticipant = new Map(profiles.map((profile) => [profile.participantId, profile]));
   return tasks.map((task) => {
-    const session = sessionBySubmission.get(task.submissionId);
+    const session =
+      task.submissionId === null ? undefined : sessionBySubmission.get(task.submissionId);
     const sessionLabel = session?.title ?? task.sessionTitle ?? "Session unavailable";
     const speaker = profileByParticipant.get(task.participantId);
     const relatedAssets = assets.filter(
@@ -502,7 +540,8 @@ function matrixRows(
   const profileByParticipant = new Map(profiles.map((profile) => [profile.participantId, profile]));
   return items.map((item) => {
     const task = item.task;
-    const session = sessionBySubmission.get(task.submissionId);
+    const session =
+      task.submissionId === null ? undefined : sessionBySubmission.get(task.submissionId);
     const speaker = profileByParticipant.get(item.participantId);
     return {
       task,
@@ -571,12 +610,18 @@ export function triggerDeliverablesDownload(download: DeliverableExportDownload)
   }
 }
 
+interface DeliverableSubjectParticipant {
+  readonly id: string;
+  readonly label: string;
+  readonly sessions: readonly { readonly id: string; readonly label: string }[];
+}
+
 function TaskComposer({
   participants,
   busy,
   onCreateTask,
 }: Readonly<{
-  participants: readonly { readonly id: string; readonly label: string }[];
+  participants: readonly DeliverableSubjectParticipant[];
   busy: boolean;
   onCreateTask?: (input: DeliverableTaskInput) => Promise<void>;
 }>) {
@@ -589,7 +634,11 @@ function TaskComposer({
   const [acceptedAssetKinds, setAcceptedAssetKinds] = useState<readonly DeliverableAssetKind[]>([
     "slides",
   ]);
+  const [subjectType, setSubjectType] = useState<"participant" | "session">("session");
   const [assigneeIds, setAssigneeIds] = useState<readonly string[]>([]);
+  const [sessionByParticipant, setSessionByParticipant] = useState<
+    Readonly<Record<string, string>>
+  >({});
   const [formError, setFormError] = useState<string | null>(null);
 
   function toggleAssignee(id: string): void {
@@ -636,6 +685,13 @@ function TaskComposer({
       setFormError("Choose at least one speaker assignee.");
       return;
     }
+    if (
+      subjectType === "session" &&
+      assigneeIds.some((participantId) => !sessionByParticipant[participantId])
+    ) {
+      setFormError("Choose an explicit accepted session for every selected speaker.");
+      return;
+    }
     if (onCreateTask === undefined) {
       setFormError(
         "Task creation is unavailable because no organizer task endpoint is provisioned.",
@@ -650,7 +706,11 @@ function TaskComposer({
         dueAt: normalizedDueAt,
         allowedMimeTypes: normalizedMimeTypes,
         maxSizeBytes: maxSize * 1024 * 1024,
-        assigneeIds,
+        assignments: assigneeIds.map((participantId) => ({
+          participantId,
+          submissionId:
+            subjectType === "participant" ? null : (sessionByParticipant[participantId] ?? null),
+        })),
         acceptedAssetKinds,
       });
     } catch (reason) {
@@ -663,7 +723,9 @@ function TaskComposer({
     setMimeTypes("application/pdf");
     setMaxSizeMb("100");
     setAcceptedAssetKinds(["slides"]);
+    setSubjectType("session");
     setAssigneeIds([]);
+    setSessionByParticipant({});
     setOpen(false);
   }
 
@@ -674,7 +736,8 @@ function TaskComposer({
           <p className={mutedClass}>Organizer-created speaker requests and follow-up</p>
           <CardTitle id="create-task-heading">Requests &amp; tracking</CardTitle>
           <CardDescription>
-            Create a file request with the policy enforced again by the private upload service.
+            Create a subject-scoped file request with policy enforced again by the private upload
+            service.
           </CardDescription>
         </div>
         <Dialog open={open} onOpenChange={setOpen}>
@@ -687,7 +750,8 @@ function TaskComposer({
             <DialogHeader>
               <DialogTitle>New file request</DialogTitle>
               <DialogDescription>
-                Speakers can upload only the selected asset kinds, MIME types, and maximum size.
+                Choose whether this request belongs to each participant or to one explicit accepted
+                session, then set the upload policy.
               </DialogDescription>
             </DialogHeader>
             <form onSubmit={(event) => void submit(event)} className={stackClass}>
@@ -723,6 +787,25 @@ function TaskComposer({
                   placeholder="Final slide deck as a PDF, 16:9 aspect ratio."
                   required
                 />
+              </div>
+              <div className={fieldClass}>
+                <Label htmlFor="task-subject-type">Request subject</Label>
+                <Select
+                  value={subjectType}
+                  onValueChange={(value) => setSubjectType(value as "participant" | "session")}
+                >
+                  <SelectTrigger id="task-subject-type" aria-describedby="task-subject-help">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="session">One accepted session per speaker</SelectItem>
+                    <SelectItem value="participant">Participant profile (all sessions)</SelectItem>
+                  </SelectContent>
+                </Select>
+                <small id="task-subject-help" className={mutedClass}>
+                  Session requests require an explicit session for every assignee. Participant
+                  requests are profile-wide and intentionally have no session.
+                </small>
               </div>
               <fieldset className={styles.fieldset} aria-describedby="asset-kind-help">
                 <legend>Accepted asset kinds (required)</legend>
@@ -772,7 +855,7 @@ function TaskComposer({
                 </div>
               </div>
               <fieldset className={styles.fieldset}>
-                <legend>Assignees</legend>
+                <legend>Assignees and subjects</legend>
                 {participants.length === 0 ? (
                   <p className={mutedClass}>
                     No authorized speaker records were returned. Task creation cannot be assigned
@@ -780,18 +863,66 @@ function TaskComposer({
                   </p>
                 ) : (
                   <div className={stackClass}>
-                    {participants.map((participant) => (
-                      <div key={participant.id} className={clusterClass}>
-                        <Checkbox
-                          id={`task-assignee-${participant.id}`}
-                          checked={assigneeIds.includes(participant.id)}
-                          onCheckedChange={() => toggleAssignee(participant.id)}
-                        />
-                        <Label htmlFor={`task-assignee-${participant.id}`}>
-                          {participant.label}
-                        </Label>
-                      </div>
-                    ))}
+                    {participants.map((participant) => {
+                      const selected = assigneeIds.includes(participant.id);
+                      return (
+                        <div key={participant.id} className={stackClass}>
+                          <div className={clusterClass}>
+                            <Checkbox
+                              id={`task-assignee-${participant.id}`}
+                              checked={selected}
+                              onCheckedChange={() => toggleAssignee(participant.id)}
+                            />
+                            <Label htmlFor={`task-assignee-${participant.id}`}>
+                              {participant.label}
+                            </Label>
+                            {participant.sessions.length > 1 ? (
+                              <Badge variant="outline">
+                                {participant.sessions.length} accepted sessions
+                              </Badge>
+                            ) : null}
+                          </div>
+                          {selected && subjectType === "session" ? (
+                            participant.sessions.length === 0 ? (
+                              <Alert variant="destructive">
+                                <AlertDescription>
+                                  No accepted session is available for this participant. Remove the
+                                  assignee or choose participant scope.
+                                </AlertDescription>
+                              </Alert>
+                            ) : (
+                              <div className={fieldClass}>
+                                <Label htmlFor={`task-session-${participant.id}`}>
+                                  Accepted session for {participant.label}
+                                </Label>
+                                <Select
+                                  {...(sessionByParticipant[participant.id] === undefined
+                                    ? {}
+                                    : { value: sessionByParticipant[participant.id] })}
+                                  onValueChange={(submissionId) =>
+                                    setSessionByParticipant((current) => ({
+                                      ...current,
+                                      [participant.id]: submissionId,
+                                    }))
+                                  }
+                                >
+                                  <SelectTrigger id={`task-session-${participant.id}`}>
+                                    <SelectValue placeholder="Choose an accepted session" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {participant.sessions.map((session) => (
+                                      <SelectItem key={session.id} value={session.id}>
+                                        {session.label}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                            )
+                          ) : null}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </fieldset>
@@ -819,12 +950,12 @@ function TaskComposer({
       </CardHeader>
       <CardContent className={stackClass}>
         <p className={mutedClass}>
-          Tasks stay separate from Files: this view assigns speaker work, records status, and
-          provides follow-up. Uploaded assets are reviewed in Files.
+          Tasks stay separate from Files: this view assigns subject-scoped speaker work, records
+          status, and provides follow-up. Uploaded assets are reviewed in Files.
         </p>
         <p className={mutedClass}>
-          Request controls: Task name, Due date, Instructions, Accepted asset kinds (required),
-          Allowed MIME types, Maximum file size (MB), and Assignees.
+          Request controls: Request subject, one accepted session per speaker when session-scoped,
+          Allowed MIME types, Maximum file size (MB), Accepted asset kinds (required), and Assignees.
         </p>
       </CardContent>
     </Card>
@@ -1011,7 +1142,9 @@ function DeliverablesTable({
                             assetFamily(asset) ===
                             assetFamily(row.currentAsset as DeliverableAsset),
                         ).length;
-                  const zipEligible = row.currentAsset?.state === "ready";
+                  const zipEligible =
+                    row.currentAsset?.state === "ready" &&
+                    row.currentAsset.currentVersionId === row.currentAsset.id;
                   return (
                     <TableRow key={row.task.id}>
                       <TableCell>
@@ -1148,9 +1281,11 @@ function FileLibrary({
     }
     return [...grouped.entries()]
       .map(([familyId, versions]) => {
-        const authoritativeId = authoritativeCurrentByFamily.get(familyId);
+        const pointers = authoritativeAssetPointerIds(versions);
+        const authoritativeId = authoritativeCurrentByFamily.get(familyId) ?? pointers.current;
         const current =
-          versions.find((asset) => asset.id === authoritativeId) ?? latestAsset(versions);
+          versions.find((asset) => asset.id === authoritativeId) ??
+          versions.find((asset) => asset.id === pointers.latest);
         return current === undefined
           ? null
           : { current, versions, authoritative: current.id === authoritativeId };
@@ -1431,7 +1566,7 @@ function FileLibrary({
               exportInFlight ||
               (!downloadReady && (onExport === undefined || selectedReadyIds.length === 0))
             }
-            onClick={() => (downloadReady ? startReadyDownload() : void exportSelected())}
+            onClick={() => (downloadReady ? undefined : void exportSelected())}
           >
             {deliverablesExportActionLabels[exportStatus]}
           </Button>
@@ -1450,7 +1585,7 @@ function FileLibrary({
             aria-live="polite"
             data-export-status={exportStatus}
           >
-            <AlertTitle>ZIP export status: {exportStatus}</AlertTitle>
+            <AlertTitle>ZIP export request state: {exportStatus}</AlertTitle>
             <AlertDescription>
               {statusDescription[exportStatus]}
               {exportStatusHistory.length > 1 ? (
@@ -1458,6 +1593,56 @@ function FileLibrary({
               ) : null}
             </AlertDescription>
           </Alert>
+        ) : null}
+        {downloadReady && readyDownload !== null ? (
+          <Card aria-labelledby="export-manifest-heading">
+            <CardHeader>
+              <CardTitle id="export-manifest-heading">Latest authorized export manifest</CardTitle>
+              <CardDescription>
+                Validated manifest.json for organization {readyDownload.manifest.organizationId} and
+                event {readyDownload.manifest.eventId}.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className={stackClass}>
+              <p className={mutedClass}>
+                {readyDownload.manifest.entries.length} authoritative file{" "}
+                {readyDownload.manifest.entries.length === 1 ? "entry" : "entries"}.
+              </p>
+              <div className={tableWrapClass}>
+                <Table>
+                  <TableCaption>Files recorded in manifest.json</TableCaption>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead scope="col">Path</TableHead>
+                      <TableHead scope="col">Speaker / session</TableHead>
+                      <TableHead scope="col">Task</TableHead>
+                      <TableHead scope="col">Version</TableHead>
+                      <TableHead scope="col">Status</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {readyDownload.manifest.entries.map((entry) => (
+                      <TableRow key={`${entry.assetId}:${entry.path}`}>
+                        <TableHead scope="row">{entry.path}</TableHead>
+                        <TableCell>
+                          {entry.participantName ?? entry.participantId}
+                          <small className={mutedClass}>
+                            {entry.sessionTitle ?? entry.sessionId ?? "Participant scope"}
+                          </small>
+                        </TableCell>
+                        <TableCell>{entry.taskTitle ?? entry.taskId ?? "No task"}</TableCell>
+                        <TableCell>v{entry.version}</TableCell>
+                        <TableCell>{formatStatus(entry.status)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+              <Button type="button" onClick={startReadyDownload}>
+                Download validated ZIP
+              </Button>
+            </CardContent>
+          </Card>
         ) : null}
         {families.length === 0 ? (
           <p className={mutedClass}>No private speaker files have been uploaded.</p>
@@ -1517,12 +1702,19 @@ function FileLibrary({
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      <strong>
-                        {authoritative
-                          ? `Authoritative current v${current.version ?? 1}`
-                          : `Latest projection v${current.version ?? 1}; current version unavailable`}{" "}
-                        · {versions.length} version{versions.length === 1 ? "" : "s"}
-                      </strong>
+                      <div className={clusterClass}>
+                        {authoritativeAssetBadges(current, versions).map((badge) => (
+                          <Badge key={badge} variant={badge === "Released" ? "default" : "outline"}>
+                            {badge}
+                          </Badge>
+                        ))}
+                        <strong>
+                          {authoritative
+                            ? `Authoritative current v${current.version ?? 1}`
+                            : `Authoritative current version unavailable`}{" "}
+                          · {versions.length} version{versions.length === 1 ? "" : "s"}
+                        </strong>
+                      </div>
                       <Button
                         variant="ghost"
                         size="sm"
@@ -1681,8 +1873,12 @@ function AssetDetail({
   loading: boolean;
   busy: boolean;
   onDownload?: (assetId: string) => Promise<void>;
-  onAddComment?: (body: string) => Promise<void>;
-  onReview?: (state: DeliverableReviewState, note?: string) => Promise<void>;
+  onAddComment?: (body: string, expectedVersion: number) => Promise<void>;
+  onReview?: (
+    state: DeliverableReviewState,
+    note: string | undefined,
+    release: boolean,
+  ) => Promise<void>;
   reviewAvailable: boolean;
 }>) {
   const family = assetFamily(asset);
@@ -1695,11 +1891,20 @@ function AssetDetail({
   const [commentBody, setCommentBody] = useState("");
   const [reviewNote, setReviewNote] = useState("");
   const [commentError, setCommentError] = useState<string | null>(null);
-  const thread = [...comments].sort(
-    (left, right) =>
-      left.createdAt.localeCompare(right.createdAt) ||
-      (left.version ?? 0) - (right.version ?? 0) ||
-      left.id.localeCompare(right.id),
+  const thread = [...comments]
+    .filter(
+      (comment) => comment.assetId === asset.id && comment.versionId === (asset.versionId ?? asset.id),
+    )
+    .sort(
+      (left, right) =>
+        left.createdAt.localeCompare(right.createdAt) ||
+        (left.version ?? 0) - (right.version ?? 0) ||
+        left.id.localeCompare(right.id),
+    );
+  const pointerBadges = authoritativeAssetBadges(asset, versions);
+  const latestCommentVersion = thread.reduce(
+    (current, comment) => Math.max(current, comment.version ?? 0),
+    0,
   );
 
   async function submitComment(event: FormEvent<HTMLFormElement>): Promise<void> {
@@ -1716,7 +1921,7 @@ function AssetDetail({
       );
       return;
     }
-    await onAddComment(body);
+    await onAddComment(body, latestCommentVersion);
     setCommentBody("");
   }
 
@@ -1730,7 +1935,14 @@ function AssetDetail({
             {asset.contentType} · {Math.ceil(asset.sizeBytes / 1024)} KB
           </p>
         </div>
-        <Badge variant="outline">Authorized detail</Badge>
+        <div className={clusterClass}>
+          <Badge variant="outline">Authorized detail</Badge>
+          {pointerBadges.map((badge) => (
+            <Badge key={badge} variant={badge === "Released" ? "default" : "outline"}>
+              {badge}
+            </Badge>
+          ))}
+        </div>
       </div>
       <p className={mutedClass}>
         Asset metadata is immutable. Each version remains independently accessible through a
@@ -1759,15 +1971,16 @@ function AssetDetail({
                   <TableHead scope="col">Uploaded</TableHead>
                   <TableHead scope="col">State</TableHead>
                   <TableHead scope="col">Review state</TableHead>
-                  <TableHead scope="col">Current</TableHead>
+                  <TableHead scope="col">Authoritative pointers</TableHead>
                   <TableHead scope="col">Download</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {versions.map((version) => {
+                  const badges = authoritativeAssetBadges(version, versions);
                   const current =
                     authoritativeCurrentAssetId === undefined
-                      ? !matrixAuthoritative && isCurrentAsset(version, versions)
+                      ? badges.includes("Current")
                       : version.id === authoritativeCurrentAssetId;
                   return (
                     <TableRow key={version.id}>
@@ -1778,13 +1991,27 @@ function AssetDetail({
                       </TableCell>
                       <TableCell>{reviewStateForAsset(version)}</TableCell>
                       <TableCell>
-                        {current ? (
-                          <strong>Current</strong>
-                        ) : matrixAuthoritative ? (
-                          "Not current"
-                        ) : (
-                          "Previous"
-                        )}
+                        <div className={clusterClass}>
+                          {badges.length === 0 ? (
+                            matrixAuthoritative ? (
+                              "No pointer"
+                            ) : (
+                              "Pointer unavailable"
+                            )
+                          ) : (
+                            badges.map((badge) => (
+                              <Badge
+                                key={badge}
+                                variant={badge === "Released" ? "default" : "outline"}
+                              >
+                                {badge}
+                              </Badge>
+                            ))
+                          )}
+                          {current && !badges.includes("Current") ? (
+                            <Badge variant="outline">Current</Badge>
+                          ) : null}
+                        </div>
                       </TableCell>
                       <TableCell>
                         <Button
@@ -1808,10 +2035,10 @@ function AssetDetail({
         )}
       </section>
       <section aria-labelledby="asset-comments-heading" className={stackClass}>
-        <h3 id="asset-comments-heading">Cross-role comment thread</h3>
+        <h3 id="asset-comments-heading">Version-specific comments</h3>
         <p className={mutedClass}>
-          Speaker and organizer replies are displayed together in the asset-family conversation
-          using the author labels returned by the server.
+          Replies below belong only to immutable asset v{asset.version ?? 1} ({asset.id}). Selecting
+          another version loads its separate thread.
         </p>
         {commentsError !== null ? (
           <Alert variant="destructive" role="alert">
@@ -1822,10 +2049,10 @@ function AssetDetail({
           loading ? (
             <p role="status">Loading comments…</p>
           ) : (
-            <p className={mutedClass}>No comments have been returned for this asset family.</p>
+            <p className={mutedClass}>No comments have been returned for this asset version.</p>
           )
         ) : (
-          <ol aria-label="Asset family comment thread">
+          <ol aria-label={`Comments for asset version ${asset.id}`}>
             {thread.map((comment) => (
               <li key={comment.id}>
                 <strong>{comment.authorLabel}</strong> ·{" "}
@@ -1837,7 +2064,7 @@ function AssetDetail({
         )}
         <form onSubmit={(event) => void submitComment(event)} className={stackClass}>
           <div className={fieldClass}>
-            <Label htmlFor="asset-comment-body">Reply to this asset-family thread</Label>
+            <Label htmlFor="asset-comment-body">Reply to asset v{asset.version ?? 1}</Label>
             <Textarea
               id="asset-comment-body"
               rows={3}
@@ -1870,8 +2097,8 @@ function AssetDetail({
               />
             </div>
             <p className={mutedClass}>
-              Approving an asset records the organizer review decision. It does not publish the file
-              immediately.
+              Approve records this exact version as approved. Approve and release additionally moves
+              the authoritative released pointer to this version.
             </p>
             <div className={clusterClass}>
               <AlertDialog>
@@ -1891,9 +2118,37 @@ function AssetDetail({
                   <AlertDialogFooter>
                     <AlertDialogCancel>Cancel</AlertDialogCancel>
                     <AlertDialogAction
-                      onClick={() => void onReview?.("approved", reviewNote.trim() || undefined)}
+                      onClick={() =>
+                        void onReview?.("approved", reviewNote.trim() || undefined, false)
+                      }
                     >
                       Confirm approval
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button variant="outline" type="button" disabled={busy}>
+                    Approve and release
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Confirm asset release</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      Approve and release this exact asset version? This changes the authoritative
+                      approved and released pointers.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction
+                      onClick={() =>
+                        void onReview?.("approved", reviewNote.trim() || undefined, true)
+                      }
+                    >
+                      Confirm release
                     </AlertDialogAction>
                   </AlertDialogFooter>
                 </AlertDialogContent>
@@ -1905,7 +2160,7 @@ function AssetDetail({
                 onClick={() =>
                   onReview === undefined
                     ? undefined
-                    : void onReview("needs_changes", reviewNote.trim() || undefined)
+                    : void onReview("needs_changes", reviewNote.trim() || undefined, false)
                 }
               >
                 Needs changes
@@ -2626,8 +2881,22 @@ export function DeliverablesWorkspaceView({
     const byId = new Map<string, string>();
     for (const profile of profiles) byId.set(profile.participantId, profile.displayName);
     for (const row of rows) byId.set(row.task.participantId, row.speakerLabel);
-    return [...byId.entries()].map(([id, label]) => ({ id, label }));
-  }, [profiles, rows]);
+    return [...byId.entries()]
+      .map(([id, label]) => ({
+        id,
+        label,
+        sessions: sessions
+          .filter(
+            (session) =>
+              session.status.toLocaleLowerCase() === "accepted" &&
+              (session.speakerIds.includes(id) ||
+                session.speakerRoster.some((member) => member.id === id)),
+          )
+          .map((session) => ({ id: session.id, label: session.title }))
+          .sort((left, right) => left.label.localeCompare(right.label)),
+      }))
+      .sort((left, right) => left.label.localeCompare(right.label));
+  }, [profiles, rows, sessions]);
   const [selectedTaskIds, setSelectedTaskIds] = useState<readonly string[]>([]);
   const [selectedExportTaskIds, setSelectedExportTaskIds] = useState<readonly string[]>([]);
   const [speakerFilter, setSpeakerFilter] = useState("all");
@@ -2657,6 +2926,7 @@ export function DeliverablesWorkspaceView({
           (speakerFilter === "all" || row.task.participantId === speakerFilter) &&
           (taskFilter === "all" || row.task.id === taskFilter) &&
           row.currentAsset?.state === "ready" &&
+          row.currentAsset.currentVersionId === row.currentAsset.id &&
           statusMatches(row.status, statusFilter) &&
           (!outstandingOnly || isOutstanding(row.status)),
       ),
@@ -2957,16 +3227,22 @@ export function DeliverablesWorkspaceView({
                     {...(onAddComment === undefined
                       ? {}
                       : {
-                          onAddComment: async (body) =>
-                            onAddComment({ assetId: selectedAsset.id, body }),
+                          onAddComment: async (body, expectedVersion) =>
+                            onAddComment({
+                              assetId: selectedAsset.id,
+                              body,
+                              expectedVersion,
+                            }),
                         })}
                     {...(onReviewAsset === undefined
                       ? {}
                       : {
-                          onReview: async (state, note) =>
+                          onReview: async (state, note, release) =>
                             onReviewAsset({
                               assetId: selectedAsset.id,
                               state,
+                              expectedVersion: selectedAsset.reviewVersion ?? 0,
+                              release,
                               ...(note === undefined ? {} : { note }),
                             }),
                         })}
@@ -3772,7 +4048,7 @@ export function DeliverablesWorkspace({
       await refreshMatrix(scope);
       if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
       setStatusMessage(
-        `Task ${next.title} created for ${input.assigneeIds.length} speaker${input.assigneeIds.length === 1 ? "" : "s"}.`,
+        `Task ${next.title} created for ${input.assignments.length} speaker${input.assignments.length === 1 ? "" : "s"}.`,
       );
       recordOperation(
         "task-create",
@@ -3794,6 +4070,7 @@ export function DeliverablesWorkspace({
   async function addComment(input: {
     readonly assetId: string;
     readonly body: string;
+    readonly expectedVersion: number;
   }): Promise<void> {
     if (api.addAssetComment === undefined) {
       setError(
@@ -3804,25 +4081,25 @@ export function DeliverablesWorkspace({
     const scope = scopeRef.current;
     setBusy(true);
     setError(null);
-    recordOperation("asset-comment", "Reply to asset thread", "pending", "Reply in progress.");
+    recordOperation("asset-comment", "Reply to asset version", "pending", "Reply in progress.");
     try {
       const next = await api.addAssetComment(input);
       if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
       if (selectedAssetIdRef.current === input.assetId) {
         setComments((current) => [...current, next]);
       }
-      setStatusMessage("Comment added to the immutable asset thread.");
+      setStatusMessage("Comment added to the immutable asset version.");
       recordOperation(
         "asset-comment",
-        "Reply to asset thread",
+        "Reply to asset version",
         "succeeded",
-        "Organizer reply added to the asset-family thread.",
+        `Organizer reply added to asset version ${input.assetId}.`,
       );
     } catch (reason) {
       if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
       const message = messageFromError(reason);
       setError(message);
-      recordOperation("asset-comment", "Reply to asset thread", "failed", message);
+      recordOperation("asset-comment", "Reply to asset version", "failed", message);
     } finally {
       if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
     }
