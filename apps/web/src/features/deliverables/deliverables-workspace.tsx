@@ -24,6 +24,8 @@ import {
   type DeliverableReviewInput,
   type DeliverableReviewState,
   type DeliverableSession,
+  type DeliverableSpeakerContentHistoryEntry,
+  type DeliverableSpeakerContentRecord,
   type DeliverableSpeakerProfile,
   type DeliverablesApi,
   DeliverablesApiError,
@@ -122,6 +124,7 @@ export type DeliverablesOperationKey =
   | "asset-review"
   | "reminder-send"
   | "biography-save"
+  | "speaker-content-restore"
   | "headshot-replace"
   | "deliverables-export"
   | "files-export";
@@ -133,12 +136,21 @@ export interface DeliverablesOperationState {
   readonly message: string;
 }
 
+export type DeliverableSpeakerContentHistoryStatus = "loading" | "empty" | "success" | "error";
+
+export interface DeliverableSpeakerContentHistoryState {
+  readonly status: DeliverableSpeakerContentHistoryStatus;
+  readonly entries: readonly DeliverableSpeakerContentHistoryEntry[];
+  readonly error?: string;
+}
+
 export interface DeliverablesSnapshot {
   readonly sessions: readonly DeliverableSession[];
   readonly tasks: readonly DeliverableTask[];
   readonly assets: readonly DeliverableAsset[];
   readonly profiles: readonly DeliverableSpeakerProfile[];
   readonly matrix?: DeliverableTaskMatrix;
+  readonly speakerContentHistory?: Readonly<Record<string, DeliverableSpeakerContentHistoryState>>;
 }
 
 export interface DeliverablesWorkspaceProps {
@@ -168,6 +180,7 @@ export interface DeliverablesWorkspaceViewProps {
   readonly tasks: readonly DeliverableTask[];
   readonly assets: readonly DeliverableAsset[];
   readonly profiles: readonly DeliverableSpeakerProfile[];
+  readonly speakerContentHistory?: Readonly<Record<string, DeliverableSpeakerContentHistoryState>>;
   readonly matrixItems?: readonly DeliverableMatrixItem[];
   readonly loading?: boolean;
   readonly busy?: boolean;
@@ -221,6 +234,11 @@ export interface DeliverablesWorkspaceViewProps {
     readonly version: number;
     readonly expectedVersion: number;
   }) => Promise<void>;
+  readonly onRestoreSpeakerContentVersion?: (input: {
+    readonly participantId: string;
+    readonly version: number;
+    readonly expectedVersion: number;
+  }) => Promise<void>;
   readonly onSaveBiography?: (input: {
     readonly participantId: string;
     readonly biography: string;
@@ -248,6 +266,133 @@ function formatDate(value: string | undefined): string {
 
 function formatStatus(status: string): string {
   return status.replace(/[_-]+/gu, " ").replace(/\b\w/gu, (letter) => letter.toUpperCase());
+}
+const speakerContentHistoryFields = [
+  ["title", "Title"],
+  ["description", "Description"],
+  ["abstract", "Abstract"],
+  ["biography", "Biography"],
+  ["socialLinks", "Social profiles"],
+  ["headshotAssetId", "Headshot"],
+  ["status", "Status"],
+] as const;
+
+type SpeakerContentHistoryField = (typeof speakerContentHistoryFields)[number][0];
+
+function speakerContentValue(
+  snapshot: DeliverableSpeakerContentHistoryEntry["snapshot"],
+  field: SpeakerContentHistoryField,
+): unknown {
+  return snapshot[field];
+}
+
+function speakerContentValuesEqual(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function formatSpeakerContentValue(value: unknown): string {
+  if (value === undefined) return "Not provided";
+  if (value === null) return "None";
+  if (typeof value === "string") return value.length === 0 ? "Empty" : value;
+  return JSON.stringify(value);
+}
+
+function speakerContentChangedFields(
+  entry: DeliverableSpeakerContentHistoryEntry,
+  previous: DeliverableSpeakerContentHistoryEntry | undefined,
+): readonly {
+  readonly label: string;
+  readonly previous: string;
+  readonly current: string;
+}[] {
+  return speakerContentHistoryFields.flatMap(([field, label]) => {
+    const currentValue = speakerContentValue(entry.snapshot, field);
+    const previousValue =
+      previous === undefined ? undefined : speakerContentValue(previous.snapshot, field);
+    if (previous !== undefined && speakerContentValuesEqual(previousValue, currentValue)) return [];
+    return [
+      {
+        label,
+        previous: formatSpeakerContentValue(previousValue),
+        current: formatSpeakerContentValue(currentValue),
+      },
+    ];
+  });
+}
+function compareSpeakerContentHistoryEntries(
+  left: DeliverableSpeakerContentHistoryEntry,
+  right: DeliverableSpeakerContentHistoryEntry,
+): number {
+  return (
+    left.version - right.version ||
+    left.occurredAt.localeCompare(right.occurredAt) ||
+    left.id.localeCompare(right.id)
+  );
+}
+
+function sortedSpeakerContentHistory(
+  entries: readonly DeliverableSpeakerContentHistoryEntry[],
+): readonly DeliverableSpeakerContentHistoryEntry[] {
+  return [...entries].sort(compareSpeakerContentHistoryEntries);
+}
+
+function speakerContentHistoryLoading(): DeliverableSpeakerContentHistoryState {
+  return { status: "loading", entries: [] };
+}
+
+function speakerContentHistoryEmpty(): DeliverableSpeakerContentHistoryState {
+  return { status: "empty", entries: [] };
+}
+
+function speakerContentHistorySuccess(
+  entries: readonly DeliverableSpeakerContentHistoryEntry[],
+): DeliverableSpeakerContentHistoryState {
+  const sorted = sortedSpeakerContentHistory(entries);
+  return sorted.length === 0
+    ? speakerContentHistoryEmpty()
+    : { status: "success", entries: sorted };
+}
+
+function speakerContentHistoryError(reason: unknown): DeliverableSpeakerContentHistoryState {
+  return {
+    status: "error",
+    entries: [],
+    error: messageFromError(reason),
+  };
+}
+function speakerContentHistoryStatesForProfiles(
+  profiles: readonly DeliverableSpeakerProfile[],
+  provided: Readonly<Record<string, DeliverableSpeakerContentHistoryState>> | undefined,
+): Readonly<Record<string, DeliverableSpeakerContentHistoryState>> {
+  return Object.fromEntries(
+    profiles.map((profile) => [
+      profile.participantId,
+      provided?.[profile.participantId] ?? speakerContentHistoryEmpty(),
+    ]),
+  );
+}
+function profileWithSpeakerContentRecord(
+  profile: DeliverableSpeakerProfile,
+  content: DeliverableSpeakerContentRecord,
+): DeliverableSpeakerProfile {
+  const {
+    socialLinks: _socialLinks,
+    social: _social,
+    status: _status,
+    headshotAssetId: _headshotAssetId,
+    ...profileWithoutContent
+  } = profile;
+  return {
+    ...profileWithoutContent,
+    biography: content.biography ?? "",
+    ...(content.socialLinks === undefined ? {} : { socialLinks: content.socialLinks }),
+    ...(content.status === undefined ? {} : { status: content.status }),
+    ...(content.headshotAssetId === undefined || content.headshotAssetId === null
+      ? {}
+      : { headshotAssetId: content.headshotAssetId }),
+    version: content.version,
+    updatedAt: content.updatedAt,
+  };
 }
 
 function statusForTask(
@@ -1944,12 +2089,15 @@ function SpeakerEditor({
   profiles,
   assets,
   busy,
+  speakerContentHistory,
   onSaveBiography,
   onReplaceHeadshot,
+  onRestoreSpeakerContentVersion,
 }: Readonly<{
   profiles: readonly DeliverableSpeakerProfile[];
   assets: readonly DeliverableAsset[];
   busy: boolean;
+  speakerContentHistory?: Readonly<Record<string, DeliverableSpeakerContentHistoryState>>;
   onSaveBiography?: (input: {
     readonly participantId: string;
     readonly biography: string;
@@ -1960,17 +2108,32 @@ function SpeakerEditor({
     readonly file: File;
     readonly supersedesAssetId?: string;
   }) => Promise<void>;
+  onRestoreSpeakerContentVersion?: (input: {
+    readonly participantId: string;
+    readonly version: number;
+    readonly expectedVersion: number;
+  }) => Promise<void>;
 }>) {
   const [participantId, setParticipantId] = useState(profiles[0]?.participantId ?? "");
   const selected =
     profiles.find((profile) => profile.participantId === participantId) ?? profiles[0];
   const [biography, setBiography] = useState(selected?.biography ?? "");
   const [formError, setFormError] = useState<string | null>(null);
+  const historyState =
+    speakerContentHistory?.[selected?.participantId ?? ""] ?? speakerContentHistoryEmpty();
+  const history = sortedSpeakerContentHistory(historyState.entries);
+  const priorVersions = history
+    .filter((entry) => selected !== undefined && entry.version < selected.version)
+    .sort((left, right) => right.version - left.version);
+  const [restoreVersion, setRestoreVersion] = useState<number | null>(
+    priorVersions[0]?.version ?? null,
+  );
 
   useEffect(() => {
     setBiography(selected?.biography ?? "");
     setFormError(null);
-  }, [selected]);
+    setRestoreVersion(priorVersions[0]?.version ?? null);
+  }, [selected, priorVersions[0]?.version]);
 
   async function save(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -2126,9 +2289,115 @@ function SpeakerEditor({
             {headshot === undefined
               ? ""
               : ` · ${formatStatus(headshot.kind)} · ${headshot.contentType} · ${headshot.sizeBytes} bytes · v${headshot.version ?? 1}`}
-            . Biography history and restore are unavailable until the profile version-history
-            endpoint is provisioned.
           </p>
+          <section aria-labelledby="speaker-content-history-heading">
+            <h3 id="speaker-content-history-heading">Speaker content history</h3>
+            {historyState.status === "loading" ? (
+              <p role="status">Loading speaker content history…</p>
+            ) : historyState.status === "error" ? (
+              <p role="alert">
+                Speaker content history could not be loaded.{" "}
+                {historyState.error ?? "The history request failed."}
+              </p>
+            ) : historyState.status === "empty" ? (
+              <p style={mutedStyle}>
+                No speaker content history was returned. Restore is unavailable without an immutable
+                prior version.
+              </p>
+            ) : (
+              <ol aria-label="Speaker content history">
+                {history.map((entry, index) => {
+                  const previous = index === 0 ? undefined : history[index - 1];
+                  const changedFields = speakerContentChangedFields(entry, previous);
+                  return (
+                    <li key={entry.id}>
+                      <div>
+                        <strong>Version {entry.version}</strong> ·{" "}
+                        {entry.action === undefined ? "Changed" : formatStatus(entry.action)} ·{" "}
+                        {formatTime(entry.occurredAt)} · {entry.actorLabel ?? entry.actorId}
+                      </div>
+                      <div>
+                        <strong>Changed fields:</strong>{" "}
+                        {changedFields.length === 0
+                          ? "No field differences returned."
+                          : changedFields.map((field) => field.label).join(", ")}
+                      </div>
+                      {changedFields.length > 0 ? (
+                        <ul>
+                          {changedFields.map((field) => (
+                            <li key={`${entry.id}-${field.label}`}>
+                              <strong>{field.label}:</strong>{" "}
+                              {previous === undefined
+                                ? field.current
+                                : `${field.previous} → ${field.current}`}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </li>
+                  );
+                })}
+              </ol>
+            )}
+            <div style={rowStyle}>
+              {priorVersions.length === 0 ? (
+                <span style={mutedStyle}>
+                  Restore is unavailable without an immutable prior speaker content version.
+                </span>
+              ) : (
+                <>
+                  <label style={fieldStyle}>
+                    <span>Prior version to restore</span>
+                    <select
+                      style={inputStyle}
+                      value={restoreVersion ?? ""}
+                      disabled={busy || onRestoreSpeakerContentVersion === undefined}
+                      onChange={(event) => {
+                        const value = Number(event.currentTarget.value);
+                        setRestoreVersion(Number.isSafeInteger(value) ? value : null);
+                      }}
+                    >
+                      {priorVersions.map((entry) => (
+                        <option key={`${entry.id}-${entry.version}`} value={entry.version}>
+                          Version {entry.version} · {formatTime(entry.occurredAt)} ·{" "}
+                          {entry.actorLabel ?? entry.actorId}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <button
+                    style={secondaryButtonStyle}
+                    type="button"
+                    disabled={
+                      busy ||
+                      onRestoreSpeakerContentVersion === undefined ||
+                      selected === undefined ||
+                      restoreVersion === null
+                    }
+                    onClick={() => {
+                      if (
+                        selected !== undefined &&
+                        restoreVersion !== null &&
+                        onRestoreSpeakerContentVersion !== undefined
+                      )
+                        void onRestoreSpeakerContentVersion({
+                          participantId: selected.participantId,
+                          version: restoreVersion,
+                          expectedVersion: selected.version,
+                        });
+                    }}
+                  >
+                    {busy ? "Restoring speaker content…" : "Restore selected speaker version"}
+                  </button>
+                  {onRestoreSpeakerContentVersion === undefined ? (
+                    <span style={mutedStyle}>
+                      Speaker content restore is not supported by the current API.
+                    </span>
+                  ) : null}
+                </>
+              )}
+            </div>
+          </section>
         </>
       )}
     </section>
@@ -2143,6 +2412,7 @@ export function DeliverablesWorkspaceView({
   tasks,
   assets,
   profiles,
+  speakerContentHistory,
   matrixItems,
   loading = false,
   busy = false,
@@ -2172,6 +2442,7 @@ export function DeliverablesWorkspaceView({
   onSaveSession,
   onApproveSession,
   onRestoreSessionVersion,
+  onRestoreSpeakerContentVersion,
   onSaveBiography,
   onReplaceHeadshot,
   onRetry,
@@ -2484,8 +2755,12 @@ export function DeliverablesWorkspaceView({
                 profiles={profiles}
                 assets={assets}
                 busy={busy}
+                {...(speakerContentHistory === undefined ? {} : { speakerContentHistory })}
                 {...(onSaveBiography === undefined ? {} : { onSaveBiography })}
                 {...(onReplaceHeadshot === undefined ? {} : { onReplaceHeadshot })}
+                {...(onRestoreSpeakerContentVersion === undefined
+                  ? {}
+                  : { onRestoreSpeakerContentVersion })}
               />
             </>
           ) : null}
@@ -2721,6 +2996,14 @@ export function DeliverablesWorkspace({
   const [profiles, setProfiles] = useState<readonly DeliverableSpeakerProfile[]>(
     initialData?.profiles ?? [],
   );
+  const [speakerContentHistory, setSpeakerContentHistory] = useState<
+    Readonly<Record<string, DeliverableSpeakerContentHistoryState>>
+  >(() =>
+    speakerContentHistoryStatesForProfiles(
+      initialData?.profiles ?? [],
+      initialData?.speakerContentHistory,
+    ),
+  );
   const [matrix, setMatrix] = useState<DeliverableTaskMatrix | undefined>(initialData?.matrix);
   const [loading, setLoading] = useState(initialData === undefined);
   const [busy, setBusy] = useState(false);
@@ -2757,6 +3040,12 @@ export function DeliverablesWorkspace({
     setTasks(initialData?.tasks ?? []);
     setAssets(initialData?.assets ?? []);
     setProfiles(initialData?.profiles ?? []);
+    setSpeakerContentHistory(
+      speakerContentHistoryStatesForProfiles(
+        initialData?.profiles ?? [],
+        initialData?.speakerContentHistory,
+      ),
+    );
     setMatrix(initialData?.matrix);
     setLoading(initialData === undefined);
     setError(null);
@@ -2789,6 +3078,44 @@ export function DeliverablesWorkspace({
       [key]: { key, label, phase, message },
     }));
   }
+  const refreshSpeakerContentHistory = useCallback(
+    async (participantId: string, signal?: AbortSignal): Promise<void> => {
+      const scope = scopeRef.current;
+      const isCurrent = (): boolean =>
+        !signal?.aborted && isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current);
+      if (!isCurrent()) return;
+      setSpeakerContentHistory((current) => ({
+        ...current,
+        [participantId]: speakerContentHistoryLoading(),
+      }));
+      const listSpeakerContentHistory = api?.listSpeakerContentHistory;
+      if (listSpeakerContentHistory === undefined) {
+        if (!isCurrent()) return;
+        setSpeakerContentHistory((current) => ({
+          ...current,
+          [participantId]: speakerContentHistoryError(
+            new Error("The speaker content history endpoint is not provisioned."),
+          ),
+        }));
+        return;
+      }
+      try {
+        const entries = await listSpeakerContentHistory(participantId, signal);
+        if (!isCurrent()) return;
+        setSpeakerContentHistory((current) => ({
+          ...current,
+          [participantId]: speakerContentHistorySuccess(entries),
+        }));
+      } catch (reason) {
+        if (!isCurrent()) return;
+        setSpeakerContentHistory((current) => ({
+          ...current,
+          [participantId]: speakerContentHistoryError(reason),
+        }));
+      }
+    },
+    [api],
+  );
 
   async function refreshMatrix(scope: DeliverablesWorkspaceScope = currentScope): Promise<boolean> {
     if (api.listDeliverableMatrix === undefined) return true;
@@ -2890,8 +3217,28 @@ export function DeliverablesWorkspace({
 
         if (requests.profiles !== undefined) {
           if (profilesResult?.ok === true) {
-            setProfiles(profilesResult.value);
+            const loadedProfiles = profilesResult.value;
+            setProfiles(loadedProfiles);
+            if (mode === "deliverables") {
+              setSpeakerContentHistory(
+                speakerContentHistoryStatesForProfiles(
+                  loadedProfiles,
+                  Object.fromEntries(
+                    loadedProfiles.map((profile) => [
+                      profile.participantId,
+                      speakerContentHistoryLoading(),
+                    ]),
+                  ),
+                ),
+              );
+              void Promise.all(
+                loadedProfiles.map((profile) =>
+                  refreshSpeakerContentHistory(profile.participantId, signal),
+                ),
+              );
+            }
           } else if (profilesResult !== undefined) {
+            setSpeakerContentHistory({});
             messages.push(
               mode === "files"
                 ? `Speaker labels unavailable: ${messageFromError(profilesResult.reason)}`
@@ -2899,10 +3246,46 @@ export function DeliverablesWorkspace({
             );
           }
         } else if (mode === "files" || requests.matrix === undefined) {
+          setSpeakerContentHistory({});
           messages.push(
             mode === "files"
               ? "Speaker labels are unavailable: the private profile endpoint is not provisioned for organizer access."
               : "Speaker profile editing unavailable: the private profile endpoint is not provisioned for organizer access.",
+          );
+        } else if (api.listProfiles !== undefined) {
+          const listProfiles = api.listProfiles;
+          const result = await startDeliverablesRequest(() => listProfiles(signal))
+            .then((value) => ({ ok: true as const, value }))
+            .catch((reason: unknown) => ({ ok: false as const, reason }));
+          if (result.ok) {
+            const loadedProfiles = result.value;
+            setProfiles(loadedProfiles);
+            setSpeakerContentHistory(
+              speakerContentHistoryStatesForProfiles(
+                loadedProfiles,
+                Object.fromEntries(
+                  loadedProfiles.map((profile) => [
+                    profile.participantId,
+                    speakerContentHistoryLoading(),
+                  ]),
+                ),
+              ),
+            );
+            void Promise.all(
+              loadedProfiles.map((profile) =>
+                refreshSpeakerContentHistory(profile.participantId, signal),
+              ),
+            );
+          } else {
+            setSpeakerContentHistory({});
+            messages.push(
+              `Speaker profile editing unavailable: ${messageFromError(result.reason)}`,
+            );
+          }
+        } else {
+          setSpeakerContentHistory({});
+          messages.push(
+            "Speaker profile editing unavailable: the private profile endpoint is not provisioned for organizer access.",
           );
         }
 
@@ -2914,6 +3297,10 @@ export function DeliverablesWorkspace({
           if (api.createTask === undefined)
             messages.push(
               "Create file-request task is unavailable until an organizer task-management endpoint is provisioned.",
+            );
+          if (api.listSpeakerContentHistory === undefined)
+            messages.push(
+              "Speaker content history is unavailable until the organizer content history endpoint is provisioned.",
             );
           if (api.sendBulkReminder === undefined)
             messages.push(
@@ -2938,7 +3325,7 @@ export function DeliverablesWorkspace({
         if (isCurrent()) setLoading(false);
       }
     },
-    [api, eventId, initialData, mode, organizationId],
+    [api, eventId, initialData, mode, organizationId, refreshSpeakerContentHistory],
   );
 
   useEffect(() => {
@@ -3362,6 +3749,7 @@ export function DeliverablesWorkspace({
         "succeeded",
         `Biography saved for ${next.displayName}.`,
       );
+      void refreshSpeakerContentHistory(input.participantId);
     } catch (reason) {
       if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
       const message = messageFromError(reason);
@@ -3423,6 +3811,7 @@ export function DeliverablesWorkspace({
         "succeeded",
         `Headshot replaced for ${next.profile.displayName}.`,
       );
+      void refreshSpeakerContentHistory(input.participantId);
     } catch (reason) {
       if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
       const message = messageFromError(reason);
@@ -3500,6 +3889,55 @@ export function DeliverablesWorkspace({
       if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
     }
   }
+  async function restoreSpeakerContentVersion(input: {
+    readonly participantId: string;
+    readonly version: number;
+    readonly expectedVersion: number;
+  }): Promise<void> {
+    if (api?.restoreSpeakerContentVersion === undefined) {
+      const message =
+        "Speaker content restore is unavailable because no restore endpoint is provisioned.";
+      setError(message);
+      recordOperation("speaker-content-restore", "Restore speaker content", "failed", message);
+      return;
+    }
+    const scope = scopeRef.current;
+    setBusy(true);
+    setError(null);
+    setStatusMessage(null);
+    recordOperation(
+      "speaker-content-restore",
+      "Restore speaker content",
+      "pending",
+      "Speaker content restore in progress.",
+    );
+    try {
+      const next = await api.restoreSpeakerContentVersion(input);
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      setProfiles((current) =>
+        current.map((profile) =>
+          profile.participantId === input.participantId
+            ? profileWithSpeakerContentRecord(profile, next)
+            : profile,
+        ),
+      );
+      setStatusMessage(`Speaker content restored to version ${input.version}.`);
+      recordOperation(
+        "speaker-content-restore",
+        "Restore speaker content",
+        "succeeded",
+        `Speaker content restored to version ${input.version}.`,
+      );
+      void refreshSpeakerContentHistory(input.participantId);
+    } catch (reason) {
+      if (!isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) return;
+      const message = messageFromError(reason);
+      setError(message);
+      recordOperation("speaker-content-restore", "Restore speaker content", "failed", message);
+    } finally {
+      if (isDeliverablesWorkspaceScopeCurrent(scope, scopeRef.current)) setBusy(false);
+    }
+  }
 
   const reviewAsset = api?.reviewAsset;
   const reviewAssetHandler =
@@ -3545,6 +3983,12 @@ export function DeliverablesWorkspace({
   const renderedTasks = renderedStateIsCurrent ? tasks : (initialData?.tasks ?? []);
   const renderedAssets = renderedStateIsCurrent ? assets : (initialData?.assets ?? []);
   const renderedProfiles = renderedStateIsCurrent ? profiles : (initialData?.profiles ?? []);
+  const renderedSpeakerContentHistory = renderedStateIsCurrent
+    ? speakerContentHistory
+    : speakerContentHistoryStatesForProfiles(
+        initialData?.profiles ?? [],
+        initialData?.speakerContentHistory,
+      );
   const renderedMatrix = renderedStateIsCurrent ? matrix : initialData?.matrix;
   const selectedSessionForHistory =
     renderedSessions.find(
@@ -3588,6 +4032,7 @@ export function DeliverablesWorkspace({
             )
           : []
       }
+      speakerContentHistory={renderedSpeakerContentHistory}
       {...(api?.createTask === undefined ? {} : { onCreateTask: createTask })}
       onInspectAsset={(assetId) => {
         setAssetHistory([]);
@@ -3622,6 +4067,9 @@ export function DeliverablesWorkspace({
       {...(api?.restoreSessionVersion === undefined
         ? {}
         : { onRestoreSessionVersion: restoreSessionVersion })}
+      {...(api?.restoreSpeakerContentVersion === undefined
+        ? {}
+        : { onRestoreSpeakerContentVersion: restoreSpeakerContentVersion })}
       {...(api?.updateBiography === undefined ? {} : { onSaveBiography: saveBiography })}
       {...(api?.replaceHeadshot === undefined ? {} : { onReplaceHeadshot: replaceHeadshot })}
     />

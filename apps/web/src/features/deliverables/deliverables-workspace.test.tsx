@@ -349,6 +349,84 @@ describe("deliverables API adapter", () => {
       "event ID is required",
     );
   });
+  it("uses speaker history and restore routes with normalized organizer content", async () => {
+    const calls: Array<{
+      readonly input: RequestInfo | URL;
+      readonly init: RequestInit | undefined;
+    }> = [];
+    const historyEntry = {
+      id: "speaker-history-1",
+      action: "updated",
+      version: 1,
+      actorAccountId: "organizer-1",
+      actorLabel: "Jordan Alvarez",
+      occurredAt: "2026-08-08T12:00:00.000Z",
+      snapshot: {
+        biography: "Earlier biography.",
+        socialLinks: { linkedin: "https://example.test/jordan" },
+        headshotAssetId: "headshot-v1",
+      },
+    };
+    const restored = {
+      id: "speaker-content-1",
+      eventId: "event-1",
+      entityType: "speaker",
+      entityId: "speaker-1",
+      biography: "Earlier biography.",
+      socialLinks: { linkedin: "https://example.test/jordan" },
+      headshotAssetId: "headshot-v1",
+      version: 3,
+      updatedAt: "2026-08-10T12:00:00.000Z",
+      updatedBy: "organizer-1",
+    };
+    const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ input, init });
+      if (String(input).endsWith("/history")) return Response.json({ data: [historyEntry] });
+      if (String(input).endsWith("/restore"))
+        return Response.json({ data: restored }, { status: 200 });
+      throw new Error(`Unexpected request ${String(input)}`);
+    };
+    const api = createDeliverablesApi("https://api.example.test", "org-1", "event-1", fetcher);
+
+    await expect(api.listSpeakerContentHistory?.("speaker/1")).resolves.toEqual([
+      {
+        id: "speaker-history-1",
+        action: "updated",
+        version: 1,
+        actorId: "organizer-1",
+        actorLabel: "Jordan Alvarez",
+        occurredAt: "2026-08-08T12:00:00.000Z",
+        snapshot: {
+          biography: "Earlier biography.",
+          socialLinks: { linkedin: "https://example.test/jordan" },
+          headshotAssetId: "headshot-v1",
+        },
+      },
+    ]);
+    await expect(
+      api.restoreSpeakerContentVersion?.({
+        participantId: "speaker/1",
+        version: 1,
+        expectedVersion: 2,
+      }),
+    ).resolves.toMatchObject({
+      entityType: "speaker",
+      entityId: "speaker-1",
+      biography: "Earlier biography.",
+      version: 3,
+    });
+    expect(String(calls[0]?.input)).toBe(
+      "https://api.example.test/api/speaker/events/event-1/organizer/content/speaker/speaker%2F1/history",
+    );
+    expect(String(calls[1]?.input)).toBe(
+      "https://api.example.test/api/speaker/events/event-1/organizer/content/speaker/speaker%2F1/restore",
+    );
+    expect(calls[1]?.init?.method).toBe("POST");
+    expect(JSON.parse(String(calls[1]?.init?.body))).toEqual({
+      version: 1,
+      expectedVersion: 2,
+    });
+  });
 });
 function deferred<T>(): {
   readonly promise: Promise<T>;
@@ -772,6 +850,72 @@ describe("deliverables workspace", () => {
     expect(markup).toContain("Organizer reply added to the asset-family thread.");
     expect(markup).not.toContain("must-not-cross-boundary");
     expect(markup).toContain("Download selected deliverables ZIP");
+  });
+  it("renders settled speaker history loading, populated, empty, and error states", () => {
+    const historyEntries = [
+      {
+        id: "speaker-history-1",
+        action: "created" as const,
+        version: 1,
+        actorId: "organizer-1",
+        actorLabel: "Jordan Alvarez",
+        occurredAt: "2026-08-08T12:00:00.000Z",
+        snapshot: { biography: "Earlier biography." },
+      },
+      {
+        id: "speaker-history-2",
+        action: "updated" as const,
+        version: 2,
+        actorId: "organizer-2",
+        actorLabel: "Sam Lee",
+        occurredAt: "2026-08-09T12:00:00.000Z",
+        snapshot: { biography: "Current biography." },
+      },
+    ];
+    const renderHistory = (
+      historyState:
+        | {
+            readonly status: "loading" | "empty" | "success" | "error";
+            readonly entries: typeof historyEntries;
+            readonly error?: string;
+          }
+        | {
+            readonly status: "empty" | "loading" | "error";
+            readonly entries: readonly [];
+            readonly error?: string;
+          },
+    ) =>
+      renderToStaticMarkup(
+        createElement(DeliverablesWorkspaceView, {
+          organizationId: "org-1",
+          eventId: "event-1",
+          sessions: [session],
+          tasks: [task],
+          assets: [assetV1],
+          profiles: [profile],
+          speakerContentHistory: { "speaker-1": historyState },
+          onRestoreSpeakerContentVersion: async () => undefined,
+        }),
+      );
+
+    const loadingMarkup = renderHistory({ status: "loading", entries: [] });
+    expect(loadingMarkup).toContain("Loading speaker content history");
+    const populatedMarkup = renderHistory({ status: "success", entries: historyEntries });
+    expect(populatedMarkup).toContain("Version 1");
+    expect(populatedMarkup).toContain("Version 2");
+    expect(populatedMarkup).toContain("Jordan Alvarez");
+    expect(populatedMarkup).toContain("Changed fields:");
+    expect(populatedMarkup).toContain("Biography");
+    expect(populatedMarkup).toContain("Restore selected speaker version");
+    const emptyMarkup = renderHistory({ status: "empty", entries: [] });
+    expect(emptyMarkup).toContain("No speaker content history was returned");
+    const errorMarkup = renderHistory({
+      status: "error",
+      entries: [],
+      error: "History request failed.",
+    });
+    expect(errorMarkup).toContain("Speaker content history could not be loaded");
+    expect(errorMarkup).toContain("History request failed.");
   });
   it("keeps Files and Deliverables route modes separate", () => {
     const filesMarkup = renderToStaticMarkup(
