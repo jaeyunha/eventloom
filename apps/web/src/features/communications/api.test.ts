@@ -2,6 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
   CommunicationApiError,
   type CommunicationTemplate,
+  type ReminderDispatch,
+  type ReminderFacts,
+  type ReminderRun,
   createCommunicationApi,
   formatCommunicationAudience,
   formatCommunicationPurpose,
@@ -43,6 +46,68 @@ function template(id: string, purpose: CommunicationTemplate["purpose"]): Commun
     updatedAt: "2026-08-11T00:00:00.000Z",
     approvedBy: "organizer-1",
     approvedAt: "2026-08-11T00:00:00.000Z",
+  };
+}
+function reminderRun(triggerType: ReminderRun["triggerType"] = "automatic"): ReminderRun {
+  return {
+    id: `${triggerType}-run-1`,
+    organizationId: "org-1",
+    eventId: "event-1",
+    triggerType,
+    audienceType: "combined",
+    audienceRevision: "audience-revision-1",
+    candidateCount: 2,
+    eligibleCount: 1,
+    queuedCount: 1,
+    skippedCount: 1,
+    failedCount: 0,
+    state: "completed",
+    configurationFailure: null,
+    actorId: "organizer-1",
+    startedAt: "2026-08-11T00:00:00.000Z",
+    completedAt: "2026-08-11T00:01:00.000Z",
+    createdAt: "2026-08-11T00:00:00.000Z",
+    updatedAt: "2026-08-11T00:01:00.000Z",
+  };
+}
+
+function reminderDispatch(status: ReminderDispatch["status"] = "provider_accepted"): ReminderDispatch {
+  return {
+    id: `${status}-dispatch-1`,
+    runId: "automatic-run-1",
+    organizationId: "org-1",
+    eventId: "event-1",
+    recipient: "application-1",
+    subject: { type: "task", taskId: "task-1" },
+    eligibilityReason: "due",
+    cadenceWindow: "2026-08-11T00:00:00.000Z",
+    idempotencyKey: "reminder-key-1",
+    providerMessageId: status === "candidate" || status === "eligible" ? null : "provider-1",
+    status,
+    skipMetadata: null,
+    failureMetadata: null,
+    createdAt: "2026-08-11T00:00:00.000Z",
+    updatedAt: "2026-08-11T00:01:00.000Z",
+    eligibleAt: "2026-08-11T00:00:10.000Z",
+    skippedAt: null,
+    queuedAt: "2026-08-11T00:00:20.000Z",
+    providerAcceptedAt: "2026-08-11T00:00:30.000Z",
+    deliveredAt: status === "delivered" ? "2026-08-11T00:01:00.000Z" : null,
+    failedAt: status === "failed" ? "2026-08-11T00:01:00.000Z" : null,
+    bouncedAt: status === "bounced" ? "2026-08-11T00:01:00.000Z" : null,
+    completedAt: status === "candidate" || status === "eligible" || status === "queued"
+      ? null
+      : "2026-08-11T00:01:00.000Z",
+    outboxJobId: "outbox-1",
+  };
+}
+
+function reminderFacts(): ReminderFacts {
+  return {
+    lastAutomatic: reminderRun("automatic"),
+    lastManual: reminderRun("manual"),
+    nextEligibleAt: "2026-08-12T00:00:00.000Z",
+    lastOutcome: reminderDispatch("delivered"),
   };
 }
 
@@ -199,5 +264,99 @@ describe("communications API", () => {
     expect(init?.credentials).toBe("include");
     expect(init?.cache).toBe("no-store");
     expect(init?.signal).toBe(controller.signal);
+  });
+  it("lists reminder runs and dispatches, fetches facts, and refreshes event-scoped delivery truth", async () => {
+    const run = reminderRun();
+    const dispatch = reminderDispatch("provider_accepted");
+    const facts = reminderFacts();
+    const fetcher = vi.fn<TestFetcher>((input) => {
+      const url = String(input);
+      if (url.endsWith("/reminders/runs")) return Promise.resolve(jsonResponse({ runs: [run] }));
+      if (url.includes("/reminders/facts?")) return Promise.resolve(jsonResponse({ facts }));
+      if (url.endsWith(`/reminders/dispatches/${dispatch.id}`)) {
+        return Promise.resolve(jsonResponse({ dispatch }));
+      }
+      if (url.includes("/reminders/dispatches?")) {
+        return Promise.resolve(jsonResponse({ dispatches: [dispatch] }));
+      }
+      return Promise.resolve(jsonResponse({ run }));
+    });
+    const api = createCommunicationApi("", "org-1", fetcher);
+    const controller = new AbortController();
+
+    await expect(api.listReminderRuns("event-1", controller.signal)).resolves.toEqual([run]);
+    await expect(api.listReminderDispatches("event-1", run.id, controller.signal)).resolves.toEqual([
+      dispatch,
+    ]);
+    await expect(
+      api.getReminderFacts("event-1", "application-1", { type: "task", taskId: "task-1" }),
+    ).resolves.toEqual(facts);
+    await expect(api.refreshReminderDelivery("event-1", dispatch.id, controller.signal)).resolves.toEqual(
+      dispatch,
+    );
+
+    const listCall = fetcher.mock.calls[0];
+    expect(String(listCall?.[0])).toBe(
+      "/api/admin/organizations/org-1/events/event-1/communications/reminders/runs",
+    );
+    expect(listCall?.[1]?.credentials).toBe("include");
+    expect(listCall?.[1]?.cache).toBe("no-store");
+    expect(listCall?.[1]?.signal).toBe(controller.signal);
+
+    const dispatchCall = fetcher.mock.calls[1];
+    expect(String(dispatchCall?.[0])).toContain(
+      "/communications/reminders/dispatches?runId=automatic-run-1",
+    );
+  });
+
+  it("sends manual reminder runs with the expected audience revision and idempotency body", async () => {
+    const run = reminderRun("manual");
+    const fetcher = vi.fn<TestFetcher>().mockResolvedValue(jsonResponse({ run }));
+    const api = createCommunicationApi("", "org-1", fetcher);
+
+    await expect(
+      api.runManualReminders({
+        eventId: "event-1",
+        idempotencyKey: "manual-key-1",
+        expectedAudienceRevision: "revision-1",
+        scheduledAt: "2026-08-11T00:00:00.000Z",
+      }),
+    ).resolves.toEqual(run);
+
+    const [input, init] = fetcher.mock.calls[0] ?? [];
+    expect(String(input)).toBe(
+      "/api/admin/organizations/org-1/events/event-1/communications/reminders/runs/manual",
+    );
+    expect(new Headers(init?.headers).get("idempotency-key")).toBe("manual-key-1");
+    expect(JSON.parse(String(init?.body))).toEqual({
+      idempotencyKey: "manual-key-1",
+      expectedAudienceRevision: "revision-1",
+      scheduledAt: "2026-08-11T00:00:00.000Z",
+    });
+    expect(init?.credentials).toBe("include");
+    expect(init?.cache).toBe("no-store");
+  });
+
+  it("rejects malformed reminder DTOs and preserves structured API errors", async () => {
+    const malformed = vi.fn<TestFetcher>().mockResolvedValue(jsonResponse({ runs: [{ id: "run" }] }));
+    await expect(createCommunicationApi("", "org-1", malformed).listReminderRuns("event-1")).rejects.toMatchObject({
+      code: "COMMUNICATION_INVALID_RESPONSE",
+      status: 502,
+    });
+
+    const denied = vi.fn<TestFetcher>().mockResolvedValue(
+      jsonResponse({ error: { code: "COMMUNICATION_CONFLICT", message: "Audience revision is stale" } }, 409),
+    );
+    await expect(
+      createCommunicationApi("", "org-1", denied).runManualReminders({
+        eventId: "event-1",
+        idempotencyKey: "manual-key-2",
+        expectedAudienceRevision: "revision-1",
+      }),
+    ).rejects.toMatchObject({
+      code: "COMMUNICATION_CONFLICT",
+      message: "Audience revision is stale",
+      status: 409,
+    });
   });
 });

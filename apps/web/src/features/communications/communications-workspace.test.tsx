@@ -7,6 +7,9 @@ import {
   type CommunicationPreview,
   type CommunicationSend,
   type CommunicationTemplate,
+  type ReminderDispatch,
+  type ReminderFacts,
+  type ReminderRun,
   escapeHtmlForPreview,
 } from "./api";
 import {
@@ -208,6 +211,88 @@ const send: CommunicationSend = {
   createdAt: "2026-08-09T10:00:00.000Z",
   updatedAt: "2026-08-09T10:01:00.000Z",
 };
+const automaticRun: ReminderRun = {
+  id: "automatic-run-1",
+  organizationId: "org-1",
+  eventId: "event-1",
+  triggerType: "automatic",
+  audienceType: "combined",
+  audienceRevision: "revision-1",
+  candidateCount: 2,
+  eligibleCount: 2,
+  queuedCount: 2,
+  skippedCount: 0,
+  failedCount: 0,
+  state: "completed",
+  configurationFailure: null,
+  actorId: null,
+  startedAt: "2026-08-09T10:00:00.000Z",
+  completedAt: "2026-08-09T10:01:00.000Z",
+  createdAt: "2026-08-09T10:00:00.000Z",
+  updatedAt: "2026-08-09T10:01:00.000Z",
+};
+
+const manualRun: ReminderRun = {
+  ...automaticRun,
+  id: "manual-run-1",
+  triggerType: "manual",
+  actorId: "organizer-1",
+};
+
+function reminderDispatch(
+  status: ReminderDispatch["status"],
+  id = `${status}-dispatch-1`,
+): ReminderDispatch {
+  return {
+    id,
+    runId: automaticRun.id,
+    organizationId: "org-1",
+    eventId: "event-1",
+    recipient: "application-1",
+    subject: { type: "task", taskId: "task-1" },
+    eligibilityReason: "due",
+    cadenceWindow: "2026-08-09T10:00:00.000Z",
+    idempotencyKey: `${id}-key`,
+    providerMessageId:
+      status === "provider_accepted" ||
+      status === "delivered" ||
+      status === "bounced"
+        ? "provider-reminder-1"
+        : null,
+    status,
+    skipMetadata: null,
+    failureMetadata: status === "failed" ? { reason: "Provider timeout" } : null,
+    createdAt: "2026-08-09T10:00:00.000Z",
+    updatedAt: "2026-08-09T10:01:00.000Z",
+    eligibleAt: "2026-08-09T10:00:10.000Z",
+    skippedAt: status === "skipped" ? "2026-08-09T10:00:15.000Z" : null,
+    queuedAt: "2026-08-09T10:00:20.000Z",
+    providerAcceptedAt:
+      status === "provider_accepted" ||
+      status === "delivered" ||
+      status === "bounced"
+        ? "2026-08-09T10:00:30.000Z"
+        : null,
+    deliveredAt: status === "delivered" ? "2026-08-09T10:01:00.000Z" : null,
+    failedAt: status === "failed" ? "2026-08-09T10:01:00.000Z" : null,
+    bouncedAt: status === "bounced" ? "2026-08-09T10:01:00.000Z" : null,
+    completedAt:
+      status === "failed" ||
+      status === "bounced" ||
+      status === "delivered" ||
+      status === "skipped"
+        ? "2026-08-09T10:01:00.000Z"
+        : null,
+    outboxJobId: "outbox-1",
+  };
+}
+
+const reminderFacts: ReminderFacts = {
+  lastAutomatic: automaticRun,
+  lastManual: manualRun,
+  nextEligibleAt: "2026-08-12T00:00:00.000Z",
+  lastOutcome: reminderDispatch("delivered"),
+};
 
 describe("communications organizer workspace", () => {
   it("displays exact approved sender identities and event-scoped version controls", () => {
@@ -269,6 +354,7 @@ describe("communications organizer workspace", () => {
     expect(markup).toContain("Audit history");
     expect(markup).toContain("send_created");
     expect(markup).toContain(senders.speakers);
+    expect(markup).toContain('href="#audit-audit-1"');
   });
   it("labels queued sends as in progress instead of completed", () => {
     const queuedSend: CommunicationSend = {
@@ -507,5 +593,89 @@ describe("communications organizer workspace", () => {
       sendConfirmationOpen: false,
       idempotencyKey: null,
     });
+  });
+  it("renders automatic/manual facts and every provider reminder state without inventing success", () => {
+    const statuses = [
+      "candidate",
+      "eligible",
+      "queued",
+      "provider_accepted",
+      "delivered",
+      "failed",
+      "bounced",
+    ] as const;
+    const dispatches = statuses.map((status) => reminderDispatch(status));
+    const markup = renderToStaticMarkup(
+      createElement(CommunicationsWorkspaceView, {
+        eventId: "event-1",
+        organizationId: "org-1",
+        templates: [],
+        reminderRuns: [automaticRun, manualRun],
+        reminderDispatches: dispatches,
+        reminderFacts,
+        reminderState: "ready",
+        onRunManualReminders: async () => undefined,
+        onRefreshDeliveryTruth: async () => undefined,
+      }),
+    );
+
+    expect(markup).toContain("Automatic and manual reminders");
+    expect(markup).toContain("Automatic");
+    expect(markup).toContain("Manual");
+    expect(markup).toContain("Provider Accepted");
+    expect(markup).toContain("Delivered");
+    expect(markup).toContain("Failed");
+    expect(markup).toContain("Bounced");
+    expect(markup).toContain("Next eligible time");
+    expect(markup).toContain("Last outcome");
+    expect(markup).toContain("Historical recipient and task/review subject snapshots are immutable");
+  });
+
+  it("renders reminder pending, conflict, stale, and unavailable truth states explicitly", () => {
+    const states = [
+      ["pending", "Reminder truth pending", "No provider outcome is assumed"],
+      ["conflict", "Reminder audience conflict", "Reconcile the current audience revision"],
+      ["stale", "Reminder truth is stale", "before treating a queued or provider-accepted state as terminal"],
+      ["unavailable", "Reminder delivery truth unavailable", "No delivery success is shown"],
+    ] as const;
+    for (const [state, message, truthBoundary] of states) {
+      const markup = renderToStaticMarkup(
+        createElement(CommunicationsWorkspaceView, {
+          eventId: "event-1",
+          organizationId: "org-1",
+          templates: [],
+          reminderState: state,
+          reminderError: `${state} error`,
+          reminderLoading: state === "pending",
+        }),
+      );
+      expect(markup).toContain(message);
+      expect(markup).toContain(truthBoundary);
+    }
+  });
+
+  it("does not show retry for non-terminal queued sends but does for bounced terminal sends", () => {
+    const bouncedSend: CommunicationSend = {
+      ...send,
+      status: "partial",
+      failedCount: 0,
+      deliveries: send.deliveries.map((delivery) => ({
+        ...delivery,
+        status: "bounced",
+        providerMessageId: "provider-bounced",
+        failureReason: "Mailbox rejected",
+      })),
+      terminal: true,
+    };
+    const markup = renderToStaticMarkup(
+      createElement(CommunicationsWorkspaceView, {
+        eventId: "event-1",
+        organizationId: "org-1",
+        templates: [],
+        send: bouncedSend,
+        onRetryFailed: async () => undefined,
+      }),
+    );
+    expect(markup).toContain("Retry failed or bounced recipients");
   });
 });
