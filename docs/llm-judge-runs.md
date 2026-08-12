@@ -14,6 +14,29 @@ The governing hierarchy is the one in [`spec/open-sessionboard.md`](../spec/open
 6. Cited product evidence and focused research explain intended workflows but cannot prove release behavior.
 
 The built-in Speaker CRM is supported first-party scope and is included in evaluator interpretation. Accelevents is a separate external event platform, outside the competition brief/evaluator requirements and unsupported by the runtime; no Accelevents run or credential is required.
+## 2026-08-12 — completed repaired-fixture automated run, manual evidence pending
+
+- Status: completed automated diagnostic; not release evidence
+- Evaluator checkout: `/tmp/killmysaas-evals-current`
+- Run directory: `/tmp/killmysaas-evals-current/runs/2026-08-12T01-13-35`
+- Machine-readable report: `/tmp/killmysaas-evals-current/runs/2026-08-12T01-13-35/report.json`
+- Human-readable report: `/tmp/killmysaas-evals-current/runs/2026-08-12T01-13-35/report.html`
+- Manual checklist: `/tmp/killmysaas-evals-current/runs/2026-08-12T01-13-35/manual-checklist.md`
+- Automated result: **60.3% overall**, **98% coverage**, `scoreWithheld: false`
+- Manual status: **19 pending**; no pending manual item is counted as verified
+- Evaluator models: `gpt-5.6-terra` at medium effort for the agent; `gpt-5.6-sol` at high effort for the judge
+
+| Area | Score | Coverage | Manual pending |
+|---|---:|---:|---:|
+| Call for Papers | 75.7% | 92.1% | 3 |
+| Abstract Management | 64.3% | 100% | 4 |
+| Speaker Management | 37.5% | 97% | 5 |
+| Content Management | 33.9% | 100% | 2 |
+| AI Agenda | 47.2% | 100% | 0 |
+| Public Widgets | 84.3% | 100% | 3 |
+| Speaker CRM | 79.4% | 89.5% | 2 |
+
+All seven areas reached report generation against the repaired canonical fixture, including optional Speaker CRM. One expired organizer session interrupted the first Abstract Management attempt; the evaluator was corrected to recover pre-provisioned personas with the configured credentials, then resumed in the same run directory. The final report uses completed replacement evidence for ABS-S2 and ABS-S3. `CNT-S2` remained blocked by product workflow behavior rather than harness authentication. The score is diagnostic because manual checks remain pending and because the source fixes committed after the run began were not deployed into this observed production run.
 
 ## 2026-08-11 — completed automated run, manual evidence pending
 
