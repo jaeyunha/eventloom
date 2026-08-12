@@ -300,6 +300,25 @@ function assetSize(value: number): string {
 }
 export type OrganizerHeadshotUploadStatus = "idle" | "busy" | "success" | "error";
 
+export function acceptedSpeakerSessions(
+  sessions: readonly SpeakerSession[],
+): readonly SpeakerSession[] {
+  return sessions.filter((session) => session.status.trim().toLowerCase() === "accepted");
+}
+
+export function organizerHeadshotSubmissionId(
+  sessions: readonly SpeakerSession[],
+  requestedSubmissionId: string | null | undefined,
+): string | null {
+  const eligibleSessions = acceptedSpeakerSessions(sessions);
+  if (eligibleSessions.length === 1) return eligibleSessions.at(0)?.submissionId ?? null;
+  return requestedSubmissionId !== null &&
+    requestedSubmissionId !== undefined &&
+    eligibleSessions.some((session) => session.submissionId === requestedSubmissionId)
+    ? requestedSubmissionId
+    : null;
+}
+
 export function validateOrganizerHeadshotFile(file: File): string | null {
   const contentType = file.type.trim().toLowerCase();
   if (
@@ -1130,6 +1149,7 @@ export function SpeakerWorkspace({
   const [headshotUploadStatus, setHeadshotUploadStatus] =
     useState<OrganizerHeadshotUploadStatus>("idle");
   const [headshotUploadMessage, setHeadshotUploadMessage] = useState<string | null>(null);
+  const [headshotSubmissionId, setHeadshotSubmissionId] = useState<string | null>(null);
   const [headshotPreviewUrl, setHeadshotPreviewUrl] = useState<string | null>(null);
   const [headshotPreviewError, setHeadshotPreviewError] = useState<string | null>(null);
   const [headshotPreviewLoading, setHeadshotPreviewLoading] = useState(false);
@@ -1364,6 +1384,14 @@ export function SpeakerWorkspace({
 
   const speakers = roster?.speakers ?? [];
   const selectedSpeaker = speakers.find((speaker) => speaker.participantId === selectedId) ?? null;
+  const eligibleHeadshotSessions = useMemo(
+    () => (selectedSpeaker === null ? [] : acceptedSpeakerSessions(selectedSpeaker.sessions)),
+    [selectedSpeaker],
+  );
+  const selectedHeadshotSubmissionId = organizerHeadshotSubmissionId(
+    selectedSpeaker?.sessions ?? [],
+    headshotSubmissionId,
+  );
   const cachedHeadshotAsset =
     selectedSpeaker === null
       ? null
@@ -1800,6 +1828,7 @@ export function SpeakerWorkspace({
 
   function beginEdit(speaker: SpeakerRecord): void {
     setSelectedId(speaker.participantId);
+    setHeadshotSubmissionId(null);
     setHeadshotUploadStatus("idle");
     setHeadshotUploadMessage(null);
     setEditDraft(editDraftFor(speaker));
@@ -2416,6 +2445,15 @@ export function SpeakerWorkspace({
       );
       return;
     }
+    if (selectedHeadshotSubmissionId === null) {
+      setHeadshotUploadStatus("error");
+      setHeadshotUploadMessage(
+        eligibleHeadshotSessions.length > 1
+          ? "Choose an accepted session before replacing this headshot."
+          : "Headshot replacement requires an accepted session owned by this speaker.",
+      );
+      return;
+    }
 
     const participantId = selectedSpeaker.participantId;
     const expectedVersion = selectedSpeaker.version;
@@ -2425,6 +2463,7 @@ export function SpeakerWorkspace({
     try {
       const replacement = await api.replaceHeadshot({
         participantId,
+        submissionId: selectedHeadshotSubmissionId,
         file,
         expectedVersion,
         ...(supersedesAssetId === undefined ? {} : { supersedesAssetId }),
@@ -2978,6 +3017,40 @@ export function SpeakerWorkspace({
                             onRetry={retryHeadshotPreview}
                             onImageError={markHeadshotPreviewFailed}
                           />
+                          {eligibleHeadshotSessions.length > 1 ? (
+                            <Field>
+                              <FieldLabel htmlFor="speaker-headshot-session">
+                                Session for headshot replacement
+                              </FieldLabel>
+                              <Select
+                                value={headshotSubmissionId ?? ""}
+                                onValueChange={(value) => {
+                                  setHeadshotSubmissionId(value);
+                                  setHeadshotUploadStatus("idle");
+                                  setHeadshotUploadMessage(null);
+                                }}
+                              >
+                                <SelectTrigger id="speaker-headshot-session">
+                                  <SelectValue placeholder="Choose an accepted session" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {eligibleHeadshotSessions.map((session) => (
+                                    <SelectItem
+                                      key={session.submissionId}
+                                      value={session.submissionId}
+                                    >
+                                      {session.title}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </Field>
+                          ) : eligibleHeadshotSessions.length === 0 ? (
+                            <p className={styles.muted} role="status">
+                              Headshot replacement requires an accepted session owned by this
+                              speaker.
+                            </p>
+                          ) : null}
                           <Field>
                             <FieldLabel htmlFor="speaker-headshot-upload">
                               Upload or replace headshot
@@ -2990,7 +3063,8 @@ export function SpeakerWorkspace({
                               disabled={
                                 headshotUploadStatus === "busy" ||
                                 api === null ||
-                                api.replaceHeadshot === undefined
+                                api.replaceHeadshot === undefined ||
+                                selectedHeadshotSubmissionId === null
                               }
                             />
                           </Field>

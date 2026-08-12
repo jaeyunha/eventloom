@@ -3,6 +3,7 @@ import { createApp } from "../app";
 import type { AgendaState, PublishedAgendaRevision } from "../features/agenda/types";
 import type { CfpForm, EventCfp, Submission } from "../features/cfp/model";
 import type { CfpRepository } from "../features/cfp/service";
+import type { CrmContact, CrmEventProjection } from "../features/crm/types";
 import { CommunicationService } from "../features/communications/service";
 import type { CommunicationActor, CommunicationRecipient } from "../features/communications/types";
 import { EvaluationService } from "../features/evaluations/service";
@@ -1868,6 +1869,328 @@ describe("fixture local runtime composition", () => {
       }),
     );
   });
+  it("reuses one same-event canonical speaker by normalized email without changing linkage", async () => {
+    const transport = new FakeAirtableTransport();
+    const eventId = "crm-marcus-event";
+    const organizationId = "crm-marcus-organization";
+    const participantId = "participant-marcus-canonical";
+    const submissionId = "speaker-submission:accepted-marcus";
+    const profileId = `speaker-profile:${eventId}:${participantId}`;
+    transport.seed({
+      baseId: "base-test",
+      table: "Events",
+      fields: {
+        "Application ID": eventId,
+        "Settings JSON": JSON.stringify({
+          id: eventId,
+          organizationId,
+          name: "Marcus Event",
+          slug: eventId,
+          timeZone: "UTC",
+          startsAt: "2026-08-09T00:00:00.000Z",
+          endsAt: "2026-08-10T00:00:00.000Z",
+        }),
+      },
+    });
+    transport.seed({
+      baseId: "base-test",
+      table: "Speaker Profiles",
+      fields: {
+        "Application ID": profileId,
+        Biography: JSON.stringify({
+          id: profileId,
+          tenantId: organizationId,
+          eventId,
+          participantId,
+          displayName: "Marcus Okafor",
+          email: " MARCUS@example.test ",
+          biography: "Accepted speaker profile.",
+          status: "active",
+          version: 1,
+          updatedAt: "2026-08-09T00:00:00.000Z",
+        }),
+      },
+    });
+    transport.seed({
+      baseId: "base-test",
+      table: "Session Roster",
+      fields: {
+        "Application ID": `roster:${eventId}:${participantId}`,
+        "Members JSON": JSON.stringify({
+          id: `roster:${eventId}:${participantId}`,
+          tenantId: organizationId,
+          eventId,
+          submissionId,
+          participantId,
+          displayName: "Marcus Okafor",
+          email: "marcus@example.test",
+          role: "primary",
+          status: "active",
+          workflowStatus: "accepted",
+          version: 1,
+          createdAt: "2026-08-09T00:00:00.000Z",
+          updatedAt: "2026-08-09T00:00:00.000Z",
+        }),
+      },
+    });
+    const repository = new AirtableCrmRepository({
+      baseId: "base-test",
+      transport,
+      events: new AirtableEventRepository({ baseId: "base-test", transport }),
+    });
+    const contact: CrmContact = {
+      id: "crm-contact:marcus",
+      organizationId,
+      firstName: "Marcus",
+      lastName: "Okafor",
+      displayName: "Marcus from CRM",
+      email: "MARCUS@example.test",
+      phone: null,
+      company: "CRM Systems",
+      title: "Community Lead",
+      website: null,
+      linkedinUrl: null,
+      notes: "CRM notes must not replace the canonical profile.",
+      tags: [],
+      customFields: {},
+      source: "speaker",
+      status: "active",
+      mergedIntoId: null,
+      pipelineStage: "qualified",
+      version: 1,
+      createdAt: "2026-08-09T00:00:00.000Z",
+      updatedAt: "2026-08-09T00:00:00.000Z",
+    };
+    const projection: CrmEventProjection = {
+      id: "event-contact:marcus",
+      organizationId,
+      eventId,
+      contactId: contact.id,
+      sessionId: "session-marcus",
+      role: "speaker",
+      note: null,
+      createdBy: "crm-owner",
+      createdAt: "2026-08-09T00:00:00.000Z",
+      updatedAt: "2026-08-09T00:00:00.000Z",
+    };
+    transport.seed({
+      baseId: "base-test",
+      table: "CRM Contacts",
+      fields: {
+        "Application ID": contact.id,
+        "Contact JSON": JSON.stringify(contact),
+      },
+    });
+
+    const saved = await repository.saveProjection(projection, contact);
+    expect(saved.id).toBe(`event-contact:existing:${eventId}:${contact.id}`);
+    expect(saved.sessionId).toBe("session-marcus");
+    expect(
+      transport.requests.filter(
+        (request) =>
+          (request.method === "POST" || request.method === "PATCH") &&
+          (request.table === "Speaker Profiles" || request.table === "Session Roster"),
+      ),
+    ).toHaveLength(0);
+
+    const speakerRepository = new AirtableSpeakerRepository({
+      baseId: "base-test",
+      transport,
+      database: productionD1("crm-marcus"),
+    });
+    await expect(speakerRepository.listRoster(eventId, submissionId)).resolves.toEqual([
+      expect.objectContaining({
+        participantId,
+        submissionId,
+        email: "marcus@example.test",
+      }),
+    ]);
+
+    const requestCount = transport.requests.length;
+    await expect(repository.saveProjection(projection, contact)).resolves.toMatchObject(saved);
+    expect(
+      transport.requests
+        .slice(requestCount)
+        .filter(
+          (request) =>
+            (request.method === "POST" || request.method === "PATCH") &&
+            (request.table === "Speaker Profiles" || request.table === "Session Roster"),
+        ),
+    ).toHaveLength(0);
+  });
+  it("does not reuse cross-scope email identities and blocks ambiguous candidates before writes", async () => {
+    const organizationId = "crm-scope-organization";
+    const eventId = "crm-scope-event";
+    const contact: CrmContact = {
+      id: "crm-contact:scope",
+      organizationId,
+      firstName: "Scope",
+      lastName: "Speaker",
+      displayName: "Scope Speaker",
+      email: "scope@example.test",
+      phone: null,
+      company: null,
+      title: null,
+      website: null,
+      linkedinUrl: null,
+      notes: null,
+      tags: [],
+      customFields: {},
+      source: "speaker",
+      status: "active",
+      mergedIntoId: null,
+      pipelineStage: "new",
+      version: 1,
+      createdAt: "2026-08-09T00:00:00.000Z",
+      updatedAt: "2026-08-09T00:00:00.000Z",
+    };
+    const projection: CrmEventProjection = {
+      id: "event-contact:scope",
+      organizationId,
+      eventId,
+      contactId: contact.id,
+      sessionId: null,
+      role: "speaker",
+      note: null,
+      createdBy: "crm-owner",
+      createdAt: "2026-08-09T00:00:00.000Z",
+      updatedAt: "2026-08-09T00:00:00.000Z",
+    };
+    const seedEvent = (transport: FakeAirtableTransport, id: string, organization: string) => {
+      transport.seed({
+        baseId: "base-test",
+        table: "Events",
+        fields: {
+          "Application ID": id,
+          "Settings JSON": JSON.stringify({
+            id,
+            organizationId: organization,
+            name: id,
+            slug: id,
+            timeZone: "UTC",
+            startsAt: "2026-08-09T00:00:00.000Z",
+            endsAt: "2026-08-10T00:00:00.000Z",
+          }),
+        },
+      });
+    };
+    const seedProfile = (
+      transport: FakeAirtableTransport,
+      profileId: string,
+      event: string,
+      organization: string,
+      participantId: string,
+      email = contact.email,
+    ) => {
+      transport.seed({
+        baseId: "base-test",
+        table: "Speaker Profiles",
+        fields: {
+          "Application ID": profileId,
+          Biography: JSON.stringify({
+            id: profileId,
+            tenantId: organization,
+            eventId: event,
+            participantId,
+            displayName: participantId,
+            email,
+            biography: "",
+            status: "active",
+            version: 1,
+            updatedAt: "2026-08-09T00:00:00.000Z",
+          }),
+        },
+      });
+    };
+    const seedContact = (transport: FakeAirtableTransport) => {
+      transport.seed({
+        baseId: "base-test",
+        table: "CRM Contacts",
+        fields: {
+          "Application ID": contact.id,
+          "Contact JSON": JSON.stringify(contact),
+        },
+      });
+    };
+
+    const scopedTransport = new FakeAirtableTransport();
+    seedEvent(scopedTransport, eventId, organizationId);
+    seedEvent(scopedTransport, `${eventId}-other`, organizationId);
+    seedProfile(
+      scopedTransport,
+      `speaker-profile:${eventId}:other-org`,
+      eventId,
+      "crm-other-organization",
+      "participant-other-org",
+    );
+    seedProfile(
+      scopedTransport,
+      `speaker-profile:${eventId}-other:other-event`,
+      `${eventId}-other`,
+      organizationId,
+      "participant-other-event",
+    );
+    seedContact(scopedTransport);
+    const scopedRepository = new AirtableCrmRepository({
+      baseId: "base-test",
+      transport: scopedTransport,
+      events: new AirtableEventRepository({ baseId: "base-test", transport: scopedTransport }),
+    });
+    await expect(scopedRepository.saveProjection(projection, contact)).resolves.toEqual(projection);
+    const scopedSpeakerRepository = new AirtableSpeakerRepository({
+      baseId: "base-test",
+      transport: scopedTransport,
+      database: productionD1("crm-scope"),
+    });
+    await expect(
+      scopedSpeakerRepository.listRoster(eventId, `speaker-submission:crm-contact:${contact.id}`),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        participantId: contact.id,
+        email: contact.email,
+      }),
+    ]);
+    expect(
+      scopedTransport.requests.filter(
+        (request) =>
+          (request.method === "POST" || request.method === "PATCH") &&
+          request.table === "Speaker Profiles",
+      ),
+    ).toHaveLength(1);
+
+    const ambiguousTransport = new FakeAirtableTransport();
+    seedEvent(ambiguousTransport, eventId, organizationId);
+    seedContact(ambiguousTransport);
+    seedProfile(
+      ambiguousTransport,
+      `speaker-profile:${eventId}:one`,
+      eventId,
+      organizationId,
+      "participant-one",
+    );
+    seedProfile(
+      ambiguousTransport,
+      `speaker-profile:${eventId}:two`,
+      eventId,
+      organizationId,
+      "participant-two",
+    );
+    const ambiguousRepository = new AirtableCrmRepository({
+      baseId: "base-test",
+      transport: ambiguousTransport,
+      events: new AirtableEventRepository({ baseId: "base-test", transport: ambiguousTransport }),
+    });
+    await expect(ambiguousRepository.saveProjection(projection, contact)).rejects.toThrow(
+      /multiple canonical speakers/u,
+    );
+    expect(
+      ambiguousTransport.requests.filter(
+        (request) =>
+          (request.method === "POST" || request.method === "PATCH") &&
+          ["CRM Event Projections", "Speaker Profiles", "Session Roster"].includes(request.table),
+      ),
+    ).toHaveLength(0);
+  });
   it("persists CRM state in Airtable, queues outreach, and projects event speakers without sessions", async () => {
     const transport = new OrderedCrmProjectionTransport(5);
     const eventId = "crm-event";
@@ -2175,6 +2498,9 @@ describe("fixture local runtime composition", () => {
         "Application ID": `published:${eventId}`,
         "Organization ID": organizationId,
         "Event Slug": eventId,
+        "Revision ID": "revision-devflow-1",
+        "Revision Number": 1,
+        "Published At": updatedAt,
         "Projection JSON": JSON.stringify({
           id: `published:${eventId}`,
           organizationId,
@@ -2492,6 +2818,15 @@ describe("fixture local runtime composition", () => {
     expect(projectionRead?.query).toMatchObject({
       pageSize: 2,
       filterByFormula: `{Event Slug}='${eventId}'`,
+      "fields[]": expect.arrayContaining([
+        "Application ID",
+        "Organization ID",
+        "Event Slug",
+        "Revision ID",
+        "Revision Number",
+        "Published At",
+        "Projection JSON",
+      ]),
     });
 
     transport.seed({
@@ -2772,6 +3107,82 @@ function acceptanceTransport(events: string[]): {
 }
 
 describe("production agenda, portal, acceptance, and reminder boundaries", () => {
+  it("uses authoritative indexed event fields for agenda metadata", async () => {
+    const eventId = "devflow-conf-2027";
+    const organizationId = "ai-engineer";
+    const transport = new FakeAirtableTransport();
+    transport.seed({
+      baseId: "base-test",
+      table: "Events",
+      fields: {
+        "Application ID": eventId,
+        Name: "DevFlow Conf 2027",
+        Slug: eventId,
+        Status: "open",
+        "Time Zone": "America/Los_Angeles",
+        "Starts At": "2027-05-12T16:00:00.000Z",
+        "Ends At": "2027-05-15T06:59:59.000Z",
+        Version: 2,
+        "Created At": "2026-08-09T00:00:00.000Z",
+        "Updated At": "2026-08-11T00:00:00.000Z",
+        "Settings JSON": JSON.stringify({
+          id: eventId,
+          organizationId,
+          slug: eventId,
+          name: "Stale DevFlow metadata",
+          timeZone: "UTC",
+          startsAt: "1970-01-01T00:00:00.000Z",
+          endsAt: "1970-01-01T00:30:00.000Z",
+          venue: "DevFlow Hall",
+          version: 1,
+        }),
+      },
+    });
+    const database = productionD1("unused");
+    const bindings = productionBindings(transport, database);
+    if (
+      bindings.AGENDA_COORDINATOR === undefined ||
+      bindings.PRIVATE_FILES === undefined ||
+      bindings.OUTBOX_QUEUE === undefined
+    ) {
+      throw new Error("Expected production agenda bindings.");
+    }
+    const dependencies = createAirtableDependencies({
+      authenticator: { authenticate: async () => null },
+      baseId: "base-test",
+      transport,
+      database,
+      agendaCoordinator: bindings.AGENDA_COORDINATOR,
+      privateFiles: bindings.PRIVATE_FILES,
+      outboxQueue: bindings.OUTBOX_QUEUE,
+      webOrigin: "https://example.test",
+    });
+    await expect(
+      new AirtableEventRepository({ baseId: "base-test", transport }).getEvent(
+        organizationId,
+        eventId,
+      ),
+    ).resolves.toMatchObject({
+      name: "DevFlow Conf 2027",
+      slug: eventId,
+      timeZone: "America/Los_Angeles",
+      startsAt: "2027-05-12T16:00:00.000Z",
+      endsAt: "2027-05-15T06:59:59.000Z",
+    });
+    const metadata = dependencies.agenda?.eventMetadataForEvent;
+    if (metadata === undefined) {
+      throw new Error("Production agenda event metadata is not mounted.");
+    }
+
+    await expect(metadata(eventId)).resolves.toEqual({
+      slug: eventId,
+      name: "DevFlow Conf 2027",
+      timeZone: "America/Los_Angeles",
+      startsOn: "2027-05-12",
+      endsOn: "2027-05-14",
+      venueName: "DevFlow Hall",
+    });
+  });
   it("stores new speaker profile scope in Biography without nonexistent physical scope fields", async () => {
     const transport = new FakeAirtableTransport();
     const organizationId = "tenant-profile-create";
@@ -5226,6 +5637,134 @@ describe("production organizer speaker composition", () => {
       }),
     ).resolves.toEqual({ ok: true, value: updated });
     await expect(repository.getTask(task.eventId, task.id)).resolves.toEqual(updated);
+  });
+  it("keeps accepted and tenant-scoped CRM tasks after an Airtable repository reload", async () => {
+    const { repository, transport, database } = fixture();
+    const manualRoster = {
+      id: "roster-crm-manual",
+      tenantId: "ai-engineer",
+      eventId: "event-speaker",
+      submissionId: "speaker-submission:crm-contact:manual",
+      participantId: "participant-manual",
+      displayName: "Manual Speaker",
+      workflowStatus: "crm-prospect",
+      organizerStatus: "pending",
+      role: "primary",
+      status: "pending",
+      version: 1,
+      createdAt: "2026-08-09T00:00:00.000Z",
+      updatedAt: "2026-08-09T00:00:00.000Z",
+    };
+    const crossTenantRoster = {
+      ...manualRoster,
+      id: "roster-crm-cross-tenant",
+      tenantId: "other-tenant",
+      submissionId: "speaker-submission:crm-contact:cross-tenant",
+      participantId: "participant-cross-tenant",
+    };
+    const crossEventRoster = {
+      ...manualRoster,
+      id: "roster-crm-cross-event",
+      eventId: "other-event",
+      submissionId: "speaker-submission:crm-contact:cross-event",
+      participantId: "participant-cross-event",
+    };
+    for (const entry of [manualRoster, crossTenantRoster, crossEventRoster]) {
+      transport.seed({
+        baseId: "base-test",
+        table: "Session Roster",
+        fields: {
+          "Application ID": entry.id,
+          "Members JSON": JSON.stringify(entry),
+        },
+      });
+    }
+    const seedTask = (input: {
+      id: string;
+      eventId: string;
+      participantId: string;
+      submissionId: string;
+    }) => {
+      transport.seed({
+        baseId: "base-test",
+        table: "Speaker Tasks",
+        fields: {
+          "Application ID": input.id,
+          "Owner JSON": JSON.stringify({
+            id: input.id,
+            eventId: input.eventId,
+            submissionId: input.submissionId,
+            participantId: input.participantId,
+            type: "action",
+            owner: "speaker",
+            title: input.id,
+            status: "not_started",
+            dependencyIds: [],
+            reminderOffsetsMinutes: [],
+            assigneeIds: [input.participantId],
+            version: 1,
+            updatedAt: "2026-08-09T00:00:00.000Z",
+          }),
+        },
+      });
+    };
+    seedTask({
+      id: "task-accepted-reload",
+      eventId: "event-speaker",
+      participantId: "participant-speaker",
+      submissionId: "submission-speaker",
+    });
+    seedTask({
+      id: "task-crm-reload",
+      eventId: "event-speaker",
+      participantId: "participant-manual",
+      submissionId: manualRoster.submissionId,
+    });
+    seedTask({
+      id: "task-crm-wrong-submission",
+      eventId: "event-speaker",
+      participantId: "participant-manual",
+      submissionId: "speaker-submission:crm-contact:wrong",
+    });
+    seedTask({
+      id: "task-crm-cross-tenant",
+      eventId: "event-speaker",
+      participantId: crossTenantRoster.participantId,
+      submissionId: crossTenantRoster.submissionId,
+    });
+    seedTask({
+      id: "task-crm-cross-event",
+      eventId: "other-event",
+      participantId: crossEventRoster.participantId,
+      submissionId: crossEventRoster.submissionId,
+    });
+
+    const participantIds = [
+      "participant-speaker",
+      "participant-manual",
+      crossTenantRoster.participantId,
+      crossEventRoster.participantId,
+    ];
+    await expect(repository.listTasks("event-speaker", participantIds)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "task-accepted-reload" }),
+        expect.objectContaining({ id: "task-crm-reload" }),
+      ]),
+    );
+    const beforeReload = await repository.listTasks("event-speaker", participantIds);
+    expect(beforeReload.map((task) => task.id).sort()).toEqual([
+      "task-accepted-reload",
+      "task-crm-reload",
+    ]);
+
+    const reloaded = new AirtableSpeakerRepository({
+      baseId: "base-test",
+      transport,
+      database,
+    });
+    await expect(reloaded.listTasks("event-speaker", participantIds)).resolves.toEqual(
+      beforeReload,
+    );
   });
   it("canonicalizes speaker aliases before projecting portal tasks", async () => {
     const { repository, state, transport } = fixture();

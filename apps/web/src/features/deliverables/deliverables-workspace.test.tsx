@@ -19,6 +19,8 @@ import {
   deliverablesExportActionLabels,
   deliverablesExportStatusLabels,
   deliverablesSessionHistoryKey,
+  eligibleSpeakerHeadshotSessions,
+  resolveSpeakerHeadshotSubmissionId,
   isDeliverablesWorkspaceScopeCurrent,
   loadDeliverablesSessionHistory,
   ReminderPreview,
@@ -129,6 +131,35 @@ const matrixItem: DeliverableMatrixItem = {
   currentAsset: assetV1,
   status: "overdue",
 };
+describe("organizer headshot session scope", () => {
+  it("automatically uses the sole accepted session owned by the speaker", () => {
+    const sessions = [
+      session,
+      { ...session, id: "declined", status: "Declined" },
+      { ...session, id: "other-event", eventId: "event-2" },
+      { ...session, id: "other-speaker", speakerIds: ["speaker-2"] },
+    ];
+    expect(eligibleSpeakerHeadshotSessions(sessions, "event-1", "speaker-1")).toEqual([session]);
+    expect(resolveSpeakerHeadshotSubmissionId(sessions, "event-1", "speaker-1", null)).toBe(
+      "session-1",
+    );
+  });
+
+  it("requires an explicit accepted submission and rejects cross-event choices", () => {
+    const sessions = [
+      session,
+      { ...session, id: "session-2", title: "Second accepted session" },
+      { ...session, id: "other-event", eventId: "event-2" },
+    ];
+    expect(resolveSpeakerHeadshotSubmissionId(sessions, "event-1", "speaker-1", null)).toBeNull();
+    expect(resolveSpeakerHeadshotSubmissionId(sessions, "event-1", "speaker-1", "session-2")).toBe(
+      "session-2",
+    );
+    expect(
+      resolveSpeakerHeadshotSubmissionId(sessions, "event-1", "speaker-1", "other-event"),
+    ).toBeNull();
+  });
+});
 
 describe("deliverables API adapter", () => {
   it("uses organization/event-qualified session and organizer asset routes", async () => {

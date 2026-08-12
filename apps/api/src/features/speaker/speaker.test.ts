@@ -3522,6 +3522,87 @@ describe("SpeakerService private asset authorization", () => {
       },
     ]);
   });
+  it("inherits task ownership when issuing a successor asset version", async () => {
+    const { repository, service } = createOrganizerFixture();
+    repository.tasks.push(task({ id: "slides-task", participantId: "participant-1" }));
+
+    const first = await service.issueOrganizerUploadGrant({
+      eventId: "event-1",
+      accountId: "account-1",
+      participantId: "participant-1",
+      taskId: "slides-task",
+      kind: "slides",
+      fileName: "slides-v1.pdf",
+      contentType: "application/pdf",
+      sizeBytes: 2_000_000,
+    });
+    const firstStored = repository.assets.find((asset) => asset.id === first.asset.id);
+    if (firstStored === undefined) throw new Error("Expected the first asset to be stored.");
+    firstStored.state = "ready";
+
+    const second = await service.issueOrganizerUploadGrant({
+      eventId: "event-1",
+      accountId: "account-1",
+      participantId: "participant-1",
+      supersedesAssetId: first.asset.id,
+      kind: "slides",
+      fileName: "slides-v2.pdf",
+      contentType: "application/pdf",
+      sizeBytes: 2_000_000,
+    });
+    expect(second.asset).toMatchObject({
+      taskId: "slides-task",
+      supersedesAssetId: first.asset.id,
+      version: 2,
+      versionFamilyId: first.asset.versionFamilyId,
+    });
+    const secondStored = repository.assets.find((asset) => asset.id === second.asset.id);
+    if (secondStored === undefined) throw new Error("Expected the successor asset to be stored.");
+    secondStored.state = "ready";
+
+    const deliverables = await service.listDeliverables("event-1", "account-1");
+    expect(deliverables.items).toHaveLength(1);
+    expect(deliverables.items[0]?.currentAsset?.id).toBe(second.asset.id);
+
+    await expect(
+      service.issueOrganizerUploadGrant({
+        eventId: "event-1",
+        accountId: "account-1",
+        participantId: "participant-1",
+        taskId: "different-task",
+        supersedesAssetId: first.asset.id,
+        kind: "slides",
+        fileName: "slides-conflict.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 2_000_000,
+      }),
+    ).rejects.toSatisfy((error: unknown) => {
+      expectServiceError(error, "NOT_FOUND");
+      return true;
+    });
+
+    const { supersedesAssetId: _supersededAssetId, ...foreignAsset } = first.asset;
+    repository.assets.push({
+      ...foreignAsset,
+      id: "foreign-asset",
+      tenantId: "other-org",
+    });
+    await expect(
+      service.issueOrganizerUploadGrant({
+        eventId: "event-1",
+        accountId: "account-1",
+        participantId: "participant-1",
+        supersedesAssetId: "foreign-asset",
+        kind: "slides",
+        fileName: "slides-foreign.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 2_000_000,
+      }),
+    ).rejects.toSatisfy((error: unknown) => {
+      expectServiceError(error, "NOT_FOUND");
+      return true;
+    });
+  });
 
   it("binds task uploads to the authorized task and its configured asset kinds", async () => {
     const { gateway, service } = createFixture();

@@ -303,7 +303,7 @@ export interface CrmApi {
       segmentId?: string;
       subject: string;
       body: string;
-      variables: Record<string, string>;
+      variables?: Record<string, string>;
     },
     idempotencyKey: string,
   ): Promise<CrmOutreachCommand>;
@@ -722,20 +722,28 @@ function draftInput(draft: ContactDraft): Record<string, unknown> {
   };
 }
 
+function contactMergeTagValues(contact: CrmContact): Readonly<Record<string, string>> {
+  const displayName = contact.displayName.trim();
+  const firstName = contact.firstName?.trim() || displayName.split(/\s+/u)[0] || displayName;
+  const lastName = contact.lastName?.trim() ?? "";
+  return {
+    first_name: firstName,
+    firstName,
+    last_name: lastName,
+    lastName,
+    display_name: displayName,
+    displayName,
+    email: contact.email?.trim() ?? "",
+    company: contact.company?.trim() ?? "",
+    title: contact.title?.trim() ?? "",
+  };
+}
+
 function renderVariablePreview(
   content: string,
   contact: CrmContact,
 ): { readonly value: string; readonly unknownTags: readonly string[] } {
-  const values: Readonly<Record<string, string>> = {
-    first_name: contact.firstName ?? "",
-    firstName: contact.firstName ?? "",
-    last_name: contact.lastName ?? "",
-    lastName: contact.lastName ?? "",
-    displayName: contact.displayName,
-    email: contact.email ?? "",
-    company: contact.company ?? "",
-    title: contact.title ?? "",
-  };
+  const values = contactMergeTagValues(contact);
   const unknown = new Set<string>();
   const value = content.replace(
     /\{\{\s*([A-Za-z][A-Za-z0-9_.-]{0,99})\s*\}\}/gu,
@@ -1771,6 +1779,12 @@ export function CrmWorkspaceView({
   );
   const outreachHasUnknownTags =
     outreachPreview?.recipients.some((recipient) => recipient.unknownTags.length > 0) ?? false;
+  const noteIds = new Set(notes.map((note) => note.id));
+  const timelineHistory = history.filter((entry) => {
+    if (entry.kind !== "note") return true;
+    const noteId = entry.metadata.noteId;
+    return typeof noteId !== "string" || !noteIds.has(noteId);
+  });
 
   function openMergeReview(): void {
     if (!selectedContact || selectedMergeContacts.length === 0) return;
@@ -2816,7 +2830,7 @@ export function CrmWorkspaceView({
                     <small>{formatDate(note.createdAt)}</small>
                   </article>
                 ))}
-                {history.map((entry) => (
+                {timelineHistory.map((entry) => (
                   <article key={entry.id}>
                     <strong>{entry.title}</strong>
                     <p>
@@ -2826,7 +2840,7 @@ export function CrmWorkspaceView({
                     <small>{formatDate(entry.occurredAt)}</small>
                   </article>
                 ))}
-                {notes.length === 0 && history.length === 0 ? (
+                {notes.length === 0 && timelineHistory.length === 0 ? (
                   <p className={styles.muted}>No history has been recorded for this contact.</p>
                 ) : null}
               </div>
@@ -2850,7 +2864,7 @@ export function CrmWorkspaceView({
               eyebrow={
                 outreachSegmentId === "__selected__" && selectedContactIds.length > 0
                   ? `Communicate with ${selectedContactIds.length} selected contacts`
-                  : "Preview before sending"
+                  : "Preview before queueing"
               }
             >
               <form className={styles.form} onSubmit={(event) => void previewOutreach(event)}>
@@ -2935,7 +2949,7 @@ export function CrmWorkspaceView({
                   <h3>Outreach preview</h3>
                   <p>
                     <strong>{outreachPreview.count}</strong> recipient
-                    {outreachPreview.count === 1 ? "" : "s"} will receive this message.
+                    {outreachPreview.count === 1 ? "" : "s"} will be queued for delivery.
                   </p>
                   {outreachPreview.eventId ? <p>Event context: {outreachPreview.eventId}</p> : null}
                   {outreachPreview.segmentId ? (
@@ -2943,7 +2957,7 @@ export function CrmWorkspaceView({
                   ) : null}
                   {outreachHasUnknownTags ? (
                     <p className={styles.error} role="alert">
-                      Sending is blocked because one or more recipients have unknown merge tags.
+                      Queueing is blocked because one or more recipients have unknown merge tags.
                     </p>
                   ) : null}
                   <div className={styles.timeline}>
@@ -2966,7 +2980,7 @@ export function CrmWorkspaceView({
                   </div>
                   <button
                     className={styles.primaryButton}
-                    aria-label="Send Now"
+                    aria-label="Queue outreach for delivery"
                     type="button"
                     onClick={() => onSendOutreach?.()}
                     disabled={
@@ -2978,13 +2992,13 @@ export function CrmWorkspaceView({
                   >
                     {busy
                       ? "Queueing…"
-                      : `Queue outreach (Send Now to ${outreachPreview.count} contact${outreachPreview.count === 1 ? "" : "s"})`}
+                      : `Queue outreach for delivery to ${outreachPreview.count} contact${outreachPreview.count === 1 ? "" : "s"}`}
                   </button>
                 </div>
               ) : null}
               {outreachResults.length > 0 ? (
                 <section className={styles.previewBox} aria-labelledby="crm-outreach-result-title">
-                  <h3 id="crm-outreach-result-title">Outreach delivery result</h3>
+                  <h3 id="crm-outreach-result-title">Outreach queue result</h3>
                   <p className={styles.resultCount}>
                     {outreachResults.reduce((count, result) => count + result.sentCount, 0)} sent ·{" "}
                     {outreachResults.reduce((count, result) => count + result.queuedCount, 0)}{" "}
@@ -2999,7 +3013,7 @@ export function CrmWorkspaceView({
                           {result.recipientEmail}: {result.status}
                         </strong>
                         <small>
-                          send {result.id}
+                          queue {result.id}
                           {result.terminal ? " · terminal" : " · awaiting delivery"}
                           {result.failureReason ? ` · ${result.failureReason}` : ""}
                         </small>
@@ -3172,6 +3186,27 @@ export async function refreshCrmAnalyticsAfterContactSave(
   loadAnalytics: () => Promise<void>,
 ): Promise<void> {
   if (existingContact === undefined) await loadAnalytics();
+}
+function contactIdentityChanged(previous: CrmContact, next: CrmContact): boolean {
+  return (
+    previous.firstName !== next.firstName ||
+    previous.lastName !== next.lastName ||
+    previous.displayName !== next.displayName ||
+    previous.email !== next.email ||
+    previous.company !== next.company ||
+    previous.phone !== next.phone
+  );
+}
+
+export async function refreshCrmDuplicatesAfterContactSave(
+  existingContact: CrmContact | undefined,
+  nextContact: CrmContact,
+  findDuplicates: (contactId: string) => Promise<CrmDuplicateReport>,
+): Promise<CrmDuplicateReport | null> {
+  if (existingContact === undefined || contactIdentityChanged(existingContact, nextContact)) {
+    return findDuplicates(nextContact.id);
+  }
+  return null;
 }
 export interface CrmWorkspaceProps {
   readonly organizationId: string;
@@ -3395,7 +3430,13 @@ export function CrmWorkspace({
       setStatusMessage(
         existingContact ? "Contact changes saved." : "Contact added to the organization directory.",
       );
-      await refreshCrmAnalyticsAfterContactSave(existingContact, loadAnalytics);
+      const [nextDuplicates] = await Promise.all([
+        refreshCrmDuplicatesAfterContactSave(existingContact, next, (contactId) =>
+          api.findDuplicates(contactId),
+        ),
+        refreshCrmAnalyticsAfterContactSave(existingContact, loadAnalytics),
+      ]);
+      if (nextDuplicates !== null) setDuplicates(nextDuplicates);
     } catch (reason) {
       setError(messageFromError(reason));
     } finally {
@@ -3723,7 +3764,7 @@ export function CrmWorkspace({
     setStatusMessage(
       issueCount === 0
         ? `Preview ready for ${recipients.length} personalized recipient${recipients.length === 1 ? "" : "s"}.`
-        : `Preview found merge-tag or recipient issues for ${issueCount} recipient${issueCount === 1 ? "" : "s"}; sending is blocked.`,
+        : `Preview found merge-tag or recipient issues for ${issueCount} recipient${issueCount === 1 ? "" : "s"}; queueing is blocked.`,
     );
   }
 
@@ -3752,12 +3793,6 @@ export function CrmWorkspace({
               body: outreachPreview.body,
               ...(outreachPreview.eventId ? { eventId: outreachPreview.eventId } : {}),
               ...(outreachPreview.segmentId ? { segmentId: outreachPreview.segmentId } : {}),
-              variables: {
-                first_name: contact.firstName ?? "",
-                firstName: contact.firstName ?? "",
-                last_name: contact.lastName ?? "",
-                lastName: contact.lastName ?? "",
-              },
             },
             recipient.idempotencyKey,
           );
@@ -3769,7 +3804,7 @@ export function CrmWorkspace({
       const failedCount = results.reduce((count, result) => count + result.failedCount, 0);
       const terminal = results.every((result) => result.terminal);
       setStatusMessage(
-        `Outreach result: ${sentCount} sent, ${queuedCount} queued, ${failedCount} failed; ${terminal ? "terminal" : "delivery still in progress"}.`,
+        `Outreach queue result: ${sentCount} sent, ${queuedCount} queued, ${failedCount} failed; ${terminal ? "terminal" : "delivery still in progress"}.`,
       );
       const [, historyResult] = await Promise.allSettled([
         loadAnalytics(),

@@ -165,6 +165,7 @@ describe("organizer submission workspace", () => {
       abstract:
         "Our monorepo CI took 40 minutes on a good day. This talk walks through how we cut it to 6 minutes.",
     });
+    expect(record.reviewData).toEqual({ status: "pending" });
     expect(record.answers).toEqual([
       {
         question: "Session title",
@@ -563,6 +564,72 @@ describe("organizer submission workspace", () => {
     } finally {
       fetchMock.mockRestore();
     }
+  });
+  it("keeps canonical detail content when optional evaluation data has no plan or is unavailable", async () => {
+    let evaluationStatus = 404;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("/organizer/workspace?eventId=")) {
+        return Response.json(
+          {
+            error: {
+              message: evaluationStatus === 404 ? "No evaluation plan." : "Evaluation unavailable.",
+            },
+          },
+          { status: evaluationStatus },
+        );
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    try {
+      const noPlan = await enrichCanonicalSubmission("", canonicalEnvelope);
+      expect(noPlan).toMatchObject({
+        id: canonicalEnvelope.submission.id,
+        title: "Taming 40-Minute CI: Incremental Builds at Monorepo Scale",
+        abstract:
+          "Our monorepo CI took 40 minutes on a good day. This talk walks through how we cut it to 6 minutes.",
+        participants: [{ name: "Priya Raman" }, { name: "Marcus Okafor" }],
+        reviewSummary: { completed: 0, total: 0 },
+        reviewData: {
+          status: "no_plan",
+          message: "No evaluation plan is configured for this event.",
+        },
+      });
+      expect(noPlan.evaluationPlanId).toBeUndefined();
+
+      evaluationStatus = 503;
+      const unavailable = await enrichCanonicalSubmission("", canonicalEnvelope);
+      expect(unavailable).toMatchObject({
+        id: canonicalEnvelope.submission.id,
+        title: "Taming 40-Minute CI: Incremental Builds at Monorepo Scale",
+        answers: expect.arrayContaining([
+          {
+            question: "Session title",
+            answer: "Taming 40-Minute CI: Incremental Builds at Monorepo Scale",
+          },
+        ]),
+        reviewData: {
+          status: "unavailable",
+          message: "Review data is unavailable: Evaluation unavailable.",
+        },
+      });
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  it("reserves not-found for a missing canonical submission", () => {
+    const markup = renderToStaticMarkup(
+      createElement(SubmissionDetailWorkspace, {
+        eventId: "summit-2026",
+        submissionId: "missing-submission",
+        organizationId: "organization-1",
+      }),
+    );
+
+    expect(markup).toContain("Submission not found");
+    expect(markup).not.toContain("Unable to load submission");
   });
 
   it("projects persisted accepted and rejected decisions into canonical statuses", async () => {

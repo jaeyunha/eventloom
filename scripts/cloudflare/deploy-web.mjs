@@ -230,6 +230,10 @@ function main() {
     cwd: webDirectory,
     env,
   });
+  const generatedOutput = join(webDirectory, ".open-next");
+  if (!existsSync(generatedOutput)) {
+    throw new Error("OpenNext build output was not created.");
+  }
 
   const vars = wranglerVariables(environment, origins);
   if (dryRun) {
@@ -262,6 +266,7 @@ function main() {
       );
     } finally {
       rmSync(outputDirectory, { force: true, recursive: true });
+      rmSync(generatedOutput, { force: true, recursive: true });
     }
     return;
   }
@@ -275,7 +280,11 @@ function main() {
     environment,
     ...vars,
   ];
-  run("bun", deployArgs, { cwd: webDirectory, env });
+  try {
+    run("bun", deployArgs, { cwd: webDirectory, env });
+  } finally {
+    rmSync(join(webDirectory, ".open-next"), { force: true, recursive: true });
+  }
   process.stdout.write(
     `${JSON.stringify({
       deployed: true,

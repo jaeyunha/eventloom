@@ -176,6 +176,7 @@ describe("deliverables API", () => {
 
     if (api.replaceHeadshot === undefined) throw new Error("Expected organizer headshot adapter.");
     const result = await api.replaceHeadshot({
+      submissionId: "submission-1",
       participantId: "participant-1",
       file: new File(["headshot-v2"], "speaker.png", { type: "image/png" }),
       supersedesAssetId: "asset-headshot-v1",
@@ -190,6 +191,7 @@ describe("deliverables API", () => {
       "https://api.example.test/api/speaker/events/event-1/organizer/profiles/participant-1",
     ]);
     expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({
+      submissionId: "submission-1",
       participantId: "participant-1",
       kind: "headshot",
       fileName: "speaker.png",

@@ -713,7 +713,7 @@ function FilesWorkspace() {
     can,
     busyAssetIds,
     uploadWorkspaceFile,
-    finalizeAsset,
+    completeAssetUpload,
     loadAssetHistory,
     loadAssetComments,
     downloadAsset,
@@ -928,10 +928,10 @@ function FilesWorkspace() {
                         versions={versions}
                         comments={workspace.assetComments[currentAsset.id] ?? []}
                         canComment={can("asset-comment")}
-                        canWrite={can("asset-write")}
+                        canCompleteUpload={can("asset-write")}
                         busy={busyAssetIds.has(currentAsset.id)}
-                        onFinalize={(state) =>
-                          void finalizeAsset({ assetId: currentAsset.id, state })
+                        onCompleteUpload={() =>
+                          void completeAssetUpload({ assetId: currentAsset.id })
                         }
                         onDownload={(version) => void download(version)}
                         commentDraft={commentDraft}
@@ -950,14 +950,14 @@ function FilesWorkspace() {
   );
 }
 
-function AssetDetails({
+export function AssetDetails({
   asset,
   versions,
   comments,
   canComment,
-  canWrite,
+  canCompleteUpload,
   busy,
-  onFinalize,
+  onCompleteUpload,
   onDownload,
   commentDraft,
   onCommentDraftChange,
@@ -974,9 +974,9 @@ function AssetDetails({
     version?: number;
   }[];
   canComment: boolean;
-  canWrite: boolean;
+  canCompleteUpload: boolean;
   busy: boolean;
-  onFinalize: (state: Extract<PortalAsset["state"], "ready" | "rejected">) => void;
+  onCompleteUpload: () => void;
   onDownload: (asset: PortalAsset) => void;
   commentDraft: string;
   onCommentDraftChange: (value: string) => void;
@@ -1006,24 +1006,22 @@ function AssetDetails({
           </li>
         ))}
       </ol>
-      {canWrite && asset.state === "pending_upload" ? (
+      {canCompleteUpload && asset.state === "pending_upload" ? (
         <div className={styles.formActions}>
-          <button
-            className={styles.primaryButton}
-            type="button"
-            disabled={busy}
-            onClick={() => onFinalize("ready")}
-          >
-            Mark finalized
-          </button>
-          <button
-            className={styles.secondaryButton}
-            type="button"
-            disabled={busy}
-            onClick={() => onFinalize("rejected")}
-          >
-            Reject file
-          </button>
+          <div>
+            <p className={styles.toolbarDescription}>
+              Completing the upload confirms your file is ready; organizer approval happens
+              separately.
+            </p>
+            <button
+              className={styles.primaryButton}
+              type="button"
+              disabled={busy}
+              onClick={onCompleteUpload}
+            >
+              Mark upload complete
+            </button>
+          </div>
         </div>
       ) : null}
       <h4>Comments</h4>
@@ -1179,7 +1177,7 @@ function UploadTaskCard({ task }: Readonly<{ task: PortalTask }>) {
           ) : null}
           {uploaded ? (
             <p className={styles.saveConfirmation} role="status">
-              Upload finalized and task status saved.
+              Upload complete and task status saved.
             </p>
           ) : null}
           <button

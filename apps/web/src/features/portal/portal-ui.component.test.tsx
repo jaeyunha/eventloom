@@ -17,7 +17,7 @@ import {
   signOutAndRedirect,
   TaskStatusBadge,
 } from "./portal-ui";
-import { groupPortalAssetVersions } from "./portal-workspace";
+import { AssetDetails, groupPortalAssetVersions } from "./portal-workspace";
 import type { PortalAsset, PortalContext, PortalProfile, PortalView } from "./types";
 
 vi.mock("next/navigation", () => ({
@@ -367,6 +367,40 @@ describe("speaker portal UI components", () => {
     expect(portalAssetStateLabel("pending_upload")).toBe("Upload pending");
     expect(portalAssetStateLabel("ready")).toBe("Ready");
     expect(portalAssetStateLabel("rejected")).toBe("Rejected");
+  });
+  it("keeps pending speaker uploads to completion-only actions", () => {
+    const pendingAsset: PortalAsset = {
+      id: "asset-pending",
+      eventId: "event-1",
+      participantId: "participant-1",
+      kind: "slides",
+      fileName: "slides.pdf",
+      contentType: "application/pdf",
+      sizeBytes: 1_536,
+      state: "pending_upload",
+      createdAt: "2026-08-09T00:00:00.000Z",
+      version: 1,
+    };
+    const markup = renderToStaticMarkup(
+      createElement(AssetDetails, {
+        asset: pendingAsset,
+        versions: [pendingAsset],
+        comments: [],
+        canComment: false,
+        canCompleteUpload: true,
+        busy: false,
+        onCompleteUpload: vi.fn(),
+        onDownload: vi.fn(),
+        commentDraft: "",
+        onCommentDraftChange: vi.fn(),
+        onComment: vi.fn(),
+      }),
+    );
+
+    expect(markup).toContain(">Mark upload complete</button>");
+    expect(markup).toContain("organizer approval happens separately");
+    expect(markup).not.toContain("Reject file");
+    expect(markup).not.toMatch(/<button[^>]*>[^<]*(?:approve|review|reject)/iu);
   });
   it("renders the honest empty participant workspace state", () => {
     const markup = renderToStaticMarkup(createElement(NoParticipantWorkspaceState));

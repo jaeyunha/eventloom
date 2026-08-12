@@ -238,6 +238,17 @@ import {
 
 const APPLICATION_ID = "Application ID";
 const DEFAULT_JSON_FIELD = "Settings JSON";
+const EVENT_INDEXED_FIELDS = {
+  Name: "name",
+  Slug: "slug",
+  Status: "status",
+  "Time Zone": "timeZone",
+  "Starts At": "startsAt",
+  "Ends At": "endsAt",
+  Version: "version",
+  "Created At": "createdAt",
+  "Updated At": "updatedAt",
+} as const satisfies Readonly<Record<string, string>>;
 
 type JsonRecord = Record<string, unknown>;
 
@@ -401,11 +412,14 @@ function actionItem(
 
 const FIELD_ALIASES: Readonly<Record<string, string>> = {
   Name: "name",
+  Slug: "slug",
   Title: "title",
   Abstract: "abstract",
   Biography: "biography",
   "Display Name": "displayName",
   Status: "status",
+  "Starts At": "startsAt",
+  "Ends At": "endsAt",
   Version: "version",
   "Event ID": "eventId",
   "Form ID": "formId",
@@ -479,11 +493,23 @@ function encodeJson(
   };
 }
 
-function decodeJson<T extends object>(fields: Readonly<AirtableFields>, jsonField: string): T {
+function decodeJson<T extends object>(
+  fields: Readonly<AirtableFields>,
+  jsonField: string,
+  indexedFields: Readonly<Record<string, string>> = {},
+): T {
   const payloadAliases = [jsonField, "Payload", "JSON", "Data", "Record JSON"];
   const payload = payloadAliases
     .map((alias) => fields[alias])
     .find((value): value is string => typeof value === "string" && value.trim().length > 0);
+  const indexed = Object.fromEntries(
+    Object.entries(indexedFields).flatMap(([field, property]) => {
+      const value = fields[field];
+      return typeof value === "string" || typeof value === "number" || typeof value === "boolean"
+        ? [[property, value]]
+        : [];
+    }),
+  );
   if (payload !== undefined) {
     try {
       const parsed: unknown = JSON.parse(payload);
@@ -520,6 +546,7 @@ function decodeJson<T extends object>(fields: Readonly<AirtableFields>, jsonFiel
         requiredId(id);
         return {
           ...parsed,
+          ...indexed,
           ...(id === undefined ? {} : { id }),
           ...(organizationId === undefined ? {} : { tenantId: organizationId, organizationId }),
           ...(eventId === undefined ? {} : { eventId }),
@@ -574,16 +601,19 @@ function decodeCfpSubmission(fields: Readonly<AirtableFields>): Submission {
 }
 function jsonMapper<T extends object>(
   jsonField: string,
-  decode: (fields: Readonly<AirtableFields>) => T = (fields) => decodeJson<T>(fields, jsonField),
+  decode: ((fields: Readonly<AirtableFields>) => T) | undefined = undefined,
   scopeFields: { readonly eventId?: boolean; readonly organizationId?: boolean } = {},
   indexedFields: Readonly<Record<string, string>> = {},
 ): AirtableMapper<T, T, Partial<T>, AirtableFields> {
+  const decodeRecord =
+    decode ??
+    ((fields: Readonly<AirtableFields>) => decodeJson<T>(fields, jsonField, indexedFields));
   return {
     applicationIdField: APPLICATION_ID,
     applicationIdOf: (input) => recordId(input),
     encodeCreate: (input) => encodeJson(input, jsonField, scopeFields, indexedFields),
     encodeUpdate: (input) => encodeJson(input as T, jsonField, scopeFields, indexedFields),
-    decode,
+    decode: decodeRecord,
   };
 }
 
@@ -759,6 +789,12 @@ export async function listEventScopedJson<T extends object>(
   return store.list({ filterByFormula: eventFilterFormula(jsonField, eventId) });
 }
 export const PUBLISHED_SPEAKER_PROJECTIONS_TABLE = "Published Speaker Projections";
+const PUBLISHED_SPEAKER_PROJECTION_INDEXED_FIELDS = {
+  "Event Slug": "eventSlug",
+  "Revision ID": "revisionId",
+  "Revision Number": "revisionNumber",
+  "Published At": "publishedAt",
+} as const satisfies Readonly<Record<string, string>>;
 
 interface PublishedSpeakerHeadshotBinding {
   readonly speakerId: string;
@@ -809,12 +845,7 @@ class AirtablePublishedSpeakerProjectionStore implements PublishedSpeakerRouteDe
       table: PUBLISHED_SPEAKER_PROJECTIONS_TABLE,
       jsonField: "Projection JSON",
       scopeFields: { organizationId: true },
-      indexedFields: {
-        "Event Slug": "eventSlug",
-        "Revision ID": "revisionId",
-        "Revision Number": "revisionNumber",
-        "Published At": "publishedAt",
-      },
+      indexedFields: PUBLISHED_SPEAKER_PROJECTION_INDEXED_FIELDS,
     });
     this.#privateFiles = options.privateFiles;
   }
@@ -923,7 +954,12 @@ class AirtablePublishedSpeakerProjectionStore implements PublishedSpeakerRouteDe
     if (normalizedSlug.length === 0) return null;
     const page = await this.#store.listPage({
       pageSize: 2,
-      fields: [APPLICATION_ID, "Organization ID", "Event Slug", "Projection JSON"],
+      fields: [
+        APPLICATION_ID,
+        "Organization ID",
+        ...Object.keys(PUBLISHED_SPEAKER_PROJECTION_INDEXED_FIELDS),
+        "Projection JSON",
+      ],
       filterByFormula: applicationIdFormula("Event Slug", normalizedSlug),
     });
     const matches = page.items.filter(
@@ -1694,6 +1730,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       ...shared,
       table: "Events",
       jsonField: "Settings JSON",
+      indexedFields: EVENT_INDEXED_FIELDS,
     });
     this.#sessions = new AirtableJsonStore({
       ...shared,
@@ -1767,6 +1804,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       ...shared,
       table: "Speaker Profiles",
       jsonField: "Biography",
+      decode: (fields) => decodeJson<SpeakerProfile>(fields, "Biography"),
       indexedFields: { Version: "version" },
     });
     this.#tasks = new AirtableJsonStore({
@@ -3321,10 +3359,11 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     ];
     if (requestedParticipantIds.length === 0) return [];
 
-    const [storedTasks, submissionRecords, decisionRecords] = await Promise.all([
+    const [storedTasks, submissionRecords, decisionRecords, rosterEntries] = await Promise.all([
       this.#tasks.list(),
       this.#submissions.list(),
       this.#decisions.list(),
+      this.listRosterForEvent(eventId),
     ]);
     const decisions = portalDecisionProjections(decisionRecords);
     const acceptedParticipantsBySubmission = new Map<string, ReadonlySet<string>>();
@@ -3346,8 +3385,12 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
         participantIdsForSubmission,
       );
     }
-
     const requested = new Set(requestedParticipantIds);
+    const manualRosterMatches = new Set(
+      rosterEntries
+        .filter(isCrmRosterAdmission)
+        .map((entry) => `${entry.participantId}\u0000${entry.submissionId}`),
+    );
     return storedTasks
       .filter((storedTask) => {
         if (storedTask.eventId !== eventId || !requested.has(storedTask.participantId))
@@ -3357,7 +3400,10 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
         const participants =
           acceptedParticipantsBySubmission.get(storedTask.submissionId) ??
           acceptedParticipantsBySubmission.get(sourceId);
-        return participants?.has(storedTask.participantId) ?? false;
+        if (participants?.has(storedTask.participantId)) return true;
+        return manualRosterMatches.has(
+          `${storedTask.participantId}\u0000${storedTask.submissionId}`,
+        );
       })
       .map((storedTask) => untagged(storedTask));
   }
@@ -4887,7 +4933,7 @@ export class AirtableEventRepository implements EventRepository {
     readonly transport: AirtableTransport;
   }) {
     const shared = { baseId: options.baseId, transport: options.transport };
-    this.#events = jsonStore(shared, "Events", "Settings JSON");
+    this.#events = jsonStore(shared, "Events", "Settings JSON", EVENT_INDEXED_FIELDS);
     this.#audit = jsonStore(shared, "Audit Records", "Changes JSON");
   }
 
@@ -4965,6 +5011,7 @@ export class AirtableCfpRepository implements CfpRepository {
       ...shared,
       table: "Events",
       jsonField: "Settings JSON",
+      indexedFields: EVENT_INDEXED_FIELDS,
     });
     this.#forms = new AirtableJsonStore({
       ...shared,
@@ -6369,6 +6416,7 @@ export class AirtableOrganizerOverviewRepository implements OrganizerOverviewRou
       ...shared,
       table: "Events",
       jsonField: "Settings JSON",
+      indexedFields: EVENT_INDEXED_FIELDS,
     });
     this.#submissions = new AirtableJsonStore({
       ...shared,
@@ -6976,8 +7024,9 @@ function jsonStore<T extends object>(
   shared: { readonly baseId: string; readonly transport: AirtableTransport },
   table: string,
   jsonField: string,
+  indexedFields: Readonly<Record<string, string>> = {},
 ): AirtableJsonStore<T> {
-  return new AirtableJsonStore<T>({ ...shared, table, jsonField });
+  return new AirtableJsonStore<T>({ ...shared, table, jsonField, indexedFields });
 }
 
 function decodeRoom(fields: Readonly<AirtableFields>): Room {
@@ -8227,6 +8276,7 @@ export class AirtableCrmRepository implements CrmRepository {
       ...shared,
       table: "Speaker Profiles",
       jsonField: "Biography",
+      decode: (fields) => decodeJson<SpeakerProfile & JsonRecord>(fields, "Biography"),
       indexedFields: { Version: "version" },
     });
     this.#speakerRoster = jsonStore(shared, "Session Roster", "Members JSON");
@@ -8652,6 +8702,7 @@ export class AirtableCrmRepository implements CrmRepository {
       await this.#projectCanonicalSpeaker(organization, stored, {
         contact: authoritativeContact,
         event,
+        canonicalRelationship,
       });
     }
     return clone(stored);
@@ -8908,6 +8959,7 @@ export class AirtableCrmRepository implements CrmRepository {
       "canonicalSpeakerProfileId",
       "speakerProfileId",
       "speaker_profile_id",
+      "profileId",
     ]);
     const explicitProfile =
       profileId === null ? undefined : await this.#speakerProfiles.find(profileId);
@@ -8919,7 +8971,7 @@ export class AirtableCrmRepository implements CrmRepository {
         "participant_id",
       ]) ??
       explicitProfile?.participantId ??
-      contact.id;
+      null;
     if (
       explicitProfile !== undefined &&
       (explicitProfile.eventId !== eventId || explicitProfile.participantId !== participantId)
@@ -8928,14 +8980,18 @@ export class AirtableCrmRepository implements CrmRepository {
         "The contact speaker profile identity does not match this event relationship.",
       );
     }
-    const [profiles, roster] = await Promise.all([
-      this.#speakerProfiles.list({
-        filterByFormula: jsonContainsAllFormula("Biography", [participantId]),
-      }),
-      this.#speakerRoster.list({
-        filterByFormula: jsonContainsAllFormula("Members JSON", [participantId]),
-      }),
-    ]);
+    let profiles: Array<SpeakerProfile & JsonRecord> = [];
+    let roster: Array<SpeakerRosterEntry & { readonly tenantId?: string }> = [];
+    if (participantId !== null) {
+      [profiles, roster] = await Promise.all([
+        this.#speakerProfiles.list({
+          filterByFormula: jsonContainsAllFormula("Biography", [participantId]),
+        }),
+        this.#speakerRoster.list({
+          filterByFormula: jsonContainsAllFormula("Members JSON", [participantId]),
+        }),
+      ]);
+    }
     const profileMatches = [
       ...(explicitProfile === undefined ? [] : [explicitProfile]),
       ...profiles.filter(
@@ -8966,7 +9022,65 @@ export class AirtableCrmRepository implements CrmRepository {
         "The contact has multiple canonical speaker profiles for this event.",
       );
     }
-    return profileMatches.length === 1 || rosterMatches.length > 0;
+    if (profileMatches.length === 1 || rosterMatches.length > 0) return true;
+
+    const normalizedEmail =
+      typeof contact.email === "string" ? contact.email.trim().toLowerCase() : "";
+    if (normalizedEmail.length === 0) return false;
+    const [emailProfiles, emailRoster] = await Promise.all([
+      listEventScopedJson(this.#speakerProfiles, "Biography", eventId),
+      listEventScopedJson(this.#speakerRoster, "Members JSON", eventId),
+    ]);
+    const inOrganization = (value: object): boolean => {
+      const scope = resolveOrganizationScope(value);
+      return (
+        scope.status === "missing" ||
+        (scope.status === "resolved" && scope.organizationId === organizationId)
+      );
+    };
+    const emailProfileMatches = emailProfiles.filter((profile) => {
+      const profileEmail =
+        typeof profile.email === "string" ? profile.email.trim().toLowerCase() : "";
+      const participantId =
+        typeof profile.participantId === "string" ? profile.participantId.trim() : "";
+      return (
+        profile.eventId === eventId &&
+        profileEmail === normalizedEmail &&
+        participantId.length > 0 &&
+        inOrganization(profile)
+      );
+    });
+    const emailRosterMatches = emailRoster.filter((entry) => {
+      const entryEmail = typeof entry.email === "string" ? entry.email.trim().toLowerCase() : "";
+      const participantId =
+        typeof entry.participantId === "string" ? entry.participantId.trim() : "";
+      return (
+        entry.eventId === eventId &&
+        entryEmail === normalizedEmail &&
+        participantId.length > 0 &&
+        inOrganization(entry)
+      );
+    });
+    const emailParticipantIds = [
+      ...new Set([
+        ...emailProfileMatches
+          .map((profile) =>
+            typeof profile.participantId === "string" ? profile.participantId.trim() : "",
+          )
+          .filter((participantId) => participantId.length > 0),
+        ...emailRosterMatches
+          .map((entry) =>
+            typeof entry.participantId === "string" ? entry.participantId.trim() : "",
+          )
+          .filter((participantId) => participantId.length > 0),
+      ]),
+    ];
+    if (emailParticipantIds.length > 1) {
+      throw new CrmRepositoryConflictError(
+        "The contact email matches multiple canonical speakers for this event.",
+      );
+    }
+    return emailParticipantIds.length === 1;
   }
 
   async #findOutreach(
@@ -8986,7 +9100,11 @@ export class AirtableCrmRepository implements CrmRepository {
   async #projectCanonicalSpeaker(
     organizationId: string,
     projection: CrmEventProjection,
-    context?: { readonly contact: CrmContact; readonly event: Event | null },
+    context?: {
+      readonly contact: CrmContact;
+      readonly event: Event | null;
+      readonly canonicalRelationship?: boolean;
+    },
   ): Promise<void> {
     const contact =
       context?.contact ?? (await this.getContact(organizationId, projection.contactId));
@@ -9000,6 +9118,10 @@ export class AirtableCrmRepository implements CrmRepository {
         : context.event;
     if (this.#events !== undefined && event === null)
       throw new CrmRepositoryConflictError("The event does not belong to this organization.");
+    const canonicalRelationship =
+      context?.canonicalRelationship ??
+      (await this.#findCanonicalSpeakerRelationship(organizationId, projection.eventId, contact));
+    if (canonicalRelationship) return;
     const canonicalSubmissionId = `speaker-submission:crm-contact:${contact.id}`;
     const profileId = `speaker-profile:${projection.eventId}:${contact.id}`;
     const rosterId = `roster:${projection.eventId}:${canonicalSubmissionId}:${contact.id}`;
@@ -9659,11 +9781,13 @@ export class AirtableRemixContentGateway implements RemixContentGateway {
       ...shared,
       table: "Events",
       jsonField: "Settings JSON",
+      indexedFields: EVENT_INDEXED_FIELDS,
     });
     this.#profiles = new AirtableJsonStore({
       ...shared,
       table: "Speaker Profiles",
       jsonField: "Biography",
+      decode: (fields) => decodeJson<JsonRecord>(fields, "Biography"),
       indexedFields: { Version: "version" },
     });
     this.#database = options.database;
@@ -10323,6 +10447,7 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
     ...shared,
     table: "Events",
     jsonField: "Settings JSON",
+    indexedFields: EVENT_INDEXED_FIELDS,
   });
   const webhooks = new AirtableWebhookRepository(shared);
   const publishedSpeakerProjections = new AirtablePublishedSpeakerProjectionStore({

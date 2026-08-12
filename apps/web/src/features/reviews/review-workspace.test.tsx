@@ -1482,6 +1482,19 @@ describe("review workspace", () => {
     expect(queueMarkup).not.toContain("Return to organizer workspace");
     expect(queueMarkup).not.toContain("Start review");
   });
+  it("exposes a reopen action for closed plans instead of sending organizers to assignments", () => {
+    const markup = renderToStaticMarkup(
+      createElement(ReviewWorkspace, {
+        eventId: "summit-2026",
+        mode: "organizer",
+        initialState: { organizer: { ...testPlan("summit-2026"), status: "closed" as const } },
+      }),
+    );
+
+    expect(markup).toContain("Closed");
+    expect(markup).toContain("Reopen plan");
+    expect(markup).not.toContain("Open assignments");
+  });
   it("keeps organizer authoring controls safe when React defers event updaters", async () => {
     vi.resetModules();
     const actualReact = await vi.importActual<typeof import("react")>("react");
@@ -1698,6 +1711,24 @@ describe("review workspace", () => {
       ).toBe("single");
 
       const reviewerPool = findHost(tree, (props) => props.id === "round-initial-reviewer-pool");
+      const reviewerPoolProps = reviewerPool.props as Record<string, unknown>;
+      expect(reviewerPoolProps.style).toMatchObject({
+        display: "block",
+        width: "100%",
+        maxWidth: "100%",
+        minWidth: 0,
+      });
+      const reviewerPoolLabels = hostElements(tree).filter(
+        (element) =>
+          (element.props as Record<string, unknown>).htmlFor === "round-initial-reviewer-pool",
+      );
+      expect(reviewerPoolLabels).toHaveLength(1);
+      const reviewerPoolLabelChildren = (
+        reviewerPoolLabels.at(0)?.props as Record<string, unknown> | undefined
+      )?.children;
+      expect(
+        isValidElement(reviewerPoolLabelChildren) && reviewerPoolLabelChildren.type === "select",
+      ).toBe(false);
       fireChange(reviewerPool, {
         value: "",
         selectedOptions: [{ value: "reviewer-a" }, { value: "reviewer-b" }],
@@ -1738,10 +1769,44 @@ describe("review workspace", () => {
         tree,
         (props) => props.id === "assignment-submission-id",
       );
+      const assignmentSubmissionProps = assignmentSubmission.props as Record<string, unknown>;
+      expect(assignmentSubmissionProps.style).toMatchObject({
+        display: "block",
+        width: "100%",
+        maxWidth: "100%",
+        minWidth: 0,
+      });
+      const assignmentSubmissionLabels = hostElements(tree).filter(
+        (element) =>
+          (element.props as Record<string, unknown>).htmlFor === "assignment-submission-id",
+      );
+      expect(assignmentSubmissionLabels).toHaveLength(1);
+      expect(
+        isValidElement(
+          (assignmentSubmissionLabels[0]?.props as Record<string, unknown> | undefined)?.children,
+        ),
+      ).toBe(false);
       fireChange(assignmentSubmission, { value: "submission-042" });
       tree = renderTree();
 
       const assignmentReviewers = findHost(tree, (props) => props.id === "assignment-reviewer-ids");
+      const assignmentReviewersProps = assignmentReviewers.props as Record<string, unknown>;
+      expect(assignmentReviewersProps.style).toMatchObject({
+        display: "block",
+        width: "100%",
+        maxWidth: "100%",
+        minWidth: 0,
+      });
+      const assignmentReviewerLabels = hostElements(tree).filter(
+        (element) =>
+          (element.props as Record<string, unknown>).htmlFor === "assignment-reviewer-ids",
+      );
+      expect(assignmentReviewerLabels).toHaveLength(1);
+      expect(
+        isValidElement(
+          (assignmentReviewerLabels[0]?.props as Record<string, unknown> | undefined)?.children,
+        ),
+      ).toBe(false);
       fireChange(assignmentReviewers, {
         value: "",
         selectedOptions: [{ value: "reviewer-a" }],

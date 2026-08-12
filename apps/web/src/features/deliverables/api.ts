@@ -253,6 +253,7 @@ export interface DeliverableTaskInput {
 }
 export interface DeliverableHeadshotReplacementInput {
   readonly participantId: string;
+  readonly submissionId: string;
   readonly file: File;
   readonly expectedVersion: number;
   readonly supersedesAssetId?: string;
@@ -955,6 +956,7 @@ export function createDeliverablesApi(
           method: "POST",
           body: JSON.stringify({
             participantId: input.participantId,
+            submissionId: input.submissionId,
             kind: "headshot",
             fileName: input.file.name,
             contentType,

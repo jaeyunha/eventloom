@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -103,8 +103,14 @@ export interface SubmissionRecord {
   organizerNotes: string;
   reopenAudit: { at: string; organizer: string; reason: string }[];
   evaluationPlanId?: string;
+  reviewData?: ReviewDataState;
   decision?: EvaluationDecisionRecord;
 }
+export type ReviewDataState =
+  | { readonly status: "pending"; readonly message?: string }
+  | { readonly status: "ready"; readonly message?: string }
+  | { readonly status: "no_plan"; readonly message: string }
+  | { readonly status: "unavailable"; readonly message: string };
 
 const seededSubmissions: SubmissionRecord[] = [
   {
@@ -467,6 +473,15 @@ export function getSeededSubmission(
 function apiBaseUrl(): string {
   return "";
 }
+class ApiRequestError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.status = status;
+  }
+}
 
 async function apiRequest<T>(
   baseUrl: string,
@@ -497,7 +512,7 @@ async function apiRequest<T>(
       typeof body.error.message === "string"
         ? body.error.message
         : "The submission request could not be completed.";
-    throw new Error(message);
+    throw new ApiRequestError(message, response.status);
   }
   if (typeof body === "object" && body !== null && "data" in body && body.data !== undefined) {
     return body.data as T;
@@ -861,8 +876,54 @@ export function mapCanonicalSubmission(envelope: CanonicalSubmissionEnvelope): S
               reason: "Recorded in the server audit log.",
             },
           ],
+    reviewData: { status: "pending" },
   };
 }
+
+function reviewDataStateFromError(reason: unknown): ReviewDataState {
+  const status =
+    typeof reason === "object" &&
+    reason !== null &&
+    "status" in reason &&
+    typeof reason.status === "number"
+      ? reason.status
+      : null;
+  if (status === 404) {
+    return {
+      status: "no_plan",
+      message: "No evaluation plan is configured for this event.",
+    };
+  }
+  const message = reason instanceof Error ? reason.message : null;
+  return {
+    status: "unavailable",
+    message:
+      message === null ? "Review data is unavailable." : `Review data is unavailable: ${message}`,
+  };
+}
+
+function reviewDataStateForIndex(index: OrganizerEvaluationIndex): ReviewDataState {
+  return index.round === undefined
+    ? {
+        status: "no_plan",
+        message: "No evaluation plan or review round is configured for this event.",
+      }
+    : { status: "ready" };
+}
+
+function reviewDataIsReady(submission: Pick<SubmissionRecord, "reviewData">): boolean {
+  return submission.reviewData === undefined || submission.reviewData.status === "ready";
+}
+
+function reviewDataMessage(
+  state: ReviewDataState | undefined,
+  fallback = "Review progress is unavailable.",
+): string | null {
+  if (state === undefined || state.status === "ready") return null;
+  if (state.status === "pending") return state.message ?? "Review data is loading.";
+  return state.message || fallback;
+}
+
 interface SubmittedReview {
   readonly assignmentId: string;
   readonly submissionId: string;
@@ -980,6 +1041,7 @@ export function mergeCanonicalSubmissionEvaluation(
         ? `${decision.status[0]?.toLocaleUpperCase() ?? ""}${decision.status.slice(1)}`
         : "Awaiting human decision",
     },
+    reviewData: reviewDataStateForIndex(index),
     submittedReviewRead:
       submittedReviewResult.error === null
         ? { status: "ready", count: submittedReviewByAssignment.size }
@@ -1022,23 +1084,31 @@ export async function enrichCanonicalSubmission(
   baseUrl: string,
   envelope: CanonicalSubmissionEnvelope,
 ): Promise<SubmissionRecord> {
-  const workspace = await loadOrganizerEvaluationWorkspace(baseUrl, envelope.submission.eventId);
-  const index = indexOrganizerEvaluationWorkspace(workspace);
-  const round = index.round;
-  const submittedReviewResult =
-    round === undefined
-      ? { reviews: [], error: null }
-      : await evaluationRequest<{ reviews: readonly SubmittedReview[] }>(
-          baseUrl,
-          `/plans/${encodeURIComponent(workspace.plan.id)}/rounds/${encodeURIComponent(round.id)}/submissions/${encodeURIComponent(envelope.submission.id)}/reviews`,
-        )
-          .then(({ reviews }) => ({ reviews, error: null }))
-          .catch((reason: unknown) => ({
-            reviews: [],
-            error:
-              reason instanceof Error ? reason.message : "Submitted reviews could not be loaded.",
-          }));
-  return mergeCanonicalSubmissionEvaluation(envelope, index, submittedReviewResult);
+  const canonical = mapCanonicalSubmission(envelope);
+  try {
+    const workspace = await loadOrganizerEvaluationWorkspace(baseUrl, envelope.submission.eventId);
+    const index = indexOrganizerEvaluationWorkspace(workspace);
+    const round = index.round;
+    const submittedReviewResult =
+      round === undefined
+        ? { reviews: [], error: null }
+        : await evaluationRequest<{ reviews: readonly SubmittedReview[] }>(
+            baseUrl,
+            `/plans/${encodeURIComponent(workspace.plan.id)}/rounds/${encodeURIComponent(round.id)}/submissions/${encodeURIComponent(envelope.submission.id)}/reviews`,
+          )
+            .then(({ reviews }) => ({ reviews, error: null }))
+            .catch((reason: unknown) => ({
+              reviews: [],
+              error:
+                reason instanceof Error ? reason.message : "Submitted reviews could not be loaded.",
+            }));
+    return mergeCanonicalSubmissionEvaluation(envelope, index, submittedReviewResult);
+  } catch (reason: unknown) {
+    return {
+      ...canonical,
+      reviewData: reviewDataStateFromError(reason),
+    };
+  }
 }
 
 function eventTitle(eventId: string): string {
@@ -1174,6 +1244,20 @@ function ProgressMeter({
     </span>
   );
 }
+function ReviewDataNotice({
+  state,
+  onRetry,
+}: Readonly<{ state: ReviewDataState; onRetry: () => void }>) {
+  if (state.status === "ready" || state.status === "pending") return null;
+  return (
+    <div className={styles.auditCallout} role="alert">
+      <p>{state.message}</p>
+      <Button type="button" variant="outline" onClick={onRetry}>
+        Retry review data
+      </Button>
+    </div>
+  );
+}
 
 export type SubmissionListState = "loading" | "failure" | "empty" | "filtered_empty" | "ready";
 
@@ -1204,13 +1288,21 @@ export function SubmissionListWorkspace({
   const [submissions, setSubmissions] = useState<SubmissionRecord[]>(() =>
     localDemoEnabled() ? getSeededSubmissionsForEvent(eventId) : [],
   );
+  const canonicalRowsLoaded = useRef(
+    localDemoEnabled() && getSeededSubmissionsForEvent(eventId).length > 0,
+  );
   const [loading, setLoading] = useState(!localDemoEnabled());
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [evaluationLoadState, setEvaluationLoadState] = useState<ReviewDataState>(() =>
+    localDemoEnabled() ? { status: "ready" } : { status: "pending" },
+  );
+  const [evaluationReloadVersion, setEvaluationReloadVersion] = useState(0);
   const baseUrl = apiBaseUrl();
   const [eventName, setEventName] = useState(() => eventTitle(eventId));
   const [eventSlug, setEventSlug] = useState<string | null>(null);
 
   useEffect(() => {
+    void evaluationReloadVersion;
     if (localDemoEnabled()) return;
     let active = true;
     if (organizationId === undefined || organizationId.trim().length === 0) {
@@ -1220,8 +1312,9 @@ export function SubmissionListWorkspace({
         active = false;
       };
     }
-    setLoading(true);
+    setLoading(!canonicalRowsLoaded.current);
     setLoadError(null);
+    setEvaluationLoadState({ status: "pending" });
     const eventController = new AbortController();
     void loadOrganizerEventIdentity(baseUrl, organizationId, eventId, eventController.signal)
       .then((event) => {
@@ -1236,17 +1329,37 @@ export function SubmissionListWorkspace({
       baseUrl,
       eventId,
       eventController.signal,
-    ).catch(() => null);
+    )
+      .then((workspace) => ({ workspace, error: null }))
+      .catch((error: unknown) => ({ workspace: null, error }));
     void loadCanonicalSubmissionList(baseUrl, organizationId, eventId, eventController.signal)
       .then((records) => {
         if (!active) return;
-        setSubmissions(records.map(mapCanonicalSubmission));
+        const canonicalRows = records.map(mapCanonicalSubmission);
+        canonicalRowsLoaded.current = true;
+        setSubmissions(canonicalRows);
         setLoading(false);
-        void workspacePromise.then((workspace) => {
-          if (!active || workspace === null) return;
+        void workspacePromise.then(({ workspace, error }) => {
+          if (!active) return;
+          if (workspace === null) {
+            const reviewState = reviewDataStateFromError(error);
+            setEvaluationLoadState(reviewState);
+            setSubmissions(
+              canonicalRows.map((record) => ({
+                ...record,
+                reviewData: reviewState,
+              })),
+            );
+            return;
+          }
           const index = indexOrganizerEvaluationWorkspace(workspace);
+          const reviewState = reviewDataStateForIndex(index);
+          setEvaluationLoadState(reviewState);
           setSubmissions(
-            records.map((record) => mergeCanonicalSubmissionEvaluation(record, index)),
+            records.map((record) => ({
+              ...mergeCanonicalSubmissionEvaluation(record, index),
+              reviewData: reviewState,
+            })),
           );
         });
       })
@@ -1264,7 +1377,7 @@ export function SubmissionListWorkspace({
       eventController.abort();
       active = false;
     };
-  }, [baseUrl, eventId, organizationId]);
+  }, [baseUrl, eventId, organizationId, evaluationReloadVersion]);
 
   const tracks = useMemo(
     () => [...new Set(submissions.map((submission) => submission.track))].sort(),
@@ -1412,6 +1525,10 @@ export function SubmissionListWorkspace({
 
           {submissions.length > 0 ? (
             <CardContent className={styles.listContent}>
+              <ReviewDataNotice
+                state={evaluationLoadState}
+                onRetry={() => setEvaluationReloadVersion((current) => current + 1)}
+              />
               <fieldset className={styles.toolbar} aria-label="Submission filters">
                 <legend className={styles.srOnly}>Filter submissions</legend>
                 <label className={styles.toolbarSearch} htmlFor="submission-search">
@@ -1603,11 +1720,17 @@ export function SubmissionListWorkspace({
                             />
                           </TableCell>
                           <TableCell>
-                            <ProgressMeter
-                              completed={submission.reviewSummary.completed}
-                              total={submission.reviewSummary.total}
-                              label={`${submission.title} review progress`}
-                            />
+                            {reviewDataIsReady(submission) ? (
+                              <ProgressMeter
+                                completed={submission.reviewSummary.completed}
+                                total={submission.reviewSummary.total}
+                                label={`${submission.title} review progress`}
+                              />
+                            ) : (
+                              <span className={styles.mutedText}>
+                                {reviewDataMessage(submission.reviewData)}
+                              </span>
+                            )}
                           </TableCell>
                           <TableCell>
                             <span className={styles.trackValue}>{submission.track}</span>
@@ -1950,6 +2073,9 @@ export function SubmissionDetailWorkspace({
   );
   const [loading, setLoading] = useState(!localDemoEnabled());
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [notFound, setNotFound] = useState(
+    () => localDemoEnabled() && getSeededSubmission(eventId, submissionId) === undefined,
+  );
   const [reloadVersion, setReloadVersion] = useState(0);
 
   useEffect(() => {
@@ -1957,6 +2083,7 @@ export function SubmissionDetailWorkspace({
     let active = true;
     if (organizationId === undefined || organizationId.trim().length === 0) {
       setLoading(false);
+      setNotFound(false);
       setLoadError("An organization-scoped route is required to load submissions.");
       return () => {
         active = false;
@@ -1964,27 +2091,44 @@ export function SubmissionDetailWorkspace({
     }
     setLoading(true);
     setLoadError(null);
+    setNotFound(false);
     const controller = new AbortController();
 
     void loadCanonicalSubmissionList(baseUrl, organizationId, eventId, controller.signal)
-
       .then((records) => {
-        if (!active) return null;
+        if (!active) return;
         const envelope = records.find((candidate) => candidate.submission.id === submissionId);
-        return envelope === undefined ? null : enrichCanonicalSubmission(baseUrl, envelope);
-      })
-      .then((loaded) => {
-        if (active) setSubmission(loaded);
+        if (envelope === undefined) {
+          setSubmission(null);
+          setNotFound(true);
+          setLoading(false);
+          return;
+        }
+        const canonical = mapCanonicalSubmission(envelope);
+        setSubmission(canonical);
+        setLoading(false);
+        void enrichCanonicalSubmission(baseUrl, envelope)
+          .then((loaded) => {
+            if (active) setSubmission(loaded);
+          })
+          .catch((reason: unknown) => {
+            if (active) {
+              setSubmission({
+                ...canonical,
+                reviewData: reviewDataStateFromError(reason),
+              });
+            }
+          });
       })
       .catch((reason: unknown) => {
         if (active) {
+          setSubmission(null);
+          setNotFound(false);
           setLoadError(
             reason instanceof Error ? reason.message : "Submission could not be loaded.",
           );
+          setLoading(false);
         }
-      })
-      .finally(() => {
-        if (active) setLoading(false);
       });
     return () => {
       active = false;
@@ -2008,8 +2152,12 @@ export function SubmissionDetailWorkspace({
       <div className={styles.workspaceRoot}>
         <div className={styles.notFound} role="alert">
           <p className={styles.eyebrow}>Organizer workspace</p>
-          <h1>Submission not found</h1>
-          <p>{loadError ?? "This submission is not part of the selected event."}</p>
+          <h1>{notFound ? "Submission not found" : "Unable to load submission"}</h1>
+          <p>
+            {notFound
+              ? "This submission is not part of the selected event."
+              : (loadError ?? "Submission could not be loaded.")}
+          </p>
           <Link className={styles.primaryLink} href={submissionListHref(eventId, organizationId)}>
             Back to submissions
           </Link>
@@ -2166,24 +2314,32 @@ export function SubmissionDetailWorkspace({
                 </strong>
                 <span>{submission.reviewSummary.recommendation}</span>
               </div>
-              <ProgressMeter
-                completed={submission.reviewSummary.completed}
-                total={submission.reviewSummary.total}
-                label="Completed reviews"
+              {reviewDataIsReady(submission) ? (
+                <ProgressMeter
+                  completed={submission.reviewSummary.completed}
+                  total={submission.reviewSummary.total}
+                  label="Completed reviews"
+                />
+              ) : null}
+              <ReviewDataNotice
+                state={submission.reviewData ?? { status: "ready" as const }}
+                onRetry={() => setReloadVersion((current) => current + 1)}
               />
-              {submittedReviewRead.status === "error" ? (
-                <div className={styles.auditCallout} role="alert">
-                  <p>Submitted reviews could not be loaded: {submittedReviewRead.message}</p>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => setReloadVersion((current) => current + 1)}
-                  >
-                    Retry submitted reviews
-                  </Button>
-                </div>
-              ) : submittedReviewRead.count === 0 ? (
-                <p className={styles.mutedText}>No submitted reviews yet.</p>
+              {reviewDataIsReady(submission) ? (
+                submittedReviewRead.status === "error" ? (
+                  <div className={styles.auditCallout} role="alert">
+                    <p>Submitted reviews could not be loaded: {submittedReviewRead.message}</p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setReloadVersion((current) => current + 1)}
+                    >
+                      Retry submitted reviews
+                    </Button>
+                  </div>
+                ) : submittedReviewRead.count === 0 ? (
+                  <p className={styles.mutedText}>No submitted reviews yet.</p>
+                ) : null
               ) : null}
               <ul className={styles.assignmentList}>
                 {submission.reviewAssignments.map((assignment) => (

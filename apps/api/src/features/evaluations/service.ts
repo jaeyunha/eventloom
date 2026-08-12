@@ -1069,14 +1069,15 @@ export class EvaluationService {
   ): Promise<EvaluationPlan> {
     const plan = await this.#getPlan(actor.tenantId, planId);
     requireHumanOrganizer(actor, plan.eventId);
-    if (plan.status !== "draft") {
-      throw conflict("Only a draft evaluation plan can be opened.");
+    const isReopening = plan.status === "closed";
+    if (plan.status !== "draft" && !isReopening) {
+      throw conflict("Only a draft or closed evaluation plan can be opened.");
     }
     if (plan.version !== expectedVersion) {
       throw conflict("Evaluation plan changed since it was loaded.");
     }
     const now = this.#clock();
-    const gradingLockedAt = now.toISOString();
+    const gradingLockedAt = plan.gradingLockedAt ?? now.toISOString();
     if (plan.closesAt !== null && Date.parse(plan.closesAt) <= now.getTime()) {
       throw closed("The evaluation plan close date has passed.");
     }

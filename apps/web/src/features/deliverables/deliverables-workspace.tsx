@@ -251,6 +251,7 @@ export interface DeliverablesWorkspaceViewProps {
     readonly expectedVersion: number;
   }) => Promise<void>;
   readonly onReplaceHeadshot?: (input: {
+    readonly submissionId: string;
     readonly participantId: string;
     readonly file: File;
     readonly supersedesAssetId?: string;
@@ -454,6 +455,33 @@ function assetSessionId(
   tasksById: ReadonlyMap<string, DeliverableTask>,
 ): string {
   return asset.submissionId ?? tasksById.get(asset.taskId ?? "")?.submissionId ?? "";
+}
+export function eligibleSpeakerHeadshotSessions(
+  sessions: readonly DeliverableSession[],
+  eventId: string,
+  participantId: string,
+): readonly DeliverableSession[] {
+  return sessions.filter(
+    (session) =>
+      session.eventId === eventId &&
+      session.status.trim().toLowerCase() === "accepted" &&
+      session.speakerIds.includes(participantId),
+  );
+}
+
+export function resolveSpeakerHeadshotSubmissionId(
+  sessions: readonly DeliverableSession[],
+  eventId: string,
+  participantId: string,
+  requestedSubmissionId: string | null | undefined,
+): string | null {
+  const eligibleSessions = eligibleSpeakerHeadshotSessions(sessions, eventId, participantId);
+  if (eligibleSessions.length === 1) return eligibleSessions.at(0)?.id ?? null;
+  return requestedSubmissionId !== null &&
+    requestedSubmissionId !== undefined &&
+    eligibleSessions.some((session) => session.id === requestedSubmissionId)
+    ? requestedSubmissionId
+    : null;
 }
 
 function isCurrentAsset(asset: DeliverableAsset, assets: readonly DeliverableAsset[]): boolean {
@@ -2236,6 +2264,8 @@ function SessionEditor({
 }
 
 function SpeakerEditor({
+  eventId,
+  sessions,
   profiles,
   assets,
   busy,
@@ -2244,6 +2274,8 @@ function SpeakerEditor({
   onReplaceHeadshot,
   onRestoreSpeakerContentVersion,
 }: Readonly<{
+  readonly eventId: string;
+  readonly sessions: readonly DeliverableSession[];
   profiles: readonly DeliverableSpeakerProfile[];
   assets: readonly DeliverableAsset[];
   busy: boolean;
@@ -2254,6 +2286,7 @@ function SpeakerEditor({
     readonly expectedVersion: number;
   }) => Promise<void>;
   onReplaceHeadshot?: (input: {
+    readonly submissionId: string;
     readonly participantId: string;
     readonly file: File;
     readonly supersedesAssetId?: string;
@@ -2267,6 +2300,20 @@ function SpeakerEditor({
   const [participantId, setParticipantId] = useState(profiles[0]?.participantId ?? "");
   const selected =
     profiles.find((profile) => profile.participantId === participantId) ?? profiles[0];
+  const [headshotSubmissionId, setHeadshotSubmissionId] = useState<string | null>(null);
+  const eligibleHeadshotSessions = useMemo(
+    () =>
+      selected === undefined
+        ? []
+        : eligibleSpeakerHeadshotSessions(sessions, eventId, selected.participantId),
+    [eventId, selected, sessions],
+  );
+  const selectedHeadshotSubmissionId = resolveSpeakerHeadshotSubmissionId(
+    sessions,
+    eventId,
+    selected?.participantId ?? "",
+    headshotSubmissionId,
+  );
   const [biography, setBiography] = useState(selected?.biography ?? "");
   const [formError, setFormError] = useState<string | null>(null);
   const historyState =
@@ -2392,25 +2439,65 @@ function SpeakerEditor({
                   onChange={(event) => setBiography(event.currentTarget.value)}
                 />
               </div>
+              {eligibleHeadshotSessions.length > 1 ? (
+                <div className={fieldClass}>
+                  <Label htmlFor="speaker-headshot-session">Session for headshot replacement</Label>
+                  <Select
+                    value={headshotSubmissionId ?? ""}
+                    onValueChange={(value) => {
+                      setHeadshotSubmissionId(value);
+                      setFormError(null);
+                    }}
+                  >
+                    <SelectTrigger id="speaker-headshot-session">
+                      <SelectValue placeholder="Choose an accepted session" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {eligibleHeadshotSessions.map((session) => (
+                        <SelectItem key={session.id} value={session.id}>
+                          {session.title}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ) : eligibleHeadshotSessions.length === 0 ? (
+                <p className={mutedClass} role="status">
+                  Headshot replacement requires an accepted session owned by this speaker.
+                </p>
+              ) : null}
               <div className={fieldClass}>
                 <Label htmlFor="speaker-headshot">Replace headshot</Label>
                 <Input
                   id="speaker-headshot"
                   type="file"
                   accept="image/jpeg,image/png,image/webp"
-                  disabled={onReplaceHeadshot === undefined || busy}
+                  disabled={
+                    onReplaceHeadshot === undefined || busy || selectedHeadshotSubmissionId === null
+                  }
                   onChange={(event) => {
                     const file = event.currentTarget.files?.[0];
                     if (
-                      file !== undefined &&
-                      selected !== undefined &&
-                      onReplaceHeadshot !== undefined
+                      file === undefined ||
+                      selected === undefined ||
+                      onReplaceHeadshot === undefined
                     )
-                      void onReplaceHeadshot({
-                        participantId: selected.participantId,
-                        file,
-                        ...(headshot === undefined ? {} : { supersedesAssetId: headshot.id }),
-                      });
+                      return;
+                    if (selectedHeadshotSubmissionId === null) {
+                      setFormError(
+                        eligibleHeadshotSessions.length > 1
+                          ? "Choose an accepted session before replacing this headshot."
+                          : "Headshot replacement requires an accepted session owned by this speaker.",
+                      );
+                      return;
+                    }
+                    setFormError(null);
+                    void onReplaceHeadshot({
+                      submissionId: selectedHeadshotSubmissionId,
+                      participantId: selected.participantId,
+                      file,
+                      ...(headshot === undefined ? {} : { supersedesAssetId: headshot.id }),
+                    });
                   }}
                 />
               </div>
@@ -3038,6 +3125,8 @@ export function DeliverablesWorkspaceView({
                   : { onRestore: onRestoreSessionVersion })}
               />
               <SpeakerEditor
+                eventId={eventId}
+                sessions={sessions}
                 profiles={profiles}
                 assets={assets}
                 busy={busy}
@@ -4048,6 +4137,7 @@ export function DeliverablesWorkspace({
   }
   async function replaceHeadshot(input: {
     readonly participantId: string;
+    readonly submissionId: string;
     readonly file: File;
     readonly supersedesAssetId?: string;
   }): Promise<void> {
@@ -4062,6 +4152,15 @@ export function DeliverablesWorkspace({
     );
     if (currentProfile === undefined) {
       setError("The selected speaker profile is no longer available; reload before replacing it.");
+      return;
+    }
+    const eligibleSessions = eligibleSpeakerHeadshotSessions(
+      sessions,
+      eventId,
+      input.participantId,
+    );
+    if (!eligibleSessions.some((session) => session.id === input.submissionId)) {
+      setError("Choose an accepted session owned by this speaker before replacing the headshot.");
       return;
     }
     const scope = scopeRef.current;

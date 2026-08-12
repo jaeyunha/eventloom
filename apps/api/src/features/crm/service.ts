@@ -314,6 +314,22 @@ function normalizedName(input: CrmContactInput): {
   }
   return { firstName, lastName, displayName };
 }
+function contactMergeTagValues(contact: CrmContact): Readonly<Record<string, string>> {
+  const displayName = contact.displayName.trim();
+  const firstName = contact.firstName?.trim() || displayName.split(/\s+/u)[0] || displayName;
+  const lastName = contact.lastName?.trim() ?? "";
+  return {
+    first_name: firstName,
+    firstName,
+    last_name: lastName,
+    lastName,
+    display_name: displayName,
+    displayName,
+    email: contact.email?.trim() ?? "",
+    company: contact.company?.trim() ?? "",
+    title: contact.title?.trim() ?? "",
+  };
+}
 
 function canonical(value: string | null | undefined): string {
   return (value ?? "")
@@ -1983,13 +1999,8 @@ export class CrmService {
     variables: Readonly<Record<string, string>> | undefined,
   ): string {
     const values: Record<string, string> = {
-      firstName: contact.firstName ?? "",
-      lastName: contact.lastName ?? "",
-      displayName: contact.displayName,
-      email: contact.email ?? "",
-      company: contact.company ?? "",
-      title: contact.title ?? "",
       ...(variables ?? {}),
+      ...contactMergeTagValues(contact),
     };
     const unknown = new Set<string>();
     const rendered = content.replace(

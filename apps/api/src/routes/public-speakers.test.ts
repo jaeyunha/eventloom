@@ -62,6 +62,34 @@ describe("published speaker projection route", () => {
     await expect(response.json()).resolves.toEqual({ data: projection });
     expect(getPublishedSpeakers).toHaveBeenCalledWith("open-sessionboard-conf");
   });
+  it("serves a schema-valid projection carrying Airtable indexed fields", async () => {
+    const indexedProjection = {
+      ...projection,
+      id: "published-speakers:organization-1:event-1",
+      organizationId: "organization-1",
+      eventId: "event-1",
+      eventSlug: projection.event.slug,
+      revisionId: projection.revision.id,
+      revisionNumber: projection.revision.number,
+      publishedAt: projection.revision.publishedAt,
+      headshots: [],
+    };
+    const app = createApp({
+      publishedSpeakers: {
+        getPublishedSpeakers: async () =>
+          indexedProjection as unknown as PublishedSpeakerProjection,
+      },
+    });
+
+    const response = await app.request(
+      "/api/public/events/open-sessionboard-conf/speakers",
+      undefined,
+      bindings,
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ data: projection });
+  });
   it("strips private fields and signed headshot URLs from the public projection", async () => {
     const unsafeProjection = {
       ...projection,

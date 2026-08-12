@@ -5051,8 +5051,22 @@ export class SpeakerService {
     }
 
     let task: SpeakerTask | null = null;
-    if (input.taskId !== undefined) {
-      task = await this.repository.getTask(input.eventId, input.taskId);
+    let existing = input.supersedesAssetId
+      ? await this.repository.getAsset(input.eventId, input.supersedesAssetId)
+      : null;
+    if (input.supersedesAssetId !== undefined && existing === null) {
+      throw notFound();
+    }
+    if (
+      input.supersedesAssetId !== undefined &&
+      input.taskId !== undefined &&
+      existing?.taskId !== input.taskId
+    ) {
+      throw notFound();
+    }
+    const taskId = input.taskId ?? existing?.taskId;
+    if (taskId !== undefined) {
+      task = await this.repository.getTask(input.eventId, taskId);
       if (
         !task ||
         task.eventId !== input.eventId ||
@@ -5113,13 +5127,10 @@ export class SpeakerService {
     const now = this.now();
     const assetId = this.generateId();
     const fileName = normalizeFileName(input.fileName);
-    let existing = input.supersedesAssetId
-      ? await this.repository.getAsset(input.eventId, input.supersedesAssetId)
-      : null;
-    if (input.taskId !== undefined && input.supersedesAssetId === undefined) {
+    if (taskId !== undefined && input.supersedesAssetId === undefined) {
       const existingAssets = await this.assetsForParticipants(input.eventId, [input.participantId]);
       const current = existingAssets
-        .filter((candidate) => candidate.taskId === input.taskId && candidate.kind === input.kind)
+        .filter((candidate) => candidate.taskId === taskId && candidate.kind === input.kind)
         .sort(
           (left, right) =>
             (right.version ?? 0) - (left.version ?? 0) ||
@@ -5186,7 +5197,7 @@ export class SpeakerService {
       eventId: input.eventId,
       submissionId,
       participantId: input.participantId,
-      ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
+      ...(taskId === undefined ? {} : { taskId }),
       kind: input.kind,
       objectKey: [
         "events",
@@ -5215,7 +5226,7 @@ export class SpeakerService {
       eventId: input.eventId,
       submissionId,
       participantId: input.participantId,
-      ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
+      ...(taskId === undefined ? {} : { taskId }),
       objectKey: storedAsset.objectKey,
       contentType,
       sizeBytes: input.sizeBytes,

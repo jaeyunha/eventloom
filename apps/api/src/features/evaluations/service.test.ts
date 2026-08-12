@@ -1409,6 +1409,48 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
       "EVALUATION_FORBIDDEN",
     );
   });
+  it("reopens a closed plan with the current version and preserves its grading lock", async () => {
+    const { service, plan } = await fixture({ reviewsPerSubmission: 1 });
+    const closedPlan = await service.closePlan(organizer, plan.id, plan.version);
+
+    await expectEvaluationError(
+      service.assignReviewers(organizer, {
+        planId: plan.id,
+        roundId: round.id,
+        submissionId: submission.id,
+        reviewerIds: ["reviewer-1"],
+        expectedVersion: closedPlan.version,
+      }),
+      "EVALUATION_CLOSED",
+    );
+
+    const reopened = await service.openPlan(organizer, closedPlan.id, closedPlan.version);
+    expect(reopened.status).toBe("open");
+    expect(reopened.version).toBe(closedPlan.version + 1);
+    expect(reopened.gradingLockedAt).toBe(plan.gradingLockedAt);
+
+    await expectEvaluationError(
+      service.openPlan(organizer, closedPlan.id, closedPlan.version),
+      "EVALUATION_CONFLICT",
+    );
+    await expectEvaluationError(
+      service.updatePlan(organizer, reopened.id, {
+        expectedVersion: reopened.version,
+        name: "Grading remains locked",
+      }),
+      "EVALUATION_CONFLICT",
+    );
+
+    await expect(
+      service.assignReviewers(organizer, {
+        planId: reopened.id,
+        roundId: round.id,
+        submissionId: submission.id,
+        reviewerIds: ["reviewer-1"],
+        expectedVersion: reopened.version,
+      }),
+    ).resolves.toHaveLength(1);
+  });
 
   it("requires an injected provider, snapshots revisions, and audits human resolutions", async () => {
     const repository = new InMemoryEvaluationRepository();

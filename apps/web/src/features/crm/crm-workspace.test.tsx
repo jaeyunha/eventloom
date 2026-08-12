@@ -11,6 +11,7 @@ import {
   createCrmApi,
   createCrmWorkspaceReadCoordinator,
   refreshCrmAnalyticsAfterContactSave,
+  refreshCrmDuplicatesAfterContactSave,
 } from "./crm-workspace";
 
 type TestFetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -269,8 +270,10 @@ describe("organization CRM workspace", () => {
     expect(markup).toContain("Notes and cross-event history");
     expect(markup).toContain("{{first_name}}");
     expect(markup).toContain("Hello Ada");
-    expect(markup).toContain("Outreach delivery result");
+    expect(markup).toContain("Outreach queue result");
     expect(markup).toContain("1 sent");
+    expect(markup).not.toContain("Send Now");
+    expect(markup).toContain("Queue outreach for delivery");
     expect(markup).toContain("Qualified speakers");
     expect(markup).toContain("Pipeline board");
     expect(markup).toContain("CRM analytics");
@@ -385,10 +388,49 @@ describe("organization CRM workspace", () => {
       }),
     );
 
-    expect(markup).toContain("Sending is blocked");
+    expect(markup).toContain("Queueing is blocked");
     expect(markup).toContain("Unknown merge tags: unknownTag");
   });
 
+  it("renders one timeline item per saved note while retaining note audit records", () => {
+    const note = {
+      id: "note-1",
+      organizationId: contact.organizationId,
+      contactId: contact.id,
+      body: "Follow up once",
+      authorId: "owner-1",
+      createdAt: contact.updatedAt,
+    };
+    const markup = renderToStaticMarkup(
+      createElement(CrmWorkspaceView, {
+        organizationId: contact.organizationId,
+        contacts: [contact],
+        selectedContact: contact,
+        segments: [],
+        events: [],
+        history: [
+          {
+            id: "history-note-1",
+            organizationId: contact.organizationId,
+            contactId: contact.id,
+            kind: "note",
+            eventId: null,
+            sessionId: null,
+            title: "Note added",
+            detail: note.body,
+            occurredAt: note.createdAt,
+            metadata: { noteId: note.id },
+          },
+        ],
+        pipelineHistory: [],
+        notes: [note],
+        duplicates: null,
+        analytics: null,
+      }),
+    );
+
+    expect(markup.match(/Follow up once/gu)?.length).toBe(1);
+  });
   it("seeds saved segments from active directory filters and exposes selected-contact context", () => {
     const markup = renderToStaticMarkup(
       createElement(CrmWorkspaceView, {
@@ -691,5 +733,32 @@ describe("CRM contact analytics refresh", () => {
 
     await refreshCrmAnalyticsAfterContactSave(undefined, loadAnalytics);
     expect(loadAnalytics).toHaveBeenCalledTimes(1);
+  });
+  it("refreshes authoritative duplicates after create and identity edits", async () => {
+    const findDuplicates = vi.fn(async (contactId: string) => ({ contactId, matches: [] }));
+
+    await expect(
+      refreshCrmDuplicatesAfterContactSave(undefined, contact, findDuplicates),
+    ).resolves.toEqual({ contactId: contact.id, matches: [] });
+    expect(findDuplicates).toHaveBeenCalledWith(contact.id);
+
+    findDuplicates.mockClear();
+    await expect(
+      refreshCrmDuplicatesAfterContactSave(
+        contact,
+        { ...contact, title: "New Title" },
+        findDuplicates,
+      ),
+    ).resolves.toBeNull();
+    expect(findDuplicates).not.toHaveBeenCalled();
+
+    await expect(
+      refreshCrmDuplicatesAfterContactSave(
+        contact,
+        { ...contact, email: "new@example.test" },
+        findDuplicates,
+      ),
+    ).resolves.toEqual({ contactId: contact.id, matches: [] });
+    expect(findDuplicates).toHaveBeenCalledWith(contact.id);
   });
 });

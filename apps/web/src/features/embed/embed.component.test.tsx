@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -19,6 +20,14 @@ import type {
   PublishedSpeaker,
   PublishedSpeakerGallery,
 } from "./types";
+const sessionsRouteSource = readFileSync(
+  new URL("../../app/events/[eventSlug]/page.tsx", import.meta.url),
+  "utf8",
+);
+const agendaRouteSource = readFileSync(
+  new URL("../../app/events/[eventSlug]/agenda/page.tsx", import.meta.url),
+  "utf8",
+);
 
 const event = {
   slug: "open-systems",
@@ -218,6 +227,25 @@ const emptyFinalDayAgenda: PublishedAgenda = {
 };
 
 describe("public embeds", () => {
+  it("keeps anonymous event entry routes dynamic and projection-backed", () => {
+    for (const [source, view, component] of [
+      [sessionsRouteSource, "sessions", "PublicSessionsView"],
+      [agendaRouteSource, "agenda", "PublicAgendaView"],
+    ] as const) {
+      expect(source).toContain("params: Promise<{ eventSlug: string }>");
+      expect(source).toContain(
+        "searchParams: Promise<Record<string, string | string[] | undefined>>",
+      );
+      expect(source).toContain("getPublishedProgramOrLocalDemo");
+      expect(source).toContain("parseEmbedQuery(query)");
+      expect(source).toContain(`view="${view}"`);
+      expect(source).toContain(`<${component}`);
+      expect(source).toContain("EmbedUnavailable");
+      expect(source).not.toContain("devflow-conf-2027");
+      expect(source).not.toContain("/admin/");
+      expect(source).not.toContain("redirect(");
+    }
+  });
   it("renders accessible agenda navigation, filters, times, and feeds", () => {
     const markup = renderToStaticMarkup(
       createElement(

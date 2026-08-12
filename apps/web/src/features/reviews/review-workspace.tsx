@@ -1180,6 +1180,23 @@ function planStatusVariant(status: PlanStatus): "default" | "secondary" | "outli
   if (status === "draft") return "outline";
   return "secondary";
 }
+const assignmentControlGridStyle = {
+  gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 24rem), 1fr))",
+} as const;
+const assignmentControlFieldStyle = {
+  boxSizing: "border-box",
+  minWidth: 0,
+  border: 0,
+  padding: 0,
+  margin: 0,
+} as const;
+const assignmentControlSelectStyle = {
+  boxSizing: "border-box",
+  display: "block",
+  width: "100%",
+  maxWidth: "100%",
+  minWidth: 0,
+} as const;
 function formatDecisionStatus(status: DecisionStatus): string {
   if (status === "accepted") return "Accepted";
   if (status === "waitlisted") return "Waitlisted";
@@ -2079,6 +2096,10 @@ function OrganizerAuthoring({
     }
   }
   function previewAssignments(): void {
+    if (status !== "open") {
+      setAssignmentPreview("Reviewer assignments require an open evaluation plan.");
+      return;
+    }
     const round = rounds.find((candidate) => candidate.id === assignmentRoundId);
     const reviewerIds = [...assignmentReviewerIds];
     const submissionId = assignmentSubmissionId.trim();
@@ -2115,6 +2136,10 @@ function OrganizerAuthoring({
   }
 
   async function assignReviewers(): Promise<void> {
+    if (status !== "open") {
+      setMessage("Reviewer assignments require an open evaluation plan.");
+      return;
+    }
     const round = rounds.find((candidate) => candidate.id === assignmentRoundId);
     const reviewerIds = [...assignmentReviewerIds];
     const submissionId = assignmentSubmissionId.trim();
@@ -2302,12 +2327,15 @@ function OrganizerAuthoring({
           Only the fields and files listed here are shown to reviewers; everything else stays
           private.
         </p>
-        <div className={styles.summaryGrid}>
-          <div className={styles.formField}>
+        <div className={styles.summaryGrid} style={assignmentControlGridStyle}>
+          <fieldset className={styles.formField} style={assignmentControlFieldStyle}>
+            <legend className={styles.cardLabel}>Assignment target</legend>
             <label htmlFor="assignment-round-id">Round for assignment</label>
             <select
               id="assignment-round-id"
+              style={assignmentControlSelectStyle}
               value={assignmentRoundId}
+              disabled={busy || status !== "open"}
               onChange={(event) => setAssignmentRoundId(event.currentTarget.value)}
             >
               {rounds.map((round) => (
@@ -2316,27 +2344,30 @@ function OrganizerAuthoring({
                 </option>
               ))}
             </select>
-          </div>
-          <div className={styles.formField}>
-            <span className={styles.cardLabel}>Assignment tooling</span>
+          </fieldset>
+          <fieldset className={styles.formField} style={assignmentControlFieldStyle}>
+            <legend className={styles.cardLabel}>Assignment tooling</legend>
             <span className={styles.fieldHint}>
               The plan cap is {maxAssignmentsPerReviewer} assignments per reviewer. Choose the
               complete reviewer set; an empty selection clears all active assignments. Preview
               before posting the replacement.
             </span>
-          </div>
+          </fieldset>
         </div>
-        <div className={styles.summaryGrid}>
-          <div className={styles.formField}>
+        <div className={styles.summaryGrid} style={assignmentControlGridStyle}>
+          <fieldset className={styles.formField} style={assignmentControlFieldStyle}>
+            <legend className={styles.cardLabel}>Submission target</legend>
             <label htmlFor="assignment-submission-id">
               Submission for reviewer-set replacement
             </label>
             <select
               id="assignment-submission-id"
+              style={assignmentControlSelectStyle}
               value={assignmentSubmissionId}
               onChange={(event) => setAssignmentSubmissionId(event.currentTarget.value)}
-              disabled={busy || seed.aggregates.length === 0}
+              disabled={busy || status !== "open" || seed.aggregates.length === 0}
               required
+              aria-describedby="assignment-submission-help"
             >
               <option value="">Choose a submission</option>
               {seed.aggregates.map((aggregate) => (
@@ -2345,22 +2376,26 @@ function OrganizerAuthoring({
                 </option>
               ))}
             </select>
-            <span className={styles.fieldHint}>
+            <span className={styles.fieldHint} id="assignment-submission-help">
               {seed.aggregates.length === 0
                 ? "No submissions are available for reviewer-set replacement."
                 : "Choose a submission from the authoritative event material; the reviewer selection replaces its complete active set."}
             </span>
-          </div>
-          <div className={styles.formField}>
+          </fieldset>
+          <fieldset className={styles.formField} style={assignmentControlFieldStyle}>
+            <legend className={styles.cardLabel}>Reviewer replacement set</legend>
             <label htmlFor="assignment-reviewer-ids">
               Verified organization reviewers (complete replacement set)
             </label>
             <select
               id="assignment-reviewer-ids"
+              style={assignmentControlSelectStyle}
               multiple
               size={Math.max(3, Math.min(8, reviewerMembers.length || 3))}
               value={[...assignmentReviewerIds]}
-              disabled={busy || reviewerMembersLoading || reviewerMembersError !== null}
+              disabled={
+                busy || status !== "open" || reviewerMembersLoading || reviewerMembersError !== null
+              }
               onChange={(event) =>
                 setAssignmentReviewerIds(
                   [...event.currentTarget.selectedOptions].map((option) => option.value),
@@ -2382,13 +2417,13 @@ function OrganizerAuthoring({
                     ? "No active, verified organization reviewers are available."
                     : "Selection replaces every active assignment for this round and submission; leave it empty to clear all. Names and email addresses are display-only; assignments submit each member user ID."))}
             </span>
-          </div>
+          </fieldset>
         </div>
         <Button
           type="button"
           variant="outline"
           onClick={previewAssignments}
-          disabled={busy || !reviewerDirectoryReady}
+          disabled={busy || status !== "open" || !reviewerDirectoryReady}
         >
           Preview reviewer assignment replacement
         </Button>
@@ -2401,7 +2436,7 @@ function OrganizerAuthoring({
           type="button"
           variant="outline"
           onClick={() => void assignReviewers()}
-          disabled={busy || !reviewerDirectoryReady}
+          disabled={busy || status !== "open" || !reviewerDirectoryReady}
         >
           Replace reviewer assignments
         </Button>
@@ -2495,13 +2530,15 @@ function OrganizerAuthoring({
                 </select>
               </div>
             </div>
-            <div className={styles.summaryGrid}>
-              <div className={styles.formField}>
+            <div className={styles.summaryGrid} style={assignmentControlGridStyle}>
+              <fieldset className={styles.formField} style={assignmentControlFieldStyle}>
+                <legend className={styles.cardLabel}>Round reviewer pool</legend>
                 <label htmlFor={`${round.id}-reviewer-pool`}>
-                  Round reviewer pool (verified organization reviewers)
+                  Verified organization reviewers for this round
                 </label>
                 <select
                   id={`${round.id}-reviewer-pool`}
+                  style={assignmentControlSelectStyle}
                   multiple
                   size={Math.max(3, Math.min(8, reviewerMembers.length || 3))}
                   value={(round.reviewerPool?.reviewerIds ?? []).filter((reviewerId) =>
@@ -2534,8 +2571,9 @@ function OrganizerAuthoring({
                     : (reviewerMembersError ??
                       `This pool applies only to ${round.name}; other rounds have independent pools. Member names are display-only.`)}
                 </span>
-              </div>
-              <div className={styles.formField}>
+              </fieldset>
+              <fieldset className={styles.formField} style={assignmentControlFieldStyle}>
+                <legend className={styles.cardLabel}>Bulk assignment filter</legend>
                 <label htmlFor={`${round.id}-track-filter`}>Track filter for bulk assignment</label>
                 <input
                   id={`${round.id}-track-filter`}
@@ -2549,7 +2587,7 @@ function OrganizerAuthoring({
                   }}
                   placeholder="Platform & Infra"
                 />
-              </div>
+              </fieldset>
             </div>
             <section
               className={styles.criteriaList}
@@ -2764,6 +2802,11 @@ function OrganizerAuthoring({
             disabled={busy}
           >
             Close plan
+          </Button>
+        ) : null}
+        {status === "closed" ? (
+          <Button type="button" onClick={() => void transition("open")} disabled={busy}>
+            Reopen plan
           </Button>
         ) : null}
       </div>
@@ -3071,9 +3114,11 @@ function OrganizerWorkspaceView({
                   <CardTitle>
                     {seed.status === "draft"
                       ? "Finish plan setup"
-                      : outstandingReviews > 0
-                        ? "Follow up on reviews"
-                        : "Record decisions"}
+                      : seed.status === "closed"
+                        ? "Reopen plan"
+                        : outstandingReviews > 0
+                          ? "Follow up on reviews"
+                          : "Record decisions"}
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
@@ -3082,7 +3127,7 @@ function OrganizerWorkspaceView({
                     variant="outline"
                     onClick={() =>
                       setView(
-                        seed.status === "draft"
+                        seed.status === "draft" || seed.status === "closed"
                           ? "setup"
                           : outstandingReviews > 0
                             ? "assignments"
@@ -3092,9 +3137,11 @@ function OrganizerWorkspaceView({
                   >
                     {seed.status === "draft"
                       ? "Open plan setup"
-                      : outstandingReviews > 0
-                        ? "Open assignments"
-                        : "Open decisions"}
+                      : seed.status === "closed"
+                        ? "Reopen plan"
+                        : outstandingReviews > 0
+                          ? "Open assignments"
+                          : "Open decisions"}
                   </Button>
                 </CardContent>
               </Card>

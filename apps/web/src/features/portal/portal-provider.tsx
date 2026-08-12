@@ -116,11 +116,7 @@ interface PortalContextValue {
     file: File;
     supersedesAssetId?: string;
   }): Promise<boolean>;
-  finalizeAsset(input: {
-    assetId: string;
-    state: Extract<PortalAsset["state"], "ready" | "rejected">;
-    rejectionReason?: string;
-  }): Promise<boolean>;
+  completeAssetUpload(input: { assetId: string }): Promise<boolean>;
   loadAssetHistory(assetId: string): Promise<PortalAssetHistoryEntry[]>;
   loadAssetComments(assetId: string): Promise<PortalAssetComment[]>;
   addAssetComment(input: {
@@ -1099,7 +1095,7 @@ export function PortalProvider({
         return false;
       }
       if (!api.finalizeAsset) {
-        setMutationError("File finalization is not available yet.");
+        setMutationError("Upload completion is not available yet.");
         return false;
       }
       if (
@@ -1477,18 +1473,14 @@ export function PortalProvider({
     [api, can, context, view, workspace.assets],
   );
 
-  const finalizeAsset = useCallback(
-    async (input: {
-      assetId: string;
-      state: Extract<PortalAsset["state"], "ready" | "rejected">;
-      rejectionReason?: string;
-    }) => {
+  const completeAssetUpload = useCallback(
+    async (input: { assetId: string }) => {
       if (!context) {
         setMutationError("No authorized portal context is available.");
         return false;
       }
       if (!can("asset-write") || !api.finalizeAsset) {
-        setMutationError("You do not have permission to finalize this file.");
+        setMutationError("You do not have permission to complete this upload.");
         return false;
       }
       const targetContext = context;
@@ -1497,23 +1489,31 @@ export function PortalProvider({
         view?.assets?.find((candidate) => candidate.id === input.assetId);
       if (
         knownAsset === undefined ||
+        knownAsset.state !== "pending_upload" ||
         !assetBelongsToPortalContext(knownAsset, context, view?.tasks ?? [])
       ) {
-        setMutationError("This file does not belong to the active speaker.");
+        setMutationError(
+          "This upload is no longer pending or does not belong to the active speaker.",
+        );
         return false;
       }
       const generation = loadGeneration.current;
       setBusyAssetIds((current) => new Set(current).add(input.assetId));
       setMutationError(null);
       try {
-        const asset = await api.finalizeAsset({ eventId: targetContext.eventId, ...input });
+        const asset = await api.finalizeAsset({
+          eventId: targetContext.eventId,
+          assetId: input.assetId,
+          state: "ready",
+        });
         if (
           asset.id !== input.assetId ||
+          asset.state !== "ready" ||
           !assetBelongsToPortalContext(asset, targetContext, view?.tasks ?? [])
         ) {
           throw new PortalApiError(
             "CONTEXT_MISMATCH",
-            "The file response belongs to a different speaker or session.",
+            "The completed upload belongs to a different speaker or session.",
             409,
           );
         }
@@ -1527,9 +1527,9 @@ export function PortalProvider({
           ),
         }));
         return true;
-      } catch (finalizeError) {
+      } catch (completeError) {
         if (isPortalGenerationCurrent(generation, loadGeneration.current)) {
-          setMutationError(messageFrom(finalizeError));
+          setMutationError(messageFrom(completeError));
         }
         return false;
       } finally {
@@ -1879,7 +1879,7 @@ export function PortalProvider({
       updateRosterEntry,
       removeRosterEntry,
       uploadWorkspaceFile,
-      finalizeAsset,
+      completeAssetUpload,
       loadAssetHistory,
       loadAssetComments,
       addAssetComment,
@@ -1904,7 +1904,7 @@ export function PortalProvider({
       eventId,
       eventQuery,
       downloadAsset,
-      finalizeAsset,
+      completeAssetUpload,
       loadAssetComments,
       loadAssetHistory,
       loadTaskForm,

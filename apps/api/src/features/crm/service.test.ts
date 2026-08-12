@@ -573,6 +573,72 @@ describe("CrmService", () => {
       }),
     ).rejects.toMatchObject({ code: "CRM_INVALID_INPUT" });
   });
+  it("keeps built-in outreach merge tags server-owned with deterministic name fallback", async () => {
+    const repository = new InMemoryCrmRepository();
+    const crm = new CrmService(
+      {
+        repository,
+        outreach: {
+          async send(command) {
+            return { ...command, status: "queued" };
+          },
+        },
+      },
+      {
+        clock: () => new Date("2026-01-01T00:00:00.000Z"),
+        generateId: (() => {
+          let sequence = 0;
+          return (prefix: string) => `${prefix}-${++sequence}`;
+        })(),
+      },
+    );
+    const displayNameOnly = await crm.createContact(actor, {
+      organizationId: "org-a",
+      displayName: "Dana Kowalski",
+      email: "dana@example.com",
+    });
+    const explicitFirstName = await crm.createContact(actor, {
+      organizationId: "org-a",
+      firstName: "Ada",
+      displayName: "Ada Lovelace",
+      email: "ada@example.com",
+    });
+
+    const fallback = await crm.sendPersonalizedOutreach(actor, {
+      organizationId: "org-a",
+      contactId: displayNameOnly.id,
+      subject: "Hello {{first_name}}",
+      body: "Hi {{first_name}} / {{display_name}} / {{firstName}}",
+      variables: {
+        first_name: "",
+        firstName: "Caller override",
+        display_name: "Caller display override",
+      },
+      idempotencyKey: "outreach-merge-fallback",
+    });
+    expect(fallback.renderedBody).toBe("Hi Dana / Dana Kowalski / Dana");
+    expect(fallback.status).toBe("queued");
+
+    const explicit = await crm.sendPersonalizedOutreach(actor, {
+      organizationId: "org-a",
+      contactId: explicitFirstName.id,
+      subject: "Hello {{first_name}}",
+      body: "Hi {{first_name}}",
+      variables: { first_name: "" },
+      idempotencyKey: "outreach-merge-explicit",
+    });
+    expect(explicit.renderedBody).toBe("Hi Ada");
+
+    await expect(
+      crm.sendPersonalizedOutreach(actor, {
+        organizationId: "org-a",
+        contactId: displayNameOnly.id,
+        subject: "Hello {{unknown_tag}}",
+        body: "Body",
+        idempotencyKey: "outreach-merge-unknown",
+      }),
+    ).rejects.toMatchObject({ code: "CRM_INVALID_INPUT" });
+  });
   it("starts analytics reads together and scopes each source to the organization", async () => {
     const repository = new CountingDelayedCrmRepository({
       listContacts: 25,
