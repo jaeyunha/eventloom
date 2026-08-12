@@ -3,14 +3,14 @@ import { createApp } from "../app";
 import type { AgendaState, PublishedAgendaRevision } from "../features/agenda/types";
 import type { CfpForm, EventCfp, Submission } from "../features/cfp/model";
 import type { CfpRepository } from "../features/cfp/service";
+import { CommunicationService } from "../features/communications/service";
+import type { CommunicationActor, CommunicationRecipient } from "../features/communications/types";
+import { SessionService } from "../features/sessions/service";
 import type {
   PrivateAssetCapabilityBinding,
   PrivateUploadGrant,
   SpeakerAsset,
 } from "../features/speaker/types";
-import { CommunicationService } from "../features/communications/service";
-import type { CommunicationActor, CommunicationRecipient } from "../features/communications/types";
-import { SessionService } from "../features/sessions/service";
 import {
   type AirtableRequest,
   type AirtableTransport,
@@ -25,8 +25,8 @@ import {
   AirtableEvaluationAcceptanceHandoff,
   AirtableEvaluationReminderBoundary,
   AirtableEvaluationRepository,
-  AirtableRemixContentGateway,
   AirtableEventRepository,
+  AirtableRemixContentGateway,
   AirtableSessionRepository,
   AirtableSpeakerReminderDeliveryAdapter,
   AirtableSpeakerRepository,
@@ -3283,7 +3283,10 @@ function speakerOrganizerDatabase(input: {
                 return (membership ?? null) as T | null;
               }
               if (query.includes("FROM auth_users")) {
-                const email = state.verifiedEmails.get(String(values[0]).toLowerCase());
+                const email =
+                  query.includes("WHERE id = ?") && String(values[0]) === "account-speaker"
+                    ? state.verifiedEmails.values().next().value
+                    : state.verifiedEmails.get(String(values[0]).toLowerCase());
                 if (query.includes("SELECT id")) {
                   return (email === undefined ? null : { id: "account-speaker" }) as T | null;
                 }
@@ -3303,6 +3306,11 @@ function speakerOrganizerDatabase(input: {
                 const email = state.verifiedEmails.get(String(values[0]).toLowerCase());
                 return {
                   results: email === undefined ? [] : [{ id: "account-speaker" }],
+                } as unknown as { results: T[] };
+              }
+              if (query.includes("FROM speaker_grants")) {
+                return {
+                  results: state.grants.filter((grant) => grant.user_id === String(values[0])),
                 } as unknown as { results: T[] };
               }
               return { results: [] as T[] };
@@ -3381,6 +3389,7 @@ function seedSpeakerOrganizerFixture(transport: FakeAirtableTransport): void {
         organizationId: "ai-engineer",
         tenantId: "ai-engineer",
         eventId: "event-speaker",
+        ownerAccountId: "account-speaker",
         formId: "form-speaker",
         title: "Reliable Systems",
         status: "accepted",
@@ -3535,6 +3544,158 @@ describe("production organizer speaker composition", () => {
       }),
     ).resolves.toEqual({ ok: true, value: updated });
     await expect(repository.getTask(task.eventId, task.id)).resolves.toEqual(updated);
+  });
+  it("canonicalizes speaker aliases before projecting portal tasks", async () => {
+    const { repository, state, transport } = fixture();
+    const aliasParticipantId = "participant-speaker-alias";
+    const canonicalProfileId = "speaker-profile:event-speaker:participant-speaker";
+    const aliasProfileId = `speaker-profile:event-speaker:${aliasParticipantId}`;
+    state.grants.push(
+      {
+        organization_id: "ai-engineer",
+        speaker_profile_id: canonicalProfileId,
+        user_id: "account-speaker",
+      },
+      {
+        organization_id: "ai-engineer",
+        speaker_profile_id: aliasProfileId,
+        user_id: "account-speaker",
+      },
+    );
+    transport.seed({
+      baseId: "base-test",
+      table: "Speaker Profiles",
+      fields: {
+        "Application ID": aliasProfileId,
+        Biography: JSON.stringify({
+          id: aliasProfileId,
+          eventId: "event-speaker",
+          participantId: aliasParticipantId,
+          displayName: "Verified Speaker",
+          email: "speaker@example.test",
+          biography: "",
+          version: 1,
+          updatedAt: "2026-08-09T00:00:00.000Z",
+        }),
+      },
+    });
+    transport.seed({
+      baseId: "base-test",
+      table: "Submissions",
+      fields: {
+        "Application ID": "speaker-submission:submission-speaker-alias",
+        "Answers JSON": JSON.stringify({
+          id: "speaker-submission:submission-speaker-alias",
+          organizationId: "ai-engineer",
+          eventId: "event-speaker",
+          title: "Reliable Systems",
+          status: "accepted",
+          participantIds: [aliasParticipantId],
+          primaryParticipantId: aliasParticipantId,
+          updatedAt: "2026-08-09T00:00:00.000Z",
+        }),
+      },
+    });
+
+    const seedTask = (input: {
+      id: string;
+      participantId: string;
+      submissionId: string;
+      title: string;
+      version?: number;
+      updatedAt?: string;
+    }) => {
+      transport.seed({
+        baseId: "base-test",
+        table: "Speaker Tasks",
+        fields: {
+          "Application ID": input.id,
+          "Owner JSON": JSON.stringify({
+            id: input.id,
+            eventId: "event-speaker",
+            submissionId: input.submissionId,
+            participantId: input.participantId,
+            assigneeIds: [input.participantId],
+            type: "action",
+            owner: "speaker",
+            title: input.title,
+            status: "not_started",
+            dependencyIds: [],
+            reminderOffsetsMinutes: [],
+            version: input.version ?? 1,
+            updatedAt: input.updatedAt ?? "2026-08-09T00:00:00.000Z",
+          }),
+        },
+      });
+    };
+    seedTask({
+      id: "task-family:participant-speaker",
+      participantId: "participant-speaker",
+      submissionId: "speaker-submission:submission-speaker",
+      title: "Canonical family",
+    });
+    seedTask({
+      id: `task-family:${aliasParticipantId}`,
+      participantId: aliasParticipantId,
+      submissionId: "speaker-submission:submission-speaker-alias",
+      title: "Canonical family",
+      version: 5,
+      updatedAt: "2026-08-10T00:00:00.000Z",
+    });
+    seedTask({
+      id: "organizer-task-for-alias",
+      participantId: aliasParticipantId,
+      submissionId: "speaker-submission:submission-speaker-alias",
+      title: "Organizer follow-up",
+    });
+    seedTask({
+      id: "same-title:participant-speaker:one",
+      participantId: "participant-speaker",
+      submissionId: "speaker-submission:submission-speaker",
+      title: "Keep both authoritative records",
+    });
+    seedTask({
+      id: `same-title:${aliasParticipantId}:two`,
+      participantId: aliasParticipantId,
+      submissionId: "speaker-submission:submission-speaker-alias",
+      title: "Keep both authoritative records",
+    });
+
+    await expect(
+      repository.getAccessScope("event-speaker", "account-speaker"),
+    ).resolves.toMatchObject({
+      tenantId: "ai-engineer",
+      participantIds: ["participant-speaker"],
+      primaryParticipantId: "participant-speaker",
+      capabilitiesByParticipant: {
+        "participant-speaker": expect.arrayContaining(["task-response", "roster-manage"]),
+      },
+    });
+    await expect(repository.listPortalContexts("account-speaker")).resolves.toMatchObject([
+      {
+        eventId: "event-speaker",
+        participantIds: ["participant-speaker"],
+        primaryParticipantId: "participant-speaker",
+      },
+    ]);
+
+    const tasks = await repository.listTasks("event-speaker", ["participant-speaker"]);
+    expect(tasks.map((task) => task.id).sort()).toEqual([
+      "organizer-task-for-alias",
+      "same-title:participant-speaker-alias:two",
+      "same-title:participant-speaker:one",
+      "task-family:participant-speaker",
+    ]);
+    expect(tasks.find((task) => task.id === "task-family:participant-speaker")).toMatchObject({
+      participantId: "participant-speaker",
+      submissionId: "speaker-submission:submission-speaker",
+      version: 1,
+    });
+    expect(tasks.find((task) => task.id === "organizer-task-for-alias")).toMatchObject({
+      participantId: "participant-speaker",
+      submissionId: "speaker-submission:submission-speaker",
+      assigneeIds: ["participant-speaker"],
+    });
   });
 
   it("resolves public CFP submission IDs to canonical speaker roster records", async () => {
