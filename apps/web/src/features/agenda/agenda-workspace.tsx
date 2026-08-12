@@ -1,12 +1,16 @@
 "use client";
 
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   createScopedReadFlightCoordinator,
   type ScopedReadFlightCoordinator,
 } from "@/lib/scoped-read-flight";
-import styles from "./agenda.module.css";
-import viewStyles from "./agenda-workspace.module.css";
+import styles from "./agenda-workspace.module.css";
 import { type AgendaApi, AgendaApiError, createAgendaApi } from "./api";
 import {
   createLocalAgendaDemoApi,
@@ -569,7 +573,7 @@ export function AgendaBoard({
         <article className={`${styles.sessionCard} ${hasIssues ? styles.sessionIssue : ""}`}>
           <div className={styles.sessionTime}>
             {showDate ? (
-              <time className={viewStyles.entryDate} dateTime={scheduleDate(entry)}>
+              <time className={styles.entryDate} dateTime={scheduleDate(entry)}>
                 {formatScheduleDate(scheduleDate(entry))}
               </time>
             ) : null}
@@ -653,17 +657,17 @@ export function AgendaBoard({
     return (
       <section
         key={group.id}
-        className={`${styles.day} ${viewStyles.viewGroup}`}
+        className={`${styles.day} ${styles.viewGroup}`}
         aria-labelledby={headingId}
       >
-        <header className={viewStyles.viewGroupHeader}>
+        <header className={styles.viewGroupHeader}>
           <h3 id={headingId}>{group.label}</h3>
           <span>
             {group.entries.length} session{group.entries.length === 1 ? "" : "s"}
           </span>
         </header>
         {group.entries.length === 0 ? (
-          <p className={viewStyles.viewGroupEmpty}>{group.emptyMessage}</p>
+          <p className={styles.viewGroupEmpty}>{group.emptyMessage}</p>
         ) : (
           <ol className={styles.sessionList}>
             {group.entries.map((entry) =>
@@ -681,19 +685,19 @@ export function AgendaBoard({
       return titleOrder === 0 ? left.id.localeCompare(right.id) : titleOrder;
     });
     return (
-      <section className={viewStyles.unscheduledGroup} aria-labelledby="agenda-unscheduled-heading">
-        <header className={viewStyles.viewGroupHeader}>
+      <section className={styles.unscheduledGroup} aria-labelledby="agenda-unscheduled-heading">
+        <header className={styles.viewGroupHeader}>
           <h3 id="agenda-unscheduled-heading">Unscheduled accepted sessions</h3>
           <span>
             {sessions.length} session{sessions.length === 1 ? "" : "s"}
           </span>
         </header>
         {sessions.length === 0 ? (
-          <p className={viewStyles.viewGroupEmpty}>No unscheduled accepted sessions.</p>
+          <p className={styles.viewGroupEmpty}>No unscheduled accepted sessions.</p>
         ) : (
-          <ul className={viewStyles.unscheduledList}>
+          <ul className={styles.unscheduledList}>
             {sessions.map((session) => (
-              <li className={viewStyles.unscheduledItem} key={session.id}>
+              <li className={styles.unscheduledItem} key={session.id}>
                 <strong>{session.title}</strong>
                 <span>
                   {session.format} · {session.durationMinutes} minutes ·{" "}
@@ -715,9 +719,9 @@ export function AgendaBoard({
     const nextGroup = groups[activeIndex + 1];
 
     return (
-      <nav className={viewStyles.viewSwitcher} aria-label="Event day navigation">
-        <span className={viewStyles.viewLabel}>Event days</span>
-        <div className={viewStyles.viewTablist}>
+      <nav className={styles.viewSwitcher} aria-label="Event day navigation">
+        <span className={styles.viewLabel}>Event days</span>
+        <div className={styles.viewTablist}>
           <button
             className={styles.secondaryButton}
             type="button"
@@ -761,7 +765,7 @@ export function AgendaBoard({
             </div>
           ) : (
             <section aria-labelledby="agenda-list-heading">
-              <header className={viewStyles.viewGroupHeader}>
+              <header className={styles.viewGroupHeader}>
                 <h3 id="agenda-list-heading">All scheduled sessions</h3>
                 <span>
                   {entries.length} session{entries.length === 1 ? "" : "s"}
@@ -801,13 +805,13 @@ export function AgendaBoard({
       const lastDate = groups.at(-1)?.label;
       return (
         <>
-          <div className={viewStyles.weekView}>
-            <p className={viewStyles.viewContext}>
+          <div className={styles.weekView}>
+            <p className={styles.viewContext}>
               {firstDate && lastDate && firstDate !== lastDate
                 ? `Week: ${firstDate} – ${lastDate}`
                 : "Week schedule"}
             </p>
-            <div className={viewStyles.weekGroups}>{groups.map((group) => renderGroup(group))}</div>
+            <div className={styles.weekGroups}>{groups.map((group) => renderGroup(group))}</div>
           </div>
           {renderUnscheduledGroup()}
         </>
@@ -815,8 +819,8 @@ export function AgendaBoard({
     }
 
     return (
-      <div className={viewStyles.groupedView}>
-        <div className={viewStyles.groupGroups}>{groups.map((group) => renderGroup(group))}</div>
+      <div className={styles.groupedView}>
+        <div className={styles.groupGroups}>{groups.map((group) => renderGroup(group))}</div>
         {renderUnscheduledGroup()}
       </div>
     );
@@ -829,7 +833,6 @@ export function AgendaBoard({
       </a>
       <header className={styles.topbar}>
         <a className={styles.brand} href="/admin">
-          <span aria-hidden="true">OS</span>
           Open Sessionboard
         </a>
         <nav aria-label="Organizer navigation">
@@ -907,7 +910,7 @@ export function AgendaBoard({
                 aria-expanded={showAddForm}
                 aria-controls="add-session-panel"
               >
-                Add accepted session
+                {showAddForm ? "Close add session" : "Add accepted session"}
               </button>
             </div>
             {!hasRooms ? (
@@ -918,12 +921,12 @@ export function AgendaBoard({
               </p>
             ) : null}
 
-            <div className={viewStyles.viewSwitcher}>
-              <span id="agenda-view-label" className={viewStyles.viewLabel}>
+            <div className={styles.viewSwitcher}>
+              <span id="agenda-view-label" className={styles.viewLabel}>
                 Schedule view
               </span>
               <div
-                className={viewStyles.viewTablist}
+                className={styles.viewTablist}
                 role="tablist"
                 aria-labelledby="agenda-view-label"
                 aria-orientation="horizontal"
@@ -932,7 +935,7 @@ export function AgendaBoard({
                   <button
                     key={mode}
                     id={`agenda-view-${mode}`}
-                    className={viewStyles.viewTab}
+                    className={styles.viewTab}
                     type="button"
                     role="tab"
                     aria-selected={viewMode === mode}
@@ -970,7 +973,7 @@ export function AgendaBoard({
 
             <div
               id="agenda-view-panel"
-              className={viewStyles.viewPanel}
+              className={styles.viewPanel}
               role="tabpanel"
               aria-labelledby={`agenda-view-${viewMode}`}
             >
@@ -979,166 +982,194 @@ export function AgendaBoard({
           </section>
 
           <aside
-            className={`${styles.inspector} ${viewStyles.actionRail}`}
+            className={`${styles.inspector} ${styles.actionRail}`}
             aria-label="Agenda validation and publication"
           >
-            <section className={styles.inspectorCard} aria-labelledby="validation-heading">
-              <div className={styles.inspectorHeading}>
-                <div>
-                  <p className={styles.eyebrow}>Safety check</p>
-                  <h2 id="validation-heading">Validate draft</h2>
-                </div>
-                {preview?.draftVersion === data.draft.version ? (
-                  <span className={styles.validatedBadge}>Validated</span>
-                ) : (
-                  <span className={styles.draftBadge}>Needs validation</span>
-                )}
+            <div className={styles.operationalSequence}>
+              <div className={styles.sequenceHeader}>
+                <p className={styles.eyebrow}>Publish workflow</p>
+                <h2>From draft to public agenda</h2>
+                <p>Complete these steps in order. Suggestions remain optional and private.</p>
               </div>
-              <p>
-                Check room, speaker, resource, travel, track, and capacity rules against draft v
-                {data.draft.version}.
-              </p>
-              <button
-                className={styles.secondaryButton}
-                type="button"
-                disabled={busy || data.draft.entries.length === 0}
-                onClick={() => void onPreview()}
+
+              <section
+                className={`${styles.inspectorCard} ${styles.sequenceStep}`}
+                aria-labelledby="validation-heading"
               >
-                {isBusyFor("validate") ? "Checking..." : "Preview and validate"}
-              </button>
-              {preview ? (
-                <fieldset className={styles.diffSummary}>
-                  <legend className={styles.srOnly}>Changes from published revision</legend>
-                  <span>
-                    <strong>{preview.diff.added}</strong> added
-                  </span>
-                  <span>
-                    <strong>{preview.diff.changed}</strong> changed
-                  </span>
-                  <span>
-                    <strong>{preview.diff.removed}</strong> removed
-                  </span>
-                </fieldset>
-              ) : null}
-            </section>
-            {hasRooms ? (
-              <AgendaSuggestionPanel
-                run={suggestionRun ?? null}
-                currentDraftVersion={data.draft.version}
-                busy={busy}
-                busyOperation={busyOperation}
-                eligibleUnscheduledCount={data.unscheduledSessions.length}
-                selectedChangeIds={selectedSuggestionChanges}
-                onSelectionChange={setSelectedSuggestionChanges}
-                onGenerate={onGenerateSuggestion}
-                onRegenerate={onRegenerateSuggestion}
-                onReject={onRejectSuggestion}
-                onApply={onApplySuggestion}
-              />
-            ) : null}
-
-            {preview?.conflicts.length ? (
-              <section className={styles.conflictPanel} aria-labelledby="conflicts-heading">
-                <h2 id="conflicts-heading">
-                  {preview.conflicts.length} hard conflict
-                  {preview.conflicts.length === 1 ? "" : "s"}
-                </h2>
-                <p>Hard conflicts block publication and cannot be overridden.</p>
-                <ul>
-                  {preview.conflicts.map((conflict) => (
-                    <li key={conflict.id}>
-                      <strong>{conflict.kind.replace("_", " ")}</strong>
-                      <span>{conflict.message}</span>
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            ) : null}
-
-            {preview?.warnings.length ? (
-              <section className={styles.warningPanel} aria-labelledby="warnings-heading">
-                <h2 id="warnings-heading">
-                  {preview.warnings.length} warning{preview.warnings.length === 1 ? "" : "s"}
-                </h2>
-                <p>Warnings require a recorded organizer reason before publication.</p>
-                <ul>
-                  {preview.warnings.map((warning) => (
-                    <li key={warning.id}>
-                      <strong>{warning.kind}</strong>
-                      <span>{warning.message}</span>
-                      {warning.overridden ? (
-                        <p className={styles.overrideRecorded}>
-                          Override recorded: {warning.overrideReason}
-                        </p>
-                      ) : (
-                        <WarningOverrideForm
-                          busy={busy}
-                          onSubmit={async (reason) => {
-                            await onOverrideWarning(warning.id, reason);
-                          }}
-                        />
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            ) : null}
-
-            <section className={styles.publishCard} aria-labelledby="publish-heading">
-              <p className={styles.eyebrow}>Public revision</p>
-              <h2 id="publish-heading">Publish agenda</h2>
-              {currentRevision ? (
+                <div className={styles.stepHeader}>
+                  <span className={styles.stepNumber}>1</span>
+                  <div className={styles.inspectorHeading}>
+                    <div>
+                      <p className={styles.eyebrow}>Safety check</p>
+                      <h3 id="validation-heading">Validate draft</h3>
+                    </div>
+                    <span
+                      className={
+                        preview?.draftVersion === data.draft.version
+                          ? styles.validatedBadge
+                          : styles.draftBadge
+                      }
+                    >
+                      {preview?.draftVersion === data.draft.version
+                        ? "Validated"
+                        : "Needs validation"}
+                    </span>
+                  </div>
+                </div>
                 <p>
-                  Revision {currentRevision.number} is public with {currentRevision.sessionCount}
-                  sessions. Published {formatRevisionTimestamp(currentRevision.publishedAt)}.
+                  Check room, speaker, resource, travel, track, and capacity rules against draft v
+                  {data.draft.version}.
                 </p>
-              ) : (
-                <p>No agenda revision has been published. Public embeds remain unavailable.</p>
-              )}
-              {!readiness.ready ? (
-                <ul className={styles.readinessList} aria-label="Publication requirements">
-                  {readiness.reasons.map((reason) => (
-                    <li key={reason}>{reason}</li>
-                  ))}
-                </ul>
-              ) : (
-                <p className={styles.readyMessage}>
-                  Draft v{data.draft.version} is ready to publish.
-                </p>
-              )}
-              <button
-                className={styles.publishButton}
-                type="button"
-                disabled={busy || !readiness.ready}
-                onClick={() => void onPublish()}
-              >
-                {isBusyFor("publish") ? "Publishing..." : "Publish immutable revision"}
-              </button>
-              <small>
-                Publishing atomically updates the public projection and queues cache, calendar, and
-                integration notifications.
-              </small>
-            </section>
-
-            {data.revisions.length > 0 ? (
-              <section className={styles.historyCard} aria-labelledby="history-heading">
-                <h2 id="history-heading">Revision history</h2>
-                <ol>
-                  {data.revisions.map((revision) => (
-                    <li key={revision.id}>
-                      <div>
-                        <strong>Revision {revision.number}</strong>
-                        {revision.current ? <span>Current</span> : null}
-                      </div>
-                      <small>
-                        {revision.sessionCount} sessions,{" "}
-                        {formatRevisionTimestamp(revision.publishedAt)}
-                      </small>
-                    </li>
-                  ))}
-                </ol>
+                <button
+                  className={styles.secondaryButton}
+                  type="button"
+                  disabled={busy || data.draft.entries.length === 0}
+                  onClick={() => void onPreview()}
+                >
+                  {isBusyFor("validate") ? "Checking..." : "Preview and validate"}
+                </button>
+                {preview ? (
+                  <fieldset className={styles.diffSummary}>
+                    <legend className={styles.srOnly}>Changes from published revision</legend>
+                    <span>
+                      <strong>{preview.diff.added}</strong> added
+                    </span>
+                    <span>
+                      <strong>{preview.diff.changed}</strong> changed
+                    </span>
+                    <span>
+                      <strong>{preview.diff.removed}</strong> removed
+                    </span>
+                  </fieldset>
+                ) : null}
               </section>
-            ) : null}
+
+              {hasRooms ? (
+                <AgendaSuggestionPanel
+                  run={suggestionRun ?? null}
+                  currentDraftVersion={data.draft.version}
+                  busy={busy}
+                  busyOperation={busyOperation}
+                  eligibleUnscheduledCount={data.unscheduledSessions.length}
+                  selectedChangeIds={selectedSuggestionChanges}
+                  onSelectionChange={setSelectedSuggestionChanges}
+                  onGenerate={onGenerateSuggestion}
+                  onRegenerate={onRegenerateSuggestion}
+                  onReject={onRejectSuggestion}
+                  onApply={onApplySuggestion}
+                />
+              ) : null}
+
+              {preview?.conflicts.length ? (
+                <Alert variant="destructive" className={styles.conflictPanel}>
+                  <AlertTitle>
+                    {preview.conflicts.length} hard conflict
+                    {preview.conflicts.length === 1 ? "" : "s"}
+                  </AlertTitle>
+                  <AlertDescription>
+                    <p>Hard conflicts block publication and cannot be overridden.</p>
+                    <ul>
+                      {preview.conflicts.map((conflict) => (
+                        <li key={conflict.id}>
+                          <strong>{conflict.kind.replace("_", " ")}</strong>
+                          <span>{conflict.message}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+
+              {preview?.warnings.length ? (
+                <section className={styles.warningPanel} aria-labelledby="warnings-heading">
+                  <h2 id="warnings-heading">
+                    {preview.warnings.length} warning{preview.warnings.length === 1 ? "" : "s"}
+                  </h2>
+                  <p>Warnings require a recorded organizer reason before publication.</p>
+                  <ul>
+                    {preview.warnings.map((warning) => (
+                      <li key={warning.id}>
+                        <strong>{warning.kind}</strong>
+                        <span>{warning.message}</span>
+                        {warning.overridden ? (
+                          <p className={styles.overrideRecorded}>
+                            Override recorded: {warning.overrideReason}
+                          </p>
+                        ) : (
+                          <WarningOverrideForm
+                            busy={busy}
+                            onSubmit={async (reason) => {
+                              await onOverrideWarning(warning.id, reason);
+                            }}
+                          />
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ) : null}
+
+              <Card className={`${styles.publishCard} ${styles.sequenceStep}`} size="sm">
+                <div className={styles.stepHeader}>
+                  <span className={styles.stepNumber}>3</span>
+                  <div>
+                    <p className={styles.eyebrow}>Public revision</p>
+                    <h3 id="publish-heading">Publish agenda</h3>
+                  </div>
+                </div>
+                {currentRevision ? (
+                  <p>
+                    Revision {currentRevision.number} is public with {currentRevision.sessionCount}
+                    sessions. Published {formatRevisionTimestamp(currentRevision.publishedAt)}.
+                  </p>
+                ) : (
+                  <p>No agenda revision has been published. Public embeds remain unavailable.</p>
+                )}
+                {!readiness.ready ? (
+                  <ul className={styles.readinessList} aria-label="Publication requirements">
+                    {readiness.reasons.map((reason) => (
+                      <li key={reason}>{reason}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className={styles.readyMessage}>
+                    Draft v{data.draft.version} is ready to publish.
+                  </p>
+                )}
+                <Button
+                  className={styles.publishButton}
+                  type="button"
+                  disabled={busy || !readiness.ready}
+                  onClick={() => void onPublish()}
+                >
+                  {isBusyFor("publish") ? "Publishing..." : "Publish agenda"}
+                </Button>
+                <small>
+                  Publishing creates an immutable public revision while keeping this private draft
+                  available for further edits.
+                </small>
+              </Card>
+
+              {data.revisions.length > 0 ? (
+                <section className={styles.historyCard} aria-labelledby="history-heading">
+                  <h2 id="history-heading">Revision history</h2>
+                  <ol>
+                    {data.revisions.map((revision) => (
+                      <li key={revision.id}>
+                        <div>
+                          <strong>Revision {revision.number}</strong>
+                          {revision.current ? <span>Current</span> : null}
+                        </div>
+                        <small>
+                          {revision.sessionCount} sessions,{" "}
+                          {formatRevisionTimestamp(revision.publishedAt)}
+                        </small>
+                      </li>
+                    ))}
+                  </ol>
+                </section>
+              ) : null}
+            </div>
           </aside>
         </div>
       </main>
@@ -1192,6 +1223,10 @@ export function AgendaSuggestionPanel({
     useState<ExistingSessionTimesSelection>("keep");
   const [ignoreExistingRooms, setIgnoreExistingRooms] = useState(false);
   const suggestionOptionsDisabled = busy || onGenerate === undefined;
+  const [suggestionsOpen, setSuggestionsOpen] = useState(run !== null);
+  useEffect(() => {
+    if (run !== null) setSuggestionsOpen(true);
+  }, [run]);
 
   function toggleChange(changeId: string) {
     onSelectionChange(
@@ -1202,194 +1237,217 @@ export function AgendaSuggestionPanel({
   }
 
   return (
-    <section className={styles.inspectorCard} aria-labelledby="suggestion-heading">
-      <div className={styles.inspectorHeading}>
-        <div>
-          <p className={styles.eyebrow}>Advisory assistant</p>
-          <h2 id="suggestion-heading">Private agenda suggestions</h2>
-        </div>
-        {run ? <span className={styles.draftBadge}>Run v{run.version}</span> : null}
-      </div>
-      <p>
-        Suggestions are private candidates only. They never change this draft or publish anything
-        until an organizer explicitly selects and applies individual changes.
-      </p>
-      {run === null ? (
-        eligibleUnscheduledCount === 0 ? (
-          <div className={viewStyles.suggestionEmpty} role="status">
-            <strong>No eligible unscheduled sessions</strong>
-            <p>
-              No eligible unscheduled accepted sessions are currently available. Accept a session
-              before generating private placement suggestions. The current draft already contains
-              every accepted session available to this assistant.
-            </p>
+    <Card className={styles.inspectorCard} size="sm">
+      <Collapsible open={suggestionsOpen} onOpenChange={setSuggestionsOpen}>
+        <div className={styles.stepHeader}>
+          <span className={styles.stepNumber}>2</span>
+          <div className={styles.inspectorHeading}>
+            <div>
+              <p className={styles.eyebrow}>Optional advisory</p>
+              <h2 id="suggestion-heading">Suggestions</h2>
+            </div>
+            {run ? <Badge variant="outline">Run v{run.version}</Badge> : null}
           </div>
-        ) : (
-          <>
-            <p role="status">No advisory suggestion run has been generated.</p>
-            <div className={viewStyles.suggestionOptions}>
-              <fieldset className={viewStyles.scheduleOptions}>
-                <legend>Existing session times</legend>
-                <label
-                  className={`${viewStyles.scheduleOption} ${
-                    existingSessionTimes === "keep" ? viewStyles.scheduleOptionSelected : ""
-                  }`}
+        </div>
+        <p>
+          Suggestions are private candidates only. They never change this draft or publish anything
+          until an organizer explicitly selects and applies individual changes.
+        </p>
+        <CollapsibleTrigger asChild>
+          <Button className={styles.suggestionToggle} variant="outline" type="button">
+            {suggestionsOpen
+              ? "Hide suggestions"
+              : run
+                ? "Review suggestions"
+                : "Configure suggestions"}
+          </Button>
+        </CollapsibleTrigger>
+        <CollapsibleContent className={styles.suggestionContent}>
+          {run === null ? (
+            eligibleUnscheduledCount === 0 ? (
+              <div className={styles.suggestionEmpty} role="status">
+                <strong>No eligible unscheduled sessions</strong>
+                <p>
+                  No eligible unscheduled accepted sessions are currently available. Accept a
+                  session before generating private placement suggestions. The current draft already
+                  contains every accepted session available to this assistant.
+                </p>
+              </div>
+            ) : (
+              <>
+                <p role="status">No advisory suggestion run has been generated.</p>
+                <div className={styles.suggestionOptions}>
+                  <fieldset className={styles.scheduleOptions}>
+                    <legend>Existing session times</legend>
+                    <label
+                      className={`${styles.scheduleOption} ${
+                        existingSessionTimes === "keep" ? styles.scheduleOptionSelected : ""
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="existing-session-times"
+                        value="keep"
+                        checked={existingSessionTimes === "keep"}
+                        disabled={suggestionOptionsDisabled}
+                        onChange={() => setExistingSessionTimes("keep")}
+                      />
+                      <span className={styles.scheduleOptionCopy}>
+                        <strong>Keep scheduled sessions fixed</strong>
+                        <small>The generator preserves their current times.</small>
+                      </span>
+                    </label>
+                    <label
+                      className={`${styles.scheduleOption} ${
+                        existingSessionTimes === "move" ? styles.scheduleOptionSelected : ""
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="existing-session-times"
+                        value="move"
+                        checked={existingSessionTimes === "move"}
+                        disabled={suggestionOptionsDisabled}
+                        onChange={() => setExistingSessionTimes("move")}
+                      />
+                      <span className={styles.scheduleOptionCopy}>
+                        <strong>Allow scheduled sessions to move</strong>
+                        <small>The generator may assign them different times.</small>
+                      </span>
+                    </label>
+                  </fieldset>
+                  <fieldset className={styles.roomOptions}>
+                    <legend>Existing room occupancy</legend>
+                    <label className={styles.roomOption}>
+                      <input
+                        type="checkbox"
+                        checked={ignoreExistingRooms}
+                        disabled={suggestionOptionsDisabled}
+                        onChange={(event) => setIgnoreExistingRooms(event.target.checked)}
+                      />
+                      <span className={styles.scheduleOptionCopy}>
+                        <strong>Ignore existing room occupancy when generating</strong>
+                        <small>
+                          The generator may place sessions in rooms that already have a scheduled
+                          session.
+                        </small>
+                      </span>
+                    </label>
+                  </fieldset>
+                </div>
+                <Button
+                  variant="outline"
+                  type="button"
+                  disabled={suggestionOptionsDisabled}
+                  onClick={() =>
+                    onGenerate
+                      ? void onGenerate(
+                          serializeAgendaSuggestionOptions(
+                            existingSessionTimes,
+                            ignoreExistingRooms,
+                          ),
+                        )
+                      : undefined
+                  }
                 >
-                  <input
-                    type="radio"
-                    name="existing-session-times"
-                    value="keep"
-                    checked={existingSessionTimes === "keep"}
-                    disabled={suggestionOptionsDisabled}
-                    onChange={() => setExistingSessionTimes("keep")}
-                  />
-                  <span className={viewStyles.scheduleOptionCopy}>
-                    <strong>Keep scheduled sessions fixed</strong>
-                    <small>The generator preserves their current times.</small>
-                  </span>
-                </label>
-                <label
-                  className={`${viewStyles.scheduleOption} ${
-                    existingSessionTimes === "move" ? viewStyles.scheduleOptionSelected : ""
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="existing-session-times"
-                    value="move"
-                    checked={existingSessionTimes === "move"}
-                    disabled={suggestionOptionsDisabled}
-                    onChange={() => setExistingSessionTimes("move")}
-                  />
-                  <span className={viewStyles.scheduleOptionCopy}>
-                    <strong>Allow scheduled sessions to move</strong>
-                    <small>The generator may assign them different times.</small>
-                  </span>
-                </label>
-              </fieldset>
-              <fieldset className={viewStyles.roomOptions}>
-                <legend>Existing room occupancy</legend>
-                <label className={viewStyles.roomOption}>
-                  <input
-                    type="checkbox"
-                    checked={ignoreExistingRooms}
-                    disabled={suggestionOptionsDisabled}
-                    onChange={(event) => setIgnoreExistingRooms(event.target.checked)}
-                  />
-                  <span className={viewStyles.scheduleOptionCopy}>
-                    <strong>Ignore existing room occupancy when generating</strong>
-                    <small>
-                      The generator may place sessions in rooms that already have a scheduled
-                      session.
-                    </small>
-                  </span>
-                </label>
-              </fieldset>
-            </div>
-            <button
-              className={styles.secondaryButton}
-              type="button"
-              disabled={suggestionOptionsDisabled}
-              onClick={() =>
-                onGenerate
-                  ? void onGenerate(
-                      serializeAgendaSuggestionOptions(existingSessionTimes, ignoreExistingRooms),
-                    )
-                  : undefined
-              }
-            >
-              {isBusyFor("generate-suggestion") ? "Generating..." : "Generate private suggestions"}
-            </button>
-            {onGenerate === undefined ? (
-              <small>
-                Suggestion generation is unavailable until an approved provider is connected.
-              </small>
-            ) : null}
-          </>
-        )
-      ) : (
-        <>
-          <p role="status" aria-live="polite">
-            Suggestion run v{run.version} is {run.status}. Base draft revision: v
-            {run.baseDraftVersion}.
-          </p>
-          {stale ? (
-            <p className={styles.inlineConflict} role="alert">
-              The draft has changed since this run was generated. Regenerate before applying.
-            </p>
-          ) : null}
-          <p>{run.diff.summary}</p>
-          {run.status === "pending" && run.diff.changes.length === 0 ? (
-            <p className={viewStyles.suggestionEmpty} role="status">
-              No eligible unscheduled sessions produced a proposal. Accept another session or
-              regenerate after changing the schedule context.
-            </p>
-          ) : null}
-          {run.status === "pending" && run.diff.changes.length > 0 ? (
-            <fieldset className={styles.overrideForm}>
-              <legend>Choose changes for human application</legend>
-              {run.diff.changes.map((change) => (
-                <label key={change.id}>
-                  <input
-                    type="checkbox"
-                    checked={selectedChangeIds.includes(change.id)}
-                    onChange={() => toggleChange(change.id)}
-                  />
-                  <span>
-                    <strong>{change.kind}</strong> {change.summary}
-                  </span>
-                </label>
-              ))}
-            </fieldset>
-          ) : null}
-          {blockers.length > 0 ? (
-            <div className={styles.conflictPanel} role="alert">
-              <strong>
-                {blockers.length} hard blocker{blockers.length === 1 ? "" : "s"} prevent application
-              </strong>
-              <p>Resolve blockers in the draft and regenerate. They cannot be overridden by AI.</p>
-              <ul>
-                {blockers.map((blocker) => (
-                  <li key={blocker.id}>{blocker.message}</li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
-          {run.status === "pending" ? (
-            <div className={styles.formActions}>
-              <button
-                className={styles.secondaryButton}
-                type="button"
-                disabled={busy || onRegenerate === undefined}
-                onClick={() => (onRegenerate ? void onRegenerate() : undefined)}
-              >
-                {isBusyFor("regenerate-suggestion") ? "Regenerating..." : "Regenerate"}
-              </button>
-              <button
-                className={styles.textButton}
-                type="button"
-                disabled={busy || onReject === undefined}
-                onClick={() => (onReject ? void onReject() : undefined)}
-              >
-                Reject run
-              </button>
-              <button
-                className={styles.primaryButton}
-                type="button"
-                disabled={!canApply}
-                onClick={() => (onApply ? void onApply(selectedAvailableChangeIds) : undefined)}
-              >
-                {isBusyFor("apply-suggestion") ? "Applying..." : "Apply selected changes"}
-              </button>
-            </div>
+                  {isBusyFor("generate-suggestion")
+                    ? "Generating..."
+                    : "Generate private suggestions"}
+                </Button>
+                {onGenerate === undefined ? (
+                  <small>
+                    Suggestion generation is unavailable until an approved provider is connected.
+                  </small>
+                ) : null}
+              </>
+            )
           ) : (
-            <small>
-              This run is closed. Generate or regenerate a new private candidate to continue.
-            </small>
+            <>
+              <p role="status" aria-live="polite">
+                Suggestion run v{run.version} is {run.status}. Base draft revision: v
+                {run.baseDraftVersion}.
+              </p>
+              {stale ? (
+                <p className={styles.inlineConflict} role="alert">
+                  The draft has changed since this run was generated. Regenerate before applying.
+                </p>
+              ) : null}
+              <p>{run.diff.summary}</p>
+              {run.status === "pending" && run.diff.changes.length === 0 ? (
+                <p className={styles.suggestionEmpty} role="status">
+                  No eligible unscheduled sessions produced a proposal. Accept another session or
+                  regenerate after changing the schedule context.
+                </p>
+              ) : null}
+              {run.status === "pending" && run.diff.changes.length > 0 ? (
+                <fieldset className={styles.overrideForm}>
+                  <legend>Choose changes for human application</legend>
+                  {run.diff.changes.map((change) => (
+                    <label key={change.id}>
+                      <input
+                        type="checkbox"
+                        checked={selectedChangeIds.includes(change.id)}
+                        onChange={() => toggleChange(change.id)}
+                      />
+                      <span>
+                        <strong>{change.kind}</strong> {change.summary}
+                      </span>
+                    </label>
+                  ))}
+                </fieldset>
+              ) : null}
+              {blockers.length > 0 ? (
+                <div className={styles.conflictPanel} role="alert">
+                  <strong>
+                    {blockers.length} hard blocker{blockers.length === 1 ? "" : "s"} prevent
+                    application
+                  </strong>
+                  <p>
+                    Resolve blockers in the draft and regenerate. They cannot be overridden by AI.
+                  </p>
+                  <ul>
+                    {blockers.map((blocker) => (
+                      <li key={blocker.id}>{blocker.message}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {run.status === "pending" ? (
+                <div className={styles.formActions}>
+                  <Button
+                    variant="outline"
+                    type="button"
+                    disabled={busy || onRegenerate === undefined}
+                    onClick={() => (onRegenerate ? void onRegenerate() : undefined)}
+                  >
+                    {isBusyFor("regenerate-suggestion") ? "Regenerating..." : "Regenerate"}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    type="button"
+                    disabled={busy || onReject === undefined}
+                    onClick={() => (onReject ? void onReject() : undefined)}
+                  >
+                    Reject run
+                  </Button>
+                  <Button
+                    type="button"
+                    disabled={!canApply}
+                    onClick={() => (onApply ? void onApply(selectedAvailableChangeIds) : undefined)}
+                  >
+                    {isBusyFor("apply-suggestion") ? "Applying..." : "Apply selected changes"}
+                  </Button>
+                </div>
+              ) : (
+                <small>
+                  This run is closed. Generate or regenerate a new private candidate to continue.
+                </small>
+              )}
+            </>
           )}
-        </>
-      )}
-    </section>
+        </CollapsibleContent>
+      </Collapsible>
+    </Card>
   );
 }
 function WarningOverrideForm({
@@ -1503,7 +1561,9 @@ function ScopedAgendaWorkspace({
         return localDemoApiRef.current.api;
       }
       const environment = await resolveAgendaAppEnvironment(appEnvironment, signal);
-      const localApi = createLocalAgendaDemoApi(environment, eventId);
+      const fixtureMode =
+        process.env.NODE_ENV === "test" || process.env.NEXT_PUBLIC_RUNTIME_PROFILE === "fixture";
+      const localApi = fixtureMode ? createLocalAgendaDemoApi(environment, eventId) : null;
       if (localApi) {
         localDemoApiRef.current = { eventId, api: localApi };
       }

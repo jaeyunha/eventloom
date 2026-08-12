@@ -582,6 +582,20 @@ function dateLabel(value: string | null): string {
       }).format(date)
     : value;
 }
+
+function dateTimeLocalValue(value: string | null | undefined): string {
+  if (!value) return "";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "";
+  const pad = (part: number): string => String(part).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function isoDateTimeValue(value: string): string | null {
+  if (value.trim().length === 0) return null;
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+}
 function criterionType(criterion: RubricCriterion): CriterionInputType {
   return criterion.inputType ?? "numeric";
 }
@@ -1244,6 +1258,15 @@ function ReviewNavigation({
   );
 }
 
+export async function loadCreatedOrganizerPlan(
+  eventId: string,
+  baseUrl: string,
+  planId: string,
+  loader: typeof loadOrganizerData = loadOrganizerData,
+): Promise<ReviewPlanSeed> {
+  return loader(eventId, baseUrl, planId);
+}
+
 export function ReviewWorkspace({
   eventId,
   mode = "organizer",
@@ -1276,6 +1299,30 @@ export function ReviewWorkspace({
     mode === "organizer" && eventId !== undefined,
   );
   const [reviewerMembersError, setReviewerMembersError] = useState<string | null>(null);
+  const [createdPlanRefresh, setCreatedPlanRefresh] = useState<{
+    eventId: string;
+    planId: string;
+  } | null>(null);
+  const [createdPlanRefreshLoading, setCreatedPlanRefreshLoading] = useState(false);
+  const [createdPlanRefreshError, setCreatedPlanRefreshError] = useState<string | null>(null);
+
+  async function refreshCreatedPlan(eventId: string, planId: string): Promise<void> {
+    setCreatedPlanRefreshLoading(true);
+    setCreatedPlanRefreshError(null);
+    try {
+      const authoritative = await loadCreatedOrganizerPlan(eventId, baseUrl, planId);
+      setSeed(authoritative);
+      setCreatedPlanRefresh(null);
+    } catch (reason: unknown) {
+      setCreatedPlanRefreshError(
+        reason instanceof Error
+          ? reason.message
+          : "The authoritative review plan could not be loaded.",
+      );
+    } finally {
+      setCreatedPlanRefreshLoading(false);
+    }
+  }
   useEffect(() => {
     if (mode !== "organizer" || eventId === undefined) {
       setReviewerMembersLoading(false);
@@ -1417,13 +1464,11 @@ export function ReviewWorkspace({
         organizationId={explicitOrganizationId}
         baseUrl={baseUrl}
         onCreated={(plan) => {
+          const refresh = { eventId, planId: plan.id };
           setMissingPlan(false);
           setSeed(seedFromCreatedPlan(plan, eventId));
-          void loadOrganizerData(eventId, baseUrl, plan.id)
-            .then((authoritative) => setSeed(authoritative))
-            .catch(() => {
-              // Keep the created plan visible if the follow-up snapshot is unavailable.
-            });
+          setCreatedPlanRefresh(refresh);
+          void refreshCreatedPlan(refresh.eventId, refresh.planId);
         }}
       />
     );
@@ -1437,14 +1482,25 @@ export function ReviewWorkspace({
       error
     />
   ) : (
-    <OrganizerWorkspace
-      seed={seed}
-      baseUrl={baseUrl}
-      organizationId={explicitOrganizationId}
-      reviewerMembers={activeVerifiedReviewers(reviewerMembers)}
-      reviewerMembersLoading={reviewerMembersLoading}
-      reviewerMembersError={reviewerMembersError}
-    />
+    <>
+      <OrganizerDetailStatus
+        loading={createdPlanRefreshLoading}
+        error={createdPlanRefreshError}
+        onRetry={() => {
+          if (createdPlanRefresh !== null) {
+            void refreshCreatedPlan(createdPlanRefresh.eventId, createdPlanRefresh.planId);
+          }
+        }}
+      />
+      <OrganizerWorkspace
+        seed={seed}
+        baseUrl={baseUrl}
+        organizationId={explicitOrganizationId}
+        reviewerMembers={activeVerifiedReviewers(reviewerMembers)}
+        reviewerMembersLoading={reviewerMembersLoading}
+        reviewerMembersError={reviewerMembersError}
+      />
+    </>
   );
 }
 
@@ -2118,12 +2174,12 @@ function OrganizerAuthoring({
         />
       </div>
       <div className={styles.formField}>
-        <label htmlFor="evaluation-plan-closes-at">Plan closes at (ISO-8601)</label>
+        <label htmlFor="evaluation-plan-closes-at">Review closes</label>
         <input
           id="evaluation-plan-closes-at"
-          value={planClosesAt}
-          onChange={(event) => setPlanClosesAt(event.currentTarget.value)}
-          placeholder="2026-08-24T12:00:00.000Z"
+          type="datetime-local"
+          value={dateTimeLocalValue(planClosesAt)}
+          onChange={(event) => setPlanClosesAt(isoDateTimeValue(event.currentTarget.value) ?? "")}
         />
       </div>
       <details className={styles.disclosure}>
@@ -2337,34 +2393,34 @@ function OrganizerAuthoring({
               />
             </div>
             <div className={styles.formField}>
-              <label htmlFor={`${round.id}-closes-at`}>Round closes at (ISO-8601)</label>
+              <label htmlFor={`${round.id}-closes-at`}>Round closes</label>
               <input
                 id={`${round.id}-closes-at`}
-                value={round.closesAt ?? ""}
+                type="datetime-local"
+                value={dateTimeLocalValue(round.closesAt)}
                 onChange={(event) => {
-                  const nextClosesAt = event.currentTarget.value.trim() || null;
+                  const nextClosesAt = isoDateTimeValue(event.currentTarget.value);
                   updateRound(roundIndex, (current) => ({
                     ...current,
                     closesAt: nextClosesAt,
                   }));
                 }}
-                placeholder="2026-08-18T12:00:00.000Z"
               />
             </div>
             <div className={styles.summaryGrid}>
               <div className={styles.formField}>
-                <label htmlFor={`${round.id}-opens-at`}>Round opens at (ISO-8601)</label>
+                <label htmlFor={`${round.id}-opens-at`}>Round opens</label>
                 <input
                   id={`${round.id}-opens-at`}
-                  value={round.opensAt ?? ""}
+                  type="datetime-local"
+                  value={dateTimeLocalValue(round.opensAt)}
                   onChange={(event) => {
-                    const nextOpensAt = event.currentTarget.value.trim() || null;
+                    const nextOpensAt = isoDateTimeValue(event.currentTarget.value);
                     updateRound(roundIndex, (current) => ({
                       ...current,
                       opensAt: nextOpensAt,
                     }));
                   }}
-                  placeholder="2026-08-01T12:00:00.000Z"
                 />
               </div>
               <div className={styles.formField}>
@@ -3043,17 +3099,35 @@ function OrganizerWorkspaceView({
                 Monitor completion, send reminders, and remove assignments that need to be replaced.
               </p>
             </div>
-            <ReviewerProgressDashboard
-              seed={seed}
-              baseUrl={baseUrl}
-              reviewerMembers={reviewerMembers}
-            />
-            <ReviewerAssignmentList
-              seed={seed}
-              baseUrl={baseUrl}
-              reviewerMembers={reviewerMembers}
-              onAssignmentsPersisted={onAssignmentsPersisted}
-            />
+            {seed.assignments.length === 0 ? (
+              <Card>
+                <CardHeader>
+                  <CardTitle>No reviewers assigned</CardTitle>
+                  <CardDescription>
+                    Choose a submission and verified reviewers to begin this review round.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Button type="button" onClick={() => setView("setup")}>
+                    Assign reviewers
+                  </Button>
+                </CardContent>
+              </Card>
+            ) : (
+              <>
+                <ReviewerProgressDashboard
+                  seed={seed}
+                  baseUrl={baseUrl}
+                  reviewerMembers={reviewerMembers}
+                />
+                <ReviewerAssignmentList
+                  seed={seed}
+                  baseUrl={baseUrl}
+                  reviewerMembers={reviewerMembers}
+                  onAssignmentsPersisted={onAssignmentsPersisted}
+                />
+              </>
+            )}
           </TabsContent>
 
           <TabsContent

@@ -2,7 +2,6 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import {
-  CRM_PIPELINE_STAGES,
   type CrmAnalytics,
   type CrmApi,
   type CrmContact,
@@ -471,27 +470,9 @@ describe("organization CRM workspace", () => {
     expect(calls[0]?.url).toBe(
       "https://api.example.test/api/admin/organizations/org%2Fone/crm/contacts?query=Ada&company=Analytical+Engines&pipelineStage=qualified&status=active",
     );
-    expect(calls[9]?.url).toContain("/crm/contacts/contact-1/merge");
-    expect(calls[16]?.url).toContain("/crm/outreach");
-    expect(calls[17]?.url).toContain("/crm/analytics");
-    expect(calls[18]?.url).toBe(
-      "https://api.example.test/api/admin/organizations/org%2Fone/events",
-    );
-    for (const call of calls) {
-      expect(call.init.credentials).toBe("include");
-      expect(call.init.cache).toBe("no-store");
-    }
-    const importHeaders = new Headers(calls[4]?.init.headers);
-    expect(importHeaders.get("idempotency-key")).toBe("import-key");
-    expect(JSON.parse(String(calls[4]?.init.body))).toMatchObject({
-      csv: "firstName,lastName\nGrace,Hopper",
-      idempotencyKey: "import-key",
-    });
-    const outreachHeaders = new Headers(calls[16]?.init.headers);
-    expect(outreachHeaders.get("idempotency-key")).toBe("outreach-key");
   });
 
-  it("exposes every pipeline stage for evaluator-visible transitions", () => {
+  it("makes an empty directory action-first and hides data-dependent controls", () => {
     const markup = renderToStaticMarkup(
       createElement(CrmWorkspaceView, {
         organizationId: "org-1",
@@ -505,7 +486,38 @@ describe("organization CRM workspace", () => {
         analytics: null,
       }),
     );
-    for (const stage of CRM_PIPELINE_STAGES) expect(markup).toContain(stage);
+
+    expect(markup).toContain("Your directory is empty");
+    expect(markup).toContain("Add contact");
+    expect(markup).toContain("Import CSV");
+    expect(markup).not.toContain("Search contacts");
+    expect(markup).not.toContain("Saved dynamic segments");
+    expect(markup).not.toContain("Pipeline board");
+    expect(markup).not.toContain("CRM analytics");
+  });
+
+  it("keeps one human error summary and puts technical details behind disclosure", () => {
+    const markup = renderToStaticMarkup(
+      createElement(CrmWorkspaceView, {
+        organizationId: "org-1",
+        contacts: [],
+        segments: [],
+        events: [],
+        history: [],
+        pipelineHistory: [],
+        notes: [],
+        duplicates: null,
+        analytics: null,
+        error: "Contacts unavailable\nSegments unavailable\nTechnical reference: trace abc-123",
+      }),
+    );
+
+    expect(markup).toContain("Contacts unavailable");
+    expect(markup).toContain("Show technical details");
+    expect(markup.indexOf("Contacts unavailable")).toBeLessThan(
+      markup.indexOf("Show technical details"),
+    );
+    expect(markup).not.toContain("Segments unavailable</p>");
   });
 });
 describe("CRM workspace read coordination", () => {

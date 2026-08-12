@@ -73,6 +73,7 @@ import {
 export interface ApiBindings {
   APP_ENV: string;
   WEB_ORIGIN: string;
+  RUNTIME_PROFILE?: string;
 }
 
 type ApiVariables = {
@@ -683,6 +684,14 @@ export function createApp<
       service: "api",
       version: "0.1.0",
       environment: environment.data.APP_ENV,
+      ...(environment.data.APP_ENV === "local"
+        ? {
+            runtimeProfile:
+              context.env.RUNTIME_PROFILE?.trim().toLowerCase() === "fixture"
+                ? ("fixture" as const)
+                : ("integrated" as const),
+          }
+        : {}),
       timestamp: new Date().toISOString(),
       traceId,
     };

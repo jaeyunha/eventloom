@@ -106,6 +106,123 @@ describe("organizer session settings domain", () => {
     ).rejects.toMatchObject({ code: "NOT_FOUND", status: 404 });
     expect(updated.roomId).toBe(room.id);
   });
+  it("preserves stale retained references on content-only updates and validates replacements", async () => {
+    const { repository, service } = setup();
+    const organizer = actor();
+    const room = await service.createRoom(organizer, {
+      eventId: "event-a",
+      id: "stale-room",
+      name: "Stale room",
+      capacity: 20,
+    });
+    const track = await service.createTrack(organizer, {
+      eventId: "event-a",
+      id: "stale-track",
+      name: "Stale track",
+    });
+    const format = await service.createFormat(organizer, {
+      eventId: "event-a",
+      id: "stale-format",
+      name: "Stale format",
+    });
+    const level = await service.createLevel(organizer, {
+      eventId: "event-a",
+      id: "stale-level",
+      name: "Stale level",
+    });
+    const tag = await service.createTag(organizer, {
+      eventId: "event-a",
+      id: "stale-tag",
+      name: "Stale tag",
+    });
+    const session = await service.createSession(organizer, {
+      eventId: "event-a",
+      id: "stale-references-session",
+      title: "Original title",
+      description: "Original description",
+      durationMinutes: 30,
+      roomId: room.id,
+      trackId: track.id,
+      formatId: format.id,
+      levelId: level.id,
+      tagIds: [tag.id],
+      speakerIds: ["speaker-1"],
+      resourceIds: ["stale-resource"],
+      status: "Accepted",
+    });
+
+    await repository.deleteRoom("tenant-a", "event-a", room.id, room.version);
+    await repository.deleteTrack("tenant-a", "event-a", track.id, track.version);
+    await repository.deleteFormat("tenant-a", "event-a", format.id, format.version);
+    await repository.deleteLevel("tenant-a", "event-a", level.id, level.version);
+    await repository.deleteTag("tenant-a", "event-a", tag.id, tag.version);
+    repository.setSpeakerIds("tenant-a", "event-a", ["speaker-2"]);
+
+    const updated = await service.updateSession(organizer, {
+      eventId: "event-a",
+      sessionId: session.id,
+      expectedVersion: session.version,
+      title: "Updated title",
+      description: "Updated description",
+      contentStatus: "Approved",
+    });
+    expect(updated).toMatchObject({
+      title: "Updated title",
+      description: "Updated description",
+      contentStatus: "Approved",
+      version: 2,
+      roomId: room.id,
+      trackId: track.id,
+      formatId: format.id,
+      levelId: level.id,
+      tagIds: [tag.id],
+      speakerIds: ["speaker-1"],
+      resourceIds: ["stale-resource"],
+    });
+    expect(updated.trackIds).toEqual([track.id]);
+    expect(updated.speakerRoster).toEqual([{ id: "speaker-1" }]);
+
+    await expect(
+      service.updateSession(organizer, {
+        eventId: "event-a",
+        sessionId: session.id,
+        expectedVersion: updated.version,
+        trackId: "unknown-track",
+      }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND", status: 404 });
+
+    await expect(
+      service.updateSession(organizer, {
+        eventId: "event-a",
+        sessionId: session.id,
+        expectedVersion: session.version,
+        title: "Stale version",
+      }),
+    ).rejects.toMatchObject({ code: "VERSION_CONFLICT", status: 409 });
+
+    await expect(
+      service.updateSession(actor("tenant-b"), {
+        eventId: "event-a",
+        sessionId: session.id,
+        expectedVersion: updated.version,
+        title: "Cross-tenant update",
+      }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND", status: 404 });
+
+    const persisted = await repository.getSession("tenant-a", "event-a", session.id);
+    expect(persisted).toMatchObject({
+      version: updated.version,
+      title: updated.title,
+      trackId: track.id,
+      trackIds: [track.id],
+      roomId: room.id,
+      formatId: format.id,
+      levelId: level.id,
+      tagIds: [tag.id],
+      speakerIds: ["speaker-1"],
+      resourceIds: ["stale-resource"],
+    });
+  });
   it("starts session list reads before agenda initialization settles", async () => {
     const { repository, service: seedService } = setup();
     const seeded = await seedService.createSession(actor(), {

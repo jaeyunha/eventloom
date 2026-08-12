@@ -797,8 +797,11 @@ function requireUrl(value: string | undefined, label: string): URL {
       cause,
     });
   }
+  const localHttp =
+    url.protocol === "http:" &&
+    (url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]");
   if (
-    (url.protocol !== "https:" && !(url.protocol === "http:" && url.hostname === "localhost")) ||
+    (url.protocol !== "https:" && !localHttp) ||
     url.username.length > 0 ||
     url.password.length > 0 ||
     url.search.length > 0 ||

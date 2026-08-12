@@ -534,7 +534,7 @@ async function expectAgendaWorkspace(page: Page): Promise<void> {
   await expect(page.getByRole("heading", { level: 2, name: "Draft schedule" })).toBeVisible();
   await expect(page.getByRole("tablist", { name: "Schedule view" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Preview and validate" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Publish immutable revision" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Publish agenda" })).toBeVisible();
   await expect(
     page.getByRole("heading", { level: 1, name: "Agenda workspace unavailable" }),
   ).toHaveCount(0);

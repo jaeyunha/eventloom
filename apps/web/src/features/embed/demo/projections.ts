@@ -139,7 +139,10 @@ export function createLocalDemoSpeakerGallery(eventSlug: string): PublishedSpeak
 }
 
 export function isLocalEmbedDemoEnvironment(appEnv: string | undefined): boolean {
-  return appEnv === "local";
+  return (
+    appEnv === "local" &&
+    (process.env.NODE_ENV === "test" || process.env.NEXT_PUBLIC_RUNTIME_PROFILE === "fixture")
+  );
 }
 
 export function shouldUseLocalEmbedDemoForError(

@@ -1,47 +1,838 @@
 @import "../../styles/tokens.css";
-.actionRail {
-  position: sticky;
-  z-index: 1;
-  top: clamp(5.25rem, 7vw, 5.75rem);
-  align-self: start;
-  max-height: calc(100vh - clamp(6.25rem, 8vw, 6.75rem));
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scroll-padding-block: 0.5rem;
-  scroll-margin-top: clamp(5.25rem, 7vw, 5.75rem);
+
+.workspaceRoot {
+  min-height: 100vh;
+  overflow-x: clip;
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
 }
 
-.suggestionEmpty {
+.skipLink {
+  position: fixed;
+  z-index: 100;
+  top: 0.75rem;
+  left: 0.75rem;
+  padding: 0.6rem 0.85rem;
+  border-radius: var(--radius-sm);
+  background: var(--color-ink);
+  color: var(--color-surface);
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-decoration: none;
+  transform: translateY(-200%);
+}
+
+.skipLink:focus {
+  transform: translateY(0);
+}
+
+.topbar {
+  display: flex;
+  min-height: 4rem;
+  gap: 1.5rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 2rem;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.brand {
+  color: var(--color-ink);
+  font-size: 0.9rem;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  text-decoration: none;
+}
+
+.topbar nav {
+  display: flex;
+  gap: 0.2rem;
+}
+
+.topbar nav a {
+  padding: 0.45rem 0.7rem;
+  border-radius: var(--radius-sm);
+  color: var(--color-muted);
+  font-size: 0.8rem;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.topbar nav a:hover,
+.topbar nav a[aria-current="page"] {
+  background: var(--color-brand-soft);
+  color: var(--color-ink);
+}
+
+.workspace {
+  width: min(calc(100% - 2rem), 96rem);
+  min-width: 0;
+  max-width: none;
+  margin-inline: auto;
+  padding: 2rem 0 4rem;
+}
+
+.pageHeading {
+  display: flex;
+  gap: 2rem;
+  align-items: flex-end;
+  justify-content: space-between;
+  margin-bottom: 1.5rem;
+}
+
+.pageHeading h1,
+.sectionHeading h2,
+.inspector h2,
+.day h3,
+.addPanel h3 {
+  max-width: none;
+  margin: 0;
+  letter-spacing: -0.035em;
+  line-height: 1.15;
+}
+
+.pageHeading h1 {
+  font-size: clamp(2rem, 4vw, 3.1rem);
+}
+
+.pageDescription {
+  max-width: 48rem;
+  margin-top: 0.55rem;
+  color: var(--color-muted);
+  font-size: 0.95rem;
+}
+
+.eyebrow {
+  margin: 0 0 0.3rem;
+  color: var(--color-muted);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.11em;
+  line-height: 1.3;
+  text-transform: uppercase;
+}
+
+.draftStatus {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.65rem;
+  align-items: center;
+  min-width: 15rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+}
+
+.statusDot {
+  width: 0.58rem;
+  height: 0.58rem;
+  flex: 0 0 auto;
+  border: 2px solid var(--color-muted);
+  border-radius: 50%;
+}
+
+.draftStatus div {
   display: grid;
-  gap: 0.35rem;
-  margin: 0.75rem 0;
-  padding: 0.85rem;
-  border: 1px dashed var(--sb-color-border-strong);
-  border-radius: var(--sb-radius-md);
-  background: var(--sb-color-surface-muted);
+  min-width: 0;
 }
 
-.suggestionEmpty strong {
-  color: var(--sb-color-ink);
+.draftStatus small {
+  color: var(--color-muted);
+  font-size: 0.72rem;
+}
+
+.errorBanner {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+  padding: 0.85rem 1rem;
+  border-color: color-mix(in srgb, var(--color-destructive) 35%, var(--color-border));
+  background: var(--color-surface);
+  color: var(--color-ink);
+}
+
+.errorBanner p {
+  margin-top: 0.15rem;
+}
+
+.errorBanner button {
+  border: 0;
+  background: transparent;
+  color: var(--color-muted);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.workspaceGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(19rem, 24rem);
+  gap: 1.25rem;
+  align-items: start;
+}
+
+.boardColumn,
+.inspectorCard,
+.conflictPanel,
+.warningPanel,
+.publishCard,
+.historyCard {
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+}
+
+.boardColumn {
+  padding: 1.1rem;
+}
+
+.sectionHeading,
+.inspectorHeading,
+.stepHeader {
+  display: flex;
+  gap: 0.8rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sectionHeading {
+  margin-bottom: 1rem;
+}
+
+.sectionHeading h2,
+.inspector h2 {
+  font-size: 1.2rem;
+}
+
+.sectionHeading p:last-child,
+.inspectorCard > p,
+.conflictPanel > p,
+.warningPanel > p,
+.publishCard > p,
+.publishCard > small {
+  color: var(--color-muted);
+  font-size: 0.84rem;
+}
+
+.primaryButton,
+.secondaryButton,
+.publishButton,
+.textButton,
+.dangerButton {
+  min-height: 2.35rem;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    background-color 140ms ease,
+    color 140ms ease,
+    border-color 140ms ease;
+}
+
+.primaryButton,
+.publishButton {
+  padding: 0.55rem 0.85rem;
+  border: 1px solid var(--color-brand);
+  background: var(--color-brand);
+  color: var(--color-surface);
+}
+
+.primaryButton:hover:not(:disabled),
+.publishButton:hover:not(:disabled) {
+  background: var(--color-brand-strong);
+}
+
+.secondaryButton {
+  padding: 0.55rem 0.85rem;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+  color: var(--color-ink);
+}
+
+.secondaryButton:hover:not(:disabled) {
+  border-color: var(--color-ink);
+  background: var(--color-brand-soft);
+}
+
+.primaryButton:disabled,
+.secondaryButton:disabled,
+.publishButton:disabled,
+.textButton:disabled,
+.dangerButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.addPanel,
+.editPanel {
+  padding: 0.9rem;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-brand-soft);
+}
+
+.addPanel {
+  margin-bottom: 1rem;
+}
+
+.addPanel h3 {
+  margin-bottom: 0.75rem;
+  font-size: 1rem;
+}
+
+.entryForm {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+
+.entryForm label,
+.fixedSession {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+  color: var(--color-muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.fixedSession strong {
+  color: var(--color-ink);
   font-size: 0.9rem;
 }
 
-.suggestionEmpty p {
-  margin: 0;
-  color: var(--sb-color-muted);
+.entryForm select,
+.entryForm input[type="datetime-local"],
+.overrideForm textarea {
+  width: 100%;
+  min-height: 2.35rem;
+  min-width: 0;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font: inherit;
   font-size: 0.82rem;
-  line-height: 1.45;
 }
+
+.trackOptions {
+  grid-column: 1 / -1;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.trackOptions legend {
+  margin-bottom: 0.3rem;
+  color: var(--color-muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.trackOptions label {
+  display: inline-flex;
+  grid-auto-flow: column;
+  gap: 0.35rem;
+  align-items: center;
+  margin: 0 0.65rem 0.3rem 0;
+  color: var(--color-ink);
+  font-size: 0.8rem;
+}
+
+.trackOptions label span::before {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  margin-right: 0.25rem;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 50%;
+  background: var(--color-surface-muted);
+  content: "";
+}
+
+.timeFields {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+
+.formActions {
+  display: flex;
+  grid-column: 1 / -1;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.formError {
+  grid-column: 1 / -1;
+  color: var(--color-destructive);
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+
+.emptySchedule {
+  display: grid;
+  min-height: 16rem;
+  place-content: center;
+  padding: 1.5rem;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-md);
+  color: var(--color-muted);
+  text-align: center;
+}
+
+.emptySchedule strong {
+  color: var(--color-ink);
+  font-size: 1rem;
+}
+
+.days {
+  display: grid;
+  gap: 1.25rem;
+}
+
+.day > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 0.55rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.day > header h3 {
+  font-size: 1rem;
+}
+
+.day > header span {
+  color: var(--color-muted);
+  font-size: 0.74rem;
+  font-weight: 650;
+}
+
+.sessionList,
+.conflictPanel ul,
+.warningPanel ul,
+.historyCard ol,
+.readinessList {
+  padding: 0;
+  list-style: none;
+}
+
+.sessionList {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0;
+}
+
+.sessionCard {
+  display: grid;
+  grid-template-columns: 5.6rem minmax(0, 1fr) auto;
+  gap: 0.8rem;
+  align-items: start;
+  min-width: 0;
+  padding: 0.8rem;
+  border: 1px solid var(--color-border);
+  border-left: 0.2rem solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+}
+
+.sessionIssue {
+  border-left-color: var(--color-warning);
+  background: var(--color-warning-soft);
+}
+
+.sessionTime {
+  display: grid;
+  color: var(--color-ink);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.sessionTime span {
+  color: var(--color-subtle);
+  font-size: 0.62rem;
+  font-weight: 600;
+}
+
+.sessionDetails {
+  min-width: 0;
+}
+
+.sessionDetails h4 {
+  margin: 0.2rem 0 0.1rem;
+  overflow-wrap: anywhere;
+  font-size: 0.92rem;
+  letter-spacing: -0.015em;
+  line-height: 1.25;
+}
+
+.sessionDetails > p {
+  overflow-wrap: anywhere;
+  color: var(--color-muted);
+  font-size: 0.78rem;
+}
+
+.sessionMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.sessionMeta span,
+.validatedBadge,
+.draftBadge,
+.historyCard li span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.25rem;
+  padding: 0.12rem 0.42rem;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-surface-muted);
+  color: var(--color-muted);
+  font-size: 0.64rem;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
+.roomName {
+  margin-top: 0.2rem;
+  font-weight: 650;
+}
+
+.sessionDetails .inlineConflict,
+.sessionDetails .inlineWarning {
+  margin-top: 0.4rem;
+  font-weight: 700;
+}
+
+.sessionDetails .inlineConflict {
+  color: var(--color-destructive);
+}
+
+.sessionDetails .inlineWarning {
+  color: var(--color-warning);
+}
+
+.cardActions {
+  display: flex;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.textButton,
+.dangerButton {
+  min-height: auto;
+  padding: 0.25rem 0.35rem;
+  border: 0;
+  background: transparent;
+  color: var(--color-ink);
+}
+
+.dangerButton {
+  color: var(--color-destructive);
+}
+
+.textButton:hover:not(:disabled),
+.dangerButton:hover:not(:disabled) {
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+.editPanel {
+  margin: 0.45rem 0 0 0.25rem;
+}
+
+.inspector {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.actionRail {
+  position: sticky;
+  z-index: 1;
+  top: 1rem;
+  max-height: calc(100vh - 2rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-padding-block: 0.5rem;
+  scroll-margin-top: 1rem;
+}
+
+.operationalSequence {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.sequenceStep {
+  display: grid;
+  gap: 0.65rem;
+  min-width: 0;
+}
+
+.stepHeader {
+  justify-content: flex-start;
+  gap: 0.5rem;
+}
+
+.stepNumber {
+  display: inline-grid;
+  width: 1.45rem;
+  height: 1.45rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 50%;
+  background: var(--color-surface);
+  color: var(--color-muted);
+  font-size: 0.7rem;
+  font-weight: 800;
+}
+
+.sequenceStepCurrent .stepNumber {
+  border-color: var(--color-ink);
+  background: var(--color-ink);
+  color: var(--color-surface);
+}
+
+.sequenceLabel {
+  color: var(--color-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.sequenceLabel strong {
+  color: var(--color-ink);
+}
+
+.inspectorCard,
+.conflictPanel,
+.warningPanel,
+.publishCard,
+.historyCard {
+  padding: 0.9rem;
+}
+
+.inspectorCard > p,
+.conflictPanel > p,
+.warningPanel > p,
+.publishCard > p {
+  margin: 0.4rem 0 0.75rem;
+}
+
+.validatedBadge {
+  border-color: color-mix(in srgb, var(--color-success) 30%, var(--color-border));
+  background: var(--color-success-soft);
+  color: var(--color-success);
+}
+
+.draftBadge {
+  border-color: color-mix(in srgb, var(--color-warning) 30%, var(--color-border));
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
+}
+
+.inspectorCard .secondaryButton,
+.publishButton {
+  width: 100%;
+}
+
+.diffSummary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  margin-top: 0.75rem;
+  padding: 0.65rem 0 0;
+  border: 0;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-muted);
+  font-size: 0.7rem;
+  text-align: center;
+}
+
+.diffSummary span {
+  display: grid;
+}
+
+.diffSummary strong {
+  color: var(--color-ink);
+  font-size: 0.95rem;
+}
+
+.conflictPanel {
+  border-color: color-mix(in srgb, var(--color-destructive) 35%, var(--color-border));
+  background: var(--color-surface);
+}
+
+.warningPanel {
+  border-color: color-mix(in srgb, var(--color-warning) 35%, var(--color-border));
+  background: var(--color-surface);
+}
+
+.conflictPanel h2 {
+  color: var(--color-destructive);
+}
+
+.warningPanel h2 {
+  color: var(--color-warning);
+}
+
+.conflictPanel ul,
+.warningPanel ul,
+.historyCard ol,
+.readinessList {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0;
+}
+
+.conflictPanel li,
+.warningPanel li {
+  display: grid;
+  gap: 0.12rem;
+  padding-top: 0.55rem;
+  border-top: 1px solid var(--color-border);
+  font-size: 0.78rem;
+}
+
+.conflictPanel li strong,
+.warningPanel li strong {
+  text-transform: capitalize;
+}
+
+.overrideForm {
+  display: grid;
+  gap: 0.3rem;
+  margin-top: 0.45rem;
+}
+
+.overrideForm label {
+  display: grid;
+  gap: 0.2rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.overrideForm textarea {
+  min-height: 3.5rem;
+  resize: vertical;
+}
+
+.overrideForm .textButton {
+  justify-self: start;
+  color: var(--color-warning);
+}
+
+.overrideRecorded,
+.readyMessage {
+  color: var(--color-success);
+  font-weight: 700;
+}
+
+.publishCard {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface);
+}
+
+.readinessList {
+  margin: 0.7rem 0;
+  color: var(--color-muted);
+  font-size: 0.76rem;
+}
+
+.readinessList li {
+  position: relative;
+  padding-left: 0.9rem;
+}
+
+.readinessList li::before {
+  position: absolute;
+  left: 0;
+  color: var(--color-warning);
+  content: "•";
+  font-weight: 900;
+}
+
+.publishButton {
+  margin: 0.2rem 0 0.55rem;
+}
+
+.publishCard > small {
+  display: block;
+  line-height: 1.4;
+}
+
+.historyCard h2 {
+  margin-bottom: 0.7rem;
+}
+
+.historyCard li {
+  display: grid;
+  gap: 0.1rem;
+  padding-top: 0.55rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.historyCard li div {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.historyCard li span {
+  border-color: color-mix(in srgb, var(--color-success) 30%, var(--color-border));
+  background: var(--color-success-soft);
+  color: var(--color-success);
+}
+
+.historyCard small {
+  color: var(--color-muted);
+}
+
+.suggestionToggle {
+  width: 100%;
+  justify-content: space-between;
+  margin-top: 0.75rem;
+  text-align: left;
+}
+
+.suggestionContent {
+  min-width: 0;
+  padding-top: 0.75rem;
+}
+
 .suggestionOptions {
   display: grid;
-  gap: 0.7rem;
-  margin-top: 0.75rem;
+  gap: 0.65rem;
+  margin-top: 0.55rem;
 }
 
 .scheduleOptions,
 .roomOptions {
   display: grid;
-  gap: 0.45rem;
+  gap: 0.4rem;
+  min-width: 0;
   margin: 0;
   padding: 0;
   border: 0;
@@ -50,114 +841,124 @@
 .scheduleOptions legend,
 .roomOptions legend {
   margin-bottom: 0.05rem;
-  color: var(--sb-color-muted);
-  font-size: 0.78rem;
-  font-weight: 800;
+  color: var(--color-muted);
+  font-size: 0.72rem;
+  font-weight: 750;
 }
 
 .scheduleOption,
 .roomOption {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  gap: 0.7rem;
+  gap: 0.55rem;
   align-items: start;
-  min-height: 2.75rem;
-  padding: 0.65rem 0.75rem;
-  border: 1px solid var(--sb-color-border);
-  border-radius: var(--sb-radius-sm);
-  background: var(--sb-color-surface);
-  color: var(--sb-color-ink);
+  min-height: 2.55rem;
+  min-width: 0;
+  padding: 0.55rem 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-ink);
   cursor: pointer;
   transition:
-    background var(--sb-transition),
-    border-color var(--sb-transition),
-    box-shadow var(--sb-transition),
-    opacity var(--sb-transition);
+    background-color 140ms ease,
+    border-color 140ms ease;
 }
 
 .scheduleOption:hover,
-.roomOption:hover {
-  border-color: var(--sb-color-brand);
-  background: var(--sb-color-brand-soft);
+.roomOption:hover,
+.scheduleOptionSelected {
+  border-color: var(--color-ink);
+  background: var(--color-brand-soft);
 }
 
 .scheduleOption:focus-within,
 .roomOption:focus-within {
-  border-color: var(--sb-color-brand);
+  border-color: var(--color-ink);
 }
 
 .scheduleOption input:focus-visible,
 .roomOption input:focus-visible {
-  outline: 3px solid rgb(79 94 232 / 28%);
+  outline: 2px solid var(--color-ink);
   outline-offset: 2px;
 }
 
 .scheduleOption input,
 .roomOption input {
-  width: 1.15rem;
-  height: 1.15rem;
-  margin: 0.2rem 0 0;
-  accent-color: var(--sb-color-brand);
-}
-
-.scheduleOptionSelected {
-  border-color: var(--sb-color-brand);
-  background: var(--sb-color-brand-soft);
-  box-shadow: 0 0 0 1px var(--sb-color-brand);
+  width: 1.05rem;
+  height: 1.05rem;
+  margin: 0.15rem 0 0;
+  accent-color: var(--color-ink);
 }
 
 .scheduleOptionCopy {
   display: grid;
-  gap: 0.15rem;
+  gap: 0.12rem;
   min-width: 0;
-  line-height: 1.35;
+  line-height: 1.3;
 }
 
 .scheduleOptionCopy strong {
-  color: var(--sb-color-ink);
-  font-size: 0.84rem;
+  overflow-wrap: anywhere;
+  color: var(--color-ink);
+  font-size: 0.79rem;
 }
 
 .scheduleOptionCopy small {
-  color: var(--sb-color-muted);
-  font-size: 0.76rem;
+  color: var(--color-muted);
+  font-size: 0.72rem;
   font-weight: 500;
 }
 
 .scheduleOption:has(input:disabled),
 .roomOption:has(input:disabled) {
   cursor: not-allowed;
-  opacity: 0.62;
-}
-
-.scheduleOption:has(input:disabled):hover,
-.roomOption:has(input:disabled):hover {
-  border-color: var(--sb-color-border);
-  background: var(--sb-color-surface-muted);
+  opacity: 0.58;
 }
 
 .scheduleOption:has(input[aria-invalid="true"]),
 .roomOption:has(input[aria-invalid="true"]),
 .scheduleOptions[aria-invalid="true"],
 .roomOptions[aria-invalid="true"] {
-  border-color: var(--sb-color-danger);
-  background: var(--sb-color-danger-soft);
-  box-shadow: 0 0 0 2px rgb(201 54 43 / 10%);
+  border-color: var(--color-destructive);
+  background: color-mix(in srgb, var(--color-destructive) 7%, var(--color-surface));
+}
+
+.suggestionEmpty {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0.65rem 0;
+  padding: 0.7rem;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-muted);
+}
+
+.suggestionEmpty strong {
+  color: var(--color-ink);
+  font-size: 0.84rem;
+}
+
+.suggestionEmpty p {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 0.76rem;
+  line-height: 1.4;
 }
 
 .viewSwitcher {
   display: grid;
-  gap: 0.5rem;
-  margin: 0 0 1.25rem;
-  padding: 0.75rem;
-  border: 1px solid var(--sb-color-border);
-  border-radius: var(--sb-radius-md);
-  background: var(--sb-color-surface-muted);
+  gap: 0.45rem;
+  margin: 0 0 1rem;
+  padding: 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-muted);
 }
 
 .viewLabel {
-  color: var(--sb-color-muted);
-  font-size: 0.75rem;
+  color: var(--color-muted);
+  font-size: 0.7rem;
   font-weight: 800;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -165,109 +966,112 @@
 
 .viewTablist {
   display: flex;
+  min-width: 0;
+  gap: 0.25rem;
   flex-wrap: wrap;
-  gap: 0.4rem;
 }
 
 .viewTab {
-  min-height: 2.4rem;
-  padding: 0.45rem 0.8rem;
-  border: 1px solid var(--sb-color-border-strong);
-  border-radius: var(--sb-radius-sm);
-  background: var(--sb-color-surface);
-  color: var(--sb-color-ink);
+  min-height: 2.15rem;
+  padding: 0.4rem 0.7rem;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-ink);
   font: inherit;
-  font-size: 0.82rem;
-  font-weight: 800;
+  font-size: 0.76rem;
+  font-weight: 700;
   cursor: pointer;
 }
 
 .viewTab:hover,
 .viewTab:focus-visible {
-  border-color: var(--sb-color-brand);
-  color: var(--sb-color-brand-strong);
+  border-color: var(--color-ink);
 }
 
 .viewTab[aria-selected="true"] {
-  border-color: var(--sb-color-brand);
-  background: var(--sb-color-brand);
-  color: white;
+  border-color: var(--color-ink);
+  background: var(--color-ink);
+  color: var(--color-surface);
 }
 
-.viewPanel {
-  min-width: 0;
-}
-
-.viewGroup {
+.viewPanel,
+.viewGroup,
+.groupedView,
+.weekView {
   min-width: 0;
 }
 
 .viewGroupHeader {
   display: flex;
-  gap: 1rem;
+  gap: 0.75rem;
   align-items: baseline;
   justify-content: space-between;
-  margin-bottom: 0.65rem;
-  padding-bottom: 0.55rem;
-  border-bottom: 1px solid var(--sb-color-border);
+  margin-bottom: 0.55rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--color-border);
 }
 
 .viewGroupHeader h3 {
   margin: 0;
-  font-size: 1.05rem;
+  overflow-wrap: anywhere;
+  font-size: 0.98rem;
 }
 
 .viewGroupHeader span {
-  color: var(--sb-color-muted);
-  font-size: 0.78rem;
-  font-weight: 750;
+  color: var(--color-muted);
+  font-size: 0.72rem;
+  font-weight: 650;
+  white-space: nowrap;
 }
 
 .viewGroupEmpty {
   margin: 0;
-  padding: 1rem;
-  border: 1px dashed var(--sb-color-border-strong);
-  border-radius: var(--sb-radius-md);
-  color: var(--sb-color-muted);
-  font-size: 0.86rem;
+  padding: 0.85rem;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--color-muted);
+  font-size: 0.8rem;
   text-align: center;
 }
 
 .entryDate {
-  color: var(--sb-color-muted);
-  font-size: 0.72rem;
-  font-weight: 750;
+  color: var(--color-muted);
+  font-size: 0.68rem;
+  font-weight: 700;
 }
 
 .weekView,
 .groupedView {
   display: grid;
-  gap: 1rem;
+  gap: 0.9rem;
 }
 
 .viewContext {
   margin: 0;
-  color: var(--sb-color-muted);
-  font-size: 0.85rem;
-  font-weight: 750;
+  color: var(--color-muted);
+  font-size: 0.78rem;
+  font-weight: 650;
 }
 
 .weekGroups,
 .groupGroups {
   display: grid;
-  gap: 1.25rem;
+  gap: 1.1rem;
 }
 
 .unscheduledGroup {
-  padding: 1rem;
-  border: 1px dashed var(--sb-color-border-strong);
-  border-radius: var(--sb-radius-md);
-  background: var(--sb-color-surface-muted);
+  min-width: 0;
+  margin-top: 1rem;
+  padding: 0.85rem;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-muted);
 }
 
 .unscheduledList {
   display: grid;
-  gap: 0.55rem;
+  gap: 0.45rem;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -275,18 +1079,122 @@
 
 .unscheduledItem {
   display: grid;
-  gap: 0.15rem;
-  padding-top: 0.55rem;
-  border-top: 1px solid var(--sb-color-border);
-  font-size: 0.84rem;
-}
-
-.unscheduledItem span {
-  color: var(--sb-color-muted);
+  gap: 0.12rem;
+  min-width: 0;
+  padding-top: 0.45rem;
+  border-top: 1px solid var(--color-border);
   font-size: 0.78rem;
 }
 
+.unscheduledItem span {
+  overflow-wrap: anywhere;
+  color: var(--color-muted);
+  font-size: 0.72rem;
+}
+
+.loadingState {
+  display: grid;
+  width: min(calc(100% - 2rem), 42rem);
+  min-height: 70vh;
+  place-content: center;
+  margin-inline: auto;
+  text-align: center;
+}
+
+.loadingState h1 {
+  max-width: none;
+  font-size: 1.8rem;
+}
+
+.loadingState p {
+  margin: 0.45rem 0 1rem;
+  color: var(--color-muted);
+}
+
+.loadingState .primaryButton {
+  justify-self: center;
+}
+
+.loadingBar {
+  width: 3.5rem;
+  height: 0.2rem;
+  margin: 0 auto 1rem;
+  border-radius: 999px;
+  background: var(--color-border-strong);
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 68rem) {
+  .workspaceGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .actionRail {
+    position: static;
+    max-height: none;
+    overflow: visible;
+  }
+}
+
 @media (max-width: 44rem) {
+  .topbar {
+    padding-inline: 1rem;
+  }
+
+  .topbar nav a:first-child {
+    display: none;
+  }
+
+  .workspace {
+    width: min(calc(100% - 1rem), 96rem);
+    padding-top: 1rem;
+  }
+
+  .pageHeading,
+  .sectionHeading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .draftStatus {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .boardColumn {
+    padding: 0.75rem;
+  }
+
+  .entryForm,
+  .timeFields {
+    grid-template-columns: 1fr;
+  }
+
+  .sessionCard {
+    grid-template-columns: 1fr;
+    gap: 0.4rem;
+  }
+
+  .sessionTime {
+    display: flex;
+    gap: 0.3rem;
+    flex-wrap: wrap;
+  }
+
+  .cardActions {
+    justify-content: flex-start;
+  }
+
   .viewTablist {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));

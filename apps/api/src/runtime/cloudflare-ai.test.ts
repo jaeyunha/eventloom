@@ -280,6 +280,7 @@ describe("Cloudflare runtime AI composition", () => {
     try {
       const dependencies = createRuntimeDependencies({
         APP_ENV: "local",
+        RUNTIME_PROFILE: "fixture",
         WEB_ORIGIN: "http://127.0.0.1:3015",
         AI_PROVIDER: "openai",
         OPENAI_API_KEY: "local-openai-secret",
@@ -387,6 +388,7 @@ liveRuntimeTest(
     if (!apiKey) throw new Error("OPENAI_API_KEY is required when RUN_OPENAI_LIVE=1.");
     const dependencies = createRuntimeDependencies({
       APP_ENV: "local",
+      RUNTIME_PROFILE: "fixture",
       WEB_ORIGIN: "http://127.0.0.1:3015",
       AI_PROVIDER: "openai",
       OPENAI_API_KEY: apiKey,

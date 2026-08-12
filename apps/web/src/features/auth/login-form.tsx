@@ -23,6 +23,8 @@ const ORGANIZER_DOMAIN_ERROR_MESSAGE =
   "Organizer accounts require a verified swyx.io or ai.engineer email address.";
 const SIGNUP_VERIFICATION_MESSAGE = "Account created. Check your email for a verification link.";
 const MAGIC_LINK_SUCCESS_MESSAGE = "Magic link sent. Check your email for a link to sign in.";
+const CFP_PATH =
+  process.env.NEXT_PUBLIC_APP_ENV === "local" ? "/cfp/demo-event" : "/cfp/open-sessionboard-conf";
 const NETWORK_ERROR_MESSAGE =
   "We couldn't reach the sign-in service. Check your connection and try again.";
 const ORGANIZER_EMAIL_DOMAINS = new Set(["swyx.io", "ai.engineer"]);
@@ -885,8 +887,7 @@ export function LoginForm({
 
             <p className={styles.cfpNote}>
               CFP applicants create accounts through the CFP; participant signup remains available
-              there. <a href="/cfp/open-sessionboard-conf">Open the CFP</a> to start or continue an
-              application.
+              there. <a href={CFP_PATH}>Open the CFP</a> to start or continue an application.
             </p>
           </CardContent>
         </Card>

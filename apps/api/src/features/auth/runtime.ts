@@ -9,7 +9,7 @@ import type { AuthSession, BetterAuthGateway } from "./types";
 export interface BetterAuthRuntimeOptions {
   readonly database: D1Database;
   readonly configuration: BetterAuthRuntimeConfiguration;
-  readonly environment: "staging" | "production";
+  readonly environment: "local" | "staging" | "production";
   readonly sendMagicLink: (input: { email: string; url: string; token: string }) => Promise<void>;
 }
 

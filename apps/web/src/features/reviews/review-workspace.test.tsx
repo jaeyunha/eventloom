@@ -10,6 +10,7 @@ import {
   createEvaluationPlan,
   createReviewAutosaveQueue,
   type EvaluatorAssignment,
+  loadCreatedOrganizerPlan,
   loadEvaluatorQueue,
   loadOrganizerData,
   normalizeCompletionPercent,
@@ -491,6 +492,22 @@ describe("review workspace", () => {
     expect(errorMarkup).toContain("Aggregate details are temporarily unavailable.");
     expect(errorMarkup).toContain("Retry review details");
     expect(errorMarkup).toContain('role="alert"');
+  });
+  it("propagates created-plan refresh failures and permits an authoritative retry", async () => {
+    const authoritative = testPlan("event-empty");
+    const loader = vi
+      .fn<typeof loadOrganizerData>()
+      .mockRejectedValueOnce(new Error("Authoritative review details are unavailable."))
+      .mockResolvedValueOnce(authoritative);
+
+    await expect(
+      loadCreatedOrganizerPlan("event-empty", "", authoritative.planId, loader),
+    ).rejects.toThrow("Authoritative review details are unavailable.");
+    await expect(
+      loadCreatedOrganizerPlan("event-empty", "", authoritative.planId, loader),
+    ).resolves.toBe(authoritative);
+    expect(loader).toHaveBeenNthCalledWith(1, "event-empty", "", authoritative.planId);
+    expect(loader).toHaveBeenNthCalledWith(2, "event-empty", "", authoritative.planId);
   });
   it("renders an accessible first-plan form for an organizer event with no plans", () => {
     const markup = renderToStaticMarkup(

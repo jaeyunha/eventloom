@@ -10,10 +10,12 @@ import {
   useRef,
   useState,
 } from "react";
+import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
-import { CharacterCount, Field, Input, Select } from "./cfp-field";
+import { Card } from "../../components/ui/card";
 import { RichTextArea } from "../../components/ui/rich-text";
 import { SearchableSelect } from "../../components/ui/searchable-select";
+import { Separator } from "../../components/ui/separator";
 import { Stepper } from "../../components/ui/stepper";
 import {
   type CfpApi,
@@ -29,6 +31,7 @@ import {
   isCfpSchemaVersionConflict,
   type PublishedCfp,
 } from "./api";
+import { CharacterCount, Field, Input, Select } from "./cfp-field";
 import styles from "./cfp-wizard.module.css";
 import { clearCfpSubmissionState, getCfpSubmissionPointerStorageKey } from "./draft-persistence";
 import { getCfpStepRoute, getNextCfpStep, getPreviousCfpStep } from "./routes";
@@ -303,6 +306,122 @@ const WIZARD_STEPS = CFP_STEPS.map((step) => ({
   id: step,
   label: STEP_LABELS[step],
 }));
+function CfpProgress({ step, mobile = false }: { step: CfpStep; mobile?: boolean }) {
+  const currentIndex = Math.max(CFP_STEPS.indexOf(step), 0);
+  if (!mobile) {
+    return (
+      <div className={styles.desktopStepper}>
+        <Stepper currentStep={step} label="Submission progress" steps={WIZARD_STEPS} />
+      </div>
+    );
+  }
+
+  return (
+    <nav aria-label="Submission progress" className={styles.mobileProgress}>
+      <div className={styles.mobileProgressHeader}>
+        <span>
+          Step {currentIndex + 1} of {CFP_STEPS.length}
+        </span>
+        <strong>{STEP_LABELS[step]}</strong>
+      </div>
+      <ol className={styles.mobileStepList}>
+        {WIZARD_STEPS.map((wizardStep, index) => (
+          <li
+            aria-current={index === currentIndex ? "step" : undefined}
+            className={index === currentIndex ? styles.mobileStepCurrent : undefined}
+            key={wizardStep.id}
+          >
+            <span aria-hidden="true" className={styles.mobileStepNumber}>
+              {index + 1}
+            </span>
+            <span>{wizardStep.label}</span>
+          </li>
+        ))}
+      </ol>
+    </nav>
+  );
+}
+
+function PublicCfpShell({
+  children,
+  event,
+  eventName,
+  form,
+  formName,
+  step,
+  className,
+}: {
+  children: ReactNode;
+  event?: PublishedCfp["event"] | undefined;
+  eventName?: string | undefined;
+  form?: CfpPublishedForm | undefined;
+  formName?: string | undefined;
+  step?: CfpStep | undefined;
+  className?: string | undefined;
+}) {
+  const resolvedEventName = event?.name ?? eventName ?? "Open Sessionboard";
+  const resolvedFormName = form?.name ?? formName ?? "Call for proposals";
+
+  return (
+    <main className={styles.viewport}>
+      <header className={styles.publicHeader}>
+        <div className={styles.publicBrand}>
+          <span aria-hidden="true" className={styles.brandMark}>
+            OS
+          </span>
+          <span>Open Sessionboard</span>
+        </div>
+        <div className={styles.publicHeaderContext}>
+          <span>{resolvedEventName}</span>
+          <span aria-hidden="true" className={styles.publicHeaderDivider}>
+            /
+          </span>
+          <span>{resolvedFormName}</span>
+        </div>
+      </header>
+      <Card className={`${styles.card} ${className ?? ""}`}>
+        <div className={styles.publicShell}>
+          <aside aria-label="Event and submission context" className={styles.contextRail}>
+            <div className={styles.railIntro}>
+              <p className={styles.railKicker}>Call for proposals</p>
+              <p className={styles.railEventName}>{resolvedEventName}</p>
+              <p className={styles.railFormName}>{resolvedFormName}</p>
+            </div>
+            {step ? (
+              <CfpProgress step={step} />
+            ) : (
+              <p className={styles.railComplete}>Submission complete</p>
+            )}
+            {event ? (
+              <>
+                <Separator className={styles.railSeparator} />
+                <dl className={styles.railMeta}>
+                  <div>
+                    <dt>Open</dt>
+                    <dd>{formatCfpWindowDate(event.opensAt, event.timezone)}</dd>
+                  </div>
+                  <div>
+                    <dt>Close</dt>
+                    <dd>{formatCfpWindowDate(event.closesAt, event.timezone)}</dd>
+                  </div>
+                </dl>
+                {form ? (
+                  <Badge className={styles.limitBadge} variant="outline">
+                    Submission Limit: {formSubmissionLimit(form)} submissions per user
+                  </Badge>
+                ) : null}
+              </>
+            ) : null}
+          </aside>
+          <div className={styles.formColumn}>
+            {step ? <CfpProgress mobile step={step} /> : null}
+            {children}
+          </div>
+        </div>
+      </Card>
+    </main>
+  );
+}
 
 function ErrorSummary({ errors }: { errors: ValidationErrors }) {
   const messages = [...new Set(Object.values(errors))];
@@ -394,6 +513,10 @@ function mergeSecondaryContact(
   };
 }
 
+function fixtureRuntimeEnabled(): boolean {
+  return process.env.NODE_ENV === "test" || process.env.NEXT_PUBLIC_RUNTIME_PROFILE === "fixture";
+}
+
 function configuredCfpIdentity(
   eventSlug: string,
   organizationId?: string,
@@ -407,9 +530,7 @@ function configuredCfpIdentity(
     throw new Error("CFP identity is not configured because the event slug is missing.");
   }
   if (!resolvedOrganizationId) {
-    const localMode =
-      process.env.NEXT_PUBLIC_APP_ENV === "local" || process.env.APP_ENV === "local";
-    if (localMode) {
+    if (fixtureRuntimeEnabled()) {
       return {
         organizationId: "local-organization",
         eventId: normalizedEventSlug,
@@ -1483,7 +1604,7 @@ export function CfpWizard({
     let nextDraft = draft;
     if (step === "account") nextDraft = syncPrimaryParticipant(draft);
     const authenticateBeforePersist =
-      step === "account" && !authenticatedSession && process.env.NEXT_PUBLIC_APP_ENV !== "local"
+      step === "account" && !authenticatedSession && !fixtureRuntimeEnabled()
         ? async (candidateDraft: CfpDraft) => {
             const authentication = await api.authenticateAccount({
               email: candidateDraft.account.email,
@@ -1602,181 +1723,174 @@ export function CfpWizard({
 
   if (!hydrated) {
     return (
-      <main className={styles.viewport}>
-        <section aria-busy="true" aria-live="polite" className={styles.card}>
-          <p className={styles.loading}>Loading your submission draft…</p>
-        </section>
-      </main>
+      <PublicCfpShell step={step}>
+        <div aria-busy="true" aria-live="polite" className={styles.loading}>
+          Loading your submission draft…
+        </div>
+      </PublicCfpShell>
     );
   }
 
   return (
-    <main className={styles.viewport}>
-      <section className={styles.card}>
-        <Stepper currentStep={step} label="Submission progress" steps={WIZARD_STEPS} />
-        <div className={styles.limitBanner}>
-          Submission Limit: {formSubmissionLimit(published?.form)} submissions per user
-        </div>
-        <ErrorSummary errors={errors} />
-        {staleFormConflict ? (
-          <section className={styles.errorSummary} role="alert">
-            <h2>This form has changed</h2>
+    <PublicCfpShell event={published?.event} form={published?.form} step={step}>
+      <ErrorSummary errors={errors} />
+      {staleFormConflict ? (
+        <section className={styles.errorSummary} role="alert">
+          <h2>This form has changed</h2>
+          <p>
+            The organizer updated this submission form. Reload the latest form before continuing;
+            your existing server draft will not be silently migrated.
+          </p>
+          {staleFormConflict.pinnedDraftUnavailable ? (
             <p>
-              The organizer updated this submission form. Reload the latest form before continuing;
-              your existing server draft will not be silently migrated.
+              The pinned server draft cannot be loaded with this form version. Discard it only when
+              you are ready to start a new submission.
             </p>
-            {staleFormConflict.pinnedDraftUnavailable ? (
-              <p>
-                The pinned server draft cannot be loaded with this form version. Discard it only
-                when you are ready to start a new submission.
-              </p>
-            ) : null}
-            <div className={styles.forwardActions}>
-              <Button
-                disabled={
-                  staleFormConflict.pinnedDraftUnavailable ||
-                  staleFormConflict.submissionId === null
-                }
-                onClick={reloadPinnedDraft}
-                variant="secondary"
-              >
-                Reload pinned draft
-              </Button>
-              <Button onClick={discardStaleDraftAndStartNew} variant="destructive">
-                Discard stale draft and start new
-              </Button>
-            </div>
-          </section>
-        ) : null}
-        {submissionsClosed ? (
-          <p className={styles.fieldError} role="status">
-            CFP closed at{" "}
-            {published?.event
-              ? formatCfpWindowDate(published.event.closesAt, published.event.timezone)
-              : "the server-recorded close instant"}{" "}
-            ({published?.event?.timezone ?? "event timezone"}). New draft creation and proposal
-            edits are locked after close; the server enforces this saved status.
-          </p>
-        ) : null}
-        {!published && saveState === "error" ? (
-          <p className={styles.fieldError} role="alert">
-            {saveError ?? "The published CFP could not be loaded. Refresh to try again."}
-          </p>
-        ) : null}
-        <form noValidate onSubmit={(event) => void continueFlow(event)}>
-          {step === "welcome" ? (
-            <WelcomeStep
-              {...(published === null ? {} : { event: published.event, form: published.form })}
-              closed={submissionsClosed}
-            />
           ) : null}
-          {step === "account" ? (
-            <AccountStep
-              authenticatedSession={authenticatedSession}
-              draft={draft}
-              errors={errors}
-              password={password}
-              setPassword={setPassword}
-              updateDraft={updateDraft}
-            />
-          ) : null}
-          {step === "submission" ? (
-            <SubmissionStep
-              draft={draft}
-              errors={errors}
-              {...(published === null ? {} : { form: published.form })}
-              answers={dynamicAnswers}
-              fileUploadStates={fileUploadStates}
-              onAnswerChange={setSubmissionAnswer}
-              onFileUploadStateChange={setFileUploadState}
-              onFileUpload={(field, file) => handleFileUpload(field, undefined, file)}
-              updateDraft={updateDraft}
-            />
-          ) : null}
-          {step === "participants" ? (
-            <ParticipantsStep
-              draft={draft}
-              errors={errors}
-              {...(published === null ? {} : { form: published.form })}
-              answers={participantAnswers}
-              fileUploadStates={fileUploadStates}
-              onAnswerChange={setParticipantAnswer}
-              onFileUpload={(field, participantId, file) =>
-                handleFileUpload(field, participantId, file)
+          <div className={styles.forwardActions}>
+            <Button
+              disabled={
+                staleFormConflict.pinnedDraftUnavailable || staleFormConflict.submissionId === null
               }
-              onFileUploadStateChange={setFileUploadState}
-              updateDraft={updateDraft}
-            />
-          ) : null}
-          {step === "review" ? (
-            <ReviewStep
-              draft={draft}
-              eventSlug={eventSlug}
-              {...(published === null ? {} : { form: published.form })}
-              answers={dynamicAnswers}
-            />
-          ) : null}
-
-          <div className={styles.actions}>
-            {step !== "welcome" ? (
-              <Button
-                className={styles.backButton}
-                disabled={mutationPending}
-                onClick={goBack}
-                variant="outline"
-              >
-                ← Back
-              </Button>
-            ) : (
-              <span />
-            )}
-            <div className={styles.forwardActions}>
-              {step !== "welcome" &&
-              (step !== "account" || process.env.NEXT_PUBLIC_APP_ENV === "local") ? (
-                <Button
-                  className={styles.draftButton}
-                  onClick={() => void saveNow()}
-                  variant="secondary"
-                  disabled={mutationPending || submissionsClosed}
-                >
-                  Save as draft
-                </Button>
-              ) : null}
-              {!submissionsClosed ? (
-                <Button className={styles.primaryButton} disabled={mutationPending} type="submit">
-                  {step === "welcome" ? "Continue →" : null}
-                  {step === "account"
-                    ? authenticatedSession
-                      ? "Continue →"
-                      : "Continue with email →"
-                    : null}
-                  {step === "submission" ? "Next step →" : null}
-                  {step === "participants" ? "Continue to review →" : null}
-                  {step === "review" ? "Submit" : null}
-                </Button>
-              ) : null}
-            </div>
+              onClick={reloadPinnedDraft}
+              variant="secondary"
+            >
+              Reload pinned draft
+            </Button>
+            <Button onClick={discardStaleDraftAndStartNew} variant="destructive">
+              Discard stale draft and start new
+            </Button>
           </div>
-        </form>
-        {step !== "welcome" ? (
-          <div className={styles.sessionFooter}>
-            {authenticatedSession
-              ? `Signed in as ${authenticatedSession.name} (${authenticatedSession.email}).`
-              : `Account details entered for ${draft.account.firstName || "Speaker"} ${draft.account.lastName} (${draft.account.email || "email pending"}). Sign-in completes when you continue from the Account step.`}
-          </div>
-        ) : null}
-        <p
-          aria-live="polite"
-          className={saveState === "error" ? styles.saveError : styles.saveStatus}
-        >
-          {saveState === "saving" ? "Saving draft…" : null}
-          {saveState === "saved" ? "Draft saved" : null}
-          {saveState === "error" && staleFormConflict === null
-            ? (saveError ?? "Draft could not be saved. Check your connection and try again.")
-            : null}
+        </section>
+      ) : null}
+      {submissionsClosed ? (
+        <p className={styles.fieldError} role="status">
+          CFP closed at{" "}
+          {published?.event
+            ? formatCfpWindowDate(published.event.closesAt, published.event.timezone)
+            : "the server-recorded close instant"}{" "}
+          ({published?.event?.timezone ?? "event timezone"}). New draft creation and proposal edits
+          are locked after close; the server enforces this saved status.
         </p>
-      </section>
-    </main>
+      ) : null}
+      {!published && saveState === "error" ? (
+        <p className={styles.fieldError} role="alert">
+          {saveError ?? "The published CFP could not be loaded. Refresh to try again."}
+        </p>
+      ) : null}
+      <form noValidate onSubmit={(event) => void continueFlow(event)}>
+        {step === "welcome" ? (
+          <WelcomeStep
+            {...(published === null ? {} : { event: published.event, form: published.form })}
+            closed={submissionsClosed}
+          />
+        ) : null}
+        {step === "account" ? (
+          <AccountStep
+            authenticatedSession={authenticatedSession}
+            draft={draft}
+            errors={errors}
+            password={password}
+            setPassword={setPassword}
+            updateDraft={updateDraft}
+          />
+        ) : null}
+        {step === "submission" ? (
+          <SubmissionStep
+            draft={draft}
+            errors={errors}
+            {...(published === null ? {} : { form: published.form })}
+            answers={dynamicAnswers}
+            fileUploadStates={fileUploadStates}
+            onAnswerChange={setSubmissionAnswer}
+            onFileUploadStateChange={setFileUploadState}
+            onFileUpload={(field, file) => handleFileUpload(field, undefined, file)}
+            updateDraft={updateDraft}
+          />
+        ) : null}
+        {step === "participants" ? (
+          <ParticipantsStep
+            draft={draft}
+            errors={errors}
+            {...(published === null ? {} : { form: published.form })}
+            answers={participantAnswers}
+            fileUploadStates={fileUploadStates}
+            onAnswerChange={setParticipantAnswer}
+            onFileUpload={(field, participantId, file) =>
+              handleFileUpload(field, participantId, file)
+            }
+            onFileUploadStateChange={setFileUploadState}
+            updateDraft={updateDraft}
+          />
+        ) : null}
+        {step === "review" ? (
+          <ReviewStep
+            draft={draft}
+            eventSlug={eventSlug}
+            {...(published === null ? {} : { form: published.form })}
+            answers={dynamicAnswers}
+          />
+        ) : null}
+
+        <div className={styles.actions}>
+          {step !== "welcome" ? (
+            <Button
+              className={styles.backButton}
+              disabled={mutationPending}
+              onClick={goBack}
+              variant="outline"
+            >
+              ← Back
+            </Button>
+          ) : (
+            <span />
+          )}
+          <div className={styles.forwardActions}>
+            {step !== "welcome" &&
+            (step !== "account" || process.env.NEXT_PUBLIC_APP_ENV === "local") ? (
+              <Button
+                className={styles.draftButton}
+                onClick={() => void saveNow()}
+                variant="secondary"
+                disabled={mutationPending || submissionsClosed}
+              >
+                Save as draft
+              </Button>
+            ) : null}
+            {!submissionsClosed ? (
+              <Button className={styles.primaryButton} disabled={mutationPending} type="submit">
+                {step === "welcome" ? "Continue →" : null}
+                {step === "account"
+                  ? authenticatedSession
+                    ? "Continue →"
+                    : "Continue with email →"
+                  : null}
+                {step === "submission" ? "Next step →" : null}
+                {step === "participants" ? "Continue to review →" : null}
+                {step === "review" ? "Submit" : null}
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      </form>
+      {step !== "welcome" ? (
+        <div className={styles.sessionFooter}>
+          {authenticatedSession
+            ? `Signed in as ${authenticatedSession.name} (${authenticatedSession.email}).`
+            : `Account details entered for ${draft.account.firstName || "Speaker"} ${draft.account.lastName} (${draft.account.email || "email pending"}). Sign-in completes when you continue from the Account step.`}
+        </div>
+      ) : null}
+      <p
+        aria-live="polite"
+        className={saveState === "error" ? styles.saveError : styles.saveStatus}
+      >
+        {saveState === "saving" ? "Saving draft…" : null}
+        {saveState === "saved" ? "Draft saved" : null}
+        {saveState === "error" && staleFormConflict === null
+          ? (saveError ?? "Draft could not be saved. Check your connection and try again.")
+          : null}
+      </p>
+    </PublicCfpShell>
   );
 }
 
@@ -1793,36 +1907,45 @@ function WelcomeStep({
     form?.welcomeContent || "Our event welcomes leaders, practitioners, and change-makers.";
   return (
     <div className={styles.welcomeContent}>
+      <p className={styles.welcomeEyebrow}>{form?.name ?? "Call for Speakers"}</p>
       <h1>{event?.name ?? "Welcome to our event!"}</h1>
-      <h2>{form?.name ?? "Call for Speakers"}</h2>
-      <p>{content}</p>
-      <p>
-        Use this form to propose a topic. Your speaker portal will show the status of your
-        submission and any tasks assigned after acceptance.
+      <p className={styles.welcomePurpose}>{content}</p>
+      <p className={styles.welcomeNote}>
+        Your speaker portal will show the status of your submission and any tasks assigned after
+        acceptance.
       </p>
-      <h2>Helpful Tips and Important Information</h2>
-      <ul>
-        <li>
-          <a href="#speaker-agreement">Speaker Agreement Terms and Conditions</a>
-        </li>
-        <li>
-          <a href="#application-faq">FAQs for the Speaker Application Process</a>
-        </li>
-        <li>
-          <a href="#speaker-resources">Speaker Tips and Resources Guide</a>
-        </li>
-      </ul>
       {event ? (
-        <>
-          <h2>Dates and Deadlines</h2>
-          <p>
-            {formatCfpWindowDate(event.opensAt, event.timezone)} –{" "}
-            {formatCfpWindowDate(event.closesAt, event.timezone)} ({event.timezone})
-          </p>
-        </>
+        <section aria-labelledby="submission-window-title" className={styles.welcomeWindow}>
+          <h2 id="submission-window-title">Submission window</h2>
+          <div className={styles.welcomeDates}>
+            <div>
+              <span>Open</span>
+              <strong>{formatCfpWindowDate(event.opensAt, event.timezone)}</strong>
+            </div>
+            <div>
+              <span>Close</span>
+              <strong>{formatCfpWindowDate(event.closesAt, event.timezone)}</strong>
+            </div>
+          </div>
+          <p className={styles.welcomeTimezone}>Times shown in {event.timezone}.</p>
+        </section>
       ) : null}
+      <section aria-labelledby="resources-title" className={styles.welcomeResources}>
+        <h2 id="resources-title">Resources</h2>
+        <ul>
+          <li>
+            <a href="#speaker-agreement">Speaker Agreement Terms and Conditions</a>
+          </li>
+          <li>
+            <a href="#application-faq">FAQs for the Speaker Application Process</a>
+          </li>
+          <li>
+            <a href="#speaker-resources">Speaker Tips and Resources Guide</a>
+          </li>
+        </ul>
+      </section>
       {closed ? (
-        <p role="status">
+        <p className={styles.closedNotice} role="status">
           Submissions are closed. Existing submissions remain available in your speaker portal.
         </p>
       ) : null}
@@ -3380,17 +3503,21 @@ export function CfpComplete({
 
   if (!confirmed) {
     return (
-      <main className={styles.viewport}>
-        <section aria-busy="true" aria-live="polite" className={styles.card}>
-          <p className={styles.loading}>Confirming your submission…</p>
-        </section>
-      </main>
+      <PublicCfpShell>
+        <div aria-busy="true" aria-live="polite" className={styles.loading}>
+          Confirming your submission…
+        </div>
+      </PublicCfpShell>
     );
   }
 
   return (
-    <main className={styles.viewport}>
-      <section className={`${styles.card} ${styles.completeCard}`}>
+    <PublicCfpShell
+      className={styles.completeCard}
+      eventName={confirmationDetails?.eventName}
+      formName="Call for Speakers"
+    >
+      <div className={styles.completeContent}>
         <div aria-hidden="true" className={styles.successMarker}>
           ✓
         </div>
@@ -3421,7 +3548,7 @@ export function CfpComplete({
         <Button className={styles.primaryButton} onClick={() => router.push("/portal")}>
           Continue to portal →
         </Button>
-      </section>
-    </main>
+      </div>
+    </PublicCfpShell>
   );
 }

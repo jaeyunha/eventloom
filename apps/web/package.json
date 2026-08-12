@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "next dev --hostname 127.0.0.1 --port 3015",
+    "dev:playwright": "next dev --hostname 127.0.0.1 --port $PLAYWRIGHT_WEB_PORT",
     "build": "next build",
     "cloudflare:build": "opennextjs-cloudflare build",
     "cloudflare:preview": "opennextjs-cloudflare preview",

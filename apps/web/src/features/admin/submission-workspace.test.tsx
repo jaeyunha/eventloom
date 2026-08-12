@@ -140,7 +140,11 @@ describe("organizer submission workspace", () => {
       createElement(SubmissionListWorkspace, { eventId: "event-with-no-submissions" }),
     );
     expect(markup).toContain("No submissions yet");
+    expect(markup).toContain("Open public CFP");
+    expect(markup).toContain("Configure CFP");
     expect(markup).not.toContain("No matching submissions");
+    expect(markup).not.toContain('id="submission-search"');
+    expect(markup).not.toContain("<table");
   });
   it("maps the exact canonical fields, edited values, and every co-speaker", () => {
     const record = mapCanonicalSubmission(canonicalEnvelope);
@@ -452,27 +456,46 @@ describe("organizer submission workspace", () => {
       format: "—",
     });
   });
-  it("renders an accessible event-scoped submission table with filters and progress", () => {
+  it("renders the compact shadcn submission workspace with filters and progress", () => {
     const markup = renderToStaticMarkup(
       createElement(SubmissionListWorkspace, { eventId: "summit-2026" }),
     );
 
-    expect(markup).toContain("<table");
+    expect(markup).toContain('data-slot="card"');
+    expect(markup).toContain('data-slot="badge"');
+    expect(markup).toContain('data-slot="table"');
+    expect(markup).toContain('data-slot="select-trigger"');
+    expect(markup).toContain('data-slot="input"');
     expect(markup).toContain("<caption");
     expect(markup).toContain('scope="col"');
     expect(markup).toContain('scope="row"');
     expect(markup).toContain('aria-label="Select all visible submissions"');
     expect(markup).toContain('aria-label="Select Designing for Trust in AI-Assisted Teams"');
     expect(markup).toContain('id="submission-search"');
-    expect(markup).toContain('for="submission-status"');
-    expect(markup).toContain('for="submission-track"');
-    expect(markup).toContain('for="submission-format"');
+    expect(markup).toContain('id="submission-status"');
+    expect(markup).toContain('id="submission-track"');
+    expect(markup).toContain('id="submission-format"');
     expect(markup).toContain('role="progressbar"');
     expect(markup).toContain("Under review");
     expect(markup).toContain("Review progress");
+    expect(markup.indexOf("Total submissions")).toBeLessThan(markup.indexOf("All submissions"));
     expect(markup).toContain("/admin/events/summit-2026/submissions/sub-001");
     expect(markup).not.toContain("maya.chen@example.test");
     expect(markup).not.toContain("Organizer notes");
+    expect(markup).not.toContain("Canonical CFP organizer view");
+    expect(markup).not.toContain("Authoritative CFP");
+  });
+
+  it("renders an action-first empty state without filter or table scaffolding", () => {
+    const markup = renderToStaticMarkup(
+      createElement(SubmissionListWorkspace, { eventId: "event-with-no-submissions" }),
+    );
+
+    expect(markup).toContain("No submissions yet");
+    expect(markup).toContain("Open public CFP");
+    expect(markup).toContain("Configure CFP");
+    expect(markup).not.toContain('id="submission-search"');
+    expect(markup).not.toContain('data-slot="table"');
   });
 
   it("keeps detail content private to the organizer detail view", () => {

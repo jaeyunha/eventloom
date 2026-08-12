@@ -1,14 +1,15 @@
 import runtimeWorker from "../../index";
-import { consumeOutboxQueue } from "./outbox-consumer";
 
 export { AgendaCoordinator } from "./agenda-coordinator";
 
 export const fetch = runtimeWorker.fetch;
-export const queue = consumeOutboxQueue;
+export const queue = runtimeWorker.queue;
+export const scheduled = runtimeWorker.scheduled;
 
 const worker = {
   fetch,
   queue,
+  scheduled,
 };
 
 export default worker;

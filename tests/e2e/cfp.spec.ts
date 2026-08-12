@@ -122,6 +122,33 @@ test("submitter completes the account-first CFP with two participants", async ({
     )
     .toBeNull();
 });
+test("CFP mobile progress stays readable and exposes the current step", async ({
+  page,
+  authSession,
+}) => {
+  await installCfpApi(page, authSession, {
+    eventId: "mobile-progress",
+    formId: "mobile-progress-cfp",
+    eventName: "Mobile Progress Test Event",
+  });
+  await page.setViewportSize({ height: 844, width: 390 });
+  await page.goto("/cfp/mobile-progress");
+
+  const mobileProgress = page
+    .getByRole("navigation", { name: "Submission progress" })
+    .filter({ hasText: "Step 1 of 5" });
+  await expect(mobileProgress).toBeVisible();
+  await expect(mobileProgress.getByText("Welcome!", { exact: true }).first()).toBeVisible();
+  await expect(mobileProgress.locator('[aria-current="step"]').first()).toBeVisible();
+  await expect(mobileProgress.getByText("Review", { exact: true })).toBeVisible();
+
+  const fitsViewport = await page.evaluate(
+    () =>
+      document.documentElement.scrollWidth <= document.documentElement.clientWidth &&
+      document.body.scrollWidth <= document.body.clientWidth,
+  );
+  expect(fitsViewport).toBe(true);
+});
 
 test("required CFP validation announces errors and focuses the first invalid field", async ({
   page,
