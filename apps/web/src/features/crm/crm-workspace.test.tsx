@@ -474,6 +474,92 @@ describe("organization CRM workspace", () => {
     expect(markup).toContain("Unknown merge tags: unknownTag");
   });
 
+  it("renders non-empty personalized outreach previews for display-name-only contacts", () => {
+    const displayNameOnlyContacts = [
+      {
+        ...contact,
+        id: "contact-dana",
+        firstName: null,
+        lastName: null,
+        displayName: "Dana Okafor",
+        email: "dana@example.test",
+      },
+      {
+        ...contact,
+        id: "contact-marcus",
+        firstName: null,
+        lastName: null,
+        displayName: "Marcus Chen",
+        email: "marcus@example.test",
+      },
+      {
+        ...contact,
+        id: "contact-explicit",
+        displayName: "Display Person",
+        firstName: "Explicit",
+        lastName: "Names",
+        email: "explicit@example.test",
+      },
+    ] as const;
+    const markup = renderToStaticMarkup(
+      createElement(CrmWorkspaceView, {
+        organizationId: "org/one",
+        contacts: displayNameOnlyContacts,
+        selectedContact: displayNameOnlyContacts[0],
+        selectedContactId: displayNameOnlyContacts[0].id,
+        segments: [],
+        events: [],
+        history: [],
+        pipelineHistory: [],
+        notes: [],
+        duplicates: null,
+        analytics: null,
+        outreachPreview: {
+          subject: "Invitation from {{first_name}}",
+          body: "Hi {{first_name}}",
+          count: displayNameOnlyContacts.length,
+          recipients: [
+            {
+              contactId: "contact-dana",
+              email: "dana@example.test",
+              displayName: "Dana Okafor",
+              subject: "Invitation from Dana",
+              body: "Hi Dana",
+              unknownTags: [],
+              idempotencyKey: "outreach-preview-dana",
+            },
+            {
+              contactId: "contact-marcus",
+              email: "marcus@example.test",
+              displayName: "Marcus Chen",
+              subject: "Invitation from Marcus",
+              body: "Hi Marcus",
+              unknownTags: [],
+              idempotencyKey: "outreach-preview-marcus",
+            },
+            {
+              contactId: "contact-explicit",
+              email: "explicit@example.test",
+              displayName: "Display Person",
+              subject: "Invitation from Explicit",
+              body: "Hi Explicit",
+              unknownTags: [],
+              idempotencyKey: "outreach-preview-explicit",
+            },
+          ],
+        },
+        onSendOutreach: async () => undefined,
+      }),
+    );
+
+    expect(markup).toContain("Invitation from Dana");
+    expect(markup).toContain("Hi Dana");
+    expect(markup).toContain("Invitation from Marcus");
+    expect(markup).toContain("Hi Marcus");
+    expect(markup).toContain("Invitation from Explicit");
+    expect(markup).toContain("Hi Explicit");
+  });
+
   it("seeds saved segments from active directory filters and exposes selected-contact context", () => {
     const markup = renderToStaticMarkup(
       createElement(CrmWorkspaceView, {

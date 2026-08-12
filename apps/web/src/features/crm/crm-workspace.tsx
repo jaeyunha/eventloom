@@ -568,6 +568,18 @@ export function createCrmApi(
 function displayName(contact: Pick<CrmContact, "displayName" | "email" | "id">): string {
   return contact.displayName.trim() || contact.email?.trim() || contact.id;
 }
+function outreachNameParts(contact: Pick<CrmContact, "firstName" | "lastName" | "displayName">): {
+  readonly firstName: string;
+  readonly lastName: string;
+} {
+  const displayParts = contact.displayName.trim().split(/\s+/u).filter(Boolean);
+  const fallbackFirstName = displayParts[0] ?? "";
+  const fallbackLastName = displayParts.slice(1).join(" ");
+  return {
+    firstName: contact.firstName?.trim() || fallbackFirstName,
+    lastName: contact.lastName?.trim() || fallbackLastName,
+  };
+}
 
 function formatDate(value: string | undefined): string {
   if (value === undefined || value.length === 0) return "—";
@@ -816,11 +828,12 @@ function renderVariablePreview(
   content: string,
   contact: CrmContact,
 ): { readonly value: string; readonly unknownTags: readonly string[] } {
+  const { firstName, lastName } = outreachNameParts(contact);
   const values: Readonly<Record<string, string>> = {
-    first_name: contact.firstName ?? "",
-    firstName: contact.firstName ?? "",
-    last_name: contact.lastName ?? "",
-    lastName: contact.lastName ?? "",
+    first_name: firstName,
+    firstName,
+    last_name: lastName,
+    lastName,
     displayName: contact.displayName,
     email: contact.email ?? "",
     company: contact.company ?? "",
@@ -4237,6 +4250,7 @@ export function CrmWorkspace({
           if (contact === undefined) {
             throw new Error(`Preview recipient ${recipient.contactId} is no longer selected.`);
           }
+          const { firstName, lastName } = outreachNameParts(contact);
           return api.sendOutreach(
             {
               contactId: contact.id,
@@ -4245,10 +4259,10 @@ export function CrmWorkspace({
               ...(outreachPreview.eventId ? { eventId: outreachPreview.eventId } : {}),
               ...(outreachPreview.segmentId ? { segmentId: outreachPreview.segmentId } : {}),
               variables: {
-                first_name: contact.firstName ?? "",
-                firstName: contact.firstName ?? "",
-                last_name: contact.lastName ?? "",
-                lastName: contact.lastName ?? "",
+                first_name: firstName,
+                firstName,
+                last_name: lastName,
+                lastName,
               },
             },
             recipient.idempotencyKey,

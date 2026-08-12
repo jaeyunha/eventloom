@@ -462,6 +462,18 @@ function normalizedName(input: CrmContactInput): {
   }
   return { firstName, lastName, displayName };
 }
+function outreachNameParts(contact: Pick<CrmContact, "firstName" | "lastName" | "displayName">): {
+  readonly firstName: string;
+  readonly lastName: string;
+} {
+  const displayParts = contact.displayName.trim().split(/\s+/u).filter(Boolean);
+  const fallbackFirstName = displayParts[0] ?? "";
+  const fallbackLastName = displayParts.slice(1).join(" ");
+  return {
+    firstName: contact.firstName?.trim() || fallbackFirstName,
+    lastName: contact.lastName?.trim() || fallbackLastName,
+  };
+}
 
 function canonical(value: string | null | undefined): string {
   return (value ?? "")
@@ -2472,14 +2484,17 @@ export class CrmService {
     contact: CrmContact,
     variables: Readonly<Record<string, string>> | undefined,
   ): string {
+    const { firstName, lastName } = outreachNameParts(contact);
     const values: Record<string, string> = {
-      firstName: contact.firstName ?? "",
-      lastName: contact.lastName ?? "",
       displayName: contact.displayName,
       email: contact.email ?? "",
       company: contact.company ?? "",
       title: contact.title ?? "",
       ...(variables ?? {}),
+      first_name: firstName,
+      firstName,
+      last_name: lastName,
+      lastName,
     };
     const unknown = new Set<string>();
     const rendered = content.replace(

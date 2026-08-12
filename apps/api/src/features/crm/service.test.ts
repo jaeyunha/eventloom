@@ -592,6 +592,57 @@ describe("CrmService", () => {
       }),
     ).rejects.toMatchObject({ code: "CRM_INVALID_INPUT" });
   });
+  it("renders outreach names from explicit fields and trimmed display names", async () => {
+    const crm = service();
+    const explicit = await crm.createContact(actor, {
+      organizationId: "org-a",
+      displayName: "Display Person",
+      firstName: "Explicit",
+      lastName: "Names",
+      email: "explicit@example.com",
+    });
+    const explicitOutreach = await crm.sendPersonalizedOutreach(actor, {
+      organizationId: "org-a",
+      contactId: explicit.id,
+      subject: "Subject {{first_name}} {{firstName}}",
+      body: "Hi {{last_name}} {{lastName}}",
+      variables: {
+        first_name: "Ignored",
+        firstName: "Ignored",
+        last_name: "Ignored",
+        lastName: "Ignored",
+      },
+      idempotencyKey: "outreach-explicit-names",
+    });
+    expect(explicitOutreach.subject).toBe("Subject Explicit Explicit");
+    expect(explicitOutreach.renderedBody).toBe("Hi Names Names");
+
+    for (const [id, displayName, firstName, lastName] of [
+      ["dana", " Dana   Okafor ", "Dana", "Okafor"],
+      ["marcus", "Marcus Chen", "Marcus", "Chen"],
+    ] as const) {
+      const displayNameOnly = await crm.createContact(actor, {
+        organizationId: "org-a",
+        displayName,
+        email: `${id}@example.com`,
+      });
+      const fallbackOutreach = await crm.sendPersonalizedOutreach(actor, {
+        organizationId: "org-a",
+        contactId: displayNameOnly.id,
+        subject: "Subject {{first_name}} {{firstName}}",
+        body: "Hi {{last_name}} {{lastName}}",
+        variables: {
+          first_name: "",
+          firstName: "",
+          last_name: "",
+          lastName: "",
+        },
+        idempotencyKey: `outreach-${id}-names`,
+      });
+      expect(fallbackOutreach.subject).toBe(`Subject ${firstName} ${firstName}`);
+      expect(fallbackOutreach.renderedBody).toBe(`Hi ${lastName} ${lastName}`);
+    }
+  });
   it("starts analytics reads together and scopes each source to the organization", async () => {
     const repository = new CountingDelayedCrmRepository({
       listContacts: 25,
