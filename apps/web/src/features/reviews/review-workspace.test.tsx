@@ -1613,10 +1613,16 @@ describe("review workspace", () => {
           (onCheckedChange as (checked: boolean) => void)(target.checked ?? false);
         } else {
           const onChange = props.onChange;
-          if (typeof onChange !== "function") throw new Error("Expected an onChange handler.");
-          const event: { currentTarget: unknown | null } = { currentTarget: target };
-          (onChange as (event: unknown) => void)(event);
-          event.currentTarget = null;
+          const onValueChange = props.onValueChange;
+          if (typeof onChange === "function") {
+            const event: { currentTarget: unknown | null } = { currentTarget: target };
+            (onChange as (event: unknown) => void)(event);
+            event.currentTarget = null;
+          } else if (typeof onValueChange === "function") {
+            (onValueChange as (value: string) => void)(target.value);
+          } else {
+            throw new Error("Expected a change handler.");
+          }
         }
         for (const apply of pendingUpdates.splice(0)) apply();
       }
