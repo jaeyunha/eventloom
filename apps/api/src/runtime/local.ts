@@ -30,7 +30,7 @@ import {
   InMemorySubmissionReviewSource,
 } from "../features/evaluations/repository";
 import { EvaluationService } from "../features/evaluations/service";
-import type { EvaluationActor } from "../features/evaluations/types";
+import type { EvaluationActor, EvaluationPlan } from "../features/evaluations/types";
 import type {
   PublicApiCreateInput,
   PublicApiGetInput,
@@ -1283,6 +1283,74 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
     },
   );
   const evaluationRepository = new InMemoryEvaluationRepository();
+  const localEvaluationPlan: EvaluationPlan = {
+    id: "local-evaluation-plan",
+    tenantId: LOCAL_ORGANIZATION_ID,
+    eventId: "demo-event",
+    name: "Program review",
+    status: "open",
+    blindReview: true,
+    closesAt: "2026-09-10T19:00:00.000Z",
+    assignmentRule: {
+      reviewsPerSubmission: 2,
+      maxAssignmentsPerReviewer: 6,
+    },
+    rounds: [
+      {
+        id: "local-review-round",
+        name: "Committee review",
+        sequence: 1,
+        opensAt: "2026-08-08T12:00:00.000Z",
+        closesAt: "2026-09-10T19:00:00.000Z",
+        blindReview: true,
+        anonymization: "double",
+        reviewerPool: {
+          name: "Program committee",
+          reviewerIds: [],
+        },
+        rubric: {
+          id: "local-program-rubric",
+          name: "Program rubric",
+          criteria: [
+            {
+              id: "quality",
+              label: "Overall quality",
+              description: "How strong and useful is this proposal for the event audience?",
+              minimum: 1,
+              maximum: 5,
+              weight: 2,
+              required: true,
+              inputType: "numeric",
+            },
+            {
+              id: "recommendation",
+              label: "Recommendation",
+              description: "Would you recommend this proposal for the program?",
+              minimum: 0,
+              maximum: 0,
+              weight: 0,
+              required: true,
+              inputType: "dropdown",
+              options: [
+                { label: "Accept", value: "accept" },
+                { label: "Maybe", value: "maybe" },
+                { label: "Reject", value: "reject" },
+              ],
+            },
+          ],
+        },
+      },
+    ],
+    reviewerProjection: {
+      fieldIds: ["format", "level"],
+      fileIds: [],
+    },
+    gradingLockedAt: SEEDED_AT,
+    version: 2,
+    createdAt: SEEDED_AT,
+    updatedAt: SEEDED_AT,
+  };
+  void evaluationRepository.putPlan(localEvaluationPlan, null);
   const evaluationSubmissions = new InMemorySubmissionReviewSource([
     {
       id: "local-submission",

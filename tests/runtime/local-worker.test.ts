@@ -178,6 +178,21 @@ describe.sequential("composed local Worker", () => {
     expect(await jsonData<{ event: { id: string } }>(cfpResponse)).toMatchObject({
       event: { id: eventId },
     });
+
+    const evaluationResponse = await runtimeRequest(
+      `/api/admin/evaluations/organizer/workspace?eventId=${eventId}`,
+      { headers: organizerHeaders },
+    );
+    expect(evaluationResponse.status).toBe(200);
+    expect(
+      await jsonData<{ plan: { id: string; eventId: string; status: string } }>(evaluationResponse),
+    ).toMatchObject({
+      plan: {
+        id: "local-evaluation-plan",
+        eventId,
+        status: "open",
+      },
+    });
   });
 
   it("enforces auth boundaries while exposing a useful seeded speaker portal", async () => {
