@@ -90,10 +90,18 @@ import { EvaluationService } from "../features/evaluations/service";
 import type {
   EvaluationActor,
   EvaluationAssignment,
+  EvaluationAssignmentDistributionInput,
+  EvaluationAssignmentDistributionResult,
+  EvaluationAssignmentReplacementInput,
+  EvaluationAssignmentReplacementResult,
+  EvaluationAssignmentScope,
   EvaluationConflictDeclaration,
   EvaluationDecision,
   EvaluationPlan,
   EvaluationReview,
+  EvaluationReviewHistory,
+  EvaluationSuggestion,
+  EvaluationSuggestionResolution,
   SubmissionReviewMaterial,
 } from "../features/evaluations/types";
 import { EventService } from "../features/events/service";
@@ -317,6 +325,58 @@ function isEvaluationAssignmentRecord(value: object): boolean {
 function isEvaluationReviewRecord(value: object): boolean {
   const kind = entityType(value);
   return kind === "evaluation_review" || (kind === undefined && "scores" in value);
+}
+function isEvaluationSuggestionRecord(value: object): value is EvaluationSuggestion & JsonRecord {
+  if (!isRecord(value) || entityType(value) !== "evaluation_suggestion") return false;
+  return (
+    typeof value.id === "string" &&
+    typeof value.tenantId === "string" &&
+    typeof value.eventId === "string" &&
+    typeof value.planId === "string" &&
+    typeof value.roundId === "string" &&
+    typeof value.assignmentId === "string" &&
+    typeof value.submissionId === "string" &&
+    typeof value.reviewerId === "string" &&
+    typeof value.version === "number"
+  );
+}
+
+function evaluationAssignmentMatchesScope(
+  assignment: EvaluationAssignment,
+  scope: EvaluationAssignmentScope,
+): boolean {
+  return (
+    assignment.tenantId === scope.tenantId &&
+    assignment.eventId === scope.eventId &&
+    assignment.planId === scope.planId &&
+    assignment.roundId === scope.roundId &&
+    (scope.submissionId === undefined || assignment.submissionId === scope.submissionId) &&
+    (scope.planVersion === undefined || assignment.planVersion === scope.planVersion)
+  );
+}
+
+function evaluationReviewHistory(
+  reviews: readonly EvaluationReview[],
+  assignment: EvaluationAssignment,
+): readonly EvaluationReviewHistory[] {
+  const review = reviews.find(
+    (candidate) =>
+      candidate.tenantId === assignment.tenantId &&
+      candidate.assignmentId === assignment.id,
+  );
+  return review === undefined
+    ? []
+    : [{ assignment: clone(assignment), review: clone(review) }];
+}
+
+function assertEvaluationVersion(
+  currentVersion: number | null,
+  expectedVersion: number | null,
+  entityName: string,
+): void {
+  if (currentVersion !== expectedVersion) {
+    throw conflict(`${entityName} changed since it was loaded.`);
+  }
 }
 
 function isEvaluationDecisionRecord(value: object): value is EvaluationDecision {
@@ -5249,15 +5309,24 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
   readonly #plans: AirtableJsonStore<EvaluationPlan>;
   readonly #assignments: AirtableJsonStore<EvaluationAssignment>;
   readonly #reviews: AirtableJsonStore<EvaluationReview>;
+  readonly #suggestions: AirtableJsonStore<EvaluationSuggestion>;
   readonly #evaluations: AirtableJsonStore<JsonRecord>;
   readonly #conflicts: AirtableJsonStore<EvaluationConflictDeclaration>;
   readonly #decisions: AirtableJsonStore<EvaluationDecision>;
+  readonly #baseId: string;
+  readonly #transport: AirtableTransport;
+  readonly #suggestionListsInFlight = new Map<
+    string,
+    Promise<readonly EvaluationSuggestion[]>
+  >();
 
   constructor(options: {
     readonly baseId: string;
     readonly transport: AirtableTransport;
   }) {
     const shared = { baseId: options.baseId, transport: options.transport };
+    this.#baseId = options.baseId;
+    this.#transport = options.transport;
     this.#plans = new AirtableJsonStore({
       ...shared,
       table: "Review Plans",
@@ -5274,6 +5343,11 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
       jsonField: "Scores JSON",
     });
     this.#reviews = new AirtableJsonStore({
+      ...shared,
+      table: "Evaluations",
+      jsonField: "Scores JSON",
+    });
+    this.#suggestions = new AirtableJsonStore({
       ...shared,
       table: "Evaluations",
       jsonField: "Scores JSON",
@@ -5358,99 +5432,282 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
     return [...byId.values()].map((assignment) => untagged(assignment));
   }
 
-  async replaceAssignments(
-    tenantId: string,
-    eventId: string,
-    planId: string,
-    roundId: string,
-    submissionId: string,
-    assignments: readonly EvaluationAssignment[],
-  ): Promise<void> {
-    const desired = [...assignments];
+  async replaceAssignment(
+    scope: EvaluationAssignmentScope,
+    input: EvaluationAssignmentReplacementInput,
+  ): Promise<EvaluationAssignmentReplacementResult> {
+    const records = await this.#evaluations.listWithRecordIds();
+    const assignments = records
+      .filter(({ entity }) => isEvaluationAssignmentRecord(entity))
+      .map(({ entity }) => untagged(entity as unknown as EvaluationAssignment));
+    const reviews = records
+      .filter(({ entity }) => isEvaluationReviewRecord(entity))
+      .map(({ entity }) => untagged(entity as unknown as EvaluationReview));
+    const oldAssignment = assignments.find(
+      (assignment) =>
+        assignment.tenantId === scope.tenantId && assignment.id === input.oldAssignmentId,
+    );
+    if (oldAssignment === undefined) {
+      throw conflict("The reviewer assignment to replace was not found.");
+    }
+    if (!evaluationAssignmentMatchesScope(oldAssignment, scope)) {
+      throw conflict("Reviewer assignment replacement is outside its target scope.");
+    }
+    if (oldAssignment.status === "superseded") {
+      throw conflict("The reviewer assignment has already been superseded.");
+    }
+    assertEvaluationVersion(
+      oldAssignment.version,
+      input.expectedAssignmentVersion,
+      "Reviewer assignment",
+    );
+
+    const successor = input.successorAssignment;
+    if (
+      successor.id === oldAssignment.id ||
+      successor.status === "abstained" ||
+      successor.status === "superseded" ||
+      successor.reviewerId !== input.replacementReviewerId ||
+      !evaluationAssignmentMatchesScope(successor, scope)
+    ) {
+      throw conflict("Reviewer assignment replacement is outside its target scope.");
+    }
+    if (input.reason.trim().length === 0) {
+      throw conflict("A replacement reason is required.");
+    }
+    if (records.some(({ entity }) => entity.id === successor.id)) {
+      throw conflict("The successor reviewer assignment already exists.");
+    }
+
+    const supersededAt = successor.updatedAt;
+    const supersededAssignment: EvaluationAssignment = {
+      ...clone(oldAssignment),
+      status: "superseded",
+      successorAssignmentId: successor.id,
+      supersededReason: input.reason,
+      lineage: {
+        predecessorAssignmentId: oldAssignment.predecessorAssignmentId ?? null,
+        successorAssignmentId: successor.id,
+        reason: input.reason,
+        supersededAt,
+      },
+      version: oldAssignment.version + 1,
+      updatedAt: supersededAt,
+    };
+    const successorAssignment: EvaluationAssignment = {
+      ...clone(successor),
+      predecessorAssignmentId: oldAssignment.id,
+      successorAssignmentId: null,
+      supersededReason: null,
+      lineage: {
+        predecessorAssignmentId: oldAssignment.id,
+        successorAssignmentId: null,
+        reason: input.reason,
+        supersededAt,
+      },
+    };
+    await this.#upsertEvaluationEntities([
+      tagged(supersededAssignment, "evaluation_assignment"),
+      tagged(successorAssignment, "evaluation_assignment"),
+    ]);
+
+    const resultScope: EvaluationAssignmentScope = {
+      ...scope,
+      submissionId: scope.submissionId ?? oldAssignment.submissionId,
+    };
+    const assignmentsById = new Map(
+      assignments.map((assignment) => [assignment.id, clone(assignment)]),
+    );
+    assignmentsById.set(supersededAssignment.id, clone(supersededAssignment));
+    assignmentsById.set(successorAssignment.id, clone(successorAssignment));
+
+    return {
+      scope: resultScope,
+      replacedAssignment: clone(supersededAssignment),
+      successorAssignment: clone(successorAssignment),
+      activeAssignments: [...assignmentsById.values()]
+        .filter(
+          (assignment) =>
+            evaluationAssignmentMatchesScope(assignment, resultScope) &&
+            assignment.status !== "superseded",
+        )
+        .sort((left, right) => left.id.localeCompare(right.id)),
+      history: evaluationReviewHistory(reviews, supersededAssignment),
+    };
+  }
+
+  async applyAssignmentDistribution(
+    scope: EvaluationAssignmentScope,
+    input: EvaluationAssignmentDistributionInput,
+  ): Promise<EvaluationAssignmentDistributionResult> {
+    if (input.reason.trim().length === 0) {
+      throw conflict("A distribution reason is required.");
+    }
+
+    const records = await this.#evaluations.listWithRecordIds();
+    const assignmentsByStorageKey = new Map<string, EvaluationAssignment>();
+    for (const { entity } of records) {
+      if (!isEvaluationAssignmentRecord(entity)) continue;
+      const assignment = untagged(entity as unknown as EvaluationAssignment);
+      const key = `${assignment.tenantId}\u0000${assignment.id}`;
+      const current = assignmentsByStorageKey.get(key);
+      if (
+        current === undefined ||
+        assignment.version > current.version ||
+        (assignment.version === current.version &&
+          assignment.updatedAt.localeCompare(current.updatedAt) > 0)
+      ) {
+        assignmentsByStorageKey.set(key, assignment);
+      }
+    }
+    const assignments = [...assignmentsByStorageKey.values()];
+    const reviews = records
+      .filter(({ entity }) => isEvaluationReviewRecord(entity))
+      .map(({ entity }) => untagged(entity as unknown as EvaluationReview));
+    const scopedAssignments = assignments.filter((assignment) =>
+      evaluationAssignmentMatchesScope(assignment, scope),
+    );
+
+    const expected = new Map<string, number>();
+    for (const expectedVersion of input.expectedActiveVersions) {
+      if (expected.has(expectedVersion.assignmentId)) {
+        throw conflict("Expected reviewer assignment versions must be unique.");
+      }
+      expected.set(expectedVersion.assignmentId, expectedVersion.version);
+    }
+
+    const desired = [...input.assignments];
+    const targetSubmissionIds = new Set(desired.map((assignment) => assignment.submissionId));
+    for (const assignmentId of expected.keys()) {
+      const assignment = scopedAssignments.find((candidate) => candidate.id === assignmentId);
+      if (assignment !== undefined) targetSubmissionIds.add(assignment.submissionId);
+    }
+    const target = scopedAssignments.filter((assignment) =>
+      targetSubmissionIds.has(assignment.submissionId),
+    );
+    const active = target.filter(
+      (assignment) => assignment.status !== "superseded" && assignment.status !== "abstained",
+    );
+    if (
+      expected.size !== active.length ||
+      active.some(
+        (assignment) =>
+          expected.get(assignment.id) === undefined ||
+          expected.get(assignment.id) !== assignment.version,
+      ) ||
+      [...expected.keys()].some(
+        (assignmentId) => !active.some((assignment) => assignment.id === assignmentId),
+      )
+    ) {
+      throw conflict("Reviewer assignments changed since the distribution was previewed.");
+    }
+
     const desiredIds = new Set<string>();
     for (const assignment of desired) {
       if (
-        assignment.tenantId !== tenantId ||
-        assignment.eventId !== eventId ||
-        assignment.planId !== planId ||
-        assignment.roundId !== roundId ||
-        assignment.submissionId !== submissionId ||
-        assignment.status === "abstained"
+        assignment.status === "abstained" ||
+        assignment.status === "superseded" ||
+        !evaluationAssignmentMatchesScope(assignment, scope)
       ) {
-        throw conflict("Reviewer assignment replacement is outside its target scope.");
+        throw conflict("Reviewer assignment distribution is outside its target scope.");
       }
       if (desiredIds.has(assignment.id)) {
-        throw conflict("Reviewer assignment replacement contains duplicates.");
+        throw conflict("Reviewer assignment distribution contains duplicates.");
       }
       desiredIds.add(assignment.id);
-    }
 
-    const allRecords = (await this.#assignments.listWithRecordIds()).filter(({ entity }) =>
-      isEvaluationAssignmentRecord(entity),
-    );
-    const targetRecords = allRecords.filter(
-      ({ entity }) =>
-        entity.tenantId === tenantId &&
-        entity.eventId === eventId &&
-        entity.planId === planId &&
-        entity.roundId === roundId &&
-        entity.submissionId === submissionId,
-    );
-    const targetById = new Map(targetRecords.map((record) => [record.entity.id, record]));
-    for (const assignment of desired) {
-      const existing = allRecords.find(
-        ({ entity }) => entity.tenantId === tenantId && entity.id === assignment.id,
+      const existing = assignmentsByStorageKey.get(
+        `${scope.tenantId}\u0000${assignment.id}`,
       );
-      if (existing !== undefined && !targetById.has(existing.entity.id)) {
-        throw conflict("A reviewer assignment already exists outside the replacement scope.");
+      const collidingRecord = records.find(({ entity }) => entity.id === assignment.id);
+      if (existing === undefined && collidingRecord !== undefined) {
+        throw conflict("A reviewer assignment already exists outside the distribution scope.");
       }
       if (existing !== undefined) {
-        if (existing.entity.status === "abstained") {
+        if (!evaluationAssignmentMatchesScope(existing, scope)) {
+          throw conflict("A reviewer assignment already exists outside the distribution scope.");
+        }
+        if (existing.status === "abstained") {
           throw conflict("A reviewer who declared a conflict cannot be reassigned.");
         }
-        if (existing.entity.reviewerId !== assignment.reviewerId) {
-          throw conflict("A reviewer assignment changed since it was loaded.");
+        if (existing.status === "superseded") {
+          throw conflict("A superseded reviewer assignment cannot be reused.");
+        }
+        if (
+          existing.reviewerId !== assignment.reviewerId ||
+          existing.version !== assignment.version
+        ) {
+          throw conflict("A reviewer assignment changed since the distribution was previewed.");
         }
       }
     }
 
-    for (const assignment of desired) {
-      if (targetById.has(assignment.id)) continue;
-      await this.#assignments.create(tagged(assignment, "evaluation_assignment"));
-    }
-
-    const reviewRecords = (await this.#reviews.listWithRecordIds()).filter(({ entity }) =>
-      isEvaluationReviewRecord(entity),
+    const desiredById = new Map(desired.map((assignment) => [assignment.id, assignment]));
+    const supersededAssignments = active.filter(
+      (assignment) => !desiredById.has(assignment.id),
     );
-    const retainedAssignmentIds = new Set([
-      ...desiredIds,
-      ...targetRecords
-        .filter(({ entity }) => entity.status === "abstained")
-        .map(({ entity }) => entity.id),
+    const supersededAt = desired[0]?.updatedAt ?? active[0]?.updatedAt ?? "";
+    const nextSuperseded = supersededAssignments.map(
+      (assignment): EvaluationAssignment => ({
+        ...clone(assignment),
+        status: "superseded",
+        successorAssignmentId: null,
+        supersededReason: input.reason,
+        lineage: {
+          predecessorAssignmentId: assignment.predecessorAssignmentId ?? null,
+          successorAssignmentId: null,
+          reason: input.reason,
+          supersededAt,
+        },
+        version: assignment.version + 1,
+        updatedAt: supersededAt,
+      }),
+    );
+    const nextAssignments = desired.map((assignment) => {
+      const existing = assignmentsByStorageKey.get(
+        `${scope.tenantId}\u0000${assignment.id}`,
+      );
+      if (existing === undefined) return clone(assignment);
+      return {
+        ...clone(existing),
+        ...clone(assignment),
+        predecessorAssignmentId:
+          assignment.predecessorAssignmentId ?? existing.predecessorAssignmentId,
+        successorAssignmentId:
+          assignment.successorAssignmentId ?? existing.successorAssignmentId,
+        supersededReason: assignment.supersededReason ?? existing.supersededReason,
+        lineage: assignment.lineage ?? existing.lineage,
+      };
+    });
+
+    await this.#upsertEvaluationEntities([
+      ...nextSuperseded.map((assignment) => tagged(assignment, "evaluation_assignment")),
+      ...nextAssignments.map((assignment) => tagged(assignment, "evaluation_assignment")),
     ]);
-    const removed = targetRecords.filter(
-      ({ entity }) => entity.status !== "abstained" && !desiredIds.has(entity.id),
-    );
-    for (const record of removed) {
-      if (!(await this.#assignments.deleteByRecordId(record.recordId))) {
-        throw conflict("The reviewer assignment could not be removed.");
-      }
-    }
 
-    const obsoleteReviews = reviewRecords.filter(
-      ({ entity }) =>
-        entity.tenantId === tenantId &&
-        entity.eventId === eventId &&
-        entity.planId === planId &&
-        entity.roundId === roundId &&
-        entity.submissionId === submissionId &&
-        !retainedAssignmentIds.has(entity.assignmentId),
+    const resultAssignments = new Map(
+      assignments.map((assignment) => [assignment.id, clone(assignment)]),
     );
-    for (const review of obsoleteReviews) {
-      if (!(await this.#reviews.deleteByRecordId(review.recordId))) {
-        throw conflict("The associated review could not be removed.");
-      }
+    for (const assignment of [...nextSuperseded, ...nextAssignments]) {
+      resultAssignments.set(assignment.id, clone(assignment));
     }
+    const activeAssignments = [...resultAssignments.values()]
+      .filter(
+        (assignment) =>
+          evaluationAssignmentMatchesScope(assignment, scope) &&
+          assignment.status !== "superseded" &&
+          targetSubmissionIds.has(assignment.submissionId),
+      )
+      .sort((left, right) => left.id.localeCompare(right.id));
+
+    return {
+      scope: clone(scope),
+      activeAssignments,
+      supersededAssignments: nextSuperseded.map(clone),
+      history: nextSuperseded.flatMap((assignment) =>
+        evaluationReviewHistory(reviews, assignment),
+      ),
+    };
   }
 
   async getReview(tenantId: string, assignmentId: string): Promise<EvaluationReview | null> {
@@ -5469,6 +5726,195 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
           review.planId === planId,
       )
       .map((review) => untagged(review));
+  }
+  async getSuggestion(
+    tenantId: string,
+    suggestionId: string,
+  ): Promise<EvaluationSuggestion | null> {
+    const suggestion = await this.#suggestions.find(suggestionId);
+    return suggestion !== undefined &&
+      isEvaluationSuggestionRecord(suggestion) &&
+      suggestion.tenantId === tenantId
+      ? untagged(suggestion)
+      : null;
+  }
+
+  async listSuggestions(
+    tenantId: string,
+    planId: string,
+  ): Promise<readonly EvaluationSuggestion[]> {
+    const key = `${tenantId}\u0000${planId}`;
+    const existing = this.#suggestionListsInFlight.get(key);
+    if (existing !== undefined) return existing;
+
+    const load = this.#suggestions
+      .list({
+        filterByFormula: jsonContainsAllFormula("Scores JSON", [tenantId, planId]),
+      })
+      .then((suggestions) =>
+        suggestions
+          .filter(
+            (suggestion) =>
+              isEvaluationSuggestionRecord(suggestion) &&
+              suggestion.tenantId === tenantId &&
+              suggestion.planId === planId,
+          )
+          .map((suggestion) => untagged(suggestion))
+          .sort((left, right) => left.id.localeCompare(right.id)),
+      );
+    this.#suggestionListsInFlight.set(key, load);
+    try {
+      return await load;
+    } finally {
+      if (this.#suggestionListsInFlight.get(key) === load) {
+        this.#suggestionListsInFlight.delete(key);
+      }
+    }
+  }
+
+  async putSuggestion(
+    suggestion: EvaluationSuggestion,
+    expectedVersion: number | null,
+  ): Promise<void> {
+    const existingRecord = await this.#evaluations.findWithRecordId(suggestion.id);
+    const existing =
+      existingRecord !== undefined && isEvaluationSuggestionRecord(existingRecord.entity)
+        ? untagged(existingRecord.entity)
+        : null;
+    if (
+      (existingRecord !== undefined && existing === null) ||
+      (existing !== null &&
+        (existing.tenantId !== suggestion.tenantId ||
+          existing.eventId !== suggestion.eventId ||
+          existing.planId !== suggestion.planId ||
+          existing.roundId !== suggestion.roundId ||
+          existing.assignmentId !== suggestion.assignmentId ||
+          existing.submissionId !== suggestion.submissionId ||
+          existing.reviewerId !== suggestion.reviewerId))
+    ) {
+      throw conflict("Suggestion changed since it was loaded.");
+    }
+    assertEvaluationVersion(existing?.version ?? null, expectedVersion, "Suggestion");
+    await this.#upsertEvaluationEntities([
+      tagged(suggestion, "evaluation_suggestion"),
+    ]);
+  }
+
+  async resolveSuggestion(
+    suggestion: EvaluationSuggestion,
+    expectedSuggestionVersion: number,
+    assignment: EvaluationAssignment | null,
+    expectedAssignmentVersion: number | null,
+    review: EvaluationReview | null,
+    expectedReviewVersion: number | null,
+  ): Promise<EvaluationSuggestionResolution> {
+    const records = await this.#evaluations.listWithRecordIds();
+    const suggestionRecord = records.find(
+      ({ entity }) => entity.id === suggestion.id && isEvaluationSuggestionRecord(entity),
+    );
+    const currentSuggestion =
+      suggestionRecord === undefined
+        ? null
+        : untagged(suggestionRecord.entity as unknown as EvaluationSuggestion);
+    if (
+      currentSuggestion === null ||
+      currentSuggestion.tenantId !== suggestion.tenantId ||
+      currentSuggestion.eventId !== suggestion.eventId ||
+      currentSuggestion.planId !== suggestion.planId ||
+      currentSuggestion.roundId !== suggestion.roundId ||
+      currentSuggestion.assignmentId !== suggestion.assignmentId ||
+      currentSuggestion.submissionId !== suggestion.submissionId ||
+      currentSuggestion.reviewerId !== suggestion.reviewerId
+    ) {
+      throw conflict("Suggestion changed since it was loaded.");
+    }
+    assertEvaluationVersion(
+      currentSuggestion.version,
+      expectedSuggestionVersion,
+      "Suggestion",
+    );
+
+    const entities: object[] = [
+      tagged(suggestion, "evaluation_suggestion") as unknown as JsonRecord,
+    ];
+    if (assignment !== null) {
+      if (
+        assignment.tenantId !== suggestion.tenantId ||
+        assignment.eventId !== suggestion.eventId ||
+        assignment.planId !== suggestion.planId ||
+        assignment.roundId !== suggestion.roundId ||
+        assignment.id !== suggestion.assignmentId ||
+        assignment.submissionId !== suggestion.submissionId ||
+        assignment.reviewerId !== suggestion.reviewerId
+      ) {
+        throw conflict("Suggestion resolution targeted another assignment.");
+      }
+      const currentAssignmentRecord = records.find(
+        ({ entity }) =>
+          entity.id === assignment.id && isEvaluationAssignmentRecord(entity),
+      );
+      const currentAssignment =
+        currentAssignmentRecord === undefined
+          ? null
+          : untagged(
+              currentAssignmentRecord.entity as unknown as EvaluationAssignment,
+            );
+      if (
+        currentAssignment !== null &&
+        (currentAssignment.tenantId !== suggestion.tenantId ||
+          currentAssignment.eventId !== suggestion.eventId ||
+          currentAssignment.planId !== suggestion.planId ||
+          currentAssignment.roundId !== suggestion.roundId ||
+          currentAssignment.submissionId !== suggestion.submissionId ||
+          currentAssignment.reviewerId !== suggestion.reviewerId)
+      ) {
+        throw conflict("Suggestion resolution targeted another assignment.");
+      }
+      assertEvaluationVersion(
+        currentAssignment?.version ?? null,
+        expectedAssignmentVersion,
+        "Assignment",
+      );
+      entities.push(
+        tagged(assignment, "evaluation_assignment") as unknown as JsonRecord,
+      );
+    }
+
+    if (review !== null) {
+      if (
+        review.tenantId !== suggestion.tenantId ||
+        review.eventId !== suggestion.eventId ||
+        review.planId !== suggestion.planId ||
+        review.roundId !== suggestion.roundId ||
+        review.assignmentId !== suggestion.assignmentId ||
+        review.submissionId !== suggestion.submissionId ||
+        review.reviewerId !== suggestion.reviewerId
+      ) {
+        throw conflict("Suggestion resolution targeted another review.");
+      }
+      const currentReviewRecord = records.find(
+        ({ entity }) =>
+          isEvaluationReviewRecord(entity) &&
+          entity.tenantId === suggestion.tenantId &&
+          entity.assignmentId === suggestion.assignmentId,
+      );
+      const currentReview =
+        currentReviewRecord === undefined
+          ? null
+          : untagged(currentReviewRecord.entity as unknown as EvaluationReview);
+      assertEvaluationVersion(
+        currentReview?.version ?? null,
+        expectedReviewVersion,
+        "Review",
+      );
+      entities.push(tagged(review, "evaluation_review") as unknown as JsonRecord);
+    }
+
+    await this.#upsertEvaluationEntities(entities);
+    return {
+      suggestion: clone(suggestion),
+      review: review === null ? null : clone(review),
+    };
   }
   async listReviewerWorkspaceRecords(
     tenantId: string,
@@ -5521,9 +5967,15 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
         }
       }
     }
+    const assignments = [...assignmentsById.values()].filter(
+      (assignment) => assignment.status !== "superseded",
+    );
+    const activeAssignmentIds = new Set(assignments.map((assignment) => assignment.id));
     return {
-      assignments: [...assignmentsById.values()],
-      reviews: [...reviewsByAssignment.values()],
+      assignments,
+      reviews: [...reviewsByAssignment.values()].filter((review) =>
+        activeAssignmentIds.has(review.assignmentId),
+      ),
     };
   }
 
@@ -5605,7 +6057,9 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
     }
 
     return {
-      assignments: [...assignmentsById.values()],
+      assignments: [...assignmentsById.values()].filter(
+        (assignment) => assignment.status !== "superseded",
+      ),
       reviews: [...reviewsByAssignment.values()],
       decisions: [...decisionsBySubmission.values()],
     };
@@ -5704,6 +6158,35 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
     else await this.#decisions.updateByRecordId(id, existingRecord.recordId, storedDecision);
   }
 
+  async #upsertEvaluationEntities(entities: readonly object[]): Promise<void> {
+    for (let index = 0; index < entities.length; index += 10) {
+      const batch = entities.slice(index, index + 10);
+      const response = await this.#transport.request({
+        method: "PATCH",
+        baseId: this.#baseId,
+        table: "Evaluations",
+        body: {
+          performUpsert: { fieldsToMergeOn: [APPLICATION_ID] },
+          records: batch.map((entity) => ({
+            fields: {
+              [APPLICATION_ID]: recordId(entity),
+              "Scores JSON": JSON.stringify(entity),
+            },
+          })),
+        },
+      });
+      if (response.status < 200 || response.status >= 300) {
+        throw new AirtableRepositoryError(
+          "REQUEST_FAILED",
+          "The Airtable evaluation mutation failed.",
+          {
+            status: response.status,
+            retryable: response.status === 429 || response.status >= 500,
+          },
+        );
+      }
+    }
+  }
   async findPlanForTenant(tenantId: string, planId: string): Promise<EvaluationPlan | null> {
     return this.getPlan(tenantId, planId);
   }
