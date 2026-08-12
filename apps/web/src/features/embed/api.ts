@@ -133,14 +133,246 @@ function normalizeApiOrigin(
   return origin.origin;
 }
 
-async function getPublishedProjection<T>(
+function invalidPublicResponse(message: string): PublicEmbedApiError {
+  return new PublicEmbedApiError("PUBLIC_EMBED_INVALID_RESPONSE", message, 502);
+}
+
+type PublicProjection = "agenda" | "speakers";
+
+interface PublicReleaseHeaders {
+  readonly servedProgramRevision?: number;
+  readonly cacheRevision?: number;
+}
+
+interface LoadedPublicProjection<T> {
+  readonly data: T;
+  readonly release: PublicReleaseHeaders;
+}
+
+function publicRecord(value: unknown, context: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw invalidPublicResponse(`The published ${context} response body is malformed.`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function publicString(
+  record: Record<string, unknown>,
+  key: string,
+  context: string,
+  options: { readonly allowEmpty?: boolean } = {},
+): string {
+  const value = record[key];
+  if (typeof value !== "string" || (!options.allowEmpty && value.trim().length === 0)) {
+    throw invalidPublicResponse(`The published ${context}.${key} field is malformed.`);
+  }
+  return value;
+}
+
+function publicNullableString(
+  record: Record<string, unknown>,
+  key: string,
+  context: string,
+): string | null {
+  const value = record[key];
+  if (value !== null && typeof value !== "string") {
+    throw invalidPublicResponse(`The published ${context}.${key} field is malformed.`);
+  }
+  return value;
+}
+
+function publicStringArray(
+  value: unknown,
+  context: string,
+  requireNonEmpty = false,
+): readonly string[] {
+  if (
+    !Array.isArray(value) ||
+    value.some(
+      (item) => typeof item !== "string" || (requireNonEmpty && item.trim().length === 0),
+    )
+  ) {
+    throw invalidPublicResponse(`The published ${context} field is malformed.`);
+  }
+  return value;
+}
+
+function publicEvent(value: unknown): PublishedAgenda["event"] {
+  const record = publicRecord(value, "event");
+  return {
+    slug: publicString(record, "slug", "event"),
+    name: publicString(record, "name", "event"),
+    timeZone: publicString(record, "timeZone", "event"),
+    startsOn: publicString(record, "startsOn", "event"),
+    endsOn: publicString(record, "endsOn", "event"),
+    venueName: publicNullableString(record, "venueName", "event"),
+  };
+}
+
+function publicRevision(value: unknown, context: string): PublishedAgenda["revision"] {
+  const record = publicRecord(value, context);
+  const number = record.number;
+  if (typeof number !== "number" || !Number.isSafeInteger(number) || number <= 0) {
+    throw invalidPublicResponse(`The published ${context}.number field is malformed.`);
+  }
+  return {
+    id: publicString(record, "id", context),
+    number,
+    publishedAt: publicString(record, "publishedAt", context),
+  };
+}
+
+function publicAgendaEntry(value: unknown): PublishedAgenda["entries"][number] {
+  const record = publicRecord(value, "agenda entry");
+  const trackIds =
+    record.trackIds === undefined
+      ? []
+      : publicStringArray(record.trackIds, "agenda entry.trackIds", true);
+  return {
+    id: publicString(record, "id", "agenda entry"),
+    sessionId: publicString(record, "sessionId", "agenda entry"),
+    title: publicString(record, "title", "agenda entry", { allowEmpty: true }),
+    summary: publicString(record, "summary", "agenda entry", { allowEmpty: true }),
+    format: publicString(record, "format", "agenda entry", { allowEmpty: true }),
+    speakerNames: publicStringArray(record.speakerNames, "agenda entry.speakerNames"),
+    roomName: publicString(record, "roomName", "agenda entry", { allowEmpty: true }),
+    trackNames: publicStringArray(record.trackNames, "agenda entry.trackNames"),
+    trackIds,
+    startsAt: publicString(record, "startsAt", "agenda entry"),
+    endsAt: publicString(record, "endsAt", "agenda entry"),
+  };
+}
+
+function publicAgenda(value: unknown): PublishedAgenda {
+  const record = publicRecord(value, "agenda");
+  if (!Array.isArray(record.entries)) {
+    throw invalidPublicResponse("The published agenda.entries field is malformed.");
+  }
+  return {
+    event: publicEvent(record.event),
+    revision: publicRevision(record.revision, "agenda revision"),
+    entries: record.entries.map(publicAgendaEntry),
+  };
+}
+
+function publicSpeaker(value: unknown): PublishedSpeakerGallery["speakers"][number] {
+  const record = publicRecord(value, "speaker");
+  return {
+    id: publicString(record, "id", "speaker"),
+    displayName: publicString(record, "displayName", "speaker"),
+    pronouns: publicNullableString(record, "pronouns", "speaker"),
+    jobTitle: publicNullableString(record, "jobTitle", "speaker"),
+    organization: publicNullableString(record, "organization", "speaker"),
+    biography: publicString(record, "biography", "speaker", { allowEmpty: true }),
+    photoUrl: publicNullableString(record, "photoUrl", "speaker"),
+    sessionIds: publicStringArray(record.sessionIds, "speaker.sessionIds", true),
+    sessionTitles: publicStringArray(record.sessionTitles, "speaker.sessionTitles"),
+    trackNames: publicStringArray(record.trackNames, "speaker.trackNames"),
+  };
+}
+
+function publicSpeakers(value: unknown): PublishedSpeakerGallery {
+  const record = publicRecord(value, "speakers");
+  if (!Array.isArray(record.speakers)) {
+    throw invalidPublicResponse("The published speakers.speakers field is malformed.");
+  }
+  return {
+    event: publicEvent(record.event),
+    revision: publicRevision(record.revision, "speaker revision"),
+    speakers: record.speakers.map(publicSpeaker),
+  };
+}
+
+function publicEnvelope(value: unknown, projection: PublicProjection): unknown {
+  const record = publicRecord(value, projection);
+  if (!Object.prototype.hasOwnProperty.call(record, "data")) {
+    throw invalidPublicResponse(`The published ${projection} response envelope is malformed.`);
+  }
+  return record.data;
+}
+
+function parsePublicError(value: unknown): PublicEmbedErrorResponse | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const errorValue = (value as Record<string, unknown>).error;
+  if (typeof errorValue !== "object" || errorValue === null || Array.isArray(errorValue)) {
+    return undefined;
+  }
+  const error = errorValue as Record<string, unknown>;
+  const code = typeof error.code === "string" ? error.code : undefined;
+  const message = typeof error.message === "string" ? error.message : undefined;
+  const traceId = typeof error.traceId === "string" ? error.traceId : undefined;
+  if (code === undefined && message === undefined && traceId === undefined) return undefined;
+  return {
+    error: {
+      ...(code === undefined ? {} : { code }),
+      ...(message === undefined ? {} : { message }),
+      ...(traceId === undefined ? {} : { traceId }),
+    },
+  };
+}
+
+function positiveReleaseHeader(value: string, name: string): number {
+  const normalized = value.trim();
+  if (!/^[1-9]\d*$/u.test(normalized)) {
+    throw invalidPublicResponse(`The ${name} response header is malformed.`);
+  }
+  const number = Number(normalized);
+  if (!Number.isSafeInteger(number) || number <= 0) {
+    throw invalidPublicResponse(`The ${name} response header is malformed.`);
+  }
+  return number;
+}
+
+function publicReleaseHeaders(
+  headers: Headers,
+  projection: PublicProjection,
+): PublicReleaseHeaders {
+  const programHeader = headers.get("x-sessionboard-program-revision");
+  const cacheHeader = headers.get("x-sessionboard-cache-revision");
+  const hasProgramHeader = programHeader !== null;
+  const hasCacheHeader = cacheHeader !== null;
+  if (projection === "speakers" && (!hasProgramHeader || !hasCacheHeader)) {
+    throw invalidPublicResponse(
+      "The published speakers response is missing its release headers.",
+    );
+  }
+  if (hasProgramHeader !== hasCacheHeader) {
+    throw invalidPublicResponse("The published response has incomplete release headers.");
+  }
+  if (!hasProgramHeader || !hasCacheHeader) return {};
+  return {
+    servedProgramRevision: positiveReleaseHeader(
+      programHeader,
+      "x-sessionboard-program-revision",
+    ),
+    cacheRevision: positiveReleaseHeader(cacheHeader, "x-sessionboard-cache-revision"),
+  };
+}
+
+function getPublishedProjection(
   baseUrl: string,
   eventSlug: string,
-  projection: "agenda" | "speakers",
+  projection: "agenda",
+  fetcher: PublicFetcher,
+  appEnvironment?: string,
+  bypassCache?: boolean,
+): Promise<LoadedPublicProjection<PublishedAgenda>>;
+function getPublishedProjection(
+  baseUrl: string,
+  eventSlug: string,
+  projection: "speakers",
+  fetcher: PublicFetcher,
+  appEnvironment?: string,
+  bypassCache?: boolean,
+): Promise<LoadedPublicProjection<PublishedSpeakerGallery>>;
+async function getPublishedProjection(
+  baseUrl: string,
+  eventSlug: string,
+  projection: PublicProjection,
   fetcher: PublicFetcher,
   appEnvironment?: string,
   bypassCache = false,
-): Promise<T> {
+): Promise<LoadedPublicProjection<PublishedAgenda | PublishedSpeakerGallery>> {
   const apiOrigin = normalizeApiOrigin(baseUrl, appEnvironment);
   const response = await fetcher(
     `${apiOrigin}/api/public/events/${encodeURIComponent(eventSlug)}/${projection}`,
@@ -159,9 +391,7 @@ async function getPublishedProjection<T>(
         },
   );
   if (!response.ok) {
-    const body = (await response.json().catch(() => undefined)) as
-      | PublicEmbedErrorResponse
-      | undefined;
+    const body = parsePublicError(await response.json().catch(() => undefined));
     throw new PublicEmbedApiError(
       body?.error?.code ?? "PUBLIC_EMBED_UNAVAILABLE",
       body?.error?.message ?? "This published event view is not available.",
@@ -169,8 +399,12 @@ async function getPublishedProjection<T>(
       body?.error?.traceId,
     );
   }
-  const body = (await response.json()) as { data: T };
-  return body.data;
+  const body = await response.json().catch(() => undefined);
+  const data =
+    projection === "agenda"
+      ? publicAgenda(publicEnvelope(body, projection))
+      : publicSpeakers(publicEnvelope(body, projection));
+  return { data, release: publicReleaseHeaders(response.headers, projection) };
 }
 
 export function getPublishedAgenda(
@@ -179,7 +413,9 @@ export function getPublishedAgenda(
   fetcher: PublicFetcher = fetch,
   appEnvironment?: string,
 ): Promise<PublishedAgenda> {
-  return getPublishedProjection(baseUrl, eventSlug, "agenda", fetcher, appEnvironment);
+  return getPublishedProjection(baseUrl, eventSlug, "agenda", fetcher, appEnvironment).then(
+    ({ data }) => data,
+  );
 }
 
 export function getPublishedSpeakers(
@@ -188,7 +424,9 @@ export function getPublishedSpeakers(
   fetcher: PublicFetcher = fetch,
   appEnvironment?: string,
 ): Promise<PublishedSpeakerGallery> {
-  return getPublishedProjection(baseUrl, eventSlug, "speakers", fetcher, appEnvironment);
+  return getPublishedProjection(baseUrl, eventSlug, "speakers", fetcher, appEnvironment).then(
+    ({ data }) => data,
+  );
 }
 
 export function publishedProjectionsMatch(
@@ -196,9 +434,6 @@ export function publishedProjectionsMatch(
   speakers: PublishedSpeakerGallery,
 ): boolean {
   return (
-    agenda.revision.id === speakers.revision.id &&
-    agenda.revision.number === speakers.revision.number &&
-    agenda.revision.publishedAt === speakers.revision.publishedAt &&
     agenda.event.slug.toLowerCase() === speakers.event.slug.toLowerCase() &&
     agenda.event.name === speakers.event.name &&
     agenda.event.timeZone === speakers.event.timeZone &&
@@ -208,19 +443,64 @@ export function publishedProjectionsMatch(
   );
 }
 
+export interface PublishedProgramRelease {
+  readonly servedProgramRevision: number;
+  readonly cacheRevision: number;
+}
+
+function validProgramRevision(value: number, field: string): number {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw invalidPublicResponse(`The ${field} release value is malformed.`);
+  }
+  return value;
+}
+
 export function publishedProgramFromProjections(
   agenda: PublishedAgenda,
   speakers: PublishedSpeakerGallery,
+  release?: PublishedProgramRelease,
 ): PublishedProgram {
   if (!publishedProjectionsMatch(agenda, speakers)) {
     throw new PublicEmbedApiError(
       "PUBLICATION_REVISION_MISMATCH",
-      "The published agenda and speaker views are not from the same revision.",
+      "The published agenda and speaker views do not agree on event metadata.",
       409,
     );
   }
-  return { agenda, speakers };
+  const servedProgramRevision = validProgramRevision(
+    release?.servedProgramRevision ?? agenda.revision.number,
+    "servedProgramRevision",
+  );
+  const cacheRevision = validProgramRevision(
+    release?.cacheRevision ?? servedProgramRevision,
+    "cacheRevision",
+  );
+  return { agenda, speakers, servedProgramRevision, cacheRevision };
 }
+
+function mergedProgramRelease(
+  agenda: PublicReleaseHeaders,
+  speakers: PublicReleaseHeaders,
+): PublishedProgramRelease {
+  const servedProgramRevision = speakers.servedProgramRevision ?? agenda.servedProgramRevision;
+  const cacheRevision = speakers.cacheRevision ?? agenda.cacheRevision;
+  if (servedProgramRevision === undefined || cacheRevision === undefined) {
+    throw invalidPublicResponse("The published program is missing its release headers.");
+  }
+  if (
+    (agenda.servedProgramRevision !== undefined &&
+      agenda.servedProgramRevision !== servedProgramRevision) ||
+    (agenda.cacheRevision !== undefined && agenda.cacheRevision !== cacheRevision)
+  ) {
+    throw new PublicEmbedApiError(
+      "PUBLICATION_REVISION_MISMATCH",
+      "The published agenda and speaker views do not agree on the served release.",
+      409,
+    );
+  }
+  return { servedProgramRevision, cacheRevision };
+}
+
 export function getPublishedProgram(
   baseUrl: string,
   eventSlug: string,
@@ -229,24 +509,15 @@ export function getPublishedProgram(
 ): Promise<PublishedProgram> {
   const loadPair = async (
     bypassCache: boolean,
-  ): Promise<[PublishedAgenda, PublishedSpeakerGallery]> => {
+  ): Promise<
+    [
+      LoadedPublicProjection<PublishedAgenda>,
+      LoadedPublicProjection<PublishedSpeakerGallery>,
+    ]
+  > => {
     const [agenda, speakers] = await Promise.allSettled([
-      getPublishedProjection<PublishedAgenda>(
-        baseUrl,
-        eventSlug,
-        "agenda",
-        fetcher,
-        appEnvironment,
-        bypassCache,
-      ),
-      getPublishedProjection<PublishedSpeakerGallery>(
-        baseUrl,
-        eventSlug,
-        "speakers",
-        fetcher,
-        appEnvironment,
-        bypassCache,
-      ),
+      getPublishedProjection(baseUrl, eventSlug, "agenda", fetcher, appEnvironment, bypassCache),
+      getPublishedProjection(baseUrl, eventSlug, "speakers", fetcher, appEnvironment, bypassCache),
     ]);
     if (agenda.status === "fulfilled" && speakers.status === "fulfilled") {
       return [agenda.value, speakers.value];
@@ -256,58 +527,8 @@ export function getPublishedProgram(
       speakers.status === "rejected" ? speakers.reason : undefined,
     );
   };
-  return loadPair(true).then(async ([agenda, speakers]) => {
-    if (publishedProjectionsMatch(agenda, speakers)) {
-      return { agenda, speakers };
-    }
-
-    if (agenda.revision.number < speakers.revision.number) {
-      const refreshedAgenda = await getPublishedProjection<PublishedAgenda>(
-        baseUrl,
-        eventSlug,
-        "agenda",
-        fetcher,
-        appEnvironment,
-        true,
-      );
-      if (refreshedAgenda.revision.number > speakers.revision.number) {
-        const refreshedSpeakers = await getPublishedProjection<PublishedSpeakerGallery>(
-          baseUrl,
-          eventSlug,
-          "speakers",
-          fetcher,
-          appEnvironment,
-          true,
-        );
-        return publishedProgramFromProjections(refreshedAgenda, refreshedSpeakers);
-      }
-      return publishedProgramFromProjections(refreshedAgenda, speakers);
-    }
-
-    if (speakers.revision.number < agenda.revision.number) {
-      const refreshedSpeakers = await getPublishedProjection<PublishedSpeakerGallery>(
-        baseUrl,
-        eventSlug,
-        "speakers",
-        fetcher,
-        appEnvironment,
-        true,
-      );
-      if (refreshedSpeakers.revision.number > agenda.revision.number) {
-        const refreshedAgenda = await getPublishedProjection<PublishedAgenda>(
-          baseUrl,
-          eventSlug,
-          "agenda",
-          fetcher,
-          appEnvironment,
-          true,
-        );
-        return publishedProgramFromProjections(refreshedAgenda, refreshedSpeakers);
-      }
-      return publishedProgramFromProjections(agenda, refreshedSpeakers);
-    }
-
-    const [refreshedAgenda, refreshedSpeakers] = await loadPair(true);
-    return publishedProgramFromProjections(refreshedAgenda, refreshedSpeakers);
+  return loadPair(true).then(([agenda, speakers]) => {
+    const release = mergedProgramRelease(agenda.release, speakers.release);
+    return publishedProgramFromProjections(agenda.data, speakers.data, release);
   });
 }

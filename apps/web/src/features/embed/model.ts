@@ -37,6 +37,35 @@ export function publishedEntrySpeakers(
   return speakers.filter((speaker) => speaker.sessionIds.includes(entry.sessionId));
 }
 
+function speakerMatchesTrackId(
+  speaker: PublishedSpeaker,
+  entries: readonly PublishedAgendaEntry[],
+  trackId: string,
+): boolean {
+  const sessionIds = new Set(speaker.sessionIds);
+  return entries.some(
+    (entry) =>
+      sessionIds.has(entry.sessionId) &&
+      (entry.trackIds ?? []).includes(trackId),
+  );
+}
+
+/**
+ * Filters configured speakers by stable published track IDs. Display-name facets
+ * continue to use filterSpeakers, which intentionally operates on track labels.
+ */
+export function filterSpeakersByTrackIds(
+  speakers: readonly PublishedSpeaker[],
+  entries: readonly PublishedAgendaEntry[],
+  trackIds: readonly string[],
+): readonly PublishedSpeaker[] {
+  const configuredTrackIds = trackIds.filter((trackId) => trackId.trim().length > 0);
+  if (configuredTrackIds.length === 0) return speakers;
+  return speakers.filter((speaker) =>
+    configuredTrackIds.some((trackId) => speakerMatchesTrackId(speaker, entries, trackId)),
+  );
+}
+
 export interface PublishedEntryPresenter {
   readonly key: string;
   readonly displayName: string;
@@ -232,6 +261,7 @@ export interface EmbedQuery {
   readonly theme: EmbedTheme;
   readonly layout: EmbedLayout | null;
   readonly displayFields: readonly EmbedDisplayField[] | null;
+  /** Stable published track IDs; display-name facets are separate interactive state. */
   readonly tracks: readonly string[];
   readonly accent: string | null;
   readonly backgroundColor: string | null;
@@ -322,7 +352,7 @@ export function parseEmbedQuery(source: EmbedQuerySource): EmbedQuery {
     theme,
     layout,
     displayFields,
-    tracks: normalizeEmbedCsvTracks(embedQueryCsv(source, "tracks")),
+    tracks: normalizeEmbedCsvTracks(embedQueryCsv(source, "trackIds")),
     accent: normalizeEmbedHexColor(embedQueryFirst(source, "accent")),
     backgroundColor: normalizeEmbedHexColor(embedQueryFirst(source, "backgroundColor")),
     textColor: normalizeEmbedHexColor(embedQueryFirst(source, "textColor")),
@@ -336,7 +366,7 @@ export function serializeEmbedQuery(query: EmbedQuery): string {
   if (query.displayFields) {
     params.set("displayFields", query.displayFields.join(","));
   }
-  if (query.tracks.length > 0) params.set("tracks", query.tracks.join(","));
+  if (query.tracks.length > 0) params.set("trackIds", query.tracks.join(","));
   if (query.accent) params.set("accent", query.accent);
   if (query.backgroundColor) params.set("backgroundColor", query.backgroundColor);
   if (query.textColor) params.set("textColor", query.textColor);
@@ -442,6 +472,20 @@ export function filterAgendaEntries(
     (entry) =>
       (!day || eventDateKey(entry.startsAt, timeZone) === day) &&
       (!track || entry.trackNames.includes(track)),
+  );
+}
+/**
+ * Applies configured embed filtering using immutable agenda track IDs.
+ * Missing track IDs therefore fail closed instead of falling back to labels.
+ */
+export function filterAgendaEntriesByTrackIds(
+  entries: readonly PublishedAgendaEntry[],
+  trackIds: readonly string[],
+): readonly PublishedAgendaEntry[] {
+  const configuredTrackIds = trackIds.filter((trackId) => trackId.trim().length > 0);
+  if (configuredTrackIds.length === 0) return entries;
+  return entries.filter((entry) =>
+    configuredTrackIds.some((trackId) => (entry.trackIds ?? []).includes(trackId)),
   );
 }
 
