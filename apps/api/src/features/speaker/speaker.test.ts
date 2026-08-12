@@ -3516,6 +3516,107 @@ describe("speaker routes", () => {
     expect(JSON.stringify(payload)).not.toContain("secret-route-private-asset");
   });
 });
+describe("SpeakerService organizer email previews", () => {
+  const createTemplate = (service: SpeakerService) =>
+    service.createOrganizerSpeakerEmailTemplate({
+      organizationId: "org-1",
+      eventId: "event-1",
+      accountId: "account-1",
+      templateId: "speaker-email",
+      name: "Speaker update",
+      subject: "Hello {{first_name}}",
+      html: "<p>Hello {{first_name}}</p>",
+      text: "Hello {{first_name}}",
+    });
+  const preview = (
+    service: SpeakerService,
+    template: { id: string; version: number },
+    participantIds: readonly string[],
+    templateVersion = template.version,
+  ) =>
+    service.previewOrganizerSpeakerEmails({
+      organizationId: "org-1",
+      eventId: "event-1",
+      accountId: "account-1",
+      participantIds,
+      templateId: template.id,
+      templateVersion,
+    });
+  const addRosterEntry = (repository: OrganizerSpeakerRepository, email?: string): void => {
+    repository.roster.push({
+      id: "roster:event-1:speaker-submission:submission-1:participant-1",
+      eventId: "event-1",
+      submissionId: "speaker-submission:submission-1",
+      participantId: "participant-1",
+      displayName: "Priya Raman",
+      ...(email === undefined ? {} : { email }),
+      role: "primary",
+      status: "active",
+      version: 1,
+      createdAt: now,
+      updatedAt: now,
+    });
+  };
+  const expectEmailError = (
+    error: unknown,
+    code: string,
+    status: 400 | 409,
+    message: string,
+  ): boolean => {
+    expectServiceError(error, code);
+    expect((error as SpeakerServiceError).status).toBe(status);
+    expect((error as SpeakerServiceError).message).toBe(message);
+    return true;
+  };
+
+  it("reports an unavailable approved template version", async () => {
+    const { service } = createOrganizerFixture();
+    const template = await createTemplate(service);
+
+    await expect(
+      preview(service, template, ["participant-1"], template.version + 1),
+    ).rejects.toSatisfy((error: unknown) =>
+      expectEmailError(
+        error,
+        "EMAIL_TEMPLATE_NOT_FOUND",
+        409,
+        "The approved speaker email template or requested version was not found.",
+      ),
+    );
+  });
+
+  it("reports a participant absent from the scoped roster", async () => {
+    const { service } = createOrganizerFixture();
+    const template = await createTemplate(service);
+
+    await expect(preview(service, template, ["participant-missing"])).rejects.toSatisfy(
+      (error: unknown) =>
+        expectEmailError(
+          error,
+          "EMAIL_PARTICIPANT_NOT_FOUND",
+          409,
+          "The selected speaker participant was not found in this event roster.",
+        ),
+    );
+  });
+
+  it("reports a roster participant without an email", async () => {
+    const { repository, service } = createOrganizerFixture();
+    addRosterEntry(repository);
+    const template = await createTemplate(service);
+
+    await expect(preview(service, template, ["participant-1"])).rejects.toSatisfy(
+      (error: unknown) =>
+        expectEmailError(
+          error,
+          "EMAIL_RECIPIENT_EMAIL_MISSING",
+          400,
+          "The selected speaker participant does not have an email address.",
+        ),
+    );
+  });
+});
+
 it("persists logistics, exposes reminder eligibility, and queues a versioned bulk email", async () => {
   const { repository } = createOrganizerFixture();
   const deliveries: Array<{ participantId: string; subject: string; html: string }> = [];
@@ -3610,9 +3711,9 @@ it("persists logistics, exposes reminder eligibility, and queues a versioned bul
     eventId: "event-1",
     accountId: "account-1",
     name: "Speaker update",
-    subject: "Hello {{first_name}}",
-    html: "<p>Hello {{first_name}}</p>",
-    text: "Hello {{first_name}}",
+    subject: "Hello {{first_name}} at {{email}}",
+    html: "<p>Hello {{first_name}} ({{display_name}}) at {{email}}</p>",
+    text: "Hello {{first_name}}, {{display_name}} ({{email}})",
   });
   const preview = await service.previewOrganizerSpeakerEmails({
     organizationId: "org-1",
@@ -3622,8 +3723,14 @@ it("persists logistics, exposes reminder eligibility, and queues a versioned bul
     templateId: template.id,
     templateVersion: template.version,
   });
-  expect(preview.recipients.map((recipient) => recipient.firstName)).toEqual(["Priya", "Marcus"]);
-  expect(preview.recipients[0]?.html).toContain("Hello Priya");
+  expect(preview.recipients[0]).toMatchObject({
+    displayName: "Priya Raman",
+    firstName: "Priya",
+    email: "priya@example.test",
+    subject: "Hello Priya at priya@example.test",
+    html: "<p>Hello Priya (Priya Raman) at priya@example.test</p>",
+    text: "Hello Priya, Priya Raman (priya@example.test)",
+  });
   const send = await service.sendOrganizerSpeakerEmails({
     organizationId: "org-1",
     eventId: "event-1",
@@ -3634,6 +3741,15 @@ it("persists logistics, exposes reminder eligibility, and queues a versioned bul
   expect(send.status).toBe("queued");
   expect(deliveries).toHaveLength(2);
   expect(send.history.some((entry) => entry.action === "delivery_queued")).toBe(true);
+  const replay = await service.sendOrganizerSpeakerEmails({
+    organizationId: "org-1",
+    eventId: "event-1",
+    accountId: "account-1",
+    previewId: preview.id,
+    idempotencyKey: "bulk-email-once",
+  });
+  expect(replay.id).toBe(send.id);
+  expect(deliveries).toHaveLength(2);
 });
 
 it("returns terminal invitation receipts and reports idempotent replays per recipient", async () => {

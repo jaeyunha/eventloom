@@ -142,7 +142,15 @@ import type {
   Track,
 } from "../features/sessions/types";
 import { SessionRepositoryConflictError } from "../features/sessions/types";
-import { SpeakerService } from "../features/speaker/service";
+import {
+  type SpeakerEmailDelivery,
+  type SpeakerEmailDeliveryInput,
+  type SpeakerEmailDeliveryReceipt,
+  type SpeakerEmailPreview,
+  type SpeakerEmailSend,
+  type SpeakerEmailTemplate,
+  SpeakerService,
+} from "../features/speaker/service";
 import type {
   CreatePrivateUploadGrantCommand,
   FinalizeSpeakerAssetCommand,
@@ -1370,6 +1378,56 @@ export class AirtableWebhookRepository implements WebhookRepository {
     return datesFromDelivery(updated);
   }
 }
+function speakerEmailScopeFormula(organizationId: string, eventId: string): string {
+  return `AND(${applicationIdFormula("Organization ID", organizationId)},${applicationIdFormula(
+    "Event ID",
+    eventId,
+  )})`;
+}
+
+function speakerEmailTemplateRecord(value: object): boolean {
+  return entityType(value) === "speaker_email_template";
+}
+
+function speakerEmailPreviewRecord(value: object): boolean {
+  return entityType(value) === "speaker_email_preview";
+}
+
+function speakerEmailSendRecord(value: object): boolean {
+  return entityType(value) === "speaker_email_send";
+}
+function speakerEmailTemplatePhysicalId(template: SpeakerEmailTemplate): string {
+  return [
+    "speaker-email-template",
+    encodeURIComponent(template.organizationId),
+    encodeURIComponent(template.eventId),
+    encodeURIComponent(template.id),
+    `v${template.version}`,
+  ].join(":");
+}
+
+function speakerEmailTemplateLogicalId(id: string): string {
+  const match = /^speaker-email-template:[^:]+:[^:]+:(.*):v\d+$/u.exec(id);
+  if (match?.[1] === undefined) return id;
+  return decodeURIComponent(match[1]);
+}
+
+function normalizeSpeakerEmailRecord<T extends object>(
+  value: object,
+  logicalTemplateId = false,
+): T {
+  const record = untagged(clone(value)) as JsonRecord;
+  const organizationId = textValue(record, "organizationId", "tenantId");
+  if (organizationId !== null) {
+    record.organizationId = organizationId;
+    delete record.tenantId;
+  }
+  delete record.airtableStatus;
+  if (logicalTemplateId && typeof record.id === "string") {
+    record.id = speakerEmailTemplateLogicalId(record.id);
+  }
+  return record as T;
+}
 
 /** Speaker records and task state are business records in Airtable. */
 export class AirtableSpeakerRepository implements SpeakerRepository {
@@ -1386,6 +1444,8 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
   readonly #resources: AirtableJsonStore<SpeakerEventResource & { tenantId?: string }>;
   readonly #wikiPages: AirtableJsonStore<SpeakerWikiPage & { tenantId?: string }>;
   readonly #decisions: AirtableJsonStore<JsonRecord>;
+  readonly #emailTemplates: AirtableJsonStore<JsonRecord>;
+  readonly #emailSnapshots: AirtableJsonStore<JsonRecord>;
 
   constructor(options: {
     readonly baseId: string;
@@ -1439,6 +1499,27 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       ...shared,
       table: "Decisions",
       jsonField: "Metadata JSON",
+    });
+    this.#emailTemplates = new AirtableJsonStore({
+      ...shared,
+      table: "Email Templates",
+      jsonField: "Settings JSON",
+      scopeFields: { eventId: true, organizationId: true },
+      indexedFields: {
+        Purpose: "purpose",
+        Status: "status",
+        Sender: "sender",
+      },
+    });
+    this.#emailSnapshots = new AirtableJsonStore({
+      ...shared,
+      table: "Email Send Snapshots",
+      jsonField: "Data JSON",
+      scopeFields: { eventId: true, organizationId: true },
+      indexedFields: {
+        Purpose: "purpose",
+        Status: "airtableStatus",
+      },
     });
     this.#profiles = new AirtableJsonStore({
       ...shared,
@@ -3051,6 +3132,194 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       })
       .map(({ tenantId: _tenantId, ...page }) => clone(page))
       .sort((left, right) => left.order - right.order || left.id.localeCompare(right.id));
+  }
+  async listSpeakerEmailTemplates(
+    organizationId: string,
+    eventId: string,
+  ): Promise<readonly SpeakerEmailTemplate[]> {
+    return (
+      await this.#emailTemplates.list({
+        filterByFormula: speakerEmailScopeFormula(organizationId, eventId),
+      })
+    )
+      .filter(
+        (value) =>
+          speakerEmailTemplateRecord(value) && scopedRecord(value, organizationId, eventId),
+      )
+      .map((value) => clone(normalizeSpeakerEmailRecord<SpeakerEmailTemplate>(value, true)))
+      .sort((left, right) => left.id.localeCompare(right.id) || left.version - right.version);
+  }
+
+  async saveSpeakerEmailTemplate(template: SpeakerEmailTemplate): Promise<SpeakerEmailTemplate> {
+    const physicalId = speakerEmailTemplatePhysicalId(template);
+    if ((await this.#emailTemplates.find(physicalId)) !== undefined) {
+      throw new AirtableRepositoryError(
+        "DUPLICATE_APPLICATION_ID",
+        "This immutable speaker email template version already exists.",
+      );
+    }
+    await this.#emailTemplates.create(
+      tagged(
+        { ...clone(template), id: physicalId } as unknown as JsonRecord,
+        "speaker_email_template",
+      ),
+    );
+    return clone(template);
+  }
+
+  async getSpeakerEmailPreview(
+    organizationId: string,
+    eventId: string,
+    previewId: string,
+  ): Promise<SpeakerEmailPreview | null> {
+    const value = await this.#emailSnapshots.find(previewId);
+    return value !== undefined &&
+      speakerEmailPreviewRecord(value) &&
+      scopedRecord(value, organizationId, eventId)
+      ? clone(normalizeSpeakerEmailRecord<SpeakerEmailPreview>(value))
+      : null;
+  }
+
+  async saveSpeakerEmailPreview(preview: SpeakerEmailPreview): Promise<SpeakerEmailPreview> {
+    const stored = tagged(clone(preview) as unknown as JsonRecord, "speaker_email_preview");
+    const existing = await this.#emailSnapshots.find(preview.id);
+    if (
+      existing !== undefined &&
+      speakerEmailPreviewRecord(existing) &&
+      scopedRecord(existing, preview.organizationId, preview.eventId)
+    ) {
+      await this.#emailSnapshots.update(preview.id, stored);
+    } else if (existing === undefined) {
+      await this.#emailSnapshots.create(stored);
+    } else {
+      throw new AirtableRepositoryError(
+        "DUPLICATE_APPLICATION_ID",
+        "A speaker email preview already uses this application ID outside the requested scope.",
+      );
+    }
+    return clone(preview);
+  }
+
+  async listSpeakerEmailSends(
+    organizationId: string,
+    eventId: string,
+  ): Promise<readonly SpeakerEmailSend[]> {
+    return (
+      await this.#emailSnapshots.list({
+        filterByFormula: speakerEmailScopeFormula(organizationId, eventId),
+      })
+    )
+      .filter(
+        (value) => speakerEmailSendRecord(value) && scopedRecord(value, organizationId, eventId),
+      )
+      .map((value) => clone(normalizeSpeakerEmailRecord<SpeakerEmailSend>(value)))
+      .sort(
+        (left, right) =>
+          right.createdAt.localeCompare(left.createdAt) || left.id.localeCompare(right.id),
+      );
+  }
+
+  async getSpeakerEmailSend(
+    organizationId: string,
+    eventId: string,
+    sendId: string,
+  ): Promise<SpeakerEmailSend | null> {
+    const value = await this.#emailSnapshots.find(sendId);
+    return value !== undefined &&
+      speakerEmailSendRecord(value) &&
+      scopedRecord(value, organizationId, eventId)
+      ? clone(normalizeSpeakerEmailRecord<SpeakerEmailSend>(value))
+      : null;
+  }
+
+  async saveSpeakerEmailSend(send: SpeakerEmailSend): Promise<SpeakerEmailSend> {
+    const stored = tagged(
+      {
+        ...clone(send),
+        airtableStatus: send.status === "sent" ? "delivered" : send.status,
+      } as unknown as JsonRecord,
+      "speaker_email_send",
+    );
+    const existing = await this.#emailSnapshots.find(send.id);
+    if (
+      existing !== undefined &&
+      speakerEmailSendRecord(existing) &&
+      scopedRecord(existing, send.organizationId, send.eventId)
+    ) {
+      await this.#emailSnapshots.update(send.id, stored);
+    } else if (existing === undefined) {
+      const scope = `speaker-email-send:${send.eventId}`;
+      const now = new Date();
+      const expiresAt = new Date(now.getTime() + 86_400_000).toISOString();
+      await this.#database
+        .prepare(
+          `DELETE FROM idempotency_records
+            WHERE tenant_id = ? AND scope = ? AND idempotency_key = ? AND expires_at <= ?`,
+        )
+        .bind(send.organizationId, scope, send.idempotencyKey, now.toISOString())
+        .run();
+      const claim = await this.#database
+        .prepare(
+          `INSERT INTO idempotency_records
+             (tenant_id, scope, idempotency_key, request_digest, state, created_at, expires_at)
+           VALUES (?, ?, ?, ?, 'processing', ?, ?)
+           ON CONFLICT (tenant_id, scope, idempotency_key) DO NOTHING`,
+        )
+        .bind(
+          send.organizationId,
+          scope,
+          send.idempotencyKey,
+          send.id,
+          now.toISOString(),
+          expiresAt,
+        )
+        .run();
+      const claimed = claim.meta?.changes === undefined || claim.meta.changes > 0;
+      if (!claimed) {
+        for (let attempt = 0; attempt < 40; attempt += 1) {
+          const claimedSend = await this.#emailSnapshots.find(send.id);
+          if (
+            claimedSend !== undefined &&
+            speakerEmailSendRecord(claimedSend) &&
+            scopedRecord(claimedSend, send.organizationId, send.eventId)
+          ) {
+            return clone(normalizeSpeakerEmailRecord<SpeakerEmailSend>(claimedSend));
+          }
+          await new Promise<void>((resolve) => setTimeout(resolve, 50));
+        }
+        throw new AirtableRepositoryError(
+          "REQUEST_FAILED",
+          "The existing speaker email send is still being persisted.",
+          { retryable: true },
+        );
+      }
+      try {
+        await this.#emailSnapshots.create(stored);
+        await this.#database
+          .prepare(
+            `UPDATE idempotency_records
+                SET state = 'completed'
+              WHERE tenant_id = ? AND scope = ? AND idempotency_key = ? AND request_digest = ?`,
+          )
+          .bind(send.organizationId, scope, send.idempotencyKey, send.id)
+          .run();
+      } catch (error) {
+        await this.#database
+          .prepare(
+            `DELETE FROM idempotency_records
+              WHERE tenant_id = ? AND scope = ? AND idempotency_key = ? AND request_digest = ?`,
+          )
+          .bind(send.organizationId, scope, send.idempotencyKey, send.id)
+          .run();
+        throw error;
+      }
+    } else {
+      throw new AirtableRepositoryError(
+        "DUPLICATE_APPLICATION_ID",
+        "A speaker email send already uses this application ID outside the requested scope.",
+      );
+    }
+    return clone(send);
   }
 }
 
@@ -8403,7 +8672,7 @@ function speakerDeliveryHtml(value: string): string {
 }
 
 async function speakerDeliveryKey(
-  kind: "invitation" | "reminder",
+  kind: "email" | "invitation" | "reminder",
   organizationId: string,
   eventId: string,
   idempotencyKey: string,
@@ -8417,14 +8686,55 @@ async function speakerDeliveryKey(
   return `speaker-${kind}:${[...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
-export class AirtableSpeakerReminderDeliveryAdapter implements SpeakerReminderDelivery {
+export class AirtableSpeakerReminderDeliveryAdapter
+  implements SpeakerReminderDelivery, SpeakerEmailDelivery
+{
   constructor(
     private readonly database: D1Database,
     private readonly outboxQueue: Queue<CloudflareOutboxMessage>,
+    private readonly webOrigin: string,
   ) {}
 
   enqueue(input: SpeakerReminderDeliveryInput): Promise<SpeakerReminderDeliveryReceipt> {
     return this.enqueueReminder(input);
+  }
+  async enqueueEmail(input: SpeakerEmailDeliveryInput): Promise<SpeakerEmailDeliveryReceipt> {
+    const recipientEmail = await this.verifiedRecipientEmail(input.recipientEmail);
+    if (recipientEmail === null) {
+      return { status: "failed", reason: "The speaker email recipient is unavailable." };
+    }
+    const deliveryKey = await speakerDeliveryKey(
+      "email",
+      input.organizationId,
+      input.eventId,
+      input.idempotencyKey,
+      input.participantId,
+    );
+    const result = await enqueueCloudflareOutbox({
+      database: this.database,
+      queue: this.outboxQueue,
+      tenantId: input.organizationId,
+      topic: "communications",
+      deduplicationKey: deliveryKey,
+      payload: {
+        from: input.sender,
+        to: [recipientEmail],
+        subject: input.subject,
+        html: input.html,
+        text: input.text,
+        idempotencyKey: deliveryKey,
+        eventId: input.eventId,
+        participantId: input.participantId,
+        templateId: input.templateId,
+        templateVersion: input.templateVersion,
+        actorAccountId: input.actorAccountId,
+      },
+    });
+    return { status: "queued", duplicate: !result.inserted };
+  }
+
+  queueEmail(input: SpeakerEmailDeliveryInput): Promise<SpeakerEmailDeliveryReceipt> {
+    return this.enqueueEmail(input);
   }
 
   queue(input: SpeakerReminderDeliveryInput): Promise<SpeakerReminderDeliveryReceipt> {
@@ -8446,6 +8756,11 @@ export class AirtableSpeakerReminderDeliveryAdapter implements SpeakerReminderDe
   ): Promise<SpeakerInvitationDeliveryReceipt> {
     const recipientEmail = await this.verifiedRecipientEmail(input.recipientEmail);
     if (recipientEmail === null) return { status: "failed" };
+    const portalPath = "/portal";
+    const invitationUrl = new URL("/login", this.webOrigin);
+    invitationUrl.searchParams.set("next", portalPath);
+    const invitationHref = invitationUrl.toString();
+    const escapedInvitationHref = speakerDeliveryHtml(invitationHref);
     const deliveryKey = await speakerDeliveryKey(
       "invitation",
       input.organizationId,
@@ -8463,8 +8778,8 @@ export class AirtableSpeakerReminderDeliveryAdapter implements SpeakerReminderDe
         from: DEFAULT_OPEN_SEND_SENDERS.speakers,
         to: [recipientEmail],
         subject: `Speaker invitation for ${input.eventId}`,
-        html: `<p>You are invited to participate as a speaker.</p><p>Template: <strong>${speakerDeliveryHtml(input.templateId)}</strong></p>`,
-        text: `You are invited to participate as a speaker for ${input.eventId}. Template: ${input.templateId}`,
+        html: `<p>You are invited to participate as a speaker for <strong>${speakerDeliveryHtml(input.eventId)}</strong>.</p><p><a href="${escapedInvitationHref}">Sign in to the speaker portal</a></p>`,
+        text: `You are invited to participate as a speaker for ${input.eventId}. Sign in to the speaker portal: ${invitationHref}`,
         idempotencyKey: deliveryKey,
         eventId: input.eventId,
         participantId: input.participantId,
@@ -8496,10 +8811,16 @@ export class AirtableSpeakerReminderDeliveryAdapter implements SpeakerReminderDe
       input.idempotencyKey,
       input.recipient.participantId,
     );
-    const titles = input.recipient.tasks
-      .map((task) => task.title.trim())
-      .filter((title) => title.length > 0);
-    const taskSummary = titles.length === 0 ? "your outstanding speaker tasks" : titles.join(", ");
+    const taskSummaries = input.recipient.tasks
+      .map((task) => {
+        const title = task.title.trim();
+        if (title.length === 0) return "";
+        const dueAt = task.dueAt?.trim() ?? "";
+        return dueAt.length === 0 ? title : `${title} (due ${dueAt})`;
+      })
+      .filter((summary) => summary.length > 0);
+    const taskSummary =
+      taskSummaries.length === 0 ? "your outstanding speaker tasks" : taskSummaries.join(", ");
     const escapedSummary = speakerDeliveryHtml(taskSummary);
     const result = await enqueueCloudflareOutbox({
       database: this.database,
@@ -8939,7 +9260,7 @@ function eventIdFromRequest(request: Request): string | undefined {
   return queryId === undefined || queryId.length === 0 ? undefined : queryId;
 }
 
-class AirtableEvaluationDecisionProjection {
+export class AirtableEvaluationDecisionProjection {
   constructor(
     private readonly cfp: AirtableCfpRepository,
     private readonly database: D1Database,
@@ -8955,6 +9276,20 @@ class AirtableEvaluationDecisionProjection {
     if (recipients.length === 0) return;
     const templatePurpose = input.communication.templatePurpose;
     const idempotencyKey = `decision:${input.idempotencyKey}`;
+    const title = submissionTitle(submission);
+    const participantNames = submissionParticipants(submission)
+      .map((participant) => `${participant.firstName} ${participant.lastName}`.trim())
+      .filter((name) => name.length > 0);
+    const contextText = [
+      `Event ID: ${input.eventId}`,
+      `Submission: ${title}`,
+      ...(participantNames.length > 0 ? [`Participants: ${participantNames.join(", ")}`] : []),
+    ].join("\n");
+    const contextHtml = contextText
+      .split("\n")
+      .map((line) => `<div>${escapeCfpReceiptHtml(line)}</div>`)
+      .join("");
+    const statusText = `Decision: ${input.status}`;
     await enqueueCloudflareOutbox({
       database: this.database,
       queue: this.queue,
@@ -8964,9 +9299,9 @@ class AirtableEvaluationDecisionProjection {
       payload: {
         from: DEFAULT_OPEN_SEND_SENDERS.speakers,
         to: recipients,
-        subject: `Session application ${input.status}`,
-        html: `<p>Your session application was ${input.status}.</p>`,
-        text: `Your session application was ${input.status}.`,
+        subject: `${input.eventId} — ${title} — ${input.status}`,
+        html: `${contextHtml}<div>${escapeCfpReceiptHtml(statusText)}</div>`,
+        text: `${contextText}\n${statusText}`,
         idempotencyKey,
         purpose: "decision",
         templatePurpose,
@@ -9138,8 +9473,14 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
     options.webOrigin,
     options.database,
   );
+  const speakerDelivery = new AirtableSpeakerReminderDeliveryAdapter(
+    options.database,
+    options.outboxQueue,
+    options.webOrigin,
+  );
   const speakerService = new SpeakerService(speakerRepository, privateAssets, {
-    delivery: new AirtableSpeakerReminderDeliveryAdapter(options.database, options.outboxQueue),
+    delivery: speakerDelivery,
+    emailDelivery: speakerDelivery,
   });
   const cfpService = new CfpService({
     repository: cfpRepository,

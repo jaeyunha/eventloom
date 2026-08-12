@@ -26,6 +26,7 @@ import {
   AirtableCommunicationRepository,
   AirtableCrmRepository,
   AirtableEvaluationAcceptanceHandoff,
+  AirtableEvaluationDecisionProjection,
   AirtableEvaluationReminderBoundary,
   AirtableEvaluationRepository,
   AirtableEventRepository,
@@ -4815,8 +4816,8 @@ function seedSpeakerOrganizerFixture(
 
 describe("production organizer speaker composition", () => {
   function fixture() {
-    const transport = new FakeAirtableTransport();
-    seedSpeakerOrganizerFixture(transport);
+    const transport = new FormulaRecordingTransport();
+    seedSpeakerOrganizerFixture(transport.fake);
     const { database, state } = speakerOrganizerDatabase({
       memberships: [{ organization_id: "ai-engineer", role: "owner" }],
       verifiedEmails: ["speaker@example.test"],
@@ -5405,9 +5406,100 @@ describe("production organizer speaker composition", () => {
     expect(payload).toMatchObject({
       from: "speakers@sessionboard.namuh.co",
       to: ["speaker@example.test"],
+      subject: "Speaker invitation for event-speaker",
+      html: expect.stringContaining(
+        'href="https://example.test/login?next=%2Fportal">Sign in to the speaker portal</a>',
+      ),
+      text: expect.stringContaining(
+        "Sign in to the speaker portal: https://example.test/login?next=%2Fportal",
+      ),
     });
     expect(JSON.stringify(payload)).not.toContain("foreverbrowsing.com");
-    const delivery = new AirtableSpeakerReminderDeliveryAdapter(database, queue);
+    const template = await speaker.service.createOrganizerSpeakerEmailTemplate({
+      organizationId: "ai-engineer",
+      eventId: "event-speaker",
+      accountId: "organizer-speaker",
+      templateId: "bulk-speaker-welcome",
+      name: "Bulk speaker welcome",
+      subject: "Welcome {{first_name}}",
+      html: "<p>Welcome {{first_name}} to the speaker program.</p>",
+      text: "Welcome {{first_name}} to the speaker program.",
+    });
+    const emailPreview = await speaker.service.previewOrganizerSpeakerEmails({
+      organizationId: "ai-engineer",
+      eventId: "event-speaker",
+      accountId: "organizer-speaker",
+      participantIds: ["participant-speaker"],
+      templateId: template.id,
+      templateVersion: template.version,
+    });
+    await expect(
+      speaker.service.sendOrganizerSpeakerEmails({
+        organizationId: "ai-engineer",
+        eventId: "event-speaker",
+        accountId: "organizer-speaker",
+        previewId: emailPreview.id,
+        idempotencyKey: "bulk-speaker-welcome-send",
+      }),
+    ).resolves.toMatchObject({
+      status: "queued",
+      deliveries: [
+        expect.objectContaining({
+          participantId: "participant-speaker",
+          status: "queued",
+        }),
+      ],
+    });
+    expect([...state.outbox.values()]).toContainEqual(
+      expect.objectContaining({
+        topic: "communications",
+        payload: expect.objectContaining({
+          to: ["speaker@example.test"],
+          subject: "Welcome Verified",
+          html: "<p>Welcome Verified to the speaker program.</p>",
+          text: "Welcome Verified to the speaker program.",
+          templateId: "bulk-speaker-welcome",
+          templateVersion: 1,
+        }),
+      }),
+    );
+    const delivery = new AirtableSpeakerReminderDeliveryAdapter(
+      database,
+      queue,
+      "https://web.example.test",
+    );
+    await expect(
+      delivery.enqueueReminder({
+        organizationId: "ai-engineer",
+        eventId: "event-speaker",
+        recipient: {
+          participantId: "participant-speaker",
+          displayName: "Speaker",
+          email: "speaker@example.test",
+          taskIds: ["task-headshot"],
+          tasks: [
+            {
+              taskId: "task-headshot",
+              participantId: "participant-speaker",
+              title: "Upload final headshot",
+              dueAt: "2027-05-10T17:00:00.000Z",
+            },
+          ],
+        },
+        idempotencyKey: "speaker-reminder-key",
+        actorAccountId: "organizer-speaker",
+      }),
+    ).resolves.toMatchObject({ queued: true });
+    expect([...state.outbox.values()]).toContainEqual(
+      expect.objectContaining({
+        topic: "communications",
+        payload: expect.objectContaining({
+          subject: "Reminder: Upload final headshot (due 2027-05-10T17:00:00.000Z)",
+          html: expect.stringContaining("Upload final headshot (due 2027-05-10T17:00:00.000Z)"),
+          text: expect.stringContaining("Upload final headshot (due 2027-05-10T17:00:00.000Z)"),
+        }),
+      }),
+    );
     await expect(
       delivery.enqueueInvitation({
         organizationId: "ai-engineer",
@@ -5419,7 +5511,49 @@ describe("production organizer speaker composition", () => {
         actorAccountId: "organizer-speaker",
       }),
     ).resolves.toEqual({ status: "failed" });
-    expect(state.queueMessages).toHaveLength(1);
+    expect(state.queueMessages).toHaveLength(3);
+  });
+  it("queues personalized decision email content from the canonical submission", async () => {
+    const { database, queue, state, transport } = fixture();
+    const projection = new AirtableEvaluationDecisionProjection(
+      new AirtableCfpRepository({ baseId: "base-test", transport }),
+      database,
+      queue,
+    );
+    await projection.projectDecision({
+      tenantId: "ai-engineer",
+      eventId: "event-speaker",
+      planId: "plan-speaker",
+      submissionId: "submission-speaker",
+      decisionId: "decision-speaker-rejected",
+      decisionVersion: 1,
+      status: "rejected",
+      priorStatus: null,
+      reason: "Not selected",
+      decidedByUserId: "organizer-speaker",
+      decidedAt: "2026-08-12T21:00:00.000Z",
+      idempotencyKey: "decision-speaker-rejected-v1",
+      participantProjection: {
+        status: "rejected",
+        reason: "Not selected",
+        decisionVersion: 1,
+        decidedAt: "2026-08-12T21:00:00.000Z",
+      },
+      communication: { templatePurpose: "decision_rejected" },
+    });
+    expect([...state.outbox.values()]).toContainEqual(
+      expect.objectContaining({
+        topic: "communications",
+        payload: expect.objectContaining({
+          to: ["speaker@example.test"],
+          subject: "event-speaker — Reliable Systems — rejected",
+          html: expect.stringContaining("Participants: Verified Speaker"),
+          text: expect.stringContaining(
+            "Submission: Reliable Systems\nParticipants: Verified Speaker\nDecision: rejected",
+          ),
+        }),
+      }),
+    );
   });
   it("serves an empty canonical Airtable roster, creates Priya by participant email, and reloads scoped projections", async () => {
     const transport = new FakeAirtableTransport();
@@ -5770,5 +5904,177 @@ describe("production communication repository composition", () => {
         (request) => request.method === "POST" && request.table === "Email Send Snapshots",
       ),
     ).toHaveLength(1);
+  });
+  it("persists scoped speaker email templates, previews, and send history across repositories", async () => {
+    const transport = new FormulaRecordingTransport();
+    const database = productionD1("speaker-email-unused");
+    const organizationId = "speaker-email-tenant";
+    const eventId = "speaker-email-event";
+    const createdAt = "2026-08-12T20:00:00.000Z";
+    const repository = new AirtableSpeakerRepository({
+      baseId: "base-test",
+      transport,
+      database,
+    });
+    const template = {
+      id: "speaker-welcome",
+      organizationId,
+      eventId,
+      name: "Speaker welcome",
+      version: 1,
+      status: "approved",
+      sender: "speakers@sessionboard.namuh.co",
+      subject: "Welcome {{first_name}}",
+      html: "<p>Welcome {{first_name}}</p>",
+      text: "Welcome {{first_name}}",
+      variables: ["first_name"],
+      createdBy: "organizer-email",
+      createdAt,
+      updatedAt: createdAt,
+    } as const;
+    const preview = {
+      id: "speaker-email-preview",
+      organizationId,
+      eventId,
+      templateId: template.id,
+      templateVersion: template.version,
+      recipientIds: ["participant-email"],
+      recipients: [
+        {
+          participantId: "participant-email",
+          displayName: "Priya Raman",
+          firstName: "Priya",
+          email: "priya@example.test",
+          subject: "Welcome Priya",
+          html: "<p>Welcome Priya</p>",
+          text: "Welcome Priya",
+        },
+      ],
+      subject: "Welcome Priya",
+      html: "<p>Welcome Priya</p>",
+      text: "Welcome Priya",
+      createdAt,
+      expiresAt: "2026-08-12T20:10:00.000Z",
+    } as const;
+    const send = {
+      id: "speaker-email-send",
+      organizationId,
+      eventId,
+      templateId: template.id,
+      templateVersion: template.version,
+      idempotencyKey: "speaker-email-send-key",
+      status: "queued",
+      recipientIds: ["participant-email"],
+      deliveries: [
+        {
+          participantId: "participant-email",
+          email: "priya@example.test",
+          status: "queued",
+          providerMessageId: null,
+          reason: null,
+        },
+      ],
+      history: [
+        {
+          occurredAt: createdAt,
+          action: "send_created",
+          participantId: null,
+          details: {},
+        },
+      ],
+      createdAt,
+      updatedAt: createdAt,
+    } as const;
+
+    await repository.saveSpeakerEmailTemplate(template);
+    await repository.saveSpeakerEmailPreview(preview);
+    await repository.saveSpeakerEmailSend(send);
+    await expect(repository.saveSpeakerEmailTemplate(template)).rejects.toMatchObject({
+      code: "DUPLICATE_APPLICATION_ID",
+      message: "This immutable speaker email template version already exists.",
+    });
+    await repository.saveSpeakerEmailTemplate({
+      ...template,
+      eventId: "other-speaker-email-event",
+    });
+    await repository.saveSpeakerEmailSend({
+      ...send,
+      id: "other-speaker-email-send",
+      eventId: "other-speaker-email-event",
+      idempotencyKey: "other-speaker-email-send-key",
+    });
+
+    const reloaded = new AirtableSpeakerRepository({
+      baseId: "base-test",
+      transport,
+      database,
+    });
+    await expect(reloaded.listSpeakerEmailTemplates(organizationId, eventId)).resolves.toEqual([
+      template,
+    ]);
+    await expect(
+      reloaded.getSpeakerEmailPreview(organizationId, eventId, preview.id),
+    ).resolves.toEqual(preview);
+    await expect(reloaded.listSpeakerEmailSends(organizationId, eventId)).resolves.toEqual([send]);
+    await expect(reloaded.getSpeakerEmailSend(organizationId, eventId, send.id)).resolves.toEqual(
+      send,
+    );
+    const templateListRequest = transport.requests.find(
+      (request) =>
+        request.method === "GET" &&
+        request.table === "Email Templates" &&
+        String(request.query?.filterByFormula).startsWith("AND({Organization ID}"),
+    );
+    expect(templateListRequest?.query?.filterByFormula).toBe(
+      `AND({Organization ID}='${organizationId}',{Event ID}='${eventId}')`,
+    );
+    const sendListRequest = transport.requests.find(
+      (request) =>
+        request.method === "GET" &&
+        request.table === "Email Send Snapshots" &&
+        String(request.query?.filterByFormula).startsWith("AND({Organization ID}"),
+    );
+    expect(sendListRequest?.query?.filterByFormula).toBe(
+      `AND({Organization ID}='${organizationId}',{Event ID}='${eventId}')`,
+    );
+    const deliveredSend = {
+      ...send,
+      status: "sent",
+      deliveries: send.deliveries.map((delivery) => ({
+        ...delivery,
+        status: "sent" as const,
+        providerMessageId: "message-speaker-email",
+      })),
+      history: [
+        ...send.history,
+        {
+          occurredAt: "2026-08-12T20:01:00.000Z",
+          action: "delivery_sent" as const,
+          participantId: "participant-email",
+          details: { providerMessageId: "message-speaker-email" },
+        },
+      ],
+      updatedAt: "2026-08-12T20:01:00.000Z",
+    } as const;
+    await reloaded.saveSpeakerEmailSend(deliveredSend);
+    await expect(reloaded.getSpeakerEmailSend(organizationId, eventId, send.id)).resolves.toEqual(
+      deliveredSend,
+    );
+    const terminalWrite = [...transport.requests]
+      .reverse()
+      .find((request) => request.method === "PATCH" && request.table === "Email Send Snapshots");
+    expect(
+      (terminalWrite?.body as { fields?: { Status?: string; "Data JSON"?: string } } | undefined)
+        ?.fields,
+    ).toMatchObject({
+      Status: "delivered",
+      "Data JSON": expect.stringContaining('"status":"sent"'),
+    });
+    await expect(
+      reloaded.getSpeakerEmailPreview("other-tenant", eventId, preview.id),
+    ).resolves.toBeNull();
+    await expect(
+      reloaded.getSpeakerEmailSend(organizationId, "other-event", send.id),
+    ).resolves.toBeNull();
   });
 });
