@@ -376,6 +376,101 @@ function assertEvaluationVersion(
     throw conflict(`${entityName} changed since it was loaded.`);
   }
 }
+interface AirtableEvaluationAssignmentGenerationSnapshot {
+  readonly version: number;
+  readonly committedAt: string;
+  readonly assignments: readonly EvaluationAssignment[];
+}
+
+interface AirtableEvaluationPlanRecord extends EvaluationPlan {
+  readonly assignmentGenerationSnapshot?: AirtableEvaluationAssignmentGenerationSnapshot;
+}
+
+function publicEvaluationPlan(record: AirtableEvaluationPlanRecord): EvaluationPlan {
+  const { assignmentGenerationSnapshot: _snapshot, ...plan } = untagged(record);
+  return plan;
+}
+
+function latestEvaluationAssignmentRows(
+  records: readonly object[],
+  tenantId?: string,
+  planId?: string,
+): readonly EvaluationAssignment[] {
+  const byId = new Map<string, EvaluationAssignment>();
+  for (const record of records) {
+    if (!isEvaluationAssignmentRecord(record)) continue;
+    const assignment = untagged(record as EvaluationAssignment);
+    if (
+      (tenantId !== undefined && assignment.tenantId !== tenantId) ||
+      (planId !== undefined && assignment.planId !== planId)
+    ) {
+      continue;
+    }
+    const current = byId.get(assignment.id);
+    if (
+      current === undefined ||
+      assignment.version > current.version ||
+      (assignment.version === current.version &&
+        assignment.updatedAt.localeCompare(current.updatedAt) > 0)
+    ) {
+      byId.set(assignment.id, clone(assignment));
+    }
+  }
+  return [...byId.values()];
+}
+
+function overlayEvaluationAssignmentSnapshot(
+  plan: AirtableEvaluationPlanRecord,
+  rows: readonly EvaluationAssignment[],
+): readonly EvaluationAssignment[] {
+  const scopedRows = rows.filter(
+    (assignment) =>
+      assignment.tenantId === plan.tenantId &&
+      assignment.eventId === plan.eventId &&
+      assignment.planId === plan.id,
+  );
+  const snapshot = plan.assignmentGenerationSnapshot;
+  if (snapshot === undefined) return latestEvaluationAssignmentRows(scopedRows);
+
+  const assignments = new Map<string, EvaluationAssignment>();
+  for (const assignment of snapshot.assignments) {
+    if (
+      assignment.tenantId === plan.tenantId &&
+      assignment.eventId === plan.eventId &&
+      assignment.planId === plan.id
+    ) {
+      assignments.set(assignment.id, clone(assignment));
+    }
+  }
+  for (const row of latestEvaluationAssignmentRows(scopedRows)) {
+    const committed = assignments.get(row.id);
+    if (committed !== undefined && row.version > committed.version) {
+      assignments.set(row.id, clone(row));
+    }
+  }
+  return [...assignments.values()];
+}
+
+function overlayEvaluationAssignmentSnapshots(
+  plans: readonly AirtableEvaluationPlanRecord[],
+  rows: readonly EvaluationAssignment[],
+): readonly EvaluationAssignment[] {
+  const planByKey = new Map(
+    plans.map((plan) => [`${plan.tenantId}\u0000${plan.id}`, plan] as const),
+  );
+  const result = new Map<string, EvaluationAssignment>();
+  for (const plan of plans) {
+    for (const assignment of overlayEvaluationAssignmentSnapshot(plan, rows)) {
+      result.set(`${assignment.tenantId}\u0000${assignment.id}`, assignment);
+    }
+  }
+  for (const assignment of latestEvaluationAssignmentRows(rows)) {
+    if (!planByKey.has(`${assignment.tenantId}\u0000${assignment.planId}`)) {
+      result.set(`${assignment.tenantId}\u0000${assignment.id}`, assignment);
+    }
+  }
+  return [...result.values()];
+}
 
 function isEvaluationDecisionRecord(value: object): value is EvaluationDecision {
   if (!isRecord(value)) return false;
@@ -5414,7 +5509,7 @@ export class AirtableCfpRepository implements CfpRepository {
 }
 
 export class AirtableEvaluationRepository implements EvaluationRepository {
-  readonly #plans: AirtableJsonStore<EvaluationPlan>;
+  readonly #plans: AirtableJsonStore<AirtableEvaluationPlanRecord>;
   readonly #assignments: AirtableJsonStore<EvaluationAssignment>;
   readonly #reviews: AirtableJsonStore<EvaluationReview>;
   readonly #suggestions: AirtableJsonStore<EvaluationSuggestion>;
@@ -5471,8 +5566,11 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
 
   async getPlan(tenantId: string, planId: string): Promise<EvaluationPlan | null> {
     const plan = await this.#plans.find(planId);
-    return plan !== undefined && plan.tenantId === tenantId ? untagged(plan) : null;
+    return plan !== undefined && plan.tenantId === tenantId
+      ? publicEvaluationPlan(plan)
+      : null;
   }
+
   async listPlans(tenantId: string, eventId?: string): Promise<readonly EvaluationPlan[]> {
     const plans = await this.#plans.list({
       filterByFormula: jsonContainsAllFormula(
@@ -5482,69 +5580,120 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
     });
     return plans
       .filter(
-        (plan) => plan.tenantId === tenantId && (eventId === undefined || plan.eventId === eventId),
+        (plan) =>
+          plan.tenantId === tenantId && (eventId === undefined || plan.eventId === eventId),
       )
-      .map((plan) => clone(untagged(plan)));
+      .map((plan) => clone(publicEvaluationPlan(plan)));
   }
 
   async putPlan(plan: EvaluationPlan, expectedVersion: number | null): Promise<void> {
-    const existing = await this.#plans.find(plan.id);
+    const existingRecord = await this.#plans.findWithRecordId(plan.id);
+    const existing = existingRecord?.entity;
     if (
       (existing?.version ?? null) !== expectedVersion ||
-      (existing && existing.tenantId !== plan.tenantId)
+      (existing !== undefined && existing.tenantId !== plan.tenantId)
     ) {
       throw conflict("Evaluation plan changed since it was loaded.");
     }
-    if (existing === undefined) await this.#plans.create(plan);
-    else await this.#plans.update(plan.id, plan);
+    const stored: AirtableEvaluationPlanRecord = {
+      ...clone(plan),
+      ...(existing?.assignmentGenerationSnapshot === undefined
+        ? {}
+        : { assignmentGenerationSnapshot: existing.assignmentGenerationSnapshot }),
+    };
+    if (existingRecord === undefined) await this.#plans.create(stored);
+    else await this.#plans.updateByRecordId(plan.id, existingRecord.recordId, stored);
   }
 
   async getAssignment(
     tenantId: string,
     assignmentId: string,
   ): Promise<EvaluationAssignment | null> {
-    const assignment = await this.#assignments.find(assignmentId);
-    return assignment !== undefined &&
-      isEvaluationAssignmentRecord(assignment) &&
-      assignment.tenantId === tenantId
-      ? untagged(assignment)
-      : null;
+    const [storedAssignment, candidatePlans] = await Promise.all([
+      this.#assignments.find(assignmentId),
+      this.#plans.list(),
+    ]);
+    const row =
+      storedAssignment !== undefined &&
+      isEvaluationAssignmentRecord(storedAssignment) &&
+      storedAssignment.tenantId === tenantId
+        ? untagged(storedAssignment)
+        : null;
+    const plans = candidatePlans.filter((plan) => plan.tenantId === tenantId);
+    if (
+      row !== null &&
+      !plans.some((plan) => plan.id === row.planId)
+    ) {
+      const rowPlan = await this.#plans.find(row.planId);
+      if (rowPlan !== undefined && rowPlan.tenantId === tenantId) plans.push(rowPlan);
+    }
+
+    const snapshotPlans = plans.filter((plan) =>
+      plan.assignmentGenerationSnapshot?.assignments.some(
+        (assignment) => assignment.tenantId === tenantId && assignment.id === assignmentId,
+      ),
+    );
+    if (snapshotPlans.length > 1) {
+      throw conflict("Multiple evaluation plans contain the reviewer assignment.");
+    }
+    const snapshotPlan = snapshotPlans[0];
+    if (snapshotPlan !== undefined) {
+      return (
+        overlayEvaluationAssignmentSnapshot(
+          snapshotPlan,
+          row === null ? [] : [row],
+        ).find((assignment) => assignment.id === assignmentId) ?? null
+      );
+    }
+    if (
+      row !== null &&
+      plans.some(
+        (plan) =>
+          plan.id === row.planId && plan.assignmentGenerationSnapshot !== undefined,
+      )
+    ) {
+      return null;
+    }
+    return row === null ? null : clone(row);
   }
 
   async listAssignments(
     tenantId: string,
     planId: string,
   ): Promise<readonly EvaluationAssignment[]> {
-    const byId = new Map<string, EvaluationAssignment>();
-    for (const assignment of await this.#assignments.list()) {
-      if (
-        !isEvaluationAssignmentRecord(assignment) ||
-        assignment.tenantId !== tenantId ||
-        assignment.planId !== planId
-      ) {
-        continue;
-      }
-      const current = byId.get(assignment.id);
-      if (
-        current === undefined ||
-        assignment.version > current.version ||
-        (assignment.version === current.version &&
-          (assignment.updatedAt ?? "").localeCompare(current.updatedAt ?? "") > 0)
-      ) {
-        byId.set(assignment.id, assignment);
-      }
-    }
-    return [...byId.values()].map((assignment) => untagged(assignment));
+    const [plan, rows] = await Promise.all([
+      this.#plans.find(planId),
+      this.#assignments.list(),
+    ]);
+    const assignments = latestEvaluationAssignmentRows(rows, tenantId, planId);
+    if (plan === undefined || plan.tenantId !== tenantId) return assignments;
+    return overlayEvaluationAssignmentSnapshot(plan, assignments);
   }
 
   async replaceAssignment(
     scope: EvaluationAssignmentScope,
     input: EvaluationAssignmentReplacementInput,
   ): Promise<EvaluationAssignmentReplacementResult> {
-    const records = await this.#evaluations.listWithRecordIds();
-    const assignments = records
-      .filter(({ entity }) => isEvaluationAssignmentRecord(entity))
-      .map(({ entity }) => untagged(entity as unknown as EvaluationAssignment));
+    const [planRecord, records] = await Promise.all([
+      this.#plans.findWithRecordId(scope.planId),
+      this.#evaluations.listWithRecordIds(),
+    ]);
+    if (
+      planRecord === undefined ||
+      planRecord.entity.tenantId !== scope.tenantId ||
+      planRecord.entity.eventId !== scope.eventId
+    ) {
+      throw conflict("Reviewer assignment replacement is outside its target scope.");
+    }
+    const assignmentRows = latestEvaluationAssignmentRows(
+      records.map(({ entity }) => entity),
+      scope.tenantId,
+      scope.planId,
+    );
+    const assignments = overlayEvaluationAssignmentSnapshot(
+      planRecord.entity,
+      assignmentRows,
+    );
     const reviews = records
       .filter(({ entity }) => isEvaluationReviewRecord(entity))
       .map(({ entity }) => untagged(entity as unknown as EvaluationReview));
@@ -5611,10 +5760,6 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
         supersededAt,
       },
     };
-    await this.#upsertEvaluationEntities([
-      tagged(supersededAssignment, "evaluation_assignment"),
-      tagged(successorAssignment, "evaluation_assignment"),
-    ]);
 
     const resultScope: EvaluationAssignmentScope = {
       ...scope,
@@ -5625,6 +5770,11 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
     );
     assignmentsById.set(supersededAssignment.id, clone(supersededAssignment));
     assignmentsById.set(successorAssignment.id, clone(successorAssignment));
+    await this.#commitAssignmentGeneration(
+      planRecord,
+      [...assignmentsById.values()],
+      supersededAt,
+    );
 
     return {
       scope: resultScope,
@@ -5649,23 +5799,32 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
       throw conflict("A distribution reason is required.");
     }
 
-    const records = await this.#evaluations.listWithRecordIds();
-    const assignmentsByStorageKey = new Map<string, EvaluationAssignment>();
-    for (const { entity } of records) {
-      if (!isEvaluationAssignmentRecord(entity)) continue;
-      const assignment = untagged(entity as unknown as EvaluationAssignment);
-      const key = `${assignment.tenantId}\u0000${assignment.id}`;
-      const current = assignmentsByStorageKey.get(key);
-      if (
-        current === undefined ||
-        assignment.version > current.version ||
-        (assignment.version === current.version &&
-          assignment.updatedAt.localeCompare(current.updatedAt) > 0)
-      ) {
-        assignmentsByStorageKey.set(key, assignment);
-      }
+    const [planRecord, records] = await Promise.all([
+      this.#plans.findWithRecordId(scope.planId),
+      this.#evaluations.listWithRecordIds(),
+    ]);
+    if (
+      planRecord === undefined ||
+      planRecord.entity.tenantId !== scope.tenantId ||
+      planRecord.entity.eventId !== scope.eventId
+    ) {
+      throw conflict("Reviewer assignment distribution is outside its target scope.");
     }
-    const assignments = [...assignmentsByStorageKey.values()];
+    const assignmentRows = latestEvaluationAssignmentRows(
+      records.map(({ entity }) => entity),
+      scope.tenantId,
+      scope.planId,
+    );
+    const assignments = overlayEvaluationAssignmentSnapshot(
+      planRecord.entity,
+      assignmentRows,
+    );
+    const assignmentsByStorageKey = new Map(
+      assignments.map(
+        (assignment) =>
+          [`${assignment.tenantId}\u0000${assignment.id}`, assignment] as const,
+      ),
+    );
     const reviews = records
       .filter(({ entity }) => isEvaluationReviewRecord(entity))
       .map(({ entity }) => untagged(entity as unknown as EvaluationReview));
@@ -5746,8 +5905,11 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
     }
 
     const desiredById = new Map(desired.map((assignment) => [assignment.id, assignment]));
-    const supersededAssignments = active.filter((assignment) => !desiredById.has(assignment.id));
-    const supersededAt = desired[0]?.updatedAt ?? active[0]?.updatedAt ?? "";
+    const supersededAssignments = active.filter(
+      (assignment) => !desiredById.has(assignment.id),
+    );
+    const supersededAt =
+      desired[0]?.updatedAt ?? active[0]?.updatedAt ?? planRecord.entity.updatedAt;
     const nextSuperseded = supersededAssignments.map(
       (assignment): EvaluationAssignment => ({
         ...clone(assignment),
@@ -5778,10 +5940,6 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
       };
     });
 
-    await this.#upsertEvaluationEntities([
-      ...nextSuperseded.map((assignment) => tagged(assignment, "evaluation_assignment")),
-      ...nextAssignments.map((assignment) => tagged(assignment, "evaluation_assignment")),
-    ]);
 
     const resultAssignments = new Map(
       assignments.map((assignment) => [assignment.id, clone(assignment)]),
@@ -5789,6 +5947,11 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
     for (const assignment of [...nextSuperseded, ...nextAssignments]) {
       resultAssignments.set(assignment.id, clone(assignment));
     }
+    await this.#commitAssignmentGeneration(
+      planRecord,
+      [...resultAssignments.values()],
+      supersededAt,
+    );
     const activeAssignments = [...resultAssignments.values()]
       .filter(
         (assignment) =>
@@ -5902,7 +6065,12 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
     review: EvaluationReview | null,
     expectedReviewVersion: number | null,
   ): Promise<EvaluationSuggestionResolution> {
-    const records = await this.#evaluations.listWithRecordIds();
+    const [records, effectiveAssignment] = await Promise.all([
+      this.#evaluations.listWithRecordIds(),
+      assignment === null
+        ? Promise.resolve(null)
+        : this.getAssignment(assignment.tenantId, assignment.id),
+    ]);
     const suggestionRecord = records.find(
       ({ entity }) => entity.id === suggestion.id && isEvaluationSuggestionRecord(entity),
     );
@@ -5939,13 +6107,7 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
       ) {
         throw conflict("Suggestion resolution targeted another assignment.");
       }
-      const currentAssignmentRecord = records.find(
-        ({ entity }) => entity.id === assignment.id && isEvaluationAssignmentRecord(entity),
-      );
-      const currentAssignment =
-        currentAssignmentRecord === undefined
-          ? null
-          : untagged(currentAssignmentRecord.entity as unknown as EvaluationAssignment);
+    const currentAssignment = effectiveAssignment;
       if (
         currentAssignment !== null &&
         (currentAssignment.tenantId !== suggestion.tenantId ||
@@ -6004,53 +6166,50 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
   ): Promise<ReviewerWorkspaceRecords> {
     const allowedEventIds = new Set(eventIds);
     if (allowedEventIds.size === 0) return { assignments: [], reviews: [] };
-    const records = await this.#evaluations.list({
-      filterByFormula: reviewerWorkspaceFormula("Scores JSON", tenantId, reviewerId, [
-        ...allowedEventIds,
-      ]),
-    });
-    const assignmentsById = new Map<string, EvaluationAssignment>();
+    const [records, planRecords] = await Promise.all([
+      this.#evaluations.list({
+        filterByFormula: reviewerWorkspaceFormula("Scores JSON", tenantId, reviewerId, [
+          ...allowedEventIds,
+        ]),
+      }),
+      this.#plans.list({
+        filterByFormula: organizationScopeFormula("Rounds JSON", tenantId, [
+          ...allowedEventIds,
+        ]),
+      }),
+    ]);
+    const plans = planRecords.filter(
+      (plan) => plan.tenantId === tenantId && allowedEventIds.has(plan.eventId),
+    );
+    const assignmentRows = latestEvaluationAssignmentRows(records, tenantId);
+    const assignments = overlayEvaluationAssignmentSnapshots(plans, assignmentRows).filter(
+      (assignment) =>
+        assignment.tenantId === tenantId &&
+        assignment.reviewerId === reviewerId &&
+        allowedEventIds.has(assignment.eventId) &&
+        assignment.status !== "superseded",
+    );
     const reviewsByAssignment = new Map<string, EvaluationReview>();
     for (const record of records) {
-      const assignmentRecord = isEvaluationAssignmentRecord(record);
-      const reviewRecord = isEvaluationReviewRecord(record);
-      if (!assignmentRecord && !reviewRecord) continue;
+      if (!isEvaluationReviewRecord(record)) continue;
+      const review = untagged(record as unknown as EvaluationReview);
       if (
-        resolvedOrganizationId(record) !== tenantId ||
-        record.reviewerId !== reviewerId ||
-        typeof record.eventId !== "string" ||
-        !allowedEventIds.has(record.eventId)
+        review.tenantId !== tenantId ||
+        review.reviewerId !== reviewerId ||
+        !allowedEventIds.has(review.eventId)
       ) {
         continue;
       }
-      const value = untagged(record);
-      if (assignmentRecord) {
-        const assignment = value as unknown as EvaluationAssignment;
-        const current = assignmentsById.get(assignment.id);
-        if (
-          current === undefined ||
-          assignment.version > current.version ||
-          (assignment.version === current.version &&
-            assignment.updatedAt.localeCompare(current.updatedAt) > 0)
-        ) {
-          assignmentsById.set(assignment.id, clone(assignment));
-        }
-      } else {
-        const review = value as unknown as EvaluationReview;
-        const current = reviewsByAssignment.get(review.assignmentId);
-        if (
-          current === undefined ||
-          review.version > current.version ||
-          (review.version === current.version &&
-            review.updatedAt.localeCompare(current.updatedAt) > 0)
-        ) {
-          reviewsByAssignment.set(review.assignmentId, clone(review));
-        }
+      const current = reviewsByAssignment.get(review.assignmentId);
+      if (
+        current === undefined ||
+        review.version > current.version ||
+        (review.version === current.version &&
+          review.updatedAt.localeCompare(current.updatedAt) > 0)
+      ) {
+        reviewsByAssignment.set(review.assignmentId, clone(review));
       }
     }
-    const assignments = [...assignmentsById.values()].filter(
-      (assignment) => assignment.status !== "superseded",
-    );
     const activeAssignmentIds = new Set(assignments.map((assignment) => assignment.id));
     return {
       assignments,
@@ -6064,55 +6223,45 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
     tenantId: string,
     eventId: string,
   ): Promise<OrganizerWorkspaceRecords> {
-    const [evaluationRecords, decisionRecords] = await Promise.all([
+    const [evaluationRecords, decisionRecords, planRecords] = await Promise.all([
       this.#evaluations.list({
         filterByFormula: jsonContainsAllFormula("Scores JSON", [tenantId, eventId]),
       }),
       this.#decisions.list({
         filterByFormula: jsonContainsAllFormula("Metadata JSON", [tenantId, eventId]),
       }),
+      this.#plans.list({
+        filterByFormula: jsonContainsAllFormula("Rounds JSON", [tenantId, eventId]),
+      }),
     ]);
-    const assignmentsById = new Map<string, EvaluationAssignment>();
+    const plans = planRecords.filter(
+      (plan) => plan.tenantId === tenantId && plan.eventId === eventId,
+    );
+    const assignmentRows = latestEvaluationAssignmentRows(evaluationRecords, tenantId);
+    const assignments = overlayEvaluationAssignmentSnapshots(plans, assignmentRows).filter(
+      (assignment) =>
+        assignment.tenantId === tenantId && assignment.eventId === eventId,
+    );
     const reviewsByAssignment = new Map<string, EvaluationReview>();
     const decisionsBySubmission = new Map<string, EvaluationDecision>();
 
     for (const record of evaluationRecords) {
-      const assignmentRecord = isEvaluationAssignmentRecord(record);
-      const reviewRecord = isEvaluationReviewRecord(record);
-      if (!assignmentRecord && !reviewRecord) continue;
+      if (!isEvaluationReviewRecord(record)) continue;
+      const review = untagged(record as unknown as EvaluationReview);
       if (
-        resolvedOrganizationId(record) !== tenantId ||
-        record.eventId !== eventId ||
-        typeof record.version !== "number" ||
-        typeof record.updatedAt !== "string"
+        review.tenantId !== tenantId ||
+        review.eventId !== eventId
       ) {
         continue;
       }
-      const value = untagged(record);
-      if (assignmentRecord) {
-        const assignment = value as unknown as EvaluationAssignment;
-        if (typeof assignment.id !== "string") continue;
-        const current = assignmentsById.get(assignment.id);
-        if (
-          current === undefined ||
-          assignment.version > current.version ||
-          (assignment.version === current.version &&
-            assignment.updatedAt.localeCompare(current.updatedAt) > 0)
-        ) {
-          assignmentsById.set(assignment.id, clone(assignment));
-        }
-      } else {
-        const review = value as unknown as EvaluationReview;
-        if (typeof review.assignmentId !== "string") continue;
-        const current = reviewsByAssignment.get(review.assignmentId);
-        if (
-          current === undefined ||
-          review.version > current.version ||
-          (review.version === current.version &&
-            review.updatedAt.localeCompare(current.updatedAt) > 0)
-        ) {
-          reviewsByAssignment.set(review.assignmentId, clone(review));
-        }
+      const current = reviewsByAssignment.get(review.assignmentId);
+      if (
+        current === undefined ||
+        review.version > current.version ||
+        (review.version === current.version &&
+          review.updatedAt.localeCompare(current.updatedAt) > 0)
+      ) {
+        reviewsByAssignment.set(review.assignmentId, clone(review));
       }
     }
 
@@ -6138,7 +6287,7 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
     }
 
     return {
-      assignments: [...assignmentsById.values()].filter(
+      assignments: assignments.filter(
         (assignment) => assignment.status !== "superseded",
       ),
       reviews: [...reviewsByAssignment.values()],
@@ -6166,12 +6315,24 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
     review: EvaluationReview,
     expectedReviewVersion: number | null,
   ): Promise<void> {
-    const currentAssignment = await this.getAssignment(assignment.tenantId, assignment.id);
-    if (currentAssignment?.version !== expectedAssignmentVersion) {
-      throw conflict("Assignment changed since it was loaded.");
-    }
-    await this.putReview(review, expectedReviewVersion);
-    await this.#assignments.update(assignment.id, tagged(assignment, "evaluation_assignment"));
+    const [currentAssignment, currentReview] = await Promise.all([
+      this.getAssignment(assignment.tenantId, assignment.id),
+      this.getReview(review.tenantId, review.assignmentId),
+    ]);
+    assertEvaluationVersion(
+      currentAssignment?.version ?? null,
+      expectedAssignmentVersion,
+      "Assignment",
+    );
+    assertEvaluationVersion(
+      currentReview?.version ?? null,
+      expectedReviewVersion,
+      "Review",
+    );
+    await this.#upsertEvaluationEntities([
+      tagged(assignment, "evaluation_assignment"),
+      tagged({ ...review, id: `review:${review.assignmentId}` }, "evaluation_review"),
+    ]);
   }
 
   async getConflict(
@@ -6195,10 +6356,13 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
     if (await this.getConflict(assignment.tenantId, assignment.id)) {
       throw conflict("A conflict has already been declared for this assignment.");
     }
-    await this.#assignments.update(assignment.id, tagged(assignment, "evaluation_assignment"));
-    await this.#conflicts.create(
-      tagged({ ...declaration, id: `conflict:${assignment.id}` }, "evaluation_conflict"),
-    );
+    await this.#upsertEvaluationEntities([
+      tagged(assignment, "evaluation_assignment"),
+      tagged(
+        { ...declaration, id: `conflict:${assignment.id}` },
+        "evaluation_conflict",
+      ),
+    ]);
   }
 
   async submitReview(
@@ -6207,11 +6371,24 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
     review: EvaluationReview,
     expectedReviewVersion: number,
   ): Promise<void> {
-    const current = await this.getAssignment(assignment.tenantId, assignment.id);
-    if (current?.version !== expectedAssignmentVersion)
-      throw conflict("Assignment changed since it was loaded.");
-    await this.putReview(review, expectedReviewVersion);
-    await this.#assignments.update(assignment.id, tagged(assignment, "evaluation_assignment"));
+    const [currentAssignment, currentReview] = await Promise.all([
+      this.getAssignment(assignment.tenantId, assignment.id),
+      this.getReview(review.tenantId, review.assignmentId),
+    ]);
+    assertEvaluationVersion(
+      currentAssignment?.version ?? null,
+      expectedAssignmentVersion,
+      "Assignment",
+    );
+    assertEvaluationVersion(
+      currentReview?.version ?? null,
+      expectedReviewVersion,
+      "Review",
+    );
+    await this.#upsertEvaluationEntities([
+      tagged(assignment, "evaluation_assignment"),
+      tagged({ ...review, id: `review:${review.assignmentId}` }, "evaluation_review"),
+    ]);
   }
 
   async getDecision(
@@ -6239,6 +6416,58 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
     else await this.#decisions.updateByRecordId(id, existingRecord.recordId, storedDecision);
   }
 
+  async #commitAssignmentGeneration(
+    planRecord: {
+      readonly recordId: string;
+      readonly entity: AirtableEvaluationPlanRecord;
+    },
+    assignments: readonly EvaluationAssignment[],
+    committedAt: string,
+  ): Promise<void> {
+    const byId = new Map<string, EvaluationAssignment>();
+    for (const assignment of assignments) {
+      if (
+        assignment.tenantId !== planRecord.entity.tenantId ||
+        assignment.eventId !== planRecord.entity.eventId ||
+        assignment.planId !== planRecord.entity.id
+      ) {
+        throw conflict("Reviewer assignment generation is outside its target plan.");
+      }
+      if (byId.has(assignment.id)) {
+        throw conflict("Reviewer assignment generation contains duplicate assignments.");
+      }
+      byId.set(assignment.id, clone(assignment));
+    }
+
+    const snapshot: AirtableEvaluationAssignmentGenerationSnapshot = {
+      version: (planRecord.entity.assignmentGenerationSnapshot?.version ?? 0) + 1,
+      committedAt,
+      assignments: [...byId.values()].sort((left, right) => left.id.localeCompare(right.id)),
+    };
+    const storedPlan: AirtableEvaluationPlanRecord = {
+      ...clone(planRecord.entity),
+      assignmentGenerationSnapshot: snapshot,
+    };
+
+    // This single Review Plan update is the authoritative visibility boundary.
+    await this.#plans.updateByRecordId(
+      planRecord.entity.id,
+      planRecord.recordId,
+      storedPlan,
+    );
+
+    // Assignment rows are only a cache/history materialization. A failed later
+    // Airtable batch cannot alter the already committed authoritative snapshot.
+    try {
+      await this.#upsertEvaluationEntities(
+        snapshot.assignments.map((assignment) =>
+          tagged(assignment, "evaluation_assignment"),
+        ),
+      );
+    } catch {
+      // Snapshot readers remain authoritative; a later mutation rematerializes all rows.
+    }
+  }
   async #upsertEvaluationEntities(entities: readonly object[]): Promise<void> {
     for (let index = 0; index < entities.length; index += 10) {
       const batch = entities.slice(index, index + 10);
@@ -7100,13 +7329,18 @@ export class AirtableOrganizerOverviewRepository implements OrganizerOverviewRou
           eventIds.has(eventReference(plan) ?? "")),
     );
     const planIds = new Set(plans.map((plan) => textValue(plan, "id")).filter(isNonEmpty));
-    const assignments = allEvaluations.filter(
-      (evaluation) =>
-        isEvaluationAssignmentRecord(evaluation) &&
-        belongsToOrganization(evaluation, organizationId, eventIds) &&
-        planIds.has(textValue(evaluation, "planId") ?? "") &&
-        eventIds.has(eventReference(evaluation) ?? ""),
-    );
+    const assignmentRows = latestEvaluationAssignmentRows(allEvaluations);
+    const assignments = overlayEvaluationAssignmentSnapshots(
+      plans as unknown as readonly AirtableEvaluationPlanRecord[],
+      assignmentRows,
+    )
+      .filter(
+        (assignment) =>
+          assignment.tenantId === organizationId &&
+          planIds.has(assignment.planId) &&
+          eventIds.has(assignment.eventId),
+      )
+      .map((assignment) => assignment as unknown as JsonRecord);
     const pendingAssignments = assignments.filter((assignment) => {
       const status = textValue(assignment, "status");
       return status === "assigned" || status === "in_progress";
@@ -8587,7 +8821,7 @@ export class AirtableReportRepository implements ReportRepository {
   readonly #sessions: AirtableJsonStore<Session>;
   readonly #participants: AirtableJsonStore<JsonRecord>;
   readonly #profiles: AirtableJsonStore<JsonRecord>;
-  readonly #plans: AirtableJsonStore<EvaluationPlan>;
+  readonly #plans: AirtableJsonStore<AirtableEvaluationPlanRecord>;
   readonly #assignments: AirtableJsonStore<EvaluationAssignment>;
 
   constructor(options: {
@@ -8727,6 +8961,21 @@ export class AirtableReportRepository implements ReportRepository {
     const plans = (await this.#plans.list()).filter((plan) =>
       scopedRecord(plan, input.tenantId, input.eventId),
     );
+    const assignmentRows = latestEvaluationAssignmentRows(
+      await this.#assignments.list(),
+      input.tenantId,
+    );
+    const assignmentsByPlan = new Map(
+      plans.map(
+        (plan) =>
+          [
+            plan.id,
+            overlayEvaluationAssignmentSnapshot(plan, assignmentRows).filter(
+              (assignment) => assignment.status !== "superseded",
+            ),
+          ] as const,
+      ),
+    );
     const records: ReportProgramRecord[] = [];
     for (const session of sessions) {
       const sessionRecord: ReportProgramRecord["session"] = {
@@ -8805,13 +9054,7 @@ export class AirtableReportRepository implements ReportRepository {
         });
       const progress = [];
       for (const plan of plans) {
-        const assignments = (await this.#assignments.list()).filter(
-          (value) =>
-            isEvaluationAssignmentRecord(value) &&
-            value.tenantId === input.tenantId &&
-            value.eventId === input.eventId &&
-            value.planId === plan.id,
-        ) as readonly EvaluationAssignment[];
+        const assignments = assignmentsByPlan.get(plan.id) ?? [];
         const counts = {
           assigned: assignments.filter((entry) => entry.status === "assigned").length,
           inProgress: assignments.filter((entry) => entry.status === "in_progress").length,
