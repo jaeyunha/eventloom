@@ -9,13 +9,19 @@ import { createBetterAuthAccount } from "./provision-personas.mjs";
 import {
   APPLICATION_ID_FIELD,
   buildSeedRecords,
+  CHAIN_CONTEXT_KEYS,
+  CHAIN_CONTEXT_VERSION,
+  FOUNDATION_TABLES,
   FULL_CHAIN_MODE,
+  SCENARIO_OWNED_TABLES,
+  emptyChainContext,
   loadFixture,
   loadSeedConfig,
   stableId,
+  validateChainContext,
 } from "./seed-devflow.mjs";
 
-export const REPAIR_VERSION = "repair:v5";
+export const REPAIR_VERSION = "repair:v6";
 export const CANONICAL_ORGANIZATION_ID = "ai-engineer";
 export const CANONICAL_EVENT_ID = "devflow-conf-2027";
 export const DEFAULT_REPAIR_MANIFEST_PATH = "/tmp/killmysaas-evals/devflow-repair-manifest.json";
@@ -32,91 +38,69 @@ export const REPAIR_PHASES = Object.freeze([
   "reset",
 ]);
 
-export const RESET_WORKFLOW_VERSION = "workflow-reset:v1";
+export const RESET_WORKFLOW_VERSION = "workflow-reset:v2";
 export const RESET_WORKFLOW_CONFIRMATION = CANONICAL_ORGANIZATION_ID;
+export const PRODUCTION_RESET_CONFIRMATION_PREFIX = "I_UNDERSTAND_PRODUCTION_DEVFLOW_RESET";
 export const RESET_WORKFLOW_PHASE = "reset-workflow";
 export const RESET_PROTECTED_TABLES = Object.freeze([
   "Organizations",
   "Memberships",
-  "Events",
-  "CFP Forms",
-  "Tracks",
-  "Formats",
-  "Rooms",
-  "Session Settings",
-  "Levels",
-  "Tags",
-  "Session Statuses",
   "Reusable Fields",
 ]);
 export const RESET_DISCOVERY_TABLES = Object.freeze([
-  "Submissions",
-  "Participants",
-  "Speaker Profiles",
-  "Review Plans",
-  "Evaluations",
-  "Decisions",
-  "Speaker Tasks",
-  "Sessions",
-  "Agenda Versions",
-  "Published Speaker Projections",
-  "Agenda Entries",
-  "Publication Outbox",
-  "Audit Records",
-  "Portal Contexts",
-  "Session Roster",
-  "Task Forms",
-  "Task Responses",
-  "Portal Resources",
-  "Wiki Pages",
-  "File Assets",
-  "File Versions",
-  "File Comments",
-  "Email Templates",
-  "Email Send Snapshots",
-  "Report Definitions",
-  "Report Runs",
-  "Remix Candidates",
-  "Remix Audit",
-  "CRM Contacts",
-  "CRM History",
-  "CRM Pipeline",
-  "CRM Notes",
-  "CRM Event Projections",
-  "CRM Outreach",
+  ...FOUNDATION_TABLES,
+  "Levels",
+  "Tags",
+  "Session Statuses",
+  ...SCENARIO_OWNED_TABLES,
 ]);
 export const RESET_DELETE_ORDER = Object.freeze([
   "CRM Outreach",
+  "CRM Commands",
+  "CRM Imports",
   "CRM History",
   "CRM Pipeline",
   "CRM Notes",
   "CRM Event Projections",
+  "CRM Segments",
+  "CRM Contacts",
   "Email Send Snapshots",
-  "Email Templates",
+  "Report Runs",
+  "Report Definitions",
+  "Remix Audit",
+  "Remix Candidates",
   "File Comments",
   "File Versions",
   "File Assets",
   "Task Responses",
   "Task Forms",
+  "Speaker Tasks",
   "Portal Resources",
   "Wiki Pages",
+  "Portal Contexts",
   "Session Roster",
-  "Participants",
-  "Speaker Tasks",
   "Published Speaker Projections",
   "Agenda Entries",
   "Agenda Versions",
-  "Sessions",
-  "Remix Audit",
-  "Remix Candidates",
-  "Audit Records",
   "Publication Outbox",
+  "Audit Records",
   "Decisions",
   "Evaluations",
   "Review Plans",
-  "Submissions",
+  "Sessions",
   "Speaker Profiles",
-  "CRM Contacts",
+  "Participants",
+  "Submissions",
+  "Email Templates",
+  "Session Statuses",
+  "Tags",
+  "Levels",
+  "Rooms",
+  "Tracks",
+  "Formats",
+  "Session Settings",
+  "CFP Forms",
+  "Events",
 ]);
 export const IDENTITY_KEYS = Object.freeze([
   "organizer-agenda",
@@ -178,6 +162,49 @@ const SESSION_TITLES = Object.freeze({
   lightning: "Lightning: Agents in Production Q&A",
 });
 const ENVIRONMENTS = new Set(["local", "staging", "production"]);
+function environmentObject(value) {
+  if (typeof value === "string") return { EVAL_ENVIRONMENT: value };
+  if (isObject(value?.env)) return value.env;
+  if (isObject(value)) return value;
+  return {};
+}
+
+export function parseRepairEnvironment(environment = undefined, overrides = {}) {
+  const source = environmentObject(environment);
+  const name = String(
+    overrides.environment ??
+      source.EVAL_ENVIRONMENT ??
+      source.TARGET_ENVIRONMENT ??
+      source.APP_ENV ??
+      "",
+  )
+    .trim()
+    .toLowerCase();
+  if (!ENVIRONMENTS.has(name)) {
+    fail("CONFIGURATION_ERROR", "EVAL_ENVIRONMENT must be local, staging, or production.");
+  }
+  const organizationId = String(
+    overrides.organizationId ?? source.EVAL_ORGANIZATION_ID ?? CANONICAL_ORGANIZATION_ID,
+  ).trim();
+  const eventId = String(
+    overrides.eventId ?? source.EVAL_EVENT_ID ?? CANONICAL_EVENT_ID,
+  ).trim();
+  if (
+    organizationId !== CANONICAL_ORGANIZATION_ID ||
+    eventId !== CANONICAL_EVENT_ID
+  ) {
+    fail("SCOPE_MISMATCH", "The evaluator reset scope is immutable.");
+  }
+  return { environment: name, organizationId, eventId };
+}
+
+export function productionResetConfirmation(manifest) {
+  const digestValue = manifest?.resetWorkflow?.digest ?? manifest?.digest;
+  if (typeof digestValue !== "string" || digestValue.length === 0) {
+    fail("MANIFEST_INVALID", "A prepared reset manifest digest is required.");
+  }
+  return `${PRODUCTION_RESET_CONFIRMATION_PREFIX}:${digestValue}`;
+}
 const DEFAULT_FETCH = globalThis.fetch;
 
 export class DevflowRepairError extends Error {
@@ -774,10 +801,11 @@ function communicationSpecs({ fixture, sessions, manifest, config }) {
   const templateBody =
     communication.acceptance_body ??
     "Hi {speaker_name}, congratulations! Your session '{talk_title}' has been accepted.";
-  const templateTimestamp = config.repair?.publishedAt ?? PUBLISHED_AT_DEFAULT;
+  const templateTimestamp = "2026-08-09T00:00:00.000Z";
   const template = {
     id: templateId,
     tenantId: CANONICAL_ORGANIZATION_ID,
+    organizationId: CANONICAL_ORGANIZATION_ID,
     eventId: CANONICAL_EVENT_ID,
     name: "DevFlow Conf 2027 acceptance",
     purpose: "decision",
@@ -788,7 +816,7 @@ function communicationSpecs({ fixture, sessions, manifest, config }) {
     html: templateBody,
     text: templateBody,
     variables: ["speaker_name", "talk_title"],
-    createdBy: userIdOrRef(manifest, "organizer-fixture"),
+    createdBy: "evaluator-seed",
     createdAt: templateTimestamp,
     updatedAt: templateTimestamp,
     approvedBy: null,
@@ -802,9 +830,12 @@ function communicationSpecs({ fixture, sessions, manifest, config }) {
       identityKey === "speaker-priya" ? fixture.identities.speaker : fixture.identities.speaker2;
     const activityId = `${templateId}:${SPEAKER_PROFILE_IDS[identityKey]}:${session.id}`;
     const participantId = SPEAKER_PARTICIPANT_IDS[identityKey];
+    const contactId = `crm-contact:${SPEAKER_PROFILE_IDS[identityKey]}`;
     activities.push({
       id: activityId,
       templateId,
+      contactId,
+      historyId: `${activityId}:history`,
       sessionId: session.id,
       participantId,
       profileId: SPEAKER_PROFILE_IDS[identityKey],
@@ -1062,8 +1093,11 @@ function foundationOperations({ fixture, config }) {
     mode: FULL_CHAIN_MODE,
     now: config.cfp.opensAt,
   });
-  return records.map((record) =>
-    airtableOperation({
+  return records.map((record) => {
+    if (!FOUNDATION_TABLES.includes(record.table)) {
+      fail("FOUNDATION_INVALID", `${record.table} is not an immutable foundation table.`);
+    }
+    return airtableOperation({
       table: record.table,
       id: record.applicationId,
       fields: record.fields,
@@ -1072,8 +1106,8 @@ function foundationOperations({ fixture, config }) {
         Object.hasOwn(record.fields, field),
       ),
       input: record.fields,
-    }),
-  );
+    });
+  });
 }
 
 function dynamicOperations({
@@ -1630,30 +1664,6 @@ function dynamicOperations({
       }),
     );
   }
-  operations.push(
-    airtableOperation({
-      table: "Email Templates",
-      id: communication.template.id,
-      fields: {
-        [APPLICATION_ID_FIELD]: communication.template.id,
-        "Organization ID": communication.template.tenantId,
-        "Event ID": communication.template.eventId,
-        Name: communication.template.name,
-        Purpose: communication.template.purpose,
-        Status: communication.template.status,
-        Sender: communication.template.sender,
-        Subject: communication.template.subject,
-        HTML: communication.template.html,
-        Text: communication.template.text,
-        "Variables JSON": json(communication.template.variables),
-        "Settings JSON": json(communication.template),
-        Version: communication.template.version,
-      },
-      phase: "crm",
-      immutable: ["Organization ID", "Event ID", "Purpose", "Subject"],
-      input: communication.template,
-    }),
-  );
   for (const activity of communication.activities) {
     operations.push(
       commandOperation({
@@ -1673,11 +1683,11 @@ function dynamicOperations({
           profileId: activity.profileId,
           participantId: activity.participantId,
           sessionId: activity.sessionId,
-          contactId: `crm-contact:${activity.profileId}`,
-          historyId: `${activity.id}:history`,
+          contactId: activity.contactId,
+          historyId: activity.historyId,
           displayName: identityByKey(manifest, activity.identityKey).displayName,
           contact: {
-            id: `crm-contact:${activity.profileId}`,
+            id: activity.contactId,
             participantId: activity.participantId,
             profileId: activity.profileId,
             displayName: identityByKey(manifest, activity.identityKey).displayName,
@@ -1770,6 +1780,35 @@ function dynamicOperations({
   );
   return operations;
 }
+function buildRepairChainContext({ proposals, sessions, tasks, communication, operations }) {
+  const context = {
+    submissionId: proposals[0]?.id ?? null,
+    participantIds: [...new Set(proposals.map((proposal) => proposal.participantId))],
+    reviewPlanId: operations.find((operation) => operation.table === "Review Plans")?.id ?? null,
+    assignmentIds: operations
+      .filter((operation) => operation.table === "Evaluations")
+      .map((operation) => operation.applicationId),
+    sessionIds: sessions.map((session) => session.id),
+    taskIds: tasks.map((task) => task.id),
+    assetFamilyIds: operations
+      .filter((operation) => operation.table === "Asset Families")
+      .map((operation) => operation.applicationId),
+    embedConfigurationId:
+      operations.find((operation) => operation.table === "Embed Configurations")?.applicationId ??
+      null,
+    crmContactIds: [
+      ...new Set(communication.activities.map((activity) => activity.contactId)),
+    ],
+  };
+  try {
+    return validateChainContext(context);
+  } catch (error) {
+    fail(
+      "CHAIN_CONTEXT_INVALID",
+      error instanceof Error ? error.message : "The repair chain context is invalid.",
+    );
+  }
+}
 
 const REQUIRED_SESSION_METADATA_FIELDS = Object.freeze([
   "id",
@@ -1855,6 +1894,7 @@ function ensureManifestShape(manifest) {
     if (
       !isObject(manifest.resetWorkflow) ||
       manifest.resetWorkflow.version !== RESET_WORKFLOW_VERSION ||
+      !ENVIRONMENTS.has(manifest.resetWorkflow.environment) ||
       manifest.resetWorkflow.organizationId !== CANONICAL_ORGANIZATION_ID ||
       manifest.resetWorkflow.eventId !== CANONICAL_EVENT_ID ||
       !Array.isArray(manifest.resetWorkflow.deletions) ||
@@ -1864,6 +1904,19 @@ function ensureManifestShape(manifest) {
     }
   }
   const resetOnly = manifest.resetOnly === true;
+  if (!isObject(manifest.chainContext)) {
+    fail("CHAIN_CONTEXT_INVALID", "The repair manifest chain context is required.");
+  }
+  try {
+    validateChainContext(manifest.chainContext, {
+      allowEmpty: resetOnly || manifest.resetWorkflow?.status === "applied",
+    });
+  } catch (error) {
+    fail(
+      "CHAIN_CONTEXT_INVALID",
+      error instanceof Error ? error.message : "The repair manifest chain context is invalid.",
+    );
+  }
   if (
     !Array.isArray(manifest.identityLedger) ||
     (!resetOnly && manifest.identityLedger.length !== IDENTITY_KEYS.length) ||
@@ -2087,6 +2140,7 @@ function computeManifestDigest(manifest) {
     reviewWindow: manifest.reviewWindow,
     identityLedger: manifest.identityLedger,
     graph: manifest.graph,
+    chainContext: manifest.chainContext,
     operations: manifest.operations.map((operation) => ({
       key: operation.key,
       inputDigest: operation.inputDigest,
@@ -2143,6 +2197,7 @@ export function buildRepairManifest(options = {}) {
       ),
     },
     identityLedger: identity.rows,
+    chainContext: emptyChainContext(),
     graph: null,
     operations: [],
     runLedger: {},
@@ -2190,6 +2245,13 @@ export function buildRepairManifest(options = {}) {
     reviewPlan: buildReviewPlan(planningConfig, userIdOrRef(manifest, "reviewer-sam")),
   };
   manifest.operations = [...foundation, ...dynamic];
+  manifest.chainContext = buildRepairChainContext({
+    proposals,
+    sessions,
+    tasks,
+    communication,
+    operations: manifest.operations,
+  });
   manifest.digest = computeManifestDigest(manifest);
   ensureManifestShape(manifest);
   Object.defineProperty(manifest, "credentials", {
@@ -2205,8 +2267,21 @@ export function buildRepairManifest(options = {}) {
   return manifest;
 }
 
+function stripProviderIdentifiers(value) {
+  if (Array.isArray(value)) {
+    for (const entry of value) stripProviderIdentifiers(entry);
+    return value;
+  }
+  if (!isObject(value)) return value;
+  for (const key of ["recordId", "providerRecordId", "airtableRecordId"]) {
+    delete value[key];
+  }
+  for (const child of Object.values(value)) stripProviderIdentifiers(child);
+  return value;
+}
+
 function safeManifestForWrite(manifest) {
-  const sanitized = clone(manifest);
+  const sanitized = stripProviderIdentifiers(clone(manifest));
   delete sanitized.credentials;
   for (const row of sanitized.identityLedger ?? []) delete row.password;
   return sanitized;
@@ -2448,15 +2523,11 @@ function resetWorkflowScope(record) {
 }
 function resetTenantCanBeDerivedFromEvent(table) {
   return new Set([
-    "Participants",
-    "Speaker Profiles",
-    "Review Plans",
-    "Evaluations",
-    "Decisions",
-    "Speaker Tasks",
-    "Submissions",
-    "Agenda Versions",
-    "Agenda Entries",
+    ...FOUNDATION_TABLES,
+    ...SCENARIO_OWNED_TABLES,
+    "Levels",
+    "Tags",
+    "Session Statuses",
   ]).has(table);
 }
 
@@ -2499,27 +2570,6 @@ function resetTargetFromRecord(candidate, fallback = {}) {
   const store = raw?.store ?? fallback.store ?? "airtable";
   if (resetProtectedTable(table)) return undefined;
   const fields = recordFields(raw);
-  const normalizedTable = String(table).toLowerCase();
-  if (
-    ["crm contacts", "crm pipeline", "crm notes"].includes(normalizedTable) &&
-    fields["Event ID"] === undefined &&
-    fields.Event === undefined
-  ) {
-    const jsonFields = Object.entries(fields)
-      .filter(([, value]) => typeof value === "string" && value.trim().startsWith("{"))
-      .map(([, value]) => {
-        try {
-          return JSON.parse(value);
-        } catch {
-          return undefined;
-        }
-      })
-      .filter(isObject);
-    const evaluatorOwned = jsonFields.some((value) => value.source === "production-repair");
-    if (!jsonFields.some((value) => value.eventId === CANONICAL_EVENT_ID) && !evaluatorOwned) {
-      return undefined;
-    }
-  }
   const proof = resetWorkflowScope({
     fields,
     payload: raw?.payload,
@@ -2545,11 +2595,12 @@ function resetTargetFromRecord(candidate, fallback = {}) {
     fields[APPLICATION_ID_FIELD] ??
     fields.applicationId ??
     (store === "airtable" ? undefined : raw?.id);
+  if (store === "airtable" && applicationId === undefined) return undefined;
   const id = applicationId ?? String(providerId);
   const recordDigest =
     raw?.recordDigest ?? digest(raw?.row ?? (Object.keys(fields).length === 0 ? raw : fields));
   const operation = {
-    key: `${RESET_WORKFLOW_VERSION}:delete:${store}:${table}:${String(providerId)}`,
+    key: `${RESET_WORKFLOW_VERSION}:delete:${store}:${table}:${String(id)}`,
     version: RESET_WORKFLOW_VERSION,
     phase: RESET_WORKFLOW_PHASE,
     action: "delete",
@@ -2557,7 +2608,6 @@ function resetTargetFromRecord(candidate, fallback = {}) {
     table,
     id: String(id),
     applicationId: applicationId === undefined ? undefined : String(applicationId),
-    recordId: String(providerId),
     expectedVersion: existingVersion(raw),
     recordDigest,
     organizationId: CANONICAL_ORGANIZATION_ID,
@@ -2567,10 +2617,14 @@ function resetTargetFromRecord(candidate, fallback = {}) {
       store,
       table,
       id: String(id),
-      recordId: String(providerId),
       recordDigest,
     }),
   };
+  Object.defineProperty(operation, "recordId", {
+    value: String(providerId),
+    enumerable: false,
+    configurable: true,
+  });
   Object.defineProperty(operation, "record", {
     value: clone(raw),
     enumerable: false,
@@ -2586,7 +2640,6 @@ function resetPlanEntry(operation, action = "delete") {
     store: operation.store,
     table: operation.table,
     id: operation.id,
-    recordId: operation.recordId,
     expectedVersion: operation.expectedVersion,
     scopeProof: operation.scopeProof,
   };
@@ -2594,10 +2647,7 @@ function resetPlanEntry(operation, action = "delete") {
 
 function resetFoundationOperations(manifest) {
   return manifest.operations.filter(
-    (operation) =>
-      operation.phase === "foundation" &&
-      operation.store === "airtable" &&
-      resetProtectedTable(operation.table),
+    (operation) => operation.phase === "foundation" && operation.store === "airtable",
   );
 }
 
@@ -2606,6 +2656,11 @@ async function discoverWorkflowResetTargets({ manifest, transport }) {
     fail("TRANSPORT_REQUIRED", "A reset planning transport is required.");
   }
   const discovered = [];
+  const foundationKeys = new Set(
+    resetFoundationOperations(manifest).map(
+      (operation) => `${operation.store}\u0000${operation.table}\u0000${operation.applicationId}`,
+    ),
+  );
   const discoveryMethod = [
     "discoverWorkflowRecords",
     "listWorkflowRecords",
@@ -2620,6 +2675,7 @@ async function discoverWorkflowResetTargets({ manifest, transport }) {
           organizationId: CANONICAL_ORGANIZATION_ID,
           eventId: CANONICAL_EVENT_ID,
           tables: RESET_DISCOVERY_TABLES,
+          chainContext: clone(manifest.chainContext),
         }),
       ),
     );
@@ -2651,6 +2707,8 @@ async function discoverWorkflowResetTargets({ manifest, transport }) {
   for (const candidate of discovered) {
     const target = resetTargetFromRecord(candidate);
     if (target === undefined || seen.has(target.key)) continue;
+    const foundationKey = `${target.store}\u0000${target.table}\u0000${target.applicationId}`;
+    if (foundationKeys.has(foundationKey)) continue;
     seen.add(target.key);
     targets.push(target);
   }
@@ -2698,6 +2756,9 @@ export function buildWorkflowResetManifest(options = {}) {
       ),
     },
     identityLedger: [],
+    chainContext: validateChainContext(options.chainContext ?? emptyChainContext(), {
+      allowEmpty: true,
+    }),
     graph: null,
     operations: foundation,
     runLedger: {},
@@ -2713,11 +2774,13 @@ export async function prepareWorkflowReset({
   manifest: suppliedManifest,
   manifestPath = DEFAULT_REPAIR_MANIFEST_PATH,
   transport,
+  environment,
   organizationId = CANONICAL_ORGANIZATION_ID,
   eventId = CANONICAL_EVENT_ID,
   now = new Date().toISOString(),
   writeManifest = true,
 } = {}) {
+  const resetEnvironment = parseRepairEnvironment(environment, { organizationId, eventId });
   const manifest = suppliedManifest ?? readRepairManifest(manifestPath);
   ensureManifestShape(manifest);
   if (
@@ -2727,6 +2790,12 @@ export async function prepareWorkflowReset({
     manifest.eventId !== CANONICAL_EVENT_ID
   ) {
     fail("SCOPE_MISMATCH", "The workflow reset scope is immutable.");
+  }
+  if (
+    manifest.resetWorkflow?.environment !== undefined &&
+    manifest.resetWorkflow.environment !== resetEnvironment.environment
+  ) {
+    fail("ENVIRONMENT_MISMATCH", "The reset manifest environment does not match the evaluator environment.");
   }
   const nowIso = dateIso(now, "workflow reset planning time");
   const targets = await discoverWorkflowResetTargets({ manifest, transport });
@@ -2751,12 +2820,14 @@ export async function prepareWorkflowReset({
     version: RESET_WORKFLOW_VERSION,
     organizationId: CANONICAL_ORGANIZATION_ID,
     eventId: CANONICAL_EVENT_ID,
+    environment: resetEnvironment.environment,
     deletionPlan,
     foundationPlan,
   });
   manifest.resetWorkflow = {
     version: RESET_WORKFLOW_VERSION,
     organizationId: CANONICAL_ORGANIZATION_ID,
+    environment: resetEnvironment.environment,
     eventId: CANONICAL_EVENT_ID,
     plannedAt: nowIso,
     digest: resetDigest,
@@ -2827,6 +2898,7 @@ async function deleteResetTarget(transport, operation) {
   }
   const input = {
     ...operation,
+    recordId: operation.recordId,
     organizationId: CANONICAL_ORGANIZATION_ID,
     eventId: CANONICAL_EVENT_ID,
     expected: operation.record === undefined ? undefined : clone(operation.record),
@@ -2871,6 +2943,7 @@ export async function applyWorkflowReset({
   manifest: suppliedManifest,
   manifestPath = DEFAULT_REPAIR_MANIFEST_PATH,
   transport,
+  environment,
   confirm,
   now = new Date().toISOString(),
   organizationId = CANONICAL_ORGANIZATION_ID,
@@ -2878,17 +2951,15 @@ export async function applyWorkflowReset({
   failureAfter,
   writeManifest = true,
 } = {}) {
-  if (organizationId !== CANONICAL_ORGANIZATION_ID || eventId !== CANONICAL_EVENT_ID) {
-    fail("SCOPE_MISMATCH", "The workflow reset scope is immutable.");
-  }
-  if (confirm !== RESET_WORKFLOW_CONFIRMATION) {
-    fail(
-      "RESET_CONFIRMATION_REQUIRED",
-      `Workflow reset requires --confirm ${CANONICAL_ORGANIZATION_ID}.`,
-    );
-  }
   const manifest = suppliedManifest ?? prepared?.manifest ?? readRepairManifest(manifestPath);
   ensureManifestShape(manifest);
+  const resetEnvironment = parseRepairEnvironment(environment, { organizationId, eventId });
+  if (
+    manifest.resetWorkflow?.environment !== undefined &&
+    manifest.resetWorkflow.environment !== resetEnvironment.environment
+  ) {
+    fail("ENVIRONMENT_MISMATCH", "The reset manifest environment does not match the evaluator environment.");
+  }
   const preflight =
     prepared?.prepared?.version === RESET_WORKFLOW_VERSION
       ? prepared
@@ -2896,12 +2967,25 @@ export async function applyWorkflowReset({
           manifest,
           manifestPath,
           transport,
+          environment: resetEnvironment.environment,
           now,
           organizationId,
           eventId,
           writeManifest: false,
         });
   const targets = preflight.targets ?? [];
+  const expectedConfirmation =
+    resetEnvironment.environment === "production"
+      ? `${PRODUCTION_RESET_CONFIRMATION_PREFIX}:${preflight.prepared.manifestDigest}`
+      : RESET_WORKFLOW_CONFIRMATION;
+  if (confirm !== expectedConfirmation) {
+    fail(
+      "RESET_CONFIRMATION_REQUIRED",
+      resetEnvironment.environment === "production"
+        ? "Production reset requires a manifest-bound confirmation."
+        : `Workflow reset requires --confirm ${CANONICAL_ORGANIZATION_ID}.`,
+    );
+  }
   const foundation = preflight.foundationOperations ?? resetFoundationOperations(manifest);
   if (
     preflight.prepared?.manifestDigest !== undefined &&
@@ -3045,6 +3129,11 @@ export async function applyWorkflowReset({
     }
     if (writeManifest) writeRepairManifest(manifestPath, manifest);
   }
+  const remainingTargets = await discoverWorkflowResetTargets({ manifest, transport });
+  if (remainingTargets.length > 0) {
+    fail("RESET_NOT_VERIFIED", "Scenario-owned evaluator records remain after workflow reset.");
+  }
+  manifest.chainContext = emptyChainContext();
   manifest.resetWorkflow.appliedAt = dateIso(now, "workflow reset apply time");
   manifest.resetWorkflow.status = "applied";
   if (writeManifest) writeRepairManifest(manifestPath, manifest);
@@ -3057,6 +3146,8 @@ export async function applyWorkflowReset({
     restored,
     operationCount: targets.length + foundation.length,
     resetDigest: manifest.resetWorkflow.digest,
+    chainContext: clone(manifest.chainContext),
+    remainingScenarioRecords: 0,
   };
 }
 
@@ -3767,6 +3858,7 @@ export async function prepareRepair({
     status,
     preparedAt: nowIso,
     manifestDigest: manifest.digest,
+    chainContext: clone(manifest.chainContext),
     plan,
     identityFailures: identityFailures.map((identity) => identity.identityKey),
     writes: 0,
@@ -4112,6 +4204,7 @@ export async function applyRepair({
     completed,
     operationCount: ordered.length,
     manifestDigest: manifest.digest,
+    chainContext: clone(manifest.chainContext),
   };
 }
 
@@ -4335,6 +4428,7 @@ export async function readRepairInvariantReport({
     organizationId: manifest.organizationId,
     eventId: manifest.eventId,
     ok: failures.length === 0,
+    chainContext: clone(manifest.chainContext),
     checks,
     failures,
     counts: {
@@ -4362,25 +4456,39 @@ export async function runRepair(options = {}) {
   if (!REPAIR_PHASES.includes(phase)) fail("CONFIGURATION_ERROR", `Unknown repair phase ${phase}.`);
   if (phase === "invariants") return readRepairInvariantReport(options);
   if (phase === RESET_WORKFLOW_PHASE || phase === "reset") {
+    const resetEnvironment = parseRepairEnvironment(options.environment ?? options.env ?? process.env, {
+      organizationId: options.organizationId,
+      eventId: options.eventId,
+    });
     const manifest = options.manifest ?? buildWorkflowResetManifest(options);
     if (options.resume === true) {
-      return resumeWorkflowReset({ ...options, manifest });
+      return resumeWorkflowReset({ ...options, manifest, environment: resetEnvironment.environment });
     }
     const resetApply =
       options.dryRun === false ||
       options.apply === true ||
       (options.dryRun === undefined &&
-        options.confirm === RESET_WORKFLOW_CONFIRMATION &&
+        options.confirm !== undefined &&
         options.resume !== true);
     if (!resetApply) {
-      return prepareWorkflowReset({ ...options, manifest });
+      return prepareWorkflowReset({
+        ...options,
+        manifest,
+        environment: resetEnvironment.environment,
+      });
     }
     const prepared = await prepareWorkflowReset({
       ...options,
       manifest,
+      environment: resetEnvironment.environment,
       writeManifest: false,
     });
-    return applyWorkflowReset({ ...options, manifest, prepared });
+    return applyWorkflowReset({
+      ...options,
+      manifest,
+      prepared,
+      environment: resetEnvironment.environment,
+    });
   }
   let manifest = options.manifest;
   let credentials = options.credentials;
@@ -4420,12 +4528,7 @@ export async function runRepair(options = {}) {
 }
 
 function parseEnvironment(environment = process.env) {
-  const name = String(environment.EVAL_ENVIRONMENT ?? environment.APP_ENV ?? "staging")
-    .trim()
-    .toLowerCase();
-  if (!ENVIRONMENTS.has(name))
-    fail("CONFIGURATION_ERROR", "EVAL_ENVIRONMENT must be local, staging, or production.");
-  return name;
+  return parseRepairEnvironment(environment).environment;
 }
 
 export function parseArguments(argv = []) {
@@ -4520,20 +4623,14 @@ export function parseArguments(argv = []) {
   result.help = help;
   result.confirm = confirm;
   if (phase === RESET_WORKFLOW_PHASE) {
-    if (confirm !== undefined && confirm !== RESET_WORKFLOW_CONFIRMATION) {
-      fail(
-        "RESET_CONFIRMATION_REQUIRED",
-        `Workflow reset requires --confirm ${CANONICAL_ORGANIZATION_ID}.`,
-      );
+    if (confirm !== undefined && (typeof confirm !== "string" || confirm.trim().length === 0)) {
+      fail("RESET_CONFIRMATION_REQUIRED", "Workflow reset requires an explicit confirmation.");
     }
-    if (confirm === RESET_WORKFLOW_CONFIRMATION && !resetDryRunExplicit && !result.resume) {
+    if (confirm !== undefined && !resetDryRunExplicit && !result.resume) {
       result.dryRun = false;
     }
-    if (!result.dryRun && confirm !== RESET_WORKFLOW_CONFIRMATION) {
-      fail(
-        "RESET_CONFIRMATION_REQUIRED",
-        `Workflow reset requires --confirm ${CANONICAL_ORGANIZATION_ID}.`,
-      );
+    if (!result.dryRun && confirm === undefined) {
+      fail("RESET_CONFIRMATION_REQUIRED", "Workflow reset requires an explicit confirmation.");
     }
   } else if ((phase === "apply" || phase === "resume") && confirm !== REPAIR_CONFIRMATION) {
     fail(
@@ -4627,15 +4724,17 @@ async function main() {
       ? readOptionalJson(argumentsValue.credentialsPath)
       : {};
   const persistedManifest =
-    argumentsValue.phase === "prepare" ||
-    (argumentsValue.phase === RESET_WORKFLOW_PHASE && argumentsValue.dryRun)
+    argumentsValue.phase === "prepare"
       ? undefined
       : existsSync(argumentsValue.manifestPath)
         ? readOptionalJson(argumentsValue.manifestPath)
-        : argumentsValue.phase === "apply" ||
-            (argumentsValue.phase === RESET_WORKFLOW_PHASE && !argumentsValue.resume)
+        : argumentsValue.phase === RESET_WORKFLOW_PHASE && argumentsValue.dryRun
           ? undefined
-          : fail("MANIFEST_NOT_FOUND", "The prepared repair manifest could not be read.");
+          : argumentsValue.phase === RESET_WORKFLOW_PHASE
+            ? fail("MANIFEST_NOT_FOUND", "The prepared reset manifest could not be read.")
+            : argumentsValue.phase === "apply"
+              ? undefined
+              : fail("MANIFEST_NOT_FOUND", "The prepared repair manifest could not be read.");
   const environment = parseEnvironment(process.env);
   const commandAdapter = await loadRepairCommandAdapter(process.env);
   const applicationApiOrigin =

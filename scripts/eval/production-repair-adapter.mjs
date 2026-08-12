@@ -9,6 +9,16 @@ export const REPAIR_EVENT_ID = "devflow-conf-2027";
 export const MAX_PROVIDER_RECORDS = 2;
 export const MAX_DISCOVERY_RECORDS = 1000;
 export const WORKFLOW_RESET_TABLES = Object.freeze([
+  "Events",
+  "CFP Forms",
+  "Tracks",
+  "Formats",
+  "Rooms",
+  "Session Settings",
+  "Email Templates",
+  "Levels",
+  "Tags",
+  "Session Statuses",
   "Submissions",
   "Participants",
   "Speaker Profiles",
@@ -22,9 +32,6 @@ export const WORKFLOW_RESET_TABLES = Object.freeze([
   "Agenda Entries",
   "Publication Outbox",
   "Audit Records",
-  "Levels",
-  "Tags",
-  "Session Statuses",
   "Portal Contexts",
   "Session Roster",
   "Task Forms",
@@ -34,36 +41,30 @@ export const WORKFLOW_RESET_TABLES = Object.freeze([
   "File Assets",
   "File Versions",
   "File Comments",
-  "Email Templates",
   "Email Send Snapshots",
   "Report Definitions",
   "Report Runs",
   "Remix Candidates",
   "Remix Audit",
   "CRM Contacts",
+  "CRM Segments",
   "CRM History",
   "CRM Pipeline",
   "CRM Notes",
   "CRM Event Projections",
   "CRM Outreach",
+  "CRM Imports",
+  "CRM Commands",
 ]);
 export const WORKFLOW_RESET_D1_TABLES = Object.freeze([
   "speaker_grants",
   "outbox_jobs",
   "audit_events",
+  "private_uploads",
 ]);
 export const WORKFLOW_RESET_PROTECTED_TABLES = Object.freeze([
   "Organizations",
   "Memberships",
-  "Events",
-  "CFP Forms",
-  "Tracks",
-  "Formats",
-  "Rooms",
-  "Session Settings",
-  "Levels",
-  "Tags",
-  "Session Statuses",
   "Reusable Fields",
 ]);
 
@@ -159,6 +160,19 @@ function clone(value) {
 
 function recordFields(record) {
   return isObject(record?.fields) ? record.fields : isObject(record) ? record : {};
+}
+
+function hideProviderRecordId(record) {
+  if (!isObject(record) || typeof record.id !== "string") return record;
+  const result = { ...record };
+  const providerId = result.id;
+  delete result.id;
+  Object.defineProperty(result, "id", {
+    value: providerId,
+    enumerable: false,
+    configurable: true,
+  });
+  return result;
 }
 
 function jsonValue(value, label) {
@@ -305,18 +319,16 @@ function exactRecordOrUndefined(records, label) {
 
 function contactIdFor(command) {
   const profileId = speakerProfileIdFor(command, "profileId");
+  const contactId = identifier(command.contactId, "CRM contact ID");
   const expectedContactId = `crm-contact:${profileId}`;
-  if (
-    command.contactId !== undefined &&
-    identifier(command.contactId, "CRM contact ID") !== expectedContactId
-  ) {
+  if (contactId !== expectedContactId) {
     fail("PROFILE_DRIFT", "CRM contact ID is not bound to the canonical speaker profile.");
   }
-  return expectedContactId;
+  return contactId;
 }
 
 function historyIdFor(command) {
-  return identifier(command.historyId ?? `${command.activityId}:history`, "CRM history ID");
+  return identifier(command.historyId, "CRM history ID");
 }
 
 function splitName(displayName) {
@@ -394,17 +406,7 @@ function resetScopeProof(record) {
   return proof;
 }
 function resetTenantCanBeDerivedFromEvent(table) {
-  return new Set([
-    "Participants",
-    "Speaker Profiles",
-    "Review Plans",
-    "Evaluations",
-    "Decisions",
-    "Speaker Tasks",
-    "Submissions",
-    "Agenda Versions",
-    "Agenda Entries",
-  ]).has(table);
+  return WORKFLOW_RESET_TABLES.includes(table);
 }
 
 export function createProductionRepairAdapter(options = {}) {
@@ -530,6 +532,9 @@ export function createProductionRepairAdapter(options = {}) {
 
   async function airtableLookup(table, applicationId, options = {}) {
     const id = identifier(applicationId, "Airtable Application ID");
+    if (/^rec[a-zA-Z0-9]{10,}$/u.test(id)) {
+      fail("APPLICATION_ID_REQUIRED", "Airtable operations require an Application ID, not a provider record ID.");
+    }
     if (table === "Speaker Profiles" && options.allowNonCanonical !== true) {
       speakerProfileIdFor({ eventId: REPAIR_EVENT_ID, speakerProfileId: id }, "speakerProfileId");
     }
@@ -543,6 +548,16 @@ export function createProductionRepairAdapter(options = {}) {
     if (payload.records.length > MAX_PROVIDER_RECORDS)
       fail("UNBOUNDED_RESULT", "Airtable returned an unbounded result.");
     return payload.records;
+  }
+  async function airtableLookupByRecordId(table, recordId) {
+    const id = identifier(recordId, "Airtable record identity");
+    const payload = await airtableRequest(
+      table,
+      `/${encodeURIComponent(id)}`,
+      { method: "GET" },
+      { allowNotFound: true },
+    );
+    return payload.notFound === true ? [] : [payload];
   }
   async function airtableList(table) {
     const records = [];
@@ -564,10 +579,9 @@ export function createProductionRepairAdapter(options = {}) {
 
   function resetAirtableRecord(table, record, digestRecord = record) {
     const fields = recordFields(record);
-    return {
+    const target = {
       store: "airtable",
       table,
-      recordId: safeRecordId(record),
       applicationId:
         typeof fields[APPLICATION_ID_FIELD] === "string" ? fields[APPLICATION_ID_FIELD] : undefined,
       id: fields[APPLICATION_ID_FIELD] ?? safeRecordId(record),
@@ -575,10 +589,17 @@ export function createProductionRepairAdapter(options = {}) {
       expectedVersion: Number(fields.Version ?? fields["Current Version"] ?? fields.version) || 1,
       recordDigest: airtableResetDigest(digestRecord),
     };
+    Object.defineProperty(target, "recordId", {
+      value: safeRecordId(record),
+      enumerable: false,
+      configurable: true,
+    });
+    return target;
   }
 
-  async function discoverAirtableWorkflowRecords() {
+  async function discoverAirtableWorkflowRecords(scope = {}) {
     const discovered = [];
+    const chainedCrmContactIds = new Set(scope.chainContext?.crmContactIds ?? []);
     for (const table of WORKFLOW_RESET_TABLES) {
       const records = await airtableList(table);
       for (const record of records) {
@@ -588,6 +609,14 @@ export function createProductionRepairAdapter(options = {}) {
         );
         const target = resetAirtableRecord(table, normalized, record);
         target.scopeProof = resetScopeProof(normalized);
+        if (
+          table === "CRM Contacts" &&
+          typeof target.applicationId === "string" &&
+          chainedCrmContactIds.has(target.applicationId)
+        ) {
+          target.scopeProof.organizationId = true;
+          target.scopeProof.eventId = true;
+        }
         discovered.push(target);
       }
     }
@@ -699,19 +728,55 @@ export function createProductionRepairAdapter(options = {}) {
         recordDigest: digest(row),
       });
     }
+    const uploads = await d1Query(
+      `SELECT id, tenant_id, object_key, content_type, byte_size, checksum_sha256, state,
+              scan_result_code, created_at, updated_at
+         FROM private_uploads
+        WHERE tenant_id = ? AND object_key LIKE ?
+        LIMIT ?`,
+      [REPAIR_ORGANIZATION_ID, `events/${REPAIR_EVENT_ID}/%`, MAX_DISCOVERY_RECORDS],
+      MAX_DISCOVERY_RECORDS,
+    );
+    for (const row of uploads.rows) {
+      if (
+        row.tenant_id !== REPAIR_ORGANIZATION_ID ||
+        typeof row.object_key !== "string" ||
+        !row.object_key.startsWith(`events/${REPAIR_EVENT_ID}/`)
+      ) {
+        continue;
+      }
+      discovered.push({
+        store: "d1",
+        table: "private_uploads",
+        id: row.id,
+        recordId: row.id,
+        applicationId: row.id,
+        fields: {
+          "Organization ID": row.tenant_id,
+          "Event ID": REPAIR_EVENT_ID,
+          "Object Key": row.object_key,
+          State: row.state,
+        },
+        row: clone(row),
+        recordDigest: digest(row),
+      });
+    }
     return discovered;
   }
 
-  async function discoverWorkflowRecords() {
-    return [...(await discoverAirtableWorkflowRecords()), ...(await discoverD1WorkflowRecords())];
+  async function discoverWorkflowRecords(scope = {}) {
+    return [
+      ...(await discoverAirtableWorkflowRecords(scope)),
+      ...(await discoverD1WorkflowRecords()),
+    ];
   }
 
   async function normalizeAirtableRecordLinks(operation, records) {
     const targets = AIRTABLE_LINK_TARGETS[operation.table];
-    if (targets === undefined) return records;
+    if (targets === undefined) return records.map((record) => hideProviderRecordId(record));
     return Promise.all(
       records.map(async (record) => {
-        if (!isObject(record?.fields)) return record;
+        if (!isObject(record?.fields)) return hideProviderRecordId(record);
         const fields = clone(record.fields);
         for (const [fieldName, targetTable] of Object.entries(targets)) {
           const expected = operation.fields?.[fieldName] ?? operation.ownedFields?.[fieldName];
@@ -727,7 +792,7 @@ export function createProductionRepairAdapter(options = {}) {
             fields[fieldName] = expected;
           }
         }
-        return { ...record, fields };
+        return hideProviderRecordId({ ...record, fields });
       }),
     );
   }
@@ -754,23 +819,23 @@ export function createProductionRepairAdapter(options = {}) {
     ) {
       fail("RESET_PROTECTED_TARGET", "The workflow reset cannot delete foundation records.");
     }
-    const recordId = required(input?.recordId, "Airtable record ID");
+    const suppliedRecordId =
+      typeof input.recordId === "string" && input.recordId.length > 0 ? input.recordId : undefined;
     let current;
     if (typeof input.applicationId === "string" && input.applicationId.length > 0) {
       const matches = await airtableLookup(table, input.applicationId, {
         allowNonCanonical: true,
       });
       current = exactRecordOrUndefined(matches, "Airtable reset record");
-    } else {
-      const payload = await airtableRequest(
-        table,
-        `/${encodeURIComponent(recordId)}`,
-        { method: "GET" },
-        { allowNotFound: true },
+    } else if (suppliedRecordId !== undefined) {
+      current = exactRecordOrUndefined(
+        await airtableLookupByRecordId(table, suppliedRecordId),
+        "Airtable reset record",
       );
-      current = payload.notFound === true ? undefined : payload;
+    } else {
+      fail("APPLICATION_ID_REQUIRED", "Airtable reset records require an Application ID.");
     }
-    if (current === undefined) return { missing: true, recordId };
+    if (current === undefined) return { missing: true };
     const proof = resetScopeProof(current);
     if (input?.scopeProof?.organizationId === true) proof.organizationId = true;
     if (input?.scopeProof?.eventId === true) proof.eventId = true;
@@ -787,15 +852,19 @@ export function createProductionRepairAdapter(options = {}) {
     ) {
       fail("SCOPE_DRIFT", "The reset record does not have exact organization and event scope.");
     }
-    if (safeRecordId(current) !== recordId) {
+    const currentRecordId = safeRecordId(current);
+    if (currentRecordId === undefined) {
+      fail("AIRTABLE_RESPONSE_INVALID", "The reset record has no provider identity.");
+    }
+    if (suppliedRecordId !== undefined && currentRecordId !== suppliedRecordId) {
       fail("RESET_IDENTITY_CONFLICT", "The reset record identity changed before deletion.");
     }
     const currentDigest = airtableResetDigest(current);
     if (typeof input.recordDigest === "string" && input.recordDigest !== currentDigest) {
       fail("RESET_VERSION_CONFLICT", "The reset record changed before deletion.");
     }
-    await airtableRequest(table, `/${encodeURIComponent(recordId)}`, { method: "DELETE" });
-    return { deleted: true, recordId };
+    await airtableRequest(table, `/${encodeURIComponent(currentRecordId)}`, { method: "DELETE" });
+    return { deleted: true };
   }
 
   async function d1Delete(input) {
@@ -842,6 +911,18 @@ export function createProductionRepairAdapter(options = {}) {
         `DELETE FROM audit_events
           WHERE sequence = ? AND id = ? AND tenant_id = ? AND details_json = ?`,
         [row.sequence, row.id, row.tenant_id, row.details_json],
+      );
+      return { deleted: true, id: input.recordId };
+    }
+    if (table === "private_uploads") {
+      const objectKey = required(row.object_key, "Private upload object key");
+      if (!objectKey.startsWith(`events/${REPAIR_EVENT_ID}/`)) {
+        fail("SCOPE_MISMATCH", "The private upload has foreign event scope.");
+      }
+      await d1Query(
+        `DELETE FROM private_uploads
+          WHERE id = ? AND tenant_id = ? AND object_key = ?`,
+        [required(row.id, "Private upload ID"), row.tenant_id, objectKey],
       );
       return { deleted: true, id: input.recordId };
     }
@@ -900,10 +981,7 @@ export function createProductionRepairAdapter(options = {}) {
   }
 
   async function readReviewPlan(command) {
-    const planId = identifier(
-      command.reviewPlanId ?? "devflow-conf-2027-initial-review",
-      "Review Plan ID",
-    );
+    const planId = identifier(command.reviewPlanId, "Review Plan ID");
     const rawRecords = await airtableLookup("Review Plans", planId);
     const rawRecord = exactRecordOrUndefined(rawRecords, "Review Plan");
     if (rawRecord === undefined) return undefined;
@@ -933,7 +1011,7 @@ export function createProductionRepairAdapter(options = {}) {
       fail("REVIEW_PLAN_DRIFT", "The authoritative Review Plan reviewer pool differs.");
     }
     return {
-      id: record.id ?? planId,
+      id: planId,
       fields: {
         [APPLICATION_ID_FIELD]: planId,
         "Round ID": roundId,
@@ -986,7 +1064,7 @@ export function createProductionRepairAdapter(options = {}) {
       }
     }
     return {
-      id: contact.id ?? contactId,
+      id: contactId,
       fields: {
         [APPLICATION_ID_FIELD]: contactId,
         "Organization ID": organizationId,
@@ -998,8 +1076,8 @@ export function createProductionRepairAdapter(options = {}) {
         Status: "draft",
         "Sent At": null,
       },
-      contact,
-      history,
+      contact: hideProviderRecordId(contact),
+      history: hideProviderRecordId(history),
     };
   }
 
@@ -1034,7 +1112,7 @@ export function createProductionRepairAdapter(options = {}) {
         return record === undefined ? [] : [record];
       }
       default:
-        return [];
+        fail("COMMAND_UNSUPPORTED", "The production repair command kind is unsupported.");
     }
   }
 
@@ -1390,8 +1468,8 @@ export function createProductionRepairAdapter(options = {}) {
         Status: "draft",
         "Sent At": null,
       },
-      contact: afterContact,
-      history: afterHistory,
+      contact: hideProviderRecordId(afterContact),
+      history: hideProviderRecordId(afterHistory),
     };
   }
 
@@ -1522,11 +1600,15 @@ export function createProductionRepairAdapter(options = {}) {
 
   const airtable = {
     lookup: async (operation) => {
-      const records = await airtableLookup(
-        operation.table,
-        operation.applicationId ?? operation.id,
-        { allowNonCanonical: operation.phase === "reset-workflow" },
-      );
+      if (!isObject(operation)) fail("COMMAND_INVALID", "An Airtable operation is required.");
+      const records =
+        typeof operation.applicationId === "string" && operation.applicationId.length > 0
+          ? await airtableLookup(operation.table, operation.applicationId, {
+              allowNonCanonical: operation.phase === "reset-workflow",
+            })
+          : operation.phase === "reset-workflow" && typeof operation.recordId === "string"
+            ? await airtableLookupByRecordId(operation.table, operation.recordId)
+            : fail("APPLICATION_ID_REQUIRED", "Airtable operations require an Application ID.");
       return normalizeAirtableRecordLinks(operation, records);
     },
     write: async (input) => airtableWrite(input.table, input.existing, input.fields),
@@ -1548,8 +1630,6 @@ export function createProductionRepairAdapter(options = {}) {
     },
     verifyIdentity,
     resolveUserId,
-    findUserIdByEmail: resolveUserId,
-    getUserIdByEmail: resolveUserId,
     recordLedger,
     airtable,
     // Exposed for deterministic adapter tests without exposing any credentials.

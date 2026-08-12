@@ -280,13 +280,29 @@ test("subset fallback is explicit and adds only downstream fixture projections",
     ["Originality", "Relevance", "Recommendation", "Comments"],
   );
   const projection = JSON.parse(
-    fieldsFor(records, "Published Speaker Projections", "published-speakers:devflow-conf-2027:1")[
-      "Projection JSON"
-    ],
+    fieldsFor(
+      records,
+      "Published Speaker Projections",
+      "agenda-foundation-speakers:devflow-conf-2027:revision-1",
+    )["Projection JSON"],
   );
   assert.deepEqual(
     projection.speakers.map((speaker) => speaker.displayName),
-    ["Priya Raman", "Marcus Okafor"],
+    ["Agenda Foundation Presenter A", "Agenda Foundation Presenter B"],
   );
   assert.equal(JSON.stringify(projection).includes("sbek-"), false);
+  const fixture = loadFixture();
+  const scenarioTitles = new Set(fixture.submissions.map((submission) => submission.title));
+  const fallbackSessions = records
+    .filter((record) => record.table === "Sessions")
+    .map((record) => record.fields.Title);
+  assert.equal(fallbackSessions.some((title) => scenarioTitles.has(title)), false);
+  const scenarioNames = new Set([
+    fixture.identities.speaker.name,
+    fixture.identities.speaker2.name,
+  ]);
+  assert.equal(
+    projection.speakers.some((speaker) => scenarioNames.has(speaker.displayName)),
+    false,
+  );
 });

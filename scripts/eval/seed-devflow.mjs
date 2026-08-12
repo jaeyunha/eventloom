@@ -12,6 +12,149 @@ export const PRODUCTION_CONFIRMATION = "I_UNDERSTAND_PRODUCTION_DEVFLOW_SEEDING"
 export const PRODUCTION_CONFIRMATION_TOKEN = PRODUCTION_CONFIRMATION;
 export const FULL_CHAIN_MODE = "full-chain";
 export const SUBSET_FALLBACK_MODE = "subset-fallback";
+export const CHAIN_CONTEXT_VERSION = "chain-context:v1";
+export const CHAIN_CONTEXT_KEYS = Object.freeze([
+  "submissionId",
+  "participantIds",
+  "reviewPlanId",
+  "assignmentIds",
+  "sessionIds",
+  "taskIds",
+  "assetFamilyIds",
+  "embedConfigurationId",
+  "crmContactIds",
+]);
+export const FOUNDATION_TABLES = Object.freeze([
+  "Events",
+  "CFP Forms",
+  "Tracks",
+  "Formats",
+  "Rooms",
+  "Session Settings",
+  "Email Templates",
+]);
+export const SCENARIO_OWNED_TABLES = Object.freeze([
+  "Submissions",
+  "Participants",
+  "Speaker Profiles",
+  "Review Plans",
+  "Evaluations",
+  "Decisions",
+  "Speaker Tasks",
+  "Sessions",
+  "Agenda Versions",
+  "Published Speaker Projections",
+  "Agenda Entries",
+  "Publication Outbox",
+  "Audit Records",
+  "Portal Contexts",
+  "Session Roster",
+  "Task Forms",
+  "Task Responses",
+  "Portal Resources",
+  "Wiki Pages",
+  "File Assets",
+  "File Versions",
+  "File Comments",
+  "Email Send Snapshots",
+  "Report Definitions",
+  "Report Runs",
+  "Remix Candidates",
+  "Remix Audit",
+  "CRM Contacts",
+  "CRM Segments",
+  "CRM History",
+  "CRM Pipeline",
+  "CRM Notes",
+  "CRM Event Projections",
+  "CRM Outreach",
+  "CRM Imports",
+  "CRM Commands",
+]);
+const CHAIN_CONTEXT_ARRAY_KEYS = new Set([
+  "participantIds",
+  "assignmentIds",
+  "sessionIds",
+  "taskIds",
+  "assetFamilyIds",
+  "crmContactIds",
+]);
+const APPLICATION_ID_PATTERN = /^rec[a-zA-Z0-9]{10,}$/u;
+
+function applicationId(value, label) {
+  if (
+    typeof value !== "string" ||
+    value.trim().length === 0 ||
+    APPLICATION_ID_PATTERN.test(value.trim())
+  ) {
+    throw new DevflowSeedError(
+      "CHAIN_CONTEXT_INVALID",
+      `${label} must be a non-provider application ID.`,
+    );
+  }
+  return value.trim();
+}
+
+export function emptyChainContext() {
+  return {
+    submissionId: null,
+    participantIds: [],
+    reviewPlanId: null,
+    assignmentIds: [],
+    sessionIds: [],
+    taskIds: [],
+    assetFamilyIds: [],
+    embedConfigurationId: null,
+    crmContactIds: [],
+  };
+}
+
+export function validateChainContext(value, options = {}) {
+  if (!isObject(value)) {
+    throw new DevflowSeedError("CHAIN_CONTEXT_INVALID", "Chain context must be an object.");
+  }
+  const keys = Object.keys(value);
+  if (
+    keys.length !== CHAIN_CONTEXT_KEYS.length ||
+    keys.some((key) => !CHAIN_CONTEXT_KEYS.includes(key))
+  ) {
+    throw new DevflowSeedError(
+      "CHAIN_CONTEXT_INVALID",
+      `Chain context keys must be exactly ${CHAIN_CONTEXT_KEYS.join(", ")}.`,
+    );
+  }
+  const context = {};
+  for (const key of CHAIN_CONTEXT_KEYS) {
+    const current = value[key];
+    if (CHAIN_CONTEXT_ARRAY_KEYS.has(key)) {
+      if (!Array.isArray(current)) {
+        throw new DevflowSeedError("CHAIN_CONTEXT_INVALID", `${key} must be an array.`);
+      }
+      const ids = current.map((entry) => applicationId(entry, key));
+      if (new Set(ids).size !== ids.length) {
+        throw new DevflowSeedError("CHAIN_CONTEXT_INVALID", `${key} must not contain duplicates.`);
+      }
+      context[key] = ids;
+      continue;
+    }
+    if (current !== null) context[key] = applicationId(current, key);
+    else context[key] = null;
+  }
+  if (options.allowEmpty !== true && context.submissionId === null) {
+    throw new DevflowSeedError("CHAIN_CONTEXT_INVALID", "submissionId is required.");
+  }
+  return context;
+}
+
+export function mergeChainContext(base, patch) {
+  const current = validateChainContext(base ?? emptyChainContext(), { allowEmpty: true });
+  const update = isObject(patch) ? patch : {};
+  const merged = { ...current };
+  for (const key of CHAIN_CONTEXT_KEYS) {
+    if (Object.hasOwn(update, key)) merged[key] = clone(update[key]);
+  }
+  return validateChainContext(merged, { allowEmpty: true });
+}
 
 const ENVIRONMENTS = new Set(["local", "staging", "production"]);
 export const APPLICATION_ID_FIELD = "Application ID";
@@ -163,7 +306,98 @@ export function loadSeedConfig(configPath = DEFAULT_SEED_CONFIG_PATH) {
       "The DevFlow seed configuration must be an object.",
     );
   }
-  return parsed;
+  return validateSeedConfig(parsed);
+}
+export function validateSeedConfig(config) {
+  if (!isObject(config)) {
+    throw new DevflowSeedError(
+      "CONFIGURATION_ERROR",
+      "The DevFlow seed configuration must be an object.",
+    );
+  }
+  if (
+    config.organizationId !== CANONICAL_ORGANIZATION_ID ||
+    config.eventId !== "devflow-conf-2027"
+  ) {
+    throw new DevflowSeedError("SCOPE_MISMATCH", "The DevFlow fixture scope is immutable.");
+  }
+  const foundation = config.foundation;
+  if (
+    !isObject(foundation) ||
+    JSON.stringify(foundation.tables) !== JSON.stringify([...FOUNDATION_TABLES]) ||
+    JSON.stringify(foundation.scenarioOwnedTables) !== JSON.stringify([...SCENARIO_OWNED_TABLES])
+  ) {
+    throw new DevflowSeedError(
+      "CONFIGURATION_ERROR",
+      "The DevFlow fixture foundation and scenario-owned table manifest is invalid.",
+    );
+  }
+  const chainKeys = config.chainContext?.keys;
+  if (
+    config.chainContext?.version !== CHAIN_CONTEXT_VERSION ||
+    JSON.stringify(chainKeys) !== JSON.stringify(CHAIN_CONTEXT_KEYS)
+  ) {
+    throw new DevflowSeedError(
+      "CONFIGURATION_ERROR",
+      "The DevFlow fixture chain context manifest is invalid.",
+    );
+  }
+  const agendaFoundation = config.subsetFallback?.agendaFoundation;
+  if (
+    !isObject(agendaFoundation) ||
+    !Array.isArray(agendaFoundation.personas) ||
+    !Array.isArray(agendaFoundation.sessions) ||
+    agendaFoundation.personas.length === 0 ||
+    agendaFoundation.sessions.length === 0
+  ) {
+    throw new DevflowSeedError(
+      "CONFIGURATION_ERROR",
+      "The agenda fallback must declare dedicated personas and sessions.",
+    );
+  }
+  const personaIds = new Set();
+  for (const persona of agendaFoundation.personas) {
+    if (
+      !isObject(persona) ||
+      typeof persona.id !== "string" ||
+      typeof persona.name !== "string" ||
+      typeof persona.email !== "string"
+    ) {
+      throw new DevflowSeedError(
+        "CONFIGURATION_ERROR",
+        "Agenda fallback personas must have dedicated IDs, names, and emails.",
+      );
+    }
+    if (personaIds.has(persona.id)) {
+      throw new DevflowSeedError(
+        "CONFIGURATION_ERROR",
+        "Agenda fallback persona IDs must be unique.",
+      );
+    }
+    personaIds.add(persona.id);
+  }
+  const titles = new Set();
+  for (const session of agendaFoundation.sessions) {
+    if (
+      !isObject(session) ||
+      typeof session.title !== "string" ||
+      typeof session.personaId !== "string" ||
+      !personaIds.has(session.personaId)
+    ) {
+      throw new DevflowSeedError(
+        "CONFIGURATION_ERROR",
+        "Agenda fallback sessions must reference dedicated personas.",
+      );
+    }
+    if (titles.has(session.title)) {
+      throw new DevflowSeedError(
+        "CONFIGURATION_ERROR",
+        "Agenda fallback session titles must be unique.",
+      );
+    }
+    titles.add(session.title);
+  }
+  return config;
 }
 
 function environmentObject(options = {}) {
@@ -315,6 +549,7 @@ function eventPayload(fixture, config, eventId, organizationId, opensAt, closesA
     opensAt,
     closesAt,
     cfpSettings: { enabled: true, opensAt, closesAt },
+    embedConfigurations: [],
     defaultCalendarSettings: {
       durationMinutes: 30,
       timeZone: config.timezone,
@@ -609,6 +844,51 @@ function buildSessionSettingsTarget(config, eventId, organizationId) {
     Version: 1,
   });
 }
+function buildEmailTemplateTarget(fixture, config, eventId, organizationId) {
+  const communication = fixture.communications ?? {};
+  const id =
+    config.repair?.communication?.templateId ?? `${eventId}:communication:acceptance`;
+  const subject =
+    communication.acceptance_subject ?? `Your session has been accepted to ${fixture.event.name}`;
+  const body =
+    communication.acceptance_body ??
+    "Hi {speaker_name}, congratulations! Your session '{talk_title}' has been accepted.";
+  const value = {
+    id,
+    tenantId: organizationId,
+    organizationId,
+    eventId,
+    name: `${fixture.event.name} acceptance`,
+    purpose: "decision",
+    version: 1,
+    status: "draft",
+    sender: "speakers@sessionboard.namuh.co",
+    subject,
+    html: body,
+    text: body,
+    variables: ["speaker_name", "talk_title"],
+    createdBy: "evaluator-seed",
+    createdAt: "2026-08-09T00:00:00.000Z",
+    updatedAt: "2026-08-09T00:00:00.000Z",
+    approvedBy: null,
+    approvedAt: null,
+  };
+  return target("Email Templates", id, {
+    [APPLICATION_ID_FIELD]: id,
+    "Organization ID": organizationId,
+    "Event ID": eventId,
+    Name: value.name,
+    Purpose: value.purpose,
+    Status: value.status,
+    Sender: value.sender,
+    Subject: value.subject,
+    HTML: value.html,
+    Text: value.text,
+    "Variables JSON": json(value.variables),
+    "Settings JSON": json(value),
+    Version: value.version,
+  });
+}
 
 function reviewPlanPayload(config, eventId, organizationId) {
   const initialRoundId = `${config.subsetFallback.reviewPlanId}-round-initial`;
@@ -791,104 +1071,87 @@ function buildSubsetTargets(
   tracksByName,
   roomsByName,
 ) {
-  const priya = sourceIdentity(fixture, "speaker");
-  const marcus = sourceIdentity(fixture, "speaker2");
-  const taming = firstSubmission(fixture, "Taming 40-Minute CI");
-  const talkFormat = taming.format;
-  const platformTrack = taming.track;
-  const lightningFormat = fixture.event.session_formats.find((format) =>
-    format.startsWith("Lightning"),
-  );
-  const aiTrack = fixture.event.tracks.find((track) => track.startsWith("AI Engineering"));
-  if (lightningFormat === undefined || aiTrack === undefined) {
-    throw new DevflowSeedError(
-      "FIXTURE_INVALID",
-      "The official fixture has no lightning format or AI Engineering track.",
-    );
-  }
-  const priyaId = stableId(eventId, "speaker", priya.name);
-  const marcusId = stableId(eventId, "speaker", marcus.name);
-  const tamingId = stableId(eventId, "session", taming.title);
-  const marcusTitle = config.subsetFallback.marcusSessionTitle;
-  const marcusSessionId = stableId(eventId, "session", marcusTitle);
-  const room2A = roomsByName.get(
-    fixture.event.rooms.find((room) => room.includes("2A")) ?? fixture.event.rooms[0],
-  );
-  const room2B = roomsByName.get(
-    fixture.event.rooms.find((room) => room.includes("2B")) ??
-      fixture.event.rooms[1] ??
-      fixture.event.rooms[0],
-  );
-  const platformTrackId = tracksByName.get(platformTrack);
-  const aiTrackId = tracksByName.get(aiTrack);
-  const talkFormatId = formatsByName.get(talkFormat);
-  const lightningFormatId = formatsByName.get(lightningFormat);
+  const agendaFoundation = config.subsetFallback?.agendaFoundation;
   if (
-    [room2A, room2B, platformTrackId, aiTrackId, talkFormatId, lightningFormatId].some(
-      (value) => value === undefined,
-    )
+    !isObject(agendaFoundation) ||
+    !Array.isArray(agendaFoundation.personas) ||
+    !Array.isArray(agendaFoundation.sessions)
   ) {
     throw new DevflowSeedError(
-      "FIXTURE_INVALID",
-      "The official fixture could not resolve subset agenda taxonomy.",
+      "CONFIGURATION_ERROR",
+      "The agenda fallback must declare dedicated personas and sessions.",
     );
   }
-  const sessions = [
-    localSessionTarget({
-      eventId,
-      organizationId,
-      roomId: room2A,
-      trackId: platformTrackId,
-      formatId: talkFormatId,
-      startsAt: "2027-05-12T16:00:00.000Z",
-      endsAt: "2027-05-12T16:30:00.000Z",
-      session: {
-        id: tamingId,
-        title: taming.title,
-        description: taming.abstract,
-        status: "confirmed",
-        format: "talk",
-        durationMinutes: parseDuration(talkFormat),
-        capacityRequired: 1,
-        speakerIds: [priyaId],
-        speakerRoster: [{ id: priyaId, role: "speaker" }],
-      },
-    }),
-    localSessionTarget({
-      eventId,
-      organizationId,
-      roomId: room2B,
-      trackId: aiTrackId,
-      formatId: lightningFormatId,
-      startsAt: "2027-05-13T18:00:00.000Z",
-      endsAt: "2027-05-13T18:10:00.000Z",
-      session: {
-        id: marcusSessionId,
-        title: marcusTitle,
-        description: "A practical Q&A on running AI agents in production.",
-        status: "confirmed",
-        format: "other",
-        durationMinutes: parseDuration(lightningFormat),
-        capacityRequired: 1,
-        speakerIds: [marcusId],
-        speakerRoster: [{ id: marcusId, role: "speaker" }],
-      },
-    }),
-  ];
-  const entries = sessions.map((sessionTarget) => {
-    const session = JSON.parse(sessionTarget.fields["Metadata JSON"]);
-    const trackName = session.trackId === platformTrackId ? platformTrack : aiTrack;
+  const personasById = new Map(
+    agendaFoundation.personas.map((persona) => [persona.id, persona]),
+  );
+  const resolveRoom = (hint, fallbackIndex) => {
     const roomName =
-      session.roomId === room2A
-        ? (fixture.event.rooms.find((room) => room.includes("2A")) ?? fixture.event.rooms[0])
-        : (fixture.event.rooms.find((room) => room.includes("2B")) ??
-          fixture.event.rooms[1] ??
-          fixture.event.rooms[0]);
+      fixture.event.rooms.find((room) => (hint ? room.includes(hint) : false)) ??
+      fixture.event.rooms[fallbackIndex] ??
+      fixture.event.rooms[0];
+    return { name: roomName, id: roomsByName.get(roomName) };
+  };
+  const sessions = agendaFoundation.sessions.map((entry, index) => {
+    const persona = personasById.get(entry.personaId);
+    const trackName =
+      entry.track ?? fixture.event.tracks[index % Math.max(fixture.event.tracks.length, 1)];
+    const formatName =
+      entry.format ??
+      fixture.event.session_formats[index % Math.max(fixture.event.session_formats.length, 1)];
+    const room = resolveRoom(entry.roomHint, index);
+    const trackId = tracksByName.get(trackName);
+    const formatId = formatsByName.get(formatName);
+    if (
+      persona === undefined ||
+      room.id === undefined ||
+      trackId === undefined ||
+      formatId === undefined
+    ) {
+      throw new DevflowSeedError(
+        "FIXTURE_INVALID",
+        `The agenda fallback could not resolve its dedicated session ${entry.title}.`,
+      );
+    }
+    const participantId = stableId(eventId, "agenda-participant", persona.id);
+    const sessionId = stableId(eventId, "agenda-session", entry.title);
+    const formatKind = formatName.startsWith("Lightning") ? "other" : "talk";
+    return localSessionTarget({
+      eventId,
+      organizationId,
+      roomId: room.id,
+      trackId,
+      formatId,
+      startsAt: entry.startsAt,
+      endsAt: entry.endsAt,
+      session: {
+        id: sessionId,
+        title: entry.title,
+        description: `Dedicated agenda foundation session presented by ${persona.name}.`,
+        status: "confirmed",
+        format: formatKind,
+        durationMinutes: parseDuration(formatName),
+        capacityRequired: 1,
+        speakerIds: [participantId],
+        speakerRoster: [{ id: participantId, role: "speaker" }],
+      },
+    });
+  });
+  const entries = sessions.map((sessionTarget, index) => {
+    const session = JSON.parse(sessionTarget.fields["Metadata JSON"]);
+    const configured = agendaFoundation.sessions[index];
+    const persona = personasById.get(configured.personaId);
+    const trackName =
+      configured.track ?? fixture.event.tracks[index % Math.max(fixture.event.tracks.length, 1)];
+    const formatName =
+      configured.format ??
+      fixture.event.session_formats[index % Math.max(fixture.event.session_formats.length, 1)];
+    const room = resolveRoom(configured.roomHint, index);
     return {
-      id: `${eventId}:entry:${session.id}`,
+      id: `${eventId}:agenda-foundation:entry:${session.id}`,
       eventId,
       entry: {
-        id: `${eventId}:entry:${session.id}`,
+        id: `${eventId}:agenda-foundation:entry:${session.id}`,
         sessionId: session.id,
         roomId: session.roomId,
         trackIds: [session.trackId],
@@ -906,9 +1169,9 @@ function buildSubsetTargets(
         metadata: {
           title: session.title,
           summary: session.description,
-          format: session.format === "talk" ? talkFormat : lightningFormat,
-          speakerNames: session.id === tamingId ? [priya.name] : [marcus.name],
-          roomName,
+          format: formatName,
+          speakerNames: [persona.name],
+          roomName: room.name,
           trackNames: [trackName],
         },
       },
@@ -925,7 +1188,7 @@ function buildSubsetTargets(
     entries: entries.map((entry) => entry.entry),
     warningOverrides: [],
     publishedAt,
-    publishedBy: "evaluator subset fallback",
+    publishedBy: "evaluator agenda foundation",
     rollbackOfRevisionId: null,
     event: publicEvent,
   };
@@ -955,13 +1218,36 @@ function buildSubsetTargets(
       entries: entries.map((entry) => entry.entry),
       warningOverrides: [],
       updatedAt: publishedAt,
-      updatedBy: "evaluator subset fallback",
+      updatedBy: "evaluator agenda foundation",
     },
     revisions: [revision],
     currentPublishedRevisionId: revision.id,
     outbox: [],
     audit: [],
   };
+  const speakers = [...personasById.values()].map((persona) => {
+    const participantId = stableId(eventId, "agenda-participant", persona.id);
+    const personaSessions = sessions
+      .map((sessionTarget) => JSON.parse(sessionTarget.fields["Metadata JSON"]))
+      .filter((session) => session.speakerIds.includes(participantId));
+    return {
+      id: participantId,
+      displayName: persona.name,
+      pronouns: null,
+      jobTitle: persona.title ?? null,
+      organization: persona.company ?? null,
+      biography: persona.bio ?? "",
+      photoUrl: null,
+      sessionIds: personaSessions.map((session) => session.id),
+      sessionTitles: personaSessions.map((session) => session.title),
+      trackNames: personaSessions.map((session) => {
+        const configured = agendaFoundation.sessions.find(
+          (entry) => entry.title === session.title,
+        );
+        return configured?.track ?? "";
+      }),
+    };
+  });
   const projection = {
     event: publicEvent,
     revision: {
@@ -969,37 +1255,12 @@ function buildSubsetTargets(
       number: 1,
       publishedAt,
     },
-    speakers: [
-      {
-        id: priyaId,
-        displayName: priya.name,
-        pronouns: null,
-        jobTitle: priya.title ?? null,
-        organization: priya.company ?? null,
-        biography: priya.bio ?? "",
-        photoUrl: null,
-        sessionIds: [tamingId],
-        sessionTitles: [taming.title],
-        trackNames: [platformTrack],
-      },
-      {
-        id: marcusId,
-        displayName: marcus.name,
-        pronouns: null,
-        jobTitle: marcus.title ?? null,
-        organization: marcus.company ?? null,
-        biography: marcus.bio ?? "",
-        photoUrl: null,
-        sessionIds: [marcusSessionId],
-        sessionTitles: [marcusTitle],
-        trackNames: [aiTrack],
-      },
-    ],
+    speakers,
   };
   const agendaTargets = [
-    target("Agenda Versions", eventId, {
-      [APPLICATION_ID_FIELD]: eventId,
-      "Agenda ID": eventId,
+    target("Agenda Versions", `agenda-foundation:${eventId}`, {
+      [APPLICATION_ID_FIELD]: `agenda-foundation:${eventId}`,
+      "Agenda ID": `agenda-foundation:${eventId}`,
       Number: 1,
       Status: "published",
       "Conflicts JSON": json(state),
@@ -1015,8 +1276,8 @@ function buildSubsetTargets(
         "Sort Order": entries.indexOf(entry),
       }),
     ),
-    target("Published Speaker Projections", `published-speakers:${eventId}:1`, {
-      [APPLICATION_ID_FIELD]: `published-speakers:${eventId}:1`,
+    target("Published Speaker Projections", config.subsetFallback.speakerProjectionRevisionId, {
+      [APPLICATION_ID_FIELD]: config.subsetFallback.speakerProjectionRevisionId,
       "Organization ID": organizationId,
       "Event Slug": eventId,
       "Revision ID": projection.revision.id,
@@ -1043,6 +1304,7 @@ export function buildSeedRecords(options = {}, fixtureOptions = {}) {
   const config =
     normalizedOptions.seedConfig ??
     loadSeedConfig(normalizedOptions.seedConfigPath ?? DEFAULT_SEED_CONFIG_PATH);
+  validateSeedConfig(config);
   const fixture =
     normalizedOptions.fixture ??
     loadFixture(normalizedOptions.sourcePath ?? config.source ?? DEFAULT_SOURCE_PATH);
@@ -1100,6 +1362,7 @@ export function buildSeedRecords(options = {}, fixtureOptions = {}) {
     ...formatTargets,
     ...roomTargets,
     buildSessionSettingsTarget(config, eventId, organizationId),
+    buildEmailTemplateTarget(fixture, config, eventId, organizationId),
   );
   if (mode === SUBSET_FALLBACK_MODE) {
     const tracksByName = new Map(
@@ -1124,6 +1387,11 @@ export function buildSeedRecords(options = {}, fixtureOptions = {}) {
       ),
     );
   }
+  Object.defineProperty(targets, "provisioned", {
+    value: [...targets],
+    enumerable: false,
+    configurable: true,
+  });
   return targets;
 }
 
@@ -1300,6 +1568,9 @@ export async function runSeed(options = {}) {
     apiOrigin: options.apiOrigin,
     productionConfirmation: options.productionConfirmation,
   });
+  const chainContext = validateChainContext(options.chainContext ?? emptyChainContext(), {
+    allowEmpty: true,
+  });
   const mode = normalizeMode(options.subsetFallback === true ? SUBSET_FALLBACK_MODE : options.mode);
   const dryRun = options.dryRun === undefined ? true : Boolean(options.dryRun);
   const records =
@@ -1357,6 +1628,11 @@ export async function runSeed(options = {}) {
     environment: parsedEnvironment.environment,
     organizationId: CANONICAL_ORGANIZATION_ID,
     eventId: "devflow-conf-2027",
+    chainContext,
+    provisioned: records.map((record) => ({
+      table: record.table,
+      applicationId: record.applicationId,
+    })),
     recordCount: records.length,
     counts,
     actions: plan,
