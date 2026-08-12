@@ -29,11 +29,13 @@ export interface EvaluationRepository {
   putPlan(plan: EvaluationPlan, expectedVersion: number | null): Promise<void>;
   getAssignment(tenantId: string, assignmentId: string): Promise<EvaluationAssignment | null>;
   listAssignments(tenantId: string, planId: string): Promise<readonly EvaluationAssignment[]>;
-  putAssignments(assignments: readonly EvaluationAssignment[]): Promise<void>;
-  deleteAssignment(
+  replaceAssignments(
     tenantId: string,
-    assignmentId: string,
-    expectedAssignmentVersion: number,
+    eventId: string,
+    planId: string,
+    roundId: string,
+    submissionId: string,
+    assignments: readonly EvaluationAssignment[],
   ): Promise<void>;
   getReview(tenantId: string, assignmentId: string): Promise<EvaluationReview | null>;
   listReviews(tenantId: string, planId: string): Promise<readonly EvaluationReview[]>;
@@ -152,7 +154,7 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
       .map(clone);
   }
 
-  async putAssignments(assignments: readonly EvaluationAssignment[]): Promise<void> {
+  async putAssignmentsForTesting(assignments: readonly EvaluationAssignment[]): Promise<void> {
     const keys = assignments.map((assignment) => storageKey(assignment.tenantId, assignment.id));
     if (new Set(keys).size !== keys.length || keys.some((key) => this.#assignments.has(key))) {
       throw conflict("One or more reviewer assignments already exist.");
@@ -161,25 +163,68 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
       this.#assignments.set(storageKey(assignment.tenantId, assignment.id), clone(assignment));
     }
   }
-
-  async deleteAssignment(
+  async replaceAssignments(
     tenantId: string,
-    assignmentId: string,
-    expectedAssignmentVersion: number,
+    eventId: string,
+    planId: string,
+    roundId: string,
+    submissionId: string,
+    assignments: readonly EvaluationAssignment[],
   ): Promise<void> {
-    const assignmentStorageKey = storageKey(tenantId, assignmentId);
-    assertVersion(
-      this.#assignments.get(assignmentStorageKey)?.version ?? null,
-      expectedAssignmentVersion,
-      "Assignment",
-    );
-    const reviewStorageKey = storageKey(tenantId, assignmentId);
-    const review = this.#reviews.get(reviewStorageKey);
-    if (review !== undefined && review.submittedAt !== null) {
-      throw conflict("A submitted review cannot be unassigned.");
+    const desired = [...assignments];
+    const desiredIds = new Set<string>();
+    for (const assignment of desired) {
+      if (
+        assignment.tenantId !== tenantId ||
+        assignment.eventId !== eventId ||
+        assignment.planId !== planId ||
+        assignment.roundId !== roundId ||
+        assignment.submissionId !== submissionId ||
+        assignment.status === "abstained"
+      ) {
+        throw conflict("Reviewer assignment replacement is outside its target scope.");
+      }
+      const key = storageKey(tenantId, assignment.id);
+      if (desiredIds.has(key)) {
+        throw conflict("Reviewer assignment replacement contains duplicates.");
+      }
+      desiredIds.add(key);
+      const existing = this.#assignments.get(key);
+      if (
+        existing !== undefined &&
+        (existing.eventId !== eventId ||
+          existing.planId !== planId ||
+          existing.roundId !== roundId ||
+          existing.submissionId !== submissionId)
+      ) {
+        throw conflict("A reviewer assignment already exists outside the replacement scope.");
+      }
+      if (existing !== undefined && existing.status === "abstained") {
+        throw conflict("A reviewer who declared a conflict cannot be reassigned.");
+      }
+      if (existing !== undefined && existing.reviewerId !== assignment.reviewerId) {
+        throw conflict("A reviewer assignment changed since it was loaded.");
+      }
     }
-    this.#assignments.delete(assignmentStorageKey);
-    this.#reviews.delete(reviewStorageKey);
+
+    const target = [...this.#assignments.entries()].filter(
+      ([, assignment]) =>
+        assignment.tenantId === tenantId &&
+        assignment.eventId === eventId &&
+        assignment.planId === planId &&
+        assignment.roundId === roundId &&
+        assignment.submissionId === submissionId,
+    );
+    for (const [key, assignment] of target) {
+      if (assignment.status === "abstained" || desiredIds.has(key)) continue;
+      this.#assignments.delete(key);
+      this.#reviews.delete(key);
+    }
+    for (const assignment of desired) {
+      if (!this.#assignments.has(storageKey(tenantId, assignment.id))) {
+        this.#assignments.set(storageKey(tenantId, assignment.id), clone(assignment));
+      }
+    }
   }
 
   async getReview(tenantId: string, assignmentId: string): Promise<EvaluationReview | null> {

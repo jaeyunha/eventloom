@@ -5,22 +5,26 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import ReviewerPage from "../../app/review/page";
 import {
+  assignmentCompletionPercent,
   buildEvaluationPlanCreateDto,
   createEvaluationPlan,
   createReviewAutosaveQueue,
-  deleteReviewAssignment,
   type EvaluatorAssignment,
   loadEvaluatorQueue,
   loadOrganizerData,
+  normalizeCompletionPercent,
   OrganizerDetailStatus,
   parseNumericAuthoringValue,
   type ReviewPlanSeed,
   type ReviewRound,
   ReviewWorkspace,
   type RubricCriterion,
+  replaceReviewAssignments,
   reviewerDisplayLabel,
+  reviewerIdsForAssignmentTarget,
   reviewerNavigationDisabled,
   reviewerSelectionBlocked,
+  unassignReviewAssignment,
   validateCreateEvaluationPlanForm,
 } from "./review-workspace";
 
@@ -349,11 +353,95 @@ describe("review workspace", () => {
     expect(markup).toContain("Initial committee review");
     expect(markup).toContain("In progress");
     expect(markup).toContain("Unassign");
+    expect(markup).toMatch(/<button[^>]*disabled=""[^>]*>Replace reviewer assignments<\/button>/u);
+  });
+  it("renders abstentions as protected history without an unassign action", () => {
+    const plan = testPlan("summit-2026");
+    const assignment = plan.assignments[0];
+    if (assignment === undefined) throw new Error("Expected an assignment fixture.");
+    const markup = renderToStaticMarkup(
+      createElement(ReviewWorkspace, {
+        eventId: "summit-2026",
+        mode: "organizer",
+        initialState: {
+          organizer: {
+            ...plan,
+            assignments: [
+              ...plan.assignments,
+              {
+                ...assignment,
+                id: "assignment-recused",
+                reviewerId: "reviewer-conflict",
+                status: "abstained",
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    expect(markup).toContain("Protected conflict history");
+    expect(markup).not.toContain('aria-label="Unassign reviewer-conflict');
   });
 
-  it("deletes an assignment through the exact plan-scoped path and propagates errors", async () => {
+  it("posts complete reviewer-set replacements, including an empty set, and propagates errors", async () => {
+    const requests: Array<{ input: string; method: string | undefined; body: string | undefined }> =
+      [];
+    await replaceReviewAssignments(
+      "https://api.example",
+      "plan-test",
+      {
+        roundId: "round-1",
+        submissionId: "submission-1",
+        reviewerIds: [],
+        expectedVersion: 3,
+      },
+      async (input, init) => {
+        requests.push({ input: String(input), method: init?.method, body: String(init?.body) });
+        return new Response(JSON.stringify({ data: { assignments: [] } }), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    );
+
+    expect(requests).toEqual([
+      {
+        input: "https://api.example/api/admin/evaluations/plans/plan-test/assignments",
+        method: "POST",
+        body: JSON.stringify({
+          roundId: "round-1",
+          submissionId: "submission-1",
+          reviewerIds: [],
+          expectedVersion: 3,
+        }),
+      },
+    ]);
+
+    await expect(
+      replaceReviewAssignments(
+        "https://api.example",
+        "plan-test",
+        {
+          roundId: "round-1",
+          submissionId: "submission-1",
+          reviewerIds: ["reviewer-2"],
+        },
+        async () =>
+          new Response(
+            JSON.stringify({ error: { message: "Assignment replacement is forbidden." } }),
+            {
+              status: 403,
+              headers: { "content-type": "application/json" },
+            },
+          ),
+      ),
+    ).rejects.toThrow("Assignment replacement is forbidden.");
+  });
+
+  it("uses the dedicated plan-scoped unassign endpoint and propagates errors", async () => {
     const requests: Array<{ input: string; method: string | undefined }> = [];
-    await deleteReviewAssignment(
+    await unassignReviewAssignment(
       "https://api.example",
       "plan-test",
       "assignment-test",
@@ -370,9 +458,8 @@ describe("review workspace", () => {
         method: "DELETE",
       },
     ]);
-
     await expect(
-      deleteReviewAssignment(
+      unassignReviewAssignment(
         "https://api.example",
         "plan-test",
         "assignment-test",
@@ -383,6 +470,33 @@ describe("review workspace", () => {
           }),
       ),
     ).rejects.toThrow("Assignment removal is forbidden.");
+  });
+  it("derives the authoritative reviewer set for an assignment target", () => {
+    const target = testPlan("summit-2026").assignments[0];
+    if (target === undefined) throw new Error("Expected a target assignment.");
+    expect(
+      reviewerIdsForAssignmentTarget(
+        [
+          target,
+          { ...target, id: "assignment-042-duplicate" },
+          { ...target, id: "assignment-042-other", reviewerId: "reviewer-2", status: "submitted" },
+          {
+            ...target,
+            id: "assignment-042-recused",
+            reviewerId: "reviewer-3",
+            status: "abstained",
+          },
+          {
+            ...target,
+            id: "assignment-other-submission",
+            submissionId: "submission-017",
+            reviewerId: "reviewer-4",
+          },
+        ],
+        target.roundId,
+        target.submissionId,
+      ),
+    ).toEqual(["reviewer-2", target.reviewerId]);
   });
   it("keeps the organizer plan usable while review details load or fail", () => {
     const retry = vi.fn();
@@ -671,6 +785,49 @@ describe("review workspace", () => {
     expect(markup).toContain("1 abstention");
     expect(markup).toContain("Counted aggregate scores");
     expect(markup).toContain("Human-confirmed scores only");
+  });
+  it("normalizes decimal completion percentages consistently across text, width, and ARIA", () => {
+    const plan = testPlan("summit-2026");
+    const decimalPlan: ReviewPlanSeed = {
+      ...plan,
+      rounds: plan.rounds.map((round, index) =>
+        index === 0 ? { ...round, completionPercent: 66.66666666666666 } : round,
+      ),
+      progress: {
+        ...plan.progress,
+        completionPercent: 66.66666666666666,
+        reviewers: plan.progress.reviewers.map((reviewer) => ({
+          ...reviewer,
+          completionPercent: 66.66666666666666,
+        })),
+      },
+    };
+    const markup = renderToStaticMarkup(
+      createElement(ReviewWorkspace, {
+        eventId: "summit-2026",
+        mode: "organizer",
+        initialState: { organizer: decimalPlan },
+      }),
+    );
+
+    expect(normalizeCompletionPercent(66.66666666666666)).toBe(67);
+    expect(markup).toContain("<strong>67%</strong>");
+    expect(markup).toContain('aria-valuenow="67"');
+    expect(markup).toContain('style="width:67%"');
+  });
+  it("derives round completion from the authoritative active assignment projection", () => {
+    const base = testPlan("summit-2026").assignments[0];
+    if (base === undefined) throw new Error("Expected an assignment fixture.");
+    const assignments = [
+      { ...base, id: "assignment-1", status: "submitted" as const },
+      { ...base, id: "assignment-2", reviewerId: "reviewer-2", status: "submitted" as const },
+      { ...base, id: "assignment-3", reviewerId: "reviewer-3", status: "assigned" as const },
+      { ...base, id: "assignment-4", reviewerId: "reviewer-4", status: "abstained" as const },
+    ];
+
+    expect(assignmentCompletionPercent(assignments, "round-initial")).toBe(67);
+    expect(assignmentCompletionPercent(assignments, "round-missing")).toBe(0);
+    expect(assignmentCompletionPercent(assignments)).toBe(67);
   });
 
   it("renders bounded rubric controls and human-authority decision safeguards", () => {
@@ -1024,7 +1181,7 @@ describe("review workspace", () => {
       inProgress: 1,
       submitted: 1,
       abstained: 0,
-      completionPercent: 33,
+      completionPercent: 100,
       reviewers: [
         {
           reviewerId: "reviewer-1",
@@ -1129,7 +1286,7 @@ describe("review workspace", () => {
       expect(seed.assignments).toEqual(assignments);
       expect(seed.progress).toEqual({
         totalAssignments: 3,
-        assigned: 1,
+        assigned: 3,
         inProgress: 1,
         submitted: 1,
         abstained: 0,
@@ -1137,6 +1294,7 @@ describe("review workspace", () => {
         completionPercent: 33,
         reviewers: progress.reviewers,
       });
+      expect(seed.rounds[0]?.completionPercent).toBe(33);
       expect(seed.decisionBySubmission).toEqual({
         "submission-b": {
           status: "waitlisted",
@@ -1173,7 +1331,7 @@ describe("review workspace", () => {
       vi.unstubAllGlobals();
     }
   });
-  it("hydrates the reviewer queue from one batch context request with canonical titles and statuses", async () => {
+  it("maps API-provided submitted assignment state into the reviewer queue from one batch context request", async () => {
     const requests: string[] = [];
     vi.stubGlobal(
       "fetch",
@@ -1221,12 +1379,7 @@ describe("review workspace", () => {
                     title: "Canonical submission title",
                     abstract: "Canonical abstract",
                   },
-                  review: {
-                    version: 1,
-                    comment: "Submitted comment",
-                    submittedAt: "2026-08-10T12:00:00.000Z",
-                    scores: {},
-                  },
+                  review: null,
                   rubricRevision: 3,
                   submissionRevision: 1,
                   suggestions: [],

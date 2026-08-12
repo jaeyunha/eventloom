@@ -284,8 +284,8 @@ async function expectEvaluationError(
 }
 
 describe("evaluation plans and assignments", () => {
-  it("enforces assignment coverage and per-reviewer load rules", async () => {
-    const { service } = await fixture();
+  it("replaces the complete active reviewer set and validates resulting limits", async () => {
+    const { service, repository } = await fixture({ reviewsPerSubmission: 2 });
     const initial = await service.assignReviewers(organizer, {
       planId: "plan-1",
       roundId: round.id,
@@ -294,24 +294,52 @@ describe("evaluation plans and assignments", () => {
     });
 
     expect(initial).toHaveLength(2);
-    await expectEvaluationError(
-      service.assignReviewers(organizer, {
-        planId: "plan-1",
-        roundId: round.id,
-        submissionId: submission.id,
-        reviewerIds: ["reviewer-3"],
-      }),
-      "EVALUATION_CONFLICT",
-    );
-    await expectEvaluationError(
+    const replacement = await service.assignReviewers(organizer, {
+      planId: "plan-1",
+      roundId: round.id,
+      submissionId: submission.id,
+      reviewerIds: ["reviewer-2", "reviewer-3"],
+    });
+    expect(replacement).toHaveLength(2);
+    expect(replacement[0]?.reviewerId).toBe("reviewer-2");
+    expect(replacement[0]?.id).toBe(initial[1]?.id);
+    await expect(repository.getAssignment(tenantId, initial[0]?.id ?? "")).resolves.toBeNull();
+    await expect(repository.getAssignment(tenantId, initial[1]?.id ?? "")).resolves.toMatchObject({
+      reviewerId: "reviewer-2",
+    });
+
+    await expect(
       service.assignReviewers(organizer, {
         planId: "plan-1",
         roundId: round.id,
         submissionId: "submission-2",
         reviewerIds: ["reviewer-1"],
       }),
-      "EVALUATION_CONFLICT",
-    );
+    ).resolves.toHaveLength(1);
+  });
+  it("supports an empty replacement and removes organizer and reviewer projections", async () => {
+    const { service, repository } = await fixture();
+    const assignment = await assignOne(service);
+    await service.saveReview(reviewer("reviewer-1"), assignment.id, {
+      scores: [{ criterionId: "quality", value: 4, origin: "human" }],
+    });
+
+    await service.assignReviewers(organizer, {
+      planId: "plan-1",
+      roundId: round.id,
+      submissionId: submission.id,
+      reviewerIds: [],
+    });
+
+    await expect(repository.getAssignment(tenantId, assignment.id)).resolves.toBeNull();
+    await expect(repository.getReview(tenantId, assignment.id)).resolves.toBeNull();
+    await expect(service.listReviewerWorkspace(reviewer("reviewer-1"), eventId)).resolves.toEqual({
+      assignments: [],
+    });
+    await expect(service.getOrganizerWorkspace(organizer, eventId)).resolves.toMatchObject({
+      assignments: [],
+      progress: { total: 0, completionPercent: 0 },
+    });
   });
 
   it("denies unassigned and cross-tenant reviewers", async () => {
@@ -500,7 +528,7 @@ describe("evaluation plans and assignments", () => {
       },
       null,
     );
-    await repository.putAssignments([
+    await repository.putAssignmentsForTesting([
       { ...assignment, id: "assignment-other-event", eventId: "event-2" },
       { ...assignment, id: "assignment-other-tenant", tenantId: "tenant-2" },
     ]);
@@ -631,6 +659,15 @@ describe("evaluation plans and assignments", () => {
     expect(reassigned).toMatchObject({ id: inProgress.id, status: "assigned", version: 1 });
     await expect(repository.getReview(tenantId, reassigned.id)).resolves.toBeNull();
   });
+  it("allows organizer cleanup after the evaluation plan closes", async () => {
+    const { plan, repository, service } = await fixture();
+    const assignment = await assignOne(service);
+    await service.closePlan(organizer, plan.id, plan.version);
+
+    await service.unassignAssignment(organizer, plan.id, assignment.id);
+
+    await expect(repository.getAssignment(tenantId, assignment.id)).resolves.toBeNull();
+  });
 
   it("requires organizer authorization and isolates plan, event, and tenant assignment scope", async () => {
     const { service, repository } = await fixture({ reviewsPerSubmission: 2 });
@@ -645,7 +682,7 @@ describe("evaluation plans and assignments", () => {
       "EVALUATION_NOT_FOUND",
     );
 
-    await repository.putAssignments([
+    await repository.putAssignmentsForTesting([
       { ...assignment, id: "assignment-other-plan", planId: "plan-2" },
       { ...assignment, id: "assignment-other-event", eventId: "event-2" },
     ]);
@@ -663,7 +700,7 @@ describe("evaluation plans and assignments", () => {
     );
   });
 
-  it("rejects submitted reviews, including stale assignment status, and other non-outstanding statuses", async () => {
+  it("removes submitted assignments through replacement while preserving conflict history", async () => {
     const { service, repository } = await fixture({ reviewsPerSubmission: 2 });
     const assignment = await assignOne(service);
     const draft = await service.saveReview(reviewer("reviewer-1"), assignment.id, {
@@ -679,16 +716,12 @@ describe("evaluation plans and assignments", () => {
     );
     expect(submitted.submittedAt).not.toBeNull();
 
-    await expectEvaluationError(
-      service.unassignAssignment(organizer, "plan-1", assignment.id),
-      "EVALUATION_CONFLICT",
-    );
-    await expect(repository.getAssignment(tenantId, assignment.id)).resolves.toMatchObject({
-      status: "submitted",
-    });
+    await service.unassignAssignment(organizer, "plan-1", assignment.id);
+    await expect(repository.getAssignment(tenantId, assignment.id)).resolves.toBeNull();
+    await expect(repository.getReview(tenantId, assignment.id)).resolves.toBeNull();
 
     const abstained = await assignOne(service, "reviewer-2");
-    await repository.putAssignments([
+    await repository.putAssignmentsForTesting([
       { ...abstained, id: "assignment-abstained", status: "abstained" },
     ]);
     await expectEvaluationError(
@@ -709,10 +742,53 @@ describe("evaluation plans and assignments", () => {
       ],
     });
     await staleService.submitReview(reviewer("reviewer-1"), staleAssignment.id, staleDraft.version);
-    await expectEvaluationError(
-      staleService.unassignAssignment(organizer, "plan-1", staleAssignment.id),
-      "EVALUATION_CONFLICT",
+    await expect(
+      staleService.getReviewContext(reviewer("reviewer-1"), staleAssignment.id),
+    ).resolves.toMatchObject({
+      assignment: { status: "submitted" },
+    });
+    await staleService.unassignAssignment(organizer, "plan-1", staleAssignment.id);
+    await expect(staleRepository.getAssignment(tenantId, staleAssignment.id)).resolves.toBeNull();
+  });
+  it("rounds bounded completion percentages for display", async () => {
+    const submissions = new InMemorySubmissionReviewSource([
+      submission,
+      { ...submission, id: "submission-2", title: "Another session" },
+      { ...submission, id: "submission-3", title: "Third session" },
+    ]);
+    const { service } = await fixture({
+      submissions,
+      reviewsPerSubmission: 1,
+      maxAssignmentsPerReviewer: 3,
+    });
+    const assignments = await Promise.all(
+      ["submission-1", "submission-2", "submission-3"].map(async (submissionId) => {
+        const result = await service.assignReviewers(organizer, {
+          planId: "plan-1",
+          roundId: round.id,
+          submissionId,
+          reviewerIds: ["reviewer-1"],
+        });
+        const assignment = result[0];
+        if (assignment === undefined) throw new Error("Expected an assignment fixture.");
+        return assignment;
+      }),
     );
+    for (const assignment of assignments.slice(0, 2)) {
+      const draft = await service.saveReview(reviewer("reviewer-1"), assignment.id, {
+        scores: [
+          { criterionId: "quality", value: 4, origin: "human" },
+          { criterionId: "relevance", value: 8, origin: "human" },
+        ],
+      });
+      await service.submitReview(reviewer("reviewer-1"), assignment.id, draft.version);
+    }
+
+    await expect(service.getProgress(organizer, "plan-1")).resolves.toMatchObject({
+      total: 3,
+      submitted: 2,
+      completionPercent: 67,
+    });
   });
 });
 
@@ -820,6 +896,12 @@ describe("review drafts, AI assistance, and aggregates", () => {
       assignment: { status: "submitted" },
       review: { submittedAt: submitted.submittedAt },
     });
+    await expect(service.listReviewerAssignments(actor, "plan-1")).resolves.toMatchObject([
+      { status: "submitted" },
+    ]);
+    await expect(service.listOrganizerAssignments(organizer, "plan-1")).resolves.toMatchObject([
+      { status: "submitted" },
+    ]);
     await expect(service.getProgress(organizer, "plan-1")).resolves.toMatchObject({
       total: 1,
       submitted: 1,
@@ -841,7 +923,7 @@ describe("review drafts, AI assistance, and aggregates", () => {
   it("does not expose assignments persisted for another event", async () => {
     const { service, repository } = await fixture({ reviewsPerSubmission: 1 });
     const assignment = await assignOne(service);
-    await repository.putAssignments([
+    await repository.putAssignmentsForTesting([
       {
         ...assignment,
         id: "foreign-event-assignment",

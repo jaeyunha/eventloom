@@ -549,22 +549,43 @@ function aggregateForSubmission(
     criteria,
   };
 }
+function effectiveAssignment(
+  assignment: EvaluationAssignment,
+  review: EvaluationReview | undefined,
+): EvaluationAssignment {
+  if (assignment.status === "abstained") return assignment;
+  if (review !== undefined && review.submittedAt !== null) {
+    return { ...assignment, status: "submitted" as const };
+  }
+  if (assignment.status === "submitted") {
+    return { ...assignment, status: "assigned" as const };
+  }
+  return assignment;
+}
+
 function effectiveAssignmentsForPlan(
   plan: EvaluationPlan,
   assignments: readonly EvaluationAssignment[],
   reviews: readonly EvaluationReview[],
 ): readonly EvaluationAssignment[] {
-  const submittedReviewIds = new Set(
-    reviews
-      .filter(
-        (review) =>
-          review.tenantId === plan.tenantId &&
-          review.eventId === plan.eventId &&
-          review.planId === plan.id &&
-          review.submittedAt !== null,
-      )
-      .map((review) => review.assignmentId),
-  );
+  const reviewByAssignment = new Map<string, EvaluationReview>();
+  for (const review of reviews) {
+    if (
+      review.tenantId !== plan.tenantId ||
+      review.eventId !== plan.eventId ||
+      review.planId !== plan.id
+    ) {
+      continue;
+    }
+    const current = reviewByAssignment.get(review.assignmentId);
+    if (
+      current === undefined ||
+      (current.submittedAt === null && review.submittedAt !== null) ||
+      (current.submittedAt === review.submittedAt && review.version > current.version)
+    ) {
+      reviewByAssignment.set(review.assignmentId, review);
+    }
+  }
   return assignments
     .filter(
       (assignment) =>
@@ -572,18 +593,14 @@ function effectiveAssignmentsForPlan(
         assignment.eventId === plan.eventId &&
         assignment.planId === plan.id,
     )
-    .map((assignment) => {
-      if (assignment.status === "abstained") return assignment;
-      if (submittedReviewIds.has(assignment.id)) {
-        return { ...assignment, status: "submitted" as const };
-      }
-      if (assignment.status === "submitted") {
-        return { ...assignment, status: "assigned" as const };
-      }
-      return assignment;
-    });
+    .map((assignment) => effectiveAssignment(assignment, reviewByAssignment.get(assignment.id)));
 }
 
+function displayCompletionPercent(completed: number, total: number): number {
+  if (total <= 0) return 0;
+  const percentage = Math.round((completed / total) * 100);
+  return Number.isFinite(percentage) ? Math.min(100, Math.max(0, percentage)) : 0;
+}
 function progressForAssignments(
   plan: EvaluationPlan,
   assignments: readonly EvaluationAssignment[],
@@ -633,8 +650,7 @@ function progressForAssignments(
       if (status === "submitted") current.submitted += 1;
     }
     current.outstanding = Math.max(0, current.assigned - current.submitted);
-    current.completionPercent =
-      current.assigned === 0 ? 0 : (current.submitted / current.assigned) * 100;
+    current.completionPercent = displayCompletionPercent(current.submitted, current.assigned);
     reviewerProgress.set(key, current);
   }
   return {
@@ -644,7 +660,7 @@ function progressForAssignments(
     inProgress: count("in_progress"),
     submitted,
     abstained,
-    completionPercent: actionable === 0 ? 0 : (submitted / actionable) * 100,
+    completionPercent: displayCompletionPercent(submitted, actionable),
     reviewers: [...reviewerProgress.values()].sort(
       (left, right) =>
         left.reviewerId.localeCompare(right.reviewerId) ||
@@ -1126,9 +1142,6 @@ export class EvaluationService {
       submissionId,
       assignedSubmission.version ?? assignedSubmission.revision,
     );
-    if (input.reviewerIds.length === 0) {
-      throw invalidInput("At least one reviewer must be assigned.");
-    }
     const reviewerIds = input.reviewerIds.map((reviewerId) =>
       requireText(reviewerId, "Reviewer id", 100),
     );
@@ -1168,24 +1181,29 @@ export class EvaluationService {
     if (reviewerIds.some((reviewerId) => abstainedReviewerIds.has(reviewerId))) {
       throw conflict("A reviewer who declared a conflict cannot be reassigned.");
     }
-    const newReviewerIds = reviewerIds.filter((reviewerId) => !existingByReviewer.has(reviewerId));
-    if (
-      targetAssignments.length + newReviewerIds.length >
-      plan.assignmentRule.reviewsPerSubmission
-    ) {
+    if (reviewerIds.length > plan.assignmentRule.reviewsPerSubmission) {
       throw conflict("The plan review limit for this submission would be exceeded.");
     }
 
+    const outsideAssignments = allAssignments.filter(
+      (assignment) =>
+        assignment.status !== "abstained" &&
+        !(assignment.roundId === input.roundId && assignment.submissionId === submissionId),
+    );
     const now = this.#clock().toISOString();
-    const created: EvaluationAssignment[] = [];
-    for (const reviewerId of newReviewerIds) {
-      const reviewerLoad = allAssignments.filter(
-        (assignment) => assignment.reviewerId === reviewerId && assignment.status !== "abstained",
-      ).length;
-      if (reviewerLoad >= plan.assignmentRule.maxAssignmentsPerReviewer) {
+    const desired: EvaluationAssignment[] = [];
+    for (const reviewerId of reviewerIds) {
+      const existing = existingByReviewer.get(reviewerId);
+      const reviewerLoad =
+        outsideAssignments.filter((assignment) => assignment.reviewerId === reviewerId).length + 1;
+      if (reviewerLoad > plan.assignmentRule.maxAssignmentsPerReviewer) {
         throw conflict(`Reviewer ${reviewerId} has reached the plan assignment limit.`);
       }
-      const assignment: EvaluationAssignment = {
+      if (existing !== undefined) {
+        desired.push(existing);
+        continue;
+      }
+      desired.push({
         id: `${plan.id}:${input.roundId}:${submissionId}:${reviewerId}`,
         tenantId: actor.tenantId,
         eventId: plan.eventId,
@@ -1200,22 +1218,17 @@ export class EvaluationService {
         version: 1,
         createdAt: now,
         updatedAt: now,
-      };
-      created.push(assignment);
+      });
     }
-    if (created.length > 0) {
-      await this.#repository.putAssignments(created);
-    }
-
-    return reviewerIds.map((reviewerId) => {
-      const assignment =
-        existingByReviewer.get(reviewerId) ??
-        created.find((candidate) => candidate.reviewerId === reviewerId);
-      if (assignment === undefined) {
-        throw conflict("The reviewer assignment could not be created.");
-      }
-      return assignment;
-    });
+    await this.#repository.replaceAssignments(
+      actor.tenantId,
+      plan.eventId,
+      plan.id,
+      input.roundId,
+      submissionId,
+      desired,
+    );
+    return desired;
   }
 
   async listReviewerAssignments(
@@ -1226,14 +1239,13 @@ export class EvaluationService {
     if (actor.kind !== "human" || !hasRole(actor, plan.eventId, "reviewer")) {
       throw forbidden();
     }
-    const assignments = await this.#repository.listAssignments(actor.tenantId, plan.id);
-    return assignments
+    const [assignments, reviews] = await Promise.all([
+      this.#repository.listAssignments(actor.tenantId, plan.id),
+      this.#repository.listReviews(actor.tenantId, plan.id),
+    ]);
+    return effectiveAssignmentsForPlan(plan, assignments, reviews)
       .filter(
-        (assignment) =>
-          assignment.planId === plan.id &&
-          assignment.eventId === plan.eventId &&
-          assignment.reviewerId === actor.userId &&
-          assignment.status !== "abstained",
+        (assignment) => assignment.reviewerId === actor.userId && assignment.status !== "abstained",
       )
       .sort(
         (left, right) =>
@@ -1302,14 +1314,10 @@ export class EvaluationService {
       );
       return {
         plan,
-        assignments: assignments.map((assignment) => {
-          const review = reviewsByAssignment.get(assignment.id);
-          const authoritativeAssignment =
-            review?.submittedAt === null || review === undefined
-              ? assignment
-              : { ...assignment, status: "submitted" as const };
-          return { assignment: authoritativeAssignment, review };
-        }),
+        assignments: assignments.map((assignment) => ({
+          assignment: effectiveAssignment(assignment, reviewsByAssignment.get(assignment.id)),
+          review: reviewsByAssignment.get(assignment.id),
+        })),
       };
     });
     const candidates = planRecords.flatMap(({ plan, assignments }) =>
@@ -1400,12 +1408,14 @@ export class EvaluationService {
   ): Promise<readonly EvaluationAssignment[]> {
     const plan = await this.#getPlan(actor.tenantId, planId);
     requireHumanOrganizer(actor, plan.eventId);
-    return [...(await this.#repository.listAssignments(actor.tenantId, plan.id))]
-      .filter((assignment) => assignment.eventId === plan.eventId)
-      .sort(
-        (left: EvaluationAssignment, right: EvaluationAssignment) =>
-          left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
-      );
+    const [assignments, reviews] = await Promise.all([
+      this.#repository.listAssignments(actor.tenantId, plan.id),
+      this.#repository.listReviews(actor.tenantId, plan.id),
+    ]);
+    return [...effectiveAssignmentsForPlan(plan, assignments, reviews)].sort(
+      (left: EvaluationAssignment, right: EvaluationAssignment) =>
+        left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+    );
   }
   async unassignAssignment(
     actor: EvaluationActor,
@@ -1422,14 +1432,30 @@ export class EvaluationService {
     ) {
       throw notFound("The evaluation assignment was not found.");
     }
-    const review = await this.#repository.getReview(actor.tenantId, assignment.id);
-    if (review !== null && review.submittedAt !== null) {
-      throw conflict("A submitted review cannot be unassigned.");
+    if (assignment.status === "abstained") {
+      throw conflict("A reviewer who declared a conflict cannot be unassigned.");
     }
-    if (assignment.status !== "assigned" && assignment.status !== "in_progress") {
-      throw conflict("Only outstanding assignments can be unassigned.");
-    }
-    await this.#repository.deleteAssignment(actor.tenantId, assignment.id, assignment.version);
+    const assignments = await this.#repository.listAssignments(actor.tenantId, plan.id);
+    const desiredByReviewer = new Map(
+      assignments
+        .filter(
+          (candidate) =>
+            candidate.eventId === plan.eventId &&
+            candidate.roundId === assignment.roundId &&
+            candidate.submissionId === assignment.submissionId &&
+            candidate.status !== "abstained" &&
+            candidate.reviewerId !== assignment.reviewerId,
+        )
+        .map((candidate) => [candidate.reviewerId, candidate] as const),
+    );
+    await this.#repository.replaceAssignments(
+      actor.tenantId,
+      plan.eventId,
+      plan.id,
+      assignment.roundId,
+      assignment.submissionId,
+      [...desiredByReviewer.values()],
+    );
   }
   async getReviewContext(actor: EvaluationActor, assignmentId: string): Promise<ReviewContext> {
     const assignment = await this.#getAssignment(actor.tenantId, assignmentId);
@@ -1461,12 +1487,8 @@ export class EvaluationService {
       round,
       submissionRevision,
     );
-    const authoritativeAssignment =
-      review?.submittedAt === null || review === null
-        ? assignment
-        : { ...assignment, status: "submitted" as const };
     return {
-      assignment: authoritativeAssignment,
+      assignment: effectiveAssignment(assignment, review ?? undefined),
       round,
       submission: this.#visibleSubmission(plan, round, material),
       review,

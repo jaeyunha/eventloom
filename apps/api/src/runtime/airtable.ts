@@ -4473,49 +4473,99 @@ export class AirtableEvaluationRepository implements EvaluationRepository {
     return [...byId.values()].map((assignment) => untagged(assignment));
   }
 
-  async putAssignments(assignments: readonly EvaluationAssignment[]): Promise<void> {
-    const existing = (await this.#assignments.list()).filter(isEvaluationAssignmentRecord);
-    const existingIds = new Set(
-      existing.map((assignment) => `${assignment.tenantId}\u0000${assignment.id}`),
-    );
-    const inputIds = assignments.map(
-      (assignment) => `${assignment.tenantId}\u0000${assignment.id}`,
-    );
-    if (new Set(inputIds).size !== inputIds.length || inputIds.some((id) => existingIds.has(id))) {
-      throw conflict("One or more reviewer assignments already exist.");
+  async replaceAssignments(
+    tenantId: string,
+    eventId: string,
+    planId: string,
+    roundId: string,
+    submissionId: string,
+    assignments: readonly EvaluationAssignment[],
+  ): Promise<void> {
+    const desired = [...assignments];
+    const desiredIds = new Set<string>();
+    for (const assignment of desired) {
+      if (
+        assignment.tenantId !== tenantId ||
+        assignment.eventId !== eventId ||
+        assignment.planId !== planId ||
+        assignment.roundId !== roundId ||
+        assignment.submissionId !== submissionId ||
+        assignment.status === "abstained"
+      ) {
+        throw conflict("Reviewer assignment replacement is outside its target scope.");
+      }
+      if (desiredIds.has(assignment.id)) {
+        throw conflict("Reviewer assignment replacement contains duplicates.");
+      }
+      desiredIds.add(assignment.id);
     }
-    for (const assignment of assignments) {
+
+    const allRecords = (await this.#assignments.listWithRecordIds()).filter(({ entity }) =>
+      isEvaluationAssignmentRecord(entity),
+    );
+    const targetRecords = allRecords.filter(
+      ({ entity }) =>
+        entity.tenantId === tenantId &&
+        entity.eventId === eventId &&
+        entity.planId === planId &&
+        entity.roundId === roundId &&
+        entity.submissionId === submissionId,
+    );
+    const targetById = new Map(targetRecords.map((record) => [record.entity.id, record]));
+    for (const assignment of desired) {
+      const existing = allRecords.find(
+        ({ entity }) => entity.tenantId === tenantId && entity.id === assignment.id,
+      );
+      if (existing !== undefined && !targetById.has(existing.entity.id)) {
+        throw conflict("A reviewer assignment already exists outside the replacement scope.");
+      }
+      if (existing !== undefined) {
+        if (existing.entity.status === "abstained") {
+          throw conflict("A reviewer who declared a conflict cannot be reassigned.");
+        }
+        if (existing.entity.reviewerId !== assignment.reviewerId) {
+          throw conflict("A reviewer assignment changed since it was loaded.");
+        }
+      }
+    }
+
+    for (const assignment of desired) {
+      if (targetById.has(assignment.id)) continue;
       await this.#assignments.create(tagged(assignment, "evaluation_assignment"));
     }
-  }
 
-  async deleteAssignment(
-    tenantId: string,
-    assignmentId: string,
-    expectedAssignmentVersion: number,
-  ): Promise<void> {
-    const assignment = await this.#assignments.findWithRecordId(assignmentId);
-    if (
-      assignment === undefined ||
-      !isEvaluationAssignmentRecord(assignment.entity) ||
-      assignment.entity.tenantId !== tenantId ||
-      assignment.entity.version !== expectedAssignmentVersion
-    ) {
-      throw conflict("Assignment changed since it was loaded.");
-    }
-
-    const review = await this.#reviews.findWithRecordId(`review:${assignmentId}`);
-    if (
-      review !== undefined &&
-      isEvaluationReviewRecord(review.entity) &&
-      review.entity.tenantId === tenantId
-    ) {
-      if (review.entity.submittedAt !== null) {
-        throw conflict("A submitted review cannot be unassigned.");
+    const reviewRecords = (await this.#reviews.listWithRecordIds()).filter(({ entity }) =>
+      isEvaluationReviewRecord(entity),
+    );
+    const retainedAssignmentIds = new Set([
+      ...desiredIds,
+      ...targetRecords
+        .filter(({ entity }) => entity.status === "abstained")
+        .map(({ entity }) => entity.id),
+    ]);
+    const removed = targetRecords.filter(
+      ({ entity }) => entity.status !== "abstained" && !desiredIds.has(entity.id),
+    );
+    for (const record of removed) {
+      if (!(await this.#assignments.deleteByRecordId(record.recordId))) {
+        throw conflict("The reviewer assignment could not be removed.");
       }
-      await this.#reviews.deleteByRecordId(review.recordId);
     }
-    await this.#assignments.deleteByRecordId(assignment.recordId);
+
+    const obsoleteReviews = reviewRecords.filter(
+      ({ entity }) =>
+        entity.tenantId === tenantId &&
+        entity.eventId === eventId &&
+        entity.planId === planId &&
+        entity.roundId === roundId &&
+        entity.submissionId === submissionId &&
+        !retainedAssignmentIds.has(entity.assignmentId),
+    );
+    for (const review of obsoleteReviews) {
+      if (!(await this.#reviews.deleteByRecordId(review.recordId))) {
+        throw conflict("The associated review could not be removed.");
+      }
+    }
   }
 
   async getReview(tenantId: string, assignmentId: string): Promise<EvaluationReview | null> {

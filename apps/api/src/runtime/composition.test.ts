@@ -14,6 +14,7 @@ import type {
 } from "../features/speaker/types";
 import {
   type AirtableRequest,
+  type AirtableResponse,
   type AirtableTransport,
   FakeAirtableTransport,
 } from "../infrastructure/airtable";
@@ -4376,6 +4377,160 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       expect(read?.query?.filterByFormula).toContain(eventId);
     }
     expect(JSON.stringify(workspace)).not.toContain("foreign");
+  });
+  it("persists authoritative Airtable assignment replacement with internal record IDs", async () => {
+    const tenantId = "tenant-replacement";
+    const eventId = "event-replacement";
+    const planId = "plan-replacement";
+    const roundId = "round-replacement";
+    const submissionId = "submission-replacement";
+    const now = "2026-08-10T12:00:00.000Z";
+    const transport = new FormulaRecordingTransport();
+    const assignmentA = {
+      id: "assignment-replacement-a",
+      tenantId,
+      eventId,
+      planId,
+      roundId,
+      submissionId,
+      reviewerId: "reviewer-a",
+      status: "assigned" as const,
+      planVersion: 1,
+      rubricRevision: 1,
+      submissionRevision: 1,
+      version: 1,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const assignmentB = {
+      ...assignmentA,
+      id: "assignment-replacement-b",
+      reviewerId: "reviewer-b",
+      status: "submitted" as const,
+      version: 2,
+      updatedAt: "2026-08-10T12:05:00.000Z",
+    };
+    const assignmentC = {
+      ...assignmentA,
+      id: "assignment-replacement-c",
+      reviewerId: "reviewer-c",
+    };
+    const reviewA = {
+      id: `review:${assignmentA.id}`,
+      tenantId,
+      eventId,
+      planId,
+      roundId,
+      assignmentId: assignmentA.id,
+      submissionId,
+      reviewerId: assignmentA.reviewerId,
+      scores: {},
+      comment: "Submitted review",
+      submittedAt: now,
+      version: 1,
+      createdAt: now,
+      updatedAt: now,
+    };
+    transport.seed({
+      baseId: "base-test",
+      table: "Evaluations",
+      recordId: "rec00000000000001",
+      fields: {
+        "Application ID": assignmentA.id,
+        "Scores JSON": JSON.stringify({ ...assignmentA, entityType: "evaluation_assignment" }),
+      },
+    });
+    transport.seed({
+      baseId: "base-test",
+      table: "Evaluations",
+      recordId: "rec00000000000002",
+      fields: {
+        "Application ID": assignmentB.id,
+        "Scores JSON": JSON.stringify({ ...assignmentB, entityType: "evaluation_assignment" }),
+      },
+    });
+    transport.seed({
+      baseId: "base-test",
+      table: "Evaluations",
+      recordId: "rec00000000000003",
+      fields: {
+        "Application ID": reviewA.id,
+        "Scores JSON": JSON.stringify({ ...reviewA, entityType: "evaluation_review" }),
+      },
+    });
+
+    let rejectNextCreate = true;
+    const mutationTransport: AirtableTransport = {
+      async request<TBody = unknown>(request: AirtableRequest): Promise<AirtableResponse<TBody>> {
+        if (rejectNextCreate && request.method === "POST" && request.table === "Evaluations") {
+          rejectNextCreate = false;
+          return { status: 503, headers: {}, body: {} as TBody };
+        }
+        return transport.request<TBody>(request);
+      },
+    };
+    const repository = new AirtableEvaluationRepository({
+      baseId: "base-test",
+      transport: mutationTransport,
+    });
+    const staleSnapshot = {
+      ...assignmentB,
+      status: "assigned" as const,
+      version: 1,
+      updatedAt: now,
+    };
+    await expect(
+      repository.replaceAssignments(tenantId, eventId, planId, roundId, submissionId, [
+        staleSnapshot,
+        assignmentC,
+      ]),
+    ).rejects.toMatchObject({ status: 503 });
+    await expect(repository.getAssignment(tenantId, assignmentA.id)).resolves.toMatchObject(
+      assignmentA,
+    );
+    await expect(repository.getReview(tenantId, assignmentA.id)).resolves.toMatchObject(reviewA);
+    await repository.replaceAssignments(tenantId, eventId, planId, roundId, submissionId, [
+      staleSnapshot,
+      assignmentC,
+    ]);
+
+    await expect(repository.getAssignment(tenantId, assignmentA.id)).resolves.toBeNull();
+    await expect(repository.getReview(tenantId, assignmentA.id)).resolves.toBeNull();
+    await expect(repository.getAssignment(tenantId, assignmentB.id)).resolves.toMatchObject(
+      assignmentB,
+    );
+    await expect(repository.getAssignment(tenantId, assignmentC.id)).resolves.toMatchObject(
+      assignmentC,
+    );
+    await expect(
+      repository.listOrganizerWorkspaceRecords(tenantId, eventId),
+    ).resolves.toMatchObject({
+      assignments: [assignmentB, assignmentC],
+      reviews: [],
+    });
+    await expect(
+      repository.listReviewerWorkspaceRecords(tenantId, assignmentB.reviewerId, [eventId]),
+    ).resolves.toMatchObject({
+      assignments: [assignmentB],
+      reviews: [],
+    });
+
+    expect(
+      transport.requests
+        .filter((request) => request.method === "DELETE")
+        .map((request) => request.recordId),
+    ).toEqual(expect.arrayContaining(["rec00000000000001", "rec00000000000003"]));
+    expect(
+      transport.requests.find(
+        (request) => request.method === "PATCH" && request.recordId === "rec00000000000002",
+      ),
+    ).toBeUndefined();
+    const createIndex = transport.requests.findIndex(
+      (request) => request.method === "POST" && request.table === "Evaluations",
+    );
+    const deleteIndex = transport.requests.findIndex((request) => request.method === "DELETE");
+    expect(createIndex).toBeGreaterThanOrEqual(0);
+    expect(deleteIndex).toBeGreaterThan(createIndex);
   });
   it("queues reviewer reminders through the shared outbox with stable idempotency", async () => {
     const transport = new FakeAirtableTransport();
