@@ -4,6 +4,7 @@ import type { RefObject } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { publishedProjectionsMatch } from "./api";
 import styles from "./embed.module.css";
+import type { EmbedDisplayField, EmbedLayout } from "./model";
 import {
   filterAgendaEntries,
   formatPublishedDateTimeRange,
@@ -164,11 +165,43 @@ function publishedFeedAvailable(
   return value !== false;
 }
 
-export function PublicAgendaView({ program }: Readonly<{ program: PublishedProgram }>) {
+export interface PublicAgendaViewProps {
+  readonly program: PublishedProgram;
+  readonly layout?: EmbedLayout | null;
+  readonly tracks?: readonly string[];
+  readonly displayFields?: readonly EmbedDisplayField[] | null;
+}
+
+const DEFAULT_AGENDA_DISPLAY_FIELDS: readonly EmbedDisplayField[] = [
+  "title",
+  "date-time",
+  "room",
+  "speakers",
+  "format",
+  "track",
+  "summary",
+];
+
+function agendaIncludeField(
+  displayFields: readonly EmbedDisplayField[],
+  field: EmbedDisplayField,
+): boolean {
+  return displayFields.includes(field);
+}
+
+export function PublicAgendaView({
+  program,
+  layout = null,
+  tracks: trackList = [],
+  displayFields = null,
+}: Readonly<PublicAgendaViewProps>) {
   const { agenda } = program;
   const speakers = publishedProjectionsMatch(program.agenda, program.speakers)
     ? program.speakers.speakers
     : [];
+  const displayFieldList = displayFields ?? DEFAULT_AGENDA_DISPLAY_FIELDS;
+  const showField = (field: EmbedDisplayField): boolean =>
+    agendaIncludeField(displayFieldList, field);
   const [day, setDay] = useState("");
   const [query, setQuery] = useState("");
   const [track, setTrack] = useState("");
@@ -204,9 +237,21 @@ export function PublicAgendaView({ program }: Readonly<{ program: PublishedProgr
         (entry) =>
           (!format || entry.format === format) &&
           (!room || entry.roomName === room) &&
+          (trackList.length === 0 ||
+            trackList.some((trackName) => entry.trackNames.includes(trackName))) &&
           (!normalizedQuery || entrySearchText(entry, speakers).includes(normalizedQuery)),
       ),
-    [agenda.entries, agenda.event.timeZone, day, format, normalizedQuery, speakers, room, track],
+    [
+      agenda.entries,
+      agenda.event.timeZone,
+      day,
+      format,
+      normalizedQuery,
+      speakers,
+      room,
+      track,
+      trackList,
+    ],
   );
   const hasFacetFilters = Boolean(normalizedQuery || track || format || room);
   const visibleDays = useMemo(() => {
@@ -269,7 +314,7 @@ export function PublicAgendaView({ program }: Readonly<{ program: PublishedProgr
   }
 
   return (
-    <section aria-labelledby="agenda-heading">
+    <section aria-labelledby="agenda-heading" data-layout={layout ?? undefined}>
       <div className={styles.viewHeading}>
         <div>
           <p className={styles.eyebrow}>Plan your itinerary</p>
@@ -419,26 +464,32 @@ export function PublicAgendaView({ program }: Readonly<{ program: PublishedProgr
                             aria-haspopup="dialog"
                             onClick={(event) => openEntry(entry.id, event.currentTarget)}
                           >
-                            <div className={styles.publicSessionTime}>
-                              <time dateTime={entry.startsAt}>
-                                {formatPublishedDateTimeRange(
-                                  entry.startsAt,
-                                  entry.endsAt,
-                                  displayTimeZone,
-                                )}
-                              </time>
-                            </div>
+                            {showField("date-time") ? (
+                              <div className={styles.publicSessionTime}>
+                                <time dateTime={entry.startsAt}>
+                                  {formatPublishedDateTimeRange(
+                                    entry.startsAt,
+                                    entry.endsAt,
+                                    displayTimeZone,
+                                  )}
+                                </time>
+                              </div>
+                            ) : null}
                             <div className={styles.publicSessionCopy}>
                               <div className={styles.publicSessionMeta}>
-                                {entry.format.trim() ? <span>Format: {entry.format}</span> : null}
-                                {entry.trackNames
-                                  .filter((trackName) => trackName.trim().length > 0)
-                                  .map((trackName) => (
-                                    <span key={trackName}>Track: {trackName}</span>
-                                  ))}
+                                {showField("format") && entry.format.trim() ? (
+                                  <span>Format: {entry.format}</span>
+                                ) : null}
+                                {showField("track")
+                                  ? entry.trackNames
+                                      .filter((trackName) => trackName.trim().length > 0)
+                                      .map((trackName) => (
+                                        <span key={trackName}>Track: {trackName}</span>
+                                      ))
+                                  : null}
                               </div>
                               <h4 id={`agenda-entry-${entry.id}`}>{entry.title}</h4>
-                              {presenters.length > 0 ? (
+                              {showField("speakers") && presenters.length > 0 ? (
                                 <p className={styles.publicSpeakers}>
                                   Presented by{" "}
                                   {presenters.map((presenter, index) => (
@@ -453,12 +504,16 @@ export function PublicAgendaView({ program }: Readonly<{ program: PublishedProgr
                                   ))}
                                 </p>
                               ) : null}
-                              <p>{entry.summary || "No description was published."}</p>
+                              {showField("summary") ? (
+                                <p>{entry.summary || "No description was published."}</p>
+                              ) : null}
                             </div>
-                            <div className={styles.publicRoom}>
-                              <span>Room</span>
-                              <strong>{entry.roomName || "Room not published"}</strong>
-                            </div>
+                            {showField("room") ? (
+                              <div className={styles.publicRoom}>
+                                <span>Room</span>
+                                <strong>{entry.roomName || "Room not published"}</strong>
+                              </div>
+                            ) : null}
                           </button>
                         </li>
                       );

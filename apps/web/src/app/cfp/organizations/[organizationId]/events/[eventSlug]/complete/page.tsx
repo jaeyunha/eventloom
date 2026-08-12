@@ -1,0 +1,10 @@
+import { CfpComplete } from "@/features/cfp/cfp-wizard";
+
+interface CfpPageProps {
+  params: Promise<{ organizationId: string; eventSlug: string }>;
+}
+
+export default async function CfpCompletePage({ params }: CfpPageProps) {
+  const { organizationId, eventSlug } = await params;
+  return <CfpComplete organizationId={organizationId} eventSlug={eventSlug} />;
+}

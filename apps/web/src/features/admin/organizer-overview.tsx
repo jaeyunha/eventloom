@@ -22,6 +22,7 @@ import {
   createScopedReadFlightCoordinator,
   type ScopedReadFlightCoordinator,
 } from "@/lib/scoped-read-flight";
+import { useOrganizerOrganizationId } from "./admin-shell";
 import styles from "./admin-shell.module.css";
 
 export interface OrganizerOverviewCoreMetrics {
@@ -112,11 +113,6 @@ export type OrganizerOverviewViewState =
       readonly core: OrganizerOverviewRequestState<OrganizerOverviewCoreData>;
       readonly activity: OrganizerOverviewRequestState<OrganizerOverviewActivityData>;
     };
-
-type OrganizerOverviewEnvironment = {
-  readonly NEXT_PUBLIC_APP_ENV?: string | undefined;
-  readonly NEXT_PUBLIC_ORGANIZATION_ID?: string | undefined;
-};
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -298,27 +294,15 @@ export function parseOrganizerOverviewActivityResponse(
 }
 
 export function resolveOrganizerOverviewConfig(
-  environment: OrganizerOverviewEnvironment = {
-    NEXT_PUBLIC_APP_ENV: process.env.NEXT_PUBLIC_APP_ENV,
-    NEXT_PUBLIC_ORGANIZATION_ID: process.env.NEXT_PUBLIC_ORGANIZATION_ID,
-  },
+  authenticatedOrganizationId?: string,
 ): OrganizerOverviewConfigResult {
   const apiBaseUrl = "";
-  const appEnv = environment.NEXT_PUBLIC_APP_ENV?.trim() ?? "";
-  const configuredOrganizationId = environment.NEXT_PUBLIC_ORGANIZATION_ID?.trim() ?? "";
-  const organizationId =
-    configuredOrganizationId || (appEnv === "local" ? "local-organization" : "");
+  const organizationId = authenticatedOrganizationId?.trim() ?? "";
 
   if (!organizationId) {
     return {
       error:
-        "Organizer overview is unavailable because NEXT_PUBLIC_ORGANIZATION_ID is missing. Set the explicit tenant ID for this deployment; only local mode may use local-organization automatically.",
-    };
-  }
-  if (organizationId === "local-organization" && appEnv !== "local") {
-    return {
-      error:
-        "Organizer overview is unavailable because local-organization is only valid when NEXT_PUBLIC_APP_ENV=local. Set NEXT_PUBLIC_ORGANIZATION_ID to this deployment's tenant ID.",
+        "Organizer overview is unavailable because the authenticated organizer membership has no organization.",
     };
   }
 
@@ -416,10 +400,11 @@ function formatDueDate(value: string | null): string | null {
   return formatted ? `Due ${formatted}` : null;
 }
 
-function eventStatusClass(status: string | null): string {
+export function eventStatusClass(status: string | null): string {
   switch (status?.toLowerCase()) {
     case "live":
     case "published":
+    case "active":
       return styles.statusLive ?? "";
     case "draft":
       return styles.statusDraft ?? "";
@@ -596,18 +581,18 @@ function ActivityMetricCards({
         const hasError = state.status === "error";
         const isLoading = state.status === "loading";
         return (
-          <Card key={metric.key}>
-            <CardHeader>
-              <CardDescription>{metric.label}</CardDescription>
+          <Card className={styles.metricDataCard} key={metric.key}>
+            <CardHeader className={styles.metricDataHeader}>
+              <CardDescription className={styles.metricLabel}>{metric.label}</CardDescription>
               {value === undefined ? (
-                <CardTitle className="text-2xl" role={hasError ? "alert" : "status"}>
+                <CardTitle className={styles.metricValue} role={hasError ? "alert" : "status"}>
                   {hasError ? "Unavailable" : "Loading…"}
                 </CardTitle>
               ) : (
-                <CardTitle className="text-3xl">{value}</CardTitle>
+                <CardTitle className={styles.metricValue}>{value}</CardTitle>
               )}
             </CardHeader>
-            <CardContent className="text-sm text-muted-foreground">
+            <CardContent className={styles.metricDetail}>
               {data && isLoading ? <p role="status">Refreshing secondary metrics…</p> : null}
               {data && hasError ? <p role="alert">Stale data. {state.message}</p> : null}
               {!data && state.status === "error" ? <p role="alert">{state.message}</p> : null}
@@ -656,11 +641,18 @@ function ActionItems({
     : [];
 
   return (
-    <Card role="region" aria-labelledby="action-items-title">
-      <CardHeader className="flex-row items-start justify-between">
+    <Card className={styles.overviewPanel} role="region" aria-labelledby="action-items-title">
+      <CardHeader className={styles.overviewPanelHeader}>
         <div>
-          <CardDescription>Needs attention</CardDescription>
-          <CardTitle id="action-items-title">Needs attention</CardTitle>
+          <CardDescription className={styles.panelEyebrow}>Prioritized work</CardDescription>
+          <CardTitle
+            aria-level={2}
+            className={styles.panelTitle}
+            id="action-items-title"
+            role="heading"
+          >
+            Needs attention
+          </CardTitle>
         </div>
         <Badge variant="secondary">
           {data
@@ -670,7 +662,7 @@ function ActionItems({
               : "Unavailable"}
         </Badge>
       </CardHeader>
-      <CardContent>
+      <CardContent className={styles.overviewPanelContent}>
         {!data && state.status === "loading" ? (
           <p className={styles.muted} role="status" aria-live="polite">
             Loading action items…
@@ -997,12 +989,14 @@ export function OrganizerOverviewView({
             </div>
           </div>
           <div className={styles.metricsGrid}>
-            <Card key={coreMetricDefinition.key}>
-              <CardHeader>
-                <CardDescription>{coreMetricDefinition.label}</CardDescription>
-                <CardTitle className="text-3xl">{core.metrics.eventCount}</CardTitle>
+            <Card className={styles.metricDataCard} key={coreMetricDefinition.key}>
+              <CardHeader className={styles.metricDataHeader}>
+                <CardDescription className={styles.metricLabel}>
+                  {coreMetricDefinition.label}
+                </CardDescription>
+                <CardTitle className={styles.metricValue}>{core.metrics.eventCount}</CardTitle>
               </CardHeader>
-              <CardContent className="text-sm text-muted-foreground">
+              <CardContent className={styles.metricDetail}>
                 {coreMetricDefinition.detail}
               </CardContent>
             </Card>
@@ -1012,11 +1006,24 @@ export function OrganizerOverviewView({
 
         <ActionItems state={activity} onRetry={onRetryActivity} />
 
-        <Card role="region" aria-labelledby="overview-events-title">
-          <CardHeader className="flex-row items-start justify-between">
+        <Card
+          className={styles.overviewPanel}
+          role="region"
+          aria-labelledby="overview-events-title"
+        >
+          <CardHeader className={styles.overviewPanelHeader}>
             <div>
-              <CardDescription>Current and upcoming</CardDescription>
-              <CardTitle id="overview-events-title">Events</CardTitle>
+              <CardDescription className={styles.panelEyebrow}>
+                Current and upcoming
+              </CardDescription>
+              <CardTitle
+                aria-level={2}
+                className={styles.panelTitle}
+                id="overview-events-title"
+                role="heading"
+              >
+                Events
+              </CardTitle>
             </div>
             <Badge variant="secondary">{core.events.length} total</Badge>
           </CardHeader>
@@ -1041,9 +1048,11 @@ export function OrganizerOverview({
   readonly api?: OrganizerOverviewApi;
   readonly config?: OrganizerOverviewConfigResult;
 }> = {}) {
+  const authenticatedOrganizationId = useOrganizerOrganizationId();
   const config = useMemo(
-    () => providedConfig ?? resolveOrganizerOverviewConfig(),
-    [providedConfig],
+    () =>
+      providedConfig ?? resolveOrganizerOverviewConfig(authenticatedOrganizationId ?? undefined),
+    [authenticatedOrganizationId, providedConfig],
   );
   const api = useMemo(() => {
     if (providedApi) {
@@ -2840,9 +2849,11 @@ export function OrganizerEvents({
   readonly api?: OrganizerEventsApi;
   readonly config?: OrganizerOverviewConfigResult;
 }> = {}) {
+  const authenticatedOrganizationId = useOrganizerOrganizationId();
   const config = useMemo(
-    () => providedConfig ?? resolveOrganizerOverviewConfig(),
-    [providedConfig],
+    () =>
+      providedConfig ?? resolveOrganizerOverviewConfig(authenticatedOrganizationId ?? undefined),
+    [authenticatedOrganizationId, providedConfig],
   );
   const api = useMemo(() => {
     if (providedApi) return providedApi;

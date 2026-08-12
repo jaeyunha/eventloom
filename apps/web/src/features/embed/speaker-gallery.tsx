@@ -5,6 +5,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import styles from "./embed.module.css";
 import {
   filterSpeakers,
+  type EmbedDisplayField,
+  type EmbedLayout,
   formatPublishedDateTimeRange,
   publicPhotoUrl,
   publishedSpeakerSessions,
@@ -62,7 +64,7 @@ export function SpeakerProfileDetail({
           Back to speakers
         </button>
       </div>
-      <article className={styles.speakerCard}>
+      <article className={styles.speakerDetail}>
         <div className={styles.speakerPhoto}>
           {photoUrl ? (
             <span
@@ -137,9 +139,15 @@ export function SpeakerProfileDetail({
 export function SpeakerGallery({
   gallery,
   agenda,
+  tracks: configuredTracks = [],
+  layout = null,
+  displayFields = null,
 }: Readonly<{
   gallery: PublishedSpeakerGallery;
   agenda?: SpeakerGalleryDetailView["agenda"];
+  tracks?: readonly string[];
+  layout?: EmbedLayout | null;
+  displayFields?: readonly EmbedDisplayField[] | null;
 }>) {
   const [query, setQuery] = useState("");
   const [track, setTrack] = useState("");
@@ -153,10 +161,13 @@ export function SpeakerGallery({
       ),
     [gallery.speakers],
   );
-  const speakers = useMemo(
-    () => filterSpeakers(gallery.speakers, query, track),
-    [gallery.speakers, query, track],
-  );
+  const speakers = useMemo(() => {
+    const configured = new Set(configuredTracks);
+    return filterSpeakers(gallery.speakers, query, track).filter(
+      (speaker) =>
+        configured.size === 0 || speaker.trackNames.some((trackName) => configured.has(trackName)),
+    );
+  }, [configuredTracks, gallery.speakers, query, track]);
   const selectedSpeaker = selectedSpeakerId
     ? gallery.speakers.find((speaker) => speaker.id === selectedSpeakerId)
     : undefined;
@@ -195,7 +206,11 @@ export function SpeakerGallery({
   }
 
   return (
-    <section aria-labelledby="speakers-heading">
+    <section
+      aria-labelledby="speakers-heading"
+      data-layout={layout ?? undefined}
+      data-display-fields={displayFields?.join(",")}
+    >
       <div className={styles.viewHeading}>
         <div>
           <p className={styles.eyebrow}>Meet the people on stage</p>

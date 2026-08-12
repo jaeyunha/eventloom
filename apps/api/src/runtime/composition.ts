@@ -14,8 +14,8 @@ import {
 import {
   createCloudflareDependencies,
   inspectProductionRuntime,
-  runtimeBindingsForEnvironment,
   type RuntimeBindings,
+  runtimeBindingsForEnvironment,
 } from "./cloudflare";
 import { createLocalDependencies } from "./local";
 

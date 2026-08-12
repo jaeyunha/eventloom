@@ -337,7 +337,8 @@ describe("public embeds", () => {
     expect(markup).toContain("Room: Main hall");
     expect(markup).toContain("<strong>Company:</strong> Open Works");
     expect(markup).toContain("Title not published");
-    expect(markup).toContain("border-radius:50%");
+    expect(markup).toContain('role="img"');
+    expect(markup).toContain('aria-label="Morgan Lee headshot"');
     expect(markup).toContain('id="speaker-list-trigger-speaker_morgan"');
     expect(markup).not.toContain("private@example.test");
     expect(markup).toContain('href="/embed/open-systems/speakers-list?theme=light"');
@@ -594,5 +595,48 @@ describe("public embeds", () => {
     );
     expect(emptyFinalDayMarkup.match(/role="tab"/gu) ?? []).toHaveLength(3);
     expect(emptyFinalDayMarkup).toContain("Thursday, May 14");
+  });
+});
+
+describe("published program shell", () => {
+  it("renders a single document heading equal to the event name", () => {
+    const markup = renderToStaticMarkup(
+      createElement(EmbedFrame, {
+        event,
+        eventSlug: event.slug,
+        theme: "light",
+        view: "sessions",
+      }),
+    );
+
+    expect(markup.match(/<h1\b/gu) ?? []).toHaveLength(1);
+    expect(markup).toContain(`>${event.name}<`);
+  });
+
+  it("propagates the requested theme onto the root data-theme attribute", () => {
+    for (const theme of ["auto", "light", "dark"] as const) {
+      const markup = renderToStaticMarkup(
+        createElement(EmbedFrame, {
+          event,
+          eventSlug: event.slug,
+          theme,
+          view: "sessions",
+        }),
+      );
+      expect(markup).toContain(`data-theme="${theme}"`);
+    }
+  });
+
+  it("exposes itinerary days as a tablist with exactly one selected tab", () => {
+    const markup = renderToStaticMarkup(
+      createElement(PublicItineraryView, {
+        program: { agenda: multiDayAgenda, speakers: gallery },
+      }),
+    );
+
+    expect(markup).toContain('role="tablist"');
+    expect(markup.match(/role="tab"/gu) ?? []).toHaveLength(2);
+    expect(markup.match(/aria-selected="true"/gu) ?? []).toHaveLength(1);
+    expect(markup).toContain('aria-controls="itinerary-panel-2026-09-18"');
   });
 });

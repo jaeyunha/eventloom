@@ -172,6 +172,13 @@ class LocalCfpRepository implements CfpRepository {
     return clone(this.#events.get(key(tenantId, eventId)) ?? null);
   }
 
+  async getEventBySlug(tenantId: string, eventSlug: string) {
+    const event = [...this.#events.values()].find(
+      (candidate) => candidate.tenantId === tenantId && candidate.slug === eventSlug,
+    );
+    return clone(event ?? null);
+  }
+
   async saveEvent(event: EventCfp, expectedVersion: number | null): Promise<void> {
     const storageKey = key(event.tenantId, event.id);
     if ((this.#events.get(storageKey)?.version ?? null) !== expectedVersion) {
@@ -200,6 +207,12 @@ class LocalCfpRepository implements CfpRepository {
 
   async getSubmission(tenantId: string, submissionId: string) {
     return clone(this.#submissions.get(key(tenantId, submissionId)) ?? null);
+  }
+
+  async listSubmissionsForEvent(tenantId: string, eventId: string) {
+    return [...this.#submissions.values()]
+      .filter((submission) => submission.tenantId === tenantId && submission.eventId === eventId)
+      .map(clone);
   }
 
   async countOwnedSubmissions(input: {

@@ -42,6 +42,7 @@ export class CfpError extends Error {
 
 export interface CfpRepository {
   getEvent(tenantId: string, eventId: string): Promise<EventCfp | null>;
+  getEventBySlug(tenantId: string, eventSlug: string): Promise<EventCfp | null>;
   saveEvent(event: EventCfp, expectedVersion: number | null): Promise<void>;
   getForm(tenantId: string, formId: string): Promise<CfpForm | null>;
   listFormsByIds?(ids: readonly string[]): Promise<readonly CfpForm[]>;
@@ -762,15 +763,23 @@ export class CfpService {
   }
   async getPublishedCfp(input: {
     tenantId: string;
-    eventId: string;
+    eventId?: string;
+    eventSlug?: string;
     formId?: string;
   }): Promise<PublishedCfp> {
-    const event = await this.#getEvent(input.tenantId, input.eventId);
-    const form = input.formId
-      ? await this.#getForm(input.tenantId, input.formId)
-      : (await this.#repository.listForms(input.tenantId, input.eventId)).find(
-          (candidate) => candidate.status === "published",
-        );
+    const event =
+      input.eventSlug === undefined
+        ? await this.#getEvent(input.tenantId, input.eventId ?? "")
+        : await this.#getEventBySlug(input.tenantId, input.eventSlug);
+    const publishedForms = (await this.#repository.listForms(input.tenantId, event.id)).filter(
+      (candidate) => candidate.status === "published",
+    );
+    const form =
+      input.formId === undefined
+        ? publishedForms.length === 1
+          ? publishedForms[0]
+          : undefined
+        : publishedForms.find((candidate) => candidate.id === input.formId);
     if (!form) {
       throw new CfpError("NOT_FOUND", "The published CFP form was not found.");
     }
@@ -812,7 +821,8 @@ export class CfpService {
   }
   async getPublishedForm(input: {
     tenantId: string;
-    eventId: string;
+    eventId?: string;
+    eventSlug?: string;
     formId?: string;
   }): Promise<PublishedCfp> {
     return this.getPublishedCfp(input);
@@ -1771,6 +1781,15 @@ export class CfpService {
 
   async #getEvent(tenantId: string, eventId: string): Promise<EventCfp> {
     const event = await this.#repository.getEvent(tenantId, eventId);
+    if (!event) {
+      throw new CfpError("NOT_FOUND", "The event was not found.");
+    }
+    ensureTenant(event.tenantId, tenantId);
+    return event;
+  }
+
+  async #getEventBySlug(tenantId: string, eventSlug: string): Promise<EventCfp> {
+    const event = await this.#repository.getEventBySlug(tenantId, eventSlug);
     if (!event) {
       throw new CfpError("NOT_FOUND", "The event was not found.");
     }

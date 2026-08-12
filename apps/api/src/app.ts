@@ -558,7 +558,7 @@ export function createApp<
   }
   if (dependencies.integrations !== undefined) {
     app.route(
-      "/api/admin/events/:eventId",
+      "/api/admin/organizations/:organizationId/events/:eventId",
       createIntegrationAdminRoutes(dependencies.integrations),
     );
   }

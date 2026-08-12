@@ -169,10 +169,13 @@ function CredentialForm({
   );
 }
 
-export function OverviewSection({ snapshot }: Readonly<{ snapshot: IntegrationAdminSnapshot }>) {
+export function OverviewSection({
+  snapshot,
+  basePath,
+}: Readonly<{ snapshot: IntegrationAdminSnapshot; basePath: string }>) {
   const activeKeys = snapshot.apiKeys.filter((key) => key.revokedAt === null).length;
   const activeWebhooks = snapshot.webhooks.filter((webhook) => webhook.active).length;
-  const base = `/admin/events/${encodeURIComponent(snapshot.event.id)}/integrations`;
+  const base = basePath;
   const deliveryStates = [snapshot.delivery.openSend.state, snapshot.delivery.calendar.state];
   const deliveryState: ConnectionState = deliveryStates.includes("degraded")
     ? "degraded"

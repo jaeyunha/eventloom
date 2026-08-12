@@ -51,7 +51,18 @@ import {
 } from "../integrations/ai";
 import { DEFAULT_OPEN_SEND_SENDERS, OpenSendClient } from "../integrations/opensend/client";
 import type { OpenSendMessage } from "../integrations/opensend/types";
-import { AirtableJsonStore, createAirtableDependencies, D1IdempotencyStore } from "./airtable";
+import type {
+  IntegrationAdminRouteDependencies,
+  IntegrationApiKeyCreation,
+  IntegrationApiKeySummary,
+  IntegrationDeliveryStatus,
+} from "../routes/integrations";
+import {
+  AirtableEventRepository,
+  AirtableJsonStore,
+  createAirtableDependencies,
+  D1IdempotencyStore,
+} from "./airtable";
 
 export type RuntimeBindings = ApiBindings &
   Partial<Omit<CloudflareBindings, keyof ApiBindings>> & {
@@ -82,8 +93,6 @@ export type RuntimeBindings = ApiBindings &
     readonly OPENAI_AGENDA_REASONING_EFFORT?: string;
     readonly OPENAI_EVALUATION_REASONING_EFFORT?: string;
     readonly OPENAI_REMIX_REASONING_EFFORT?: string;
-    readonly ORGANIZER_AUTOJOIN_DOMAINS?: string;
-    readonly ORGANIZER_AUTOJOIN_ORGANIZATION_ID?: string;
   };
 
 export interface RuntimeConfigurationInspection {
@@ -187,82 +196,8 @@ interface MemberInvitationEnvelope {
 interface ReviewerPoolRecord extends ReviewerPool {
   readonly id: string;
 }
-export interface OrganizerAutojoinConfiguration {
-  readonly domains: readonly string[];
-  readonly organizationId: string;
-}
-
-const ORGANIZER_AUTOJOIN_DOMAINS = new Set(["swyx.io", "ai.engineer"]);
-const ORGANIZER_AUTOJOIN_ORGANIZATION_ID = "ai-engineer";
-
 function nonEmpty(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
-}
-function normalizedEmailDomain(email: string): string | null {
-  const normalized = email.trim().toLowerCase();
-  const at = normalized.lastIndexOf("@");
-  if (at <= 0 || at === normalized.length - 1 || normalized.indexOf("@") !== at) return null;
-  return normalized.slice(at + 1);
-}
-
-function parseOrganizerAutojoinConfiguration(
-  bindings: Pick<
-    RuntimeBindings,
-    "ORGANIZER_AUTOJOIN_DOMAINS" | "ORGANIZER_AUTOJOIN_ORGANIZATION_ID"
-  >,
-): OrganizerAutojoinConfiguration | null {
-  const rawDomains = bindings.ORGANIZER_AUTOJOIN_DOMAINS;
-  const rawOrganizationId = bindings.ORGANIZER_AUTOJOIN_ORGANIZATION_ID;
-  if (!nonEmpty(rawDomains) || !nonEmpty(rawOrganizationId)) return null;
-
-  const domains = rawDomains.split(",").map((domain) => domain.trim().toLowerCase());
-  const domainPattern =
-    /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u;
-  if (
-    domains.length === 0 ||
-    domains.some((domain) => !domainPattern.test(domain) || !ORGANIZER_AUTOJOIN_DOMAINS.has(domain))
-  ) {
-    return null;
-  }
-
-  const organizationId = rawOrganizationId.trim();
-  if (
-    organizationId !== ORGANIZER_AUTOJOIN_ORGANIZATION_ID ||
-    !/^[A-Za-z0-9][A-Za-z0-9_-]*$/u.test(organizationId)
-  ) {
-    return null;
-  }
-
-  return { domains: [...new Set(domains)], organizationId };
-}
-
-function organizerAutojoinConfigurationProvided(
-  bindings: Pick<
-    RuntimeBindings,
-    "ORGANIZER_AUTOJOIN_DOMAINS" | "ORGANIZER_AUTOJOIN_ORGANIZATION_ID"
-  >,
-): boolean {
-  return (
-    nonEmpty(bindings.ORGANIZER_AUTOJOIN_DOMAINS) ||
-    nonEmpty(bindings.ORGANIZER_AUTOJOIN_ORGANIZATION_ID)
-  );
-}
-
-function validOrganizerAutojoinConfiguration(
-  configuration: OrganizerAutojoinConfiguration | null,
-): OrganizerAutojoinConfiguration | null {
-  if (
-    configuration === null ||
-    configuration.organizationId !== ORGANIZER_AUTOJOIN_ORGANIZATION_ID ||
-    configuration.domains.length === 0 ||
-    configuration.domains.some((domain) => !ORGANIZER_AUTOJOIN_DOMAINS.has(domain))
-  ) {
-    return null;
-  }
-  return {
-    domains: [...new Set(configuration.domains)],
-    organizationId: configuration.organizationId,
-  };
 }
 
 function validDate(value: string): Date | null {
@@ -316,15 +251,12 @@ const unavailableMagicLinks: MagicLinkOperations = {
 
 export class D1BetterAuthGateway implements BetterAuthGateway {
   readonly #magicLinks: MagicLinkOperations;
-  readonly #organizerAutojoin: OrganizerAutojoinConfiguration | null;
 
   constructor(
     private readonly database: D1Database,
     magicLinks: MagicLinkOperations = unavailableMagicLinks,
-    organizerAutojoin: OrganizerAutojoinConfiguration | null = null,
   ) {
     this.#magicLinks = magicLinks;
-    this.#organizerAutojoin = validOrganizerAutojoinConfiguration(organizerAutojoin);
   }
 
   async resolveSession(sessionToken: string): Promise<AuthSession | null> {
@@ -409,52 +341,7 @@ export class D1BetterAuthGateway implements BetterAuthGateway {
         : [],
     );
 
-    let memberships = membershipsFrom(membershipRows);
-    const organizerAutojoin = this.#organizerAutojoin;
-    const emailDomain = normalizedEmailDomain(row.email);
-    if (
-      organizerAutojoin !== null &&
-      row.email_verified === 1 &&
-      expiresAt.getTime() > Date.now() &&
-      emailDomain !== null &&
-      organizerAutojoin.domains.includes(emailDomain) &&
-      !memberships.some(
-        (membership) => membership.organizationId === organizerAutojoin.organizationId,
-      ) &&
-      !(await this.hasUnfinishedMemberInvitation(
-        organizerAutojoin.organizationId,
-        row.user_id,
-        row.email,
-      ))
-    ) {
-      const auditTimestamp = new Date().toISOString();
-      const insertResult = await this.database
-        .prepare(
-          `INSERT INTO organization_memberships (
-             organization_id, user_id, role, created_at, updated_at
-           ) VALUES (?, ?, 'admin', ?, ?)
-           ON CONFLICT (organization_id, user_id) DO NOTHING`,
-        )
-        .bind(organizerAutojoin.organizationId, row.user_id, auditTimestamp, auditTimestamp)
-        .run();
-      if (Number(insertResult.meta?.changes ?? 0) > 0) {
-        memberships = [
-          ...memberships,
-          { organizationId: organizerAutojoin.organizationId, role: "admin" },
-        ];
-      } else {
-        const refreshedMemberships = await this.database
-          .prepare(
-            `SELECT organization_id, role
-               FROM organization_memberships
-              WHERE user_id = ?
-              ORDER BY organization_id`,
-          )
-          .bind(row.user_id)
-          .all<MembershipRow>();
-        memberships = membershipsFrom(refreshedMemberships.results);
-      }
-    }
+    const memberships = membershipsFrom(membershipRows);
 
     return {
       sessionId: row.session_id,
@@ -465,37 +352,6 @@ export class D1BetterAuthGateway implements BetterAuthGateway {
       memberships,
       speakerGrants: speakerGrantsFrom(speakerGrantRows),
     };
-  }
-
-  private async hasUnfinishedMemberInvitation(
-    organizationId: string,
-    userId: string,
-    email: string,
-  ): Promise<boolean> {
-    const rows = await this.database
-      .prepare(
-        `SELECT id, identifier, token_digest, expires_at, created_at, updated_at
-           FROM auth_verifications`,
-      )
-      .all<MemberInvitationRow>();
-    return rows.results.some((invitationRow) => {
-      let parsed: MemberInvitationEnvelope | null;
-      try {
-        parsed = invitationEnvelope(JSON.parse(invitationRow.identifier));
-      } catch {
-        parsed = null;
-      }
-      return (
-        parsed !== null &&
-        parsed.usedAt === null &&
-        parsed.invitation.organizationId === organizationId &&
-        parsed.invitation.userId === userId &&
-        parsed.invitation.email.toLowerCase() === email.toLowerCase() &&
-        (parsed.invitation.status === "pending" ||
-          parsed.invitation.status === "delivered" ||
-          parsed.invitation.status === "accepted")
-      );
-    });
   }
 
   async requestMagicLink(input: { email: string; callbackUrl: string }): Promise<void> {
@@ -2039,6 +1895,238 @@ export class D1ApiKeyAuthenticatorGateway implements D1ApiKeyGateway {
   }
 }
 
+interface IntegrationApiKeyRow {
+  readonly id?: unknown;
+  readonly label?: unknown;
+  readonly key_prefix?: unknown;
+  readonly scopes_json?: unknown;
+  readonly created_at?: unknown;
+  readonly last_used_at?: unknown;
+  readonly expires_at?: unknown;
+  readonly revoked_at?: unknown;
+}
+
+interface IntegrationStatusRow {
+  readonly payload_json?: unknown;
+}
+
+function integrationDefaultStatus(credentialLastFour: string | null): IntegrationDeliveryStatus {
+  return {
+    openSend: {
+      state: credentialLastFour === null ? "not_configured" : "connected",
+      credentialLastFour,
+      senderChecks: [],
+      deliveredLast24Hours: 0,
+      failedLast24Hours: 0,
+      lastDeliveryAt: null,
+    },
+    calendar: {
+      state: "not_configured",
+      sentLast24Hours: 0,
+      failedLast24Hours: 0,
+      lastInvitationAt: null,
+      lastFailure: null,
+    },
+  };
+}
+
+function integrationApiKey(row: IntegrationApiKeyRow): IntegrationApiKeySummary | null {
+  if (
+    !nonEmpty(row.id) ||
+    !nonEmpty(row.label) ||
+    !nonEmpty(row.key_prefix) ||
+    !nonEmpty(row.created_at) ||
+    !nonEmpty(row.scopes_json)
+  ) {
+    return null;
+  }
+  const scopes = scopesFrom(row.scopes_json);
+  if (scopes === null) return null;
+  return {
+    id: row.id,
+    label: row.label,
+    prefix: row.key_prefix,
+    scopes: scopes as IntegrationApiKeySummary["scopes"],
+    createdAt: row.created_at,
+    lastUsedAt: nonEmpty(row.last_used_at) ? row.last_used_at : null,
+    expiresAt: nonEmpty(row.expires_at) ? row.expires_at : null,
+    revokedAt: nonEmpty(row.revoked_at) ? row.revoked_at : null,
+  };
+}
+
+async function encryptedIntegrationSecret(secret: string, keyMaterial: string): Promise<string> {
+  const keyBytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(keyMaterial));
+  const key = await crypto.subtle.importKey("raw", keyBytes, "AES-GCM", false, ["encrypt"]);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = new Uint8Array(
+    await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(secret)),
+  );
+  return `${Buffer.from(iv).toString("base64url")}.${Buffer.from(ciphertext).toString("base64url")}`;
+}
+
+export class CloudflareIntegrationAdminRepository
+  implements
+    Omit<
+      IntegrationAdminRouteDependencies,
+      "webhooks" | "getWebhookLastDelivery" | "retryCalendarDelivery"
+    >
+{
+  constructor(
+    private readonly database: D1Database,
+    private readonly events: AirtableEventRepository,
+    private readonly encryptionKey: string,
+  ) {}
+
+  async getEvent(organizationId: string, eventId: string) {
+    const event = await this.events.getEvent(organizationId, eventId);
+    return event === null
+      ? null
+      : {
+          id: event.id,
+          organizationId: event.organizationId,
+          name: event.name,
+          timeZone: event.timeZone,
+          publishedAgendaRevisionId: null,
+        };
+  }
+
+  async getDeliveryStatus(
+    organizationId: string,
+    eventId: string,
+  ): Promise<IntegrationDeliveryStatus> {
+    const [statusRow, credentialRow] = await Promise.all([
+      this.database
+        .prepare(
+          `SELECT payload_json
+             FROM integration_delivery_status
+            WHERE organization_id = ? AND event_id = ?`,
+        )
+        .bind(organizationId, eventId)
+        .first<IntegrationStatusRow>(),
+      this.database
+        .prepare(
+          `SELECT credential_last_four
+             FROM integration_credentials
+            WHERE organization_id = ? AND event_id = ? AND provider = 'opensend'`,
+        )
+        .bind(organizationId, eventId)
+        .first<{ credential_last_four?: unknown }>(),
+    ]);
+    if (statusRow !== null && nonEmpty(statusRow.payload_json)) {
+      try {
+        return JSON.parse(statusRow.payload_json) as IntegrationDeliveryStatus;
+      } catch {
+        // Invalid operational state fails closed to a neutral snapshot.
+      }
+    }
+    return integrationDefaultStatus(
+      credentialRow !== null && nonEmpty(credentialRow.credential_last_four)
+        ? credentialRow.credential_last_four
+        : null,
+    );
+  }
+
+  async saveCredential(
+    organizationId: string,
+    eventId: string,
+    provider: "opensend",
+    secret: string,
+  ): Promise<void> {
+    const now = new Date().toISOString();
+    const encrypted = await encryptedIntegrationSecret(secret, this.encryptionKey);
+    await this.database
+      .prepare(
+        `INSERT INTO integration_credentials (
+           organization_id, event_id, provider, encrypted_secret, credential_last_four, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(organization_id, event_id, provider) DO UPDATE SET
+           encrypted_secret = excluded.encrypted_secret,
+           credential_last_four = excluded.credential_last_four,
+           updated_at = excluded.updated_at`,
+      )
+      .bind(organizationId, eventId, provider, encrypted, secret.slice(-4), now)
+      .run();
+  }
+
+  async listApiKeys(
+    organizationId: string,
+    eventId: string,
+  ): Promise<readonly IntegrationApiKeySummary[]> {
+    const rows = await this.database
+      .prepare(
+        `SELECT id, label, key_prefix, scopes_json, created_at, last_used_at, expires_at, revoked_at
+           FROM api_keys
+          WHERE organization_id = ? AND event_id = ?
+          ORDER BY created_at DESC`,
+      )
+      .bind(organizationId, eventId)
+      .all<IntegrationApiKeyRow>();
+    return rows.results.flatMap((row) => {
+      const key = integrationApiKey(row);
+      return key === null ? [] : [key];
+    });
+  }
+
+  async createApiKey(input: {
+    readonly organizationId: string;
+    readonly eventId: string;
+    readonly label: string;
+    readonly scopes: readonly IntegrationApiKeySummary["scopes"][number][];
+    readonly expiresAt: string | null;
+  }): Promise<IntegrationApiKeyCreation> {
+    const secret = `osb_${randomToken()}`;
+    const now = new Date().toISOString();
+    const summary: IntegrationApiKeySummary = {
+      id: `key_${crypto.randomUUID()}`,
+      label: input.label,
+      prefix: secret.slice(0, 12),
+      scopes: [...new Set(input.scopes)],
+      createdAt: now,
+      lastUsedAt: null,
+      expiresAt: input.expiresAt,
+      revokedAt: null,
+    };
+    await this.database
+      .prepare(
+        `INSERT INTO api_keys (
+           id, organization_id, event_id, label, key_prefix, key_digest, scopes_json,
+           expires_at, revoked_at, last_used_at, created_by_user_id, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)`,
+      )
+      .bind(
+        summary.id,
+        input.organizationId,
+        input.eventId,
+        summary.label,
+        summary.prefix,
+        await sha256(secret),
+        JSON.stringify(summary.scopes),
+        summary.expiresAt,
+        now,
+        now,
+      )
+      .run();
+    return { summary, secret };
+  }
+
+  async revokeApiKey(organizationId: string, eventId: string, apiKeyId: string): Promise<boolean> {
+    const now = new Date().toISOString();
+    const existing = await this.database
+      .prepare(
+        `SELECT id FROM api_keys
+          WHERE id = ? AND organization_id = ? AND event_id = ? AND revoked_at IS NULL`,
+      )
+      .bind(apiKeyId, organizationId, eventId)
+      .first<{ id?: unknown }>();
+    if (existing === null) return false;
+    await this.database
+      .prepare("UPDATE api_keys SET revoked_at = ?, updated_at = ? WHERE id = ?")
+      .bind(now, now, apiKeyId)
+      .run();
+    return true;
+  }
+}
+
 const fixedOrigins = {
   local: {
     web: "http://127.0.0.1:3015",
@@ -2223,15 +2311,6 @@ export function inspectProductionRuntime(source: RuntimeBindings): RuntimeConfig
       }
     }
   }
-  if (
-    organizerAutojoinConfigurationProvided(bindings) &&
-    parseOrganizerAutojoinConfiguration(bindings) === null
-  ) {
-    issues.push(
-      "ORGANIZER_AUTOJOIN_DOMAINS and ORGANIZER_AUTOJOIN_ORGANIZATION_ID must be configured as a valid pair.",
-    );
-  }
-
   if (source.APP_ENV === "local" && !nonEmpty(source.AIRTABLE_BASE_DEV_ID)) {
     issues.push("AIRTABLE_BASE_DEV_ID is required for integrated local development");
   }
@@ -2247,6 +2326,21 @@ export function inspectProductionRuntime(source: RuntimeBindings): RuntimeConfig
   }
   if (!nonEmpty(bindings.BETTER_AUTH_SECRET) || bindings.BETTER_AUTH_SECRET.trim().length < 32) {
     issues.push("BETTER_AUTH_SECRET must contain at least 32 characters");
+  }
+  if (!nonEmpty(bindings.CACHE_INVALIDATION_URL)) {
+    issues.push("CACHE_INVALIDATION_URL is required for the integrated runtime");
+  } else {
+    try {
+      const url = new URL(bindings.CACHE_INVALIDATION_URL);
+      if (url.protocol !== "https:" && source.APP_ENV !== "local") {
+        issues.push("CACHE_INVALIDATION_URL must use HTTPS outside local development");
+      }
+    } catch {
+      issues.push("CACHE_INVALIDATION_URL must be a valid URL");
+    }
+  }
+  if (!nonEmpty(bindings.CACHE_INVALIDATION_TOKEN)) {
+    issues.push("CACHE_INVALIDATION_TOKEN is required for the integrated runtime");
   }
 
   const openSendKey = (bindings.OPENSEND_API_KEY ?? bindings.OPENSEND_SENDING_API_KEY)?.trim();
@@ -2315,7 +2409,6 @@ export function createCloudflareDependencies(source: RuntimeBindings): ApiDepend
   ) {
     throw new TypeError("The production authentication runtime is not configured.");
   }
-  const organizerAutojoin = parseOrganizerAutojoinConfiguration(bindings);
   const aiSelection = selectedAiProvider(bindings);
   const aiProviders = createCloudflareAiProviders(aiSelection?.binding, {
     ...(aiSelection?.model === undefined ? {} : { model: aiSelection.model }),
@@ -2371,7 +2464,7 @@ export function createCloudflareDependencies(source: RuntimeBindings): ApiDepend
   });
 
   const authenticator = new RequestAuthenticator(
-    new D1BetterAuthGateway(bindings.DB, betterAuthRuntime, organizerAutojoin),
+    new D1BetterAuthGateway(bindings.DB, betterAuthRuntime),
     new D1ApiKeyAuthenticatorGateway(bindings.DB),
     {
       sessionCookieName:
@@ -2410,5 +2503,32 @@ export function createCloudflareDependencies(source: RuntimeBindings): ApiDepend
       transport,
     }),
   });
-  return { ...dependencies, auth: betterAuthRuntime, members: { service: memberService } };
+  const integrationRepository = new CloudflareIntegrationAdminRepository(
+    bindings.DB,
+    new AirtableEventRepository({
+      baseId: bindings.AIRTABLE_BASE_ID ?? "",
+      transport,
+    }),
+    bindings.BETTER_AUTH_SECRET ?? "",
+  );
+  const integrations: IntegrationAdminRouteDependencies = {
+    getEvent: integrationRepository.getEvent.bind(integrationRepository),
+    getDeliveryStatus: integrationRepository.getDeliveryStatus.bind(integrationRepository),
+    saveCredential: integrationRepository.saveCredential.bind(integrationRepository),
+    listApiKeys: integrationRepository.listApiKeys.bind(integrationRepository),
+    createApiKey: integrationRepository.createApiKey.bind(integrationRepository),
+    revokeApiKey: integrationRepository.revokeApiKey.bind(integrationRepository),
+    webhooks:
+      dependencies.webhooks ??
+      (() => {
+        throw new Error("The integrated webhook repository is not configured.");
+      })(),
+    retryCalendarDelivery: async () => false,
+  };
+  return {
+    ...dependencies,
+    auth: betterAuthRuntime,
+    members: { service: memberService },
+    integrations,
+  };
 }

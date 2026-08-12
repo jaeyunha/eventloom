@@ -4,15 +4,15 @@ import { AuthAccessError, type AuthPrincipal } from "../auth/types";
 import { type EventService, EventServiceError, type EventServiceErrorCode } from "./service";
 import {
   type CreateEventInput,
+  type EventActor,
+  type EventCfpSettingsInput,
+  type EventDefaultCalendarSettingsInput,
   type EventEmbedConfigurationInput,
   eventEmbedDisplayFields,
   eventEmbedLayouts,
   eventEmbedOutputFormats,
   eventEmbedThemes,
   eventEmbedWidgetIds,
-  type EventActor,
-  type EventCfpSettingsInput,
-  type EventDefaultCalendarSettingsInput,
   eventStatuses,
   type UpdateEventInput,
 } from "./types";

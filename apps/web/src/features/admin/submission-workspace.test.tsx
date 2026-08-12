@@ -5,8 +5,13 @@ import {
   enrichCanonicalSubmission,
   getAcceptedHandoffMetadata,
   getSeededSubmission,
-  mapCanonicalSubmission,
+  indexOrganizerEvaluationWorkspace,
+  loadCanonicalSubmissionList,
+  loadOrganizerEvaluationWorkspace,
+  loadOrganizerEventIdentity,
   loadOrganizerEventName,
+  mapCanonicalSubmission,
+  mergeCanonicalSubmissionEvaluation,
   SubmissionDetailWorkspace,
   SubmissionListWorkspace,
   submissionListState,
@@ -137,10 +142,13 @@ describe("organizer submission workspace", () => {
     ).toBe("filtered_empty");
 
     const markup = renderToStaticMarkup(
-      createElement(SubmissionListWorkspace, { eventId: "event-with-no-submissions" }),
+      createElement(SubmissionListWorkspace, {
+        eventId: "event-with-no-submissions",
+        organizationId: "org-1",
+      }),
     );
     expect(markup).toContain("No submissions yet");
-    expect(markup).toContain("Open public CFP");
+    expect(markup).not.toContain("Open public CFP");
     expect(markup).toContain("Configure CFP");
     expect(markup).not.toContain("No matching submissions");
     expect(markup).not.toContain('id="submission-search"');
@@ -271,7 +279,33 @@ describe("organizer submission workspace", () => {
         loadOrganizerEventName("", "organization-1", "82b23d61-c2f8-4f6b-a89a-9bba98c3555c"),
       ).resolves.toBe("Forward Summit 2028");
       expect(fetchMock).toHaveBeenCalledWith(
-        "/api/admin/organizations/organization-1/events/82b23d61-c2f8-4f6b-a89a-9bba98c3555c",
+        "/api/cfp/organizations/organization-1/events/82b23d61-c2f8-4f6b-a89a-9bba98c3555c/config",
+        expect.objectContaining({ credentials: "include", cache: "no-store" }),
+      );
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  it("keeps an authoritative public slug separate from the event id", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        data: {
+          id: "evt_01JXYZ",
+          name: "DevFlow Conference",
+          slug: "devflow-conf-2027",
+        },
+      }),
+    );
+    try {
+      await expect(loadOrganizerEventIdentity("", "organization-1", "evt_01JXYZ")).resolves.toEqual(
+        {
+          name: "DevFlow Conference",
+          slug: "devflow-conf-2027",
+        },
+      );
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/cfp/organizations/organization-1/events/evt_01JXYZ/config",
         expect.objectContaining({ credentials: "include", cache: "no-store" }),
       );
     } finally {
@@ -283,24 +317,16 @@ describe("organizer submission workspace", () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input);
       requests.push(url);
-      if (url.includes("/plans?eventId=")) {
+      if (url.includes("/organizer/workspace?eventId=")) {
         return Response.json({
           data: {
-            plans: [
-              {
-                id: "plan-1",
-                rounds: [
-                  { id: "round-initial", sequence: 1 },
-                  { id: "round-final", sequence: 2 },
-                ],
-              },
-            ],
-          },
-        });
-      }
-      if (url.endsWith("/assignments")) {
-        return Response.json({
-          data: {
+            plan: {
+              id: "plan-1",
+              rounds: [
+                { id: "round-initial", sequence: 1 },
+                { id: "round-final", sequence: 2 },
+              ],
+            },
             assignments: [
               {
                 id: "assignment-1",
@@ -309,18 +335,19 @@ describe("organizer submission workspace", () => {
                 status: "submitted",
               },
             ],
+            decisions: {},
+            aggregates: [
+              {
+                submissionId: "submission-devflow-1",
+                roundId: "round-final",
+                submittedReviewCount: 0,
+                expectedReviewCount: 1,
+                averageWeightedTotal: null,
+                possibleWeightedTotal: 0,
+              },
+            ],
           },
         });
-      }
-
-      if (url.endsWith("/decision")) {
-        return Response.json({ data: null });
-      }
-      if (url.endsWith("/aggregate")) {
-        return Response.json(
-          { error: { code: "INTERNAL_ERROR", message: "Aggregate unavailable" } },
-          { status: 500 },
-        );
       }
       if (url.endsWith("/reviews")) {
         return Response.json({
@@ -362,16 +389,114 @@ describe("organizer submission workspace", () => {
           },
         ],
       });
-      expect(requests).toHaveLength(5);
+      expect(requests).toHaveLength(2);
 
       expect(requests.every((request) => request.startsWith("/api/admin/evaluations/"))).toBe(true);
+      expect(requests.filter((request) => request.includes("/organizer/workspace"))).toHaveLength(
+        1,
+      );
+      expect(requests.some((request) => request.includes("/plans?eventId="))).toBe(false);
+      expect(requests.some((request) => request.endsWith("/assignments"))).toBe(false);
+      expect(requests.some((request) => request.endsWith("/aggregate"))).toBe(false);
+      expect(requests.some((request) => request.endsWith("/decision"))).toBe(false);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+  it("loads canonical titles independently of the event-wide evaluation batch", async () => {
+    let releaseWorkspace: ((response: Response) => void) | undefined;
+    const workspaceGate = new Promise<Response>((resolve) => {
+      releaseWorkspace = resolve;
+    });
+    const requests: string[] = [];
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      requests.push(url);
+      if (url === "/api/cfp/organizations/org-1/events/event-1/submissions") {
+        return Response.json({ data: [canonicalEnvelope] });
+      }
+      if (url === "/api/admin/evaluations/organizer/workspace?eventId=event-1") {
+        return workspaceGate;
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    try {
+      const workspacePromise = loadOrganizerEvaluationWorkspace("", "event-1");
+      const envelopes = await loadCanonicalSubmissionList("", "org-1", "event-1");
+      const rows = envelopes.map(mapCanonicalSubmission);
+      expect(rows.map((row) => row.title)).toEqual([
+        "Taming 40-Minute CI: Incremental Builds at Monorepo Scale",
+      ]);
+      expect(requests).toEqual([
+        "/api/admin/evaluations/organizer/workspace?eventId=event-1",
+        "/api/cfp/organizations/org-1/events/event-1/submissions",
+      ]);
+
+      releaseWorkspace?.(
+        Response.json({
+          data: {
+            plan: { id: "plan-1", rounds: [{ id: "round-1", sequence: 1 }] },
+            assignments: [],
+            aggregates: [],
+            decisions: {},
+          },
+        }),
+      );
+      const workspace = await workspacePromise;
       expect(
-        requests.some((request) =>
-          request.includes(
-            "/plans/plan-1/rounds/round-final/submissions/submission-devflow-1/aggregate",
+        envelopes.map((envelope) =>
+          mergeCanonicalSubmissionEvaluation(
+            envelope,
+            indexOrganizerEvaluationWorkspace(workspace),
           ),
         ),
-      ).toBe(true);
+      ).toHaveLength(1);
+      expect(requests.some((request) => request.includes("/plans?eventId="))).toBe(false);
+      expect(requests.some((request) => request.endsWith("/reviews"))).toBe(false);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  it("keeps canonical rows when the evaluation batch fails", async () => {
+    const requests: string[] = [];
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      requests.push(url);
+      if (url === "/api/cfp/organizations/org-1/events/event-1/submissions") {
+        return Response.json({ data: [canonicalEnvelope] });
+      }
+      if (url === "/api/admin/evaluations/organizer/workspace?eventId=event-1") {
+        return Response.json({ error: { message: "Evaluation unavailable." } }, { status: 503 });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    try {
+      const [envelopes, workspace] = await Promise.all([
+        loadCanonicalSubmissionList("", "org-1", "event-1"),
+        loadOrganizerEvaluationWorkspace("", "event-1").catch(() => null),
+      ]);
+      const rows =
+        workspace === null
+          ? envelopes.map(mapCanonicalSubmission)
+          : envelopes.map((envelope) =>
+              mergeCanonicalSubmissionEvaluation(
+                envelope,
+                indexOrganizerEvaluationWorkspace(workspace),
+              ),
+            );
+      expect(rows[0]?.title).toBe("Taming 40-Minute CI: Incremental Builds at Monorepo Scale");
+      expect(
+        submissionListState({
+          loading: false,
+          loadError: null,
+          submissionCount: rows.length,
+          visibleCount: rows.length,
+        }),
+      ).toBe("ready");
+      expect(requests).toHaveLength(2);
     } finally {
       fetchMock.mockRestore();
     }
@@ -381,16 +506,10 @@ describe("organizer submission workspace", () => {
     const reviewRequests: string[] = [];
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input);
-      if (url.includes("/plans?eventId=")) {
+      if (url.includes("/organizer/workspace?eventId=")) {
         return Response.json({
           data: {
-            plans: [{ id: "plan-1", rounds: [{ id: "round-final", sequence: 2 }] }],
-          },
-        });
-      }
-      if (url.endsWith("/assignments")) {
-        return Response.json({
-          data: {
+            plan: { id: "plan-1", rounds: [{ id: "round-final", sequence: 2 }] },
             assignments: [
               {
                 id: "assignment-1",
@@ -399,17 +518,17 @@ describe("organizer submission workspace", () => {
                 status: "submitted",
               },
             ],
-          },
-        });
-      }
-      if (url.endsWith("/decision")) return Response.json({ data: null });
-      if (url.endsWith("/aggregate")) {
-        return Response.json({
-          data: {
-            submittedReviewCount: 1,
-            expectedReviewCount: 1,
-            averageWeightedTotal: 4,
-            possibleWeightedTotal: 5,
+            decisions: {},
+            aggregates: [
+              {
+                roundId: "round-final",
+                submissionId: canonicalEnvelope.submission.id,
+                submittedReviewCount: 1,
+                expectedReviewCount: 1,
+                averageWeightedTotal: 4,
+                possibleWeightedTotal: 5,
+              },
+            ],
           },
         });
       }
@@ -450,50 +569,47 @@ describe("organizer submission workspace", () => {
     let decisionStatus: "accepted" | "rejected" = "accepted";
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input);
-      if (url.includes("/plans?eventId=")) {
+      if (url.includes("/organizer/workspace?eventId=")) {
         return Response.json({
           data: {
-            plans: [{ id: "plan-1", rounds: [{ id: "round-final", sequence: 1 }] }],
-          },
-        });
-      }
-      if (url.endsWith("/assignments")) {
-        return Response.json({ data: { assignments: [] } });
-      }
-      if (url.endsWith("/decision")) {
-        return Response.json({
-          data: {
-            id: "decision-1",
-            tenantId: canonicalEnvelope.submission.tenantId,
-            eventId: canonicalEnvelope.submission.eventId,
-            planId: "plan-1",
-            submissionId: canonicalEnvelope.submission.id,
-            status: decisionStatus,
-            version: 2,
-            history: [
+            plan: { id: "plan-1", rounds: [{ id: "round-final", sequence: 1 }] },
+            assignments: [],
+            aggregates: [
               {
-                from: null,
-                to: decisionStatus,
-                reason: `Organizer decision: ${decisionStatus}.`,
-                decidedBy: "organizer-1",
-                decidedAt: "2027-01-03T12:00:00.000Z",
-                idempotencyKey: `decision-${decisionStatus}`,
+                roundId: "round-final",
+                submissionId: canonicalEnvelope.submission.id,
+                submittedReviewCount: 0,
+                expectedReviewCount: 0,
+                averageWeightedTotal: null,
+                possibleWeightedTotal: 0,
               },
             ],
-            updatedAt: "2027-01-03T12:00:00.000Z",
+            decisions: {
+              [canonicalEnvelope.submission.id]: {
+                id: "decision-1",
+                tenantId: canonicalEnvelope.submission.tenantId,
+                eventId: canonicalEnvelope.submission.eventId,
+                planId: "plan-1",
+                submissionId: canonicalEnvelope.submission.id,
+                status: decisionStatus,
+                version: 2,
+                history: [
+                  {
+                    from: null,
+                    to: decisionStatus,
+                    reason: `Organizer decision: ${decisionStatus}.`,
+                    decidedBy: "organizer-1",
+                    decidedAt: "2027-01-03T12:00:00.000Z",
+                    idempotencyKey: `decision-${decisionStatus}`,
+                  },
+                ],
+                updatedAt: "2027-01-03T12:00:00.000Z",
+              },
+            },
           },
         });
       }
-      if (url.endsWith("/aggregate")) {
-        return Response.json({
-          data: {
-            submittedReviewCount: 0,
-            expectedReviewCount: 0,
-            averageWeightedTotal: null,
-            possibleWeightedTotal: 0,
-          },
-        });
-      }
+      if (url.endsWith("/reviews")) return Response.json({ data: { reviews: [] } });
       throw new Error(`Unexpected request: ${url}`);
     });
 
@@ -528,7 +644,10 @@ describe("organizer submission workspace", () => {
   });
   it("renders the compact shadcn submission workspace with filters and progress", () => {
     const markup = renderToStaticMarkup(
-      createElement(SubmissionListWorkspace, { eventId: "summit-2026" }),
+      createElement(SubmissionListWorkspace, {
+        eventId: "summit-2026",
+        organizationId: "organization-1",
+      }),
     );
 
     expect(markup).toContain('data-slot="card"');
@@ -549,7 +668,9 @@ describe("organizer submission workspace", () => {
     expect(markup).toContain("Under review");
     expect(markup).toContain("Review progress");
     expect(markup.indexOf("Total submissions")).toBeLessThan(markup.indexOf("All submissions"));
-    expect(markup).toContain("/admin/events/summit-2026/submissions/sub-001");
+    expect(markup).toContain(
+      "/admin/organizations/organization-1/events/summit-2026/submissions/sub-001",
+    );
     expect(markup).not.toContain("maya.chen@example.test");
     expect(markup).not.toContain("Organizer notes");
     expect(markup).not.toContain("Canonical CFP organizer view");
@@ -558,11 +679,14 @@ describe("organizer submission workspace", () => {
 
   it("renders an action-first empty state without filter or table scaffolding", () => {
     const markup = renderToStaticMarkup(
-      createElement(SubmissionListWorkspace, { eventId: "event-with-no-submissions" }),
+      createElement(SubmissionListWorkspace, {
+        eventId: "event-with-no-submissions",
+        organizationId: "org-1",
+      }),
     );
 
     expect(markup).toContain("No submissions yet");
-    expect(markup).toContain("Open public CFP");
+    expect(markup).not.toContain("Open public CFP");
     expect(markup).toContain("Configure CFP");
     expect(markup).not.toContain('id="submission-search"');
     expect(markup).not.toContain('data-slot="table"');
@@ -573,6 +697,7 @@ describe("organizer submission workspace", () => {
       createElement(SubmissionDetailWorkspace, {
         eventId: "summit-2026",
         submissionId: "sub-001",
+        organizationId: "organization-1",
       }),
     );
 
@@ -603,6 +728,7 @@ describe("organizer submission workspace", () => {
         createElement(SubmissionDetailWorkspace, {
           eventId: "summit-2026",
           submissionId: "sub-001",
+          organizationId: "organization-1",
         }),
       );
       expect(errorMarkup).toContain('role="alert"');
@@ -615,6 +741,7 @@ describe("organizer submission workspace", () => {
         createElement(SubmissionDetailWorkspace, {
           eventId: "summit-2026",
           submissionId: "sub-001",
+          organizationId: "organization-1",
         }),
       );
       expect(emptyMarkup).toContain("No submitted reviews yet.");
@@ -629,6 +756,7 @@ describe("organizer submission workspace", () => {
       createElement(SubmissionDetailWorkspace, {
         eventId: "summit-2026",
         submissionId: "sub-001",
+        organizationId: "organization-1",
       }),
     );
 
@@ -660,6 +788,7 @@ describe("organizer submission workspace", () => {
       createElement(SubmissionDetailWorkspace, {
         eventId: "summit-2026",
         submissionId: "sub-003",
+        organizationId: "organization-1",
       }),
     );
     expect(markup).toContain("Accepted session handoff");
@@ -673,6 +802,7 @@ describe("organizer submission workspace", () => {
       createElement(SubmissionDetailWorkspace, {
         eventId: "summit-2026",
         submissionId: "sub-001",
+        organizationId: "organization-1",
       }),
     );
 
@@ -688,20 +818,28 @@ describe("organizer submission workspace", () => {
 
   it("uses the requested event in every seeded list/detail lookup and link", () => {
     const listMarkup = renderToStaticMarkup(
-      createElement(SubmissionListWorkspace, { eventId: "forge-2025" }),
+      createElement(SubmissionListWorkspace, {
+        eventId: "forge-2025",
+        organizationId: "organization-1",
+      }),
     );
     const detailMarkup = renderToStaticMarkup(
       createElement(SubmissionDetailWorkspace, {
         eventId: "forge-2025",
         submissionId: "sub-101",
+        organizationId: "organization-1",
       }),
     );
 
     expect(getSeededSubmission("forge-2025", "sub-101")?.eventId).toBe("forge-2025");
     expect(getSeededSubmission("summit-2026", "sub-101")).toBeUndefined();
-    expect(listMarkup).toContain("/admin/events/forge-2025/submissions/sub-101");
-    expect(listMarkup).not.toContain("/admin/events/summit-2026/submissions/");
-    expect(detailMarkup).toContain("/admin/events/forge-2025/submissions");
-    expect(detailMarkup).not.toContain("/admin/events/summit-2026/submissions");
+    expect(listMarkup).toContain(
+      "/admin/organizations/organization-1/events/forge-2025/submissions/sub-101",
+    );
+    expect(listMarkup).not.toContain("/admin/events/");
+    expect(detailMarkup).toContain(
+      "/admin/organizations/organization-1/events/forge-2025/submissions",
+    );
+    expect(detailMarkup).not.toContain("/admin/events/");
   });
 });

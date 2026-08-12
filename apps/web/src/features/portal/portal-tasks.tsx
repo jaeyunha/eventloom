@@ -20,8 +20,8 @@ import {
   PageHeading,
   PortalContentState,
   Progress,
-  TaskStatusBadge,
   portalAssetStateLabel,
+  TaskStatusBadge,
 } from "./portal-ui";
 import type { PortalAssetKind, PortalTask } from "./types";
 

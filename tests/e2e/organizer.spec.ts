@@ -17,7 +17,7 @@ import { E2E_SESSION_COOKIE, type E2eAuthSession, expect, test } from "./fixture
 
 test.use({ authRole: "organizer" });
 
-const ORGANIZATION_ID = "ai-engineer";
+const ORGANIZATION_ID = "local-organization";
 const ORGANIZER_EMAIL = "jaeyunha0317@gmail.com";
 const ORGANIZER_PASSWORD = "CalmSystems!26";
 const PRIMARY_EVENT_ID = "open-sessionboard-conf";
@@ -501,6 +501,36 @@ async function installOrganizerApi(
         await fulfillJson(route, settings.audit);
         return;
       }
+      if (request.method() === "GET" && suffix === "integrations") {
+        await fulfillJson(route, {
+          event: {
+            id: event.id,
+            name: event.name,
+            timeZone: event.timeZone,
+            publishedAgendaRevisionId: "agenda-revision-e2e",
+          },
+          delivery: {
+            openSend: {
+              state: "connected",
+              credentialLastFour: "2468",
+              senderChecks: [],
+              deliveredLast24Hours: 12,
+              failedLast24Hours: 0,
+              lastDeliveryAt: SEEDED_AT,
+            },
+            calendar: {
+              state: "connected",
+              sentLast24Hours: 8,
+              failedLast24Hours: 0,
+              lastInvitationAt: SEEDED_AT,
+              lastFailure: null,
+            },
+          },
+          apiKeys: [],
+          webhooks: [],
+        });
+        return;
+      }
       await fulfillError(route, 404, "E2E_ROUTE_NOT_FOUND", `No organizer route for ${suffix}.`);
       return;
     }
@@ -542,6 +572,7 @@ async function expectAgendaWorkspace(page: Page): Promise<void> {
 }
 
 test("verified organizer login opens the organization overview", async ({ authSession, page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
   expect(authSession.role).toBe("organizer");
   expect(authSession.email).toBe(ORGANIZER_EMAIL);
   const api = await installOrganizerApi(page, authSession);
@@ -559,14 +590,52 @@ test("verified organizer login opens the organization overview", async ({ authSe
     page.getByRole("heading", { level: 1, name: "Organization overview" }),
   ).toBeVisible();
   await expect(
-    page.getByLabel("Organizer workspace").getByText("ai-engineer", { exact: true }),
+    page.getByLabel("Organizer workspace").getByText(ORGANIZATION_ID, { exact: true }),
   ).toBeVisible();
   await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
   await expect(page.getByRole("heading", { level: 2, name: "Events" })).toBeVisible();
+  await page.screenshot({
+    path: "test-results/organizer-redesign-desktop.png",
+    fullPage: true,
+  });
+  await page.keyboard.press("Control+k");
+  await expect(page.getByRole("dialog", { name: "Jump to a page or action" })).toBeVisible();
+  await expect(page.getByPlaceholder("Search pages and actions…")).toBeFocused();
+  await page.getByPlaceholder("Search pages and actions…").fill("nothing matches");
+  await expect(page.getByText("No matching pages or actions.")).toBeVisible();
+  await page.keyboard.press("Tab");
+  await expect(page.getByRole("dialog", { name: "Jump to a page or action" })).toBeVisible();
+  await page.keyboard.press("Shift+Tab");
+  await expect(page.getByPlaceholder("Search pages and actions…")).toBeFocused();
+  await page.getByPlaceholder("Search pages and actions…").fill("events");
+  await expect(page.getByRole("link", { name: "Go to events" })).toBeVisible();
+  await page.screenshot({
+    path: "test-results/organizer-redesign-command.png",
+    fullPage: true,
+  });
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "Jump to a page or action" })).toBeHidden();
+  await expect(page.getByRole("button", { name: "Search or jump to" })).toBeFocused();
   await expect(
     page.getByText("Open Sessionboard Conference", { exact: true }).first(),
   ).toBeVisible();
   await expect(page.getByRole("link", { name: "Events", exact: true })).toBeVisible();
+  await page.getByRole("link", { name: "Open agenda for Open Sessionboard Conference" }).click();
+  await expect(page).toHaveURL(
+    `/admin/organizations/${ORGANIZATION_ID}/events/open-sessionboard-conf/agenda`,
+  );
+  await page.goto(
+    `/admin/organizations/${ORGANIZATION_ID}/events/${PRIMARY_EVENT_ID}/integrations`,
+  );
+  await expect(page).toHaveURL(
+    `/admin/organizations/${ORGANIZATION_ID}/events/${PRIMARY_EVENT_ID}/integrations`,
+  );
+  await expect(page.getByRole("heading", { level: 1, name: "Integrations" })).toBeVisible();
+  await expect(page.getByRole("link", { name: /Email & calendar Connected/u })).toBeVisible();
+  await expect(page.getByRole("link", { name: /API keys None/u })).toBeVisible();
+  await expect(page.getByRole("link", { name: /Webhooks None/u })).toBeVisible();
+  await expect(page.getByText("Source-of-truth boundary")).toBeVisible();
+  await expect(page.getByText("Integration settings are unavailable")).toHaveCount(0);
   expect(api.verifiedLogins).toEqual([ORGANIZER_EMAIL]);
   const overviewRequests = api.requests
     .filter((request) => request.method() === "GET")
@@ -591,6 +660,15 @@ test("organization overview reflows without document overflow", async ({ authSes
       .getByRole("region", { name: "Events" })
       .getByRole("heading", { level: 2, name: "Open Sessionboard Conference" }),
   ).toBeVisible();
+  await page.getByRole("button", { name: "Toggle Sidebar" }).click();
+  const mobileSidebar = page.getByRole("dialog", { name: "Sidebar" });
+  await expect(mobileSidebar).toBeVisible();
+  await expect(mobileSidebar.getByRole("link", { name: "Overview", exact: true })).toBeVisible();
+  await page.screenshot({
+    path: "test-results/organizer-redesign-mobile.png",
+    fullPage: true,
+  });
+  await page.keyboard.press("Escape");
   const mobileOverflow = await page.evaluate(() =>
     [...document.querySelectorAll<HTMLElement>("body *")]
       .map((element) => {
@@ -600,9 +678,13 @@ test("organization overview reflows without document overflow", async ({ authSes
           className: element.className,
           left: rect.left,
           right: rect.right,
+          visible:
+            element.getClientRects().length > 0 &&
+            getComputedStyle(element).visibility !== "hidden" &&
+            !element.classList.contains("sr-only"),
         };
       })
-      .filter(({ left, right }) => left < -1 || right > window.innerWidth + 1)
+      .filter(({ left, right, visible }) => visible && (left < -1 || right > window.innerWidth + 1))
       .slice(0, 10),
   );
   expect(mobileOverflow).toEqual([]);

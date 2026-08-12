@@ -3,11 +3,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
   SelectContent,
@@ -15,17 +16,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import styles from "@/features/admin/admin-shell.module.css";
-import workspaceStyles from "./embed-workspace.module.css";
 import {
   createOrganizerEventsApi,
   type OrganizerEventEmbedConfiguration,
   type OrganizerEventRecord,
   type OrganizerEventsApi,
 } from "@/features/admin/organizer-overview";
+import workspaceStyles from "./embed-workspace.module.css";
 
 export type EmbedWidgetId = "sessions" | "speakers" | "agenda" | "itinerary" | "gallery";
 export type EmbedTheme = "auto" | "light" | "dark";
@@ -969,8 +969,8 @@ function EmbedControls({
   tracks,
   statuses,
   cacheRefreshMessage,
-  cacheRefreshBusy,
-  cacheRefreshError,
+  cacheRefreshBusy: _cacheRefreshBusy,
+  cacheRefreshError: _cacheRefreshError,
   onTheme,
   onOutputFormat,
   onLayout,
@@ -1497,7 +1497,7 @@ export function EmbedWorkspaceView({
   publicOrigin,
   eventName,
   eventVersion,
-  expectedPublishedRevision = null,
+  expectedPublishedRevision: _expectedPublishedRevision = null,
   initialConfigurations,
   api,
   publication,

@@ -1,7 +1,11 @@
 import type { CfpStep } from "./types";
 
-export function getCfpStepRoute(eventSlug: string, step: CfpStep | "complete"): string {
-  const base = `/cfp/${encodeURIComponent(eventSlug)}`;
+export function getCfpStepRoute(
+  organizationId: string,
+  eventSlug: string,
+  step: CfpStep | "complete",
+): string {
+  const base = `/cfp/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventSlug)}`;
   if (step === "welcome") return base;
   return `${base}/${step}`;
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -28,7 +29,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { getCfpStepRoute } from "../cfp/routes";
 import styles from "./submission-workspace.module.css";
 
 export type SubmissionStatus =
@@ -526,6 +527,20 @@ async function canonicalSubmissionRequest<T>(
   );
 }
 
+export async function loadCanonicalSubmissionList(
+  baseUrl: string,
+  organizationId: string,
+  eventId: string,
+  signal?: AbortSignal,
+): Promise<readonly CanonicalSubmissionEnvelope[]> {
+  return canonicalSubmissionRequest<readonly CanonicalSubmissionEnvelope[]>(
+    baseUrl,
+    organizationId,
+    eventId,
+    signal === undefined ? {} : { signal },
+  );
+}
+
 function localDemoEnabled(): boolean {
   return process.env.NODE_ENV === "test" || process.env.NEXT_PUBLIC_RUNTIME_PROFILE === "fixture";
 }
@@ -562,6 +577,42 @@ export interface EvaluationDecisionRecord {
   readonly version: number;
   readonly history: readonly EvaluationDecisionTransition[];
   readonly updatedAt: string;
+}
+
+export interface OrganizerEvaluationWorkspace {
+  readonly plan: {
+    readonly id: string;
+    readonly rounds: readonly { readonly id: string; readonly sequence?: number | undefined }[];
+  };
+  readonly assignments: readonly {
+    readonly id: string;
+    readonly reviewerId: string;
+    readonly submissionId: string;
+    readonly status: "assigned" | "in_progress" | "submitted" | "abstained";
+  }[];
+  readonly aggregates: readonly {
+    readonly roundId: string;
+    readonly submissionId: string;
+    readonly submittedReviewCount: number;
+    readonly expectedReviewCount: number;
+    readonly averageWeightedTotal: number | null;
+    readonly possibleWeightedTotal: number;
+  }[];
+  readonly decisions: Readonly<Record<string, EvaluationDecisionRecord>>;
+}
+
+export interface OrganizerEvaluationIndex {
+  readonly plan: OrganizerEvaluationWorkspace["plan"];
+  readonly round: OrganizerEvaluationWorkspace["plan"]["rounds"][number] | undefined;
+  readonly assignmentsBySubmissionId: ReadonlyMap<
+    string,
+    OrganizerEvaluationWorkspace["assignments"]
+  >;
+  readonly aggregateBySubmissionId: ReadonlyMap<
+    string,
+    OrganizerEvaluationWorkspace["aggregates"][number]
+  >;
+  readonly decisions: OrganizerEvaluationWorkspace["decisions"];
 }
 
 export interface AcceptedHandoffMetadata {
@@ -831,67 +882,63 @@ function rubricCriterionLabel(criterionId: string): string {
     .join(" ");
 }
 
-export async function enrichCanonicalSubmission(
+export async function loadOrganizerEvaluationWorkspace(
   baseUrl: string,
-  envelope: CanonicalSubmissionEnvelope,
-): Promise<SubmissionRecord> {
-  const submission = mapCanonicalSubmission(envelope);
-  const planResult = await evaluationRequest<{
-    plans: readonly {
-      id: string;
-      rounds: readonly { id: string; sequence?: number | undefined }[];
-    }[];
-  }>(baseUrl, `/plans?eventId=${encodeURIComponent(submission.eventId)}`).catch(() => ({
-    plans: [],
-  }));
-  const plan = planResult.plans[0];
-  if (plan === undefined) return submission;
-  const round = [...plan.rounds].sort(
+  eventId: string,
+  signal?: AbortSignal,
+): Promise<OrganizerEvaluationWorkspace> {
+  return evaluationRequest<OrganizerEvaluationWorkspace>(
+    baseUrl,
+    `/organizer/workspace?eventId=${encodeURIComponent(eventId)}`,
+    signal === undefined ? {} : { signal },
+  );
+}
+
+export function indexOrganizerEvaluationWorkspace(
+  workspace: OrganizerEvaluationWorkspace,
+): OrganizerEvaluationIndex {
+  const round = [...workspace.plan.rounds].sort(
     (left, right) => (right.sequence ?? 0) - (left.sequence ?? 0),
   )[0];
-  const [assignmentResult, decision, aggregate, submittedReviewResult] = await Promise.all([
-    evaluationRequest<{
-      assignments: readonly {
-        id: string;
-        reviewerId: string;
-        submissionId: string;
-        status: "assigned" | "in_progress" | "submitted" | "abstained";
-      }[];
-    }>(baseUrl, `/plans/${encodeURIComponent(plan.id)}/assignments`).catch(() => ({
-      assignments: [],
-    })),
-    evaluationRequest<EvaluationDecisionRecord | null>(
-      baseUrl,
-      `/plans/${encodeURIComponent(plan.id)}/submissions/${encodeURIComponent(submission.id)}/decision`,
-    ).catch(() => null),
-    round === undefined
-      ? Promise.resolve(null)
-      : evaluationRequest<{
-          submittedReviewCount: number;
-          expectedReviewCount: number;
-          averageWeightedTotal: number | null;
-          possibleWeightedTotal: number;
-        }>(
-          baseUrl,
-          `/plans/${encodeURIComponent(plan.id)}/rounds/${encodeURIComponent(round.id)}/submissions/${encodeURIComponent(submission.id)}/aggregate`,
-        ).catch(() => null),
-    round === undefined
-      ? Promise.resolve<SubmittedReviewResult>({ reviews: [], error: null })
-      : evaluationRequest<{ reviews: readonly SubmittedReview[] }>(
-          baseUrl,
-          `/plans/${encodeURIComponent(plan.id)}/rounds/${encodeURIComponent(round.id)}/submissions/${encodeURIComponent(submission.id)}/reviews`,
-        )
-          .then(({ reviews }) => ({ reviews, error: null }))
-          .catch((reason: unknown) => ({
-            reviews: [],
-            error:
-              reason instanceof Error ? reason.message : "Submitted reviews could not be loaded.",
-          })),
-  ]);
+  const assignmentsBySubmissionId = new Map<
+    string,
+    OrganizerEvaluationWorkspace["assignments"][number][]
+  >();
+  for (const assignment of workspace.assignments) {
+    const current = assignmentsBySubmissionId.get(assignment.submissionId) ?? [];
+    current.push(assignment);
+    assignmentsBySubmissionId.set(assignment.submissionId, current);
+  }
+  const aggregateBySubmissionId = new Map<
+    string,
+    OrganizerEvaluationWorkspace["aggregates"][number]
+  >();
+  if (round !== undefined) {
+    for (const aggregate of workspace.aggregates) {
+      if (aggregate.roundId === round.id) {
+        aggregateBySubmissionId.set(aggregate.submissionId, aggregate);
+      }
+    }
+  }
+  return {
+    plan: workspace.plan,
+    round,
+    assignmentsBySubmissionId,
+    aggregateBySubmissionId,
+    decisions: workspace.decisions,
+  };
+}
 
-  const assignments = assignmentResult.assignments.filter(
-    (assignment) => assignment.submissionId === submission.id,
-  );
+export function mergeCanonicalSubmissionEvaluation(
+  envelope: CanonicalSubmissionEnvelope,
+  index: OrganizerEvaluationIndex,
+  submittedReviewResult: SubmittedReviewResult = { reviews: [], error: null },
+): SubmissionRecord {
+  const submission = mapCanonicalSubmission(envelope);
+  const plan = index.plan;
+  const assignments = index.assignmentsBySubmissionId.get(submission.id) ?? [];
+  const decision = index.decisions[submission.id] ?? null;
+  const aggregate = index.aggregateBySubmissionId.get(submission.id) ?? null;
   const submittedReviewByAssignment = new Map(
     submittedReviewResult.reviews
       .filter((review) => review.submissionId === submission.id)
@@ -971,6 +1018,29 @@ export async function enrichCanonicalSubmission(
   };
 }
 
+export async function enrichCanonicalSubmission(
+  baseUrl: string,
+  envelope: CanonicalSubmissionEnvelope,
+): Promise<SubmissionRecord> {
+  const workspace = await loadOrganizerEvaluationWorkspace(baseUrl, envelope.submission.eventId);
+  const index = indexOrganizerEvaluationWorkspace(workspace);
+  const round = index.round;
+  const submittedReviewResult =
+    round === undefined
+      ? { reviews: [], error: null }
+      : await evaluationRequest<{ reviews: readonly SubmittedReview[] }>(
+          baseUrl,
+          `/plans/${encodeURIComponent(workspace.plan.id)}/rounds/${encodeURIComponent(round.id)}/submissions/${encodeURIComponent(envelope.submission.id)}/reviews`,
+        )
+          .then(({ reviews }) => ({ reviews, error: null }))
+          .catch((reason: unknown) => ({
+            reviews: [],
+            error:
+              reason instanceof Error ? reason.message : "Submitted reviews could not be loaded.",
+          }));
+  return mergeCanonicalSubmissionEvaluation(envelope, index, submittedReviewResult);
+}
+
 function eventTitle(eventId: string): string {
   if (eventId === "summit-2026") {
     return "Open Sessionboard Summit 2026";
@@ -994,8 +1064,18 @@ export async function loadOrganizerEventName(
   eventId: string,
   signal?: AbortSignal,
 ): Promise<string> {
+  const event = await loadOrganizerEventIdentity(baseUrl, organizationId, eventId, signal);
+  return event.name;
+}
+
+export async function loadOrganizerEventIdentity(
+  baseUrl: string,
+  organizationId: string,
+  eventId: string,
+  signal?: AbortSignal,
+): Promise<{ readonly name: string; readonly slug: string | null }> {
   const response = await fetch(
-    `${baseUrl.replace(/\/+$/u, "")}/api/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}`,
+    `${baseUrl.replace(/\/+$/u, "")}/api/cfp/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}/config`,
     {
       credentials: "include",
       cache: "no-store",
@@ -1003,22 +1083,25 @@ export async function loadOrganizerEventName(
     },
   );
   if (!response.ok) throw new Error(`The event request failed (HTTP ${response.status}).`);
-  const payload = (await response.json()) as { readonly data?: { readonly name?: unknown } };
+  const payload = (await response.json()) as {
+    readonly data?: { readonly name?: unknown; readonly slug?: unknown };
+  };
   const name = payload.data?.name;
   if (typeof name !== "string" || name.trim().length === 0) {
     throw new TypeError("The event response does not contain a name.");
   }
-  return name.trim();
+  const slug = payload.data?.slug;
+  return {
+    name: name.trim(),
+    slug: typeof slug === "string" && slug.trim().length > 0 ? slug.trim() : null,
+  };
 }
 
-function submissionListHref(eventId: string, organizationId?: string): string {
-  if (organizationId !== undefined) {
-    return `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}/submissions`;
-  }
-  return `/admin/events/${encodeURIComponent(eventId)}/submissions`;
+function submissionListHref(eventId: string, organizationId: string): string {
+  return `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}/submissions`;
 }
 
-function submissionHref(eventId: string, submissionId: string, organizationId?: string): string {
+function submissionHref(eventId: string, submissionId: string, organizationId: string): string {
   return `${submissionListHref(eventId, organizationId)}/${encodeURIComponent(submissionId)}`;
 }
 
@@ -1110,7 +1193,7 @@ export function submissionListState(input: {
 export function SubmissionListWorkspace({
   eventId,
   organizationId,
-}: Readonly<{ eventId: string; organizationId?: string }>) {
+}: Readonly<{ eventId: string; organizationId: string }>) {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<SubmissionStatus | "all">("all");
   const [track, setTrack] = useState("all");
@@ -1125,6 +1208,7 @@ export function SubmissionListWorkspace({
   const [loadError, setLoadError] = useState<string | null>(null);
   const baseUrl = apiBaseUrl();
   const [eventName, setEventName] = useState(() => eventTitle(eventId));
+  const [eventSlug, setEventSlug] = useState<string | null>(null);
 
   useEffect(() => {
     if (localDemoEnabled()) return;
@@ -1139,22 +1223,32 @@ export function SubmissionListWorkspace({
     setLoading(true);
     setLoadError(null);
     const eventController = new AbortController();
-    void loadOrganizerEventName(baseUrl, organizationId, eventId, eventController.signal)
-      .then((name) => {
-        if (active) setEventName(name);
+    void loadOrganizerEventIdentity(baseUrl, organizationId, eventId, eventController.signal)
+      .then((event) => {
+        if (active) {
+          setEventName(event.name);
+          setEventSlug(event.slug);
+        }
       })
       .catch(() => undefined);
 
-    void canonicalSubmissionRequest<readonly CanonicalSubmissionEnvelope[]>(
+    const workspacePromise = loadOrganizerEvaluationWorkspace(
       baseUrl,
-      organizationId,
       eventId,
-    )
-      .then(async (records) => {
-        const enriched = await Promise.all(
-          records.map((record) => enrichCanonicalSubmission(baseUrl, record)),
-        );
-        if (active) setSubmissions(enriched);
+      eventController.signal,
+    ).catch(() => null);
+    void loadCanonicalSubmissionList(baseUrl, organizationId, eventId, eventController.signal)
+      .then((records) => {
+        if (!active) return;
+        setSubmissions(records.map(mapCanonicalSubmission));
+        setLoading(false);
+        void workspacePromise.then((workspace) => {
+          if (!active || workspace === null) return;
+          const index = indexOrganizerEvaluationWorkspace(workspace);
+          setSubmissions(
+            records.map((record) => mergeCanonicalSubmissionEvaluation(record, index)),
+          );
+        });
       })
       .catch((reason: unknown) => {
         if (active) {
@@ -1557,18 +1651,22 @@ export function SubmissionListWorkspace({
                 </EmptyHeader>
                 <EmptyContent>
                   <Button asChild>
-                    <Link href={`/cfp/${encodeURIComponent(eventId)}`}>Open public CFP</Link>
+                    {organizationId && eventSlug ? (
+                      <Link href={getCfpStepRoute(organizationId, eventSlug, "welcome")}>
+                        Open public CFP
+                      </Link>
+                    ) : null}
                   </Button>
                   <Button asChild variant="outline">
-                    <Link
-                      href={
-                        organizationId === undefined
-                          ? `/admin/events/${encodeURIComponent(eventId)}/cfp`
-                          : `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}/cfp`
-                      }
-                    >
-                      Configure CFP
-                    </Link>
+                    {organizationId ? (
+                      <Link
+                        href={`/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}/cfp`}
+                      >
+                        Configure CFP
+                      </Link>
+                    ) : (
+                      <span>Organization scope required</span>
+                    )}
                   </Button>
                 </EmptyContent>
               </Empty>
@@ -1845,7 +1943,7 @@ export function SubmissionDetailWorkspace({
   eventId,
   submissionId,
   organizationId,
-}: Readonly<{ eventId: string; submissionId: string; organizationId?: string }>) {
+}: Readonly<{ eventId: string; submissionId: string; organizationId: string }>) {
   const baseUrl = apiBaseUrl();
   const [submission, setSubmission] = useState<SubmissionRecord | null>(() =>
     localDemoEnabled() ? (getSeededSubmission(eventId, submissionId) ?? null) : null,
@@ -1868,12 +1966,7 @@ export function SubmissionDetailWorkspace({
     setLoadError(null);
     const controller = new AbortController();
 
-    void canonicalSubmissionRequest<readonly CanonicalSubmissionEnvelope[]>(
-      baseUrl,
-      organizationId,
-      eventId,
-      { signal: controller.signal },
-    )
+    void loadCanonicalSubmissionList(baseUrl, organizationId, eventId, controller.signal)
 
       .then((records) => {
         if (!active) return null;

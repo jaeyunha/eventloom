@@ -1,12 +1,13 @@
 import type { Page, Request, Route } from "@playwright/test";
 import { E2E_SESSION_COOKIE, type E2eAuthSession } from "./auth";
 
-const DEFAULT_ORGANIZATION_ID = "ai-engineer";
+const DEFAULT_ORGANIZATION_ID = "evaluator-org";
 const DEFAULT_FORM_VERSION = 1;
 const UPDATED_AT = "2026-08-08T12:00:00.000Z";
 
 export interface CfpFixtureOptions {
   eventId: string;
+  eventSlug?: string;
   formId?: string;
   eventName?: string;
   formName?: string;
@@ -110,9 +111,10 @@ export async function installCfpApi(
 ): Promise<CfpFixtureHarness> {
   const formId = options.formId ?? `${options.eventId}-cfp`;
   const formVersion = options.formVersion ?? DEFAULT_FORM_VERSION;
+  const eventSlug = options.eventSlug ?? options.eventId;
   const event = {
     id: options.eventId,
-    slug: options.eventId,
+    slug: eventSlug,
     name: options.eventName ?? "Welcome to our event!",
     timezone: "America/Los_Angeles",
     opensAt: "2026-08-01T07:00:00.000Z",
@@ -152,7 +154,7 @@ export async function installCfpApi(
     updatedAt: UPDATED_AT,
   };
   const requests: Request[] = [];
-  const publicPath = `/api/public/cfp/organizations/${DEFAULT_ORGANIZATION_ID}/events/${options.eventId}`;
+  const publicPath = `/api/public/cfp/organizations/${DEFAULT_ORGANIZATION_ID}/events/${eventSlug}`;
   const apiPath = `/api/cfp/organizations/${DEFAULT_ORGANIZATION_ID}/events/${options.eventId}`;
   const draftPath = `${apiPath}/submissions/${submission.id}/draft`;
 

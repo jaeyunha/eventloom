@@ -1,3 +1,4 @@
+import { getCfpStepRoute } from "../cfp/routes";
 import type {
   PortalAsset,
   PortalContext,
@@ -402,7 +403,7 @@ export function portalSubmissionEditTarget(
   const organizationId = context.id.split(":")[1]?.trim();
   if (!organizationId) return null;
   return {
-    href: `/cfp/${encodeURIComponent(eventSlug)}/submission`,
+    href: getCfpStepRoute(organizationId, eventSlug, "submission"),
     pointerKey: `open-sessionboard:cfp-submission:v1:${encodeURIComponent(
       organizationId,
     )}:${encodeURIComponent(context.eventId)}:${encodeURIComponent(submission.formId)}`,

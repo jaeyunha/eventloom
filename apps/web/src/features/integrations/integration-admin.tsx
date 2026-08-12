@@ -22,6 +22,7 @@ type SupportedIntegrationSection = "overview" | "api-keys" | "webhooks" | "deliv
 
 export interface IntegrationAdminProps {
   readonly eventId: string;
+  readonly organizationId: string;
   readonly section: SupportedIntegrationSection;
   readonly initialSnapshot?: IntegrationAdminSnapshot;
   readonly api?: IntegrationAdminApi;
@@ -58,6 +59,7 @@ function messageFrom(error: unknown): string {
 
 export function IntegrationAdmin({
   eventId,
+  organizationId,
   section,
   initialSnapshot,
   api: injectedApi,
@@ -80,7 +82,7 @@ export function IntegrationAdmin({
     async (signal?: AbortSignal) => {
       setLoadError(null);
       try {
-        setSnapshot(await api.getSnapshot(eventId, signal));
+        setSnapshot(await api.getSnapshot(organizationId, eventId, signal));
       } catch (error) {
         if (!(error instanceof DOMException && error.name === "AbortError")) {
           setLoadError(messageFrom(error));
@@ -91,7 +93,7 @@ export function IntegrationAdmin({
         }
       }
     },
-    [api, eventId],
+    [api, eventId, organizationId],
   );
 
   useEffect(() => {
@@ -121,17 +123,17 @@ export function IntegrationAdmin({
 
   const refreshAfter = useCallback(async () => {
     try {
-      setSnapshot(await api.getSnapshot(eventId));
+      setSnapshot(await api.getSnapshot(organizationId, eventId));
     } catch (error) {
       setMutationError(`The change was saved, but status could not refresh: ${messageFrom(error)}`);
     }
-  }, [api, eventId]);
+  }, [api, eventId, organizationId]);
 
   const actions = {
     busy,
     async saveCredential(provider: "opensend", secret: string) {
       const saved = await mutate(
-        () => api.saveCredential({ eventId, provider, secret }),
+        () => api.saveCredential({ organizationId, eventId, provider, secret }),
         "OpenSend credential saved.",
       );
       if (saved === null) {
@@ -142,11 +144,11 @@ export function IntegrationAdmin({
     },
     async createApiKey(
       input: Parameters<IntegrationAdminApi["createApiKey"]>[0] extends infer P
-        ? Omit<Extract<P, object>, "eventId">
+        ? Omit<Extract<P, object>, "organizationId" | "eventId">
         : never,
     ) {
       const secret = await mutate(
-        () => api.createApiKey({ ...input, eventId }),
+        () => api.createApiKey({ ...input, organizationId, eventId }),
         "API key created. Copy it before leaving this page.",
       );
       if (!secret) {
@@ -157,7 +159,10 @@ export function IntegrationAdmin({
       return true;
     },
     async revokeApiKey(apiKeyId: string) {
-      const revoked = await mutate(() => api.revokeApiKey(eventId, apiKeyId), "API key revoked.");
+      const revoked = await mutate(
+        () => api.revokeApiKey(organizationId, eventId, apiKeyId),
+        "API key revoked.",
+      );
       if (revoked === null) {
         return false;
       }
@@ -166,11 +171,11 @@ export function IntegrationAdmin({
     },
     async createWebhook(
       input: Parameters<IntegrationAdminApi["createWebhook"]>[0] extends infer P
-        ? Omit<Extract<P, object>, "eventId">
+        ? Omit<Extract<P, object>, "organizationId" | "eventId">
         : never,
     ) {
       const secret = await mutate(
-        () => api.createWebhook({ ...input, eventId }),
+        () => api.createWebhook({ ...input, organizationId, eventId }),
         "Webhook endpoint created. Copy its signing secret now.",
       );
       if (!secret) {
@@ -182,7 +187,7 @@ export function IntegrationAdmin({
     },
     async setWebhookActive(subscriptionId: string, active: boolean) {
       const updated = await mutate(
-        () => api.setWebhookActive(eventId, subscriptionId, active),
+        () => api.setWebhookActive(organizationId, eventId, subscriptionId, active),
         active ? "Webhook deliveries resumed." : "Webhook deliveries paused.",
       );
       if (updated === null) {
@@ -193,7 +198,7 @@ export function IntegrationAdmin({
     },
     async rotateWebhookSecret(subscriptionId: string) {
       const secret = await mutate(
-        () => api.rotateWebhookSecret(eventId, subscriptionId),
+        () => api.rotateWebhookSecret(organizationId, eventId, subscriptionId),
         "Signing secret rotated. Update the endpoint before dismissing it.",
       );
       if (!secret) {
@@ -205,7 +210,7 @@ export function IntegrationAdmin({
     },
     async deleteWebhook(subscriptionId: string) {
       const removed = await mutate(
-        () => api.deleteWebhook(eventId, subscriptionId),
+        () => api.deleteWebhook(organizationId, eventId, subscriptionId),
         "Webhook endpoint removed.",
       );
       if (removed === null) {
@@ -216,7 +221,7 @@ export function IntegrationAdmin({
     },
     async retryCalendarDelivery(deliveryId: string) {
       const retried = await mutate(
-        () => api.retryCalendarDelivery(eventId, deliveryId),
+        () => api.retryCalendarDelivery(organizationId, eventId, deliveryId),
         "Calendar delivery queued for retry.",
       );
       if (retried === null) {
@@ -227,7 +232,8 @@ export function IntegrationAdmin({
     },
   };
 
-  const base = `/admin/events/${encodeURIComponent(eventId)}/integrations`;
+  const eventBase = `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}`;
+  const base = `${eventBase}/integrations`;
   const tabs: readonly {
     readonly section: SupportedIntegrationSection;
     readonly label: string;
@@ -248,9 +254,7 @@ export function IntegrationAdmin({
       <nav className={styles.breadcrumbs} aria-label="Breadcrumb">
         <a href="/admin">Events</a>
         <span aria-hidden="true">/</span>
-        <a href={`/admin/events/${encodeURIComponent(eventId)}`}>
-          {snapshot?.event.name ?? "Event"}
-        </a>
+        <a href={eventBase}>{snapshot?.event.name ?? "Event"}</a>
         <span aria-hidden="true">/</span>
         <span>Integrations</span>
       </nav>
@@ -315,7 +319,7 @@ export function IntegrationAdmin({
 
         {snapshot ? (
           section === "overview" ? (
-            <OverviewSection snapshot={snapshot} />
+            <OverviewSection basePath={base} snapshot={snapshot} />
           ) : section === "api-keys" ? (
             <ApiKeysSection keys={snapshot.apiKeys} actions={actions} />
           ) : section === "webhooks" ? (

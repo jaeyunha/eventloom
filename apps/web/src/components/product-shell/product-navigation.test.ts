@@ -1,11 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const requiredRoutes = [
-  ["Call for speakers", "/cfp/devflow-conf-2027"],
-  ["Public program", "/embed/devflow-conf-2027/sessions"],
-  ["Sign in", "/login"],
-] as const;
+const requiredRoutes = [["Sign in", "/login"]] as const;
 
 const navigationSource = readFileSync(new URL("./product-navigation.tsx", import.meta.url), "utf8");
 const homePageSource = readFileSync(new URL("../../app/page.tsx", import.meta.url), "utf8");
@@ -38,7 +34,7 @@ describe("Home", () => {
     expect(homePageSource).toContain("Human-authoritative review");
     expect(homePageSource).toContain("Conflict-safe scheduling");
     expect(homePageSource).toContain("explicitly published");
-    expect(homePageSource).toContain("Accepted speakers return to the");
+    expect(homePageSource).toContain("Organizers share event-specific CFP");
     expect(homePageSource).not.toContain("/docs/api");
     expect(homePageSource).not.toContain("NEXT_PUBLIC_API_URL");
   });

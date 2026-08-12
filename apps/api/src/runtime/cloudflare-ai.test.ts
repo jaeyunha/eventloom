@@ -77,9 +77,10 @@ function productionBindings(ai: CloudflareAiBinding): RuntimeBindings {
     BETTER_AUTH_SECRET: "runtime-secret-that-is-at-least-32-characters-long",
     OPENSEND_API_URL: "https://opensend.namuh.co",
     OPENSEND_API_KEY: "opensend-api-key",
+    CACHE_INVALIDATION_URL:
+      "https://open-sessionboard-web-production.ashleyha0317.workers.dev/api/internal/cache-invalidation",
+    CACHE_INVALIDATION_TOKEN: "shared-cache-invalidation-token",
     AUTH_FROM_EMAIL: "auth@sessionboard.namuh.co",
-    ORGANIZER_AUTOJOIN_DOMAINS: "swyx.io,ai.engineer",
-    ORGANIZER_AUTOJOIN_ORGANIZATION_ID: "ai-engineer",
     AI: ai,
     AI_MODEL: MODEL,
     AI_PROVIDER: "cloudflare",

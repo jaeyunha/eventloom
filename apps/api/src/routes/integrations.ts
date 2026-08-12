@@ -74,17 +74,33 @@ export interface IntegrationWebhookDelivery {
 }
 
 export interface IntegrationAdminRouteDependencies {
-  readonly getEvent: (eventId: string) => Promise<IntegrationEvent | null>;
-  readonly getDeliveryStatus: (eventId: string) => Promise<IntegrationDeliveryStatus>;
-  readonly saveCredential: (eventId: string, provider: "opensend", secret: string) => Promise<void>;
-  readonly listApiKeys: (eventId: string) => Promise<readonly IntegrationApiKeySummary[]>;
+  readonly getEvent: (organizationId: string, eventId: string) => Promise<IntegrationEvent | null>;
+  readonly getDeliveryStatus: (
+    organizationId: string,
+    eventId: string,
+  ) => Promise<IntegrationDeliveryStatus>;
+  readonly saveCredential: (
+    organizationId: string,
+    eventId: string,
+    provider: "opensend",
+    secret: string,
+  ) => Promise<void>;
+  readonly listApiKeys: (
+    organizationId: string,
+    eventId: string,
+  ) => Promise<readonly IntegrationApiKeySummary[]>;
   readonly createApiKey: (input: {
+    readonly organizationId: string;
     readonly eventId: string;
     readonly label: string;
     readonly scopes: readonly ApiScope[];
     readonly expiresAt: string | null;
   }) => Promise<IntegrationApiKeyCreation>;
-  readonly revokeApiKey: (eventId: string, apiKeyId: string) => Promise<boolean>;
+  readonly revokeApiKey: (
+    organizationId: string,
+    eventId: string,
+    apiKeyId: string,
+  ) => Promise<boolean>;
   readonly webhooks: WebhookSubscriptionRepository;
   readonly getWebhookLastDelivery?: (
     eventId: string,
@@ -119,6 +135,7 @@ class IntegrationRouteError extends Error {
 }
 
 const eventIdSchema = z.string().trim().min(1).max(200);
+const organizationIdSchema = z.string().trim().min(1).max(200);
 const providerSchema = z.literal("opensend");
 const credentialSchema = z.object({ secret: z.string().trim().min(1).max(512) }).strict();
 const apiScopeSchema = z.enum(apiScopes);
@@ -187,6 +204,18 @@ function requiredEventId(context: IntegrationContext): string {
   return parsed.data;
 }
 
+function requiredOrganizationId(context: IntegrationContext): string {
+  const parsed = organizationIdSchema.safeParse(context.req.param("organizationId"));
+  if (!parsed.success) {
+    throw new IntegrationRouteError(
+      "VALIDATION_FAILED",
+      "The organization path parameter is invalid.",
+      400,
+    );
+  }
+  return parsed.data;
+}
+
 function requireOrganizer(context: IntegrationContext): AuthPrincipal {
   const principal = context.get("authPrincipal");
   if (principal === null) {
@@ -200,11 +229,12 @@ async function eventFor(
   dependencies: IntegrationAdminRouteDependencies,
 ): Promise<IntegrationEvent> {
   const principal = requireOrganizer(context);
-  const event = await dependencies.getEvent(requiredEventId(context));
+  const organizationId = requiredOrganizationId(context);
+  const event = await dependencies.getEvent(organizationId, requiredEventId(context));
   if (event === null) {
     throw new IntegrationRouteError("NOT_FOUND", "The event was not found.", 404);
   }
-  requireOrganizationRole(principal, event.organizationId, ["owner", "admin"]);
+  requireOrganizationRole(principal, organizationId, ["owner", "admin"]);
   return event;
 }
 
@@ -258,7 +288,7 @@ async function findWebhook(
   return subscription;
 }
 
-/** Organizer-only event integration settings. Mount at `/api/admin/events/:eventId`. */
+/** Organizer-only event integration settings. Mount at the organization-qualified event path. */
 export function createIntegrationAdminRoutes(
   dependencies: IntegrationAdminRouteDependencies,
 ): Hono<IntegrationRouteEnvironment> {
@@ -267,8 +297,8 @@ export function createIntegrationAdminRoutes(
   routes.get("/integrations", async (context) => {
     const event = await eventFor(context, dependencies);
     const [delivery, apiKeys, subscriptions] = await Promise.all([
-      dependencies.getDeliveryStatus(event.id),
-      dependencies.listApiKeys(event.id),
+      dependencies.getDeliveryStatus(event.organizationId, event.id),
+      dependencies.listApiKeys(event.organizationId, event.id),
       dependencies.webhooks.listSubscriptions(event.organizationId),
     ]);
     const eventSubscriptions = subscriptions.filter(
@@ -312,7 +342,7 @@ export function createIntegrationAdminRoutes(
       await requestBody(context),
       "The credential payload is invalid.",
     );
-    await dependencies.saveCredential(event.id, provider, body.secret);
+    await dependencies.saveCredential(event.organizationId, event.id, provider, body.secret);
     return context.body(null, 204);
   });
 
@@ -323,7 +353,11 @@ export function createIntegrationAdminRoutes(
       await requestBody(context),
       "The API key payload is invalid.",
     );
-    const created = await dependencies.createApiKey({ eventId: event.id, ...body });
+    const created = await dependencies.createApiKey({
+      organizationId: event.organizationId,
+      eventId: event.id,
+      ...body,
+    });
     return context.json({ data: { id: created.summary.id, secret: created.secret } }, 201);
   });
 
@@ -332,7 +366,7 @@ export function createIntegrationAdminRoutes(
     const apiKeyId = context.req.param("apiKeyId")?.trim();
     if (!apiKeyId)
       throw new IntegrationRouteError("VALIDATION_FAILED", "The API key id is required.", 400);
-    if (!(await dependencies.revokeApiKey(event.id, apiKeyId))) {
+    if (!(await dependencies.revokeApiKey(event.organizationId, event.id, apiKeyId))) {
       throw new IntegrationRouteError("NOT_FOUND", "The API key was not found.", 404);
     }
     return context.body(null, 204);

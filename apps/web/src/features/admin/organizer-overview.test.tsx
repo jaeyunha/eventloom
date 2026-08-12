@@ -4,6 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   AdminShell,
   eventNavigationFor,
+  organizerOrganizationIdFromSession,
+  organizerOrganizationIdsFromSession,
   qualifiedEventContext,
   sessionHasOrganizerMembership,
 } from "./admin-shell";
@@ -12,13 +14,14 @@ import {
   createOrganizerEventsApi,
   createOrganizerOverviewApi,
   eventIntersectsCalendarDate,
+  eventStatusClass,
   getCalendarMonthCells,
   initialCalendarMonth,
   type OrganizerEventFormValues,
   type OrganizerEventRecord,
+  OrganizerEventsView,
   type OrganizerOverviewActivityData,
   type OrganizerOverviewCoreData,
-  OrganizerEventsView,
   OrganizerOverviewView,
   parseOrganizerEventsResponse,
   parseOrganizerOverviewActivityResponse,
@@ -26,8 +29,11 @@ import {
   resolveOrganizerOverviewConfig,
   validateOrganizerEventForm,
 } from "./organizer-overview";
+
+const mockedPathname = vi.hoisted(() => ({ value: "/admin" }));
+
 vi.mock("next/navigation", () => ({
-  usePathname: () => "/admin",
+  usePathname: () => mockedPathname.value,
 }));
 
 const loadedCore: OrganizerOverviewCoreData = {
@@ -129,6 +135,11 @@ describe("organizer overview", () => {
     expect(output).toContain("/admin/organizations/ai-engineer/events/event-live/settings");
     expect(output).not.toContain("Keep your program moving");
     expect(output).not.toContain("Summit 2026");
+  });
+
+  it("presents active events with the same live status treatment as published events", () => {
+    expect(eventStatusClass("active")).toBe(eventStatusClass("published"));
+    expect(eventStatusClass("active")).not.toBe(eventStatusClass("archived"));
   });
 
   it("renders explicit empty states for events and action items", () => {
@@ -241,39 +252,13 @@ describe("organizer overview", () => {
     expect(output).toContain("Retry activity");
   });
 
-  it("uses local-organization only for local configuration", () => {
-    expect(
-      resolveOrganizerOverviewConfig({
-        NEXT_PUBLIC_APP_ENV: "local",
-      }),
-    ).toEqual({
+  it("requires an authenticated organization instead of an environment tenant default", () => {
+    expect(resolveOrganizerOverviewConfig("org-owner")).toEqual({
       apiBaseUrl: "",
-      organizationId: "local-organization",
+      organizationId: "org-owner",
     });
-    expect(
-      resolveOrganizerOverviewConfig({
-        NEXT_PUBLIC_APP_ENV: "local",
-        NEXT_PUBLIC_ORGANIZATION_ID: "ai-engineer",
-      }),
-    ).toEqual({
-      apiBaseUrl: "",
-      organizationId: "ai-engineer",
-    });
-    expect(
-      resolveOrganizerOverviewConfig({
-        NEXT_PUBLIC_APP_ENV: "production",
-        NEXT_PUBLIC_ORGANIZATION_ID: "ai-engineer",
-      }),
-    ).toEqual({
-      apiBaseUrl: "",
-      organizationId: "ai-engineer",
-    });
-    expect(
-      resolveOrganizerOverviewConfig({
-        NEXT_PUBLIC_APP_ENV: "production",
-      }),
-    ).toMatchObject({
-      error: expect.stringContaining("NEXT_PUBLIC_ORGANIZATION_ID"),
+    expect(resolveOrganizerOverviewConfig(undefined)).toMatchObject({
+      error: expect.stringContaining("authenticated organizer membership"),
     });
   });
 
@@ -585,6 +570,7 @@ describe("admin navigation", () => {
       ["Reports", "/admin/organizations/org%2Flive/events/event%2Flive/reports"],
       ["Content remix", "/admin/organizations/org%2Flive/events/event%2Flive/remix"],
       ["Embeds", "/admin/organizations/org%2Flive/events/event%2Flive/embeds"],
+      ["Integrations", "/admin/organizations/org%2Flive/events/event%2Flive/integrations"],
     ] as const;
 
     expect(items.map((item) => [item.label, item.href])).toEqual(expected);
@@ -605,21 +591,11 @@ describe("admin navigation", () => {
   });
 
   it("keeps organization Members available outside and inside an event", () => {
-    const previousOrganizationId = process.env.NEXT_PUBLIC_ORGANIZATION_ID;
-    process.env.NEXT_PUBLIC_ORGANIZATION_ID = "ai-engineer";
-    try {
-      expect(eventNavigationFor(null).map((item) => item.label)).toEqual([
-        "Overview",
-        "Events",
-        "Members",
-      ]);
-    } finally {
-      if (previousOrganizationId === undefined) {
-        delete process.env.NEXT_PUBLIC_ORGANIZATION_ID;
-      } else {
-        process.env.NEXT_PUBLIC_ORGANIZATION_ID = previousOrganizationId;
-      }
-    }
+    expect(eventNavigationFor(null, "ai-engineer").map((item) => item.label)).toEqual([
+      "Overview",
+      "Events",
+      "Members",
+    ]);
 
     expect(
       eventNavigationFor({
@@ -635,15 +611,41 @@ describe("admin navigation", () => {
     ).toEqual({ organizationId: "org/live", eventId: "event/live" });
     expect(qualifiedEventContext("/admin/events/event-live/agenda")).toBeNull();
   });
-  it("mounts protected page content while organizer access is still being checked", () => {
+  it("does not mount protected page content while organizer access is still being checked", () => {
+    mockedPathname.value = "/admin";
     const output = renderToStaticMarkup(
       createElement(AdminShell, null, createElement("p", null, "Primary organizer content")),
     );
 
     expect(output).toContain("Open Sessionboard");
-    expect(output).toContain("Primary organizer content");
+    expect(output).toContain("Workspace");
+    expect(output).not.toContain("Program operations");
+    expect(output).not.toContain("Publish &amp; measure");
+    expect(output).toContain("Search or jump to");
+    expect(output).toContain('aria-keyshortcuts="Meta+K Control+K"');
+    expect(output).not.toContain("Primary organizer content");
     expect(output).toContain('aria-busy="true"');
     expect(output).toContain("Checking organizer access");
+  });
+  it("groups event-scoped navigation by organizer workflow", () => {
+    mockedPathname.value = "/admin/organizations/ai-engineer/events/event-live/agenda";
+    try {
+      const output = renderToStaticMarkup(
+        createElement(AdminShell, null, createElement("p", null, "Event workspace content")),
+      );
+
+      expect(output).toContain("Workspace");
+      expect(output).toContain("Program operations");
+      expect(output).toContain("People &amp; content");
+      expect(output).toContain("Publish &amp; measure");
+      expect(output).toContain("Integrations");
+      expect(output).toContain("/admin/organizations/ai-engineer/events/event-live/agenda");
+      expect(output).toContain("/admin/organizations/ai-engineer/events/event-live/integrations");
+      expect(output).not.toContain("Event workspace content");
+      expect(output).toContain("Checking organizer access");
+    } finally {
+      mockedPathname.value = "/admin";
+    }
   });
   it("accepts only owner or admin membership for the selected organization", () => {
     const session = {
@@ -660,5 +662,22 @@ describe("admin navigation", () => {
     expect(sessionHasOrganizerMembership(session, "org-speaker")).toBe(false);
     expect(sessionHasOrganizerMembership(session, "other-org")).toBe(false);
     expect(sessionHasOrganizerMembership(session, null)).toBe(true);
+  });
+  it("selects the organization from owner or admin session memberships", () => {
+    const session = {
+      user: { id: "user-1" },
+      memberships: [
+        { organizationId: "org-reviewer", role: "reviewer" },
+        { organizationId: "org-owner", role: "owner" },
+        { organizationId: "org-admin", role: "admin" },
+      ],
+    };
+
+    expect(organizerOrganizationIdFromSession(session, null)).toBe("org-admin");
+    expect(organizerOrganizationIdsFromSession(session)).toEqual(["org-admin", "org-owner"]);
+    expect(organizerOrganizationIdFromSession(session, null, "org-admin")).toBe("org-admin");
+    expect(organizerOrganizationIdFromSession(session, "org-admin")).toBe("org-admin");
+    expect(organizerOrganizationIdFromSession(session, "org-reviewer")).toBeNull();
+    expect(organizerOrganizationIdFromSession(session, "other-org")).toBeNull();
   });
 });

@@ -378,15 +378,6 @@ interface RowKeyState<T extends object> {
   nextId: number;
 }
 
-function stableRowKey<T extends object>(state: RowKeyState<T>, prefix: string, row: T): string {
-  const existing = state.map.get(row);
-  if (existing !== undefined) return existing;
-  const key = `${prefix}-${state.nextId}`;
-  state.nextId += 1;
-  state.map.set(row, key);
-  return key;
-}
-
 function carryRowKey<T extends object>(state: RowKeyState<T>, previous: T, next: T): void {
   const existing = state.map.get(previous);
   if (existing !== undefined) state.map.set(next, existing);

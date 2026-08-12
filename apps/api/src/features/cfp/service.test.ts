@@ -160,6 +160,13 @@ class MemoryRepository implements CfpRepository {
     return found?.tenantId === tenantId ? structuredClone(found) : null;
   }
 
+  async getEventBySlug(tenantId: string, eventSlug: string): Promise<EventCfp | null> {
+    const found = [...this.events.values()].find(
+      (candidate) => candidate.tenantId === tenantId && candidate.slug === eventSlug,
+    );
+    return found === undefined ? null : structuredClone(found);
+  }
+
   async saveEvent(value: EventCfp, expectedVersion: number | null): Promise<void> {
     const current = this.events.get(value.id);
     if ((current?.version ?? null) !== expectedVersion) {
@@ -571,6 +578,38 @@ describe("CFP rules and configuration", () => {
     ]);
     expect(published.form.settings).not.toHaveProperty("adminNotificationsEnabled");
     expect(published.form.settings).not.toHaveProperty("remindersEnabled");
+  });
+
+  it("resolves a public CFP by organization-scoped slug and returns canonical IDs", async () => {
+    const { service } = createFixture();
+
+    const published = await service.getPublishedCfp({
+      tenantId: "tenant_1",
+      eventSlug: "future-conf",
+    });
+
+    expect(published.event).toMatchObject({ id: "event_1", slug: "future-conf" });
+    expect(published.form.id).toBe("form_1");
+    await expect(
+      service.getPublishedCfp({ tenantId: "tenant_2", eventSlug: "future-conf" }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("fails closed when a public event has multiple published forms", async () => {
+    const { service, repository } = createFixture();
+    const second = buildForm({ id: "form_2", name: "Secondary CFP" });
+    repository.forms.set(second.id, second);
+
+    await expect(
+      service.getPublishedCfp({ tenantId: "tenant_1", eventSlug: "future-conf" }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(
+      service.getPublishedCfp({
+        tenantId: "tenant_1",
+        eventSlug: "future-conf",
+        formId: "form_1",
+      }),
+    ).resolves.toMatchObject({ form: { id: "form_1" } });
   });
 
   it("authorizes reusable field versions within the tenant", async () => {

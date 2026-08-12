@@ -187,8 +187,8 @@ import type {
   SpeakerTaskFormDefinition,
   SpeakerTaskRepositoryCommand,
   SpeakerTaskResponseRecord,
-  SpeakerWikiPage,
   SpeakerTravelLogistics,
+  SpeakerWikiPage,
   TransitionSpeakerTaskCommand,
   UpdateBiographyCommand,
   UpdateSpeakerContentCommand,
@@ -4989,6 +4989,14 @@ export class AirtableCfpRepository implements CfpRepository {
     if (raw === undefined) return null;
     const event = cfpEventFromRecord(raw as unknown as JsonRecord);
     return event.tenantId === tenantId ? event : null;
+  }
+
+  async getEventBySlug(tenantId: string, eventSlug: string): Promise<EventCfp | null> {
+    const records = await this.#events.list();
+    const event = records
+      .map((record) => cfpEventFromRecord(record as unknown as JsonRecord))
+      .find((candidate) => candidate.tenantId === tenantId && candidate.slug === eventSlug);
+    return event ?? null;
   }
 
   async saveEvent(event: EventCfp, expectedVersion: number | null): Promise<void> {

@@ -18,7 +18,9 @@ import {
 
 describe("CFP editor", () => {
   it("renders an accessible organizer hierarchy and labeled seeded controls", () => {
-    const markup = renderToStaticMarkup(createElement(CfpEditor, { eventId: "summit-2026" }));
+    const markup = renderToStaticMarkup(
+      createElement(CfpEditor, { eventId: "summit-2026", organizationId: "organization-1" }),
+    );
 
     expect(markup).toContain("<h1>Configure your call for proposals</h1>");
     expect(markup).toContain('id="event-details-heading">Event details</h2>');
@@ -30,7 +32,9 @@ describe("CFP editor", () => {
     expect(markup).toContain("2026-03-31");
   });
   it("renders one responsive section navigator and an explicit publish confirmation", () => {
-    const markup = renderToStaticMarkup(createElement(CfpEditor, { eventId: "summit-2026" }));
+    const markup = renderToStaticMarkup(
+      createElement(CfpEditor, { eventId: "summit-2026", organizationId: "organization-1" }),
+    );
 
     expect(markup).toContain('aria-label="CFP workspace sections"');
     expect(markup).toContain('aria-current="location"');
@@ -41,7 +45,9 @@ describe("CFP editor", () => {
   });
 
   it("exposes useful limits and applicant-facing configuration controls", () => {
-    const markup = renderToStaticMarkup(createElement(CfpEditor, { eventId: "summit-2026" }));
+    const markup = renderToStaticMarkup(
+      createElement(CfpEditor, { eventId: "summit-2026", organizationId: "organization-1" }),
+    );
 
     expect(markup).toContain('id="participant-limit"');
     expect(markup).toContain('max="15"');
@@ -65,7 +71,9 @@ describe("CFP editor", () => {
     );
     expect(isCfpCloseDatePast("2026-08-01", new Date("2026-08-10T00:00:00.000Z"))).toBe(true);
 
-    const markup = renderToStaticMarkup(createElement(CfpEditor, { eventId: "summit-2026" }));
+    const markup = renderToStaticMarkup(
+      createElement(CfpEditor, { eventId: "summit-2026", organizationId: "organization-1" }),
+    );
     expect(markup).toContain("Public visitors see the closed portal");
     expect(markup).toContain('id="confirm-past-close"');
   });
@@ -147,7 +155,9 @@ describe("CFP editor", () => {
   });
 
   it("shows nested AND/OR condition logic in the rule preview", () => {
-    const markup = renderToStaticMarkup(createElement(CfpEditor, { eventId: "summit-2026" }));
+    const markup = renderToStaticMarkup(
+      createElement(CfpEditor, { eventId: "summit-2026", organizationId: "organization-1" }),
+    );
 
     expect(
       summarizeRule({
@@ -175,7 +185,9 @@ describe("CFP editor", () => {
   });
 
   it("renders a semantic public form preview that mirrors seeded copy and options", () => {
-    const markup = renderToStaticMarkup(createElement(CfpEditor, { eventId: "summit-2026" }));
+    const markup = renderToStaticMarkup(
+      createElement(CfpEditor, { eventId: "summit-2026", organizationId: "organization-1" }),
+    );
 
     expect(markup).toContain('<h2 id="public-preview-heading">Public form preview</h2>');
     expect(markup).toContain('aria-label="Public CFP form preview"');

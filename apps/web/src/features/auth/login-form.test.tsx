@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import {
   createLoginApi,
+  getLoginCallbackUrl,
   LoginForm,
   LoginRequestError,
   resolveLoginConfig,
@@ -71,6 +72,26 @@ describe("organizer login", () => {
       email: "organizer@example.com",
       callbackURL: "https://app.example.com/admin",
     });
+  });
+
+  it("returns password and magic-link authentication to the scoped CFP account route", async () => {
+    const accountRoute = "/cfp/organizations/org-1/events/devflow-conf-2027/account";
+    expect(safeLoginReturnTo(accountRoute)).toBe(accountRoute);
+    expect(getLoginCallbackUrl("https://app.example.com/", accountRoute)).toBe(
+      `https://app.example.com${accountRoute}`,
+    );
+    expect(
+      resolveLoginLandingRoute(
+        {
+          session: { id: "session-1" },
+          user: { id: "user-1" },
+          memberships: [],
+          speakerGrants: [],
+        },
+        accountRoute,
+      ),
+    ).toBe(accountRoute);
+    expect(safeLoginReturnTo("/cfp/devflow-conf-2027/account")).toBe("/admin");
   });
 
   it("classifies magic-link network and server failures consistently", async () => {
@@ -145,7 +166,7 @@ describe("organizer login", () => {
     });
   });
 
-  it("rejects non-swyx organizer signup addresses before making a request", async () => {
+  it("allows any valid work email while leaving organization access to memberships", async () => {
     vi.stubEnv("NEXT_PUBLIC_APP_ENV", "staging");
     try {
       let requestCount = 0;
@@ -155,13 +176,11 @@ describe("organizer login", () => {
       }) as typeof fetch);
 
       for (const email of ["host@example.com", "host@sub.swyx.io", "host@swyx.io.attacker"]) {
-        const failure = await api
-          .signUpWithEmail({ name: "Host", email, password: "Passw0rd!" })
-          .catch((error: unknown) => error);
-        expect(failure).toMatchObject({ kind: "organization-domain" });
-        expect((failure as Error).message).toContain("swyx.io");
+        await expect(
+          api.signUpWithEmail({ name: "Host", email, password: "Passw0rd!" }),
+        ).resolves.toEqual({ verificationRequired: true });
       }
-      expect(requestCount).toBe(0);
+      expect(requestCount).toBe(3);
     } finally {
       vi.unstubAllEnvs();
     }
@@ -232,9 +251,9 @@ describe("organizer login", () => {
     expect(
       resolveLoginLandingRoute(
         { memberships: [], speakerGrants: [] },
-        "/cfp/devflow-conf-2027/account",
+        "/cfp/organizations/ai-engineer/events/devflow-conf-2027/account",
       ),
-    ).toBe("/cfp/devflow-conf-2027/account");
+    ).toBe("/cfp/organizations/ai-engineer/events/devflow-conf-2027/account");
     expect(safeLoginReturnTo("https://evil.example")).toBe("/admin");
     expect(safeLoginReturnTo("//evil.example")).toBe("/admin");
   });
@@ -281,7 +300,7 @@ describe("organizer login", () => {
     expect(markup).toContain("Sign in to Open Sessionboard");
     expect(markup).toContain("Organizers");
     expect(markup).toContain("Reviewers");
-    expect(markup).toContain("CFP applicants create accounts through the CFP");
+    expect(markup).toContain("CFP applicants create accounts from the event-specific application");
     expect(markup).not.toContain("Welcome back to the program desk.");
     expect(markup).not.toContain("01");
     expect(markup).not.toContain("Google");
@@ -297,7 +316,9 @@ describe("organizer login", () => {
     expect(markup).toContain('for="login-name"');
     expect(markup).toContain('autoComplete="new-password"');
     expect(markup).toContain("Sign in");
-    expect(markup).toContain("Use your verified swyx.io or ai.engineer email to join ai-engineer.");
+    expect(markup).toContain(
+      "Use your work email. Organization access is granted by an owner or administrator.",
+    );
     expect(markup).not.toContain("Google");
     expect(markup).not.toContain("Email me a magic link");
   });

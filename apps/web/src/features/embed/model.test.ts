@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   embedTheme,
+  escapeXmlValue,
   filterAgendaEntries,
   filterSpeakers,
   formatPublishedDateTimeRange,
+  parseEmbedQuery,
   publicAgendaDays,
   publicPhotoUrl,
   publishedEntryPresenters,
+  serializeEmbedQuery,
   sortSpeakersBySurname,
   speakerInitials,
   speakerSurname,
@@ -243,5 +246,162 @@ describe("published embed model", () => {
       publicPhotoUrl("https://assets.example.test/private/speaker.webp?signature=secret"),
     ).toBeNull();
     expect(publicPhotoUrl("http://assets.example.test/public/speaker.webp")).toBeNull();
+  });
+
+  it("allows same-origin /api/public/... relative published headshot URLs", () => {
+    expect(publicPhotoUrl("/api/public/events/open-systems/speakers/speaker_morgan/headshot")).toBe(
+      "/api/public/events/open-systems/speakers/speaker_morgan/headshot",
+    );
+  });
+
+  it("rejects same-origin URLs with query strings, credentials, fragments, or private paths", () => {
+    expect(publicPhotoUrl("/api/private/events/open-systems/raw-uploads/headshot")).toBeNull();
+    expect(publicPhotoUrl("/api/public/events/open-systems/headshot?token=secret")).toBeNull();
+    expect(publicPhotoUrl("/api/public/events/open-systems/headshot#main")).toBeNull();
+    expect(publicPhotoUrl("//attacker.test/api/public/events/open-systems/headshot")).toBeNull();
+    expect(
+      publicPhotoUrl("https://sessionboard.test/api/public/events/open-systems/headshot"),
+    ).toBeNull();
+  });
+});
+
+describe("embed query parser", () => {
+  it("returns defaults when no query is provided", () => {
+    expect(parseEmbedQuery({})).toEqual({
+      theme: "auto",
+      layout: null,
+      displayFields: null,
+      tracks: [],
+      accent: null,
+      backgroundColor: null,
+      textColor: null,
+    });
+  });
+
+  it("parses theme, layout, color tokens, and tracks from a Next.js-style query", () => {
+    expect(
+      parseEmbedQuery({
+        theme: "dark",
+        layout: "timeline",
+        accent: "#4f46e5",
+        backgroundColor: "#ffffff",
+        textColor: "#20232b",
+        tracks: ["Main stage", "Build"],
+      }),
+    ).toEqual({
+      theme: "dark",
+      layout: "timeline",
+      displayFields: null,
+      tracks: ["Main stage", "Build"],
+      accent: "#4f46e5",
+      backgroundColor: "#ffffff",
+      textColor: "#20232b",
+    });
+  });
+
+  it("parses the same query through a URLSearchParams input", () => {
+    const params = new URLSearchParams();
+    params.set("theme", "light");
+    params.set("layout", "grid");
+    params.set("accent", "#4f5ee8");
+    params.set("tracks", "Main stage,Build");
+    expect(parseEmbedQuery(params)).toEqual({
+      theme: "light",
+      layout: "grid",
+      displayFields: null,
+      tracks: ["Main stage", "Build"],
+      accent: "#4f5ee8",
+      backgroundColor: null,
+      textColor: null,
+    });
+  });
+
+  it("uses allowlists for theme, layout, color, and display fields", () => {
+    expect(parseEmbedQuery({ theme: "nope-such-theme" }).theme).toBe("auto");
+    expect(parseEmbedQuery({ layout: "nope" }).layout).toBeNull();
+    expect(
+      parseEmbedQuery({
+        accent: "red",
+        backgroundColor: "#abc",
+        textColor: "#000000000000",
+      }).accent,
+    ).toBeNull();
+    expect(parseEmbedQuery({ accent: "#4F46E5" }).accent).toBe("#4f46e5");
+    expect(
+      parseEmbedQuery({ displayFields: "title,date-time,company,unknown-field" }).displayFields,
+    ).toEqual(["title", "date-time", "company"]);
+  });
+
+  it("keeps required display fields even when omitted from the query", () => {
+    expect(parseEmbedQuery({ displayFields: "company" }).displayFields).toEqual([
+      "company",
+      "title",
+      "date-time",
+    ]);
+  });
+
+  it("defaults display fields to null (show all) when the query omits them", () => {
+    expect(parseEmbedQuery({ theme: "dark" }).displayFields).toBeNull();
+    expect(parseEmbedQuery({ theme: "dark", displayFields: "" }).displayFields).toEqual([
+      "title",
+      "date-time",
+    ]);
+  });
+
+  it("trims, dedupes, and rejects empty track tokens", () => {
+    expect(parseEmbedQuery({ tracks: "Build,, ,Build" }).tracks).toEqual(["Build"]);
+    expect(parseEmbedQuery({ tracks: ["Build"] }).tracks).toEqual(["Build"]);
+  });
+
+  it("drops unsupported internal workflow status filters", () => {
+    expect(parseEmbedQuery({ statuses: "Approved,Pending" }).tracks).toEqual([]);
+    const serialized = serializeEmbedQuery(parseEmbedQuery({ statuses: ["Approved"] }));
+    expect(serialized).toBe("");
+    expect(serialized).not.toContain("statuses");
+  });
+
+  it("does not preserve private or unsupported keys when serializing", () => {
+    const parsed = parseEmbedQuery({
+      theme: "dark",
+      layout: "timeline",
+      tracks: ["Main stage"],
+      customCss: "body { color: red; }",
+      navigation: "top",
+      view: "agenda",
+    });
+    const serialized = serializeEmbedQuery(parsed);
+    expect(serialized).toContain("theme=dark");
+    expect(serialized).toContain("layout=timeline");
+    expect(serialized).toContain("tracks=Main+stage");
+    expect(serialized).not.toContain("customCss");
+    expect(serialized).not.toContain("navigation");
+    expect(serialized).not.toContain("view=");
+  });
+
+  it("omits the auto theme and null defaults when serializing", () => {
+    expect(serializeEmbedQuery(parseEmbedQuery({}))).toBe("");
+    expect(serializeEmbedQuery(parseEmbedQuery({ theme: "auto" }))).toBe("");
+    expect(serializeEmbedQuery(parseEmbedQuery({ theme: "light" }))).toBe("?theme=light");
+  });
+
+  it("serializes display fields when explicitly provided", () => {
+    const parsed = parseEmbedQuery({ displayFields: "title,date-time,room" });
+    expect(serializeEmbedQuery(parsed)).toContain("displayFields=title%2Cdate-time%2Croom");
+  });
+});
+
+describe("XML escape for embed attributes", () => {
+  it("escapes ampersands, brackets, and quotes in attribute values", () => {
+    expect(escapeXmlValue("a&b")).toBe("a&amp;b");
+    expect(escapeXmlValue('"a"')).toBe("&quot;a&quot;");
+    expect(escapeXmlValue("<a>")).toBe("&lt;a&gt;");
+  });
+
+  it("escapes a full query-string URL so it stays well-formed in an attribute", () => {
+    const escaped = escapeXmlValue(
+      "https://sessionboard.example/embed/summit/agenda?theme=dark&layout=timeline&tracks=Main%20stage",
+    );
+    expect(escaped).toContain("theme=dark&amp;layout=timeline&amp;tracks=");
+    expect(escaped).not.toContain("&layout");
   });
 });

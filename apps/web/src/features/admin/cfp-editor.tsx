@@ -2,15 +2,6 @@
 
 import { type ChangeEvent, type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
-  type CfpFormField as ApiCfpFormField,
-  type CfpApi,
-  CfpApiError,
-  type CfpEventConfiguration,
-  type CfpFormConfiguration,
-  createCfpApi,
-} from "../cfp/api";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -20,6 +11,16 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import {
+  type CfpFormField as ApiCfpFormField,
+  type CfpApi,
+  CfpApiError,
+  type CfpEventConfiguration,
+  type CfpFormConfiguration,
+  createCfpApi,
+} from "../cfp/api";
+import { getCfpStepRoute } from "../cfp/routes";
 import styles from "./cfp-editor.module.css";
 
 type FieldType =
@@ -121,7 +122,8 @@ const SEEDED_CONFIGURATION: CfpConfiguration = {
   confirmationBody:
     "Thanks for sharing your idea. We will review every proposal and email you when the program moves forward.",
   successMessage: "Thanks — your proposal has been submitted successfully.",
-  redirectUrl: "https://open-sessionboard.local/cfp/summit-2026/complete",
+  redirectUrl:
+    "https://open-sessionboard.local/cfp/organizations/organization-1/events/summit-2026/complete",
   tracks: ["Product craft", "Community systems", "Responsible AI"],
   tags: ["Accessibility", "Leadership", "Open source", "Operations"],
   formats: ["Talk · 30 minutes", "Workshop · 60 minutes", "Panel · 45 minutes"],
@@ -251,7 +253,7 @@ function createEditorInitialConfiguration(eventId: string): CfpConfiguration {
   if (process.env.NODE_ENV === "test" || process.env.NEXT_PUBLIC_RUNTIME_PROFILE === "fixture") {
     return createSeededCfpConfiguration(eventId);
   }
-  const seeded = createSeededCfpConfiguration(eventId);
+  const seeded = createSeededCfpConfiguration("");
   return {
     ...seeded,
     eventName: "",
@@ -1052,7 +1054,7 @@ function RuleTree({ rule }: { rule: CfpRule }) {
 
 interface CfpEditorProps {
   eventId: string;
-  organizationId?: string;
+  organizationId: string;
   formId?: string;
   api?: CfpApi;
 }
@@ -1077,12 +1079,11 @@ export function CfpEditor({ eventId, organizationId, formId, api: providedApi }:
     level: "Introductory",
   });
   const [previewMessage, setPreviewMessage] = useState("");
+  const [authoritativeConfigLoaded, setAuthoritativeConfigLoaded] = useState(
+    process.env.NEXT_PUBLIC_RUNTIME_PROFILE === "fixture",
+  );
 
-  const fixtureMode =
-    process.env.NODE_ENV === "test" || process.env.NEXT_PUBLIC_RUNTIME_PROFILE === "fixture";
-  const explicitOrganizationId =
-    organizationId?.trim() || process.env.NEXT_PUBLIC_ORGANIZATION_ID?.trim();
-  const resolvedOrganizationId = explicitOrganizationId || (fixtureMode ? "organization-1" : "");
+  const resolvedOrganizationId = organizationId.trim();
   const requestedFormId = formId?.trim() || undefined;
   const resolvedFormId = requestedFormId ?? configuration.id;
   const dateValidationError = validateCfpDateRange(
@@ -1125,6 +1126,7 @@ export function CfpEditor({ eventId, organizationId, formId, api: providedApi }:
           formConfiguration = selectEditorForm(forms, resolvedOrganizationId, eventId);
         }
         if (!active) return;
+        setAuthoritativeConfigLoaded(true);
         if (formConfiguration !== undefined) {
           setConfiguration((current) =>
             configurationFromServer(current, eventConfiguration, formConfiguration),
@@ -1148,7 +1150,11 @@ export function CfpEditor({ eventId, organizationId, formId, api: providedApi }:
         });
       })
       .catch(() => {
-        if (active) setSaveState("error");
+        if (active) {
+          setAuthoritativeConfigLoaded(false);
+          setConfiguration((current) => ({ ...current, slug: "" }));
+          setSaveState("error");
+        }
       });
     return () => {
       active = false;
@@ -1464,6 +1470,27 @@ export function CfpEditor({ eventId, organizationId, formId, api: providedApi }:
   const selectedRuleField = ruleFields.find((field) => field.key === selectedRuleFieldKey);
   const selectedRuleOptions = fieldOptionValues(selectedRuleField);
 
+  if (!resolvedOrganizationId) {
+    return (
+      <div className={styles.viewport}>
+        <section className={styles.pageHeader} role="alert">
+          <div>
+            <p className={styles.eyebrow}>Organizer workspace</p>
+            <h1>Organization scope required</h1>
+            <p className={styles.pageIntro}>
+              Open this editor from an organization-qualified event route.
+            </p>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  const publicRoute =
+    authoritativeConfigLoaded && configuration.slug
+      ? getCfpStepRoute(resolvedOrganizationId, configuration.slug, "welcome")
+      : null;
+
   return (
     <div className={styles.viewport}>
       <header className={styles.pageHeader}>
@@ -1476,9 +1503,11 @@ export function CfpEditor({ eventId, organizationId, formId, api: providedApi }:
           </p>
         </div>
         <div className={styles.headerActions}>
-          <a className={styles.secondaryButton} href={`/cfp/${configuration.slug}`}>
-            View public form
-          </a>
+          {publicRoute ? (
+            <a className={styles.secondaryButton} href={publicRoute}>
+              View public form
+            </a>
+          ) : null}
           <button className={styles.primaryButton} type="submit" form="cfp-editor-form">
             Save changes
           </button>
@@ -1589,7 +1618,11 @@ export function CfpEditor({ eventId, organizationId, formId, api: providedApi }:
                   value={configuration.slug}
                   onChange={(event) => updateConfiguration("slug", event.target.value)}
                 />
-                <p className={styles.fieldHint}>/cfp/{configuration.slug || "your-event"}</p>
+                <p className={styles.fieldHint}>
+                  {publicRoute
+                    ? `/cfp/organizations/${resolvedOrganizationId}/events/${configuration.slug}`
+                    : "Public URL unavailable until the authoritative event slug loads."}
+                </p>
               </div>
               <div className={styles.fieldGroup}>
                 <label htmlFor="event-timezone">Event timezone</label>
@@ -2216,9 +2249,13 @@ export function CfpEditor({ eventId, organizationId, formId, api: providedApi }:
               <div>
                 <dt>Public URL</dt>
                 <dd>
-                  <a href={`/cfp/${configuration.slug}`}>
-                    /cfp/{configuration.slug || "your-event"}
-                  </a>
+                  {publicRoute ? (
+                    <a href={publicRoute}>
+                      /cfp/organizations/{resolvedOrganizationId}/events/{configuration.slug}
+                    </a>
+                  ) : (
+                    "Unavailable until event scope and slug are loaded."
+                  )}
                 </dd>
               </div>
               <div>
@@ -2275,9 +2312,11 @@ export function CfpEditor({ eventId, organizationId, formId, api: providedApi }:
               submission.
             </p>
           </div>
-          <a className={styles.secondaryButton} href={`/cfp/${configuration.slug}`}>
-            Open public route
-          </a>
+          {publicRoute ? (
+            <a className={styles.secondaryButton} href={publicRoute}>
+              Open public route
+            </a>
+          ) : null}
         </div>
 
         <div className={styles.previewGrid}>

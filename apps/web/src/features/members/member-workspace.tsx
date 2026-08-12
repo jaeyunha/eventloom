@@ -204,13 +204,14 @@ function formatDate(value: string | null | undefined): string {
 }
 
 function dashboardHref(
+  organizationId: string,
   eventId: string | undefined,
   roundId: string | undefined,
   reviewerId: string,
 ): string {
   if (!eventId) return "/admin/events";
   const query = new URLSearchParams({ reviewerId, ...(roundId ? { roundId } : {}) });
-  return `/admin/events/${encodeURIComponent(eventId)}/reviews/evaluate?${query.toString()}`;
+  return `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}/reviews/evaluate?${query.toString()}`;
 }
 
 function poolFromGrants(pool: ReviewerPool | null): Record<string, number> {
@@ -240,6 +241,7 @@ function StatusMessage({ message, error = false }: Readonly<{ message: string; e
 
 function MemberRow({
   member,
+  organizationId,
   eventId,
   roundId,
   busy,
@@ -247,6 +249,7 @@ function MemberRow({
   onRevoke,
 }: Readonly<{
   readonly member: OrganizationMember;
+  readonly organizationId: string;
   readonly eventId?: string;
   readonly roundId?: string;
   readonly busy: boolean;
@@ -299,7 +302,7 @@ function MemberRow({
           ) : null}
           {member.role === "reviewer" ? (
             <Button asChild variant="ghost" size="sm">
-              <Link href={dashboardHref(eventId, roundId, member.userId)}>
+              <Link href={dashboardHref(organizationId, eventId, roundId, member.userId)}>
                 Open review dashboard
               </Link>
             </Button>
@@ -939,6 +942,7 @@ export function MemberWorkspace({
                       <MemberRow
                         key={member.userId}
                         member={member}
+                        organizationId={organizationId}
                         {...(memberCardEventId ? { eventId: memberCardEventId } : {})}
                         {...(memberCardRoundId ? { roundId: memberCardRoundId } : {})}
                         busy={busyUserId === member.userId}
@@ -1171,7 +1175,12 @@ export function MemberWorkspace({
             {poolHasScope ? (
               <CardFooter className={styles.cardFooterSecondary}>
                 <Link
-                  href={dashboardHref(poolEventId.trim(), poolRoundId.trim() || undefined, "pool")}
+                  href={dashboardHref(
+                    organizationId,
+                    poolEventId.trim(),
+                    poolRoundId.trim() || undefined,
+                    "pool",
+                  )}
                 >
                   Open My Evaluations
                 </Link>

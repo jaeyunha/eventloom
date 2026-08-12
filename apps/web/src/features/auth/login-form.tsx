@@ -1,8 +1,6 @@
 "use client";
 
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import styles from "./login-form.module.css";
-import { safeLoginReturnTo } from "./return-path";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,6 +8,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import styles from "./login-form.module.css";
+import { safeLoginReturnTo } from "./return-path";
+import { normalizeSessionSpeakerGrants } from "./session";
 
 const AUTH_PATH = "/api/auth";
 const ADMIN_PATH = "/admin";
@@ -19,15 +20,11 @@ const UNVERIFIED_EMAIL_MESSAGE =
 const SERVER_ERROR_MESSAGE = "We couldn't sign you in right now. Try again in a moment.";
 const MAGIC_LINK_ERROR_MESSAGE =
   "We couldn't send a sign-in link right now. Try again in a moment.";
-const ORGANIZER_DOMAIN_ERROR_MESSAGE =
-  "Organizer accounts require a verified swyx.io or ai.engineer email address.";
+const ORGANIZER_DOMAIN_ERROR_MESSAGE = "Enter a valid email address.";
 const SIGNUP_VERIFICATION_MESSAGE = "Account created. Check your email for a verification link.";
 const MAGIC_LINK_SUCCESS_MESSAGE = "Magic link sent. Check your email for a link to sign in.";
-const CFP_PATH =
-  process.env.NEXT_PUBLIC_APP_ENV === "local" ? "/cfp/demo-event" : "/cfp/open-sessionboard-conf";
 const NETWORK_ERROR_MESSAGE =
   "We couldn't reach the sign-in service. Check your connection and try again.";
-const ORGANIZER_EMAIL_DOMAINS = new Set(["swyx.io", "ai.engineer"]);
 const REVIEW_PATH = "/review";
 const PORTAL_PATH = "/portal";
 const AUTHENTICATION_ERROR_MESSAGE =
@@ -224,10 +221,9 @@ function parseLoginSession(payload: unknown): LoginSession | null {
     "organizationMemberships",
     "organization_memberships",
   ]);
-  const grantsValue = collectionValue(candidates, ["speakerGrants", "speaker_grants"]);
   const memberships = membershipsValue.found ? parseMemberships(membershipsValue.value) : [];
-  const speakerGrants = grantsValue.found ? parseSpeakerGrants(grantsValue.value) : [];
-  if (memberships === null || speakerGrants === null) return null;
+  const speakerGrants = normalizeSessionSpeakerGrants(payload);
+  if (memberships === null) return null;
   return { memberships, speakerGrants };
 }
 
@@ -255,7 +251,7 @@ export function resolveLoginLandingRoute(value: unknown, returnTo?: unknown): st
   if (session.memberships.some(({ role }) => role === "reviewer")) {
     return REVIEW_PATH;
   }
-  if (session.memberships.length === 0 && session.speakerGrants.length > 0) {
+  if (session.memberships.length === 0) {
     return PORTAL_PATH;
   }
   throw new LoginRequestError("authentication", AUTHENTICATION_ERROR_MESSAGE);
@@ -276,8 +272,7 @@ function normalizedOrganizerEmail(value: string): string | null {
   const normalized = value.trim().toLowerCase();
   const at = normalized.lastIndexOf("@");
   if (at <= 0 || at !== normalized.indexOf("@") || at === normalized.length - 1) return null;
-  if (process.env.NEXT_PUBLIC_APP_ENV === "local") return normalized;
-  return ORGANIZER_EMAIL_DOMAINS.has(normalized.slice(at + 1)) ? normalized : null;
+  return normalized;
 }
 
 export function resolveLoginConfig(environment: LoginEnvironment = {}): LoginConfig {
@@ -708,7 +703,7 @@ export function LoginForm({
             </CardTitle>
             <CardDescription>
               {isSignup
-                ? "Use your verified swyx.io or ai.engineer email to join ai-engineer."
+                ? "Use your work email. Organization access is granted by an owner or administrator."
                 : "Use your organizer or reviewer account to continue."}
             </CardDescription>
           </CardHeader>
@@ -886,8 +881,8 @@ export function LoginForm({
             </Tabs>
 
             <p className={styles.cfpNote}>
-              CFP applicants create accounts through the CFP; participant signup remains available
-              there. <a href={CFP_PATH}>Open the CFP</a> to start or continue an application.
+              CFP applicants create accounts from the event-specific application link shared by the
+              organizer.
             </p>
           </CardContent>
         </Card>

@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import styles from "./embed.module.css";
 import { formatPublishedDateTimeRange, publishedEntryPresenters } from "./model";
+import type { EmbedDisplayField, EmbedLayout } from "./model";
 import type { PublishedAgendaEntry, PublishedProgram, PublishedSpeaker } from "./types";
 
 const DESCRIPTION_LIMIT = 190;
@@ -50,19 +51,36 @@ function speakerRole(speaker: PublishedSpeaker): string {
   return [jobTitle, organization].filter(Boolean).join(" · ") || "Speaker";
 }
 
-function WidgetLinks({ eventSlug }: Readonly<{ eventSlug: string }>) {
-  const encodedSlug = encodeURIComponent(eventSlug);
-  return (
-    <nav className={styles.feedLinks} aria-label="Published program views">
-      <a href={`/embed/${encodedSlug}/sessions`}>Sessions</a>
-      <a href={`/embed/${encodedSlug}/itinerary`}>Itinerary</a>
-      <a href={`/embed/${encodedSlug}/agenda`}>Agenda</a>
-      <a href={`/embed/${encodedSlug}/speakers`}>Speakers</a>
-    </nav>
-  );
+export interface PublicSessionsViewProps {
+  readonly program: PublishedProgram;
+  readonly layout?: EmbedLayout | null;
+  readonly tracks?: readonly string[];
+  readonly displayFields?: readonly EmbedDisplayField[] | null;
 }
 
-export function PublicSessionsView({ program }: Readonly<{ program: PublishedProgram }>) {
+const DEFAULT_SESSIONS_DISPLAY_FIELDS: readonly EmbedDisplayField[] = [
+  "title",
+  "date-time",
+  "room",
+  "speakers",
+  "format",
+  "track",
+  "summary",
+];
+
+function sessionsIncludeField(
+  displayFields: readonly EmbedDisplayField[],
+  field: EmbedDisplayField,
+): boolean {
+  return displayFields.includes(field);
+}
+
+export function PublicSessionsView({
+  program,
+  layout = null,
+  tracks: trackList = [],
+  displayFields = null,
+}: Readonly<PublicSessionsViewProps>) {
   const { agenda, speakers } = program;
   const [query, setQuery] = useState("");
   const [track, setTrack] = useState("");
@@ -70,8 +88,11 @@ export function PublicSessionsView({ program }: Readonly<{ program: PublishedPro
   const [room, setRoom] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
+  const displayFieldList = displayFields ?? DEFAULT_SESSIONS_DISPLAY_FIELDS;
+  const showField = (field: EmbedDisplayField): boolean =>
+    sessionsIncludeField(displayFieldList, field);
 
-  const tracks = useMemo(
+  const trackOptions = useMemo(
     () => uniqueValues(agenda.entries.flatMap((entry) => entry.trackNames)),
     [agenda.entries],
   );
@@ -89,6 +110,11 @@ export function PublicSessionsView({ program }: Readonly<{ program: PublishedPro
       [...agenda.entries]
         .filter((entry) => {
           if (track && !entry.trackNames.includes(track)) return false;
+          if (
+            trackList.length > 0 &&
+            !trackList.some((trackName) => entry.trackNames.includes(trackName))
+          )
+            return false;
           if (format && entry.format !== format) return false;
           if (room && entry.roomName !== room) return false;
           return (
@@ -96,7 +122,7 @@ export function PublicSessionsView({ program }: Readonly<{ program: PublishedPro
           );
         })
         .sort(compareStarts),
-    [agenda.entries, format, normalizedQuery, room, speakers.speakers, track],
+    [agenda.entries, format, normalizedQuery, room, speakers.speakers, track, trackList],
   );
 
   const hasFilters = Boolean(query || track || format || room);
@@ -118,7 +144,6 @@ export function PublicSessionsView({ program }: Readonly<{ program: PublishedPro
             titles or speaker names, then narrow by track, format, or room.
           </p>
         </div>
-        <WidgetLinks eventSlug={agenda.event.slug} />
       </div>
 
       <search>
@@ -158,7 +183,7 @@ export function PublicSessionsView({ program }: Readonly<{ program: PublishedPro
             <span>Track</span>
             <select value={track} onChange={(event) => setTrack(event.target.value)}>
               <option value="">All tracks</option>
-              {tracks.map((value) => (
+              {trackOptions.map((value) => (
                 <option key={value} value={value}>
                   {value}
                 </option>
@@ -213,7 +238,11 @@ export function PublicSessionsView({ program }: Readonly<{ program: PublishedPro
             const hasDescription = entry.summary.trim().length > 0;
             return (
               <li key={entry.id}>
-                <article id={`session-${entry.sessionId}`} className={styles.publicSessionCard}>
+                <article
+                  id={`session-${entry.sessionId}`}
+                  className={styles.publicSessionCard}
+                  data-layout={layout ?? undefined}
+                >
                   <div className={styles.publicSessionTime}>
                     <time dateTime={entry.startsAt}>
                       {formatPublishedDateTimeRange(
@@ -225,44 +254,50 @@ export function PublicSessionsView({ program }: Readonly<{ program: PublishedPro
                   </div>
                   <div className={styles.publicSessionCopy}>
                     <div className={styles.publicSessionMeta}>
-                      {entry.format.trim() ? <span>Format: {entry.format}</span> : null}
-                      {entry.trackNames
-                        .filter((trackName) => trackName.trim().length > 0)
-                        .map((trackName) => (
-                          <span key={trackName}>Track: {trackName}</span>
-                        ))}
+                      {entry.format.trim() && showField("format") ? (
+                        <span>Format: {entry.format}</span>
+                      ) : null}
+                      {showField("track")
+                        ? entry.trackNames
+                            .filter((trackName) => trackName.trim().length > 0)
+                            .map((trackName) => <span key={trackName}>Track: {trackName}</span>)
+                        : null}
                     </div>
                     <h3>{entry.title}</h3>
-                    {presenters.length > 0 ? (
-                      <div className={styles.publicSpeakers}>
-                        <strong>Speakers</strong>
-                        <ul>
-                          {presenters.map((presenter) => (
-                            <li key={presenter.key}>
-                              {presenter.speaker ? (
-                                <>
-                                  <span>{presenter.displayName}</span>{" "}
-                                  <span>({speakerRole(presenter.speaker)})</span>
-                                </>
-                              ) : (
-                                presenter.displayName
-                              )}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    ) : (
-                      <p className={styles.publicSpeakers}>Speakers to be announced</p>
-                    )}
-                    {hasDescription ? (
-                      <p id={`session-summary-${entry.id}`}>
-                        {isExpanded || !hasLongDescription
-                          ? entry.summary
-                          : truncateDescription(entry.summary)}
-                      </p>
-                    ) : (
-                      <p>No description was published.</p>
-                    )}
+                    {showField("speakers") ? (
+                      presenters.length > 0 ? (
+                        <div className={styles.publicSpeakers}>
+                          <strong>Speakers</strong>
+                          <ul>
+                            {presenters.map((presenter) => (
+                              <li key={presenter.key}>
+                                {presenter.speaker ? (
+                                  <>
+                                    <span>{presenter.displayName}</span>{" "}
+                                    <span>({speakerRole(presenter.speaker)})</span>
+                                  </>
+                                ) : (
+                                  presenter.displayName
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : (
+                        <p className={styles.publicSpeakers}>Speakers to be announced</p>
+                      )
+                    ) : null}
+                    {showField("summary") ? (
+                      hasDescription ? (
+                        <p id={`session-summary-${entry.id}`}>
+                          {isExpanded || !hasLongDescription
+                            ? entry.summary
+                            : truncateDescription(entry.summary)}
+                        </p>
+                      ) : (
+                        <p>No description was published.</p>
+                      )
+                    ) : null}
                     {hasLongDescription ? (
                       <button
                         className={styles.clearButton}
@@ -283,8 +318,10 @@ export function PublicSessionsView({ program }: Readonly<{ program: PublishedPro
                     ) : null}
                   </div>
                   <div className={styles.publicRoom}>
-                    <span>Location</span>
-                    <strong>{entry.roomName || "Location to be announced"}</strong>
+                    {showField("room") ? <span>Location</span> : null}
+                    {showField("room") ? (
+                      <strong>{entry.roomName || "Location to be announced"}</strong>
+                    ) : null}
                   </div>
                 </article>
               </li>

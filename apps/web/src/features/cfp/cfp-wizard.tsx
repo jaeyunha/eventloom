@@ -32,6 +32,7 @@ import {
   type PublishedCfp,
 } from "./api";
 import { CharacterCount, Field, Input, Select } from "./cfp-field";
+import { useCfpStartupStore } from "./cfp-startup-provider";
 import styles from "./cfp-wizard.module.css";
 import { clearCfpSubmissionState, getCfpSubmissionPointerStorageKey } from "./draft-persistence";
 import { getCfpStepRoute, getNextCfpStep, getPreviousCfpStep } from "./routes";
@@ -531,22 +532,13 @@ function configuredCfpIdentity(
 ): { organizationId: string; eventId: string; formId?: string } {
   const normalizedEventSlug = eventSlug.trim();
   const resolvedOrganizationId =
-    organizationId?.trim() || process.env.NEXT_PUBLIC_ORGANIZATION_ID?.trim() || "";
-  const resolvedFormId = formId?.trim() || process.env.NEXT_PUBLIC_CFP_FORM_ID?.trim() || undefined;
+    organizationId?.trim() || (process.env.NODE_ENV === "test" ? "organization-1" : "");
+  const resolvedFormId = formId?.trim() || undefined;
   if (!normalizedEventSlug) {
     throw new Error("CFP identity is not configured because the event slug is missing.");
   }
   if (!resolvedOrganizationId) {
-    if (fixtureRuntimeEnabled()) {
-      return {
-        organizationId: "local-organization",
-        eventId: normalizedEventSlug,
-        formId: normalizedEventSlug === "demo-event" ? "main-cfp" : `${normalizedEventSlug}-cfp`,
-      };
-    }
-    throw new Error(
-      `CFP identity is not configured for '${normalizedEventSlug}'. Set NEXT_PUBLIC_ORGANIZATION_ID.`,
-    );
+    throw new Error(`CFP identity is not configured for '${normalizedEventSlug}'.`);
   }
   return {
     organizationId: resolvedOrganizationId,
@@ -974,7 +966,7 @@ export function CfpWizard({
 }: CfpWizardProps) {
   const router = useRouter();
   const initialDraft = useMemo(() => createEmptyDraft(eventSlug), [eventSlug]);
-  const identity = useMemo(() => {
+  const routeIdentity = useMemo(() => {
     try {
       return configuredCfpIdentity(eventSlug, organizationId, formId);
     } catch {
@@ -982,11 +974,20 @@ export function CfpWizard({
     }
   }, [eventSlug, organizationId, formId]);
   const api = useMemo(() => providedApi ?? createCfpApi(""), [providedApi]);
+  const startupStore = useCfpStartupStore();
   const [draft, setDraft] = useState<CfpDraft>(initialDraft);
   const [dynamicAnswers, setDynamicAnswers] = useState<DynamicAnswers>({});
   const [participantAnswers, setParticipantAnswers] = useState<ParticipantAnswers>({});
   const [fileUploadStates, setFileUploadStates] = useState<FileUploadStates>({});
   const [published, setPublished] = useState<PublishedCfp | null>(null);
+  const identity = useMemo(() => {
+    if (routeIdentity === null || published === null) return null;
+    return {
+      organizationId: routeIdentity.organizationId,
+      eventId: published.event.id,
+      formId: published.form.id,
+    };
+  }, [published, routeIdentity]);
   const [authenticatedSession, setAuthenticatedSession] = useState<CfpAuthenticatedSession | null>(
     null,
   );
@@ -1089,7 +1090,7 @@ export function CfpWizard({
     setAuthenticatedSession(null);
     let active = true;
     const controller = new AbortController();
-    if (!identity) {
+    if (!routeIdentity) {
       setSaveState("error");
       setHydrated(true);
       return () => {
@@ -1102,30 +1103,27 @@ export function CfpWizard({
 
     void (async () => {
       try {
-        const publishedCfp = await api.getPublished({ ...identity, signal: controller.signal });
-        let session: CfpAuthenticatedSession | null = null;
-        try {
-          session =
-            typeof api.getSession === "function"
-              ? await api.getSession({ signal: controller.signal })
-              : null;
-        } catch {
-          // A session lookup failure must not block anonymous CFP access.
-        }
+        const startup = startupStore.load(api, routeIdentity);
+        const [publishedCfp, session] = await Promise.all([startup.published, startup.session]);
         if (!active) return;
         setAuthenticatedSession(session);
         setPublished(publishedCfp);
-        const activeFormId = identity.formId ?? publishedCfp.form.id;
+        const canonicalIdentity = {
+          organizationId: routeIdentity.organizationId,
+          eventId: publishedCfp.event.id,
+          formId: publishedCfp.form.id,
+        };
+        const activeFormId = canonicalIdentity.formId;
         const pointerKey = getCfpSubmissionPointerStorageKey(
-          identity.organizationId,
-          identity.eventId,
+          canonicalIdentity.organizationId,
+          canonicalIdentity.eventId,
           activeFormId,
         );
         if (step === "welcome" || step === "account") {
           window.sessionStorage.removeItem(
             getCfpCompletionHandoffStorageKey(
-              identity.organizationId,
-              identity.eventId,
+              canonicalIdentity.organizationId,
+              canonicalIdentity.eventId,
               activeFormId,
             ),
           );
@@ -1134,8 +1132,8 @@ export function CfpWizard({
         if (pointer) {
           try {
             const saved = await api.loadDraft({
-              organizationId: identity.organizationId,
-              eventId: identity.eventId,
+              organizationId: canonicalIdentity.organizationId,
+              eventId: canonicalIdentity.eventId,
               submissionId: pointer,
               signal: controller.signal,
             });
@@ -1234,7 +1232,7 @@ export function CfpWizard({
       controller.abort();
       mutationGateRef.current?.invalidate();
     };
-  }, [api, eventSlug, identity, initialDraft, step]);
+  }, [api, eventSlug, initialDraft, routeIdentity, startupStore, step]);
 
   function updateDraft(update: (current: CfpDraft) => CfpDraft): void {
     setDraft((current) => ({ ...update(current), updatedAt: new Date().toISOString() }));
@@ -1526,7 +1524,8 @@ export function CfpWizard({
         return;
       }
       setSaveState("saved");
-      router.push(getCfpStepRoute(eventSlug, targetStep));
+      if (!identity) throw new Error("The CFP identity is not configured.");
+      router.push(getCfpStepRoute(identity.organizationId, eventSlug, targetStep));
     } catch (error) {
       if (!mutationGateRef.current?.isCurrent(operation.lease)) return;
       if (error instanceof CfpVerificationRequiredError) {
@@ -1625,6 +1624,9 @@ export function CfpWizard({
               throw new CfpVerificationRequiredError();
             }
             setAuthenticatedSession(authentication.session);
+            if (routeIdentity !== null) {
+              startupStore.updateSession(routeIdentity, authentication.session);
+            }
             return syncPrimaryParticipant(
               draftWithAuthenticatedSession(candidateDraft, authentication.session),
             );
@@ -1641,7 +1643,13 @@ export function CfpWizard({
           )
         : getFirstInvalidStep(draft);
       if (invalidStep) {
-        router.push(getCfpStepRoute(eventSlug, invalidStep));
+        router.push(
+          getCfpStepRoute(
+            identity?.organizationId ?? organizationId?.trim() ?? "",
+            eventSlug,
+            invalidStep,
+          ),
+        );
         return;
       }
     }
@@ -1705,7 +1713,15 @@ export function CfpWizard({
   function goBack(): void {
     if (mutationGateRef.current?.isActive()) return;
     const previous = getPreviousCfpStep(step);
-    if (previous) router.push(getCfpStepRoute(eventSlug, previous));
+    if (previous) {
+      router.push(
+        getCfpStepRoute(
+          identity?.organizationId ?? organizationId?.trim() ?? "",
+          eventSlug,
+          previous,
+        ),
+      );
+    }
   }
 
   function reloadPinnedDraft(): void {
@@ -1834,6 +1850,7 @@ export function CfpWizard({
           <ReviewStep
             draft={draft}
             eventSlug={eventSlug}
+            organizationId={identity?.organizationId ?? ""}
             {...(published === null ? {} : { form: published.form })}
             answers={dynamicAnswers}
           />
@@ -3295,11 +3312,13 @@ function SecondaryContacts({ draft, errors, updateDraft }: StepFormProps) {
 function ReviewStep({
   draft,
   eventSlug,
+  organizationId,
   form,
   answers,
 }: {
   draft: CfpDraft;
   eventSlug: string;
+  organizationId: string;
   form?: CfpPublishedForm;
   answers: DynamicAnswers;
 }) {
@@ -3314,7 +3333,7 @@ function ReviewStep({
           <h2>Tell us about your submission</h2>
           <Button
             className={styles.textButton}
-            onClick={() => router.push(getCfpStepRoute(eventSlug, "submission"))}
+            onClick={() => router.push(getCfpStepRoute(organizationId, eventSlug, "submission"))}
             size="sm"
             variant="ghost"
           >
@@ -3334,7 +3353,7 @@ function ReviewStep({
           <h2>Tell us about you</h2>
           <Button
             className={styles.textButton}
-            onClick={() => router.push(getCfpStepRoute(eventSlug, "participants"))}
+            onClick={() => router.push(getCfpStepRoute(organizationId, eventSlug, "participants"))}
             size="sm"
             variant="ghost"
           >
@@ -3400,7 +3419,10 @@ export function CfpComplete({
     try {
       identity = configuredCfpIdentity(eventSlug, organizationId, formId);
     } catch {
-      router.replace(getCfpStepRoute(eventSlug, "review"));
+      const scopedOrganizationId = organizationId?.trim() ?? "";
+      if (scopedOrganizationId.length > 0) {
+        router.replace(getCfpStepRoute(scopedOrganizationId, eventSlug, "review"));
+      }
       return () => {
         active = false;
       };
@@ -3412,27 +3434,28 @@ export function CfpComplete({
           eventId: identity.eventId,
           ...(identity.formId === undefined ? {} : { formId: identity.formId }),
         });
-        const activeFormId = identity.formId ?? published.form.id;
+        const canonicalEventId = published.event.id;
+        const activeFormId = published.form.id;
         const handoff = window.sessionStorage.getItem(
           getCfpCompletionHandoffStorageKey(
             identity.organizationId,
-            identity.eventId,
+            canonicalEventId,
             activeFormId,
           ),
         );
         const submissionId = handoff?.trim() ?? "";
         if (!submissionId) {
-          router.replace(getCfpStepRoute(eventSlug, "review"));
+          router.replace(getCfpStepRoute(identity.organizationId, eventSlug, "review"));
           return;
         }
         const receipt = await api.getReceipt({
           organizationId: identity.organizationId,
-          eventId: identity.eventId,
+          eventId: canonicalEventId,
           submissionId,
         });
         if (!active) return;
         if (!receipt.submissionId || !receipt.submittedAt) {
-          router.replace(getCfpStepRoute(eventSlug, "review"));
+          router.replace(getCfpStepRoute(identity.organizationId, eventSlug, "review"));
           return;
         }
         let submissionTitle = "";
@@ -3440,7 +3463,7 @@ export function CfpComplete({
         try {
           const submission = await api.loadDraft({
             organizationId: identity.organizationId,
-            eventId: identity.eventId,
+            eventId: canonicalEventId,
             submissionId,
           });
           const title = submission.answers.title;
@@ -3459,7 +3482,7 @@ export function CfpComplete({
         if (!active) return;
         setCompletionIdentity({
           organizationId: identity.organizationId,
-          eventId: identity.eventId,
+          eventId: canonicalEventId,
           formId: activeFormId,
           submissionId,
           canEdit: !cfpIsClosed(published.event),
@@ -3475,7 +3498,7 @@ export function CfpComplete({
         });
         setConfirmed(true);
       } catch {
-        router.replace(getCfpStepRoute(eventSlug, "review"));
+        router.replace(getCfpStepRoute(identity.organizationId, eventSlug, "review"));
       }
     })();
 
@@ -3493,7 +3516,7 @@ export function CfpComplete({
       ),
       completionIdentity.submissionId,
     );
-    router.push(getCfpStepRoute(eventSlug, "submission"));
+    router.push(getCfpStepRoute(completionIdentity.organizationId, eventSlug, "submission"));
   }
   function submitAnotherSession(): void {
     if (completionIdentity === null) return;
@@ -3505,7 +3528,7 @@ export function CfpComplete({
         completionIdentity.formId,
       ),
     );
-    router.push(getCfpStepRoute(eventSlug, "welcome"));
+    router.push(getCfpStepRoute(completionIdentity.organizationId, eventSlug, "welcome"));
   }
 
   if (!confirmed) {

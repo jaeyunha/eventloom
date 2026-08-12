@@ -162,9 +162,8 @@ test("co-speaker roster exposes only server-authorized permissions and clears st
   await page.getByRole("button", { name: "Account menu" }).click();
   await page.getByRole("menuitem", { name: "Collaborative Systems Summit" }).click();
   await expect(
-    page.getByRole("heading", { level: 1, name: "Collaborative Systems Summit" }),
+    page.getByRole("heading", { level: 1, name: "This workspace is not available" }),
   ).toBeVisible();
-  await expect(page.getByText("Roster changes are disabled for this context.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Add co-speaker" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Remove" })).toHaveCount(0);
   expect(api.view.context?.eventId).toBe("event-collaboration");

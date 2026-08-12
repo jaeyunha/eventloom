@@ -1,5 +1,11 @@
-import { describe, expect, it } from "vitest";
-import { CfpMutationGate, type CfpPublishedForm } from "./api";
+import { describe, expect, it, vi } from "vitest";
+import {
+  type CfpAuthenticatedSession,
+  CfpMutationGate,
+  type CfpPublishedForm,
+  type PublishedCfp,
+} from "./api";
+import { createCfpStartupStore } from "./cfp-startup-provider";
 import {
   canResumeCfpSubmission,
   cfpConfirmationEmailMessage,
@@ -21,11 +27,58 @@ import {
 } from "./types";
 
 describe("CFP flow", () => {
+  it("deduplicates published form and session reads across step remounts", async () => {
+    const store = createCfpStartupStore();
+    const published = { form: { id: "form-1" } } as unknown as PublishedCfp;
+    const session = { email: "speaker@example.com" } as CfpAuthenticatedSession;
+    const api = {
+      getPublished: vi.fn(async () => published),
+      getSession: vi.fn(async () => session),
+    };
+    const identity = { organizationId: "org-1", eventId: "event-1", formId: "form-1" };
+
+    const welcome = store.load(api, identity);
+    const account = store.load(api, identity);
+    const submission = store.load(api, identity);
+
+    await expect(
+      Promise.all([welcome.published, account.published, submission.published]),
+    ).resolves.toEqual([published, published, published]);
+    await expect(
+      Promise.all([welcome.session, account.session, submission.session]),
+    ).resolves.toEqual([session, session, session]);
+    expect(api.getPublished).toHaveBeenCalledTimes(1);
+    expect(api.getSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps event caches isolated and retries a failed published-form read", async () => {
+    const store = createCfpStartupStore();
+    const published = { form: { id: "form-1" } } as unknown as PublishedCfp;
+    const api = {
+      getPublished: vi
+        .fn<() => Promise<PublishedCfp>>()
+        .mockRejectedValueOnce(new Error("offline"))
+        .mockResolvedValue(published),
+      getSession: vi.fn(async () => null),
+    };
+    const identity = { organizationId: "org-1", eventId: "event-1" };
+    await expect(store.load(api, identity).published).rejects.toThrow("offline");
+    await expect(store.load(api, identity).published).resolves.toBe(published);
+    await expect(
+      store.load(api, { organizationId: "org-1", eventId: "event-2" }).published,
+    ).resolves.toBe(published);
+    expect(api.getPublished).toHaveBeenCalledTimes(3);
+  });
+
   it("maps the evidence-defined account-first sequence to stable routes", () => {
     const eventSlug = "future/conf";
 
-    expect(getCfpStepRoute(eventSlug, "welcome")).toBe("/cfp/future%2Fconf");
-    expect(getCfpStepRoute(eventSlug, "account")).toBe("/cfp/future%2Fconf/account");
+    expect(getCfpStepRoute("org/live", eventSlug, "welcome")).toBe(
+      "/cfp/organizations/org%2Flive/events/future%2Fconf",
+    );
+    expect(getCfpStepRoute("org/live", eventSlug, "account")).toBe(
+      "/cfp/organizations/org%2Flive/events/future%2Fconf/account",
+    );
     expect(getNextCfpStep("welcome")).toBe("account");
     expect(getNextCfpStep("account")).toBe("submission");
     expect(getNextCfpStep("submission")).toBe("participants");
