@@ -99,6 +99,20 @@ const attentionTaskStatuses = new Set<PortalTaskStatus>([
   "overdue",
   "reopened",
 ]);
+const speakerSubmissionPrefix = "speaker-submission:";
+function portalSubmissionIdValue(value: string): string | null {
+  const normalized = value.trim();
+  const submissionId = normalized.startsWith(speakerSubmissionPrefix)
+    ? normalized.slice(speakerSubmissionPrefix.length)
+    : normalized;
+  return submissionId.length === 0 ? null : submissionId;
+}
+
+export function portalSubmissionIdsMatch(left: string, right: string): boolean {
+  const normalizedLeft = portalSubmissionIdValue(left);
+  const normalizedRight = portalSubmissionIdValue(right);
+  return normalizedLeft !== null && normalizedRight !== null && normalizedLeft === normalizedRight;
+}
 
 export function submissionStatusPresentation(status: PortalSubmissionStatus): StatusPresentation {
   return submissionPresentations[status];
@@ -170,15 +184,22 @@ export function filterTasks(tasks: readonly PortalTask[], filter: TaskFilter): P
 }
 
 export function findProfileForTask(task: PortalTask, profiles: readonly PortalProfile[]) {
-  return profiles.find((profile) => profile.participantId === task.participantId);
+  return profiles.find(
+    (profile) => profile.eventId === task.eventId && profile.participantId === task.participantId,
+  );
 }
 
 export function findSubmissionForTask(task: PortalTask, submissions: readonly PortalSubmission[]) {
-  return submissions.find((submission) => submission.id === task.submissionId);
+  return submissions.find(
+    (submission) =>
+      submission.eventId === task.eventId &&
+      submission.participantIds.includes(task.participantId) &&
+      portalSubmissionIdsMatch(submission.id, task.submissionId),
+  );
 }
 export function scopePortalContextToPrimaryParticipant(
   context: PortalContext,
-  submissionIds: readonly string[] = [],
+  submissionIds?: readonly string[],
 ): PortalContext {
   const primaryParticipantId = context.primaryParticipantId?.trim();
   const hasValidPrimaryParticipant =
@@ -192,11 +213,17 @@ export function scopePortalContextToPrimaryParticipant(
     primaryParticipantId: _primaryParticipantId,
     ...contextWithoutParticipants
   } = context;
+  const requestedSubmissionIds = submissionIds ?? context.submissionIds;
+  const scopedSubmissionIds = requestedSubmissionIds.filter((submissionId) =>
+    context.submissionIds.some((authorizedId) =>
+      portalSubmissionIdsMatch(authorizedId, submissionId),
+    ),
+  );
   return hasValidPrimaryParticipant
     ? {
         ...contextWithoutParticipants,
         participantIds: [primaryParticipantId],
-        submissionIds: [...submissionIds],
+        submissionIds: scopedSubmissionIds,
         primaryParticipantId,
       }
     : { ...contextWithoutParticipants, participantIds: [], submissionIds: [] };
@@ -236,16 +263,24 @@ export function scopePortalViewToPrimaryParticipant(
   const submissions = view.submissions
     .filter(
       (submission) =>
-        submission.eventId === eventId && submission.participantIds.includes(primaryParticipantId),
+        submission.eventId === eventId &&
+        submission.participantIds.includes(primaryParticipantId) &&
+        context.submissionIds.some((authorizedId) =>
+          portalSubmissionIdsMatch(authorizedId, submission.id),
+        ),
     )
     .map((submission) => ({ ...submission, participantIds: [primaryParticipantId] }));
-  const submissionIds = new Set(submissions.map((submission) => submission.id));
+  const submissionIds = submissions.map((submission) => submission.id);
+  const submissionMatches = (submissionId: string): boolean =>
+    submissionIds.some((scopedSubmissionId) =>
+      portalSubmissionIdsMatch(scopedSubmissionId, submissionId),
+    );
   const tasks = view.tasks.filter(
     (task) =>
       task.eventId === eventId &&
       task.owner === "speaker" &&
       task.participantId === primaryParticipantId &&
-      submissionIds.has(task.submissionId),
+      submissionMatches(task.submissionId),
   );
   const taskIds = new Set(tasks.map((task) => task.id));
   const assets = (view.assets ?? []).filter(
@@ -253,7 +288,7 @@ export function scopePortalViewToPrimaryParticipant(
       asset.eventId === eventId &&
       asset.participantId === primaryParticipantId &&
       (asset.taskId === undefined || taskIds.has(asset.taskId)) &&
-      (asset.submissionId === undefined || submissionIds.has(asset.submissionId)),
+      (asset.submissionId === undefined || submissionMatches(asset.submissionId)),
   );
 
   return {
@@ -266,7 +301,7 @@ export function scopePortalViewToPrimaryParticipant(
     assets,
     ...(view.roster !== undefined &&
     view.roster.eventId === eventId &&
-    submissionIds.has(view.roster.submissionId)
+    submissionMatches(view.roster.submissionId)
       ? {
           roster: {
             ...view.roster,
@@ -283,7 +318,7 @@ export function scopePortalViewToPrimaryParticipant(
       : { resources: view.resources.map((resource) => ({ ...resource })) }),
     ...(view.wiki === undefined ? {} : { wiki: view.wiki.map((page) => ({ ...page })) }),
     ...(capabilities === undefined ? {} : { capabilities }),
-    context: scopePortalContextToPrimaryParticipant(context, [...submissionIds]),
+    context: scopePortalContextToPrimaryParticipant(context, submissionIds),
   };
 }
 
@@ -313,7 +348,9 @@ export function portalTaskAsset(
       (asset) =>
         asset.taskId === task.id &&
         asset.eventId === task.eventId &&
-        asset.participantId === task.participantId,
+        asset.participantId === task.participantId &&
+        (asset.submissionId === undefined ||
+          portalSubmissionIdsMatch(asset.submissionId, task.submissionId)),
     )
     .reduce<PortalAsset | undefined>((latest, candidate) => {
       if (latest === undefined) {
@@ -350,7 +387,14 @@ export function portalSubmissionEditTarget(
   if (
     context === null ||
     submission.formId === undefined ||
-    (submission.status !== "submitted" && submission.status !== "under_review")
+    (submission.status !== "submitted" && submission.status !== "under_review") ||
+    submission.eventId !== context.eventId ||
+    !context.submissionIds.some((authorizedId) =>
+      portalSubmissionIdsMatch(authorizedId, submission.id),
+    ) ||
+    !submission.participantIds.some((participantId) =>
+      context.participantIds.includes(participantId),
+    )
   ) {
     return null;
   }

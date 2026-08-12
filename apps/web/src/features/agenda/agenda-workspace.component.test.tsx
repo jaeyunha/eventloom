@@ -319,6 +319,12 @@ describe("agenda organizer workspace", () => {
     expect(markup).toContain("Main hall already has a session at this time.");
     expect(markup).toContain("Hard conflict:");
   });
+  it("links the agenda back to the organization-scoped event overview", () => {
+    const markup = renderBoard();
+
+    expect(markup).toContain('href="/admin/organizations/organization-1/events/evt_open"');
+    expect(markup).not.toContain('href="/admin/events/evt_open"');
+  });
 
   it("exposes accessible scheduling and disabled publication controls", () => {
     const markup = renderToStaticMarkup(

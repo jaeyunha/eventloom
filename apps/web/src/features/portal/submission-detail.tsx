@@ -2,14 +2,13 @@
 
 import Link from "next/link";
 import { clearCfpSubmissionState } from "../cfp/draft-persistence";
-import { submissionStatusPresentation } from "./model";
+import { portalSubmissionIdsMatch, submissionStatusPresentation } from "./model";
 import styles from "./portal.module.css";
 import { usePortal } from "./portal-provider";
 import {
   canonicalPortalSubmissionId,
   portalSubmissionActionTargets,
   portalSubmissionDisplayTitle,
-  portalSubmissionIdsMatch,
 } from "./portal-submissions";
 import {
   EmptyState,

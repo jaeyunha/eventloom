@@ -6,6 +6,7 @@ import type { CfpSubmissionPointerIdentity } from "../cfp/draft-persistence";
 import {
   filterSubmissions,
   portalSubmissionEditTarget,
+  portalSubmissionIdsMatch,
   submissionStatusPresentation,
 } from "./model";
 import styles from "./portal.module.css";
@@ -19,13 +20,14 @@ import {
 } from "./portal-ui";
 import type { PortalContext, PortalSubmission } from "./types";
 
-export function portalSubmissionIdsMatch(left: string, right: string): boolean {
-  const normalizedLeft = canonicalPortalSubmissionId(left);
-  const normalizedRight = canonicalPortalSubmissionId(right);
-  if (normalizedLeft.length === 0 || normalizedRight.length === 0) return false;
-  return normalizedLeft === normalizedRight;
+export function canonicalPortalSubmissionId(id: string): string {
+  const normalized = id.trim();
+  const prefix = "speaker-submission:";
+  return normalized.toLocaleLowerCase().startsWith(prefix)
+    ? normalized.slice(prefix.length).trim()
+    : normalized;
 }
-const speakerSubmissionPrefix = "speaker-submission:";
+
 const submissionTitleAcronyms = new Set(["ai", "api", "cfp", "ci", "llm", "qa", "ui", "ux"]);
 const submissionTitleMinorWords = new Set([
   "a",
@@ -42,13 +44,6 @@ const submissionTitleMinorWords = new Set([
   "to",
   "with",
 ]);
-
-export function canonicalPortalSubmissionId(id: string): string {
-  const normalized = id.trim();
-  return normalized.toLocaleLowerCase().startsWith(speakerSubmissionPrefix)
-    ? normalized.slice(speakerSubmissionPrefix.length).trim()
-    : normalized;
-}
 
 function humanizeCanonicalSubmissionReference(reference: string): string {
   const marker = /(?:^|[-_/:])submission[-_/:]/iu.exec(reference);
@@ -79,12 +74,11 @@ function isMachineSubmissionTitle(
 ): boolean {
   const normalizedTitle = title.trim().toLocaleLowerCase();
   if (normalizedTitle.length === 0) return true;
+  const prefix = "speaker-submission:";
   const references = [submission.id, canonicalPortalSubmissionId(submission.id)].map((reference) =>
     reference.toLocaleLowerCase(),
   );
-  return (
-    references.includes(normalizedTitle) || normalizedTitle.startsWith(speakerSubmissionPrefix)
-  );
+  return references.includes(normalizedTitle) || normalizedTitle.startsWith(prefix);
 }
 
 export function portalSubmissionDisplayTitle(
@@ -107,6 +101,7 @@ export function portalSubmissionDisplayTitle(
   }
   return humanizeCanonicalSubmissionReference(canonicalPortalSubmissionId(submission.id));
 }
+
 export interface PortalSubmissionActionTargets {
   editHref: string;
   newProposalHref: string;
@@ -120,46 +115,31 @@ export function portalSubmissionActionTargets(
 ): PortalSubmissionActionTargets | null {
   const formId = submission.formId?.trim();
   if (context === null || formId === undefined || formId.length === 0) return null;
-
   const contextStatus = context.status?.trim().toLocaleLowerCase();
-  if (
-    contextStatus === "draft" ||
-    contextStatus === "closed" ||
-    contextStatus === "archived" ||
-    contextStatus === "inactive" ||
-    contextStatus === "cancelled"
-  ) {
+  if (["draft", "closed", "archived", "inactive", "cancelled"].includes(contextStatus ?? "")) {
     return null;
   }
-
   const closeAt = submission.closeAt?.trim();
   if (closeAt !== undefined && closeAt.length > 0) {
     const closeTime = Date.parse(closeAt);
     if (!Number.isFinite(closeTime) || closeTime <= Date.now()) return null;
   }
-
   const editableSubmission =
     submission.status === "accepted"
       ? { ...submission, status: "submitted" as const, formId }
       : { ...submission, formId };
   const editTarget = portalSubmissionEditTarget(context, editableSubmission);
   if (editTarget === null) return null;
-
   const eventSlug = context.slug?.trim() || context.eventId.trim();
   const organizationId = context.id.split(":")[1]?.trim();
   if (eventSlug.length === 0 || organizationId === undefined || organizationId.length === 0) {
     return null;
   }
-
   return {
     editHref: editTarget.href,
     newProposalHref: `/cfp/${encodeURIComponent(eventSlug)}`,
     pointerKey: editTarget.pointerKey,
-    identity: {
-      organizationId,
-      eventId: context.eventId,
-      formId,
-    },
+    identity: { organizationId, eventId: context.eventId, formId },
   };
 }
 
@@ -174,14 +154,11 @@ export function PortalSubmissions() {
 function PortalSubmissionsContent() {
   const { eventQuery, view, context, can } = usePortal();
   const [search, setSearch] = useState("");
-  if (!view) {
-    return null;
-  }
+  if (!view) return null;
   const submissions = filterSubmissions(view.submissions, search).filter(
     (candidate, index, all) =>
       all.findIndex((other) => portalSubmissionIdsMatch(other.id, candidate.id)) === index,
   );
-
   return (
     <>
       <PageHeading
@@ -208,7 +185,6 @@ function PortalSubmissionsContent() {
             />
           </label>
         </div>
-
         {view.submissions.length === 0 ? (
           <EmptyState
             title="No sessions yet"

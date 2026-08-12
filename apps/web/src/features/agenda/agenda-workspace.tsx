@@ -833,7 +833,11 @@ export function AgendaBoard({
           Open Sessionboard
         </a>
         <nav aria-label="Organizer navigation">
-          <a href={`/admin/events/${encodeURIComponent(data.event.id)}`}>Event overview</a>
+          <a
+            href={`/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(data.event.id)}`}
+          >
+            Event overview
+          </a>
           <a
             aria-current="page"
             href={`/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(data.event.id)}/agenda`}

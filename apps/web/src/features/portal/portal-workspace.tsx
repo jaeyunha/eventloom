@@ -740,7 +740,10 @@ function FilesWorkspace() {
     if (selectedFamilyId && !selectedFamily) setSelectedFamilyId("");
   }, [selectedFamily, selectedFamilyId]);
   const participantId = context?.primaryParticipantId ?? view?.profiles[0]?.participantId;
-  const submissionId = view?.submissions.find((submission) => submission.status === "accepted")?.id;
+  const defaultSubmissionId = view?.submissions.find(
+    (submission) => submission.status === "accepted",
+  )?.id;
+  const submissionId = selectedFamily?.current.submissionId ?? defaultSubmissionId;
 
   async function upload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

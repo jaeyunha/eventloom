@@ -223,6 +223,7 @@ function resolveGrantUrl(value: string, origin: string): string {
   try {
     url = fallbackOrigin ? new URL(value, `${fallbackOrigin}/`) : new URL(value);
   } catch {
+    if (fallbackOrigin.length === 0) return value;
     throw new TypeError("The upload grant URL is invalid.");
   }
   const hostname = url.hostname.toLowerCase();
