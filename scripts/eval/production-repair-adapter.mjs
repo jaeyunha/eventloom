@@ -533,7 +533,10 @@ export function createProductionRepairAdapter(options = {}) {
   async function airtableLookup(table, applicationId, options = {}) {
     const id = identifier(applicationId, "Airtable Application ID");
     if (/^rec[a-zA-Z0-9]{10,}$/u.test(id)) {
-      fail("APPLICATION_ID_REQUIRED", "Airtable operations require an Application ID, not a provider record ID.");
+      fail(
+        "APPLICATION_ID_REQUIRED",
+        "Airtable operations require an Application ID, not a provider record ID.",
+      );
     }
     if (table === "Speaker Profiles" && options.allowNonCanonical !== true) {
       speakerProfileIdFor({ eventId: REPAIR_EVENT_ID, speakerProfileId: id }, "speakerProfileId");

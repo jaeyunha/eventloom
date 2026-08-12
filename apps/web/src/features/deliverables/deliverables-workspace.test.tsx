@@ -1210,7 +1210,9 @@ describe("deliverables workspace", () => {
         tasks: [task],
         assets: [pointerV1, pointerAsset],
         profiles: [profile],
-        matrixItems: [{ ...matrixItem, assets: [pointerV1, pointerAsset], currentAsset: pointerAsset }],
+        matrixItems: [
+          { ...matrixItem, assets: [pointerV1, pointerAsset], currentAsset: pointerAsset },
+        ],
         selectedAssetId: pointerAsset.id,
         assetHistory: [pointerV1, pointerAsset],
         comments: [],

@@ -226,9 +226,7 @@ function taskCadence(
   };
 }
 
-async function reminderAudienceRevision(
-  candidates: readonly ReminderCandidate[],
-): Promise<string> {
+async function reminderAudienceRevision(candidates: readonly ReminderCandidate[]): Promise<string> {
   const serialized = JSON.stringify(
     candidates.map((candidate) => ({
       id: candidate.id,
@@ -359,13 +357,8 @@ class RuntimeReminderCandidateSource implements ReminderCandidateSource {
       const recipient = recipientById.get(item.participantId);
       if (recipient === undefined) continue;
       const verifiedEmail = await this.verifiedEmailByAddress(recipient.email);
-      const cadence = taskCadence(
-        item.dueAt,
-        item.reminderOffsetsMinutes,
-        scheduledAt,
-      );
-      const summary =
-        item.dueAt === null ? item.title : `${item.title} (due ${item.dueAt})`;
+      const cadence = taskCadence(item.dueAt, item.reminderOffsetsMinutes, scheduledAt);
+      const summary = item.dueAt === null ? item.title : `${item.title} (due ${item.dueAt})`;
       candidates.push({
         id: `task:${item.taskId}:${item.participantId}`,
         organizationId,
@@ -507,8 +500,7 @@ function createOutboxDeliveryStatusRecorder(
         if (service === undefined) {
           throw new Error("The communication delivery status service is unavailable.");
         }
-        const status =
-          input.status === "provider_accepted" ? "delivered" : input.status;
+        const status = input.status === "provider_accepted" ? "delivered" : input.status;
         await service.recordDeliveryStatus(
           {
             tenantId: input.tenantId,
@@ -553,9 +545,7 @@ function createOutboxDeliveryStatusRecorder(
             ...(input.providerMessageId === undefined
               ? {}
               : { providerMessageId: input.providerMessageId }),
-            ...(input.reason === undefined
-              ? {}
-              : { failureMetadata: { reason: input.reason } }),
+            ...(input.reason === undefined ? {} : { failureMetadata: { reason: input.reason } }),
           },
         );
         return;
@@ -565,8 +555,7 @@ function createOutboxDeliveryStatusRecorder(
       if (service === undefined) {
         throw new Error("The CRM outreach delivery status service is unavailable.");
       }
-      const status =
-        input.status === "provider_accepted" ? "delivered" : input.status;
+      const status = input.status === "provider_accepted" ? "delivered" : input.status;
       await service.recordOutreachDeliveryStatus({
         organizationId: input.tenantId,
         outreachId: input.target.outreachId,

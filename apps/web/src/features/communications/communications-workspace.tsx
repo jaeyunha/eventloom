@@ -856,9 +856,11 @@ function DeliveryHistory({
   busy,
 }: Readonly<{ send: CommunicationSend; onRetryFailed?: () => Promise<void>; busy: boolean }>) {
   const recipientById = new Map(send.recipients.map((recipient) => [recipient.id, recipient]));
-  const retryable = send.terminal && send.deliveries.some(
-    (delivery) => delivery.status === "failed" || delivery.status === "bounced",
-  );
+  const retryable =
+    send.terminal &&
+    send.deliveries.some(
+      (delivery) => delivery.status === "failed" || delivery.status === "bounced",
+    );
   const providerAcceptedCount = send.deliveries.filter(
     (delivery) => delivery.status === "provider_accepted",
   ).length;
@@ -1146,9 +1148,7 @@ function ReminderTruth({
                 variant="outline"
                 disabled={busy || onRefreshDeliveryTruth === undefined}
                 onClick={() =>
-                  onRefreshDeliveryTruth === undefined
-                    ? undefined
-                    : void onRefreshDeliveryTruth()
+                  onRefreshDeliveryTruth === undefined ? undefined : void onRefreshDeliveryTruth()
                 }
               >
                 {loading ? "Refreshing delivery truth…" : "Refresh delivery truth"}
@@ -1844,9 +1844,7 @@ export function CommunicationsWorkspace({
   );
   const [reminderFacts, setReminderFacts] = useState<ReminderFacts | null>(initialReminderFacts);
   const [reminderState, setReminderState] = useState<ReminderTruthState>(
-    initialReminderRuns !== undefined || initialReminderDispatches !== undefined
-      ? "ready"
-      : "idle",
+    initialReminderRuns !== undefined || initialReminderDispatches !== undefined ? "ready" : "idle",
   );
   const [reminderError, setReminderError] = useState<string | null>(null);
   const [selectedTemplateId, setSelectedTemplateId] = useState(
@@ -1986,7 +1984,7 @@ export function CommunicationsWorkspace({
     setReminderRuns([]);
     setReminderDispatches([]);
     void refreshDeliveryTruth();
-  }, [eventId, initialReminderDispatches, initialReminderRuns, refreshDeliveryTruth]);
+  }, [initialReminderDispatches, initialReminderRuns, refreshDeliveryTruth]);
 
   function replaceTemplate(next: CommunicationTemplate): void {
     setTemplates((current) =>
@@ -2201,10 +2199,7 @@ export function CommunicationsWorkspace({
         idempotencyKey,
         expectedAudienceRevision,
       });
-      setReminderRuns((current) => [
-        ...current.filter((run) => run.id !== next.id),
-        next,
-      ]);
+      setReminderRuns((current) => [...current.filter((run) => run.id !== next.id), next]);
       reminderIdempotencyKeyRef.current = null;
       setReminderState("ready");
       setStatusMessage(`Manual reminder run ${next.id} is ${statusLabel(next.state)}.`);

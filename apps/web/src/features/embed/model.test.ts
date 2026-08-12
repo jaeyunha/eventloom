@@ -158,12 +158,14 @@ describe("published embed model", () => {
         ? { ...entry, trackNames: ["Renamed track"], trackIds: ["track_build"] }
         : entry,
     );
-    expect(filterAgendaEntriesByTrackIds(renamedEntries, ["track_build"]).map((entry) => entry.id)).toEqual([
-      "entry_evening",
-    ]);
-    expect(filterSpeakersByTrackIds(speakers, renamedEntries, ["track_build"]).map((speaker) => speaker.id)).toEqual([
-      "speaker_morgan",
-    ]);
+    expect(
+      filterAgendaEntriesByTrackIds(renamedEntries, ["track_build"]).map((entry) => entry.id),
+    ).toEqual(["entry_evening"]);
+    expect(
+      filterSpeakersByTrackIds(speakers, renamedEntries, ["track_build"]).map(
+        (speaker) => speaker.id,
+      ),
+    ).toEqual(["speaker_morgan"]);
     expect(filterSpeakersByTrackIds(speakers, renamedEntries, ["missing"])).toEqual([]);
   });
 

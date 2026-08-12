@@ -240,8 +240,7 @@ class OrganizerSpeakerRepository extends FakeSpeakerRepository {
     const submissionIds = this.submissions
       .filter(
         (submission) =>
-          submission.eventId === input.eventId &&
-          submission.participantIds.includes(participantId),
+          submission.eventId === input.eventId && submission.participantIds.includes(participantId),
       )
       .map((submission) => submission.id);
     return Promise.resolve({
@@ -2201,9 +2200,7 @@ describe("SpeakerService organizer speaker writes", () => {
   });
   it("persists one explicit task mapping for each affected session", async () => {
     const { repository, service } = createOrganizerFixture();
-    repository.submissions.push(
-      submission("submission-1-breakout", "participant-1"),
-    );
+    repository.submissions.push(submission("submission-1-breakout", "participant-1"));
     const scope = repository.organizerScopes.get("event-1:account-1");
     if (scope === undefined) throw new Error("Expected organizer scope.");
     repository.organizerScopes.set("event-1:account-1", {
@@ -3910,26 +3907,23 @@ describe("canonical speaker admin routes", () => {
       "content-type": "application/json",
     };
 
-    const speaker = await app.request(
-      "/api/admin/organizations/org-1/events/event-1/speakers",
-      {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          idempotencyKey: "route-cfp-participant-1",
-          sourceType: "cfp",
-          sourceId: "submission-1:participant-1",
-          participantId: "participant-1",
-          displayName: "Priya Raman",
-          email: "priya@example.test",
-          jobTitle: "Principal Engineer",
-          company: "Latticework Systems",
-          biography: "Builds reliable platforms.",
-          socialLinks: {},
-          status: "confirmed",
-        }),
-      },
-    );
+    const speaker = await app.request("/api/admin/organizations/org-1/events/event-1/speakers", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        idempotencyKey: "route-cfp-participant-1",
+        sourceType: "cfp",
+        sourceId: "submission-1:participant-1",
+        participantId: "participant-1",
+        displayName: "Priya Raman",
+        email: "priya@example.test",
+        jobTitle: "Principal Engineer",
+        company: "Latticework Systems",
+        biography: "Builds reliable platforms.",
+        socialLinks: {},
+        status: "confirmed",
+      }),
+    });
     expect(speaker.status).toBe(201);
     expect(await speaker.json()).toMatchObject({
       data: {
@@ -3937,21 +3931,16 @@ describe("canonical speaker admin routes", () => {
       },
     });
 
-    const task = await app.request(
-      "/api/admin/organizations/org-1/events/event-1/speaker-tasks",
-      {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          title: "Confirm session",
-          description: "Confirm the session details.",
-          dueAt: "2027-04-01",
-          assignments: [
-            { participantId: "participant-1", submissionId: "submission-1" },
-          ],
-        }),
-      },
-    );
+    const task = await app.request("/api/admin/organizations/org-1/events/event-1/speaker-tasks", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: "Confirm session",
+        description: "Confirm the session details.",
+        dueAt: "2027-04-01",
+        assignments: [{ participantId: "participant-1", submissionId: "submission-1" }],
+      }),
+    });
     expect(task.status).toBe(201);
     expect(await task.json()).toMatchObject({
       data: {

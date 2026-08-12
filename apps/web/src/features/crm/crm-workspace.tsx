@@ -1934,10 +1934,7 @@ export function CrmWorkspaceView({
     const plan: CrmMergePlan = {
       duplicateContactIds: selectedMergeContacts.map((match) => match.contact.id),
       fieldWinners: Object.fromEntries(
-        CRM_MERGE_SCALAR_FIELDS.map(({ key }) => [
-          key,
-          fieldWinners[key] ?? selectedContact.id,
-        ]),
+        CRM_MERGE_SCALAR_FIELDS.map(({ key }) => [key, fieldWinners[key] ?? selectedContact.id]),
       ) as Record<CrmMergeScalarField, string>,
       customFieldWinners: { ...customFieldWinners },
     };
@@ -2811,11 +2808,14 @@ export function CrmWorkspaceView({
                               <AlertDescription>
                                 <p>
                                   Distinct participants are linked to contacts in this merge. CRM
-                                  merge cannot choose a participant identity or change authorization.
+                                  merge cannot choose a participant identity or change
+                                  authorization.
                                 </p>
                                 <ul>
                                   {mergePreview.participantConflicts.map((conflict) => (
-                                    <li key={`${conflict.eventId}-${conflict.participantIds.join(",")}`}>
+                                    <li
+                                      key={`${conflict.eventId}-${conflict.participantIds.join(",")}`}
+                                    >
                                       Event {conflict.eventId}: participants{" "}
                                       {conflict.participantIds.join(", ")} share CRM contacts{" "}
                                       {conflict.crmContactIds.join(", ")}.
@@ -3609,8 +3609,9 @@ export function CrmWorkspace({
   const [notes, setNotes] = useState<readonly CrmNote[]>([]);
   const [duplicates, setDuplicates] = useState<CrmDuplicateReport | null>(null);
   const [importResult, setImportResult] = useState<CrmImportResult | null>(null);
-  const [importPreviewResult, setImportPreviewResult] =
-    useState<CrmImportPreviewResult | null>(null);
+  const [importPreviewResult, setImportPreviewResult] = useState<CrmImportPreviewResult | null>(
+    null,
+  );
   const [importPreviewLoading, setImportPreviewLoading] = useState(false);
   const [importPreviewError, setImportPreviewError] = useState<string | null>(null);
   const [importPreviewSource, setImportPreviewSource] = useState<string | null>(null);
@@ -3871,7 +3872,6 @@ export function CrmWorkspace({
     }
   }
 
-
   async function previewMerge(plan: CrmMergePlan): Promise<void> {
     if (!selectedContact || plan.duplicateContactIds.length === 0) return;
     const key = mergePlanKey(plan);
@@ -3881,14 +3881,10 @@ export function CrmWorkspace({
     setMergePreviewError(null);
     setMergePreviewLoading(true);
     try {
-      const result = await api.previewMerge(
-        selectedContact.id,
-        plan.duplicateContactIds,
-        {
-          fieldWinners: plan.fieldWinners,
-          customFieldWinners: plan.customFieldWinners,
-        },
-      );
+      const result = await api.previewMerge(selectedContact.id, plan.duplicateContactIds, {
+        fieldWinners: plan.fieldWinners,
+        customFieldWinners: plan.customFieldWinners,
+      });
       if (mergePreviewRequestRef.current !== key) return;
       setMergePreview(result);
       setMergePreviewPlanKey(key);
@@ -3990,10 +3986,15 @@ export function CrmWorkspace({
     setBusy(true);
     setError(null);
     try {
-      const result = await api.mergeContacts(primaryContactId, duplicateIds, idempotencyKey("crm-merge"), {
-        fieldWinners: plan.fieldWinners,
-        customFieldWinners: plan.customFieldWinners,
-      });
+      const result = await api.mergeContacts(
+        primaryContactId,
+        duplicateIds,
+        idempotencyKey("crm-merge"),
+        {
+          fieldWinners: plan.fieldWinners,
+          customFieldWinners: plan.customFieldWinners,
+        },
+      );
       setMergeResult(result);
       setStatusMessage(
         `Merge committed: survivor ${result.survivorId}; audit ${result.auditId}${result.idempotent ? " (idempotent replay)" : ""}.`,

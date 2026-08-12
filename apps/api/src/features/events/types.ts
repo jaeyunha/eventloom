@@ -207,8 +207,7 @@ export const programPublicationSourceTriggers = [
   "released-asset-change",
   "released-schedule-change",
 ] as const;
-export type ProgramPublicationSourceTrigger =
-  (typeof programPublicationSourceTriggers)[number];
+export type ProgramPublicationSourceTrigger = (typeof programPublicationSourceTriggers)[number];
 
 export interface ProgramProjectionBinding {
   projectionId: string;
@@ -300,7 +299,6 @@ export interface ProgramPublicationCompletionInput {
 export interface ProgramPublicationFailureInput extends ProgramPublicationCompletionInput {
   reason: string;
 }
-
 
 export interface ProgramPublicationRollbackInput {
   organizationId?: string;

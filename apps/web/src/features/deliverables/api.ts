@@ -37,7 +37,6 @@ export interface DeliverableTaskAssignment {
   readonly submissionId: string | null;
 }
 
-
 export interface DeliverableSessionHistoryEntry {
   readonly id: string;
   readonly action: "created" | "updated" | "deleted" | "restored" | "approved" | "needs_changes";
@@ -717,10 +716,7 @@ function invalidTaskResponse(message: string): DeliverablesApiError {
   return new DeliverablesApiError("DELIVERABLES_TASK_INVALID_RESPONSE", message, 200);
 }
 
-function normalizedTaskMimeTypes(
-  value: unknown,
-  required: boolean,
-): readonly string[] | undefined {
+function normalizedTaskMimeTypes(value: unknown, required: boolean): readonly string[] | undefined {
   if (value === undefined) {
     if (required) throw invalidTaskResponse("The upload task is missing allowed MIME types.");
     return undefined;
@@ -881,7 +877,9 @@ function normalizeTask(value: unknown): DeliverableTask {
     submissionId,
     participantId,
     subject,
-    ...(typeof value.participantName === "string" ? { participantName: value.participantName } : {}),
+    ...(typeof value.participantName === "string"
+      ? { participantName: value.participantName }
+      : {}),
     ...(typeof value.sessionTitle === "string" ? { sessionTitle: value.sessionTitle } : {}),
     type,
     owner: value.owner as DeliverableTask["owner"],
@@ -1197,11 +1195,7 @@ function attachmentFileName(value: string | null): string {
   }
   return fileName;
 }
-const exportManifestStatuses = new Set<string>([
-  ...deliverableTaskStatuses,
-  "pending",
-  "uploaded",
-]);
+const exportManifestStatuses = new Set<string>([...deliverableTaskStatuses, "pending", "uploaded"]);
 
 function zipInvalid(message: string): DeliverablesApiError {
   return invalidExportResponse(`The deliverables export archive is invalid: ${message}`);
@@ -1326,7 +1320,9 @@ function storedZipManifest(body: ArrayBuffer): StoredZipManifestSource {
   }
   let value: unknown;
   try {
-    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(dataOffset, dataEnd));
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(
+      bytes.subarray(dataOffset, dataEnd),
+    );
     value = JSON.parse(text) as unknown;
   } catch {
     throw zipInvalid("manifest.json is not valid UTF-8 JSON.");
@@ -1456,7 +1452,12 @@ async function deliverablesExportResponse(
     );
   }
   const archive = storedZipManifest(body);
-  const manifest = normalizeExportManifest(archive.value, organizationId, eventId, archive.fileNames);
+  const manifest = normalizeExportManifest(
+    archive.value,
+    organizationId,
+    eventId,
+    archive.fileNames,
+  );
   return {
     body,
     fileName: attachmentFileName(response.headers.get("content-disposition")),

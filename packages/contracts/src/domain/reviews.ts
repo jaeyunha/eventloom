@@ -365,7 +365,8 @@ export type EvaluationPlanMutationResponse = MutationEnvelope<EvaluationPlan>;
 export const reviewResponseSchema = mutationEnvelopeSchema(reviewSchema);
 export type ReviewMutationResponse = MutationEnvelope<Review>;
 export const reviewsResponseSchema = paginatedResponseSchema(reviewSchema);
-export const reviewAssignmentMutationResponseSchema = mutationEnvelopeSchema(reviewAssignmentSchema);
+export const reviewAssignmentMutationResponseSchema =
+  mutationEnvelopeSchema(reviewAssignmentSchema);
 export type ReviewAssignmentMutationResponse = MutationEnvelope<ReviewAssignment>;
 export const reviewAssignmentsResponseSchema = paginatedResponseSchema(reviewAssignmentSchema);
 export const evaluationPlanResponseSchema = evaluationPlanMutationResponseSchema;

@@ -798,9 +798,11 @@ describe("program publication and saved embeds", () => {
     });
     expect(response.status).toBe(202);
     expect(response.headers.get("cache-control")).toBe("private, no-store");
-    const pending = await responseData<{ version: number; pendingReleaseId: string; pendingRevision: number }>(
-      response,
-    );
+    const pending = await responseData<{
+      version: number;
+      pendingReleaseId: string;
+      pendingRevision: number;
+    }>(response);
     const served = await active.service.completeRebuild({
       organizationId: "org-a",
       eventId: "event-publication",

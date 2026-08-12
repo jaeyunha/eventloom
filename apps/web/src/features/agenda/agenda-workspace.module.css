@@ -1152,6 +1152,8 @@
   color: var(--color-muted);
   font-size: 0.76rem;
   text-align: center;
+  width: 100%;
+  font-family: inherit;
 }
 
 .calendarDelivery {

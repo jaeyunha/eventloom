@@ -504,45 +504,45 @@ describe("organization CRM workspace", () => {
     const calls: Array<{ url: string; init: RequestInit }> = [];
     const fetcher = vi.fn<TestFetcher>(async (input, init = {}) => {
       calls.push({ url: String(input), init });
-      return response(calls.length === 1 ? importPreview : {
-        organizationId: "org/one",
-        survivorId: contact.id,
-        retiredIds: ["contact-2"],
-        rewired: {
-          participantContactLinks: 1,
-          notes: 2,
-          segments: 3,
-          pipelineHistory: 4,
-        },
-        participantConflicts: [],
-        auditId: "audit-merge",
-        planFingerprint: "plan-merge",
-        survivor: contact,
-        tombstones: [],
-        primary: contact,
-        merged: [],
-        preview: true,
-        canCommit: true,
-      });
+      return response(
+        calls.length === 1
+          ? importPreview
+          : {
+              organizationId: "org/one",
+              survivorId: contact.id,
+              retiredIds: ["contact-2"],
+              rewired: {
+                participantContactLinks: 1,
+                notes: 2,
+                segments: 3,
+                pipelineHistory: 4,
+              },
+              participantConflicts: [],
+              auditId: "audit-merge",
+              planFingerprint: "plan-merge",
+              survivor: contact,
+              tombstones: [],
+              primary: contact,
+              merged: [],
+              preview: true,
+              canCommit: true,
+            },
+      );
     });
     const api = createCrmApi("https://api.example.test/", "org/one", fetcher);
     await api.previewImport("Name,Email\nAda,ada@example.test");
-    await api.previewMerge(
-      contact.id,
-      ["contact-2"],
-      {
-        fieldWinners: {
-          email: contact.id,
-          phone: contact.id,
-          name: contact.id,
-          company: contact.id,
-          title: contact.id,
-          bio: contact.id,
-          headshot: contact.id,
-        },
-        customFieldWinners: { region: contact.id },
+    await api.previewMerge(contact.id, ["contact-2"], {
+      fieldWinners: {
+        email: contact.id,
+        phone: contact.id,
+        name: contact.id,
+        company: contact.id,
+        title: contact.id,
+        bio: contact.id,
+        headshot: contact.id,
       },
-    );
+      customFieldWinners: { region: contact.id },
+    });
     expect(calls.map((call) => call.url)).toEqual([
       "https://api.example.test/api/admin/organizations/org%2Fone/crm/contacts/import/preview",
       "https://api.example.test/api/admin/organizations/org%2Fone/crm/contacts/contact-1/merge/preview",

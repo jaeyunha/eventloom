@@ -838,8 +838,7 @@ export function PortalProvider({
         setProfileRevision(
           scopedView.profiles.find(
             (profile) =>
-              profile.eventId === scopedContext.eventId &&
-              profile.participantId === selected,
+              profile.eventId === scopedContext.eventId && profile.participantId === selected,
           )?.version ?? null,
         );
         setWorkspace({ ...emptyWorkspace, assets: [...(scopedView.assets ?? [])] });
@@ -955,8 +954,9 @@ export function PortalProvider({
   const switchParticipant = useCallback(
     (participantId: string): boolean => {
       const target =
-        (context === null ? undefined : contexts.find((candidate) => candidate.id === context.id)) ??
-        context;
+        (context === null
+          ? undefined
+          : contexts.find((candidate) => candidate.id === context.id)) ?? context;
       if (!target) {
         return false;
       }
@@ -976,8 +976,7 @@ export function PortalProvider({
       setProfileRevision(
         scopedView.profiles.find(
           (profile) =>
-            profile.eventId === scopedContext.eventId &&
-            profile.participantId === selected,
+            profile.eventId === scopedContext.eventId && profile.participantId === selected,
         )?.version ?? null,
       );
       setProfileMutationState("idle");
@@ -1103,16 +1102,9 @@ export function PortalProvider({
           version: input.profile.version,
         });
         if (classification.state !== "saved") {
-          throw new PortalApiError(
-            "PROFILE_NOT_AUTHORITATIVE",
-            classification.message,
-            502,
-          );
+          throw new PortalApiError("PROFILE_NOT_AUTHORITATIVE", classification.message, 502);
         }
-        if (
-          finalizedHeadshot !== undefined &&
-          updated.headshotAssetId !== finalizedHeadshot.id
-        ) {
+        if (finalizedHeadshot !== undefined && updated.headshotAssetId !== finalizedHeadshot.id) {
           throw new PortalApiError(
             "CONTEXT_MISMATCH",
             "The saved profile does not reference the finalized headshot.",
@@ -1183,14 +1175,7 @@ export function PortalProvider({
         }
       }
     },
-    [
-      api,
-      can,
-      context,
-      contexts,
-      hydrate,
-      selectedParticipantId,
-    ],
+    [api, can, context, contexts, hydrate, selectedParticipantId],
   );
 
   const transitionTask = useCallback(

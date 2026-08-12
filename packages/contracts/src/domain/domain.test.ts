@@ -173,9 +173,11 @@ describe("C0 contract gate invariants", () => {
       type: "participant",
       participantId,
     });
-    expect(
-      taskSubjectSchema.parse({ type: "session", participantId, submissionId }),
-    ).toEqual({ type: "session", participantId, submissionId });
+    expect(taskSubjectSchema.parse({ type: "session", participantId, submissionId })).toEqual({
+      type: "session",
+      participantId,
+      submissionId,
+    });
     expect(() =>
       taskSubjectSchema.parse({ type: "participant", participantId, submissionId: null }),
     ).toThrow();

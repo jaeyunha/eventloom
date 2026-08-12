@@ -501,9 +501,7 @@ const automation: CommunicationActor = {
   grants: [{ eventId, role: "delivery" }],
 };
 
-function reminderCandidate(
-  overrides: Partial<ReminderCandidate> = {},
-): ReminderCandidate {
+function reminderCandidate(overrides: Partial<ReminderCandidate> = {}): ReminderCandidate {
   return {
     id: "candidate-1",
     organizationId: tenantId,
@@ -670,7 +668,8 @@ describe("reminder domain", () => {
     const dispatches = await repository.listDispatches(tenantId, eventId);
     const first = dispatches[0];
     const other = dispatches[1];
-    if (first === undefined || other === undefined) throw new Error("Expected reminder dispatches.");
+    if (first === undefined || other === undefined)
+      throw new Error("Expected reminder dispatches.");
     await expectCode(
       service.recordReminderDispatchStatus(automation, {
         eventId,

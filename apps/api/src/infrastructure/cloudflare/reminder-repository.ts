@@ -156,7 +156,9 @@ export class D1ReminderRepository implements ReminderRepository {
     runId: string,
   ): Promise<ReminderRun | undefined> {
     const row = await this.database
-      .prepare(`SELECT ${runColumns} FROM reminder_runs WHERE organization_id = ? AND event_id = ? AND id = ? LIMIT 1`)
+      .prepare(
+        `SELECT ${runColumns} FROM reminder_runs WHERE organization_id = ? AND event_id = ? AND id = ? LIMIT 1`,
+      )
       .bind(organizationId, eventId, runId)
       .first<ReminderRunRow>();
     return row === null ? undefined : toRun(row);
@@ -164,7 +166,9 @@ export class D1ReminderRepository implements ReminderRepository {
 
   async listRuns(organizationId: string, eventId: string): Promise<readonly ReminderRun[]> {
     const rows = await this.database
-      .prepare(`SELECT ${runColumns} FROM reminder_runs WHERE organization_id = ? AND event_id = ? ORDER BY started_at DESC, id DESC`)
+      .prepare(
+        `SELECT ${runColumns} FROM reminder_runs WHERE organization_id = ? AND event_id = ? ORDER BY started_at DESC, id DESC`,
+      )
       .bind(organizationId, eventId)
       .all<ReminderRunRow>();
     return rows.results.map(toRun);
@@ -172,7 +176,9 @@ export class D1ReminderRepository implements ReminderRepository {
 
   async insertRun(run: ReminderRun): Promise<ReminderRun> {
     await this.database
-      .prepare(`INSERT INTO reminder_runs (${runColumns}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .prepare(
+        `INSERT INTO reminder_runs (${runColumns}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
       .bind(
         run.id,
         run.organizationId,
@@ -199,7 +205,9 @@ export class D1ReminderRepository implements ReminderRepository {
 
   async updateRun(run: ReminderRun): Promise<ReminderRun> {
     const result = await this.database
-      .prepare(`UPDATE reminder_runs SET trigger_type = ?, audience_type = ?, audience_revision = ?, candidate_count = ?, eligible_count = ?, queued_count = ?, skipped_count = ?, failed_count = ?, state = ?, configuration_failure = ?, actor_id = ?, started_at = ?, completed_at = ?, created_at = ?, updated_at = ? WHERE id = ? AND organization_id = ? AND event_id = ?`)
+      .prepare(
+        `UPDATE reminder_runs SET trigger_type = ?, audience_type = ?, audience_revision = ?, candidate_count = ?, eligible_count = ?, queued_count = ?, skipped_count = ?, failed_count = ?, state = ?, configuration_failure = ?, actor_id = ?, started_at = ?, completed_at = ?, created_at = ?, updated_at = ? WHERE id = ? AND organization_id = ? AND event_id = ?`,
+      )
       .bind(
         run.triggerType,
         run.audienceType,
@@ -231,7 +239,9 @@ export class D1ReminderRepository implements ReminderRepository {
     dispatchId: string,
   ): Promise<ReminderDispatch | undefined> {
     const row = await this.database
-      .prepare(`SELECT ${dispatchColumns} FROM reminder_dispatches WHERE organization_id = ? AND event_id = ? AND id = ? LIMIT 1`)
+      .prepare(
+        `SELECT ${dispatchColumns} FROM reminder_dispatches WHERE organization_id = ? AND event_id = ? AND id = ? LIMIT 1`,
+      )
       .bind(organizationId, eventId, dispatchId)
       .first<ReminderDispatchRow>();
     return row === null ? undefined : toDispatch(row);
@@ -243,7 +253,9 @@ export class D1ReminderRepository implements ReminderRepository {
     idempotencyKey: string,
   ): Promise<ReminderDispatch | undefined> {
     const row = await this.database
-      .prepare(`SELECT ${dispatchColumns} FROM reminder_dispatches WHERE organization_id = ? AND event_id = ? AND idempotency_key = ? LIMIT 1`)
+      .prepare(
+        `SELECT ${dispatchColumns} FROM reminder_dispatches WHERE organization_id = ? AND event_id = ? AND idempotency_key = ? LIMIT 1`,
+      )
       .bind(organizationId, eventId, idempotencyKey)
       .first<ReminderDispatchRow>();
     return row === null ? undefined : toDispatch(row);
@@ -255,7 +267,9 @@ export class D1ReminderRepository implements ReminderRepository {
     providerMessageId: string,
   ): Promise<ReminderDispatch | undefined> {
     const row = await this.database
-      .prepare(`SELECT ${dispatchColumns} FROM reminder_dispatches WHERE organization_id = ? AND event_id = ? AND provider_message_id = ? LIMIT 1`)
+      .prepare(
+        `SELECT ${dispatchColumns} FROM reminder_dispatches WHERE organization_id = ? AND event_id = ? AND provider_message_id = ? LIMIT 1`,
+      )
       .bind(organizationId, eventId, providerMessageId)
       .first<ReminderDispatchRow>();
     return row === null ? undefined : toDispatch(row);
@@ -269,10 +283,14 @@ export class D1ReminderRepository implements ReminderRepository {
     const statement =
       runId === undefined
         ? this.database
-            .prepare(`SELECT ${dispatchColumns} FROM reminder_dispatches WHERE organization_id = ? AND event_id = ? ORDER BY created_at DESC, id DESC`)
+            .prepare(
+              `SELECT ${dispatchColumns} FROM reminder_dispatches WHERE organization_id = ? AND event_id = ? ORDER BY created_at DESC, id DESC`,
+            )
             .bind(organizationId, eventId)
         : this.database
-            .prepare(`SELECT ${dispatchColumns} FROM reminder_dispatches WHERE organization_id = ? AND event_id = ? AND run_id = ? ORDER BY created_at DESC, id DESC`)
+            .prepare(
+              `SELECT ${dispatchColumns} FROM reminder_dispatches WHERE organization_id = ? AND event_id = ? AND run_id = ? ORDER BY created_at DESC, id DESC`,
+            )
             .bind(organizationId, eventId, runId);
     const rows = await statement.all<ReminderDispatchRow>();
     return rows.results.map(toDispatch);
@@ -281,7 +299,9 @@ export class D1ReminderRepository implements ReminderRepository {
   async insertDispatch(dispatch: ReminderDispatch): Promise<ReminderDispatch> {
     const [taskId, reviewAssignmentId] = subjectColumns(dispatch.subject);
     await this.database
-      .prepare(`INSERT INTO reminder_dispatches (${dispatchColumns}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .prepare(
+        `INSERT INTO reminder_dispatches (${dispatchColumns}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
       .bind(
         dispatch.id,
         dispatch.runId,
@@ -316,7 +336,9 @@ export class D1ReminderRepository implements ReminderRepository {
   async updateDispatch(dispatch: ReminderDispatch): Promise<ReminderDispatch> {
     const [taskId, reviewAssignmentId] = subjectColumns(dispatch.subject);
     const result = await this.database
-      .prepare(`UPDATE reminder_dispatches SET run_id = ?, recipient = ?, task_id = ?, review_assignment_id = ?, eligibility_reason = ?, cadence_window = ?, idempotency_key = ?, provider_message_id = ?, status = ?, skip_metadata_json = ?, failure_metadata_json = ?, created_at = ?, updated_at = ?, eligible_at = ?, skipped_at = ?, queued_at = ?, provider_accepted_at = ?, delivered_at = ?, failed_at = ?, bounced_at = ?, completed_at = ?, outbox_job_id = ? WHERE id = ? AND organization_id = ? AND event_id = ?`)
+      .prepare(
+        `UPDATE reminder_dispatches SET run_id = ?, recipient = ?, task_id = ?, review_assignment_id = ?, eligibility_reason = ?, cadence_window = ?, idempotency_key = ?, provider_message_id = ?, status = ?, skip_metadata_json = ?, failure_metadata_json = ?, created_at = ?, updated_at = ?, eligible_at = ?, skipped_at = ?, queued_at = ?, provider_accepted_at = ?, delivered_at = ?, failed_at = ?, bounced_at = ?, completed_at = ?, outbox_job_id = ? WHERE id = ? AND organization_id = ? AND event_id = ?`,
+      )
       .bind(
         dispatch.runId,
         dispatch.recipient,
@@ -362,7 +384,9 @@ export class CloudflareReminderOutbox implements ReminderOutboxDelivery {
     const now = new Date().toISOString();
     const outboxJobId = `reminder-outbox:${input.dispatchId}`;
     await this.database
-      .prepare(`INSERT INTO outbox_jobs (id, tenant_id, topic, deduplication_key, payload_json, state, attempt_count, available_at, created_at, updated_at) VALUES (?, ?, 'communications', ?, ?, 'pending', 0, ?, ?, ?) ON CONFLICT (tenant_id, topic, deduplication_key) DO NOTHING`)
+      .prepare(
+        `INSERT INTO outbox_jobs (id, tenant_id, topic, deduplication_key, payload_json, state, attempt_count, available_at, created_at, updated_at) VALUES (?, ?, 'communications', ?, ?, 'pending', 0, ?, ?, ?) ON CONFLICT (tenant_id, topic, deduplication_key) DO NOTHING`,
+      )
       .bind(
         outboxJobId,
         input.organizationId,
@@ -387,7 +411,9 @@ export class CloudflareReminderOutbox implements ReminderOutboxDelivery {
       )
       .run();
     const row = await this.database
-      .prepare("SELECT id, state FROM outbox_jobs WHERE tenant_id = ? AND topic = 'communications' AND deduplication_key = ? LIMIT 1")
+      .prepare(
+        "SELECT id, state FROM outbox_jobs WHERE tenant_id = ? AND topic = 'communications' AND deduplication_key = ? LIMIT 1",
+      )
       .bind(input.organizationId, input.idempotencyKey)
       .first<OutboxStateRow>();
     if (row === null) throw new Error("The reminder outbox job was not persisted.");
@@ -400,7 +426,9 @@ export class CloudflareReminderOutbox implements ReminderOutboxDelivery {
         enqueuedAt: now,
       });
       await this.database
-        .prepare("UPDATE outbox_jobs SET state = 'queued', updated_at = ? WHERE id = ? AND state = 'pending'")
+        .prepare(
+          "UPDATE outbox_jobs SET state = 'queued', updated_at = ? WHERE id = ? AND state = 'pending'",
+        )
         .bind(now, row.id)
         .run();
     }

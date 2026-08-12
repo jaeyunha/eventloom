@@ -487,9 +487,7 @@ describe("advisory agenda suggestions", () => {
     const run = await engine.generateSuggestion(suggestionInput(savedDraft.version));
     const savedPreview = await engine.preview("event-1");
 
-    expect(run.candidateDiagnostics.conflicts).toEqual([
-      expect.objectContaining({ kind: "room" }),
-    ]);
+    expect(run.candidateDiagnostics.conflicts).toEqual([expect.objectContaining({ kind: "room" })]);
     expect(run).not.toHaveProperty("validation");
     expect(savedPreview.validation.conflicts).toEqual([]);
     expect(await engine.getDraft("event-1")).toEqual(savedDraft);

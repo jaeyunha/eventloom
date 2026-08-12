@@ -127,7 +127,6 @@ function suggestionApiFor(api: AgendaApi | null): AgendaSuggestionApi | null {
     : null;
 }
 
-
 interface EntryFormProps {
   entry?: AgendaEntry;
   sessions: readonly AgendaSession[];
@@ -138,7 +137,10 @@ interface EntryFormProps {
   initialSessionId?: string;
   onSubmit(entry: AgendaEntryInput): Promise<void>;
   onCancel?: () => void;
-  onCreateRoom?: (input: { name: string; capacity: number }) => Promise<AgendaWorkspaceData["rooms"][number] | null>;
+  onCreateRoom?: (input: {
+    name: string;
+    capacity: number;
+  }) => Promise<AgendaWorkspaceData["rooms"][number] | null>;
   onCreateTrack?: (input: { name: string }) => Promise<AgendaTrack | null>;
 }
 
@@ -293,7 +295,11 @@ function EntryForm({
                   onChange={(event) => setRoomCapacity(event.target.value)}
                 />
               </label>
-              <button className={styles.secondaryButton} type="button" onClick={() => void createRoom()}>
+              <button
+                className={styles.secondaryButton}
+                type="button"
+                onClick={() => void createRoom()}
+              >
                 Save room
               </button>
             </div>
@@ -331,7 +337,11 @@ function EntryForm({
                 <span>Track name</span>
                 <input value={trackName} onChange={(event) => setTrackName(event.target.value)} />
               </label>
-              <button className={styles.secondaryButton} type="button" onClick={() => void createTrack()}>
+              <button
+                className={styles.secondaryButton}
+                type="button"
+                onClick={() => void createTrack()}
+              >
                 Save track
               </button>
             </div>
@@ -538,7 +548,10 @@ interface AgendaBoardProps {
   onRegenerateSuggestion?: () => Promise<void>;
   onRejectSuggestion?: () => Promise<void>;
   onApplySuggestion?: (changeIds: readonly string[]) => Promise<void>;
-  onCreateRoom?: (input: { name: string; capacity: number }) => Promise<AgendaWorkspaceData["rooms"][number] | null>;
+  onCreateRoom?: (input: {
+    name: string;
+    capacity: number;
+  }) => Promise<AgendaWorkspaceData["rooms"][number] | null>;
   onCreateTrack?: (input: { name: string }) => Promise<AgendaTrack | null>;
   calendarDelivery?: AgendaCalendarDeliveryState | null;
   onRetryCalendarDelivery?: () => Promise<void>;
@@ -629,7 +642,8 @@ export function AgendaBoard({
     const entryConflicts = conflictsForEntry(entry.id, preview?.conflicts ?? []);
     const entryReleaseConflicts = conflictsForEntry(entry.id, preview?.releaseConflicts ?? []);
     const entryWarnings = warningsForEntry(entry.id, preview?.warnings ?? []);
-    const hasIssues = entryConflicts.length + entryReleaseConflicts.length + entryWarnings.length > 0;
+    const hasIssues =
+      entryConflicts.length + entryReleaseConflicts.length + entryWarnings.length > 0;
     const editExpanded = viewMode === "day" && editingEntryId === entry.id;
     return (
       <li key={key}>
@@ -763,7 +777,8 @@ export function AgendaBoard({
           </span>
         </header>
         <p className={styles.viewContext}>
-          Choose Place in schedule with keyboard or touch, or drag a session to the schedule drop target.
+          Choose Place in schedule with keyboard or touch, or drag a session to the schedule drop
+          target.
         </p>
         {sessions.length === 0 ? (
           <p className={styles.viewGroupEmpty}>No unscheduled accepted sessions.</p>
@@ -1043,7 +1058,8 @@ export function AgendaBoard({
                 ))}
               </div>
             </div>
-            <div
+            <button
+              type="button"
               className={styles.scheduleDropTarget}
               onDragOver={(event) => {
                 event.preventDefault();
@@ -1060,7 +1076,7 @@ export function AgendaBoard({
               aria-label="Schedule drop target"
             >
               Drag an unscheduled session here to open placement.
-            </div>
+            </button>
 
             {showAddForm && hasRooms ? (
               <div id="add-session-panel" className={styles.addPanel}>
@@ -1075,9 +1091,7 @@ export function AgendaBoard({
                     setShowAddForm(false);
                     setPlacementSessionId(null);
                   }}
-                  {...(placementSessionId === null
-                    ? {}
-                    : { initialSessionId: placementSessionId })}
+                  {...(placementSessionId === null ? {} : { initialSessionId: placementSessionId })}
                   {...(onCreateRoom === undefined ? {} : { onCreateRoom })}
                   {...(onCreateTrack === undefined ? {} : { onCreateTrack })}
                   onSubmit={async (entry) => {
@@ -1248,7 +1262,10 @@ export function AgendaBoard({
                 </section>
               ) : null}
               {suggestionRun?.candidateDiagnostics ? (
-                <section className={styles.warningPanel} aria-labelledby="candidate-diagnostics-heading">
+                <section
+                  className={styles.warningPanel}
+                  aria-labelledby="candidate-diagnostics-heading"
+                >
                   <h2 id="candidate-diagnostics-heading">Candidate diagnostics</h2>
                   <p>Private suggestion diagnostics are not part of the authoritative preview.</p>
                   <ul>
@@ -1290,11 +1307,19 @@ export function AgendaBoard({
                     <span>Calendar: {calendarDelivery.state.replace("_", " ")}</span>
                     <span>Sent last 24 hours: {calendarDelivery.sentLast24Hours}</span>
                     <span>Failed last 24 hours: {calendarDelivery.failedLast24Hours}</span>
-                    <span>Last invitation: {calendarDelivery.lastInvitationAt ? formatRevisionTimestamp(calendarDelivery.lastInvitationAt) : "None"}</span>
+                    <span>
+                      Last invitation:{" "}
+                      {calendarDelivery.lastInvitationAt
+                        ? formatRevisionTimestamp(calendarDelivery.lastInvitationAt)
+                        : "None"}
+                    </span>
                     {calendarDelivery.lastFailure ? (
                       <div role="alert">
                         <span>Last failure: {calendarDelivery.lastFailure.summary}</span>
-                        <small>Committed UID and sequence are retained for repair; this does not claim delivery success.</small>
+                        <small>
+                          Committed UID and sequence are retained for repair; this does not claim
+                          delivery success.
+                        </small>
                         {calendarDelivery.lastFailure.retryable && onRetryCalendarDelivery ? (
                           <button
                             className={styles.secondaryButton}
@@ -1302,7 +1327,9 @@ export function AgendaBoard({
                             disabled={busy}
                             onClick={() => void onRetryCalendarDelivery()}
                           >
-                            {isBusyFor("retry-calendar-delivery") ? "Retrying..." : "Retry calendar delivery"}
+                            {isBusyFor("retry-calendar-delivery")
+                              ? "Retrying..."
+                              : "Retry calendar delivery"}
                           </button>
                         ) : null}
                       </div>

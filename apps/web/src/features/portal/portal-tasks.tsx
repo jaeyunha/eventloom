@@ -21,7 +21,13 @@ import {
   portalAssetStateLabel,
   TaskStatusBadge,
 } from "./portal-ui";
-import type { PortalAsset, PortalAssetComment, PortalProfile, PortalSubmission, PortalTask } from "./types";
+import type {
+  PortalAsset,
+  PortalAssetComment,
+  PortalProfile,
+  PortalSubmission,
+  PortalTask,
+} from "./types";
 
 const filters: readonly { value: TaskFilter; label: string }[] = [
   { value: "all", label: "All tasks" },
@@ -103,7 +109,10 @@ export function resolveTaskSubject(task: PortalTask): TaskSubjectResolution {
       error: null,
     };
   }
-  return { subject: null, error: "Task subject metadata is missing a session or participant scope." };
+  return {
+    subject: null,
+    error: "Task subject metadata is missing a session or participant scope.",
+  };
 }
 
 export interface TaskSubjectPresentation {
@@ -132,7 +141,8 @@ export function taskSubjectPresentation(
         candidate.participantId === resolution.subject.participantId,
     );
     const taskParticipantName = nonEmptyString(asRecord(task)?.participantName);
-    const displayName = profile?.displayName ?? taskParticipantName ?? resolution.subject.participantId;
+    const displayName =
+      profile?.displayName ?? taskParticipantName ?? resolution.subject.participantId;
     return {
       label: `Participant · ${displayName}`,
       description: "This requirement applies to your participant profile across accepted sessions.",
@@ -192,9 +202,7 @@ export function getTaskUploadPolicy(task: PortalTask): TaskUploadPolicy {
     allowedMimeTypes.length === rawMimeTypes.length;
   const rawMaxBytes = taskRecord?.maxBytes;
   const maxBytes =
-    typeof rawMaxBytes === "number" &&
-    Number.isSafeInteger(rawMaxBytes) &&
-    rawMaxBytes > 0
+    typeof rawMaxBytes === "number" && Number.isSafeInteger(rawMaxBytes) && rawMaxBytes > 0
       ? rawMaxBytes
       : null;
 
@@ -473,7 +481,8 @@ export function assetPointerLabels(
 ): readonly string[] {
   if (pointers.status !== "ready") return [];
   const labels: string[] = [];
-  const matches = (pointerId: string | null) => pointerId !== null && assetMatchesPointer(asset, pointerId);
+  const matches = (pointerId: string | null) =>
+    pointerId !== null && assetMatchesPointer(asset, pointerId);
   if (matches(pointers.latestVersionId)) labels.push("Latest");
   if (matches(pointers.currentVersionId)) labels.push("Current");
   if (matches(pointers.approvedVersionId)) labels.push("Approved");
@@ -490,7 +499,9 @@ export function commentsForAsset(
   return comments.filter((comment) => {
     if (comment.assetId !== asset.id) return false;
     const commentVersionId = nonEmptyString(asRecord(comment)?.versionId);
-    return commentVersionId === null || commentVersionId === asset.id || commentVersionId === versionId;
+    return (
+      commentVersionId === null || commentVersionId === asset.id || commentVersionId === versionId
+    );
   });
 }
 
@@ -616,15 +627,16 @@ function TaskCard({ task }: Readonly<{ task: PortalTask }>) {
   const [downloading, setDownloading] = useState(false);
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
   const [commentDraft, setCommentDraft] = useState("");
-  const [commentStatus, setCommentStatus] = useState<
-    "idle" | "pending" | "succeeded" | "failure"
-  >("idle");
+  const [commentStatus, setCommentStatus] = useState<"idle" | "pending" | "succeeded" | "failure">(
+    "idle",
+  );
   const [commentError, setCommentError] = useState<string | null>(null);
   const commentLoadRef = useRef<string | null>(null);
 
   const availableAssets = view ? mergePortalAssets(view.assets ?? [], workspace.assets) : [];
   const candidateResolution = view ? resolveTaskAsset(task, availableAssets) : null;
-  const candidateDefaultAssetId = candidateResolution?.latest?.id ??
+  const candidateDefaultAssetId =
+    candidateResolution?.latest?.id ??
     (candidateResolution?.assets.length === 1 ? candidateResolution.assets[0]?.id : null);
   const candidateSelectedAssetId = candidateResolution?.assets.some(
     (asset) => asset.id === selectedAssetId,
@@ -655,7 +667,8 @@ function TaskCard({ task }: Readonly<{ task: PortalTask }>) {
   const blockedBySubject = subject.error !== null;
   const blocked = isTaskBlocked(task, view.tasks) || blockedBySubject;
   const resolution = resolveTaskAsset(task, availableAssets);
-  const selectedAsset = resolution.assets.find((asset) => asset.id === selectedAssetId) ?? resolution.latest;
+  const selectedAsset =
+    resolution.assets.find((asset) => asset.id === selectedAssetId) ?? resolution.latest;
   const presentation = taskStatusPresentation(task.status);
   const action = blocked ? null : taskPrimaryAction(task);
   const busy = busyTaskIds.has(task.id);
@@ -821,7 +834,8 @@ function TaskCard({ task }: Readonly<{ task: PortalTask }>) {
               <strong>Version</strong> {selectedAsset.version ?? assetVersionId(selectedAsset)}
             </span>
           </div>
-          <div className={styles.taskMetadata} aria-label="Authoritative asset pointers">
+          <fieldset className={styles.taskMetadata}>
+            <legend className={styles.srOnly}>Authoritative asset pointers</legend>
             {assetPointerLabels(selectedAsset, resolution.pointers).map((label) => (
               <span key={label} className={styles.badge}>
                 {label} version
@@ -832,7 +846,7 @@ function TaskCard({ task }: Readonly<{ task: PortalTask }>) {
                 <strong>Pointer state</strong> {resolution.pointers.status.replace("-", " ")}
               </span>
             ) : null}
-          </div>
+          </fieldset>
           {resolution.pointers.status === "missing-metadata" ? (
             <p className={styles.blockedNotice} role="status">
               Authoritative version pointers are missing; the current version cannot be confirmed.
@@ -854,7 +868,8 @@ function TaskCard({ task }: Readonly<{ task: PortalTask }>) {
             </p>
           ) : null}
           {resolution.assets.length > 1 ? (
-            <div className={styles.taskMetadata} role="group" aria-label="Select asset version">
+            <fieldset className={styles.taskMetadata}>
+              <legend className={styles.srOnly}>Select asset version</legend>
               {resolution.assets.map((candidate) => (
                 <button
                   key={candidate.id}
@@ -866,10 +881,11 @@ function TaskCard({ task }: Readonly<{ task: PortalTask }>) {
                     setCommentStatus("idle");
                   }}
                 >
-                  {candidate.id === selectedAsset.id ? "Viewing" : "View"} version {candidate.version ?? assetVersionId(candidate)}
+                  {candidate.id === selectedAsset.id ? "Viewing" : "View"} version{" "}
+                  {candidate.version ?? assetVersionId(candidate)}
                 </button>
               ))}
-            </div>
+            </fieldset>
           ) : null}
           {selectedAsset.state === "ready" ? (
             <button
@@ -882,7 +898,9 @@ function TaskCard({ task }: Readonly<{ task: PortalTask }>) {
             </button>
           ) : null}
           <section className={styles.taskActionArea} aria-labelledby={`comments-${task.id}`}>
-            <h4 id={`comments-${task.id}`}>Comments for version {selectedAsset.version ?? assetVersionId(selectedAsset)}</h4>
+            <h4 id={`comments-${task.id}`}>
+              Comments for version {selectedAsset.version ?? assetVersionId(selectedAsset)}
+            </h4>
             {commentStatus === "pending" ? (
               <p className={styles.toolbarDescription} role="status">
                 Loading comments for this immutable version…
@@ -890,10 +908,14 @@ function TaskCard({ task }: Readonly<{ task: PortalTask }>) {
             ) : null}
             {commentStatus === "failure" || commentProviderError !== null ? (
               <p className={styles.fieldError} role="alert">
-                {commentError ?? commentProviderError ?? "Comments are unavailable for this version."}
+                {commentError ??
+                  commentProviderError ??
+                  "Comments are unavailable for this version."}
               </p>
             ) : null}
-            {commentStatus === "succeeded" && commentProviderError === null && comments.length === 0 ? (
+            {commentStatus === "succeeded" &&
+            commentProviderError === null &&
+            comments.length === 0 ? (
               <p className={styles.toolbarDescription}>No comments on this version yet.</p>
             ) : null}
             {comments.length > 0 ? (
@@ -901,7 +923,9 @@ function TaskCard({ task }: Readonly<{ task: PortalTask }>) {
                 {comments.map((comment) => (
                   <li key={comment.id}>
                     <strong>{comment.authorLabel}</strong>{" "}
-                    <time dateTime={comment.createdAt}>{formatPortalDate(comment.createdAt) ?? ""}</time>
+                    <time dateTime={comment.createdAt}>
+                      {formatPortalDate(comment.createdAt) ?? ""}
+                    </time>
                     <p>{comment.body}</p>
                   </li>
                 ))}

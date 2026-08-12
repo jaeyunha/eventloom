@@ -19,7 +19,10 @@ import {
   userIdSchema,
 } from "./ids";
 import { taskStatusSchema, taskTypeSchema } from "./lifecycle";
-import { mutationEnvelopeSchema as authoritativeMutationEnvelopeSchema, type MutationEnvelope } from "./submissions";
+import {
+  mutationEnvelopeSchema as authoritativeMutationEnvelopeSchema,
+  type MutationEnvelope,
+} from "./submissions";
 
 export const taskSubjectSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("participant"), participantId: participantIdSchema }).strict(),

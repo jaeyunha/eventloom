@@ -4212,9 +4212,7 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
     expect(evaluationsRead?.query?.filterByFormula).toContain(reviewerId);
     expect(evaluationsRead?.query?.filterByFormula).toContain(eventId);
     expect(
-      evaluationReads.some((request) =>
-        String(request.query?.filterByFormula).includes(planId),
-      ),
+      evaluationReads.some((request) => String(request.query?.filterByFormula).includes(planId)),
     ).toBe(true);
   });
   it("batches organizer workspace Airtable reads under the warm latency budget", async () => {
@@ -4824,7 +4822,9 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
         version: 3,
       }),
     ]);
-    await expect(repository.listOrganizerWorkspaceRecords(tenantId, eventId)).resolves.toMatchObject({
+    await expect(
+      repository.listOrganizerWorkspaceRecords(tenantId, eventId),
+    ).resolves.toMatchObject({
       assignments: [expect.objectContaining({ id: assignmentC.id })],
       reviews: [reviewA],
     });
@@ -4846,9 +4846,9 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
         request.recordId === undefined,
     );
     expect(mutations).toHaveLength(2);
-    expect(mutations.every((request) => JSON.stringify(request.body).includes("performUpsert"))).toBe(
-      true,
-    );
+    expect(
+      mutations.every((request) => JSON.stringify(request.body).includes("performUpsert")),
+    ).toBe(true);
   });
 
   it("persists tenant-scoped Airtable suggestions with atomic CAS resolution", async () => {
@@ -4939,7 +4939,10 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       ...suggestion,
       status: "accepted" as const,
       version: 2,
-      history: [...suggestion.history, { action: "accept" as const, actorId: reviewerId, at: later }],
+      history: [
+        ...suggestion.history,
+        { action: "accept" as const, actorId: reviewerId, at: later },
+      ],
       audit: [...suggestion.audit, { action: "accept" as const, actorId: reviewerId, at: later }],
       updatedAt: later,
     };
@@ -5022,11 +5025,8 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       (request) =>
         request.method === "PATCH" &&
         request.recordId === undefined &&
-        (
-          request.body as
-            | { readonly records?: readonly unknown[] }
-            | undefined
-        )?.records?.length === 3,
+        (request.body as { readonly records?: readonly unknown[] } | undefined)?.records?.length ===
+          3,
     );
     expect(resolutionMutation).toBeDefined();
   });

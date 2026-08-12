@@ -400,7 +400,9 @@ describe("evaluation plans and assignments", () => {
     await expect(service.listReviewerWorkspace(reviewer("reviewer-1"), eventId)).resolves.toEqual({
       assignments: [],
     });
-    await expect(service.listReviewerWorkspace(reviewer("reviewer-2"), eventId)).resolves.toMatchObject({
+    await expect(
+      service.listReviewerWorkspace(reviewer("reviewer-2"), eventId),
+    ).resolves.toMatchObject({
       assignments: [
         expect.objectContaining({
           assignment: expect.objectContaining({ id: result.successorAssignment.id }),
@@ -599,11 +601,13 @@ describe("evaluation plans and assignments", () => {
         }),
       ],
     });
-    await expect(repository.getAssignment(tenantId, unrelated[0]?.id ?? "")).resolves.toMatchObject({
-      status: "assigned",
-      submissionId: "submission-2",
-      reviewerId: "reviewer-9",
-    });
+    await expect(repository.getAssignment(tenantId, unrelated[0]?.id ?? "")).resolves.toMatchObject(
+      {
+        status: "assigned",
+        submissionId: "submission-2",
+        reviewerId: "reviewer-9",
+      },
+    );
   });
   it("denies unassigned and cross-tenant reviewers", async () => {
     const { service } = await fixture();

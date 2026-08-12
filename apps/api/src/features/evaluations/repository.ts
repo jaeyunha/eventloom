@@ -48,14 +48,8 @@ export interface EvaluationRepository {
   getReview(tenantId: string, assignmentId: string): Promise<EvaluationReview | null>;
   listReviews(tenantId: string, planId: string): Promise<readonly EvaluationReview[]>;
   getSuggestion(tenantId: string, suggestionId: string): Promise<EvaluationSuggestion | null>;
-  listSuggestions(
-    tenantId: string,
-    planId: string,
-  ): Promise<readonly EvaluationSuggestion[]>;
-  putSuggestion(
-    suggestion: EvaluationSuggestion,
-    expectedVersion: number | null,
-  ): Promise<void>;
+  listSuggestions(tenantId: string, planId: string): Promise<readonly EvaluationSuggestion[]>;
+  putSuggestion(suggestion: EvaluationSuggestion, expectedVersion: number | null): Promise<void>;
   resolveSuggestion(
     suggestion: EvaluationSuggestion,
     expectedSuggestionVersion: number,
@@ -168,9 +162,7 @@ function reviewHistoryFor(
   assignment: EvaluationAssignment,
 ): readonly EvaluationReviewHistory[] {
   const review = reviews.get(storageKey(assignment.tenantId, assignment.id));
-  return review === undefined
-    ? []
-    : [{ assignment: clone(assignment), review: clone(review) }];
+  return review === undefined ? [] : [{ assignment: clone(assignment), review: clone(review) }];
 }
 
 export class InMemoryEvaluationRepository implements EvaluationRepository {
@@ -240,11 +232,7 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
     if (oldAssignment.status === "superseded") {
       throw conflict("The reviewer assignment has already been superseded.");
     }
-    assertVersion(
-      oldAssignment.version,
-      input.expectedAssignmentVersion,
-      "Reviewer assignment",
-    );
+    assertVersion(oldAssignment.version, input.expectedAssignmentVersion, "Reviewer assignment");
 
     const successor = input.successorAssignment;
     if (
@@ -377,16 +365,17 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
         if (existing.status === "superseded") {
           throw conflict("A superseded reviewer assignment cannot be reused.");
         }
-        if (existing.reviewerId !== assignment.reviewerId || existing.version !== assignment.version) {
+        if (
+          existing.reviewerId !== assignment.reviewerId ||
+          existing.version !== assignment.version
+        ) {
           throw conflict("A reviewer assignment changed since the distribution was previewed.");
         }
       }
     }
 
     const desiredById = new Map(desired.map((assignment) => [assignment.id, assignment]));
-    const supersededAssignments = active.filter(
-      (assignment) => !desiredById.has(assignment.id),
-    );
+    const supersededAssignments = active.filter((assignment) => !desiredById.has(assignment.id));
     const supersededAt = desired[0]?.updatedAt ?? active[0]?.updatedAt ?? "";
     const nextSuperseded = supersededAssignments.map(
       (assignment): EvaluationAssignment => ({

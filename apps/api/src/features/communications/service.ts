@@ -529,7 +529,9 @@ function copyReminderDispatch(dispatch: ReminderDispatch): ReminderDispatch {
 }
 
 function reminderSubjectKey(subject: ReminderSubject): string {
-  return subject.type === "task" ? `task:${subject.taskId}` : `review:${subject.reviewAssignmentId}`;
+  return subject.type === "task"
+    ? `task:${subject.taskId}`
+    : `review:${subject.reviewAssignmentId}`;
 }
 
 function reminderRunId(
@@ -599,10 +601,7 @@ function reminderErrorMessage(error: unknown): string {
 
 function isReminderTerminal(status: ReminderDispatchStatus): boolean {
   return (
-    status === "skipped" ||
-    status === "failed" ||
-    status === "bounced" ||
-    status === "delivered"
+    status === "skipped" || status === "failed" || status === "bounced" || status === "delivered"
   );
 }
 
@@ -622,8 +621,7 @@ function reminderCountStatus(status: ReminderDispatchStatus): {
       status === "bounced"
         ? 1
         : 0,
-    queued:
-      status === "queued" || status === "provider_accepted" || status === "delivered" ? 1 : 0,
+    queued: status === "queued" || status === "provider_accepted" || status === "delivered" ? 1 : 0,
     skipped: status === "skipped" ? 1 : 0,
     failed: status === "failed" || status === "bounced" ? 1 : 0,
   };
@@ -1638,7 +1636,11 @@ export class CommunicationService {
   ): Promise<readonly ReminderRun[]> {
     const eventId = typeof input === "string" ? input : input.eventId;
     requireOrganizer(actor, eventId);
-    const scope = reminderScope(actor, typeof input === "string" ? undefined : input.organizationId, eventId);
+    const scope = reminderScope(
+      actor,
+      typeof input === "string" ? undefined : input.organizationId,
+      eventId,
+    );
     const runtime = this.requireReminderRepository();
     return (await runtime.listRuns(scope.organizationId, scope.eventId)).map(copyReminderRun);
   }
@@ -1650,7 +1652,11 @@ export class CommunicationService {
   ): Promise<readonly ReminderDispatch[]> {
     const eventId = typeof input === "string" ? input : input.eventId;
     requireOrganizer(actor, eventId);
-    const scope = reminderScope(actor, typeof input === "string" ? undefined : input.organizationId, eventId);
+    const scope = reminderScope(
+      actor,
+      typeof input === "string" ? undefined : input.organizationId,
+      eventId,
+    );
     const runtime = this.requireReminderRepository();
     const filterRunId = typeof input === "string" ? runId : input.runId;
     return (await runtime.listDispatches(scope.organizationId, scope.eventId, filterRunId)).map(
@@ -1730,7 +1736,10 @@ export class CommunicationService {
     requireAutomationDelivery(actor, input.eventId);
     const scope = reminderScope(actor, input.organizationId, input.eventId);
     const runtime = this.requireReminderRepository();
-    const dispatchId = input.dispatchId === undefined ? undefined : requireText(input.dispatchId, "Dispatch id", 300);
+    const dispatchId =
+      input.dispatchId === undefined
+        ? undefined
+        : requireText(input.dispatchId, "Dispatch id", 300);
     const providerMessageId =
       input.providerMessageId === undefined
         ? undefined
@@ -1778,11 +1787,14 @@ export class CommunicationService {
       (dispatch.status === "queued" &&
         (input.status === "provider_accepted" || input.status === "failed")) ||
       (dispatch.status === "provider_accepted" &&
-        (input.status === "delivered" || input.status === "failed" || input.status === "bounced")) ||
-      (dispatch.status === input.status &&
-        currentProviderMessageId === dispatch.providerMessageId);
+        (input.status === "delivered" ||
+          input.status === "failed" ||
+          input.status === "bounced")) ||
+      (dispatch.status === input.status && currentProviderMessageId === dispatch.providerMessageId);
     if (!validTransition) {
-      throw conflict(`Cannot transition reminder dispatch from ${dispatch.status} to ${input.status}.`);
+      throw conflict(
+        `Cannot transition reminder dispatch from ${dispatch.status} to ${input.status}.`,
+      );
     }
     const now = this.clock().toISOString();
     const next: ReminderDispatch = {
@@ -1795,7 +1807,9 @@ export class CommunicationService {
           : cloneReminderMetadata(input.failureMetadata),
       updatedAt: now,
       providerAcceptedAt:
-        input.status === "provider_accepted" ? (dispatch.providerAcceptedAt ?? now) : dispatch.providerAcceptedAt,
+        input.status === "provider_accepted"
+          ? (dispatch.providerAcceptedAt ?? now)
+          : dispatch.providerAcceptedAt,
       deliveredAt: input.status === "delivered" ? now : dispatch.deliveredAt,
       failedAt: input.status === "failed" ? now : dispatch.failedAt,
       bouncedAt: input.status === "bounced" ? now : dispatch.bouncedAt,
@@ -1864,7 +1878,11 @@ export class CommunicationService {
       updatedAt: now,
     };
     run = await runtime.repository.insertRun(run);
-    run = await runtime.repository.updateRun({ ...run, state: "running", updatedAt: this.clock().toISOString() });
+    run = await runtime.repository.updateRun({
+      ...run,
+      state: "running",
+      updatedAt: this.clock().toISOString(),
+    });
     if (runtime.source === undefined || runtime.outbox === undefined) {
       return this.finishReminderRun(
         run,
@@ -2009,7 +2027,8 @@ export class CommunicationService {
           idempotencyKey: dispatch.idempotencyKey,
         });
         const outboxJobId = result.outboxJobId.trim();
-        if (outboxJobId.length === 0) throw new Error("The reminder outbox returned an empty job id.");
+        if (outboxJobId.length === 0)
+          throw new Error("The reminder outbox returned an empty job id.");
         const queuedAt = this.clock().toISOString();
         dispatch = await runtime.repository.updateDispatch({
           ...dispatch,
@@ -2095,14 +2114,19 @@ export class CommunicationService {
     const nextState =
       run.state === "completed" || run.state === "failed"
         ? run.state
-        : dispatches.every((dispatch) => isReminderTerminal(dispatch.status) || dispatch.status === "queued")
+        : dispatches.every(
+              (dispatch) => isReminderTerminal(dispatch.status) || dispatch.status === "queued",
+            )
           ? "completed"
           : "running";
     await runtime.repository.updateRun({
       ...run,
       ...counts,
       state: nextState,
-      completedAt: nextState === "completed" && run.completedAt === null ? this.clock().toISOString() : run.completedAt,
+      completedAt:
+        nextState === "completed" && run.completedAt === null
+          ? this.clock().toISOString()
+          : run.completedAt,
       updatedAt: this.clock().toISOString(),
     });
   }

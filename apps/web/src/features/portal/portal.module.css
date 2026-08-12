@@ -1086,6 +1086,9 @@
   display: flex;
   gap: 1.2rem;
   margin: 0.8rem 0 0 3.1rem;
+  min-width: 0;
+  padding: 0;
+  border: 0;
   color: var(--portal-muted);
   font-size: 0.7rem;
 }

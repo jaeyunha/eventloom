@@ -6,11 +6,7 @@ import {
   InMemoryReminderRepository,
 } from "./service";
 import { createCommunicationRoutes, type CommunicationRouteEnvironment } from "./routes";
-import type {
-  CommunicationActor,
-  ReminderCandidate,
-  ReminderOutboxDelivery,
-} from "./types";
+import type { CommunicationActor, ReminderCandidate, ReminderOutboxDelivery } from "./types";
 
 const organizationId = "organization-1";
 const eventId = "event-1";
@@ -133,9 +129,7 @@ describe("communication reminder routes", () => {
     });
 
     const facts = await app.request(
-      url(
-        "/reminders/facts?recipientApplicationId=participant-1&subjectType=task&taskId=task-1",
-      ),
+      url("/reminders/facts?recipientApplicationId=participant-1&subjectType=task&taskId=task-1"),
     );
     expect(facts.status).toBe(200);
     await expect(facts.json()).resolves.toMatchObject({
@@ -148,17 +142,14 @@ describe("communication reminder routes", () => {
 
   it("rejects cross-organization and malformed reminder requests", async () => {
     const { app } = testApp();
-    const crossOrganization = await app.request(
-      url("/reminders/runs", "organization-2"),
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          idempotencyKey: "manual-route-2",
-          expectedAudienceRevision: "revision-1",
-        }),
-      },
-    );
+    const crossOrganization = await app.request(url("/reminders/runs", "organization-2"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        idempotencyKey: "manual-route-2",
+        expectedAudienceRevision: "revision-1",
+      }),
+    });
     expect(crossOrganization.status).toBe(404);
 
     const malformed = await app.request(url("/reminders/facts?subjectType=task"));

@@ -846,8 +846,7 @@ function buildSessionSettingsTarget(config, eventId, organizationId) {
 }
 function buildEmailTemplateTarget(fixture, config, eventId, organizationId) {
   const communication = fixture.communications ?? {};
-  const id =
-    config.repair?.communication?.templateId ?? `${eventId}:communication:acceptance`;
+  const id = config.repair?.communication?.templateId ?? `${eventId}:communication:acceptance`;
   const subject =
     communication.acceptance_subject ?? `Your session has been accepted to ${fixture.event.name}`;
   const body =
@@ -1082,9 +1081,7 @@ function buildSubsetTargets(
       "The agenda fallback must declare dedicated personas and sessions.",
     );
   }
-  const personasById = new Map(
-    agendaFoundation.personas.map((persona) => [persona.id, persona]),
-  );
+  const personasById = new Map(agendaFoundation.personas.map((persona) => [persona.id, persona]));
   const resolveRoom = (hint, fallbackIndex) => {
     const roomName =
       fixture.event.rooms.find((room) => (hint ? room.includes(hint) : false)) ??
@@ -1241,9 +1238,7 @@ function buildSubsetTargets(
       sessionIds: personaSessions.map((session) => session.id),
       sessionTitles: personaSessions.map((session) => session.title),
       trackNames: personaSessions.map((session) => {
-        const configured = agendaFoundation.sessions.find(
-          (entry) => entry.title === session.title,
-        );
+        const configured = agendaFoundation.sessions.find((entry) => entry.title === session.title);
         return configured?.track ?? "";
       }),
     };

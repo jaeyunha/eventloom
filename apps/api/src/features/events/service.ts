@@ -377,7 +377,11 @@ function normalizeEmbedConfigurations(
       value.revision === undefined
         ? undefined
         : embedConfigurationRevision(value.revision, `${field}.revision`);
-    if (currentConfiguration === undefined && suppliedRevision !== undefined && suppliedRevision !== 1) {
+    if (
+      currentConfiguration === undefined &&
+      suppliedRevision !== undefined &&
+      suppliedRevision !== 1
+    ) {
       throw validation(`${field}.revision must start at 1.`);
     }
     if (
@@ -412,10 +416,7 @@ function normalizeEmbedConfigurations(
       currentConfiguration.revision,
       `${field}.revision`,
     );
-    candidate.revision = embedConfigurationSemanticallyEqual(
-      candidate,
-      currentConfiguration,
-    )
+    candidate.revision = embedConfigurationSemanticallyEqual(candidate, currentConfiguration)
       ? currentRevision
       : currentRevision + 1;
     normalized.push(candidate);
@@ -896,7 +897,10 @@ export class InMemoryProgramPublicationRepository implements ProgramPublicationR
     }
   }
 
-  async getState(organizationId: string, eventIdValue: string): Promise<ProgramPublicationState | null> {
+  async getState(
+    organizationId: string,
+    eventIdValue: string,
+  ): Promise<ProgramPublicationState | null> {
     const state = this.#states.get(this.key(organizationId, eventIdValue));
     return state === undefined ? null : clone(state);
   }
@@ -947,7 +951,10 @@ function releaseForCompletion(
   state: ProgramPublicationState,
   input: ProgramPublicationCompletionInput,
 ): ProgramPublicationManifest {
-  if (state.version !== positiveInteger(input.expectedPublicationVersion, "expectedPublicationVersion")) {
+  if (
+    state.version !==
+    positiveInteger(input.expectedPublicationVersion, "expectedPublicationVersion")
+  ) {
     throw publicationVersionConflict();
   }
   const revision = positiveInteger(input.revision, "revision");
@@ -1012,11 +1019,20 @@ export class ProgramPublicationService {
     if (current?.pendingRevision !== null && current?.pendingRevision !== undefined) {
       throw conflict("A program publication rebuild is already pending.");
     }
-    if (input.trigger === "initial-publication" && current?.servedManifest !== null && current !== null) {
+    if (
+      input.trigger === "initial-publication" &&
+      current?.servedManifest !== null &&
+      current !== null
+    ) {
       throw conflict("The program already has publication intent.");
     }
-    if (input.trigger !== "initial-publication" && (current === null || current.servedManifest === null)) {
-      throw conflict("Approved source changes cannot publish a program before explicit publication.");
+    if (
+      input.trigger !== "initial-publication" &&
+      (current === null || current.servedManifest === null)
+    ) {
+      throw conflict(
+        "Approved source changes cannot publish a program before explicit publication.",
+      );
     }
     if (
       input.parentServedRevision !== undefined &&
@@ -1217,7 +1233,10 @@ export class ProgramPublicationService {
     input: ProgramPublicationPreviewRequest,
   ): ProgramResolvedPublication {
     const organizationId = organizationFromInput(actor, input.organizationId);
-    if (organizationId !== input.manifest.organizationId || eventId(input.eventId) !== input.manifest.eventId) {
+    if (
+      organizationId !== input.manifest.organizationId ||
+      eventId(input.eventId) !== input.manifest.eventId
+    ) {
       throw forbidden("The published program does not belong to this event.");
     }
     return resolvePublishedProgram(input);
@@ -1321,46 +1340,44 @@ export function resolvePublishedProgram(
   );
   const sessionIds = new Set(filteredEntries.map((entry) => entry.sessionId));
   const fields = new Set(configuration.displayFields);
-  const agenda = filteredEntries.map(
-    (entry): ProgramResolvedPublication["agenda"][number] => ({
-      id: entry.id,
-      sessionId: entry.sessionId,
-      title: entry.title,
-      ...(fields.has("summary") && entry.summary !== undefined ? { summary: entry.summary } : {}),
-      ...(fields.has("format") && entry.format !== undefined ? { format: entry.format } : {}),
-      ...(fields.has("date-time") && entry.startsAt !== undefined
-        ? { startsAt: entry.startsAt }
-        : {}),
-      ...(fields.has("date-time") && entry.endsAt !== undefined ? { endsAt: entry.endsAt } : {}),
-      ...(fields.has("date-time") && entry.startsAtLocal !== undefined
-        ? { startsAtLocal: entry.startsAtLocal }
-        : {}),
-      ...(fields.has("date-time") && entry.endsAtLocal !== undefined
-        ? { endsAtLocal: entry.endsAtLocal }
-        : {}),
-      ...(fields.has("date-time") && entry.timeZone !== undefined ? { timeZone: entry.timeZone } : {}),
-      ...(fields.has("room") && entry.roomName !== undefined ? { roomName: entry.roomName } : {}),
-      trackNames: fields.has("track") ? [...(entry.trackNames ?? [])] : [],
-      speakerNames: fields.has("speakers") ? [...(entry.speakerNames ?? [])] : [],
-    }),
-  );
+  const agenda = filteredEntries.map((entry): ProgramResolvedPublication["agenda"][number] => ({
+    id: entry.id,
+    sessionId: entry.sessionId,
+    title: entry.title,
+    ...(fields.has("summary") && entry.summary !== undefined ? { summary: entry.summary } : {}),
+    ...(fields.has("format") && entry.format !== undefined ? { format: entry.format } : {}),
+    ...(fields.has("date-time") && entry.startsAt !== undefined
+      ? { startsAt: entry.startsAt }
+      : {}),
+    ...(fields.has("date-time") && entry.endsAt !== undefined ? { endsAt: entry.endsAt } : {}),
+    ...(fields.has("date-time") && entry.startsAtLocal !== undefined
+      ? { startsAtLocal: entry.startsAtLocal }
+      : {}),
+    ...(fields.has("date-time") && entry.endsAtLocal !== undefined
+      ? { endsAtLocal: entry.endsAtLocal }
+      : {}),
+    ...(fields.has("date-time") && entry.timeZone !== undefined
+      ? { timeZone: entry.timeZone }
+      : {}),
+    ...(fields.has("room") && entry.roomName !== undefined ? { roomName: entry.roomName } : {}),
+    trackNames: fields.has("track") ? [...(entry.trackNames ?? [])] : [],
+    speakerNames: fields.has("speakers") ? [...(entry.speakerNames ?? [])] : [],
+  }));
   const speakers = speakerProjection.speakers
     .filter((speaker) => speaker.sessionIds.some((sessionId) => sessionIds.has(sessionId)))
-    .map(
-      (speaker): ProgramResolvedPublication["speakers"][number] => ({
-        id: speaker.id,
-        participantId: speaker.participantId,
-        sessionIds: speaker.sessionIds.filter((sessionId) => sessionIds.has(sessionId)),
-        displayName: speaker.displayName,
-        ...(fields.has("company") && speaker.company !== undefined
-          ? { company: speaker.company }
-          : {}),
-        ...(fields.has("bio") && speaker.bio !== undefined ? { bio: speaker.bio } : {}),
-        ...(speaker.avatarUrl !== undefined
-          ? { avatarUrl: safeProgramAvatarUrl(speaker.avatarUrl) ?? null }
-          : {}),
-      }),
-    );
+    .map((speaker): ProgramResolvedPublication["speakers"][number] => ({
+      id: speaker.id,
+      participantId: speaker.participantId,
+      sessionIds: speaker.sessionIds.filter((sessionId) => sessionIds.has(sessionId)),
+      displayName: speaker.displayName,
+      ...(fields.has("company") && speaker.company !== undefined
+        ? { company: speaker.company }
+        : {}),
+      ...(fields.has("bio") && speaker.bio !== undefined ? { bio: speaker.bio } : {}),
+      ...(speaker.avatarUrl !== undefined
+        ? { avatarUrl: safeProgramAvatarUrl(speaker.avatarUrl) ?? null }
+        : {}),
+    }));
 
   return {
     configurationRevision: configuration.revision,

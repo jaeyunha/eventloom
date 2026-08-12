@@ -106,7 +106,8 @@ export const deliverablesExportStatusLabels: Readonly<Record<DeliverablesExportU
     idle: "",
     queued: "The browser queued the authorized ZIP request.",
     preparing: "The browser is preparing the scoped export request.",
-    generating: "The export request is generating no fabricated progress; the API exposes no server job ID.",
+    generating:
+      "The export request is generating no fabricated progress; the API exposes no server job ID.",
     ready: "The server returned a ZIP with a validated authoritative manifest.",
     "download-started": "The browser download has started.",
     failure: "The authorized ZIP request failed.",
@@ -445,9 +446,7 @@ function reviewStateForAsset(asset: DeliverableAsset): string {
   if (asset.reviewState !== undefined) return formatStatus(asset.reviewState);
   return asset.state === "ready" ? "Pending review" : formatStatus(asset.state);
 }
-function authoritativeAssetPointerIds(
-  versions: readonly DeliverableAsset[],
-): Readonly<{
+function authoritativeAssetPointerIds(versions: readonly DeliverableAsset[]): Readonly<{
   latest?: string;
   current?: string;
   approved?: string;
@@ -955,7 +954,8 @@ function TaskComposer({
         </p>
         <p className={mutedClass}>
           Request controls: Request subject, one accepted session per speaker when session-scoped,
-          Allowed MIME types, Maximum file size (MB), Accepted asset kinds (required), and Assignees.
+          Allowed MIME types, Maximum file size (MB), Accepted asset kinds (required), and
+          Assignees.
         </p>
       </CardContent>
     </Card>
@@ -1893,7 +1893,8 @@ function AssetDetail({
   const [commentError, setCommentError] = useState<string | null>(null);
   const thread = [...comments]
     .filter(
-      (comment) => comment.assetId === asset.id && comment.versionId === (asset.versionId ?? asset.id),
+      (comment) =>
+        comment.assetId === asset.id && comment.versionId === (asset.versionId ?? asset.id),
     )
     .sort(
       (left, right) =>
@@ -1992,22 +1993,18 @@ function AssetDetail({
                       <TableCell>{reviewStateForAsset(version)}</TableCell>
                       <TableCell>
                         <div className={clusterClass}>
-                          {badges.length === 0 ? (
-                            matrixAuthoritative ? (
-                              "No pointer"
-                            ) : (
-                              "Pointer unavailable"
-                            )
-                          ) : (
-                            badges.map((badge) => (
-                              <Badge
-                                key={badge}
-                                variant={badge === "Released" ? "default" : "outline"}
-                              >
-                                {badge}
-                              </Badge>
-                            ))
-                          )}
+                          {badges.length === 0
+                            ? matrixAuthoritative
+                              ? "No pointer"
+                              : "Pointer unavailable"
+                            : badges.map((badge) => (
+                                <Badge
+                                  key={badge}
+                                  variant={badge === "Released" ? "default" : "outline"}
+                                >
+                                  {badge}
+                                </Badge>
+                              ))}
                           {current && !badges.includes("Current") ? (
                             <Badge variant="outline">Current</Badge>
                           ) : null}

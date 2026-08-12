@@ -499,11 +499,15 @@ type SpeakerAssetFamilyPointers = {
   released?: SpeakerAsset;
 };
 
-function assetFamilyPointers(assets: readonly SpeakerAsset[]): SpeakerAssetFamilyPointers | undefined {
+function assetFamilyPointers(
+  assets: readonly SpeakerAsset[],
+): SpeakerAssetFamilyPointers | undefined {
   if (assets.length === 0) return undefined;
   const byId = new Map(assets.map((asset) => [asset.id, asset]));
   const supersededIds = new Set(
-    assets.flatMap((asset) => (asset.supersedesAssetId === undefined ? [] : [asset.supersedesAssetId])),
+    assets.flatMap((asset) =>
+      asset.supersedesAssetId === undefined ? [] : [asset.supersedesAssetId],
+    ),
   );
   const terminal = assets.filter((asset) => !supersededIds.has(asset.id));
   if (terminal.length !== 1) return undefined;
@@ -1466,7 +1470,6 @@ function authoritativeSubmissionPrimaryParticipantId(
   return submission.participantIds.length === 1 ? submission.participantIds[0] : undefined;
 }
 
-
 function speakerOwnsAcceptedSubmission(
   scope: SpeakerAccessScope,
   submission: SpeakerSubmission,
@@ -1789,8 +1792,7 @@ export class SpeakerService {
             ...(context.status === undefined ? {} : { status: context.status }),
             capabilities,
             submissionIds,
-            participantIds:
-              primaryParticipantId === undefined ? [] : [primaryParticipantId],
+            participantIds: primaryParticipantId === undefined ? [] : [primaryParticipantId],
             ...(primaryParticipantId === undefined ? {} : { primaryParticipantId }),
           };
         },
@@ -1875,8 +1877,7 @@ export class SpeakerService {
       this.repository.listAssets !== undefined
         ? this.repository.listAssets(eventId, [primaryParticipantId])
         : Promise.resolve(undefined);
-    const resourceParticipants =
-      primaryParticipantId === undefined ? [] : [primaryParticipantId];
+    const resourceParticipants = primaryParticipantId === undefined ? [] : [primaryParticipantId];
     const resourcesPromise: Promise<readonly SpeakerEventResource[] | undefined> =
       this.repository.listEventResources === undefined
         ? Promise.resolve(undefined)
@@ -2113,7 +2114,9 @@ export class SpeakerService {
       }
       if (subject.type === "participant") return [structuredClone(task)];
       if (!speakerSubmissionAllowed(scope.submissionIds, subject.submissionId)) return [];
-      const submission = acceptedSubmissions.get(canonicalSpeakerSubmissionId(subject.submissionId));
+      const submission = acceptedSubmissions.get(
+        canonicalSpeakerSubmissionId(subject.submissionId),
+      );
       return submission === undefined || !submission.participantIds.includes(task.participantId)
         ? []
         : [{ ...structuredClone(task), sessionTitle: submission.title }];
@@ -2479,8 +2482,7 @@ export class SpeakerService {
     if (
       assignments.some(
         ({ participantId }) =>
-          !acceptedParticipantIds.has(participantId) &&
-          !manualParticipantIds.has(participantId),
+          !acceptedParticipantIds.has(participantId) && !manualParticipantIds.has(participantId),
       )
     ) {
       throw notFound();
@@ -2490,7 +2492,10 @@ export class SpeakerService {
       const submission = acceptedByCanonicalId.get(
         canonicalSpeakerSubmissionId(assignment.submissionId),
       );
-      if (submission === undefined || !submission.participantIds.includes(assignment.participantId)) {
+      if (
+        submission === undefined ||
+        !submission.participantIds.includes(assignment.participantId)
+      ) {
         throw notFound();
       }
       assignment.submissionId = canonicalSpeakerSubmissionId(submission.id);
@@ -2553,7 +2558,11 @@ export class SpeakerService {
         throw notFound();
       }
       const persisted = await this.repository.getTask(input.eventId, task.id);
-      if (persisted === null || persisted.version !== 1 || speakerTaskSubject(persisted) === undefined) {
+      if (
+        persisted === null ||
+        persisted.version !== 1 ||
+        speakerTaskSubject(persisted) === undefined
+      ) {
         throw new SpeakerServiceError(
           "VERSION_CONFLICT",
           409,
@@ -2591,8 +2600,7 @@ export class SpeakerService {
       current === null
         ? undefined
         : roster.find(
-            (entry) =>
-              entry.participantId === current.participantId && isCrmRosterEntry(entry),
+            (entry) => entry.participantId === current.participantId && isCrmRosterEntry(entry),
           );
     const participantAllowed =
       current !== null &&
@@ -2602,9 +2610,7 @@ export class SpeakerService {
       (scope.submissionIds.some((submissionId) =>
         sameSpeakerSubmission(submissionId, subject.submissionId),
       ) &&
-        (
-          await this.repository.listSubmissions(input.eventId, [subject.submissionId])
-        ).some(
+        (await this.repository.listSubmissions(input.eventId, [subject.submissionId])).some(
           (submission) =>
             submission.status === "accepted" &&
             submission.participantIds.includes(subject.participantId),
@@ -3002,7 +3008,9 @@ export class SpeakerService {
       const pointers = assetFamilyPointers(family);
       if (pointers === undefined) return [];
       if (selectedFamilyKeys !== undefined) {
-        return selectedFamilyKeys.has(key) && pointers.current !== undefined ? [pointers.current] : [];
+        return selectedFamilyKeys.has(key) && pointers.current !== undefined
+          ? [pointers.current]
+          : [];
       }
       return pointers.released === undefined ? [] : [pointers.released];
     });
@@ -3525,15 +3533,11 @@ export class SpeakerService {
     const history =
       this.repository.listAssetHistory === undefined
         ? await this.assetsForParticipants(input.eventId, [asset.participantId])
-        : await this.repository.listAssetHistory(
-            input.eventId,
-            asset.versionFamilyId ?? asset.id,
-          );
+        : await this.repository.listAssetHistory(input.eventId, asset.versionFamilyId ?? asset.id);
     const pointers = assetFamilyPointers(
       history.filter(
         (candidate) =>
-          (candidate.versionFamilyId ?? candidate.id) ===
-          (asset.versionFamilyId ?? asset.id),
+          (candidate.versionFamilyId ?? candidate.id) === (asset.versionFamilyId ?? asset.id),
       ),
     );
     if (pointers?.current?.id !== asset.id) {
@@ -3605,10 +3609,7 @@ export class SpeakerService {
     const persistedHistory =
       this.repository.listAssetHistory === undefined
         ? await this.assetsForParticipants(input.eventId, [asset.participantId])
-        : await this.repository.listAssetHistory(
-            input.eventId,
-            asset.versionFamilyId ?? asset.id,
-          );
+        : await this.repository.listAssetHistory(input.eventId, asset.versionFamilyId ?? asset.id);
     const persistedPointers = assetFamilyPointers(persistedHistory);
     if (
       persisted === null ||
@@ -6585,11 +6586,7 @@ export class SpeakerService {
     const status = importText(input.status, "The speaker status", 80);
     const socialLinks = normalizeSocialLinks(input.socialLinks) ?? {};
     const travelLogistics = normalizeTravelLogistics(input.travelLogistics);
-    const idempotencyKey = normalizeUserText(
-      input.idempotencyKey,
-      "The idempotency key",
-      300,
-    );
+    const idempotencyKey = normalizeUserText(input.idempotencyKey, "The idempotency key", 300);
     const sourceType = input.sourceType ?? "manual";
     const sourceId = input.sourceId?.trim() || idempotencyKey;
     const resolutionKey = `${sourceType}\u0000${sourceId}`;
@@ -7018,8 +7015,7 @@ export class SpeakerService {
     if (
       existing !== undefined &&
       currentProfile !== null &&
-      (existing.version !== currentProfile.version ||
-        existing.version !== input.expectedVersion)
+      (existing.version !== currentProfile.version || existing.version !== input.expectedVersion)
     ) {
       throw new SpeakerServiceError(
         "VERSION_CONFLICT",

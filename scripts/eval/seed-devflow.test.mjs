@@ -296,7 +296,10 @@ test("subset fallback is explicit and adds only downstream fixture projections",
   const fallbackSessions = records
     .filter((record) => record.table === "Sessions")
     .map((record) => record.fields.Title);
-  assert.equal(fallbackSessions.some((title) => scenarioTitles.has(title)), false);
+  assert.equal(
+    fallbackSessions.some((title) => scenarioTitles.has(title)),
+    false,
+  );
   const scenarioNames = new Set([
     fixture.identities.speaker.name,
     fixture.identities.speaker2.name,

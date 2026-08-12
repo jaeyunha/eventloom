@@ -549,10 +549,7 @@ export function createPublishedSpeakerRoutes(
       manifest.speakerRevisionNumber,
     );
     const data = projectionBoundToManifest(projection, parsedSlug.data, manifest);
-    const approvedPhotoPath = publishedSpeakerPhotoPath(
-      parsedSlug.data,
-      parsedSpeakerId.data,
-    );
+    const approvedPhotoPath = publishedSpeakerPhotoPath(parsedSlug.data, parsedSpeakerId.data);
     const speaker = data?.speakers.find((candidate) => candidate.id === parsedSpeakerId.data);
     if (speaker === undefined || speaker.photoUrl !== approvedPhotoPath) {
       return errorResponse(context, 404, "NOT_FOUND", "The published headshot was not found.");

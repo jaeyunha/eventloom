@@ -44,9 +44,7 @@ function speakerMatchesTrackId(
 ): boolean {
   const sessionIds = new Set(speaker.sessionIds);
   return entries.some(
-    (entry) =>
-      sessionIds.has(entry.sessionId) &&
-      (entry.trackIds ?? []).includes(trackId),
+    (entry) => sessionIds.has(entry.sessionId) && (entry.trackIds ?? []).includes(trackId),
   );
 }
 

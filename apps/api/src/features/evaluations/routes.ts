@@ -636,48 +636,45 @@ export function createEvaluationRoutes(
     );
   });
 
-  routes.post(
-    "/plans/:planId/assignments/:assignmentId/replace",
-    async (context) => {
-      const body = replacementSchema.parse(await context.req.json());
-      const currentActor = actor(context);
-      const planId = context.req.param("planId");
-      const plan = await service.getPlan(currentActor, planId);
-      const assignmentId = context.req.param("assignmentId");
-      const assignment = (
-        await service.listOrganizerAssignments(currentActor, planId)
-      ).find((candidate) => candidate.id === assignmentId);
-      if (assignment === undefined) {
-        throw notFound("The evaluation assignment was not found.");
-      }
-      const replacementReviewerIds =
-        options.reviewerIdentity === undefined
-          ? [body.replacementReviewerId]
-          : await options.reviewerIdentity.resolveReviewerIds(currentActor, {
-              eventId: plan.eventId,
-              reviewerIds: [body.replacementReviewerId],
-            });
-      const replacementReviewerId = replacementReviewerIds?.[0];
-      if (replacementReviewerId === undefined) {
-        return context.json(
-          {
-            error: {
-              code: "EVALUATION_REVIEWER_NOT_FOUND",
-              message: "The replacement reviewer must be a verified organization member.",
-            },
-          },
-          403,
-        );
-      }
+  routes.post("/plans/:planId/assignments/:assignmentId/replace", async (context) => {
+    const body = replacementSchema.parse(await context.req.json());
+    const currentActor = actor(context);
+    const planId = context.req.param("planId");
+    const plan = await service.getPlan(currentActor, planId);
+    const assignmentId = context.req.param("assignmentId");
+    const assignment = (await service.listOrganizerAssignments(currentActor, planId)).find(
+      (candidate) => candidate.id === assignmentId,
+    );
+    if (assignment === undefined) {
+      throw notFound("The evaluation assignment was not found.");
+    }
+    const replacementReviewerIds =
+      options.reviewerIdentity === undefined
+        ? [body.replacementReviewerId]
+        : await options.reviewerIdentity.resolveReviewerIds(currentActor, {
+            eventId: plan.eventId,
+            reviewerIds: [body.replacementReviewerId],
+          });
+    const replacementReviewerId = replacementReviewerIds?.[0];
+    if (replacementReviewerId === undefined) {
       return context.json(
-        await service.replaceAssignment(currentActor, assignmentId, {
-          replacementReviewerId,
-          expectedVersion: body.expectedVersion,
-          reason: body.reason,
-        }),
+        {
+          error: {
+            code: "EVALUATION_REVIEWER_NOT_FOUND",
+            message: "The replacement reviewer must be a verified organization member.",
+          },
+        },
+        403,
       );
-    },
-  );
+    }
+    return context.json(
+      await service.replaceAssignment(currentActor, assignmentId, {
+        replacementReviewerId,
+        expectedVersion: body.expectedVersion,
+        reason: body.reason,
+      }),
+    );
+  });
 
   routes.post("/plans/:planId/reminders", async (context) => {
     const body = reminderSchema.parse(await context.req.json());
@@ -794,14 +791,10 @@ export function createEvaluationRoutes(
   );
   routes.get("/plans/:planId/assignment-history", async (context) =>
     context.json({
-      history: await service.listAssignmentHistory(
-        actor(context),
-        context.req.param("planId"),
-        {
-          roundId: context.req.query("roundId"),
-          submissionId: context.req.query("submissionId"),
-        },
-      ),
+      history: await service.listAssignmentHistory(actor(context), context.req.param("planId"), {
+        roundId: context.req.query("roundId"),
+        submissionId: context.req.query("submissionId"),
+      }),
     }),
   );
 

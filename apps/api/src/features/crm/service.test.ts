@@ -36,10 +36,7 @@ function crmRouteApp(crm: CrmService): Hono<CrmRouteEnvironment> {
     });
     await next();
   });
-  app.route(
-    "/api/admin/organizations/:organizationId/crm",
-    createCrmRoutes({ service: crm }),
-  );
+  app.route("/api/admin/organizations/:organizationId/crm", createCrmRoutes({ service: crm }));
   return app;
 }
 
@@ -985,9 +982,7 @@ describe("CrmService", () => {
     });
     expect(replay).toEqual({ ...committed, idempotent: true });
     expect(replay.contacts).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: existing.id, company: "Northstar" }),
-      ]),
+      expect.arrayContaining([expect.objectContaining({ id: existing.id, company: "Northstar" })]),
     );
   });
 
@@ -1105,10 +1100,9 @@ describe("CrmService", () => {
       rules: [expect.objectContaining({ value: survivor.id })],
       mergeAuditIds: [merged.auditId],
     });
-    expect(await repository.getOutreachByIdempotencyKey(
-      "org-a",
-      "retired-recipient-snapshot",
-    )).toMatchObject({
+    expect(
+      await repository.getOutreachByIdempotencyKey("org-a", "retired-recipient-snapshot"),
+    ).toMatchObject({
       id: outreach.id,
       contactId: retired.id,
       recipientEmail: "retired@example.com",
@@ -1175,9 +1169,9 @@ describe("CrmService", () => {
     });
     expect(await crm.getContact(actor, "org-a", survivor.id)).toMatchObject({ status: "active" });
     expect(await crm.getContact(actor, "org-a", retired.id)).toMatchObject({ status: "active" });
-    expect((await repository.listParticipantContactLinks("org-a")).map((link) => link.crmContactId)).toEqual(
-      expect.arrayContaining([survivor.id, retired.id]),
-    );
+    expect(
+      (await repository.listParticipantContactLinks("org-a")).map((link) => link.crmContactId),
+    ).toEqual(expect.arrayContaining([survivor.id, retired.id]));
   });
   it("exposes read-only import preview and requires idempotency for route commits", async () => {
     const repository = new InMemoryCrmRepository();
@@ -1278,8 +1272,7 @@ describe("CrmService", () => {
       idempotencyKey: "route-link-two",
     });
     const app = crmRouteApp(crm);
-    const mergePath =
-      `/api/admin/organizations/org-a/crm/contacts/${survivor.id}/merge`;
+    const mergePath = `/api/admin/organizations/org-a/crm/contacts/${survivor.id}/merge`;
 
     const preview = await app.request(`${mergePath}/preview`, {
       method: "POST",

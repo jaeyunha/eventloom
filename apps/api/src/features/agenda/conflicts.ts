@@ -192,7 +192,9 @@ export function detectReleasedSpeakerCommitmentConflicts(
         entryIds: [entry.id, releasedEntry.id],
         message: `${participantLabel} ${participantNames
           .map((name) => `"${name}"`)
-          .join(", ")} ${participantVerb} an active released commitment for "${releasedSession.title}" that overlaps "${session.title}"`,
+          .join(
+            ", ",
+          )} ${participantVerb} an active released commitment for "${releasedSession.title}" that overlaps "${session.title}"`,
       });
     }
   }

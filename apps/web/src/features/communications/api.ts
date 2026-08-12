@@ -898,7 +898,9 @@ export function createCommunicationApi(
             ...(input.providerMessageId === undefined
               ? {}
               : { providerMessageId: input.providerMessageId }),
-            ...(input.failureMetadata === undefined ? {} : { failureMetadata: input.failureMetadata }),
+            ...(input.failureMetadata === undefined
+              ? {}
+              : { failureMetadata: input.failureMetadata }),
           }),
         },
       );

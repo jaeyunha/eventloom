@@ -378,9 +378,7 @@ describe("review workspace", () => {
         roundId: "round-1",
         planVersion: 3,
       },
-      desiredAssignments: [
-        { submissionId: "submission-1", reviewerId: "reviewer-1" },
-      ],
+      desiredAssignments: [{ submissionId: "submission-1", reviewerId: "reviewer-1" }],
       deficits: [{ submissionId: "submission-2", missingReviewCount: 1, reason: "cap" }],
       exclusions: [
         { submissionId: "submission-2", reviewerId: "reviewer-2", reason: "reviewer_cap" },
@@ -389,10 +387,15 @@ describe("review workspace", () => {
       submissionRevisions: [{ submissionId: "submission-1", revision: 4 }],
       fingerprint: "fingerprint-1",
     };
-    await previewReviewAssignments("https://api.example", "plan-test", input, async (request, init) => {
-      requests.push({ input: String(request), method: init?.method, body: String(init?.body) });
-      return new Response(JSON.stringify({ data: preview }), { status: 200 });
-    });
+    await previewReviewAssignments(
+      "https://api.example",
+      "plan-test",
+      input,
+      async (request, init) => {
+        requests.push({ input: String(request), method: init?.method, body: String(init?.body) });
+        return new Response(JSON.stringify({ data: preview }), { status: 200 });
+      },
+    );
     await applyReviewAssignments(
       "https://api.example",
       "plan-test",
@@ -1584,9 +1587,7 @@ describe("review workspace", () => {
             roundId: "round-initial",
             planVersion: 3,
           },
-          desiredAssignments: [
-            { submissionId: "submission-042", reviewerId: "reviewer-a" },
-          ],
+          desiredAssignments: [{ submissionId: "submission-042", reviewerId: "reviewer-a" }],
           deficits: [],
           exclusions: [],
           expectedActiveVersions: [],
@@ -1771,7 +1772,8 @@ describe("review workspace", () => {
       ];
       tree = renderTree();
       const setupTab = hostElements(tree).find(
-        (element) => (element.props as Record<string, unknown>)["aria-controls"] === "review-panel-setup",
+        (element) =>
+          (element.props as Record<string, unknown>)["aria-controls"] === "review-panel-setup",
       );
       if (setupTab === undefined) throw new Error("Expected the plan setup tab.");
       fireClick(setupTab);

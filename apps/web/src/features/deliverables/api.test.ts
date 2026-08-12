@@ -193,35 +193,31 @@ describe("deliverables API", () => {
   });
 
   it("retains authoritative asset lineage pointers without exposing private storage fields", async () => {
-    const api = createDeliverablesApi(
-      "https://api.example.test",
-      "org-1",
-      "event-1",
-      async () =>
-        Response.json({
-          data: [
-            {
-              id: "asset-v2",
-              eventId: "event-1",
-              participantId: "participant-1",
-              kind: "slides",
-              fileName: "slides.pdf",
-              contentType: "application/pdf",
-              sizeBytes: 10,
-              state: "ready",
-              createdAt: "2026-08-12T00:00:00.000Z",
-              version: 2,
-              versionFamilyId: "family-1",
-              versionId: "version-2",
-              latestVersionId: "asset-v2",
-              currentVersionId: "asset-v2",
-              approvedVersionId: "asset-v1",
-              releasedVersionId: "asset-v1",
-              objectKey: "private/object",
-              tenantId: "private-tenant",
-            },
-          ],
-        }),
+    const api = createDeliverablesApi("https://api.example.test", "org-1", "event-1", async () =>
+      Response.json({
+        data: [
+          {
+            id: "asset-v2",
+            eventId: "event-1",
+            participantId: "participant-1",
+            kind: "slides",
+            fileName: "slides.pdf",
+            contentType: "application/pdf",
+            sizeBytes: 10,
+            state: "ready",
+            createdAt: "2026-08-12T00:00:00.000Z",
+            version: 2,
+            versionFamilyId: "family-1",
+            versionId: "version-2",
+            latestVersionId: "asset-v2",
+            currentVersionId: "asset-v2",
+            approvedVersionId: "asset-v1",
+            releasedVersionId: "asset-v1",
+            objectKey: "private/object",
+            tenantId: "private-tenant",
+          },
+        ],
+      }),
     );
     const assets = await api.listAssets?.();
     expect(assets?.[0]).toMatchObject({

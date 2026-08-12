@@ -1,3 +1,4 @@
+PRAGMA foreign_keys = ON;
 ALTER TABLE api_keys ADD COLUMN event_id TEXT;
 
 CREATE INDEX IF NOT EXISTS api_keys_organization_event_idx

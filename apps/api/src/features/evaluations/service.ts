@@ -1,11 +1,4 @@
-import {
-  advisoryUnavailable,
-  closed,
-  conflict,
-  forbidden,
-  invalidInput,
-  notFound,
-} from "./errors";
+import { advisoryUnavailable, closed, conflict, forbidden, invalidInput, notFound } from "./errors";
 import type {
   EvaluationRepository,
   OrganizerWorkspaceRecords,
@@ -544,14 +537,12 @@ function aggregateForSubmission(
           (review.rubricRevision ??
             review.rubricVersion ??
             review.planRevision ??
-            review.planVersion) ===
-            rubricRevision &&
+            review.planVersion) === rubricRevision &&
           (review.roundRevision ??
             review.rubricRevision ??
             review.rubricVersion ??
             review.planRevision ??
-            review.planVersion) ===
-            roundRevision,
+            review.planVersion) === roundRevision,
       )
       .map((review) => [review.assignmentId, review]),
   );
@@ -744,7 +735,6 @@ function organizerRound(plan: EvaluationPlan, now: Date): ReviewRound | undefine
     )[0]
   );
 }
-
 
 function normalizeProjection(
   projection: EvaluationReviewerProjection | undefined,
@@ -1346,7 +1336,9 @@ export class EvaluationService {
     input: ApplyEvaluationDistributionInput,
   ): Promise<EvaluationAssignmentDistributionResult> {
     const built = await this.#buildDistributionPreview(actor, input);
-    if (built.preview.fingerprint !== requireText(input.fingerprint, "Distribution fingerprint", 200)) {
+    if (
+      built.preview.fingerprint !== requireText(input.fingerprint, "Distribution fingerprint", 200)
+    ) {
       throw conflict("Reviewer assignments changed since the distribution was previewed.");
     }
     return this.#repository.applyAssignmentDistribution(built.preview.scope, {
@@ -1422,10 +1414,7 @@ export class EvaluationService {
         candidate.id === baseAssignmentId || candidate.id.startsWith(`${baseAssignmentId}:v`),
     ).length;
     const successorAssignment: EvaluationAssignment = {
-      id:
-        matchingIdCount === 0
-          ? baseAssignmentId
-          : `${baseAssignmentId}:v${matchingIdCount + 1}`,
+      id: matchingIdCount === 0 ? baseAssignmentId : `${baseAssignmentId}:v${matchingIdCount + 1}`,
       tenantId: actor.tenantId,
       eventId: plan.eventId,
       planId: plan.id,
@@ -1493,8 +1482,7 @@ export class EvaluationService {
           assignment.planId === plan.id &&
           assignment.status === "superseded" &&
           (input.roundId === undefined || assignment.roundId === input.roundId) &&
-          (input.submissionId === undefined ||
-            assignment.submissionId === input.submissionId) &&
+          (input.submissionId === undefined || assignment.submissionId === input.submissionId) &&
           reviewByAssignmentId.has(assignment.id),
       )
       .map((assignment) => ({
@@ -1522,7 +1510,8 @@ export class EvaluationService {
     ]);
     return effectiveAssignmentsForPlan(plan, assignments, reviews)
       .filter(
-        (assignment) => assignment.reviewerId === actor.userId && isActionableAssignment(assignment),
+        (assignment) =>
+          assignment.reviewerId === actor.userId && isActionableAssignment(assignment),
       )
       .sort(
         (left, right) =>
@@ -2705,9 +2694,9 @@ export class EvaluationService {
     }
     submissionIds.sort((left, right) => left.localeCompare(right));
 
-    const requestedReviewerIds = (
-      input.reviewerIds ?? round.reviewerPool?.reviewerIds ?? []
-    ).map((reviewerId) => requireText(reviewerId, "Reviewer id", 100));
+    const requestedReviewerIds = (input.reviewerIds ?? round.reviewerPool?.reviewerIds ?? []).map(
+      (reviewerId) => requireText(reviewerId, "Reviewer id", 100),
+    );
     if (
       requestedReviewerIds.length === 0 ||
       new Set(requestedReviewerIds).size !== requestedReviewerIds.length
@@ -2723,8 +2712,7 @@ export class EvaluationService {
     const materialById = new Map(
       materials
         .filter(
-          (material) =>
-            material.tenantId === actor.tenantId && material.eventId === plan.eventId,
+          (material) => material.tenantId === actor.tenantId && material.eventId === plan.eventId,
         )
         .map((material) => [material.id, material] as const),
     );
@@ -2751,10 +2739,7 @@ export class EvaluationService {
     );
     const reviewerLoad = new Map<string, number>();
     for (const assignment of actionableAssignments) {
-      reviewerLoad.set(
-        assignment.reviewerId,
-        (reviewerLoad.get(assignment.reviewerId) ?? 0) + 1,
-      );
+      reviewerLoad.set(assignment.reviewerId, (reviewerLoad.get(assignment.reviewerId) ?? 0) + 1);
     }
 
     const pool = round.reviewerPool?.reviewerIds;
@@ -2764,13 +2749,11 @@ export class EvaluationService {
     );
     const exclusions: Array<EvaluationDistributionPreview["exclusions"][number]> = [];
     const desired: EvaluationAssignment[] = [];
-    const desiredAssignments: Array<
-      EvaluationDistributionPreview["desiredAssignments"][number]
-    > = [];
+    const desiredAssignments: Array<EvaluationDistributionPreview["desiredAssignments"][number]> =
+      [];
     const deficits: Array<EvaluationDistributionPreview["deficits"][number]> = [];
-    const submissionRevisions: Array<
-      EvaluationDistributionPreview["submissionRevisions"][number]
-    > = [];
+    const submissionRevisions: Array<EvaluationDistributionPreview["submissionRevisions"][number]> =
+      [];
     const now = this.#clock().toISOString();
     const planRevision = gradingRevision(plan);
     const rubricRevision = round.rubricRevision ?? planRevision;
@@ -2799,8 +2782,7 @@ export class EvaluationService {
         });
       }
 
-      const outsideTrack =
-        trackFilter !== null && !(material.trackIds ?? []).includes(trackFilter);
+      const outsideTrack = trackFilter !== null && !(material.trackIds ?? []).includes(trackFilter);
       for (const reviewerId of requestedReviewerIds) {
         if (poolSet !== null && !poolSet.has(reviewerId)) {
           exclusions.push({ submissionId, reviewerId, reason: "outside_pool" });
@@ -2815,8 +2797,7 @@ export class EvaluationService {
       if (!outsideTrack) {
         const candidates = eligibleReviewerIds
           .filter(
-            (reviewerId) =>
-              !existing.some((assignment) => assignment.reviewerId === reviewerId),
+            (reviewerId) => !existing.some((assignment) => assignment.reviewerId === reviewerId),
           )
           .sort(
             (left, right) =>
@@ -2827,16 +2808,14 @@ export class EvaluationService {
           if (
             abstentions.some(
               (assignment) =>
-                assignment.submissionId === submissionId &&
-                assignment.reviewerId === reviewerId,
+                assignment.submissionId === submissionId && assignment.reviewerId === reviewerId,
             )
           ) {
             exclusions.push({ submissionId, reviewerId, reason: "declared_conflict" });
             continue;
           }
           if (
-            (reviewerLoad.get(reviewerId) ?? 0) >=
-            plan.assignmentRule.maxAssignmentsPerReviewer
+            (reviewerLoad.get(reviewerId) ?? 0) >= plan.assignmentRule.maxAssignmentsPerReviewer
           ) {
             exclusions.push({ submissionId, reviewerId, reason: "reviewer_cap" });
             continue;
@@ -2878,9 +2857,7 @@ export class EvaluationService {
         deficits.push({
           submissionId,
           missingReviewCount: missing,
-          reason: outsideTrack
-            ? "submission_outside_track"
-            : "insufficient_eligible_reviewers",
+          reason: outsideTrack ? "submission_outside_track" : "insufficient_eligible_reviewers",
         });
       }
     }

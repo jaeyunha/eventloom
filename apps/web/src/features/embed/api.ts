@@ -188,9 +188,7 @@ function publicStringArray(
 ): readonly string[] {
   if (
     !Array.isArray(value) ||
-    value.some(
-      (item) => typeof item !== "string" || (requireNonEmpty && item.trim().length === 0),
-    )
+    value.some((item) => typeof item !== "string" || (requireNonEmpty && item.trim().length === 0))
   ) {
     throw invalidPublicResponse(`The published ${context} field is malformed.`);
   }
@@ -332,19 +330,14 @@ function publicReleaseHeaders(
   const hasProgramHeader = programHeader !== null;
   const hasCacheHeader = cacheHeader !== null;
   if (projection === "speakers" && (!hasProgramHeader || !hasCacheHeader)) {
-    throw invalidPublicResponse(
-      "The published speakers response is missing its release headers.",
-    );
+    throw invalidPublicResponse("The published speakers response is missing its release headers.");
   }
   if (hasProgramHeader !== hasCacheHeader) {
     throw invalidPublicResponse("The published response has incomplete release headers.");
   }
   if (!hasProgramHeader || !hasCacheHeader) return {};
   return {
-    servedProgramRevision: positiveReleaseHeader(
-      programHeader,
-      "x-sessionboard-program-revision",
-    ),
+    servedProgramRevision: positiveReleaseHeader(programHeader, "x-sessionboard-program-revision"),
     cacheRevision: positiveReleaseHeader(cacheHeader, "x-sessionboard-cache-revision"),
   };
 }
@@ -510,10 +503,7 @@ export function getPublishedProgram(
   const loadPair = async (
     bypassCache: boolean,
   ): Promise<
-    [
-      LoadedPublicProjection<PublishedAgenda>,
-      LoadedPublicProjection<PublishedSpeakerGallery>,
-    ]
+    [LoadedPublicProjection<PublishedAgenda>, LoadedPublicProjection<PublishedSpeakerGallery>]
   > => {
     const [agenda, speakers] = await Promise.allSettled([
       getPublishedProjection(baseUrl, eventSlug, "agenda", fetcher, appEnvironment, bypassCache),

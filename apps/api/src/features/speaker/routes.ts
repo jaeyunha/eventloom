@@ -1631,9 +1631,7 @@ export function createSpeakerAdminRoutes(dependencies: SpeakerRouteDependencies)
       idempotencyKey: body.idempotencyKey,
       sourceType: body.sourceType,
       ...(body.sourceId === undefined ? {} : { sourceId: body.sourceId }),
-      ...(body.participantId === undefined
-        ? {}
-        : { explicitParticipantId: body.participantId }),
+      ...(body.participantId === undefined ? {} : { explicitParticipantId: body.participantId }),
       displayName: body.displayName,
       email: body.email,
       jobTitle: body.jobTitle,

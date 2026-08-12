@@ -76,7 +76,9 @@ function manifestWith(
   return { ...manifest, ...overrides };
 }
 
-function releaseProjection(currentManifest: ProgramPublicationManifest = manifest): PublishedSpeakerProjection {
+function releaseProjection(
+  currentManifest: ProgramPublicationManifest = manifest,
+): PublishedSpeakerProjection {
   const { sourceHash: _sourceHash, ...publicProjection } = projection;
   return {
     ...publicProjection,
@@ -323,8 +325,7 @@ describe("published speaker projection route", () => {
       publishedSpeakers: dependencies({
         getPublishedSpeakers,
         getPublishedSpeakerHeadshot,
-        getProgramPublicationManifest: async () =>
-          manifestWith({ speakerRevisionNumber: 2 }),
+        getProgramPublicationManifest: async () => manifestWith({ speakerRevisionNumber: 2 }),
       }),
     });
 

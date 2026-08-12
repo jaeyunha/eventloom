@@ -158,9 +158,7 @@ function replaceContactReference(
   survivorId: string,
 ): { readonly value: unknown; readonly changed: boolean } {
   if (typeof value === "string") {
-    return retiredIds.has(value)
-      ? { value: survivorId, changed: true }
-      : { value, changed: false };
+    return retiredIds.has(value) ? { value: survivorId, changed: true } : { value, changed: false };
   }
   if (Array.isArray(value)) {
     let changed = false;
@@ -948,10 +946,7 @@ export class CrmService {
     });
   }
 
-  async previewImport(
-    actor: CrmActor,
-    input: ImportCrmContactsInput,
-  ): Promise<CrmImportResult> {
+  async previewImport(actor: CrmActor, input: ImportCrmContactsInput): Promise<CrmImportResult> {
     const prepared = await this.prepareImport(actor, input);
     const previewKey =
       input.idempotencyKey === undefined
@@ -982,10 +977,7 @@ export class CrmService {
     return this.previewImport(actor, input);
   }
 
-  async previewCsvImport(
-    actor: CrmActor,
-    input: ImportCrmContactsInput,
-  ): Promise<CrmImportResult> {
+  async previewCsvImport(actor: CrmActor, input: ImportCrmContactsInput): Promise<CrmImportResult> {
     return this.previewImport(actor, input);
   }
 
@@ -1010,11 +1002,14 @@ export class CrmService {
           persisted.planFingerprint !== undefined &&
           persisted.planFingerprint !== prepared.planFingerprint
         ) {
-          throw conflict("The import idempotency key was already used for a different normalized input.", {
-            idempotencyKey: key,
-            priorPlanFingerprint: persisted.planFingerprint,
-            planFingerprint: prepared.planFingerprint,
-          });
+          throw conflict(
+            "The import idempotency key was already used for a different normalized input.",
+            {
+              idempotencyKey: key,
+              priorPlanFingerprint: persisted.planFingerprint,
+              planFingerprint: prepared.planFingerprint,
+            },
+          );
         }
         return { ...clone(persisted), idempotent: true, preview: false };
       }
@@ -1050,7 +1045,8 @@ export class CrmService {
           );
           assertTenant(saved, organizationId);
           const authoritative = await repository.getContact(organizationId, saved.id);
-          if (authoritative === null) throw dependencyUnavailable("The saved contact could not be re-read.");
+          if (authoritative === null)
+            throw dependencyUnavailable("The saved contact could not be re-read.");
           contactsById.set(authoritative.id, clone(authoritative));
           if (result.status === "created") created += 1;
           else updated += 1;
@@ -1132,7 +1128,9 @@ export class CrmService {
       throw invalid(`Import must contain between 1 and ${MAX_IMPORT_ROWS} rows.`);
     const mode = input.mode ?? "upsert";
     if (mode !== "upsert" && mode !== "create") throw invalid("mode must be upsert or create.");
-    const columns = Object.keys((input.rows?.[0] ?? parsedCsv?.[0] ?? {}) as Record<string, unknown>);
+    const columns = Object.keys(
+      (input.rows?.[0] ?? parsedCsv?.[0] ?? {}) as Record<string, unknown>,
+    );
     const mapping = importColumnMapping(columns);
     const planFingerprint = fingerprint({
       organizationId,
@@ -1144,7 +1142,11 @@ export class CrmService {
     const existingContacts = await repository.listContacts(organizationId, { organizationId });
     const byEmail = new Map<string, CrmContact>();
     for (const contact of existingContacts) {
-      if (contact.organizationId === organizationId && contact.status === "active" && contact.email) {
+      if (
+        contact.organizationId === organizationId &&
+        contact.status === "active" &&
+        contact.email
+      ) {
         byEmail.set(contact.email.toLowerCase(), clone(contact));
       }
     }
@@ -1190,7 +1192,10 @@ export class CrmService {
           existing,
           existing?.source ?? "csv",
         );
-        if (existing !== undefined && sameRecord(contactComparable(existing), contactComparable(candidate))) {
+        if (
+          existing !== undefined &&
+          sameRecord(contactComparable(existing), contactComparable(candidate))
+        ) {
           skipped += 1;
           rows.push({
             result: {
@@ -1233,7 +1238,9 @@ export class CrmService {
       mapping,
       rows,
       counts: { created, updated, skipped, errors },
-      previewContacts: [...contacts.values()].sort((left, right) => left.id.localeCompare(right.id)),
+      previewContacts: [...contacts.values()].sort((left, right) =>
+        left.id.localeCompare(right.id),
+      ),
       planFingerprint,
     };
   }
@@ -1416,10 +1423,7 @@ export class CrmService {
     };
   }
 
-  async previewMerge(
-    actor: CrmActor,
-    input: MergeCrmContactsInput,
-  ): Promise<CrmMergePreview> {
+  async previewMerge(actor: CrmActor, input: MergeCrmContactsInput): Promise<CrmMergePreview> {
     return this.previewMergeContacts(actor, input);
   }
   async previewContactMerge(
@@ -1429,10 +1433,7 @@ export class CrmService {
     return this.previewMergeContacts(actor, input);
   }
 
-  async planMergeContacts(
-    actor: CrmActor,
-    input: MergeCrmContactsInput,
-  ): Promise<CrmMergePreview> {
+  async planMergeContacts(actor: CrmActor, input: MergeCrmContactsInput): Promise<CrmMergePreview> {
     return this.previewMergeContacts(actor, input);
   }
 
@@ -1452,20 +1453,23 @@ export class CrmService {
           prior.planFingerprint !== undefined &&
           prior.planFingerprint !== normalized.planFingerprint
         ) {
-          throw conflict("The merge idempotency key was already used for a different normalized plan.", {
-            idempotencyKey: key,
-            priorPlanFingerprint: prior.planFingerprint,
-            planFingerprint: normalized.planFingerprint,
-          });
+          throw conflict(
+            "The merge idempotency key was already used for a different normalized plan.",
+            {
+              idempotencyKey: key,
+              priorPlanFingerprint: prior.planFingerprint,
+              planFingerprint: normalized.planFingerprint,
+            },
+          );
         }
         return { ...clone(prior), idempotent: true };
       }
       const plan = await this.buildMergePlan(actor, normalized);
       if (plan.participantConflicts.length > 0) {
-        throw conflict(
-          "The merge would reconcile two distinct participants in the same event.",
-          { participantConflicts: plan.participantConflicts, plan: clone(plan) },
-        );
+        throw conflict("The merge would reconcile two distinct participants in the same event.", {
+          participantConflicts: plan.participantConflicts,
+          plan: clone(plan),
+        });
       }
 
       const tombstones: CrmContact[] = [];
@@ -1478,7 +1482,9 @@ export class CrmService {
           continue;
         }
         if (current.status !== "active")
-          throw invalid("Every duplicate contact must be active or already merged into this survivor.");
+          throw invalid(
+            "Every duplicate contact must be active or already merged into this survivor.",
+          );
         const retired: CrmContact = {
           ...current,
           status: "merged",
@@ -1532,16 +1538,12 @@ export class CrmService {
         throw error;
       }
       if (reconciliation.participantConflicts.length > 0) {
-        throw conflict(
-          "The merge would reconcile two distinct participants in the same event.",
-          { participantConflicts: reconciliation.participantConflicts },
-        );
+        throw conflict("The merge would reconcile two distinct participants in the same event.", {
+          participantConflicts: reconciliation.participantConflicts,
+        });
       }
 
-      const history = await repository.listHistory(
-        normalized.organizationId,
-        plan.survivorId,
-      );
+      const history = await repository.listHistory(normalized.organizationId, plan.survivorId);
       const audited = history.some(
         (entry) => (entry.metadata.auditId as string | undefined) === plan.auditId,
       );
@@ -1568,7 +1570,8 @@ export class CrmService {
         normalized.organizationId,
         plan.survivorId,
       );
-      if (authoritativePrimary === null) throw dependencyUnavailable("The merged survivor could not be re-read.");
+      if (authoritativePrimary === null)
+        throw dependencyUnavailable("The merged survivor could not be re-read.");
       const authoritativeTombstones: CrmContact[] = [];
       for (const retiredId of plan.retiredIds) {
         const authoritative = await repository.getContact(normalized.organizationId, retiredId);
@@ -1587,12 +1590,7 @@ export class CrmService {
         idempotent: false,
         planFingerprint: normalized.planFingerprint,
       };
-      await repository.saveCommandResult(
-        normalized.organizationId,
-        "merge-contacts",
-        key,
-        result,
-      );
+      await repository.saveCommandResult(normalized.organizationId, "merge-contacts", key, result);
       return clone(result);
     });
   }
@@ -1613,13 +1611,17 @@ export class CrmService {
     const survivorId = identifier(input.primaryContactId, "primaryContactId");
     if (!Array.isArray(input.duplicateContactIds))
       throw invalid("duplicateContactIds must be an array.");
-    const retiredIds = [...new Set(
-      input.duplicateContactIds.map((id) => identifier(id, "duplicateContactId")),
-    )].sort((left, right) => left.localeCompare(right));
+    const retiredIds = [
+      ...new Set(input.duplicateContactIds.map((id) => identifier(id, "duplicateContactId"))),
+    ].sort((left, right) => left.localeCompare(right));
     if (retiredIds.length === 0 || retiredIds.includes(survivorId))
-      throw invalid("duplicateContactIds must contain unique contacts other than the primary contact.");
+      throw invalid(
+        "duplicateContactIds must contain unique contacts other than the primary contact.",
+      );
     if (new Set(input.duplicateContactIds).size !== input.duplicateContactIds.length)
-      throw invalid("duplicateContactIds must contain unique contacts other than the primary contact.");
+      throw invalid(
+        "duplicateContactIds must contain unique contacts other than the primary contact.",
+      );
     const fieldWinners = normalizeMergeScalarWinners(input.fieldWinners);
     const customFieldWinners = normalizeMergeCustomFieldWinners(input.customFieldWinners);
     const idempotencyKey =
@@ -1684,16 +1686,32 @@ export class CrmService {
       for (const [field, value] of Object.entries(duplicate.customFields))
         if (mergedFields[field] === undefined) mergedFields[field] = clone(value);
 
-    let firstName = primary.firstName ?? duplicates.find((contact) => contact.firstName !== null)?.firstName ?? null;
-    let lastName = primary.lastName ?? duplicates.find((contact) => contact.lastName !== null)?.lastName ?? null;
-    let displayName = primary.displayName || duplicates.find((contact) => contact.displayName)?.displayName || "Unnamed contact";
-    let email = primary.email ?? duplicates.find((contact) => contact.email !== null)?.email ?? null;
-    let phone = primary.phone ?? duplicates.find((contact) => contact.phone !== null)?.phone ?? null;
-    let company = primary.company ?? duplicates.find((contact) => contact.company !== null)?.company ?? null;
-    let title = primary.title ?? duplicates.find((contact) => contact.title !== null)?.title ?? null;
-    const website = primary.website ?? duplicates.find((contact) => contact.website !== null)?.website ?? null;
-    const linkedinUrl = primary.linkedinUrl ?? duplicates.find((contact) => contact.linkedinUrl !== null)?.linkedinUrl ?? null;
-    const survivorNotes = primary.notes ?? duplicates.find((contact) => contact.notes !== null)?.notes ?? null;
+    let firstName =
+      primary.firstName ??
+      duplicates.find((contact) => contact.firstName !== null)?.firstName ??
+      null;
+    let lastName =
+      primary.lastName ?? duplicates.find((contact) => contact.lastName !== null)?.lastName ?? null;
+    let displayName =
+      primary.displayName ||
+      duplicates.find((contact) => contact.displayName)?.displayName ||
+      "Unnamed contact";
+    let email =
+      primary.email ?? duplicates.find((contact) => contact.email !== null)?.email ?? null;
+    let phone =
+      primary.phone ?? duplicates.find((contact) => contact.phone !== null)?.phone ?? null;
+    let company =
+      primary.company ?? duplicates.find((contact) => contact.company !== null)?.company ?? null;
+    let title =
+      primary.title ?? duplicates.find((contact) => contact.title !== null)?.title ?? null;
+    const website =
+      primary.website ?? duplicates.find((contact) => contact.website !== null)?.website ?? null;
+    const linkedinUrl =
+      primary.linkedinUrl ??
+      duplicates.find((contact) => contact.linkedinUrl !== null)?.linkedinUrl ??
+      null;
+    const survivorNotes =
+      primary.notes ?? duplicates.find((contact) => contact.notes !== null)?.notes ?? null;
 
     for (const [field, winnerId] of Object.entries(normalized.fieldWinners)) {
       const winner = contactsById.get(winnerId);
@@ -1771,9 +1789,10 @@ export class CrmService {
       updatedAt: nowIso(this.#clock),
     };
     const projections = await repository.listProjections(normalized.organizationId);
-    const links = projections.filter((projection) =>
-      normalized.retiredIds.includes(projectionCrmContactId(projection)) ||
-      projectionCrmContactId(projection) === normalized.survivorId,
+    const links = projections.filter(
+      (projection) =>
+        normalized.retiredIds.includes(projectionCrmContactId(projection)) ||
+        projectionCrmContactId(projection) === normalized.survivorId,
     );
     const participantConflicts = participantConflictDetails(
       projections,
@@ -1781,9 +1800,13 @@ export class CrmService {
     );
     const [segments, notesByContact, pipelineByContact] = await Promise.all([
       repository.listSegments(normalized.organizationId),
-      Promise.all(normalized.retiredIds.map((id) => repository.listNotes(normalized.organizationId, id))),
       Promise.all(
-        normalized.retiredIds.map((id) => repository.listPipelineHistory(normalized.organizationId, id)),
+        normalized.retiredIds.map((id) => repository.listNotes(normalized.organizationId, id)),
+      ),
+      Promise.all(
+        normalized.retiredIds.map((id) =>
+          repository.listPipelineHistory(normalized.organizationId, id),
+        ),
       ),
     ]);
     const notes = notesByContact.flat();
@@ -2531,7 +2554,11 @@ export class InMemoryCrmRepository implements CrmRepository {
         contactId: crmContactId,
       };
       this.#projections.set(
-        this.projectionKey(normalizedProjection.organizationId, normalizedProjection.eventId, participantId),
+        this.projectionKey(
+          normalizedProjection.organizationId,
+          normalizedProjection.eventId,
+          participantId,
+        ),
         clone(normalizedProjection),
       );
     }
@@ -2781,7 +2808,9 @@ export class InMemoryCrmRepository implements CrmRepository {
     }
 
     let participantContactLinks = 0;
-    const orderedProjections = [...projections].sort((left, right) => left.id.localeCompare(right.id));
+    const orderedProjections = [...projections].sort((left, right) =>
+      left.id.localeCompare(right.id),
+    );
     for (const projection of orderedProjections) {
       if (!retiredSet.has(projectionCrmContactId(projection))) continue;
       const oldKey = this.projectionKey(
@@ -2846,10 +2875,7 @@ export class InMemoryCrmRepository implements CrmRepository {
         version: segment.version + 1,
         updatedAt: segment.updatedAt,
       };
-      this.#segments.set(
-        this.segmentKey(organizationId, segment.id),
-        clone(updatedSegment),
-      );
+      this.#segments.set(this.segmentKey(organizationId, segment.id), clone(updatedSegment));
       segments += 1;
     }
 
@@ -2863,7 +2889,6 @@ export class InMemoryCrmRepository implements CrmRepository {
     this.#mergeReceipts.set(receiptKey, clone(result));
     return clone(result);
   }
-
 
   async saveOutreach(command: CrmOutreachCommand): Promise<CrmOutreachCommand> {
     const key = this.commandKey(command.organizationId, command.idempotencyKey);

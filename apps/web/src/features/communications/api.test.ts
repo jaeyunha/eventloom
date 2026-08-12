@@ -71,7 +71,9 @@ function reminderRun(triggerType: ReminderRun["triggerType"] = "automatic"): Rem
   };
 }
 
-function reminderDispatch(status: ReminderDispatch["status"] = "provider_accepted"): ReminderDispatch {
+function reminderDispatch(
+  status: ReminderDispatch["status"] = "provider_accepted",
+): ReminderDispatch {
   return {
     id: `${status}-dispatch-1`,
     runId: "automatic-run-1",
@@ -95,9 +97,10 @@ function reminderDispatch(status: ReminderDispatch["status"] = "provider_accepte
     deliveredAt: status === "delivered" ? "2026-08-11T00:01:00.000Z" : null,
     failedAt: status === "failed" ? "2026-08-11T00:01:00.000Z" : null,
     bouncedAt: status === "bounced" ? "2026-08-11T00:01:00.000Z" : null,
-    completedAt: status === "candidate" || status === "eligible" || status === "queued"
-      ? null
-      : "2026-08-11T00:01:00.000Z",
+    completedAt:
+      status === "candidate" || status === "eligible" || status === "queued"
+        ? null
+        : "2026-08-11T00:01:00.000Z",
     outboxJobId: "outbox-1",
   };
 }
@@ -285,15 +288,15 @@ describe("communications API", () => {
     const controller = new AbortController();
 
     await expect(api.listReminderRuns("event-1", controller.signal)).resolves.toEqual([run]);
-    await expect(api.listReminderDispatches("event-1", run.id, controller.signal)).resolves.toEqual([
-      dispatch,
-    ]);
+    await expect(api.listReminderDispatches("event-1", run.id, controller.signal)).resolves.toEqual(
+      [dispatch],
+    );
     await expect(
       api.getReminderFacts("event-1", "application-1", { type: "task", taskId: "task-1" }),
     ).resolves.toEqual(facts);
-    await expect(api.refreshReminderDelivery("event-1", dispatch.id, controller.signal)).resolves.toEqual(
-      dispatch,
-    );
+    await expect(
+      api.refreshReminderDelivery("event-1", dispatch.id, controller.signal),
+    ).resolves.toEqual(dispatch);
 
     const listCall = fetcher.mock.calls[0];
     expect(String(listCall?.[0])).toBe(
@@ -338,15 +341,24 @@ describe("communications API", () => {
   });
 
   it("rejects malformed reminder DTOs and preserves structured API errors", async () => {
-    const malformed = vi.fn<TestFetcher>().mockResolvedValue(jsonResponse({ runs: [{ id: "run" }] }));
-    await expect(createCommunicationApi("", "org-1", malformed).listReminderRuns("event-1")).rejects.toMatchObject({
+    const malformed = vi
+      .fn<TestFetcher>()
+      .mockResolvedValue(jsonResponse({ runs: [{ id: "run" }] }));
+    await expect(
+      createCommunicationApi("", "org-1", malformed).listReminderRuns("event-1"),
+    ).rejects.toMatchObject({
       code: "COMMUNICATION_INVALID_RESPONSE",
       status: 502,
     });
 
-    const denied = vi.fn<TestFetcher>().mockResolvedValue(
-      jsonResponse({ error: { code: "COMMUNICATION_CONFLICT", message: "Audience revision is stale" } }, 409),
-    );
+    const denied = vi
+      .fn<TestFetcher>()
+      .mockResolvedValue(
+        jsonResponse(
+          { error: { code: "COMMUNICATION_CONFLICT", message: "Audience revision is stale" } },
+          409,
+        ),
+      );
     await expect(
       createCommunicationApi("", "org-1", denied).runManualReminders({
         eventId: "event-1",

@@ -254,9 +254,7 @@ function reminderDispatch(
     cadenceWindow: "2026-08-09T10:00:00.000Z",
     idempotencyKey: `${id}-key`,
     providerMessageId:
-      status === "provider_accepted" ||
-      status === "delivered" ||
-      status === "bounced"
+      status === "provider_accepted" || status === "delivered" || status === "bounced"
         ? "provider-reminder-1"
         : null,
     status,
@@ -268,19 +266,14 @@ function reminderDispatch(
     skippedAt: status === "skipped" ? "2026-08-09T10:00:15.000Z" : null,
     queuedAt: "2026-08-09T10:00:20.000Z",
     providerAcceptedAt:
-      status === "provider_accepted" ||
-      status === "delivered" ||
-      status === "bounced"
+      status === "provider_accepted" || status === "delivered" || status === "bounced"
         ? "2026-08-09T10:00:30.000Z"
         : null,
     deliveredAt: status === "delivered" ? "2026-08-09T10:01:00.000Z" : null,
     failedAt: status === "failed" ? "2026-08-09T10:01:00.000Z" : null,
     bouncedAt: status === "bounced" ? "2026-08-09T10:01:00.000Z" : null,
     completedAt:
-      status === "failed" ||
-      status === "bounced" ||
-      status === "delivered" ||
-      status === "skipped"
+      status === "failed" || status === "bounced" || status === "delivered" || status === "skipped"
         ? "2026-08-09T10:01:00.000Z"
         : null,
     outboxJobId: "outbox-1",
@@ -628,14 +621,20 @@ describe("communications organizer workspace", () => {
     expect(markup).toContain("Bounced");
     expect(markup).toContain("Next eligible time");
     expect(markup).toContain("Last outcome");
-    expect(markup).toContain("Historical recipient and task/review subject snapshots are immutable");
+    expect(markup).toContain(
+      "Historical recipient and task/review subject snapshots are immutable",
+    );
   });
 
   it("renders reminder pending, conflict, stale, and unavailable truth states explicitly", () => {
     const states = [
       ["pending", "Reminder truth pending", "No provider outcome is assumed"],
       ["conflict", "Reminder audience conflict", "Reconcile the current audience revision"],
-      ["stale", "Reminder truth is stale", "before treating a queued or provider-accepted state as terminal"],
+      [
+        "stale",
+        "Reminder truth is stale",
+        "before treating a queued or provider-accepted state as terminal",
+      ],
       ["unavailable", "Reminder delivery truth unavailable", "No delivery success is shown"],
     ] as const;
     for (const [state, message, truthBoundary] of states) {

@@ -764,9 +764,7 @@ export function reminderDeliveryMessage(result: ReminderDeliveryResponse): strin
     .map((fact) =>
       [
         fact.status ? `status ${fact.status}` : null,
-        fact.timestamp ?? fact.createdAt
-          ? `timestamp ${fact.timestamp ?? fact.createdAt}`
-          : null,
+        (fact.timestamp ?? fact.createdAt) ? `timestamp ${fact.timestamp ?? fact.createdAt}` : null,
         fact.runId ? `run ${fact.runId}` : null,
         fact.outboxId ? `outbox ${fact.outboxId}` : null,
         fact.providerId ? `provider ${fact.providerId}` : null,
@@ -920,7 +918,9 @@ function mapPlan(
   const submittedAssignments = activeAssignments.filter(
     (assignment) => assignment.status === "submitted",
   ).length;
-  const abstainedAssignments = assignments.filter((assignment) => assignment.status === "abstained").length;
+  const abstainedAssignments = assignments.filter(
+    (assignment) => assignment.status === "abstained",
+  ).length;
   const now = Date.now();
   return {
     planId: plan.id,
@@ -1148,9 +1148,7 @@ export function mapRoundAggregates(
         .length,
       participants: submission.participants ?? [],
       roundId,
-      ...(aggregate?.roundRevision === undefined
-        ? {}
-        : { roundRevision: aggregate.roundRevision }),
+      ...(aggregate?.roundRevision === undefined ? {} : { roundRevision: aggregate.roundRevision }),
       ...(aggregate?.rubricRevision === undefined
         ? {}
         : { rubricRevision: aggregate.rubricRevision }),
@@ -1169,7 +1167,9 @@ export function mapSeedRoundAggregates(
     ...(aggregate.participants === undefined ? {} : { participants: aggregate.participants }),
   }));
   const mapped = mapRoundAggregates(submissionRows, seed.assignments, aggregates, roundId);
-  const referenceById = new Map(seed.aggregates.map((aggregate) => [aggregate.id, aggregate.reference]));
+  const referenceById = new Map(
+    seed.aggregates.map((aggregate) => [aggregate.id, aggregate.reference]),
+  );
   return mapped.map((aggregate) => ({
     ...aggregate,
     reference: referenceById.get(aggregate.id) ?? aggregate.reference,
@@ -1495,7 +1495,12 @@ function formatAssignmentStatus(status: EvaluatorAssignment["assignmentStatus"])
   if (status === "superseded") return "Superseded";
   return "Needs review";
 }
-type AssignmentReviewStatus = "needs-review" | "in-progress" | "submitted" | "recused" | "superseded";
+type AssignmentReviewStatus =
+  | "needs-review"
+  | "in-progress"
+  | "submitted"
+  | "recused"
+  | "superseded";
 
 function assignmentReviewStatus(
   status: EvaluatorAssignment["assignmentStatus"],
@@ -2245,10 +2250,12 @@ function OrganizerAuthoring({
     reviewerMembers,
     seed.assignments,
   ]);
+  const assignmentSelectionKey = `${assignmentRoundId}:${assignmentSubmissionId}:${assignmentReviewerIds.join(",")}:${version}`;
   useEffect(() => {
+    if (assignmentSelectionKey.length === 0) return;
     setAssignmentPreview(null);
     setAssignmentPreviewKey(null);
-  }, [assignmentRoundId, assignmentSubmissionId, assignmentReviewerIds, version]);
+  }, [assignmentSelectionKey]);
 
   function updateRound(
     roundIndex: number,
@@ -3298,8 +3305,7 @@ function OrganizerWorkspaceView({
   const [exportMessage, setExportMessage] = useState<string | null>(null);
   const [view, setView] = useState<"overview" | "setup" | "assignments" | "decisions">("overview");
   const [selectedDecisionId, setSelectedDecisionId] = useState<string | null>(null);
-  const selectedRound =
-    seed.rounds.find((round) => round.id === selectedRoundId) ?? activeRound;
+  const selectedRound = seed.rounds.find((round) => round.id === selectedRoundId) ?? activeRound;
   useEffect(() => {
     setRoundAggregates(seed.aggregates);
     setAggregateError(null);
@@ -4127,17 +4133,23 @@ function ReviewerAssignmentList({
                         </span>
                       ) : null}
                       {assignment.supersededReason ? (
-                        <span className={styles.fieldHint}>Reason: {assignment.supersededReason}</span>
+                        <span className={styles.fieldHint}>
+                          Reason: {assignment.supersededReason}
+                        </span>
                       ) : null}
                     </td>
                     <td>
                       {protectedHistory ? (
                         <span className={styles.mutedLabel}>
-                          Protected {assignment.status === "superseded" ? "superseded" : "conflict"} history
+                          Protected {assignment.status === "superseded" ? "superseded" : "conflict"}{" "}
+                          history
                         </span>
                       ) : (
                         <div className={styles.formField}>
-                          <label className={styles.srOnly} htmlFor={`replacement-reviewer-${assignment.id}`}>
+                          <label
+                            className={styles.srOnly}
+                            htmlFor={`replacement-reviewer-${assignment.id}`}
+                          >
                             Replacement reviewer for {submissionTitle}
                           </label>
                           <select
@@ -4160,7 +4172,10 @@ function ReviewerAssignmentList({
                                 </option>
                               ))}
                           </select>
-                          <label className={styles.srOnly} htmlFor={`replacement-reason-${assignment.id}`}>
+                          <label
+                            className={styles.srOnly}
+                            htmlFor={`replacement-reason-${assignment.id}`}
+                          >
                             Replacement reason for {submissionTitle}
                           </label>
                           <textarea
@@ -4797,8 +4812,12 @@ function EvaluatorWorkspace({
             : "Suggestion rejected by a human",
       );
     } catch (reason: unknown) {
-      const message = reason instanceof Error ? reason.message : "The suggestion could not be resolved.";
-      if (reason instanceof EvaluationRequestError && (reason.status === 409 || reason.status === 412)) {
+      const message =
+        reason instanceof Error ? reason.message : "The suggestion could not be resolved.";
+      if (
+        reason instanceof EvaluationRequestError &&
+        (reason.status === 409 || reason.status === 412)
+      ) {
         setSuggestions((current) =>
           current.map((candidate) =>
             candidate.id === suggestion.id ? { ...candidate, status: "stale" as const } : candidate,
@@ -5367,50 +5386,52 @@ function EvaluatorWorkspace({
             <span className={styles.fieldHint}>
               Pending suggestions include exact revisions, evidence, and provider provenance.
             </span>
-          {suggestionUnavailable ? (
-            <p className={styles.fieldHint} role="status">
-              AI provider unavailable locally: {suggestionUnavailable} Manual scoring, save draft, and
-              submit evaluation remain usable.
-            </p>
-          ) : null}
-          {suggestionConflict ? (
-            <p className={styles.formError} role="alert">
-              {suggestionConflict}{" "}
-              <button
-                className={styles.secondaryButton}
-                type="button"
-                onClick={() => void generateSuggestions()}
-                disabled={suggestionBusy || reviewLocked}
-              >
-                Regenerate suggestions
-              </button>
-            </p>
-          ) : null}
-          {suggestions.length > 0 ? (
-            <details className={styles.disclosure}>
-              <summary>AI suggestion status and provenance</summary>
-              <ul>
-                {suggestions.map((suggestion) => (
-                  <li key={suggestion.id}>
-                    <strong>{suggestion.status}</strong> · suggestion {suggestion.id} · rubric
-                    revision {suggestion.rubricRevision} · submission revision{" "}
-                    {suggestion.submissionRevision} · provider {suggestion.provenance.provider} · model{" "}
-                    {suggestion.provenance.model}
-                    {suggestion.provenance.generatedAt
-                      ? ` · generated ${suggestion.provenance.generatedAt}`
-                      : ""}
-                    {suggestion.provenance.promptVersion
-                      ? ` · prompt ${suggestion.provenance.promptVersion}`
-                      : ""}
-                    {suggestion.provenance.traceId ? ` · trace ${suggestion.provenance.traceId}` : ""}
-                    {suggestion.provenance.sourceReferences.length > 0
-                      ? ` · sources ${suggestion.provenance.sourceReferences.join(", ")}`
-                      : " · sources unavailable"}
-                  </li>
-                ))}
-              </ul>
-            </details>
-          ) : null}
+            {suggestionUnavailable ? (
+              <p className={styles.fieldHint} role="status">
+                AI provider unavailable locally: {suggestionUnavailable} Manual scoring, save draft,
+                and submit evaluation remain usable.
+              </p>
+            ) : null}
+            {suggestionConflict ? (
+              <p className={styles.formError} role="alert">
+                {suggestionConflict}{" "}
+                <button
+                  className={styles.secondaryButton}
+                  type="button"
+                  onClick={() => void generateSuggestions()}
+                  disabled={suggestionBusy || reviewLocked}
+                >
+                  Regenerate suggestions
+                </button>
+              </p>
+            ) : null}
+            {suggestions.length > 0 ? (
+              <details className={styles.disclosure}>
+                <summary>AI suggestion status and provenance</summary>
+                <ul>
+                  {suggestions.map((suggestion) => (
+                    <li key={suggestion.id}>
+                      <strong>{suggestion.status}</strong> · suggestion {suggestion.id} · rubric
+                      revision {suggestion.rubricRevision} · submission revision{" "}
+                      {suggestion.submissionRevision} · provider {suggestion.provenance.provider} ·
+                      model {suggestion.provenance.model}
+                      {suggestion.provenance.generatedAt
+                        ? ` · generated ${suggestion.provenance.generatedAt}`
+                        : ""}
+                      {suggestion.provenance.promptVersion
+                        ? ` · prompt ${suggestion.provenance.promptVersion}`
+                        : ""}
+                      {suggestion.provenance.traceId
+                        ? ` · trace ${suggestion.provenance.traceId}`
+                        : ""}
+                      {suggestion.provenance.sourceReferences.length > 0
+                        ? ` · sources ${suggestion.provenance.sourceReferences.join(", ")}`
+                        : " · sources unavailable"}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            ) : null}
           </div>
           {suggestions
             .filter((suggestion) => suggestion.status === "stale")
@@ -5638,8 +5659,8 @@ function EvaluatorWorkspace({
                                 : ""}
                             </p>
                             <p>
-                              Rubric revision {suggestionRecord.rubricRevision} · submission revision{" "}
-                              {suggestionRecord.submissionRevision}
+                              Rubric revision {suggestionRecord.rubricRevision} · submission
+                              revision {suggestionRecord.submissionRevision}
                             </p>
                             {suggestionRecord.provenance.promptVersion ? (
                               <p>Prompt version: {suggestionRecord.provenance.promptVersion}</p>
@@ -5649,7 +5670,8 @@ function EvaluatorWorkspace({
                             ) : null}
                             <p>
                               Source references:{" "}
-                              {suggestionRecord.provenance.sourceReferences.join(", ") || "none returned"}
+                              {suggestionRecord.provenance.sourceReferences.join(", ") ||
+                                "none returned"}
                             </p>
                           </div>
                         ) : null}

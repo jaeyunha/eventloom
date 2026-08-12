@@ -296,18 +296,13 @@ describe("evaluation HTTP routes", () => {
     expect(preview.exclusions).toEqual([]);
     expect(preview.fingerprint).toMatch(/^evaluation-distribution-v1-/u);
 
-    const apply = await jsonRequest(
-      app,
-      "/evaluations/plans/plan-1/distribution/apply",
-      "POST",
-      {
-        roundId: "round-1",
-        submissionIds: ["submission-1"],
-        reviewerIds: ["reviewer-2", "reviewer-1"],
-        expectedVersion: 2,
-        fingerprint: preview.fingerprint,
-      },
-    );
+    const apply = await jsonRequest(app, "/evaluations/plans/plan-1/distribution/apply", "POST", {
+      roundId: "round-1",
+      submissionIds: ["submission-1"],
+      reviewerIds: ["reviewer-2", "reviewer-1"],
+      expectedVersion: 2,
+      fingerprint: preview.fingerprint,
+    });
     expect(apply.status).toBe(200);
     await expect(apply.json()).resolves.toMatchObject({
       activeAssignments: [
@@ -406,10 +401,9 @@ describe("evaluation HTTP routes", () => {
         },
       ],
     });
-    const reviewerWorkspace = await app.request(
-      "/evaluations/reviewer/workspace?eventId=event-1",
-      { headers: { "x-test-actor": "reviewer" } },
-    );
+    const reviewerWorkspace = await app.request("/evaluations/reviewer/workspace?eventId=event-1", {
+      headers: { "x-test-actor": "reviewer" },
+    });
     await expect(reviewerWorkspace.json()).resolves.toEqual({
       data: { assignments: [] },
     });

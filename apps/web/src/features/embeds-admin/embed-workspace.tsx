@@ -206,7 +206,11 @@ export interface EmbedEventRecord {
   readonly startsAt: string;
   readonly endsAt: string;
   readonly venue: string | null;
-  readonly cfpSettings: Readonly<{ enabled: boolean; opensAt: string | null; closesAt: string | null }>;
+  readonly cfpSettings: Readonly<{
+    enabled: boolean;
+    opensAt: string | null;
+    closesAt: string | null;
+  }>;
   readonly defaultCalendarSettings: Readonly<{
     durationMinutes: number;
     timeZone: string;
@@ -347,7 +351,9 @@ function parseEmbedConfiguration(value: unknown, field: string): EmbedConfigurat
 
 function parseEmbedConfigurations(value: unknown, field: string): readonly EmbedConfiguration[] {
   if (!Array.isArray(value)) throw responseError(`${field} must be an array.`);
-  const configurations = value.map((item, index) => parseEmbedConfiguration(item, `${field}[${index}]`));
+  const configurations = value.map((item, index) =>
+    parseEmbedConfiguration(item, `${field}[${index}]`),
+  );
   if (new Set(configurations.map((item) => item.id)).size !== configurations.length) {
     throw responseError(`${field} must not contain duplicate IDs.`);
   }
@@ -441,7 +447,11 @@ export function parseEmbedEventResponse(
   expectedOrganizationId?: string,
   expectedEventId?: string,
 ): EmbedEventRecord {
-  return parseEmbedEventRecord(responseData(payload, "event response"), expectedOrganizationId, expectedEventId);
+  return parseEmbedEventRecord(
+    responseData(payload, "event response"),
+    expectedOrganizationId,
+    expectedEventId,
+  );
 }
 
 export function parseEmbedAgendaResponse(payload: unknown): EmbedAgendaData {
@@ -474,7 +484,10 @@ function parseEmbedReleaseRecord(value: unknown, field: string): EmbedReleaseRec
     eventId,
     revision: positiveResponseInteger(value.revision, `${field}.revision`),
     lifecycle,
-    agendaProjectionId: requiredResponseString(value.agendaProjectionId, `${field}.agendaProjectionId`),
+    agendaProjectionId: requiredResponseString(
+      value.agendaProjectionId,
+      `${field}.agendaProjectionId`,
+    ),
     agendaRevisionNumber: positiveResponseInteger(
       value.agendaRevisionNumber,
       `${field}.agendaRevisionNumber`,
@@ -488,7 +501,10 @@ function parseEmbedReleaseRecord(value: unknown, field: string): EmbedReleaseRec
       value.speakerRevisionNumber,
       `${field}.speakerRevisionNumber`,
     ),
-    speakerSourceHash: requiredResponseString(value.speakerSourceHash, `${field}.speakerSourceHash`),
+    speakerSourceHash: requiredResponseString(
+      value.speakerSourceHash,
+      `${field}.speakerSourceHash`,
+    ),
     approvedContentRevision: positiveResponseInteger(
       value.approvedContentRevision,
       `${field}.approvedContentRevision`,
@@ -564,7 +580,10 @@ export function parseEmbedPublicationResponse(
     version: positiveResponseInteger(data.version, "publication.version"),
     servedRevision,
     servedManifest,
-    pendingRevision: nullablePositiveResponseInteger(data.pendingRevision, "publication.pendingRevision"),
+    pendingRevision: nullablePositiveResponseInteger(
+      data.pendingRevision,
+      "publication.pendingRevision",
+    ),
     pendingReleaseId: nullableResponseString(data.pendingReleaseId, "publication.pendingReleaseId"),
     releases,
   };
@@ -911,7 +930,8 @@ function queryForSettings(settings: EmbedSnippetSettings): string {
 
   const trackIds = normalizeStringList(settings.trackIds ?? []);
   const statuses = normalizeStringList(settings.statuses ?? []);
-  if (settings.configurationId?.trim()) query.set("configurationId", settings.configurationId.trim());
+  if (settings.configurationId?.trim())
+    query.set("configurationId", settings.configurationId.trim());
   if (settings.configurationRevision !== undefined) {
     query.set("configurationRevision", String(settings.configurationRevision));
   }
@@ -1444,7 +1464,9 @@ function EmbedConfigurationLibrary({
           <span className={workspaceStyles.muted}>
             {selectedConfigurationId
               ? `Saved configuration revision ${
-                  configurations.find((configuration) => configuration.id === selectedConfigurationId)?.revision ?? "unknown"
+                  configurations.find(
+                    (configuration) => configuration.id === selectedConfigurationId,
+                  )?.revision ?? "unknown"
                 } is authoritative. Updates require that revision.`
               : "New configurations start at revision 1. Saved configurations are immutable; disable one instead of deleting it."}
           </span>
@@ -1795,13 +1817,15 @@ function PublicationStatus({
         </div>
         <div className={workspaceStyles.statusItem}>
           <span className={workspaceStyles.statusLabel}>Served program revision</span>
-          <strong>{servedRevision === null ? "No served revision" : `Revision ${servedRevision}`}</strong>
+          <strong>
+            {servedRevision === null ? "No served revision" : `Revision ${servedRevision}`}
+          </strong>
           <span className={workspaceStyles.muted}>
             {publication.status === "pending"
               ? `Rebuild ${publication.pendingRevision ?? "pending"} is in progress; revision ${servedRevision ?? "none"} remains served.`
               : publication.status === "failed"
                 ? `${publication.failedReason ?? "The latest rebuild failed."} Previously served revision remains active.`
-                : publication.message ?? "Public outputs use this served program release."}
+                : (publication.message ?? "Public outputs use this served program release.")}
           </span>
         </div>
         <div className={workspaceStyles.statusItem}>
@@ -1976,7 +2000,9 @@ function MissingPublicProjection({
 }>) {
   const checking = publication.status === "loading";
   const needsConfiguration =
-    (publication.status === "served" || publication.status === "pending" || publication.status === "failed") &&
+    (publication.status === "served" ||
+      publication.status === "pending" ||
+      publication.status === "failed") &&
     !settingsAvailable;
   const title = checking
     ? "Loading publication state"
@@ -1998,7 +2024,13 @@ function MissingPublicProjection({
       ? "The current organizer publication state is loading."
       : "Preview and outputs remain withheld until a saved enabled configuration and served program revision are available.");
   return (
-    <Alert variant={publication.status === "failed" || publication.status === "unavailable" ? "destructive" : "default"}>
+    <Alert
+      variant={
+        publication.status === "failed" || publication.status === "unavailable"
+          ? "destructive"
+          : "default"
+      }
+    >
       <AlertTitle>{title}</AlertTitle>
       <AlertDescription>
         {description}
@@ -2062,9 +2094,7 @@ export function EmbedWorkspaceView({
   const [displayFields, setDisplayFields] = useState<readonly EmbedFieldId[]>(
     initialConfiguration?.displayFields ?? DEFAULT_EMBED_DISPLAY_FIELDS,
   );
-  const [trackIds, setTrackIds] = useState<readonly string[]>(
-    initialConfiguration?.trackIds ?? [],
-  );
+  const [trackIds, setTrackIds] = useState<readonly string[]>(initialConfiguration?.trackIds ?? []);
   const [statuses, setStatuses] = useState<readonly string[]>(
     initialConfiguration?.statuses ?? ["Approved"],
   );
@@ -2305,7 +2335,6 @@ export function EmbedWorkspaceView({
     widgetId,
   ]);
 
-
   const toggleConfiguration = useCallback(
     async (id: string, enabled: boolean) => {
       const configuration = configurations.find((candidate) => candidate.id === id);
@@ -2331,7 +2360,8 @@ export function EmbedWorkspaceView({
   const normalizedSlug = normalizeEmbedSlug(eventSlug ?? undefined);
   const selectedConfiguration =
     snapshotScopeKey === scopeKey && selectedConfigurationId !== null
-      ? configurations.find((configuration) => configuration.id === selectedConfigurationId) ?? null
+      ? (configurations.find((configuration) => configuration.id === selectedConfigurationId) ??
+        null)
       : null;
   const settings = useMemo<EmbedSnippetSettings | null>(() => {
     if (loading || errorMessage || snapshotScopeKey !== scopeKey || !normalizedSlug || !origin) {
@@ -2732,13 +2762,14 @@ function publicationMetadataFromState(
             number: state.servedManifest.revision,
             publishedAt: state.servedManifest.publishedAt,
           },
-    previewAvailability: effectiveStatus === "served" || effectiveStatus === "pending" || effectiveStatus === "failed"
-      ? "available"
-      : effectiveStatus === "loading"
-        ? "checking"
-        : effectiveStatus === "unavailable"
-          ? "failed"
-          : "unavailable",
+    previewAvailability:
+      effectiveStatus === "served" || effectiveStatus === "pending" || effectiveStatus === "failed"
+        ? "available"
+        : effectiveStatus === "loading"
+          ? "checking"
+          : effectiveStatus === "unavailable"
+            ? "failed"
+            : "unavailable",
     ...(message === undefined ? {} : { message }),
   };
 }

@@ -68,7 +68,6 @@ export interface AgendaCandidateDiagnostics {
   report: AgendaValidationReport | null;
 }
 
-
 export type AgendaCalendarConnectionState = "connected" | "degraded" | "not_configured";
 
 export interface AgendaCalendarDeliveryState {
@@ -83,7 +82,6 @@ export interface AgendaCalendarDeliveryState {
     retryable: boolean;
   } | null;
 }
-
 
 export interface AgendaPreview {
   draftVersion: number;
@@ -100,7 +98,6 @@ export interface AgendaPreview {
 export interface AgendaPlacementFailureData extends AgendaCandidateDiagnostics {
   authoritativeSavedPreview: AgendaPreview;
 }
-
 
 export interface AgendaRevision {
   id: string;

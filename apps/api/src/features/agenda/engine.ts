@@ -1,7 +1,4 @@
-import {
-  detectAgendaConflicts,
-  detectReleasedSpeakerCommitmentConflicts,
-} from "./conflicts";
+import { detectAgendaConflicts, detectReleasedSpeakerCommitmentConflicts } from "./conflicts";
 import { AgendaRepositoryConflictError } from "./infrastructure";
 import { canonicalizeTimeZone, resolveLocalDateTime } from "./timezone";
 import type {
@@ -965,10 +962,7 @@ export class AgendaEngine {
       : detectAgendaConflicts({ ...base, customRules: this.#customRules });
   }
   private releaseValidationReport(
-    state: Pick<
-      AgendaState,
-      "currentPublishedRevisionId" | "revisions" | "sessions"
-    >,
+    state: Pick<AgendaState, "currentPublishedRevisionId" | "revisions" | "sessions">,
     entries: readonly AgendaEntry[],
   ): AgendaValidationReport {
     const releasedEntries = currentRevision(state)?.entries ?? [];

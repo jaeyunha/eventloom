@@ -322,7 +322,13 @@ export class SpeakerApiError extends Error {
   }
 }
 
-export type SpeakerMutationStatus = "idle" | "saving" | "pending" | "saved" | "conflict" | "failure";
+export type SpeakerMutationStatus =
+  | "idle"
+  | "saving"
+  | "pending"
+  | "saved"
+  | "conflict"
+  | "failure";
 
 export class SpeakerAuthoritativeDataError extends Error {
   readonly code = "AUTHORITATIVE_DATA_INVALID";
@@ -696,8 +702,12 @@ export function createSpeakerApi(
       );
     },
     update(participantId, input) {
-      return jsonRequest<SpeakerRosterEnvelope>(`/${pathSegment(participantId)}`, "PATCH", input).then(
-        (value) => assertSpeakerRosterScope(value, normalizedOrganizationId, normalizedEventId),
+      return jsonRequest<SpeakerRosterEnvelope>(
+        `/${pathSegment(participantId)}`,
+        "PATCH",
+        input,
+      ).then((value) =>
+        assertSpeakerRosterScope(value, normalizedOrganizationId, normalizedEventId),
       );
     },
     getSessions(participantId, signal) {

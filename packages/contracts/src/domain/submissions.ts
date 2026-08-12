@@ -62,9 +62,7 @@ export const speakerWorkspaceExpectedVersionSchema = z
     expectedProfileVersion: entityVersionSchema,
   })
   .strict();
-export type SpeakerWorkspaceExpectedVersion = z.infer<
-  typeof speakerWorkspaceExpectedVersionSchema
->;
+export type SpeakerWorkspaceExpectedVersion = z.infer<typeof speakerWorkspaceExpectedVersionSchema>;
 
 export const submissionAnswersSchema = z.record(formFieldIdSchema, jsonValueSchema);
 
@@ -270,7 +268,9 @@ export type SubmissionMutationResponse = MutationEnvelope<Submission>;
 export const submissionResponseSchema = submissionMutationResponseSchema;
 export const submissionsResponseSchema = paginatedResponseSchema(submissionSchema);
 
-export const participantMutationResponseSchema = mutationEnvelopeSchema(submissionParticipantSchema);
+export const participantMutationResponseSchema = mutationEnvelopeSchema(
+  submissionParticipantSchema,
+);
 export type ParticipantMutationResponse = MutationEnvelope<SubmissionParticipant>;
 export const participantResponseSchema = participantMutationResponseSchema;
 export const participantsResponseSchema = paginatedResponseSchema(submissionParticipantSchema);

@@ -382,11 +382,7 @@ export interface ReminderDispatch {
 }
 
 export interface ReminderRepository {
-  getRun(
-    organizationId: string,
-    eventId: string,
-    runId: string,
-  ): Promise<ReminderRun | undefined>;
+  getRun(organizationId: string, eventId: string, runId: string): Promise<ReminderRun | undefined>;
   listRuns(organizationId: string, eventId: string): Promise<readonly ReminderRun[]>;
   insertRun(run: ReminderRun): Promise<ReminderRun>;
   updateRun(run: ReminderRun): Promise<ReminderRun>;

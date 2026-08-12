@@ -411,7 +411,12 @@ test("asserts C0 participant, task, asset, review, embed, and release schema inv
   ]) {
     assert.equal(assetFamilies.has(fieldName), true, `Asset Families missing ${fieldName}`);
   }
-  for (const fieldName of ["Latest Version", "Current Version", "Approved Version", "Released Version"]) {
+  for (const fieldName of [
+    "Latest Version",
+    "Current Version",
+    "Approved Version",
+    "Released Version",
+  ]) {
     assert.equal(assetFamilies.get(fieldName)?.type, "multipleRecordLinks");
   }
 
@@ -551,7 +556,10 @@ test("C0 dry-run reports additive mutations without writes, deletes, or renames"
     summary.actions.some((action) => /delete|rename/i.test(action.action)),
     false,
   );
-  assert.deepEqual(mock.requests.map((request) => request.method), ["GET"]);
+  assert.deepEqual(
+    mock.requests.map((request) => request.method),
+    ["GET"],
+  );
   assert.equal(mock.tables.length, 0);
 });
 test("validates configuration and command modes", () => {

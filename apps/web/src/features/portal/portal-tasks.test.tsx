@@ -30,10 +30,7 @@ function task(overrides: Record<string, unknown> = {}): PortalTask {
   } as PortalTask;
 }
 
-function asset(
-  id: string,
-  overrides: Record<string, unknown> = {},
-): PortalAsset {
+function asset(id: string, overrides: Record<string, unknown> = {}): PortalAsset {
   return {
     id,
     eventId: "event-1",
@@ -57,9 +54,7 @@ describe("portal task deliverable helpers", () => {
     expect(missing.valid).toBe(false);
     expect(missing.error).toContain("MIME allowlist");
 
-    const missingLimit = getTaskUploadPolicy(
-      task({ allowedMimeTypes: ["application/pdf"] }),
-    );
+    const missingLimit = getTaskUploadPolicy(task({ allowedMimeTypes: ["application/pdf"] }));
     expect(missingLimit.valid).toBe(false);
     expect(missingLimit.error).toContain("byte limit");
 
@@ -99,17 +94,21 @@ describe("portal task deliverable helpers", () => {
       error: null,
     });
     expect(
-      taskSubjectPresentation(participantTask, [
-        {
-          id: "profile-1",
-          eventId: "event-1",
-          participantId: "participant-1",
-          displayName: "Ada Speaker",
-          biography: "",
-          version: 1,
-          updatedAt: "2026-08-12T12:00:00.000Z",
-        },
-      ], []).label,
+      taskSubjectPresentation(
+        participantTask,
+        [
+          {
+            id: "profile-1",
+            eventId: "event-1",
+            participantId: "participant-1",
+            displayName: "Ada Speaker",
+            biography: "",
+            version: 1,
+            updatedAt: "2026-08-12T12:00:00.000Z",
+          },
+        ],
+        [],
+      ).label,
     ).toContain("Ada Speaker");
 
     const sessionTask = task({

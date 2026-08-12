@@ -158,11 +158,7 @@ function isValidationIssue(value: unknown): value is AgendaValidationIssue {
   );
 }
 function isAgendaValidationReport(value: unknown): value is AgendaValidationReport {
-  return (
-    isRecord(value) &&
-    Array.isArray(value.conflicts) &&
-    Array.isArray(value.warnings)
-  );
+  return isRecord(value) && Array.isArray(value.conflicts) && Array.isArray(value.warnings);
 }
 
 function placementFailureData(
@@ -183,7 +179,6 @@ function placementFailureData(
     authoritativeSavedPreview: authoritativePreview as unknown as AgendaPreview,
   };
 }
-
 
 function normalizedErrorDetails(value: unknown): AgendaApiErrorDetails | undefined {
   if (Array.isArray(value)) {
@@ -272,9 +267,11 @@ export function createAgendaApi(
     return snapshot.delivery.calendar;
   }
 
-  async function createRoom(
-    input: { eventId: string; name: string; capacity: number },
-  ): Promise<{ resource: AgendaRoom; workspace: AgendaWorkspaceData }> {
+  async function createRoom(input: {
+    eventId: string;
+    name: string;
+    capacity: number;
+  }): Promise<{ resource: AgendaRoom; workspace: AgendaWorkspaceData }> {
     const created = await request<AgendaRoom>(`/${segment(input.eventId)}/sessions/rooms`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -288,9 +285,10 @@ export function createAgendaApi(
     return { resource, workspace };
   }
 
-  async function createTrack(
-    input: { eventId: string; name: string },
-  ): Promise<{ resource: AgendaTrack; workspace: AgendaWorkspaceData }> {
+  async function createTrack(input: {
+    eventId: string;
+    name: string;
+  }): Promise<{ resource: AgendaTrack; workspace: AgendaWorkspaceData }> {
     const created = await request<AgendaTrack>(`/${segment(input.eventId)}/sessions/tracks`, {
       method: "POST",
       headers: { "content-type": "application/json" },

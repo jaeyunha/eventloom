@@ -186,13 +186,8 @@ export function parseRepairEnvironment(environment = undefined, overrides = {}) 
   const organizationId = String(
     overrides.organizationId ?? source.EVAL_ORGANIZATION_ID ?? CANONICAL_ORGANIZATION_ID,
   ).trim();
-  const eventId = String(
-    overrides.eventId ?? source.EVAL_EVENT_ID ?? CANONICAL_EVENT_ID,
-  ).trim();
-  if (
-    organizationId !== CANONICAL_ORGANIZATION_ID ||
-    eventId !== CANONICAL_EVENT_ID
-  ) {
+  const eventId = String(overrides.eventId ?? source.EVAL_EVENT_ID ?? CANONICAL_EVENT_ID).trim();
+  if (organizationId !== CANONICAL_ORGANIZATION_ID || eventId !== CANONICAL_EVENT_ID) {
     fail("SCOPE_MISMATCH", "The evaluator reset scope is immutable.");
   }
   return { environment: name, organizationId, eventId };
@@ -1796,9 +1791,7 @@ function buildRepairChainContext({ proposals, sessions, tasks, communication, op
     embedConfigurationId:
       operations.find((operation) => operation.table === "Embed Configurations")?.applicationId ??
       null,
-    crmContactIds: [
-      ...new Set(communication.activities.map((activity) => activity.contactId)),
-    ],
+    crmContactIds: [...new Set(communication.activities.map((activity) => activity.contactId))],
   };
   try {
     return validateChainContext(context);
@@ -2795,7 +2788,10 @@ export async function prepareWorkflowReset({
     manifest.resetWorkflow?.environment !== undefined &&
     manifest.resetWorkflow.environment !== resetEnvironment.environment
   ) {
-    fail("ENVIRONMENT_MISMATCH", "The reset manifest environment does not match the evaluator environment.");
+    fail(
+      "ENVIRONMENT_MISMATCH",
+      "The reset manifest environment does not match the evaluator environment.",
+    );
   }
   const nowIso = dateIso(now, "workflow reset planning time");
   const targets = await discoverWorkflowResetTargets({ manifest, transport });
@@ -2958,7 +2954,10 @@ export async function applyWorkflowReset({
     manifest.resetWorkflow?.environment !== undefined &&
     manifest.resetWorkflow.environment !== resetEnvironment.environment
   ) {
-    fail("ENVIRONMENT_MISMATCH", "The reset manifest environment does not match the evaluator environment.");
+    fail(
+      "ENVIRONMENT_MISMATCH",
+      "The reset manifest environment does not match the evaluator environment.",
+    );
   }
   const preflight =
     prepared?.prepared?.version === RESET_WORKFLOW_VERSION
@@ -4456,20 +4455,25 @@ export async function runRepair(options = {}) {
   if (!REPAIR_PHASES.includes(phase)) fail("CONFIGURATION_ERROR", `Unknown repair phase ${phase}.`);
   if (phase === "invariants") return readRepairInvariantReport(options);
   if (phase === RESET_WORKFLOW_PHASE || phase === "reset") {
-    const resetEnvironment = parseRepairEnvironment(options.environment ?? options.env ?? process.env, {
-      organizationId: options.organizationId,
-      eventId: options.eventId,
-    });
+    const resetEnvironment = parseRepairEnvironment(
+      options.environment ?? options.env ?? process.env,
+      {
+        organizationId: options.organizationId,
+        eventId: options.eventId,
+      },
+    );
     const manifest = options.manifest ?? buildWorkflowResetManifest(options);
     if (options.resume === true) {
-      return resumeWorkflowReset({ ...options, manifest, environment: resetEnvironment.environment });
+      return resumeWorkflowReset({
+        ...options,
+        manifest,
+        environment: resetEnvironment.environment,
+      });
     }
     const resetApply =
       options.dryRun === false ||
       options.apply === true ||
-      (options.dryRun === undefined &&
-        options.confirm !== undefined &&
-        options.resume !== true);
+      (options.dryRun === undefined && options.confirm !== undefined && options.resume !== true);
     if (!resetApply) {
       return prepareWorkflowReset({
         ...options,

@@ -1160,8 +1160,7 @@ export function SpeakerWorkspace({
   const [importCommitBusy, setImportCommitBusy] = useState(false);
   const [taskBusy, setTaskBusy] = useState(false);
   const [saveBusy, setSaveBusy] = useState(false);
-  const [profileMutationStatus, setProfileMutationStatus] =
-    useState<SpeakerMutationStatus>("idle");
+  const [profileMutationStatus, setProfileMutationStatus] = useState<SpeakerMutationStatus>("idle");
   const [profileMutationMessage, setProfileMutationMessage] = useState<string | null>(null);
   const [headshotMutationStatus, setHeadshotMutationStatus] =
     useState<SpeakerMutationStatus>("idle");
@@ -1171,6 +1170,7 @@ export function SpeakerWorkspace({
   const importRequestRef = useRef(0);
   const emailSelectionSnapshotRef = useRef<string | null>(null);
   useEffect(() => {
+    if (organizationId.length === 0 || eventId.length === 0) return;
     rosterRequestRef.current += 1;
     setRoster(null);
     setProgress(null);
@@ -1409,15 +1409,11 @@ export function SpeakerWorkspace({
   }, [api, currentSecondaryLoadKey]);
 
   const scopedRoster =
-    roster !== null &&
-    roster.organizationId === organizationId &&
-    roster.eventId === eventId
+    roster !== null && roster.organizationId === organizationId && roster.eventId === eventId
       ? roster
       : null;
   const scopedProgress =
-    progress !== null &&
-    progress.organizationId === organizationId &&
-    progress.eventId === eventId
+    progress !== null && progress.organizationId === organizationId && progress.eventId === eventId
       ? progress
       : null;
   const speakers = scopedRoster?.speakers ?? [];
@@ -1469,7 +1465,9 @@ export function SpeakerWorkspace({
   );
   const progressRows = useMemo(
     () =>
-      (scopedProgress?.rows ?? []).filter((row) => speakerProgressMatches(row.tasks, progressFilter)),
+      (scopedProgress?.rows ?? []).filter((row) =>
+        speakerProgressMatches(row.tasks, progressFilter),
+      ),
     [scopedProgress?.rows, progressFilter],
   );
   const onboardingTaskDefinitions = useMemo(
@@ -1816,7 +1814,9 @@ export function SpeakerWorkspace({
       if (requestId === rosterRequestRef.current) {
         if (
           reason instanceof Error &&
-          /different organization|different event|invalid|duplicate participant/iu.test(reason.message)
+          /different organization|different event|invalid|duplicate participant/iu.test(
+            reason.message,
+          )
         ) {
           setRoster(null);
           setProgress(null);
@@ -1951,9 +1951,7 @@ export function SpeakerWorkspace({
     } catch (reason: unknown) {
       const conflict =
         reason instanceof SpeakerApiError &&
-        (reason.status === 409 ||
-          reason.code === "CONFLICT" ||
-          reason.code === "VERSION_CONFLICT");
+        (reason.status === 409 || reason.code === "CONFLICT" || reason.code === "VERSION_CONFLICT");
       if (conflict) {
         setProfileMutationStatus("conflict");
         setProfileMutationMessage("Conflict detected. Authoritative speaker data was reloaded.");
@@ -2574,9 +2572,7 @@ export function SpeakerWorkspace({
       if (persisted.headshotAssetId !== replacement.asset.id) {
         throw new TypeError("The reloaded speaker does not point to the uploaded headshot.");
       }
-      setEditDraft((current) =>
-        current === null ? current : editDraftFor(persisted),
-      );
+      setEditDraft((current) => (current === null ? current : editDraftFor(persisted)));
       setHeadshotPreviewUrl(null);
       setHeadshotPreviewError(null);
       setHeadshotPreviewRevision((current) => current + 1);
@@ -2587,9 +2583,7 @@ export function SpeakerWorkspace({
     } catch (reason: unknown) {
       const conflict =
         reason instanceof SpeakerApiError &&
-        (reason.status === 409 ||
-          reason.code === "CONFLICT" ||
-          reason.code === "VERSION_CONFLICT");
+        (reason.status === 409 || reason.code === "CONFLICT" || reason.code === "VERSION_CONFLICT");
       if (conflict) {
         setHeadshotMutationStatus("conflict");
         setHeadshotMutationMessage("Conflict detected. Authoritative speaker data was reloaded.");
@@ -2877,11 +2871,7 @@ export function SpeakerWorkspace({
 
               {loading ? (
                 <FormMessage
-                  message={
-                  scopedRoster
-                    ? "Refreshing speaker roster…"
-                    : "Loading speaker roster…"
-                  }
+                  message={scopedRoster ? "Refreshing speaker roster…" : "Loading speaker roster…"}
                 />
               ) : null}
               {duplicateEmailWarnings.length > 0 ? (
@@ -2912,7 +2902,10 @@ export function SpeakerWorkspace({
                       </EmptyHeader>
                     </Empty>
                   ) : null}
-                  {!loading && scopedRoster && speakers.length > 0 && filteredSpeakers.length === 0 ? (
+                  {!loading &&
+                  scopedRoster &&
+                  speakers.length > 0 &&
+                  filteredSpeakers.length === 0 ? (
                     <Empty className={styles.empty}>
                       <EmptyHeader>
                         <EmptyTitle>No matching speakers</EmptyTitle>

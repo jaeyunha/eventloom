@@ -248,9 +248,7 @@ export function scopePortalContextToAuthorizedParticipants(
   selectedParticipantId?: string | null,
   submissionIds?: readonly string[],
 ): PortalContext {
-  const participantIds = normalizedIds(
-    context.authorizedParticipantIds ?? context.participantIds,
-  );
+  const participantIds = normalizedIds(context.authorizedParticipantIds ?? context.participantIds);
   const selected = portalSelectedParticipantId(
     { ...context, participantIds, authorizedParticipantIds: participantIds },
     selectedParticipantId ?? context.selectedParticipantId,
@@ -448,10 +446,7 @@ export function scopePortalViewToPrimaryParticipant(
     tasks,
     assets,
     outstandingTaskCount: tasks.filter((task) => !isTaskFinished(task)).length,
-    context: scopePortalContextToPrimaryParticipant(
-      scopedContext,
-      submissionIds,
-    ),
+    context: scopePortalContextToPrimaryParticipant(scopedContext, submissionIds),
   };
 }
 

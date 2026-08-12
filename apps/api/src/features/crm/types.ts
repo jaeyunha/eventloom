@@ -294,7 +294,6 @@ export interface AddCrmNoteInput {
   readonly body: string;
 }
 
-
 export type CrmHistoryKind =
   | "event"
   | "session"
@@ -478,9 +477,7 @@ export interface CrmRepository {
     organizationId: string,
   ): Promise<readonly CrmParticipantContactLink[]>;
   /** Re-keys active CRM lookup relationships without changing participant identity or access. */
-  reconcileContactMerge(
-    input: CrmMergeReconciliationInput,
-  ): Promise<CrmMergeReconciliationResult>;
+  reconcileContactMerge(input: CrmMergeReconciliationInput): Promise<CrmMergeReconciliationResult>;
   saveOutreach(command: CrmOutreachCommand): Promise<CrmOutreachCommand>;
   updateOutreach(command: CrmOutreachCommand): Promise<CrmOutreachCommand>;
   getOutreachByIdempotencyKey(

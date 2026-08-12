@@ -234,7 +234,10 @@ function idempotencyKey(context: CrmContext, candidate: string | undefined): str
     throw new CrmServiceError("CRM_INVALID_INPUT", "The idempotency key is too long.", 400);
   return key;
 }
-function optionalIdempotencyKey(context: CrmContext, candidate: string | undefined): string | undefined {
+function optionalIdempotencyKey(
+  context: CrmContext,
+  candidate: string | undefined,
+): string | undefined {
   const header = context.req.header("idempotency-key")?.trim();
   const bodyKey = candidate?.trim();
   if (header !== undefined && header.length > 0 && bodyKey !== undefined && bodyKey !== header) {

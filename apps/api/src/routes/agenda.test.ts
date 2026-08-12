@@ -687,9 +687,7 @@ describe("canonical agenda draft routes", () => {
     await initialize(engine, {
       ...catalog,
       sessions: catalog.sessions.map((session) =>
-        session.id === "session-3"
-          ? { ...session, participantIds: ["participant-1"] }
-          : session,
+        session.id === "session-3" ? { ...session, participantIds: ["participant-1"] } : session,
       ),
     });
     const app = appFor(engine);

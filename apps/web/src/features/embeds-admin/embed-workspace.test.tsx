@@ -80,17 +80,14 @@ describe("authoritative embed configuration transport", () => {
   it("replaces the complete event configuration list with expectedVersion", async () => {
     let requestedUrl = "";
     let requestedInit: RequestInit | undefined;
-    const api = createEmbedWorkspaceApi(
-      "org-1",
-      async (url, init) => {
-        requestedUrl = String(url);
-        requestedInit = init;
-        return new Response(JSON.stringify({ data: { ...eventRecord, version: 8 } }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
-      },
-    );
+    const api = createEmbedWorkspaceApi("org-1", async (url, init) => {
+      requestedUrl = String(url);
+      requestedInit = init;
+      return new Response(JSON.stringify({ data: { ...eventRecord, version: 8 } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
 
     await expect(
       api.updateEvent("event-1", {

@@ -667,12 +667,12 @@ export function createAgendaDemoApi(eventId: string): AgendaApi {
     async createRoom(input) {
       assertEvent(input.eventId);
       const name = input.name.trim();
-      if (
-        name.length === 0 ||
-        !Number.isInteger(input.capacity) ||
-        input.capacity < 0
-      ) {
-        throw demoError("AGENDA_ROOM_INVALID", "Provide a room name and non-negative capacity.", 400);
+      if (name.length === 0 || !Number.isInteger(input.capacity) || input.capacity < 0) {
+        throw demoError(
+          "AGENDA_ROOM_INVALID",
+          "Provide a room name and non-negative capacity.",
+          400,
+        );
       }
       const resource: AgendaRoom = {
         id: `room_demo_${rooms.length + 1}`,
@@ -724,11 +724,7 @@ export function createAgendaDemoApi(eventId: string): AgendaApi {
     async retryCalendarDelivery(input) {
       assertEvent(input.eventId);
       const failure = calendarDelivery.lastFailure;
-      if (
-        failure === null ||
-        failure.deliveryId !== input.deliveryId ||
-        !failure.retryable
-      ) {
+      if (failure === null || failure.deliveryId !== input.deliveryId || !failure.retryable) {
         throw demoError("CALENDAR_DELIVERY_NOT_FOUND", "The calendar delivery was not found.", 404);
       }
       calendarDelivery = {
