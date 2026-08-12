@@ -35,7 +35,6 @@ function usage() {
     "Required deployment variables:",
     "  NEXT_PUBLIC_APP_URL   The exact HTTPS workers.dev origin for staging/production.",
     "  API_UPSTREAM_ORIGIN   The exact HTTPS origin of the separate API Worker.",
-    "  NEXT_PUBLIC_ORGANIZATION_ID  The explicit organization tenant ID; required for staging/production.",
   ].join("\n");
 }
 
@@ -155,23 +154,6 @@ function resolveOrigins(environment) {
   }
   return { appOrigin, apiOrigin };
 }
-function resolveOrganizationId(environment) {
-  const configured = process.env.NEXT_PUBLIC_ORGANIZATION_ID?.trim();
-  if (configured) {
-    if (configured === "local-organization" && environment !== "local") {
-      throw new Error(
-        "NEXT_PUBLIC_ORGANIZATION_ID must identify the deployed tenant; local-organization is only valid for local dry runs.",
-      );
-    }
-    return configured;
-  }
-  if (environment === "local") {
-    return "local-organization";
-  }
-  throw new Error(
-    "NEXT_PUBLIC_ORGANIZATION_ID must be a non-empty explicit tenant ID for staging and production.",
-  );
-}
 
 function run(command, args, options) {
   const result = spawnSync(command, args, {
@@ -203,18 +185,17 @@ function containsWorkerArtifact(directory) {
   return false;
 }
 
-function deploymentEnvironment(environment, origins, organizationId) {
+function deploymentEnvironment(environment, origins) {
   return {
     ...process.env,
     APP_ENV: environment,
     API_UPSTREAM_ORIGIN: origins.apiOrigin,
     NEXT_PUBLIC_APP_ENV: environment,
     NEXT_PUBLIC_APP_URL: origins.appOrigin,
-    NEXT_PUBLIC_ORGANIZATION_ID: organizationId,
   };
 }
 
-function wranglerVariables(environment, origins, organizationId) {
+function wranglerVariables(environment, origins) {
   return [
     "--var",
     `APP_ENV:${environment}`,
@@ -224,15 +205,12 @@ function wranglerVariables(environment, origins, organizationId) {
     `NEXT_PUBLIC_APP_ENV:${environment}`,
     "--var",
     `NEXT_PUBLIC_APP_URL:${origins.appOrigin}`,
-    "--var",
-    `NEXT_PUBLIC_ORGANIZATION_ID:${organizationId}`,
   ];
 }
 
 function main() {
   const { confirmation, dryRun, environment } = parseArguments(process.argv.slice(2));
   const origins = resolveOrigins(environment);
-  const organizationId = resolveOrganizationId(environment);
   if (origins.appOrigin === origins.apiOrigin) {
     throw new Error("NEXT_PUBLIC_APP_URL and API_UPSTREAM_ORIGIN must identify separate services.");
   }
@@ -247,13 +225,13 @@ function main() {
     }
   }
 
-  const env = deploymentEnvironment(environment, origins, organizationId);
+  const env = deploymentEnvironment(environment, origins);
   run("bun", ["run", "cloudflare:build"], {
     cwd: webDirectory,
     env,
   });
 
-  const vars = wranglerVariables(environment, origins, organizationId);
+  const vars = wranglerVariables(environment, origins);
   if (dryRun) {
     const outputDirectory = mkdtempSync(join(tmpdir(), "open-sessionboard-web-wrangler-"));
     try {

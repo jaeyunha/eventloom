@@ -42,7 +42,6 @@ APP_ENV=local
 WEB_ORIGIN=http://127.0.0.1:3015
 NEXT_PUBLIC_APP_ENV=local
 NEXT_PUBLIC_APP_URL=http://127.0.0.1:3015
-NEXT_PUBLIC_ORGANIZATION_ID=local-organization
 API_URL=http://127.0.0.1:8787
 API_UPSTREAM_ORIGIN=http://127.0.0.1:8787
 BETTER_AUTH_URL=http://127.0.0.1:8787
@@ -72,15 +71,21 @@ bunx wrangler d1 migrations apply DB --cwd apps/api --local
 make dev
 ```
 
-The deterministic local runtime has three isolated test personas. They share the local-only password `local`; none of these credentials exist in staging or production:
+The deterministic personas below belong to the fixture runtime only; they are not seeded by the default integrated `make dev` runtime and do not exist in staging or production.
 
-| Persona | Email | Access |
-| --- | --- | --- |
-| Organizer | `organizer@local.test` | Organization administration and organizer evaluation work |
-| Reviewer | `reviewer@local.test` | Only the seeded assigned-review workspace |
-| Speaker | `speaker@local.test` | Only the seeded speaker portal and CFP applicant flow |
+| Persona | Email | Password | Access |
+| --- | --- | --- | --- |
+| Organizer | `organizer@local.open-sessionboard.test` | `organizer-local` | Organization administration and organizer evaluation work |
+| Reviewer | `reviewer@local.open-sessionboard.test` | `reviewer-local` | Only the seeded assigned-review workspace |
+| Speaker | `speaker@local.open-sessionboard.test` | `speaker-local` | Only the seeded speaker portal and CFP applicant flow |
 
-Use organization `local-organization` and event `demo-event` when testing these fixtures. The local runtime does not grant a persona another role implicitly: reviewer and speaker sessions are denied organizer routes, and organizer membership does not grant the speaker portal.
+To run the fixture API for deterministic persona checks, start it instead of the integrated API:
+
+```bash
+bun run --filter @open-sessionboard/api dev:fixture
+```
+
+Run the web app separately with `NEXT_PUBLIC_RUNTIME_PROFILE=fixture`. Use organization `local-organization` and event `demo-event`. The fixture runtime does not grant a persona another role implicitly: reviewer and speaker sessions are denied organizer routes, and organizer membership does not grant the speaker portal.
 
 `make dev` starts Mailpit through Docker Compose, the OpenSend-compatible loopback bridge, the API Worker, and the web app. Mailpit captures verification, magic-link, communication, and calendar messages:
 
@@ -144,24 +149,22 @@ Use `production open-sessionboard:production` for production. The command requir
 
 ## Guarded web deployment
 
-The web deploy script accepts only the pinned Workers origins for non-local environments. It requires the exact `NEXT_PUBLIC_APP_URL`, server-only `API_UPSTREAM_ORIGIN`, explicit `NEXT_PUBLIC_ORGANIZATION_ID`, and deployment token. `API_UPSTREAM_ORIGIN` is validated as the API Worker origin and configured for the server-side proxy; browsers always use same-origin `/api/*` through the browser-visible `NEXT_PUBLIC_APP_URL`.
+The web deploy script accepts only the pinned Workers origins for non-local environments. It requires the exact `NEXT_PUBLIC_APP_URL`, server-only `API_UPSTREAM_ORIGIN`, and deployment token. `API_UPSTREAM_ORIGIN` is validated as the API Worker origin and configured for the server-side proxy; browsers always use same-origin `/api/*` through the browser-visible `NEXT_PUBLIC_APP_URL`. Organization scope comes from authenticated memberships and organization-qualified routes, not a browser deployment variable.
 
 A no-side-effect build/Wrangler check is available before the guarded deployment:
 
 ```bash
 NEXT_PUBLIC_APP_URL='https://open-sessionboard-web-staging.ashleyha0317.workers.dev' \
 API_UPSTREAM_ORIGIN='https://open-sessionboard-api-staging.ashleyha0317.workers.dev' \
-NEXT_PUBLIC_ORGANIZATION_ID='<explicit-staging-organization-id>' \
 node scripts/cloudflare/deploy-web.mjs staging --dry-run
 ```
 
-Deploy staging only after the API and release gates authorize it. The shell guards prevent an accidental deployment without the token or tenant ID:
+Deploy staging only after the API and release gates authorize it. The shell guards prevent an accidental deployment without the token:
 
 ```bash
 set -eu
 export NEXT_PUBLIC_APP_URL='https://open-sessionboard-web-staging.ashleyha0317.workers.dev'
 export API_UPSTREAM_ORIGIN='https://open-sessionboard-api-staging.ashleyha0317.workers.dev'
-: "${NEXT_PUBLIC_ORGANIZATION_ID:?set the explicit staging organization application ID}"
 : "${CLOUDFLARE_API_TOKEN:?set the staging deployment token from the secret manager}"
 node scripts/cloudflare/deploy-web.mjs staging open-sessionboard-web:staging
 ```
@@ -172,12 +175,11 @@ The production form is identical except for the pinned production origins and co
 set -eu
 export NEXT_PUBLIC_APP_URL='https://open-sessionboard-web-production.ashleyha0317.workers.dev'
 export API_UPSTREAM_ORIGIN='https://open-sessionboard-api-production.ashleyha0317.workers.dev'
-: "${NEXT_PUBLIC_ORGANIZATION_ID:?set the explicit production organization application ID}"
 : "${CLOUDFLARE_API_TOKEN:?set the production deployment token from the secret manager}"
 node scripts/cloudflare/deploy-web.mjs production open-sessionboard-web:production
 ```
 
-The web deployment receives the public app URL, server-only API upstream origin, environment, and explicit tenant ID. Never pass Airtable, OpenSend, Better Auth, or other private values to the web bundle.
+The web deployment receives the public app URL, server-only API upstream origin, and environment. Organization scope is resolved from authenticated memberships and organization-qualified routes. Never pass Airtable, OpenSend, Better Auth, or other private values to the web bundle.
 
 ## Airtable and OpenSend
 
