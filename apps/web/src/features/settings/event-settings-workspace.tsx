@@ -282,7 +282,7 @@ function SettingsSectionNavigation() {
         const first = visible[0]?.target.id as SectionNavigationItem["id"] | undefined;
         if (first) setActiveId(first);
       },
-      { rootMargin: "-6rem 0px -60% 0px", threshold: [0, 0.15, 1] },
+      { rootMargin: "-96px 0px -60% 0px", threshold: [0, 0.15, 1] },
     );
     for (const section of sections) observer.observe(section);
     return () => observer.disconnect();

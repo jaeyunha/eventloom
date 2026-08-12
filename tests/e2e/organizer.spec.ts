@@ -681,10 +681,11 @@ test("canonical Settings navigation stays organization and event qualified", asy
   await expect(
     page.getByText(`Organization ${ORGANIZATION_ID} · Event ${PRIMARY_EVENT_ID}`, { exact: true }),
   ).toBeVisible();
-  await expect(page.getByRole("navigation", { name: "Event settings sections" })).toBeVisible();
-  await expect(
-    page.getByRole("link", { name: "Sessions and statuses", exact: true }),
-  ).toHaveAttribute("href", "#session-settings");
+  await expect(page.getByRole("complementary", { name: "Event settings sections" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Session settings", exact: true })).toHaveAttribute(
+    "href",
+    "#session-settings",
+  );
 
   const organizerSidebar = page.getByRole("navigation", { name: "Organizer navigation" });
   await expect(organizerSidebar.getByRole("link", { name: "Agenda", exact: true })).toHaveAttribute(

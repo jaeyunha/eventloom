@@ -165,6 +165,10 @@ export async function installCfpApi(
       await route.fulfill({ status: 204, headers: CORS_HEADERS });
       return;
     }
+    if (request.method() === "GET" && url.pathname === "/api/auth/get-session") {
+      await route.fallback();
+      return;
+    }
     if (request.headers().cookie?.includes(`${E2E_SESSION_COOKIE}=${session.token}`) !== true) {
       await fulfillError(route, "AUTHENTICATION_REQUIRED", "Authentication is required.", 404);
       return;

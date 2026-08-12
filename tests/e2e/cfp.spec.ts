@@ -256,6 +256,13 @@ test("submitter completes the account-first CFP with two participants", async ({
   expect(browserState.pointer).toBeNull();
   expect(browserState.completionHandoff).toMatch(/^submission[_-]/);
   expect(browserState.legacyDraft).toBeNull();
+  await page.goto("/cfp/evaluator-2026/complete");
+  await expect(
+    page.getByRole("heading", {
+      level: 1,
+      name: "Submission received: Designing calm incident response",
+    }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Submit another session" }).click();
   await expect(page).toHaveURL(/\/cfp\/evaluator-2026$/);
   await expect

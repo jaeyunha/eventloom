@@ -18,7 +18,7 @@ test("authenticated speaker completes dependent action and upload tasks", async 
   ).toBeVisible();
 
   await page.getByRole("link", { name: "Open all tasks" }).click();
-  await expect(page).toHaveURL(/\/portal\/tasks$/);
+  await expect(page).toHaveURL(/\/portal\/tasks\?event=event-evaluator$/);
   await expect(page.getByText("3 tasks still need your attention.")).toBeVisible();
   const agreement = page.getByRole("article", { name: "Confirm speaker agreement" });
   const headshot = page.getByRole("article", { name: "Upload a headshot" });
