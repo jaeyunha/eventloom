@@ -193,6 +193,36 @@ describe.sequential("composed local Worker", () => {
         status: "open",
       },
     });
+
+    const speakerContentPath = `/api/speaker/events/${eventId}/organizer/content/speaker/local-participant`;
+    const speakerContentResponse = await runtimeRequest(speakerContentPath, {
+      headers: organizerHeaders,
+    });
+    expect(speakerContentResponse.status).toBe(200);
+    expect(
+      await jsonData<{ entityId: string; version: number; biography: string }>(
+        speakerContentResponse,
+      ),
+    ).toMatchObject({
+      entityId: "local-participant",
+      version: 1,
+    });
+
+    const speakerHistoryResponse = await runtimeRequest(`${speakerContentPath}/history`, {
+      headers: organizerHeaders,
+    });
+    expect(speakerHistoryResponse.status).toBe(200);
+    expect(
+      await jsonData<Array<{ entityId: string; version: number; action: string }>>(
+        speakerHistoryResponse,
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        entityId: "local-participant",
+        version: 1,
+        action: "created",
+      }),
+    ]);
   });
 
   it("enforces auth boundaries while exposing a useful seeded speaker portal", async () => {

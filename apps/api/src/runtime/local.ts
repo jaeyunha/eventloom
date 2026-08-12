@@ -46,14 +46,18 @@ import type {
   RepositoryResult,
   SpeakerAccessScope,
   SpeakerAsset,
+  SpeakerContentHistoryEntry,
+  SpeakerContentRecord,
   SpeakerPortalCapability,
   SpeakerProfile,
   SpeakerRepository,
   SpeakerSubmission,
   SpeakerTask,
   TransitionSpeakerTaskCommand,
+  RestoreSpeakerContentVersionCommand,
   UpdateBiographyCommand,
   UpdateSpeakerProfileCommand,
+  UpdateSpeakerContentCommand,
 } from "../features/speaker/types";
 import type { CloudflareAiProviders } from "../integrations/ai";
 import { InMemoryWebhookRepository } from "../integrations/webhooks/types";
@@ -340,8 +344,14 @@ class LocalSpeakerRepository implements SpeakerRepository {
   readonly #profiles = new Map<string, SpeakerProfile[]>();
   readonly #tasks = new Map<string, SpeakerTask[]>();
   readonly #assets = new Map<string, SpeakerAsset[]>();
+  readonly #content = new Map<string, SpeakerContentRecord>();
+  readonly #contentHistory = new Map<string, SpeakerContentHistoryEntry[]>();
   constructor() {
     this.#seed("demo-event");
+  }
+
+  #contentKey(eventId: string, entityType: "session" | "speaker", entityId: string): string {
+    return `${eventId}\u0000${entityType}\u0000${entityId}`;
   }
 
   #seed(eventId: string): void {
@@ -366,6 +376,36 @@ class LocalSpeakerRepository implements SpeakerRepository {
           "Alex builds dependable, accessible systems for communities and the people who run them.",
         version: 1,
         updatedAt: SEEDED_AT,
+      },
+    ]);
+    const speakerContent: SpeakerContentRecord = {
+      id: "local-speaker-content",
+      eventId,
+      tenantId: LOCAL_ORGANIZATION_ID,
+      entityType: "speaker",
+      entityId: "local-participant",
+      biography:
+        "Alex builds dependable, accessible systems for communities and the people who run them.",
+      socialLinks: {},
+      status: "approved",
+      version: 1,
+      updatedAt: SEEDED_AT,
+      updatedBy: LOCAL_SPEAKER_ACCOUNT_ID,
+    };
+    const speakerContentKey = this.#contentKey(eventId, "speaker", "local-participant");
+    this.#content.set(speakerContentKey, speakerContent);
+    this.#contentHistory.set(speakerContentKey, [
+      {
+        id: "local-speaker-content-history-1",
+        eventId,
+        entityType: "speaker",
+        entityId: "local-participant",
+        action: "created",
+        version: 1,
+        actorAccountId: LOCAL_SPEAKER_ACCOUNT_ID,
+        actorLabel: "Local Organizer",
+        occurredAt: SEEDED_AT,
+        snapshot: clone(speakerContent),
       },
     ]);
     this.#tasks.set(eventId, [
@@ -575,6 +615,94 @@ class LocalSpeakerRepository implements SpeakerRepository {
   async getAsset(eventId: string, assetId: string) {
     this.#seed(eventId);
     return clone(this.#assets.get(eventId)?.find(({ id }) => id === assetId) ?? null);
+  }
+
+  async getContent(eventId: string, entityType: "session" | "speaker", entityId: string) {
+    this.#seed(eventId);
+    return clone(this.#content.get(this.#contentKey(eventId, entityType, entityId)) ?? null);
+  }
+
+  async listContentHistory(eventId: string, entityType: "session" | "speaker", entityId: string) {
+    this.#seed(eventId);
+    return clone(this.#contentHistory.get(this.#contentKey(eventId, entityType, entityId)) ?? []);
+  }
+
+  async updateContent(
+    command: UpdateSpeakerContentCommand,
+  ): Promise<RepositoryResult<SpeakerContentRecord>> {
+    this.#seed(command.eventId);
+    const key = this.#contentKey(command.eventId, command.entityType, command.entityId);
+    const current = this.#content.get(key);
+    if (current === undefined) return { ok: false, reason: "not_found" };
+    if (current.version !== command.expectedVersion) {
+      return { ok: false, reason: "version_conflict" };
+    }
+    const updated: SpeakerContentRecord = {
+      ...current,
+      ...(command.title === undefined ? {} : { title: command.title }),
+      ...(command.description === undefined ? {} : { description: command.description }),
+      ...(command.abstract === undefined ? {} : { abstract: command.abstract }),
+      ...(command.biography === undefined ? {} : { biography: command.biography }),
+      ...(command.socialLinks === undefined ? {} : { socialLinks: clone(command.socialLinks) }),
+      ...(command.headshotAssetId === undefined || command.headshotAssetId === null
+        ? {}
+        : { headshotAssetId: command.headshotAssetId }),
+      ...(command.status === undefined ? {} : { status: command.status }),
+      version: current.version + 1,
+      updatedAt: command.updatedAt,
+      updatedBy: command.accountId,
+    };
+    if (command.headshotAssetId === null) delete updated.headshotAssetId;
+    this.#content.set(key, updated);
+    this.#contentHistory.get(key)?.push({
+      id: `local-${command.entityType}-content-history-${updated.version}`,
+      eventId: command.eventId,
+      entityType: command.entityType,
+      entityId: command.entityId,
+      action: "updated",
+      version: updated.version,
+      actorAccountId: command.accountId,
+      actorLabel: "Local Organizer",
+      occurredAt: command.updatedAt,
+      snapshot: clone(updated),
+    });
+    return { ok: true, value: clone(updated) };
+  }
+
+  async restoreContentVersion(
+    command: RestoreSpeakerContentVersionCommand,
+  ): Promise<RepositoryResult<SpeakerContentRecord>> {
+    this.#seed(command.eventId);
+    const key = this.#contentKey(command.eventId, command.entityType, command.entityId);
+    const current = this.#content.get(key);
+    if (current === undefined) return { ok: false, reason: "not_found" };
+    if (current.version !== command.expectedVersion) {
+      return { ok: false, reason: "version_conflict" };
+    }
+    const target = this.#contentHistory
+      .get(key)
+      ?.find(({ version }) => version === command.version);
+    if (target === undefined) return { ok: false, reason: "not_found" };
+    const restored: SpeakerContentRecord = {
+      ...clone(target.snapshot),
+      version: current.version + 1,
+      updatedAt: command.updatedAt,
+      updatedBy: command.accountId,
+    };
+    this.#content.set(key, restored);
+    this.#contentHistory.get(key)?.push({
+      id: `local-${command.entityType}-content-history-${restored.version}`,
+      eventId: command.eventId,
+      entityType: command.entityType,
+      entityId: command.entityId,
+      action: "restored",
+      version: restored.version,
+      actorAccountId: command.accountId,
+      actorLabel: "Local Organizer",
+      occurredAt: command.updatedAt,
+      snapshot: clone(restored),
+    });
+    return { ok: true, value: clone(restored) };
   }
 }
 
