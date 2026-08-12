@@ -212,6 +212,35 @@ export interface DeliverableContentHistoryEntry {
   readonly title?: string;
   readonly description?: string;
 }
+export interface DeliverableSpeakerContentSnapshot {
+  readonly title?: string;
+  readonly description?: string;
+  readonly abstract?: string;
+  readonly biography?: string;
+  readonly socialLinks?: Readonly<Record<string, string>>;
+  readonly headshotAssetId?: string | null;
+  readonly status?: string;
+}
+
+export interface DeliverableSpeakerContentHistoryEntry {
+  readonly id: string;
+  readonly action?: "created" | "updated" | "restored" | "approved" | "needs_changes";
+  readonly version: number;
+  readonly actorId: string;
+  readonly actorLabel?: string;
+  readonly occurredAt: string;
+  readonly snapshot: DeliverableSpeakerContentSnapshot;
+}
+
+export interface DeliverableSpeakerContentRecord extends DeliverableSpeakerContentSnapshot {
+  readonly id: string;
+  readonly eventId: string;
+  readonly entityType: "speaker";
+  readonly entityId: string;
+  readonly version: number;
+  readonly updatedAt: string;
+  readonly updatedBy: string;
+}
 
 export interface DeliverableTaskInput {
   readonly title: string;
@@ -254,6 +283,10 @@ export interface DeliverablesApi {
     sessionId: string,
     signal?: AbortSignal,
   ): Promise<readonly DeliverableContentHistoryEntry[]>;
+  listSpeakerContentHistory?(
+    participantId: string,
+    signal?: AbortSignal,
+  ): Promise<readonly DeliverableSpeakerContentHistoryEntry[]>;
   /** Server-derived organizer task/status/current-asset matrix. */
   listDeliverableMatrix?(options?: DeliverableMatrixQuery): Promise<DeliverableTaskMatrix>;
 
@@ -281,6 +314,11 @@ export interface DeliverablesApi {
     readonly biography: string;
     readonly expectedVersion: number;
   }): Promise<DeliverableSpeakerProfile>;
+  restoreSpeakerContentVersion?(input: {
+    readonly participantId: string;
+    readonly version: number;
+    readonly expectedVersion: number;
+  }): Promise<DeliverableSpeakerContentRecord>;
 
   replaceHeadshot?(
     input: DeliverableHeadshotReplacementInput,
@@ -529,6 +567,74 @@ function normalizeContentHistory(value: unknown): DeliverableContentHistoryEntry
       : {}),
     ...(title === undefined ? {} : { title }),
     ...(description === undefined ? {} : { description }),
+  };
+}
+function normalizeSpeakerContentSnapshot(value: unknown): DeliverableSpeakerContentSnapshot {
+  const candidate = isRecord(value) ? value : {};
+  const socialLinks = isRecord(candidate.socialLinks)
+    ? Object.fromEntries(
+        Object.entries(candidate.socialLinks).filter(
+          (entry): entry is [string, string] => typeof entry[1] === "string",
+        ),
+      )
+    : undefined;
+  return {
+    ...(typeof candidate.title === "string" ? { title: candidate.title } : {}),
+    ...(typeof candidate.description === "string" ? { description: candidate.description } : {}),
+    ...(typeof candidate.abstract === "string" ? { abstract: candidate.abstract } : {}),
+    ...(typeof candidate.biography === "string" ? { biography: candidate.biography } : {}),
+    ...(socialLinks === undefined ? {} : { socialLinks }),
+    ...(candidate.headshotAssetId === null
+      ? { headshotAssetId: null }
+      : typeof candidate.headshotAssetId === "string"
+        ? { headshotAssetId: candidate.headshotAssetId }
+        : {}),
+    ...(typeof candidate.status === "string" ? { status: candidate.status } : {}),
+  };
+}
+
+function normalizeSpeakerContentHistory(value: unknown): DeliverableSpeakerContentHistoryEntry {
+  const candidate = isRecord(value) ? value : {};
+  const snapshot = normalizeSpeakerContentSnapshot(
+    isRecord(candidate.snapshot) ? candidate.snapshot : candidate,
+  );
+  const text = (source: JsonRecord, key: string): string | undefined =>
+    typeof source[key] === "string" ? source[key] : undefined;
+  const actorId =
+    text(candidate, "actorId") ??
+    text(candidate, "actorAccountId") ??
+    text(candidate, "actorLabel") ??
+    "";
+  const actorLabel = text(candidate, "actorLabel");
+  const action = text(candidate, "action");
+  return {
+    id: text(candidate, "id") ?? `${actorId}:${String(candidate.version ?? "")}`,
+    version: typeof candidate.version === "number" ? candidate.version : 0,
+    actorId,
+    ...(actorLabel === undefined ? {} : { actorLabel }),
+    occurredAt: text(candidate, "occurredAt") ?? "",
+    ...(action === "created" ||
+    action === "updated" ||
+    action === "restored" ||
+    action === "approved" ||
+    action === "needs_changes"
+      ? { action }
+      : {}),
+    snapshot,
+  };
+}
+
+function normalizeSpeakerContentRecord(value: unknown): DeliverableSpeakerContentRecord {
+  const candidate = isRecord(value) ? value : {};
+  return {
+    id: typeof candidate.id === "string" ? candidate.id : "",
+    eventId: typeof candidate.eventId === "string" ? candidate.eventId : "",
+    entityType: "speaker",
+    entityId: typeof candidate.entityId === "string" ? candidate.entityId : "",
+    ...normalizeSpeakerContentSnapshot(candidate),
+    version: typeof candidate.version === "number" ? candidate.version : 0,
+    updatedAt: typeof candidate.updatedAt === "string" ? candidate.updatedAt : "",
+    updatedBy: typeof candidate.updatedBy === "string" ? candidate.updatedBy : "",
   };
 }
 
@@ -907,6 +1013,13 @@ export function createDeliverablesApi(
       );
       return responseCollection<unknown>(body, "history").map(normalizeContentHistory);
     },
+    async listSpeakerContentHistory(participantId, signal) {
+      const body = await speakerRequest<unknown>(
+        `/organizer/content/speaker/${segment(participantId, "participant ID")}/history`,
+        signal === undefined ? {} : { signal },
+      );
+      return responseCollection<unknown>(body, "history").map(normalizeSpeakerContentHistory);
+    },
     replaceHeadshot,
     async createTask(input) {
       if (
@@ -1055,6 +1168,18 @@ export function createDeliverablesApi(
           expectedVersion: input.expectedVersion,
         }),
       }).then(normalizeSession);
+    },
+    async restoreSpeakerContentVersion(input) {
+      return speakerRequest<unknown>(
+        `/organizer/content/speaker/${segment(input.participantId, "participant ID")}/restore`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            version: input.version,
+            expectedVersion: input.expectedVersion,
+          }),
+        },
+      ).then(normalizeSpeakerContentRecord);
     },
     async exportDeliverables(input) {
       validateExportInput(input);
