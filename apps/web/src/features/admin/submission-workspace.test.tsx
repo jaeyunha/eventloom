@@ -402,6 +402,8 @@ describe("organizer submission workspace", () => {
     expect(markup).toContain("speaker edits are");
     expect(markup).toContain("read-only");
     expect(markup).toContain("server evaluation plan");
+    expect(markup).toContain("submitter notification queue");
+    expect(markup).toContain("idempotent background handoff");
   });
 
   it("summarizes accepted handoff metadata from server participant identities", () => {

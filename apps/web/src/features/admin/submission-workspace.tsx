@@ -1541,9 +1541,9 @@ function DecisionControl({
       <p className={styles.eyebrow}>Human organizer decision</p>
       <h2 id="decision-heading">Accept or reject</h2>
       <p className={styles.mutedText}>
-        Decisions are versioned on the evaluation server. Saving waits for the decision notification
-        projection; accepted outcomes also wait for the canonical session handoff to be queued by
-        the existing APIs.
+        Decisions are versioned on the evaluation server. Saving waits for the durable decision and
+        its submitter notification queue. Accepted-speaker onboarding then continues through the
+        idempotent background handoff.
       </p>
       <form onSubmit={handleSubmit}>
         <div className={styles.formGrid}>
@@ -1646,7 +1646,7 @@ function DecisionControl({
           <p className={styles.successMessage} role="status">
             Decision notification queued for the all_participants audience.
             {status === "accepted"
-              ? " Accepted-speaker handoff notification queued for the accepted_participants audience too."
+              ? " Accepted-speaker onboarding is continuing through the idempotent background handoff."
               : " No accepted-speaker handoff is required for this outcome."}
           </p>
         ) : notificationState === "confirmed" ? (
