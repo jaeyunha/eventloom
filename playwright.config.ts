@@ -1,7 +1,9 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const webBaseUrl = "http://127.0.0.1:3015";
-const apiBaseUrl = "http://127.0.0.1:8787";
+const webPort = process.env.PLAYWRIGHT_WEB_PORT?.trim() || "3015";
+const apiPort = process.env.PLAYWRIGHT_API_PORT?.trim() || "8787";
+const webBaseUrl = `http://127.0.0.1:${webPort}`;
+const apiBaseUrl = `http://127.0.0.1:${apiPort}`;
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -21,20 +23,28 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: "bun run --filter @open-sessionboard/api dev",
+      command: "bun run --filter @open-sessionboard/api dev:fixture",
       url: `${apiBaseUrl}/api/health`,
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
+      env: {
+        ...process.env,
+        API_PORT: apiPort,
+        APP_ENV: "local",
+        RUNTIME_PROFILE: "fixture",
+      },
     },
     {
-      command: "bun run --filter @open-sessionboard/web dev",
+      command: "bun run --filter @open-sessionboard/web dev:playwright",
       url: `${webBaseUrl}/health`,
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
       env: {
         ...process.env,
+        PLAYWRIGHT_WEB_PORT: webPort,
         APP_ENV: "local",
         NEXT_PUBLIC_APP_ENV: "local",
+        NEXT_PUBLIC_RUNTIME_PROFILE: "fixture",
         CLAUDECODE: "",
         CLAUDE_CODE: "",
         NEXT_PUBLIC_APP_URL: webBaseUrl,

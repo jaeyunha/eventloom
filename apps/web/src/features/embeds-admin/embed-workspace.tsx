@@ -548,6 +548,154 @@ export function normalizeEmbedSlug(value: string | null | undefined): string | n
   const candidate = value?.trim() || "";
   return candidate ? candidate : null;
 }
+export type EmbedExpectedPublishedRevision = Readonly<{
+  readonly id: string;
+  readonly number: number;
+}>;
+
+export interface EmbedPublishedRevision extends EmbedExpectedPublishedRevision {
+  readonly publishedAt: string;
+}
+
+type EmbedPublicationProjection = Readonly<{
+  readonly event: Readonly<{ readonly slug: string }>;
+  readonly revision: EmbedPublishedRevision;
+}> &
+  Record<string, unknown>;
+
+export type EmbedPublicationFetcher = (
+  input: RequestInfo | URL,
+  init?: RequestInit,
+) => Promise<Response>;
+
+export interface VerifyEmbedPublicationOptions {
+  readonly eventSlug: string;
+  readonly expectedPublishedRevision?: EmbedExpectedPublishedRevision | null;
+  readonly fetcher?: EmbedPublicationFetcher;
+}
+
+export interface VerifiedEmbedPublication {
+  readonly agenda: EmbedPublicationProjection;
+  readonly speakers: EmbedPublicationProjection;
+  readonly revision: EmbedPublishedRevision;
+}
+
+function projectionVerificationError(projection: "agenda" | "speakers", message: string): Error {
+  return new Error(`The published ${projection} projection could not be verified: ${message}`);
+}
+
+async function parseEmbedProjection(
+  response: Response,
+  projection: "agenda" | "speakers",
+): Promise<EmbedPublicationProjection> {
+  if (!response.ok) {
+    throw projectionVerificationError(projection, `the server returned HTTP ${response.status}.`);
+  }
+
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    throw projectionVerificationError(projection, "the response was not valid JSON.");
+  }
+
+  if (!isRecord(payload) || !isRecord(payload.data)) {
+    throw projectionVerificationError(projection, "the response did not contain a data envelope.");
+  }
+
+  const data = payload.data;
+  if (!isRecord(data.event) || !isRecord(data.revision)) {
+    throw projectionVerificationError(
+      projection,
+      "the response omitted event or revision identity.",
+    );
+  }
+
+  const eventSlug = nonEmptyString(data.event.slug);
+  const revisionId = nonEmptyString(data.revision.id);
+  const revisionNumber = data.revision.number;
+  const publishedAt = nonEmptyString(data.revision.publishedAt);
+
+  if (!eventSlug || !revisionId || !publishedAt) {
+    throw projectionVerificationError(
+      projection,
+      "the event slug or revision identity is invalid.",
+    );
+  }
+  if (typeof revisionNumber !== "number" || !Number.isInteger(revisionNumber)) {
+    throw projectionVerificationError(projection, "the published revision number is invalid.");
+  }
+
+  return {
+    ...data,
+    event: { ...data.event, slug: eventSlug },
+    revision: {
+      ...data.revision,
+      id: revisionId,
+      number: revisionNumber,
+      publishedAt,
+    },
+  };
+}
+
+export async function verifyEmbedPublication({
+  eventSlug,
+  expectedPublishedRevision = null,
+  fetcher = fetch,
+}: VerifyEmbedPublicationOptions): Promise<VerifiedEmbedPublication> {
+  const expectedSlug = eventSlug.trim();
+  if (!expectedSlug) {
+    throw new Error("A public event slug is required before the preview can be refreshed.");
+  }
+
+  const encodedSlug = encodeURIComponent(expectedSlug);
+  const requestInit: RequestInit = {
+    cache: "no-store",
+    credentials: "same-origin",
+  };
+
+  let agendaResponse: Response;
+  let speakersResponse: Response;
+  try {
+    [agendaResponse, speakersResponse] = await Promise.all([
+      fetcher(`/api/public/events/${encodedSlug}/agenda.json`, requestInit),
+      fetcher(`/api/public/events/${encodedSlug}/speakers`, requestInit),
+    ]);
+  } catch (error) {
+    const detail = error instanceof Error && error.message ? ` ${error.message}` : "";
+    throw new Error(`The published agenda and speaker projections could not be reached.${detail}`);
+  }
+
+  const [agenda, speakers] = await Promise.all([
+    parseEmbedProjection(agendaResponse, "agenda"),
+    parseEmbedProjection(speakersResponse, "speakers"),
+  ]);
+
+  if (agenda.event.slug !== expectedSlug || speakers.event.slug !== expectedSlug) {
+    throw new Error("The published projection event slug does not match this embed event.");
+  }
+  if (agenda.event.slug !== speakers.event.slug) {
+    throw new Error("The published agenda and speaker event slugs do not match.");
+  }
+
+  if (
+    agenda.revision.id !== speakers.revision.id ||
+    agenda.revision.number !== speakers.revision.number ||
+    agenda.revision.publishedAt !== speakers.revision.publishedAt
+  ) {
+    throw new Error("The published agenda and speaker projections are from different revisions.");
+  }
+
+  if (
+    expectedPublishedRevision !== null &&
+    (agenda.revision.id !== expectedPublishedRevision.id ||
+      agenda.revision.number !== expectedPublishedRevision.number)
+  ) {
+    throw new Error("The published projections do not match the expected published revision.");
+  }
+
+  return { agenda, speakers, revision: agenda.revision };
+}
 
 function workspaceScopeKey(organizationId: string, eventId: string): string {
   return `${organizationId}\u0000${eventId}`;
@@ -575,6 +723,7 @@ export interface EmbedWorkspaceViewProps {
   readonly publicOrigin?: string;
   readonly eventName?: string;
   readonly eventVersion?: number | null;
+  readonly expectedPublishedRevision?: EmbedExpectedPublishedRevision | null;
   readonly initialConfigurations?: readonly OrganizerEventEmbedConfiguration[];
   readonly api?: Pick<OrganizerEventsApi, "updateEvent">;
   readonly publication?: EmbedPublicationMetadata;
@@ -820,6 +969,8 @@ function EmbedControls({
   tracks,
   statuses,
   cacheRefreshMessage,
+  cacheRefreshBusy,
+  cacheRefreshError,
   onTheme,
   onOutputFormat,
   onLayout,
@@ -844,6 +995,8 @@ function EmbedControls({
   tracks: readonly string[];
   statuses: readonly string[];
   cacheRefreshMessage: string;
+  cacheRefreshBusy: boolean;
+  cacheRefreshError: boolean;
   onTheme: (value: EmbedTheme) => void;
   onOutputFormat: (value: EmbedOutputFormat) => void;
   onLayout: (value: EmbedLayout) => void;
@@ -1344,6 +1497,7 @@ export function EmbedWorkspaceView({
   publicOrigin,
   eventName,
   eventVersion,
+  expectedPublishedRevision = null,
   initialConfigurations,
   api,
   publication,
@@ -1854,6 +2008,8 @@ export function EmbedWorkspaceView({
                 tracks={tracks}
                 statuses={statuses}
                 cacheRefreshMessage={cacheRefreshMessage}
+                cacheRefreshBusy={false}
+                cacheRefreshError={false}
                 onTheme={setTheme}
                 onOutputFormat={setOutputFormat}
                 onLayout={setLayout}

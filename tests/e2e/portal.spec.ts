@@ -327,7 +327,7 @@ test("published resources and wiki stay event-scoped and cross-event portal acce
 
   const denied = await page.evaluate(async () => {
     const response = await fetch(
-      "http://127.0.0.1:8787/api/speaker/events/event-not-authorized/portal",
+      `${window.location.origin}/api/speaker/events/event-not-authorized/portal`,
       {
         credentials: "include",
       },

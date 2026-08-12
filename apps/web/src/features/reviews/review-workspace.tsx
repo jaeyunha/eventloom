@@ -1303,6 +1303,15 @@ function ReviewNavigation({
   );
 }
 
+export async function loadCreatedOrganizerPlan(
+  eventId: string,
+  baseUrl: string,
+  planId: string,
+  loader: typeof loadOrganizerData = loadOrganizerData,
+): Promise<ReviewPlanSeed> {
+  return loader(eventId, baseUrl, planId);
+}
+
 export function ReviewWorkspace({
   eventId,
   mode = "organizer",
@@ -1335,6 +1344,30 @@ export function ReviewWorkspace({
     mode === "organizer" && eventId !== undefined,
   );
   const [reviewerMembersError, setReviewerMembersError] = useState<string | null>(null);
+  const [createdPlanRefresh, setCreatedPlanRefresh] = useState<{
+    eventId: string;
+    planId: string;
+  } | null>(null);
+  const [createdPlanRefreshLoading, setCreatedPlanRefreshLoading] = useState(false);
+  const [createdPlanRefreshError, setCreatedPlanRefreshError] = useState<string | null>(null);
+
+  async function refreshCreatedPlan(eventId: string, planId: string): Promise<void> {
+    setCreatedPlanRefreshLoading(true);
+    setCreatedPlanRefreshError(null);
+    try {
+      const authoritative = await loadCreatedOrganizerPlan(eventId, baseUrl, planId);
+      setSeed(authoritative);
+      setCreatedPlanRefresh(null);
+    } catch (reason: unknown) {
+      setCreatedPlanRefreshError(
+        reason instanceof Error
+          ? reason.message
+          : "The authoritative review plan could not be loaded.",
+      );
+    } finally {
+      setCreatedPlanRefreshLoading(false);
+    }
+  }
   useEffect(() => {
     if (mode !== "organizer" || eventId === undefined) {
       setReviewerMembersLoading(false);
@@ -1476,13 +1509,11 @@ export function ReviewWorkspace({
         organizationId={explicitOrganizationId}
         baseUrl={baseUrl}
         onCreated={(plan) => {
+          const refresh = { eventId, planId: plan.id };
           setMissingPlan(false);
           setSeed(seedFromCreatedPlan(plan, eventId));
-          void loadOrganizerData(eventId, baseUrl, plan.id)
-            .then((authoritative) => setSeed(authoritative))
-            .catch(() => {
-              // Keep the created plan visible if the follow-up snapshot is unavailable.
-            });
+          setCreatedPlanRefresh(refresh);
+          void refreshCreatedPlan(refresh.eventId, refresh.planId);
         }}
       />
     );
@@ -1496,14 +1527,25 @@ export function ReviewWorkspace({
       error
     />
   ) : (
-    <OrganizerWorkspace
-      seed={seed}
-      baseUrl={baseUrl}
-      organizationId={explicitOrganizationId}
-      reviewerMembers={activeVerifiedReviewers(reviewerMembers)}
-      reviewerMembersLoading={reviewerMembersLoading}
-      reviewerMembersError={reviewerMembersError}
-    />
+    <>
+      <OrganizerDetailStatus
+        loading={createdPlanRefreshLoading}
+        error={createdPlanRefreshError}
+        onRetry={() => {
+          if (createdPlanRefresh !== null) {
+            void refreshCreatedPlan(createdPlanRefresh.eventId, createdPlanRefresh.planId);
+          }
+        }}
+      />
+      <OrganizerWorkspace
+        seed={seed}
+        baseUrl={baseUrl}
+        organizationId={explicitOrganizationId}
+        reviewerMembers={activeVerifiedReviewers(reviewerMembers)}
+        reviewerMembersLoading={reviewerMembersLoading}
+        reviewerMembersError={reviewerMembersError}
+      />
+    </>
   );
 }
 

@@ -159,11 +159,7 @@ describe("local public embed demo projections", () => {
       status: 409,
     });
     expect(calls).toHaveLength(3);
-    expect(calls.map(({ init }) => init?.cache)).toEqual([
-      "no-store",
-      "no-store",
-      "no-store",
-    ]);
+    expect(calls.map(({ init }) => init?.cache)).toEqual(["no-store", "no-store", "no-store"]);
     expect(String(calls[2]?.input)).toMatch(/\/speakers$/u);
   });
 

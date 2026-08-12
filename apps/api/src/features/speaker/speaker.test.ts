@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { FakeAirtableTransport } from "../../infrastructure/airtable";
+import { AirtableSpeakerRepository } from "../../runtime/airtable";
 import { createSpeakerRoutes } from "./routes";
 import { SpeakerService, SpeakerServiceError } from "./service";
 import type {
@@ -3221,6 +3223,117 @@ describe("SpeakerService capability and canonical task scope", () => {
     expect(crossSubmissionTask?.status).toBe("not_started");
   });
 });
+describe("Airtable speaker acceptance initialization", () => {
+  it("preserves organizer-managed profile state and initializes accepted only for a new profile", async () => {
+    const transport = new FakeAirtableTransport();
+    const organizationId = "tenant-acceptance";
+    const eventId = "event-acceptance";
+    const participantId = "participant-existing";
+    const existingProfileId = `speaker-profile:${eventId}:${participantId}`;
+    transport.seed({
+      baseId: "base-test",
+      table: "Events",
+      fields: {
+        "Application ID": eventId,
+        "Settings JSON": JSON.stringify({
+          id: eventId,
+          organizationId,
+          name: "Acceptance Event",
+        }),
+      },
+    });
+    transport.seed({
+      baseId: "base-test",
+      table: "Speaker Profiles",
+      fields: {
+        "Application ID": existingProfileId,
+        Version: 3,
+        Biography: JSON.stringify({
+          id: existingProfileId,
+          tenantId: organizationId,
+          eventId,
+          participantId,
+          displayName: "Organizer Managed",
+          email: "managed@example.test",
+          jobTitle: "Principal Engineer",
+          company: "Example Co",
+          biography: "Organizer biography",
+          socialLinks: { website: "https://example.test/speaker" },
+          headshotAssetId: "asset-headshot",
+          travelLogistics: {
+            travelRequired: true,
+            arrivalAt: "2027-05-01T10:00:00.000Z",
+            departureAt: "2027-05-03T10:00:00.000Z",
+            accommodation: "Conference hotel",
+            dietaryRequirements: "Vegetarian",
+            accessibilityNeeds: "Step-free access",
+            travelNotes: "Late arrival",
+          },
+          status: "confirmed",
+          version: 3,
+          updatedAt: "2026-08-01T00:00:00.000Z",
+        }),
+      },
+    });
+    const repository = new AirtableSpeakerRepository({
+      baseId: "base-test",
+      transport,
+      database: {} as ConstructorParameters<typeof AirtableSpeakerRepository>[0]["database"],
+    });
+
+    const existing = await repository.ensureProfile({
+      organizationId,
+      eventId,
+      participant: {
+        id: participantId,
+        firstName: "Updated",
+        lastName: "Name",
+        email: "updated@example.test",
+        role: "primary",
+        biography: "CFP biography",
+        answers: {},
+      },
+      updatedAt: now,
+    });
+    expect(existing).toMatchObject({
+      displayName: "Updated Name",
+      email: "updated@example.test",
+      biography: "Organizer biography",
+      status: "confirmed",
+      headshotAssetId: "asset-headshot",
+      jobTitle: "Principal Engineer",
+      company: "Example Co",
+      socialLinks: { website: "https://example.test/speaker" },
+      travelLogistics: {
+        travelRequired: true,
+        accommodation: "Conference hotel",
+        dietaryRequirements: "Vegetarian",
+      },
+      version: 4,
+    });
+
+    const created = await repository.ensureProfile({
+      organizationId,
+      eventId,
+      participant: {
+        id: "participant-new",
+        firstName: "New",
+        lastName: "Speaker",
+        email: "new@example.test",
+        role: "co_speaker",
+        biography: "New biography",
+        answers: {},
+      },
+      updatedAt: now,
+    });
+    expect(created).toMatchObject({
+      participantId: "participant-new",
+      biography: "New biography",
+      status: "accepted",
+      version: 1,
+    });
+  });
+});
 
 describe("SpeakerService profile updates", () => {
   it("normalizes an authorized biography and uses optimistic concurrency", async () => {
@@ -3594,6 +3707,107 @@ describe("speaker routes", () => {
     expect(JSON.stringify(payload)).not.toContain("secret-route-private-asset");
   });
 });
+describe("SpeakerService organizer email previews", () => {
+  const createTemplate = (service: SpeakerService) =>
+    service.createOrganizerSpeakerEmailTemplate({
+      organizationId: "org-1",
+      eventId: "event-1",
+      accountId: "account-1",
+      templateId: "speaker-email",
+      name: "Speaker update",
+      subject: "Hello {{first_name}}",
+      html: "<p>Hello {{first_name}}</p>",
+      text: "Hello {{first_name}}",
+    });
+  const preview = (
+    service: SpeakerService,
+    template: { id: string; version: number },
+    participantIds: readonly string[],
+    templateVersion = template.version,
+  ) =>
+    service.previewOrganizerSpeakerEmails({
+      organizationId: "org-1",
+      eventId: "event-1",
+      accountId: "account-1",
+      participantIds,
+      templateId: template.id,
+      templateVersion,
+    });
+  const addRosterEntry = (repository: OrganizerSpeakerRepository, email?: string): void => {
+    repository.roster.push({
+      id: "roster:event-1:speaker-submission:submission-1:participant-1",
+      eventId: "event-1",
+      submissionId: "speaker-submission:submission-1",
+      participantId: "participant-1",
+      displayName: "Priya Raman",
+      ...(email === undefined ? {} : { email }),
+      role: "primary",
+      status: "active",
+      version: 1,
+      createdAt: now,
+      updatedAt: now,
+    });
+  };
+  const expectEmailError = (
+    error: unknown,
+    code: string,
+    status: 400 | 409,
+    message: string,
+  ): boolean => {
+    expectServiceError(error, code);
+    expect((error as SpeakerServiceError).status).toBe(status);
+    expect((error as SpeakerServiceError).message).toBe(message);
+    return true;
+  };
+
+  it("reports an unavailable approved template version", async () => {
+    const { service } = createOrganizerFixture();
+    const template = await createTemplate(service);
+
+    await expect(
+      preview(service, template, ["participant-1"], template.version + 1),
+    ).rejects.toSatisfy((error: unknown) =>
+      expectEmailError(
+        error,
+        "EMAIL_TEMPLATE_NOT_FOUND",
+        409,
+        "The approved speaker email template or requested version was not found.",
+      ),
+    );
+  });
+
+  it("reports a participant absent from the scoped roster", async () => {
+    const { service } = createOrganizerFixture();
+    const template = await createTemplate(service);
+
+    await expect(preview(service, template, ["participant-missing"])).rejects.toSatisfy(
+      (error: unknown) =>
+        expectEmailError(
+          error,
+          "EMAIL_PARTICIPANT_NOT_FOUND",
+          409,
+          "The selected speaker participant was not found in this event roster.",
+        ),
+    );
+  });
+
+  it("reports a roster participant without an email", async () => {
+    const { repository, service } = createOrganizerFixture();
+    addRosterEntry(repository);
+    const template = await createTemplate(service);
+
+    await expect(preview(service, template, ["participant-1"])).rejects.toSatisfy(
+      (error: unknown) =>
+        expectEmailError(
+          error,
+          "EMAIL_RECIPIENT_EMAIL_MISSING",
+          400,
+          "The selected speaker participant does not have an email address.",
+        ),
+    );
+  });
+});
+
 it("persists logistics, exposes reminder eligibility, and queues a versioned bulk email", async () => {
   const { repository } = createOrganizerFixture();
   const deliveries: Array<{ participantId: string; subject: string; html: string }> = [];
@@ -3688,9 +3902,9 @@ it("persists logistics, exposes reminder eligibility, and queues a versioned bul
     eventId: "event-1",
     accountId: "account-1",
     name: "Speaker update",
-    subject: "Hello {{first_name}}",
-    html: "<p>Hello {{first_name}}</p>",
-    text: "Hello {{first_name}}",
+    subject: "Hello {{first_name}} at {{email}}",
+    html: "<p>Hello {{first_name}} ({{display_name}}) at {{email}}</p>",
+    text: "Hello {{first_name}}, {{display_name}} ({{email}})",
   });
   const preview = await service.previewOrganizerSpeakerEmails({
     organizationId: "org-1",
@@ -3700,8 +3914,14 @@ it("persists logistics, exposes reminder eligibility, and queues a versioned bul
     templateId: template.id,
     templateVersion: template.version,
   });
-  expect(preview.recipients.map((recipient) => recipient.firstName)).toEqual(["Priya", "Marcus"]);
-  expect(preview.recipients[0]?.html).toContain("Hello Priya");
+  expect(preview.recipients[0]).toMatchObject({
+    displayName: "Priya Raman",
+    firstName: "Priya",
+    email: "priya@example.test",
+    subject: "Hello Priya at priya@example.test",
+    html: "<p>Hello Priya (Priya Raman) at priya@example.test</p>",
+    text: "Hello Priya, Priya Raman (priya@example.test)",
+  });
   const send = await service.sendOrganizerSpeakerEmails({
     organizationId: "org-1",
     eventId: "event-1",
@@ -3712,6 +3932,15 @@ it("persists logistics, exposes reminder eligibility, and queues a versioned bul
   expect(send.status).toBe("queued");
   expect(deliveries).toHaveLength(2);
   expect(send.history.some((entry) => entry.action === "delivery_queued")).toBe(true);
+  const replay = await service.sendOrganizerSpeakerEmails({
+    organizationId: "org-1",
+    eventId: "event-1",
+    accountId: "account-1",
+    previewId: preview.id,
+    idempotencyKey: "bulk-email-once",
+  });
+  expect(replay.id).toBe(send.id);
+  expect(deliveries).toHaveLength(2);
 });
 
 it("returns terminal invitation receipts and reports idempotent replays per recipient", async () => {

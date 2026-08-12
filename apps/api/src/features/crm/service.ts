@@ -1538,11 +1538,6 @@ export class CrmService {
       const saved = await repository.saveProjection(projection, contact);
       assertTenant(saved, organizationId);
       if (saved.id !== projection.id) {
-        if (saved.role !== role || saved.sessionId !== sessionId || saved.note !== note) {
-          throw conflict(
-            "This contact already has a different canonical relationship for the event.",
-          );
-        }
         const result: CrmEventProjectionResult = {
           projection: clone(saved),
           idempotent: true,

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ApiBindings } from "../app";
 import { createApp } from "../app";
-import type { PublishedSpeakerProjection } from "./public-speakers";
+import { type PublishedSpeakerProjection, publishedSpeakerPhotoPath } from "./public-speakers";
 
 const bindings: ApiBindings = {
   APP_ENV: "local",
@@ -103,15 +103,11 @@ describe("published speaker projection route", () => {
     expect(JSON.stringify(body)).not.toContain("private-token");
   });
 
-  it("keeps only stable HTTPS URLs supplied as approved public headshots", async () => {
+  it("keeps only the exact stable same-origin headshot URL for the event and speaker", async () => {
+    const photoUrl = publishedSpeakerPhotoPath(projection.event.slug, publishedSpeaker.id);
     const approvedProjection: PublishedSpeakerProjection = {
       ...projection,
-      speakers: [
-        {
-          ...publishedSpeaker,
-          photoUrl: "https://assets.sessionboard.namuh.co/public/speaker-1.webp",
-        },
-      ],
+      speakers: [{ ...publishedSpeaker, photoUrl }],
     };
     const app = createApp({
       publishedSpeakers: { getPublishedSpeakers: async () => approvedProjection },
@@ -124,14 +120,72 @@ describe("published speaker projection route", () => {
     );
 
     await expect(response.json()).resolves.toMatchObject({
-      data: {
-        speakers: [
-          {
-            photoUrl: "https://assets.sessionboard.namuh.co/public/speaker-1.webp",
-          },
-        ],
+      data: { speakers: [{ photoUrl }] },
+    });
+  });
+  it("rejects stable-looking headshot URLs for another event or speaker", async () => {
+    const app = createApp({
+      publishedSpeakers: {
+        getPublishedSpeakers: async () => ({
+          ...projection,
+          speakers: [
+            {
+              ...publishedSpeaker,
+              photoUrl: publishedSpeakerPhotoPath("other-event", publishedSpeaker.id),
+            },
+          ],
+        }),
       },
     });
+
+    const response = await app.request(
+      "/api/public/events/open-sessionboard-conf/speakers",
+      undefined,
+      bindings,
+    );
+
+    await expect(response.json()).resolves.toMatchObject({
+      data: { speakers: [{ photoUrl: null }] },
+    });
+  });
+  it("serves only headshot bytes resolved from the immutable publication dependency", async () => {
+    const body = new TextEncoder().encode("image").buffer as ArrayBuffer;
+    const getPublishedSpeakerHeadshot = vi.fn(async (eventSlug: string, speakerId: string) =>
+      eventSlug === projection.event.slug && speakerId === publishedSpeaker.id
+        ? {
+            body,
+            contentType: "image/webp" as const,
+            sizeBytes: body.byteLength,
+          }
+        : null,
+    );
+    const app = createApp({
+      publishedSpeakers: {
+        getPublishedSpeakers: async () => projection,
+        getPublishedSpeakerHeadshot,
+      },
+    });
+
+    const response = await app.request(
+      `${publishedSpeakerPhotoPath(projection.event.slug, publishedSpeaker.id)}`,
+      undefined,
+      bindings,
+    );
+    const missing = await app.request(
+      `${publishedSpeakerPhotoPath(projection.event.slug, "speaker-other")}`,
+      undefined,
+      bindings,
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("image/webp");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(new TextEncoder().encode("image"));
+    expect(missing.status).toBe(404);
+    expect(getPublishedSpeakerHeadshot).toHaveBeenCalledWith(
+      projection.event.slug,
+      publishedSpeaker.id,
+    );
   });
   it("caches successful projections without crossing event slugs", async () => {
     const otherProjection: PublishedSpeakerProjection = {

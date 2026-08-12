@@ -11,6 +11,7 @@ import {
   publicAgendaCalendarUrl,
   publicEmbedUrl,
   scriptSnippet,
+  verifyEmbedPublication,
 } from "./embed-workspace";
 
 const agenda = EMBED_WIDGETS.find((widget) => widget.id === "agenda");
@@ -243,6 +244,92 @@ describe("safe live embed URLs", () => {
     expect(publicEmbedUrl(settings)).toContain("/embed/summit-2026/speakers?");
     expect(scriptSnippet(settings)).toContain('data-view="speakers"');
     expect(scriptSnippet(settings)).not.toContain("private");
+  });
+});
+
+describe("embed publication refresh verification", () => {
+  const projectionResponse = (
+    slug = "summit-2026",
+    revision: { readonly id: string; readonly number: number; readonly publishedAt: string } = {
+      id: "revision-7",
+      number: 7,
+      publishedAt: "2026-08-12T10:00:00.000Z",
+    },
+  ) =>
+    new Response(
+      JSON.stringify({
+        data: {
+          event: { slug },
+          revision,
+        },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+
+  it("reloads both public projections without cache and accepts their expected revision", async () => {
+    const requests: Array<{ readonly url: string; readonly init?: RequestInit }> = [];
+    const fetcher = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      requests.push({ url: String(input), ...(init === undefined ? {} : { init }) });
+      return projectionResponse();
+    };
+
+    await expect(
+      verifyEmbedPublication({
+        eventSlug: "summit-2026",
+        expectedPublishedRevision: { id: "revision-7", number: 7 },
+        fetcher,
+      }),
+    ).resolves.toMatchObject({
+      revision: { id: "revision-7", number: 7 },
+    });
+    expect(requests.map((request) => request.url)).toEqual([
+      "/api/public/events/summit-2026/agenda.json",
+      "/api/public/events/summit-2026/speakers",
+    ]);
+    expect(
+      requests.every(
+        (request) =>
+          request.init?.cache === "no-store" && request.init.credentials === "same-origin",
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects agenda and speaker projections from different revisions", async () => {
+    let request = 0;
+    const fetcher = async (): Promise<Response> => {
+      request += 1;
+      return projectionResponse("summit-2026", {
+        id: `revision-${request}`,
+        number: request,
+        publishedAt: "2026-08-12T10:00:00.000Z",
+      });
+    };
+
+    await expect(verifyEmbedPublication({ eventSlug: "summit-2026", fetcher })).rejects.toThrow(
+      "different revisions",
+    );
+  });
+
+  it("rejects projections that do not match the expected published revision", async () => {
+    await expect(
+      verifyEmbedPublication({
+        eventSlug: "summit-2026",
+        expectedPublishedRevision: { id: "revision-8", number: 8 },
+        fetcher: async () => projectionResponse(),
+      }),
+    ).rejects.toThrow("expected published revision");
+  });
+
+  it("rejects a projection for another event without treating the pair as refreshed", async () => {
+    let request = 0;
+    const fetcher = async (): Promise<Response> => {
+      request += 1;
+      return projectionResponse(request === 1 ? "summit-2026" : "other-event");
+    };
+
+    await expect(verifyEmbedPublication({ eventSlug: "summit-2026", fetcher })).rejects.toThrow(
+      "does not match this embed event",
+    );
   });
 });
 

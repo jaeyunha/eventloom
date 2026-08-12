@@ -142,10 +142,10 @@ describe("local speaker portal demo adapter", () => {
 });
 
 describe("local speaker portal fallback", () => {
-  it("reads the API APP_ENV without sending portal credentials", async () => {
+  it("requires the explicit fixture profile without sending portal credentials", async () => {
     const fetcher = vi.fn(
       async () =>
-        new Response(JSON.stringify({ environment: "local" }), {
+        new Response(JSON.stringify({ environment: "local", runtimeProfile: "fixture" }), {
           status: 200,
           headers: { "content-type": "application/json" },
         }),

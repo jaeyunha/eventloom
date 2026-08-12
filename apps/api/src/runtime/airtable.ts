@@ -142,7 +142,15 @@ import type {
   Track,
 } from "../features/sessions/types";
 import { SessionRepositoryConflictError } from "../features/sessions/types";
-import { SpeakerService } from "../features/speaker/service";
+import {
+  type SpeakerEmailDelivery,
+  type SpeakerEmailDeliveryInput,
+  type SpeakerEmailDeliveryReceipt,
+  type SpeakerEmailPreview,
+  type SpeakerEmailSend,
+  type SpeakerEmailTemplate,
+  SpeakerService,
+} from "../features/speaker/service";
 import type {
   CreatePrivateUploadGrantCommand,
   FinalizeSpeakerAssetCommand,
@@ -153,9 +161,12 @@ import type {
   PrivateUploadGrant,
   PrivateUploadReceipt,
   RepositoryResult,
+  RestoreSpeakerContentVersionCommand,
   SpeakerAccessScope,
   SpeakerAsset,
   SpeakerAssetComment,
+  SpeakerContentHistoryEntry,
+  SpeakerContentRecord,
   SpeakerEventResource,
   SpeakerInvitationDeliveryInput,
   SpeakerInvitationDeliveryReceipt,
@@ -180,6 +191,7 @@ import type {
   SpeakerTravelLogistics,
   TransitionSpeakerTaskCommand,
   UpdateBiographyCommand,
+  UpdateSpeakerContentCommand,
   UpdateSpeakerProfileCommand,
 } from "../features/speaker/types";
 import {
@@ -213,8 +225,10 @@ import type {
 } from "../routes/organizer-overview";
 import {
   invalidatePublishedSpeakerCache,
+  type PublishedSpeakerHeadshot,
   type PublishedSpeakerProjection,
   type PublishedSpeakerRouteDependencies,
+  publishedSpeakerPhotoPath,
 } from "../routes/public-speakers";
 import {
   matchesOrganizationScope,
@@ -746,6 +760,26 @@ export async function listEventScopedJson<T extends object>(
 }
 export const PUBLISHED_SPEAKER_PROJECTIONS_TABLE = "Published Speaker Projections";
 
+interface PublishedSpeakerHeadshotBinding {
+  readonly speakerId: string;
+  readonly tenantId: string;
+  readonly eventId: string;
+  readonly assetId: string;
+  readonly objectKey: string;
+  readonly fileName: string;
+  readonly contentType: PublishedSpeakerHeadshot["contentType"];
+  readonly sizeBytes: number;
+}
+
+function publishedHeadshotContentType(
+  value: string,
+): PublishedSpeakerHeadshot["contentType"] | null {
+  const contentType = value.trim().toLowerCase();
+  return contentType === "image/jpeg" || contentType === "image/png" || contentType === "image/webp"
+    ? contentType
+    : null;
+}
+
 interface PublishedSpeakerProjectionRecord extends PublishedSpeakerProjection {
   readonly id: string;
   readonly organizationId: string;
@@ -754,6 +788,7 @@ interface PublishedSpeakerProjectionRecord extends PublishedSpeakerProjection {
   readonly revisionId: string;
   readonly revisionNumber: number;
   readonly publishedAt: string;
+  readonly headshots: readonly PublishedSpeakerHeadshotBinding[];
 }
 
 /**
@@ -762,10 +797,12 @@ interface PublishedSpeakerProjectionRecord extends PublishedSpeakerProjection {
  */
 class AirtablePublishedSpeakerProjectionStore implements PublishedSpeakerRouteDependencies {
   readonly #store: AirtableJsonStore<PublishedSpeakerProjectionRecord>;
+  readonly #privateFiles: R2Bucket;
 
   constructor(options: {
     readonly baseId: string;
     readonly transport: AirtableTransport;
+    readonly privateFiles: R2Bucket;
   }) {
     this.#store = new AirtableJsonStore({
       ...options,
@@ -779,6 +816,7 @@ class AirtablePublishedSpeakerProjectionStore implements PublishedSpeakerRouteDe
         "Published At": "publishedAt",
       },
     });
+    this.#privateFiles = options.privateFiles;
   }
   async putPublishedSpeakers(record: PublishedSpeakerProjectionRecord): Promise<void> {
     const existing = await this.#store.findWithRecordId(record.id);
@@ -809,19 +847,8 @@ class AirtablePublishedSpeakerProjectionStore implements PublishedSpeakerRouteDe
   }
 
   async getPublishedSpeakers(eventSlug: string): Promise<PublishedSpeakerProjection | null> {
-    const normalizedSlug = eventSlug.trim();
-    if (normalizedSlug.length === 0) return null;
-    const page = await this.#store.listPage({
-      pageSize: 2,
-      fields: [APPLICATION_ID, "Organization ID", "Event Slug", "Projection JSON"],
-      filterByFormula: applicationIdFormula("Event Slug", normalizedSlug),
-    });
-    const matches = page.items.filter(
-      (record) => record.event.slug === normalizedSlug && record.organizationId.trim().length > 0,
-    );
-    if (matches.length !== 1) return null;
-    const record = matches[0];
-    if (record === undefined) return null;
+    const record = await this.#recordForSlug(eventSlug);
+    if (record === null) return null;
     return {
       event: {
         slug: record.event.slug,
@@ -849,6 +876,60 @@ class AirtablePublishedSpeakerProjectionStore implements PublishedSpeakerRouteDe
         trackNames: [...speaker.trackNames],
       })),
     };
+  }
+
+  async getPublishedSpeakerHeadshot(
+    eventSlug: string,
+    speakerId: string,
+  ): Promise<PublishedSpeakerHeadshot | null> {
+    const record = await this.#recordForSlug(eventSlug);
+    if (record === null) return null;
+    const normalizedSpeakerId = speakerId.trim();
+    const expectedPath = publishedSpeakerPhotoPath(record.event.slug, normalizedSpeakerId);
+    const speaker = record.speakers.find(
+      (candidate) => candidate.id === normalizedSpeakerId && candidate.photoUrl === expectedPath,
+    );
+    const binding = record.headshots?.find(
+      (candidate) =>
+        candidate.speakerId === normalizedSpeakerId &&
+        candidate.tenantId === record.organizationId &&
+        candidate.eventId === record.eventId,
+    );
+    if (
+      speaker === undefined ||
+      binding === undefined ||
+      binding.sizeBytes <= 0 ||
+      !Number.isSafeInteger(binding.sizeBytes)
+    ) {
+      return null;
+    }
+    const object = await this.#privateFiles.get(binding.objectKey);
+    const contentType = object?.httpMetadata?.contentType?.trim().toLowerCase();
+    if (
+      object === null ||
+      object.body === null ||
+      object.size !== binding.sizeBytes ||
+      contentType !== binding.contentType
+    ) {
+      return null;
+    }
+    const body = await object.arrayBuffer();
+    if (body.byteLength !== binding.sizeBytes) return null;
+    return { body, contentType: binding.contentType, sizeBytes: binding.sizeBytes };
+  }
+
+  async #recordForSlug(eventSlug: string): Promise<PublishedSpeakerProjectionRecord | null> {
+    const normalizedSlug = eventSlug.trim();
+    if (normalizedSlug.length === 0) return null;
+    const page = await this.#store.listPage({
+      pageSize: 2,
+      fields: [APPLICATION_ID, "Organization ID", "Event Slug", "Projection JSON"],
+      filterByFormula: applicationIdFormula("Event Slug", normalizedSlug),
+    });
+    const matches = page.items.filter(
+      (record) => record.event.slug === normalizedSlug && record.organizationId.trim().length > 0,
+    );
+    return matches.length === 1 ? (matches[0] ?? null) : null;
   }
 }
 
@@ -1380,12 +1461,216 @@ export class AirtableWebhookRepository implements WebhookRepository {
     return datesFromDelivery(updated);
   }
 }
+function speakerEmailScopeFormula(organizationId: string, eventId: string): string {
+  return `AND(${applicationIdFormula("Organization ID", organizationId)},${applicationIdFormula(
+    "Event ID",
+    eventId,
+  )})`;
+}
+
+function speakerEmailTemplateRecord(value: object): boolean {
+  return entityType(value) === "speaker_email_template";
+}
+
+function speakerEmailPreviewRecord(value: object): boolean {
+  return entityType(value) === "speaker_email_preview";
+}
+
+function speakerEmailSendRecord(value: object): boolean {
+  return entityType(value) === "speaker_email_send";
+}
+function speakerEmailTemplatePhysicalId(template: SpeakerEmailTemplate): string {
+  return [
+    "speaker-email-template",
+    encodeURIComponent(template.organizationId),
+    encodeURIComponent(template.eventId),
+    encodeURIComponent(template.id),
+    `v${template.version}`,
+  ].join(":");
+}
+
+function speakerEmailTemplateLogicalId(id: string): string {
+  const match = /^speaker-email-template:[^:]+:[^:]+:(.*):v\d+$/u.exec(id);
+  if (match?.[1] === undefined) return id;
+  return decodeURIComponent(match[1]);
+}
+
+function normalizeSpeakerEmailRecord<T extends object>(
+  value: object,
+  logicalTemplateId = false,
+): T {
+  const record = untagged(clone(value)) as JsonRecord;
+  const organizationId = textValue(record, "organizationId", "tenantId");
+  if (organizationId !== null) {
+    record.organizationId = organizationId;
+    delete record.tenantId;
+  }
+  delete record.airtableStatus;
+  if (logicalTemplateId && typeof record.id === "string") {
+    record.id = speakerEmailTemplateLogicalId(record.id);
+  }
+  return record as T;
+}
+type StoredSpeakerProfile = SpeakerProfile &
+  JsonRecord & {
+    tenantId?: string;
+    updatedBy?: string;
+    contentHistory?: readonly SpeakerContentHistoryEntry[];
+  };
+
+function speakerContentRecord(
+  profile: StoredSpeakerProfile,
+  tenantId: string,
+): SpeakerContentRecord {
+  return {
+    id: profile.id,
+    tenantId,
+    eventId: profile.eventId,
+    entityType: "speaker",
+    entityId: profile.participantId,
+    biography: profile.biography,
+    ...(profile.socialLinks === undefined ? {} : { socialLinks: clone(profile.socialLinks) }),
+    ...(profile.headshotAssetId === undefined ? {} : { headshotAssetId: profile.headshotAssetId }),
+    ...(profile.status === undefined ? {} : { status: profile.status }),
+    version: profile.version,
+    updatedAt: profile.updatedAt,
+    updatedBy: profile.updatedBy ?? "system:speaker-profile",
+  };
+}
+
+function sessionContentRecord(session: Session): SpeakerContentRecord {
+  return {
+    id: session.id,
+    tenantId: session.tenantId,
+    eventId: session.eventId,
+    entityType: "session",
+    entityId: session.id,
+    title: session.title,
+    description: session.description,
+    status: session.contentStatus ?? session.status,
+    version: session.version,
+    updatedAt: session.updatedAt,
+    updatedBy: session.updatedBy,
+  };
+}
+function sessionContentSnapshotForHistory(
+  session: Session,
+): NonNullable<Session["history"][number]["snapshot"]> {
+  return {
+    id: session.id,
+    tenantId: session.tenantId,
+    eventId: session.eventId,
+    title: session.title,
+    description: session.description,
+    status: session.status,
+    ...(session.contentStatus === undefined ? {} : { contentStatus: session.contentStatus }),
+    durationMinutes: session.durationMinutes,
+    capacityRequired: session.capacityRequired,
+    ...(session.roomId === undefined ? {} : { roomId: session.roomId }),
+    ...(session.trackId === undefined ? {} : { trackId: session.trackId }),
+    trackIds: clone(session.trackIds),
+    ...(session.formatId === undefined ? {} : { formatId: session.formatId }),
+    ...(session.levelId === undefined ? {} : { levelId: session.levelId }),
+    tagIds: clone(session.tagIds),
+    speakerIds: clone(session.speakerIds),
+    speakerRoster: clone(session.speakerRoster),
+    resourceIds: clone(session.resourceIds),
+  };
+}
+
+function ensuredSpeakerContentHistory(
+  profile: StoredSpeakerProfile,
+  tenantId: string,
+): SpeakerContentHistoryEntry[] {
+  const existing = speakerContentHistory(profile);
+  if (existing.length > 0) return existing;
+  const snapshot = speakerContentRecord(profile, tenantId);
+  return [
+    {
+      id: contentHistoryId(
+        tenantId,
+        profile.eventId,
+        "speaker",
+        profile.participantId,
+        profile.version,
+      ),
+      eventId: profile.eventId,
+      entityType: "speaker",
+      entityId: profile.participantId,
+      action: "created",
+      version: profile.version,
+      actorAccountId: snapshot.updatedBy,
+      occurredAt: profile.updatedAt,
+      snapshot,
+    },
+  ];
+}
+
+function contentHistoryId(
+  tenantId: string,
+  eventId: string,
+  entityType: "session" | "speaker",
+  entityId: string,
+  version: number,
+): string {
+  return `speaker-content-history:${tenantId}:${eventId}:${entityType}:${entityId}:v${version}`;
+}
+
+function speakerContentHistory(profile: StoredSpeakerProfile): SpeakerContentHistoryEntry[] {
+  return Array.isArray(profile.contentHistory)
+    ? profile.contentHistory.map((entry) => clone(entry))
+    : [];
+}
+
+function sessionContentHistory(session: Session): SpeakerContentHistoryEntry[] {
+  return session.history.flatMap((entry) => {
+    const snapshot = entry.snapshot;
+    if (snapshot === undefined) return [];
+    if (
+      entry.action !== "created" &&
+      entry.action !== "updated" &&
+      entry.action !== "restored" &&
+      entry.action !== "approved" &&
+      entry.action !== "needs_changes"
+    ) {
+      return [];
+    }
+    const content: SpeakerContentRecord = {
+      id: snapshot.id,
+      tenantId: snapshot.tenantId,
+      eventId: snapshot.eventId,
+      entityType: "session",
+      entityId: snapshot.id,
+      title: snapshot.title,
+      description: snapshot.description,
+      status: snapshot.contentStatus ?? snapshot.status,
+      version: entry.version,
+      updatedAt: entry.occurredAt,
+      updatedBy: entry.actorId,
+    };
+    return [
+      {
+        id: entry.id,
+        eventId: snapshot.eventId,
+        entityType: "session",
+        entityId: snapshot.id,
+        action: entry.action,
+        version: entry.version,
+        actorAccountId: entry.actorId,
+        ...(entry.actorLabel === undefined ? {} : { actorLabel: entry.actorLabel }),
+        occurredAt: entry.occurredAt,
+        snapshot: content,
+      },
+    ];
+  });
+}
 
 /** Speaker records and task state are business records in Airtable. */
 export class AirtableSpeakerRepository implements SpeakerRepository {
   readonly #submissions: AirtableJsonStore<SpeakerSubmission>;
   readonly #profiles: AirtableJsonStore<SpeakerProfile>;
   readonly #tasks: AirtableJsonStore<SpeakerTask>;
+  readonly #sessions: AirtableJsonStore<Session>;
   readonly #assets: AirtableJsonStore<SpeakerAsset>;
   readonly #database: D1Database;
   readonly #events: AirtableJsonStore<JsonRecord>;
@@ -1396,6 +1681,8 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
   readonly #resources: AirtableJsonStore<SpeakerEventResource & { tenantId?: string }>;
   readonly #wikiPages: AirtableJsonStore<SpeakerWikiPage & { tenantId?: string }>;
   readonly #decisions: AirtableJsonStore<JsonRecord>;
+  readonly #emailTemplates: AirtableJsonStore<JsonRecord>;
+  readonly #emailSnapshots: AirtableJsonStore<JsonRecord>;
 
   constructor(options: {
     readonly baseId: string;
@@ -1407,6 +1694,11 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       ...shared,
       table: "Events",
       jsonField: "Settings JSON",
+    });
+    this.#sessions = new AirtableJsonStore({
+      ...shared,
+      table: "Sessions",
+      jsonField: "Metadata JSON",
     });
     this.#roster = new AirtableJsonStore({
       ...shared,
@@ -1449,6 +1741,27 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       ...shared,
       table: "Decisions",
       jsonField: "Metadata JSON",
+    });
+    this.#emailTemplates = new AirtableJsonStore({
+      ...shared,
+      table: "Email Templates",
+      jsonField: "Settings JSON",
+      scopeFields: { eventId: true, organizationId: true },
+      indexedFields: {
+        Purpose: "purpose",
+        Status: "status",
+        Sender: "sender",
+      },
+    });
+    this.#emailSnapshots = new AirtableJsonStore({
+      ...shared,
+      table: "Email Send Snapshots",
+      jsonField: "Data JSON",
+      scopeFields: { eventId: true, organizationId: true },
+      indexedFields: {
+        Purpose: "purpose",
+        Status: "airtableStatus",
+      },
     });
     this.#profiles = new AirtableJsonStore({
       ...shared,
@@ -2325,7 +2638,6 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
           ? {}
           : { displayName }),
         ...(email.length === 0 || existing.email === email ? {} : { email }),
-        ...(existing.status === "accepted" ? {} : { status: "accepted" }),
       };
       if (
         updated.displayName === existing.displayName &&
@@ -2630,6 +2942,373 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     }
     await this.#profiles.update(profile.id, tagged(updated, "speaker_profile"));
     return { ok: true, value: clone(updated) };
+  }
+  async getContent(
+    eventId: string,
+    entityType: "session" | "speaker",
+    entityId: string,
+  ): Promise<SpeakerContentRecord | null> {
+    const event = await this.#events.find(eventId);
+    const tenantId = event === undefined ? undefined : resolvedOrganizationId(event);
+    if (tenantId === undefined) return null;
+
+    if (entityType === "session") {
+      const session = await this.#sessions.find(entityId);
+      if (
+        session === undefined ||
+        session.id !== entityId ||
+        session.eventId !== eventId ||
+        session.tenantId !== tenantId
+      ) {
+        return null;
+      }
+      return clone(sessionContentRecord(session));
+    }
+
+    const profile = await this.getProfile(eventId, entityId, tenantId);
+    if (profile === null || resolvedOrganizationId(profile) !== tenantId) return null;
+    return clone(speakerContentRecord(profile as StoredSpeakerProfile, tenantId));
+  }
+
+  async listContentHistory(
+    eventId: string,
+    entityType: "session" | "speaker",
+    entityId: string,
+  ): Promise<SpeakerContentHistoryEntry[]> {
+    const current = await this.getContent(eventId, entityType, entityId);
+    if (current === null || current.tenantId === undefined) return [];
+
+    const history =
+      entityType === "session"
+        ? await (async () => {
+            const session = await this.#sessions.find(entityId);
+            return session === undefined ? [] : sessionContentHistory(session);
+          })()
+        : await (async () => {
+            const profile = await this.#profiles.find(`speaker-profile:${eventId}:${entityId}`);
+            return profile === undefined
+              ? []
+              : speakerContentHistory(profile as StoredSpeakerProfile);
+          })();
+
+    return history
+      .filter(
+        (entry) =>
+          entry.eventId === eventId &&
+          entry.entityType === entityType &&
+          entry.entityId === entityId &&
+          Number.isSafeInteger(entry.version) &&
+          entry.version > 0 &&
+          entry.snapshot.tenantId === current.tenantId &&
+          entry.snapshot.eventId === eventId &&
+          entry.snapshot.entityType === entityType &&
+          entry.snapshot.entityId === entityId &&
+          entry.snapshot.version === entry.version,
+      )
+      .sort(
+        (left, right) =>
+          left.version - right.version || left.occurredAt.localeCompare(right.occurredAt),
+      )
+      .map((entry) => clone(entry));
+  }
+
+  async updateContent(
+    command: UpdateSpeakerContentCommand,
+  ): Promise<RepositoryResult<SpeakerContentRecord>> {
+    const event = await this.#events.find(command.eventId);
+    const tenantId = event === undefined ? undefined : resolvedOrganizationId(event);
+    if (tenantId === undefined) return { ok: false, reason: "not_found" };
+
+    if (command.entityType === "session") {
+      if (
+        command.biography !== undefined ||
+        command.socialLinks !== undefined ||
+        command.headshotAssetId !== undefined
+      ) {
+        return { ok: false, reason: "invalid_state" };
+      }
+      const current = await this.#sessions.find(command.entityId);
+      if (
+        current === undefined ||
+        current.id !== command.entityId ||
+        current.eventId !== command.eventId ||
+        current.tenantId !== tenantId
+      ) {
+        return { ok: false, reason: "not_found" };
+      }
+      if (current.version !== command.expectedVersion) {
+        return { ok: false, reason: "version_conflict" };
+      }
+
+      const requestedContentStatus =
+        command.status === "Approved" || command.status === "Needs changes"
+          ? command.status
+          : undefined;
+      const nextVersion = current.version + 1;
+      const nextBase: Session = {
+        ...current,
+        ...(command.title === undefined ? {} : { title: command.title }),
+        ...(command.description === undefined && command.abstract === undefined
+          ? {}
+          : { description: command.description ?? command.abstract ?? current.description }),
+        ...(command.status === undefined || requestedContentStatus !== undefined
+          ? {}
+          : { status: command.status }),
+        ...(requestedContentStatus === undefined ? {} : { contentStatus: requestedContentStatus }),
+        version: nextVersion,
+        updatedAt: command.updatedAt,
+        updatedBy: command.accountId,
+        history: clone(current.history),
+      };
+      const existingHistory = [...current.history];
+      if (!sessionContentHistory(current).some((entry) => entry.version === current.version)) {
+        existingHistory.push({
+          id: contentHistoryId(
+            tenantId,
+            command.eventId,
+            "session",
+            command.entityId,
+            current.version,
+          ),
+          action: "created",
+          version: current.version,
+          actorId: current.updatedBy,
+          occurredAt: current.updatedAt,
+          actorLabel: current.updatedBy,
+          snapshot: sessionContentSnapshotForHistory(current),
+        });
+      }
+      const action =
+        requestedContentStatus === "Approved"
+          ? "approved"
+          : requestedContentStatus === "Needs changes"
+            ? "needs_changes"
+            : "updated";
+      const updated: Session = {
+        ...nextBase,
+        history: [
+          ...existingHistory,
+          {
+            id: contentHistoryId(
+              tenantId,
+              command.eventId,
+              "session",
+              command.entityId,
+              nextVersion,
+            ),
+            action,
+            version: nextVersion,
+            actorId: command.accountId,
+            actorLabel: command.accountId,
+            occurredAt: command.updatedAt,
+            snapshot: sessionContentSnapshotForHistory(nextBase),
+          },
+        ],
+      };
+      await this.#sessions.update(current.id, updated);
+      return { ok: true, value: clone(sessionContentRecord(updated)) };
+    }
+
+    if (
+      command.title !== undefined ||
+      command.description !== undefined ||
+      command.abstract !== undefined
+    ) {
+      return { ok: false, reason: "invalid_state" };
+    }
+    const profile = await this.getProfile(command.eventId, command.entityId, tenantId);
+    if (profile === null || resolvedOrganizationId(profile) !== tenantId) {
+      return { ok: false, reason: "not_found" };
+    }
+    if (profile.version !== command.expectedVersion) {
+      return { ok: false, reason: "version_conflict" };
+    }
+    if (command.headshotAssetId !== undefined && command.headshotAssetId !== null) {
+      const asset = await this.getAsset(command.eventId, command.headshotAssetId);
+      if (
+        asset === null ||
+        asset.tenantId !== tenantId ||
+        asset.participantId !== command.entityId ||
+        asset.kind !== "headshot" ||
+        asset.state !== "ready"
+      ) {
+        return { ok: false, reason: "not_found" };
+      }
+    }
+
+    const stored = profile as StoredSpeakerProfile;
+    const nextVersion = stored.version + 1;
+    const updated: StoredSpeakerProfile = {
+      ...stored,
+      tenantId,
+      ...(command.biography === undefined ? {} : { biography: command.biography }),
+      ...(command.socialLinks === undefined ? {} : { socialLinks: clone(command.socialLinks) }),
+      ...(command.status === undefined ? {} : { status: command.status }),
+      version: nextVersion,
+      updatedAt: command.updatedAt,
+      updatedBy: command.accountId,
+    };
+    if (command.headshotAssetId === null) {
+      delete updated.headshotAssetId;
+    } else if (command.headshotAssetId !== undefined) {
+      updated.headshotAssetId = command.headshotAssetId;
+    }
+    const snapshot = speakerContentRecord(updated, tenantId);
+    updated.contentHistory = [
+      ...ensuredSpeakerContentHistory(stored, tenantId),
+      {
+        id: contentHistoryId(tenantId, command.eventId, "speaker", command.entityId, nextVersion),
+        eventId: command.eventId,
+        entityType: "speaker",
+        entityId: command.entityId,
+        action: "updated",
+        version: nextVersion,
+        actorAccountId: command.accountId,
+        actorLabel: command.accountId,
+        occurredAt: command.updatedAt,
+        snapshot,
+      },
+    ];
+    await this.#profiles.update(stored.id, tagged(updated, "speaker_profile"));
+    return { ok: true, value: clone(snapshot) };
+  }
+
+  async restoreContentVersion(
+    command: RestoreSpeakerContentVersionCommand,
+  ): Promise<RepositoryResult<SpeakerContentRecord>> {
+    const event = await this.#events.find(command.eventId);
+    const tenantId = event === undefined ? undefined : resolvedOrganizationId(event);
+    if (tenantId === undefined) return { ok: false, reason: "not_found" };
+
+    const current = await this.getContent(command.eventId, command.entityType, command.entityId);
+    if (current === null || current.tenantId !== tenantId) {
+      return { ok: false, reason: "not_found" };
+    }
+    if (command.expectedVersion === undefined || current.version !== command.expectedVersion) {
+      return { ok: false, reason: "version_conflict" };
+    }
+    const history = await this.listContentHistory(
+      command.eventId,
+      command.entityType,
+      command.entityId,
+    );
+    const target = history.find(
+      (entry) =>
+        entry.version === command.version &&
+        entry.snapshot.version === command.version &&
+        entry.snapshot.tenantId === tenantId &&
+        entry.snapshot.eventId === command.eventId &&
+        entry.snapshot.entityType === command.entityType &&
+        entry.snapshot.entityId === command.entityId,
+    );
+    if (target === undefined) return { ok: false, reason: "not_found" };
+
+    const nextVersion = current.version + 1;
+    if (command.entityType === "session") {
+      const session = await this.#sessions.find(command.entityId);
+      if (
+        session === undefined ||
+        session.eventId !== command.eventId ||
+        session.tenantId !== tenantId ||
+        session.version !== current.version
+      ) {
+        return { ok: false, reason: "version_conflict" };
+      }
+      const restoredStatus = target.snapshot.status;
+      const restoredContentStatus =
+        restoredStatus === "Approved" || restoredStatus === "Needs changes"
+          ? restoredStatus
+          : undefined;
+      const restoredBase: Session = {
+        ...session,
+        ...(target.snapshot.title === undefined ? {} : { title: target.snapshot.title }),
+        ...(target.snapshot.description === undefined
+          ? {}
+          : { description: target.snapshot.description }),
+        ...(restoredStatus === undefined || restoredContentStatus !== undefined
+          ? {}
+          : { status: restoredStatus }),
+        ...(restoredContentStatus === undefined ? {} : { contentStatus: restoredContentStatus }),
+        version: nextVersion,
+        updatedAt: command.updatedAt,
+        updatedBy: command.accountId,
+        history: clone(session.history),
+      };
+      const restored: Session = {
+        ...restoredBase,
+        history: [
+          ...session.history,
+          {
+            id: contentHistoryId(
+              tenantId,
+              command.eventId,
+              "session",
+              command.entityId,
+              nextVersion,
+            ),
+            action: "restored",
+            version: nextVersion,
+            actorId: command.accountId,
+            actorLabel: command.accountId,
+            occurredAt: command.updatedAt,
+            snapshot: sessionContentSnapshotForHistory(restoredBase),
+          },
+        ],
+      };
+      await this.#sessions.update(session.id, restored);
+      return { ok: true, value: clone(sessionContentRecord(restored)) };
+    }
+
+    const profile = await this.getProfile(command.eventId, command.entityId, tenantId);
+    if (
+      profile === null ||
+      resolvedOrganizationId(profile) !== tenantId ||
+      profile.version !== current.version
+    ) {
+      return { ok: false, reason: "version_conflict" };
+    }
+    const stored = profile as StoredSpeakerProfile;
+    const restored: StoredSpeakerProfile = {
+      ...stored,
+      tenantId,
+      biography: target.snapshot.biography ?? "",
+      version: nextVersion,
+      updatedAt: command.updatedAt,
+      updatedBy: command.accountId,
+    };
+    if (target.snapshot.socialLinks === undefined) {
+      delete restored.socialLinks;
+    } else {
+      restored.socialLinks = clone(target.snapshot.socialLinks);
+    }
+    if (target.snapshot.headshotAssetId === undefined) {
+      delete restored.headshotAssetId;
+    } else {
+      restored.headshotAssetId = target.snapshot.headshotAssetId;
+    }
+    if (target.snapshot.status === undefined) {
+      delete restored.status;
+    } else {
+      restored.status = target.snapshot.status;
+    }
+    const snapshot = speakerContentRecord(restored, tenantId);
+    restored.contentHistory = [
+      ...speakerContentHistory(stored),
+      {
+        id: contentHistoryId(tenantId, command.eventId, "speaker", command.entityId, nextVersion),
+        eventId: command.eventId,
+        entityType: "speaker",
+        entityId: command.entityId,
+        action: "restored",
+        version: nextVersion,
+        actorAccountId: command.accountId,
+        actorLabel: command.accountId,
+        occurredAt: command.updatedAt,
+        snapshot,
+      },
+    ];
+    await this.#profiles.update(stored.id, tagged(restored, "speaker_profile"));
+    return { ok: true, value: clone(snapshot) };
   }
 
   async listTasks(eventId: string, participantIds: readonly string[]): Promise<SpeakerTask[]> {
@@ -3002,6 +3681,194 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       })
       .map(({ tenantId: _tenantId, ...page }) => clone(page))
       .sort((left, right) => left.order - right.order || left.id.localeCompare(right.id));
+  }
+  async listSpeakerEmailTemplates(
+    organizationId: string,
+    eventId: string,
+  ): Promise<readonly SpeakerEmailTemplate[]> {
+    return (
+      await this.#emailTemplates.list({
+        filterByFormula: speakerEmailScopeFormula(organizationId, eventId),
+      })
+    )
+      .filter(
+        (value) =>
+          speakerEmailTemplateRecord(value) && scopedRecord(value, organizationId, eventId),
+      )
+      .map((value) => clone(normalizeSpeakerEmailRecord<SpeakerEmailTemplate>(value, true)))
+      .sort((left, right) => left.id.localeCompare(right.id) || left.version - right.version);
+  }
+
+  async saveSpeakerEmailTemplate(template: SpeakerEmailTemplate): Promise<SpeakerEmailTemplate> {
+    const physicalId = speakerEmailTemplatePhysicalId(template);
+    if ((await this.#emailTemplates.find(physicalId)) !== undefined) {
+      throw new AirtableRepositoryError(
+        "DUPLICATE_APPLICATION_ID",
+        "This immutable speaker email template version already exists.",
+      );
+    }
+    await this.#emailTemplates.create(
+      tagged(
+        { ...clone(template), id: physicalId } as unknown as JsonRecord,
+        "speaker_email_template",
+      ),
+    );
+    return clone(template);
+  }
+
+  async getSpeakerEmailPreview(
+    organizationId: string,
+    eventId: string,
+    previewId: string,
+  ): Promise<SpeakerEmailPreview | null> {
+    const value = await this.#emailSnapshots.find(previewId);
+    return value !== undefined &&
+      speakerEmailPreviewRecord(value) &&
+      scopedRecord(value, organizationId, eventId)
+      ? clone(normalizeSpeakerEmailRecord<SpeakerEmailPreview>(value))
+      : null;
+  }
+
+  async saveSpeakerEmailPreview(preview: SpeakerEmailPreview): Promise<SpeakerEmailPreview> {
+    const stored = tagged(clone(preview) as unknown as JsonRecord, "speaker_email_preview");
+    const existing = await this.#emailSnapshots.find(preview.id);
+    if (
+      existing !== undefined &&
+      speakerEmailPreviewRecord(existing) &&
+      scopedRecord(existing, preview.organizationId, preview.eventId)
+    ) {
+      await this.#emailSnapshots.update(preview.id, stored);
+    } else if (existing === undefined) {
+      await this.#emailSnapshots.create(stored);
+    } else {
+      throw new AirtableRepositoryError(
+        "DUPLICATE_APPLICATION_ID",
+        "A speaker email preview already uses this application ID outside the requested scope.",
+      );
+    }
+    return clone(preview);
+  }
+
+  async listSpeakerEmailSends(
+    organizationId: string,
+    eventId: string,
+  ): Promise<readonly SpeakerEmailSend[]> {
+    return (
+      await this.#emailSnapshots.list({
+        filterByFormula: speakerEmailScopeFormula(organizationId, eventId),
+      })
+    )
+      .filter(
+        (value) => speakerEmailSendRecord(value) && scopedRecord(value, organizationId, eventId),
+      )
+      .map((value) => clone(normalizeSpeakerEmailRecord<SpeakerEmailSend>(value)))
+      .sort(
+        (left, right) =>
+          right.createdAt.localeCompare(left.createdAt) || left.id.localeCompare(right.id),
+      );
+  }
+
+  async getSpeakerEmailSend(
+    organizationId: string,
+    eventId: string,
+    sendId: string,
+  ): Promise<SpeakerEmailSend | null> {
+    const value = await this.#emailSnapshots.find(sendId);
+    return value !== undefined &&
+      speakerEmailSendRecord(value) &&
+      scopedRecord(value, organizationId, eventId)
+      ? clone(normalizeSpeakerEmailRecord<SpeakerEmailSend>(value))
+      : null;
+  }
+
+  async saveSpeakerEmailSend(send: SpeakerEmailSend): Promise<SpeakerEmailSend> {
+    const stored = tagged(
+      {
+        ...clone(send),
+        airtableStatus: send.status === "sent" ? "delivered" : send.status,
+      } as unknown as JsonRecord,
+      "speaker_email_send",
+    );
+    const existing = await this.#emailSnapshots.find(send.id);
+    if (
+      existing !== undefined &&
+      speakerEmailSendRecord(existing) &&
+      scopedRecord(existing, send.organizationId, send.eventId)
+    ) {
+      await this.#emailSnapshots.update(send.id, stored);
+    } else if (existing === undefined) {
+      const scope = `speaker-email-send:${send.eventId}`;
+      const now = new Date();
+      const expiresAt = new Date(now.getTime() + 86_400_000).toISOString();
+      await this.#database
+        .prepare(
+          `DELETE FROM idempotency_records
+            WHERE tenant_id = ? AND scope = ? AND idempotency_key = ? AND expires_at <= ?`,
+        )
+        .bind(send.organizationId, scope, send.idempotencyKey, now.toISOString())
+        .run();
+      const claim = await this.#database
+        .prepare(
+          `INSERT INTO idempotency_records
+             (tenant_id, scope, idempotency_key, request_digest, state, created_at, expires_at)
+           VALUES (?, ?, ?, ?, 'processing', ?, ?)
+           ON CONFLICT (tenant_id, scope, idempotency_key) DO NOTHING`,
+        )
+        .bind(
+          send.organizationId,
+          scope,
+          send.idempotencyKey,
+          send.id,
+          now.toISOString(),
+          expiresAt,
+        )
+        .run();
+      const claimed = claim.meta?.changes === undefined || claim.meta.changes > 0;
+      if (!claimed) {
+        for (let attempt = 0; attempt < 40; attempt += 1) {
+          const claimedSend = await this.#emailSnapshots.find(send.id);
+          if (
+            claimedSend !== undefined &&
+            speakerEmailSendRecord(claimedSend) &&
+            scopedRecord(claimedSend, send.organizationId, send.eventId)
+          ) {
+            return clone(normalizeSpeakerEmailRecord<SpeakerEmailSend>(claimedSend));
+          }
+          await new Promise<void>((resolve) => setTimeout(resolve, 50));
+        }
+        throw new AirtableRepositoryError(
+          "REQUEST_FAILED",
+          "The existing speaker email send is still being persisted.",
+          { retryable: true },
+        );
+      }
+      try {
+        await this.#emailSnapshots.create(stored);
+        await this.#database
+          .prepare(
+            `UPDATE idempotency_records
+                SET state = 'completed'
+              WHERE tenant_id = ? AND scope = ? AND idempotency_key = ? AND request_digest = ?`,
+          )
+          .bind(send.organizationId, scope, send.idempotencyKey, send.id)
+          .run();
+      } catch (error) {
+        await this.#database
+          .prepare(
+            `DELETE FROM idempotency_records
+              WHERE tenant_id = ? AND scope = ? AND idempotency_key = ? AND request_digest = ?`,
+          )
+          .bind(send.organizationId, scope, send.idempotencyKey, send.id)
+          .run();
+        throw error;
+      }
+    } else {
+      throw new AirtableRepositoryError(
+        "DUPLICATE_APPLICATION_ID",
+        "A speaker email send already uses this application ID outside the requested scope.",
+      );
+    }
+    return clone(send);
   }
 }
 
@@ -7751,13 +8618,15 @@ export class AirtableCrmRepository implements CrmRepository {
     if (eventRepository !== undefined && event === null) {
       throw new CrmRepositoryConflictError("The event does not belong to this organization.");
     }
-    const context = { contact: authoritativeContact, event };
-    if (existing !== null) {
-      await this.#projectCanonicalSpeaker(organization, existing, context);
-      return clone(existing);
-    }
+    if (existing !== null) return clone(existing);
+    const canonicalRelationship = await this.#findCanonicalSpeakerRelationship(
+      organization,
+      eventId,
+      authoritativeContact,
+    );
     const stored: CrmEventProjection = {
       ...clone(projection),
+      id: canonicalRelationship ? `event-contact:existing:${eventId}:${contactId}` : projection.id,
       organizationId: organization,
       eventId,
       contactId,
@@ -7766,15 +8635,17 @@ export class AirtableCrmRepository implements CrmRepository {
       await this.#projections.create(stored);
     } catch (error) {
       const concurrent = await this.#findProjection(organization, eventId, contactId);
-      if (concurrent !== null) {
-        await this.#projectCanonicalSpeaker(organization, concurrent, context);
-        return clone(concurrent);
-      }
+      if (concurrent !== null) return clone(concurrent);
       throw new CrmRepositoryConflictError(
         error instanceof Error ? error.message : "The event projection could not be saved.",
       );
     }
-    await this.#projectCanonicalSpeaker(organization, stored, context);
+    if (!canonicalRelationship) {
+      await this.#projectCanonicalSpeaker(organization, stored, {
+        contact: authoritativeContact,
+        event,
+      });
+    }
     return clone(stored);
   }
 
@@ -8020,6 +8891,76 @@ export class AirtableCrmRepository implements CrmRepository {
     return projection === undefined ? null : clone(projection);
   }
 
+  async #findCanonicalSpeakerRelationship(
+    organizationId: string,
+    eventId: string,
+    contact: CrmContact,
+  ): Promise<boolean> {
+    const profileId = crmStableCustomId(contact, [
+      "canonicalSpeakerProfileId",
+      "speakerProfileId",
+      "speaker_profile_id",
+    ]);
+    const explicitProfile =
+      profileId === null ? undefined : await this.#speakerProfiles.find(profileId);
+    const participantId =
+      crmStableCustomId(contact, [
+        "canonicalParticipantId",
+        "speakerParticipantId",
+        "participantId",
+        "participant_id",
+      ]) ??
+      explicitProfile?.participantId ??
+      contact.id;
+    if (
+      explicitProfile !== undefined &&
+      (explicitProfile.eventId !== eventId || explicitProfile.participantId !== participantId)
+    ) {
+      throw new CrmRepositoryConflictError(
+        "The contact speaker profile identity does not match this event relationship.",
+      );
+    }
+    const [profiles, roster] = await Promise.all([
+      this.#speakerProfiles.list({
+        filterByFormula: jsonContainsAllFormula("Biography", [participantId]),
+      }),
+      this.#speakerRoster.list({
+        filterByFormula: jsonContainsAllFormula("Members JSON", [participantId]),
+      }),
+    ]);
+    const profileMatches = [
+      ...(explicitProfile === undefined ? [] : [explicitProfile]),
+      ...profiles.filter(
+        (profile) => profile.eventId === eventId && profile.participantId === participantId,
+      ),
+    ].filter(
+      (profile, index, values) =>
+        values.findIndex((candidate) => candidate.id === profile.id) === index,
+    );
+    const rosterMatches = roster.filter(
+      (entry) => entry.eventId === eventId && entry.participantId === participantId,
+    );
+    for (const value of [...profileMatches, ...rosterMatches]) {
+      const scope = resolveOrganizationScope(value);
+      if (scope.status === "conflict") {
+        throw new CrmRepositoryConflictError(
+          "The canonical speaker relationship has conflicting tenant data.",
+        );
+      }
+      if (scope.status === "resolved" && scope.organizationId !== organizationId) {
+        throw new CrmRepositoryConflictError(
+          "The canonical speaker relationship belongs to another organization.",
+        );
+      }
+    }
+    if (profileMatches.length > 1) {
+      throw new CrmRepositoryConflictError(
+        "The contact has multiple canonical speaker profiles for this event.",
+      );
+    }
+    return profileMatches.length === 1 || rosterMatches.length > 0;
+  }
+
   async #findOutreach(
     organizationId: string,
     idempotencyKey: string,
@@ -8196,6 +9137,21 @@ function crmSocialLinks(value: unknown): Readonly<Record<string, string>> {
   }
   return Object.fromEntries(entries);
 }
+
+function crmStableCustomId(contact: CrmContact, fields: readonly string[]): string | null {
+  const values = fields
+    .map((field) => contact.customFields?.[field])
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+  const unique = [...new Set(values)];
+  if (unique.length > 1) {
+    throw new CrmRepositoryConflictError(
+      "The contact contains conflicting canonical speaker identities.",
+    );
+  }
+  return unique[0] ?? null;
+}
 function crmNestedTenant(value: unknown, organizationId: string): void {
   const visited = new Set<object>();
   const visit = (candidate: unknown): void => {
@@ -8354,7 +9310,7 @@ function speakerDeliveryHtml(value: string): string {
 }
 
 async function speakerDeliveryKey(
-  kind: "invitation" | "reminder",
+  kind: "email" | "invitation" | "reminder",
   organizationId: string,
   eventId: string,
   idempotencyKey: string,
@@ -8368,14 +9324,55 @@ async function speakerDeliveryKey(
   return `speaker-${kind}:${[...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
-export class AirtableSpeakerReminderDeliveryAdapter implements SpeakerReminderDelivery {
+export class AirtableSpeakerReminderDeliveryAdapter
+  implements SpeakerReminderDelivery, SpeakerEmailDelivery
+{
   constructor(
     private readonly database: D1Database,
     private readonly outboxQueue: Queue<CloudflareOutboxMessage>,
+    private readonly webOrigin: string,
   ) {}
 
   enqueue(input: SpeakerReminderDeliveryInput): Promise<SpeakerReminderDeliveryReceipt> {
     return this.enqueueReminder(input);
+  }
+  async enqueueEmail(input: SpeakerEmailDeliveryInput): Promise<SpeakerEmailDeliveryReceipt> {
+    const recipientEmail = await this.verifiedRecipientEmail(input.recipientEmail);
+    if (recipientEmail === null) {
+      return { status: "failed", reason: "The speaker email recipient is unavailable." };
+    }
+    const deliveryKey = await speakerDeliveryKey(
+      "email",
+      input.organizationId,
+      input.eventId,
+      input.idempotencyKey,
+      input.participantId,
+    );
+    const result = await enqueueCloudflareOutbox({
+      database: this.database,
+      queue: this.outboxQueue,
+      tenantId: input.organizationId,
+      topic: "communications",
+      deduplicationKey: deliveryKey,
+      payload: {
+        from: input.sender,
+        to: [recipientEmail],
+        subject: input.subject,
+        html: input.html,
+        text: input.text,
+        idempotencyKey: deliveryKey,
+        eventId: input.eventId,
+        participantId: input.participantId,
+        templateId: input.templateId,
+        templateVersion: input.templateVersion,
+        actorAccountId: input.actorAccountId,
+      },
+    });
+    return { status: "queued", duplicate: !result.inserted };
+  }
+
+  queueEmail(input: SpeakerEmailDeliveryInput): Promise<SpeakerEmailDeliveryReceipt> {
+    return this.enqueueEmail(input);
   }
 
   queue(input: SpeakerReminderDeliveryInput): Promise<SpeakerReminderDeliveryReceipt> {
@@ -8397,6 +9394,11 @@ export class AirtableSpeakerReminderDeliveryAdapter implements SpeakerReminderDe
   ): Promise<SpeakerInvitationDeliveryReceipt> {
     const recipientEmail = await this.verifiedRecipientEmail(input.recipientEmail);
     if (recipientEmail === null) return { status: "failed" };
+    const portalPath = "/portal";
+    const invitationUrl = new URL("/login", this.webOrigin);
+    invitationUrl.searchParams.set("next", portalPath);
+    const invitationHref = invitationUrl.toString();
+    const escapedInvitationHref = speakerDeliveryHtml(invitationHref);
     const deliveryKey = await speakerDeliveryKey(
       "invitation",
       input.organizationId,
@@ -8414,8 +9416,8 @@ export class AirtableSpeakerReminderDeliveryAdapter implements SpeakerReminderDe
         from: DEFAULT_OPEN_SEND_SENDERS.speakers,
         to: [recipientEmail],
         subject: `Speaker invitation for ${input.eventId}`,
-        html: `<p>You are invited to participate as a speaker.</p><p>Template: <strong>${speakerDeliveryHtml(input.templateId)}</strong></p>`,
-        text: `You are invited to participate as a speaker for ${input.eventId}. Template: ${input.templateId}`,
+        html: `<p>You are invited to participate as a speaker for <strong>${speakerDeliveryHtml(input.eventId)}</strong>.</p><p><a href="${escapedInvitationHref}">Sign in to the speaker portal</a></p>`,
+        text: `You are invited to participate as a speaker for ${input.eventId}. Sign in to the speaker portal: ${invitationHref}`,
         idempotencyKey: deliveryKey,
         eventId: input.eventId,
         participantId: input.participantId,
@@ -8447,10 +9449,16 @@ export class AirtableSpeakerReminderDeliveryAdapter implements SpeakerReminderDe
       input.idempotencyKey,
       input.recipient.participantId,
     );
-    const titles = input.recipient.tasks
-      .map((task) => task.title.trim())
-      .filter((title) => title.length > 0);
-    const taskSummary = titles.length === 0 ? "your outstanding speaker tasks" : titles.join(", ");
+    const taskSummaries = input.recipient.tasks
+      .map((task) => {
+        const title = task.title.trim();
+        if (title.length === 0) return "";
+        const dueAt = task.dueAt?.trim() ?? "";
+        return dueAt.length === 0 ? title : `${title} (due ${dueAt})`;
+      })
+      .filter((summary) => summary.length > 0);
+    const taskSummary =
+      taskSummaries.length === 0 ? "your outstanding speaker tasks" : taskSummaries.join(", ");
     const escapedSummary = speakerDeliveryHtml(taskSummary);
     const result = await enqueueCloudflareOutbox({
       database: this.database,
@@ -8890,7 +9898,7 @@ function eventIdFromRequest(request: Request): string | undefined {
   return queryId === undefined || queryId.length === 0 ? undefined : queryId;
 }
 
-class AirtableEvaluationDecisionProjection {
+export class AirtableEvaluationDecisionProjection {
   constructor(
     private readonly cfp: AirtableCfpRepository,
     private readonly database: D1Database,
@@ -8906,6 +9914,20 @@ class AirtableEvaluationDecisionProjection {
     if (recipients.length === 0) return;
     const templatePurpose = input.communication.templatePurpose;
     const idempotencyKey = `decision:${input.idempotencyKey}`;
+    const title = submissionTitle(submission);
+    const participantNames = submissionParticipants(submission)
+      .map((participant) => `${participant.firstName} ${participant.lastName}`.trim())
+      .filter((name) => name.length > 0);
+    const contextText = [
+      `Event ID: ${input.eventId}`,
+      `Submission: ${title}`,
+      ...(participantNames.length > 0 ? [`Participants: ${participantNames.join(", ")}`] : []),
+    ].join("\n");
+    const contextHtml = contextText
+      .split("\n")
+      .map((line) => `<div>${escapeCfpReceiptHtml(line)}</div>`)
+      .join("");
+    const statusText = `Decision: ${input.status}`;
     await enqueueCloudflareOutbox({
       database: this.database,
       queue: this.queue,
@@ -8915,9 +9937,9 @@ class AirtableEvaluationDecisionProjection {
       payload: {
         from: DEFAULT_OPEN_SEND_SENDERS.speakers,
         to: recipients,
-        subject: `Session application ${input.status}`,
-        html: `<p>Your session application was ${input.status}.</p>`,
-        text: `Your session application was ${input.status}.`,
+        subject: `${input.eventId} — ${title} — ${input.status}`,
+        html: `${contextHtml}<div>${escapeCfpReceiptHtml(statusText)}</div>`,
+        text: `${contextText}\n${statusText}`,
         idempotencyKey,
         purpose: "decision",
         templatePurpose,
@@ -9089,8 +10111,14 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
     options.webOrigin,
     options.database,
   );
+  const speakerDelivery = new AirtableSpeakerReminderDeliveryAdapter(
+    options.database,
+    options.outboxQueue,
+    options.webOrigin,
+  );
   const speakerService = new SpeakerService(speakerRepository, privateAssets, {
-    delivery: new AirtableSpeakerReminderDeliveryAdapter(options.database, options.outboxQueue),
+    delivery: speakerDelivery,
+    emailDelivery: speakerDelivery,
   });
   const cfpService = new CfpService({
     repository: cfpRepository,
@@ -9289,7 +10317,10 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
     jsonField: "Settings JSON",
   });
   const webhooks = new AirtableWebhookRepository(shared);
-  const publishedSpeakerProjections = new AirtablePublishedSpeakerProjectionStore(shared);
+  const publishedSpeakerProjections = new AirtablePublishedSpeakerProjectionStore({
+    ...shared,
+    privateFiles: options.privateFiles,
+  });
   const organizerOverview = new AirtableOrganizerOverviewRepository(shared);
 
   const organizerMembership = async (
@@ -9429,7 +10460,10 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
           publishedSessionIds.has(session.id),
         );
         const participantIds = [...new Set(sessions.flatMap((session) => session.participantIds))];
-        const profiles = await speakerRepository.listProfiles(eventId, participantIds);
+        const [profiles, assets] = await Promise.all([
+          speakerRepository.listProfiles(eventId, participantIds),
+          speakerRepository.listAssets(eventId, participantIds),
+        ]);
         const entriesBySessionId = new Map(
           revision.entries.map((entry) => [entry.sessionId, entry]),
         );
@@ -9451,6 +10485,40 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
           }
         }
 
+        const headshotsBySpeakerId = new Map<string, PublishedSpeakerHeadshotBinding>();
+        for (const profile of profiles) {
+          if (profile.headshotAssetId === undefined) continue;
+          const asset = assets.find(
+            (candidate) =>
+              candidate.id === profile.headshotAssetId &&
+              candidate.tenantId === organizationId &&
+              candidate.eventId === eventId &&
+              candidate.participantId === profile.participantId &&
+              candidate.kind === "headshot" &&
+              candidate.state === "ready" &&
+              candidate.reviewState === "approved",
+          );
+          if (asset === undefined) continue;
+          const contentType = publishedHeadshotContentType(asset.contentType);
+          if (
+            contentType === null ||
+            asset.sizeBytes <= 0 ||
+            !Number.isSafeInteger(asset.sizeBytes)
+          ) {
+            continue;
+          }
+          headshotsBySpeakerId.set(profile.participantId, {
+            speakerId: profile.participantId,
+            tenantId: organizationId,
+            eventId,
+            assetId: asset.id,
+            objectKey: asset.objectKey,
+            fileName: asset.fileName,
+            contentType,
+            sizeBytes: asset.sizeBytes,
+          });
+        }
+
         await publishedSpeakerProjections.putPublishedSpeakers({
           id: `published-speakers:${organizationId}:${eventId}`,
           organizationId,
@@ -9459,6 +10527,7 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
           revisionId: revision.id,
           revisionNumber: revision.revisionNumber,
           publishedAt: revision.publishedAt,
+          headshots: [...headshotsBySpeakerId.values()],
           event: {
             slug: rawEvent.slug,
             name: rawEvent.name,
@@ -9488,7 +10557,9 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
                 jobTitle: profile.jobTitle ?? null,
                 organization: profile.company ?? null,
                 biography: profile.biography,
-                photoUrl: null,
+                photoUrl: headshotsBySpeakerId.has(profile.participantId)
+                  ? publishedSpeakerPhotoPath(rawEvent.slug, profile.participantId)
+                  : null,
                 sessionIds: speakerSessions.map((session) => session.id),
                 sessionTitles: speakerSessions.map((session) => session.title),
                 trackNames: [

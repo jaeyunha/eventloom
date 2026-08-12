@@ -70,6 +70,9 @@ export interface ReviewAssignment {
   comment?: string;
   conflict?: string;
 }
+export type SubmittedReviewReadState =
+  | { readonly status: "ready"; readonly count: number }
+  | { readonly status: "error"; readonly message: string };
 
 export interface SubmissionRecord {
   eventId: string;
@@ -94,6 +97,8 @@ export interface SubmissionRecord {
     recommendation: string;
   };
   reviewAssignments: ReviewAssignment[];
+  submittedReviewRead?: SubmittedReviewReadState;
+
   organizerNotes: string;
   reopenAudit: { at: string; organizer: string; reason: string }[];
   evaluationPlanId?: string;
@@ -522,10 +527,7 @@ async function canonicalSubmissionRequest<T>(
 }
 
 function localDemoEnabled(): boolean {
-  return (
-    process.env.NEXT_PUBLIC_APP_ENV === "local" ||
-    (process.env.NEXT_PUBLIC_APP_ENV !== "production" && process.env.NODE_ENV === "test")
-  );
+  return process.env.NODE_ENV === "test" || process.env.NEXT_PUBLIC_RUNTIME_PROFILE === "fixture";
 }
 interface SubmissionFieldOption {
   readonly value: string;
@@ -816,6 +818,10 @@ interface SubmittedReview {
   readonly comment: string;
   readonly scores: Readonly<Record<string, { readonly value: number | string }>>;
 }
+interface SubmittedReviewResult {
+  readonly reviews: readonly SubmittedReview[];
+  readonly error: string | null;
+}
 
 function rubricCriterionLabel(criterionId: string): string {
   return criterionId
@@ -870,11 +876,17 @@ export async function enrichCanonicalSubmission(
           `/plans/${encodeURIComponent(plan.id)}/rounds/${encodeURIComponent(round.id)}/submissions/${encodeURIComponent(submission.id)}/aggregate`,
         ).catch(() => null),
     round === undefined
-      ? Promise.resolve({ reviews: [] as readonly SubmittedReview[] })
+      ? Promise.resolve<SubmittedReviewResult>({ reviews: [], error: null })
       : evaluationRequest<{ reviews: readonly SubmittedReview[] }>(
           baseUrl,
           `/plans/${encodeURIComponent(plan.id)}/rounds/${encodeURIComponent(round.id)}/submissions/${encodeURIComponent(submission.id)}/reviews`,
-        ).catch(() => ({ reviews: [] })),
+        )
+          .then(({ reviews }) => ({ reviews, error: null }))
+          .catch((reason: unknown) => ({
+            reviews: [],
+            error:
+              reason instanceof Error ? reason.message : "Submitted reviews could not be loaded.",
+          })),
   ]);
 
   const assignments = assignmentResult.assignments.filter(
@@ -921,6 +933,11 @@ export async function enrichCanonicalSubmission(
         ? `${decision.status[0]?.toLocaleUpperCase() ?? ""}${decision.status.slice(1)}`
         : "Awaiting human decision",
     },
+    submittedReviewRead:
+      submittedReviewResult.error === null
+        ? { status: "ready", count: submittedReviewByAssignment.size }
+        : { status: "error", message: submittedReviewResult.error },
+
     reviewAssignments: assignments.map((assignment) => {
       const submittedReview = submittedReviewByAssignment.get(assignment.id);
       return {
@@ -1835,6 +1852,7 @@ export function SubmissionDetailWorkspace({
   );
   const [loading, setLoading] = useState(!localDemoEnabled());
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [reloadVersion, setReloadVersion] = useState(0);
 
   useEffect(() => {
     if (localDemoEnabled()) return;
@@ -1846,11 +1864,17 @@ export function SubmissionDetailWorkspace({
         active = false;
       };
     }
+    setLoading(true);
+    setLoadError(null);
+    const controller = new AbortController();
+
     void canonicalSubmissionRequest<readonly CanonicalSubmissionEnvelope[]>(
       baseUrl,
       organizationId,
       eventId,
+      { signal: controller.signal },
     )
+
       .then((records) => {
         if (!active) return null;
         const envelope = records.find((candidate) => candidate.submission.id === submissionId);
@@ -1871,8 +1895,9 @@ export function SubmissionDetailWorkspace({
       });
     return () => {
       active = false;
+      controller.abort(`Submission load attempt ${reloadVersion} was superseded.`);
     };
-  }, [baseUrl, eventId, organizationId, submissionId]);
+  }, [baseUrl, eventId, organizationId, reloadVersion, submissionId]);
 
   if (loading) {
     return (
@@ -1899,6 +1924,11 @@ export function SubmissionDetailWorkspace({
       </div>
     );
   }
+  const submittedReviewRead = submission.submittedReviewRead ?? {
+    status: "ready",
+    count: submission.reviewAssignments.filter((assignment) => assignment.status === "complete")
+      .length,
+  };
 
   return (
     <div className={styles.workspaceRoot}>
@@ -2048,6 +2078,20 @@ export function SubmissionDetailWorkspace({
                 total={submission.reviewSummary.total}
                 label="Completed reviews"
               />
+              {submittedReviewRead.status === "error" ? (
+                <div className={styles.auditCallout} role="alert">
+                  <p>Submitted reviews could not be loaded: {submittedReviewRead.message}</p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setReloadVersion((current) => current + 1)}
+                  >
+                    Retry submitted reviews
+                  </Button>
+                </div>
+              ) : submittedReviewRead.count === 0 ? (
+                <p className={styles.mutedText}>No submitted reviews yet.</p>
+              ) : null}
               <ul className={styles.assignmentList}>
                 {submission.reviewAssignments.map((assignment) => (
                   <li key={assignment.reviewer}>

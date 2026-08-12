@@ -991,32 +991,43 @@ export class SessionService {
       (contentChanged
         ? "Needs changes"
         : (currentContentStatus ?? (sameStatus(nextStatus, "Accepted") ? "Approved" : undefined)));
-    const normalized = await this.normalizeSessionReferences(actor.tenantId, eventId, {
+    const referenceInput: Partial<CreateSessionInput> & { eventId: string } = { eventId };
+    if (input.roomId !== undefined) referenceInput.roomId = input.roomId;
+    if (input.trackId !== undefined) referenceInput.trackId = input.trackId;
+    if (input.trackIds !== undefined) referenceInput.trackIds = input.trackIds;
+    if (input.formatId !== undefined) referenceInput.formatId = input.formatId;
+    if (input.levelId !== undefined) referenceInput.levelId = input.levelId;
+    if (input.tagIds !== undefined) referenceInput.tagIds = input.tagIds;
+    if (input.speakerIds !== undefined) referenceInput.speakerIds = input.speakerIds;
+    if (input.speakerRoster !== undefined) referenceInput.speakerRoster = input.speakerRoster;
+    if (input.resourceIds !== undefined) referenceInput.resourceIds = input.resourceIds;
+    const normalized = await this.normalizeSessionReferences(
+      actor.tenantId,
       eventId,
-      ...(input.roomId === undefined ? { roomId: current.roomId } : { roomId: input.roomId }),
-      ...(input.trackId === undefined ? { trackId: current.trackId } : { trackId: input.trackId }),
-      ...(input.trackIds === undefined
-        ? input.trackId === null
-          ? { trackIds: [] }
-          : input.trackId === undefined
-            ? { trackIds: current.trackIds }
-            : { trackIds: [input.trackId] }
-        : { trackIds: input.trackIds }),
-      ...(input.formatId === undefined
-        ? { formatId: current.formatId }
-        : { formatId: input.formatId }),
-      ...(input.levelId === undefined ? { levelId: current.levelId } : { levelId: input.levelId }),
-      ...(input.tagIds === undefined ? { tagIds: current.tagIds } : { tagIds: input.tagIds }),
-      ...(input.speakerIds === undefined
-        ? { speakerIds: current.speakerIds }
-        : { speakerIds: input.speakerIds }),
-      ...(input.speakerRoster === undefined
-        ? { speakerRoster: current.speakerRoster }
-        : { speakerRoster: input.speakerRoster }),
-      ...(input.resourceIds === undefined
-        ? { resourceIds: current.resourceIds }
-        : { resourceIds: input.resourceIds }),
-    } as unknown as Partial<CreateSessionInput> & { eventId: string });
+      referenceInput,
+    );
+    const trackReferencesSupplied = input.trackId !== undefined || input.trackIds !== undefined;
+    const speakerReferencesSupplied =
+      input.speakerIds !== undefined || input.speakerRoster !== undefined;
+    const nextTrackIds = trackReferencesSupplied ? normalized.trackIds : [...current.trackIds];
+    const nextTrackId = trackReferencesSupplied ? nextTrackIds[0] : current.trackId;
+    const nextSpeakerIds = speakerReferencesSupplied
+      ? normalized.speakerIds
+      : [...current.speakerIds];
+    const nextSpeakerRoster = !speakerReferencesSupplied
+      ? current.speakerRoster.map((reference) => ({ ...reference }))
+      : input.speakerRoster === undefined
+        ? nextSpeakerIds.map((id) => {
+            const currentReference = current.speakerRoster.find((reference) => reference.id === id);
+            return currentReference === undefined ? { id } : { ...currentReference };
+          })
+        : normalized.speakerRoster;
+    const nextRoomId = input.roomId === undefined ? current.roomId : normalized.roomId;
+    const nextFormatId = input.formatId === undefined ? current.formatId : normalized.formatId;
+    const nextLevelId = input.levelId === undefined ? current.levelId : normalized.levelId;
+    const nextTagIds = input.tagIds === undefined ? [...current.tagIds] : normalized.tagIds;
+    const nextResourceIds =
+      input.resourceIds === undefined ? [...current.resourceIds] : normalized.resourceIds;
     const candidate: Session = {
       ...current,
       title: nextTitle,
@@ -1030,23 +1041,23 @@ export class SessionService {
         input.capacityRequired === undefined
           ? current.capacityRequired
           : capacity(input.capacityRequired),
-      ...(normalized.roomId === undefined ? {} : { roomId: normalized.roomId }),
-      ...(normalized.trackIds[0] === undefined ? {} : { trackId: normalized.trackIds[0] }),
-      trackIds: normalized.trackIds,
-      ...(normalized.formatId === undefined ? {} : { formatId: normalized.formatId }),
-      ...(normalized.levelId === undefined ? {} : { levelId: normalized.levelId }),
-      tagIds: normalized.tagIds,
-      speakerIds: normalized.speakerIds,
-      speakerRoster: normalized.speakerRoster,
-      resourceIds: normalized.resourceIds,
+      ...(nextRoomId === undefined ? {} : { roomId: nextRoomId }),
+      ...(nextTrackId === undefined ? {} : { trackId: nextTrackId }),
+      trackIds: nextTrackIds,
+      ...(nextFormatId === undefined ? {} : { formatId: nextFormatId }),
+      ...(nextLevelId === undefined ? {} : { levelId: nextLevelId }),
+      tagIds: nextTagIds,
+      speakerIds: nextSpeakerIds,
+      speakerRoster: nextSpeakerRoster,
+      resourceIds: nextResourceIds,
       ...(nextContentStatus === undefined ? {} : { contentStatus: nextContentStatus }),
       history: orderedSessionHistory(current.history),
     };
     if (candidate.contentStatus === undefined) delete candidate.contentStatus;
-    if (normalized.roomId === undefined) delete candidate.roomId;
-    if (normalized.formatId === undefined) delete candidate.formatId;
-    if (normalized.levelId === undefined) delete candidate.levelId;
-    if (normalized.trackIds[0] === undefined) delete candidate.trackId;
+    if (nextRoomId === undefined) delete candidate.roomId;
+    if (nextFormatId === undefined) delete candidate.formatId;
+    if (nextLevelId === undefined) delete candidate.levelId;
+    if (nextTrackId === undefined) delete candidate.trackId;
     if (acceptedSessionFieldsEqual(current, candidate)) return sessionProjection(current);
 
     const now = this.instant();

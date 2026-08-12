@@ -88,7 +88,10 @@ export type SpeakerServiceErrorCode =
   | "CAPABILITY_EXPIRED"
   | "CAPABILITY_REPLAY"
   | "REMINDER_UNAVAILABLE"
-  | "CONTENT_UNAVAILABLE";
+  | "CONTENT_UNAVAILABLE"
+  | "EMAIL_TEMPLATE_NOT_FOUND"
+  | "EMAIL_PARTICIPANT_NOT_FOUND"
+  | "EMAIL_RECIPIENT_EMAIL_MISSING";
 
 export class SpeakerServiceError extends Error {
   constructor(
@@ -1105,6 +1108,21 @@ function travelLogisticsFrom(value: unknown): SpeakerTravelLogistics {
 function speakerEmailFirstName(displayName: string): string {
   const first = displayName.trim().split(/\s+/u)[0];
   return first === undefined || first.length === 0 ? displayName.trim() : first;
+}
+async function speakerEmailSendId(
+  organizationId: string,
+  eventId: string,
+  idempotencyKey: string,
+): Promise<string> {
+  const digest = new Uint8Array(
+    await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(`${organizationId}:${eventId}:${idempotencyKey}`),
+    ),
+  );
+  return `speaker-email-send:${[...digest]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")}`;
 }
 
 function escapeSpeakerEmailHtml(value: string): string {
@@ -2765,12 +2783,13 @@ export class SpeakerService {
     }
     const familyKey = (asset: SpeakerAsset): string =>
       `${asset.participantId}\u0000${asset.taskId ?? ""}\u0000${asset.versionFamilyId ?? asset.id}`;
-    const currentByFamily = new Map<string, SpeakerAsset>();
+    const readyByFamily = new Map<string, SpeakerAsset>();
     for (const asset of assets) {
+      if (asset.state !== "ready") continue;
       const key = familyKey(asset);
-      const current = currentByFamily.get(key);
+      const current = readyByFamily.get(key);
       if (current === undefined || assetVersionCompare(asset, current) < 0) {
-        currentByFamily.set(key, asset);
+        readyByFamily.set(key, asset);
       }
     }
     const selectedCurrentIds =
@@ -2780,7 +2799,7 @@ export class SpeakerService {
             assetIds.flatMap((assetId) => {
               const selected = assetById.get(assetId);
               if (selected === undefined) return [];
-              const current = currentByFamily.get(familyKey(selected));
+              const current = readyByFamily.get(familyKey(selected));
               return current === undefined ? [] : [current.id];
             }),
           );
@@ -2797,8 +2816,7 @@ export class SpeakerService {
       basePath: string;
     }[] = [];
 
-    for (const asset of currentByFamily.values()) {
-      if (asset.state !== "ready") continue;
+    for (const asset of readyByFamily.values()) {
       if (selectedCurrentIds !== undefined && !selectedCurrentIds.has(asset.id)) continue;
       if (participantFilter !== undefined && !participantFilter.has(asset.participantId)) continue;
       const task = asset.taskId === undefined ? undefined : taskById.get(asset.taskId);
@@ -3906,7 +3924,10 @@ export class SpeakerService {
     const persisted = store.listSpeakerEmailTemplates
       ? await store.listSpeakerEmailTemplates(organizationId, eventId)
       : [];
-    const cached = this.emailTemplateCache.get(`${organizationId}:${eventId}`) ?? [];
+    const cached =
+      store.listSpeakerEmailTemplates === undefined
+        ? (this.emailTemplateCache.get(`${organizationId}:${eventId}`) ?? [])
+        : [];
     const byKey = new Map(
       [...persisted, ...cached].map((template) => [
         `${template.id}:${template.version}`,
@@ -3916,10 +3937,12 @@ export class SpeakerService {
     const templates = [...byKey.values()].sort(
       (left, right) => left.id.localeCompare(right.id) || left.version - right.version,
     );
-    this.emailTemplateCache.set(
-      `${organizationId}:${eventId}`,
-      templates.map((template) => structuredClone(template)),
-    );
+    if (store.listSpeakerEmailTemplates === undefined) {
+      this.emailTemplateCache.set(
+        `${organizationId}:${eventId}`,
+        templates.map((template) => structuredClone(template)),
+      );
+    }
     return templates;
   }
 
@@ -3980,14 +4003,16 @@ export class SpeakerService {
       store.saveSpeakerEmailTemplate === undefined
         ? template
         : await store.saveSpeakerEmailTemplate(structuredClone(template));
-    const cacheKey = `${input.organizationId}:${input.eventId}`;
-    const next = [
-      ...(this.emailTemplateCache.get(cacheKey) ?? []).filter(
-        (candidate) => !(candidate.id === stored.id && candidate.version === stored.version),
-      ),
-      structuredClone(stored),
-    ];
-    this.emailTemplateCache.set(cacheKey, next);
+    if (store.saveSpeakerEmailTemplate === undefined) {
+      const cacheKey = `${input.organizationId}:${input.eventId}`;
+      const next = [
+        ...(this.emailTemplateCache.get(cacheKey) ?? []).filter(
+          (candidate) => !(candidate.id === stored.id && candidate.version === stored.version),
+        ),
+        structuredClone(stored),
+      ];
+      this.emailTemplateCache.set(cacheKey, next);
+    }
     return structuredClone(stored);
   }
 
@@ -4043,7 +4068,13 @@ export class SpeakerService {
           candidate.status === "approved",
       )
       .sort((left, right) => right.version - left.version)[0];
-    if (template === undefined) throw notFound();
+    if (template === undefined) {
+      throw new SpeakerServiceError(
+        "EMAIL_TEMPLATE_NOT_FOUND",
+        409,
+        "The approved speaker email template or requested version was not found.",
+      );
+    }
     const requested = unique(input.participantIds);
     if (requested.length === 0) {
       throw new SpeakerServiceError(
@@ -4061,7 +4092,20 @@ export class SpeakerService {
       const speaker = roster.speakers.find(
         (candidate) => candidate.participantId === participantId,
       );
-      if (speaker === undefined || speaker.email.trim().length === 0) throw notFound();
+      if (speaker === undefined) {
+        throw new SpeakerServiceError(
+          "EMAIL_PARTICIPANT_NOT_FOUND",
+          409,
+          "The selected speaker participant was not found in this event roster.",
+        );
+      }
+      if (speaker.email.trim().length === 0) {
+        throw new SpeakerServiceError(
+          "EMAIL_RECIPIENT_EMAIL_MISSING",
+          400,
+          "The selected speaker participant does not have an email address.",
+        );
+      }
       const displayName = speaker.displayName.trim();
       const firstName = speakerEmailFirstName(displayName);
       const recipient = { displayName, firstName, email: speaker.email.trim() };
@@ -4076,7 +4120,13 @@ export class SpeakerService {
       };
     });
     const first = speakers[0];
-    if (first === undefined) throw notFound();
+    if (first === undefined) {
+      throw new SpeakerServiceError(
+        "VALIDATION_ERROR",
+        400,
+        "Select at least one speaker for the email preview.",
+      );
+    }
     const now = this.now();
     const preview: SpeakerEmailPreview = {
       id: this.generateId(),
@@ -4097,7 +4147,9 @@ export class SpeakerService {
       store.saveSpeakerEmailPreview === undefined
         ? preview
         : await store.saveSpeakerEmailPreview(structuredClone(preview));
-    this.emailPreviewCache.set(stored.id, structuredClone(stored));
+    if (store.saveSpeakerEmailPreview === undefined) {
+      this.emailPreviewCache.set(stored.id, structuredClone(stored));
+    }
     return structuredClone(stored);
   }
 
@@ -4119,22 +4171,24 @@ export class SpeakerService {
       300,
     );
     const cacheKey = `${input.organizationId}:${input.eventId}:${idempotencyKey}`;
-    const existingCached = this.emailSendCache.get(cacheKey);
-    if (existingCached !== undefined) return structuredClone(existingCached);
     const store = this.repository as SpeakerRepository & SpeakerEmailRepository;
+    const existingCached =
+      store.listSpeakerEmailSends === undefined ? this.emailSendCache.get(cacheKey) : undefined;
+    if (existingCached !== undefined) return structuredClone(existingCached);
     const persistedSends = store.listSpeakerEmailSends
       ? await store.listSpeakerEmailSends(input.organizationId, input.eventId)
       : [];
     const existing = persistedSends.find((send) => send.idempotencyKey === idempotencyKey);
     if (existing !== undefined) {
-      this.emailSendCache.set(cacheKey, structuredClone(existing));
+      if (store.listSpeakerEmailSends === undefined) {
+        this.emailSendCache.set(cacheKey, structuredClone(existing));
+      }
       return structuredClone(existing);
     }
     const preview =
-      this.emailPreviewCache.get(input.previewId) ??
-      (store.getSpeakerEmailPreview
-        ? await store.getSpeakerEmailPreview(input.organizationId, input.eventId, input.previewId)
-        : null);
+      store.getSpeakerEmailPreview === undefined
+        ? (this.emailPreviewCache.get(input.previewId) ?? null)
+        : await store.getSpeakerEmailPreview(input.organizationId, input.eventId, input.previewId);
     if (
       preview === null ||
       preview === undefined ||
@@ -4189,7 +4243,7 @@ export class SpeakerService {
       })),
     ];
     let send: SpeakerEmailSend = {
-      id: this.generateId(),
+      id: await speakerEmailSendId(input.organizationId, input.eventId, idempotencyKey),
       organizationId: scope.tenantId,
       eventId: input.eventId,
       templateId: preview.templateId,
@@ -4205,36 +4259,10 @@ export class SpeakerService {
     if (store.saveSpeakerEmailSend !== undefined) {
       send = await store.saveSpeakerEmailSend(structuredClone(send));
     }
-    const delivery =
-      this.emailDelivery ?? (this.delivery as unknown as SpeakerEmailDelivery | undefined);
-    const queue = delivery?.enqueueEmail ?? delivery?.queueEmail;
-    const legacyQueue = this.delivery?.enqueue ?? this.delivery?.queue;
+    const emailDelivery = this.emailDelivery;
     const queueEmail =
-      queue ??
-      (legacyQueue === undefined
-        ? undefined
-        : async (email: SpeakerEmailDeliveryInput): Promise<SpeakerEmailDeliveryReceipt> => {
-            const receipt = await legacyQueue({
-              organizationId: email.organizationId,
-              eventId: email.eventId,
-              actorAccountId: email.actorAccountId,
-              idempotencyKey: email.idempotencyKey,
-              recipient: {
-                participantId: email.participantId,
-                displayName: email.displayName,
-                email: email.recipientEmail,
-                taskIds: [],
-                tasks: [],
-              },
-              subject: email.subject,
-              sender: email.sender,
-              html: email.html,
-              text: email.text,
-              templateId: email.templateId,
-              templateVersion: email.templateVersion,
-            } as never);
-            return receipt;
-          });
+      emailDelivery?.enqueueEmail?.bind(emailDelivery) ??
+      emailDelivery?.queueEmail?.bind(emailDelivery);
     if (queueEmail === undefined) {
       throw new SpeakerServiceError(
         "REMINDER_UNAVAILABLE",
@@ -4321,7 +4349,9 @@ export class SpeakerService {
     if (store.saveSpeakerEmailSend !== undefined) {
       send = await store.saveSpeakerEmailSend(structuredClone(send));
     }
-    this.emailSendCache.set(cacheKey, structuredClone(send));
+    if (store.saveSpeakerEmailSend === undefined) {
+      this.emailSendCache.set(cacheKey, structuredClone(send));
+    }
     return structuredClone(send);
   }
 
@@ -4335,9 +4365,12 @@ export class SpeakerService {
     const persisted = store.listSpeakerEmailSends
       ? await store.listSpeakerEmailSends(organizationId, eventId)
       : [];
-    const cached = [...this.emailSendCache.values()].filter(
-      (send) => send.organizationId === organizationId && send.eventId === eventId,
-    );
+    const cached =
+      store.listSpeakerEmailSends === undefined
+        ? [...this.emailSendCache.values()].filter(
+            (send) => send.organizationId === organizationId && send.eventId === eventId,
+          )
+        : [];
     const byId = new Map([...persisted, ...cached].map((send) => [send.id, structuredClone(send)]));
     return [...byId.values()].sort(
       (left, right) =>
@@ -4641,7 +4674,13 @@ export class SpeakerService {
           entry.eventId === eventId &&
           entry.entityType === entityType &&
           entry.entityId === entityId &&
-          (entry.snapshot.tenantId === undefined || entry.snapshot.tenantId === scope.tenantId),
+          Number.isSafeInteger(entry.version) &&
+          entry.version > 0 &&
+          entry.snapshot.tenantId === scope.tenantId &&
+          entry.snapshot.eventId === eventId &&
+          entry.snapshot.entityType === entityType &&
+          entry.snapshot.entityId === entityId &&
+          entry.snapshot.version === entry.version,
       )
       .sort(
         (left, right) =>
@@ -4748,19 +4787,19 @@ export class SpeakerService {
       );
     }
     const history = await this.readContentHistory(input.eventId, input.entityType, input.entityId);
-    const target = history.find((entry) => entry.version === input.version);
-    if (
-      target === undefined ||
-      target.eventId !== input.eventId ||
-      target.entityType !== input.entityType ||
-      target.entityId !== input.entityId ||
-      target.snapshot.eventId !== input.eventId ||
-      target.snapshot.entityType !== input.entityType ||
-      target.snapshot.entityId !== input.entityId ||
-      (target.snapshot.tenantId !== undefined && target.snapshot.tenantId !== scope.tenantId)
-    ) {
-      throw notFound();
-    }
+    const target = history.find(
+      (entry) =>
+        entry.version === input.version &&
+        entry.eventId === input.eventId &&
+        entry.entityType === input.entityType &&
+        entry.entityId === input.entityId &&
+        entry.snapshot.tenantId === scope.tenantId &&
+        entry.snapshot.eventId === input.eventId &&
+        entry.snapshot.entityType === input.entityType &&
+        entry.snapshot.entityId === input.entityId &&
+        entry.snapshot.version === input.version,
+    );
+    if (target === undefined) throw notFound();
     const command = {
       ...input,
       expectedVersion: input.expectedVersion ?? current.version,
@@ -8196,7 +8235,7 @@ export class SpeakerService {
       content.eventId !== eventId ||
       content.entityType !== entityType ||
       content.entityId !== entityId ||
-      (content.tenantId !== undefined && content.tenantId !== scope.tenantId)
+      content.tenantId !== scope.tenantId
     ) {
       throw notFound();
     }

@@ -248,7 +248,7 @@ export function createSeededCfpConfiguration(eventId = DEFAULT_EVENT_ID): CfpCon
 }
 
 function createEditorInitialConfiguration(eventId: string): CfpConfiguration {
-  if (process.env.NODE_ENV === "test" || process.env.NEXT_PUBLIC_APP_ENV === "local") {
+  if (process.env.NODE_ENV === "test" || process.env.NEXT_PUBLIC_RUNTIME_PROFILE === "fixture") {
     return createSeededCfpConfiguration(eventId);
   }
   const seeded = createSeededCfpConfiguration(eventId);
@@ -1078,10 +1078,11 @@ export function CfpEditor({ eventId, organizationId, formId, api: providedApi }:
   });
   const [previewMessage, setPreviewMessage] = useState("");
 
-  const localMode = process.env.NEXT_PUBLIC_APP_ENV === "local" || process.env.APP_ENV === "local";
+  const fixtureMode =
+    process.env.NODE_ENV === "test" || process.env.NEXT_PUBLIC_RUNTIME_PROFILE === "fixture";
   const explicitOrganizationId =
     organizationId?.trim() || process.env.NEXT_PUBLIC_ORGANIZATION_ID?.trim();
-  const resolvedOrganizationId = explicitOrganizationId || (localMode ? "organization-1" : "");
+  const resolvedOrganizationId = explicitOrganizationId || (fixtureMode ? "organization-1" : "");
   const requestedFormId = formId?.trim() || undefined;
   const resolvedFormId = requestedFormId ?? configuration.id;
   const dateValidationError = validateCfpDateRange(

@@ -82,6 +82,12 @@ The deterministic local runtime has three isolated test personas. They share the
 
 Use organization `local-organization` and event `demo-event` when testing these fixtures. The local runtime does not grant a persona another role implicitly: reviewer and speaker sessions are denied organizer routes, and organizer membership does not grant the speaker portal.
 
+`make dev` starts Mailpit through Docker Compose, the OpenSend-compatible loopback bridge, the API Worker, and the web app. Mailpit captures verification, magic-link, communication, and calendar messages:
+
+- Inbox/API: `http://127.0.0.1:8025`
+- SMTP: `127.0.0.1:1025`
+- OpenSend-compatible bridge: `http://127.0.0.1:8026`
+
 Check each service independently:
 
 ```bash
