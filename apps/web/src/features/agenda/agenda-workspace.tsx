@@ -28,11 +28,13 @@ import {
   warningsForEntry,
 } from "./model";
 import type {
+  AgendaCalendarDeliveryState,
   AgendaEntry,
   AgendaEntryInput,
   AgendaPreview,
   AgendaSession,
   AgendaTrack,
+  AgendaValidationReport,
   AgendaWorkspaceData,
 } from "./types";
 
@@ -42,6 +44,7 @@ function messageFrom(error: unknown): string {
   }
   return "The agenda request could not be completed.";
 }
+export type AgendaCandidateDiagnostics = AgendaValidationReport;
 export interface AgendaSuggestionChangeView {
   id: string;
   kind: "add" | "move" | "change" | "remove";
@@ -59,9 +62,7 @@ export interface AgendaSuggestionRunView {
     summary: string;
     changes: readonly AgendaSuggestionChangeView[];
   };
-  validation?: {
-    conflicts: readonly { id: string; kind: string; message: string }[];
-  };
+  candidateDiagnostics?: AgendaCandidateDiagnostics;
   acceptedChangeIds?: readonly string[];
 }
 export interface AgendaSuggestionOptions {
@@ -88,7 +89,8 @@ export type AgendaBusyOperation =
   | "generate-suggestion"
   | "regenerate-suggestion"
   | "reject-suggestion"
-  | "apply-suggestion";
+  | "apply-suggestion"
+  | "retry-calendar-delivery";
 interface AgendaSuggestionApi {
   generateSuggestion(input: {
     eventId: string;
@@ -125,57 +127,6 @@ function suggestionApiFor(api: AgendaApi | null): AgendaSuggestionApi | null {
     : null;
 }
 
-function previewFromError(error: AgendaApiError, draftVersion: number): AgendaPreview | null {
-  if (Array.isArray(error.details)) {
-    const conflicts = error.details
-      .filter((issue) => issue.code.startsWith("agenda."))
-      .map((issue, index) => {
-        const kindValue = issue.code.slice("agenda.".length);
-        const kind = ["participant", "resource", "room"].includes(kindValue)
-          ? (kindValue as AgendaPreview["conflicts"][number]["kind"])
-          : "room";
-        const entryIds =
-          issue.path[0] === "entries"
-            ? issue.path
-                .slice(1)
-                .filter(
-                  (segment: string | number): segment is string => typeof segment === "string",
-                )
-            : [];
-        return {
-          id: `agenda-error-${index}-${issue.code}-${issue.path.join("-")}`,
-          kind,
-          entryIds,
-          message: issue.message,
-        };
-      });
-    if (conflicts.length === 0) return null;
-    return {
-      draftVersion,
-      conflicts,
-      warnings: [],
-      diff: { added: 0, changed: 0, removed: 0 },
-      validatedAt: new Date().toISOString(),
-    };
-  }
-
-  const legacyDetails = error.details as
-    | {
-        readonly conflicts?: AgendaPreview["conflicts"];
-        readonly warnings?: AgendaPreview["warnings"];
-      }
-    | undefined;
-  if (!legacyDetails?.conflicts && !legacyDetails?.warnings) {
-    return null;
-  }
-  return {
-    draftVersion,
-    conflicts: legacyDetails.conflicts ?? [],
-    warnings: legacyDetails.warnings ?? [],
-    diff: { added: 0, changed: 0, removed: 0 },
-    validatedAt: new Date().toISOString(),
-  };
-}
 
 interface EntryFormProps {
   entry?: AgendaEntry;
@@ -184,8 +135,11 @@ interface EntryFormProps {
   tracks: readonly AgendaTrack[];
   eventStart: string;
   busy: boolean;
+  initialSessionId?: string;
   onSubmit(entry: AgendaEntryInput): Promise<void>;
   onCancel?: () => void;
+  onCreateRoom?: (input: { name: string; capacity: number }) => Promise<AgendaWorkspaceData["rooms"][number] | null>;
+  onCreateTrack?: (input: { name: string }) => Promise<AgendaTrack | null>;
 }
 
 function EntryForm({
@@ -195,10 +149,13 @@ function EntryForm({
   tracks,
   eventStart,
   busy,
+  initialSessionId,
   onSubmit,
   onCancel,
+  onCreateRoom,
+  onCreateTrack,
 }: EntryFormProps) {
-  const firstSession = entry?.sessionId ?? sessions[0]?.id ?? "";
+  const firstSession = entry?.sessionId ?? initialSessionId ?? sessions[0]?.id ?? "";
   const [sessionId, setSessionId] = useState(firstSession);
   const [roomId, setRoomId] = useState(entry?.roomId ?? rooms[0]?.id ?? "");
   const [trackIds, setTrackIds] = useState<readonly string[]>(
@@ -207,6 +164,14 @@ function EntryForm({
   const [startsAtLocal, setStartsAtLocal] = useState(entry?.startsAtLocal ?? `${eventStart}T09:00`);
   const [endsAtLocal, setEndsAtLocal] = useState(entry?.endsAtLocal ?? `${eventStart}T10:00`);
   const [formError, setFormError] = useState<string | null>(null);
+  const [roomCreatorOpen, setRoomCreatorOpen] = useState(false);
+  const [trackCreatorOpen, setTrackCreatorOpen] = useState(false);
+  const [roomName, setRoomName] = useState("");
+  const [roomCapacity, setRoomCapacity] = useState("");
+  const [trackName, setTrackName] = useState("");
+  useEffect(() => {
+    if (!entry && initialSessionId) setSessionId(initialSessionId);
+  }, [entry, initialSessionId]);
 
   function toggleTrack(trackId: string) {
     setTrackIds((current) =>
@@ -216,6 +181,39 @@ function EntryForm({
     );
   }
 
+  async function createRoom() {
+    if (!onCreateRoom) return;
+    const name = roomName.trim();
+    const capacity = Number(roomCapacity);
+    if (!name || !Number.isFinite(capacity) || capacity < 1) {
+      setFormError("Enter a room name and capacity of at least 1.");
+      return;
+    }
+    const room = await onCreateRoom({ name, capacity });
+    if (room) {
+      setRoomId(room.id);
+      setRoomName("");
+      setRoomCapacity("");
+      setRoomCreatorOpen(false);
+      setFormError(null);
+    }
+  }
+
+  async function createTrack() {
+    if (!onCreateTrack) return;
+    const name = trackName.trim();
+    if (!name) {
+      setFormError("Enter a track name.");
+      return;
+    }
+    const track = await onCreateTrack({ name });
+    if (track) {
+      setTrackIds((current) => (current.includes(track.id) ? current : [...current, track.id]));
+      setTrackName("");
+      setTrackCreatorOpen(false);
+      setFormError(null);
+    }
+  }
   async function submit(formEvent: FormEvent<HTMLFormElement>) {
     formEvent.preventDefault();
     if (!sessionId || !roomId) {
@@ -270,6 +268,38 @@ function EntryForm({
           ))}
         </select>
       </label>
+      {onCreateRoom ? (
+        <div className={styles.inlineCreate}>
+          <button
+            className={styles.textButton}
+            type="button"
+            onClick={() => setRoomCreatorOpen((open) => !open)}
+            aria-expanded={roomCreatorOpen}
+          >
+            {roomCreatorOpen ? "Cancel new room" : "Create room"}
+          </button>
+          {roomCreatorOpen ? (
+            <div className={styles.inlineCreateFields}>
+              <label>
+                <span>Room name</span>
+                <input value={roomName} onChange={(event) => setRoomName(event.target.value)} />
+              </label>
+              <label>
+                <span>Capacity</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={roomCapacity}
+                  onChange={(event) => setRoomCapacity(event.target.value)}
+                />
+              </label>
+              <button className={styles.secondaryButton} type="button" onClick={() => void createRoom()}>
+                Save room
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       <fieldset className={styles.trackOptions}>
         <legend>Tracks</legend>
         {tracks.map((track) => (
@@ -285,6 +315,29 @@ function EntryForm({
           </label>
         ))}
       </fieldset>
+      {onCreateTrack ? (
+        <div className={styles.inlineCreate}>
+          <button
+            className={styles.textButton}
+            type="button"
+            onClick={() => setTrackCreatorOpen((open) => !open)}
+            aria-expanded={trackCreatorOpen}
+          >
+            {trackCreatorOpen ? "Cancel new track" : "Create track"}
+          </button>
+          {trackCreatorOpen ? (
+            <div className={styles.inlineCreateFields}>
+              <label>
+                <span>Track name</span>
+                <input value={trackName} onChange={(event) => setTrackName(event.target.value)} />
+              </label>
+              <button className={styles.secondaryButton} type="button" onClick={() => void createTrack()}>
+                Save track
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       <div className={styles.timeFields}>
         <label>
           <span>Starts</span>
@@ -485,6 +538,10 @@ interface AgendaBoardProps {
   onRegenerateSuggestion?: () => Promise<void>;
   onRejectSuggestion?: () => Promise<void>;
   onApplySuggestion?: (changeIds: readonly string[]) => Promise<void>;
+  onCreateRoom?: (input: { name: string; capacity: number }) => Promise<AgendaWorkspaceData["rooms"][number] | null>;
+  onCreateTrack?: (input: { name: string }) => Promise<AgendaTrack | null>;
+  calendarDelivery?: AgendaCalendarDeliveryState | null;
+  onRetryCalendarDelivery?: () => Promise<void>;
 }
 
 export function AgendaBoard({
@@ -507,10 +564,15 @@ export function AgendaBoard({
   onRegenerateSuggestion,
   onRejectSuggestion,
   onApplySuggestion,
+  onCreateRoom,
+  onCreateTrack,
+  calendarDelivery,
+  onRetryCalendarDelivery,
 }: AgendaBoardProps) {
   const readiness = publicationReadiness(data, preview);
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
+  const [placementSessionId, setPlacementSessionId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<AgendaViewMode>(initialView);
   const { startsOn, endsOn } = data.event;
   const eventDays = useMemo(
@@ -565,8 +627,9 @@ export function AgendaBoard({
 
   function renderEntryCard(entry: AgendaEntry, key: string, showDate = false): React.ReactNode {
     const entryConflicts = conflictsForEntry(entry.id, preview?.conflicts ?? []);
+    const entryReleaseConflicts = conflictsForEntry(entry.id, preview?.releaseConflicts ?? []);
     const entryWarnings = warningsForEntry(entry.id, preview?.warnings ?? []);
-    const hasIssues = entryConflicts.length + entryWarnings.length > 0;
+    const hasIssues = entryConflicts.length + entryReleaseConflicts.length + entryWarnings.length > 0;
     const editExpanded = viewMode === "day" && editingEntryId === entry.id;
     return (
       <li key={key}>
@@ -594,6 +657,11 @@ export function AgendaBoard({
             {entryConflicts.map((conflict) => (
               <p className={styles.inlineConflict} key={conflict.id}>
                 Hard conflict: {conflict.message}
+              </p>
+            ))}
+            {entryReleaseConflicts.map((conflict) => (
+              <p className={styles.inlineConflict} key={conflict.id}>
+                Released commitment conflict: {conflict.message}
               </p>
             ))}
             {entryWarnings.map((warning) => (
@@ -641,6 +709,8 @@ export function AgendaBoard({
               eventStart={data.event.startsOn}
               busy={busy}
               onCancel={() => setEditingEntryId(null)}
+              {...(onCreateRoom === undefined ? {} : { onCreateRoom })}
+              {...(onCreateTrack === undefined ? {} : { onCreateTrack })}
               onSubmit={async (input) => {
                 const saved = await onSaveEntry(input);
                 if (saved !== false) setEditingEntryId(null);
@@ -692,17 +762,38 @@ export function AgendaBoard({
             {sessions.length} session{sessions.length === 1 ? "" : "s"}
           </span>
         </header>
+        <p className={styles.viewContext}>
+          Choose Place in schedule with keyboard or touch, or drag a session to the schedule drop target.
+        </p>
         {sessions.length === 0 ? (
           <p className={styles.viewGroupEmpty}>No unscheduled accepted sessions.</p>
         ) : (
           <ul className={styles.unscheduledList}>
             {sessions.map((session) => (
-              <li className={styles.unscheduledItem} key={session.id}>
+              <li
+                className={styles.unscheduledItem}
+                key={session.id}
+                draggable
+                onDragStart={(event) => {
+                  event.dataTransfer.setData("text/plain", session.id);
+                  event.dataTransfer.effectAllowed = "move";
+                }}
+              >
                 <strong>{session.title}</strong>
                 <span>
                   {session.format} · {session.durationMinutes} minutes ·{" "}
                   {session.speakerNames.join(", ")}
                 </span>
+                <button
+                  className={styles.textButton}
+                  type="button"
+                  onClick={() => {
+                    setPlacementSessionId(session.id);
+                    setShowAddForm(true);
+                  }}
+                >
+                  Place in schedule
+                </button>
               </li>
             ))}
           </ul>
@@ -952,6 +1043,24 @@ export function AgendaBoard({
                 ))}
               </div>
             </div>
+            <div
+              className={styles.scheduleDropTarget}
+              onDragOver={(event) => {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "move";
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                const sessionId = event.dataTransfer.getData("text/plain");
+                if (data.unscheduledSessions.some((session) => session.id === sessionId)) {
+                  setPlacementSessionId(sessionId);
+                  setShowAddForm(true);
+                }
+              }}
+              aria-label="Schedule drop target"
+            >
+              Drag an unscheduled session here to open placement.
+            </div>
 
             {showAddForm && hasRooms ? (
               <div id="add-session-panel" className={styles.addPanel}>
@@ -962,10 +1071,21 @@ export function AgendaBoard({
                   tracks={data.tracks}
                   eventStart={data.event.startsOn}
                   busy={busy}
-                  onCancel={() => setShowAddForm(false)}
+                  onCancel={() => {
+                    setShowAddForm(false);
+                    setPlacementSessionId(null);
+                  }}
+                  {...(placementSessionId === null
+                    ? {}
+                    : { initialSessionId: placementSessionId })}
+                  {...(onCreateRoom === undefined ? {} : { onCreateRoom })}
+                  {...(onCreateTrack === undefined ? {} : { onCreateTrack })}
                   onSubmit={async (entry) => {
                     const saved = await onSaveEntry(entry);
-                    if (saved !== false) setShowAddForm(false);
+                    if (saved !== false) {
+                      setShowAddForm(false);
+                      setPlacementSessionId(null);
+                    }
                   }}
                 />
               </div>
@@ -1079,6 +1199,25 @@ export function AgendaBoard({
                   </AlertDescription>
                 </Alert>
               ) : null}
+              {preview?.releaseConflicts.length ? (
+                <Alert variant="destructive" className={styles.conflictPanel}>
+                  <AlertTitle>
+                    {preview.releaseConflicts.length} released commitment conflict
+                    {preview.releaseConflicts.length === 1 ? "" : "s"}
+                  </AlertTitle>
+                  <AlertDescription>
+                    <p>Released commitment conflicts block publication until resolved.</p>
+                    <ul>
+                      {preview.releaseConflicts.map((conflict) => (
+                        <li key={conflict.id}>
+                          <strong>{conflict.kind.replace("_", " ")}</strong>
+                          <span>{conflict.message}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </AlertDescription>
+                </Alert>
+              ) : null}
 
               {preview?.warnings.length ? (
                 <section className={styles.warningPanel} aria-labelledby="warnings-heading">
@@ -1108,6 +1247,26 @@ export function AgendaBoard({
                   </ul>
                 </section>
               ) : null}
+              {suggestionRun?.candidateDiagnostics ? (
+                <section className={styles.warningPanel} aria-labelledby="candidate-diagnostics-heading">
+                  <h2 id="candidate-diagnostics-heading">Candidate diagnostics</h2>
+                  <p>Private suggestion diagnostics are not part of the authoritative preview.</p>
+                  <ul>
+                    {suggestionRun.candidateDiagnostics.conflicts.map((conflict) => (
+                      <li key={conflict.id}>
+                        <strong>{conflict.kind.replace("_", " ")}</strong>
+                        <span>{conflict.message}</span>
+                      </li>
+                    ))}
+                    {suggestionRun.candidateDiagnostics.warnings.map((warning) => (
+                      <li key={warning.id}>
+                        <strong>{warning.kind}</strong>
+                        <span>{warning.message}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ) : null}
 
               <Card className={`${styles.publishCard} ${styles.sequenceStep}`} size="sm">
                 <div className={styles.stepHeader}>
@@ -1125,6 +1284,31 @@ export function AgendaBoard({
                 ) : (
                   <p>No agenda revision has been published. Public embeds remain unavailable.</p>
                 )}
+                {calendarDelivery ? (
+                  <div className={styles.calendarDelivery} aria-live="polite">
+                    <strong>Released commitment calendar delivery</strong>
+                    <span>Calendar: {calendarDelivery.state.replace("_", " ")}</span>
+                    <span>Sent last 24 hours: {calendarDelivery.sentLast24Hours}</span>
+                    <span>Failed last 24 hours: {calendarDelivery.failedLast24Hours}</span>
+                    <span>Last invitation: {calendarDelivery.lastInvitationAt ? formatRevisionTimestamp(calendarDelivery.lastInvitationAt) : "None"}</span>
+                    {calendarDelivery.lastFailure ? (
+                      <div role="alert">
+                        <span>Last failure: {calendarDelivery.lastFailure.summary}</span>
+                        <small>Committed UID and sequence are retained for repair; this does not claim delivery success.</small>
+                        {calendarDelivery.lastFailure.retryable && onRetryCalendarDelivery ? (
+                          <button
+                            className={styles.secondaryButton}
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void onRetryCalendarDelivery()}
+                          >
+                            {isBusyFor("retry-calendar-delivery") ? "Retrying..." : "Retry calendar delivery"}
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
                 {!readiness.ready ? (
                   <ul className={styles.readinessList} aria-label="Publication requirements">
                     {readiness.reasons.map((reason) => (
@@ -1204,7 +1388,7 @@ export function AgendaSuggestionPanel({
   onReject,
   onApply,
 }: AgendaSuggestionPanelProps) {
-  const blockers = run?.validation?.conflicts ?? [];
+  const blockers = run?.candidateDiagnostics?.conflicts ?? [];
   const stale = run !== null && run.baseDraftVersion !== currentDraftVersion;
   const selectedAvailableChangeIds =
     run?.diff.changes
@@ -1730,8 +1914,25 @@ function ScopedAgendaWorkspace({
       if (!operationIsCurrent(token)) return false;
       setError(messageFrom(mutationError));
       if (mutationError instanceof AgendaApiError) {
-        const failurePreview = previewFromError(mutationError, authoritativeData.draft.version);
-        if (failurePreview) setPreview(failurePreview);
+        setSuggestionRun((current) =>
+          current
+            ? {
+                ...current,
+                candidateDiagnostics: mutationError.candidateDiagnostics?.report ?? {
+                  conflicts: [],
+                  warnings: [],
+                },
+              }
+            : current,
+        );
+        const recovered = await Promise.all([
+          currentSnapshot.api.getWorkspace(eventId),
+          currentSnapshot.api.preview(eventId),
+        ]);
+        if (operationIsCurrent(token) && agendaWorkspaceDataMatchesEvent(recovered[0], eventId)) {
+          setSnapshot({ ...currentSnapshot, data: recovered[0] });
+          setPreview(recovered[1]);
+        }
       }
       return false;
     } finally {
@@ -1918,10 +2119,6 @@ function ScopedAgendaWorkspace({
     } catch (previewError) {
       if (!operationIsCurrent(token)) return;
       setError(messageFrom(previewError));
-      if (previewError instanceof AgendaApiError) {
-        const failurePreview = previewFromError(previewError, currentSnapshot.data.draft.version);
-        if (failurePreview) setPreview(failurePreview);
-      }
     } finally {
       endOperation(token);
     }

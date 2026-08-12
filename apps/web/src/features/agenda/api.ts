@@ -1,7 +1,12 @@
 import type {
+  AgendaCalendarDeliveryState,
   AgendaEntryInput,
   AgendaErrorResponse,
+  AgendaPlacementFailureData,
   AgendaPreview,
+  AgendaRoom,
+  AgendaTrack,
+  AgendaValidationReport,
   AgendaWorkspaceData,
 } from "./types";
 
@@ -18,6 +23,7 @@ export class AgendaApiError extends Error {
   readonly status: number;
   readonly traceId: string | undefined;
   readonly details: AgendaApiErrorDetails | undefined;
+  readonly candidateDiagnostics: AgendaPlacementFailureData | undefined;
 
   constructor(
     code: string,
@@ -25,6 +31,7 @@ export class AgendaApiError extends Error {
     status: number,
     traceId?: string,
     details?: AgendaApiErrorDetails,
+    candidateDiagnostics?: AgendaPlacementFailureData,
   ) {
     super(message);
     this.name = "AgendaApiError";
@@ -32,6 +39,7 @@ export class AgendaApiError extends Error {
     this.status = status;
     this.traceId = traceId;
     this.details = details;
+    this.candidateDiagnostics = candidateDiagnostics;
   }
 }
 export type AgendaSuggestionChangeKind = "add" | "move" | "change" | "remove";
@@ -53,13 +61,7 @@ export interface AgendaSuggestionRun {
     readonly summary: string;
     readonly changes: readonly AgendaSuggestionChange[];
   };
-  readonly validation: {
-    readonly conflicts: readonly {
-      readonly id: string;
-      readonly kind: string;
-      readonly message: string;
-    }[];
-  };
+  readonly candidateDiagnostics: AgendaValidationReport;
   readonly acceptedChangeIds: readonly string[];
 }
 
@@ -77,6 +79,15 @@ export interface AgendaApi {
     entryId: string;
     expectedVersion: number;
   }): Promise<AgendaWorkspaceData>;
+  createRoom(input: {
+    eventId: string;
+    name: string;
+    capacity: number;
+  }): Promise<{ resource: AgendaRoom; workspace: AgendaWorkspaceData }>;
+  createTrack(input: {
+    eventId: string;
+    name: string;
+  }): Promise<{ resource: AgendaTrack; workspace: AgendaWorkspaceData }>;
   preview(eventId: string): Promise<AgendaPreview>;
   overrideWarning(input: {
     eventId: string;
@@ -112,6 +123,11 @@ export interface AgendaApi {
     acceptedChangeIds: readonly string[];
   }): Promise<AgendaWorkspaceData>;
   getSuggestion(input: { eventId: string; runId: string }): Promise<AgendaSuggestionRun>;
+  getCalendarDelivery(eventId: string, signal?: AbortSignal): Promise<AgendaCalendarDeliveryState>;
+  retryCalendarDelivery(input: {
+    eventId: string;
+    deliveryId: string;
+  }): Promise<AgendaCalendarDeliveryState>;
 }
 
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -141,6 +157,33 @@ function isValidationIssue(value: unknown): value is AgendaValidationIssue {
     value.message.trim().length > 0
   );
 }
+function isAgendaValidationReport(value: unknown): value is AgendaValidationReport {
+  return (
+    isRecord(value) &&
+    Array.isArray(value.conflicts) &&
+    Array.isArray(value.warnings)
+  );
+}
+
+function placementFailureData(
+  candidateValue: unknown,
+  authoritativePreview: unknown,
+): AgendaPlacementFailureData | undefined {
+  if (
+    !isRecord(candidateValue) ||
+    typeof candidateValue.evaluated !== "boolean" ||
+    (candidateValue.report !== null && !isAgendaValidationReport(candidateValue.report)) ||
+    !isRecord(authoritativePreview)
+  ) {
+    return undefined;
+  }
+  return {
+    evaluated: candidateValue.evaluated,
+    report: candidateValue.report === null ? null : candidateValue.report,
+    authoritativeSavedPreview: authoritativePreview as unknown as AgendaPreview,
+  };
+}
+
 
 function normalizedErrorDetails(value: unknown): AgendaApiErrorDetails | undefined {
   if (Array.isArray(value)) {
@@ -153,6 +196,11 @@ async function apiError(response: Response): Promise<AgendaApiError> {
   const rawBody = await response.json().catch(() => undefined);
   const error =
     isRecord(rawBody) && isRecord(rawBody.error) ? rawBody.error : ({} as Record<string, unknown>);
+  const data = isRecord(rawBody) && isRecord(rawBody.data) ? rawBody.data : undefined;
+  const candidateDiagnostics = placementFailureData(
+    data?.candidateDiagnostics,
+    data?.authoritativeSavedPreview,
+  );
   return new AgendaApiError(
     typeof error.code === "string" ? error.code : "AGENDA_REQUEST_FAILED",
     typeof error.message === "string"
@@ -161,6 +209,7 @@ async function apiError(response: Response): Promise<AgendaApiError> {
     response.status,
     typeof error.traceId === "string" ? error.traceId : undefined,
     normalizedErrorDetails(error.details),
+    candidateDiagnostics,
   );
 }
 
@@ -188,6 +237,9 @@ export function createAgendaApi(
     if (!response.ok) {
       throw await apiError(response);
     }
+    if (response.status === 204) {
+      return undefined as T;
+    }
     const body: unknown = await response.json();
     return unwrapData<T>(body);
   }
@@ -200,6 +252,58 @@ export function createAgendaApi(
       ...(signal === undefined ? {} : { signal }),
     });
   }
+  type AgendaIntegrationsResponse = {
+    readonly delivery: {
+      readonly calendar: AgendaCalendarDeliveryState;
+    };
+  };
+
+  async function loadCalendarDelivery(
+    eventId: string,
+    signal?: AbortSignal,
+  ): Promise<AgendaCalendarDeliveryState> {
+    const snapshot = await request<AgendaIntegrationsResponse>(
+      `/${segment(eventId)}/integrations`,
+      {
+        cache: "no-store",
+        ...(signal === undefined ? {} : { signal }),
+      },
+    );
+    return snapshot.delivery.calendar;
+  }
+
+  async function createRoom(
+    input: { eventId: string; name: string; capacity: number },
+  ): Promise<{ resource: AgendaRoom; workspace: AgendaWorkspaceData }> {
+    const created = await request<AgendaRoom>(`/${segment(input.eventId)}/sessions/rooms`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: input.name, capacity: input.capacity }),
+    });
+    const workspace = await loadWorkspace(input.eventId);
+    const resource = workspace.rooms.find((room) => room.id === created.id);
+    if (!resource) {
+      throw new Error("The created room was not present in the authoritative agenda workspace.");
+    }
+    return { resource, workspace };
+  }
+
+  async function createTrack(
+    input: { eventId: string; name: string },
+  ): Promise<{ resource: AgendaTrack; workspace: AgendaWorkspaceData }> {
+    const created = await request<AgendaTrack>(`/${segment(input.eventId)}/sessions/tracks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: input.name }),
+    });
+    const workspace = await loadWorkspace(input.eventId);
+    const resource = workspace.tracks.find((track) => track.id === created.id);
+    if (!resource) {
+      throw new Error("The created track was not present in the authoritative agenda workspace.");
+    }
+    return { resource, workspace };
+  }
+
   type AgendaDraftResponse = {
     readonly eventId: string;
     readonly version: number;
@@ -287,6 +391,8 @@ export function createAgendaApi(
         ),
       );
     },
+    createRoom,
+    createTrack,
     preview(eventId) {
       return request<AgendaPreview>(`/${segment(eventId)}/agenda/preview`, { method: "GET" });
     },
@@ -359,6 +465,19 @@ export function createAgendaApi(
       return request<AgendaSuggestionRun>(
         `/${segment(input.eventId)}/agenda/suggestions/${segment(input.runId)}`,
       );
+    },
+    getCalendarDelivery(eventId, signal) {
+      return loadCalendarDelivery(eventId, signal);
+    },
+    retryCalendarDelivery(input) {
+      return request<void>(
+        `/${segment(input.eventId)}/integrations/calendar/deliveries/${segment(input.deliveryId)}/retry`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({}),
+        },
+      ).then(() => loadCalendarDelivery(input.eventId));
     },
   };
 }

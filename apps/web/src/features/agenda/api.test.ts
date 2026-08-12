@@ -451,6 +451,7 @@ describe("agenda API adapter", () => {
     const preview = {
       draftVersion: 2,
       conflicts: [],
+      releaseConflicts: [],
       warnings: [],
       diff: { added: 0, changed: 0, removed: 0 },
       validatedAt: "2026-08-08T12:00:00.000Z",
@@ -518,6 +519,7 @@ describe("agenda API adapter", () => {
     const preview = {
       draftVersion: 2,
       conflicts: [],
+      releaseConflicts: [],
       warnings: [],
       diff: { added: 0, changed: 0, removed: 0 },
       validatedAt: "2026-08-08T12:00:00.000Z",
@@ -571,7 +573,7 @@ describe("agenda API adapter", () => {
       status: "pending",
       baseDraftVersion: 2,
       diff: { summary: "One proposed change", changes: [] },
-      validation: { conflicts: [] },
+      candidateDiagnostics: { conflicts: [], warnings: [] },
       acceptedChangeIds: [],
     };
     const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
