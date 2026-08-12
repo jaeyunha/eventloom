@@ -4,8 +4,13 @@ import { describe, expect, it } from "vitest";
 import { createReportsApi, type ReportDefinition, type ReportRun } from "./api";
 import {
   REPORT_FIELD_ALLOWLIST,
+  DeleteReportDialog,
+  DirtySelectionDialog,
+  REPORT_DIALOG_COPY,
+  ReportPreview,
   ReportsWorkspace,
   ReportsWorkspaceStatus,
+  UnavailableState,
   normalizeDraft,
 } from "./reports-workspace";
 
@@ -71,6 +76,28 @@ const run: ReportRun = {
     completedAt: "2026-08-02T01:00:01.000Z",
     outputDigest: "digest-1",
     rowCount: 1,
+  },
+};
+const xlsxRun: ReportRun = {
+  ...run,
+  id: "run-xlsx",
+  parameters: {
+    ...run.parameters,
+    format: "xlsx",
+  },
+  export: {
+    ...run.export,
+    format: "xlsx",
+    fileName: "progress-report-v4.xlsx",
+    contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    body: '<?xml version="1.0"?><worksheet><row><c>SpreadsheetML must not be tabulated</c></row></worksheet>',
+  },
+  audit: {
+    ...run.audit,
+    parameters: {
+      ...run.audit.parameters,
+      format: "xlsx",
+    },
   },
 };
 
@@ -220,6 +247,27 @@ describe("reports API adapter", () => {
     expect(draft.name).toBe("Evaluation progress");
     expect(draft.relationships).toEqual(["sessions", "evaluationProgress"]);
     expect(draft.fields).toContain("evaluationProgress.completionPercent");
+    const normalized = normalizeDraft({
+      name: "Only approved fields survive",
+      description: "",
+      relationships: ["sessions"],
+      fields: ["sessions.id", "evaluationProgress.individualGrade"],
+      order: ["evaluationProgress.individualGrade", "sessions.id"],
+      filters: [
+        { field: "evaluationProgress.individualGrade", operator: "gte", value: 80 },
+        { field: "sessions.id", operator: "eq", value: "session-1" },
+      ],
+      sort: [
+        { field: "evaluationProgress.individualGrade", direction: "desc" },
+        { field: "sessions.id", direction: "asc" },
+      ],
+    });
+    expect(normalized.fields).toEqual(["sessions.id"]);
+    expect(normalized.order).toEqual(["sessions.id"]);
+    expect(normalized.filters).toEqual([
+      { field: "sessions.id", operator: "eq", value: "session-1" },
+    ]);
+    expect(normalized.sort).toEqual([{ field: "sessions.id", direction: "asc" }]);
 
     const calls: Array<{ url: string; init: RequestInit | undefined }> = [];
     const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -328,16 +376,20 @@ describe("reports API adapter", () => {
 });
 
 describe("reports workspace", () => {
-  it("renders saved reports, safe sources, field order, filters, sorting, preview, export, and audit controls", () => {
+  it("renders saved report recipes, safe sources, field order, filters, sorting, preview, export, and audit controls", () => {
     const markup = renderToStaticMarkup(
       createElement(ReportsWorkspace, { organizationId: "org-1", eventId: "event-1" }),
     );
 
     expect(markup).toContain("Reports workspace");
-    expect(markup).toContain("Saved report definitions for event-1");
-    expect(markup).toContain("<caption>");
+    expect(markup).toContain("Saved reports");
+    expect(markup).toContain("Reusable recipes define sources and columns");
+    expect(markup).toContain("immutable, dated result");
+    expect(markup).toContain("<caption ");
     expect(markup).toContain('scope="col"');
     expect(markup).toContain('scope="row"');
+    expect(markup).toContain("Data sources");
+    expect(markup).toContain("Columns");
     expect(markup).toContain("Field order");
     expect(markup).toContain("Move up");
     expect(markup).toContain("Add filter");
@@ -347,6 +399,9 @@ describe("reports workspace", () => {
     expect(markup).toContain("Download CSV");
     expect(markup).toContain("View audit metadata");
     expect(markup).toContain("Output digest");
+    expect(markup).toContain("Reports workspace navigator");
+    expect(markup).toContain("Switch section");
+    expect(markup).toContain("Server authorization");
     expect(markup).not.toContain("privateNotes");
     expect(markup).not.toContain("individualGrade");
     expect(markup).not.toContain("fileIds");
@@ -366,11 +421,18 @@ describe("reports workspace", () => {
       false,
     );
   });
-  it("renders explicit empty and error states as live accessible regions", () => {
+  it("renders distinct empty and unavailable states with honest retry semantics", () => {
     const empty = renderToStaticMarkup(
       createElement(ReportsWorkspaceStatus, {
         eventId: "event-empty",
         message: "No saved reports yet.",
+      }),
+    );
+    const unavailable = renderToStaticMarkup(
+      createElement(UnavailableState, {
+        eventId: "event-error",
+        message: "Reports API unavailable.",
+        onRetry: () => undefined,
       }),
     );
     const error = renderToStaticMarkup(
@@ -382,7 +444,68 @@ describe("reports workspace", () => {
     );
     expect(empty).toContain('role="status"');
     expect(empty).toContain("No saved reports yet.");
+    expect(unavailable).toContain('role="alert"');
+    expect(unavailable).toContain("Reports are unavailable");
+    expect(unavailable).toContain("Retry loading reports");
     expect(error).toContain('role="alert"');
     expect(error).toContain("Reports API unavailable.");
+  });
+
+  it("labels recipes and immutable dated runs separately", () => {
+    const recipeMarkup = renderToStaticMarkup(
+      createElement(ReportsWorkspace, { organizationId: "org-1", eventId: "event-1" }),
+    );
+    const runMarkup = renderToStaticMarkup(
+      createElement(ReportPreview, {
+        run,
+        busy: false,
+        onDownload: () => undefined,
+      }),
+    );
+    expect(recipeMarkup).toContain("Saved recipes");
+    expect(recipeMarkup).toContain("Run history");
+    expect(recipeMarkup).toContain("immutable, dated result");
+    expect(runMarkup).toContain("Immutable result");
+    expect(runMarkup).toContain("Run run-1");
+    expect(runMarkup).toContain("Output digest");
+    expect(runMarkup).toContain("Download CSV");
+  });
+  it("keeps XLSX runs download-only instead of parsing SpreadsheetML as CSV", () => {
+    const markup = renderToStaticMarkup(
+      createElement(ReportPreview, {
+        run: xlsxRun,
+        busy: false,
+        onDownload: () => undefined,
+      }),
+    );
+    expect(markup).toContain("Download XLSX");
+    expect(markup).toContain("Download only");
+    expect(markup).toContain("XLSX previews are download-only");
+    expect(markup).not.toContain("<table");
+    expect(markup).not.toContain("SpreadsheetML must not be tabulated");
+  });
+
+  it("keeps delete failures inside the active gate and wires close focus restoration", () => {
+    expect(String(DeleteReportDialog)).toContain("Delete failed");
+    expect(String(DeleteReportDialog)).toContain("AlertDescription");
+    expect(String(DeleteReportDialog)).toContain("Deleting");
+    expect(String(DeleteReportDialog)).toContain("onCloseAutoFocus");
+    expect(String(DirtySelectionDialog)).toContain("onCloseAutoFocus");
+  });
+  it("keeps delete and dirty-selection actions focus-managed and explicit", () => {
+    const workspaceMarkup = renderToStaticMarkup(
+      createElement(ReportsWorkspace, { organizationId: "org-1", eventId: "event-1" }),
+    );
+    expect(workspaceMarkup).toContain("Delete");
+    expect(REPORT_DIALOG_COPY.deleteTitle).toBe("Delete saved report?");
+    expect(REPORT_DIALOG_COPY.deleteCancel).toBe("Keep report");
+    expect(REPORT_DIALOG_COPY.deleteAction).toBe("Delete saved report");
+    expect(REPORT_DIALOG_COPY.dirtyTitle).toBe("Discard unsaved recipe changes?");
+    expect(REPORT_DIALOG_COPY.dirtyCancel).toBe("Keep editing");
+    expect(REPORT_DIALOG_COPY.dirtyAction).toBe("Discard changes");
+    expect(DeleteReportDialog).toBeTypeOf("function");
+    expect(DirtySelectionDialog).toBeTypeOf("function");
+    expect(String(DeleteReportDialog)).toContain("AlertDialog");
+    expect(String(DirtySelectionDialog)).toContain("AlertDialog");
   });
 });

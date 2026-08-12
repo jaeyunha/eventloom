@@ -1441,6 +1441,83 @@ describe("organizer content-management contracts", () => {
     expect(repository.assets.find((asset) => asset.id === "asset-pending")?.state).toBe("ready");
   });
 });
+it("projects exactly one latest ready asset as the organizer current version", async () => {
+  const repository = new LifecycleRepository();
+  repository.organizerScopes.set("event-1:organizer", {
+    tenantId: "tenant-1",
+    eventId: "event-1",
+    submissionIds: ["submission-1"],
+    participantIds: ["participant-1"],
+    role: "owner",
+  });
+  repository.assets.push(
+    {
+      id: "family-v1",
+      tenantId: "tenant-1",
+      eventId: "event-1",
+      submissionId: "submission-1",
+      participantId: "participant-1",
+      taskId: "upload-task",
+      kind: "slides",
+      objectKey: "opaque/family-v1",
+      fileName: "slides.pdf",
+      contentType: "application/pdf",
+      sizeBytes: 3,
+      state: "ready",
+      createdAt: "2026-08-09T00:00:00.000Z",
+      version: 1,
+      versionFamilyId: "family-slides",
+    },
+    {
+      id: "family-v2",
+      tenantId: "tenant-1",
+      eventId: "event-1",
+      submissionId: "submission-1",
+      participantId: "participant-1",
+      taskId: "upload-task",
+      kind: "slides",
+      objectKey: "opaque/family-v2",
+      fileName: "slides.pdf",
+      contentType: "application/pdf",
+      sizeBytes: 3,
+      state: "ready",
+      createdAt: "2026-08-09T01:00:00.000Z",
+      version: 2,
+      versionFamilyId: "family-slides",
+      supersedesAssetId: "family-v1",
+    },
+    {
+      id: "family-v3-pending",
+      tenantId: "tenant-1",
+      eventId: "event-1",
+      submissionId: "submission-1",
+      participantId: "participant-1",
+      taskId: "upload-task",
+      kind: "slides",
+      objectKey: "opaque/family-v3-pending",
+      fileName: "slides.pdf",
+      contentType: "application/pdf",
+      sizeBytes: 3,
+      state: "pending_upload",
+      createdAt: "2026-08-09T02:00:00.000Z",
+      version: 3,
+      versionFamilyId: "family-slides",
+      supersedesAssetId: "family-v2",
+    },
+  );
+  const service = new SpeakerService(repository, new CapabilityGateway(), {
+    now: () => new Date(now),
+  });
+
+  const matrix = await service.listDeliverables("event-1", "organizer");
+  const row = matrix.items.find((item) => item.task.id === "upload-task");
+  expect(row?.currentAsset).toMatchObject({ id: "family-v2", version: 2, state: "ready" });
+  expect(row?.assets.map((asset) => asset.id)).toEqual([
+    "family-v1",
+    "family-v2",
+    "family-v3-pending",
+  ]);
+});
 describe("organizer immutable content history", () => {
   it("records attributed session edits and restores an earlier version with optimistic concurrency", async () => {
     const repository = new LifecycleRepository();

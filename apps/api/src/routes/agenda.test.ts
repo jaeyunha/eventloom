@@ -183,6 +183,7 @@ function appForWithPublic(
 function publicAppFor(
   engine: AgendaEngine,
   eventMetadataForEvent?: AgendaRouteDependencies["eventMetadataForEvent"],
+  publicRevisionNumberForEventSlug?: AgendaRouteDependencies["publicRevisionNumberForEventSlug"],
 ): Hono<AgendaRouteEnvironment> {
   const app = new Hono<AgendaRouteEnvironment>();
   app.use("*", async (context, next) => {
@@ -195,6 +196,9 @@ function publicAppFor(
     createPublishedAgendaRoutes({
       engine,
       ...(eventMetadataForEvent === undefined ? {} : { eventMetadataForEvent }),
+      ...(publicRevisionNumberForEventSlug === undefined
+        ? {}
+        : { publicRevisionNumberForEventSlug }),
     }),
   );
   return app;
@@ -1141,6 +1145,56 @@ describe("anonymous published agenda feeds", () => {
     expect((await app.request("/api/public/events/open-systems/agenda")).status).toBe(200);
     expect((await app.request("/api/public/events/open-systems/agenda.ics")).status).toBe(200);
     expect(getPublishedAgenda).toHaveBeenCalledTimes(2);
+  });
+  it("serves the agenda revision matching the authoritative public speaker projection", async () => {
+    const publicRevisionFour = publicRevision();
+    const publicRevisionFive = {
+      ...publicRevisionFour,
+      id: "revision-public-5",
+      revisionNumber: 5,
+      entries: publicRevisionFour.entries.map((entry) => ({
+        ...entry,
+        metadata: {
+          ...entry.metadata,
+          title: "A newer agenda that is not public yet",
+        },
+      })),
+    } as PublishedAgendaRevision;
+    const getPublishedAgenda = vi.fn(async () => publicRevisionFive);
+    const getPublishedAgendaRevision = vi.fn(async (_eventSlug: string, revisionNumber: number) =>
+      revisionNumber === 4 ? publicRevisionFour : null,
+    );
+    const publicRevisionNumberForEventSlug = vi.fn(async () => 4);
+    const app = publicAppFor(
+      { getPublishedAgenda, getPublishedAgendaRevision } as unknown as AgendaEngine,
+      undefined,
+      publicRevisionNumberForEventSlug,
+    );
+
+    const response = await app.request("/api/public/events/open-systems/agenda.json");
+
+    expect(response.status).toBe(200);
+    await expect(responseData(response)).resolves.toMatchObject({
+      revision: { number: 4 },
+      entries: [{ title: "A session, with; punctuation \\\\" }],
+    });
+    expect(getPublishedAgendaRevision).toHaveBeenCalledWith("open-systems", 4);
+  });
+  it("withholds the agenda when no authoritative public speaker revision exists", async () => {
+    const getPublishedAgendaRevision = vi.fn();
+    const app = publicAppFor(
+      {
+        getPublishedAgenda: async () => publicRevision(),
+        getPublishedAgendaRevision,
+      } as unknown as AgendaEngine,
+      undefined,
+      async () => null,
+    );
+
+    const response = await app.request("/api/public/events/open-systems/agenda.json");
+
+    expect(response.status).toBe(404);
+    expect(getPublishedAgendaRevision).not.toHaveBeenCalled();
   });
   it("never reads mutable agenda state while serving the published projection", async () => {
     const revision = publicRevision();

@@ -245,6 +245,13 @@ export class AgendaEngine {
       state.revisions.find((revision) => revision.id === state.currentPublishedRevisionId) ?? null
     );
   }
+  async getPublishedAgendaRevision(
+    eventId: string,
+    revisionNumber: number,
+  ): Promise<PublishedAgendaRevision | null> {
+    const state = await this.requireState(eventId);
+    return state.revisions.find((revision) => revision.revisionNumber === revisionNumber) ?? null;
+  }
 
   async getOutbox(eventId: string): Promise<readonly AgendaOutboxEvent[]> {
     return (await this.requireState(eventId)).outbox;

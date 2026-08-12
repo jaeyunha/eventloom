@@ -7,6 +7,7 @@ import {
   EMBED_WIDGETS,
   EmbedWorkspaceView,
   iframeSnippet,
+  normalizeEmbedSlug,
   publicAgendaCalendarUrl,
   publicEmbedUrl,
   scriptSnippet,
@@ -34,6 +35,16 @@ const configuration = {
   displayFields: ["title", "date-time", "room"] as const,
   tracks: ["Track A", "Track B"] as const,
   statuses: ["Approved"] as const,
+};
+const publication = {
+  agendaDraftVersion: 12,
+  publicRevision: {
+    id: "agenda-revision-12",
+    number: 12,
+    publishedAt: "2026-08-07T12:00:00.000Z",
+  },
+  previewAvailability: "available" as const,
+  message: "Preview and code use this exact published revision.",
 };
 
 const eventRecord: OrganizerEventRecord = {
@@ -139,6 +150,33 @@ describe("safe live embed URLs", () => {
     expect(url.searchParams.get("customCss")).toBeNull();
     expect(url.toString()).not.toContain("color%3A");
   });
+  it("withholds URLs when the authoritative event slug is absent", () => {
+    expect(normalizeEmbedSlug(undefined)).toBeNull();
+    expect(
+      publicEmbedUrl({
+        widget: agenda,
+        eventSlug: "",
+        publicOrigin: "https://sessionboard.example",
+        theme: "light",
+      }),
+    ).toBe("");
+    expect(
+      publicAgendaCalendarUrl({
+        widget: agenda,
+        eventSlug: " ",
+        publicOrigin: "https://sessionboard.example",
+        theme: "light",
+      }),
+    ).toBe("");
+    expect(
+      scriptSnippet({
+        widget: agenda,
+        eventSlug: "",
+        publicOrigin: "https://sessionboard.example",
+        theme: "light",
+      }),
+    ).toBe("");
+  });
 
   it("uses the real same-origin agenda feed for iCal output", () => {
     expect(
@@ -218,26 +256,51 @@ describe("embed workspace view", () => {
         eventVersion: eventRecord.version,
         initialConfigurations: eventRecord.embedConfigurations ?? [],
         publicOrigin: "https://sessionboard.example",
+        publication,
       }),
     );
 
-    expect(markup).toContain("Widget configurations");
+    expect(markup).toContain("Choose or save a configuration");
     expect(markup).toContain("Main schedule");
     expect(markup).toContain("Disable Main schedule");
     expect(markup).toContain("Layout");
-    expect(markup).toContain("Custom CSS stays in the host markup");
+    expect(markup).toContain("Custom CSS stays in host markup");
     expect(markup).toContain("Sessions List");
     expect(markup).toContain("Speakers List");
     expect(markup).toContain("Agenda");
     expect(markup).toContain("Schedule Itinerary");
     expect(markup).toContain("Speaker Gallery");
     expect(markup).toContain("Accent color");
-    expect(markup).toContain("Live public preview");
+    expect(markup).toContain("Live published preview");
     expect(markup).toContain("Copy iframe code");
-    expect(markup).toContain("Public and self-updating");
+    expect(markup).toContain("Public boundary");
+    expect(markup).toContain("Publication truth");
+    expect(markup).toContain("Draft event");
+    expect(markup).toContain("Agenda draft");
+    expect(markup).toContain("Public revision");
+    expect(markup).toContain("Preview availability");
     expect(markup).not.toContain("browser-local");
     expect(markup).not.toContain("privateDraft");
     expect(markup).not.toContain("objectKey");
+  });
+  it("withholds distribution while a scoped event snapshot is loading", () => {
+    const markup = renderToStaticMarkup(
+      createElement(EmbedWorkspaceView, {
+        organizationId: "org-1",
+        eventId: "event-1",
+        eventSlug: "stale-summit-2025",
+        eventVersion: eventRecord.version,
+        initialConfigurations: eventRecord.embedConfigurations ?? [],
+        publicOrigin: "https://sessionboard.example",
+        publication,
+        loading: true,
+      }),
+    );
+
+    expect(markup).toContain("Preview unavailable");
+    expect(markup).not.toContain("<iframe");
+    expect(markup).not.toContain("Copy iframe code");
+    expect(markup).not.toContain("stale-summit-2025");
   });
 
   it("renders the published calendar feed for saved iCal configurations", () => {
@@ -249,6 +312,7 @@ describe("embed workspace view", () => {
         eventVersion: eventRecord.version,
         initialConfigurations: [{ ...configuration, outputFormat: "ical" }],
         publicOrigin: "https://sessionboard.example",
+        publication,
       }),
     );
 
@@ -258,5 +322,65 @@ describe("embed workspace view", () => {
     expect(markup).not.toContain(
       "# Use the published agenda calendar link when that feed is enabled.",
     );
+  });
+  it("withholds preview and code when the public projection is absent", () => {
+    const markup = renderToStaticMarkup(
+      createElement(EmbedWorkspaceView, {
+        organizationId: "org-1",
+        eventId: "event-1",
+        eventSlug: "summit-2026",
+        eventVersion: eventRecord.version,
+        initialConfigurations: eventRecord.embedConfigurations ?? [],
+        publicOrigin: "https://sessionboard.example",
+      }),
+    );
+
+    expect(markup).toContain("No published public projection");
+    expect(markup).toContain("Preview unavailable");
+    expect(markup).toContain("Open Agenda validation and publish");
+    expect(markup).not.toContain("<iframe");
+    expect(markup).not.toContain("Copy iframe code");
+  });
+
+  it("labels each lifecycle state and repeats one revision for preview and code", () => {
+    const markup = renderToStaticMarkup(
+      createElement(EmbedWorkspaceView, {
+        organizationId: "org-1",
+        eventId: "event-1",
+        eventSlug: "summit-2026",
+        eventVersion: eventRecord.version,
+        initialConfigurations: eventRecord.embedConfigurations ?? [],
+        publicOrigin: "https://sessionboard.example",
+        publication,
+      }),
+    );
+
+    expect(markup).toContain("Draft event");
+    expect(markup).toContain("Agenda draft");
+    expect(markup).toContain("Public revision");
+    expect(markup).toContain("Preview availability");
+    expect(markup).toContain("Revision 12");
+    expect(markup.match(/Revision 12/g)?.length).toBeGreaterThanOrEqual(3);
+    expect(markup).toContain("Preview and code use this exact published revision.");
+  });
+
+  it("keeps the builder in tabs with a collapsible advanced section", () => {
+    const markup = renderToStaticMarkup(
+      createElement(EmbedWorkspaceView, {
+        organizationId: "org-1",
+        eventId: "event-1",
+        eventSlug: "summit-2026",
+        eventVersion: eventRecord.version,
+        initialConfigurations: [],
+        publicOrigin: "https://sessionboard.example",
+        publication,
+      }),
+    );
+
+    expect(markup).toContain('role="tablist"');
+    expect(markup).toContain("1 Choose and save");
+    expect(markup).toContain("2 Configure widget");
+    expect(markup).toContain("Advanced public options");
+    expect(markup).toContain('data-slot="collapsible"');
   });
 });

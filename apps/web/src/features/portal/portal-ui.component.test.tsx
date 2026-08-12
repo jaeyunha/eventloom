@@ -326,7 +326,7 @@ describe("speaker portal UI components", () => {
     await expect(staleCompletion).resolves.toBe(false);
     expect(isPortalGenerationCurrent(activeGeneration, activeGeneration)).toBe(true);
   });
-  it("starts contexts and the configured workspace request together and consumes one matching view", async () => {
+  it("validates the configured event against server contexts before prefetching", async () => {
     let resolveContexts!: (contexts: PortalContext[]) => void;
     const contexts = new Promise<PortalContext[]>((resolve) => {
       resolveContexts = resolve;
@@ -345,7 +345,7 @@ describe("speaker portal UI components", () => {
     };
 
     const startup = loadPortalStartup(api, "event-1");
-    expect(requests).toEqual(["contexts", "workspace:event-1"]);
+    expect(requests).toEqual(["contexts"]);
 
     resolveContexts([matchingContext]);
     const result = await startup;
@@ -376,11 +376,10 @@ describe("speaker portal UI components", () => {
     expect(requests).toEqual(["contexts", "workspace:event-1"]);
   });
 
-  it("does not consume a concurrent workspace prefetch after abort", async () => {
+  it("does not consume a workspace prefetch after abort", async () => {
     const context = portalStartupContext("event-1");
     const controller = new AbortController();
     let resolveContexts!: (contexts: PortalContext[]) => void;
-    let resolveView!: (view: PortalView) => void;
     const requests: string[] = [];
     const api = {
       listPortalContexts: () => {
@@ -389,47 +388,58 @@ describe("speaker portal UI components", () => {
           resolveContexts = resolve;
         });
       },
-      getPortal: (eventId: string) => {
+      getPortal: async (eventId: string) => {
         requests.push(`workspace:${eventId}`);
-        return new Promise<PortalView>((resolve) => {
-          resolveView = resolve;
-        });
+        return portalStartupView(context);
       },
     };
 
     const startup = loadPortalStartup(api, context.eventId, controller.signal);
-    expect(requests).toEqual(["contexts", "workspace:event-1"]);
+    expect(requests).toEqual(["contexts"]);
     controller.abort();
-    resolveView(portalStartupView(context));
     resolveContexts([context]);
 
     const result = await startup;
     expect(result.prefetchedView).toBeUndefined();
-    expect(requests).toEqual(["contexts", "workspace:event-1"]);
+    expect(requests).toEqual(["contexts"]);
   });
 
-  it("does not consume a stale configured workspace view for an authorized context", async () => {
+  it("ignores an unauthorized event hint and does not query that event", async () => {
     const authorizedContext = portalStartupContext("event-authorized");
-    const staleContext = portalStartupContext("event-stale");
+    const unauthorizedEventId = "event-not-authorized";
     const requests: string[] = [];
     const api = {
       listPortalContexts: async () => [authorizedContext],
       getPortal: async (eventId: string) => {
         requests.push(eventId);
+        return portalStartupView(authorizedContext);
+      },
+    };
+
+    const result = await loadPortalStartup(api, unauthorizedEventId);
+    expect(result.preferredContext?.eventId).toBe(authorizedContext.eventId);
+    expect(result.prefetchedView).toMatchObject({ status: "fulfilled" });
+    expect(requests).toEqual([authorizedContext.eventId]);
+  });
+
+  it("selects the matching authorized event among multiple contexts", async () => {
+    const firstContext = portalStartupContext("event-first");
+    const matchingContext = portalStartupContext("event-matching");
+    const requests: string[] = [];
+    const api = {
+      listPortalContexts: async () => [firstContext, matchingContext],
+      getPortal: async (eventId: string) => {
+        requests.push(eventId);
         return portalStartupView(
-          eventId === staleContext.eventId ? staleContext : authorizedContext,
+          eventId === matchingContext.eventId ? matchingContext : firstContext,
         );
       },
     };
 
-    const result = await loadPortalStartup(api, staleContext.eventId);
-    expect(result.preferredContext?.eventId).toBe(authorizedContext.eventId);
-    expect(result.prefetchedView).toBeUndefined();
-    if (result.preferredContext === null) throw new Error("Expected an authorized portal context.");
-
-    const fallbackView = await api.getPortal(result.preferredContext.eventId);
-    expect(fallbackView.context?.eventId).toBe(authorizedContext.eventId);
-    expect(requests).toEqual([staleContext.eventId, authorizedContext.eventId]);
+    const result = await loadPortalStartup(api, matchingContext.eventId);
+    expect(result.preferredContext?.eventId).toBe(matchingContext.eventId);
+    expect(result.prefetchedView).toMatchObject({ status: "fulfilled" });
+    expect(requests).toEqual([matchingContext.eventId]);
   });
 
   it("completes delayed production-equivalent startup under one second", async () => {

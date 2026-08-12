@@ -177,6 +177,7 @@ import type {
   SpeakerTaskRepositoryCommand,
   SpeakerTaskResponseRecord,
   SpeakerWikiPage,
+  SpeakerTravelLogistics,
   TransitionSpeakerTaskCommand,
   UpdateBiographyCommand,
   UpdateSpeakerProfileCommand,
@@ -210,9 +211,10 @@ import type {
   OrganizerOverviewEvent,
   OrganizerOverviewRouteDependencies,
 } from "../routes/organizer-overview";
-import type {
-  PublishedSpeakerProjection,
-  PublishedSpeakerRouteDependencies,
+import {
+  invalidatePublishedSpeakerCache,
+  type PublishedSpeakerProjection,
+  type PublishedSpeakerRouteDependencies,
 } from "../routes/public-speakers";
 import {
   matchesOrganizationScope,
@@ -780,6 +782,14 @@ class AirtablePublishedSpeakerProjectionStore implements PublishedSpeakerRouteDe
   }
   async putPublishedSpeakers(record: PublishedSpeakerProjectionRecord): Promise<void> {
     const existing = await this.#store.findWithRecordId(record.id);
+    if (
+      existing !== undefined &&
+      existing.entity.organizationId === record.organizationId &&
+      existing.entity.eventId === record.eventId &&
+      existing.entity.revisionNumber > record.revisionNumber
+    ) {
+      return;
+    }
     if (existing === undefined) {
       await this.#store.create(record);
     } else {
@@ -2361,6 +2371,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     readonly company: string;
     readonly biography: string;
     readonly socialLinks: Readonly<Record<string, string>>;
+    readonly travelLogistics?: SpeakerTravelLogistics;
     readonly status: string;
     readonly updatedAt: string;
   }): Promise<SpeakerProfile> {
@@ -2381,6 +2392,14 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       biography: input.biography,
       socialLinks: { ...input.socialLinks },
       status: input.status,
+      ...(input.travelLogistics === undefined
+        ? existing?.travelLogistics === undefined
+          ? {}
+          : { travelLogistics: existing.travelLogistics }
+        : { travelLogistics: input.travelLogistics }),
+      ...(existing?.headshotAssetId === undefined
+        ? {}
+        : { headshotAssetId: existing.headshotAssetId }),
       version: existing?.version ?? 1,
       updatedAt: input.updatedAt,
     };
@@ -2598,6 +2617,9 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       ...(command.status === undefined ? {} : { status: command.status }),
       ...(command.biography === undefined ? {} : { biography: command.biography }),
       ...(command.socialLinks === undefined ? {} : { socialLinks: command.socialLinks }),
+      ...(command.travelLogistics === undefined
+        ? {}
+        : { travelLogistics: command.travelLogistics }),
       version: profile.version + 1,
       updatedAt: command.updatedAt,
     };
@@ -2620,144 +2642,45 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     ];
     if (requestedParticipantIds.length === 0) return [];
 
-    const [storedTasks, profiles, submissionRecords, decisionRecords] = await Promise.all([
+    const [storedTasks, submissionRecords, decisionRecords] = await Promise.all([
       this.#tasks.list(),
-      this.#profiles.list(),
       this.#submissions.list(),
       this.#decisions.list(),
     ]);
-    const requested = new Set(requestedParticipantIds);
-    const aliasesByEmail = new Map<string, Set<string>>();
-    for (const profile of profiles) {
-      if (profile.eventId !== eventId) continue;
-      const email = profile.email?.trim().toLowerCase();
-      const participantId = profile.participantId.trim();
-      if (email === undefined || email.length === 0 || participantId.length === 0) continue;
-      const aliases = aliasesByEmail.get(email) ?? new Set<string>();
-      aliases.add(participantId);
-      aliasesByEmail.set(email, aliases);
-    }
-
-    const canonicalByParticipant = new Map(
-      requestedParticipantIds.map((participantId) => [participantId, participantId]),
-    );
-    for (const aliases of aliasesByEmail.values()) {
-      const requestedAliases = [...aliases].filter((participantId) => requested.has(participantId));
-      if (requestedAliases.length !== 1) continue;
-      const canonicalParticipantId = requestedAliases[0];
-      if (canonicalParticipantId === undefined) continue;
-      for (const alias of aliases) canonicalByParticipant.set(alias, canonicalParticipantId);
-    }
-
-    const records = submissionRecords as unknown as JsonRecord[];
     const decisions = portalDecisionProjections(decisionRecords);
-    const acceptedSubmissions = records.flatMap((record) => {
+    const acceptedParticipantsBySubmission = new Map<string, ReadonlySet<string>>();
+    for (const record of submissionRecords as unknown as JsonRecord[]) {
       if (
         textValue(record, "eventId", "Event ID") !== eventId ||
         portalRecordStatus(record, decisions) !== "accepted"
       ) {
-        return [];
+        continue;
       }
       const id = textValue(record, "id", APPLICATION_ID);
-      const title = portalAnswerText(record, "title", "sessionTitle", "name");
-      if (id === null || title === null) return [];
-      return [
-        {
-          sourceId: originalCfpSubmissionId(id) ?? id,
-          title,
-          participantIds: portalParticipantIds(record),
-        },
-      ];
-    });
-    const canonicalSubmissionByAlias = new Map<string, string>();
-    for (const [aliasParticipantId, canonicalParticipantId] of canonicalByParticipant) {
-      if (aliasParticipantId === canonicalParticipantId) continue;
-      const aliasSubmissions = acceptedSubmissions.filter((submission) =>
-        submission.participantIds.includes(aliasParticipantId),
+      if (id === null) continue;
+      const participantIdsForSubmission = new Set(portalParticipantIds(record));
+      const sourceId = originalCfpSubmissionId(id) ?? id;
+      acceptedParticipantsBySubmission.set(id, participantIdsForSubmission);
+      acceptedParticipantsBySubmission.set(sourceId, participantIdsForSubmission);
+      acceptedParticipantsBySubmission.set(
+        `speaker-submission:${sourceId}`,
+        participantIdsForSubmission,
       );
-      for (const aliasSubmission of aliasSubmissions) {
-        const canonicalSourceIds = [
-          ...new Set(
-            acceptedSubmissions
-              .filter(
-                (submission) =>
-                  submission.title === aliasSubmission.title &&
-                  submission.participantIds.includes(canonicalParticipantId),
-              )
-              .map((submission) => submission.sourceId),
-          ),
-        ];
-        if (canonicalSourceIds.length !== 1) continue;
-        const canonicalSourceId = canonicalSourceIds[0];
-        if (canonicalSourceId === undefined) continue;
-        canonicalSubmissionByAlias.set(
-          `${aliasParticipantId}\u0000${aliasSubmission.sourceId}`,
-          `speaker-submission:${canonicalSourceId}`,
-        );
-      }
     }
 
-    type ProjectedTask = {
-      readonly task: SpeakerTask;
-      readonly familyId: string;
-      readonly assignedToCanonicalParticipant: boolean;
-    };
-    const byFamily = new Map<string, ProjectedTask>();
-    for (const storedTask of storedTasks) {
-      if (storedTask.eventId !== eventId) continue;
-      const canonicalParticipantId = canonicalByParticipant.get(storedTask.participantId);
-      if (canonicalParticipantId === undefined) continue;
-
-      const task = untagged(storedTask);
-      const sourceSubmissionId = originalCfpSubmissionId(task.submissionId) ?? task.submissionId;
-      const canonicalSubmissionId =
-        canonicalSubmissionByAlias.get(`${task.participantId}\u0000${sourceSubmissionId}`) ??
-        task.submissionId;
-      const projected: SpeakerTask = {
-        ...task,
-        participantId: canonicalParticipantId,
-        submissionId: canonicalSubmissionId,
-        ...(task.assigneeIds === undefined
-          ? {}
-          : {
-              assigneeIds: [
-                ...new Set(
-                  task.assigneeIds.map(
-                    (participantId) => canonicalByParticipant.get(participantId) ?? participantId,
-                  ),
-                ),
-              ],
-            }),
-      };
-
-      let familyId = task.id.split(task.participantId).join(canonicalParticipantId);
-      if (canonicalSubmissionId !== task.submissionId) {
-        const canonicalSourceId =
-          originalCfpSubmissionId(canonicalSubmissionId) ?? canonicalSubmissionId;
-        familyId = familyId
-          .split(task.submissionId)
-          .join(canonicalSubmissionId)
-          .split(sourceSubmissionId)
-          .join(canonicalSourceId);
-      }
-      const candidate: ProjectedTask = {
-        task: projected,
-        familyId,
-        assignedToCanonicalParticipant: task.participantId === canonicalParticipantId,
-      };
-      const existing = byFamily.get(familyId);
-      if (
-        existing === undefined ||
-        (!existing.assignedToCanonicalParticipant && candidate.assignedToCanonicalParticipant) ||
-        (existing.assignedToCanonicalParticipant === candidate.assignedToCanonicalParticipant &&
-          (candidate.task.version > existing.task.version ||
-            (candidate.task.version === existing.task.version &&
-              candidate.task.updatedAt > existing.task.updatedAt)))
-      ) {
-        byFamily.set(familyId, candidate);
-      }
-    }
-    return [...byFamily.values()].map(({ task }) => task);
+    const requested = new Set(requestedParticipantIds);
+    return storedTasks
+      .filter((storedTask) => {
+        if (storedTask.eventId !== eventId || !requested.has(storedTask.participantId))
+          return false;
+        const sourceId =
+          originalCfpSubmissionId(storedTask.submissionId) ?? storedTask.submissionId;
+        const participants =
+          acceptedParticipantsBySubmission.get(storedTask.submissionId) ??
+          acceptedParticipantsBySubmission.get(sourceId);
+        return participants?.has(storedTask.participantId) ?? false;
+      })
+      .map((storedTask) => untagged(storedTask));
   }
 
   async createTask(command: SpeakerTaskRepositoryCommand): Promise<RepositoryResult<SpeakerTask>> {
@@ -2809,6 +2732,34 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
   > {
     const task = await this.getTask(command.eventId, command.taskId);
     if (task === null) return { ok: false, reason: "not_found" };
+    if (
+      command.transition.participantId !== task.participantId ||
+      task.submissionId === undefined
+    ) {
+      return { ok: false, reason: "not_found" };
+    }
+    const [submissionRecords, decisionRecords] = await Promise.all([
+      this.#submissions.list(),
+      this.#decisions.list(),
+    ]);
+    const decisions = portalDecisionProjections(decisionRecords);
+    const sourceId = originalCfpSubmissionId(task.submissionId) ?? task.submissionId;
+    const authorized = (submissionRecords as unknown as JsonRecord[]).some((record) => {
+      const id = textValue(record, "id", APPLICATION_ID);
+      if (
+        id === null ||
+        eventReference(record) !== command.eventId ||
+        portalRecordStatus(record, decisions) !== "accepted"
+      ) {
+        return false;
+      }
+      const candidateSourceId = originalCfpSubmissionId(id) ?? id;
+      return (
+        (id === task.submissionId || candidateSourceId === sourceId) &&
+        portalParticipantIds(record).includes(task.participantId)
+      );
+    });
+    if (!authorized) return { ok: false, reason: "not_found" };
     if (task.version !== command.expectedVersion || task.status !== command.fromStatus) {
       return { ok: false, reason: "version_conflict" };
     }
@@ -9453,6 +9404,10 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
           venueName: event.venue,
         };
       },
+      async publicRevisionNumberForEventSlug(eventSlug: string) {
+        const projection = await publishedSpeakerProjections.getPublishedSpeakers(eventSlug);
+        return projection?.revision.number ?? null;
+      },
       async afterPublish(eventId, revision) {
         const [rawEvent, agendaState] = await Promise.all([
           events.find(eventId),
@@ -9543,6 +9498,7 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
             })
             .sort((left, right) => left.displayName.localeCompare(right.displayName)),
         });
+        await invalidatePublishedSpeakerCache(publishedSpeakerProjections, rawEvent.slug);
         await enqueueCloudflareOutbox({
           database: options.database,
           queue: options.outboxQueue,

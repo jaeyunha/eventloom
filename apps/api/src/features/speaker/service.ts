@@ -492,6 +492,9 @@ function assetVersionCompare(left: SpeakerAsset, right: SpeakerAsset): number {
     compareStable(left.id, right.id)
   );
 }
+function latestReadyAsset(assets: readonly SpeakerAsset[]): SpeakerAsset | undefined {
+  return assets.filter((asset) => asset.state === "ready").sort(assetVersionCompare)[0];
+}
 
 function crc32(bytes: Uint8Array): number {
   let crc = 0xffffffff;
@@ -1935,7 +1938,7 @@ export class SpeakerService {
         return [];
       }
       const submission = acceptedSubmissions.get(canonicalSpeakerSubmissionId(task.submissionId));
-      return submission === undefined
+      return submission === undefined || !submission.participantIds.includes(task.participantId)
         ? []
         : [{ ...structuredClone(task), sessionTitle: submission.title }];
     });
@@ -2181,15 +2184,19 @@ export class SpeakerService {
         ),
       ),
     );
-    const participantIds = unique([...acceptedParticipantIds, ...manualByParticipant.keys()]);
+    const participantIds = new Set([...acceptedParticipantIds, ...manualByParticipant.keys()]);
     const participantNames = new Map(
       roster.map((entry) => [entry.participantId, entry.displayName]),
     );
     return tasks
       .filter((task) => {
-        if (task.eventId !== eventId || !participantIds.includes(task.participantId)) return false;
-        if (acceptedSubmissionsById.has(canonicalSpeakerSubmissionId(task.submissionId)))
-          return true;
+        if (task.eventId !== eventId || !participantIds.has(task.participantId)) return false;
+        const submission = acceptedSubmissionsById.get(
+          canonicalSpeakerSubmissionId(task.submissionId),
+        );
+        if (submission !== undefined) {
+          return submission.participantIds.includes(task.participantId);
+        }
         const manual = manualByParticipant.get(task.participantId);
         return (
           manual !== undefined && sameSpeakerSubmission(manual.submissionId, task.submissionId)
@@ -2291,7 +2298,17 @@ export class SpeakerService {
       const candidates = acceptedByParticipant.get(participantId) ?? [];
       const submission =
         input.submissionId === undefined
-          ? candidates[0]
+          ? candidates.length === 1
+            ? candidates[0]
+            : candidates.length === 0
+              ? undefined
+              : (() => {
+                  throw new SpeakerServiceError(
+                    "VALIDATION_ERROR",
+                    400,
+                    "A submission is required when a speaker has multiple accepted sessions.",
+                  );
+                })()
           : candidates.find((candidate) =>
               sameSpeakerSubmission(candidate.id, input.submissionId as string),
             );
@@ -2613,13 +2630,7 @@ export class SpeakerService {
           asset.submissionId === undefined ||
           sameSpeakerSubmission(asset.submissionId, task.submissionId),
       );
-      const currentAsset = taskAssets
-        .slice()
-        .sort(
-          (left, right) =>
-            (right.version ?? 0) - (left.version ?? 0) ||
-            right.createdAt.localeCompare(left.createdAt),
-        )[0];
+      const currentAsset = latestReadyAsset(taskAssets);
       const status = taskStatusForAssets(task, taskAssets, this.now());
       const incomplete = !["completed", "waived", "uploaded"].includes(status);
       if (
@@ -2683,9 +2694,6 @@ export class SpeakerService {
       );
     }
     const acceptedSubmissions = await this.acceptedOrganizerSubmissions(input.eventId, scope);
-    const allowedSubmissionIds = new Set(
-      acceptedSubmissions.map((submission) => canonicalSpeakerSubmissionId(submission.id)),
-    );
     const acceptedSubmissionsById = new Map(
       acceptedSubmissions.map((submission) => [
         canonicalSpeakerSubmissionId(submission.id),
@@ -2708,25 +2716,34 @@ export class SpeakerService {
     }
 
     const tasks = (await this.repository.listTasks(input.eventId, [...allowedParticipantIds]))
-      .filter(
-        (task) =>
-          task.eventId === input.eventId &&
-          allowedParticipantIds.has(task.participantId) &&
-          allowedSubmissionIds.has(canonicalSpeakerSubmissionId(task.submissionId)),
-      )
+      .filter((task) => {
+        if (task.eventId !== input.eventId || !allowedParticipantIds.has(task.participantId)) {
+          return false;
+        }
+        const submission = acceptedSubmissionsById.get(
+          canonicalSpeakerSubmissionId(task.submissionId),
+        );
+        return submission?.participantIds.includes(task.participantId) ?? false;
+      })
       .sort((left, right) => compareStable(left.id, right.id));
     const taskById = new Map(tasks.map((task) => [task.id, task]));
     if (taskIds?.some((taskId) => !taskById.has(taskId))) throw notFound();
 
     const assets = (await this.assetsForParticipants(input.eventId, [...allowedParticipantIds]))
-      .filter(
-        (asset) =>
-          asset.eventId === input.eventId &&
-          allowedParticipantIds.has(asset.participantId) &&
-          (asset.tenantId === undefined || asset.tenantId === scope.tenantId) &&
-          (asset.submissionId === undefined ||
-            allowedSubmissionIds.has(canonicalSpeakerSubmissionId(asset.submissionId))),
-      )
+      .filter((asset) => {
+        if (
+          asset.eventId !== input.eventId ||
+          !allowedParticipantIds.has(asset.participantId) ||
+          (asset.tenantId !== undefined && asset.tenantId !== scope.tenantId)
+        ) {
+          return false;
+        }
+        if (asset.submissionId === undefined) return true;
+        const submission = acceptedSubmissionsById.get(
+          canonicalSpeakerSubmissionId(asset.submissionId),
+        );
+        return submission?.participantIds.includes(asset.participantId) ?? false;
+      })
       .sort((left, right) => compareStable(left.id, right.id));
     const assetById = new Map(assets.map((asset) => [asset.id, asset]));
     if (
@@ -3073,17 +3090,23 @@ export class SpeakerService {
     const participantIds =
       participantId === undefined ? [...acceptedParticipantIds] : [participantId];
     return assets
-      .filter(
-        (asset) =>
-          asset.eventId === eventId &&
-          participantIds.includes(asset.participantId) &&
-          acceptedParticipantIds.has(asset.participantId) &&
-          (versionFamilyId === undefined ||
-            (asset.versionFamilyId ?? asset.id) === versionFamilyId) &&
-          (asset.tenantId === undefined || asset.tenantId === scope.tenantId) &&
-          (asset.submissionId === undefined ||
-            acceptedSubmissionsById.has(canonicalSpeakerSubmissionId(asset.submissionId))),
-      )
+      .filter((asset) => {
+        if (
+          asset.eventId !== eventId ||
+          !participantIds.includes(asset.participantId) ||
+          !acceptedParticipantIds.has(asset.participantId) ||
+          (versionFamilyId !== undefined &&
+            (asset.versionFamilyId ?? asset.id) !== versionFamilyId) ||
+          (asset.tenantId !== undefined && asset.tenantId !== scope.tenantId)
+        ) {
+          return false;
+        }
+        if (asset.submissionId === undefined) return true;
+        const submission = acceptedSubmissionsById.get(
+          canonicalSpeakerSubmissionId(asset.submissionId),
+        );
+        return submission?.participantIds.includes(asset.participantId) ?? false;
+      })
       .map((asset) => {
         const submission =
           asset.submissionId === undefined
@@ -4876,15 +4899,33 @@ export class SpeakerService {
     assertExpectedVersion(input.expectedVersion);
     const scope = await this.getScope(input.eventId, input.accountId);
     const task = await this.repository.getTask(input.eventId, input.taskId);
+    const acceptedSubmissions = await this.repository.listSubmissions(
+      input.eventId,
+      scope.submissionIds,
+    );
+    const taskSubmission =
+      task === null || task.submissionId === undefined
+        ? undefined
+        : acceptedSubmissions.find(
+            (submission) =>
+              sameSpeakerSubmission(submission.id, task.submissionId) &&
+              submission.participantIds.includes(task.participantId),
+          );
     if (
       !task ||
       task.eventId !== input.eventId ||
       task.owner !== "speaker" ||
       !scope.participantIds.includes(task.participantId) ||
-      task.submissionId === undefined ||
-      !speakerSubmissionAllowed(scope.submissionIds, task.submissionId)
+      taskSubmission === undefined
     ) {
       throw notFound();
+    }
+    if (taskSubmission.status !== "accepted") {
+      throw new SpeakerServiceError(
+        "TASK_NOT_ACTIVE",
+        409,
+        "Speaker tasks are available only after the submission is accepted.",
+      );
     }
     assertCapability(scope, "task-response", task.participantId);
     if (task.version !== input.expectedVersion) {
@@ -4979,11 +5020,21 @@ export class SpeakerService {
         task.participantId !== input.participantId ||
         task.owner !== "speaker" ||
         task.type !== "upload" ||
-        task.submissionId === undefined ||
-        !speakerSubmissionAllowed(scope.submissionIds, task.submissionId)
+        task.submissionId === undefined
       ) {
         throw notFound();
       }
+      const authorizedTask = task;
+      const taskSubmission = (
+        await this.repository.listSubmissions(input.eventId, scope.submissionIds)
+      ).find(
+        (submission) =>
+          submission.eventId === input.eventId &&
+          submission.status === "accepted" &&
+          sameSpeakerSubmission(submission.id, authorizedTask.submissionId as string) &&
+          submission.participantIds.includes(authorizedTask.participantId),
+      );
+      if (taskSubmission === undefined) throw notFound();
       await this.assertTaskIsActive(task);
       if (
         ["completed", "waived"].includes(task.status) ||
@@ -5707,13 +5758,22 @@ export class SpeakerService {
   async getTaskForm(eventId: string, accountId: string, taskId: string): Promise<SpeakerTaskForm> {
     const scope = await this.getScope(eventId, accountId);
     const task = await this.repository.getTask(eventId, taskId);
+    const submissions = await this.repository.listSubmissions(eventId, scope.submissionIds);
+    const taskSubmission =
+      task === null || task.submissionId === undefined
+        ? undefined
+        : submissions.find(
+            (submission) =>
+              submission.status === "accepted" &&
+              sameSpeakerSubmission(submission.id, task.submissionId) &&
+              submission.participantIds.includes(task.participantId),
+          );
     if (
       task === null ||
       task.eventId !== eventId ||
       task.owner !== "speaker" ||
       !scope.participantIds.includes(task.participantId) ||
-      task.submissionId === undefined ||
-      !speakerSubmissionAllowed(scope.submissionIds, task.submissionId)
+      taskSubmission === undefined
     ) {
       throw notFound();
     }
@@ -6006,20 +6066,21 @@ export class SpeakerService {
   private async assertTaskAssetsReady(task: SpeakerTask): Promise<void> {
     if (task.type !== "upload") return;
     const assets = await this.assetsForParticipants(task.eventId, [task.participantId]);
-    const latestByFamily = new Map<string, SpeakerAsset>();
+    const assetsByFamily = new Map<string, SpeakerAsset[]>();
     for (const asset of assets) {
       if (asset.taskId !== task.id) continue;
       const familyId = asset.versionFamilyId ?? asset.id;
-      const current = latestByFamily.get(familyId);
-      if (current === undefined || assetVersionCompare(asset, current) < 0) {
-        latestByFamily.set(familyId, asset);
-      }
+      const family = assetsByFamily.get(familyId);
+      if (family === undefined) assetsByFamily.set(familyId, [asset]);
+      else family.push(asset);
     }
-    const ready = [...latestByFamily.values()].some(
-      (asset) =>
-        asset.state === "ready" &&
-        (task.acceptedAssetKinds === undefined || task.acceptedAssetKinds.includes(asset.kind)),
-    );
+    const ready = [...assetsByFamily.values()]
+      .map((family) => latestReadyAsset(family))
+      .some(
+        (asset) =>
+          asset !== undefined &&
+          (task.acceptedAssetKinds === undefined || task.acceptedAssetKinds.includes(asset.kind)),
+      );
     if (!ready) {
       throw new SpeakerServiceError(
         "TASK_ASSET_NOT_READY",
@@ -6057,6 +6118,7 @@ export class SpeakerService {
         (candidate) =>
           sameSpeakerSubmission(candidate.id, requestedSubmissionId) &&
           candidate.eventId === eventId &&
+          candidate.status === "accepted" &&
           candidate.participantIds.includes(participantId),
       );
       if (
@@ -7121,8 +7183,15 @@ export class SpeakerService {
       participantId === undefined
         ? unique([...scope.participantIds, ...manualByParticipant.keys()])
         : [participantId];
+    const submissions = await this.repository.listSubmissions(eventId, scope.submissionIds);
     const taskAllowed = (task: SpeakerTask): boolean => {
-      if (speakerSubmissionAllowed(scope.submissionIds, task.submissionId)) return true;
+      const submission = submissions.find(
+        (candidate) =>
+          candidate.status === "accepted" &&
+          sameSpeakerSubmission(candidate.id, task.submissionId) &&
+          candidate.participantIds.includes(task.participantId),
+      );
+      if (submission !== undefined) return true;
       const manual = manualByParticipant.get(task.participantId);
       return manual !== undefined && sameSpeakerSubmission(manual.submissionId, task.submissionId);
     };
@@ -7131,14 +7200,22 @@ export class SpeakerService {
       this.assetsForParticipants(eventId, requested),
     ]);
     const assets = rawAssets.filter((asset) => {
-      if (asset.tenantId !== undefined && asset.tenantId !== scope.tenantId) return false;
-      if (speakerSubmissionAllowed(scope.submissionIds, asset.submissionId)) return true;
-      const manual = manualByParticipant.get(asset.participantId);
-      return (
-        manual !== undefined &&
-        asset.submissionId !== undefined &&
-        sameSpeakerSubmission(manual.submissionId, asset.submissionId)
+      if (asset.tenantId !== undefined && asset.tenantId !== scope.tenantId) {
+        return false;
+      }
+      const submissionId = asset.submissionId;
+      if (submissionId === undefined) {
+        return scope.participantIds.includes(asset.participantId);
+      }
+      const submission = submissions.find(
+        (candidate) =>
+          candidate.status === "accepted" &&
+          sameSpeakerSubmission(candidate.id, submissionId) &&
+          candidate.participantIds.includes(asset.participantId),
       );
+      if (submission !== undefined) return true;
+      const manual = manualByParticipant.get(asset.participantId);
+      return manual !== undefined && sameSpeakerSubmission(manual.submissionId, submissionId);
     });
     return {
       organizationId,
@@ -7153,15 +7230,11 @@ export class SpeakerService {
             (participantId === undefined || task.participantId === participantId),
         )
         .map((task) => {
-          const latestAsset = assets
-            .filter(
+          const latestAsset = latestReadyAsset(
+            assets.filter(
               (asset) => asset.taskId === task.id && asset.participantId === task.participantId,
-            )
-            .sort(
-              (left, right) =>
-                (right.version ?? 0) - (left.version ?? 0) ||
-                right.createdAt.localeCompare(left.createdAt),
-            )[0];
+            ),
+          );
           return {
             ...this.workspaceTask(task),
             latestAssetId: latestAsset?.id ?? null,
@@ -7551,8 +7624,11 @@ export class SpeakerService {
     );
     const crmParticipantIds = entries.filter(isCrmRosterEntry).map((entry) => entry.participantId);
     const participantIds = unique([...acceptedParticipantIds, ...crmParticipantIds]);
-    const acceptedSubmissionIds = new Set(
-      acceptedSubmissions.map((submission) => canonicalSpeakerSubmissionId(submission.id)),
+    const acceptedSubmissionById = new Map(
+      acceptedSubmissions.map((submission) => [
+        canonicalSpeakerSubmissionId(submission.id),
+        submission,
+      ]),
     );
     const manualByParticipant = new Map(
       entries.filter(isOrganizerManagedRosterEntry).map((entry) => [entry.participantId, entry]),
@@ -7573,32 +7649,37 @@ export class SpeakerService {
         organizerRecordTenantMatches(candidate, scope.tenantId),
       );
     }
-    const tasks = taskCandidates.filter(
-      (task) =>
-        task.eventId === eventId &&
-        participantIds.includes(task.participantId) &&
-        task.owner === "speaker" &&
-        (acceptedSubmissionIds.has(canonicalSpeakerSubmissionId(task.submissionId)) ||
-          (manualByParticipant.get(task.participantId) !== undefined &&
-            sameSpeakerSubmission(
-              manualByParticipant.get(task.participantId)?.submissionId ?? "",
-              task.submissionId,
-            ))),
-    );
-    const assets = assetCandidates.filter(
-      (asset) =>
-        asset.eventId === eventId &&
-        participantIds.includes(asset.participantId) &&
-        (asset.tenantId === undefined || asset.tenantId === scope.tenantId) &&
-        ((asset.submissionId === undefined && acceptedParticipantIds.has(asset.participantId)) ||
-          acceptedSubmissionIds.has(canonicalSpeakerSubmissionId(asset.submissionId ?? "")) ||
-          (asset.submissionId !== undefined &&
-            manualByParticipant.get(asset.participantId) !== undefined &&
-            sameSpeakerSubmission(
-              manualByParticipant.get(asset.participantId)?.submissionId ?? "",
-              asset.submissionId,
-            ))),
-    );
+    const tasks = taskCandidates.filter((task) => {
+      if (
+        task.eventId !== eventId ||
+        !participantIds.includes(task.participantId) ||
+        task.owner !== "speaker"
+      ) {
+        return false;
+      }
+      const submission = acceptedSubmissionById.get(
+        canonicalSpeakerSubmissionId(task.submissionId),
+      );
+      if (submission !== undefined) return submission.participantIds.includes(task.participantId);
+      const manual = manualByParticipant.get(task.participantId);
+      return manual !== undefined && sameSpeakerSubmission(manual.submissionId, task.submissionId);
+    });
+    const assets = assetCandidates.filter((asset) => {
+      if (
+        asset.eventId !== eventId ||
+        !participantIds.includes(asset.participantId) ||
+        (asset.tenantId !== undefined && asset.tenantId !== scope.tenantId)
+      ) {
+        return false;
+      }
+      if (asset.submissionId === undefined) return acceptedParticipantIds.has(asset.participantId);
+      const submission = acceptedSubmissionById.get(
+        canonicalSpeakerSubmissionId(asset.submissionId),
+      );
+      if (submission !== undefined) return submission.participantIds.includes(asset.participantId);
+      const manual = manualByParticipant.get(asset.participantId);
+      return manual !== undefined && sameSpeakerSubmission(manual.submissionId, asset.submissionId);
+    });
     return {
       scope,
       acceptedSubmissions,
@@ -7637,40 +7718,15 @@ export class SpeakerService {
     );
     const recordsByIdentity = new Map<string, SpeakerWorkspaceRecord>();
     for (const record of records) {
-      const normalizedEmail = record.email.trim().toLowerCase();
-      const identityKey =
-        normalizedEmail.length > 0
-          ? `email:${normalizedEmail}`
-          : `participant:${record.participantId}`;
-      const current = recordsByIdentity.get(identityKey);
-      if (current === undefined) {
-        recordsByIdentity.set(identityKey, record);
-        continue;
-      }
-      const preferred =
+      const current = recordsByIdentity.get(record.participantId);
+      if (
+        current === undefined ||
         record.version > current.version ||
         (record.version === current.version &&
           record.updatedAt.localeCompare(current.updatedAt) > 0)
-          ? record
-          : current;
-      const sessionsByTitle = new Map<string, SpeakerWorkspaceSession>();
-      for (const session of [...current.sessions, ...record.sessions]) {
-        const titleKey = session.title.trim().toLowerCase();
-        if (!sessionsByTitle.has(titleKey)) sessionsByTitle.set(titleKey, session);
+      ) {
+        recordsByIdentity.set(record.participantId, record);
       }
-      const assetsById = new Map(
-        [...current.assets, ...record.assets].map((asset) => [asset.assetId, asset]),
-      );
-      recordsByIdentity.set(identityKey, {
-        ...preferred,
-        sessions: [...sessionsByTitle.values()],
-        taskSummary: {
-          total: current.taskSummary.total + record.taskSummary.total,
-          completed: current.taskSummary.completed + record.taskSummary.completed,
-          overdue: current.taskSummary.overdue + record.taskSummary.overdue,
-        },
-        assets: [...assetsById.values()],
-      });
     }
     return {
       organizationId,
@@ -7978,18 +8034,18 @@ export class SpeakerService {
     }).length;
     return {
       participantId,
-      displayName: entry.displayName || profile?.displayName || participantId,
-      email: entry.email ?? profile?.email ?? "",
-      jobTitle: entry.jobTitle ?? profile?.jobTitle ?? "",
-      company: entry.company ?? profile?.company ?? "",
-      biography: entry.biography ?? profile?.biography ?? "",
-      socialLinks: entry.socialLinks ?? profile?.socialLinks ?? profile?.social ?? {},
+      displayName: profile?.displayName ?? entry.displayName ?? participantId,
+      email: profile?.email ?? entry.email ?? "",
+      jobTitle: profile?.jobTitle ?? entry.jobTitle ?? "",
+      company: profile?.company ?? entry.company ?? "",
+      biography: profile?.biography ?? entry.biography ?? "",
+      socialLinks: profile?.socialLinks ?? profile?.social ?? entry.socialLinks ?? {},
       travelLogistics: travelLogisticsFrom(profile?.travelLogistics ?? entry.travelLogistics),
-      headshotAssetId: entry.headshotAssetId ?? profile?.headshotAssetId ?? null,
+      headshotAssetId: profile?.headshotAssetId ?? entry.headshotAssetId ?? null,
       status:
         isCrmRosterEntry(entry) && !isOrganizerManagedRosterEntry(entry)
           ? crmRosterWorkflowStatus
-          : (entry.organizerStatus ?? profile?.status ?? entry.workflowStatus ?? entry.status),
+          : (profile?.status ?? entry.organizerStatus ?? entry.workflowStatus ?? entry.status),
       sessions: submissions
         .filter((submission) => submission.participantIds.includes(participantId))
         .map((submission) => ({

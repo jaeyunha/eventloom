@@ -766,11 +766,14 @@ function withJsonHeaders(init: RequestInit = {}): RequestInit {
   if (init.body !== undefined) headers.set("content-type", "application/json");
   return { ...init, credentials: "include", cache: "no-store", headers };
 }
-function resolveUploadGrantUrl(value: string, origin: string): string {
+export function resolveDeliverablesUploadGrantUrl(value: string, origin: string): string {
   try {
     return new URL(value).toString();
   } catch {
-    return new URL(value, `${trimTrailingSlash(origin)}/`).toString();
+    const normalizedOrigin = trimTrailingSlash(origin);
+    return normalizedOrigin.length === 0
+      ? value
+      : new URL(value, `${normalizedOrigin}/`).toString();
   }
 }
 
@@ -929,7 +932,7 @@ export function createDeliverablesApi(
     authorization: DeliverableUploadAuthorization,
   ): Promise<void> {
     const response = await fetcher(
-      resolveUploadGrantUrl(authorization.grant.url, normalizedBaseUrl),
+      resolveDeliverablesUploadGrantUrl(authorization.grant.url, normalizedBaseUrl),
       {
         method: authorization.grant.method,
         credentials: "omit",

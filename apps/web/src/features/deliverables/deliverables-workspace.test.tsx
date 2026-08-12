@@ -11,6 +11,7 @@ import {
   type DeliverablesApi,
   type DeliverableTask,
   type DeliverableTaskMatrix,
+  deliverableAssetKinds,
 } from "./api";
 import {
   type DeliverableRow,
@@ -816,11 +817,15 @@ describe("deliverables workspace", () => {
         onRestoreSessionVersion: async () => undefined,
       }),
     );
-    expect(markup).toContain("Content management and deliverables");
-    expect(markup).toContain("Create a file-request task");
+    expect(markup).toContain("Deliverables");
+    expect(markup).toContain("New file request");
+    expect(markup).not.toContain(
+      "Speakers can upload only the selected asset kinds, MIME types, and maximum size.",
+    );
+    expect(markup).not.toContain('data-slot="dialog-content"');
     expect(markup).toContain("Allowed MIME types");
     expect(markup).toContain("Accepted asset kinds (required)");
-    expect(markup).toContain("Slides");
+    expect(deliverableAssetKinds).toContain("slides");
     expect(markup).toContain("The replacement is staged through a");
     expect(markup).not.toContain("current API does not expose organizer headshot replacement");
     expect(markup).toContain("Maximum file size");
@@ -829,12 +834,11 @@ describe("deliverables workspace", () => {
     expect(markup).toContain("Filter by task");
     expect(markup).toContain("Preview reminder recipients");
     expect(markup).toContain("Outstanding only");
-    expect(markup).toContain("Overdue");
+    expect(markup).toContain("Status");
     expect(markup).toContain("slides.pdf");
     expect(markup).toContain("Current");
     expect(markup).toContain("Draft deck - final version coming Friday.");
-    expect(markup).toContain("Cross-role comment thread");
-    expect(markup).toContain("Post organizer reply");
+    expect(markup).toContain("Selected asset comment evidence");
     expect(markup).toContain("Approve content");
     expect(markup).toContain("Session title and abstract");
     expect(markup).toContain("Public approval gate");
@@ -930,12 +934,11 @@ describe("deliverables workspace", () => {
         onInspectAsset: () => undefined,
       }),
     );
-    expect(filesMarkup).toContain("Asset-centric Files library");
-    expect(filesMarkup).toContain("Select sessions");
+    expect(filesMarkup).toContain("Organizer-side authorized uploaded-asset library");
+    expect(filesMarkup).toContain("Add eligible files by session");
     expect(filesMarkup).toContain("Download selected files ZIP");
-    expect(filesMarkup).not.toContain("Create a file-request task");
-    expect(filesMarkup).not.toContain("Deliverables dashboard");
-
+    expect(filesMarkup).not.toContain("New file request");
+    expect(filesMarkup).toContain("Files");
     const deliverablesMarkup = renderToStaticMarkup(
       createElement(DeliverablesWorkspaceView, {
         organizationId: "org-1",
@@ -947,8 +950,8 @@ describe("deliverables workspace", () => {
         profiles: [profile],
       }),
     );
-    expect(deliverablesMarkup).toContain("Deliverables dashboard");
-    expect(deliverablesMarkup).not.toContain("Asset-centric Files library");
+    expect(deliverablesMarkup).toContain("Requests &amp; tracking");
+    expect(deliverablesMarkup).not.toContain("Organizer-side authorized uploaded-asset library");
   });
 
   it("groups slides.pdf by its authoritative latest version and shows two versions", () => {
@@ -986,11 +989,9 @@ describe("deliverables workspace", () => {
     expect(markup).toContain("Filter files");
     expect(markup).toContain("Filter by session");
     expect(markup).toContain("Filter by review state");
-    expect(markup).toContain("Select all visible latest files");
-    expect(markup).toContain(
-      "Select session Taming 40-Minute CI: Incremental Builds at Monorepo Scale",
-    );
-    expect(markup).toContain('aria-label="Select slides.pdf"');
+    expect(markup).toContain("Add eligible files by session");
+    expect(markup).toContain("Server-authoritative eligibility");
+    expect(markup).toContain(">Select ready current file slides.pdf</");
   });
 
   it("selects only the server-authoritative current ready version", () => {
@@ -1038,8 +1039,8 @@ describe("deliverables workspace", () => {
     );
 
     expect(markup).toContain("current version unavailable");
-    expect(markup).not.toContain("data-current-version");
-    expect(markup).toContain("Select at least one latest ready asset.");
+    expect(markup).not.toContain('data-current-version="asset-2"');
+    expect(markup).toContain("Select row-level ready current files.");
   });
 
   it("requires explicit confirmation of the exact outstanding reminder snapshot", () => {
@@ -1067,6 +1068,46 @@ describe("deliverables workspace", () => {
     expect(markup).toContain("I confirm this exact outstanding recipient and task snapshot.");
     expect(markup).toContain("Confirm and send reminders");
     expect(markup).toContain('disabled=""');
+  });
+
+  it("makes mode purpose, selection intent, and confirmation gates explicit", () => {
+    const deliverablesMarkup = renderToStaticMarkup(
+      createElement(DeliverablesWorkspaceView, {
+        organizationId: "org-1",
+        eventId: "event-1",
+        sessions: [session],
+        tasks: [task],
+        assets: [assetV1],
+        profiles: [profile],
+        onCreateTask: async () => undefined,
+        onSendBulkReminder: async () => undefined,
+        onApproveSession: async () => undefined,
+      }),
+    );
+    expect((deliverablesMarkup.match(/<h1\b/g) ?? []).length).toBe(1);
+    expect(deliverablesMarkup).toContain("Organizer-created speaker requests");
+    expect(deliverablesMarkup).toContain("For reminder");
+    expect(deliverablesMarkup).toContain("For ZIP export");
+    expect(deliverablesMarkup).toContain("changes public eligibility");
+    expect(deliverablesMarkup).toContain("does not publish immediately");
+
+    const filesMarkup = renderToStaticMarkup(
+      createElement(DeliverablesWorkspaceView, {
+        organizationId: "org-1",
+        eventId: "event-1",
+        mode: "files",
+        sessions: [session],
+        tasks: [task],
+        assets: [assetV1],
+        profiles: [profile],
+        matrixItems: [{ ...matrixItem, currentAsset: assetV1 }],
+      }),
+    );
+    expect((filesMarkup.match(/<h1\b/g) ?? []).length).toBe(1);
+    expect(filesMarkup).toContain("Organizer-side authorized uploaded-asset library");
+    expect(filesMarkup).toContain("Server-authoritative eligibility");
+    expect(filesMarkup).toContain("ready");
+    expect(filesMarkup).toContain("Add eligible files by session");
   });
 
   it("keeps every ZIP response state explicit and non-fabricated", () => {

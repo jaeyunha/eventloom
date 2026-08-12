@@ -18,6 +18,7 @@ import {
   canCommitEventSettingsAsyncCompletion,
   EventSettingsWorkspace,
   EventSettingsWorkspaceView,
+  eventSettingsSectionNavigation,
   eventSettingsWorkspaceScopeKey,
   loadEventSettingsProgressively,
   persistEventSettingsMutation,
@@ -474,6 +475,78 @@ describe("event settings view", () => {
       }),
     );
     expect(error).toContain("The settings API is unavailable.");
+  });
+  it("exposes the shared section metadata as real, scrollable anchors", () => {
+    const output = renderToStaticMarkup(
+      createElement(EventSettingsWorkspaceView, {
+        organizationId: "org_a",
+        eventId: "event-a",
+        state: { status: "loaded", data: overview },
+      }),
+    );
+    for (const section of eventSettingsSectionNavigation) {
+      expect(output).toContain(`href="#${section.id}"`);
+      expect(output).toContain(`id="${section.id}"`);
+      expect(output).toContain(section.label);
+    }
+    expect(output).toContain('data-slot="collapsible"');
+    expect(output).toContain("Communications");
+    expect(output).toContain("Open Communications");
+    expect(output).not.toContain('href="#communications"');
+    expect(output).not.toContain('href="#calendar"');
+  });
+
+  it("keeps core failures full width and free of dead section anchors", () => {
+    const output = renderToStaticMarkup(
+      createElement(EventSettingsWorkspaceView, {
+        organizationId: "org_a",
+        eventId: "event-a",
+        state: { status: "error", message: "Core settings failed." },
+        onRetry: () => undefined,
+      }),
+    );
+    expect(output).toContain("Core settings failed.");
+    expect(output).toContain("Try again");
+    expect(output).not.toContain("Event settings sections");
+    expect(output).not.toContain('href="#session-settings"');
+    expect(output).not.toContain('href="#rooms"');
+  });
+
+  it("keeps progressive details failure separate from loaded core settings", () => {
+    const output = renderToStaticMarkup(
+      createElement(EventSettingsWorkspaceView, {
+        organizationId: "org_a",
+        eventId: "event-a",
+        state: {
+          status: "loaded",
+          data: overview,
+          detailsStatus: "error",
+          detailsMessage: "Library reads timed out.",
+        },
+      }),
+    );
+    expect(output).toContain("Session settings");
+    expect(output).toContain("Library reads timed out.");
+    expect(output).toContain("Settings audit history unavailable.");
+    expect(output).toContain("Event library unavailable.");
+  });
+
+  it("renders one semantic status table with labelled eligibility controls and honest disabled actions", () => {
+    const output = renderToStaticMarkup(
+      createElement(EventSettingsWorkspaceView, {
+        organizationId: "org_a",
+        eventId: "event-a",
+        state: { status: "loaded", data: overview },
+        actions: {},
+      }),
+    );
+    expect(output).toContain("Configured session statuses and agenda eligibility");
+    expect(output).toContain("Agenda eligible for Accepted");
+    expect(output).toContain("Remove");
+    expect(output).toContain("Session settings are read-only.");
+    expect(output).toContain("Room editing controls are read-only");
+    expect(output).toContain("Adding values is unavailable in this view.");
+    expect(output).toMatch(/data-slot="button"[^>]*disabled/);
   });
   it("adds settings navigation context only for qualified event routes", () => {
     expect(qualifiedEventContext("/admin/organizations/org_a/events/event-a/settings")).toEqual({

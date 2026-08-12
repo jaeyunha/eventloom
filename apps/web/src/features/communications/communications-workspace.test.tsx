@@ -11,7 +11,11 @@ import {
 } from "./api";
 import {
   CommunicationsWorkspaceView,
+  communicationTemplateSelectionFromKey,
+  communicationTemplateSelectionKey,
   createCommunicationTemplateReadCoordinator,
+  findCommunicationTemplate,
+  invalidateCommunicationPreviewState,
   loadCommunicationTemplates,
 } from "./communications-workspace";
 
@@ -251,8 +255,10 @@ describe("communications organizer workspace", () => {
     expect(markup).toContain("Escaped HTML source (not executed)");
     expect(markup).toContain("Per-recipient email previews");
     expect(markup).toContain("Hello Grace Hopper");
-    expect(markup).toContain("Confirm operational email send");
-    expect(markup).toContain("Confirm and send");
+    expect(markup).toContain("Step 4 · Confirm send");
+    expect(markup).toContain(
+      "Sending is blocked until you explicitly confirm this exact snapshot.",
+    );
     expect(markup).toContain("Delivered");
     expect(markup).toContain("Failed");
     expect(markup).toContain("Provider timeout");
@@ -407,5 +413,99 @@ describe("communications organizer workspace", () => {
     });
 
     expect(callbacks).toEqual(["Access denied: Not authorized", "current:settled"]);
+  });
+  it("keeps template selection exact when one id has multiple versions", () => {
+    const versions = [
+      template("group-1", "organizer_group_email", senders.speakers, "approved", 1),
+      template("group-1", "organizer_group_email", senders.speakers, "draft", 2),
+    ];
+    const key = communicationTemplateSelectionKey("group-1", 2);
+    expect(key).toBe("group-1:2");
+    expect(communicationTemplateSelectionFromKey(key)).toEqual({
+      templateId: "group-1",
+      templateVersion: 2,
+    });
+    expect(findCommunicationTemplate(versions, communicationTemplateSelectionFromKey(key))).toEqual(
+      versions[1],
+    );
+    expect(
+      findCommunicationTemplate(versions, {
+        templateId: "group-1",
+        templateVersion: 3,
+      }),
+    ).toBeUndefined();
+
+    const markup = renderToStaticMarkup(
+      createElement(CommunicationsWorkspaceView, {
+        eventId: "event-1",
+        organizationId: "org-1",
+        templates: versions,
+        selectedTemplateId: "group-1",
+        selectedTemplateVersion: 2,
+      }),
+    );
+    expect(markup).toContain('data-template-selection="group-1:2"');
+    expect(markup).toContain('data-template-selection="group-1:1"');
+    expect(markup).toContain("Select organizer_group_email template version 2");
+    expect(markup).toContain("Select exact approved version");
+  });
+
+  it("renders an approval review gate with cancel and confirm controls", () => {
+    const markup = renderToStaticMarkup(
+      createElement(CommunicationsWorkspaceView, {
+        eventId: "event-1",
+        organizationId: "org-1",
+        templates: [template("group-1", "organizer_group_email", senders.speakers, "draft", 2)],
+        selectedTemplateId: "group-1",
+        selectedTemplateVersion: 2,
+        approvalDialogOpen: true,
+        onApproveTemplate: async () => undefined,
+      }),
+    );
+    expect(markup).toContain('data-approval-dialog-state="open"');
+    expect(markup).toContain("Step 2 · Review and approve exact version");
+    expect(markup).toContain("Approve version 2");
+  });
+
+  it("uses an alert dialog for focus-safe send confirmation and retains history without a preview", () => {
+    const markup = renderToStaticMarkup(
+      createElement(CommunicationsWorkspaceView, {
+        eventId: "event-1",
+        organizationId: "org-1",
+        templates: [],
+        send,
+        sendConfirmationOpen: false,
+      }),
+    );
+    expect(markup).toContain("Step 5 · Delivery history");
+    expect(markup).toContain("Per-recipient status and audit history");
+    expect(markup).not.toContain("Confirm operational email send");
+
+    const confirmationMarkup = renderToStaticMarkup(
+      createElement(CommunicationsWorkspaceView, {
+        eventId: "event-1",
+        organizationId: "org-1",
+        templates: [template("group-1", "organizer_group_email", senders.speakers, "approved", 2)],
+        selectedTemplateId: "group-1",
+        selectedTemplateVersion: 2,
+        preview,
+        send,
+        sendConfirmationOpen: true,
+        onConfirmSend: async () => undefined,
+        onCloseSendConfirmation: () => undefined,
+      }),
+    );
+    expect(confirmationMarkup).toContain('data-confirmation-open="true"');
+    expect(
+      invalidateCommunicationPreviewState({
+        preview,
+        sendConfirmationOpen: true,
+        idempotencyKey: "web-send-1",
+      }),
+    ).toEqual({
+      preview: null,
+      sendConfirmationOpen: false,
+      idempotencyKey: null,
+    });
   });
 });

@@ -90,6 +90,7 @@ describe("organizer session settings domain", () => {
       sessionId: session.id,
       expectedVersion: session.version,
       title: "Reliable workers, revised",
+      contentStatus: "Approved",
     });
     expect(updated.version).toBe(2);
     await expect(
@@ -105,6 +106,15 @@ describe("organizer session settings domain", () => {
       service.getSession(actor("tenant-b"), { eventId: "event-a", sessionId: session.id }),
     ).rejects.toMatchObject({ code: "NOT_FOUND", status: 404 });
     expect(updated.roomId).toBe(room.id);
+    const publicSession = (await service.getAgendaCatalog("tenant-a", "event-a")).sessions.find(
+      (candidate) => candidate.id === session.id,
+    );
+    expect(publicSession).toMatchObject({
+      format: "Talk",
+      roomName: "Main hall",
+      trackNames: ["Platform"],
+      speakerNames: ["Speaker"],
+    });
   });
   it("starts session list reads before agenda initialization settles", async () => {
     const { repository, service: seedService } = setup();
@@ -346,7 +356,7 @@ describe("organizer session settings domain", () => {
           capacityRequired: 0,
           trackIds: [],
           speakerIds: ["speaker-1"],
-          speakerNames: ["speaker-1"],
+          speakerNames: ["Speaker"],
           resourceIds: [],
           version: 1,
           updatedAt: now.toISOString(),
@@ -585,7 +595,7 @@ describe("organizer session settings domain", () => {
           capacityRequired: 0,
           trackIds: [],
           speakerIds: ["speaker-1"],
-          speakerNames: ["speaker-1"],
+          speakerNames: ["Speaker"],
           resourceIds: [],
           version: 5,
           updatedAt: now.toISOString(),

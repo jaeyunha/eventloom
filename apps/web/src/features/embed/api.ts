@@ -256,7 +256,7 @@ export function getPublishedProgram(
       speakers.status === "rejected" ? speakers.reason : undefined,
     );
   };
-  return loadPair(false).then(async ([agenda, speakers]) => {
+  return loadPair(true).then(async ([agenda, speakers]) => {
     if (publishedProjectionsMatch(agenda, speakers)) {
       return { agenda, speakers };
     }

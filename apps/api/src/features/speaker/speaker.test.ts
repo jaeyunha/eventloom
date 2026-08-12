@@ -1285,16 +1285,17 @@ describe("SpeakerService organizer roster read model", () => {
     expect(repository.taskReads).toBe(0);
     expect(repository.assetReads).toBe(0);
     expect(roster.organizationId).toBe("org-1");
-    expect(roster.speakers).toHaveLength(2);
+    expect(roster.speakers).toHaveLength(3);
     expect(roster.speakers.map((speaker) => speaker.participantId)).toEqual([
       "participant-manual",
+      "participant-1",
       "participant-2",
     ]);
-    const shared = roster.speakers.find((speaker) => speaker.participantId === "participant-2");
+    const shared = roster.speakers.find((speaker) => speaker.participantId === "participant-1");
     expect(shared).toMatchObject({
       displayName: "Shared Speaker",
       sessions: [{ submissionId: "speaker-submission:submission-1", title: "Shared session" }],
-      taskSummary: { total: 3, completed: 1, overdue: 0 },
+      taskSummary: { total: 2, completed: 1, overdue: 0 },
       assets: [expect.objectContaining({ assetId: "asset-accepted" })],
     });
     expect(shared?.assets.map((asset) => asset.assetId)).toEqual(["asset-accepted"]);
@@ -1425,7 +1426,7 @@ describe("SpeakerService organizer asset reads", () => {
     expect(roster.speakers).toEqual([
       expect.objectContaining({
         participantId: "participant-1",
-        displayName: "Roster participant-1",
+        displayName: "Speaker participant-1",
         sessions: [expect.objectContaining({ submissionId: "speaker-submission:submission-1" })],
       }),
     ]);
@@ -1734,6 +1735,58 @@ describe("SpeakerService organizer speaker writes", () => {
     expect(repository.readModelResources).toEqual([{ profiles: true, tasks: true, assets: true }]);
     expect(repository.rosterReads).toBe(0);
     expect(repository.profileReads).toBe(0);
+  });
+  it("reloads organizer profile and travel edits from the canonical event-scoped profile", async () => {
+    const { repository, service } = createOrganizerFixture();
+    repository.profiles.push({
+      ...profile("participant-1"),
+      displayName: "Priya Raman",
+      email: "priya@example.test",
+      biography: "Old biography",
+      version: 1,
+    });
+    repository.roster.push({
+      id: "roster:event-1:speaker-submission:submission-1:participant-1",
+      eventId: "event-1",
+      submissionId: "speaker-submission:submission-1",
+      participantId: "participant-1",
+      displayName: "Stale roster name",
+      biography: "Stale roster biography",
+      organizerStatus: "accepted",
+      role: "primary",
+      status: "active",
+      version: 1,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    await service.updateOrganizerProfile({
+      eventId: "event-1",
+      accountId: "account-1",
+      participantId: "participant-1",
+      biography: "SBEK-ORG-EDIT-01",
+      travelLogistics: {
+        travelRequired: true,
+        arrivalAt: "2027-05-01T12:00:00.000Z",
+        dietaryRequirements: "Vegan",
+        travelNotes: "Arrive before check-in.",
+      },
+      expectedVersion: 1,
+    });
+
+    const reloaded = await service.listOrganizerSpeakerRoster("org-1", "event-1", "account-1");
+    expect(reloaded.speakers).toEqual([
+      expect.objectContaining({
+        participantId: "participant-1",
+        biography: "SBEK-ORG-EDIT-01",
+        travelLogistics: expect.objectContaining({
+          travelRequired: true,
+          dietaryRequirements: "Vegan",
+          travelNotes: "Arrive before check-in.",
+        }),
+        version: 2,
+      }),
+    ]);
   });
   it("persists manual speakers, profile changes, and single-assignee task changes across services", async () => {
     const { repository, gateway, service } = createOrganizerFixture();
@@ -2053,7 +2106,21 @@ describe("SpeakerService organizer speaker writes", () => {
     ).toBe("Descriptive accepted session");
   });
 
-  it("consolidates duplicate verified-email projections and counts only general action tasks", async () => {
+  it("filters organizer task contamination by canonical submission participant", async () => {
+    const { repository, service } = createOrganizerFixture();
+    repository.tasks.push(
+      task({
+        id: "wrong-submission-assignee",
+        participantId: "participant-1",
+        submissionId: "submission-2",
+        type: "action",
+      }),
+    );
+
+    const tasks = await service.listOrganizerTasks("event-1", "account-1");
+    expect(tasks.some((candidate) => candidate.id === "wrong-submission-assignee")).toBe(false);
+  });
+  it("keeps duplicate verified-email projections isolated and counts only general action tasks", async () => {
     const { repository, service } = createOrganizerFixture();
     const firstSubmission = repository.submissions[0];
     const secondSubmission = repository.submissions[1];
@@ -2115,13 +2182,24 @@ describe("SpeakerService organizer speaker writes", () => {
 
     const roster = await service.listOrganizerSpeakerRoster("org-1", "event-1", "account-1");
 
-    expect(roster.speakers).toHaveLength(1);
-    expect(roster.speakers[0]).toMatchObject({
-      participantId: "participant-2",
-      displayName: "Priya Raman",
-      taskSummary: { total: 3, completed: 2, overdue: 0 },
-    });
-    expect(roster.speakers[0]?.sessions).toHaveLength(1);
+    expect(roster.speakers).toHaveLength(2);
+    expect(roster.speakers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          participantId: "participant-1",
+          displayName: "Priya Raman",
+          taskSummary: { total: 3, completed: 2, overdue: 0 },
+          sessions: expect.any(Array),
+        }),
+        expect.objectContaining({
+          participantId: "participant-2",
+          displayName: "Priya Raman",
+          taskSummary: { total: 0, completed: 0, overdue: 0 },
+          sessions: expect.any(Array),
+        }),
+      ]),
+    );
+    expect(roster.speakers.every((speaker) => speaker.sessions.length === 1)).toBe(true);
     expect(repository.rosterEventReads).toBe(1);
   });
   it("does not issue download grants while constructing the organizer roster", async () => {

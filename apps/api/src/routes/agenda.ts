@@ -29,6 +29,7 @@ export interface AgendaRouteDependencies {
   readonly organizationIdForEvent: (eventId: string) => Promise<string | null>;
   readonly afterPublish?: (eventId: string, revision: AgendaPublishedRevision) => Promise<void>;
   readonly eventMetadataForEvent?: (eventId: string) => Promise<AgendaEventMetadata | null>;
+  readonly publicRevisionNumberForEventSlug?: (eventSlug: string) => Promise<number | null>;
 }
 
 const identifierSchema = z.string().trim().min(1).max(200);
@@ -145,9 +146,9 @@ async function completePublicationHandoff(
   eventId: string,
   revision: AgendaPublishedRevision,
 ): Promise<void> {
-  await invalidatePublishedAgendaCache(dependencies.engine, eventId, revision);
   try {
     await dependencies.afterPublish?.(eventId, revision);
+    await invalidatePublishedAgendaCache(dependencies.engine, eventId, revision);
   } catch (error) {
     throw publicationProjectionFailure(error);
   }
@@ -1455,12 +1456,26 @@ function publicAgendaCalendar(projection: PublishedAgendaProjection, eventSlug: 
 
 async function publishedProjection(
   context: AgendaContext,
-  dependencies: Pick<AgendaRouteDependencies, "engine" | "eventMetadataForEvent">,
+  dependencies: Pick<
+    AgendaRouteDependencies,
+    "engine" | "eventMetadataForEvent" | "publicRevisionNumberForEventSlug"
+  >,
 ): Promise<PublishedAgendaProjectionValue | null> {
   const eventSlug = publicEventSlug(context);
   if (eventSlug === null) return null;
-  const revision = await dependencies.engine.getPublishedAgenda(eventSlug);
+  let revision = await dependencies.engine.getPublishedAgenda(eventSlug);
   if (revision === null) return null;
+  if (dependencies.publicRevisionNumberForEventSlug !== undefined) {
+    const publicRevisionNumber = await dependencies.publicRevisionNumberForEventSlug(eventSlug);
+    if (publicRevisionNumber === null) return null;
+    if (publicRevisionNumber !== revision.revisionNumber) {
+      revision = await dependencies.engine.getPublishedAgendaRevision(
+        eventSlug,
+        publicRevisionNumber,
+      );
+      if (revision === null) return null;
+    }
+  }
   let eventMetadata: AgendaEventMetadata | undefined;
   if (dependencies.eventMetadataForEvent !== undefined) {
     const resolved = await dependencies.eventMetadataForEvent(revision.eventId);
@@ -1475,7 +1490,10 @@ async function publishedProjection(
 
 /** Anonymous routes expose only the immutable current publication, never a draft. */
 export function createPublishedAgendaRoutes(
-  dependencies: Pick<AgendaRouteDependencies, "engine" | "eventMetadataForEvent">,
+  dependencies: Pick<
+    AgendaRouteDependencies,
+    "engine" | "eventMetadataForEvent" | "publicRevisionNumberForEventSlug"
+  >,
 ): Hono<AgendaRouteEnvironment> {
   const routes = new Hono<AgendaRouteEnvironment>();
   const cacheState = agendaCacheState(dependencies.engine);

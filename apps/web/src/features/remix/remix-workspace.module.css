@@ -1,0 +1,373 @@
+.workspace {
+  width: min(100% - 2rem, 76rem);
+  margin: 0 auto;
+  padding: 1.5rem 0 4rem;
+  color: var(--foreground);
+}
+
+.statusPage {
+  width: min(100% - 2rem, 44rem);
+  margin: 0 auto;
+  padding: 3rem 0;
+}
+
+.header {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 1.5rem;
+}
+
+.header h1,
+.statusPage h1 {
+  margin: 0.35rem 0 0.65rem;
+  font-size: clamp(1.65rem, 3vw, 2.35rem);
+  letter-spacing: -0.03em;
+}
+
+.header p:last-child {
+  max-width: 48rem;
+  margin: 0;
+  color: var(--muted-foreground);
+}
+
+.eyebrow {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+}
+
+.authorityAlert {
+  margin-top: 1rem;
+}
+
+.sectionNav {
+  position: sticky;
+  top: 0.75rem;
+  z-index: 10;
+  display: flex;
+  gap: 0.25rem;
+  width: fit-content;
+  max-width: 100%;
+  margin: 1.25rem 0;
+  padding: 0.25rem;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, var(--background) 94%, transparent);
+  box-shadow: 0 0.25rem 1rem color-mix(in srgb, var(--foreground) 7%, transparent);
+  backdrop-filter: blur(0.6rem);
+}
+
+.sectionNav a,
+.directLink {
+  color: var(--foreground);
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.sectionNav a {
+  padding: 0.45rem 0.7rem;
+  border-radius: 0.5rem;
+  white-space: nowrap;
+}
+
+.sectionNav a:hover,
+.sectionNav a:focus-visible {
+  background: var(--muted);
+  text-decoration: underline;
+  text-underline-offset: 0.18rem;
+}
+
+.mobileSectionSwitcher {
+  display: none;
+}
+
+.content {
+  display: grid;
+  gap: 1rem;
+}
+
+.content > * {
+  scroll-margin-top: 5rem;
+}
+
+.stack {
+  display: grid;
+  gap: 1rem;
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.fieldLabel,
+.filterLabel {
+  display: grid;
+  gap: 0.4rem;
+  color: var(--foreground);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.filterLabel {
+  min-width: 12rem;
+}
+
+.selectTrigger {
+  width: 100%;
+}
+
+.textarea {
+  width: 100%;
+  min-height: 5rem;
+  resize: vertical;
+  border: 1px solid var(--input);
+  border-radius: 0.5rem;
+  background: transparent;
+  padding: 0.55rem 0.65rem;
+  color: inherit;
+  font: inherit;
+  font-weight: 400;
+}
+
+.textarea:focus-visible {
+  border-color: var(--ring);
+  outline: 2px solid color-mix(in srgb, var(--ring) 35%, transparent);
+  outline-offset: 1px;
+}
+
+.muted,
+.sourceMeta {
+  color: var(--muted-foreground);
+  font-size: 0.83rem;
+  font-weight: 400;
+}
+
+.sourceList {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.sourceList legend {
+  margin-bottom: 0.5rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.sourceList ul {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sourceItem {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.65rem;
+}
+
+.checkboxLabel {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  min-height: 1.5rem;
+  color: var(--foreground);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.checkboxControl {
+  margin-top: 0.12rem;
+}
+
+.sourceMeta {
+  margin-left: 1.45rem;
+}
+
+.checkboxGroup,
+.actionRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.actionRow {
+  padding-top: 0.25rem;
+}
+
+.headerRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.headerRow > div:first-child {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.comparisonCard,
+.summaryCard {
+  background: var(--muted);
+  box-shadow: none;
+}
+
+.comparisonTable {
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: 0.65rem;
+}
+
+.comparisonTableHead,
+.comparisonTableCell {
+  white-space: normal;
+  vertical-align: top;
+}
+
+.confirmation {
+  display: grid;
+  gap: 0.7rem;
+  margin: 0;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.7rem;
+  background: var(--background);
+}
+
+.confirmation legend {
+  padding: 0 0.35rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.provenance {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.7rem;
+  padding: 0.75rem;
+  border-left: 2px solid var(--border);
+  color: var(--muted-foreground);
+  font-size: 0.85rem;
+}
+
+.provenance div {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.provenance dt {
+  font-weight: 600;
+}
+
+.provenance dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.unavailableCard {
+  margin-top: 1rem;
+}
+
+.unavailableFooter {
+  justify-content: flex-start;
+}
+
+.skipLink {
+  position: absolute;
+  top: 0;
+  left: -10000px;
+}
+
+.skipLink:focus {
+  left: 1rem;
+  z-index: 20;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.4rem;
+  background: var(--background);
+  outline: 2px solid var(--ring);
+}
+
+@media (max-width: 48rem) {
+  .workspace {
+    width: min(100% - 1rem, 76rem);
+    padding-top: 1rem;
+  }
+
+  .sectionNav {
+    display: none;
+  }
+
+  .mobileSectionSwitcher {
+    display: grid;
+    gap: 0.35rem;
+    margin: 1rem 0;
+    color: var(--muted-foreground);
+    font-size: 0.8rem;
+    font-weight: 600;
+  }
+
+  .mobileSectionSwitcher select {
+    width: 100%;
+    min-height: 2.25rem;
+    border: 1px solid var(--input);
+    border-radius: 0.5rem;
+    background: var(--background);
+    padding: 0.45rem 0.6rem;
+    color: var(--foreground);
+    font: inherit;
+  }
+
+  .formGrid,
+  .provenance {
+    grid-template-columns: 1fr;
+  }
+
+  .headerRow {
+    display: grid;
+  }
+
+  .filterLabel {
+    min-width: 0;
+  }
+
+  .comparisonTableHeader {
+    display: none;
+  }
+
+  .comparisonTableRow {
+    display: block;
+    padding: 0.65rem 0;
+  }
+
+  .comparisonTableHead,
+  .comparisonTableCell {
+    display: block;
+    width: 100%;
+    padding: 0.35rem 0.65rem;
+    white-space: normal;
+  }
+
+  .comparisonTableHead {
+    color: var(--muted-foreground);
+    font-size: 0.78rem;
+  }
+
+  .comparisonTableCell::before {
+    display: block;
+    margin-bottom: 0.2rem;
+    color: var(--muted-foreground);
+    content: attr(data-label);
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+}

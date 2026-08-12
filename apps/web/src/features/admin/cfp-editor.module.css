@@ -104,6 +104,7 @@
 .primaryButton:focus-visible,
 .secondaryButton:focus-visible,
 .sectionNav button:focus-visible,
+.mobileSectionTrigger:focus-visible,
 .editorForm input:focus-visible,
 .editorForm textarea:focus-visible,
 .editorForm select:focus-visible,
@@ -117,10 +118,26 @@
 }
 
 .sectionNav {
+  position: sticky;
+  top: 1rem;
+  z-index: 10;
+  display: block;
+  margin: 1.5rem 0;
+  padding: 0.5rem;
+  border: 1px solid var(--color-border, #dfe2e8);
+  border-radius: 0.8rem;
+  background: var(--color-surface, #fff);
+  box-shadow: var(--shadow-card, 0 8px 24px rgb(29 34 51 / 6%));
+}
+
+.desktopSectionNav {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
-  margin: 1.5rem 0;
+}
+
+.mobileSectionNav {
+  display: none;
 }
 
 .sectionNav button {
@@ -134,6 +151,63 @@
 
 .sectionNav button:hover,
 .sectionNav .activeNavButton {
+  border-color: var(--color-border, #dfe2e8);
+  background: var(--color-surface, #fff);
+  color: var(--color-brand-strong, #3f51ce);
+}
+
+.mobileSectionTrigger,
+.mobileSectionContent {
+  width: 100%;
+}
+
+.mobileSectionTrigger {
+  display: flex;
+  min-height: 2.75rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid var(--color-border-strong, #cdd1da);
+  border-radius: 0.65rem;
+  background: var(--color-surface, #fff);
+  color: var(--color-ink, #25272d);
+  font: inherit;
+  font-weight: 750;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mobileSectionLabel {
+  display: block;
+  margin-bottom: 0.15rem;
+  color: var(--color-muted, #697181);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.mobileSectionContent {
+  display: grid;
+  gap: 0.25rem;
+  margin-top: 0.35rem;
+}
+
+.mobileSectionContent button {
+  min-height: 2.45rem;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid transparent;
+  border-radius: 0.55rem;
+  background: transparent;
+  color: var(--color-muted, #697181);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mobileSectionContent button:hover,
+.mobileSectionContent .activeNavButton {
   border-color: var(--color-border, #dfe2e8);
   background: var(--color-surface, #fff);
   color: var(--color-brand-strong, #3f51ce);
@@ -568,7 +642,7 @@
   padding: clamp(1rem, 3vw, 2rem);
   border: 1px solid var(--color-border, #dfe2e8);
   border-radius: 0.8rem;
-  background: #fbfcff;
+  background: var(--color-surface, #fff);
 }
 
 .publicForm h3,
@@ -590,8 +664,8 @@
   gap: 0.2rem;
   margin-bottom: 0.5rem;
   padding: 0.8rem 0.9rem;
-  border-left: 3px solid var(--color-brand, #5065e8);
-  background: var(--color-brand-soft, #eef0ff);
+  border-left: 3px solid var(--color-border-strong, #cdd1da);
+  background: var(--color-surface-muted, #f6f7f9);
   font-size: 0.84rem;
 }
 
@@ -628,8 +702,8 @@
 }
 
 .previewRuleNote {
-  background: var(--color-warning-soft, #fff7d6);
-  color: #6f4a00;
+  background: var(--color-surface-muted, #f6f7f9);
+  color: var(--color-ink, #25272d);
 }
 
 .previewConfirmation {
@@ -709,6 +783,17 @@
   .viewport {
     width: min(calc(100% - 1rem), 88rem);
     padding-top: 1rem;
+  }
+  .sectionNav {
+    position: static;
+  }
+
+  .desktopSectionNav {
+    display: none;
+  }
+
+  .mobileSectionNav {
+    display: block;
   }
 
   .pageHeader,

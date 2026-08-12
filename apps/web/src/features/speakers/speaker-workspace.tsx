@@ -16,7 +16,15 @@ import {
 } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
-import { type ChangeEvent, type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ChangeEvent,
+  type FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   Accordion,
   AccordionContent,
@@ -24,6 +32,16 @@ import {
   AccordionTrigger,
 } from "../../components/ui/accordion";
 import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "../../components/ui/alert-dialog";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import {
@@ -456,6 +474,27 @@ export function speakerInvitationReady(
     matching[0]?.state === "ready" &&
     normalizedEmail(matching[0].recipientEmail) === normalizedEmail(speaker.email)
   );
+}
+
+export type SpeakerTaskStatusTone = "neutral" | "info" | "warning" | "success";
+
+export function taskStatusTone(status: string): SpeakerTaskStatusTone {
+  if (taskComplete(status)) return "success";
+  if (status === "overdue") return "warning";
+  if (status === "in_progress") return "info";
+  return "neutral";
+}
+function taskStatusClassName(status: string): string {
+  switch (taskStatusTone(status)) {
+    case "info":
+      return `${styles.taskStatus} ${styles.taskStatusInfo}`;
+    case "warning":
+      return `${styles.taskStatus} ${styles.taskStatusWarning}`;
+    case "success":
+      return `${styles.taskStatus} ${styles.taskStatusSuccess}`;
+    default:
+      return `${styles.taskStatus} ${styles.taskStatusNeutral}`;
+  }
 }
 
 function taskStatusLabel(status: string): string {
@@ -938,7 +977,7 @@ function ProfileFields({
       </div>
       <FieldSet className={styles.detailBlock}>
         <FieldLegend variant="label">Travel and logistics</FieldLegend>
-        <Field orientation="horizontal">
+        <Field orientation="horizontal" className={styles.checkboxField}>
           <Checkbox
             id="speaker-travel-required"
             checked={draft.travelRequired}
@@ -1043,6 +1082,8 @@ export function SpeakerWorkspace({
   const [emailHtml, setEmailHtml] = useState("<p>Hello {{first_name}},</p>");
   const [emailText, setEmailText] = useState("Hello {{first_name}},");
   const [emailPreview, setEmailPreview] = useState<SpeakerEmailPreview | null>(null);
+  const [emailEditorMode, setEmailEditorMode] = useState<"visual" | "html" | "text">("visual");
+  const [emailConfirmOpen, setEmailConfirmOpen] = useState(false);
   const [emailSends, setEmailSends] = useState<readonly SpeakerEmailSend[]>([]);
   const [emailSaveBusy, setEmailSaveBusy] = useState(false);
   const [emailPreviewBusy, setEmailPreviewBusy] = useState(false);
@@ -1109,6 +1150,8 @@ export function SpeakerWorkspace({
   const rosterRequestRef = useRef(0);
   const headshotRequestRef = useRef(0);
   const importRequestRef = useRef(0);
+  const emailSelectionSnapshotRef = useRef<string | null>(null);
+  const emailPreviewRequestRef = useRef(0);
   const secondaryLoadRef = useRef<{ api: SpeakerApi; key: string } | null>(null);
   const progressLoadRef = useRef<{ api: SpeakerApi; key: string; requestId: number } | null>(null);
   const emailSectionRef = useRef<HTMLDivElement | null>(null);
@@ -1336,6 +1379,9 @@ export function SpeakerWorkspace({
           : null));
   const duplicateEmailWarnings = useMemo(() => duplicateEmailConflicts(speakers), [speakers]);
   const emailAnyBusy = emailSaveBusy || emailPreviewBusy || emailSendBusy || emailHistoryBusy;
+  const selectedEmailTemplate = emailTemplates.find(
+    (template) => template.id === emailTemplateId && template.version === emailTemplateVersion,
+  );
   const statusOptions = useMemo(() => {
     const values = new Set<string>([
       ...DEFAULT_STATUS_OPTIONS,
@@ -1406,6 +1452,27 @@ export function SpeakerWorkspace({
     .filter((participantId) => selectedSpeakerIds.includes(participantId));
   const allVisibleSelected =
     filteredSpeakers.length > 0 && selectedVisibleSpeakerIds.length === filteredSpeakers.length;
+  const emailPreviewCurrent =
+    emailPreview !== null &&
+    emailPreview.organizationId === organizationId &&
+    emailPreview.eventId === eventId &&
+    emailPreview.templateId === emailTemplateId &&
+    emailPreview.templateVersion === emailTemplateVersion &&
+    emailPreview.recipientIds.length === selectedSpeakerIds.length &&
+    selectedSpeakerIds.every((participantId) => emailPreview.recipientIds.includes(participantId));
+  const invalidateEmailPreview = useCallback(() => {
+    emailPreviewRequestRef.current += 1;
+    setEmailPreview(null);
+    setEmailSendIdempotencyKey(null);
+    setEmailConfirmOpen(false);
+    setEmailPreviewBusy(false);
+  }, []);
+  useEffect(() => {
+    const snapshot = [...selectedSpeakerIds].sort().join("\u0000");
+    const previous = emailSelectionSnapshotRef.current;
+    if (previous !== null && previous !== snapshot) invalidateEmailPreview();
+    emailSelectionSnapshotRef.current = snapshot;
+  }, [invalidateEmailPreview, selectedSpeakerIds]);
   useEffect(() => {
     const participantId = selectedSpeaker?.participantId;
     const assetId = selectedSpeaker?.headshotAssetId;
@@ -1500,9 +1567,8 @@ export function SpeakerWorkspace({
         ? current.filter((candidate) => candidate !== participantId)
         : [...current, participantId],
     );
-    setEmailPreview(null);
+    invalidateEmailPreview();
     setEmailNotice(null);
-    setEmailSendIdempotencyKey(null);
   }
 
   function toggleVisibleSpeakerSelection(): void {
@@ -1512,16 +1578,14 @@ export function SpeakerWorkspace({
         ? current.filter((participantId) => !visibleIds.includes(participantId))
         : [...new Set([...current, ...visibleIds])],
     );
-    setEmailPreview(null);
+    invalidateEmailPreview();
     setEmailNotice(null);
-    setEmailSendIdempotencyKey(null);
   }
 
   function clearSpeakerSelection(): void {
     setSelectedSpeakerIds([]);
-    setEmailPreview(null);
+    invalidateEmailPreview();
     setEmailNotice(null);
-    setEmailSendIdempotencyKey(null);
   }
 
   function updateCreate(field: keyof CreateDraft, value: string | boolean): void {
@@ -2025,6 +2089,7 @@ export function SpeakerWorkspace({
       );
       return null;
     }
+    invalidateEmailPreview();
     setEmailSaveBusy(true);
     setEmailNotice(null);
     try {
@@ -2092,6 +2157,8 @@ export function SpeakerWorkspace({
       setEmailNotice("Select at least one speaker before previewing an email.");
       return;
     }
+    invalidateEmailPreview();
+    const requestId = emailPreviewRequestRef.current;
     setEmailPreviewBusy(true);
     setEmailNotice(null);
     try {
@@ -2115,6 +2182,7 @@ export function SpeakerWorkspace({
             ),
           "Email template preparation",
         );
+        if (requestId !== emailPreviewRequestRef.current) return;
         templateId = created.id;
         templateVersion = created.version;
         setEmailTemplateId(created.id);
@@ -2142,6 +2210,10 @@ export function SpeakerWorkspace({
           ),
         "Email merge preview",
       );
+      if (requestId !== emailPreviewRequestRef.current) return;
+      if (preview.organizationId !== organizationId || preview.eventId !== eventId) {
+        throw new Error("The email preview belongs to a different event. Create a new preview.");
+      }
       setEmailPreview(preview);
       setEmailTemplateId(preview.templateId);
       setEmailCreateTemplateId(null);
@@ -2151,15 +2223,16 @@ export function SpeakerWorkspace({
         `Merge preview ready for ${preview.recipientIds.length} selected speaker${preview.recipientIds.length === 1 ? "" : "s"}.`,
       );
     } catch (reason: unknown) {
-      setEmailNotice(errorMessage(reason));
+      if (requestId === emailPreviewRequestRef.current) setEmailNotice(errorMessage(reason));
     } finally {
-      setEmailPreviewBusy(false);
+      if (requestId === emailPreviewRequestRef.current) setEmailPreviewBusy(false);
     }
   }
 
   async function sendBulkEmail(): Promise<void> {
-    if (api === null || emailPreview === null) {
-      setEmailNotice("Create a merge preview before queueing the email.");
+    if (api === null || !emailPreviewCurrent || emailPreview === null) {
+      setEmailNotice("Create a current merge preview before queueing the email.");
+      setEmailConfirmOpen(false);
       return;
     }
     const preview = emailPreview;
@@ -2732,11 +2805,17 @@ export function SpeakerWorkspace({
                           className={`${styles.speakerRow}${selectedId === speaker.participantId ? ` ${styles.speakerRowSelected}` : ""}`}
                           key={speaker.participantId}
                         >
-                          <Checkbox
-                            aria-label={`Select ${speaker.displayName}`}
-                            checked={selectedSpeakerIds.includes(speaker.participantId)}
-                            onCheckedChange={() => toggleSpeakerSelection(speaker.participantId)}
-                          />
+                          <Field orientation="horizontal" className={styles.checkboxField}>
+                            <Checkbox
+                              id={`roster-selection-${speaker.participantId}`}
+                              aria-label={`Select ${speaker.displayName}`}
+                              checked={selectedSpeakerIds.includes(speaker.participantId)}
+                              onCheckedChange={() => toggleSpeakerSelection(speaker.participantId)}
+                            />
+                            <FieldLabel htmlFor={`roster-selection-${speaker.participantId}`}>
+                              Select speaker
+                            </FieldLabel>
+                          </Field>
                           <div className={styles.speakerCopy}>
                             <Button
                               variant="link"
@@ -3266,15 +3345,20 @@ export function SpeakerWorkspace({
                   ) : (
                     <div className={styles.checkboxGrid}>
                       {speakers.map((speaker) => (
-                        <Field key={speaker.participantId} orientation="horizontal">
+                        <Field
+                          key={speaker.participantId}
+                          orientation="horizontal"
+                          className={styles.checkboxField}
+                        >
                           <Checkbox
                             id={`task-assignee-${speaker.participantId}`}
+                            aria-label={`Assign task to ${speaker.displayName}`}
                             checked={taskAssignees.includes(speaker.participantId)}
                             onCheckedChange={() => toggleAssignee(speaker.participantId)}
                             disabled={taskBusy}
                           />
                           <FieldLabel htmlFor={`task-assignee-${speaker.participantId}`}>
-                            {speaker.displayName}
+                            Assign task to {speaker.displayName}
                           </FieldLabel>
                         </Field>
                       ))}
@@ -3412,11 +3496,12 @@ export function SpeakerWorkspace({
                                 row.tasks.map((task) => (
                                   <li key={task.taskId}>
                                     <strong>{task.title}</strong> · {dateLabel(task.dueAt)} ·{" "}
-                                    <Badge
-                                      variant={taskComplete(task.status) ? "secondary" : "outline"}
+                                    <span
+                                      className={taskStatusClassName(task.status)}
+                                      data-status={task.status}
                                     >
                                       {taskStatusLabel(task.status)}
-                                    </Badge>
+                                    </span>
                                   </li>
                                 ))
                               )}
@@ -3514,115 +3599,237 @@ export function SpeakerWorkspace({
                   <CardTitle id="bulk-email-heading">Speaker email</CardTitle>
                   <CardDescription>
                     Compose an event-scoped message for {selectedSpeakerIds.length} selected speaker
-                    {selectedSpeakerIds.length === 1 ? "" : "s"}. Save a draft, preview the merge,
-                    then queue the send.
+                    {selectedSpeakerIds.length === 1 ? "" : "s"}. Save a draft, preview selected
+                    recipients, then confirm the send.
                   </CardDescription>
                 </div>
                 <Badge variant="outline">Preview required before send</Badge>
               </CardHeader>
               <CardContent className={styles.actionsStack}>
-                <div className={styles.fieldGrid}>
-                  <Field>
-                    <FieldLabel className={adminStyles.srOnly} htmlFor="email-template">
-                      Template / version
-                    </FieldLabel>
-                    <Select
-                      value={
-                        emailTemplateId ? `${emailTemplateId}:${emailTemplateVersion ?? ""}` : ""
+                <div className={styles.emailFlowGrid}>
+                  <div className={styles.emailEditor}>
+                    <div className={styles.emailTemplateRow}>
+                      <Field>
+                        <FieldLabel htmlFor="email-template">Template version</FieldLabel>
+                        <Select
+                          value={
+                            emailTemplateId
+                              ? `${emailTemplateId}:${emailTemplateVersion ?? ""}`
+                              : "new"
+                          }
+                          onValueChange={(value) => {
+                            invalidateEmailPreview();
+                            if (value === "new") {
+                              setEmailTemplateId("");
+                              setEmailCreateTemplateId(null);
+                              setEmailTemplateVersion(undefined);
+                              return;
+                            }
+                            const separator = value.lastIndexOf(":");
+                            const nextId = separator < 0 ? value : value.slice(0, separator);
+                            const rawVersion = separator < 0 ? "" : value.slice(separator + 1);
+                            const nextVersion = Number(rawVersion);
+                            const template = emailTemplates.find(
+                              (candidate) =>
+                                candidate.id === nextId && candidate.version === nextVersion,
+                            );
+                            setEmailTemplateId(nextId);
+                            setEmailCreateTemplateId(null);
+                            setEmailTemplateVersion(
+                              Number.isFinite(nextVersion) ? nextVersion : undefined,
+                            );
+                            if (template !== undefined) {
+                              setEmailTemplateName(template.name);
+                              setEmailSubject(template.subject);
+                              setEmailHtml(template.html);
+                              setEmailText(template.text);
+                            }
+                          }}
+                          disabled={emailSaveBusy}
+                        >
+                          <SelectTrigger id="email-template">
+                            <SelectValue placeholder="New template version" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectGroup>
+                              <SelectItem value="new">New template version</SelectItem>
+                              {emailTemplates.map((template) => (
+                                <SelectItem
+                                  key={`${template.id}:${template.version}`}
+                                  value={`${template.id}:${template.version}`}
+                                >
+                                  {template.name} · v{template.version} · {template.status}
+                                </SelectItem>
+                              ))}
+                            </SelectGroup>
+                          </SelectContent>
+                        </Select>
+                      </Field>
+                      <div className={styles.emailTemplateMeta} aria-live="polite">
+                        <strong>{selectedEmailTemplate?.name ?? emailTemplateName}</strong>
+                        <span className={styles.muted}>
+                          {emailTemplateId
+                            ? `Exact template ${emailTemplateId} · version ${emailTemplateVersion ?? "unsaved"}`
+                            : "New draft · save to create an exact server version"}
+                        </span>
+                        {selectedEmailTemplate ? (
+                          <span className={styles.muted}>
+                            {statusLabel(selectedEmailTemplate.status)} · Sender{" "}
+                            {selectedEmailTemplate.sender}
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+
+                    <Field>
+                      <FieldLabel htmlFor="email-template-name">Template name</FieldLabel>
+                      <Input
+                        id="email-template-name"
+                        value={emailTemplateName}
+                        onChange={(event) => {
+                          setEmailTemplateName(event.target.value);
+                          invalidateEmailPreview();
+                        }}
+                        maxLength={200}
+                        disabled={emailSaveBusy}
+                      />
+                    </Field>
+                    <Field>
+                      <FieldLabel htmlFor="email-subject">Subject</FieldLabel>
+                      <Input
+                        id="email-subject"
+                        value={emailSubject}
+                        onChange={(event) => {
+                          setEmailSubject(event.target.value);
+                          invalidateEmailPreview();
+                        }}
+                        placeholder="Update for {{first_name}}"
+                        maxLength={500}
+                        disabled={emailSaveBusy}
+                      />
+                    </Field>
+
+                    <Tabs
+                      value={emailEditorMode}
+                      onValueChange={(value) =>
+                        setEmailEditorMode(value as "visual" | "html" | "text")
                       }
-                      onValueChange={(value) => {
-                        if (value === "new") {
-                          setEmailTemplateId("");
-                          setEmailCreateTemplateId(null);
-                          setEmailTemplateVersion(undefined);
-                          return;
-                        }
-                        const separator = value.lastIndexOf(":");
-                        const nextId = separator < 0 ? value : value.slice(0, separator);
-                        const rawVersion = separator < 0 ? "" : value.slice(separator + 1);
-                        const nextVersion = Number(rawVersion);
-                        const template = emailTemplates.find(
-                          (candidate) =>
-                            candidate.id === nextId && candidate.version === nextVersion,
-                        );
-                        setEmailTemplateId(nextId);
-                        setEmailCreateTemplateId(null);
-                        setEmailTemplateVersion(
-                          Number.isFinite(nextVersion) ? nextVersion : undefined,
-                        );
-                        if (template !== undefined) {
-                          setEmailTemplateName(template.name);
-                          setEmailSubject(template.subject);
-                          setEmailHtml(template.html);
-                          setEmailText(template.text);
-                        }
-                      }}
-                      disabled={emailSaveBusy}
+                      className={styles.emailEditorTabs}
                     >
-                      <SelectTrigger
-                        id="email-template"
-                        aria-label="Speaker email template version"
+                      <TabsList
+                        variant="line"
+                        className={styles.emailEditorTabsList}
+                        aria-label="Email editor mode"
                       >
-                        <SelectValue placeholder="New template version" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectGroup>
-                          <SelectItem value="new">New template version</SelectItem>
-                          {emailTemplates.map((template) => (
-                            <SelectItem
-                              key={`${template.id}:${template.version}`}
-                              value={`${template.id}:${template.version}`}
-                            >
-                              {template.name} · v{template.version} · {template.status}
-                            </SelectItem>
-                          ))}
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="email-template-name">Template name</FieldLabel>
-                    <Input
-                      id="email-template-name"
-                      value={emailTemplateName}
-                      onChange={(event) => setEmailTemplateName(event.target.value)}
-                      maxLength={200}
-                      disabled={emailSaveBusy}
-                    />
-                  </Field>
-                </div>
-                <Field>
-                  <FieldLabel htmlFor="email-subject">Subject</FieldLabel>
-                  <Input
-                    id="email-subject"
-                    value={emailSubject}
-                    onChange={(event) => setEmailSubject(event.target.value)}
-                    placeholder="Update for {{first_name}}"
-                    maxLength={500}
-                    disabled={emailSaveBusy}
-                  />
-                </Field>
-                <div className={styles.fieldGrid}>
-                  <Field>
-                    <FieldLabel htmlFor="email-html">HTML body</FieldLabel>
-                    <Textarea
-                      id="email-html"
-                      value={emailHtml}
-                      onChange={(event) => setEmailHtml(event.target.value)}
-                      maxLength={100_000}
-                      disabled={emailSaveBusy}
-                    />
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="email-text">Text body</FieldLabel>
-                    <Textarea
-                      id="email-text"
-                      value={emailText}
-                      onChange={(event) => setEmailText(event.target.value)}
-                      maxLength={100_000}
-                      disabled={emailSaveBusy}
-                    />
-                  </Field>
+                        <TabsTrigger value="visual">Visual preview</TabsTrigger>
+                        <TabsTrigger value="html">HTML source</TabsTrigger>
+                        <TabsTrigger value="text">Plain text</TabsTrigger>
+                      </TabsList>
+                      <TabsContent value="visual" className={styles.actionsStack}>
+                        <p className={styles.muted}>
+                          Visual mode uses the safe server preview. Raw HTML is never executed in
+                          this workspace.
+                        </p>
+                        {emailPreviewCurrent && emailPreview ? (
+                          <div className={styles.emailPreviewOutput}>
+                            <p className={styles.muted}>Server-rendered text</p>
+                            <pre>{emailPreview.text}</pre>
+                            <p className={styles.muted}>Escaped HTML output</p>
+                            <pre>{emailPreview.html}</pre>
+                          </div>
+                        ) : (
+                          <p className={styles.muted} role="status">
+                            Preview selected recipients to see the server-rendered result.
+                          </p>
+                        )}
+                      </TabsContent>
+                      <TabsContent value="html">
+                        <Field>
+                          <FieldLabel htmlFor="email-html">HTML source</FieldLabel>
+                          <Textarea
+                            id="email-html"
+                            value={emailHtml}
+                            onChange={(event) => {
+                              setEmailHtml(event.target.value);
+                              invalidateEmailPreview();
+                            }}
+                            maxLength={100_000}
+                            disabled={emailSaveBusy}
+                          />
+                        </Field>
+                      </TabsContent>
+                      <TabsContent value="text">
+                        <Field>
+                          <FieldLabel htmlFor="email-text">Plain text body</FieldLabel>
+                          <Textarea
+                            id="email-text"
+                            value={emailText}
+                            onChange={(event) => {
+                              setEmailText(event.target.value);
+                              invalidateEmailPreview();
+                            }}
+                            maxLength={100_000}
+                            disabled={emailSaveBusy}
+                          />
+                        </Field>
+                      </TabsContent>
+                    </Tabs>
+
+                    <p className={styles.muted}>
+                      Merge variables are resolved by the server:{" "}
+                      <code className={styles.code}>{"{{first_name}}"}</code>,{" "}
+                      <code className={styles.code}>{"{{display_name}}"}</code>,{" "}
+                      <code className={styles.code}>{"{{email}}"}</code>.
+                    </p>
+                  </div>
+
+                  <Card
+                    size="sm"
+                    className={styles.emailPreviewPanel}
+                    aria-label="Selected speaker email preview"
+                  >
+                    <CardHeader>
+                      <CardTitle>Preview selected recipients</CardTitle>
+                      <CardDescription>
+                        Exact server result; this panel never executes template HTML.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className={styles.actionsStack}>
+                      {emailPreviewCurrent && emailPreview ? (
+                        <>
+                          <p className={styles.muted}>
+                            {emailPreview.recipientIds.length} recipient
+                            {emailPreview.recipientIds.length === 1 ? "" : "s"} · exact template{" "}
+                            {emailPreview.templateId} · version {emailPreview.templateVersion}
+                          </p>
+                          <p>
+                            <strong>Subject:</strong> {emailPreview.subject}
+                          </p>
+                          <ul
+                            className={styles.list}
+                            aria-label="Speaker email preview recipient names"
+                          >
+                            {emailPreview.recipients.map((recipient) => (
+                              <li key={recipient.participantId}>
+                                <strong>{recipient.displayName}</strong> · {recipient.email}
+                              </li>
+                            ))}
+                          </ul>
+                          <div className={styles.emailPreviewOutput}>
+                            <p className={styles.muted}>Server-rendered text</p>
+                            <pre>{emailPreview.text}</pre>
+                            <p className={styles.muted}>Escaped HTML output</p>
+                            <pre>{emailPreview.html}</pre>
+                          </div>
+                        </>
+                      ) : (
+                        <p className={styles.muted} role="status">
+                          No current preview. Select recipients and preview before confirming a
+                          send.
+                        </p>
+                      )}
+                    </CardContent>
+                  </Card>
                 </div>
               </CardContent>
               <CardFooter className={styles.actions}>
@@ -3642,16 +3849,16 @@ export function SpeakerWorkspace({
                   disabled={emailPreviewBusy || api === null || selectedSpeakerIds.length === 0}
                 >
                   <Eye data-icon="inline-start" />
-                  {emailPreviewBusy ? "Preparing…" : "Preview"}
+                  {emailPreviewBusy ? "Preparing…" : "Preview selected recipients"}
                 </Button>
                 <Button
                   variant="default"
                   type="button"
-                  onClick={() => void sendBulkEmail()}
-                  disabled={emailSendBusy || api === null || emailPreview === null}
+                  onClick={() => setEmailConfirmOpen(true)}
+                  disabled={emailSendBusy || api === null || !emailPreviewCurrent}
                 >
                   <Send data-icon="inline-start" />
-                  {emailSendBusy ? "Queueing…" : "Send"}
+                  {emailSendBusy ? "Queueing…" : "Confirm send"}
                 </Button>
                 <Button
                   variant="ghost"
@@ -3666,51 +3873,28 @@ export function SpeakerWorkspace({
                 </Button>
               </CardFooter>
               <CardContent className={styles.actionsStack}>
-                <p className={styles.muted}>
-                  Merge tokens: <code className={styles.code}>{"{{first_name}}"}</code>,{" "}
-                  <code className={styles.code}>{"{{display_name}}"}</code>,{" "}
-                  <code className={styles.code}>{"{{email}}"}</code>.
-                </p>
                 {emailNotice ? (
                   <FormMessage
                     message={emailNotice}
                     error={emailNotice.includes("unavailable") || emailNotice.includes("could")}
                   />
                 ) : null}
-                {emailPreview ? (
-                  <Card size="sm" className={styles.preview}>
-                    <CardHeader>
-                      <CardTitle>
-                        Merge preview · {emailPreview.recipientIds.length} recipient
-                        {emailPreview.recipientIds.length === 1 ? "" : "s"} · template v
-                        {emailPreview.templateVersion}
-                      </CardTitle>
-                      <CardDescription>{emailPreview.subject}</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <ul
-                        className={styles.list}
-                        aria-label="Speaker email merge preview recipients"
-                      >
-                        {emailPreview.recipients.map((recipient) => (
-                          <li key={recipient.participantId}>
-                            <strong>{recipient.firstName}</strong> · {recipient.email} ·{" "}
-                            {recipient.subject}
-                          </li>
-                        ))}
-                      </ul>
-                    </CardContent>
-                  </Card>
-                ) : null}
-                {emailSends.length > 0 ? (
-                  <Card size="sm">
-                    <CardHeader>
-                      <CardTitle>Email queue history</CardTitle>
-                    </CardHeader>
-                    <CardContent>
+                <Card size="sm" className={styles.emailHistory}>
+                  <CardHeader>
+                    <CardTitle>Email send history</CardTitle>
+                    <CardDescription>
+                      Completed send records stay here when you start a new draft or preview.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    {emailSends.length === 0 ? (
+                      <p className={styles.muted} role="status">
+                        No email sends recorded for this event.
+                      </p>
+                    ) : (
                       <Table>
                         <TableCaption className={adminStyles.srOnly}>
-                          Speaker email queue history
+                          Speaker email send history
                         </TableCaption>
                         <TableHeader>
                           <TableRow>
@@ -3726,18 +3910,44 @@ export function SpeakerWorkspace({
                               <TableCell>
                                 <Badge variant="outline">{send.status}</Badge>
                               </TableCell>
-                              <TableCell>v{send.templateVersion}</TableCell>
+                              <TableCell>
+                                {send.templateId} · v{send.templateVersion}
+                              </TableCell>
                               <TableCell>{send.recipientIds.length}</TableCell>
                               <TableCell>{dateLabel(send.updatedAt)}</TableCell>
                             </TableRow>
                           ))}
                         </TableBody>
                       </Table>
-                    </CardContent>
-                  </Card>
-                ) : null}
+                    )}
+                  </CardContent>
+                </Card>
               </CardContent>
             </Card>
+
+            <AlertDialog open={emailConfirmOpen} onOpenChange={setEmailConfirmOpen}>
+              <AlertDialogContent className={styles.dialogContent}>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Confirm speaker email send</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Queue the current server preview for {emailPreview?.recipientIds.length ?? 0}{" "}
+                    selected recipient
+                    {(emailPreview?.recipientIds.length ?? 0) === 1 ? "" : "s"} using exact template
+                    version {emailPreview?.templateVersion ?? "unavailable"}. This action uses the
+                    current idempotency key and cannot be edited after queueing.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel disabled={emailSendBusy}>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    disabled={emailSendBusy || !emailPreviewCurrent}
+                    onClick={() => void sendBulkEmail()}
+                  >
+                    {emailSendBusy ? "Queueing…" : "Confirm send"}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </div>
         </TabsContent>
       </Tabs>

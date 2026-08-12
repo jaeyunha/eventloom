@@ -70,7 +70,7 @@ describe("local public embed demo projections", () => {
       expect(program.agenda.event.slug).toBe("open-sessionboard-conf");
       expect(program.speakers.event.slug).toBe("open-sessionboard-conf");
       expect(calls).toHaveLength(2);
-      expect(calls.map(({ init }) => init?.cache)).toEqual(["force-cache", "force-cache"]);
+      expect(calls.map(({ init }) => init?.cache)).toEqual(["no-store", "no-store"]);
     }
   });
 
@@ -160,8 +160,8 @@ describe("local public embed demo projections", () => {
     });
     expect(calls).toHaveLength(3);
     expect(calls.map(({ init }) => init?.cache)).toEqual([
-      "force-cache",
-      "force-cache",
+      "no-store",
+      "no-store",
       "no-store",
     ]);
     expect(String(calls[2]?.input)).toMatch(/\/speakers$/u);
@@ -189,7 +189,7 @@ describe("local public embed demo projections", () => {
       status: 404,
     });
     expect(calls).toHaveLength(2);
-    expect(calls.map(({ init }) => init?.cache)).toEqual(["force-cache", "force-cache"]);
+    expect(calls.map(({ init }) => init?.cache)).toEqual(["no-store", "no-store"]);
   });
 
   it("preserves a real published program in local", async () => {

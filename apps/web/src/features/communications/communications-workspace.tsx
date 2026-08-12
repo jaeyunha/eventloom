@@ -1,14 +1,49 @@
 "use client";
 
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
-  type CSSProperties,
-  type FormEvent,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Textarea } from "@/components/ui/textarea";
 import { createScopedReadFlightCoordinator } from "@/lib/scoped-read-flight";
 import {
   approvedSenderForPurpose,
@@ -29,66 +64,7 @@ import {
   formatCommunicationAudience,
   formatCommunicationPurpose,
 } from "./api";
-
-const pageStyle: CSSProperties = {
-  minHeight: "100dvh",
-  padding: "2rem 1rem 4rem",
-  background: "var(--color-canvas, #f5f6f9)",
-};
-const contentStyle: CSSProperties = { width: "min(100%, 76rem)", margin: "0 auto" };
-const cardStyle: CSSProperties = {
-  padding: "1.25rem",
-  border: "1px solid var(--color-border, #dfe2e8)",
-  borderRadius: "0.875rem",
-  background: "var(--color-surface, #fff)",
-  boxShadow: "var(--shadow-card, 0 8px 24px rgb(29 34 51 / 6%))",
-};
-const gridStyle: CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 24rem), 1fr))",
-  gap: "1rem",
-};
-const fieldStyle: CSSProperties = { display: "grid", gap: "0.35rem" };
-const inputStyle: CSSProperties = {
-  width: "100%",
-  padding: "0.6rem 0.7rem",
-  border: "1px solid var(--color-border-strong, #cdd1da)",
-  borderRadius: "0.5rem",
-  font: "inherit",
-};
-const buttonStyle: CSSProperties = {
-  padding: "0.62rem 0.9rem",
-  border: "1px solid var(--color-brand, #5065e8)",
-  borderRadius: "0.5rem",
-  background: "var(--color-brand, #5065e8)",
-  color: "white",
-  font: "inherit",
-  fontWeight: 700,
-  cursor: "pointer",
-};
-const secondaryButtonStyle: CSSProperties = {
-  ...buttonStyle,
-  borderColor: "var(--color-border-strong, #cdd1da)",
-  background: "var(--color-surface, #fff)",
-  color: "var(--color-ink, #25272d)",
-};
-const mutedStyle: CSSProperties = { color: "var(--color-muted, #697181)" };
-const rowStyle: CSSProperties = {
-  display: "flex",
-  flexWrap: "wrap",
-  gap: "0.65rem",
-  alignItems: "center",
-};
-const preStyle: CSSProperties = {
-  maxHeight: "16rem",
-  overflow: "auto",
-  padding: "0.8rem",
-  borderRadius: "0.5rem",
-  background: "#20242d",
-  color: "#f8f9fb",
-  whiteSpace: "pre-wrap",
-  overflowWrap: "anywhere",
-};
+import styles from "./communications-workspace.module.css";
 
 export type CommunicationProviderState =
   | "unknown"
@@ -106,6 +82,11 @@ export interface CommunicationsWorkspaceProps {
   readonly providerState?: CommunicationProviderState;
 }
 
+export interface CommunicationTemplateSelection {
+  readonly templateId: string;
+  readonly templateVersion: number;
+}
+
 export interface CommunicationsWorkspaceViewProps {
   readonly eventId: string;
   readonly organizationId: string;
@@ -118,9 +99,10 @@ export interface CommunicationsWorkspaceViewProps {
   readonly statusMessage?: string | null;
   readonly providerState?: CommunicationProviderState;
   readonly selectedTemplateId?: string;
+  readonly selectedTemplateVersion?: number;
   readonly creatingTemplate?: boolean;
   readonly selectedAudience?: CommunicationAudience;
-  readonly onSelectTemplate?: (templateId: string) => void;
+  readonly onSelectTemplate?: (templateId: string, templateVersion?: number) => void;
   readonly onStartNewTemplate?: () => void;
   readonly onSelectAudience?: (audience: CommunicationAudience) => void;
   readonly onCreateTemplate?: (input: TemplateDraft) => Promise<void>;
@@ -128,10 +110,13 @@ export interface CommunicationsWorkspaceViewProps {
   readonly onApproveTemplate?: (template: CommunicationTemplate) => Promise<void>;
   readonly onPreview?: () => Promise<void>;
   readonly onOpenSendConfirmation?: () => void;
-  readonly onConfirmSend?: () => Promise<void>;
+  readonly onConfirmSend?: () => Promise<boolean | undefined>;
   readonly onCloseSendConfirmation?: () => void;
   readonly sendConfirmationOpen?: boolean;
   readonly onRetryFailed?: () => Promise<void>;
+  /** Exposed for deterministic component tests; production uses the local dialog state. */
+  readonly approvalDialogOpen?: boolean;
+  readonly onApprovalDialogOpenChange?: (open: boolean) => void;
 }
 
 export interface TemplateDraft {
@@ -144,6 +129,61 @@ export interface TemplateDraft {
   readonly templateId?: string;
 }
 
+export function communicationTemplateSelectionKey(
+  templateId: string,
+  templateVersion: number,
+): string {
+  return `${encodeURIComponent(templateId)}:${templateVersion}`;
+}
+
+export function communicationTemplateSelectionFromKey(
+  value: string,
+): CommunicationTemplateSelection | undefined {
+  const separator = value.lastIndexOf(":");
+  if (separator <= 0) return undefined;
+  let templateId: string;
+  try {
+    templateId = decodeURIComponent(value.slice(0, separator));
+  } catch {
+    return undefined;
+  }
+  const templateVersion = Number(value.slice(separator + 1));
+  if (
+    templateId.trim().length === 0 ||
+    !Number.isSafeInteger(templateVersion) ||
+    templateVersion <= 0
+  ) {
+    return undefined;
+  }
+  return { templateId, templateVersion };
+}
+
+export function findCommunicationTemplate(
+  templates: readonly CommunicationTemplate[],
+  selection: CommunicationTemplateSelection | undefined,
+): CommunicationTemplate | undefined {
+  if (selection === undefined) return undefined;
+  return templates.find(
+    (template) =>
+      template.id === selection.templateId && template.version === selection.templateVersion,
+  );
+}
+export interface CommunicationPreviewActionState {
+  readonly preview: CommunicationPreview | null;
+  readonly sendConfirmationOpen: boolean;
+  readonly idempotencyKey: string | null;
+}
+
+export function invalidateCommunicationPreviewState(
+  _state: CommunicationPreviewActionState,
+): CommunicationPreviewActionState {
+  return {
+    preview: null,
+    sendConfirmationOpen: false,
+    idempotencyKey: null,
+  };
+}
+
 function statusLabel(
   status:
     | CommunicationTemplate["status"]
@@ -151,6 +191,28 @@ function statusLabel(
     | CommunicationDelivery["status"],
 ): string {
   return status.charAt(0).toUpperCase() + status.slice(1);
+}
+
+function statusVariant(
+  status:
+    | CommunicationTemplate["status"]
+    | CommunicationSend["status"]
+    | CommunicationDelivery["status"],
+): "default" | "secondary" | "outline" | "destructive" {
+  if (status === "failed" || status === "bounced" || status === "complained") return "destructive";
+  if (status === "approved" || status === "delivered") return "secondary";
+  return "outline";
+}
+
+function StatusBadge({
+  status,
+}: Readonly<{
+  status:
+    | CommunicationTemplate["status"]
+    | CommunicationSend["status"]
+    | CommunicationDelivery["status"];
+}>) {
+  return <Badge variant={statusVariant(status)}>{statusLabel(status)}</Badge>;
 }
 
 function senderLabel(template: CommunicationTemplate | CommunicationPreview["template"]): string {
@@ -192,6 +254,7 @@ function messageFromError(error: unknown): string {
     ? error.message
     : "The communication request could not be completed.";
 }
+
 export async function loadCommunicationTemplates({
   read,
   signal,
@@ -219,6 +282,7 @@ export async function loadCommunicationTemplates({
     if (canCommit()) onSettled();
   }
 }
+
 export interface CommunicationTemplateReadKey {
   readonly api: CommunicationApi;
   readonly organizationId: string;
@@ -273,39 +337,70 @@ function templateDraftFrom(template: CommunicationTemplate | undefined): Templat
       };
 }
 
-function latestTemplateForId(
+function draftEqual(left: TemplateDraft, right: TemplateDraft): boolean {
+  return (
+    left.templateId === right.templateId &&
+    left.name === right.name &&
+    left.purpose === right.purpose &&
+    left.subject === right.subject &&
+    left.html === right.html &&
+    left.text === right.text &&
+    left.variables.join("\u0000") === right.variables.join("\u0000")
+  );
+}
+
+function resolveEditorTemplate(
   templates: readonly CommunicationTemplate[],
   templateId: string | undefined,
+  templateVersion: number | undefined,
 ): CommunicationTemplate | undefined {
-  if (templateId === undefined) return undefined;
-  return templates
-    .filter((template) => template.id === templateId)
-    .reduce<CommunicationTemplate | undefined>(
-      (latest, template) =>
-        latest === undefined || template.version > latest.version ? template : latest,
-      undefined,
-    );
+  if (templateId === undefined || templateId.length === 0) return undefined;
+  const candidates = templates.filter((template) => template.id === templateId);
+  if (templateVersion !== undefined) {
+    return candidates.find((template) => template.version === templateVersion);
+  }
+  // A missing version is only safe when the id has one version; never silently pick latest.
+  return candidates.length === 1 ? candidates[0] : undefined;
 }
+
 function TemplateEditor({
   selected,
   busy,
   onCreateTemplate,
   onCreateVersion,
   onApproveTemplate,
+  approvalDialogOpen: controlledApprovalDialogOpen,
+  onApprovalDialogOpenChange,
 }: Readonly<{
   selected: CommunicationTemplate | undefined;
   busy: boolean;
   onCreateTemplate?: (input: TemplateDraft) => Promise<void>;
   onCreateVersion?: (input: TemplateDraft) => Promise<void>;
   onApproveTemplate?: (template: CommunicationTemplate) => Promise<void>;
+  approvalDialogOpen?: boolean;
+  onApprovalDialogOpenChange?: (open: boolean) => void;
 }>) {
+  const approvalTriggerRef = useRef<HTMLButtonElement | null>(null);
   const [draft, setDraft] = useState<TemplateDraft>(() => templateDraftFrom(selected));
   const [formError, setFormError] = useState<string | null>(null);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
+  const [approvalBusy, setApprovalBusy] = useState(false);
+  const [internalApprovalDialogOpen, setInternalApprovalDialogOpen] = useState(false);
 
   useEffect(() => {
     setDraft(templateDraftFrom(selected));
     setFormError(null);
+    setApprovalError(null);
   }, [selected]);
+
+  const persistedDraft = useMemo(() => templateDraftFrom(selected), [selected]);
+  const dirty = !draftEqual(draft, persistedDraft);
+  const approvalDialogOpen = controlledApprovalDialogOpen ?? internalApprovalDialogOpen;
+  const setApprovalDialogOpen = (open: boolean) => {
+    if (controlledApprovalDialogOpen === undefined) setInternalApprovalDialogOpen(open);
+    onApprovalDialogOpenChange?.(open);
+    if (!open) setApprovalError(null);
+  };
 
   function update<K extends keyof TemplateDraft>(key: K, value: TemplateDraft[K]): void {
     setDraft((current) => ({ ...current, [key]: value }));
@@ -329,205 +424,390 @@ function TemplateEditor({
     }
   }
 
+  async function confirmApproval(): Promise<void> {
+    if (selected === undefined || onApproveTemplate === undefined) return;
+    setApprovalBusy(true);
+    setApprovalError(null);
+    try {
+      await onApproveTemplate(selected);
+      setApprovalDialogOpen(false);
+    } catch (reason) {
+      setApprovalError(messageFromError(reason));
+    } finally {
+      setApprovalBusy(false);
+    }
+  }
+
   const sender = approvedSenderForPurpose(draft.purpose);
   return (
-    <section style={cardStyle} aria-labelledby="template-editor-heading">
-      <div style={rowStyle}>
-        <div style={{ flex: "1 1 20rem" }}>
-          <p style={mutedStyle}>Template authoring</p>
-          <h2 id="template-editor-heading">
-            {selected === undefined ? "Create an email template" : "Create a new template version"}
-          </h2>
-        </div>
-        {selected !== undefined ? <span>Version {selected.version}</span> : null}
-      </div>
-      <p style={mutedStyle}>
-        Templates are event-scoped and versioned. Only approved versions can be previewed or sent.
-        HTML is rendered by the email provider; this workspace never executes it.
-      </p>
-      <form onSubmit={(event) => void submit(event)} style={{ display: "grid", gap: "0.9rem" }}>
-        <div style={gridStyle}>
-          <label style={fieldStyle}>
-            <span>Template name</span>
-            <input
-              style={inputStyle}
-              value={draft.name}
-              onChange={(event) => update("name", event.currentTarget.value)}
-              required
-            />
-          </label>
-          <label style={fieldStyle}>
-            <span>Purpose</span>
-            <select
-              style={inputStyle}
-              value={draft.purpose}
-              disabled={selected !== undefined}
-              onChange={(event) =>
-                update("purpose", event.currentTarget.value as CommunicationTemplatePurpose)
-              }
-            >
-              {COMMUNICATION_TEMPLATE_PURPOSES.map((purpose) => (
-                <option key={purpose} value={purpose}>
-                  {formatCommunicationPurpose(purpose)}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-        <p style={mutedStyle}>
-          Approved sender identity: <strong>{sender}</strong>. Sender identities cannot be entered
-          manually.
-        </p>
-        <label style={fieldStyle}>
-          <span>Subject</span>
-          <input
-            style={inputStyle}
-            value={draft.subject}
-            onChange={(event) => update("subject", event.currentTarget.value)}
-            required
-          />
-        </label>
-        <label style={fieldStyle}>
-          <span>HTML body</span>
-          <textarea
-            style={inputStyle}
-            rows={7}
-            value={draft.html}
-            onChange={(event) => update("html", event.currentTarget.value)}
-            required
-          />
-        </label>
-        <label style={fieldStyle}>
-          <span>Plain-text body</span>
-          <textarea
-            style={inputStyle}
-            rows={6}
-            value={draft.text}
-            onChange={(event) => update("text", event.currentTarget.value)}
-            required
-          />
-        </label>
-        <label style={fieldStyle}>
-          <span>Variables (comma-separated)</span>
-          <input
-            style={inputStyle}
-            value={draft.variables.join(", ")}
-            onChange={(event) =>
-              update(
-                "variables",
-                event.currentTarget.value
-                  .split(",")
-                  .map((value) => value.trim())
-                  .filter(Boolean),
-              )
-            }
-            placeholder="recipient.displayName, event.name"
-          />
-        </label>
-        {formError !== null ? <p role="alert">{formError}</p> : null}
-        <div style={rowStyle}>
-          <button style={buttonStyle} type="submit" disabled={busy}>
-            {busy ? "Saving…" : selected === undefined ? "Save draft template" : "Save new version"}
-          </button>
-          {selected !== undefined && selected.status !== "approved" ? (
-            <button
-              style={secondaryButtonStyle}
-              type="button"
-              disabled={busy}
-              onClick={() =>
-                onApproveTemplate === undefined ? undefined : void onApproveTemplate(selected)
-              }
-            >
-              Approve version {selected.version}
-            </button>
+    <Card id="draft-template" className={styles.workflowCard}>
+      <CardHeader>
+        <div className={styles.cardEyebrow}>Step 1 · Draft template</div>
+        <div className={styles.cardHeadingRow}>
+          <div>
+            <CardTitle>
+              {selected === undefined
+                ? "Create an email template"
+                : "Create a new template version"}
+            </CardTitle>
+            <CardDescription>
+              Event-scoped content is versioned. The editor keeps HTML and plain text separate; HTML
+              is shown as escaped source and is never executed here.
+            </CardDescription>
+          </div>
+          {selected !== undefined ? (
+            <div className={styles.versionSummary}>
+              <span>Selected version</span>
+              <strong>v{selected.version}</strong>
+            </div>
           ) : null}
         </div>
-      </form>
-    </section>
+      </CardHeader>
+      <CardContent>
+        <div className={styles.persistedState} role="status" aria-live="polite">
+          <span
+            className={dirty ? styles.statusDotDirty : styles.statusDotPersisted}
+            aria-hidden="true"
+          />
+          <strong>
+            {dirty ? "Unsaved changes" : selected === undefined ? "New draft" : "Persisted version"}
+          </strong>
+          <span className={styles.mutedText}>
+            {dirty
+              ? "Save a new version before review."
+              : selected === undefined
+                ? "Nothing has been saved yet."
+                : `Saved event version ${selected.version} on ${formatTime(selected.updatedAt)}.`}
+          </span>
+        </div>
+        <form onSubmit={(event) => void submit(event)} className={styles.formStack}>
+          <div className={styles.formGrid}>
+            <div className={styles.field}>
+              <Label htmlFor="communication-template-name">Template name</Label>
+              <Input
+                id="communication-template-name"
+                value={draft.name}
+                onChange={(event) => update("name", event.currentTarget.value)}
+                required
+              />
+            </div>
+            <div className={styles.field}>
+              <Label htmlFor="communication-template-purpose">Purpose</Label>
+              <select
+                id="communication-template-purpose"
+                className={styles.select}
+                value={draft.purpose}
+                disabled={selected !== undefined}
+                onChange={(event) =>
+                  update("purpose", event.currentTarget.value as CommunicationTemplatePurpose)
+                }
+              >
+                {COMMUNICATION_TEMPLATE_PURPOSES.map((purpose) => (
+                  <option key={purpose} value={purpose}>
+                    {formatCommunicationPurpose(purpose)}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <p className={styles.mutedText}>
+            Approved sender identity: <strong>{sender}</strong>. Sender identities are controlled by
+            purpose and cannot be entered manually.
+          </p>
+          <div className={styles.field}>
+            <Label htmlFor="communication-template-subject">Subject</Label>
+            <Input
+              id="communication-template-subject"
+              value={draft.subject}
+              onChange={(event) => update("subject", event.currentTarget.value)}
+              required
+            />
+          </div>
+          <div className={styles.formGrid}>
+            <div className={styles.field}>
+              <Label htmlFor="communication-template-html">HTML body</Label>
+              <Textarea
+                id="communication-template-html"
+                rows={8}
+                value={draft.html}
+                onChange={(event) => update("html", event.currentTarget.value)}
+                required
+              />
+            </div>
+            <div className={styles.field}>
+              <Label htmlFor="communication-template-text">Plain-text body</Label>
+              <Textarea
+                id="communication-template-text"
+                rows={8}
+                value={draft.text}
+                onChange={(event) => update("text", event.currentTarget.value)}
+                required
+              />
+            </div>
+          </div>
+          <div className={styles.field}>
+            <Label htmlFor="communication-template-variables">Required variables</Label>
+            <Input
+              id="communication-template-variables"
+              value={draft.variables.join(", ")}
+              onChange={(event) =>
+                update(
+                  "variables",
+                  event.currentTarget.value
+                    .split(",")
+                    .map((value) => value.trim())
+                    .filter(Boolean),
+                )
+              }
+              placeholder="recipient.displayName, event.name"
+            />
+          </div>
+          {formError !== null ? (
+            <p className={styles.inlineError} role="alert">
+              {formError}
+            </p>
+          ) : null}
+          <div className={styles.actionRow}>
+            <Button type="submit" disabled={busy}>
+              {busy
+                ? "Saving…"
+                : selected === undefined
+                  ? "Save draft template"
+                  : "Save new version"}
+            </Button>
+            {selected !== undefined ? (
+              <span className={styles.mutedText}>
+                Saving creates a new version; it does not overwrite v{selected.version}.
+              </span>
+            ) : null}
+          </div>
+        </form>
+      </CardContent>
+      <span
+        id="review-approve"
+        className={styles.anchorTarget}
+        aria-hidden="true"
+        data-approval-dialog-state={approvalDialogOpen ? "open" : "closed"}
+      />
+      {selected !== undefined ? (
+        <CardFooter className={styles.reviewFooter}>
+          <div>
+            <div className={styles.cardEyebrow}>Step 2 · Review and approve exact version</div>
+            <p className={styles.footerDescription}>
+              Approval is a human gate. Review sender, purpose, subject, required variables,
+              rendered sample, and effect before approving this exact version.
+            </p>
+          </div>
+          <Button
+            ref={approvalTriggerRef}
+            type="button"
+            variant="outline"
+            disabled={busy || onApproveTemplate === undefined || selected.status === "approved"}
+            onClick={() => setApprovalDialogOpen(true)}
+            data-template-id={selected.id}
+            data-template-version={selected.version}
+          >
+            {selected.status === "approved"
+              ? `Version ${selected.version} approved`
+              : `Approve version ${selected.version}`}
+          </Button>
+        </CardFooter>
+      ) : null}
+      {selected !== undefined ? (
+        <Dialog open={approvalDialogOpen} onOpenChange={setApprovalDialogOpen}>
+          <DialogContent
+            onCloseAutoFocus={(event) => {
+              event.preventDefault();
+              approvalTriggerRef.current?.focus();
+            }}
+            className={styles.reviewDialog}
+            aria-describedby="template-approval-description"
+            data-approval-dialog="exact-version"
+          >
+            <DialogHeader>
+              <DialogTitle>
+                Review and approve exact template version {selected.version}
+              </DialogTitle>
+              <DialogDescription id="template-approval-description">
+                Approval applies only to template <strong>{selected.id}</strong> version{" "}
+                <strong>{selected.version}</strong>. The server will require this exact version for
+                preview and send.
+              </DialogDescription>
+            </DialogHeader>
+            <dl className={styles.detailGrid}>
+              <div>
+                <dt>Template</dt>
+                <dd>{selected.name}</dd>
+              </div>
+              <div>
+                <dt>Exact version</dt>
+                <dd>
+                  {selected.id} · v{selected.version}
+                </dd>
+              </div>
+              <div>
+                <dt>Sender</dt>
+                <dd>{senderLabel(selected)}</dd>
+              </div>
+              <div>
+                <dt>Purpose</dt>
+                <dd>{formatCommunicationPurpose(selected.purpose)}</dd>
+              </div>
+              <div>
+                <dt>Subject</dt>
+                <dd>{selected.subject}</dd>
+              </div>
+              <div>
+                <dt>Required variables</dt>
+                <dd>{selected.variables.length === 0 ? "None" : selected.variables.join(", ")}</dd>
+              </div>
+            </dl>
+            <div className={styles.sampleGrid}>
+              <div>
+                <h3>Rendered HTML sample (escaped source)</h3>
+                <pre className={styles.codeBlock}>{escapeHtmlForPreview(selected.html)}</pre>
+              </div>
+              <div>
+                <h3>Rendered plain-text sample</h3>
+                <pre className={styles.textBlock}>{selected.text}</pre>
+              </div>
+            </div>
+            <Alert>
+              <AlertTitle>Effect of approval</AlertTitle>
+              <AlertDescription>
+                Approving v{selected.version} makes this exact sender, purpose, subject, and body
+                eligible for a server-generated recipient preview. It does not send email.
+              </AlertDescription>
+            </Alert>
+            {approvalError !== null ? (
+              <p className={styles.inlineError} role="alert">
+                {approvalError}
+              </p>
+            ) : null}
+            <DialogFooter>
+              <DialogClose asChild>
+                <Button type="button" variant="outline" disabled={approvalBusy}>
+                  Cancel review
+                </Button>
+              </DialogClose>
+              <Button type="button" disabled={approvalBusy} onClick={() => void confirmApproval()}>
+                {approvalBusy ? "Approving…" : `Approve exact version ${selected.version}`}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      ) : null}
+    </Card>
   );
 }
 
 function RecipientPreview({ preview }: Readonly<{ preview: CommunicationPreview }>) {
   return (
-    <>
-      <div style={gridStyle}>
+    <div className={styles.previewBody}>
+      <div className={styles.detailGrid}>
         <div>
-          <span style={mutedStyle}>Audience</span>
-          <strong style={{ display: "block" }}>
-            {formatCommunicationAudience(preview.audience)}
-          </strong>
+          <span className={styles.detailLabel}>Audience</span>
+          <strong>{formatCommunicationAudience(preview.audience)}</strong>
         </div>
         <div>
-          <span style={mutedStyle}>Approved template</span>
-          <strong style={{ display: "block" }}>
+          <span className={styles.detailLabel}>Exact approved template</span>
+          <strong>
             {preview.template.name} · v{preview.templateVersion}
           </strong>
+          <span className={styles.mutedText}>{preview.templateId}</span>
         </div>
         <div>
-          <span style={mutedStyle}>Recipient snapshot</span>
-          <strong style={{ display: "block" }}>
+          <span className={styles.detailLabel}>Sender</span>
+          <strong>{senderLabel(preview.template)}</strong>
+        </div>
+        <div>
+          <span className={styles.detailLabel}>Immutable recipient snapshot</span>
+          <strong>
             {preview.recipientCount} recipient{preview.recipientCount === 1 ? "" : "s"}
           </strong>
         </div>
         <div>
-          <span style={mutedStyle}>Preview expires</span>
-          <strong style={{ display: "block" }}>{formatTime(preview.expiresAt)}</strong>
+          <span className={styles.detailLabel}>Preview artifact</span>
+          <strong>{preview.id}</strong>
+        </div>
+        <div>
+          <span className={styles.detailLabel}>Generated</span>
+          <strong>{formatTime(preview.createdAt)}</strong>
+        </div>
+        <div>
+          <span className={styles.detailLabel}>Preview expires</span>
+          <strong>{formatTime(preview.expiresAt)}</strong>
         </div>
       </div>
-      <p>
-        Sender: <strong>{senderLabel(preview.template)}</strong>. The send uses this immutable
-        recipient snapshot, not a live audience query.
-      </p>
+      <Alert>
+        <AlertTitle>Server-authoritative preview</AlertTitle>
+        <AlertDescription>
+          Sender, recipients, and rendered output below came from the server for exact version{" "}
+          {preview.templateId} v{preview.templateVersion}. Sending uses this immutable snapshot, not
+          a live audience query.
+        </AlertDescription>
+      </Alert>
       {preview.recipientCount === 0 ? (
-        <p role="alert">This approved audience has no recipients. Sending is disabled.</p>
+        <Alert variant="destructive">
+          <AlertTitle>No recipients</AlertTitle>
+          <AlertDescription>
+            This approved audience has no recipients. Sending is disabled.
+          </AlertDescription>
+        </Alert>
       ) : null}
-      <div style={{ overflowX: "auto" }}>
-        <table>
-          <caption>Recipients captured for this preview</caption>
-          <thead>
-            <tr>
-              <th scope="col">Name</th>
-              <th scope="col">Email</th>
-              <th scope="col">Participant id</th>
-            </tr>
-          </thead>
-          <tbody>
-            {preview.recipients.map((recipient) => (
-              <tr key={recipient.id}>
-                <th scope="row">{recipient.displayName}</th>
-                <td>{recipient.email}</td>
-                <td>{recipient.participantId}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <div style={{ display: "grid", gap: "0.75rem" }}>
-        <h3>Per-recipient email previews</h3>
+      <details className={styles.disclosure} open>
+        <summary>Recipient snapshot details ({preview.recipientCount})</summary>
+        <div className={styles.tableWrap}>
+          <Table>
+            <TableCaption>Recipients captured for this immutable preview</TableCaption>
+            <TableHeader>
+              <TableRow>
+                <TableHead scope="col">Name</TableHead>
+                <TableHead scope="col">Email</TableHead>
+                <TableHead scope="col">Participant id</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {preview.recipients.map((recipient) => (
+                <TableRow key={recipient.id}>
+                  <TableHead scope="row">{recipient.displayName}</TableHead>
+                  <TableCell>{recipient.email}</TableCell>
+                  <TableCell>{recipient.participantId}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      </details>
+      <div className={styles.renderedOutput}>
+        <div className={styles.sectionHeadingRow}>
+          <h3>Rendered output · Per-recipient email previews</h3>
+          <span className={styles.mutedText}>Server artifact · read only</span>
+        </div>
         {preview.recipientPreviews.map((recipient) => (
-          <article key={recipient.recipientId} style={cardStyle}>
-            <h4>
-              {recipient.displayName} · {recipient.email}
-            </h4>
-            <p>
-              <strong>Subject:</strong> {recipient.subject}
-            </p>
-            <p style={mutedStyle}>Escaped HTML source (not executed):</p>
-            <pre style={preStyle}>{escapeHtmlForPreview(recipient.html)}</pre>
-            <p style={mutedStyle}>Plain-text body:</p>
-            <pre
-              style={{
-                ...preStyle,
-                background: "var(--color-canvas, #f5f6f9)",
-                color: "inherit",
-              }}
-            >
-              {recipient.text}
-            </pre>
-          </article>
+          <Card key={recipient.recipientId} size="sm">
+            <CardHeader>
+              <CardTitle>
+                {recipient.displayName} · {recipient.email}
+              </CardTitle>
+              <CardDescription>
+                <strong>Subject:</strong> {recipient.subject}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className={styles.sampleGrid}>
+              <div>
+                <h4>Escaped HTML source (not executed)</h4>
+                <pre className={styles.codeBlock}>{escapeHtmlForPreview(recipient.html)}</pre>
+              </div>
+              <div>
+                <h4>Plain-text body</h4>
+                <pre className={styles.textBlock}>{recipient.text}</pre>
+              </div>
+            </CardContent>
+          </Card>
         ))}
       </div>
-    </>
+    </div>
   );
 }
 
@@ -539,99 +819,182 @@ function DeliveryHistory({
   const recipientById = new Map(send.recipients.map((recipient) => [recipient.id, recipient]));
   const failed = send.terminal && send.deliveries.some((delivery) => delivery.status === "failed");
   return (
-    <section style={cardStyle} aria-labelledby="delivery-history-heading">
-      <div style={rowStyle}>
-        <div style={{ flex: "1 1 20rem" }}>
-          <p style={mutedStyle}>Delivery record</p>
-          <h2 id="delivery-history-heading">Per-recipient status and history</h2>
+    <Card className={styles.workflowCard}>
+      <CardHeader>
+        <div className={styles.cardEyebrow}>Step 5 · Delivery history</div>
+        <div className={styles.cardHeadingRow}>
+          <div>
+            <CardTitle>Per-recipient status and audit history</CardTitle>
+            <CardDescription>
+              Completed sends remain visible when a new template or audience invalidates an
+              actionable preview.
+            </CardDescription>
+          </div>
+          <StatusBadge status={send.status} />
         </div>
-        <span>{statusLabel(send.status)}</span>
-      </div>
-      <p>
-        Send <code>{send.id}</code> · {send.recipientCount} recipient
-        {send.recipientCount === 1 ? "" : "s"} · sender{" "}
-        <strong>{senderLabel(send.template)}</strong>
-      </p>
-      <p role="status">
-        {send.terminal ? "Terminal" : "In progress"} · {send.queuedCount} queued ·{" "}
-        {send.deliveredCount} delivered · {send.failedCount} failed
-      </p>
-      <div style={{ overflowX: "auto" }}>
-        <table>
-          <caption>Delivery status for every recipient</caption>
-          <thead>
-            <tr>
-              <th scope="col">Recipient</th>
-              <th scope="col">Status</th>
-              <th scope="col">Attempts</th>
-              <th scope="col">Provider id</th>
-              <th scope="col">Failure</th>
-            </tr>
-          </thead>
-          <tbody>
-            {send.deliveries.map((delivery) => {
-              const recipient = recipientById.get(delivery.recipientId);
-              return (
-                <tr key={delivery.recipientId}>
-                  <th scope="row">
-                    {recipient?.displayName ?? delivery.email}
-                    <br />
-                    <small>{delivery.email}</small>
-                  </th>
-                  <td>{statusLabel(delivery.status)}</td>
-                  <td>{delivery.attempts}</td>
-                  <td>{delivery.providerMessageId ?? "—"}</td>
-                  <td>{delivery.failureReason ?? "—"}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-      {failed && onRetryFailed !== undefined ? (
-        <button
-          style={secondaryButtonStyle}
-          type="button"
-          disabled={busy}
-          onClick={() => void onRetryFailed()}
-        >
-          {busy ? "Retrying…" : "Retry failed recipients"}
-        </button>
-      ) : null}
-      <h3>Audit history</h3>
-      {send.history.length === 0 ? (
-        <p style={mutedStyle}>No audit history has been returned.</p>
-      ) : (
+      </CardHeader>
+      <CardContent className={styles.formStack}>
+        <p>
+          Send <code>{send.id}</code> · {send.recipientCount} recipient
+          {send.recipientCount === 1 ? "" : "s"} · exact template {send.templateId} v
+          {send.templateVersion} · preview artifact {send.previewId ?? "not recorded"} · sender{" "}
+          <strong>{senderLabel(send.template)}</strong>
+        </p>
+        <div className={styles.metricRow} role="status">
+          <span>{send.terminal ? "Terminal" : "In progress"}</span>
+          <span>{send.queuedCount} queued</span>
+          <span>{send.deliveredCount} delivered</span>
+          <span>{send.failedCount} failed</span>
+        </div>
+        <details className={styles.disclosure} open>
+          <summary>Recipient delivery details</summary>
+          <div className={styles.tableWrap}>
+            <Table>
+              <TableCaption>Delivery status for every recipient</TableCaption>
+              <TableHeader>
+                <TableRow>
+                  <TableHead scope="col">Recipient</TableHead>
+                  <TableHead scope="col">Status</TableHead>
+                  <TableHead scope="col">Attempts</TableHead>
+                  <TableHead scope="col">Provider id</TableHead>
+                  <TableHead scope="col">Failure</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {send.deliveries.map((delivery) => {
+                  const recipient = recipientById.get(delivery.recipientId);
+                  return (
+                    <TableRow key={delivery.recipientId}>
+                      <TableHead scope="row">
+                        {recipient?.displayName ?? delivery.email}
+                        <br />
+                        <small>{delivery.email}</small>
+                      </TableHead>
+                      <TableCell>
+                        <StatusBadge status={delivery.status} />
+                      </TableCell>
+                      <TableCell>{delivery.attempts}</TableCell>
+                      <TableCell>{delivery.providerMessageId ?? "—"}</TableCell>
+                      <TableCell>{delivery.failureReason ?? "—"}</TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </div>
+        </details>
+        {failed && onRetryFailed !== undefined ? (
+          <Button
+            variant="outline"
+            type="button"
+            disabled={busy}
+            onClick={() => void onRetryFailed()}
+          >
+            {busy ? "Retrying…" : "Retry failed recipients"}
+          </Button>
+        ) : null}
+        <div>
+          <h3>Audit history</h3>
+          {send.history.length === 0 ? (
+            <p className={styles.mutedText}>No audit history has been returned.</p>
+          ) : (
+            <ol className={styles.auditList}>
+              {send.history.map((entry: CommunicationAuditEntry) => (
+                <li key={entry.id}>
+                  {formatTime(entry.occurredAt)} · {entry.action}
+                  {entry.recipientId === null ? "" : ` · ${entry.recipientId}`}
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+        <details className={styles.disclosure}>
+          <summary>View provider delivery events</summary>
+          {send.deliveries.map((delivery) => (
+            <div key={`${delivery.recipientId}-history`} className={styles.providerEvents}>
+              <h4>{recipientById.get(delivery.recipientId)?.displayName ?? delivery.email}</h4>
+              {delivery.history.length === 0 ? (
+                <p className={styles.mutedText}>No provider events.</p>
+              ) : (
+                <ul>
+                  {delivery.history.map((entry) => (
+                    <li key={entry.id}>
+                      {formatTime(entry.occurredAt)} · {statusLabel(entry.status)}
+                      {entry.reason === null ? "" : ` · ${entry.reason}`}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ))}
+        </details>
+      </CardContent>
+    </Card>
+  );
+}
+
+const workflowSteps = [
+  ["draft-template", "Draft template"],
+  ["review-approve", "Review and approve"],
+  ["preview-snapshot", "Preview snapshot"],
+  ["confirm-send", "Confirm send"],
+  ["delivery-history", "Delivery history"],
+] as const;
+
+function WorkflowNavigation({
+  hasPreview,
+  hasSend,
+}: Readonly<{ hasPreview: boolean; hasSend: boolean }>) {
+  const [mobileOpen, setMobileOpen] = useState(false);
+  return (
+    <div className={styles.workflowNavigation}>
+      <nav className={styles.desktopWorkflow} aria-label="Communications workflow">
+        <p className={styles.navEyebrow}>Workflow</p>
         <ol>
-          {send.history.map((entry: CommunicationAuditEntry) => (
-            <li key={entry.id}>
-              {formatTime(entry.occurredAt)} · {entry.action}
-              {entry.recipientId === null ? "" : ` · ${entry.recipientId}`}
+          {workflowSteps.map(([id, label], index) => (
+            <li key={id}>
+              <a href={`#${id}`}>
+                <span>{index + 1}</span>
+                {label}
+              </a>
+              {id === "preview-snapshot" && hasPreview ? (
+                <Badge variant="secondary">Ready</Badge>
+              ) : null}
+              {id === "delivery-history" && hasSend ? (
+                <Badge variant="secondary">Recorded</Badge>
+              ) : null}
             </li>
           ))}
         </ol>
-      )}
-      <details>
-        <summary>View provider delivery events</summary>
-        {send.deliveries.map((delivery: CommunicationDelivery) => (
-          <div key={`${delivery.recipientId}-history`}>
-            <h4>{recipientById.get(delivery.recipientId)?.displayName ?? delivery.email}</h4>
-            {delivery.history.length === 0 ? (
-              <p style={mutedStyle}>No provider events.</p>
-            ) : (
-              <ul>
-                {delivery.history.map((entry) => (
-                  <li key={entry.id}>
-                    {formatTime(entry.occurredAt)} · {statusLabel(entry.status)}
-                    {entry.reason === null ? "" : ` · ${entry.reason}`}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        ))}
-      </details>
-    </section>
+      </nav>
+      <Collapsible open={mobileOpen} onOpenChange={setMobileOpen} className={styles.mobileWorkflow}>
+        <CollapsibleTrigger asChild>
+          <Button
+            variant="outline"
+            type="button"
+            className={styles.mobileWorkflowTrigger}
+            aria-label="Choose communications workflow section"
+          >
+            <span>Communications workflow</span>
+            <span aria-hidden="true">{mobileOpen ? "−" : "+"}</span>
+          </Button>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <nav aria-label="Mobile communications workflow">
+            <ol className={styles.mobileWorkflowList}>
+              {workflowSteps.map(([id, label], index) => (
+                <li key={id}>
+                  <a href={`#${id}`} onClick={() => setMobileOpen(false)}>
+                    <span>{index + 1}</span>
+                    {label}
+                  </a>
+                </li>
+              ))}
+            </ol>
+          </nav>
+        </CollapsibleContent>
+      </Collapsible>
+    </div>
   );
 }
 
@@ -647,6 +1010,7 @@ export function CommunicationsWorkspaceView({
   statusMessage = null,
   providerState = "unknown",
   selectedTemplateId = "",
+  selectedTemplateVersion,
   creatingTemplate = false,
   selectedAudience = "all_participants",
   onSelectTemplate,
@@ -661,128 +1025,170 @@ export function CommunicationsWorkspaceView({
   onCloseSendConfirmation,
   sendConfirmationOpen = false,
   onRetryFailed,
+  approvalDialogOpen,
+  onApprovalDialogOpenChange,
 }: CommunicationsWorkspaceViewProps) {
-  const selected = latestTemplateForId(templates, selectedTemplateId) ?? templates[0];
+  const sendConfirmationTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const selected = creatingTemplate
+    ? undefined
+    : resolveEditorTemplate(templates, selectedTemplateId, selectedTemplateVersion);
   const selectedForEditor = creatingTemplate ? undefined : selected;
   const approvedGroupTemplates = templates
     .filter(
       (template) => template.purpose === "organizer_group_email" && template.status === "approved",
     )
-    .reduce<CommunicationTemplate[]>((latest, template) => {
-      const existingIndex = latest.findIndex((candidate) => candidate.id === template.id);
-      const existing = existingIndex < 0 ? undefined : latest[existingIndex];
-      if (existing === undefined) {
-        latest.push(template);
-        return latest;
-      }
-      if (template.version <= existing.version) return latest;
-      latest[existingIndex] = template;
-      return latest;
-    }, []);
+    .sort((left, right) => left.id.localeCompare(right.id) || left.version - right.version);
+  const selectedPreviewKey =
+    selected !== undefined &&
+    selected.status === "approved" &&
+    selected.purpose === "organizer_group_email"
+      ? communicationTemplateSelectionKey(selected.id, selected.version)
+      : "";
 
-  const selectedPreviewTemplate =
-    approvedGroupTemplates.find((template) => template.id === selectedTemplateId) ??
-    approvedGroupTemplates[0];
-  const effectivePreviewTemplateId = selectedPreviewTemplate?.id ?? "";
   return (
-    <div style={pageStyle}>
-      <a href="#communications-content" style={{ position: "absolute", left: "-10000px" }}>
+    <div className={styles.page}>
+      <a href="#communications-content" className={styles.skipLink}>
         Skip to communications workspace
       </a>
-      <div style={contentStyle}>
-        <header style={{ ...cardStyle, marginBottom: "1rem" }}>
-          <div style={rowStyle}>
-            <div style={{ flex: "1 1 28rem" }}>
-              <p style={mutedStyle}>
-                Organizer · {organizationId} · event {eventId}
-              </p>
-              <h1>Operational communications</h1>
-              <p style={mutedStyle}>
-                Manage approved event email templates, preview a recipient snapshot, confirm the
-                send, and inspect delivery history. This workspace does not send SMS, CRM, marketing
-                campaigns, or analytics.
-              </p>
-            </div>
-            <fieldset style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
-              <legend style={{ padding: 0, fontWeight: 700 }}>Email provider status</legend>
-              <strong>{providerLabel(providerState)}</strong>
-              <p style={mutedStyle}>{providerDescription(providerState)}</p>
-            </fieldset>
+      <div className={styles.content}>
+        <header className={styles.header}>
+          <div className={styles.headerMain}>
+            <p className={styles.eyebrow}>
+              Organizer · {organizationId} · event {eventId}
+            </p>
+            <h1>Operational communications</h1>
+            <p className={styles.lede}>
+              One explicit workflow for versioned email: draft, review and approve, preview the
+              immutable recipient snapshot, confirm the send, and inspect delivery history. This
+              workspace does not send SMS, CRM, marketing campaigns, or analytics.
+            </p>
           </div>
+          <details className={styles.providerDetails}>
+            <summary>
+              <span>Email provider</span>
+              <Badge
+                variant={
+                  providerState === "available"
+                    ? "secondary"
+                    : providerState === "unavailable" || providerState === "domain-unverified"
+                      ? "destructive"
+                      : "outline"
+                }
+              >
+                {providerLabel(providerState)}
+              </Badge>
+            </summary>
+            <strong>{providerLabel(providerState)}</strong>
+            <p>{providerDescription(providerState)}</p>
+          </details>
         </header>
-        <main id="communications-content" tabIndex={-1} style={{ display: "grid", gap: "1rem" }}>
+        <WorkflowNavigation hasPreview={preview !== null} hasSend={send !== null} />
+        <main id="communications-content" tabIndex={-1} className={styles.main}>
           {error !== null ? (
-            <div role="alert" style={{ ...cardStyle, borderColor: "#b42318" }}>
-              <strong>Communication action was not completed</strong>
-              <p>{error}</p>
+            <Alert variant="destructive">
+              <AlertTitle>Communication action was not completed</AlertTitle>
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          ) : null}
+          {statusMessage !== null ? (
+            <div role="status" aria-live="polite" className={styles.statusMessage}>
+              {statusMessage}
             </div>
           ) : null}
-          <div role="status" aria-live="polite">
-            {statusMessage}
-          </div>
           {loading ? (
-            <section style={cardStyle} role="status">
-              <h2>Loading communication templates</h2>
-              <p>Retrieving event-scoped approved and draft versions.</p>
-            </section>
+            <Card>
+              <CardHeader>
+                <CardTitle>Loading communication templates</CardTitle>
+                <CardDescription>
+                  Retrieving event-scoped approved and draft versions.
+                </CardDescription>
+              </CardHeader>
+            </Card>
           ) : null}
           {!loading ? (
-            <section style={cardStyle} aria-labelledby="templates-heading">
-              <div style={rowStyle}>
-                <div style={{ flex: "1 1 20rem" }}>
-                  <p style={mutedStyle}>Event-scoped content</p>
-                  <h2 id="templates-heading">Email templates</h2>
+            <Card
+              className={styles.workflowCard}
+              role="region"
+              aria-labelledby="template-library-heading"
+            >
+              <CardHeader>
+                <div className={styles.cardHeadingRow}>
+                  <div>
+                    <div className={styles.cardEyebrow}>Event-scoped content</div>
+                    <CardTitle id="template-library-heading">Template versions</CardTitle>
+                    <CardDescription>
+                      Select a specific id and version. No control resolves a template id to latest
+                      implicitly.
+                    </CardDescription>
+                  </div>
+                  <Button
+                    variant="outline"
+                    type="button"
+                    onClick={onStartNewTemplate}
+                    disabled={busy}
+                  >
+                    New template
+                  </Button>
                 </div>
-                <span>
-                  {templates.length} version{templates.length === 1 ? "" : "s"}
-                </span>
-                <button
-                  style={secondaryButtonStyle}
-                  type="button"
-                  onClick={() => onStartNewTemplate?.()}
-                  disabled={busy}
-                >
-                  New template
-                </button>
-              </div>
-              {templates.length === 0 ? (
-                <p>No communication templates exist for this event. Create a draft to begin.</p>
-              ) : (
-                <div style={{ overflowX: "auto" }}>
-                  <table>
-                    <caption>Event email template versions</caption>
-                    <thead>
-                      <tr>
-                        <th scope="col">Template</th>
-                        <th scope="col">Purpose</th>
-                        <th scope="col">Version</th>
-                        <th scope="col">Status</th>
-                        <th scope="col">Approved sender</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {templates.map((template) => (
-                        <tr key={`${template.id}-${template.version}`}>
-                          <th scope="row">
-                            <button
-                              style={{ ...secondaryButtonStyle, padding: "0.3rem 0.45rem" }}
-                              type="button"
-                              onClick={() => onSelectTemplate?.(template.id)}
+              </CardHeader>
+              <CardContent>
+                {templates.length === 0 ? (
+                  <p>No communication templates exist for this event. Create a draft to begin.</p>
+                ) : (
+                  <div className={styles.tableWrap}>
+                    <Table>
+                      <TableCaption>Event email template versions</TableCaption>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead scope="col">Template</TableHead>
+                          <TableHead scope="col">Purpose</TableHead>
+                          <TableHead scope="col">Exact version</TableHead>
+                          <TableHead scope="col">Status</TableHead>
+                          <TableHead scope="col">Approved sender</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {templates.map((template) => {
+                          const key = communicationTemplateSelectionKey(
+                            template.id,
+                            template.version,
+                          );
+                          const selectedKey = communicationTemplateSelectionKey(
+                            selectedTemplateId,
+                            selectedTemplateVersion ?? 0,
+                          );
+                          return (
+                            <TableRow
+                              key={key}
+                              data-template-selection={key}
+                              data-selected={selectedKey === key ? "true" : "false"}
                             >
-                              {template.name}
-                            </button>
-                          </th>
-                          <td>{formatCommunicationPurpose(template.purpose)}</td>
-                          <td>v{template.version}</td>
-                          <td>{statusLabel(template.status)}</td>
-                          <td>{senderLabel(template)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </section>
+                              <TableHead scope="row">
+                                <Button
+                                  variant="link"
+                                  size="sm"
+                                  type="button"
+                                  onClick={() => onSelectTemplate?.(template.id, template.version)}
+                                  aria-label={`Select ${template.name} version ${template.version}`}
+                                >
+                                  {template.name}
+                                </Button>
+                              </TableHead>
+                              <TableCell>{formatCommunicationPurpose(template.purpose)}</TableCell>
+                              <TableCell>v{template.version}</TableCell>
+                              <TableCell>
+                                <StatusBadge status={template.status} />
+                              </TableCell>
+                              <TableCell>{senderLabel(template)}</TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           ) : null}
           {!loading ? (
             <TemplateEditor
@@ -791,100 +1197,135 @@ export function CommunicationsWorkspaceView({
               {...(onCreateTemplate === undefined ? {} : { onCreateTemplate })}
               {...(onCreateVersion === undefined ? {} : { onCreateVersion })}
               {...(onApproveTemplate === undefined ? {} : { onApproveTemplate })}
+              {...(approvalDialogOpen === undefined ? {} : { approvalDialogOpen })}
+              {...(onApprovalDialogOpenChange === undefined ? {} : { onApprovalDialogOpenChange })}
             />
           ) : null}
-          <section style={cardStyle} aria-labelledby="preview-heading">
-            <div style={rowStyle}>
-              <div style={{ flex: "1 1 20rem" }}>
-                <p style={mutedStyle}>Human review required</p>
-                <h2 id="preview-heading">Preview an approved event-recipient group</h2>
+          <Card
+            id="preview-snapshot"
+            className={styles.workflowCard}
+            role="region"
+            aria-labelledby="preview-heading"
+          >
+            <CardHeader>
+              <div className={styles.cardEyebrow}>
+                Step 3 · Preview immutable recipient snapshot
               </div>
-              <span>Preview before send</span>
-            </div>
-            <p style={mutedStyle}>
-              Only the approved organizer group email purpose can use this audience workflow. The
-              server snapshots authorized event recipients and renders template variables with
-              escaping.
-            </p>
-            <div style={gridStyle}>
-              <label style={fieldStyle}>
-                <span>Approved group template</span>
-                <select
-                  style={inputStyle}
-                  value={effectivePreviewTemplateId}
-                  onChange={(event) => onSelectTemplate?.(event.currentTarget.value)}
-                  disabled={approvedGroupTemplates.length === 0 || busy}
-                >
-                  {approvedGroupTemplates.length === 0 ? (
-                    <option value="">No approved group template</option>
-                  ) : (
-                    approvedGroupTemplates.map((template) => (
-                      <option key={`${template.id}-${template.version}`} value={template.id}>
+              <div className={styles.cardHeadingRow}>
+                <div>
+                  <CardTitle id="preview-heading">Preview before send</CardTitle>
+                  <CardDescription>
+                    Only an approved organizer group email can use this audience workflow. The
+                    server snapshots authorized recipients and renders variables with escaping.
+                  </CardDescription>
+                </div>
+                <Badge variant={preview === null ? "outline" : "secondary"}>
+                  {preview === null ? "Not generated" : "Snapshot ready"}
+                </Badge>
+              </div>
+            </CardHeader>
+            <CardContent className={styles.formStack}>
+              <div className={styles.formGrid}>
+                <div className={styles.field}>
+                  <Label htmlFor="approved-group-template">
+                    Approved group template · exact version
+                  </Label>
+                  <select
+                    id="approved-group-template"
+                    className={styles.select}
+                    value={selectedPreviewKey}
+                    onChange={(event) => {
+                      const selection = communicationTemplateSelectionFromKey(
+                        event.currentTarget.value,
+                      );
+                      if (selection !== undefined)
+                        onSelectTemplate?.(selection.templateId, selection.templateVersion);
+                    }}
+                    disabled={approvedGroupTemplates.length === 0 || busy}
+                  >
+                    <option value="">
+                      {approvedGroupTemplates.length === 0
+                        ? "No approved group template"
+                        : "Select exact approved version"}
+                    </option>
+                    {approvedGroupTemplates.map((template) => (
+                      <option
+                        key={communicationTemplateSelectionKey(template.id, template.version)}
+                        value={communicationTemplateSelectionKey(template.id, template.version)}
+                      >
                         {template.name} · v{template.version}
                       </option>
-                    ))
-                  )}
-                </select>
-              </label>
-              <label style={fieldStyle}>
-                <span>Authorized recipient group</span>
-                <select
-                  style={inputStyle}
-                  value={selectedAudience}
-                  onChange={(event) =>
-                    onSelectAudience?.(event.currentTarget.value as CommunicationAudience)
-                  }
-                  disabled={busy}
-                >
-                  {COMMUNICATION_AUDIENCES.map((audience) => (
-                    <option key={audience} value={audience}>
-                      {formatCommunicationAudience(audience)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-            <div style={{ ...rowStyle, marginTop: "0.9rem" }}>
-              <button
-                style={buttonStyle}
-                type="button"
-                disabled={
-                  busy || onPreview === undefined || effectivePreviewTemplateId.length === 0
-                }
-                onClick={() => (onPreview === undefined ? undefined : void onPreview())}
-              >
-                {busy ? "Preparing preview…" : "Preview recipients and email"}
-              </button>
-              {approvedGroupTemplates.length === 0 ? (
-                <span style={mutedStyle}>
-                  Create and approve an organizer group email template before previewing.
-                </span>
-              ) : null}
-            </div>
-            {preview !== null ? (
-              <div style={{ display: "grid", gap: "1rem", marginTop: "1rem" }}>
-                <RecipientPreview preview={preview} />
-                <div style={rowStyle}>
-                  <button
-                    style={buttonStyle}
-                    type="button"
-                    disabled={
-                      busy || preview.recipientCount === 0 || onOpenSendConfirmation === undefined
+                    ))}
+                  </select>
+                </div>
+                <div className={styles.field}>
+                  <Label htmlFor="authorized-recipient-group">Authorized recipient group</Label>
+                  <select
+                    id="authorized-recipient-group"
+                    className={styles.select}
+                    value={selectedAudience}
+                    onChange={(event) =>
+                      onSelectAudience?.(event.currentTarget.value as CommunicationAudience)
                     }
-                    onClick={onOpenSendConfirmation}
+                    disabled={busy}
                   >
-                    Send to {preview.recipientCount} recipient
-                    {preview.recipientCount === 1 ? "" : "s"}
-                  </button>
-                  <span style={mutedStyle}>
-                    Sending is blocked until you explicitly confirm this snapshot.
-                  </span>
+                    {COMMUNICATION_AUDIENCES.map((audience) => (
+                      <option key={audience} value={audience}>
+                        {formatCommunicationAudience(audience)}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
-            ) : (
-              <p style={mutedStyle}>No preview has been created for this event.</p>
-            )}
-          </section>
+              <div className={styles.actionRow}>
+                <Button
+                  type="button"
+                  disabled={busy || onPreview === undefined || selectedPreviewKey.length === 0}
+                  onClick={() => (onPreview === undefined ? undefined : void onPreview())}
+                >
+                  {busy ? "Preparing preview…" : "Preview recipients and email"}
+                </Button>
+                {approvedGroupTemplates.length === 0 ? (
+                  <span className={styles.mutedText}>
+                    Create and approve an organizer group email template before previewing.
+                  </span>
+                ) : selectedPreviewKey.length === 0 ? (
+                  <span className={styles.mutedText}>
+                    Select one exact approved template version before previewing.
+                  </span>
+                ) : null}
+              </div>
+              <span id="confirm-send" className={styles.anchorTarget} aria-hidden="true" />
+              {preview !== null ? (
+                <div className={styles.previewStack}>
+                  <RecipientPreview preview={preview} />
+                  <div
+                    className={styles.confirmPanel}
+                    data-confirmation-open={sendConfirmationOpen ? "true" : "false"}
+                  >
+                    <div>
+                      <div className={styles.cardEyebrow}>Step 4 · Confirm send</div>
+                      <p>Sending is blocked until you explicitly confirm this exact snapshot.</p>
+                    </div>
+                    <Button
+                      ref={sendConfirmationTriggerRef}
+                      type="button"
+                      disabled={
+                        busy || preview.recipientCount === 0 || onOpenSendConfirmation === undefined
+                      }
+                      onClick={onOpenSendConfirmation}
+                    >
+                      Send to {preview.recipientCount} recipient
+                      {preview.recipientCount === 1 ? "" : "s"}
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <p className={styles.mutedText}>No preview has been created for this event.</p>
+              )}
+            </CardContent>
+          </Card>
+          <span id="delivery-history" className={styles.anchorTarget} aria-hidden="true" />
           {send !== null ? (
             <DeliveryHistory
               send={send}
@@ -893,50 +1334,73 @@ export function CommunicationsWorkspaceView({
             />
           ) : null}
         </main>
-        {sendConfirmationOpen && preview !== null ? (
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="send-confirmation-heading"
-            style={{
-              ...cardStyle,
-              maxWidth: "42rem",
-              margin: "1rem auto 0",
-              borderColor: "var(--color-brand, #5065e8)",
-            }}
-          >
-            <h2 id="send-confirmation-heading">Confirm operational email send</h2>
-            <p>
-              You are about to send <strong>{preview.subject}</strong> to the{" "}
-              {formatCommunicationAudience(preview.audience)} snapshot of{" "}
-              <strong>{preview.recipientCount}</strong> recipient
-              {preview.recipientCount === 1 ? "" : "s"}.
-            </p>
-            <p>
-              Approved sender: <strong>{senderLabel(preview.template)}</strong>. This action sends
-              email only. Confirming repeats the same idempotent operation safely if the provider
-              response is interrupted.
-            </p>
-            <div style={rowStyle}>
-              <button
-                style={secondaryButtonStyle}
-                type="button"
-                disabled={busy}
-                onClick={onCloseSendConfirmation}
-              >
-                Keep preview
-              </button>
-              <button
-                style={buttonStyle}
-                type="button"
-                disabled={busy}
-                onClick={() => (onConfirmSend === undefined ? undefined : void onConfirmSend())}
-              >
-                {busy ? "Sending…" : "Confirm and send"}
-              </button>
-            </div>
-          </div>
-        ) : null}
+        <AlertDialog
+          open={sendConfirmationOpen && preview !== null}
+          onOpenChange={(open) => {
+            if (!open) onCloseSendConfirmation?.();
+          }}
+        >
+          {preview !== null ? (
+            <AlertDialogContent
+              className={styles.confirmDialog}
+              data-confirmation-dialog="alert-dialog"
+              onCloseAutoFocus={(event) => {
+                event.preventDefault();
+                sendConfirmationTriggerRef.current?.focus();
+              }}
+            >
+              <AlertDialogHeader>
+                <AlertDialogTitle>Confirm operational email send</AlertDialogTitle>
+                <AlertDialogDescription>
+                  You are about to send the server-rendered subject{" "}
+                  <strong>{preview.subject}</strong> to the immutable{" "}
+                  {formatCommunicationAudience(preview.audience)} snapshot of{" "}
+                  <strong>{preview.recipientCount}</strong> recipient
+                  {preview.recipientCount === 1 ? "" : "s"}.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              {error !== null ? (
+                <Alert variant="destructive">
+                  <AlertTitle>Send was not completed</AlertTitle>
+                  <AlertDescription>{error}</AlertDescription>
+                </Alert>
+              ) : null}
+              <dl className={styles.detailGrid}>
+                <div>
+                  <dt>Exact template</dt>
+                  <dd>
+                    {preview.templateId} · v{preview.templateVersion}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Approved sender</dt>
+                  <dd>{senderLabel(preview.template)}</dd>
+                </div>
+                <div>
+                  <dt>Preview expiry</dt>
+                  <dd>{formatTime(preview.expiresAt)}</dd>
+                </div>
+              </dl>
+              <p className={styles.mutedText}>
+                This action sends email only. Confirming repeats the same idempotent operation
+                safely if the provider response is interrupted. Provider failures remain visible;
+                confirmation does not create fake success.
+              </p>
+              <AlertDialogFooter>
+                <AlertDialogCancel disabled={busy}>Keep preview</AlertDialogCancel>
+                <AlertDialogAction
+                  disabled={busy}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    if (onConfirmSend !== undefined) void onConfirmSend();
+                  }}
+                >
+                  {busy ? "Sending…" : "Confirm and send"}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          ) : null}
+        </AlertDialog>
       </div>
     </div>
   );
@@ -960,10 +1424,16 @@ export function CommunicationsWorkspace({
   );
   const [preview, setPreview] = useState<CommunicationPreview | null>(initialPreview);
   const [send, setSend] = useState<CommunicationSend | null>(initialSend);
-  const [selectedTemplateId, setSelectedTemplateId] = useState(initialTemplates?.[0]?.id ?? "");
+  const [selectedTemplateId, setSelectedTemplateId] = useState(
+    initialTemplates?.[0]?.id ?? initialPreview?.templateId ?? "",
+  );
+  const [selectedTemplateVersion, setSelectedTemplateVersion] = useState<number | undefined>(
+    initialTemplates?.[0]?.version ?? initialPreview?.templateVersion,
+  );
   const [creatingTemplate, setCreatingTemplate] = useState(false);
-  const [selectedAudience, setSelectedAudience] =
-    useState<CommunicationAudience>("all_participants");
+  const [selectedAudience, setSelectedAudience] = useState<CommunicationAudience>(
+    initialPreview?.audience ?? "all_participants",
+  );
   const [loading, setLoading] = useState(initialTemplates === undefined);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -973,6 +1443,15 @@ export function CommunicationsWorkspace({
   const [sendConfirmationOpen, setSendConfirmationOpen] = useState(false);
   const idempotencyKeyRef = useRef<string | null>(null);
   const templateLoadGenerationRef = useRef(0);
+  const selectedTemplateSelectionRef = useRef<CommunicationTemplateSelection | undefined>(
+    selectedTemplateId.length === 0 || selectedTemplateVersion === undefined
+      ? undefined
+      : { templateId: selectedTemplateId, templateVersion: selectedTemplateVersion },
+  );
+  selectedTemplateSelectionRef.current =
+    selectedTemplateId.length === 0 || selectedTemplateVersion === undefined
+      ? undefined
+      : { templateId: selectedTemplateId, templateVersion: selectedTemplateVersion };
   const initialReadKey = useMemo(
     () => ({ api, organizationId, eventId }),
     [api, eventId, organizationId],
@@ -980,10 +1459,20 @@ export function CommunicationsWorkspace({
   const initialReadCoordinatorRef = useRef<ReturnType<
     typeof createCommunicationTemplateReadCoordinator
   > | null>(null);
-  if (initialReadCoordinatorRef.current === null) {
+  if (initialReadCoordinatorRef.current === null)
     initialReadCoordinatorRef.current = createCommunicationTemplateReadCoordinator();
-  }
   const initialReadCoordinator = initialReadCoordinatorRef.current;
+
+  const invalidatePreview = useCallback(() => {
+    const next = invalidateCommunicationPreviewState({
+      preview: null,
+      sendConfirmationOpen: false,
+      idempotencyKey: null,
+    });
+    setPreview(next.preview);
+    setSendConfirmationOpen(next.sendConfirmationOpen);
+    idempotencyKeyRef.current = next.idempotencyKey;
+  }, []);
 
   const loadTemplates = useCallback(
     async (
@@ -1002,9 +1491,19 @@ export function CommunicationsWorkspace({
         isCurrent: () => templateLoadGenerationRef.current === generation,
         onLoaded: (loaded) => {
           setTemplates(loaded);
-          setSelectedTemplateId((current) =>
-            loaded.some((template) => template.id === current) ? current : (loaded[0]?.id ?? ""),
-          );
+          const currentSelection = selectedTemplateSelectionRef.current;
+          const exactCurrent =
+            currentSelection !== undefined &&
+            loaded.some(
+              (template) =>
+                template.id === currentSelection.templateId &&
+                template.version === currentSelection.templateVersion,
+            );
+          if (!exactCurrent) {
+            const first = loaded[0];
+            setSelectedTemplateId(first?.id ?? "");
+            setSelectedTemplateVersion(first?.version);
+          }
         },
         onError: setError,
         onSettled: () => setLoading(false),
@@ -1019,12 +1518,12 @@ export function CommunicationsWorkspace({
     setPreview(null);
     setSend(null);
     setSelectedTemplateId("");
+    setSelectedTemplateVersion(undefined);
     setCreatingTemplate(false);
     setSelectedAudience("all_participants");
     setStatusMessage(null);
     setSendConfirmationOpen(false);
     idempotencyKeyRef.current = null;
-
     const lease = initialReadCoordinator.acquire(initialReadKey);
     void loadTemplates(lease.signal, lease.promise);
     return () => {
@@ -1034,16 +1533,18 @@ export function CommunicationsWorkspace({
   }, [initialReadCoordinator, initialReadKey, initialTemplates, loadTemplates]);
 
   function replaceTemplate(next: CommunicationTemplate): void {
-    setTemplates((current) => {
-      const withoutVersion = current.filter(
-        (template) => !(template.id === next.id && template.version === next.version),
-      );
-      return [...withoutVersion, next].sort(
-        (left, right) => left.id.localeCompare(right.id) || left.version - right.version,
-      );
-    });
+    setTemplates((current) =>
+      [
+        ...current.filter(
+          (template) => !(template.id === next.id && template.version === next.version),
+        ),
+        next,
+      ].sort((left, right) => left.id.localeCompare(right.id) || left.version - right.version),
+    );
     setSelectedTemplateId(next.id);
+    setSelectedTemplateVersion(next.version);
     setCreatingTemplate(false);
+    invalidatePreview();
   }
 
   async function saveTemplate(draft: TemplateDraft): Promise<void> {
@@ -1108,31 +1609,28 @@ export function CommunicationsWorkspace({
       setStatusMessage(`Template ${next.name} v${next.version} approved for event use.`);
     } catch (reason) {
       setError(messageFromError(reason));
+      throw reason;
     } finally {
       setBusy(false);
     }
   }
 
   async function createPreview(): Promise<void> {
-    const approvedGroupTemplates = templates.filter(
-      (candidate) =>
-        candidate.purpose === "organizer_group_email" && candidate.status === "approved",
-    );
-    const template =
-      latestTemplateForId(approvedGroupTemplates, selectedTemplateId) ??
-      approvedGroupTemplates.reduce<CommunicationTemplate | undefined>(
-        (latest, candidate) =>
-          latest === undefined || candidate.version > latest.version ? candidate : latest,
-        undefined,
+    const template = resolveEditorTemplate(templates, selectedTemplateId, selectedTemplateVersion);
+    if (
+      template === undefined ||
+      template.purpose !== "organizer_group_email" ||
+      template.status !== "approved"
+    ) {
+      setError(
+        "Select one exact approved organizer group email template version before creating a recipient preview.",
       );
-    if (template === undefined) {
-      setError("Approve an organizer group email template before creating a recipient preview.");
       return;
     }
+    invalidatePreview();
     setBusy(true);
     setError(null);
     setStatusMessage(null);
-    setSend(null);
     try {
       const next = await api.preview({
         eventId,
@@ -1162,14 +1660,14 @@ export function CommunicationsWorkspace({
     setError(null);
   }
 
-  async function confirmSend(): Promise<void> {
-    if (preview === null || preview.recipientCount === 0) return;
+  async function confirmSend(): Promise<boolean> {
+    if (preview === null || preview.recipientCount === 0) return false;
     const idempotencyKey = idempotencyKeyRef.current;
     if (idempotencyKey === null) {
       setError(
         "A send confirmation key could not be created. Reopen the confirmation and try again.",
       );
-      return;
+      return false;
     }
     setBusy(true);
     setError(null);
@@ -1183,10 +1681,12 @@ export function CommunicationsWorkspace({
       setStatusMessage(
         `Send ${next.id}: ${next.deliveredCount} delivered, ${next.failedCount} failed, ${next.queuedCount} queued; ${next.terminal ? "terminal" : "still in progress"}.`,
       );
+      return true;
     } catch (reason) {
       setError(messageFromError(reason));
       const state = stateFromError(reason);
       if (state !== undefined) setProviderState(state);
+      return false;
     } finally {
       setBusy(false);
     }
@@ -1213,7 +1713,6 @@ export function CommunicationsWorkspace({
     }
   }
 
-  const selectedTemplate = latestTemplateForId(templates, selectedTemplateId);
   return (
     <CommunicationsWorkspaceView
       eventId={eventId}
@@ -1227,14 +1726,25 @@ export function CommunicationsWorkspace({
       statusMessage={statusMessage}
       providerState={providerState}
       creatingTemplate={creatingTemplate}
-      selectedTemplateId={selectedTemplate?.id ?? selectedTemplateId}
+      selectedTemplateId={selectedTemplateId}
+      {...(selectedTemplateVersion === undefined ? {} : { selectedTemplateVersion })}
       selectedAudience={selectedAudience}
-      onSelectTemplate={(templateId) => {
+      onSelectTemplate={(templateId, templateVersion) => {
+        const selectionChanged =
+          templateId !== selectedTemplateId || templateVersion !== selectedTemplateVersion;
         setCreatingTemplate(false);
         setSelectedTemplateId(templateId);
+        setSelectedTemplateVersion(templateVersion);
+        if (selectionChanged) invalidatePreview();
       }}
-      onSelectAudience={setSelectedAudience}
-      onStartNewTemplate={() => setCreatingTemplate(true)}
+      onSelectAudience={(audience) => {
+        if (audience !== selectedAudience) invalidatePreview();
+        setSelectedAudience(audience);
+      }}
+      onStartNewTemplate={() => {
+        setCreatingTemplate(true);
+        invalidatePreview();
+      }}
       onCreateTemplate={saveTemplate}
       onCreateVersion={saveVersion}
       onApproveTemplate={approveTemplate}
@@ -1247,5 +1757,6 @@ export function CommunicationsWorkspace({
     />
   );
 }
+
 export const CommunicationWorkspace = CommunicationsWorkspace;
 export const CommunicationWorkspaceView = CommunicationsWorkspaceView;

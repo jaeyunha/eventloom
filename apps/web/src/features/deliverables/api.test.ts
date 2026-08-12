@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createDeliverablesApi } from "./api";
+import { createDeliverablesApi, resolveDeliverablesUploadGrantUrl } from "./api";
 
 const restoredSession = {
   id: "session-1",
@@ -14,6 +14,17 @@ const restoredSession = {
 };
 
 describe("deliverables API", () => {
+  it("keeps relative private-upload grants on the browser same origin", () => {
+    expect(resolveDeliverablesUploadGrantUrl("/api/private-assets/grant-1", "")).toBe(
+      "/api/private-assets/grant-1",
+    );
+    expect(
+      resolveDeliverablesUploadGrantUrl(
+        "/api/private-assets/grant-1",
+        "https://sessionboard.example",
+      ),
+    ).toBe("https://sessionboard.example/api/private-assets/grant-1");
+  });
   it("restores immutable session content through the canonical admin mutation envelope", async () => {
     const requests: Array<{ url: string; method: string; body: unknown }> = [];
     const api = createDeliverablesApi(

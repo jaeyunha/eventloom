@@ -289,9 +289,12 @@ function sessionSpeakerNames(session: Session): string[] {
         (value): value is string => typeof value === "string" && value.trim().length > 0,
       )
     : [];
-  return session.speakerIds.map(
-    (participantId, index) => rosterNames.get(participantId) ?? storedNames[index] ?? participantId,
-  );
+  return session.speakerIds.map((participantId, index) => {
+    const rosterName = rosterNames.get(participantId);
+    if (rosterName !== undefined && rosterName !== participantId) return rosterName;
+    const storedName = storedNames[index]?.trim();
+    return storedName && storedName !== participantId ? storedName : "Speaker";
+  });
 }
 
 function normalizeResources(
@@ -1597,10 +1600,11 @@ export class SessionService {
   async getAgendaCatalog(tenantId: string, eventId: string) {
     const organizationId = resourceId(tenantId, "tenant id");
     const scopedEventId = this.event(eventId);
-    const [content, rooms, tracks] = await Promise.all([
+    const [content, rooms, tracks, formats] = await Promise.all([
       this.getPublishedSessionContent(organizationId, scopedEventId),
       this.#repository.listRooms(organizationId, scopedEventId),
       this.#repository.listTracks(organizationId, scopedEventId),
+      this.#repository.listFormats(organizationId, scopedEventId),
     ]);
     const roomById = new Map(
       rooms
@@ -1612,6 +1616,11 @@ export class SessionService {
         .filter((track) => this.inScope(track, organizationId, scopedEventId))
         .map((track) => [track.id, track]),
     );
+    const formatById = new Map(
+      formats
+        .filter((format) => this.inScope(format, organizationId, scopedEventId))
+        .map((format) => [format.id, format]),
+    );
     return {
       sessions: content.sessions.map((session) => ({
         id: session.id,
@@ -1622,12 +1631,18 @@ export class SessionService {
         capacityRequired: session.capacityRequired,
         durationMinutes: session.durationMinutes,
         summary: session.abstract,
-        format: session.formatId ?? "Session",
+        format:
+          session.formatId === undefined
+            ? "Session"
+            : (formatById.get(session.formatId)?.name ?? "Session"),
         speakerNames: [...session.speakerNames],
         ...(session.roomId === undefined
           ? {}
-          : { roomName: roomById.get(session.roomId)?.name ?? session.roomId }),
-        trackNames: session.trackIds.map((trackId) => trackById.get(trackId)?.name ?? trackId),
+          : { roomName: roomById.get(session.roomId)?.name ?? "Room to be announced" }),
+        trackNames: session.trackIds.flatMap((trackId) => {
+          const name = trackById.get(trackId)?.name;
+          return name === undefined ? [] : [name];
+        }),
       })),
       rooms: [...roomById.values()].map((room) => ({
         id: room.id,

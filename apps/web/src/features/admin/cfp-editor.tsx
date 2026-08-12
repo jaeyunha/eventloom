@@ -1,6 +1,6 @@
 "use client";
 
-import { type ChangeEvent, type FormEvent, useEffect, useMemo, useState } from "react";
+import { type ChangeEvent, type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   type CfpFormField as ApiCfpFormField,
   type CfpApi,
@@ -9,6 +9,17 @@ import {
   type CfpFormConfiguration,
   createCfpApi,
 } from "../cfp/api";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import styles from "./cfp-editor.module.css";
 
 type FieldType =
@@ -1053,6 +1064,9 @@ export function CfpEditor({ eventId, organizationId, formId, api: providedApi }:
   const api = useMemo(() => providedApi ?? createCfpApi(""), [providedApi]);
   const [activeSection, setActiveSection] =
     useState<(typeof SECTION_LINKS)[number]["id"]>("event-details");
+  const [mobileSectionsOpen, setMobileSectionsOpen] = useState(false);
+  const sectionNavRef = useRef<HTMLElement | null>(null);
+  const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [pastCloseAcknowledged, setPastCloseAcknowledged] = useState(false);
@@ -1139,6 +1153,43 @@ export function CfpEditor({ eventId, organizationId, formId, api: providedApi }:
       active = false;
     };
   }, [api, eventId, requestedFormId, resolvedOrganizationId]);
+  useEffect(() => {
+    const sections = SECTION_LINKS.map((section) => document.getElementById(section.id)).filter(
+      (section): section is HTMLElement => section !== null,
+    );
+    if (sections.length === 0) return;
+
+    let frame: number | null = null;
+    const updateActiveSection = () => {
+      if (frame !== null) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = null;
+        const navigationHeight = window.matchMedia("(max-width: 44rem)").matches
+          ? 0
+          : (sectionNavRef.current?.getBoundingClientRect().height ?? 0);
+        const threshold = navigationHeight + 24;
+        let currentId: (typeof SECTION_LINKS)[number]["id"] =
+          (sections[0]?.id as (typeof SECTION_LINKS)[number]["id"] | undefined) ?? "event-details";
+        for (const section of sections) {
+          if (section.getBoundingClientRect().top <= threshold) {
+            currentId = section.id as (typeof SECTION_LINKS)[number]["id"];
+          } else {
+            break;
+          }
+        }
+        setActiveSection(currentId);
+      });
+    };
+
+    updateActiveSection();
+    window.addEventListener("scroll", updateActiveSection, { passive: true });
+    window.addEventListener("resize", updateActiveSection);
+    return () => {
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      window.removeEventListener("scroll", updateActiveSection);
+      window.removeEventListener("resize", updateActiveSection);
+    };
+  }, []);
 
   function updateConfiguration<K extends keyof CfpConfiguration>(
     key: K,
@@ -1326,7 +1377,28 @@ export function CfpEditor({ eventId, organizationId, formId, api: providedApi }:
 
   function openSection(id: (typeof SECTION_LINKS)[number]["id"]): void {
     setActiveSection(id);
-    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setMobileSectionsOpen(false);
+    const target = document.getElementById(id);
+    if (!target) return;
+    const isMobile = window.matchMedia("(max-width: 44rem)").matches;
+    const scrollToTarget = () => {
+      const navigationHeight = isMobile
+        ? 0
+        : (sectionNavRef.current?.getBoundingClientRect().height ?? 0);
+      const top = Math.max(
+        0,
+        target.getBoundingClientRect().top + window.scrollY - navigationHeight - 16,
+      );
+      const behavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+        ? "auto"
+        : "smooth";
+      window.scrollTo({ top, behavior });
+    };
+    if (isMobile) {
+      window.requestAnimationFrame(scrollToTarget);
+    } else {
+      scrollToTarget();
+    }
   }
 
   function handlePreviewSubmit(event: FormEvent<HTMLFormElement>): void {
@@ -1412,26 +1484,56 @@ export function CfpEditor({ eventId, organizationId, formId, api: providedApi }:
           <button
             className={styles.secondaryButton}
             type="button"
-            onClick={() => void handlePublish()}
+            onClick={() => setPublishDialogOpen(true)}
+            disabled={saveState === "saving"}
           >
             Publish form
           </button>
         </div>
       </header>
 
-      <nav className={styles.sectionNav} aria-label="CFP workspace sections">
-        {SECTION_LINKS.map((section) => (
-          <button
-            key={section.id}
-            type="button"
-            aria-controls={section.id}
-            aria-pressed={activeSection === section.id}
-            className={activeSection === section.id ? styles.activeNavButton : undefined}
-            onClick={() => openSection(section.id)}
-          >
-            {section.label}
-          </button>
-        ))}
+      <nav ref={sectionNavRef} className={styles.sectionNav} aria-label="CFP workspace sections">
+        <div className={styles.desktopSectionNav}>
+          {SECTION_LINKS.map((section) => (
+            <button
+              key={section.id}
+              type="button"
+              aria-controls={section.id}
+              aria-current={activeSection === section.id ? "location" : undefined}
+              className={activeSection === section.id ? styles.activeNavButton : undefined}
+              onClick={() => openSection(section.id)}
+            >
+              {section.label}
+            </button>
+          ))}
+        </div>
+        <Collapsible
+          className={styles.mobileSectionNav}
+          open={mobileSectionsOpen}
+          onOpenChange={setMobileSectionsOpen}
+        >
+          <CollapsibleTrigger className={styles.mobileSectionTrigger} type="button">
+            <span>
+              <span className={styles.mobileSectionLabel}>Current section</span>
+              {SECTION_LINKS.find((section) => section.id === activeSection)?.label}
+            </span>
+            <span aria-hidden="true">⌄</span>
+          </CollapsibleTrigger>
+          <CollapsibleContent className={styles.mobileSectionContent}>
+            {SECTION_LINKS.map((section) => (
+              <button
+                key={section.id}
+                type="button"
+                aria-controls={section.id}
+                aria-current={activeSection === section.id ? "location" : undefined}
+                className={activeSection === section.id ? styles.activeNavButton : undefined}
+                onClick={() => openSection(section.id)}
+              >
+                {section.label}
+              </button>
+            ))}
+          </CollapsibleContent>
+        </Collapsible>
       </nav>
 
       <div className={styles.workspaceGrid}>
@@ -2304,6 +2406,29 @@ export function CfpEditor({ eventId, organizationId, formId, api: providedApi }:
           </aside>
         </div>
       </section>
+      <AlertDialog open={publishDialogOpen} onOpenChange={setPublishDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Publish this CFP form?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Publishing makes the saved CFP version available to applicants. Confirm only after
+              reviewing the form and its dates.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={saveState === "saving"}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={saveState === "saving"}
+              onClick={() => {
+                setPublishDialogOpen(false);
+                void handlePublish();
+              }}
+            >
+              Publish form
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

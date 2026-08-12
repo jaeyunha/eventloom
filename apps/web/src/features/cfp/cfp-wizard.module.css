@@ -165,7 +165,7 @@
   margin: 0;
 }
 
-.railMeta div {
+.publicShell .railMeta div {
   display: grid;
   gap: 0.2rem;
 }
@@ -235,12 +235,12 @@
   font-size: 0.98rem;
 }
 
-.card p,
-.card li {
+.publicShell .card p,
+.publicShell .card li {
   line-height: 1.6;
 }
 
-.card a,
+.publicShell .card a,
 .textButton {
   color: var(--sb-color-brand-strong, #3947cb);
   text-decoration: underline;
@@ -287,7 +287,7 @@
   gap: 1rem;
 }
 
-.welcomeDates div {
+.publicShell .welcomeDates div {
   display: grid;
   gap: 0.25rem;
   min-width: 0;
@@ -504,7 +504,7 @@
   border-top: 1px solid var(--sb-color-border, #dfe2e8);
 }
 
-.secondaryContacts > p {
+.publicShell .secondaryContacts > p {
   color: var(--sb-color-muted, #667085);
 }
 
@@ -620,12 +620,12 @@
   max-width: 34rem;
 }
 
-.completeContent p {
+.publicShell .completeContent p {
   max-width: 38rem;
   margin: 0.55rem 0;
 }
 
-.completeContent > a {
+.publicShell .completeContent > a {
   margin-top: 0.75rem;
 }
 
@@ -757,7 +757,7 @@
     list-style: none;
   }
 
-  .mobileStepList li {
+  .publicShell .mobileStepList li {
     display: grid;
     min-width: 0;
     justify-items: start;
@@ -780,8 +780,8 @@
     font-weight: 700;
   }
 
-  .mobileStepCurrent {
-    color: var(--sb-color-brand-strong, #3947cb) !important;
+  .mobileStepList .mobileStepCurrent {
+    color: var(--sb-color-brand-strong, #3947cb);
     font-weight: 700;
   }
 

@@ -1,0 +1,606 @@
+.workspace {
+  min-width: 0;
+}
+
+.contextText,
+.mutedText,
+.versionText {
+  color: var(--admin-muted);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.contextText {
+  margin: 0.7rem 0 0;
+}
+
+.dashboardGrid {
+  display: grid;
+  grid-template-columns: minmax(13rem, 0.32fr) minmax(0, 1fr);
+  gap: 1.2rem;
+  min-width: 0;
+  align-items: start;
+}
+
+.contentStack {
+  display: grid;
+  min-width: 0;
+  gap: 1.2rem;
+}
+
+.navigationWrapper {
+  min-width: 0;
+}
+
+.desktopNavigation {
+  position: sticky;
+  top: 5.35rem;
+  display: grid;
+  max-height: calc(100vh - 6.5rem);
+  gap: 1rem;
+  align-content: start;
+  overflow-y: auto;
+  padding: 1rem;
+  border: 1px solid var(--admin-border);
+  border-radius: var(--admin-radius-md);
+  background: var(--admin-surface);
+}
+
+.navigationHeader {
+  display: grid;
+  gap: 0.2rem;
+  padding-bottom: 0.2rem;
+}
+
+.navigationHint {
+  margin: 0;
+  color: var(--admin-muted);
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
+.navigationGroup {
+  display: grid;
+  gap: 0.38rem;
+}
+
+.navigationGroupTitle {
+  margin: 0;
+  color: var(--admin-subtle);
+  font-size: 0.66rem;
+  font-weight: 750;
+  letter-spacing: 0.1em;
+  line-height: 1.3;
+  text-transform: uppercase;
+}
+
+.navigationList {
+  display: grid;
+  gap: 0.22rem;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.navigationLink {
+  display: block;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid transparent;
+  border-radius: var(--admin-radius-sm);
+  color: var(--admin-muted);
+  font-size: 0.79rem;
+  font-weight: 700;
+  line-height: 1.25;
+  text-decoration: none;
+}
+
+.navigationLink:hover,
+.navigationLink:focus-visible {
+  border-color: var(--admin-border);
+  background: var(--admin-canvas);
+  color: var(--admin-ink);
+}
+
+.navigationLinkActive {
+  border-color: #cbd8d0;
+  background: var(--admin-brand-soft);
+  color: var(--admin-brand-strong);
+}
+
+.mobileNavigation {
+  display: none;
+}
+
+.mobileNavigationTrigger {
+  width: 100%;
+  justify-content: space-between;
+}
+
+.mobileNavigationTrigger strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mobileNavigationContent {
+  display: grid;
+  gap: 0.8rem;
+  padding: 0.75rem;
+  margin-top: 0.45rem;
+  border: 1px solid var(--admin-border);
+  border-radius: var(--admin-radius-md);
+  background: var(--admin-surface);
+}
+
+.panel {
+  min-width: 0;
+  scroll-margin-top: 5.8rem;
+  border: 1px solid var(--admin-border);
+  border-radius: var(--admin-radius-md);
+  background: var(--admin-surface);
+}
+
+.panelHeader {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 1rem 1.1rem 0.85rem;
+  border-bottom: 1px solid var(--admin-border);
+}
+
+.panelHeading {
+  min-width: 0;
+}
+
+.panelTitle,
+.sectionTitle,
+.subheading,
+.cardHeading {
+  margin: 0;
+  color: var(--admin-ink);
+  letter-spacing: -0.02em;
+}
+
+.panelTitle {
+  font-size: 1rem;
+  font-weight: 750;
+  line-height: 1.25;
+}
+
+.sectionTitle {
+  margin-top: 0.2rem;
+  font-size: 1rem;
+  font-weight: 750;
+}
+
+.subheading {
+  font-size: 0.94rem;
+  font-weight: 750;
+  line-height: 1.3;
+}
+
+.cardHeading {
+  font-size: 0.9rem;
+  font-weight: 750;
+}
+
+.panelHeader .mutedText,
+.taxonomyHeader .mutedText {
+  margin: 0.3rem 0 0;
+}
+
+.panelContent {
+  min-width: 0;
+  padding: 1rem 1.1rem;
+}
+
+.notice {
+  padding: 0.7rem 0.85rem;
+  border: 1px solid #c8d9ce;
+  border-radius: var(--admin-radius-sm);
+  background: var(--admin-brand-soft);
+  color: var(--admin-brand-strong);
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.fullWidthState {
+  width: 100%;
+  border-color: var(--admin-border-strong);
+}
+
+.fullWidthState[role="alert"] {
+  border-color: #e2b9b4;
+  background: var(--admin-danger-soft);
+}
+
+.stateActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.stateActions p {
+  margin: 0;
+}
+
+.settingsForm,
+.dialogForm {
+  display: grid;
+  gap: 1rem;
+}
+
+.formIntro,
+.formActions,
+.addStatusRow,
+.cardActions,
+.dialogActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+}
+
+.formIntro {
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.formIntro .mutedText {
+  margin: 0.3rem 0 0;
+}
+
+.versionText {
+  white-space: nowrap;
+}
+
+.tableWrap {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+}
+
+.statusTable {
+  width: 100%;
+  min-width: 38rem;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.statusTable caption {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.statusTable th {
+  padding: 0.6rem 0.7rem;
+  border-bottom: 1px solid var(--admin-border);
+  color: var(--admin-subtle);
+  font-size: 0.7rem;
+  font-weight: 750;
+}
+
+.statusTable td {
+  padding: 0.65rem 0.7rem;
+  border-bottom: 1px solid var(--admin-border);
+  color: var(--admin-muted);
+  font-size: 0.78rem;
+  vertical-align: middle;
+}
+
+.statusTable tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.statusTable td:first-child {
+  width: 48%;
+}
+
+.statusTable td:nth-child(2) {
+  width: 32%;
+}
+
+.fieldLabel,
+.formField,
+.checkboxLabel {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.fieldLabel {
+  margin-bottom: 0.2rem;
+  color: var(--admin-ink);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.formField > span:first-child {
+  color: var(--admin-ink);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.checkboxLabel {
+  display: inline-flex;
+  gap: 0.5rem;
+  align-items: center;
+  color: var(--admin-ink);
+  font-size: 0.76rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.addStatusRow {
+  align-items: flex-end;
+}
+
+.addStatusRow .formField {
+  flex: 1 1 14rem;
+}
+
+.formError {
+  margin: 0;
+  color: var(--admin-danger);
+  font-size: 0.8rem;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.formActions {
+  justify-content: flex-start;
+}
+
+.readOnlyState,
+.capabilityNote,
+.emptyState,
+.detailsState {
+  color: var(--admin-muted);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.readOnlyState {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.readOnlyState strong {
+  color: var(--admin-ink);
+}
+
+.capabilityNote {
+  padding: 0.65rem 0.75rem;
+  margin: 0 0 0.8rem;
+  border-left: 3px solid var(--admin-border-strong);
+  background: var(--admin-canvas);
+}
+
+.resourceList,
+.auditList {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.resourceCard {
+  overflow: visible;
+}
+
+.resourceCardHeader,
+.taxonomyHeader {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.resourceCardHeader {
+  padding-bottom: 0.8rem;
+}
+
+.resourceCardContent {
+  padding-top: 0;
+  color: var(--admin-muted);
+  font-size: 0.78rem;
+}
+
+.resourceCardContent strong {
+  color: var(--admin-ink);
+}
+
+.emptyState {
+  display: grid;
+  gap: 0.25rem;
+  padding: 1rem;
+  border: 1px dashed var(--admin-border-strong);
+  border-radius: var(--admin-radius-sm);
+  text-align: center;
+}
+
+.emptyState strong {
+  color: var(--admin-ink);
+}
+
+.taxonomyGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.taxonomyCard {
+  display: grid;
+  min-width: 0;
+  gap: 0.8rem;
+  padding: 1rem;
+  border: 1px solid var(--admin-border);
+  border-radius: var(--admin-radius-md);
+  background: var(--admin-surface);
+}
+
+.taxonomyHeader .mutedText {
+  max-width: 45ch;
+}
+
+.dialogForm {
+  padding-top: 0.2rem;
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.85rem;
+}
+
+.dialogActions {
+  justify-content: flex-end;
+}
+
+.auditList {
+  gap: 0;
+}
+
+.auditEntry {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 0.8rem 0;
+  border-bottom: 1px solid var(--admin-border);
+}
+
+.auditEntry:first-child {
+  padding-top: 0;
+}
+
+.auditEntry:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.auditEntry > div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.auditEntry strong {
+  color: var(--admin-ink);
+  font-size: 0.8rem;
+}
+
+.auditEntry span,
+.auditEntry time {
+  color: var(--admin-muted);
+  font-size: 0.74rem;
+}
+
+.auditEntry time {
+  white-space: nowrap;
+}
+
+.librarySection,
+.relatedWorkflows {
+  min-width: 0;
+  scroll-margin-top: 5.8rem;
+}
+
+.sectionIntro {
+  display: flex;
+  gap: 1rem;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 0.7rem;
+}
+
+.relatedGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+
+.relatedCardContent {
+  padding-top: 0;
+}
+
+@media (max-width: 64rem) {
+  .dashboardGrid {
+    grid-template-columns: minmax(11rem, 0.28fr) minmax(0, 1fr);
+  }
+
+  .taxonomyGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 48rem) {
+  .dashboardGrid {
+    display: block;
+  }
+
+  .desktopNavigation {
+    display: none;
+  }
+
+  .mobileNavigation {
+    display: block;
+    margin-bottom: 1rem;
+  }
+
+  .taxonomyGrid,
+  .relatedGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .statusTable {
+    min-width: 34rem;
+  }
+
+  .formGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (min-width: 48.01rem) {
+  .mobileNavigation {
+    display: none;
+  }
+}
+
+@media (max-width: 36rem) {
+  .panelHeader,
+  .panelContent {
+    padding-inline: 0.85rem;
+  }
+
+  .taxonomyCard {
+    padding: 0.85rem;
+  }
+
+  .resourceCardHeader,
+  .taxonomyHeader {
+    display: grid;
+  }
+
+  .cardActions {
+    width: 100%;
+  }
+
+  .cardActions > button {
+    flex: 1 1 7rem;
+  }
+}

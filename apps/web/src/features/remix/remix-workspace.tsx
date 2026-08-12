@@ -1,6 +1,51 @@
 "use client";
 
-import { type CSSProperties, type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "../../components/ui/alert-dialog";
+import { Badge } from "../../components/ui/badge";
+import { Button } from "../../components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "../../components/ui/card";
+import { Checkbox } from "../../components/ui/checkbox";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "../../components/ui/collapsible";
+import { Input } from "../../components/ui/input";
+import { Label } from "../../components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../components/ui/select";
+import {
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "../../components/ui/table";
 import {
   createRemixApi,
   type RemixApi,
@@ -13,19 +58,18 @@ import {
   type RemixField,
   type RemixProvenance,
   type RemixSessionContent,
-  type RemixSessionRecord,
   type RemixSourceRecord,
   type RemixSourceType,
-  type RemixSpeakerRecord,
   remixSessionFields,
   remixSpeakerFields,
 } from "./api";
+import styles from "./remix-workspace.module.css";
 
 export interface RemixWorkspaceProps {
   organizationId: string;
   eventId: string;
-  /** Optional injection point for focused UI tests and host applications. */
-  api?: RemixApi;
+  /** Inject the authoritative API in tests or a host application. `null` means unavailable. */
+  api?: RemixApi | null;
 }
 
 const fieldLabels: Readonly<Record<RemixField, string>> = {
@@ -34,28 +78,6 @@ const fieldLabels: Readonly<Record<RemixField, string>> = {
   tags: "Tags",
   tracks: "Tracks",
   biography: "Biography",
-};
-
-const panelStyle: CSSProperties = {
-  border: "1px solid #d6dbe3",
-  borderRadius: 10,
-  padding: "1.25rem",
-  marginBlock: "1rem",
-  background: "#fff",
-};
-
-const mutedStyle: CSSProperties = { color: "#52606d", fontSize: "0.9rem" };
-const errorStyle: CSSProperties = { color: "#9b1c1c", fontWeight: 600 };
-const actionRowStyle: CSSProperties = {
-  display: "flex",
-  flexWrap: "wrap",
-  gap: "0.6rem",
-  alignItems: "center",
-};
-const gridStyle: CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(15rem, 1fr))",
-  gap: "1rem",
 };
 
 function messageFrom(error: unknown): string {
@@ -68,18 +90,14 @@ function messageFrom(error: unknown): string {
   return error instanceof Error ? error.message : "The remix request could not be completed.";
 }
 
-function fieldsForSourceType(sourceType: RemixSourceType): readonly RemixField[] {
-  return sourceType === "session" ? remixSessionFields : remixSpeakerFields;
+function isCapabilityUnavailable(error: unknown): boolean {
+  return (
+    error instanceof RemixApiError && (error.status === 404 || error.code === "REMIX_NOT_FOUND")
+  );
 }
 
-function sourceContent(record: RemixSourceRecord): RemixContent {
-  if (record.kind === "speaker") return { biography: record.biography };
-  return {
-    title: record.title,
-    description: record.description,
-    tags: record.tags ?? [],
-    tracks: record.tracks ?? [],
-  };
+function fieldsForSourceType(sourceType: RemixSourceType): readonly RemixField[] {
+  return sourceType === "session" ? remixSessionFields : remixSpeakerFields;
 }
 
 function isSessionContent(content: RemixContent): content is RemixSessionContent {
@@ -87,9 +105,7 @@ function isSessionContent(content: RemixContent): content is RemixSessionContent
 }
 
 function valueForField(content: RemixContent, field: RemixField): string | readonly string[] {
-  if (field === "biography") {
-    return !isSessionContent(content) ? content.biography : "";
-  }
+  if (field === "biography") return !isSessionContent(content) ? content.biography : "";
   if (!isSessionContent(content)) return "";
   if (field === "title") return content.title;
   if (field === "description") return content.description;
@@ -119,8 +135,7 @@ function normalizeFilterInput(value: string): readonly string[] {
 
 /**
  * Return only fields requested by the candidate's server-issued allowlist.
- * This is deliberately exported so callers can test that human edits cannot
- * smuggle fields outside the generation request into an apply mutation.
+ * Human edits cannot smuggle fields outside the generation request into apply.
  */
 export function allowedContentForApply(
   candidate: Pick<RemixCandidate, "sourceType" | "fields" | "candidate">,
@@ -148,8 +163,10 @@ function recordMatches(
     record.kind === "session"
       ? [record.id, record.title, record.description, ...sessionTags, ...sessionTracks]
       : [record.id, record.biography];
-  const normalizedHaystack = haystack.join(" ").toLocaleLowerCase();
-  if (search.trim().length > 0 && !normalizedHaystack.includes(search.trim().toLocaleLowerCase())) {
+  if (
+    search.trim().length > 0 &&
+    !haystack.join(" ").toLocaleLowerCase().includes(search.trim().toLocaleLowerCase())
+  ) {
     return false;
   }
   if (record.kind === "speaker") return tags.length === 0 && tracks.length === 0;
@@ -168,6 +185,17 @@ function candidateSource(
   if (candidate === undefined) return undefined;
   return records.find(
     (record) => record.kind === candidate.sourceType && record.id === candidate.sourceId,
+  );
+}
+
+/** A filtered-out source is not evidence of a source revision change. */
+export function candidateIsStale(
+  candidate: Pick<RemixCandidate, "status" | "sourceRevision">,
+  source: Pick<RemixSourceRecord, "revision"> | undefined,
+): boolean {
+  return (
+    candidate.status === "stale" ||
+    (source !== undefined && source.revision !== candidate.sourceRevision)
   );
 }
 
@@ -196,203 +224,11 @@ function formatTimestamp(value: string): string {
   }).format(date);
 }
 
-function demoSession(
-  eventId: string,
-  id: string,
-  revision: number,
-  title: string,
-  description: string,
-  tags: readonly string[],
-  tracks: readonly string[],
-): RemixSessionRecord {
-  return { kind: "session", id, eventId, revision, title, description, tags, tracks };
+function directRemixHref(organizationId: string, eventId: string): string {
+  return `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}/remix`;
 }
 
-function demoCandidate(
-  source: RemixSourceRecord,
-  status: RemixCandidate["status"],
-  sourceRevision: number,
-  id: string,
-  generation: number,
-  parentCandidateId: string | null,
-): RemixCandidate {
-  const original = sourceContent(source);
-  const candidate: RemixContent =
-    source.kind === "session"
-      ? {
-          ...original,
-          title: `${source.title} — a practical guide`,
-          description: `${source.description} Organised for a clear, practical event conversation.`,
-        }
-      : {
-          biography: `${source.biography} Known for making complex ideas useful to practitioners.`,
-        };
-  const fields: readonly RemixField[] =
-    source.kind === "session" ? ["title", "description"] : ["biography"];
-  const provenance: RemixProvenance = {
-    provider: "demo-remix-provider",
-    model: "demo-model",
-    promptVersion: "remix-v1",
-    generatedAt: "2026-08-09T12:00:00.000Z",
-    requestId: `request-${id}`,
-  };
-  return {
-    id,
-    tenantId: "tenant-demo",
-    eventId: source.eventId,
-    sourceType: source.kind,
-    sourceId: source.id,
-    sourceRevision,
-    fields,
-    tone: "Clear and practical",
-    guidance: "Keep the author's meaning and make the outcome concrete.",
-    original,
-    candidate,
-    changedFields: fields,
-    changeSummary: "Clarifies the promise and makes the audience outcome easier to scan.",
-    provenance,
-    status,
-    version: 1,
-    generation,
-    parentCandidateId,
-    createdAt: "2026-08-09T12:00:00.000Z",
-    createdBy: "organizer-demo",
-    ...(status === "stale"
-      ? {
-          staleAt: "2026-08-09T12:05:00.000Z",
-          staleReason: "Source content changed after generation.",
-        }
-      : {}),
-  };
-}
-
-interface DemoWorkspaceData {
-  records: readonly RemixSourceRecord[];
-  candidates: readonly RemixCandidate[];
-  audit: readonly RemixAuditEntry[];
-}
-
-function demoWorkspaceData(eventId: string): DemoWorkspaceData {
-  const session = demoSession(
-    eventId,
-    "session-1",
-    2,
-    "Designing resilient public services",
-    "A practical session for resilient public services.",
-    ["public-service", "design"],
-    ["Civic technology"],
-  );
-  const secondSession = demoSession(
-    eventId,
-    "session-2",
-    3,
-    "Calm incident response",
-    "A field guide to making incident response calmer and clearer.",
-    ["operations"],
-    ["Engineering"],
-  );
-  const speaker: RemixSpeakerRecord = {
-    kind: "speaker",
-    id: "speaker-1",
-    eventId,
-    revision: 1,
-    biography: "Riley helps public-interest teams build reliable services.",
-  };
-  const pending = demoCandidate(session, "pending", session.revision, "candidate-1", 1, null);
-  const stale = demoCandidate(secondSession, "stale", 2, "candidate-stale", 1, null);
-  return {
-    records: [session, secondSession, speaker],
-    candidates: [pending, stale],
-    audit: [
-      {
-        id: "audit-generated",
-        tenantId: "tenant-demo",
-        eventId,
-        candidateId: pending.id,
-        actorId: pending.createdBy,
-        action: "candidate.generated",
-        createdAt: pending.createdAt,
-        details: { generation: 1, sourceRevision: pending.sourceRevision },
-      },
-      {
-        id: "audit-stale",
-        tenantId: "tenant-demo",
-        eventId,
-        candidateId: stale.id,
-        actorId: "system",
-        action: "candidate.stale",
-        createdAt: stale.staleAt ?? stale.createdAt,
-        details: {
-          previousSourceRevision: stale.sourceRevision,
-          currentSourceRevision: secondSession.revision,
-        },
-      },
-    ],
-  };
-}
-
-function localCandidate(
-  source: RemixSourceRecord,
-  fields: readonly RemixField[],
-  tone: string,
-  guidance: string,
-  parent: RemixCandidate | undefined,
-): RemixCandidate {
-  const original = sourceContent(source);
-  const candidate: RemixContent =
-    source.kind === "session"
-      ? {
-          ...original,
-          ...(fields.includes("title") ? { title: `${source.title} — in practice` } : {}),
-          ...(fields.includes("description")
-            ? {
-                description: `${source.description} Written in a ${tone.toLocaleLowerCase()} tone.`,
-              }
-            : {}),
-        }
-      : {
-          biography: fields.includes("biography")
-            ? `${source.biography} Focused on useful lessons for this event audience.`
-            : source.biography,
-        };
-  const changedFields = fields.filter(
-    (field) =>
-      inputValue(valueForField(original, field)) !== inputValue(valueForField(candidate, field)),
-  );
-  const generation = parent === undefined ? 1 : parent.generation + 1;
-  return {
-    id: `candidate-local-${generation}-${source.id}`,
-    tenantId: "tenant-local",
-    eventId: source.eventId,
-    sourceType: source.kind,
-    sourceId: source.id,
-    sourceRevision: source.revision,
-    fields: [...fields],
-    tone,
-    guidance,
-    original,
-    candidate,
-    changedFields,
-    changeSummary:
-      changedFields.length === 0
-        ? "The provider found no changes in the requested fields."
-        : `Updated ${changedFields.map((field) => fieldLabels[field].toLocaleLowerCase()).join(", ")}.`,
-    provenance: {
-      provider: "local-demo-provider",
-      model: "local-demo-model",
-      promptVersion: "remix-demo-v1",
-      generatedAt: new Date().toISOString(),
-    },
-    status: "pending",
-    version: 1,
-    generation,
-    parentCandidateId: parent?.id ?? null,
-    createdAt: new Date().toISOString(),
-    createdBy: "organizer-demo",
-  };
-}
-
-function WorkspaceStatus({
+function ScopeStatus({
   organizationId,
   eventId,
   message,
@@ -404,50 +240,86 @@ function WorkspaceStatus({
   error?: boolean;
 }>) {
   return (
-    <main style={{ maxWidth: 1100, margin: "0 auto", padding: "2rem 1rem" }}>
-      <p style={mutedStyle}>
+    <main className={styles.statusPage}>
+      <p className={styles.eyebrow}>
         Organization {organizationId || "(missing)"} · Event {eventId || "(missing)"}
       </p>
-      <h1>Human-applied content remix</h1>
-      <section style={panelStyle} role={error ? "alert" : "status"} aria-live="polite">
-        <h2>{error ? "Remix unavailable" : "Loading remix workspace"}</h2>
-        <p>{message}</p>
-      </section>
+      <h1>Content remix workspace unavailable</h1>
+      <Card role={error ? "alert" : "status"} aria-live="polite">
+        <CardHeader>
+          <CardTitle>{error ? "Remix unavailable" : "Loading remix workspace"}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p>{message}</p>
+        </CardContent>
+      </Card>
+    </main>
+  );
+}
+
+function CapabilityUnavailable({
+  organizationId,
+  eventId,
+  reason,
+}: Readonly<{ organizationId: string; eventId: string; reason?: string | null }>) {
+  return (
+    <main className={styles.statusPage}>
+      <p className={styles.eyebrow}>
+        Organization {organizationId} · Event {eventId}
+      </p>
+      <Card className={styles.unavailableCard}>
+        <CardHeader>
+          <Badge variant="outline">Unavailable</Badge>
+          <CardTitle>Content remix is unavailable</CardTitle>
+          <CardDescription>
+            {reason ?? "This event does not have an approved content remix capability."}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className={styles.stack}>
+          <p>
+            Content remix makes private draft suggestions for selected session or speaker copy. It
+            never publishes automatically. An organizer reviews, edits, and applies an auditable
+            revision.
+          </p>
+          <Alert>
+            <AlertTitle>No local candidate was created</AlertTitle>
+            <AlertDescription>
+              Suggestions, rejection, application, and audit records require the authoritative
+              capability. Nothing was inferred or saved in this browser.
+            </AlertDescription>
+          </Alert>
+        </CardContent>
+        <CardFooter className={styles.unavailableFooter}>
+          <a className={styles.directLink} href={directRemixHref(organizationId, eventId)}>
+            Open Content remix directly
+          </a>
+        </CardFooter>
+      </Card>
     </main>
   );
 }
 
 export function RemixWorkspace({ organizationId, eventId, api: apiOverride }: RemixWorkspaceProps) {
   const scopeValid = organizationId.trim().length > 0 && eventId.trim().length > 0;
-  const baseUrl = "";
-  const testMode = apiOverride === undefined && process.env.NODE_ENV === "test";
-  const api = useMemo(() => {
+  const api = useMemo<RemixApi | null>(() => {
     if (apiOverride !== undefined) return apiOverride;
-    if (testMode || !scopeValid) return null;
+    // Tests must inject an API; never manufacture candidates for the test environment.
+    if (process.env.NODE_ENV === "test" || !scopeValid) return null;
     try {
-      return createRemixApi(baseUrl, organizationId);
+      return createRemixApi("", organizationId);
     } catch {
       return null;
     }
-  }, [apiOverride, organizationId, scopeValid, testMode]);
-  const demo = useMemo(() => demoWorkspaceData(eventId), [eventId]);
+  }, [apiOverride, organizationId, scopeValid]);
+  const [capabilityUnavailable, setCapabilityUnavailable] = useState(api === null);
+  const [capabilityMessage, setCapabilityMessage] = useState<string | null>(null);
   const [sourceType, setSourceType] = useState<RemixSourceType>("session");
   const sourceTypeInitialized = useRef(false);
-  const [records, setRecords] = useState<readonly RemixSourceRecord[]>(() =>
-    testMode ? demo.records : [],
-  );
-  const [candidates, setCandidates] = useState<readonly RemixCandidate[]>(() =>
-    testMode ? demo.candidates : [],
-  );
-  const [audit, setAudit] = useState<readonly RemixAuditEntry[]>(() =>
-    testMode ? demo.audit : [],
-  );
-  const [selectedSourceIds, setSelectedSourceIds] = useState<readonly string[]>(() =>
-    testMode ? ["session-1"] : [],
-  );
-  const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(() =>
-    testMode ? "candidate-1" : null,
-  );
+  const [records, setRecords] = useState<readonly RemixSourceRecord[]>([]);
+  const [candidates, setCandidates] = useState<readonly RemixCandidate[]>([]);
+  const [audit, setAudit] = useState<readonly RemixAuditEntry[]>([]);
+  const [selectedSourceIds, setSelectedSourceIds] = useState<readonly string[]>([]);
+  const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
   const [candidateFilter, setCandidateFilter] = useState<RemixCandidate["status"] | "all">("all");
   const [search, setSearch] = useState("");
   const [tagFilter, setTagFilter] = useState("");
@@ -459,14 +331,27 @@ export function RemixWorkspace({ organizationId, eventId, api: apiOverride }: Re
   );
   const [humanConfirmed, setHumanConfirmed] = useState(false);
   const [draftContent, setDraftContent] = useState<Readonly<Record<string, string>>>({});
-  const [loading, setLoading] = useState(!testMode && api !== null && scopeValid);
+  const [loading, setLoading] = useState(api !== null && scopeValid);
   const [busyAction, setBusyAction] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(() => {
-    if (!scopeValid) return "Organization and event scope are required.";
-    return null;
-  });
+  const [error, setError] = useState<string | null>(() =>
+    scopeValid ? null : "Organization and event scope are required.",
+  );
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [applyError, setApplyError] = useState<string | null>(null);
+  const [applyDialogOpen, setApplyDialogOpen] = useState(false);
+  const applyButtonRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    setCapabilityUnavailable(api === null);
+    setCapabilityMessage(null);
+    if (api === null) {
+      setLoading(false);
+      setRecords([]);
+      setCandidates([]);
+      setAudit([]);
+    }
+  }, [api]);
 
   useEffect(() => {
     if (!sourceTypeInitialized.current) {
@@ -481,21 +366,11 @@ export function RemixWorkspace({ organizationId, eventId, api: apiOverride }: Re
   }, [sourceType]);
 
   useEffect(() => {
-    if (testMode) return;
+    if (!scopeValid || api === null || capabilityUnavailable) {
+      setLoading(false);
+      return;
+    }
     let active = true;
-    if (!scopeValid) {
-      setLoading(false);
-      setError("Organization and event scope are required.");
-      return () => {
-        active = false;
-      };
-    }
-    if (api === null) {
-      setLoading(false);
-      return () => {
-        active = false;
-      };
-    }
     setLoading(true);
     setError(null);
     const controller = new AbortController();
@@ -525,8 +400,16 @@ export function RemixWorkspace({ organizationId, eventId, api: apiOverride }: Re
         );
       })
       .catch((reason: unknown) => {
-        if (active && reason instanceof DOMException && reason.name === "AbortError") return;
-        if (active) setError(messageFrom(reason));
+        if (!active || (reason instanceof DOMException && reason.name === "AbortError")) return;
+        if (isCapabilityUnavailable(reason)) {
+          setCapabilityUnavailable(true);
+          setCapabilityMessage(reason instanceof Error ? reason.message : "Capability not found.");
+          setRecords([]);
+          setCandidates([]);
+          setAudit([]);
+          return;
+        }
+        setError(messageFrom(reason));
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -535,7 +418,7 @@ export function RemixWorkspace({ organizationId, eventId, api: apiOverride }: Re
       active = false;
       controller.abort();
     };
-  }, [api, eventId, scopeValid, search, sourceType, tagFilter, testMode, trackFilter]);
+  }, [api, capabilityUnavailable, eventId, scopeValid, search, sourceType, tagFilter, trackFilter]);
 
   const availableFields = fieldsForSourceType(sourceType);
   const visibleRecords = useMemo(() => {
@@ -559,12 +442,11 @@ export function RemixWorkspace({ organizationId, eventId, api: apiOverride }: Re
   );
   const selectedCandidate = candidates.find((candidate) => candidate.id === selectedCandidateId);
   const selectedCandidateSource = candidateSource(selectedCandidate, records);
-  const sourceChanged =
-    selectedCandidate !== undefined &&
-    (selectedCandidateSource === undefined ||
-      selectedCandidateSource.revision !== selectedCandidate.sourceRevision);
-  const staleCandidate = selectedCandidate?.status === "stale" || sourceChanged;
+  const staleCandidate =
+    selectedCandidate !== undefined && candidateIsStale(selectedCandidate, selectedCandidateSource);
   const canApply =
+    api !== null &&
+    !loading &&
     selectedCandidate !== undefined &&
     selectedCandidate.status === "pending" &&
     !staleCandidate &&
@@ -609,6 +491,14 @@ export function RemixWorkspace({ organizationId, eventId, api: apiOverride }: Re
     event.preventDefault();
     setActionError(null);
     setActionMessage(null);
+    if (api === null) {
+      setActionError("Content remix is unavailable. No candidate was created.");
+      return;
+    }
+    if (loading) {
+      setActionError("Remix data is still loading. Try again when the capability is ready.");
+      return;
+    }
     if (selectedSourceIds.length === 0) {
       setActionError("Choose at least one session or speaker before generating.");
       return;
@@ -623,24 +513,14 @@ export function RemixWorkspace({ organizationId, eventId, api: apiOverride }: Re
     }
     setBusyAction("generate");
     try {
-      const generated =
-        api === null
-          ? selectedSourceIds.flatMap((sourceId) => {
-              const source = records.find(
-                (record) => record.id === sourceId && record.kind === sourceType,
-              );
-              return source === undefined
-                ? []
-                : [localCandidate(source, fields, tone.trim(), guidance.trim(), undefined)];
-            })
-          : await api.generate({
-              eventId,
-              sourceType,
-              sourceIds: selectedSourceIds,
-              fields,
-              tone: tone.trim(),
-              ...(guidance.trim().length === 0 ? {} : { guidance: guidance.trim() }),
-            });
+      const generated = await api.generate({
+        eventId,
+        sourceType,
+        sourceIds: selectedSourceIds,
+        fields,
+        tone: tone.trim(),
+        ...(guidance.trim().length === 0 ? {} : { guidance: guidance.trim() }),
+      });
       setCandidates((current) => [...generated, ...current]);
       const first = generated[0];
       if (first !== undefined) setSelectedCandidateId(first.id);
@@ -655,30 +535,21 @@ export function RemixWorkspace({ organizationId, eventId, api: apiOverride }: Re
   }
 
   async function regenerate(): Promise<void> {
+    if (api === null) {
+      setActionError("Content remix is unavailable. No candidate was regenerated.");
+      return;
+    }
     if (selectedCandidate === undefined || selectedCandidate.status === "applied") return;
     setBusyAction("regenerate");
     setActionError(null);
     setActionMessage(null);
     try {
-      const regenerated =
-        api === null
-          ? (() => {
-              const source = selectedCandidateSource;
-              if (source === undefined) throw new Error("The source is no longer available.");
-              return localCandidate(
-                source,
-                selectedCandidate.fields,
-                tone.trim(),
-                guidance.trim(),
-                selectedCandidate,
-              );
-            })()
-          : await api.regenerate({
-              eventId,
-              candidateId: selectedCandidate.id,
-              ...(tone.trim().length === 0 ? {} : { tone: tone.trim() }),
-              ...(guidance.trim().length === 0 ? {} : { guidance: guidance.trim() }),
-            });
+      const regenerated = await api.regenerate({
+        eventId,
+        candidateId: selectedCandidate.id,
+        ...(tone.trim().length === 0 ? {} : { tone: tone.trim() }),
+        ...(guidance.trim().length === 0 ? {} : { guidance: guidance.trim() }),
+      });
       setCandidates((current) => [
         regenerated,
         ...current.map((candidate) =>
@@ -704,43 +575,29 @@ export function RemixWorkspace({ organizationId, eventId, api: apiOverride }: Re
   }
 
   async function reject(): Promise<void> {
+    if (api === null) {
+      setActionError("Content remix is unavailable. No candidate was rejected.");
+      return;
+    }
     if (selectedCandidate === undefined || selectedCandidate.status === "applied") return;
     setBusyAction("reject");
     setActionError(null);
     setActionMessage(null);
     try {
-      const rejected =
-        api === null
-          ? {
-              ...selectedCandidate,
-              status: "rejected" as const,
-              version: selectedCandidate.version + 1,
-              rejectedAt: new Date().toISOString(),
-              rejectedBy: "organizer-demo",
-              rejectionReason: "Rejected by the human organizer.",
-            }
-          : await api.reject({
-              eventId,
-              candidateId: selectedCandidate.id,
-              reason: "Rejected by the human organizer.",
-            });
+      const rejected = await api.reject({
+        eventId,
+        candidateId: selectedCandidate.id,
+        reason: "Rejected by the human organizer.",
+      });
       setCandidates((current) =>
         current.map((candidate) => (candidate.id === rejected.id ? rejected : candidate)),
       );
-      setAudit((current) => [
-        {
-          id: `audit-local-rejected-${rejected.id}`,
-          tenantId: rejected.tenantId,
-          eventId: rejected.eventId,
-          candidateId: rejected.id,
-          actorId: rejected.rejectedBy ?? "organizer",
-          action: "candidate.rejected",
-          createdAt: rejected.rejectedAt ?? new Date().toISOString(),
-          details: { reason: rejected.rejectionReason ?? "rejected" },
-        },
-        ...current,
-      ]);
-      setActionMessage("Candidate rejected and recorded in the human audit trail.");
+      // The server is the audit authority; never synthesize a local audit entry.
+      const nextAudit = await api.listAudit(eventId);
+      setAudit(nextAudit.filter((entry) => entry.eventId === eventId));
+      setActionMessage(
+        "Candidate rejected by a human organizer and recorded by the server audit trail.",
+      );
     } catch (reason: unknown) {
       setActionError(messageFrom(reason));
     } finally {
@@ -748,40 +605,20 @@ export function RemixWorkspace({ organizationId, eventId, api: apiOverride }: Re
     }
   }
 
-  async function apply(): Promise<void> {
-    if (selectedCandidate === undefined || !canApply) return;
+  async function commitApply(): Promise<void> {
+    if (api === null || selectedCandidate === undefined || !canApply) return;
     setBusyAction("apply");
     setActionError(null);
+    setApplyError(null);
     setActionMessage(null);
     try {
       const content = allowedContentForApply(selectedCandidate, draftContent);
-      const revision: RemixContentRevision =
-        api === null
-          ? {
-              id: `revision-local-${selectedCandidate.id}`,
-              tenantId: selectedCandidate.tenantId,
-              eventId: selectedCandidate.eventId,
-              sourceType: selectedCandidate.sourceType,
-              sourceId: selectedCandidate.sourceId,
-              sourceRevision: selectedCandidate.sourceRevision,
-              fields: selectedCandidate.fields,
-              content: {
-                ...(selectedCandidate.sourceType === "session"
-                  ? selectedCandidate.candidate
-                  : selectedCandidate.candidate),
-                ...content,
-              } as RemixContent,
-              candidateId: selectedCandidate.id,
-              appliedBy: "organizer-demo",
-              appliedAt: new Date().toISOString(),
-            }
-          : await api.apply({
-              eventId,
-              candidateId: selectedCandidate.id,
-              expectedVersion: selectedCandidate.version,
-              content,
-            });
-      const appliedAt = revision.appliedAt;
+      const revision: RemixContentRevision = await api.apply({
+        eventId,
+        candidateId: selectedCandidate.id,
+        expectedVersion: selectedCandidate.version,
+        content,
+      });
       setCandidates((current) =>
         current.map((candidate) =>
           candidate.id === selectedCandidate.id
@@ -790,44 +627,45 @@ export function RemixWorkspace({ organizationId, eventId, api: apiOverride }: Re
                 status: "applied" as const,
                 version: candidate.version + 1,
                 candidate: revision.content,
-                appliedAt,
+                appliedAt: revision.appliedAt,
                 appliedBy: revision.appliedBy,
                 appliedRevisionId: revision.id,
               }
             : candidate,
         ),
       );
-      setAudit((current) => [
-        {
-          id: `audit-local-applied-${selectedCandidate.id}`,
-          tenantId: selectedCandidate.tenantId,
-          eventId: selectedCandidate.eventId,
-          candidateId: selectedCandidate.id,
-          actorId: revision.appliedBy,
-          action: "candidate.applied",
-          createdAt: appliedAt,
-          details: {
-            contentRevisionId: revision.id,
-            sourceRevision: selectedCandidate.sourceRevision,
-            humanEdited: true,
-          },
-        },
-        ...current,
-      ]);
+      // The server is the audit authority; never synthesize a local audit entry.
+      const nextAudit = await api.listAudit(eventId);
+      setAudit(nextAudit.filter((entry) => entry.eventId === eventId));
       setHumanConfirmed(false);
+      setApplyDialogOpen(false);
+      setApplyError(null);
       setActionMessage(
-        "Applied to event content by a human organizer and recorded in the audit trail. Public content changed only now.",
+        "Applied to event content by a human organizer and recorded in the server audit trail. Public content changed only now.",
       );
     } catch (reason: unknown) {
-      setActionError(messageFrom(reason));
+      const message = messageFrom(reason);
+      setActionError(message);
+      setApplyError(message);
     } finally {
       setBusyAction(null);
     }
   }
+  function openApplyDialog(): void {
+    if (!canApply) return;
+    setApplyError(null);
+    setActionError(null);
+    setApplyDialogOpen(true);
+  }
+
+  function jumpToSection(section: string): void {
+    if (typeof document === "undefined") return;
+    document.getElementById(section)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 
   if (!scopeValid) {
     return (
-      <WorkspaceStatus
+      <ScopeStatus
         organizationId={organizationId}
         eventId={eventId}
         message="Organization and event scope are required."
@@ -835,468 +673,690 @@ export function RemixWorkspace({ organizationId, eventId, api: apiOverride }: Re
       />
     );
   }
-  if (loading) {
+  if (capabilityUnavailable) {
     return (
-      <WorkspaceStatus
+      <CapabilityUnavailable
         organizationId={organizationId}
         eventId={eventId}
-        message="Loading event-scoped sessions, speakers, and remix candidates…"
+        reason={capabilityMessage}
       />
-    );
-  }
-  if (error !== null && records.length === 0 && !testMode) {
-    return (
-      <WorkspaceStatus organizationId={organizationId} eventId={eventId} message={error} error />
     );
   }
 
   return (
-    <main
-      style={{ maxWidth: 1200, margin: "0 auto", padding: "1.5rem 1rem 4rem" }}
-      id="remix-workspace"
-    >
-      <a href="#remix-content" style={{ position: "absolute", left: -10000, top: "auto" }}>
+    <main className={styles.workspace} id="remix-workspace">
+      <a className={styles.skipLink} href="#remix-choose">
         Skip to remix workspace content
       </a>
-      <header style={{ borderBottom: "1px solid #d6dbe3", paddingBlockEnd: "1.25rem" }}>
-        <p style={mutedStyle}>
+      <header className={styles.header}>
+        <p className={styles.eyebrow}>
           Organization {organizationId} · Event {eventId}
         </p>
-        <h1>Human-applied content remix</h1>
+        <h1>Human-governed content remix</h1>
         <p>
           Prepare private session or speaker copy with an advisory provider, compare it to the
           source, and apply only the fields an authorized human approves.
         </p>
       </header>
 
-      <aside
-        style={{ ...panelStyle, borderColor: "#9bb7d4", background: "#f4f8fc" }}
-        role="note"
-        aria-labelledby="remix-authority-title"
-      >
-        <h2 id="remix-authority-title">Candidates are private until a human applies them</h2>
-        <p>
+      <Alert className={styles.authorityAlert}>
+        <AlertTitle>Candidates are private until a human applies them</AlertTitle>
+        <AlertDescription>
           AI-generated candidates cannot affect public content, published sessions, or speaker
-          profiles. They remain private workspace data until a human organizer reviews the
-          source-versus-candidate comparison, confirms the allowed fields, and applies the change.
-        </p>
-        <p style={mutedStyle}>
-          AI is advisory; it cannot apply, publish, reject, or decide content on behalf of a human.
-        </p>
-      </aside>
+          profiles. The provider is advisory: it cannot apply, publish, reject, or decide content on
+          behalf of a human organizer. Only an authorized human organizer can apply a reviewed
+          candidate.
+        </AlertDescription>
+      </Alert>
 
-      <div id="remix-content" tabIndex={-1}>
-        <section style={panelStyle} aria-labelledby="source-heading">
-          <h2 id="source-heading">1. Choose event content</h2>
-          <p style={mutedStyle}>
-            Both organization and event scope are enforced by every request. Select one or more
-            records from this event only.
-          </p>
-          <div style={gridStyle}>
-            <label>
-              Source type
-              <select
-                id="remix-source-type"
-                value={sourceType}
-                onChange={(event) => setSourceType(event.currentTarget.value as RemixSourceType)}
-              >
-                <option value="session">Sessions</option>
-                <option value="speaker">Speakers</option>
-              </select>
-            </label>
-            <label>
-              Search sessions or speakers
-              <input
-                id="remix-record-search"
-                type="search"
-                value={search}
-                onChange={(event) => setSearch(event.currentTarget.value)}
-                placeholder="Title, biography, or id"
-              />
-            </label>
-            {sourceType === "session" ? (
-              <>
-                <label>
-                  Filter by tag
-                  <input
-                    id="remix-tag-filter"
-                    value={tagFilter}
-                    onChange={(event) => setTagFilter(event.currentTarget.value)}
-                    placeholder="design, operations"
-                    aria-describedby="remix-filter-help"
-                  />
-                </label>
-                <label>
-                  Filter by track
-                  <input
-                    id="remix-track-filter"
-                    value={trackFilter}
-                    onChange={(event) => setTrackFilter(event.currentTarget.value)}
-                    placeholder="Civic technology"
-                    aria-describedby="remix-filter-help"
-                  />
-                </label>
-              </>
-            ) : null}
-          </div>
-          <p id="remix-filter-help" style={mutedStyle}>
-            Comma-separated filters match every requested tag or track.
-          </p>
-          <fieldset>
-            <legend>
-              {sourceType === "session" ? "Sessions in this event" : "Speakers in this event"}
-            </legend>
-            {visibleRecords.length === 0 ? (
-              <p role="status">No {sourceType} records match the current filters.</p>
-            ) : (
-              <ul>
-                {visibleRecords.map((record) => {
-                  const label = record.kind === "session" ? record.title : record.biography;
-                  return (
-                    <li key={record.id}>
-                      <label>
-                        <input
-                          type="checkbox"
-                          checked={selectedSourceIds.includes(record.id)}
-                          onChange={() => toggleSource(record.id)}
-                        />
-                        <strong>{label}</strong>{" "}
-                        <span style={mutedStyle}>
-                          ({record.id}, revision {record.revision})
-                        </span>
-                      </label>
-                      {record.kind === "session" ? (
-                        <span
-                          style={{ ...mutedStyle, display: "block", marginInlineStart: "1.5rem" }}
-                        >
-                          {(record.tags ?? []).join(", ") || "No tags"} ·{" "}
-                          {(record.tracks ?? []).join(", ") || "No tracks"}
-                        </span>
-                      ) : null}
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </fieldset>
-        </section>
+      <nav className={styles.sectionNav} aria-label="Remix workspace sections">
+        <a href="#remix-choose">Choose content</a>
+        <a href="#remix-instructions">Instructions</a>
+        <a href="#remix-review">Review</a>
+        <a href="#remix-audit">Audit</a>
+      </nav>
+      <div className={styles.mobileSectionSwitcher}>
+        <Label htmlFor="remix-section-switcher">Jump to section</Label>
+        <select
+          id="remix-section-switcher"
+          defaultValue="remix-choose"
+          onChange={(event) => jumpToSection(event.currentTarget.value)}
+        >
+          <option value="remix-choose">Choose content</option>
+          <option value="remix-instructions">Instructions</option>
+          <option value="remix-review">Review</option>
+          <option value="remix-audit">Audit</option>
+        </select>
+      </div>
 
-        <section style={panelStyle} aria-labelledby="instruction-heading">
-          <h2 id="instruction-heading">2. Set tone and guidance</h2>
-          <p style={mutedStyle}>
-            The provider receives only the selected records and requested fields. Keep instructions
-            factual and review the result.
-          </p>
-          <form onSubmit={(event) => void generate(event)}>
-            <div style={gridStyle}>
-              <label>
-                Tone <span aria-hidden="true">*</span>
-                <input
-                  id="remix-tone"
-                  required
-                  maxLength={120}
-                  value={tone}
-                  onChange={(event) => setTone(event.currentTarget.value)}
-                  aria-describedby="remix-tone-help"
+      <div className={styles.content} id="remix-content" tabIndex={-1}>
+        <Card id="remix-choose">
+          <CardHeader>
+            <Badge variant="outline">1 · Choose content</Badge>
+            <h2 data-slot="card-title" className="font-heading text-base leading-snug font-medium">
+              Choose content
+            </h2>
+            <CardDescription>
+              Choose event content from sessions or speakers in this event only. Browse filters
+              affect the list, not source revision truth.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className={styles.stack}>
+            <div className={styles.formGrid}>
+              <div className={styles.fieldLabel}>
+                <Label htmlFor="remix-source-type">Source type</Label>
+                <Select
+                  value={sourceType}
+                  onValueChange={(value) => setSourceType(value as RemixSourceType)}
+                >
+                  <SelectTrigger
+                    id="remix-source-type"
+                    className={styles.selectTrigger}
+                    aria-label="Source type"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="session">Sessions</SelectItem>
+                    <SelectItem value="speaker">Speakers</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className={styles.fieldLabel}>
+                <Label htmlFor="remix-record-search">Search sessions or speakers</Label>
+                <Input
+                  id="remix-record-search"
+                  type="search"
+                  value={search}
+                  onChange={(event) => setSearch(event.currentTarget.value)}
+                  placeholder="Title, biography, or id"
                 />
-                <span id="remix-tone-help" style={mutedStyle}>
-                  Up to 120 characters.
-                </span>
-              </label>
-              <label>
-                Guidance
-                <textarea
-                  id="remix-guidance"
-                  maxLength={2000}
-                  rows={4}
-                  value={guidance}
-                  onChange={(event) => setGuidance(event.currentTarget.value)}
-                  aria-describedby="remix-guidance-help"
-                />
-                <span id="remix-guidance-help" style={mutedStyle}>
-                  Optional, up to 2,000 characters.
-                </span>
-              </label>
-            </div>
-            <fieldset>
-              <legend>Fields the provider may change</legend>
-              <p style={mutedStyle}>
-                Only these event content fields can be returned or applied; omitted fields remain
-                unchanged.
-              </p>
-              <div style={actionRowStyle}>
-                {availableFields.map((field) => (
-                  <label key={field}>
-                    <input
-                      type="checkbox"
-                      checked={fields.includes(field)}
-                      onChange={() => toggleField(field)}
+              </div>
+              {sourceType === "session" ? (
+                <>
+                  <div className={styles.fieldLabel}>
+                    <Label htmlFor="remix-tag-filter">Filter by tag</Label>
+                    <Input
+                      id="remix-tag-filter"
+                      value={tagFilter}
+                      onChange={(event) => setTagFilter(event.currentTarget.value)}
+                      placeholder="design, operations"
                     />
-                    {fieldLabels[field]}
-                  </label>
-                ))}
-              </div>
-            </fieldset>
-            {actionError ? (
-              <p style={errorStyle} role="alert">
-                {actionError}
-              </p>
-            ) : null}
-            {actionMessage ? (
-              <p role="status" aria-live="polite">
-                {actionMessage}
-              </p>
-            ) : null}
-            <button type="submit" disabled={busyAction !== null}>
-              {busyAction === "generate"
-                ? "Generating private candidates…"
-                : "Generate private candidates"}
-            </button>
-          </form>
-        </section>
-
-        <section style={panelStyle} aria-labelledby="candidate-heading">
-          <div style={actionRowStyle}>
-            <div>
-              <h2 id="candidate-heading">3. Review candidate comparison</h2>
-              <p style={mutedStyle}>
-                A candidate is a private proposal, not a publication. Stale candidates cannot be
-                applied.
-              </p>
-            </div>
-            <label>
-              Filter candidates
-              <select
-                id="remix-candidate-filter"
-                value={candidateFilter}
-                onChange={(event) =>
-                  setCandidateFilter(event.currentTarget.value as RemixCandidate["status"] | "all")
-                }
-              >
-                <option value="all">All statuses</option>
-                <option value="pending">Pending</option>
-                <option value="stale">Stale</option>
-                <option value="rejected">Rejected</option>
-                <option value="applied">Applied</option>
-              </select>
-            </label>
-          </div>
-          {visibleCandidates.length === 0 ? (
-            <p role="status">
-              No candidates match this filter. Generate a private candidate above.
-            </p>
-          ) : (
-            <ul aria-label="Remix candidates">
-              {visibleCandidates.map((candidate) => {
-                const stale =
-                  candidate.status === "stale" ||
-                  (candidateSource(candidate, records)?.revision !== undefined &&
-                    candidateSource(candidate, records)?.revision !== candidate.sourceRevision);
-                return (
-                  <li key={candidate.id} style={{ marginBlock: "0.5rem" }}>
-                    <button
-                      type="button"
-                      aria-pressed={selectedCandidateId === candidate.id}
-                      onClick={() => selectCandidate(candidate.id)}
-                    >
-                      {candidate.sourceType} · {candidate.sourceId} · generation{" "}
-                      {candidate.generation} · {candidateStatusLabel(candidate)}
-                      {stale ? " · source changed" : ""}
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </section>
-
-        {selectedCandidate ? (
-          <section style={panelStyle} aria-labelledby="comparison-heading">
-            <div style={actionRowStyle}>
-              <div>
-                <h2 id="comparison-heading">Source versus candidate</h2>
-                <p style={mutedStyle}>
-                  {selectedCandidate.sourceType} {selectedCandidate.sourceId} · source revision{" "}
-                  {selectedCandidate.sourceRevision} · candidate version {selectedCandidate.version}
-                </p>
-              </div>
-              <span>{candidateStatusLabel(selectedCandidate)}</span>
-            </div>
-            {staleCandidate ? (
-              <p style={errorStyle} role="alert">
-                This candidate is stale because the source revision changed or was removed. Apply is
-                disabled; regenerate against the current source.
-              </p>
-            ) : null}
-            <table>
-              <caption>Requested field comparison and human edits</caption>
-              <thead>
-                <tr>
-                  <th scope="col">Field</th>
-                  <th scope="col">Original source</th>
-                  <th scope="col">Candidate and human edit</th>
-                </tr>
-              </thead>
-              <tbody>
-                {selectedCandidate.fields.map((field) => (
-                  <tr key={field}>
-                    <th scope="row">{fieldLabels[field]}</th>
-                    <td>{displayValue(valueForField(selectedCandidate.original, field))}</td>
-                    <td>
-                      {selectedCandidate.status === "pending" && !staleCandidate ? (
-                        field === "tags" || field === "tracks" ? (
-                          <input
-                            aria-label={`${fieldLabels[field]} candidate value`}
-                            value={
-                              draftContent[field] ??
-                              inputValue(valueForField(selectedCandidate.candidate, field))
-                            }
-                            onChange={(event) => {
-                              const value = event.currentTarget.value;
-                              setDraftContent((current) => ({
-                                ...current,
-                                [field]: value,
-                              }));
-                            }}
-                          />
-                        ) : (
-                          <textarea
-                            aria-label={`${fieldLabels[field]} candidate value`}
-                            rows={field === "description" || field === "biography" ? 5 : 2}
-                            value={
-                              draftContent[field] ??
-                              inputValue(valueForField(selectedCandidate.candidate, field))
-                            }
-                            onChange={(event) => {
-                              const value = event.currentTarget.value;
-                              setDraftContent((current) => ({
-                                ...current,
-                                [field]: value,
-                              }));
-                            }}
-                          />
-                        )
-                      ) : (
-                        displayValue(valueForField(selectedCandidate.candidate, field))
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div style={panelStyle}>
-              <h3>Change summary</h3>
-              <p>{selectedCandidate.changeSummary}</p>
-              <p style={mutedStyle}>
-                Changed fields:{" "}
-                {selectedCandidate.changedFields.map((field) => fieldLabels[field]).join(", ") ||
-                  "None"}
-              </p>
-              {selectedCandidate.parentCandidateId ? (
-                <p>
-                  Regeneration lineage: generation {selectedCandidate.generation} · parent candidate{" "}
-                  {selectedCandidate.parentCandidateId}.
-                </p>
+                  </div>
+                  <div className={styles.fieldLabel}>
+                    <Label htmlFor="remix-track-filter">Filter by track</Label>
+                    <Input
+                      id="remix-track-filter"
+                      value={trackFilter}
+                      onChange={(event) => setTrackFilter(event.currentTarget.value)}
+                      placeholder="Civic technology"
+                    />
+                  </div>
+                </>
               ) : null}
             </div>
-            <details>
-              <summary>Provider provenance</summary>
-              <dl>
-                <div>
-                  <dt>Provider</dt>
-                  <dd>{selectedCandidate.provenance.provider}</dd>
-                </div>
-                <div>
-                  <dt>Model</dt>
-                  <dd>{selectedCandidate.provenance.model}</dd>
-                </div>
-                <div>
-                  <dt>Prompt version</dt>
-                  <dd>{selectedCandidate.provenance.promptVersion}</dd>
-                </div>
-                <div>
-                  <dt>Generated</dt>
-                  <dd>{formatTimestamp(selectedCandidate.provenance.generatedAt)}</dd>
-                </div>
-                {selectedCandidate.provenance.requestId ? (
-                  <div>
-                    <dt>Request</dt>
-                    <dd>{selectedCandidate.provenance.requestId}</dd>
-                  </div>
-                ) : null}
-              </dl>
-            </details>
-            <div style={{ ...actionRowStyle, marginBlockStart: "1rem" }}>
-              <button
-                type="button"
-                onClick={() => void regenerate()}
-                disabled={busyAction !== null || selectedCandidate.status === "applied"}
-              >
-                {busyAction === "regenerate" ? "Regenerating…" : "Regenerate candidate"}
-              </button>
-              <button
-                type="button"
-                onClick={() => void reject()}
-                disabled={
-                  busyAction !== null ||
-                  selectedCandidate.status === "applied" ||
-                  selectedCandidate.status === "rejected"
-                }
-              >
-                {busyAction === "reject" ? "Rejecting…" : "Reject candidate"}
-              </button>
-            </div>
-            <fieldset style={{ marginBlockStart: "1rem" }}>
-              <legend>Human apply confirmation</legend>
-              <label>
-                <input
-                  id="remix-human-confirmation"
-                  type="checkbox"
-                  checked={humanConfirmed}
-                  onChange={(event) => setHumanConfirmed(event.currentTarget.checked)}
-                  disabled={selectedCandidate.status !== "pending" || staleCandidate}
-                />
-                I reviewed the source, candidate, provenance, and change summary. Apply only these
-                allowlisted fields to this event.
-              </label>
-              <p style={mutedStyle}>
-                Only an authorized human organizer can apply. This action writes an auditable
-                content revision; it does not happen during generation.
-              </p>
-              <button type="button" onClick={() => void apply()} disabled={!canApply}>
-                {busyAction === "apply"
-                  ? "Applying to event content…"
-                  : "Apply reviewed candidate to event content"}
-              </button>
+            <p className={styles.muted}>
+              Comma-separated filters match every requested tag or track.
+            </p>
+            {loading ? <p role="status">Loading sessions, speakers, and candidates…</p> : null}
+            {error !== null ? (
+              <Alert variant="destructive">
+                <AlertTitle>Workspace data unavailable</AlertTitle>
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            ) : null}
+            <fieldset className={styles.sourceList}>
+              <legend>
+                {sourceType === "session" ? "Sessions in this event" : "Speakers in this event"}
+              </legend>
+              {visibleRecords.length === 0 ? (
+                <p role="status">No {sourceType} records match the current filters.</p>
+              ) : (
+                <ul>
+                  {visibleRecords.map((record) => {
+                    const label = record.kind === "session" ? record.title : record.biography;
+                    return (
+                      <li key={record.id} className={styles.sourceItem}>
+                        <Label
+                          className={styles.checkboxLabel}
+                          htmlFor={`remix-source-${record.id}`}
+                        >
+                          <Checkbox
+                            id={`remix-source-${record.id}`}
+                            className={styles.checkboxControl}
+                            checked={selectedSourceIds.includes(record.id)}
+                            onCheckedChange={(checked) => {
+                              if (checked === true || checked === false) toggleSource(record.id);
+                            }}
+                          />
+                          <span>
+                            <strong>{label}</strong>{" "}
+                            <span className={styles.muted}>
+                              ({record.id}, revision {record.revision})
+                            </span>
+                          </span>
+                        </Label>
+                        {record.kind === "session" ? (
+                          <span className={styles.sourceMeta}>
+                            {(record.tags ?? []).join(", ") || "No tags"} ·{" "}
+                            {(record.tracks ?? []).join(", ") || "No tracks"}
+                          </span>
+                        ) : null}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
             </fieldset>
-          </section>
-        ) : null}
+          </CardContent>
+        </Card>
 
-        <section style={panelStyle} aria-labelledby="audit-heading">
-          <h2 id="audit-heading">Human audit trail</h2>
-          <p style={mutedStyle}>
-            Generation, regeneration, stale-source detection, rejection, and application are
-            recorded for this organization and event.
-          </p>
-          {audit.length === 0 ? (
-            <p>No remix audit entries yet.</p>
-          ) : (
-            <ol>
-              {audit.map((entry) => (
-                <li key={entry.id}>
-                  <strong>{auditActionLabel(entry.action)}</strong> · candidate {entry.candidateId}{" "}
-                  · {formatTimestamp(entry.createdAt)} · actor {entry.actorId}
-                </li>
-              ))}
-            </ol>
-          )}
-        </section>
-        {error !== null ? (
-          <p style={errorStyle} role="alert">
-            {error}
-          </p>
-        ) : null}
+        <Card id="remix-instructions">
+          <CardHeader>
+            <Badge variant="outline">2 · Instructions</Badge>
+            <h2 data-slot="card-title" className="font-heading text-base leading-snug font-medium">
+              Instructions
+            </h2>
+            <CardDescription>
+              The provider receives only selected records and requested fields. Review every private
+              result before any human apply.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form className={styles.stack} onSubmit={(event) => void generate(event)}>
+              <div className={styles.formGrid}>
+                <div className={styles.fieldLabel}>
+                  <Label htmlFor="remix-tone">
+                    Tone <span aria-hidden="true">*</span>
+                  </Label>
+                  <Input
+                    id="remix-tone"
+                    required
+                    maxLength={120}
+                    value={tone}
+                    onChange={(event) => setTone(event.currentTarget.value)}
+                  />
+                  <span className={styles.muted}>Up to 120 characters.</span>
+                </div>
+                <div className={styles.fieldLabel}>
+                  <Label htmlFor="remix-guidance">Guidance</Label>
+                  <textarea
+                    id="remix-guidance"
+                    className={styles.textarea}
+                    maxLength={2000}
+                    rows={4}
+                    value={guidance}
+                    onChange={(event) => setGuidance(event.currentTarget.value)}
+                  />
+                  <span className={styles.muted}>Optional, up to 2,000 characters.</span>
+                </div>
+              </div>
+              <fieldset>
+                <legend>Fields the provider may change</legend>
+                <p className={styles.muted}>
+                  Only these event content fields can be returned or applied; omitted fields remain
+                  unchanged.
+                </p>
+                <div className={styles.checkboxGroup}>
+                  {availableFields.map((field) => (
+                    <Label
+                      className={styles.checkboxLabel}
+                      htmlFor={`remix-field-${field}`}
+                      key={field}
+                    >
+                      <Checkbox
+                        id={`remix-field-${field}`}
+                        className={styles.checkboxControl}
+                        checked={fields.includes(field)}
+                        onCheckedChange={(checked) => {
+                          if (checked === true || checked === false) toggleField(field);
+                        }}
+                      />
+                      {fieldLabels[field]}
+                    </Label>
+                  ))}
+                </div>
+              </fieldset>
+              {actionError ? (
+                <Alert variant="destructive">
+                  <AlertTitle>Action not completed</AlertTitle>
+                  <AlertDescription>{actionError}</AlertDescription>
+                </Alert>
+              ) : null}
+              {actionMessage ? <p role="status">{actionMessage}</p> : null}
+              <Button type="submit" disabled={busyAction !== null || loading}>
+                {busyAction === "generate"
+                  ? "Generating private candidates…"
+                  : "Generate private candidates"}
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+
+        <Card id="remix-review">
+          <CardHeader>
+            <div className={styles.headerRow}>
+              <div>
+                <Badge variant="outline">3 · Review</Badge>
+                <h2
+                  data-slot="card-title"
+                  className="font-heading text-base leading-snug font-medium"
+                >
+                  Review
+                </h2>
+              </div>
+              <div className={styles.filterLabel}>
+                <Label htmlFor="remix-candidate-filter">Filter candidates</Label>
+                <Select
+                  value={candidateFilter}
+                  onValueChange={(value) =>
+                    setCandidateFilter(value as RemixCandidate["status"] | "all")
+                  }
+                >
+                  <SelectTrigger
+                    id="remix-candidate-filter"
+                    className={styles.selectTrigger}
+                    aria-label="Filter candidates"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All statuses</SelectItem>
+                    <SelectItem value="pending">Pending</SelectItem>
+                    <SelectItem value="stale">Stale</SelectItem>
+                    <SelectItem value="rejected">Rejected</SelectItem>
+                    <SelectItem value="applied">Applied</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <CardDescription>
+              A candidate is a private proposal, not a publication. Stale candidates cannot be
+              applied. The source versus candidate comparison, change summary, and provider
+              provenance remain visible for human review.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className={styles.stack}>
+            {visibleCandidates.length === 0 ? (
+              <p role="status">
+                No candidates match this filter. Generate a private candidate above.
+              </p>
+            ) : (
+              <Table>
+                <TableCaption>Private remix candidates available for human review</TableCaption>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Candidate</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Action</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {visibleCandidates.map((candidate) => {
+                    const stale = candidateIsStale(candidate, candidateSource(candidate, records));
+                    return (
+                      <TableRow
+                        key={candidate.id}
+                        data-state={selectedCandidateId === candidate.id ? "selected" : undefined}
+                      >
+                        <TableCell>
+                          <strong>
+                            {candidate.sourceType} · {candidate.sourceId}
+                          </strong>
+                          <br />
+                          <span className={styles.muted}>Generation {candidate.generation}</span>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={stale ? "destructive" : "outline"}>
+                            {stale
+                              ? "Stale — regenerate before applying"
+                              : candidateStatusLabel(candidate)}
+                          </Badge>
+                          {stale && candidate.status !== "stale" ? (
+                            <span className={styles.muted}> Source changed</span>
+                          ) : null}
+                        </TableCell>
+                        <TableCell>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            aria-pressed={selectedCandidateId === candidate.id}
+                            onClick={() => selectCandidate(candidate.id)}
+                          >
+                            {selectedCandidateId === candidate.id ? "Selected" : "Review candidate"}
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            )}
+
+            {selectedCandidate ? (
+              <Card className={styles.comparisonCard}>
+                <CardHeader>
+                  <div className={styles.headerRow}>
+                    <div>
+                      <CardTitle>Source versus candidate</CardTitle>
+                      <CardDescription>
+                        {selectedCandidate.sourceType} {selectedCandidate.sourceId} · source
+                        revision {selectedCandidate.sourceRevision} · candidate version{" "}
+                        {selectedCandidate.version}
+                      </CardDescription>
+                    </div>
+                    <Badge variant={staleCandidate ? "destructive" : "outline"}>
+                      {staleCandidate
+                        ? "Stale — regenerate before applying"
+                        : candidateStatusLabel(selectedCandidate)}
+                    </Badge>
+                  </div>
+                </CardHeader>
+                <CardContent className={styles.stack}>
+                  {staleCandidate ? (
+                    <Alert variant="destructive">
+                      <AlertTitle>Source revision requires a fresh candidate</AlertTitle>
+                      <AlertDescription>
+                        This candidate is stale because the source revision changed. Apply is
+                        disabled; regenerate against the current source.
+                      </AlertDescription>
+                    </Alert>
+                  ) : null}
+                  <Table className={styles.comparisonTable}>
+                    <TableCaption>
+                      Requested fields, source provenance, and human edits
+                    </TableCaption>
+                    <TableHeader className={styles.comparisonTableHeader}>
+                      <TableRow className={styles.comparisonTableRow}>
+                        <TableHead className={styles.comparisonTableHead}>Field</TableHead>
+                        <TableHead className={styles.comparisonTableHead}>
+                          Original source
+                        </TableHead>
+                        <TableHead className={styles.comparisonTableHead}>
+                          Candidate and human edit
+                        </TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {selectedCandidate.fields.map((field) => (
+                        <TableRow className={styles.comparisonTableRow} key={field}>
+                          <TableHead className={styles.comparisonTableHead} scope="row">
+                            {fieldLabels[field]}
+                          </TableHead>
+                          <TableCell
+                            className={styles.comparisonTableCell}
+                            data-label="Original source"
+                          >
+                            {displayValue(valueForField(selectedCandidate.original, field))}
+                          </TableCell>
+                          <TableCell
+                            className={styles.comparisonTableCell}
+                            data-label="Candidate and human edit"
+                          >
+                            {selectedCandidate.status === "pending" && !staleCandidate ? (
+                              field === "tags" || field === "tracks" ? (
+                                <Input
+                                  aria-label={`${fieldLabels[field]} candidate value`}
+                                  value={
+                                    draftContent[field] ??
+                                    inputValue(valueForField(selectedCandidate.candidate, field))
+                                  }
+                                  onChange={(event) =>
+                                    setDraftContent((current) => ({
+                                      ...current,
+                                      [field]: event.currentTarget.value,
+                                    }))
+                                  }
+                                />
+                              ) : field === "description" || field === "biography" ? (
+                                <textarea
+                                  className={styles.textarea}
+                                  aria-label={`${fieldLabels[field]} candidate value`}
+                                  rows={5}
+                                  value={
+                                    draftContent[field] ??
+                                    inputValue(valueForField(selectedCandidate.candidate, field))
+                                  }
+                                  onChange={(event) =>
+                                    setDraftContent((current) => ({
+                                      ...current,
+                                      [field]: event.currentTarget.value,
+                                    }))
+                                  }
+                                />
+                              ) : (
+                                <Input
+                                  aria-label={`${fieldLabels[field]} candidate value`}
+                                  value={
+                                    draftContent[field] ??
+                                    inputValue(valueForField(selectedCandidate.candidate, field))
+                                  }
+                                  onChange={(event) =>
+                                    setDraftContent((current) => ({
+                                      ...current,
+                                      [field]: event.currentTarget.value,
+                                    }))
+                                  }
+                                />
+                              )
+                            ) : (
+                              displayValue(valueForField(selectedCandidate.candidate, field))
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                  <Card className={styles.summaryCard}>
+                    <CardHeader>
+                      <CardTitle>Change summary</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <p>{selectedCandidate.changeSummary}</p>
+                      <p className={styles.muted}>
+                        Changed fields:{" "}
+                        {selectedCandidate.changedFields
+                          .map((field) => fieldLabels[field])
+                          .join(", ") || "None"}
+                      </p>
+                      {selectedCandidate.parentCandidateId ? (
+                        <p>
+                          Regeneration lineage: generation {selectedCandidate.generation} · parent
+                          candidate {selectedCandidate.parentCandidateId}.
+                        </p>
+                      ) : null}
+                    </CardContent>
+                  </Card>
+                  <Collapsible defaultOpen>
+                    <CollapsibleTrigger asChild>
+                      <Button type="button" variant="ghost" size="sm">
+                        Provider provenance
+                      </Button>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent>
+                      <Provenance provenance={selectedCandidate.provenance} />
+                    </CollapsibleContent>
+                  </Collapsible>
+                  <div className={styles.actionRow}>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => void regenerate()}
+                      disabled={
+                        busyAction !== null ||
+                        loading ||
+                        selectedCandidate.status === "applied" ||
+                        api === null
+                      }
+                    >
+                      {busyAction === "regenerate" ? "Regenerating…" : "Regenerate candidate"}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      onClick={() => void reject()}
+                      disabled={
+                        busyAction !== null ||
+                        loading ||
+                        selectedCandidate.status === "applied" ||
+                        selectedCandidate.status === "rejected" ||
+                        api === null
+                      }
+                    >
+                      {busyAction === "reject" ? "Rejecting…" : "Reject candidate"}
+                    </Button>
+                  </div>
+                  <fieldset className={styles.confirmation}>
+                    <legend>Human apply confirmation</legend>
+                    <Label className={styles.checkboxLabel} htmlFor="remix-human-confirmation">
+                      <Checkbox
+                        id="remix-human-confirmation"
+                        className={styles.checkboxControl}
+                        checked={humanConfirmed}
+                        onCheckedChange={(checked) => setHumanConfirmed(checked === true)}
+                        disabled={
+                          loading ||
+                          selectedCandidate.status !== "pending" ||
+                          staleCandidate ||
+                          api === null
+                        }
+                      />
+                      I reviewed the source, candidate, provenance, and change summary. Apply only
+                      these allowlisted fields to this event.
+                    </Label>
+                    <p className={styles.muted}>
+                      Only an authorized human organizer can apply. This action writes an auditable
+                      content revision; it does not happen during generation.
+                    </p>
+                    <Button
+                      ref={applyButtonRef}
+                      type="button"
+                      onClick={openApplyDialog}
+                      disabled={!canApply}
+                    >
+                      Apply reviewed candidate to event content
+                    </Button>
+                  </fieldset>
+                </CardContent>
+              </Card>
+            ) : null}
+          </CardContent>
+        </Card>
+
+        <Card id="remix-audit">
+          <CardHeader>
+            <Badge variant="outline">4 · Audit</Badge>
+            <h2 data-slot="card-title" className="font-heading text-base leading-snug font-medium">
+              Audit
+            </h2>
+            <CardDescription>
+              Generation, regeneration, stale-source detection, rejection, and application are
+              recorded by the server for this organization and event.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Collapsible defaultOpen>
+              <CollapsibleTrigger asChild>
+                <Button type="button" variant="ghost" size="sm">
+                  Human audit trail
+                </Button>
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                {audit.length === 0 ? (
+                  <p>No remix audit entries yet.</p>
+                ) : (
+                  <Table>
+                    <TableCaption>Authoritative audit events</TableCaption>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Action</TableHead>
+                        <TableHead>Candidate</TableHead>
+                        <TableHead>When</TableHead>
+                        <TableHead>Actor</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {audit.map((entry) => (
+                        <TableRow key={entry.id}>
+                          <TableCell>{auditActionLabel(entry.action)}</TableCell>
+                          <TableCell>{entry.candidateId}</TableCell>
+                          <TableCell>{formatTimestamp(entry.createdAt)}</TableCell>
+                          <TableCell>{entry.actorId}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </CollapsibleContent>
+            </Collapsible>
+          </CardContent>
+        </Card>
       </div>
+
+      <AlertDialog open={applyDialogOpen} onOpenChange={setApplyDialogOpen}>
+        <AlertDialogContent
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            applyButtonRef.current?.focus();
+          }}
+        >
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirm human application</AlertDialogTitle>
+            <AlertDialogDescription>
+              This applies the reviewed allowlisted fields to event content and creates the server
+              audit record. It does not publish anything automatically.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {applyError !== null ? (
+            <Alert variant="destructive">
+              <AlertTitle>Apply failed</AlertTitle>
+              <AlertDescription>{applyError}</AlertDescription>
+            </Alert>
+          ) : null}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busyAction === "apply"}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={busyAction === "apply"}
+              onClick={(event) => {
+                event.preventDefault();
+                void commitApply();
+              }}
+            >
+              {busyAction === "apply" ? "Applying revision…" : "Confirm and apply revision"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </main>
+  );
+}
+
+function Provenance({ provenance }: Readonly<{ provenance: RemixProvenance }>) {
+  return (
+    <dl className={styles.provenance}>
+      <div>
+        <dt>Provider</dt>
+        <dd>{provenance.provider}</dd>
+      </div>
+      <div>
+        <dt>Model</dt>
+        <dd>{provenance.model}</dd>
+      </div>
+      <div>
+        <dt>Prompt version</dt>
+        <dd>{provenance.promptVersion}</dd>
+      </div>
+      <div>
+        <dt>Generated</dt>
+        <dd>{formatTimestamp(provenance.generatedAt)}</dd>
+      </div>
+      {provenance.requestId ? (
+        <div>
+          <dt>Request</dt>
+          <dd>{provenance.requestId}</dd>
+        </div>
+      ) : null}
+    </dl>
   );
 }

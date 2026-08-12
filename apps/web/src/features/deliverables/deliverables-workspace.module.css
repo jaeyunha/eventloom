@@ -1,0 +1,247 @@
+.workspace {
+  min-height: 100dvh;
+  background: var(--color-canvas, #f5f6f9);
+}
+
+.content {
+  width: min(100%, 96rem);
+  margin: 0 auto;
+  padding: clamp(1rem, 3vw, 2.5rem) clamp(1rem, 4vw, 3rem) 4rem;
+}
+
+.header {
+  position: sticky;
+  z-index: 10;
+  top: 0.75rem;
+  margin-bottom: 1rem;
+  background: var(--color-surface, #fff);
+}
+
+.eyebrow {
+  margin: 0;
+  color: var(--color-muted, #697181);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.lede {
+  max-width: 52rem;
+  margin: 0.45rem 0 0;
+  color: var(--color-muted, #697181);
+  line-height: 1.55;
+}
+
+.switcherWrap {
+  padding-top: 0;
+}
+
+.modeNav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: stretch;
+  border-top: 1px solid var(--color-border, #dfe2e8);
+  padding-top: 0.75rem;
+}
+
+.modeNav a,
+.mobileSwitcher a {
+  display: inline-flex;
+  gap: 0.35rem;
+  align-items: baseline;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--color-border, #dfe2e8);
+  border-radius: 0.5rem;
+  color: inherit;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.modeNav a[aria-current="page"] {
+  border-color: var(--color-primary, #5065e8);
+  background: color-mix(in srgb, var(--color-primary, #5065e8) 10%, transparent);
+}
+
+.modeNav span {
+  color: var(--color-muted, #697181);
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.mobileSwitcher {
+  display: none;
+}
+
+.mobileSwitcher summary {
+  cursor: pointer;
+  color: var(--color-muted, #697181);
+  font-weight: 700;
+}
+
+.mobileSwitcher nav {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.65rem;
+}
+
+.main {
+  display: grid;
+  gap: 1rem;
+  outline: none;
+}
+
+.section {
+  min-width: 0;
+}
+
+.contentSection {
+  display: grid;
+  gap: 0.9rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--color-border, #dfe2e8);
+}
+
+.contentSection > h2 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.stack {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.cluster {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+  gap: 0.8rem;
+}
+
+.field {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+  color: var(--color-foreground, #25272d);
+  font-size: 0.85rem;
+  font-weight: 650;
+}
+
+.field small,
+.field [data-slot="input"] + small {
+  font-weight: 400;
+}
+
+.fieldset {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.8rem;
+  border: 1px solid var(--color-border, #dfe2e8);
+  border-radius: 0.6rem;
+}
+
+.fieldset legend {
+  padding: 0 0.25rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.muted {
+  color: var(--color-muted, #697181);
+  line-height: 1.5;
+}
+
+.field small,
+.muted small,
+.tableWrap small {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 400;
+}
+
+.tableWrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.tableWrap table {
+  min-width: 58rem;
+}
+
+.tableWrap th,
+.tableWrap td {
+  vertical-align: top;
+}
+
+.tableWrap [data-slot="table-cell"] > [data-slot="button"] {
+  margin-top: 0.25rem;
+}
+
+.status {
+  min-height: 1.25rem;
+  color: var(--color-muted, #697181);
+}
+
+.danger {
+  border-color: var(--color-destructive, #b42318);
+}
+
+.dialogContent {
+  max-height: min(90dvh, 46rem);
+  overflow-y: auto;
+}
+
+.assetSheet {
+  width: min(100%, 48rem);
+  max-width: 48rem;
+  overflow-y: auto;
+}
+
+.skipLink {
+  position: fixed;
+  z-index: 30;
+  top: 0.5rem;
+  left: 0.5rem;
+  padding: 0.55rem 0.75rem;
+  border-radius: 0.4rem;
+  background: var(--color-foreground, #25272d);
+  color: white;
+  text-decoration: none;
+  transform: translateY(-200%);
+}
+
+.skipLink:focus {
+  transform: translateY(0);
+}
+
+@media (max-width: 48rem) {
+  .header {
+    position: static;
+  }
+
+  .modeNav {
+    display: none;
+  }
+
+  .mobileSwitcher {
+    display: block;
+  }
+
+  .assetSheet {
+    width: 100%;
+    max-width: none;
+  }
+}
+.assetScroll {
+  min-height: 0;
+  flex: 1;
+}

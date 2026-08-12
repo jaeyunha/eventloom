@@ -12,6 +12,8 @@ import {
   CardTitle,
 } from "../../components/ui/card";
 import { Progress } from "../../components/ui/progress";
+import { Checkbox } from "../../components/ui/checkbox";
+import { Field, FieldContent, FieldDescription, FieldLabel } from "../../components/ui/field";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import {
   activeVerifiedReviewers,
@@ -1190,6 +1192,49 @@ function formatAssignmentStatus(status: EvaluatorAssignment["assignmentStatus"])
   if (status === "abstained") return "Recused";
   return "Needs review";
 }
+type AssignmentReviewStatus = "needs-review" | "in-progress" | "submitted" | "recused";
+
+function assignmentReviewStatus(
+  status: EvaluatorAssignment["assignmentStatus"],
+): AssignmentReviewStatus {
+  if (status === "submitted") return "submitted";
+  if (status === "in_progress") return "in-progress";
+  if (status === "abstained") return "recused";
+  return "needs-review";
+}
+
+function AssignmentStatusBadge({
+  status,
+}: Readonly<{ status: EvaluatorAssignment["assignmentStatus"] }>) {
+  const normalized = assignmentReviewStatus(status);
+  const className =
+    normalized === "submitted"
+      ? styles.statusSubmitted
+      : normalized === "in-progress"
+        ? styles.statusInProgress
+        : normalized === "recused"
+          ? styles.statusRecused
+          : styles.statusNeedsReview;
+  return (
+    <Badge variant="outline" className={className}>
+      {formatAssignmentStatus(status)}
+    </Badge>
+  );
+}
+
+function DecisionStatusBadge({ status }: Readonly<{ status: DecisionStatus }>) {
+  const className =
+    status === "accepted"
+      ? styles.statusAccepted
+      : status === "waitlisted"
+        ? styles.statusWaitlisted
+        : styles.statusRejected;
+  return (
+    <Badge variant="outline" className={className}>
+      {formatDecisionStatus(status)}
+    </Badge>
+  );
+}
 
 function ProgressBar({ label, value }: Readonly<{ label: string; value: number }>) {
   const normalizedValue = normalizeCompletionPercent(value);
@@ -1664,15 +1709,17 @@ function OrganizerPlanCreation({
                 required
               />
             </div>
-            <label className={styles.checkboxLabel} htmlFor="create-plan-blind-review">
-              <input
+            <Field orientation="horizontal" className={styles.checkboxField}>
+              <Checkbox
                 id="create-plan-blind-review"
-                type="checkbox"
                 checked={blindReview}
-                onChange={(event) => setBlindReview(event.currentTarget.checked)}
+                onCheckedChange={(checked) => setBlindReview(checked === true)}
               />
-              Blind review
-            </label>
+              <FieldContent>
+                <FieldLabel htmlFor="create-plan-blind-review">Blind review</FieldLabel>
+                <FieldDescription>Hide submitter identity from reviewers.</FieldDescription>
+              </FieldContent>
+            </Field>
           </div>
           <div className={styles.summaryGrid}>
             <div className={styles.formField}>
@@ -2175,15 +2222,19 @@ function OrganizerAuthoring({
               }
             />
           </div>
-          <label className={styles.checkboxLabel} htmlFor="blind-review-setting">
-            <input
+          <Field orientation="horizontal" className={styles.checkboxField}>
+            <Checkbox
               id="blind-review-setting"
-              type="checkbox"
               checked={blindReview}
-              onChange={(event) => setBlindReview(event.currentTarget.checked)}
+              onCheckedChange={(checked) => setBlindReview(checked === true)}
             />
-            Blind review
-          </label>
+            <FieldContent>
+              <FieldLabel htmlFor="blind-review-setting">Blind review</FieldLabel>
+              <FieldDescription>
+                Keep identity fields outside the evaluator projection.
+              </FieldDescription>
+            </FieldContent>
+          </Field>
         </div>
         <div className={styles.summaryGrid}>
           <div className={styles.formField}>
@@ -2609,25 +2660,26 @@ function OrganizerAuthoring({
                         />
                       </div>
                     </div>
-                    <label
-                      className={styles.checkboxLabel}
-                      htmlFor={`${round.id}-criterion-${criterionIndex}-required`}
-                    >
-                      <input
+                    <Field orientation="horizontal" className={styles.checkboxField}>
+                      <Checkbox
                         id={`${round.id}-criterion-${criterionIndex}-required`}
                         aria-label={`${criterion.label} required`}
-                        type="checkbox"
                         checked={criterion.required}
-                        onChange={(event) => {
-                          const nextRequired = event.currentTarget.checked;
+                        onCheckedChange={(checked) => {
+                          const nextRequired = checked === true;
                           updateCriterion(roundIndex, criterionIndex, (current) => ({
                             ...current,
                             required: nextRequired,
                           }));
                         }}
                       />
-                      Required criterion
-                    </label>
+                      <FieldContent>
+                        <FieldLabel htmlFor={`${round.id}-criterion-${criterionIndex}-required`}>
+                          Required criterion
+                        </FieldLabel>
+                        <FieldDescription>Reviewers must complete this criterion.</FieldDescription>
+                      </FieldContent>
+                    </Field>
                   </div>
                 </fieldset>
               ))}
@@ -3211,9 +3263,11 @@ function OrganizerWorkspaceView({
                           <h3>{aggregate.title}</h3>
                         </div>
                         <span className={styles.decisionStatus}>
-                          {decision === undefined
-                            ? "Not decided"
-                            : formatDecisionStatus(decision.status)}
+                          {decision === undefined ? (
+                            "Not decided"
+                          ) : (
+                            <DecisionStatusBadge status={decision.status} />
+                          )}
                         </span>
                         <span className={styles.scorePill}>
                           {aggregate.countedScore} / {aggregate.possibleScore}
@@ -3354,13 +3408,21 @@ function ReviewerProgressDashboard({
               return (
                 <tr key={key}>
                   <td>
-                    <input
-                      type="checkbox"
-                      aria-label={`Select ${reviewerLabel(reviewer.reviewerId)} reminder`}
-                      checked={selected.has(key)}
-                      disabled={reviewer.outstanding === 0}
-                      onChange={() => toggle(reviewer)}
-                    />
+                    <Field orientation="horizontal" className={styles.tableCheckboxField}>
+                      <Checkbox
+                        id={`reminder-${key.replaceAll("\u0000", "-")}`}
+                        aria-label={`Select ${reviewerLabel(reviewer.reviewerId)} reminder`}
+                        checked={selected.has(key)}
+                        disabled={reviewer.outstanding === 0}
+                        onCheckedChange={() => toggle(reviewer)}
+                      />
+                      <FieldLabel
+                        htmlFor={`reminder-${key.replaceAll("\u0000", "-")}`}
+                        className={styles.srOnly}
+                      >
+                        Select {reviewerLabel(reviewer.reviewerId)} reminder
+                      </FieldLabel>
+                    </Field>
                   </td>
                   <th scope="row">{reviewerLabel(reviewer.reviewerId)}</th>
                   <td>{round?.name ?? "Round unavailable"}</td>
@@ -3414,12 +3476,6 @@ function ReviewerProgressDashboard({
       ) : null}
     </section>
   );
-}
-function reviewerAssignmentStatusLabel(status: ReviewPlanAssignment["status"]): string {
-  if (status === "in_progress") return "In progress";
-  if (status === "submitted") return "Submitted";
-  if (status === "abstained") return "Recused";
-  return "Assigned";
 }
 
 export function reviewerIdsForAssignmentTarget(
@@ -3525,7 +3581,11 @@ function ReviewerAssignmentList({
                       <strong>{reviewer}</strong>
                     </td>
                     <td>{round?.name ?? "Round unavailable"}</td>
-                    <td>{reviewerAssignmentStatusLabel(assignment.status)}</td>
+                    <td>
+                      <AssignmentStatusBadge
+                        status={assignment.status === "assigned" ? undefined : assignment.status}
+                      />
+                    </td>
                     <td>
                       {assignment.status === "abstained" ? (
                         <span className={styles.mutedLabel}>Protected conflict history</span>
@@ -3668,16 +3728,20 @@ function DecisionEditor({
             placeholder="Explain the human committee rationale."
           />
         </div>
-        <label className={styles.checkboxLabel} htmlFor={`${aggregate.id}-confirm`}>
-          <input
+        <Field orientation="horizontal" className={styles.checkboxField}>
+          <Checkbox
             id={`${aggregate.id}-confirm`}
-            type="checkbox"
             checked={confirmed}
-            onChange={(event) => setConfirmed(event.currentTarget.checked)}
+            onCheckedChange={(checked) => setConfirmed(checked === true)}
             required
           />
-          I confirm this is a human organizer decision, not an AI decision.
-        </label>
+          <FieldContent>
+            <FieldLabel htmlFor={`${aggregate.id}-confirm`}>
+              I confirm this is a human organizer decision, not an AI decision.
+            </FieldLabel>
+            <FieldDescription>This confirmation is required before saving.</FieldDescription>
+          </FieldContent>
+        </Field>
         {error ? (
           <p className={styles.formError} role="alert">
             {error}
@@ -3802,7 +3866,13 @@ function ReviewerQueueWorkspace({
           <span className={styles.mutedLabel}>{visibleEntries.length} assigned</span>
         </div>
         {visibleEntries.length === 0 ? (
-          <p role="status">No review assignments are currently available.</p>
+          <div className={styles.emptyQueue} role="status">
+            <h3>No assigned reviews yet</h3>
+            <p>
+              This queue is assignment-driven. An organizer must assign a submission before it
+              appears here.
+            </p>
+          </div>
         ) : (
           <div className={styles.decisionList}>
             {visibleEntries.map(({ assignment }, assignmentIndex) => {
@@ -3837,9 +3907,22 @@ function ReviewerQueueWorkspace({
                       <dt>Status</dt>
                       <dd>
                         {assignment.submittedAt !== null ||
+                        submittedAtById[assignment.id] !== undefined ? (
+                          <AssignmentStatusBadge status="submitted" />
+                        ) : (
+                          <AssignmentStatusBadge status={assignment.assignmentStatus} />
+                        )}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Progress</dt>
+                      <dd>
+                        {assignment.submittedAt !== null ||
                         submittedAtById[assignment.id] !== undefined
-                          ? "Submitted"
-                          : formatAssignmentStatus(assignment.assignmentStatus)}
+                          ? "Complete"
+                          : assignment.assignmentStatus === "in_progress"
+                            ? "Draft saved"
+                            : "Not started"}
                       </dd>
                     </div>
                   </dl>
@@ -3859,7 +3942,11 @@ function ReviewerQueueWorkspace({
                       ) || undefined
                     }
                   >
-                    {isSelected ? "Scorecard open" : "Open scorecard"}
+                    {isSelected
+                      ? "Scorecard open"
+                      : assignment.assignmentStatus === "in_progress"
+                        ? "Resume review"
+                        : "Start review"}
                   </Link>
                 </article>
               );
@@ -4511,10 +4598,7 @@ function EvaluatorWorkspace({
         <div className={styles.headerSide}>
           <ReviewNavigation mode="evaluator" />
           <section className={styles.reviewState} aria-label="Review state">
-            <span className={`${styles.statusBadge} ${styles.statusOpen}`}>
-              <span aria-hidden="true" />
-              {submitted ? "Submitted" : formatAssignmentStatus(assignment.assignmentStatus)}
-            </span>
+            <AssignmentStatusBadge status={submitted ? "submitted" : assignment.assignmentStatus} />
             <span className={styles.queuePosition}>
               {queuePosition
                 ? `Queue position ${queuePosition.position} of ${queuePosition.total}`
@@ -4577,7 +4661,9 @@ function EvaluatorWorkspace({
                 <div>
                   <dt>Reviewer state</dt>
                   <dd>
-                    {submitted ? "Submitted" : formatAssignmentStatus(assignment.assignmentStatus)}
+                    <AssignmentStatusBadge
+                      status={submitted ? "submitted" : assignment.assignmentStatus}
+                    />
                   </dd>
                 </div>
                 <div>

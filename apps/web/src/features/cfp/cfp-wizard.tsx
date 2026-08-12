@@ -76,6 +76,13 @@ export function getCfpCompletionHandoffStorageKey(
     organizationId,
   )}:${encodeURIComponent(eventId)}:${encodeURIComponent(formId)}`;
 }
+export function getCfpPortalHandoffHref(
+  path: "/portal" | "/portal/submissions",
+  eventId?: string,
+): string {
+  const normalizedEventId = eventId?.trim();
+  return normalizedEventId ? `${path}?event=${encodeURIComponent(normalizedEventId)}` : path;
+}
 
 export function canResumeCfpSubmission(
   status: CfpServerSubmission["status"],
@@ -3534,7 +3541,9 @@ export function CfpComplete({
           Check your speaker status dashboard for the submission and any tasks that need to be
           completed.
         </p>
-        <a href="/portal/submissions">View submission status dashboard</a>
+        <a href={getCfpPortalHandoffHref("/portal/submissions", completionIdentity?.eventId)}>
+          View submission status dashboard
+        </a>
         {completionIdentity?.canEdit ? (
           <Button className={styles.textButton} onClick={editSubmission} variant="ghost">
             Edit submission
@@ -3543,7 +3552,12 @@ export function CfpComplete({
         <Button className={styles.textButton} onClick={submitAnotherSession} variant="ghost">
           Submit another session
         </Button>
-        <Button className={styles.primaryButton} onClick={() => router.push("/portal")}>
+        <Button
+          className={styles.primaryButton}
+          onClick={() =>
+            router.push(getCfpPortalHandoffHref("/portal", completionIdentity?.eventId))
+          }
+        >
           Continue to portal →
         </Button>
       </div>

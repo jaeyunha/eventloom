@@ -8,7 +8,7 @@ import {
   type RemixContentRevision,
   type RemixFetcher,
 } from "./api";
-import { allowedContentForApply, RemixWorkspace } from "./remix-workspace";
+import { allowedContentForApply, candidateIsStale, RemixWorkspace } from "./remix-workspace";
 
 function response(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -91,6 +91,7 @@ describe("remix API", () => {
     });
     expect(calls[0]?.init?.credentials).toBe("include");
   });
+
   it("uses a same-origin API path when the base URL is empty", async () => {
     const calls: { url: string; init: RequestInit | undefined }[] = [];
     const generated = candidate();
@@ -216,31 +217,69 @@ describe("remix API", () => {
 });
 
 describe("remix workspace", () => {
-  it("renders source selection, comparison, provenance, and human-authority messaging", () => {
+  it("renders an honest unavailable state without fake candidates or audit", () => {
     const markup = renderToStaticMarkup(
       createElement(RemixWorkspace, { organizationId: "org-1", eventId: "event-1" }),
     );
 
-    expect(markup).toContain("Choose event content");
-    expect(markup).toContain("Source versus candidate");
-    expect(markup).toContain("Provider provenance");
-    expect(markup).toContain("Change summary");
+    expect(markup).toContain("Content remix is unavailable");
+    expect(markup).toContain("private draft suggestions");
+    expect(markup).toContain("never publishes automatically");
+    expect(markup).toContain("organizer reviews, edits, and applies an auditable revision");
+    expect(markup).toContain("Open Content remix directly");
+    expect(markup).toContain("No local candidate was created");
+    expect(markup).not.toContain("candidate-local");
+    expect(markup).not.toContain("Generate private candidates");
+  });
+
+  it("keeps an injected API workspace available without using local demo state", () => {
+    const api = {
+      listRecords: async () => [],
+      listCandidates: async () => [],
+      getCandidate: async () => candidate(),
+      listAudit: async () => [],
+      generate: async () => [candidate()],
+      regenerate: async () => candidate({ id: "candidate-2", generation: 2 }),
+      reject: async () => candidate({ status: "rejected" }),
+      apply: async () => ({
+        id: "revision-1",
+        tenantId: "tenant-1",
+        eventId: "event-1",
+        sourceType: "session" as const,
+        sourceId: "session-1",
+        sourceRevision: 4,
+        fields: ["title"] as const,
+        content: candidate().candidate,
+        candidateId: "candidate-1",
+        appliedBy: "organizer-1",
+        appliedAt: "2026-08-09T12:01:00.000Z",
+      }),
+    };
+    const markup = renderToStaticMarkup(
+      createElement(RemixWorkspace, { organizationId: "org-1", eventId: "event-1", api }),
+    );
+
+    expect(markup).toContain("Choose content");
+    expect(markup).toContain("Instructions");
+    expect(markup).toContain("Review");
+    expect(markup).toContain("Audit");
+    expect(markup).toMatch(/<h2[^>]*>Choose content<\/h2>/);
+    expect(markup).toMatch(/<h2[^>]*>Instructions<\/h2>/);
+    expect(markup).toMatch(/<h2[^>]*>Review<\/h2>/);
+    expect(markup).toMatch(/<h2[^>]*>Audit<\/h2>/);
     expect(markup).toContain("Candidates are private until a human applies them");
-    expect(markup).toContain("cannot affect public content");
-    expect(markup).toContain("Only an authorized human organizer can apply");
-    expect(markup).toContain("Apply reviewed candidate to event content");
+    expect(markup).not.toContain("Content remix is unavailable");
   });
 
-  it("keeps stale source candidates visibly non-applicable", () => {
-    const markup = renderToStaticMarkup(
-      createElement(RemixWorkspace, { organizationId: "org-1", eventId: "event-1" }),
-    );
-
-    expect(markup).toContain("candidate-stale");
-    expect(markup).toContain("Stale — regenerate before applying");
-    expect(markup).toContain("Stale candidates cannot be applied.");
+  it("does not infer stale state from a source hidden by browse filters", () => {
+    expect(candidateIsStale(candidate(), undefined)).toBe(false);
+    expect(candidateIsStale(candidate(), { revision: 4 })).toBe(false);
+    expect(candidateIsStale(candidate(), { revision: 5 })).toBe(true);
+    expect(candidateIsStale(candidate({ status: "stale" }), undefined)).toBe(true);
   });
+});
 
+describe("apply allowlist", () => {
   it("enforces the source-type field allowlist when preparing human apply content", () => {
     const session = candidate({ fields: ["title"] });
     expect(

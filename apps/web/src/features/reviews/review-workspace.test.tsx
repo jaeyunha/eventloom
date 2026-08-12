@@ -1389,7 +1389,7 @@ describe("review workspace", () => {
     expect(markup).toContain("Reviewer queue");
     expect(markup).toContain("Submissions to review");
     expect(markup).toContain("Designing resilient public services");
-    expect(markup).toContain("Open scorecard");
+    expect(markup).toContain("Start review");
     expect(markup).not.toContain("Create evaluation plan");
     expect(markup).not.toContain("/admin/");
     expect(pageMarkup).toContain("Reviewer queue");
@@ -1440,8 +1440,10 @@ describe("review workspace", () => {
 
     expect(scorecardMarkup).toContain("Assignment abstained");
     expect(scorecardMarkup).not.toContain("Score this submission");
-    expect(queueMarkup).toContain("No review assignments are currently available.");
-    expect(queueMarkup).not.toContain("Open scorecard");
+    expect(queueMarkup).toContain("No assigned reviews yet");
+    expect(queueMarkup).toContain("assignment-driven");
+    expect(queueMarkup).not.toContain("Return to organizer workspace");
+    expect(queueMarkup).not.toContain("Start review");
   });
   it("keeps organizer authoring controls safe when React defers event updaters", async () => {
     vi.resetModules();
@@ -1537,11 +1539,17 @@ describe("review workspace", () => {
           readonly selectedOptions?: readonly { readonly value: string }[];
         },
       ): void {
-        const onChange = (element.props as Record<string, unknown>).onChange;
-        if (typeof onChange !== "function") throw new Error("Expected an onChange handler.");
-        const event: { currentTarget: unknown | null } = { currentTarget: target };
-        (onChange as (event: unknown) => void)(event);
-        event.currentTarget = null;
+        const props = element.props as Record<string, unknown>;
+        const onCheckedChange = props.onCheckedChange;
+        if (typeof onCheckedChange === "function") {
+          (onCheckedChange as (checked: boolean) => void)(target.checked ?? false);
+        } else {
+          const onChange = props.onChange;
+          if (typeof onChange !== "function") throw new Error("Expected an onChange handler.");
+          const event: { currentTarget: unknown | null } = { currentTarget: target };
+          (onChange as (event: unknown) => void)(event);
+          event.currentTarget = null;
+        }
         for (const apply of pendingUpdates.splice(0)) apply();
       }
       function fireClick(element: ReactElement): void {

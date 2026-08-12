@@ -465,7 +465,7 @@
   font-weight: 700;
 }
 
-.sessionTime span {
+.workspace .sessionTime span {
   color: var(--color-subtle);
   font-size: 0.62rem;
   font-weight: 600;
@@ -495,7 +495,7 @@
   gap: 0.3rem;
 }
 
-.sessionMeta span,
+.workspace .sessionMeta span,
 .validatedBadge,
 .draftBadge,
 .historyCard li span {
@@ -670,7 +670,7 @@
   text-align: center;
 }
 
-.diffSummary span {
+.workspace .diffSummary span {
   display: grid;
 }
 
@@ -970,6 +970,29 @@
   gap: 0.25rem;
   flex-wrap: wrap;
 }
+.dayPager {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0 0 1rem;
+  padding: 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-muted);
+}
+
+.dayPagerControls {
+  display: flex;
+  min-width: 0;
+  gap: 0.25rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.dayPagerCurrent {
+  flex: 1;
+  margin: 0;
+  text-align: center;
+}
 
 .viewTab {
   min-height: 2.15rem;
@@ -1018,7 +1041,7 @@
   font-size: 0.98rem;
 }
 
-.viewGroupHeader span {
+.workspace .viewGroupHeader span {
   color: var(--color-muted);
   font-size: 0.72rem;
   font-weight: 650;
@@ -1086,7 +1109,7 @@
   font-size: 0.78rem;
 }
 
-.unscheduledItem span {
+.workspace .unscheduledItem span {
   overflow-wrap: anywhere;
   color: var(--color-muted);
   font-size: 0.72rem;
@@ -1198,6 +1221,20 @@
   .viewTablist {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .dayPagerControls {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dayPagerCurrent {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    width: 100%;
+  }
+
+  .dayPagerControls .secondaryButton {
+    width: 100%;
   }
 
   .viewTab {

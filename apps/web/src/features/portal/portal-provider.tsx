@@ -1,4 +1,5 @@
 "use client";
+import { useSearchParams } from "next/navigation";
 
 import {
   createContext,
@@ -63,7 +64,7 @@ const emptyWorkspace: PortalWorkspaceState = {
 
 interface PortalContextValue {
   eventId: string;
-  /** Kept for existing page links; context selection is never derived from this value. */
+  /** The selected event query is a display/navigation hint, never an authority source. */
   eventQuery: string;
   contexts: readonly PortalContext[];
   context: PortalContext | null;
@@ -243,40 +244,40 @@ export async function loadPortalStartup(
   }
 
   const normalizedConfiguredEventId = configuredEventId?.trim() || undefined;
-  const prefetchEventId = normalizedConfiguredEventId?.startsWith("portal:")
-    ? undefined
-    : normalizedConfiguredEventId;
-  const contextsRequest = invokePortalRequest(() => listPortalContexts(signal));
-  const prefetchedViewRequest =
-    prefetchEventId === undefined
-      ? undefined
-      : invokePortalRequest(() => api.getPortal(prefetchEventId, signal)).then(
-          (value) => ({ status: "fulfilled", value }) as const,
-          (reason) => ({ status: "rejected", reason }) as const,
-        );
-
-  const authorizedContexts = (await contextsRequest)
+  const authorizedContexts = (await invokePortalRequest(() => listPortalContexts(signal)))
     .map((candidate) => scopePortalContextToPrimaryParticipant(candidate))
     .filter((candidate) => candidate.primaryParticipantId !== undefined);
+  if (signal?.aborted) {
+    return { authorizedContexts, preferredContext: null };
+  }
+
   const preferredContext =
     authorizedContexts.find((candidate) => candidate.id === normalizedConfiguredEventId) ??
     authorizedContexts.find((candidate) => candidate.eventId === normalizedConfiguredEventId) ??
     authorizedContexts[0] ??
     null;
+  const shouldPrefetch =
+    normalizedConfiguredEventId !== undefined &&
+    !normalizedConfiguredEventId.startsWith("portal:") &&
+    preferredContext !== null;
+  if (!shouldPrefetch || signal?.aborted) {
+    return { authorizedContexts, preferredContext };
+  }
 
-  if (
-    signal?.aborted ||
-    prefetchEventId === undefined ||
-    preferredContext?.eventId !== prefetchEventId ||
-    prefetchedViewRequest === undefined
-  ) {
+  const prefetchedView = await invokePortalRequest(() =>
+    api.getPortal(preferredContext.eventId, signal),
+  ).then(
+    (value) => ({ status: "fulfilled", value }) as const,
+    (reason) => ({ status: "rejected", reason }) as const,
+  );
+  if (signal?.aborted) {
     return { authorizedContexts, preferredContext };
   }
 
   return {
     authorizedContexts,
     preferredContext,
-    prefetchedView: await prefetchedViewRequest,
+    prefetchedView,
   };
 }
 
@@ -504,7 +505,11 @@ export function PortalProvider({
   api: providedApi,
   apiBaseUrl: providedApiBaseUrl,
 }: Readonly<PortalProviderProps>) {
-  const configuredEventId = process.env.NEXT_PUBLIC_PORTAL_EVENT_ID?.trim();
+  const searchParams = useSearchParams();
+  const requestedEventId =
+    searchParams?.get("eventId")?.trim() || searchParams?.get("event")?.trim() || undefined;
+  const configuredEventId =
+    requestedEventId ?? process.env.NEXT_PUBLIC_PORTAL_EVENT_ID?.trim() ?? undefined;
   const apiBaseUrl = providedApiBaseUrl?.trim() ?? "";
   const api = useMemo<PortalApi>(
     () => createPortalProviderApi(providedApi, apiBaseUrl),
@@ -527,7 +532,7 @@ export function PortalProvider({
   const loadGeneration = useRef(0);
 
   const eventId = context?.eventId ?? "";
-  const eventQuery = "";
+  const eventQuery = eventId ? `?event=${encodeURIComponent(eventId)}` : "";
   const can = useCallback(
     (capability: PortalCapability) => capabilities.includes(capability),
     [capabilities],
@@ -1898,6 +1903,7 @@ export function PortalProvider({
       contexts,
       error,
       eventId,
+      eventQuery,
       downloadAsset,
       finalizeAsset,
       loadAssetComments,

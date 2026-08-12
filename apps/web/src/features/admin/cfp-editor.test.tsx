@@ -21,13 +21,23 @@ describe("CFP editor", () => {
     const markup = renderToStaticMarkup(createElement(CfpEditor, { eventId: "summit-2026" }));
 
     expect(markup).toContain("<h1>Configure your call for proposals</h1>");
-    expect(markup).toContain('<h2 id="event-details-heading">Event details</h2>');
+    expect(markup).toContain('id="event-details-heading">Event details</h2>');
     expect(markup).toContain('aria-label="Event and CFP configuration"');
     expect(markup).toContain('for="event-name"');
     expect(markup).toContain('for="event-timezone"');
     expect(markup).toContain("Open Sessionboard Summit 2026");
     expect(markup).toContain("America/Los_Angeles");
     expect(markup).toContain("2026-03-31");
+  });
+  it("renders one responsive section navigator and an explicit publish confirmation", () => {
+    const markup = renderToStaticMarkup(createElement(CfpEditor, { eventId: "summit-2026" }));
+
+    expect(markup).toContain('aria-label="CFP workspace sections"');
+    expect(markup).toContain('aria-current="location"');
+    expect(markup).toContain('aria-controls="public-preview"');
+    expect(markup).toContain('data-slot="collapsible"');
+    expect(markup).toContain("Current section");
+    expect(markup).toContain(">Publish form</button>");
   });
 
   it("exposes useful limits and applicant-facing configuration controls", () => {

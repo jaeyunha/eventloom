@@ -13,6 +13,119 @@ async function selectSearchable(
   await page.getByRole("option", { name: option, exact: true }).click();
   await expect(combobox).toHaveValue(option);
 }
+interface CfpPortalHandoffHarness {
+  selectedEventIds: string[];
+}
+
+async function installCfpPortalHandoffApi(
+  page: import("@playwright/test").Page,
+  session: E2eAuthSession,
+  submittedEventId: string,
+  submissionId: string,
+): Promise<CfpPortalHandoffHarness> {
+  const participantId = "participant-cfp-handoff";
+  const alternateEventId = "event-alternate-authorized";
+  const matchingContext = {
+    id: `portal:ai-engineer:${submittedEventId}`,
+    eventId: submittedEventId,
+    name: "Submitted CFP Event",
+    capabilities: ["profile-self"],
+    submissionIds: [submissionId],
+    participantIds: [participantId],
+    primaryParticipantId: participantId,
+  };
+  const alternateContext = {
+    id: `portal:ai-engineer:${alternateEventId}`,
+    eventId: alternateEventId,
+    name: "Alternate Authorized Event",
+    capabilities: ["profile-self"],
+    submissionIds: [],
+    participantIds: ["participant-alternate"],
+    primaryParticipantId: "participant-alternate",
+  };
+  const viewFor = (context: typeof matchingContext) => ({
+    submissions:
+      context.eventId === submittedEventId
+        ? [
+            {
+              id: submissionId,
+              eventId: submittedEventId,
+              title: "Submitted CFP session",
+              status: "submitted",
+              participantIds: [participantId],
+              updatedAt: "2026-08-08T13:05:00.000Z",
+            },
+          ]
+        : [],
+    profiles: [
+      {
+        id: `profile-${context.eventId}`,
+        eventId: context.eventId,
+        participantId: context.primaryParticipantId,
+        displayName: context.eventId === submittedEventId ? "Ada Speaker" : "Alternate Speaker",
+        biography: "",
+        version: 1,
+        updatedAt: "2026-08-08T13:05:00.000Z",
+      },
+    ],
+    tasks: [],
+    outstandingTaskCount: 0,
+    context,
+    capabilities: context.capabilities,
+  });
+  const selectedEventIds: string[] = [];
+  await page.route("**/api/speaker/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (request.method() === "OPTIONS") {
+      await route.fulfill({ status: 204 });
+      return;
+    }
+    if (request.headers().cookie?.includes(`${E2E_SESSION_COOKIE}=${session.token}`) !== true) {
+      await route.fulfill({
+        status: 401,
+        contentType: "application/json",
+        body: JSON.stringify({ error: { code: "AUTHENTICATION_REQUIRED" } }),
+      });
+      return;
+    }
+    if (request.method() === "GET" && url.pathname === "/api/speaker/portal/contexts") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ data: [alternateContext, matchingContext] }),
+      });
+      return;
+    }
+    const portalPath = url.pathname.match(/^\/api\/speaker\/events\/([^/]+)\/portal$/u);
+    if (request.method() === "GET" && portalPath) {
+      const eventId = decodeURIComponent(portalPath[1] ?? "");
+      selectedEventIds.push(eventId);
+      const context =
+        eventId === submittedEventId
+          ? matchingContext
+          : eventId === alternateEventId
+            ? alternateContext
+            : null;
+      if (!context) {
+        await route.fulfill({
+          status: 404,
+          contentType: "application/json",
+          body: JSON.stringify({ error: { code: "NOT_FOUND" } }),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ data: viewFor(context) }),
+      });
+      return;
+    }
+    await route.fallback();
+  });
+  return { selectedEventIds };
+}
 
 test("submitter completes the account-first CFP with two participants", async ({
   page,
@@ -22,6 +135,12 @@ test("submitter completes the account-first CFP with two participants", async ({
     eventId: "evaluator-2026",
     formId: "evaluator-2026-cfp",
   });
+  const portalHandoff = await installCfpPortalHandoffApi(
+    page,
+    authSession,
+    "evaluator-2026",
+    "submission-evaluator-2026-e2e",
+  );
   await page.goto("/cfp/evaluator-2026");
 
   await expect(
@@ -88,6 +207,42 @@ test("submitter completes the account-first CFP with two participants", async ({
     page.getByText("Thank you for contributing to the program.", { exact: true }),
   ).toBeVisible();
   await expect(page.getByRole("button", { name: "Continue to portal →" })).toBeVisible();
+  const statusDashboard = page.getByRole("link", { name: "View submission status dashboard" });
+  await expect(statusDashboard).toHaveAttribute("href", "/portal/submissions?event=evaluator-2026");
+  await statusDashboard.click();
+  await expect(page).toHaveURL(/\/portal\/submissions\?event=evaluator-2026$/);
+  await expect(page.getByRole("heading", { level: 1, name: "Sessions" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Account menu" })).toContainText(
+    "Submitted CFP Event",
+  );
+  expect(portalHandoff.selectedEventIds).toEqual(["evaluator-2026"]);
+
+  await page.goto("/portal/submissions?event=event-not-authorized");
+  await expect(page.getByRole("heading", { level: 1, name: "Sessions" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Account menu" })).toContainText(
+    "Alternate Authorized Event",
+  );
+  expect(portalHandoff.selectedEventIds).toEqual(["evaluator-2026", "event-alternate-authorized"]);
+  expect(portalHandoff.selectedEventIds).not.toContain("event-not-authorized");
+
+  await page.goto("/cfp/evaluator-2026/complete");
+  await expect(
+    page.getByRole("heading", {
+      level: 1,
+      name: "Submission received: Designing calm incident response",
+    }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Continue to portal →" }).click();
+  await expect(page).toHaveURL(/\/portal\?event=evaluator-2026$/);
+  await expect(page.getByRole("heading", { level: 1, name: /Welcome, Ada/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Account menu" })).toContainText(
+    "Submitted CFP Event",
+  );
+  expect(portalHandoff.selectedEventIds).toEqual([
+    "evaluator-2026",
+    "event-alternate-authorized",
+    "evaluator-2026",
+  ]);
 
   const browserState = await page.evaluate(() => ({
     pointer: window.localStorage.getItem(

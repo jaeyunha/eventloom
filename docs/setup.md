@@ -42,7 +42,7 @@ APP_ENV=local
 WEB_ORIGIN=http://127.0.0.1:3015
 NEXT_PUBLIC_APP_ENV=local
 NEXT_PUBLIC_APP_URL=http://127.0.0.1:3015
-NEXT_PUBLIC_ORGANIZATION_ID=ai-engineer
+NEXT_PUBLIC_ORGANIZATION_ID=local-organization
 API_URL=http://127.0.0.1:8787
 API_UPSTREAM_ORIGIN=http://127.0.0.1:8787
 BETTER_AUTH_URL=http://127.0.0.1:8787
@@ -71,6 +71,16 @@ The angle-bracket values are operator placeholders, not credentials to commit. A
 bunx wrangler d1 migrations apply DB --cwd apps/api --local
 make dev
 ```
+
+The deterministic local runtime has three isolated test personas. They share the local-only password `local`; none of these credentials exist in staging or production:
+
+| Persona | Email | Access |
+| --- | --- | --- |
+| Organizer | `organizer@local.test` | Organization administration and organizer evaluation work |
+| Reviewer | `reviewer@local.test` | Only the seeded assigned-review workspace |
+| Speaker | `speaker@local.test` | Only the seeded speaker portal and CFP applicant flow |
+
+Use organization `local-organization` and event `demo-event` when testing these fixtures. The local runtime does not grant a persona another role implicitly: reviewer and speaker sessions are denied organizer routes, and organizer membership does not grant the speaker portal.
 
 Check each service independently:
 

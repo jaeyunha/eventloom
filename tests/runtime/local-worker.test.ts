@@ -28,7 +28,14 @@ const organizerHeaders = {
   cookie: "better-auth.session_token=local-session",
   "x-request-id": traceId,
 };
-const speakerHeaders = organizerHeaders;
+const reviewerHeaders = {
+  cookie: "better-auth.session_token=local-reviewer-session",
+  "x-request-id": traceId,
+};
+const speakerHeaders = {
+  cookie: "better-auth.session_token=local-speaker-session",
+  "x-request-id": traceId,
+};
 
 function createBindingFakes(): Omit<RuntimeBindings, "APP_ENV" | "WEB_ORIGIN"> {
   const statement = {
@@ -141,6 +148,80 @@ describe.sequential("composed local Worker", () => {
     const error = await errorResponse(missing, 404, "NOT_FOUND");
     expect(error.error.message).not.toContain("not-a-route");
   });
+  it("issues distinct local sessions and enforces organizer, reviewer, and speaker boundaries", async () => {
+    const personas = [
+      {
+        email: "organizer@local.test",
+        cookie: organizerHeaders.cookie,
+        userId: "local-organizer",
+      },
+      {
+        email: "reviewer@local.test",
+        cookie: reviewerHeaders.cookie,
+        userId: "local-reviewer",
+      },
+      {
+        email: "speaker@local.test",
+        cookie: speakerHeaders.cookie,
+        userId: "local-speaker",
+      },
+    ] as const;
+
+    for (const persona of personas) {
+      const signIn = await runtimeRequest(
+        "/api/auth/sign-in/email",
+        jsonRequest("POST", { email: persona.email, password: "local" }),
+      );
+      expect(signIn.status).toBe(200);
+      expect(signIn.headers.get("set-cookie")).toContain(persona.cookie);
+      const session = await runtimeRequest("/api/auth/get-session", {
+        headers: { cookie: persona.cookie },
+      });
+      expect(session.status).toBe(200);
+      expect((await session.json()) as { user: { id: string } }).toMatchObject({
+        user: { id: persona.userId },
+      });
+    }
+
+    const invalid = await runtimeRequest(
+      "/api/auth/sign-in/email",
+      jsonRequest("POST", { email: "organizer@local.test", password: "wrong" }),
+    );
+    expect(invalid.status).toBe(401);
+
+    const organizerEvents = await runtimeRequest(
+      `/api/admin/organizations/${organizationId}/events`,
+      { headers: organizerHeaders },
+    );
+    expect(organizerEvents.status).toBe(200);
+
+    const reviewerEvents = await runtimeRequest(
+      `/api/admin/organizations/${organizationId}/events`,
+      { headers: reviewerHeaders },
+    );
+    expect(reviewerEvents.status).toBe(403);
+
+    const speakerEvents = await runtimeRequest(
+      `/api/admin/organizations/${organizationId}/events`,
+      { headers: speakerHeaders },
+    );
+    expect(speakerEvents.status).toBe(403);
+
+    const reviewerWorkspace = await runtimeRequest(
+      `/api/admin/evaluations/reviewer/workspace?eventId=${eventId}`,
+      { headers: reviewerHeaders },
+    );
+    expect(reviewerWorkspace.status).toBe(200);
+    const reviewerData = await jsonData<{ assignments: readonly { reviewerId: string }[] }>(
+      reviewerWorkspace,
+    );
+    expect(reviewerData.assignments).toHaveLength(1);
+
+    const speakerPortal = await runtimeRequest(`/api/speaker/events/${eventId}/portal`, {
+      headers: speakerHeaders,
+    });
+    expect(speakerPortal.status).toBe(200);
+  });
 
   it("serves seeded local organizer data for Events, People, CRM, and CFP review", async () => {
     const eventsResponse = await runtimeRequest(
@@ -161,7 +242,10 @@ describe.sequential("composed local Worker", () => {
     const members = await jsonData<Array<{ userId: string; role: string }>>(membersResponse);
     expect(membersResponse.status).toBe(200);
     expect(members).toContainEqual(
-      expect.objectContaining({ userId: "local-speaker", role: "owner" }),
+      expect.objectContaining({ userId: "local-organizer", role: "owner" }),
+    );
+    expect(members).toContainEqual(
+      expect.objectContaining({ userId: "local-reviewer", role: "reviewer" }),
     );
 
     const contactsResponse = await runtimeRequest(
@@ -406,7 +490,7 @@ describe.sequential("composed local Worker", () => {
     const createInit = {
       method: "POST",
       headers: {
-        ...organizerHeaders,
+        ...speakerHeaders,
         "idempotency-key": "runtime-cfp-create-1",
       },
     } satisfies RequestInit;
@@ -419,7 +503,7 @@ describe.sequential("composed local Worker", () => {
 
     const missingIdempotencyKey = await runtimeRequest(createPath, {
       method: "POST",
-      headers: organizerHeaders,
+      headers: speakerHeaders,
     });
     await errorResponse(missingIdempotencyKey, 400, "VALIDATION_FAILED");
 
@@ -460,7 +544,7 @@ describe.sequential("composed local Worker", () => {
               : {}),
           },
           {
-            ...organizerHeaders,
+            ...speakerHeaders,
             "idempotency-key": `runtime-cfp-step-${completedStep}`,
           },
         ),
@@ -489,7 +573,7 @@ describe.sequential("composed local Worker", () => {
           ],
           secondaryContacts: [],
         },
-        { ...organizerHeaders, "idempotency-key": "runtime-cfp-participants-1" },
+        { ...speakerHeaders, "idempotency-key": "runtime-cfp-participants-1" },
       ),
     );
     const participants = await jsonData<{ version: number }>(participantsResponse);
@@ -501,7 +585,7 @@ describe.sequential("composed local Worker", () => {
       jsonRequest(
         "PATCH",
         { expectedVersion: version, completedStep: "review" },
-        { ...organizerHeaders, "idempotency-key": "runtime-cfp-review-step-1" },
+        { ...speakerHeaders, "idempotency-key": "runtime-cfp-review-step-1" },
       ),
     );
     const reviewStep = await jsonData<{ version: number }>(reviewStepResponse);
@@ -510,7 +594,7 @@ describe.sequential("composed local Worker", () => {
 
     const reviewResponse = await runtimeRequest(`${cfpBase}/submissions/${created.id}/review`, {
       method: "POST",
-      headers: { ...organizerHeaders, "idempotency-key": "runtime-cfp-review-1" },
+      headers: { ...speakerHeaders, "idempotency-key": "runtime-cfp-review-1" },
     });
     const review = await jsonData<{ canSubmit: boolean; issues: unknown[] }>(reviewResponse);
     expect(reviewResponse.status).toBe(200);
@@ -519,7 +603,7 @@ describe.sequential("composed local Worker", () => {
     const submitInit = jsonRequest(
       "POST",
       { expectedVersion: version },
-      { ...organizerHeaders, "idempotency-key": "runtime-cfp-submit-1" },
+      { ...speakerHeaders, "idempotency-key": "runtime-cfp-submit-1" },
     );
     const submitResponse = await runtimeRequest(
       `${cfpBase}/submissions/${created.id}/submit`,
@@ -545,6 +629,131 @@ describe.sequential("composed local Worker", () => {
     expect(submitReplay).toEqual(submitted);
   });
 
+  it("mounts the seeded organizer lifecycle workspaces with strict persona access", async () => {
+    const workspaceBase = `/api/admin/organizations/${organizationId}/events/${eventId}`;
+
+    const settingsResponse = await runtimeRequest(`${workspaceBase}/sessions/settings`, {
+      headers: organizerHeaders,
+    });
+    expect(settingsResponse.status).toBe(200);
+    expect(
+      await jsonData<{
+        statuses: readonly string[];
+        agendaEligibleStatuses: readonly string[];
+      }>(settingsResponse),
+    ).toMatchObject({
+      statuses: expect.arrayContaining(["accepted", "scheduled"]),
+      agendaEligibleStatuses: ["accepted", "scheduled"],
+    });
+
+    const roomsResponse = await runtimeRequest(`${workspaceBase}/sessions/rooms`, {
+      headers: organizerHeaders,
+    });
+    const rooms = await jsonData<readonly { id: string; name: string }[]>(roomsResponse);
+    expect(roomsResponse.status).toBe(200);
+    expect(rooms).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "local-room-main", name: "Main Hall" }),
+        expect.objectContaining({ id: "local-room-studio", name: "Workshop Studio" }),
+      ]),
+    );
+
+    const templatesResponse = await runtimeRequest(`${workspaceBase}/communications/templates`, {
+      headers: organizerHeaders,
+    });
+    expect(templatesResponse.status).toBe(200);
+    expect(
+      (
+        (await templatesResponse.json()) as {
+          templates: readonly { id: string; status: string; sender: string }[];
+        }
+      ).templates,
+    ).toEqual([
+      expect.objectContaining({
+        id: "local-event-update",
+        status: "approved",
+        sender: "speakers@sessionboard.namuh.co",
+      }),
+    ]);
+
+    const createReportResponse = await runtimeRequest(
+      `${workspaceBase}/reports`,
+      jsonRequest(
+        "POST",
+        {
+          id: "local-program-report",
+          name: "Program snapshot",
+          description: "Current accepted program.",
+          relationships: ["sessions"],
+          fields: ["sessions.id", "sessions.title", "sessions.status"],
+          order: ["sessions.id", "sessions.title", "sessions.status"],
+          filters: [],
+          sort: [{ field: "sessions.title", direction: "asc" }],
+        },
+        organizerHeaders,
+      ),
+    );
+    expect(createReportResponse.status).toBe(201);
+    expect(
+      (await createReportResponse.json()) as {
+        id: string;
+        eventId: string;
+        fields: readonly string[];
+      },
+    ).toMatchObject({
+      id: "local-program-report",
+      eventId,
+      fields: ["sessions.id", "sessions.title", "sessions.status"],
+    });
+
+    const remixResponse = await runtimeRequest(
+      `${workspaceBase}/remix/records?sourceType=session`,
+      { headers: organizerHeaders },
+    );
+    expect(remixResponse.status).toBe(200);
+    expect(
+      ((await remixResponse.json()) as { records: readonly { id: string; eventId: string }[] })
+        .records,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "local-session-keynote", eventId }),
+        expect.objectContaining({ id: "local-session-workshop", eventId }),
+      ]),
+    );
+
+    for (const path of [
+      `${workspaceBase}/sessions/settings`,
+      `${workspaceBase}/communications/templates`,
+      `${workspaceBase}/reports`,
+      `${workspaceBase}/remix/records?sourceType=session`,
+    ]) {
+      const reviewerResponse = await runtimeRequest(path, { headers: reviewerHeaders });
+      expect(reviewerResponse.status).toBe(403);
+      const speakerResponse = await runtimeRequest(path, { headers: speakerHeaders });
+      expect(speakerResponse.status).toBe(403);
+    }
+  });
+  it("serves one matching immutable public agenda and speaker revision", async () => {
+    const [agendaResponse, speakersResponse] = await Promise.all([
+      runtimeRequest(`/api/public/events/${eventId}/agenda`),
+      runtimeRequest(`/api/public/events/${eventId}/speakers`),
+    ]);
+    expect(agendaResponse.status).toBe(200);
+    expect(speakersResponse.status).toBe(200);
+    const agenda = await jsonData<{ revision: { id: string; number: number } }>(agendaResponse);
+    const speakers = await jsonData<{
+      revision: { id: string; number: number };
+      speakers: readonly { displayName: string; id: string }[];
+    }>(speakersResponse);
+    expect(speakers.revision).toEqual(agenda.revision);
+    expect(speakers.speakers).toEqual([
+      expect.objectContaining({
+        id: "local-public-speaker-alex",
+        displayName: "Alex Rivera",
+      }),
+    ]);
+    expect(JSON.stringify(speakers)).not.toContain("local-participant");
+  });
   it("fails closed outside local mode when provider configuration is absent", async () => {
     const response = await runtimeRequest(
       `/api/speaker/events/${eventId}/portal`,

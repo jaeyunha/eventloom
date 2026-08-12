@@ -1,16 +1,33 @@
 "use client";
 
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  type CSSProperties,
-  type FormEvent,
-  type ReactNode,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
-import styles from "../admin/admin-shell.module.css";
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import shellStyles from "../admin/admin-shell.module.css";
+import styles from "./event-settings-workspace.module.css";
 import {
   createEventSettingsApi,
   defaultAgendaEligibleStatuses,
@@ -26,56 +43,6 @@ import {
   type SessionSettingsRecord,
   type TaxonomyInput,
 } from "./api";
-
-const stackStyle: CSSProperties = { display: "grid", gap: "1rem" };
-const twoColumnStyle: CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(16rem, 1fr))",
-  gap: "1rem",
-};
-const fieldStyle: CSSProperties = { display: "grid", gap: "0.35rem" };
-const fieldLabelStyle: CSSProperties = {
-  color: "var(--admin-ink)",
-  fontSize: "0.78rem",
-  fontWeight: 750,
-};
-const inputStyle: CSSProperties = {
-  width: "100%",
-  minHeight: "2.55rem",
-  padding: "0.55rem 0.65rem",
-  border: "1px solid var(--admin-border-strong)",
-  borderRadius: "var(--admin-radius-sm)",
-  background: "var(--admin-surface)",
-  color: "var(--admin-ink)",
-  font: "inherit",
-  fontSize: "0.84rem",
-};
-const inlineActionsStyle: CSSProperties = {
-  display: "flex",
-  flexWrap: "wrap",
-  gap: "0.55rem",
-  alignItems: "center",
-};
-const listStyle: CSSProperties = {
-  display: "grid",
-  gap: "0.65rem",
-  padding: 0,
-  margin: 0,
-  listStyle: "none",
-};
-const cardStyle: CSSProperties = {
-  display: "grid",
-  gap: "0.75rem",
-  padding: "0.95rem 1rem",
-  border: "1px solid var(--admin-border)",
-  borderRadius: "var(--admin-radius-sm)",
-  background: "var(--admin-canvas)",
-};
-const subtleTextStyle: CSSProperties = {
-  color: "var(--admin-muted)",
-  fontSize: "0.78rem",
-  lineHeight: 1.5,
-};
 
 export type EventSettingsDetailsStatus = "loading" | "loaded" | "error";
 
@@ -281,72 +248,135 @@ function auditSummary(entry: EventSettingsAuditEntry): string {
   return `${entry.entityType} ${entry.action} at version ${entry.version}.`;
 }
 
-function SettingsGroupedNavigation(): ReactNode {
-  return (
-    <nav
-      aria-label="Event settings sections"
-      style={{ ...cardStyle, gap: "1.1rem", alignSelf: "start" }}
-    >
-      <h2 style={{ margin: 0, fontSize: "0.95rem", fontWeight: 800 }}>Event settings</h2>
-      <SettingsNavGroup
-        title="Event setup"
-        links={[
-          { href: "#session-settings", label: "Sessions and statuses" },
-          { href: "#rooms", label: "Rooms and capacity" },
-        ]}
-      />
-      <SettingsNavGroup
-        title="Library"
-        links={[{ href: "#library", label: "Tracks, formats, levels, and tags" }]}
-      />
-      <SettingsNavGroup
-        title="Communications"
-        links={[{ href: "#communications", label: "Email and message settings" }]}
-      />
-      <SettingsNavGroup
-        title="Calendar"
-        links={[{ href: "#calendar", label: "Calendar delivery" }]}
-      />
-    </nav>
-  );
-}
+type SectionNavigationItem = Readonly<{
+  id: "session-settings" | "rooms" | "library" | "audit";
+  label: string;
+  group: string;
+}>;
 
-function SettingsNavGroup({
-  title,
-  links,
-}: Readonly<{ title: string; links: readonly { href: string; label: string }[] }>) {
+export const eventSettingsSectionNavigation: readonly SectionNavigationItem[] = [
+  { id: "session-settings", label: "Session settings", group: "Event setup" },
+  { id: "rooms", label: "Rooms", group: "Event setup" },
+  { id: "library", label: "Program library", group: "Library" },
+  { id: "audit", label: "Audit", group: "Safety and history" },
+];
+
+function navigationGroupId(prefix: string, group: string): string {
+  return `${prefix}-${group.toLowerCase().replaceAll(" ", "-")}`;
+}
+function SettingsSectionNavigation() {
+  const [activeId, setActiveId] = useState<SectionNavigationItem["id"]>("session-settings");
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  useEffect(() => {
+    if (typeof IntersectionObserver === "undefined") return;
+    const sections = eventSettingsSectionNavigation
+      .map((item) => document.getElementById(item.id))
+      .filter((section): section is HTMLElement => section !== null);
+    if (sections.length === 0) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((left, right) => left.boundingClientRect.top - right.boundingClientRect.top);
+        const first = visible[0]?.target.id as SectionNavigationItem["id"] | undefined;
+        if (first) setActiveId(first);
+      },
+      { rootMargin: "-6rem 0px -60% 0px", threshold: [0, 0.15, 1] },
+    );
+    for (const section of sections) observer.observe(section);
+    return () => observer.disconnect();
+  }, []);
+
+  const groups = useMemo(() => {
+    const grouped = new Map<string, SectionNavigationItem[]>();
+    for (const item of eventSettingsSectionNavigation) {
+      const current = grouped.get(item.group) ?? [];
+      current.push(item);
+      grouped.set(item.group, current);
+    }
+    return [...grouped.entries()];
+  }, []);
+  const active =
+    eventSettingsSectionNavigation.find((item) => item.id === activeId) ??
+    ({ id: "session-settings", label: "Session settings", group: "Event setup" } as const);
+
+  const links = (items: readonly SectionNavigationItem[]) => (
+    <ul className={styles.navigationList}>
+      {items.map((item) => (
+        <li key={item.id}>
+          <a
+            className={`${styles.navigationLink} ${activeId === item.id ? styles.navigationLinkActive : ""}`}
+            href={`#${item.id}`}
+            aria-current={activeId === item.id ? "location" : undefined}
+            onClick={() => setMobileOpen(false)}
+          >
+            {item.label}
+          </a>
+        </li>
+      ))}
+    </ul>
+  );
+
   return (
-    <section aria-labelledby={`settings-nav-${title.toLowerCase().replaceAll(" ", "-")}`}>
-      <h3
-        id={`settings-nav-${title.toLowerCase().replaceAll(" ", "-")}`}
-        style={{
-          margin: "0 0 0.35rem",
-          color: "var(--admin-subtle)",
-          fontSize: "0.68rem",
-          letterSpacing: "0.1em",
-          textTransform: "uppercase",
-        }}
-      >
-        {title}
-      </h3>
-      <ul style={{ display: "grid", gap: "0.25rem", padding: 0, margin: 0, listStyle: "none" }}>
-        {links.map((link) => (
-          <li key={link.href}>
-            <a
-              href={link.href}
-              style={{
-                color: "var(--admin-brand-strong)",
-                fontSize: "0.78rem",
-                fontWeight: 700,
-                textDecoration: "none",
-              }}
+    <div className={styles.navigationWrapper}>
+      <aside className={styles.desktopNavigation} aria-label="Event settings sections">
+        <div className={styles.navigationHeader}>
+          <p className={shellStyles.panelEyebrow}>Event settings</p>
+          <p className={styles.navigationHint}>Jump to a settings section</p>
+        </div>
+        {groups.map(([group, items]) => (
+          <section
+            key={group}
+            className={styles.navigationGroup}
+            aria-labelledby={navigationGroupId("settings-nav", group)}
+          >
+            <h2
+              id={navigationGroupId("settings-nav", group)}
+              className={styles.navigationGroupTitle}
             >
-              {link.label}
-            </a>
-          </li>
+              {group}
+            </h2>
+            {links(items)}
+          </section>
         ))}
-      </ul>
-    </section>
+      </aside>
+      <Collapsible
+        className={styles.mobileNavigation}
+        open={mobileOpen}
+        onOpenChange={setMobileOpen}
+      >
+        <CollapsibleTrigger asChild>
+          <Button
+            className={styles.mobileNavigationTrigger}
+            variant="outline"
+            type="button"
+            aria-label="Choose event settings section"
+          >
+            <span>Section</span>
+            <strong>{active.label}</strong>
+            <span aria-hidden="true">{mobileOpen ? "−" : "+"}</span>
+          </Button>
+        </CollapsibleTrigger>
+        <CollapsibleContent className={styles.mobileNavigationContent}>
+          {groups.map(([group, items]) => (
+            <section
+              key={group}
+              className={styles.navigationGroup}
+              aria-labelledby={navigationGroupId("mobile-settings-nav", group)}
+            >
+              <h2
+                id={navigationGroupId("mobile-settings-nav", group)}
+                className={styles.navigationGroupTitle}
+              >
+                {group}
+              </h2>
+              {links(items)}
+            </section>
+          ))}
+        </CollapsibleContent>
+      </Collapsible>
+    </div>
   );
 }
 
@@ -354,15 +384,19 @@ interface StatusRow {
   readonly id: string;
   readonly value: string;
 }
+
 function StatusSettingsForm({
   settings,
   busy,
   onSave,
+  readOnly = false,
 }: Readonly<{
   settings: SessionSettingsRecord;
   busy: boolean;
-  onSave: EventSettingsWorkspaceActions["updateSettings"];
+  onSave?: EventSettingsWorkspaceActions["updateSettings"];
+  readOnly?: boolean;
 }>) {
+  const disabled = busy || readOnly;
   const nextStatusRowId = useRef(0);
   const createStatusRows = useCallback(
     (values: readonly string[]): StatusRow[] =>
@@ -412,11 +446,13 @@ function StatusSettingsForm({
     setEligible((current) => current.filter((candidate) => candidate !== status));
   }
 
-  function toggleEligibility(status: string) {
+  function toggleEligibility(status: string, checked: boolean) {
     setEligible((current) =>
-      current.includes(status)
-        ? current.filter((candidate) => candidate !== status)
-        : [...current, status],
+      checked
+        ? current.includes(status)
+          ? current
+          : [...current, status]
+        : current.filter((candidate) => candidate !== status),
     );
   }
 
@@ -437,6 +473,7 @@ function StatusSettingsForm({
     }
     setFormError(null);
     try {
+      if (!onSave) return;
       await onSave({
         expectedVersion: settings.version,
         statuses: cleaned,
@@ -448,108 +485,108 @@ function StatusSettingsForm({
   }
 
   return (
-    <form onSubmit={(event) => void submit(event)} style={stackStyle}>
-      <div style={twoColumnStyle}>
-        <div style={stackStyle}>
-          <div>
-            <h3 style={{ margin: 0, fontSize: "0.98rem" }}>Session statuses</h3>
-            <p style={subtleTextStyle}>
-              Statuses are event-scoped. Changes are versioned and audited.
-            </p>
-          </div>
-          <ul aria-label="Configured session statuses" style={listStyle}>
-            {statuses.map((status, index) => (
-              <li
-                key={status.id}
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "minmax(0, 1fr) auto",
-                  gap: "0.5rem",
-                  alignItems: "center",
-                }}
-              >
-                <label style={fieldStyle}>
-                  <span className={styles.srOnly}>Status {index + 1}</span>
-                  <input
-                    style={inputStyle}
-                    value={status.value}
-                    maxLength={64}
-                    onChange={(event) => changeStatus(status.id, event.target.value)}
-                  />
-                </label>
-                <button
-                  className={styles.secondaryButton}
-                  type="button"
-                  onClick={() => removeStatus(status.value)}
-                  disabled={busy}
-                >
-                  Remove
-                </button>
-              </li>
-            ))}
-          </ul>
-          <div style={{ display: "flex", gap: "0.45rem", alignItems: "end" }}>
-            <label style={{ ...fieldStyle, flex: 1 }}>
-              <span style={fieldLabelStyle}>Add status</span>
-              <input
-                style={inputStyle}
-                value={newStatus}
-                maxLength={64}
-                onChange={(event) => setNewStatus(event.target.value)}
-              />
-            </label>
-            <button
-              className={styles.secondaryButton}
-              type="button"
-              onClick={addStatus}
-              disabled={busy}
-            >
-              Add
-            </button>
-          </div>
-        </div>
-        <fieldset style={{ ...cardStyle, gap: "0.65rem", margin: 0 }}>
-          <legend style={{ padding: "0 0.35rem", fontSize: "0.86rem", fontWeight: 800 }}>
-            Agenda eligibility
-          </legend>
-          <p style={{ ...subtleTextStyle, margin: 0 }}>
-            Eligible sessions can be scheduled in the private agenda. Accepted is the default.
+    <form className={styles.settingsForm} onSubmit={(event) => void submit(event)}>
+      <div className={styles.formIntro}>
+        <div>
+          <h3 className={styles.subheading}>Session statuses</h3>
+          <p className={styles.mutedText}>
+            Statuses are event-scoped. Changes are versioned and audited.
           </p>
-          {statuses.map((status) => (
-            <label
-              key={status.id}
-              style={{
-                display: "flex",
-                gap: "0.55rem",
-                alignItems: "center",
-                color: "var(--admin-ink)",
-                fontSize: "0.82rem",
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={eligible.includes(status.value)}
-                onChange={() => toggleEligibility(status.value)}
-                disabled={busy}
-              />
-              <span>{status.value}</span>
-            </label>
-          ))}
-        </fieldset>
+        </div>
+        <span className={styles.versionText}>Version {settings.version}</span>
+      </div>
+      {readOnly ? (
+        <p className={styles.capabilityNote}>
+          Session status editing is unavailable until the organizer API capability is connected.
+        </p>
+      ) : null}
+      <div className={styles.tableWrap}>
+        <table className={styles.statusTable}>
+          <caption>Configured session statuses and agenda eligibility</caption>
+          <thead>
+            <tr>
+              <th scope="col">Status</th>
+              <th scope="col">Agenda eligible</th>
+              <th scope="col">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {statuses.map((status, index) => {
+              const statusInputId = `${status.id}-value`;
+              const checkboxId = `${status.id}-agenda`;
+              return (
+                <tr key={status.id}>
+                  <td>
+                    <Label className={styles.fieldLabel} htmlFor={statusInputId}>
+                      <span className={shellStyles.srOnly}>Status {index + 1}</span>
+                    </Label>
+                    <Input
+                      id={statusInputId}
+                      value={status.value}
+                      maxLength={64}
+                      disabled={disabled}
+                      onChange={(event) => changeStatus(status.id, event.target.value)}
+                    />
+                  </td>
+                  <td>
+                    <Label className={styles.checkboxLabel} htmlFor={checkboxId}>
+                      <Checkbox
+                        id={checkboxId}
+                        checked={eligible.includes(status.value)}
+                        disabled={disabled}
+                        aria-label={`Agenda eligible for ${status.value || `status ${index + 1}`}`}
+                        onCheckedChange={(checked) =>
+                          toggleEligibility(status.value, checked === true)
+                        }
+                      />
+                      <span>Eligible</span>
+                    </Label>
+                  </td>
+                  <td>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={disabled}
+                      onClick={() => removeStatus(status.value)}
+                    >
+                      Remove
+                    </Button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div className={styles.addStatusRow}>
+        <Label className={styles.formField} htmlFor="new-status">
+          <span>Status name</span>
+          <Input
+            id="new-status"
+            value={newStatus}
+            maxLength={64}
+            disabled={disabled}
+            onChange={(event) => setNewStatus(event.target.value)}
+            placeholder="Add a status"
+          />
+        </Label>
+        <Button type="button" variant="outline" disabled={disabled} onClick={addStatus}>
+          Add status
+        </Button>
       </div>
       {formError ? (
-        <p
-          role="alert"
-          style={{ margin: 0, color: "var(--admin-danger)", fontSize: "0.8rem", fontWeight: 700 }}
-        >
+        <p className={styles.formError} role="alert">
           {formError}
         </p>
       ) : null}
-      <div style={inlineActionsStyle}>
-        <button className={styles.primaryButton} type="submit" disabled={busy}>
-          {busy ? "Saving settings…" : "Save session settings"}
-        </button>
-        <span style={subtleTextStyle}>Version {settings.version}</span>
+      <div className={styles.formActions}>
+        <Button type="submit" disabled={busy || readOnly || !onSave}>
+          {readOnly
+            ? "Session settings are read-only."
+            : busy
+              ? "Saving settings…"
+              : "Save session settings"}
+        </Button>
       </div>
     </form>
   );
@@ -585,6 +622,7 @@ export function validateRoomForm(
     input: { name: normalizedName, capacity: parsedCapacity, resources: parsedResources.resources },
   };
 }
+
 function roomRequestId(): string {
   const randomUUID = globalThis.crypto?.randomUUID;
   if (typeof randomUUID === "function") return `room-${randomUUID.call(globalThis.crypto)}`;
@@ -639,65 +677,124 @@ function RoomForm({
   }
 
   return (
-    <form
-      onSubmit={(event) => void submit(event)}
-      style={{ ...cardStyle, background: "var(--admin-surface)" }}
-    >
-      <div style={twoColumnStyle}>
-        <label style={fieldStyle}>
-          <span style={fieldLabelStyle}>Room name</span>
-          <input
-            style={inputStyle}
+    <form className={styles.dialogForm} onSubmit={(event) => void submit(event)}>
+      <div className={styles.formGrid}>
+        <Label className={styles.formField} htmlFor="room-name">
+          <span>Room name</span>
+          <Input
+            id="room-name"
             value={name}
             maxLength={200}
             required
+            disabled={busy}
             onChange={(event) => setName(event.target.value)}
           />
-        </label>
-        <label style={fieldStyle}>
-          <span style={fieldLabelStyle}>Capacity</span>
-          <input
-            style={inputStyle}
+        </Label>
+        <Label className={styles.formField} htmlFor="room-capacity">
+          <span>Capacity</span>
+          <Input
+            id="room-capacity"
             type="number"
             min={1}
+            max={1_000_000}
             step={1}
             value={capacity}
             required
+            disabled={busy}
             onChange={(event) => setCapacity(event.target.value)}
           />
-        </label>
+        </Label>
       </div>
-      <label style={fieldStyle}>
-        <span style={fieldLabelStyle}>Resources</span>
-        <input
-          style={inputStyle}
+      <Label className={styles.formField} htmlFor="room-resources">
+        <span>Resources</span>
+        <Input
+          id="room-resources"
           value={resourcesText}
           placeholder="Projector, microphones"
+          disabled={busy}
           onChange={(event) => setResourcesText(event.target.value)}
         />
-        <span style={subtleTextStyle}>
+        <span className={styles.mutedText}>
           Comma-separated resource names. Duplicate or blank names are rejected.
         </span>
-      </label>
+      </Label>
       {formError ? (
-        <p
-          role="alert"
-          style={{ margin: 0, color: "var(--admin-danger)", fontSize: "0.8rem", fontWeight: 700 }}
-        >
+        <p className={styles.formError} role="alert">
           {formError}
         </p>
       ) : null}
-      <div style={inlineActionsStyle}>
+      <DialogFooter className={styles.dialogActions}>
         {onCancel ? (
-          <button className={styles.secondaryButton} type="button" onClick={onCancel}>
+          <Button type="button" variant="outline" onClick={onCancel} disabled={busy}>
             Cancel
-          </button>
+          </Button>
         ) : null}
-        <button className={styles.primaryButton} type="submit" disabled={busy}>
+        <Button type="submit" disabled={busy}>
           {busy ? "Saving room…" : room ? "Save room" : "Add room"}
-        </button>
-      </div>
+        </Button>
+      </DialogFooter>
     </form>
+  );
+}
+
+function DeleteConfirmationDialog({
+  open,
+  onOpenChange,
+  title,
+  description,
+  busy,
+  onConfirm,
+}: Readonly<{
+  open: boolean;
+  onOpenChange(open: boolean): void;
+  title: string;
+  description: string;
+  busy: boolean;
+  onConfirm(): Promise<void>;
+}>) {
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) setError(null);
+  }, [open]);
+
+  async function confirm() {
+    setError(null);
+    try {
+      await onConfirm();
+      onOpenChange(false);
+    } catch (reason) {
+      setError(messageFrom(reason));
+    }
+  }
+
+  return (
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{title}</AlertDialogTitle>
+          <AlertDialogDescription>{description}</AlertDialogDescription>
+        </AlertDialogHeader>
+        {error ? (
+          <p className={styles.formError} role="alert">
+            Delete was not completed. {error}
+          </p>
+        ) : null}
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            variant="destructive"
+            disabled={busy}
+            onClick={(event) => {
+              event.preventDefault();
+              void confirm();
+            }}
+          >
+            {busy ? "Deleting…" : "Delete"}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 
@@ -712,127 +809,179 @@ function RoomsSection({
 }>) {
   const [showForm, setShowForm] = useState(false);
   const [editingRoomId, setEditingRoomId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<EventRoom | null>(null);
   const editingRoom = rooms.find((room) => room.id === editingRoomId);
+  const canCreate = Boolean(actions.createRoom);
+  const canUpdate = Boolean(actions.updateRoom);
+  const canDelete = Boolean(actions.deleteRoom);
 
   return (
     <section id="rooms" className={styles.panel} aria-labelledby="rooms-heading">
       <header className={styles.panelHeader}>
         <div className={styles.panelHeading}>
-          <p className={styles.panelEyebrow}>Event setup</p>
+          <p className={shellStyles.panelEyebrow}>Event setup</p>
           <h2 id="rooms-heading" className={styles.panelTitle}>
-            Rooms, capacity, and resources
+            Rooms
           </h2>
+          <p className={styles.mutedText}>
+            Define capacity and resources before assigning sessions to the agenda.
+          </p>
         </div>
-        <button
-          className={styles.secondaryButton}
+        <Button
           type="button"
+          variant="outline"
+          disabled={busy || !canCreate}
+          aria-expanded={showForm}
+          aria-controls="room-form-dialog"
+          title={canCreate ? "Add a room" : "Adding rooms is unavailable"}
           onClick={() => {
             setEditingRoomId(null);
-            setShowForm((current) => !current);
+            setShowForm(true);
           }}
-          aria-expanded={showForm}
-          aria-controls="room-form"
         >
-          {showForm ? "Close form" : "Add room"}
-        </button>
+          Add room
+        </Button>
       </header>
-      <div className={styles.panelContent} style={stackStyle}>
-        {showForm ? (
-          <div id="room-form">
-            {actions.createRoom ? (
-              <RoomForm
-                busy={busy}
-                onCancel={() => setShowForm(false)}
-                onSave={async (input) => {
-                  await actions.createRoom?.(input);
-                  setShowForm(false);
-                }}
-              />
-            ) : null}
-          </div>
+      <CardContent className={styles.panelContent}>
+        {!canCreate || !canUpdate || !canDelete ? (
+          <p className={styles.capabilityNote}>
+            Room editing controls are read-only until the organizer API capabilities are connected.
+          </p>
         ) : null}
-        {editingRoom ? (
-          <div id={`room-edit-${editingRoom.id}`}>
-            {actions.updateRoom ? (
-              <RoomForm
-                room={editingRoom}
-                busy={busy}
-                onCancel={() => setEditingRoomId(null)}
-                onSave={async (input) => {
-                  await actions.updateRoom?.({
-                    roomId: editingRoom.id,
-                    expectedVersion: editingRoom.version,
-                    ...input,
-                    resources: input.resources ?? [],
-                  });
-                  setEditingRoomId(null);
-                }}
-              />
-            ) : null}
-          </div>
-        ) : null}
-        {rooms.length === 0 ? (
-          <div style={{ ...cardStyle, textAlign: "center" }}>
-            <strong>No rooms configured yet.</strong>
-            <p style={{ ...subtleTextStyle, margin: "0.25rem 0 0" }}>
-              Add a room with a capacity before scheduling accepted sessions.
-            </p>
-          </div>
-        ) : (
-          <ul aria-label="Event rooms" style={listStyle}>
-            {rooms.map((room) => (
-              <li key={room.id} style={cardStyle}>
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    gap: "1rem",
-                    alignItems: "start",
-                  }}
-                >
-                  <div>
-                    <h3 style={{ margin: 0, fontSize: "0.94rem" }}>{room.name}</h3>
-                    <p style={{ ...subtleTextStyle, margin: "0.25rem 0 0" }}>
-                      {room.capacity} seats · Version {room.version}
-                    </p>
-                  </div>
-                  <div style={inlineActionsStyle}>
-                    <button
-                      className={styles.secondaryButton}
-                      type="button"
-                      disabled={busy}
-                      onClick={() => {
-                        setShowForm(false);
-                        setEditingRoomId((current) => (current === room.id ? null : room.id));
-                      }}
-                      aria-expanded={editingRoomId === room.id}
-                      aria-controls={`room-edit-${room.id}`}
-                    >
-                      Edit
-                    </button>
-                    {actions.deleteRoom ? (
-                      <button
-                        className={styles.secondaryButton}
+        <ul className={styles.resourceList} aria-label="Event rooms">
+          {rooms.length === 0 ? (
+            <li className={styles.emptyState}>
+              <strong>No rooms configured yet.</strong>
+              <span>Add a room with a capacity before scheduling accepted sessions.</span>
+            </li>
+          ) : (
+            rooms.map((room) => (
+              <li key={room.id}>
+                <Card size="sm" className={styles.resourceCard}>
+                  <CardHeader className={styles.resourceCardHeader}>
+                    <div>
+                      <CardTitle className={styles.cardHeading}>{room.name}</CardTitle>
+                      <CardDescription>
+                        {room.capacity} seats · Version {room.version}
+                      </CardDescription>
+                    </div>
+                    <div className={styles.cardActions}>
+                      <Button
                         type="button"
-                        disabled={busy}
-                        onClick={() => void actions.deleteRoom?.(room.id, room.version)}
+                        variant="outline"
+                        disabled={busy || !canUpdate}
+                        title={canUpdate ? "Edit room" : "Room editing is unavailable"}
+                        aria-expanded={editingRoomId === room.id}
+                        aria-controls={`room-edit-${room.id}`}
+                        onClick={() => {
+                          setShowForm(false);
+                          setEditingRoomId((current) => (current === room.id ? null : room.id));
+                        }}
+                      >
+                        Edit
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        disabled={busy || !canDelete}
+                        title={canDelete ? "Delete room" : "Room deletion is unavailable"}
+                        onClick={() => setDeleteTarget(room)}
                       >
                         Delete
-                      </button>
-                    ) : null}
-                  </div>
-                </div>
-                <p style={{ ...subtleTextStyle, margin: 0 }}>
-                  <strong>Resources:</strong>{" "}
-                  {room.resources?.length || room.resourceIds?.length
-                    ? (room.resources ?? room.resourceIds ?? []).join(", ")
-                    : "None configured"}
-                </p>
+                      </Button>
+                    </div>
+                  </CardHeader>
+                  <CardContent className={styles.resourceCardContent}>
+                    <span>
+                      <strong>Resources:</strong>{" "}
+                      {room.resources?.length || room.resourceIds?.length
+                        ? (room.resources ?? room.resourceIds ?? []).join(", ")
+                        : "None configured"}
+                    </span>
+                  </CardContent>
+                </Card>
               </li>
-            ))}
-          </ul>
-        )}
-      </div>
+            ))
+          )}
+        </ul>
+      </CardContent>
+      <Dialog
+        open={showForm && canCreate}
+        onOpenChange={(open) => {
+          if (!open) setShowForm(false);
+        }}
+      >
+        <DialogContent id="room-form-dialog">
+          <DialogHeader>
+            <DialogTitle>Add room</DialogTitle>
+            <DialogDescription>
+              Add an event-scoped room with the capacity and resources used by scheduling.
+            </DialogDescription>
+          </DialogHeader>
+          <RoomForm
+            busy={busy}
+            onCancel={() => setShowForm(false)}
+            onSave={async (input) => {
+              await actions.createRoom?.(input);
+              setShowForm(false);
+            }}
+          />
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={editingRoom !== undefined && canUpdate}
+        onOpenChange={(open) => {
+          if (!open) setEditingRoomId(null);
+        }}
+      >
+        <DialogContent id={editingRoom ? `room-edit-${editingRoom.id}` : undefined}>
+          <DialogHeader>
+            <DialogTitle>Edit room</DialogTitle>
+            <DialogDescription>
+              Save changes against the room version shown in this form.
+            </DialogDescription>
+          </DialogHeader>
+          {editingRoom ? (
+            <RoomForm
+              room={editingRoom}
+              busy={busy}
+              onCancel={() => setEditingRoomId(null)}
+              onSave={async (input) => {
+                await actions.updateRoom?.({
+                  roomId: editingRoom.id,
+                  expectedVersion: editingRoom.version,
+                  ...input,
+                  resources: input.resources ?? [],
+                });
+                setEditingRoomId(null);
+              }}
+            />
+          ) : null}
+        </DialogContent>
+      </Dialog>
+      <DeleteConfirmationDialog
+        open={deleteTarget !== null && canDelete}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+        title="Delete this room?"
+        description={
+          deleteTarget
+            ? `${deleteTarget.name} will be removed from this event. This cannot be undone.`
+            : "This room will be removed from this event."
+        }
+        busy={busy}
+        onConfirm={async () => {
+          if (!deleteTarget) return;
+          const currentTarget = rooms.find((room) => room.id === deleteTarget.id);
+          if (!currentTarget) {
+            setDeleteTarget(null);
+            return;
+          }
+          await actions.deleteRoom?.(currentTarget.id, currentTarget.version);
+          setDeleteTarget(null);
+        }}
+      />
     </section>
   );
 }
@@ -873,49 +1022,43 @@ function TaxonomyForm({
   }
 
   return (
-    <form
-      onSubmit={(event) => void submit(event)}
-      style={{ ...cardStyle, background: "var(--admin-surface)" }}
-    >
-      <div style={twoColumnStyle}>
-        <label style={fieldStyle}>
-          <span style={fieldLabelStyle}>Name</span>
-          <input
-            style={inputStyle}
-            value={name}
-            maxLength={200}
-            required
-            onChange={(event) => setName(event.target.value)}
-          />
-        </label>
-        <label style={fieldStyle}>
-          <span style={fieldLabelStyle}>Description</span>
-          <input
-            style={inputStyle}
-            value={description}
-            maxLength={2_000}
-            onChange={(event) => setDescription(event.target.value)}
-          />
-        </label>
-      </div>
+    <form className={styles.dialogForm} onSubmit={(event) => void submit(event)}>
+      <Label className={styles.formField} htmlFor="taxonomy-name">
+        <span>Name</span>
+        <Input
+          id="taxonomy-name"
+          value={name}
+          maxLength={200}
+          required
+          disabled={busy}
+          onChange={(event) => setName(event.target.value)}
+        />
+      </Label>
+      <Label className={styles.formField} htmlFor="taxonomy-description">
+        <span>Description</span>
+        <Textarea
+          id="taxonomy-description"
+          value={description}
+          maxLength={2_000}
+          disabled={busy}
+          onChange={(event) => setDescription(event.target.value)}
+        />
+      </Label>
       {formError ? (
-        <p
-          role="alert"
-          style={{ margin: 0, color: "var(--admin-danger)", fontSize: "0.8rem", fontWeight: 700 }}
-        >
+        <p className={styles.formError} role="alert">
           {formError}
         </p>
       ) : null}
-      <div style={inlineActionsStyle}>
+      <DialogFooter className={styles.dialogActions}>
         {onCancel ? (
-          <button className={styles.secondaryButton} type="button" onClick={onCancel}>
+          <Button type="button" variant="outline" onClick={onCancel} disabled={busy}>
             Cancel
-          </button>
+          </Button>
         ) : null}
-        <button className={styles.primaryButton} type="submit" disabled={busy}>
+        <Button type="submit" disabled={busy}>
           {busy ? "Saving…" : resource ? "Save changes" : "Add"}
-        </button>
-      </div>
+        </Button>
+      </DialogFooter>
     </form>
   );
 }
@@ -934,46 +1077,133 @@ function TaxonomySection({
   const title = resourceTitle(kind);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<EventTaxonomyResource | null>(null);
   const editing = resources.find((resource) => resource.id === editingId);
+  const canCreate = Boolean(actions.createResource);
+  const canUpdate = Boolean(actions.updateResource);
+  const canDelete = Boolean(actions.deleteResource);
+  const capabilityNoteId = `${kind}-capability-note`;
 
   return (
-    <section className={styles.panel} aria-labelledby={`${kind}-heading`}>
-      <header className={styles.panelHeader}>
-        <div className={styles.panelHeading}>
-          <p className={styles.panelEyebrow}>Library</p>
-          <h3 id={`${kind}-heading`} className={styles.panelTitle}>
+    <article className={styles.taxonomyCard} aria-labelledby={`${kind}-heading`}>
+      <header className={styles.taxonomyHeader}>
+        <div>
+          <p className={shellStyles.panelEyebrow}>Program library</p>
+          <h3 id={`${kind}-heading`} className={styles.subheading}>
             {title}
           </h3>
-          <p style={{ ...subtleTextStyle, margin: "0.3rem 0 0" }}>{resourceDescription(kind)}</p>
+          <p className={styles.mutedText}>{resourceDescription(kind)}</p>
         </div>
-        <button
-          className={styles.secondaryButton}
+        <Button
           type="button"
+          variant="outline"
+          disabled={busy || !canCreate}
+          aria-expanded={showForm}
+          aria-controls={`${kind}-form-dialog`}
+          aria-describedby={!canCreate ? capabilityNoteId : undefined}
+          title={canCreate ? `Add ${kind}` : `${title} are read-only`}
           onClick={() => {
             setEditingId(null);
-            setShowForm((current) => !current);
+            setShowForm(true);
           }}
-          aria-expanded={showForm}
-          aria-controls={`${kind}-form`}
         >
-          {showForm ? "Close form" : `Add ${kind}`}
-        </button>
+          Add {kind}
+        </Button>
       </header>
-      <div className={styles.panelContent} style={stackStyle}>
-        {showForm && actions.createResource ? (
-          <div id={`${kind}-form`}>
-            <TaxonomyForm
-              busy={busy}
-              onCancel={() => setShowForm(false)}
-              onSave={async (input) => {
-                await actions.createResource?.(kind, input);
-                setShowForm(false);
-              }}
-            />
-          </div>
-        ) : null}
-        {editing && actions.updateResource ? (
-          <div id={`${kind}-edit-${editing.id}`}>
+      {!canCreate || !canUpdate || !canDelete ? (
+        <p id={capabilityNoteId} className={styles.capabilityNote}>
+          {title} editing is unavailable until the organizer API capability is connected; existing
+          values remain visible.
+        </p>
+      ) : null}
+      <ul className={styles.resourceList} aria-label={`Event ${title.toLowerCase()}`}>
+        {resources.length === 0 ? (
+          <li className={styles.emptyState}>
+            <strong>No {kind}s configured yet.</strong>
+            <span>
+              {canCreate
+                ? `Use Add ${kind} to create the first event-scoped value.`
+                : "Adding values is unavailable in this view."}
+            </span>
+          </li>
+        ) : (
+          resources.map((resource) => (
+            <li key={resource.id}>
+              <Card size="sm" className={styles.resourceCard}>
+                <CardHeader className={styles.resourceCardHeader}>
+                  <div>
+                    <CardTitle className={styles.cardHeading}>{resource.name}</CardTitle>
+                    {resource.description ? (
+                      <CardDescription>{resource.description}</CardDescription>
+                    ) : null}
+                    <CardDescription>Version {resource.version}</CardDescription>
+                  </div>
+                  <div className={styles.cardActions}>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={busy || !canUpdate}
+                      title={canUpdate ? `Edit ${kind}` : `${title} editing is unavailable`}
+                      aria-expanded={editingId === resource.id}
+                      aria-controls={`${kind}-edit-${resource.id}`}
+                      onClick={() => {
+                        setShowForm(false);
+                        setEditingId((current) => (current === resource.id ? null : resource.id));
+                      }}
+                    >
+                      Edit
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      disabled={busy || !canDelete}
+                      title={canDelete ? `Delete ${kind}` : `${title} deletion is unavailable`}
+                      onClick={() => setDeleteTarget(resource)}
+                    >
+                      Delete
+                    </Button>
+                  </div>
+                </CardHeader>
+              </Card>
+            </li>
+          ))
+        )}
+      </ul>
+      <Dialog
+        open={showForm && canCreate}
+        onOpenChange={(open) => {
+          if (!open) setShowForm(false);
+        }}
+      >
+        <DialogContent id={`${kind}-form-dialog`}>
+          <DialogHeader>
+            <DialogTitle>Add {kind}</DialogTitle>
+            <DialogDescription>{resourceDescription(kind)}</DialogDescription>
+          </DialogHeader>
+          <TaxonomyForm
+            busy={busy}
+            onCancel={() => setShowForm(false)}
+            onSave={async (input) => {
+              await actions.createResource?.(kind, input);
+              setShowForm(false);
+            }}
+          />
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={editing !== undefined && canUpdate}
+        onOpenChange={(open) => {
+          if (!open) setEditingId(null);
+        }}
+      >
+        <DialogContent id={editing ? `${kind}-edit-${editing.id}` : undefined}>
+          <DialogHeader>
+            <DialogTitle>Edit {kind}</DialogTitle>
+            <DialogDescription>
+              Save changes against the current version of this value.
+            </DialogDescription>
+          </DialogHeader>
+          {editing ? (
             <TaxonomyForm
               resource={editing}
               busy={busy}
@@ -988,144 +1218,116 @@ function TaxonomySection({
                 setEditingId(null);
               }}
             />
-          </div>
-        ) : null}
-        {resources.length === 0 ? (
-          <div style={{ ...cardStyle, textAlign: "center" }}>
-            <strong>No {kind}s configured yet.</strong>
-            <p style={{ ...subtleTextStyle, margin: "0.25rem 0 0" }}>
-              Use the add button to create the first event-scoped {kind}.
-            </p>
-          </div>
-        ) : (
-          <ul aria-label={`Event ${title.toLowerCase()}`} style={listStyle}>
-            {resources.map((resource) => (
-              <li key={resource.id} style={cardStyle}>
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    gap: "1rem",
-                    alignItems: "start",
-                  }}
-                >
-                  <div>
-                    <h4 style={{ margin: 0, fontSize: "0.9rem" }}>{resource.name}</h4>
-                    {resource.description ? (
-                      <p style={{ ...subtleTextStyle, margin: "0.25rem 0 0" }}>
-                        {resource.description}
-                      </p>
-                    ) : null}
-                    <small style={{ ...subtleTextStyle, display: "block", marginTop: "0.25rem" }}>
-                      Version {resource.version}
-                    </small>
-                  </div>
-                  <div style={inlineActionsStyle}>
-                    {actions.updateResource ? (
-                      <button
-                        className={styles.secondaryButton}
-                        type="button"
-                        disabled={busy}
-                        onClick={() => {
-                          setShowForm(false);
-                          setEditingId((current) => (current === resource.id ? null : resource.id));
-                        }}
-                        aria-expanded={editingId === resource.id}
-                        aria-controls={`${kind}-edit-${resource.id}`}
-                      >
-                        Edit
-                      </button>
-                    ) : null}
-                    {actions.deleteResource ? (
-                      <button
-                        className={styles.secondaryButton}
-                        type="button"
-                        disabled={busy}
-                        onClick={() =>
-                          void actions.deleteResource?.(kind, resource.id, resource.version)
-                        }
-                      >
-                        Delete
-                      </button>
-                    ) : null}
-                  </div>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </section>
+          ) : null}
+        </DialogContent>
+      </Dialog>
+      <DeleteConfirmationDialog
+        open={deleteTarget !== null && canDelete}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+        title={`Delete this ${kind}?`}
+        description={
+          deleteTarget
+            ? `${deleteTarget.name} will be removed from this event. This cannot be undone.`
+            : `This ${kind} will be removed from this event.`
+        }
+        busy={busy}
+        onConfirm={async () => {
+          if (!deleteTarget) return;
+          const currentTarget = resources.find((resource) => resource.id === deleteTarget.id);
+          if (!currentTarget) {
+            setDeleteTarget(null);
+            return;
+          }
+          await actions.deleteResource?.(kind, currentTarget.id, currentTarget.version);
+          setDeleteTarget(null);
+        }}
+      />
+    </article>
   );
 }
 
 function AuditSection({ audit }: Readonly<{ audit: readonly EventSettingsAuditEntry[] }>) {
   return (
-    <section className={styles.panel} aria-labelledby="audit-heading">
+    <section id="audit" className={styles.panel} aria-labelledby="audit-heading">
       <header className={styles.panelHeader}>
         <div className={styles.panelHeading}>
-          <p className={styles.panelEyebrow}>Safety and history</p>
+          <p className={shellStyles.panelEyebrow}>Safety and history</p>
           <h2 id="audit-heading" className={styles.panelTitle}>
             Settings audit history
           </h2>
         </div>
       </header>
-      <div className={styles.panelContent}>
+      <CardContent className={styles.panelContent}>
         {audit.length === 0 ? (
-          <p style={{ ...subtleTextStyle, margin: 0 }}>
+          <p className={styles.mutedText}>
             No settings changes have been audited for this event yet.
           </p>
         ) : (
-          <ol aria-label="Settings audit history" style={{ ...listStyle, listStyleType: "none" }}>
+          <ol className={styles.auditList} aria-label="Settings audit history">
             {audit.map((entry) => (
-              <li
-                key={entry.id}
-                style={{ ...cardStyle, gridTemplateColumns: "minmax(0, 1fr) auto" }}
-              >
+              <li key={entry.id} className={styles.auditEntry}>
                 <div>
-                  <strong style={{ display: "block", fontSize: "0.8rem" }}>
-                    {auditSummary(entry)}
-                  </strong>
-                  <span style={subtleTextStyle}>
+                  <strong>{auditSummary(entry)}</strong>
+                  <span>
                     {entry.entityId} · actor {entry.actorId}
                   </span>
                 </div>
-                <time
-                  dateTime={entry.occurredAt}
-                  style={{ ...subtleTextStyle, whiteSpace: "nowrap" }}
-                >
+                <time dateTime={entry.occurredAt}>
                   {new Date(entry.occurredAt).toLocaleString()}
                 </time>
               </li>
             ))}
           </ol>
         )}
-      </div>
+      </CardContent>
     </section>
   );
 }
 
-function InformationalGroup({
-  id,
-  title,
-  description,
-  detail,
-}: Readonly<{ id: string; title: string; description: string; detail: string }>) {
+function RelatedWorkflows({
+  organizationId,
+  eventId,
+}: Readonly<{ organizationId: string; eventId: string }>) {
+  const eventBasePath = `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}`;
   return (
-    <section id={id} className={styles.panel} aria-labelledby={`${id}-heading`}>
-      <header className={styles.panelHeader}>
-        <div className={styles.panelHeading}>
-          <p className={styles.panelEyebrow}>Event settings</p>
-          <h2 id={`${id}-heading`} className={styles.panelTitle}>
-            {title}
+    <section className={styles.relatedWorkflows} aria-labelledby="related-workflows-heading">
+      <div className={styles.sectionIntro}>
+        <div>
+          <p className={shellStyles.eyebrow}>Related workflows</p>
+          <h2 id="related-workflows-heading" className={styles.sectionTitle}>
+            Keep operational work in its dedicated workspace
           </h2>
         </div>
-      </header>
-      <div className={styles.panelContent}>
-        <p style={{ margin: 0, color: "var(--admin-ink)", fontSize: "0.86rem", lineHeight: 1.55 }}>
-          {description}
-        </p>
-        <p style={{ ...subtleTextStyle, margin: "0.55rem 0 0" }}>{detail}</p>
+      </div>
+      <div className={styles.relatedGrid}>
+        <Card size="sm">
+          <CardHeader>
+            <CardTitle>Communications</CardTitle>
+            <CardDescription>
+              Templates, recipient previews, sends, and delivery history live in Communications.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className={styles.relatedCardContent}>
+            <Button asChild variant="link">
+              <a href={`${eventBasePath}/communications`}>Open Communications</a>
+            </Button>
+          </CardContent>
+        </Card>
+        <Card size="sm">
+          <CardHeader>
+            <CardTitle>Calendar</CardTitle>
+            <CardDescription>
+              Review agenda timing and published calendar delivery in the Agenda workspace.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className={styles.relatedCardContent}>
+            <Button asChild variant="link">
+              <a href={`${eventBasePath}/agenda`}>Open Agenda &amp; Calendar</a>
+            </Button>
+          </CardContent>
+        </Card>
       </div>
     </section>
   );
@@ -1146,207 +1348,167 @@ export function EventSettingsWorkspaceView({
     state.status === "loaded"
       ? (state.detailsMessage ?? "The event library and audit history could not be loaded.")
       : null;
+
   return (
-    <main id="event-settings-content" tabIndex={-1}>
-      <header className={styles.pageHeader}>
-        <div className={styles.pageHeaderCopy}>
-          <p className={styles.eyebrow}>Event setup</p>
-          <h1 className={styles.pageTitle}>Event settings</h1>
-          <p className={styles.pageDescription}>
+    <main id="event-settings-content" className={styles.workspace} tabIndex={-1}>
+      <header className={shellStyles.pageHeader}>
+        <div className={shellStyles.pageHeaderCopy}>
+          <p className={shellStyles.eyebrow}>Event setup</p>
+          <h1 className={shellStyles.pageTitle}>Event settings</h1>
+          <p className={shellStyles.pageDescription}>
             Configure the program vocabulary, scheduling rules, and operational groups for this
             event.
           </p>
-          <p style={{ ...subtleTextStyle, margin: "0.7rem 0 0" }}>
-            {contextLabel(organizationId, eventId)}
-          </p>
+          <p className={styles.contextText}>{contextLabel(organizationId, eventId)}</p>
         </div>
       </header>
+
       {state.status === "error" || state.status === "config-error" ? (
-        <div
-          role="alert"
-          className={styles.callout}
-          style={{
-            marginBottom: "1.25rem",
-            borderColor: "#f2c9c7",
-            background: "var(--admin-danger-soft)",
-          }}
-        >
-          <div>
-            <strong>Event settings unavailable</strong>
-            <p>{state.message}</p>
+        <Card className={styles.fullWidthState} role="alert">
+          <CardHeader>
+            <CardTitle>Event settings unavailable</CardTitle>
+            <CardDescription>{state.message}</CardDescription>
+          </CardHeader>
+          <CardContent className={styles.stateActions}>
+            <p className={styles.mutedText}>
+              Core event settings were not loaded, so section navigation is unavailable.
+            </p>
             {onRetry ? (
-              <button
-                className={styles.secondaryButton}
-                type="button"
-                onClick={onRetry}
-                style={{ marginTop: "0.7rem" }}
-              >
+              <Button type="button" variant="outline" onClick={onRetry}>
                 Try again
-              </button>
+              </Button>
             ) : null}
-          </div>
-        </div>
-      ) : null}
-      <div
-        className={styles.dashboardGrid}
-        style={{ gridTemplateColumns: "minmax(13rem, 0.34fr) minmax(0, 1fr)" }}
-      >
-        <SettingsGroupedNavigation />
-        <div style={stackStyle}>
-          <div className={styles.srOnly} role="status" aria-live="polite">
-            {notice}
-          </div>
-          {notice ? (
-            <div
-              role="status"
-              aria-live="polite"
-              className={styles.callout}
-              style={{ marginBottom: "1rem" }}
-            >
+          </CardContent>
+        </Card>
+      ) : state.status === "loading" && !data ? (
+        <Card className={styles.fullWidthState} aria-live="polite" aria-busy="true">
+          <CardHeader>
+            <CardTitle>Loading event settings</CardTitle>
+            <CardDescription>Retrieving event-scoped statuses and rooms.</CardDescription>
+          </CardHeader>
+        </Card>
+      ) : data ? (
+        <div className={styles.dashboardGrid}>
+          <SettingsSectionNavigation />
+          <div className={styles.contentStack}>
+            <div className={shellStyles.srOnly} role="status" aria-live="polite">
               {notice}
             </div>
-          ) : null}
-          {state.status === "loading" && !data ? (
-            <section className={styles.panel} aria-live="polite" aria-busy="true">
-              <div className={styles.panelContent}>
-                <h2 className={styles.panelTitle}>Loading event settings</h2>
-                <p style={subtleTextStyle}>
-                  Retrieving event-scoped statuses, rooms, and library values.
-                </p>
+            {notice ? (
+              <div className={styles.notice} role="status" aria-live="polite">
+                {notice}
               </div>
-            </section>
-          ) : null}
-          {data ? (
-            <>
-              <section
-                id="session-settings"
-                className={styles.panel}
-                aria-labelledby="session-settings-heading"
-              >
-                <header className={styles.panelHeader}>
-                  <div className={styles.panelHeading}>
-                    <p className={styles.panelEyebrow}>Event setup</p>
-                    <h2 id="session-settings-heading" className={styles.panelTitle}>
-                      Session settings
-                    </h2>
-                    <p style={{ ...subtleTextStyle, margin: "0.3rem 0 0" }}>
-                      Set statuses and decide which statuses are eligible for the private agenda.
-                    </p>
-                  </div>
-                </header>
-                <div className={styles.panelContent}>
-                  {actions.updateSettings ? (
-                    <StatusSettingsForm
-                      settings={data.settings}
-                      busy={busy}
-                      onSave={actions.updateSettings}
-                    />
-                  ) : (
-                    <div style={stackStyle}>
-                      <p style={{ ...subtleTextStyle, margin: 0 }}>
-                        Settings are read-only until the organizer API is connected.
-                      </p>
-                      <p style={{ ...subtleTextStyle, margin: 0 }}>
-                        <strong>Configured statuses:</strong> {data.settings.statuses.join(", ")}
-                      </p>
-                      <p style={{ ...subtleTextStyle, margin: 0 }}>
-                        <strong>Agenda-eligible:</strong>{" "}
-                        {data.settings.agendaEligibleStatuses.join(", ")}
-                      </p>
-                    </div>
-                  )}
+            ) : null}
+            <section
+              id="session-settings"
+              className={styles.panel}
+              aria-labelledby="session-settings-heading"
+            >
+              <header className={styles.panelHeader}>
+                <div className={styles.panelHeading}>
+                  <p className={shellStyles.panelEyebrow}>Event setup</p>
+                  <h2 id="session-settings-heading" className={styles.panelTitle}>
+                    Session settings
+                  </h2>
+                  <p className={styles.mutedText}>
+                    Set statuses and decide which statuses are eligible for the private agenda.
+                  </p>
                 </div>
-              </section>
-              <RoomsSection rooms={data.rooms} busy={busy} actions={actions} />
-              <section id="library" aria-labelledby="library-heading" style={stackStyle}>
+              </header>
+              <CardContent className={styles.panelContent}>
+                <StatusSettingsForm
+                  settings={data.settings}
+                  busy={busy}
+                  {...(actions.updateSettings === undefined
+                    ? {}
+                    : { onSave: actions.updateSettings })}
+                  readOnly={!actions.updateSettings}
+                />
+              </CardContent>
+            </section>
+            <RoomsSection rooms={data.rooms} busy={busy} actions={actions} />
+            <section
+              id="library"
+              className={styles.librarySection}
+              aria-labelledby="library-heading"
+            >
+              <div className={styles.sectionIntro}>
                 <div>
-                  <p className={styles.eyebrow}>Library</p>
+                  <p className={shellStyles.eyebrow}>Program library</p>
                   <h2 id="library-heading" className={styles.sectionTitle}>
                     Program library
                   </h2>
-                  <p style={{ ...subtleTextStyle, margin: "0.35rem 0 0" }}>
+                  <p className={styles.mutedText}>
                     Event-scoped values keep the event vocabulary predictable without crossing
                     organization boundaries.
                   </p>
                 </div>
-                {detailsStatus === "loading" ? (
-                  <p role="status" aria-live="polite" style={subtleTextStyle}>
-                    Loading event library…
-                  </p>
-                ) : detailsStatus === "error" ? (
-                  <p role="alert" style={subtleTextStyle}>
-                    Event library unavailable. {detailsMessage}
-                  </p>
-                ) : (
-                  <div style={twoColumnStyle}>
-                    <TaxonomySection
-                      kind="track"
-                      resources={data.tracks}
-                      busy={busy}
-                      actions={actions}
-                    />
-                    <TaxonomySection
-                      kind="format"
-                      resources={data.formats}
-                      busy={busy}
-                      actions={actions}
-                    />
-                    <TaxonomySection
-                      kind="level"
-                      resources={data.levels}
-                      busy={busy}
-                      actions={actions}
-                    />
-                    <TaxonomySection
-                      kind="tag"
-                      resources={data.tags}
-                      busy={busy}
-                      actions={actions}
-                    />
-                  </div>
-                )}
-              </section>
-              <InformationalGroup
-                id="communications"
-                title="Communications"
-                description="Keep event communications organized around approved, event-scoped messages."
-                detail="Transactional templates and recipient groups are managed in the Communications workspace. This settings page does not send messages."
-              />
-              <InformationalGroup
-                id="calendar"
-                title="Calendar"
-                description="Calendar delivery follows the published agenda and the event timezone."
-                detail="Calendar invitations are generated only from published agenda changes. Draft settings never leak to public or participant calendar feeds."
-              />
-              {detailsStatus === "loaded" ? (
-                <AuditSection audit={data.audit} />
+              </div>
+              {detailsStatus === "loading" ? (
+                <Card className={styles.detailsState} role="status" aria-live="polite">
+                  <CardContent>
+                    <p>Loading event library and audit history…</p>
+                  </CardContent>
+                </Card>
+              ) : detailsStatus === "error" ? (
+                <Card className={styles.detailsState} role="alert">
+                  <CardContent>
+                    <p>Event library unavailable. {detailsMessage}</p>
+                  </CardContent>
+                </Card>
               ) : (
-                <section className={styles.panel} aria-labelledby="audit-heading">
-                  <header className={styles.panelHeader}>
-                    <div className={styles.panelHeading}>
-                      <p className={styles.panelEyebrow}>Safety and history</p>
-                      <h2 id="audit-heading" className={styles.panelTitle}>
-                        Settings audit history
-                      </h2>
-                    </div>
-                  </header>
-                  <div className={styles.panelContent}>
-                    <p
-                      role={detailsStatus === "error" ? "alert" : "status"}
-                      aria-live="polite"
-                      style={{ ...subtleTextStyle, margin: 0 }}
-                    >
-                      {detailsStatus === "loading"
-                        ? "Loading settings audit history…"
-                        : `Settings audit history unavailable. ${detailsMessage}`}
-                    </p>
-                  </div>
-                </section>
+                <div className={styles.taxonomyGrid}>
+                  <TaxonomySection
+                    kind="track"
+                    resources={data.tracks}
+                    busy={busy}
+                    actions={actions}
+                  />
+                  <TaxonomySection
+                    kind="format"
+                    resources={data.formats}
+                    busy={busy}
+                    actions={actions}
+                  />
+                  <TaxonomySection
+                    kind="level"
+                    resources={data.levels}
+                    busy={busy}
+                    actions={actions}
+                  />
+                  <TaxonomySection kind="tag" resources={data.tags} busy={busy} actions={actions} />
+                </div>
               )}
-            </>
-          ) : null}
+            </section>
+            <RelatedWorkflows organizationId={organizationId} eventId={eventId} />
+            {detailsStatus === "loaded" ? (
+              <AuditSection audit={data.audit} />
+            ) : (
+              <section id="audit" className={styles.panel} aria-labelledby="audit-heading">
+                <header className={styles.panelHeader}>
+                  <div className={styles.panelHeading}>
+                    <p className={shellStyles.panelEyebrow}>Safety and history</p>
+                    <h2 id="audit-heading" className={styles.panelTitle}>
+                      Settings audit history
+                    </h2>
+                  </div>
+                </header>
+                <CardContent className={styles.panelContent}>
+                  <p
+                    className={styles.mutedText}
+                    role={detailsStatus === "error" ? "alert" : "status"}
+                    aria-live="polite"
+                  >
+                    {detailsStatus === "loading"
+                      ? "Loading settings audit history…"
+                      : `Settings audit history unavailable. ${detailsMessage}`}
+                  </p>
+                </CardContent>
+              </section>
+            )}
+          </div>
         </div>
-      </div>
+      ) : null}
     </main>
   );
 }

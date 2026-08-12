@@ -107,6 +107,7 @@ const publishedSpeakerProjectionSchema = z.object({
 interface SpeakerResponseCache {
   match(request: Request): Promise<Response | undefined>;
   put(request: Request, response: Response): Promise<void>;
+  delete?(request: Request): Promise<boolean>;
 }
 
 interface SpeakerCachedResponse {
@@ -268,6 +269,21 @@ function writeSpeakerCache(
   const workerCache = workerSpeakerCache();
   if (workerCache === null) return;
   scheduleSpeakerCachePut(context, state, workerCache, path, entry, generation);
+}
+export async function invalidatePublishedSpeakerCache(
+  dependencies: PublishedSpeakerRouteDependencies,
+  eventSlug: string,
+): Promise<void> {
+  const normalizedSlug = eventSlug.trim();
+  if (normalizedSlug.length === 0) return;
+  const path = `/api/public/events/${encodeURIComponent(normalizedSlug)}/speakers`;
+  const state = speakerCacheState(dependencies);
+  nextSpeakerCacheGeneration(state, path);
+  state.entries.delete(path);
+  const workerCache = workerSpeakerCache();
+  if (workerCache?.delete !== undefined) {
+    await workerCache.delete(speakerCacheRequest(path)).catch(() => false);
+  }
 }
 
 function traceId(context: PublishedSpeakerContext): string {

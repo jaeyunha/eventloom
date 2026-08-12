@@ -5278,8 +5278,6 @@ describe("production organizer speaker composition", () => {
 
     const tasks = await repository.listTasks("event-speaker", ["participant-speaker"]);
     expect(tasks.map((task) => task.id).sort()).toEqual([
-      "organizer-task-for-alias",
-      "same-title:participant-speaker-alias:two",
       "same-title:participant-speaker:one",
       "task-family:participant-speaker",
     ]);
@@ -5288,11 +5286,7 @@ describe("production organizer speaker composition", () => {
       submissionId: "speaker-submission:submission-speaker",
       version: 1,
     });
-    expect(tasks.find((task) => task.id === "organizer-task-for-alias")).toMatchObject({
-      participantId: "participant-speaker",
-      submissionId: "speaker-submission:submission-speaker",
-      assigneeIds: ["participant-speaker"],
-    });
+    expect(tasks.find((task) => task.id === "organizer-task-for-alias")).toBeUndefined();
   });
 
   it("resolves public CFP submission IDs to canonical speaker roster records", async () => {

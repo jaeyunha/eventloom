@@ -83,7 +83,7 @@ describe("public embed API", () => {
       ),
     ).resolves.toEqual({ agenda: publishedAgenda, speakers: publishedSpeakers });
     expect(calls).toHaveLength(2);
-    expect(calls.map(({ init }) => init?.cache)).toEqual(["force-cache", "force-cache"]);
+    expect(calls.map(({ init }) => init?.cache)).toEqual(["no-store", "no-store"]);
   });
 
   it("recovers one-revision skew by refreshing only the stale projection", async () => {
@@ -118,10 +118,7 @@ describe("public embed API", () => {
       ),
     ).resolves.toEqual({ agenda: publishedAgenda, speakers: publishedSpeakers });
     expect(calls).toHaveLength(3);
-    expect(calls.slice(0, 2).map(({ init }) => init?.cache)).toEqual([
-      "force-cache",
-      "force-cache",
-    ]);
+    expect(calls.slice(0, 2).map(({ init }) => init?.cache)).toEqual(["no-store", "no-store"]);
     expect(String(calls[2]?.input)).toMatch(/\/speakers$/u);
     expect(calls[2]?.init).toMatchObject({
       cache: "no-store",
@@ -179,8 +176,8 @@ describe("public embed API", () => {
       ).resolves.toEqual({ agenda: refreshedAgenda, speakers: refreshedSpeakers });
       expect(calls).toHaveLength(4);
       expect(calls.map(({ init }) => init?.cache)).toEqual([
-        "force-cache",
-        "force-cache",
+        "no-store",
+        "no-store",
         "no-store",
         "no-store",
       ]);
@@ -231,8 +228,8 @@ describe("public embed API", () => {
     });
     expect(calls).toHaveLength(4);
     expect(calls.map(({ init }) => init?.cache)).toEqual([
-      "force-cache",
-      "force-cache",
+      "no-store",
+      "no-store",
       "no-store",
       "no-store",
     ]);
@@ -266,8 +263,8 @@ describe("public embed API", () => {
     });
     expect(calls).toHaveLength(4);
     expect(calls.map(({ init }) => init?.cache)).toEqual([
-      "force-cache",
-      "force-cache",
+      "no-store",
+      "no-store",
       "no-store",
       "no-store",
     ]);

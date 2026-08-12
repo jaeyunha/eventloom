@@ -27,6 +27,7 @@ import {
   speakerProgressFor,
   speakerProgressMatches,
   speakerSecondaryLoadKey,
+  taskStatusTone,
   travelLogisticsFor,
   validateOrganizerHeadshotFile,
   validateSpeakerTaskAssignment,
@@ -613,6 +614,14 @@ describe("speaker API adapter", () => {
 });
 
 describe("speaker workspace contracts", () => {
+  it("uses restrained semantic tones for each task status", () => {
+    expect(taskStatusTone("not_started")).toBe("neutral");
+    expect(taskStatusTone("in_progress")).toBe("info");
+    expect(taskStatusTone("overdue")).toBe("warning");
+    expect(taskStatusTone("completed")).toBe("success");
+    expect(taskStatusTone("submitted")).toBe("success");
+    expect(taskStatusTone("unknown")).toBe("neutral");
+  });
   it("skips the batch task request for an empty roster", async () => {
     let taskCalls = 0;
     const progress = await speakerProgressFor(
@@ -1109,7 +1118,7 @@ describe("speaker workspace", () => {
     ]);
   });
 
-  it("renders independently recoverable CSV and bulk-email action controls", () => {
+  it("renders the email workflow controls without unsafe HTML execution", () => {
     const markup = renderToStaticMarkup(
       createElement(SpeakerWorkspace, {
         organizationId: "org-1",
@@ -1122,7 +1131,8 @@ describe("speaker workspace", () => {
     expect(markup).toContain('aria-expanded="false"');
     expect(markup).toContain('id="email-tab"');
     expect(markup).toContain('aria-controls="email-view"');
-    expect(markup).not.toContain("Preview merge");
-    expect(markup).not.toContain("Queue speaker email");
+    expect(markup).not.toContain("dangerouslySetInnerHTML");
+    expect(markup).not.toContain("srcDoc");
+    expect(markup).not.toContain("iframe");
   });
 });

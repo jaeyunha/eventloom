@@ -719,9 +719,9 @@ export function AgendaBoard({
     const nextGroup = groups[activeIndex + 1];
 
     return (
-      <nav className={styles.viewSwitcher} aria-label="Event day navigation">
+      <nav className={styles.dayPager} aria-label="Event day navigation">
         <span className={styles.viewLabel}>Event days</span>
-        <div className={styles.viewTablist}>
+        <div className={styles.dayPagerControls}>
           <button
             className={styles.secondaryButton}
             type="button"
@@ -732,7 +732,7 @@ export function AgendaBoard({
           >
             Previous day
           </button>
-          <p aria-live="polite">
+          <p className={styles.dayPagerCurrent} aria-live="polite">
             {currentGroup
               ? `${currentGroup.label} · Day ${activeIndex + 1} of ${groups.length}`
               : "No event days available"}
