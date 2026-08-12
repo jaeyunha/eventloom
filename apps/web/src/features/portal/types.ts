@@ -47,6 +47,7 @@ export interface PortalSubmission {
   participantIds: readonly string[];
   updatedAt: string;
   formId?: string;
+  closeAt?: string;
 }
 
 export interface PortalProfile {

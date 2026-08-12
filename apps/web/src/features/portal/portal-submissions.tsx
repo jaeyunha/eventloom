@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import type { CfpSubmissionPointerIdentity } from "../cfp/draft-persistence";
 import {
   filterSubmissions,
   portalSubmissionEditTarget,
@@ -16,7 +17,7 @@ import {
   PortalContentState,
   SubmissionStatusBadge,
 } from "./portal-ui";
-import type { PortalSubmission } from "./types";
+import type { PortalContext, PortalSubmission } from "./types";
 
 export function portalSubmissionIdsMatch(left: string, right: string): boolean {
   const normalizedLeft = canonicalPortalSubmissionId(left);
@@ -105,6 +106,61 @@ export function portalSubmissionDisplayTitle(
     return submission.title.trim();
   }
   return humanizeCanonicalSubmissionReference(canonicalPortalSubmissionId(submission.id));
+}
+export interface PortalSubmissionActionTargets {
+  editHref: string;
+  newProposalHref: string;
+  pointerKey: string;
+  identity: CfpSubmissionPointerIdentity;
+}
+
+export function portalSubmissionActionTargets(
+  context: PortalContext | null,
+  submission: PortalSubmission,
+): PortalSubmissionActionTargets | null {
+  const formId = submission.formId?.trim();
+  if (context === null || formId === undefined || formId.length === 0) return null;
+
+  const contextStatus = context.status?.trim().toLocaleLowerCase();
+  if (
+    contextStatus === "draft" ||
+    contextStatus === "closed" ||
+    contextStatus === "archived" ||
+    contextStatus === "inactive" ||
+    contextStatus === "cancelled"
+  ) {
+    return null;
+  }
+
+  const closeAt = submission.closeAt?.trim();
+  if (closeAt !== undefined && closeAt.length > 0) {
+    const closeTime = Date.parse(closeAt);
+    if (!Number.isFinite(closeTime) || closeTime <= Date.now()) return null;
+  }
+
+  const editableSubmission =
+    submission.status === "accepted"
+      ? { ...submission, status: "submitted" as const, formId }
+      : { ...submission, formId };
+  const editTarget = portalSubmissionEditTarget(context, editableSubmission);
+  if (editTarget === null) return null;
+
+  const eventSlug = context.slug?.trim() || context.eventId.trim();
+  const organizationId = context.id.split(":")[1]?.trim();
+  if (eventSlug.length === 0 || organizationId === undefined || organizationId.length === 0) {
+    return null;
+  }
+
+  return {
+    editHref: editTarget.href,
+    newProposalHref: `/cfp/${encodeURIComponent(eventSlug)}`,
+    pointerKey: editTarget.pointerKey,
+    identity: {
+      organizationId,
+      eventId: context.eventId,
+      formId,
+    },
+  };
 }
 
 export function PortalSubmissions() {
