@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { createApp } from "../app";
+import { type ApiDependencies, createApp } from "../app";
 import type { AgendaState, PublishedAgendaRevision } from "../features/agenda/types";
 import type { CfpForm, EventCfp, Submission } from "../features/cfp/model";
 import type { CfpRepository } from "../features/cfp/service";
-import { CommunicationService } from "../features/communications/service";
+import {
+  CommunicationService,
+  InMemoryCommunicationRepository,
+  InMemoryReminderRepository,
+} from "../features/communications/service";
 import type { CommunicationActor, CommunicationRecipient } from "../features/communications/types";
 import { EvaluationService } from "../features/evaluations/service";
 import { SessionService } from "../features/sessions/service";
@@ -45,7 +49,12 @@ import {
   inspectProductionRuntime,
   type RuntimeBindings,
 } from "./cloudflare";
-import { createRuntimeApp, createRuntimeDependencies, createRuntimeWorker } from "./composition";
+import {
+  createRuntimeApp,
+  createRuntimeDependencies,
+  createRuntimeWorker,
+  runScheduledReminders,
+} from "./composition";
 import {
   LOCAL_API_KEY,
   LOCAL_ORGANIZATION_ID,
@@ -2699,6 +2708,62 @@ describe("fixture local runtime composition", () => {
     await expect(
       scheduled({ scheduledTime: Date.now() } as never, bindings, {} as ExecutionContext),
     ).resolves.toBeUndefined();
+  });
+  it("records a failed automatic run when scheduled reminder delivery is misconfigured", async () => {
+    const reminders = new InMemoryReminderRepository();
+    const service = new CommunicationService(new InMemoryCommunicationRepository(), undefined, {
+      reminders: { repository: reminders },
+    });
+    const database = {
+      prepare() {
+        return {
+          async all() {
+            return {
+              results: [
+                {
+                  organization_id: "organization-reminders",
+                  user_id: "organizer-reminders",
+                  role: "owner",
+                },
+              ],
+            };
+          },
+        };
+      },
+    } as unknown as D1Database;
+    const dependencies = {
+      communications: {
+        service,
+        actorFor: async () => null,
+      },
+      events: {
+        service: {
+          async listEvents() {
+            return [{ id: "event-reminders", organizationId: "organization-reminders" }];
+          },
+        },
+      },
+    } as unknown as ApiDependencies;
+
+    await runScheduledReminders(
+      dependencies,
+      {
+        APP_ENV: "production",
+        WEB_ORIGIN: "https://open-sessionboard.pages.dev",
+        DB: database,
+      },
+      new Date("2026-08-12T12:30:00.000Z"),
+    );
+
+    await expect(
+      reminders.listRuns("organization-reminders", "event-reminders"),
+    ).resolves.toMatchObject([
+      {
+        triggerType: "automatic",
+        state: "failed",
+        configurationFailure: "The reminder candidate source is not configured.",
+      },
+    ]);
   });
 
   it("exposes the production outbox queue consumer and retries when bindings fail closed", async () => {
