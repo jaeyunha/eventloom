@@ -149,7 +149,7 @@ describe("published speaker projection route", () => {
     });
   });
   it("serves only headshot bytes resolved from the immutable publication dependency", async () => {
-    const body = new TextEncoder().encode("image").buffer;
+    const body = new TextEncoder().encode("image").buffer as ArrayBuffer;
     const getPublishedSpeakerHeadshot = vi.fn(async (eventSlug: string, speakerId: string) =>
       eventSlug === projection.event.slug && speakerId === publishedSpeaker.id
         ? {

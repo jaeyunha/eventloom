@@ -46,6 +46,8 @@ import { SpeakerService } from "../features/speaker/service";
 import type {
   CreatePrivateUploadGrantCommand,
   PrivateAssetGateway,
+  PrivateDownloadGrant,
+  PrivateUploadGrant,
   RepositoryResult,
   SpeakerAccessScope,
   SpeakerAsset,
@@ -861,7 +863,7 @@ class LocalPrivateAssetGateway implements PrivateAssetGateway {
   readonly #objects = new Map<string, LocalPrivateAssetObject>();
   #sequence = 0;
 
-  async createUploadGrant(_command: CreatePrivateUploadGrantCommand) {
+  async createUploadGrant(_command: CreatePrivateUploadGrantCommand): Promise<PrivateUploadGrant> {
     throw new Error("A fully bound local upload capability is required.");
   }
 
@@ -869,7 +871,7 @@ class LocalPrivateAssetGateway implements PrivateAssetGateway {
     objectKey: string;
     fileName: string;
     expiresAt: string;
-  }) {
+  }): Promise<PrivateDownloadGrant> {
     throw new Error("A fully bound local download capability is required.");
   }
 
@@ -933,8 +935,7 @@ class LocalPrivateAssetGateway implements PrivateAssetGateway {
     if (
       contentType !== capability.binding.contentType.trim().toLowerCase() ||
       (declaredLength !== null &&
-        (!/^\d+$/u.test(declaredLength) ||
-          Number(declaredLength) !== capability.binding.sizeBytes))
+        (!/^\d+$/u.test(declaredLength) || Number(declaredLength) !== capability.binding.sizeBytes))
     ) {
       throw new Error("The uploaded object metadata is not allowed.");
     }
@@ -970,7 +971,8 @@ class LocalPrivateAssetGateway implements PrivateAssetGateway {
     if (
       object === undefined ||
       object.bytes.byteLength !== capability.binding.sizeBytes ||
-      object.contentType.trim().toLowerCase() !== capability.binding.contentType.trim().toLowerCase()
+      object.contentType.trim().toLowerCase() !==
+        capability.binding.contentType.trim().toLowerCase()
     ) {
       throw new Error("The requested private asset is not available.");
     }

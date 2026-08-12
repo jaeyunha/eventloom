@@ -316,11 +316,7 @@ function stableRowKey<T extends object>(state: RowKeyState<T>, prefix: string, r
   return key;
 }
 
-function carryRowKey<T extends object>(
-  state: RowKeyState<T>,
-  previous: T,
-  next: T,
-): void {
+function carryRowKey<T extends object>(state: RowKeyState<T>, previous: T, next: T): void {
   const existing = state.map.get(previous);
   if (existing !== undefined) state.map.set(next, existing);
 }

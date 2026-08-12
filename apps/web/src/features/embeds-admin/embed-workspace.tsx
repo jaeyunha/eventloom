@@ -818,10 +818,9 @@ function EmbedConfigurationLibrary({
           ))}
         </select>
       </label>
-      <div
-        role="group"
+      <fieldset
         aria-label="Saved configuration availability"
-        style={{ display: "grid", gap: "0.4rem", marginTop: "0.7rem" }}
+        style={{ display: "grid", gap: "0.4rem", marginTop: "0.7rem", border: 0, padding: 0 }}
       >
         {configurations.map((configuration) => (
           <Label
@@ -842,7 +841,7 @@ function EmbedConfigurationLibrary({
             </span>
           </Label>
         ))}
-      </div>
+      </fieldset>
 
       <label style={{ ...fieldStyle, marginTop: "0.7rem" }} htmlFor="embed-configuration-name">
         <span style={fieldLabelStyle}>Configuration name</span>
@@ -1409,9 +1408,7 @@ export function EmbedWorkspaceView({
 }: EmbedWorkspaceViewProps) {
   const serverConfigurationList = useMemo<readonly EmbedConfiguration[] | null>(
     () =>
-      initialConfigurations === undefined
-        ? null
-        : eventEmbedConfigurations(initialConfigurations),
+      initialConfigurations === undefined ? null : eventEmbedConfigurations(initialConfigurations),
     [initialConfigurations],
   );
   const initialServerConfigurations = serverConfigurationList ?? [];
@@ -1500,7 +1497,6 @@ export function EmbedWorkspaceView({
     setTracks(configuration.tracks);
     setStatuses(configuration.statuses);
   }, []);
-
 
   useEffect(() => {
     if (serverConfigurationList === null) return;

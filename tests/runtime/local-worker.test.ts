@@ -849,9 +849,8 @@ describe.sequential("composed local Worker", () => {
     const taskResponse = await runtimeRequest(`/api/speaker/events/${eventId}/tasks`, {
       headers: speakerHeaders,
     });
-    const tasks = await jsonData<Array<{ id: string; status: string; version: number }>>(
-      taskResponse,
-    );
+    const tasks =
+      await jsonData<Array<{ id: string; status: string; version: number }>>(taskResponse);
     expect(taskResponse.status).toBe(200);
     expect(tasks).toContainEqual(
       expect.objectContaining({ id: "local-slides-task", status: "submitted", version: 1 }),

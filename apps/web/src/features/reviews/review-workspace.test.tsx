@@ -499,7 +499,7 @@ describe("review workspace", () => {
     });
     expect(isValidElement(retryTree)).toBe(true);
     if (!isValidElement(retryTree)) throw new Error("Expected review detail status.");
-    const retryButton = (retryTree.props.children as readonly unknown[]).find(
+    const retryButton = (retryTree.props as { children: readonly unknown[] }).children.find(
       (child) =>
         isValidElement(child) &&
         (child.props as Record<string, unknown>).children === "Retry review details",
