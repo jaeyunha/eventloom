@@ -134,7 +134,7 @@
   padding: 1.15rem 1.25rem;
   border: 1px solid rgb(80 101 232 / 30%);
   border-radius: var(--radius-md);
-  background: linear-gradient(110deg, var(--color-brand-soft), var(--color-surface));
+  background: var(--color-surface);
 }
 
 .authorityNotice h2,
@@ -367,7 +367,7 @@
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, var(--color-brand), #7a87ee);
+  background: var(--color-ink);
 }
 
 .tableWrap {
@@ -1369,4 +1369,398 @@
 .secondaryButton,
 .dangerButton {
   min-height: 2.75rem;
+}
+/* Organizer task views */
+.workspace {
+  max-inline-size: 76rem;
+  overflow-x: clip;
+}
+
+.workspaceHeader {
+  padding-block: 1.25rem 1rem;
+}
+
+.workspaceHeader h1 {
+  font-size: clamp(1.8rem, 3vw, 2.5rem);
+  letter-spacing: -0.035em;
+  line-height: 1.1;
+}
+
+.eyebrow,
+.sectionEyebrow {
+  color: var(--color-muted);
+  font-size: 0.74rem;
+  letter-spacing: 0.08em;
+}
+
+.headerDescription {
+  max-width: 62ch;
+  margin-top: 0.65rem;
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+.authorityNotice {
+  display: block;
+  margin: 0 0 1rem;
+  padding: 0.7rem 0;
+  border: 0;
+  border-bottom: 1px solid var(--color-border);
+  border-radius: 0;
+  background: transparent;
+}
+
+.authorityNotice h2 {
+  display: inline;
+  margin-right: 0.3rem;
+  font-size: 0.9rem;
+}
+
+.authorityNotice p {
+  display: inline;
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.workspaceTabs {
+  display: flex;
+  gap: 0.2rem;
+  max-inline-size: 100%;
+  margin-bottom: 1rem;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--color-border);
+  scrollbar-width: thin;
+}
+
+.tabButton {
+  min-height: 2.75rem;
+  flex: 0 0 auto;
+  padding: 0.55rem 0.8rem;
+  border: 1px solid transparent;
+  border-bottom: 2px solid transparent;
+  border-radius: 0.3rem 0.3rem 0 0;
+  background: transparent;
+  color: var(--color-muted);
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.tabButton:hover {
+  background: var(--color-canvas);
+  color: var(--color-ink);
+}
+
+.tabButtonActive {
+  border-bottom-color: var(--color-ink);
+  color: var(--color-ink);
+}
+
+.tabButton:focus-visible,
+.overviewAction:focus-visible {
+  outline: 3px solid rgb(37 39 45 / 28%);
+  outline-offset: 2px;
+}
+
+.tabPanel {
+  min-inline-size: 0;
+}
+
+.viewIntro {
+  margin: 0 0 1rem;
+  padding: 0.2rem 0 0.9rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.viewIntro h2 {
+  margin: 0;
+  color: var(--color-ink);
+  font-size: clamp(1.35rem, 2.5vw, 1.75rem);
+  letter-spacing: -0.03em;
+}
+
+.viewIntro p:last-child {
+  max-width: 65ch;
+  margin: 0.35rem 0 0;
+  color: var(--color-muted);
+  font-size: 0.92rem;
+}
+
+.section {
+  margin-top: 1rem;
+  padding: 1.25rem;
+  border-radius: 0.55rem;
+  box-shadow: none;
+}
+
+.sectionHeading {
+  margin-bottom: 0.9rem;
+}
+
+.sectionHeading h2 {
+  font-size: clamp(1.25rem, 2.2vw, 1.55rem);
+  letter-spacing: -0.025em;
+}
+
+.overviewGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.overviewCard {
+  display: grid;
+  min-inline-size: 0;
+  min-block-size: 8.5rem;
+  align-content: start;
+  gap: 0.35rem;
+  padding: 0.9rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.45rem;
+  background: var(--color-surface);
+}
+
+.overviewValue {
+  display: block;
+  min-inline-size: 0;
+  color: var(--color-ink);
+  font-size: 1.08rem;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.overviewCard p {
+  margin: 0.1rem 0 0;
+  color: var(--color-muted);
+  font-size: 0.86rem;
+}
+
+.overviewCard .progressBlock {
+  margin-top: auto;
+}
+
+.overviewAction {
+  justify-self: start;
+  min-height: 2.75rem;
+  margin-top: auto;
+  padding: 0.35rem 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-ink);
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 750;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+  cursor: pointer;
+}
+
+.overviewFooter {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(12rem, 0.7fr);
+  gap: 1rem;
+  align-items: end;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-muted);
+  font-size: 0.84rem;
+}
+
+.viewToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.decisionList {
+  gap: 0.5rem;
+}
+
+.decisionRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.7rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.45rem;
+  background: var(--color-surface);
+}
+
+.decisionRowSummary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 0.75rem;
+  min-inline-size: 0;
+  align-items: center;
+}
+
+.decisionRowSummary h3 {
+  min-inline-size: 0;
+  margin: 0.2rem 0 0;
+  color: var(--color-ink);
+  font-size: 0.98rem;
+  overflow-wrap: anywhere;
+}
+
+.decisionStatus {
+  color: var(--color-muted);
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.selectedDecisionEditor {
+  margin-top: 0.75rem;
+}
+
+.selectedDecisionEditor .decisionCard {
+  margin: 0;
+}
+
+.scorePill {
+  border: 1px solid var(--color-border);
+  border-radius: 0.25rem;
+  background: var(--color-canvas);
+  color: var(--color-ink);
+}
+
+.disclosure {
+  margin: 1rem 0;
+  border: 1px solid var(--color-border);
+  border-radius: 0.45rem;
+  background: var(--color-canvas);
+}
+
+.disclosure summary {
+  min-height: 2.75rem;
+  padding: 0.7rem 0.8rem;
+  color: var(--color-ink);
+  font-size: 0.9rem;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.disclosure[open] {
+  padding-bottom: 0.85rem;
+}
+
+.disclosure[open] summary {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.disclosure > .fieldHint,
+.disclosure > .summaryGrid,
+.disclosure > .formField,
+.disclosure > button {
+  margin-inline: 0.85rem;
+}
+
+.tableWrap {
+  max-inline-size: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.dataTable {
+  min-inline-size: 38rem;
+}
+
+.primaryButton {
+  border-color: var(--color-ink);
+  background: var(--color-ink);
+  color: var(--color-surface);
+}
+
+.primaryButton:hover {
+  background: var(--color-muted);
+}
+
+.secondaryButton {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface);
+  color: var(--color-ink);
+}
+
+.secondaryButton:hover {
+  border-color: var(--color-ink);
+  color: var(--color-ink);
+}
+
+.dangerButton {
+  border-color: #d8a6a6;
+  background: #fffafa;
+  color: #8f3030;
+}
+
+.statusBadge {
+  border-radius: 0.3rem;
+}
+
+.statusOpen {
+  background: #edf5ef;
+  color: #2e6b42;
+}
+
+.statusScheduled {
+  background: var(--color-canvas);
+  color: var(--color-muted);
+}
+
+.cardLabel,
+.mutedLabel,
+.versionLabel,
+.roundNumber,
+.referenceBadge {
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+}
+
+@media (max-width: 64rem) {
+  .overviewGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .overviewFooter {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 48rem) {
+  .workspace {
+    width: min(calc(100% - 1rem), 76rem);
+  }
+
+  .workspaceHeader {
+    padding-top: 0.8rem;
+  }
+
+  .overviewGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .decisionRow,
+  .decisionRowSummary {
+    grid-template-columns: 1fr;
+  }
+
+  .decisionRow .secondaryButton {
+    justify-self: start;
+  }
+
+  .viewToolbar {
+    justify-content: flex-start;
+  }
+
+  .viewToolbar button {
+    flex: 1 1 auto;
+  }
+
+  .tabButton {
+    padding-inline: 0.7rem;
+  }
 }

@@ -1,6 +1,18 @@
 "use client";
 import Link from "next/link";
 import { type FormEvent, useEffect, useRef, useState } from "react";
+import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert";
+import { Badge } from "../../components/ui/badge";
+import { Button } from "../../components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "../../components/ui/card";
+import { Progress } from "../../components/ui/progress";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import {
   activeVerifiedReviewers,
   createMemberApi,
@@ -1147,12 +1159,17 @@ function formatPlanStatus(status: PlanStatus): string {
   if (status === "draft") return "Draft";
   return "Closed";
 }
-
-function formatRoundStatus(status: RoundStatus): string {
-  if (status === "open") return "Open now";
-  if (status === "scheduled") return "Scheduled";
-  return "Closed";
+function planStatusVariant(status: PlanStatus): "default" | "secondary" | "outline" {
+  if (status === "open") return "default";
+  if (status === "draft") return "outline";
+  return "secondary";
 }
+function formatDecisionStatus(status: DecisionStatus): string {
+  if (status === "accepted") return "Accepted";
+  if (status === "waitlisted") return "Waitlisted";
+  return "Rejected";
+}
+
 function formatAssignmentStatus(status: EvaluatorAssignment["assignmentStatus"]): string {
   if (status === "submitted") return "Submitted";
   if (status === "in_progress") return "In progress";
@@ -1168,35 +1185,19 @@ function ProgressBar({ label, value }: Readonly<{ label: string; value: number }
         <span>{label}</span>
         <strong>{normalizedValue}%</strong>
       </div>
-      <div
-        className={styles.progressTrack}
-        role="progressbar"
-        aria-label={label}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={normalizedValue}
-      >
-        <span style={{ width: `${normalizedValue}%` }} />
-      </div>
+      <Progress value={normalizedValue} aria-label={label} />
     </div>
   );
 }
 
 function AuthorityNotice() {
   return (
-    <aside className={styles.authorityNotice} role="note" aria-labelledby="human-authority-title">
-      <span className={styles.noticeIcon} aria-hidden="true">
-        ✓
-      </span>
-      <div>
-        <h2 id="human-authority-title">Human authority is required</h2>
-        <p>
-          AI suggestions never count and never decide an outcome; they remain advisory until a human
-          reviewer confirms or edits every score, and a human organizer confirms each final
-          decision.
-        </p>
-      </div>
-    </aside>
+    <Alert className={styles.authorityNotice} role="note">
+      <AlertTitle>Human approval required.</AlertTitle>
+      <AlertDescription>
+        AI suggestions remain advisory; an authorized human confirms every score and outcome.
+      </AlertDescription>
+    </Alert>
   );
 }
 
@@ -1208,9 +1209,11 @@ function ReviewNavigation({
   if (mode === "evaluator") {
     return (
       <nav className={styles.reviewNavigation} aria-label="Reviewer navigation">
-        <Link className={styles.navCurrent} href="/review" aria-current="page">
-          Review queue
-        </Link>
+        <Button asChild size="sm">
+          <Link href="/review" aria-current="page">
+            Review queue
+          </Link>
+        </Button>
       </nav>
     );
   }
@@ -1222,19 +1225,20 @@ function ReviewNavigation({
       : `/admin/organizations/${encodeURIComponent(resolvedOrganizationId)}/events/${encodeURIComponent(eventId)}/reviews`;
   return (
     <nav className={styles.reviewNavigation} aria-label="Review workspace">
-      <Link className={styles.navCurrent} href={reviewBase} aria-current="page">
-        Review plan
-      </Link>
-      <Link className={styles.navLink} href={`${reviewBase}/evaluate`}>
-        Assigned review
-      </Link>
-      {resolvedOrganizationId === null ? null : (
-        <Link
-          className={styles.navLink}
-          href={`/admin/organizations/${encodeURIComponent(resolvedOrganizationId)}/members`}
-        >
-          Invite reviewers
+      <Button asChild size="sm">
+        <Link href={reviewBase} aria-current="page">
+          Review plan
         </Link>
+      </Button>
+      <Button asChild size="sm" variant="ghost">
+        <Link href={`${reviewBase}/evaluate`}>Assigned review</Link>
+      </Button>
+      {resolvedOrganizationId === null ? null : (
+        <Button asChild size="sm" variant="ghost">
+          <Link href={`/admin/organizations/${encodeURIComponent(resolvedOrganizationId)}/members`}>
+            Invite reviewers
+          </Link>
+        </Button>
       )}
     </nav>
   );
@@ -1694,9 +1698,9 @@ function OrganizerPlanCreation({
               {message}
             </p>
           ) : null}
-          <button className={styles.primaryButton} type="submit" disabled={busy}>
+          <Button type="submit" disabled={busy}>
             {busy ? "Creating…" : "Create evaluation plan"}
-          </button>
+          </Button>
         </form>
       </section>
     </div>
@@ -1955,7 +1959,7 @@ function OrganizerAuthoring({
           }),
         },
       );
-      setMessage(`Draft saved at server version ${updated.version}.`);
+      setMessage("Draft saved.");
       setRounds(updated.rounds);
       setName(updated.name);
       setPlanClosesAt(updated.closesAt ?? "");
@@ -2076,7 +2080,7 @@ function OrganizerAuthoring({
         `/plans/${encodeURIComponent(seed.planId)}/${action}`,
         { method: "POST", body: JSON.stringify({ expectedVersion: version }) },
       );
-      setMessage(`Plan is now ${updated.status} at server version ${updated.version}.`);
+      setMessage("Plan status updated.");
       setRounds(updated.rounds);
       setBlindReview(updated.blindReview);
       setPlanClosesAt(updated.closesAt ?? "");
@@ -2097,14 +2101,13 @@ function OrganizerAuthoring({
       <div className={styles.sectionHeading}>
         <div>
           <p className={styles.sectionEyebrow}>Organizer authoring</p>
-          <h2 id="authoring-heading">Author and lock the evaluation plan</h2>
+          <h2 id="authoring-heading">Configure the evaluation plan</h2>
         </div>
-        <span className={styles.mutedLabel}>Version {version} · optimistic locking</span>
+        <span className={styles.mutedLabel}>Draft version {version}</span>
       </div>
       <p className={styles.sectionIntro}>
-        Edit rounds, rubric criteria, bounds, weights, assignment limits, and the deny-by-default
-        evaluator projection while the plan is a draft. Opening the plan locks grading
-        configuration.
+        Edit rounds, rubric criteria, bounds, weights, and assignment limits while the plan is a
+        draft. Opening the plan locks grading configuration.
       </p>
       <div className={styles.formField}>
         <label htmlFor="evaluation-plan-name">Plan name</label>
@@ -2123,171 +2126,179 @@ function OrganizerAuthoring({
           placeholder="2026-08-24T12:00:00.000Z"
         />
       </div>
-      <div className={styles.summaryGrid}>
-        <div className={styles.formField}>
-          <label htmlFor="reviews-per-submission">Reviews per submission</label>
-          <input
-            id="reviews-per-submission"
-            type="number"
-            min={1}
-            value={reviewsPerSubmission}
-            onChange={(event) =>
-              setReviewsPerSubmission(
-                parseNumericAuthoringValue(reviewsPerSubmission, event.currentTarget.value),
-              )
-            }
-          />
-        </div>
-        <div className={styles.formField}>
-          <label htmlFor="max-assignments-per-reviewer">Maximum assignments per reviewer</label>
-          <input
-            id="max-assignments-per-reviewer"
-            type="number"
-            min={1}
-            value={maxAssignmentsPerReviewer}
-            onChange={(event) =>
-              setMaxAssignmentsPerReviewer(
-                parseNumericAuthoringValue(maxAssignmentsPerReviewer, event.currentTarget.value),
-              )
-            }
-          />
-        </div>
-        <label className={styles.checkboxLabel} htmlFor="blind-review-setting">
-          <input
-            id="blind-review-setting"
-            type="checkbox"
-            checked={blindReview}
-            onChange={(event) => setBlindReview(event.currentTarget.checked)}
-          />
-          Blind review
-        </label>
-      </div>
-      <div className={styles.summaryGrid}>
-        <div className={styles.formField}>
-          <label htmlFor="reviewer-visible-fields">Evaluator-visible fields</label>
-          <input
-            id="reviewer-visible-fields"
-            value={fieldIds}
-            onChange={(event) => setFieldIds(event.currentTarget.value)}
-            placeholder="abstract, audience"
-            aria-describedby="projection-help"
-          />
-        </div>
-        <div className={styles.formField}>
-          <label htmlFor="reviewer-visible-files">Evaluator-visible files</label>
-          <input
-            id="reviewer-visible-files"
-            value={fileIds}
-            onChange={(event) => setFileIds(event.currentTarget.value)}
-            placeholder="file-id-1"
-            aria-describedby="projection-help"
-          />
-        </div>
-      </div>
-      <p className={styles.fieldHint} id="projection-help">
-        Comma-separated ids are allowlisted; omitted fields and files stay private.
-      </p>
-      <div className={styles.summaryGrid}>
-        <div className={styles.formField}>
-          <label htmlFor="assignment-round-id">Round for assignment</label>
-          <select
-            id="assignment-round-id"
-            value={assignmentRoundId}
-            onChange={(event) => setAssignmentRoundId(event.currentTarget.value)}
-          >
-            {rounds.map((round) => (
-              <option value={round.id} key={round.id}>
-                {round.name}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className={styles.formField}>
-          <span className={styles.cardLabel}>Assignment tooling</span>
-          <span className={styles.fieldHint}>
-            The plan cap is {maxAssignmentsPerReviewer} assignments per reviewer. Choose the
-            complete reviewer set; an empty selection clears all active assignments. Preview before
-            posting the replacement.
-          </span>
-        </div>
-      </div>
-      <div className={styles.summaryGrid}>
-        <div className={styles.formField}>
-          <label htmlFor="assignment-submission-id">Submission for reviewer-set replacement</label>
-          <select
-            id="assignment-submission-id"
-            value={assignmentSubmissionId}
-            onChange={(event) => setAssignmentSubmissionId(event.currentTarget.value)}
-            disabled={busy || seed.aggregates.length === 0}
-            required
-          >
-            <option value="">Choose a submission</option>
-            {seed.aggregates.map((aggregate) => (
-              <option value={aggregate.id} key={aggregate.id}>
-                {aggregate.reference} · {aggregate.title}
-              </option>
-            ))}
-          </select>
-          <span className={styles.fieldHint}>
-            {seed.aggregates.length === 0
-              ? "No submissions are available for reviewer-set replacement."
-              : "Choose a submission from the authoritative event material; the reviewer selection replaces its complete active set."}
-          </span>
-        </div>
-        <div className={styles.formField}>
-          <label htmlFor="assignment-reviewer-ids">
-            Verified organization reviewers (complete replacement set)
-          </label>
-          <select
-            id="assignment-reviewer-ids"
-            multiple
-            size={Math.max(3, Math.min(8, reviewerMembers.length || 3))}
-            value={[...assignmentReviewerIds]}
-            disabled={busy || reviewerMembersLoading || reviewerMembersError !== null}
-            onChange={(event) =>
-              setAssignmentReviewerIds(
-                [...event.currentTarget.selectedOptions].map((option) => option.value),
-              )
-            }
-            aria-describedby="assignment-reviewer-help"
-          >
-            {reviewerMembers.map((member) => (
-              <option value={member.userId} key={member.userId}>
-                {member.name ?? member.email} · {member.email}
-              </option>
-            ))}
-          </select>
-          <span className={styles.fieldHint} id="assignment-reviewer-help">
-            {reviewerMembersLoading
-              ? "Loading active, verified organization reviewers…"
-              : (reviewerMembersError ??
-                (reviewerMembers.length === 0
-                  ? "No active, verified organization reviewers are available."
-                  : "Selection replaces every active assignment for this round and submission; leave it empty to clear all. Names and email addresses are display-only; assignments submit each member user ID."))}
-          </span>
-        </div>
-      </div>
-      <button
-        className={styles.secondaryButton}
-        type="button"
-        onClick={previewAssignments}
-        disabled={busy || !reviewerDirectoryReady}
-      >
-        Preview reviewer assignment replacement
-      </button>
-      {assignmentPreview ? (
-        <p className={styles.fieldHint} role="status">
-          {assignmentPreview}
+      <details className={styles.disclosure}>
+        <summary>Assignment and reviewer visibility</summary>
+        <p className={styles.fieldHint}>
+          Keep the planning details below closed until you need to adjust reviewer coverage or
+          visibility.
         </p>
-      ) : null}
-      <button
-        className={styles.secondaryButton}
-        type="button"
-        onClick={() => void assignReviewers()}
-        disabled={busy || !reviewerDirectoryReady}
-      >
-        Replace reviewer assignments
-      </button>
+        <div className={styles.summaryGrid}>
+          <div className={styles.formField}>
+            <label htmlFor="reviews-per-submission">Reviews per submission</label>
+            <input
+              id="reviews-per-submission"
+              type="number"
+              min={1}
+              value={reviewsPerSubmission}
+              onChange={(event) =>
+                setReviewsPerSubmission(
+                  parseNumericAuthoringValue(reviewsPerSubmission, event.currentTarget.value),
+                )
+              }
+            />
+          </div>
+          <div className={styles.formField}>
+            <label htmlFor="max-assignments-per-reviewer">Maximum assignments per reviewer</label>
+            <input
+              id="max-assignments-per-reviewer"
+              type="number"
+              min={1}
+              value={maxAssignmentsPerReviewer}
+              onChange={(event) =>
+                setMaxAssignmentsPerReviewer(
+                  parseNumericAuthoringValue(maxAssignmentsPerReviewer, event.currentTarget.value),
+                )
+              }
+            />
+          </div>
+          <label className={styles.checkboxLabel} htmlFor="blind-review-setting">
+            <input
+              id="blind-review-setting"
+              type="checkbox"
+              checked={blindReview}
+              onChange={(event) => setBlindReview(event.currentTarget.checked)}
+            />
+            Blind review
+          </label>
+        </div>
+        <div className={styles.summaryGrid}>
+          <div className={styles.formField}>
+            <label htmlFor="reviewer-visible-fields">Evaluator-visible fields</label>
+            <input
+              id="reviewer-visible-fields"
+              value={fieldIds}
+              onChange={(event) => setFieldIds(event.currentTarget.value)}
+              placeholder="abstract, audience"
+              aria-describedby="projection-help"
+            />
+          </div>
+          <div className={styles.formField}>
+            <label htmlFor="reviewer-visible-files">Evaluator-visible files</label>
+            <input
+              id="reviewer-visible-files"
+              value={fileIds}
+              onChange={(event) => setFileIds(event.currentTarget.value)}
+              placeholder="file-id-1"
+              aria-describedby="projection-help"
+            />
+          </div>
+        </div>
+        <p className={styles.fieldHint} id="projection-help">
+          Only the fields and files listed here are shown to reviewers; everything else stays
+          private.
+        </p>
+        <div className={styles.summaryGrid}>
+          <div className={styles.formField}>
+            <label htmlFor="assignment-round-id">Round for assignment</label>
+            <select
+              id="assignment-round-id"
+              value={assignmentRoundId}
+              onChange={(event) => setAssignmentRoundId(event.currentTarget.value)}
+            >
+              {rounds.map((round) => (
+                <option value={round.id} key={round.id}>
+                  {round.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className={styles.formField}>
+            <span className={styles.cardLabel}>Assignment tooling</span>
+            <span className={styles.fieldHint}>
+              The plan cap is {maxAssignmentsPerReviewer} assignments per reviewer. Choose the
+              complete reviewer set; an empty selection clears all active assignments. Preview before
+              posting the replacement.
+            </span>
+          </div>
+        </div>
+        <div className={styles.summaryGrid}>
+          <div className={styles.formField}>
+            <label htmlFor="assignment-submission-id">Submission for reviewer-set replacement</label>
+            <select
+              id="assignment-submission-id"
+              value={assignmentSubmissionId}
+              onChange={(event) => setAssignmentSubmissionId(event.currentTarget.value)}
+              disabled={busy || seed.aggregates.length === 0}
+              required
+            >
+              <option value="">Choose a submission</option>
+              {seed.aggregates.map((aggregate) => (
+                <option value={aggregate.id} key={aggregate.id}>
+                  {aggregate.reference} · {aggregate.title}
+                </option>
+              ))}
+            </select>
+            <span className={styles.fieldHint}>
+              {seed.aggregates.length === 0
+                ? "No submissions are available for reviewer-set replacement."
+                : "Choose a submission from the authoritative event material; the reviewer selection replaces its complete active set."}
+            </span>
+          </div>
+          <div className={styles.formField}>
+            <label htmlFor="assignment-reviewer-ids">
+              Verified organization reviewers (complete replacement set)
+            </label>
+            <select
+              id="assignment-reviewer-ids"
+              multiple
+              size={Math.max(3, Math.min(8, reviewerMembers.length || 3))}
+              value={[...assignmentReviewerIds]}
+              disabled={busy || reviewerMembersLoading || reviewerMembersError !== null}
+              onChange={(event) =>
+                setAssignmentReviewerIds(
+                  [...event.currentTarget.selectedOptions].map((option) => option.value),
+                )
+              }
+              aria-describedby="assignment-reviewer-help"
+            >
+              {reviewerMembers.map((member) => (
+                <option value={member.userId} key={member.userId}>
+                  {member.name ?? member.email} · {member.email}
+                </option>
+              ))}
+            </select>
+            <span className={styles.fieldHint} id="assignment-reviewer-help">
+              {reviewerMembersLoading
+                ? "Loading active, verified organization reviewers…"
+                : (reviewerMembersError ??
+                  (reviewerMembers.length === 0
+                    ? "No active, verified organization reviewers are available."
+                    : "Selection replaces every active assignment for this round and submission; leave it empty to clear all. Names and email addresses are display-only; assignments submit each member user ID."))}
+            </span>
+          </div>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={previewAssignments}
+          disabled={busy || !reviewerDirectoryReady}
+        >
+          Preview reviewer assignment replacement
+        </Button>
+        {assignmentPreview ? (
+          <p className={styles.fieldHint} role="status">
+            {assignmentPreview}
+          </p>
+        ) : null}
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => void assignReviewers()}
+          disabled={busy || !reviewerDirectoryReady}
+        >
+          Replace reviewer assignments
+        </Button>
+      </details>
       <div className={styles.scoreList}>
         {rounds.map((round, roundIndex) => (
           <fieldset className={styles.scoreCard} key={round.id}>
@@ -2605,53 +2616,47 @@ function OrganizerAuthoring({
                 </fieldset>
               ))}
             </section>
-            <button
-              className={styles.secondaryButton}
+            <Button
               type="button"
+              variant="outline"
               onClick={() => addCriterion(roundIndex)}
               disabled={busy || status !== "draft"}
             >
               Add criterion
-            </button>
+            </Button>
           </fieldset>
         ))}
       </div>
       <div className={styles.confirmationActions}>
-        <button
-          className={styles.secondaryButton}
+        <Button
           type="button"
+          variant="outline"
           onClick={addRound}
           disabled={busy || status !== "draft"}
         >
           Add round
-        </button>
-        <button
-          className={styles.primaryButton}
+        </Button>
+        <Button
           type="button"
           onClick={() => void saveDraft()}
           disabled={busy || status !== "draft"}
         >
           {busy ? "Saving…" : "Save authoring draft"}
-        </button>
+        </Button>
         {status === "draft" ? (
-          <button
-            className={styles.primaryButton}
-            type="button"
-            onClick={() => void transition("open")}
-            disabled={busy}
-          >
+          <Button type="button" onClick={() => void transition("open")} disabled={busy}>
             Open plan
-          </button>
+          </Button>
         ) : null}
         {status === "open" ? (
-          <button
-            className={styles.dangerButton}
+          <Button
             type="button"
+            variant="destructive"
             onClick={() => void transition("close")}
             disabled={busy}
           >
             Close plan
-          </button>
+          </Button>
         ) : null}
       </div>
       {message ? (
@@ -2673,22 +2678,23 @@ export function OrganizerDetailStatus({
 }>) {
   if (!loading && error === null) return null;
   return (
-    <aside className={styles.authorityNotice} role={error === null ? "status" : "alert"}>
-      <span className={styles.noticeIcon} aria-hidden="true">
-        {error === null ? "…" : "!"}
-      </span>
-      <div>
-        <h2>{error === null ? "Loading review details" : "Review details need attention"}</h2>
-        <p>
-          {error === null ? "The plan is usable while aggregate scores and decisions load." : error}
-        </p>
-        {error === null ? null : (
-          <button className={styles.secondaryButton} type="button" onClick={onRetry}>
-            Retry review details
-          </button>
-        )}
-      </div>
-    </aside>
+    <Alert
+      className={styles.authorityNotice}
+      role={error === null ? "status" : "alert"}
+      variant={error === null ? "default" : "destructive"}
+    >
+      <AlertTitle>
+        {error === null ? "Loading review details" : "Review details need attention"}
+      </AlertTitle>
+      <AlertDescription>
+        {error === null ? "The plan is usable while aggregate scores and decisions load." : error}
+      </AlertDescription>
+      {error === null ? null : (
+        <Button type="button" variant="outline" onClick={onRetry}>
+          Retry review details
+        </Button>
+      )}
+    </Alert>
   );
 }
 
@@ -2787,9 +2793,10 @@ function OrganizerWorkspaceView({
       .filter((round) => round.status === "open")
       .sort((left, right) => (right.sequence ?? 0) - (left.sequence ?? 0))[0] ??
     [...seed.rounds].sort((left, right) => (right.sequence ?? 0) - (left.sequence ?? 0))[0];
-  const criteria = activeRound?.rubric.criteria ?? [];
   const [aggregateSort, setAggregateSort] = useState<"ascending" | "descending">("descending");
   const [exportMessage, setExportMessage] = useState<string | null>(null);
+  const [view, setView] = useState<"overview" | "setup" | "assignments" | "decisions">("overview");
+  const [selectedDecisionId, setSelectedDecisionId] = useState<string | null>(null);
   const sortedAggregates = [...seed.aggregates].sort((left, right) => {
     const leftScore = Number(left.countedScore);
     const rightScore = Number(right.countedScore);
@@ -2801,6 +2808,14 @@ function OrganizerWorkspaceView({
     }
     return left.reference.localeCompare(right.reference);
   });
+  const outstandingReviews = Math.max(0, seed.progress.totalAssignments - seed.progress.submitted);
+  const undecidedCount = seed.aggregates.filter(
+    (aggregate) => seed.decisionBySubmission[aggregate.id] === undefined,
+  ).length;
+  const selectedAggregate =
+    selectedDecisionId === null
+      ? undefined
+      : seed.aggregates.find((aggregate) => aggregate.id === selectedDecisionId);
 
   async function exportResults(): Promise<void> {
     setExportMessage(`Preparing evaluation-${seed.planId}.csv…`);
@@ -2844,8 +2859,8 @@ function OrganizerWorkspaceView({
           <p className={styles.eyebrow}>{seed.eventName} · organizer review</p>
           <h1>Evaluation plan</h1>
           <p className={styles.headerDescription}>
-            Configure rounds, monitor reviewer coverage, and record the committee&apos;s
-            human-approved decisions for <strong>{seed.planName}</strong>.
+            Keep review setup, reviewer follow-up, and final decisions in one focused workspace for{" "}
+            <strong>{seed.planName}</strong>.
           </p>
         </div>
         <div className={styles.headerSide}>
@@ -2854,350 +2869,356 @@ function OrganizerWorkspaceView({
             mode="organizer"
             organizationId={organizationId}
           />
-          <span className={`${styles.statusBadge} ${styles.statusOpen}`}>
-            <span aria-hidden="true" />
-            {formatPlanStatus(seed.status)}
-          </span>
+          <Badge variant={planStatusVariant(seed.status)}>{formatPlanStatus(seed.status)}</Badge>
         </div>
       </header>
 
       <div id="review-content" tabIndex={-1}>
         <AuthorityNotice />
-        <OrganizerAuthoring
-          seed={seed}
-          baseUrl={baseUrl}
-          reviewerMembers={reviewerMembers}
-          reviewerMembersLoading={reviewerMembersLoading}
-          reviewerMembersError={reviewerMembersError}
-          onAuthoritativePlan={onAuthoritativePlan}
-          onAssignmentsPersisted={onAssignmentsPersisted}
-        />
-
-        <section className={styles.section} aria-labelledby="plan-status-heading">
-          <div className={styles.sectionHeading}>
-            <div>
-              <p className={styles.sectionEyebrow}>Plan controls</p>
-              <h2 id="plan-status-heading">Evaluation plan status</h2>
-            </div>
-            <span className={styles.versionLabel}>Version {seed.version} · server state</span>
-          </div>
-          <div className={styles.summaryGrid}>
-            <article className={styles.summaryCard}>
-              <span className={styles.cardLabel}>Status</span>
-              <strong className={styles.cardValue}>{formatPlanStatus(seed.status)}</strong>
-              <p>Reviewers can work in the active round until its close date.</p>
-            </article>
-            <article className={styles.summaryCard}>
-              <span className={styles.cardLabel}>Plan dates</span>
-              <dl className={styles.compactDefinitionList}>
-                <div>
-                  <dt>Opens</dt>
-                  <dd>{seed.opensAt}</dd>
-                </div>
-                <div>
-                  <dt>Closes</dt>
-                  <dd>{seed.closesAt}</dd>
-                </div>
-              </dl>
-            </article>
-            <article className={styles.summaryCard}>
-              <span className={styles.cardLabel}>Blind review</span>
-              <strong className={styles.cardValue}>{seed.blindReview ? "On" : "Off"}</strong>
-              <p>
-                {seed.blindReview
-                  ? "Reviewer views hide participant identity fields."
-                  : "Reviewer views include participant identity fields."}
-              </p>
-            </article>
-            <article className={styles.summaryCard}>
-              <span className={styles.cardLabel}>Assignment rule</span>
-              <strong className={styles.cardValue}>
-                {seed.assignmentRule.reviewsPerSubmission} reviews
-              </strong>
-              <p>
-                per submission · {seed.assignmentRule.maxAssignmentsPerReviewer} maximum per
-                reviewer
-              </p>
-            </article>
-          </div>
-        </section>
-
-        <section className={styles.section} aria-labelledby="rounds-heading">
-          <div className={styles.sectionHeading}>
-            <div>
-              <p className={styles.sectionEyebrow}>Sequenced review</p>
-              <h2 id="rounds-heading">Rounds</h2>
-            </div>
-            <span className={styles.mutedLabel}>{seed.rounds.length} rounds configured</span>
-          </div>
-          <div className={styles.roundGrid}>
-            {seed.rounds.map((round, roundIndex) => (
-              <article className={styles.roundCard} key={round.id}>
-                <div className={styles.roundCardHeader}>
-                  <div>
-                    <span className={styles.roundNumber}>
-                      Round {round.sequence ?? roundIndex + 1}
-                    </span>
-                    <h3>{round.name}</h3>
-                  </div>
-                  <span
-                    className={`${styles.statusBadge} ${round.status === "open" ? styles.statusOpen : styles.statusScheduled}`}
-                  >
-                    <span aria-hidden="true" />
-                    {formatRoundStatus(round.status)}
-                  </span>
-                </div>
-                <dl className={styles.dateList}>
-                  <div>
-                    <dt>Opens</dt>
-                    <dd>{round.opensAt}</dd>
-                  </div>
-                  <div>
-                    <dt>Closes</dt>
-                    <dd>{round.closesAt}</dd>
-                  </div>
-                </dl>
-                <p className={styles.roundRubric}>
-                  {round.rubric.name} · {round.rubric.criteria.length} criteria
-                </p>
-                <p className={styles.fieldHint}>
-                  {round.blindReview
-                    ? "Blind reviewer projection"
-                    : "Identity visible to reviewers"}{" "}
-                  · {round.reviewerPool?.reviewerIds.length ?? 0} reviewer(s) in this round&apos;s
-                  pool
-                </p>
-                <ProgressBar label={`${round.name} completion`} value={round.completionPercent} />
-              </article>
+        <Tabs
+          value={view}
+          onValueChange={(value) =>
+            setView(value as "overview" | "setup" | "assignments" | "decisions")
+          }
+          className={styles.workspaceTabs}
+        >
+          <TabsList variant="line" aria-label="Review plan sections">
+            {(
+              [
+                ["overview", "Overview"],
+                ["setup", "Plan setup"],
+                ["assignments", "Assignments"],
+                ["decisions", "Decisions"],
+              ] as const
+            ).map(([tabView, label]) => (
+              <TabsTrigger
+                id={`review-tab-${tabView}`}
+                value={tabView}
+                key={tabView}
+                aria-controls={`review-panel-${tabView}`}
+                onClick={() => setView(tabView)}
+              >
+                {label}
+              </TabsTrigger>
             ))}
-          </div>
-        </section>
+          </TabsList>
 
-        <section className={styles.section} aria-labelledby="rubric-heading">
-          <div className={styles.sectionHeading}>
-            <div>
-              <p className={styles.sectionEyebrow}>Round {activeRound?.sequence ?? 1} rubric</p>
-              <h2 id="rubric-heading">Criteria and weights</h2>
+          <TabsContent
+            id="review-panel-overview"
+            aria-labelledby="review-tab-overview"
+            value="overview"
+            className={styles.tabPanel}
+          >
+            <div className={styles.sectionHeading}>
+              <div>
+                <p className={styles.sectionEyebrow}>Overview</p>
+                <h2>Review at a glance</h2>
+              </div>
+              <span className={styles.mutedLabel}>{seed.aggregates.length} submissions</span>
             </div>
-            <span className={styles.mutedLabel}>Scale 1–5 · weighted total</span>
-          </div>
-          <div className={styles.tableWrap}>
-            <table className={styles.dataTable}>
-              <caption>Rubric criteria and their contribution to the counted score</caption>
-              <thead>
-                <tr>
-                  <th scope="col">Criterion</th>
-                  <th scope="col">Input type</th>
-                  <th scope="col">Bounds</th>
-                  <th scope="col">Weight</th>
-                  <th scope="col">Required</th>
-                </tr>
-              </thead>
-              <tbody>
-                {criteria.map((criterion) => (
-                  <tr key={criterion.id}>
-                    <th scope="row">
-                      <strong>{criterion.label}</strong>
-                      <span>{criterion.description}</span>
-                    </th>
-                    <td>
-                      {criterionType(criterion) === "free_text"
-                        ? "Free text"
-                        : criterionType(criterion) === "dropdown"
-                          ? `Dropdown (${criterion.options?.length ?? 0} options)`
-                          : "Numeric"}
-                    </td>
-                    <td>
-                      {criterion.minimum}–{criterion.maximum}
-                    </td>
-                    <td>{criterion.weight}%</td>
-                    <td>{criterion.required ? "Required" : "Optional"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <p className={styles.tableNote}>
-            Weighted aggregate scores include only scores that a human reviewer has confirmed or
-            edited; AI-prefilled values remain uncounted until then.
-          </p>
-        </section>
-
-        <section className={styles.section} aria-labelledby="assignment-heading">
-          <div className={styles.sectionHeading}>
-            <div>
-              <p className={styles.sectionEyebrow}>Coverage and safety</p>
-              <h2 id="assignment-heading">Reviewer assignment progress</h2>
-            </div>
-            <span className={styles.mutedLabel}>{seed.progress.assigned} assigned</span>
-          </div>
-          <div className={styles.progressLayout}>
-            <div className={styles.progressPanel}>
-              <ProgressBar label="Submitted reviews" value={seed.progress.completionPercent} />
-              <p className={styles.progressMeta}>
-                {seed.progress.submitted} of {seed.progress.assigned} assigned reviews submitted ·{" "}
-                {seed.progress.inProgress} in progress
-              </p>
-            </div>
-            <ul className={styles.indicatorList}>
-              <li>
-                <span
-                  className={`${styles.indicatorDot} ${styles.dotSuccess}`}
-                  aria-hidden="true"
-                />
-                <strong>{seed.progress.assigned} assigned</strong>
-                <span>within reviewer load limits</span>
-              </li>
-              <li>
-                <span
-                  className={`${styles.indicatorDot} ${styles.dotWarning}`}
-                  aria-hidden="true"
-                />
-                <strong>{seed.progress.abstained} abstention</strong>
-                <span>requires a replacement assignment</span>
-              </li>
-              <li>
-                <span className={`${styles.indicatorDot} ${styles.dotDanger}`} aria-hidden="true" />
-                <strong>{seed.progress.conflicts} conflicts declared</strong>
-                <span>conflicted reviewers have no submission access</span>
-              </li>
-            </ul>
-          </div>
-        </section>
-        <ReviewerProgressDashboard
-          seed={seed}
-          baseUrl={baseUrl}
-          reviewerMembers={reviewerMembers}
-        />
-        <ReviewerAssignmentList
-          seed={seed}
-          baseUrl={baseUrl}
-          reviewerMembers={reviewerMembers}
-          onAssignmentsPersisted={onAssignmentsPersisted}
-        />
-
-        <section className={styles.section} aria-labelledby="aggregate-heading">
-          <div className={styles.sectionHeading}>
-            <div>
-              <p className={styles.sectionEyebrow}>Decision input</p>
-              <h2 id="aggregate-heading">Counted aggregate scores</h2>
-            </div>
-            <span className={styles.mutedLabel}>Human-confirmed scores only</span>
-            <div className={styles.confirmationActions}>
-              <button
-                className={styles.secondaryButton}
-                type="button"
-                onClick={() =>
-                  setAggregateSort((current) =>
-                    current === "descending" ? "ascending" : "descending",
-                  )
-                }
-                aria-label={`Sort aggregate score ${aggregateSort === "descending" ? "ascending" : "descending"}`}
-              >
-                Sort {aggregateSort === "descending" ? "ascending" : "descending"}
-              </button>
-              <button
-                className={styles.secondaryButton}
-                type="button"
-                onClick={() => void exportResults()}
-              >
-                Export review results CSV
-              </button>
-            </div>
-            {exportMessage ? (
-              <p className={styles.fieldHint} role="status">
-                {exportMessage}
-              </p>
-            ) : null}
-          </div>
-          <div className={styles.tableWrap}>
-            <table className={styles.dataTable}>
-              <caption>Submission aggregates available to organizers</caption>
-              <thead>
-                <tr>
-                  <th scope="col">Submission</th>
-                  <th
-                    scope="col"
-                    aria-sort={aggregateSort === "descending" ? "descending" : "ascending"}
+            <div className={styles.overviewGrid}>
+              <Card>
+                <CardHeader>
+                  <CardDescription>Plan status</CardDescription>
+                  <CardTitle>{formatPlanStatus(seed.status)}</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <dl className={styles.compactDefinitionList}>
+                    <div>
+                      <dt>Opens</dt>
+                      <dd>{seed.opensAt}</dd>
+                    </div>
+                    <div>
+                      <dt>Closes</dt>
+                      <dd>{seed.closesAt}</dd>
+                    </div>
+                  </dl>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader>
+                  <CardDescription>Active round</CardDescription>
+                  <CardTitle>{activeRound?.name ?? "No round configured"}</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <ProgressBar
+                    label={`${activeRound?.name ?? "Active round"} progress`}
+                    value={activeRound?.completionPercent ?? 0}
+                  />
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader>
+                  <CardDescription>Needs attention</CardDescription>
+                  <CardTitle>{outstandingReviews} reviews</CardTitle>
+                </CardHeader>
+                <CardContent className="text-sm text-muted-foreground">
+                  {seed.progress.conflicts} conflict{seed.progress.conflicts === 1 ? "" : "s"}{" "}
+                  declared
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader>
+                  <CardDescription>Next action</CardDescription>
+                  <CardTitle>
+                    {seed.status === "draft"
+                      ? "Finish plan setup"
+                      : outstandingReviews > 0
+                        ? "Follow up on reviews"
+                        : "Record decisions"}
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() =>
+                      setView(
+                        seed.status === "draft"
+                          ? "setup"
+                          : outstandingReviews > 0
+                            ? "assignments"
+                            : "decisions",
+                      )
+                    }
                   >
-                    <button
-                      className={styles.secondaryButton}
-                      type="button"
-                      onClick={() =>
-                        setAggregateSort((current) =>
-                          current === "descending" ? "ascending" : "descending",
-                        )
-                      }
-                    >
-                      Counted score ({aggregateSort})
-                    </button>
-                  </th>
-                  <th scope="col">Reviews counted</th>
-                  <th scope="col">Safety signals</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sortedAggregates.map((aggregate) => (
-                  <tr key={aggregate.id}>
-                    <th scope="row">
-                      <strong>{aggregate.reference}</strong>
-                      <span>{aggregate.title}</span>
-                      {aggregate.participants && aggregate.participants.length > 0 ? (
-                        <span>
-                          {aggregate.participants
-                            .map((participant) =>
-                              participant.role
-                                ? `${participant.displayName} (${participant.role})`
-                                : participant.displayName,
-                            )
-                            .join(" · ")}
-                        </span>
-                      ) : null}
-                    </th>
-                    <td>
-                      <strong>{aggregate.countedScore}</strong> / {aggregate.possibleScore}
-                    </td>
-                    <td>
-                      {aggregate.countedReviews} / {aggregate.expectedReviews}
-                    </td>
-                    <td>
-                      {aggregate.conflicts > 0
-                        ? `${aggregate.conflicts} conflict${aggregate.conflicts === 1 ? "" : "s"}`
-                        : "No conflicts"}
-                      {aggregate.abstentions > 0 ? ` · ${aggregate.abstentions} abstention` : ""}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <section className={styles.section} aria-labelledby="decisions-heading">
-          <div className={styles.sectionHeading}>
-            <div>
-              <p className={styles.sectionEyebrow}>Organizer-only action</p>
-              <h2 id="decisions-heading">Human decisions</h2>
+                    {seed.status === "draft"
+                      ? "Open plan setup"
+                      : outstandingReviews > 0
+                        ? "Open assignments"
+                        : "Open decisions"}
+                  </Button>
+                </CardContent>
+              </Card>
             </div>
-            <span className={styles.mutedLabel}>Accept · waitlist · reject</span>
-          </div>
-          <p className={styles.sectionIntro}>
-            Only an authorized human organizer can record an outcome. Choose a status, write the
-            reason, and confirm; AI suggestions cannot accept, waitlist, reject, or publish a
-            decision.
-          </p>
-          <div className={styles.decisionList}>
-            {seed.aggregates.map((aggregate) => (
-              <DecisionEditor
-                aggregate={aggregate}
-                baseUrl={baseUrl}
-                planId={seed.planId}
-                decision={seed.decisionBySubmission[aggregate.id]}
-                key={aggregate.id}
+            <div className={styles.overviewFooter}>
+              <ProgressBar
+                label="All assigned reviews submitted"
+                value={seed.progress.completionPercent}
               />
-            ))}
-          </div>
-        </section>
+              <span>
+                {seed.progress.submitted} of {seed.progress.totalAssignments} submitted ·{" "}
+                {undecidedCount} decision{undecidedCount === 1 ? "" : "s"} to record
+              </span>
+            </div>
+          </TabsContent>
+
+          <TabsContent
+            id="review-panel-setup"
+            aria-labelledby="review-tab-setup"
+            value="setup"
+            className={styles.tabPanel}
+          >
+            <div className={styles.viewIntro}>
+              <p className={styles.sectionEyebrow}>Plan setup</p>
+              <h2>Configure the review plan</h2>
+              <p>
+                Set dates, rounds, rubrics, reviewer pools, and the fields reviewers can use before
+                opening the plan.
+              </p>
+            </div>
+            <OrganizerAuthoring
+              seed={seed}
+              baseUrl={baseUrl}
+              reviewerMembers={reviewerMembers}
+              reviewerMembersLoading={reviewerMembersLoading}
+              reviewerMembersError={reviewerMembersError}
+              onAuthoritativePlan={onAuthoritativePlan}
+              onAssignmentsPersisted={onAssignmentsPersisted}
+            />
+          </TabsContent>
+
+          <TabsContent
+            id="review-panel-assignments"
+            aria-labelledby="review-tab-assignments"
+            value="assignments"
+            className={styles.tabPanel}
+          >
+            <div className={styles.viewIntro}>
+              <p className={styles.sectionEyebrow}>Assignments</p>
+              <h2>Keep reviewer coverage moving</h2>
+              <p>
+                Monitor completion, send reminders, and remove assignments that need to be replaced.
+              </p>
+            </div>
+            <ReviewerProgressDashboard
+              seed={seed}
+              baseUrl={baseUrl}
+              reviewerMembers={reviewerMembers}
+            />
+            <ReviewerAssignmentList
+              seed={seed}
+              baseUrl={baseUrl}
+              reviewerMembers={reviewerMembers}
+              onAssignmentsPersisted={onAssignmentsPersisted}
+            />
+          </TabsContent>
+
+          <TabsContent
+            id="review-panel-decisions"
+            aria-labelledby="review-tab-decisions"
+            value="decisions"
+            className={styles.tabPanel}
+          >
+            <section className={styles.section} aria-labelledby="aggregate-heading">
+              <div className={styles.sectionHeading}>
+                <div>
+                  <p className={styles.sectionEyebrow}>Decisions</p>
+                  <h2 id="aggregate-heading">Scores and review status</h2>
+                </div>
+                <div className={styles.viewToolbar}>
+                  <Button
+                    size="sm"
+                    type="button"
+                    variant="outline"
+                    onClick={() =>
+                      setAggregateSort((current) =>
+                        current === "descending" ? "ascending" : "descending",
+                      )
+                    }
+                    aria-label={`Sort aggregate score ${aggregateSort === "descending" ? "ascending" : "descending"}`}
+                  >
+                    Sort {aggregateSort === "descending" ? "ascending" : "descending"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    type="button"
+                    variant="outline"
+                    onClick={() => void exportResults()}
+                  >
+                    Export CSV
+                  </Button>
+                </div>
+              </div>
+              {exportMessage ? (
+                <p className={styles.fieldHint} role="status">
+                  {exportMessage}
+                </p>
+              ) : null}
+              <div className={styles.tableWrap}>
+                <table className={styles.dataTable}>
+                  <caption>Submission aggregates available to organizers</caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">Submission</th>
+                      <th
+                        scope="col"
+                        aria-sort={aggregateSort === "descending" ? "descending" : "ascending"}
+                      >
+                        Counted score
+                      </th>
+                      <th scope="col">Reviews counted</th>
+                      <th scope="col">Safety signals</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sortedAggregates.map((aggregate) => (
+                      <tr key={aggregate.id}>
+                        <th scope="row">
+                          <strong>{aggregate.reference}</strong>
+                          <span>{aggregate.title}</span>
+                          {aggregate.participants && aggregate.participants.length > 0 ? (
+                            <span>
+                              {aggregate.participants
+                                .map((participant) =>
+                                  participant.role
+                                    ? `${participant.displayName} (${participant.role})`
+                                    : participant.displayName,
+                                )
+                                .join(" · ")}
+                            </span>
+                          ) : null}
+                        </th>
+                        <td>
+                          <strong>{aggregate.countedScore}</strong> / {aggregate.possibleScore}
+                        </td>
+                        <td>
+                          {aggregate.countedReviews} / {aggregate.expectedReviews}
+                        </td>
+                        <td>
+                          {aggregate.conflicts > 0
+                            ? `${aggregate.conflicts} conflict${aggregate.conflicts === 1 ? "" : "s"}`
+                            : "No conflicts"}
+                          {aggregate.abstentions > 0
+                            ? ` · ${aggregate.abstentions} abstention`
+                            : ""}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className={styles.tableNote}>
+                Scores count only after a reviewer confirms or edits them.
+              </p>
+            </section>
+
+            <section className={styles.section} aria-labelledby="decisions-heading">
+              <div className={styles.sectionHeading}>
+                <div>
+                  <p className={styles.sectionEyebrow}>Organizer action</p>
+                  <h2 id="decisions-heading">Human decisions</h2>
+                </div>
+                <span className={styles.mutedLabel}>Accept · waitlist · reject</span>
+              </div>
+              <p className={styles.sectionIntro}>
+                Choose a submission to review its outcome. Only an authorized human organizer can
+                record a decision.
+              </p>
+              <div className={styles.decisionList}>
+                {seed.aggregates.map((aggregate) => {
+                  const decision = seed.decisionBySubmission[aggregate.id];
+                  const selected = selectedDecisionId === aggregate.id;
+                  return (
+                    <article className={styles.decisionRow} key={aggregate.id}>
+                      <div className={styles.decisionRowSummary}>
+                        <div>
+                          <span className={styles.cardLabel}>{aggregate.reference}</span>
+                          <h3>{aggregate.title}</h3>
+                        </div>
+                        <span className={styles.decisionStatus}>
+                          {decision === undefined
+                            ? "Not decided"
+                            : formatDecisionStatus(decision.status)}
+                        </span>
+                        <span className={styles.scorePill}>
+                          {aggregate.countedScore} / {aggregate.possibleScore}
+                        </span>
+                      </div>
+                      <Button
+                        size="sm"
+                        type="button"
+                        variant="outline"
+                        onClick={() => setSelectedDecisionId(selected ? null : aggregate.id)}
+                        aria-expanded={selected}
+                        aria-controls={selected ? `decision-editor-${aggregate.id}` : undefined}
+                      >
+                        {selected ? "Close editor" : "Review decision"}
+                      </Button>
+                    </article>
+                  );
+                })}
+              </div>
+              {selectedAggregate ? (
+                <div
+                  id={`decision-editor-${selectedAggregate.id}`}
+                  className={styles.selectedDecisionEditor}
+                >
+                  <DecisionEditor
+                    aggregate={selectedAggregate}
+                    baseUrl={baseUrl}
+                    planId={seed.planId}
+                    decision={seed.decisionBySubmission[selectedAggregate.id]}
+                  />
+                </div>
+              ) : (
+                <p className={styles.fieldHint}>
+                  Select Review decision to open one decision editor.
+                </p>
+              )}
+            </section>
+          </TabsContent>
+        </Tabs>
       </div>
     </div>
   );
@@ -3246,7 +3267,6 @@ function ReviewerProgressDashboard({
         byRound.set(reviewer.roundId, ids);
       }
       let queued = 0;
-      const sentReviewerIds = new Set<string>();
       for (const [roundId, reviewerIds] of byRound) {
         const result = await evaluationRequest<{
           queued: number;
@@ -3256,11 +3276,8 @@ function ReviewerProgressDashboard({
           body: JSON.stringify({ roundId, reviewerIds: reviewerIds.sort() }),
         });
         queued += result.queued;
-        for (const reviewerId of result.reviewerIds) sentReviewerIds.add(reviewerId);
       }
-      setMessage(
-        `Reminder queued for ${queued} outstanding review assignment(s) for ${[...sentReviewerIds].sort().join(", ")}.`,
-      );
+      setMessage(`Reminder queued for ${queued} outstanding review assignment(s).`);
       setSelected(new Set<string>());
     } catch (reason: unknown) {
       setMessage(
@@ -3312,7 +3329,7 @@ function ReviewerProgressDashboard({
                     />
                   </td>
                   <th scope="row">{reviewerLabel(reviewer.reviewerId)}</th>
-                  <td>{round?.name ?? reviewer.roundId}</td>
+                  <td>{round?.name ?? "Round unavailable"}</td>
                   <td>{reviewer.assigned}</td>
                   <td>{reviewer.submitted}</td>
                   <td>{reviewer.outstanding}</td>
@@ -3437,7 +3454,7 @@ function ReviewerAssignmentList({
     <section className={styles.section} aria-labelledby="current-assignments-heading">
       <div className={styles.sectionHeading}>
         <div>
-          <p className={styles.sectionEyebrow}>Authoritative assignments</p>
+          <p className={styles.sectionEyebrow}>Current assignments</p>
           <h2 id="current-assignments-heading">Current reviewer assignments</h2>
         </div>
         <span className={styles.mutedLabel}>{seed.assignments.length} assignments</span>
@@ -3463,17 +3480,17 @@ function ReviewerAssignmentList({
                 const round = roundById.get(assignment.roundId);
                 const reviewer = reviewerDisplayLabel(assignment.reviewerId, reviewerMembers);
                 const busy = busyAssignmentId === assignment.id;
+                const submissionTitle = aggregate?.title ?? "Untitled submission";
                 return (
                   <tr key={assignment.id}>
                     <th scope="row">
-                      <strong>{aggregate?.title ?? assignment.submissionId}</strong>
-                      <span>{aggregate?.reference ?? assignment.submissionId}</span>
+                      <strong>{submissionTitle}</strong>
+                      <span>{aggregate?.reference ?? "Submission"}</span>
                     </th>
                     <td>
                       <strong>{reviewer}</strong>
-                      <span>{assignment.reviewerId}</span>
                     </td>
-                    <td>{round?.name ?? assignment.roundId}</td>
+                    <td>{round?.name ?? "Round unavailable"}</td>
                     <td>{reviewerAssignmentStatusLabel(assignment.status)}</td>
                     <td>
                       {assignment.status === "abstained" ? (
@@ -3634,7 +3651,7 @@ function DecisionEditor({
         ) : null}
         {saved ? (
           <p className={styles.submittedMessage} role="status">
-            Decision saved on the server. Submitter notification queued.
+            Decision saved. Submitter notification queued.
           </p>
         ) : null}
         <button

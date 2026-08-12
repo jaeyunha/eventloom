@@ -3,6 +3,13 @@
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import styles from "./login-form.module.css";
 import { safeLoginReturnTo } from "./return-path";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Separator } from "@/components/ui/separator";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 const AUTH_PATH = "/api/auth";
 const ADMIN_PATH = "/admin";
@@ -677,224 +684,217 @@ export function LoginForm({
 
       <main className={styles.main} id="login-main" tabIndex={-1}>
         <section className={styles.intro} aria-labelledby="login-title">
-          <p className={styles.eyebrow}>Private workspace</p>
-          <h1 id="login-title">Welcome back to the program desk.</h1>
-          <p>
-            Sign in to coordinate submissions, guide review, and prepare the next public agenda with
-            your team.
-          </p>
-          <div className={styles.boundaryNote} role="note">
-            <span className={styles.noteMark} aria-hidden="true">
-              01
-            </span>
-            <div>
-              <strong>Keep the working table private.</strong>
-              <span>Organizer and reviewer work stays behind your authenticated session.</span>
-            </div>
-          </div>
+          <p className={styles.kicker}>Operator access</p>
+          <h1 id="login-title">Sign in to Open Sessionboard</h1>
+          <p>Manage event programs, review submissions, and keep your team aligned.</p>
+          <ul className={styles.accessList} aria-label="Workspace access">
+            <li>
+              <strong>Organizers</strong>
+              <span>Manage events, CFPs, and review operations.</span>
+            </li>
+            <li>
+              <strong>Reviewers</strong>
+              <span>Access assigned review work and decisions.</span>
+            </li>
+          </ul>
         </section>
 
-        <section className={styles.card} aria-labelledby="login-form-title">
-          <div className={styles.cardHeading}>
-            <p className={styles.eyebrow}>Authorized access</p>
-            <h2 id="login-form-title">{isSignup ? "Create organizer account" : "Sign in"}</h2>
-            <p>
+        <Card className={styles.card} aria-labelledby="login-form-title">
+          <CardHeader className={styles.cardHeader}>
+            <CardTitle id="login-form-title">
+              {isSignup ? "Create organizer account" : "Sign in"}
+            </CardTitle>
+            <CardDescription>
               {isSignup
                 ? "Use your verified swyx.io or ai.engineer email to join ai-engineer."
                 : "Use your organizer or reviewer account to continue."}
-            </p>
-            <div className={styles.modeSwitch} role="tablist" aria-label="Account access mode">
-              <button
-                className={`${styles.modeButton} ${!isSignup ? styles.modeButtonActive : ""}`}
-                type="button"
-                role="tab"
-                aria-selected={!isSignup}
-                onClick={() => {
-                  setMode("sign-in");
-                  clearErrors();
-                }}
-              >
-                Sign in
-              </button>
-              <button
-                className={`${styles.modeButton} ${isSignup ? styles.modeButtonActive : ""}`}
-                type="button"
-                role="tab"
-                aria-selected={isSignup}
-                onClick={() => {
-                  setMode("sign-up");
-                  clearErrors();
-                }}
-              >
-                Create account
-              </button>
-            </div>
-          </div>
+            </CardDescription>
+          </CardHeader>
 
-          {verificationRequired ? (
-            <div className={styles.boundaryNote} role="status" aria-live="polite">
-              <span className={styles.noteMark} aria-hidden="true">
-                02
-              </span>
-              <div>
-                <strong>Verification required.</strong>
-                <span>{SIGNUP_VERIFICATION_MESSAGE}</span>
-              </div>
-            </div>
-          ) : (
-            <form
-              className={styles.form}
-              method="post"
-              onSubmit={(event) =>
-                void (isSignup ? submitOrganizerSignup(event) : submitCredentials(event))
-              }
-              noValidate
+          <CardContent className={styles.cardContent}>
+            <Tabs
+              value={mode}
+              onValueChange={(value) => {
+                if (value === "sign-in" || value === "sign-up") {
+                  setMode(value);
+                  clearErrors();
+                }
+              }}
             >
-              {isSignup ? (
-                <div className={styles.field}>
-                  <label htmlFor="login-name">Name</label>
-                  <input
-                    ref={nameInput}
-                    id="login-name"
-                    name="name"
-                    type="text"
-                    value={name}
-                    autoComplete="name"
-                    required
-                    aria-invalid={fieldErrors.name ? true : undefined}
-                    aria-describedby={fieldErrors.name ? "login-name-error" : undefined}
-                    onChange={(event) => {
-                      setName(event.currentTarget.value);
-                      if (fieldErrors.name || error) clearErrors();
-                    }}
-                  />
-                  {fieldErrors.name ? (
-                    <p className={styles.fieldError} id="login-name-error" role="alert">
-                      {fieldErrors.name}
-                    </p>
-                  ) : null}
-                </div>
-              ) : null}
+              <TabsList className={styles.tabsList} aria-label="Account access mode">
+                <TabsTrigger value="sign-in">Sign in</TabsTrigger>
+                <TabsTrigger value="sign-up">Create account</TabsTrigger>
+              </TabsList>
 
-              <div className={styles.field}>
-                <label htmlFor="login-email">Email address</label>
-                <input
-                  ref={emailInput}
-                  id="login-email"
-                  name="email"
-                  type="email"
-                  value={email}
-                  autoComplete="email"
-                  autoCapitalize="none"
-                  spellCheck={false}
-                  required
-                  aria-invalid={fieldErrors.email ? true : undefined}
-                  aria-describedby={fieldErrors.email ? "login-email-error" : undefined}
-                  onChange={(event) => {
-                    setEmail(event.currentTarget.value);
-                    if (fieldErrors.email || error || magicLinkSent) clearErrors();
-                  }}
-                />
-                {fieldErrors.email ? (
-                  <p className={styles.fieldError} id="login-email-error" role="alert">
-                    {fieldErrors.email}
-                  </p>
+              <TabsContent value={mode} className={styles.tabPanel}>
+                {verificationRequired ? (
+                  <Alert className={styles.notice} role="status" aria-live="polite">
+                    <AlertTitle>Verify your email</AlertTitle>
+                    <AlertDescription>{SIGNUP_VERIFICATION_MESSAGE}</AlertDescription>
+                  </Alert>
+                ) : (
+                  <form
+                    className={styles.form}
+                    method="post"
+                    onSubmit={(event) =>
+                      void (isSignup ? submitOrganizerSignup(event) : submitCredentials(event))
+                    }
+                    noValidate
+                  >
+                    {isSignup ? (
+                      <div className={styles.field}>
+                        <Label htmlFor="login-name">Name</Label>
+                        <Input
+                          ref={nameInput}
+                          id="login-name"
+                          name="name"
+                          type="text"
+                          value={name}
+                          autoComplete="name"
+                          required
+                          aria-invalid={fieldErrors.name ? true : undefined}
+                          aria-describedby={fieldErrors.name ? "login-name-error" : undefined}
+                          onChange={(event) => {
+                            setName(event.currentTarget.value);
+                            if (fieldErrors.name || error) clearErrors();
+                          }}
+                        />
+                        {fieldErrors.name ? (
+                          <p className={styles.fieldError} id="login-name-error" role="alert">
+                            {fieldErrors.name}
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    <div className={styles.field}>
+                      <Label htmlFor="login-email">Email address</Label>
+                      <Input
+                        ref={emailInput}
+                        id="login-email"
+                        name="email"
+                        type="email"
+                        value={email}
+                        autoComplete="email"
+                        autoCapitalize="none"
+                        spellCheck={false}
+                        required
+                        aria-invalid={fieldErrors.email ? true : undefined}
+                        aria-describedby={fieldErrors.email ? "login-email-error" : undefined}
+                        onChange={(event) => {
+                          setEmail(event.currentTarget.value);
+                          if (fieldErrors.email || error || magicLinkSent) clearErrors();
+                        }}
+                      />
+                      {fieldErrors.email ? (
+                        <p className={styles.fieldError} id="login-email-error" role="alert">
+                          {fieldErrors.email}
+                        </p>
+                      ) : null}
+                    </div>
+
+                    <div className={styles.field}>
+                      <Label htmlFor="login-password">Password</Label>
+                      <Input
+                        ref={passwordInput}
+                        id="login-password"
+                        name="password"
+                        type="password"
+                        value={password}
+                        autoComplete={isSignup ? "new-password" : "current-password"}
+                        required
+                        aria-invalid={fieldErrors.password ? true : undefined}
+                        aria-describedby={fieldErrors.password ? "login-password-error" : undefined}
+                        onChange={(event) => {
+                          setPassword(event.currentTarget.value);
+                          if (fieldErrors.password || error) clearErrors();
+                        }}
+                      />
+                      {fieldErrors.password ? (
+                        <p className={styles.fieldError} id="login-password-error" role="alert">
+                          {fieldErrors.password}
+                        </p>
+                      ) : null}
+                    </div>
+
+                    {error ? (
+                      <div
+                        className={styles.alert}
+                        id="login-error"
+                        role="alert"
+                        aria-live="assertive"
+                        tabIndex={-1}
+                        ref={errorSummary}
+                      >
+                        <Alert variant="destructive" role="presentation">
+                          <AlertTitle>
+                            {isSignup ? "Account creation failed" : "Sign-in failed"}
+                          </AlertTitle>
+                          <AlertDescription>{error.message}</AlertDescription>
+                        </Alert>
+                      </div>
+                    ) : null}
+
+                    <Button
+                      className="w-full"
+                      type="submit"
+                      disabled={submitting}
+                      aria-busy={submitting}
+                      size="lg"
+                    >
+                      {submitting
+                        ? isSignup
+                          ? "Creating account…"
+                          : "Signing in…"
+                        : isSignup
+                          ? "Create organizer account"
+                          : "Sign in to workspace"}
+                    </Button>
+                  </form>
+                )}
+
+                {!isSignup ? (
+                  <>
+                    <div className={styles.magicDivider}>
+                      <Separator decorative={false} />
+                      <span>or</span>
+                      <Separator decorative={false} />
+                    </div>
+
+                    <Button
+                      className="w-full"
+                      type="button"
+                      variant="outline"
+                      onClick={() => void submitMagicLink()}
+                      disabled={submitting}
+                      aria-busy={submitting}
+                      size="lg"
+                    >
+                      {submitting ? "Sending magic link…" : "Email me a magic link"}
+                    </Button>
+
+                    {magicLinkSent ? (
+                      <p className={styles.success} role="status" aria-live="polite">
+                        {MAGIC_LINK_SUCCESS_MESSAGE}
+                      </p>
+                    ) : null}
+                  </>
                 ) : null}
-              </div>
+              </TabsContent>
+            </Tabs>
 
-              <div className={styles.field}>
-                <label htmlFor="login-password">Password</label>
-                <input
-                  ref={passwordInput}
-                  id="login-password"
-                  name="password"
-                  type="password"
-                  value={password}
-                  autoComplete={isSignup ? "new-password" : "current-password"}
-                  required
-                  aria-invalid={fieldErrors.password ? true : undefined}
-                  aria-describedby={fieldErrors.password ? "login-password-error" : undefined}
-                  onChange={(event) => {
-                    setPassword(event.currentTarget.value);
-                    if (fieldErrors.password || error) clearErrors();
-                  }}
-                />
-                {fieldErrors.password ? (
-                  <p className={styles.fieldError} id="login-password-error" role="alert">
-                    {fieldErrors.password}
-                  </p>
-                ) : null}
-              </div>
-
-              {error ? (
-                <div
-                  className={styles.error}
-                  id="login-error"
-                  role="alert"
-                  tabIndex={-1}
-                  ref={errorSummary}
-                >
-                  <span className={styles.errorMark} aria-hidden="true">
-                    !
-                  </span>
-                  <p>{error.message}</p>
-                </div>
-              ) : null}
-
-              <button
-                className={styles.primaryButton}
-                type="submit"
-                disabled={submitting}
-                aria-busy={submitting}
-              >
-                {submitting
-                  ? isSignup
-                    ? "Creating account…"
-                    : "Signing in…"
-                  : isSignup
-                    ? "Create organizer account"
-                    : "Sign in to workspace"}
-              </button>
-            </form>
-          )}
-
-          {!isSignup ? (
-            <>
-              <div className={styles.divider}>
-                <hr />
-                <span>or</span>
-                <hr />
-              </div>
-
-              <button
-                className={styles.secondaryButton}
-                type="button"
-                onClick={() => void submitMagicLink()}
-                disabled={submitting}
-                aria-busy={submitting}
-              >
-                {submitting ? "Sending magic link…" : "Email me a magic link"}
-              </button>
-
-              {magicLinkSent ? (
-                <p className={styles.success} role="status" aria-live="polite">
-                  {MAGIC_LINK_SUCCESS_MESSAGE}
-                </p>
-              ) : null}
-            </>
-          ) : null}
-
-          <p className={styles.cfpNote}>
-            CFP applicants create accounts through the CFP; participant signup remains available
-            there. <a href="/cfp/open-sessionboard-conf">Open the CFP</a> to start or continue an
-            application.
-          </p>
-        </section>
+            <p className={styles.cfpNote}>
+              CFP applicants create accounts through the CFP; participant signup remains available
+              there. <a href="/cfp/open-sessionboard-conf">Open the CFP</a> to start or continue an
+              application.
+            </p>
+          </CardContent>
+        </Card>
       </main>
 
       <footer className={styles.footer}>
         <span>Open Sessionboard</span>
-        <span>Built for careful, human-led program operations.</span>
+        <span>Organizer and reviewer workspace</span>
       </footer>
     </div>
   );

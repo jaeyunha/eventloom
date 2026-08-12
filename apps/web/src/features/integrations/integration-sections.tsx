@@ -17,6 +17,8 @@ import {
   CardHeader,
   CardTitle,
   Field,
+  FieldDescription,
+  FieldLabel,
   Input,
 } from "../../components/ui";
 import styles from "./integrations.module.css";
@@ -49,10 +51,10 @@ interface IntegrationActions {
 
 const statusPresentation: Record<
   ConnectionState,
-  { readonly label: string; readonly variant: "success" | "warning" | "outline" }
+  { readonly label: string; readonly variant: "default" | "secondary" | "outline" }
 > = {
-  connected: { label: "Connected", variant: "success" },
-  degraded: { label: "Needs attention", variant: "warning" },
+  connected: { label: "Connected", variant: "default" },
+  degraded: { label: "Needs attention", variant: "secondary" },
   not_configured: { label: "Not configured", variant: "outline" },
 };
 
@@ -104,10 +106,10 @@ export function OneTimeSecretPanel({
       </div>
       <code className={styles.secretValue}>{secret.secret}</code>
       <div className={styles.actionRow}>
-        <Button type="button" variant="secondary" size="small" onClick={() => void copySecret()}>
+        <Button type="button" variant="secondary" size="sm" onClick={() => void copySecret()}>
           Copy secret
         </Button>
-        <Button type="button" variant="ghost" size="small" onClick={onDismiss}>
+        <Button type="button" variant="ghost" size="sm" onClick={onDismiss}>
           I saved it
         </Button>
       </div>
@@ -144,18 +146,18 @@ function CredentialForm({
 
   return (
     <form className={styles.formStack} onSubmit={(event) => void submit(event)}>
-      <Field label={label} name={`${provider}-secret`} hint={hint} required>
-        {(control) => (
-          <Input
-            {...control}
-            name="secret"
-            type="password"
-            autoComplete="off"
-            autoCapitalize="none"
-            spellCheck={false}
-            required
-          />
-        )}
+      <Field>
+        <FieldLabel htmlFor={`${provider}-secret`}>{label}</FieldLabel>
+        <Input
+          id={`${provider}-secret`}
+          name="secret"
+          type="password"
+          autoComplete="off"
+          autoCapitalize="none"
+          spellCheck={false}
+          required
+        />
+        <FieldDescription>{hint}</FieldDescription>
       </Field>
       <p className={styles.securityNote}>
         Credentials are encrypted at rest. Existing values are never returned to this browser.
@@ -182,7 +184,7 @@ export function OverviewSection({ snapshot }: Readonly<{ snapshot: IntegrationAd
     <div className={styles.sectionStack}>
       <div className={styles.statusGrid}>
         <a className={styles.statusCardLink} href={`${base}/delivery`}>
-          <Card interactive>
+          <Card>
             <CardHeader>
               <div className={styles.cardTitleRow}>
                 <CardTitle>Email &amp; calendar</CardTitle>
@@ -201,11 +203,11 @@ export function OverviewSection({ snapshot }: Readonly<{ snapshot: IntegrationAd
           </Card>
         </a>
         <a className={styles.statusCardLink} href={`${base}/api-keys`}>
-          <Card interactive>
+          <Card>
             <CardHeader>
               <div className={styles.cardTitleRow}>
                 <CardTitle>API keys</CardTitle>
-                <Badge variant={activeKeys > 0 ? "success" : "outline"}>
+                <Badge variant={activeKeys > 0 ? "default" : "outline"}>
                   {activeKeys > 0 ? "Active" : "None"}
                 </Badge>
               </div>
@@ -220,11 +222,11 @@ export function OverviewSection({ snapshot }: Readonly<{ snapshot: IntegrationAd
           </Card>
         </a>
         <a className={styles.statusCardLink} href={`${base}/webhooks`}>
-          <Card interactive>
+          <Card>
             <CardHeader>
               <div className={styles.cardTitleRow}>
                 <CardTitle>Webhooks</CardTitle>
-                <Badge variant={activeWebhooks > 0 ? "success" : "outline"}>
+                <Badge variant={activeWebhooks > 0 ? "default" : "outline"}>
                   {activeWebhooks > 0 ? "Delivering" : "None"}
                 </Badge>
               </div>
@@ -237,7 +239,7 @@ export function OverviewSection({ snapshot }: Readonly<{ snapshot: IntegrationAd
           </Card>
         </a>
       </div>
-      <Card flat>
+      <Card>
         <CardHeader>
           <CardTitle>Source-of-truth boundary</CardTitle>
           <CardDescription>
@@ -296,23 +298,22 @@ export function ApiKeysSection({
         <CardContent>
           <form className={styles.formStack} onSubmit={(event) => void submit(event)}>
             <div className={styles.formGrid}>
-              <Field label="Key name" name="api-key-label" required>
-                {(control) => (
-                  <Input
-                    {...control}
-                    name="label"
-                    maxLength={100}
-                    placeholder="Agenda export"
-                    required
-                  />
-                )}
+              <Field>
+                <FieldLabel htmlFor="api-key-label">Key name</FieldLabel>
+                <Input
+                  id="api-key-label"
+                  name="label"
+                  maxLength={100}
+                  placeholder="Agenda export"
+                  required
+                />
               </Field>
-              <Field
-                label="Expires"
-                name="api-key-expiry"
-                hint="Leave blank only for long-running server integrations."
-              >
-                {(control) => <Input {...control} name="expiresAt" type="date" />}
+              <Field>
+                <FieldLabel htmlFor="api-key-expiry">Expires</FieldLabel>
+                <Input id="api-key-expiry" name="expiresAt" type="date" />
+                <FieldDescription>
+                  Leave blank only for long-running server integrations.
+                </FieldDescription>
               </Field>
             </div>
             <fieldset className={styles.checkboxFieldset}>
@@ -337,7 +338,7 @@ export function ApiKeysSection({
         </CardContent>
       </Card>
 
-      <Card flat>
+      <Card>
         <CardHeader>
           <CardTitle>API keys</CardTitle>
           <CardDescription>
@@ -374,7 +375,7 @@ export function ApiKeysSection({
                       <td>{key.scopes.join(", ")}</td>
                       <td>{formatDate(key.lastUsedAt)}</td>
                       <td>
-                        <Badge variant={key.revokedAt ? "outline" : "success"}>
+                        <Badge variant={key.revokedAt ? "outline" : "default"}>
                           {key.revokedAt ? "Revoked" : "Active"}
                         </Badge>
                       </td>
@@ -385,8 +386,8 @@ export function ApiKeysSection({
                             <p>Requests using this key will immediately fail.</p>
                             <Button
                               type="button"
-                              size="small"
-                              variant="danger"
+                              size="sm"
+                              variant="destructive"
                               disabled={actions.busy}
                               onClick={() => void actions.revokeApiKey(key.id)}
                             >
@@ -409,18 +410,21 @@ export function ApiKeysSection({
 
 function deliveryBadge(status: WebhookSubscriptionSummary["lastDelivery"]): {
   label: string;
-  variant: "success" | "warning" | "danger" | "outline";
+  variant: "default" | "secondary" | "destructive" | "outline";
 } {
   if (!status) {
     return { label: "No attempts", variant: "outline" };
   }
   if (status.status === "succeeded") {
-    return { label: "Delivered", variant: "success" };
+    return { label: "Delivered", variant: "default" };
   }
   if (status.status === "failed") {
-    return { label: "Failed", variant: "danger" };
+    return { label: "Failed", variant: "destructive" };
   }
-  return { label: status.status === "retrying" ? "Retrying" : "In progress", variant: "warning" };
+  return {
+    label: status.status === "retrying" ? "Retrying" : "In progress",
+    variant: "secondary",
+  };
 }
 
 export function WebhooksSection({
@@ -463,23 +467,20 @@ export function WebhooksSection({
         </CardHeader>
         <CardContent>
           <form className={styles.formStack} onSubmit={(event) => void submit(event)}>
-            <Field
-              label="Endpoint URL"
-              name="webhook-endpoint"
-              hint="Use a public HTTPS endpoint. Redirects are not followed."
-              required
-            >
-              {(control) => (
-                <Input
-                  {...control}
-                  name="endpointUrl"
-                  type="url"
-                  inputMode="url"
-                  placeholder="https://example.com/open-sessionboard"
-                  pattern="https://.*"
-                  required
-                />
-              )}
+            <Field>
+              <FieldLabel htmlFor="webhook-endpoint">Endpoint URL</FieldLabel>
+              <Input
+                id="webhook-endpoint"
+                name="endpointUrl"
+                type="url"
+                inputMode="url"
+                placeholder="https://example.com/open-sessionboard"
+                pattern="https://.*"
+                required
+              />
+              <FieldDescription>
+                Use a public HTTPS endpoint. Redirects are not followed.
+              </FieldDescription>
             </Field>
             <fieldset className={styles.checkboxFieldset}>
               <legend>Events</legend>
@@ -504,7 +505,7 @@ export function WebhooksSection({
       </Card>
 
       {webhooks.length === 0 ? (
-        <Card flat>
+        <Card>
           <CardContent>
             <p className={styles.empty}>No webhook endpoints are configured for this event.</p>
           </CardContent>
@@ -520,7 +521,7 @@ export function WebhooksSection({
                     <CardTitle>
                       <code>{webhook.endpointUrl}</code>
                     </CardTitle>
-                    <Badge variant={webhook.active ? "success" : "outline"}>
+                    <Badge variant={webhook.active ? "default" : "outline"}>
                       {webhook.active ? "Active" : "Paused"}
                     </Badge>
                   </div>
@@ -553,7 +554,7 @@ export function WebhooksSection({
                 <CardFooter>
                   <Button
                     type="button"
-                    size="small"
+                    size="sm"
                     variant="secondary"
                     disabled={actions.busy}
                     onClick={() => void actions.setWebhookActive(webhook.id, !webhook.active)}
@@ -565,8 +566,8 @@ export function WebhooksSection({
                     <p>The current signing secret stops working immediately.</p>
                     <Button
                       type="button"
-                      size="small"
-                      variant="danger"
+                      size="sm"
+                      variant="destructive"
                       disabled={actions.busy}
                       onClick={() => void actions.rotateWebhookSecret(webhook.id)}
                     >
@@ -578,8 +579,8 @@ export function WebhooksSection({
                     <p>Pending deliveries stop and this endpoint is permanently removed.</p>
                     <Button
                       type="button"
-                      size="small"
-                      variant="danger"
+                      size="sm"
+                      variant="destructive"
                       disabled={actions.busy}
                       onClick={() => void actions.deleteWebhook(webhook.id)}
                     >
@@ -674,7 +675,7 @@ export function DeliverySection({
         </Card>
       </div>
 
-      <Card flat>
+      <Card>
         <CardHeader>
           <CardTitle>Verified sender identities</CardTitle>
           <CardDescription>
@@ -689,10 +690,10 @@ export function DeliverySection({
                 <Badge
                   variant={
                     sender.status === "verified"
-                      ? "success"
+                      ? "default"
                       : sender.status === "failed"
-                        ? "danger"
-                        : "warning"
+                        ? "destructive"
+                        : "secondary"
                   }
                 >
                   {sender.status === "verified"

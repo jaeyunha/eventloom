@@ -1,15 +1,23 @@
 "use client";
 
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import Link from "next/link";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
-  type CSSProperties,
-  type FormEvent,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   createScopedReadFlightCoordinator,
   type ScopedReadFlightCoordinator,
@@ -121,38 +129,32 @@ const actionTypeLabels: Record<OrganizerOverviewActionType, string> = {
 const coreMetricDefinition = {
   label: "Events",
   key: "eventCount" as const,
-  icon: "▦",
   detail: "Live event records",
 };
 
 const activityMetricDefinitions: readonly {
   readonly label: string;
   readonly key: keyof OrganizerOverviewActivityMetrics;
-  readonly icon: string;
   readonly detail: string;
 }[] = [
   {
     label: "Submissions",
     key: "submissionCount",
-    icon: "▤",
     detail: "Across this organization",
   },
   {
     label: "Pending reviews",
     key: "pendingReviewCount",
-    icon: "◌",
     detail: "Awaiting organizer attention",
   },
   {
     label: "Speaker tasks",
     key: "outstandingSpeakerTaskCount",
-    icon: "✓",
     detail: "Open speaker work items",
   },
   {
     label: "Published sessions",
     key: "publishedSessionCount",
-    icon: "▥",
     detail: "Included in published agendas",
   },
 ] as const;
@@ -451,99 +453,45 @@ function LoadingState() {
             Organization overview
           </h1>
           <p className={styles.pageDescription}>
-            Loading live event, submission, review, and speaker data.
+            Loading live operational data for your organization.
           </p>
         </div>
         <div className={styles.headerActions}>
           <Link className={styles.primaryButton} href="/admin/events">
-            View events <span aria-hidden="true">→</span>
+            Manage events
           </Link>
         </div>
       </header>
 
-      <section className={styles.metricsGrid} aria-label="Loading organization metrics">
-        {[coreMetricDefinition, ...activityMetricDefinitions].map((metric) => (
-          <article className={styles.metricCard} key={metric.key}>
-            <div className={styles.metricTop}>
-              <span
-                className={`${styles.metricIcon} ${styles.skeletonCircle}`}
-                aria-hidden="true"
-              />
-            </div>
-            <div>
-              <span className={styles.metricLabel}>{metric.label}</span>
-              <span className={styles.skeletonValue} aria-hidden="true" />
-              <span className={styles.skeletonLine} aria-hidden="true" />
-            </div>
-          </article>
-        ))}
-      </section>
-
-      <div className={styles.dashboardGrid}>
+      <div className={styles.overviewStack}>
         <section className={styles.panel} aria-labelledby="organizer-overview-loading-actions">
           <div className={styles.panelHeader}>
             <div className={styles.panelHeading}>
-              <p className={styles.panelEyebrow}>Action queue</p>
+              <p className={styles.panelEyebrow}>Needs attention</p>
               <h2 className={styles.panelTitle} id="organizer-overview-loading-actions">
-                Tasks that need you
+                Needs attention
               </h2>
             </div>
             <span className={styles.skeletonInline} aria-hidden="true" />
           </div>
           <div className={styles.panelContent} aria-hidden="true">
-            <div className={styles.skeletonTask}>
-              <span className={styles.skeletonCircle} />
-              <span className={styles.skeletonTaskCopy}>
-                <span className={styles.skeletonLine} />
-                <span className={styles.skeletonLineShort} />
-              </span>
-              <span className={styles.skeletonAction} />
-            </div>
-            <div className={styles.skeletonTask}>
-              <span className={styles.skeletonCircle} />
-              <span className={styles.skeletonTaskCopy}>
-                <span className={styles.skeletonLine} />
-                <span className={styles.skeletonLineShort} />
-              </span>
-              <span className={styles.skeletonAction} />
-            </div>
-            <div className={styles.skeletonTask}>
-              <span className={styles.skeletonCircle} />
-              <span className={styles.skeletonTaskCopy}>
-                <span className={styles.skeletonLine} />
-                <span className={styles.skeletonLineShort} />
-              </span>
-              <span className={styles.skeletonAction} />
-            </div>
+            {[1, 2, 3].map((item) => (
+              <div className={styles.skeletonTask} key={item}>
+                <span className={styles.skeletonCircle} />
+                <span className={styles.skeletonTaskCopy}>
+                  <span className={styles.skeletonLine} />
+                  <span className={styles.skeletonLineShort} />
+                </span>
+                <span className={styles.skeletonAction} />
+              </div>
+            ))}
           </div>
         </section>
 
-        <section
-          className={`${styles.panel} ${styles.guidancePanel}`}
-          aria-labelledby="organizer-overview-loading-guidance"
-        >
+        <section className={styles.panel} aria-labelledby="organizer-overview-loading-events">
           <div className={styles.panelHeader}>
             <div className={styles.panelHeading}>
-              <p className={styles.panelEyebrow}>Organization</p>
-              <h2 className={styles.panelTitle} id="organizer-overview-loading-guidance">
-                Keep your program moving
-              </h2>
-            </div>
-          </div>
-          <div className={styles.panelContent} aria-hidden="true">
-            <span className={styles.skeletonLine} />
-            <span className={styles.skeletonLine} />
-            <span className={styles.skeletonLineShort} />
-          </div>
-        </section>
-
-        <section
-          className={`${styles.panel} ${styles.widePanel}`}
-          aria-labelledby="organizer-overview-loading-events"
-        >
-          <div className={styles.panelHeader}>
-            <div className={styles.panelHeading}>
-              <p className={styles.panelEyebrow}>Live event data</p>
+              <p className={styles.panelEyebrow}>Current and upcoming</p>
               <h2 className={styles.panelTitle} id="organizer-overview-loading-events">
                 Events
               </h2>
@@ -569,6 +517,26 @@ function LoadingState() {
               <span className={styles.skeletonLineShort} />
               <span className={styles.skeletonAction} />
             </div>
+          </div>
+        </section>
+
+        <section className={styles.metricsSection} aria-label="Loading organization metrics">
+          <div className={styles.metricsGrid}>
+            {[coreMetricDefinition, ...activityMetricDefinitions].map((metric) => (
+              <article className={styles.metricCard} key={metric.key}>
+                <div className={styles.metricTop}>
+                  <span
+                    className={`${styles.metricIcon} ${styles.skeletonCircle}`}
+                    aria-hidden="true"
+                  />
+                </div>
+                <div>
+                  <span className={styles.metricLabel}>{metric.label}</span>
+                  <span className={styles.skeletonValue} aria-hidden="true" />
+                  <span className={styles.skeletonLine} aria-hidden="true" />
+                </div>
+              </article>
+            ))}
           </div>
         </section>
       </div>
@@ -628,52 +596,35 @@ function ActivityMetricCards({
         const hasError = state.status === "error";
         const isLoading = state.status === "loading";
         return (
-          <article className={styles.metricCard} key={metric.key}>
-            <div className={styles.metricTop}>
-              <span className={styles.metricIcon} aria-hidden="true">
-                {metric.icon}
-              </span>
-            </div>
-            <div>
-              <span className={styles.metricLabel}>{metric.label}</span>
+          <Card key={metric.key}>
+            <CardHeader>
+              <CardDescription>{metric.label}</CardDescription>
               {value === undefined ? (
-                <strong className={styles.metricValue} role={hasError ? "alert" : "status"}>
+                <CardTitle className="text-2xl" role={hasError ? "alert" : "status"}>
                   {hasError ? "Unavailable" : "Loading…"}
-                </strong>
+                </CardTitle>
               ) : (
-                <strong className={styles.metricValue}>{value}</strong>
+                <CardTitle className="text-3xl">{value}</CardTitle>
               )}
-              {data && isLoading ? (
-                <p className={styles.metricDetail} role="status">
-                  Refreshing secondary metrics…
-                </p>
-              ) : null}
-              {data && hasError ? (
-                <p className={styles.metricDetail} role="alert">
-                  Stale data. {state.message}
-                </p>
-              ) : null}
-              {!data && state.status === "error" ? (
-                <p className={styles.metricDetail} role="alert">
-                  {state.message}
-                </p>
-              ) : null}
+            </CardHeader>
+            <CardContent className="text-sm text-muted-foreground">
+              {data && isLoading ? <p role="status">Refreshing secondary metrics…</p> : null}
+              {data && hasError ? <p role="alert">Stale data. {state.message}</p> : null}
+              {!data && state.status === "error" ? <p role="alert">{state.message}</p> : null}
               {index === 0 && hasError && onRetry ? (
-                <button
-                  className={styles.secondaryButton}
+                <Button
+                  className="mt-3"
+                  size="sm"
                   type="button"
-                  onClick={() => {
-                    void onRetry();
-                  }}
+                  variant="outline"
+                  onClick={() => void onRetry()}
                 >
                   Retry activity
-                </button>
+                </Button>
               ) : null}
-              {value !== undefined && !isLoading && !hasError ? (
-                <p className={styles.metricDetail}>{metric.detail}</p>
-              ) : null}
-            </div>
-          </article>
+              {value !== undefined && !isLoading && !hasError ? <p>{metric.detail}</p> : null}
+            </CardContent>
+          </Card>
         );
       })}
     </>
@@ -705,28 +656,21 @@ function ActionItems({
     : [];
 
   return (
-    <section className={styles.panel} aria-labelledby="action-items-title">
-      <div className={styles.panelHeader}>
-        <div className={styles.panelHeading}>
-          <p className={styles.panelEyebrow}>Action queue</p>
-          <h2 className={styles.panelTitle} id="action-items-title">
-            Tasks that need you
-          </h2>
+    <Card role="region" aria-labelledby="action-items-title">
+      <CardHeader className="flex-row items-start justify-between">
+        <div>
+          <CardDescription>Needs attention</CardDescription>
+          <CardTitle id="action-items-title">Needs attention</CardTitle>
         </div>
-        <div className={styles.panelHeaderActions}>
-          <span className={styles.panelCount}>
-            {data
-              ? `${data.actionItems.length} ${data.actionItems.length === 1 ? "task" : "tasks"}`
-              : state.status === "loading"
-                ? "Loading…"
-                : "Unavailable"}
-          </span>
-          <Link className={styles.panelLink} href="/admin/events">
-            View events <span aria-hidden="true">→</span>
-          </Link>
-        </div>
-      </div>
-      <div className={styles.panelContent}>
+        <Badge variant="secondary">
+          {data
+            ? `${data.actionItems.length} ${data.actionItems.length === 1 ? "task" : "tasks"}`
+            : state.status === "loading"
+              ? "Loading…"
+              : "Unavailable"}
+        </Badge>
+      </CardHeader>
+      <CardContent>
         {!data && state.status === "loading" ? (
           <p className={styles.muted} role="status" aria-live="polite">
             Loading action items…
@@ -736,15 +680,9 @@ function ActionItems({
             <p className={styles.emptyStateTitle}>Action items unavailable</p>
             <p className={styles.muted}>{state.message}</p>
             {onRetry ? (
-              <button
-                className={styles.secondaryButton}
-                type="button"
-                onClick={() => {
-                  void onRetry();
-                }}
-              >
+              <Button size="sm" type="button" variant="outline" onClick={() => void onRetry()}>
                 Retry activity
-              </button>
+              </Button>
             ) : null}
           </div>
         ) : (
@@ -757,15 +695,9 @@ function ActionItems({
             {state.status === "error" && onRetry ? (
               <div role="alert">
                 <p className={styles.muted}>Stale action items. {state.message}</p>
-                <button
-                  className={styles.secondaryButton}
-                  type="button"
-                  onClick={() => {
-                    void onRetry();
-                  }}
-                >
+                <Button size="sm" type="button" variant="outline" onClick={() => void onRetry()}>
                   Retry activity
-                </button>
+                </Button>
               </div>
             ) : state.status === "error" ? (
               <p className={styles.muted} role="alert">
@@ -789,9 +721,7 @@ function ActionItems({
                       className={`${styles.taskItem} ${critical ? styles.taskItemCritical : ""}`}
                       key={item.id}
                     >
-                      <span className={styles.taskIcon} aria-hidden="true">
-                        {critical ? "!" : "·"}
-                      </span>
+                      <span className={styles.taskIcon} aria-hidden="true" />
                       <div className={styles.taskContent}>
                         <h3 className={styles.taskTitle}>{item.title}</h3>
                         <p className={styles.taskDescription}>{item.description}</p>
@@ -805,14 +735,12 @@ function ActionItems({
                           {dueDate ? ` · ${dueDate}` : ""}
                         </p>
                       </div>
-                      <Link
-                        aria-label={`Open ${item.title}`}
-                        className={`${styles.alertTag} ${critical ? styles.alertTagCritical : ""}`}
-                        href={item.href}
-                      >
-                        Open
-                        <span className={styles.srOnly}> {item.title}</span>
-                      </Link>
+                      <Button asChild size="sm" variant={critical ? "destructive" : "outline"}>
+                        <Link aria-label={`Open ${item.title}`} href={item.href}>
+                          Open
+                          <span className="sr-only"> {item.title}</span>
+                        </Link>
+                      </Button>
                     </li>
                   );
                 })}
@@ -820,8 +748,8 @@ function ActionItems({
             )}
           </>
         )}
-      </div>
-    </section>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -835,7 +763,7 @@ function EventsTable({ data }: Readonly<{ data: OrganizerOverviewCoreData }>) {
             No events are available for this organization yet.
           </p>
           <Link className={styles.primaryButton} href="/admin/events">
-            Manage events <span aria-hidden="true">→</span>
+            Manage events
           </Link>
         </div>
       </div>
@@ -844,7 +772,7 @@ function EventsTable({ data }: Readonly<{ data: OrganizerOverviewCoreData }>) {
 
   return (
     <>
-      <div className={styles.tableWrap}>
+      <div className={`${styles.tableWrap} ${styles.overviewTableWrap}`}>
         <table className={styles.eventsTable}>
           <caption>Organization events and their current status</caption>
           <thead>
@@ -866,7 +794,7 @@ function EventsTable({ data }: Readonly<{ data: OrganizerOverviewCoreData }>) {
                 </td>
                 <td>
                   <span className={`${styles.statusBadge} ${eventStatusClass(event.status)}`}>
-                    <span aria-hidden="true">●</span>&nbsp;
+                    <span className={styles.statusDot} aria-hidden="true" />
                     {eventStatusLabel(event.status)}
                   </span>
                 </td>
@@ -878,14 +806,14 @@ function EventsTable({ data }: Readonly<{ data: OrganizerOverviewCoreData }>) {
                       className={styles.primaryButton}
                       href={agendaHref(data.organizationId, event.id)}
                     >
-                      Open agenda <span aria-hidden="true">→</span>
+                      Open agenda
                     </Link>
                     <Link
                       aria-label={`Open settings for ${event.name}`}
                       className={styles.outlineButton}
                       href={eventSettingsHref(data.organizationId, event.id)}
                     >
-                      Settings <span aria-hidden="true">→</span>
+                      Settings
                     </Link>
                   </div>
                 </td>
@@ -903,7 +831,7 @@ function EventsTable({ data }: Readonly<{ data: OrganizerOverviewCoreData }>) {
                 {event.slug ? <p className={styles.eventSlug}>/{event.slug}</p> : null}
               </div>
               <span className={`${styles.statusBadge} ${eventStatusClass(event.status)}`}>
-                <span aria-hidden="true">●</span>&nbsp;
+                <span className={styles.statusDot} aria-hidden="true" />
                 {eventStatusLabel(event.status)}
               </span>
             </div>
@@ -918,14 +846,14 @@ function EventsTable({ data }: Readonly<{ data: OrganizerOverviewCoreData }>) {
                 className={styles.primaryButton}
                 href={agendaHref(data.organizationId, event.id)}
               >
-                Open agenda <span aria-hidden="true">→</span>
+                Open agenda
               </Link>
               <Link
                 aria-label={`Open settings for ${event.name}`}
                 className={styles.secondaryButton}
                 href={eventSettingsHref(data.organizationId, event.id)}
               >
-                Settings <span aria-hidden="true">→</span>
+                Settings
               </Link>
             </div>
           </article>
@@ -1026,8 +954,7 @@ export function OrganizerOverviewView({
           <p className={styles.eyebrow}>Organizer workspace</p>
           <h1 className={styles.pageTitle}>Organization overview</h1>
           <p className={styles.pageDescription}>
-            Live operational data for your organization, including events, submissions, reviews, and
-            speaker work.
+            A calm view of what needs attention and which event to open next.
           </p>
           {state.core.status === "loading" ? (
             <p className={styles.taskMeta} role="status" aria-live="polite">
@@ -1035,84 +962,65 @@ export function OrganizerOverviewView({
             </p>
           ) : null}
           {state.core.status === "error" ? (
-            <div role="alert">
-              <p className={styles.taskMeta}>Showing previous event data. {state.core.message}</p>
+            <Alert variant="destructive">
+              <AlertTitle>Event data could not refresh</AlertTitle>
+              <AlertDescription>Showing previous event data. {state.core.message}</AlertDescription>
               {onRetryCore ? (
-                <button
-                  className={styles.secondaryButton}
+                <Button
+                  className="mt-3"
+                  size="sm"
                   type="button"
-                  onClick={() => {
-                    void onRetryCore();
-                  }}
+                  variant="outline"
+                  onClick={() => void onRetryCore()}
                 >
                   Retry core
-                </button>
+                </Button>
               ) : null}
-            </div>
+            </Alert>
           ) : null}
         </div>
         <div className={styles.headerActions}>
-          <Link className={styles.primaryButton} href="/admin/events">
-            View events <span aria-hidden="true">→</span>
-          </Link>
+          <Button asChild>
+            <Link href="/admin/events">Manage events</Link>
+          </Button>
         </div>
       </header>
 
-      <section className={styles.metricsGrid} aria-labelledby="overview-metrics-title">
-        <h2 className={styles.srOnly} id="overview-metrics-title">
-          Live organization metrics
-        </h2>
-        <article className={styles.metricCard} key={coreMetricDefinition.key}>
-          <div className={styles.metricTop}>
-            <span className={styles.metricIcon} aria-hidden="true">
-              {coreMetricDefinition.icon}
-            </span>
-          </div>
-          <div>
-            <span className={styles.metricLabel}>{coreMetricDefinition.label}</span>
-            <strong className={styles.metricValue}>{core.metrics.eventCount}</strong>
-            <p className={styles.metricDetail}>{coreMetricDefinition.detail}</p>
-          </div>
-        </article>
-        <ActivityMetricCards state={activity} onRetry={onRetryActivity} />
-      </section>
-
-      <div className={styles.dashboardGrid}>
+      <div className={styles.overviewStack}>
         <ActionItems state={activity} onRetry={onRetryActivity} />
-        <section
-          className={`${styles.panel} ${styles.guidancePanel}`}
-          aria-labelledby="overview-guidance-title"
-        >
-          <div className={styles.panelHeader}>
-            <div className={styles.panelHeading}>
-              <p className={styles.panelEyebrow}>Organization</p>
-              <h2 className={styles.panelTitle} id="overview-guidance-title">
-                Keep your program moving
-              </h2>
-            </div>
-          </div>
-          <div className={styles.panelContent}>
-            <p className={styles.muted}>
-              Open an event agenda from the live event list below to review and publish its current
-              program.
-            </p>
-          </div>
-        </section>
 
-        <section
-          className={`${styles.panel} ${styles.widePanel}`}
-          aria-labelledby="overview-events-title"
-        >
-          <div className={styles.panelHeader}>
-            <div className={styles.panelHeading}>
-              <p className={styles.panelEyebrow}>Live event data</p>
-              <h2 className={styles.panelTitle} id="overview-events-title">
-                Events
+        <Card role="region" aria-labelledby="overview-events-title">
+          <CardHeader className="flex-row items-start justify-between">
+            <div>
+              <CardDescription>Current and upcoming</CardDescription>
+              <CardTitle id="overview-events-title">Events</CardTitle>
+            </div>
+            <Badge variant="secondary">{core.events.length} total</Badge>
+          </CardHeader>
+          <EventsTable data={core} />
+        </Card>
+
+        <section className={styles.metricsSection} aria-labelledby="overview-metrics-title">
+          <div className={styles.sectionIntro}>
+            <div>
+              <p className={styles.panelEyebrow}>Organization snapshot</p>
+              <h2 className={styles.sectionTitle} id="overview-metrics-title">
+                Metrics
               </h2>
             </div>
-            <span className={styles.panelCount}>{core.events.length} total</span>
           </div>
-          <EventsTable data={core} />
+          <div className={styles.metricsGrid}>
+            <Card key={coreMetricDefinition.key}>
+              <CardHeader>
+                <CardDescription>{coreMetricDefinition.label}</CardDescription>
+                <CardTitle className="text-3xl">{core.metrics.eventCount}</CardTitle>
+              </CardHeader>
+              <CardContent className="text-sm text-muted-foreground">
+                {coreMetricDefinition.detail}
+              </CardContent>
+            </Card>
+            <ActivityMetricCards state={activity} onRetry={onRetryActivity} />
+          </div>
         </section>
       </div>
     </>
@@ -1983,42 +1891,6 @@ export function validateOrganizerEventForm(values: OrganizerEventFormValues): {
 
 export const validateEventForm = validateOrganizerEventForm;
 
-const eventFieldStyle: CSSProperties = {
-  display: "grid",
-  gap: "0.35rem",
-};
-
-const eventFieldLabelStyle: CSSProperties = {
-  color: "var(--admin-ink)",
-  fontSize: "0.78rem",
-  fontWeight: 750,
-};
-
-const eventInputStyle: CSSProperties = {
-  width: "100%",
-  minHeight: "2.55rem",
-  padding: "0.55rem 0.65rem",
-  border: "1px solid var(--admin-border-strong)",
-  borderRadius: "var(--admin-radius-sm)",
-  background: "var(--admin-surface)",
-  color: "var(--admin-ink)",
-  font: "inherit",
-  fontSize: "0.84rem",
-};
-
-const eventTwoColumnStyle: CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(15rem, 1fr))",
-  gap: "1rem",
-};
-
-const eventInlineActionsStyle: CSSProperties = {
-  display: "flex",
-  flexWrap: "wrap",
-  gap: "0.55rem",
-  alignItems: "center",
-};
-
 export interface OrganizerEventEditorProps {
   readonly event?: OrganizerEventRecord | undefined;
   readonly busy?: boolean;
@@ -2067,12 +1939,11 @@ export function OrganizerEventEditor({
   }
 
   return (
-    <form onSubmit={(formEvent) => void submit(formEvent)} style={{ display: "grid", gap: "1rem" }}>
+    <form className={styles.eventForm} onSubmit={(formEvent) => void submit(formEvent)}>
       <div>
         <h2
-          className={styles.panelTitle}
+          className={`${styles.panelTitle} ${styles.eventEditorTitle}`}
           id="organizer-event-editor-title"
-          style={{ marginBottom: "0.35rem" }}
         >
           {event ? "Configure event" : "Create an event"}
         </h2>
@@ -2080,11 +1951,11 @@ export function OrganizerEventEditor({
           Event dates are entered in the event time zone and saved as canonical ISO instants.
         </p>
       </div>
-      <div style={eventTwoColumnStyle}>
-        <label style={eventFieldStyle} htmlFor="organizer-event-name">
-          <span style={eventFieldLabelStyle}>Event name</span>
+      <div className={styles.eventTwoColumn}>
+        <label className={styles.eventField} htmlFor="organizer-event-name">
+          <span className={styles.eventFieldLabel}>Event name</span>
           <input
-            style={eventInputStyle}
+            className={styles.eventInput}
             id="organizer-event-name"
             name="name"
             type="text"
@@ -2094,10 +1965,10 @@ export function OrganizerEventEditor({
             onChange={(formEvent) => updateValue("name", formEvent.target.value)}
           />
         </label>
-        <label style={eventFieldStyle} htmlFor="organizer-event-slug">
-          <span style={eventFieldLabelStyle}>URL slug</span>
+        <label className={styles.eventField} htmlFor="organizer-event-slug">
+          <span className={styles.eventFieldLabel}>URL slug</span>
           <input
-            style={eventInputStyle}
+            className={styles.eventInput}
             id="organizer-event-slug"
             name="slug"
             type="text"
@@ -2108,11 +1979,11 @@ export function OrganizerEventEditor({
           />
         </label>
       </div>
-      <div style={eventTwoColumnStyle}>
-        <label style={eventFieldStyle} htmlFor="organizer-event-status">
-          <span style={eventFieldLabelStyle}>Status</span>
+      <div className={styles.eventTwoColumn}>
+        <label className={styles.eventField} htmlFor="organizer-event-status">
+          <span className={styles.eventFieldLabel}>Status</span>
           <select
-            style={eventInputStyle}
+            className={styles.eventInput}
             id="organizer-event-status"
             name="status"
             value={values.status}
@@ -2127,10 +1998,10 @@ export function OrganizerEventEditor({
             ))}
           </select>
         </label>
-        <label style={eventFieldStyle} htmlFor="organizer-event-time-zone">
-          <span style={eventFieldLabelStyle}>Event time zone</span>
+        <label className={styles.eventField} htmlFor="organizer-event-time-zone">
+          <span className={styles.eventFieldLabel}>Event time zone</span>
           <input
-            style={eventInputStyle}
+            className={styles.eventInput}
             id="organizer-event-time-zone"
             name="timeZone"
             type="text"
@@ -2149,11 +2020,11 @@ export function OrganizerEventEditor({
           </datalist>
         </label>
       </div>
-      <div style={eventTwoColumnStyle}>
-        <label style={eventFieldStyle} htmlFor="organizer-event-starts-at">
-          <span style={eventFieldLabelStyle}>Starts</span>
+      <div className={styles.eventTwoColumn}>
+        <label className={styles.eventField} htmlFor="organizer-event-starts-at">
+          <span className={styles.eventFieldLabel}>Starts</span>
           <input
-            style={eventInputStyle}
+            className={styles.eventInput}
             id="organizer-event-starts-at"
             name="startsAt"
             type="datetime-local"
@@ -2162,10 +2033,10 @@ export function OrganizerEventEditor({
             onChange={(formEvent) => updateValue("startsAt", formEvent.target.value)}
           />
         </label>
-        <label style={eventFieldStyle} htmlFor="organizer-event-ends-at">
-          <span style={eventFieldLabelStyle}>Ends</span>
+        <label className={styles.eventField} htmlFor="organizer-event-ends-at">
+          <span className={styles.eventFieldLabel}>Ends</span>
           <input
-            style={eventInputStyle}
+            className={styles.eventInput}
             id="organizer-event-ends-at"
             name="endsAt"
             type="datetime-local"
@@ -2175,10 +2046,10 @@ export function OrganizerEventEditor({
           />
         </label>
       </div>
-      <label style={eventFieldStyle} htmlFor="organizer-event-venue">
-        <span style={eventFieldLabelStyle}>Venue</span>
+      <label className={styles.eventField} htmlFor="organizer-event-venue">
+        <span className={styles.eventFieldLabel}>Venue</span>
         <input
-          style={eventInputStyle}
+          className={styles.eventInput}
           id="organizer-event-venue"
           name="venue"
           type="text"
@@ -2187,28 +2058,9 @@ export function OrganizerEventEditor({
           onChange={(formEvent) => updateValue("venue", formEvent.target.value)}
         />
       </label>
-      <fieldset
-        style={{
-          display: "grid",
-          gap: "0.8rem",
-          border: "1px solid var(--admin-border)",
-          borderRadius: "var(--admin-radius-sm)",
-          padding: "0.95rem",
-          margin: 0,
-        }}
-      >
-        <legend style={{ padding: "0 0.35rem", fontSize: "0.86rem", fontWeight: 800 }}>
-          CFP settings
-        </legend>
-        <label
-          style={{
-            display: "flex",
-            gap: "0.55rem",
-            alignItems: "center",
-            color: "var(--admin-ink)",
-            fontSize: "0.82rem",
-          }}
-        >
+      <fieldset className={styles.eventFieldset}>
+        <legend className={styles.eventLegend}>CFP settings</legend>
+        <label className={styles.eventCheckboxLabel}>
           <input
             type="checkbox"
             name="cfpSettings.enabled"
@@ -2217,11 +2069,11 @@ export function OrganizerEventEditor({
           />
           <span>Enable call for proposals</span>
         </label>
-        <div style={eventTwoColumnStyle}>
-          <label style={eventFieldStyle} htmlFor="organizer-event-cfp-opens-at">
-            <span style={eventFieldLabelStyle}>CFP opens</span>
+        <div className={styles.eventTwoColumn}>
+          <label className={styles.eventField} htmlFor="organizer-event-cfp-opens-at">
+            <span className={styles.eventFieldLabel}>CFP opens</span>
             <input
-              style={eventInputStyle}
+              className={styles.eventInput}
               id="organizer-event-cfp-opens-at"
               name="cfpSettings.opensAt"
               type="datetime-local"
@@ -2229,10 +2081,10 @@ export function OrganizerEventEditor({
               onChange={(formEvent) => updateValue("cfpOpensAt", formEvent.target.value)}
             />
           </label>
-          <label style={eventFieldStyle} htmlFor="organizer-event-cfp-closes-at">
-            <span style={eventFieldLabelStyle}>CFP closes</span>
+          <label className={styles.eventField} htmlFor="organizer-event-cfp-closes-at">
+            <span className={styles.eventFieldLabel}>CFP closes</span>
             <input
-              style={eventInputStyle}
+              className={styles.eventInput}
               id="organizer-event-cfp-closes-at"
               name="cfpSettings.closesAt"
               type="datetime-local"
@@ -2242,24 +2094,13 @@ export function OrganizerEventEditor({
           </label>
         </div>
       </fieldset>
-      <fieldset
-        style={{
-          display: "grid",
-          gap: "0.8rem",
-          border: "1px solid var(--admin-border)",
-          borderRadius: "var(--admin-radius-sm)",
-          padding: "0.95rem",
-          margin: 0,
-        }}
-      >
-        <legend style={{ padding: "0 0.35rem", fontSize: "0.86rem", fontWeight: 800 }}>
-          Default calendar settings
-        </legend>
-        <div style={eventTwoColumnStyle}>
-          <label style={eventFieldStyle} htmlFor="organizer-event-calendar-duration">
-            <span style={eventFieldLabelStyle}>Default duration (minutes)</span>
+      <fieldset className={styles.eventFieldset}>
+        <legend className={styles.eventLegend}>Default calendar settings</legend>
+        <div className={styles.eventTwoColumn}>
+          <label className={styles.eventField} htmlFor="organizer-event-calendar-duration">
+            <span className={styles.eventFieldLabel}>Default duration (minutes)</span>
             <input
-              style={eventInputStyle}
+              className={styles.eventInput}
               id="organizer-event-calendar-duration"
               name="defaultCalendarSettings.durationMinutes"
               type="number"
@@ -2273,10 +2114,10 @@ export function OrganizerEventEditor({
               }
             />
           </label>
-          <label style={eventFieldStyle} htmlFor="organizer-event-calendar-time-zone">
-            <span style={eventFieldLabelStyle}>Calendar time zone</span>
+          <label className={styles.eventField} htmlFor="organizer-event-calendar-time-zone">
+            <span className={styles.eventFieldLabel}>Calendar time zone</span>
             <input
-              style={eventInputStyle}
+              className={styles.eventInput}
               id="organizer-event-calendar-time-zone"
               name="defaultCalendarSettings.timeZone"
               type="text"
@@ -2288,10 +2129,10 @@ export function OrganizerEventEditor({
             />
           </label>
         </div>
-        <label style={eventFieldStyle} htmlFor="organizer-event-calendar-location">
-          <span style={eventFieldLabelStyle}>Default calendar location</span>
+        <label className={styles.eventField} htmlFor="organizer-event-calendar-location">
+          <span className={styles.eventFieldLabel}>Default calendar location</span>
           <input
-            style={eventInputStyle}
+            className={styles.eventInput}
             id="organizer-event-calendar-location"
             name="defaultCalendarSettings.location"
             type="text"
@@ -2302,19 +2143,11 @@ export function OrganizerEventEditor({
         </label>
       </fieldset>
       {formError ? (
-        <p
-          role="alert"
-          style={{
-            margin: 0,
-            color: "var(--admin-danger)",
-            fontSize: "0.8rem",
-            fontWeight: 700,
-          }}
-        >
+        <p className={styles.eventError} role="alert">
           {formError}
         </p>
       ) : null}
-      <div style={eventInlineActionsStyle}>
+      <div className={styles.eventInlineActions}>
         {onCancel ? (
           <button className={styles.secondaryButton} type="button" onClick={onCancel}>
             Cancel
@@ -2365,6 +2198,96 @@ function formatEventManagementDates(event: OrganizerEventRecord): string {
 
 function eventSettingsHref(organizationId: string, eventId: string): string {
   return `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}/settings`;
+}
+export interface OrganizerCalendarDateCell {
+  readonly date: Date;
+  readonly dateKey: string;
+  readonly isCurrentMonth: boolean;
+}
+
+function localDateKey(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function calendarDateStart(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function parseCalendarInstant(value: string | null | undefined): Date | null {
+  if (typeof value !== "string" || value.trim().length === 0) return null;
+  const normalized = value.trim();
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(normalized);
+  if (dateOnly) {
+    const year = Number(dateOnly[1]);
+    const month = Number(dateOnly[2]) - 1;
+    const day = Number(dateOnly[3]);
+    const parsed = new Date(year, month, day);
+    return parsed.getFullYear() === year && parsed.getMonth() === month && parsed.getDate() === day
+      ? parsed
+      : null;
+  }
+  const parsed = new Date(normalized);
+  return Number.isNaN(parsed.valueOf()) ? null : parsed;
+}
+
+export function getCalendarMonthCells(month: Date): readonly OrganizerCalendarDateCell[] {
+  const safeMonth = Number.isNaN(month.valueOf()) ? new Date() : month;
+  const monthStart = new Date(safeMonth.getFullYear(), safeMonth.getMonth(), 1);
+  const firstCell = new Date(
+    monthStart.getFullYear(),
+    monthStart.getMonth(),
+    1 - monthStart.getDay(),
+  );
+  return Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(
+      firstCell.getFullYear(),
+      firstCell.getMonth(),
+      firstCell.getDate() + index,
+    );
+    return {
+      date,
+      dateKey: localDateKey(date),
+      isCurrentMonth:
+        date.getFullYear() === monthStart.getFullYear() &&
+        date.getMonth() === monthStart.getMonth(),
+    };
+  });
+}
+
+export const calendarMonthCells = getCalendarMonthCells;
+
+export function organizerEventIntersectsCalendarDate(
+  event: Pick<OrganizerEventRecord, "startsAt" | "endsAt">,
+  date: Date | string,
+): boolean {
+  const cellDate = typeof date === "string" ? parseCalendarInstant(date) : date;
+  if (cellDate === null || Number.isNaN(cellDate.valueOf())) return false;
+  const startsAt = parseCalendarInstant(event.startsAt);
+  const endsAt = parseCalendarInstant(event.endsAt);
+  if (startsAt === null || endsAt === null || startsAt > endsAt) return false;
+  const dayStart = calendarDateStart(cellDate);
+  const dayEnd = new Date(dayStart.getFullYear(), dayStart.getMonth(), dayStart.getDate() + 1);
+  return startsAt < dayEnd && endsAt >= dayStart;
+}
+
+export const eventIntersectsCalendarDate = organizerEventIntersectsCalendarDate;
+
+export function initialCalendarMonth(
+  events: readonly Pick<OrganizerEventRecord, "status" | "startsAt">[],
+): Date {
+  let earliest: Date | null = null;
+  for (const event of events) {
+    if (event.status === "archived") continue;
+    const startsAt = parseCalendarInstant(event.startsAt);
+    if (startsAt !== null && (earliest === null || startsAt < earliest)) {
+      earliest = startsAt;
+    }
+  }
+  const source = earliest ?? new Date();
+  return new Date(source.getFullYear(), source.getMonth(), 1);
 }
 
 export interface OrganizerEventsData {
@@ -2481,10 +2404,37 @@ function OrganizerEventsLoaded({
   readonly onArchive?: ((eventId: string, expectedVersion: number) => Promise<void>) | undefined;
 }>) {
   const [editor, setEditor] = useState<"create" | string | null>(null);
+  const [view, setView] = useState<"calendar" | "list">("calendar");
+  const [visibleMonth, setVisibleMonth] = useState(() => initialCalendarMonth(data.events));
+  const [archiveTarget, setArchiveTarget] = useState<OrganizerEventRecord | null>(null);
   const editingEvent =
     editor !== null && editor !== "create"
       ? data.events.find((event) => event.id === editor)
       : undefined;
+  const calendarCells = getCalendarMonthCells(visibleMonth);
+  const monthLabel = new Intl.DateTimeFormat(undefined, {
+    month: "long",
+    year: "numeric",
+  }).format(visibleMonth);
+  const upcomingEvents = [...data.events]
+    .filter((event) => {
+      const startsAt = parseCalendarInstant(event.startsAt);
+      return event.status !== "archived" && startsAt !== null && startsAt >= new Date();
+    })
+    .sort((left, right) => {
+      const leftStart = parseCalendarInstant(left.startsAt)?.valueOf() ?? Number.POSITIVE_INFINITY;
+      const rightStart =
+        parseCalendarInstant(right.startsAt)?.valueOf() ?? Number.POSITIVE_INFINITY;
+      return leftStart - rightStart;
+    })
+    .slice(0, 5);
+  const statusCounts = Object.fromEntries(
+    organizerEventStatuses.map((status) => [
+      status,
+      data.events.filter((event) => event.status === status).length,
+    ]),
+  ) as Record<OrganizerEventStatus, number>;
+
   useEffect(() => {
     if (!onCreate || !onUpdate) setEditor(null);
   }, [onCreate, onUpdate]);
@@ -2501,10 +2451,10 @@ function OrganizerEventsLoaded({
     setEditor(null);
   }
 
-  async function archive(event: OrganizerEventRecord) {
-    if (!onArchive) return;
-    if (typeof window !== "undefined" && !window.confirm(`Archive ${event.name}?`)) return;
-    await onArchive(event.id, event.version);
+  async function archive() {
+    if (!onArchive || archiveTarget === null) return;
+    await onArchive(archiveTarget.id, archiveTarget.version);
+    setArchiveTarget(null);
   }
 
   return (
@@ -2514,146 +2464,317 @@ function OrganizerEventsLoaded({
           <p className={styles.eyebrow}>Organizer workspace</p>
           <h1 className={styles.pageTitle}>Event management</h1>
           <p className={styles.pageDescription}>
-            Create events, configure their dates and defaults, and choose an event workspace.
+            Keep event dates visible at a glance, then switch to List for configuration and actions.
           </p>
         </div>
         {onCreate ? (
           <div className={styles.headerActions}>
-            <button
-              className={styles.primaryButton}
+            <Button
               type="button"
               onClick={() => setEditor((current) => (current === "create" ? null : "create"))}
               aria-expanded={editor === "create"}
               aria-controls="organizer-event-editor"
             >
               {editor === "create" ? "Close create form" : "Create event"}
-            </button>
+            </Button>
           </div>
         ) : null}
       </header>
 
       {notice ? (
-        <p className={styles.callout} role="status" style={{ marginBottom: "1.25rem" }}>
-          {notice}
-        </p>
+        <Alert role="status">
+          <AlertTitle>Event updated</AlertTitle>
+          <AlertDescription>{notice}</AlertDescription>
+        </Alert>
       ) : null}
 
       {editor !== null && onCreate && onUpdate ? (
-        <section
-          className={styles.panel}
-          id="organizer-event-editor"
-          aria-labelledby="organizer-event-editor-title"
-        >
-          <div className={styles.panelContent}>
+        <Card id="organizer-event-editor" aria-labelledby="organizer-event-editor-title">
+          <CardContent className="pt-6">
             <OrganizerEventEditor
               event={editingEvent}
               busy={busy}
               onCancel={() => setEditor(null)}
               onSave={editor === "create" ? create : update}
             />
-          </div>
-        </section>
+          </CardContent>
+        </Card>
       ) : null}
 
-      <section className={styles.panel} aria-labelledby="organizer-events-title">
-        <div className={styles.panelHeader}>
-          <div className={styles.panelHeading}>
-            <p className={styles.panelEyebrow}>Live organization data</p>
-            <h2 className={styles.panelTitle} id="organizer-events-title">
-              Events
-            </h2>
-          </div>
-          <span className={styles.muted}>{data.events.length} total</span>
-        </div>
-        {data.events.length === 0 ? (
-          <div className={styles.panelContent}>
-            <p className={styles.muted} role="status">
-              No events are available for this organization yet. Create an event to begin.
-            </p>
-          </div>
-        ) : (
-          <div className={styles.tableWrap}>
-            <table className={styles.eventsTable}>
-              <caption>Organization events and their current status</caption>
-              <thead>
-                <tr>
-                  <th scope="col">Event</th>
-                  <th scope="col">Status</th>
-                  <th scope="col">Event dates</th>
-                  <th scope="col">
-                    <span className={styles.srOnly}>Actions</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.events.map((event) => (
-                  <tr key={event.id}>
-                    <td className={styles.eventNameCell}>
-                      <Link
-                        className={styles.eventName}
-                        href={eventSettingsHref(data.organizationId, event.id)}
-                      >
-                        {event.name}
-                      </Link>
-                      <p className={styles.eventSlug}>/{event.slug}</p>
-                    </td>
-                    <td>
-                      <span
-                        className={`${styles.statusBadge} ${eventManagementStatusClass(event.status)}`}
-                      >
-                        <span aria-hidden="true">●</span>&nbsp;
-                        {eventManagementStatusLabel(event.status)}
-                      </span>
-                    </td>
-                    <td className={styles.eventDateCell}>
-                      {formatEventManagementDates(event)}
-                      <span className={styles.eventSlug}>{event.timeZone}</span>
-                    </td>
-                    <td>
-                      <div className={styles.eventActions}>
-                        <Link
-                          className={styles.outlineButton}
-                          href={agendaHref(data.organizationId, event.id)}
-                        >
-                          Agenda <span aria-hidden="true">→</span>
-                        </Link>
-                        <Link
-                          className={styles.outlineButton}
-                          href={eventSettingsHref(data.organizationId, event.id)}
-                        >
-                          Settings <span aria-hidden="true">→</span>
-                        </Link>
-                        {onUpdate ? (
-                          <button
-                            className={styles.secondaryButton}
-                            type="button"
-                            disabled={busy}
-                            onClick={() =>
-                              setEditor((current) => (current === event.id ? null : event.id))
-                            }
+      <Tabs value={view} onValueChange={(value) => setView(value === "list" ? "list" : "calendar")}>
+        <Card aria-labelledby="organizer-events-title">
+          <CardHeader className="flex-row items-start justify-between">
+            <div>
+              <CardDescription>Live organization data</CardDescription>
+              <CardTitle>
+                <h2 id="organizer-events-title">Events</h2>
+              </CardTitle>
+            </div>
+            <TabsList aria-label="Event display">
+              <TabsTrigger value="calendar">Calendar</TabsTrigger>
+              <TabsTrigger value="list">List</TabsTrigger>
+            </TabsList>
+          </CardHeader>
+
+          {data.events.length === 0 ? (
+            <CardContent>
+              <p className={styles.muted} role="status">
+                No events are available for this organization yet. Create an event to begin.
+              </p>
+            </CardContent>
+          ) : view === "calendar" ? (
+            <TabsContent value="calendar" className={`${styles.calendarWorkspace} mt-0`}>
+              <aside className={styles.calendarRail} aria-label="Calendar summary">
+                <div className={styles.calendarRailSection}>
+                  <p className={styles.panelEyebrow}>Upcoming events</p>
+                  {upcomingEvents.length === 0 ? (
+                    <p className={styles.muted}>No upcoming events to show.</p>
+                  ) : (
+                    <ul className={styles.upcomingList}>
+                      {upcomingEvents.map((event) => (
+                        <li key={event.id}>
+                          <Link
+                            className={styles.upcomingLink}
+                            href={eventSettingsHref(data.organizationId, event.id)}
                           >
-                            {editor === event.id ? "Close editor" : "Edit"}
-                          </button>
-                        ) : null}
-                        {event.status !== "archived" && onArchive ? (
-                          <button
-                            className={styles.secondaryButton}
-                            type="button"
-                            disabled={busy}
-                            onClick={() => void archive(event)}
+                            <strong>{event.name}</strong>
+                            <span>
+                              {formatEventManagementDate(event.startsAt, event.timeZone)} ·{" "}
+                              {event.timeZone}
+                            </span>
+                          </Link>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+                <div className={styles.calendarRailSection}>
+                  <p className={styles.panelEyebrow}>Status</p>
+                  <ul className={styles.statusLegend}>
+                    {organizerEventStatuses.map((status) => (
+                      <li key={status}>
+                        <span
+                          className={`${styles.statusDot} ${eventManagementStatusClass(status)}`}
+                        />
+                        <span>{eventManagementStatusLabel(status)}</span>
+                        <strong>{statusCounts[status]}</strong>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </aside>
+
+              <div className={styles.calendarMain}>
+                <div className={styles.calendarToolbar}>
+                  <div className={styles.calendarMonthControls}>
+                    <Button
+                      size="icon"
+                      type="button"
+                      variant="outline"
+                      aria-label="Previous month"
+                      onClick={() =>
+                        setVisibleMonth(
+                          (current) => new Date(current.getFullYear(), current.getMonth() - 1, 1),
+                        )
+                      }
+                    >
+                      <ChevronLeft aria-hidden="true" />
+                    </Button>
+                    <Button
+                      size="sm"
+                      type="button"
+                      variant="outline"
+                      onClick={() =>
+                        setVisibleMonth(
+                          new Date(new Date().getFullYear(), new Date().getMonth(), 1),
+                        )
+                      }
+                    >
+                      Today
+                    </Button>
+                    <Button
+                      size="icon"
+                      type="button"
+                      variant="outline"
+                      aria-label="Next month"
+                      onClick={() =>
+                        setVisibleMonth(
+                          (current) => new Date(current.getFullYear(), current.getMonth() + 1, 1),
+                        )
+                      }
+                    >
+                      <ChevronRight aria-hidden="true" />
+                    </Button>
+                    <h3 className={styles.calendarMonthLabel}>{monthLabel}</h3>
+                  </div>
+                  <Badge variant="secondary">{data.events.length} total</Badge>
+                </div>
+
+                <div className={styles.calendarScroll}>
+                  <table className={styles.calendarGrid}>
+                    <caption className={styles.srOnly}>{monthLabel} events</caption>
+                    <thead>
+                      <tr className={styles.weekdayRow}>
+                        {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((weekday) => (
+                          <th className={styles.weekday} scope="col" key={weekday}>
+                            {weekday}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className={styles.calendarCells}>
+                      {Array.from({ length: 6 }, (_, weekIndex) => (
+                        <tr key={calendarCells[weekIndex * 7]?.dateKey}>
+                          {calendarCells.slice(weekIndex * 7, weekIndex * 7 + 7).map((cell) => {
+                            const cellEvents = data.events.filter(
+                              (event) =>
+                                event.status !== "archived" &&
+                                organizerEventIntersectsCalendarDate(event, cell.date),
+                            );
+                            return (
+                              <td
+                                className={`${styles.calendarCell} ${cell.isCurrentMonth ? "" : styles.calendarCellOutside}`}
+                                key={cell.dateKey}
+                              >
+                                <time dateTime={cell.dateKey} className={styles.calendarDate}>
+                                  <span className={styles.srOnly}>
+                                    {cell.date.toLocaleDateString(undefined, {
+                                      month: "long",
+                                      day: "numeric",
+                                      year: "numeric",
+                                    })}
+                                  </span>
+                                  <span aria-hidden="true">{cell.date.getDate()}</span>
+                                </time>
+                                <div className={styles.calendarEventList}>
+                                  {cellEvents.map((event) => (
+                                    <Link
+                                      className={styles.calendarEvent}
+                                      href={eventSettingsHref(data.organizationId, event.id)}
+                                      key={event.id}
+                                      aria-label={event.name}
+                                    >
+                                      <span className={styles.calendarEventName}>{event.name}</span>
+                                      <span className={styles.calendarEventStatus}>
+                                        {eventManagementStatusLabel(event.status)}
+                                      </span>
+                                    </Link>
+                                  ))}
+                                </div>
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </TabsContent>
+          ) : (
+            <TabsContent value="list" className="mt-0">
+              <div className={styles.tableWrap}>
+                <table className={styles.eventsTable}>
+                  <caption>Organization events and their current status</caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">Event</th>
+                      <th scope="col">Status</th>
+                      <th scope="col">Event dates</th>
+                      <th scope="col">
+                        <span className={styles.srOnly}>Actions</span>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.events.map((event) => (
+                      <tr key={event.id}>
+                        <td className={styles.eventNameCell}>
+                          <Link
+                            className={styles.eventName}
+                            href={eventSettingsHref(data.organizationId, event.id)}
                           >
-                            Archive
-                          </button>
-                        ) : null}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+                            {event.name}
+                          </Link>
+                          <p className={styles.eventSlug}>/{event.slug}</p>
+                        </td>
+                        <td>
+                          <Badge variant={event.status === "active" ? "default" : "secondary"}>
+                            {eventManagementStatusLabel(event.status)}
+                          </Badge>
+                        </td>
+                        <td className={styles.eventDateCell}>
+                          {formatEventManagementDates(event)}
+                          <span className={styles.eventSlug}>{event.timeZone}</span>
+                        </td>
+                        <td>
+                          <div className={styles.eventActions}>
+                            <Button asChild size="sm" variant="outline">
+                              <Link href={agendaHref(data.organizationId, event.id)}>Agenda</Link>
+                            </Button>
+                            <Button asChild size="sm" variant="outline">
+                              <Link href={eventSettingsHref(data.organizationId, event.id)}>
+                                Settings
+                              </Link>
+                            </Button>
+                            {onUpdate ? (
+                              <Button
+                                size="sm"
+                                type="button"
+                                variant="secondary"
+                                disabled={busy}
+                                onClick={() =>
+                                  setEditor((current) => (current === event.id ? null : event.id))
+                                }
+                              >
+                                {editor === event.id ? "Close editor" : "Edit"}
+                              </Button>
+                            ) : null}
+                            {event.status !== "archived" && onArchive ? (
+                              <Button
+                                size="sm"
+                                type="button"
+                                variant="outline"
+                                disabled={busy}
+                                onClick={() => setArchiveTarget(event)}
+                              >
+                                Archive
+                              </Button>
+                            ) : null}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </TabsContent>
+          )}
+        </Card>
+      </Tabs>
+      <AlertDialog
+        open={archiveTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setArchiveTarget(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Archive this event?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {archiveTarget
+                ? `${archiveTarget.name} will leave active event workflows.`
+                : "This event will leave active event workflows."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+            <AlertDialogAction disabled={busy} variant="destructive" onClick={() => void archive()}>
+              Archive event
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }

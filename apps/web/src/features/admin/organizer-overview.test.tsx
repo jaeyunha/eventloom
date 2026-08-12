@@ -8,8 +8,12 @@ import {
   sessionHasOrganizerMembership,
 } from "./admin-shell";
 import {
+  calendarMonthCells,
   createOrganizerEventsApi,
   createOrganizerOverviewApi,
+  eventIntersectsCalendarDate,
+  getCalendarMonthCells,
+  initialCalendarMonth,
   type OrganizerEventFormValues,
   type OrganizerEventRecord,
   type OrganizerOverviewActivityData,
@@ -111,15 +115,17 @@ describe("organizer overview", () => {
     });
 
     expect(output).toContain("Organization overview");
-    expect(output).toContain("Live organization metrics");
-    expect(output).toContain(">1<");
-    expect(output).toContain(">2<");
-    expect(output).toContain("Tasks that need you");
+    expect(output).toContain("Metrics");
+    expect(output).toContain(">1</");
+    expect(output).toContain(">2</");
+    expect(output).toContain("Needs attention");
     expect(output).toContain("1 task");
     expect(output).toContain("Priority queued");
     expect(output).toContain("Publish the remaining session");
-    expect(output).toContain("Open agenda");
+    expect(output).toContain(">Open");
     expect(output).toContain("/admin/organizations/ai-engineer/events/event-live/agenda");
+    expect(output).toContain("/admin/organizations/ai-engineer/events/event-live/settings");
+    expect(output).not.toContain("Keep your program moving");
     expect(output).not.toContain("Summit 2026");
   });
 
@@ -162,7 +168,7 @@ describe("organizer overview", () => {
     expect(loading).toContain("Loading organizer overview");
     expect(loading).toContain('aria-busy="true"');
     expect(loading).toContain('aria-label="Loading organization metrics"');
-    expect(loading).toContain("Tasks that need you");
+    expect(loading).toContain("Needs attention");
     expect(loading).toContain("Events");
     expect(loading).not.toContain("128");
 
@@ -366,7 +372,41 @@ describe("organizer overview", () => {
       ),
     ).toThrow("another organization");
   });
-  it("renders dedicated event management rows with organization-qualified agenda and settings links", () => {
+  it("generates a bounded 42-cell month grid across month boundaries", () => {
+    const cells = getCalendarMonthCells(new Date(2026, 1, 1));
+    expect(cells).toHaveLength(42);
+    expect(cells[0]?.dateKey).toBe("2026-02-01");
+    expect(cells[41]?.dateKey).toBe("2026-03-14");
+    expect(calendarMonthCells(new Date(2026, 1, 1))).toHaveLength(42);
+  });
+
+  it("places multi-day events by checking each visible date and ignores invalid spans", () => {
+    const event = {
+      startsAt: "2026-02-28",
+      endsAt: "2026-03-02",
+    };
+    expect(eventIntersectsCalendarDate(event, new Date(2026, 1, 28))).toBe(true);
+    expect(eventIntersectsCalendarDate(event, new Date(2026, 2, 1))).toBe(true);
+    expect(eventIntersectsCalendarDate(event, new Date(2026, 2, 2))).toBe(true);
+    expect(eventIntersectsCalendarDate(event, new Date(2026, 2, 3))).toBe(false);
+    expect(
+      eventIntersectsCalendarDate(
+        { startsAt: "not-a-date", endsAt: "2026-03-02T01:00:00.000Z" },
+        new Date(2026, 2, 1),
+      ),
+    ).toBe(false);
+  });
+
+  it("initializes from the earliest non-archived valid event start", () => {
+    const month = initialCalendarMonth([
+      { status: "archived", startsAt: "2020-01-01T00:00:00.000Z" },
+      { status: "active", startsAt: "not-a-date" },
+      { status: "draft", startsAt: "2026-04-08T00:00:00.000Z" },
+      { status: "active", startsAt: "2026-03-08T00:00:00.000Z" },
+    ]);
+    expect([month.getFullYear(), month.getMonth(), month.getDate()]).toEqual([2026, 2, 1]);
+  });
+  it("renders Calendar by default and keeps List actions behind the view switch", () => {
     const output = renderToStaticMarkup(
       createElement(OrganizerEventsView, {
         state: {
@@ -384,9 +424,16 @@ describe("organizer overview", () => {
 
     expect(output).toContain("Event management");
     expect(output).toContain("Create event");
-    expect(output).toContain("/admin/organizations/ai-engineer/events/event-live/agenda");
+    expect(output).toContain('aria-selected="true"');
+    expect(output).toContain("September 2026");
+    expect(output).toContain("Sun");
+    expect(output).toContain("Mon");
     expect(output).toContain("/admin/organizations/ai-engineer/events/event-live/settings");
     expect(output).toContain("America/Los_Angeles");
+    expect(output).toContain("<table");
+    expect(output).toContain("September 2026 events");
+    expect(output).not.toContain("Organization events and their current status");
+    expect(output).not.toContain(">Agenda<");
   });
   it("retains event records after refresh failure and disables stale mutations", () => {
     const output = renderToStaticMarkup(

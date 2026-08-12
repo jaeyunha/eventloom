@@ -283,12 +283,7 @@ export function IntegrationAdmin({
               <h2>Could not save the change</h2>
               <p>{mutationError}</p>
             </div>
-            <Button
-              type="button"
-              variant="ghost"
-              size="small"
-              onClick={() => setMutationError(null)}
-            >
+            <Button type="button" variant="ghost" size="sm" onClick={() => setMutationError(null)}>
               Dismiss
             </Button>
           </div>

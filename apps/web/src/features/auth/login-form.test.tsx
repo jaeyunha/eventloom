@@ -258,7 +258,7 @@ describe("organizer login", () => {
       /verify your account access/i,
     );
   });
-  it("renders labeled controls, a keyboard-accessible magic-link action, and the CFP account boundary", () => {
+  it("renders concise access modes and shadcn form controls", () => {
     const markup = renderToStaticMarkup(createElement(LoginForm, { apiBaseUrl: API_ORIGIN }));
 
     expect(markup).toContain('id="login-main"');
@@ -266,6 +266,11 @@ describe("organizer login", () => {
     expect(markup).toContain('autoComplete="email"');
     expect(markup).toContain('for="login-password"');
     expect(markup).toContain('autoComplete="current-password"');
+    expect(markup).toContain('data-slot="card"');
+    expect(markup).toContain('data-slot="tabs-list"');
+    expect(markup).toContain('data-slot="tabs-trigger"');
+    expect(markup).toContain('data-slot="input"');
+    expect(markup).toContain('data-slot="label"');
     expect(markup).toContain('type="submit"');
     expect(markup).toContain('method="post"');
     expect(markup).toContain('type="button"');
@@ -273,7 +278,12 @@ describe("organizer login", () => {
     expect(markup).toContain("Account access mode");
     expect(markup).toContain("Create account");
     expect(markup).toContain("Organizer and reviewer access");
+    expect(markup).toContain("Sign in to Open Sessionboard");
+    expect(markup).toContain("Organizers");
+    expect(markup).toContain("Reviewers");
     expect(markup).toContain("CFP applicants create accounts through the CFP");
+    expect(markup).not.toContain("Welcome back to the program desk.");
+    expect(markup).not.toContain("01");
     expect(markup).not.toContain("Google");
     expect(markup).not.toContain("sign-in/social");
     expect(markup).not.toContain("sign-up/email");

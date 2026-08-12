@@ -3,7 +3,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { AppShell, SidebarNavigation } from "../layout";
 import { DataTable } from "./data-table";
-import { Field, Input } from "./field";
+import { Field, FieldDescription, FieldError, FieldLabel } from "./field";
+import { Input } from "./input";
 import { applyRichTextCommand } from "./rich-text";
 import { filterOptions, SearchableSelect } from "./searchable-select";
 import { getStepState, Stepper } from "./stepper";
@@ -31,14 +32,13 @@ describe("design system accessibility", () => {
 
   it("connects labels, help, validation, and controls", () => {
     const markup = renderToStaticMarkup(
-      <Field
-        error="A title is required"
-        hint="Use a concise title"
-        label="Title"
-        name="title"
-        required
-      >
-        {(controlProps) => <Input {...controlProps} />}
+      <Field data-invalid>
+        <FieldLabel htmlFor="title">
+          Title <span aria-hidden="true">*</span>
+        </FieldLabel>
+        <Input id="title" aria-describedby="title-hint title-error" aria-invalid aria-required />
+        <FieldDescription id="title-hint">Use a concise title</FieldDescription>
+        <FieldError id="title-error">A title is required</FieldError>
       </Field>,
     );
 

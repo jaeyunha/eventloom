@@ -1076,10 +1076,11 @@ describe("speaker workspace", () => {
     expect(markup).toContain("Speaker roster");
     expect(markup).toContain("Search speakers");
     expect(markup).toContain("Add speaker");
-    expect(markup).toContain("Import speakers from CSV");
-    expect(markup).toContain("General speaker tasks");
-    expect(markup).toContain("Load task progress");
-    expect(markup).toContain("Onboarding progress");
+    expect(markup).toContain("Import CSV");
+    expect(markup).toContain('id="tasks-tab"');
+    expect(markup).toContain('id="email-tab"');
+    expect(markup).not.toContain("General speaker tasks");
+    expect(markup).not.toContain("Bulk speaker email");
     expect(markup).not.toContain("objectKey");
   });
   it("starts secondary speaker reads only after the current roster renders", () => {
@@ -1117,12 +1118,11 @@ describe("speaker workspace", () => {
       }),
     );
 
-    expect(markup).toContain("Import speakers from CSV");
-    expect(markup).toContain("Preview merge");
-    expect(markup).toContain("Queue speaker email");
-    expect(markup).toContain('aria-label="Refresh speaker email history"');
-    expect(markup).toContain("Refresh email history");
-    const csvInput = markup.match(/<input[^>]*accept="\.csv,text\/csv"[^>]*>/u)?.[0] ?? "";
-    expect(csvInput).not.toContain("disabled");
+    expect(markup).toContain("Import CSV");
+    expect(markup).toContain('aria-expanded="false"');
+    expect(markup).toContain('id="email-tab"');
+    expect(markup).toContain('aria-controls="email-view"');
+    expect(markup).not.toContain("Preview merge");
+    expect(markup).not.toContain("Queue speaker email");
   });
 });

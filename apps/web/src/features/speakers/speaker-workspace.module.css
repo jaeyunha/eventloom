@@ -1,0 +1,419 @@
+.workspace {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+  color: var(--foreground);
+}
+
+.header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1.5rem;
+}
+
+.headerCopy {
+  min-width: 0;
+}
+
+.eyebrow {
+  margin: 0 0 0.4rem;
+  color: var(--primary);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.title {
+  margin: 0;
+  color: var(--foreground);
+  font-size: clamp(1.75rem, 3vw, 2.45rem);
+  font-weight: 800;
+  letter-spacing: -0.045em;
+  line-height: 1.08;
+}
+
+.description {
+  max-width: 58ch;
+  margin: 0.45rem 0 0;
+  color: var(--muted-foreground);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.headerActions,
+.actions,
+.inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  align-items: center;
+}
+
+.headerActions {
+  flex: 0 0 auto;
+}
+
+.tabs,
+.view {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.panel {
+  min-width: 0;
+}
+
+.panelHeader,
+.detailHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.heading,
+.subheading {
+  margin: 0;
+  color: var(--foreground);
+  font-weight: 750;
+}
+
+.heading {
+  font-size: 1.05rem;
+}
+
+.subheading {
+  font-size: 0.92rem;
+}
+
+.muted {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.error {
+  color: var(--destructive);
+}
+
+.formMessage {
+  margin: 0;
+}
+
+.formMessageError {
+  color: var(--destructive);
+}
+
+.summaryGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.summary {
+  min-width: 0;
+}
+
+.toolbar {
+  display: grid;
+  grid-template-columns: minmax(12rem, 1.6fr) repeat(3, minmax(8rem, 0.7fr)) auto;
+  gap: 0.55rem;
+  align-items: end;
+}
+
+.inputWithIcon {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.inputWithIcon > svg {
+  flex: 0 0 auto;
+  color: var(--muted-foreground);
+}
+
+.control {
+  width: 100%;
+}
+
+.fieldGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 0.8rem;
+}
+
+.list {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.rosterGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(20rem, 0.85fr);
+  gap: 1rem;
+  min-width: 0;
+  align-items: start;
+}
+
+.rosterList,
+.detail {
+  min-width: 0;
+}
+
+.rosterList {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.selectionBar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--muted-foreground);
+  font-size: 0.8rem;
+}
+
+.speakerList {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.speakerRow {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.65rem;
+  align-items: start;
+  min-width: 0;
+}
+
+.speakerRowSelected {
+  background: var(--muted);
+}
+
+.speakerCopy {
+  display: grid;
+  min-width: 0;
+  gap: 0.18rem;
+}
+
+.speakerName {
+  width: fit-content;
+  justify-content: flex-start;
+  padding-inline: 0;
+  text-align: left;
+}
+
+.speakerMeta {
+  overflow-wrap: anywhere;
+  color: var(--muted-foreground);
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
+.speakerStats {
+  display: grid;
+  justify-items: end;
+  gap: 0.25rem;
+  color: var(--muted-foreground);
+  font-size: 0.74rem;
+  text-align: right;
+}
+
+.detail {
+  position: sticky;
+  top: 1rem;
+}
+
+.detailTitle {
+  margin: 0;
+  color: var(--foreground);
+  font-size: 1.25rem;
+  font-weight: 800;
+  letter-spacing: -0.035em;
+}
+
+.detailBlock {
+  display: grid;
+  gap: 0.55rem;
+  min-width: 0;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--border);
+}
+
+.detailGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: 0.9rem;
+}
+
+.uploadPanel,
+.preview {
+  min-width: 0;
+}
+
+.tableWrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.importDetails {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.importBody {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.checkboxGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: 0.45rem;
+}
+
+.actionsStack {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.reminderItem {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  align-items: baseline;
+  padding: 0.6rem 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.82rem;
+}
+
+.reminderItem:last-child {
+  border-bottom: 0;
+}
+
+.empty {
+  min-height: 8rem;
+}
+
+.code {
+  padding: 0.1rem 0.25rem;
+  border-radius: var(--radius-sm);
+  background: var(--muted);
+  color: var(--foreground);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+}
+
+.headshot {
+  display: grid;
+  min-height: 12rem;
+  place-items: center;
+  overflow: hidden;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--muted);
+}
+
+.headshotImage {
+  display: block;
+  width: 100%;
+  max-height: 18rem;
+  object-fit: cover;
+}
+
+.headshotFallback,
+.sheetBody,
+.progressCell {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.headshotFallback {
+  justify-items: center;
+  text-align: center;
+}
+
+.progressCell {
+  min-width: 8rem;
+}
+
+.dialogContent {
+  max-width: min(52rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
+}
+
+.sheetBody {
+  padding: 1rem;
+}
+
+@media (max-width: 68rem) {
+  .rosterGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .detail {
+    position: static;
+  }
+
+  .toolbar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .toolbar > :first-child {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 42rem) {
+  .header {
+    display: grid;
+    align-items: start;
+  }
+
+  .headerActions > * {
+    flex: 1 1 auto;
+  }
+
+  .summaryGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .toolbar > :first-child {
+    grid-column: auto;
+  }
+
+  .speakerRow {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .speakerStats {
+    grid-column: 2;
+    justify-items: start;
+    text-align: left;
+  }
+
+  .detailHeader .actions,
+  .actions > * {
+    flex: 1 1 auto;
+  }
+}
