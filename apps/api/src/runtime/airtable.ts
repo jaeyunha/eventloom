@@ -9121,7 +9121,6 @@ export class AirtableCrmRepository implements CrmRepository {
       (storedRoster.biography ?? null) !== contact.notes ||
       JSON.stringify(storedRoster.socialLinks ?? {}) !== JSON.stringify(socialLinks) ||
       storedRoster.workflowStatus !== "crm-prospect" ||
-      storedRoster.organizerStatus !== "Pending" ||
       storedRoster.status !== "active" ||
       storedRoster.role !== "primary";
     if (rosterChanged) {
@@ -9147,7 +9146,6 @@ export class AirtableCrmRepository implements CrmRepository {
         role: "primary",
         status: "active",
         workflowStatus: "crm-prospect",
-        organizerStatus: "Pending",
         version: storedRoster?.version === undefined ? 1 : storedRoster.version + 1,
         createdAt: storedRoster?.createdAt ?? projection.createdAt,
         updatedAt: contact.updatedAt,
