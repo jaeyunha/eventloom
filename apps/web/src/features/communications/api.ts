@@ -196,6 +196,57 @@ export { CommunicationApiError as CommunicationsApiError };
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 type JsonRecord = Record<string, unknown>;
+const COMMUNICATION_TEMPLATE_STATUSES = ["draft", "approved", "archived"] as const;
+
+const COMMUNICATION_RESPONSE_INVALID_CODE = "COMMUNICATION_INVALID_RESPONSE";
+const COMMUNICATION_RESPONSE_INVALID_MESSAGE =
+  "The communication API returned an invalid response.";
+const COMMUNICATION_RESPONSE_INVALID_STATUS = 502;
+
+function isRequiredCommunicationString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isNullableCommunicationString(value: unknown): value is string | null {
+  return value === null || isRequiredCommunicationString(value);
+}
+
+function isCommunicationTemplate(value: unknown): value is CommunicationTemplate {
+  if (!isRecord(value)) return false;
+  return (
+    isRequiredCommunicationString(value.id) &&
+    isRequiredCommunicationString(value.tenantId) &&
+    isRequiredCommunicationString(value.eventId) &&
+    isRequiredCommunicationString(value.name) &&
+    typeof value.purpose === "string" &&
+    COMMUNICATION_TEMPLATE_PURPOSES.includes(value.purpose as CommunicationTemplatePurpose) &&
+    typeof value.version === "number" &&
+    Number.isSafeInteger(value.version) &&
+    value.version > 0 &&
+    typeof value.status === "string" &&
+    COMMUNICATION_TEMPLATE_STATUSES.includes(value.status as CommunicationTemplateStatus) &&
+    typeof value.sender === "string" &&
+    COMMUNICATION_SENDERS.includes(value.sender as CommunicationSenderIdentity) &&
+    isRequiredCommunicationString(value.subject) &&
+    isRequiredCommunicationString(value.html) &&
+    isRequiredCommunicationString(value.text) &&
+    Array.isArray(value.variables) &&
+    value.variables.every((variable) => isRequiredCommunicationString(variable)) &&
+    isRequiredCommunicationString(value.createdBy) &&
+    isRequiredCommunicationString(value.createdAt) &&
+    isRequiredCommunicationString(value.updatedAt) &&
+    isNullableCommunicationString(value.approvedBy) &&
+    isNullableCommunicationString(value.approvedAt)
+  );
+}
+
+function invalidCommunicationResponse(): CommunicationApiError {
+  return new CommunicationApiError(
+    COMMUNICATION_RESPONSE_INVALID_CODE,
+    COMMUNICATION_RESPONSE_INVALID_MESSAGE,
+    COMMUNICATION_RESPONSE_INVALID_STATUS,
+  );
+}
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null;
@@ -239,14 +290,20 @@ export function escapeHtmlForPreview(value: string): string {
     .replaceAll("'", "&#39;");
 }
 
-export function formatCommunicationPurpose(purpose: CommunicationTemplatePurpose): string {
+export function formatCommunicationPurpose(
+  purpose: CommunicationTemplatePurpose | null | undefined,
+): string {
+  if (purpose === null || purpose === undefined) return "Not specified";
   return purpose
     .split("_")
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
 }
 
-export function formatCommunicationAudience(audience: CommunicationAudience): string {
+export function formatCommunicationAudience(
+  audience: CommunicationAudience | null | undefined,
+): string {
+  if (audience === null || audience === undefined) return "Not specified";
   return audience
     .split("_")
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
@@ -370,10 +427,15 @@ export function createCommunicationApi(
         `/templates${query}`,
         signal === undefined ? {} : { signal },
       );
-      if (Array.isArray(raw)) return raw as readonly CommunicationTemplate[];
-      if (isRecord(raw) && Array.isArray(raw.templates))
-        return raw.templates as readonly CommunicationTemplate[];
-      return [];
+      const templates = Array.isArray(raw)
+        ? raw
+        : isRecord(raw) && Array.isArray(raw.templates)
+          ? raw.templates
+          : undefined;
+      if (templates === undefined || !templates.every(isCommunicationTemplate)) {
+        throw invalidCommunicationResponse();
+      }
+      return templates;
     },
     getTemplate(eventId, templateId, version, signal) {
       const query = version === undefined ? "" : `?version=${encodeURIComponent(String(version))}`;

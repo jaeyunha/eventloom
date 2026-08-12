@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CommunicationTemplate } from "../features/communications/types";
 import {
+  AirtableRepositoryError,
   type AirtableRequest,
   type AirtableTransport,
   FakeAirtableTransport,
@@ -176,5 +177,32 @@ describe("Airtable communication template reads", () => {
       repository.listTemplates("org-1", "event-1", "organizer_group_email"),
     ).resolves.toEqual([updated]);
     expect(transport.templateListReads).toBe(1);
+  });
+  it("rejects incomplete communication template JSON instead of returning a partial DTO", async () => {
+    const transport = new DelayedCountingTransport();
+    transport.seed({
+      baseId: "base-test",
+      table: "Email Templates",
+      fields: {
+        "Application ID": "template:malformed:v1",
+        "Organization ID": "org-1",
+        "Event ID": "event-1",
+        Purpose: "organizer_group_email",
+        Status: "approved",
+        Sender: "speakers@sessionboard.namuh.co",
+        "Settings JSON": JSON.stringify({ sentAt: null }),
+      },
+    });
+    const repository = new AirtableCommunicationRepository({
+      baseId: "base-test",
+      transport,
+    });
+
+    const read = repository.listTemplates("org-1", "event-1");
+    await expect(read).rejects.toBeInstanceOf(AirtableRepositoryError);
+    await expect(read).rejects.toMatchObject({
+      code: "INVALID_RESPONSE",
+      message: expect.stringContaining("Invalid communication template record"),
+    });
   });
 });

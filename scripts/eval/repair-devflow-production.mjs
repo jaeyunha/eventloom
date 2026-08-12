@@ -771,17 +771,28 @@ function communicationSpecs({ fixture, sessions, manifest, config }) {
   const communication = fixture.communications ?? {};
   const templateId =
     config.repair?.communication?.templateId ?? `${CANONICAL_EVENT_ID}:communication:acceptance`;
+  const templateBody =
+    communication.acceptance_body ??
+    "Hi {speaker_name}, congratulations! Your session '{talk_title}' has been accepted.";
+  const templateTimestamp = config.repair?.publishedAt ?? PUBLISHED_AT_DEFAULT;
   const template = {
     id: templateId,
+    tenantId: CANONICAL_ORGANIZATION_ID,
+    eventId: CANONICAL_EVENT_ID,
     name: "DevFlow Conf 2027 acceptance",
     purpose: "decision",
+    version: 1,
     status: "draft",
     sender: "speakers@sessionboard.namuh.co",
     subject: communication.acceptance_subject ?? "Your talk has been accepted to DevFlow Conf 2027",
-    body:
-      communication.acceptance_body ??
-      "Hi {speaker_name}, congratulations! Your session '{talk_title}' has been accepted.",
-    sentAt: null,
+    html: templateBody,
+    text: templateBody,
+    variables: ["speaker_name", "talk_title"],
+    createdBy: userIdOrRef(manifest, "organizer-fixture"),
+    createdAt: templateTimestamp,
+    updatedAt: templateTimestamp,
+    approvedBy: null,
+    approvedAt: null,
   };
   const activities = [];
   for (const session of sessions.filter((candidate) => candidate.proposalId !== null)) {
@@ -803,7 +814,7 @@ function communicationSpecs({ fixture, sessions, manifest, config }) {
       status: "draft",
       sentAt: null,
       subject: template.subject,
-      body: template.body
+      body: template.text
         .replaceAll("{speaker_name}", source.name)
         .replaceAll("{talk_title}", session.title),
     });
@@ -1625,18 +1636,18 @@ function dynamicOperations({
       id: communication.template.id,
       fields: {
         [APPLICATION_ID_FIELD]: communication.template.id,
-        "Organization ID": CANONICAL_ORGANIZATION_ID,
-        "Event ID": CANONICAL_EVENT_ID,
+        "Organization ID": communication.template.tenantId,
+        "Event ID": communication.template.eventId,
         Name: communication.template.name,
         Purpose: communication.template.purpose,
         Status: communication.template.status,
         Sender: communication.template.sender,
         Subject: communication.template.subject,
-        HTML: communication.template.body,
-        Text: communication.template.body,
-        "Variables JSON": json(["speaker_name", "talk_title"]),
-        "Settings JSON": json({ sentAt: null }),
-        Version: 1,
+        HTML: communication.template.html,
+        Text: communication.template.text,
+        "Variables JSON": json(communication.template.variables),
+        "Settings JSON": json(communication.template),
+        Version: communication.template.version,
       },
       phase: "crm",
       immutable: ["Organization ID", "Event ID", "Purpose", "Subject"],

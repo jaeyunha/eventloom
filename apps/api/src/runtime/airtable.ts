@@ -34,17 +34,20 @@ import {
   CfpService,
 } from "../features/cfp/service";
 import { CommunicationError, CommunicationService } from "../features/communications/service";
-import type {
-  CommunicationActor,
-  CommunicationAudience,
-  CommunicationDeliveryAdapter,
-  CommunicationDeliveryRequest,
-  CommunicationPreview,
-  CommunicationRecipient,
-  CommunicationRepository,
-  CommunicationSend,
-  CommunicationTemplate,
-  CommunicationTemplatePurpose,
+import {
+  COMMUNICATION_TEMPLATE_PURPOSES,
+  type CommunicationActor,
+  type CommunicationAudience,
+  type CommunicationDeliveryAdapter,
+  type CommunicationDeliveryRequest,
+  type CommunicationPreview,
+  type CommunicationRecipient,
+  type CommunicationRepository,
+  type CommunicationSend,
+  type CommunicationSenderIdentity,
+  type CommunicationTemplate,
+  type CommunicationTemplatePurpose,
+  type CommunicationTemplateStatus,
 } from "../features/communications/types";
 import { CrmRepositoryConflictError, CrmService } from "../features/crm/service";
 import type {
@@ -6431,11 +6434,154 @@ function communicationIndexedFilterFormula(
   return clauses.length === 1 ? (clauses[0] as string) : `AND(${clauses.join(",")})`;
 }
 
+const COMMUNICATION_TEMPLATE_STATUSES = [
+  "draft",
+  "approved",
+  "archived",
+] as const satisfies readonly CommunicationTemplateStatus[];
+
+const COMMUNICATION_TEMPLATE_SENDERS = [
+  "auth@sessionboard.namuh.co",
+  "speakers@sessionboard.namuh.co",
+  "calendar@sessionboard.namuh.co",
+] as const satisfies readonly CommunicationSenderIdentity[];
+
+function isNonEmptyTemplateString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isTemplateStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every(isNonEmptyTemplateString);
+}
+
+function invalidCommunicationTemplate(fields: readonly string[]): AirtableRepositoryError {
+  return new AirtableRepositoryError(
+    "INVALID_RESPONSE",
+    `Invalid communication template record: missing or invalid fields: ${fields.join(", ")}.`,
+  );
+}
+
 function normalizeTemplate(value: JsonRecord): CommunicationTemplate {
-  const clean = untagged(value) as unknown as CommunicationTemplate;
+  let clean: JsonRecord;
+  try {
+    clean = untagged(value);
+  } catch {
+    throw invalidCommunicationTemplate(["organization scope"]);
+  }
+
+  const invalidFields = new Set<string>();
+  const requiredString = (field: keyof CommunicationTemplate): string | undefined => {
+    const candidate = clean[field];
+    if (!isNonEmptyTemplateString(candidate)) {
+      invalidFields.add(field);
+      return undefined;
+    }
+    return candidate;
+  };
+  const nullableString = (field: "approvedBy" | "approvedAt"): string | null | undefined => {
+    const candidate = clean[field];
+    if (candidate === null) return null;
+    if (!isNonEmptyTemplateString(candidate)) {
+      invalidFields.add(field);
+      return undefined;
+    }
+    return candidate;
+  };
+
+  const idValue = requiredString("id");
+  const id = idValue === undefined ? undefined : templateLogicalId(idValue.trim());
+  if (id !== undefined && id.trim().length === 0) invalidFields.add("id");
+
+  const tenantId = requiredString("tenantId");
+  const eventId = requiredString("eventId");
+  const name = requiredString("name");
+  const subject = requiredString("subject");
+  const html = requiredString("html");
+  const text = requiredString("text");
+  const createdBy = requiredString("createdBy");
+  const createdAt = requiredString("createdAt");
+  const updatedAt = requiredString("updatedAt");
+
+  const purpose = COMMUNICATION_TEMPLATE_PURPOSES.find((candidate) => candidate === clean.purpose);
+  if (purpose === undefined) invalidFields.add("purpose");
+
+  const status = COMMUNICATION_TEMPLATE_STATUSES.find((candidate) => candidate === clean.status);
+  if (status === undefined) invalidFields.add("status");
+
+  const sender = COMMUNICATION_TEMPLATE_SENDERS.find((candidate) => candidate === clean.sender);
+  if (sender === undefined) invalidFields.add("sender");
+
+  const version =
+    typeof clean.version === "number" && Number.isSafeInteger(clean.version) && clean.version > 0
+      ? clean.version
+      : undefined;
+  if (version === undefined) invalidFields.add("version");
+  const variableValue = clean.variables;
+  const variables = isTemplateStringArray(variableValue) ? variableValue : undefined;
+  if (variables === undefined) invalidFields.add("variables");
+
+  const approvedBy = nullableString("approvedBy");
+  const approvedAt = nullableString("approvedAt");
+
+  if (
+    invalidFields.size > 0 ||
+    id === undefined ||
+    tenantId === undefined ||
+    eventId === undefined ||
+    name === undefined ||
+    purpose === undefined ||
+    version === undefined ||
+    status === undefined ||
+    sender === undefined ||
+    subject === undefined ||
+    html === undefined ||
+    text === undefined ||
+    variables === undefined ||
+    createdBy === undefined ||
+    createdAt === undefined ||
+    updatedAt === undefined ||
+    approvedBy === undefined ||
+    approvedAt === undefined
+  ) {
+    const fields = new Set(invalidFields);
+    if (id === undefined) fields.add("id");
+    if (tenantId === undefined) fields.add("tenantId");
+    if (eventId === undefined) fields.add("eventId");
+    if (name === undefined) fields.add("name");
+    if (purpose === undefined) fields.add("purpose");
+    if (version === undefined) fields.add("version");
+    if (status === undefined) fields.add("status");
+    if (sender === undefined) fields.add("sender");
+    if (subject === undefined) fields.add("subject");
+    if (html === undefined) fields.add("html");
+    if (text === undefined) fields.add("text");
+    if (variables === undefined) fields.add("variables");
+    if (createdBy === undefined) fields.add("createdBy");
+    if (createdAt === undefined) fields.add("createdAt");
+    if (updatedAt === undefined) fields.add("updatedAt");
+    if (approvedBy === undefined) fields.add("approvedBy");
+    if (approvedAt === undefined) fields.add("approvedAt");
+    throw invalidCommunicationTemplate([...fields]);
+  }
+
   return {
-    ...clean,
-    id: templateLogicalId(requiredId(value.id)),
+    id,
+    tenantId,
+    eventId,
+    name,
+    purpose,
+    version,
+    status,
+    sender,
+    subject,
+    html,
+    text,
+    variables,
+    createdBy,
+    createdAt,
+    updatedAt,
+    approvedBy,
+    approvedAt,
   };
 }
 
@@ -6532,10 +6678,10 @@ export class AirtableCommunicationRepository implements CommunicationRepository 
       .filter(
         (value) =>
           communicationEntity(value, "communication_template") &&
-          scopedRecord(value, tenantId, eventId) &&
-          (purpose === undefined || value.purpose === purpose),
+          scopedRecord(value, tenantId, eventId),
       )
       .map(normalizeTemplate)
+      .filter((value) => purpose === undefined || value.purpose === purpose)
       .sort((left, right) => left.id.localeCompare(right.id) || left.version - right.version);
   }
 

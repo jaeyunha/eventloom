@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { CommunicationApiError, type CommunicationTemplate, createCommunicationApi } from "./api";
+import {
+  CommunicationApiError,
+  type CommunicationTemplate,
+  createCommunicationApi,
+  formatCommunicationAudience,
+  formatCommunicationPurpose,
+} from "./api";
 
 type TestFetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
@@ -41,6 +47,35 @@ function template(id: string, purpose: CommunicationTemplate["purpose"]): Commun
 }
 
 describe("communications API", () => {
+  it("rejects malformed production template DTOs with a controlled validation error", async () => {
+    const fetcher = vi.fn<TestFetcher>().mockResolvedValue(
+      jsonResponse({
+        templates: [
+          {
+            sentAt: null,
+            id: "template-1",
+            tenantId: "org-1",
+            eventId: "event-1",
+          },
+        ],
+      }),
+    );
+    const api = createCommunicationApi("", "org-1", fetcher);
+
+    await expect(api.listTemplates("event-1")).rejects.toMatchObject({
+      name: "CommunicationApiError",
+      code: "COMMUNICATION_INVALID_RESPONSE",
+      message: "The communication API returned an invalid response.",
+      status: 502,
+    });
+  });
+
+  it("formats nullish communication values without throwing", () => {
+    expect(formatCommunicationPurpose(undefined)).toBe("Not specified");
+    expect(formatCommunicationPurpose(null)).toBe("Not specified");
+    expect(formatCommunicationAudience(undefined)).toBe("Not specified");
+    expect(formatCommunicationAudience(null)).toBe("Not specified");
+  });
   it("starts independent resource reads without waiting and keeps their failures separate", async () => {
     const receiptResponse = deferred<Response>();
     const reminderResponse = deferred<Response>();
