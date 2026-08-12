@@ -10,6 +10,16 @@ import {
   useRef,
   useState,
 } from "react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button as UiButton } from "@/components/ui/button";
+import {
+  Card as UiCard,
+  CardContent as UiCardContent,
+  CardHeader as UiCardHeader,
+  CardTitle as UiCardTitle,
+} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import styles from "./crm-workspace.module.css";
 
 export const CRM_PIPELINE_STAGES = [
@@ -490,10 +500,24 @@ function focusAndScroll(target: HTMLElement | null): void {
 
 function messageFromError(error: unknown): string {
   if (error instanceof CrmApiError) {
-    const suffix = error.traceId === undefined ? "" : ` (trace ${error.traceId})`;
-    return `${error.message}${suffix}`;
+    return error.traceId
+      ? `${error.message}\nTechnical reference: trace ${error.traceId}`
+      : error.message;
   }
   return error instanceof Error ? error.message : "The CRM request could not be completed.";
+}
+
+function humanErrorSummary(error: string): string {
+  const summary =
+    error
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(Boolean)
+      ?.replace(/\s*\(trace(?:\s+id)?\s*[:#]?\s*[^)]+\)/gi, "")
+      .replace(/\s+trace(?:\s+id)?\s*[:#]?\s*[a-z0-9-]+/gi, "")
+      .replace(/\s{2,}/g, " ")
+      .trim() ?? "";
+  return summary || "The CRM request could not be completed.";
 }
 
 function customFieldText(contact: CrmContact | undefined, aliases: readonly string[]): string {
@@ -833,16 +857,18 @@ function Card({
   actions,
 }: Readonly<{ title: string; eyebrow?: string; children: ReactNode; actions?: ReactNode }>) {
   return (
-    <section className={styles.card}>
-      <div className={styles.cardHeader}>
+    <UiCard className={styles.card}>
+      <UiCardHeader className={styles.cardHeader}>
         <div>
           {eyebrow ? <p className={styles.eyebrow}>{eyebrow}</p> : null}
-          <h2>{title}</h2>
+          <UiCardTitle>
+            <h2>{title}</h2>
+          </UiCardTitle>
         </div>
         {actions ? <div className={styles.actions}>{actions}</div> : null}
-      </div>
-      {children}
-    </section>
+      </UiCardHeader>
+      <UiCardContent className={styles.cardContent}>{children}</UiCardContent>
+    </UiCard>
   );
 }
 
@@ -944,18 +970,13 @@ function ContactEditor({
         </p>
       ) : null}
       <div className={styles.actions}>
-        <button className={styles.primaryButton} type="submit" disabled={busy}>
+        <UiButton type="submit" disabled={busy}>
           {busy ? "Saving…" : contact ? "Save contact" : "Add contact"}
-        </button>
+        </UiButton>
         {onCancel ? (
-          <button
-            className={styles.secondaryButton}
-            type="button"
-            onClick={onCancel}
-            disabled={busy}
-          >
+          <UiButton variant="outline" type="button" onClick={onCancel} disabled={busy}>
             Cancel
-          </button>
+          </UiButton>
         ) : null}
       </div>
     </form>
@@ -1054,15 +1075,17 @@ function DirectoryTable({
                 <div className={styles.tagList}>
                   {contact.tags.length > 0
                     ? contact.tags.map((tag) => (
-                        <span className={styles.tag} key={tag}>
+                        <Badge variant="secondary" className={styles.tag} key={tag}>
                           {tag}
-                        </span>
+                        </Badge>
                       ))
                     : "—"}
                 </div>
               </td>
               <td>
-                <span className={styles.stageBadge}>{contact.pipelineStage}</span>
+                <Badge variant="outline" className={styles.stageBadge}>
+                  {contact.pipelineStage}
+                </Badge>
               </td>
               <td>
                 <button
@@ -1861,41 +1884,53 @@ export function CrmWorkspaceView({
         </div>
       </header>
       <main id="crm-content" className={styles.content} tabIndex={-1}>
-        <section className={styles.bulkToolbar} aria-labelledby="crm-analytics-summary-title">
-          <div>
-            <p className={styles.eyebrow}>CRM analytics</p>
-            <h2 id="crm-analytics-summary-title">Contact snapshot</h2>
-            {analytics ? (
-              <>
-                <p className={styles.resultCount}>
-                  {analytics.totalContacts} total contacts · {analytics.activeContacts} active
-                </p>
-                <p className={styles.muted}>
-                  Pipeline:{" "}
-                  {CRM_PIPELINE_STAGES.map(
-                    (stage) => `${stage}: ${analytics.contactsByPipelineStage[stage] ?? 0}`,
-                  ).join(" · ")}
-                </p>
-                <p className={styles.muted}>
-                  Sources:{" "}
-                  {Object.entries(analytics.contactsBySource)
-                    .map(([source, count]) => `${source}: ${count}`)
-                    .join(" · ") || "No source counts yet"}
-                </p>
-              </>
-            ) : (
-              <p className={styles.muted}>Analytics are not available yet.</p>
-            )}
-          </div>
-          <a className={styles.secondaryButton} href="#crm-analytics" aria-controls="crm-analytics">
-            Open CRM analytics
-          </a>
-        </section>
+        {analytics && contacts.length > 0 ? (
+          <section className={styles.summaryBar} aria-labelledby="crm-analytics-summary-title">
+            <div>
+              <p className={styles.eyebrow}>CRM analytics</p>
+              <h2 id="crm-analytics-summary-title">Contact snapshot</h2>
+              <p className={styles.resultCount}>
+                {analytics.totalContacts} total contacts · {analytics.activeContacts} active
+              </p>
+              <p className={styles.muted}>
+                Pipeline:{" "}
+                {CRM_PIPELINE_STAGES.map(
+                  (stage) => `${stage}: ${analytics.contactsByPipelineStage[stage] ?? 0}`,
+                ).join(" · ")}
+              </p>
+            </div>
+            <a
+              className={styles.secondaryButton}
+              href="#crm-analytics"
+              aria-controls="crm-analytics"
+            >
+              Open CRM analytics
+            </a>
+          </section>
+        ) : null}
         {error ? (
-          <div className={styles.alert} role="alert">
-            <strong>CRM action was not completed.</strong>
-            <p>{error}</p>
-          </div>
+          <Alert className={styles.alert} variant="destructive">
+            <AlertTitle>We couldn't complete that CRM action.</AlertTitle>
+            <AlertDescription>
+              <p>{humanErrorSummary(error)}</p>
+              {onRefresh ? (
+                <UiButton
+                  className={styles.alertAction}
+                  type="button"
+                  onClick={onRefresh}
+                  disabled={busy}
+                >
+                  Try again
+                </UiButton>
+              ) : null}
+              {error.includes("\n") ? (
+                <details className={styles.errorDetails}>
+                  <summary>Show technical details</summary>
+                  <pre>{error}</pre>
+                </details>
+              ) : null}
+            </AlertDescription>
+          </Alert>
         ) : null}
         <div className={styles.status} role="status" aria-live="polite">
           {statusMessage}
@@ -1915,87 +1950,116 @@ export function CrmWorkspaceView({
           title="Contact directory"
           eyebrow="Search, filter, add, edit, or import"
           actions={
-            <div className={styles.actions}>
-              <button
-                className={styles.primaryButton}
-                type="button"
-                onClick={() => {
-                  setShowAddForm(true);
-                  onStartAdd?.();
-                }}
-                disabled={busy}
-              >
-                Add contact
-              </button>
-              <button
-                className={styles.secondaryButton}
-                type="button"
-                onClick={() => setShowImport((current) => !current)}
-              >
-                {showImport ? "Hide import" : "Import CSV"}
-              </button>
-            </div>
+            contacts.length > 0 ? (
+              <div className={styles.actions}>
+                <UiButton
+                  type="button"
+                  onClick={() => {
+                    setShowAddForm(true);
+                    onStartAdd?.();
+                  }}
+                  disabled={busy}
+                >
+                  Add contact
+                </UiButton>
+                <UiButton
+                  variant="outline"
+                  type="button"
+                  onClick={() => setShowImport((current) => !current)}
+                >
+                  {showImport ? "Hide import" : "Import CSV"}
+                </UiButton>
+              </div>
+            ) : null
           }
         >
-          <div className={styles.filterGrid}>
-            <label className={styles.field}>
-              <span>Search contacts</span>
-              <input
-                aria-label="Search contacts"
-                value={query}
-                onChange={(event) => onQueryChange?.(event.currentTarget.value)}
-                placeholder="Name, email, company"
-              />
-            </label>
-            <label className={styles.field}>
-              <span>Company</span>
-              <input
-                aria-label="Filter by company"
-                value={companyFilter}
-                onChange={(event) => onCompanyChange?.(event.currentTarget.value)}
-              />
-            </label>
-            <label className={styles.field}>
-              <span>Tags</span>
-              <input
-                aria-label="Filter by tags"
-                value={tagsFilter}
-                onChange={(event) => onTagsChange?.(event.currentTarget.value)}
-                placeholder="speaker,west"
-              />
-            </label>
-            <label className={styles.field}>
-              <span>Pipeline stage</span>
-              <select
-                aria-label="Filter by pipeline stage"
-                value={pipelineFilter}
-                onChange={(event) =>
-                  onPipelineFilterChange?.(event.currentTarget.value as CrmPipelineStage | "")
-                }
-              >
-                <option value="">All stages</option>
-                {CRM_PIPELINE_STAGES.map((stage) => (
-                  <option value={stage} key={stage}>
-                    {stage}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className={styles.field}>
-              <span>Record status</span>
-              <select
-                aria-label="Filter by contact status"
-                value={statusFilter}
-                onChange={(event) =>
-                  onStatusFilterChange?.(event.currentTarget.value as CrmContactStatus | "")
-                }
-              >
-                <option value="">All records</option>
-                <option value="active">Active</option>
-                <option value="merged">Merged</option>
-              </select>
-            </label>
-          </div>
+          {contacts.length > 0 ? (
+            <div className={styles.filterGrid}>
+              <label className={styles.field} htmlFor="crm-search">
+                <span>Search contacts</span>
+                <Input
+                  id="crm-search"
+                  aria-label="Search contacts"
+                  value={query}
+                  onChange={(event) => onQueryChange?.(event.currentTarget.value)}
+                  placeholder="Name, email, company"
+                />
+              </label>
+              <label className={styles.field} htmlFor="crm-company-filter">
+                <span>Company</span>
+                <Input
+                  id="crm-company-filter"
+                  aria-label="Filter by company"
+                  value={companyFilter}
+                  onChange={(event) => onCompanyChange?.(event.currentTarget.value)}
+                />
+              </label>
+              <label className={styles.field} htmlFor="crm-tags-filter">
+                <span>Tags</span>
+                <Input
+                  id="crm-tags-filter"
+                  aria-label="Filter by tags"
+                  value={tagsFilter}
+                  onChange={(event) => onTagsChange?.(event.currentTarget.value)}
+                  placeholder="speaker,west"
+                />
+              </label>
+              <label className={styles.field}>
+                <span>Pipeline stage</span>
+                <select
+                  aria-label="Filter by pipeline stage"
+                  value={pipelineFilter}
+                  onChange={(event) =>
+                    onPipelineFilterChange?.(event.currentTarget.value as CrmPipelineStage | "")
+                  }
+                >
+                  <option value="">All stages</option>
+                  {CRM_PIPELINE_STAGES.map((stage) => (
+                    <option value={stage} key={stage}>
+                      {stage}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className={styles.field}>
+                <span>Record status</span>
+                <select
+                  aria-label="Filter by contact status"
+                  value={statusFilter}
+                  onChange={(event) =>
+                    onStatusFilterChange?.(event.currentTarget.value as CrmContactStatus | "")
+                  }
+                >
+                  <option value="">All records</option>
+                  <option value="active">Active</option>
+                  <option value="merged">Merged</option>
+                </select>
+              </label>
+            </div>
+          ) : (
+            <div className={styles.emptyDirectory} role="status">
+              <h3>Your directory is empty</h3>
+              <p>
+                Add a contact manually or import a CSV to start building your organization
+                directory.
+              </p>
+              <div className={styles.actions}>
+                <UiButton
+                  type="button"
+                  onClick={() => {
+                    setShowAddForm(true);
+                    onStartAdd?.();
+                  }}
+                  disabled={busy}
+                >
+                  Add contact
+                </UiButton>
+                <UiButton variant="outline" type="button" onClick={() => setShowImport(true)}>
+                  Import CSV
+                </UiButton>
+              </div>
+            </div>
+          )}
           {selectedContactIds.length > 0 ? (
             <div className={styles.bulkToolbar} role="status">
               <strong>{selectedContactIds.length} selected</strong>
@@ -2227,7 +2291,9 @@ export function CrmWorkspaceView({
             eyebrow="Pipeline card detail · identity, tags, custom fields, and notes"
             actions={
               <div className={styles.actions}>
-                <span className={styles.stageBadge}>{selectedContact.pipelineStage}</span>
+                <Badge variant="outline" className={styles.stageBadge}>
+                  {selectedContact.pipelineStage}
+                </Badge>
                 {mergeCandidates.length > 0 ? (
                   <>
                     <span className={styles.muted}>
@@ -2301,9 +2367,9 @@ export function CrmWorkspaceView({
                 </div>
                 <div className={styles.tagList}>
                   {selectedContact.tags.map((tag) => (
-                    <span className={styles.tag} key={tag}>
+                    <Badge variant="secondary" className={styles.tag} key={tag}>
                       {tag}
-                    </span>
+                    </Badge>
                   ))}
                 </div>
                 <h3>Custom fields</h3>
@@ -2766,12 +2832,12 @@ export function CrmWorkspaceView({
               </div>
             </Card>
           </div>
-        ) : (
+        ) : contacts.length > 0 ? (
           <div className={styles.callout}>
             Select a contact to view identity, history, pipeline, event relationships, and outreach
             controls.
           </div>
-        )}
+        ) : null}
         {selectedContact || selectedContactIds.length > 0 ? (
           <section
             id="crm-outreach-composer"
@@ -2945,26 +3011,32 @@ export function CrmWorkspaceView({
             </Card>
           </section>
         ) : null}
-        <SegmentManager
-          segments={segments}
-          busy={busy}
-          currentRules={currentFilterRules}
-          onCreate={onCreateSegment ?? (async () => undefined)}
-          onSelect={onSelectSegment ?? (() => undefined)}
-        />
-        <PipelineBoard
-          contacts={contacts}
-          onMove={onMovePipeline ?? (() => undefined)}
-          onSelect={(id) => onSelectContact?.(id)}
-          onEnroll={onEnrollPipeline ?? (async () => undefined)}
-        />
-        <section id="crm-analytics" tabIndex={-1} aria-label="CRM analytics panel">
-          <AnalyticsPanel
-            analytics={analytics}
-            events={events}
-            onEventDrillThrough={onAnalyticsEventDrillThrough ?? (() => undefined)}
-          />
-        </section>
+        {contacts.length > 0 ? (
+          <>
+            <SegmentManager
+              segments={segments}
+              busy={busy}
+              currentRules={currentFilterRules}
+              onCreate={onCreateSegment ?? (async () => undefined)}
+              onSelect={onSelectSegment ?? (() => undefined)}
+            />
+            <PipelineBoard
+              contacts={contacts}
+              onMove={onMovePipeline ?? (() => undefined)}
+              onSelect={(id) => onSelectContact?.(id)}
+              onEnroll={onEnrollPipeline ?? (async () => undefined)}
+            />
+            {analytics ? (
+              <section id="crm-analytics" tabIndex={-1} aria-label="CRM analytics panel">
+                <AnalyticsPanel
+                  analytics={analytics}
+                  events={events}
+                  onEventDrillThrough={onAnalyticsEventDrillThrough ?? (() => undefined)}
+                />
+              </section>
+            ) : null}
+          </>
+        ) : null}
       </main>
     </div>
   );
@@ -3012,7 +3084,8 @@ export function createCrmWorkspaceReadCoordinator(api: CrmApi, handlers: CrmWork
     const messages = CRM_WORKSPACE_READ_KINDS.flatMap((candidate) =>
       errors[candidate] === null ? [] : [errors[candidate]],
     );
-    handlers.setError(messages.length === 0 ? null : messages.join("\n"));
+    const summary = messages[0] ?? null;
+    handlers.setError(summary === null ? null : messages.join("\n"));
   }
 
   function isCurrent(kind: CrmWorkspaceReadKind, generation: number): boolean {
