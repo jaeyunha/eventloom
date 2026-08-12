@@ -1,4 +1,7 @@
-import { detectAgendaConflicts } from "./conflicts";
+import {
+  detectAgendaConflicts,
+  detectReleasedSpeakerCommitmentConflicts,
+} from "./conflicts";
 import { AgendaRepositoryConflictError } from "./infrastructure";
 import { canonicalizeTimeZone, resolveLocalDateTime } from "./timezone";
 import type {
@@ -728,10 +731,14 @@ export class AgendaEngine {
       }
 
       const preview = this.previewState(state);
-      if (preview.validation.conflicts.length > 0 || preview.unoverriddenWarnings.length > 0) {
+      if (
+        preview.validation.conflicts.length > 0 ||
+        preview.releaseValidation.conflicts.length > 0 ||
+        preview.unoverriddenWarnings.length > 0
+      ) {
         throw new AgendaValidationError(
           "Publication requires all conflicts to be resolved and warnings to be overridden",
-          preview.validation,
+          mergeValidationReports(preview.validation, preview.releaseValidation),
         );
       }
 
@@ -775,8 +782,12 @@ export class AgendaEngine {
 
       validateStoredEntries(target.entries, state);
       const report = this.validationReport(state, target.entries);
-      if (report.conflicts.length > 0) {
-        throw new AgendaValidationError("The requested rollback now has hard conflicts", report);
+      const releaseReport = this.releaseValidationReport(state, target.entries);
+      if (report.conflicts.length > 0 || releaseReport.conflicts.length > 0) {
+        throw new AgendaValidationError(
+          "The requested rollback now has hard conflicts",
+          mergeValidationReports(report, releaseReport),
+        );
       }
       const warningIds = new Set(report.warnings.map((warning) => warning.id));
       const targetOverrides = target.warningOverrides.filter((override) =>
@@ -895,7 +906,7 @@ export class AgendaEngine {
       placements: structuredClone(proposedEntries),
       proposedEntries: structuredClone(proposedEntries),
       diff,
-      validation: this.validationReport(state, proposedEntries),
+      candidateDiagnostics: this.validationReport(state, proposedEntries),
       generatedAt: this.now(),
       generatedBy: actorId,
       regenerationOfRunId,
@@ -953,6 +964,20 @@ export class AgendaEngine {
       ? detectAgendaConflicts(base)
       : detectAgendaConflicts({ ...base, customRules: this.#customRules });
   }
+  private releaseValidationReport(
+    state: Pick<
+      AgendaState,
+      "currentPublishedRevisionId" | "revisions" | "sessions"
+    >,
+    entries: readonly AgendaEntry[],
+  ): AgendaValidationReport {
+    const releasedEntries = currentRevision(state)?.entries ?? [];
+    return detectReleasedSpeakerCommitmentConflicts({
+      entries,
+      releasedEntries,
+      sessions: state.sessions,
+    });
+  }
 
   private previewState(state: AgendaState): AgendaPreview {
     const validation = this.validationReport(state, state.draft.entries);
@@ -963,6 +988,7 @@ export class AgendaEngine {
     return {
       draftVersion: state.draft.version,
       validation,
+      releaseValidation: this.releaseValidationReport(state, state.draft.entries),
       unoverriddenWarnings: validation.warnings.filter(
         (warning) => !overriddenWarningIds.has(warning.id),
       ),
@@ -1666,7 +1692,9 @@ function assertDraftVersion(state: AgendaState, expectedVersion: number): void {
   }
 }
 
-function currentRevision(state: AgendaState): PublishedAgendaRevision | null {
+function currentRevision(
+  state: Pick<AgendaState, "currentPublishedRevisionId" | "revisions">,
+): PublishedAgendaRevision | null {
   if (state.currentPublishedRevisionId === null) {
     return null;
   }
@@ -1702,4 +1730,13 @@ function entriesEqual(left: AgendaEntry, right: AgendaEntry): boolean {
     left.endsAt === right.endsAt &&
     left.trackIds.join("\u0000") === right.trackIds.join("\u0000")
   );
+}
+function mergeValidationReports(
+  left: AgendaValidationReport,
+  right: AgendaValidationReport,
+): AgendaValidationReport {
+  return {
+    conflicts: [...left.conflicts, ...right.conflicts],
+    warnings: [...left.warnings, ...right.warnings],
+  };
 }

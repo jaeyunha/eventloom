@@ -384,6 +384,7 @@ function adminAgendaPreviewView(
   return {
     draftVersion: preview.draftVersion,
     conflicts: preview.validation.conflicts,
+    releaseConflicts: preview.releaseValidation.conflicts,
     warnings: preview.validation.warnings.map((warning) => {
       const overrideReason = warningOverrides.get(warning.id);
       return {

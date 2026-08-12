@@ -682,6 +682,81 @@ describe("canonical agenda draft routes", () => {
     expect((await engine.repository.load("event-a"))?.revisions).toHaveLength(1);
   });
 
+  it("returns active released speaker commitments separately and blocks publication", async () => {
+    const engine = createEngine();
+    await initialize(engine, {
+      ...catalog,
+      sessions: catalog.sessions.map((session) =>
+        session.id === "session-3"
+          ? { ...session, participantIds: ["participant-1"] }
+          : session,
+      ),
+    });
+    const app = appFor(engine);
+    const root = "/api/admin/organizations/org-a/events/event-a/agenda";
+    const releasedEntry = {
+      id: "entry-1",
+      sessionId: "session-1",
+      roomId: "room-large",
+      trackIds: [],
+      startsAtLocal: "2026-08-10T09:00",
+      endsAtLocal: "2026-08-10T10:00",
+    };
+    expect(
+      (
+        await app.request(`${root}/draft`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ expectedVersion: 1, entries: [releasedEntry] }),
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await app.request(`${root}/publish`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ expectedVersion: 2 }),
+        })
+      ).status,
+    ).toBe(200);
+
+    const candidate = await app.request(`${root}/draft`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        expectedVersion: 2,
+        entries: [
+          {
+            ...releasedEntry,
+            id: "entry-3",
+            sessionId: "session-3",
+            startsAtLocal: "2026-08-10T09:15",
+            endsAtLocal: "2026-08-10T09:45",
+          },
+        ],
+      }),
+    });
+    expect(candidate.status).toBe(200);
+
+    const preview = await app.request(`${root}/preview`);
+    expect(
+      await responseData<{
+        conflicts: readonly unknown[];
+        releaseConflicts: readonly { kind: string; entryIds: readonly string[] }[];
+      }>(preview),
+    ).toMatchObject({
+      conflicts: [],
+      releaseConflicts: [{ kind: "participant", entryIds: ["entry-3", "entry-1"] }],
+    });
+    const blocked = await app.request(`${root}/publish`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ expectedVersion: 3 }),
+    });
+    expect(blocked.status).toBe(409);
+    expect((await engine.getPublishedAgenda("event-a"))?.entries[0]?.sessionId).toBe("session-1");
+  });
   it("maps full-draft hard conflicts to 409 without changing the version", async () => {
     const engine = createEngine();
     await initialize(engine);
@@ -907,6 +982,8 @@ describe("agenda suggestion admin routes", () => {
         orderedRules: suggestionRequest.orderedRules,
       },
     });
+    expect(run.candidateDiagnostics).toEqual({ conflicts: [], warnings: [] });
+    expect(run).not.toHaveProperty("validation");
     expect(await engine.getDraft("event-a")).toEqual(before);
     expect(await engine.getPublishedAgenda("event-a")).toBeNull();
 
@@ -1053,6 +1130,18 @@ describe("agenda suggestion admin routes", () => {
       { ...suggestionRequest, baseDraftVersion: 2, roomIds: ["room-small"] },
     );
     const conflictRun = await responseData<AgendaSuggestionRun>(conflictGenerated);
+    expect(conflictRun.candidateDiagnostics.conflicts).toEqual([
+      expect.objectContaining({ kind: "room" }),
+    ]);
+    const savedPreview = await conflictApp.request(
+      "/api/admin/organizations/org-a/events/event-a/agenda/preview",
+    );
+    expect(savedPreview.status).toBe(200);
+    expect(
+      await responseData<{ conflicts: readonly unknown[]; releaseConflicts: readonly unknown[] }>(
+        savedPreview,
+      ),
+    ).toMatchObject({ conflicts: [], releaseConflicts: [] });
     const conflict = await postSuggestion(
       conflictApp,
       `/api/admin/organizations/org-a/events/event-a/agenda/suggestions/${conflictRun.id}/apply`,

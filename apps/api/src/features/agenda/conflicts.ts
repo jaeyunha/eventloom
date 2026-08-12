@@ -13,6 +13,11 @@ export interface ConflictDetectionInput extends AgendaCatalog {
   minimumTravelMinutes: number;
   customRules?: readonly AgendaCustomRule[];
 }
+export interface ReleasedSpeakerCommitmentDetectionInput {
+  entries: readonly AgendaEntry[];
+  releasedEntries: readonly AgendaEntry[];
+  sessions: readonly AgendaSession[];
+}
 
 export function detectAgendaConflicts(input: ConflictDetectionInput): AgendaValidationReport {
   const conflicts: AgendaConflict[] = [];
@@ -148,6 +153,53 @@ export function detectAgendaConflicts(input: ConflictDetectionInput): AgendaVali
   return {
     conflicts: uniqueById(conflicts).sort(compareById),
     warnings: uniqueById(warnings).sort(compareById),
+  };
+}
+export function detectReleasedSpeakerCommitmentConflicts(
+  input: ReleasedSpeakerCommitmentDetectionInput,
+): AgendaValidationReport {
+  const conflicts: AgendaConflict[] = [];
+  const sessions = new Map(input.sessions.map((session) => [session.id, session]));
+
+  for (const entry of input.entries) {
+    const session = sessions.get(entry.sessionId);
+    if (session === undefined) continue;
+
+    for (const releasedEntry of input.releasedEntries) {
+      if (releasedEntry.sessionId === entry.sessionId || !overlaps(entry, releasedEntry)) {
+        continue;
+      }
+      const releasedSession = sessions.get(releasedEntry.sessionId);
+      if (releasedSession === undefined) continue;
+      const sharedParticipants = intersection(
+        session.participantIds,
+        releasedSession.participantIds,
+      );
+      if (sharedParticipants.length === 0) continue;
+
+      const participantNames = sharedParticipants.map((participantId) =>
+        participantName(participantId, session, releasedSession),
+      );
+      const participantLabel = participantNames.length === 1 ? "Speaker" : "Speakers";
+      const participantVerb = participantNames.length === 1 ? "has" : "have";
+      conflicts.push({
+        id: conflictId(
+          "released-participant",
+          [entry.id, releasedEntry.id],
+          sharedParticipants.join("-"),
+        ),
+        kind: "participant",
+        entryIds: [entry.id, releasedEntry.id],
+        message: `${participantLabel} ${participantNames
+          .map((name) => `"${name}"`)
+          .join(", ")} ${participantVerb} an active released commitment for "${releasedSession.title}" that overlaps "${session.title}"`,
+      });
+    }
+  }
+
+  return {
+    conflicts: uniqueById(conflicts).sort(compareById),
+    warnings: [],
   };
 }
 
