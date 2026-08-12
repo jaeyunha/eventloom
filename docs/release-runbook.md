@@ -103,13 +103,12 @@ The command requires `CLOUDFLARE_API_TOKEN`, validates the deployment configurat
 
 The repository staging/production contract selects OpenAI Responses, but AI remains optional at application boot. Before deploying, confirm that the target environment has its own `OPENAI_API_KEY` Cloudflare secret. Never place it in Wrangler `[vars]`, `NEXT_PUBLIC_*`, CI output, or evidence.
 
-Deploy the web Worker from the identical candidate commit. The script requires the exact browser-visible `NEXT_PUBLIC_APP_URL`, server-only `API_UPSTREAM_ORIGIN`, and explicit tenant ID:
+Deploy the web Worker from the identical candidate commit. The script requires the exact browser-visible `NEXT_PUBLIC_APP_URL` and server-only `API_UPSTREAM_ORIGIN`. Organization scope comes from authenticated memberships and organization-qualified routes:
 
 ```bash
 set -eu
 export NEXT_PUBLIC_APP_URL='https://open-sessionboard-web-staging.ashleyha0317.workers.dev'
 export API_UPSTREAM_ORIGIN='https://open-sessionboard-api-staging.ashleyha0317.workers.dev'
-: "${NEXT_PUBLIC_ORGANIZATION_ID:?set the explicit staging organization application ID}"
 : "${CLOUDFLARE_API_TOKEN:?set the staging deployment token from the secret manager}"
 node scripts/cloudflare/deploy-web.mjs staging open-sessionboard-web:staging
 ```
@@ -170,7 +169,6 @@ Deploy the web Worker with the production-only browser-visible app URL, server-o
 set -eu
 export NEXT_PUBLIC_APP_URL='https://open-sessionboard-web-production.ashleyha0317.workers.dev'
 export API_UPSTREAM_ORIGIN='https://open-sessionboard-api-production.ashleyha0317.workers.dev'
-: "${NEXT_PUBLIC_ORGANIZATION_ID:?set the explicit production organization application ID}"
 : "${CLOUDFLARE_API_TOKEN:?set the production deployment token from the secret manager}"
 node scripts/cloudflare/deploy-web.mjs production open-sessionboard-web:production
 ```
