@@ -1010,6 +1010,74 @@ function portalPrimaryParticipantId(record: JsonRecord): string | undefined {
     : undefined;
 }
 
+function portalPrimaryGrantedParticipantId(
+  profiles: readonly SpeakerProfile[],
+  accountEmail: string | undefined,
+): string | undefined {
+  const participantIds = [
+    ...new Set(
+      profiles
+        .map((profile) => profile.participantId.trim())
+        .filter((participantId) => participantId.length > 0),
+    ),
+  ].sort();
+  if (participantIds.length === 1) return participantIds[0];
+  if (participantIds.length === 0 || accountEmail === undefined) return undefined;
+  const normalizedEmail = accountEmail.trim().toLowerCase();
+  if (normalizedEmail.length === 0) return undefined;
+  const emailMatches = [
+    ...new Set(
+      profiles
+        .filter((profile) => profile.email?.trim().toLowerCase() === normalizedEmail)
+        .map((profile) => profile.participantId.trim())
+        .filter((participantId) => participantId.length > 0),
+    ),
+  ];
+  return emailMatches[0];
+}
+function portalCanonicalAccountParticipantId(
+  ownedRecords: readonly JsonRecord[],
+  grantedProfiles: readonly SpeakerProfile[],
+  accountEmail: string | undefined,
+  decisions: ReadonlyMap<string, PortalDecisionProjection>,
+): string | undefined {
+  if (accountEmail !== undefined) {
+    const ownedParticipantIds = [
+      ...new Set(
+        ownedRecords.flatMap((record) => portalParticipantIdsForEmail(record, accountEmail)),
+      ),
+    ].sort();
+    if (ownedParticipantIds.length === 1) return ownedParticipantIds[0];
+    const acceptedOwnedParticipantIds = [
+      ...new Set(
+        ownedRecords
+          .filter((record) => portalRecordStatus(record, decisions) === "accepted")
+          .flatMap((record) => portalParticipantIdsForEmail(record, accountEmail)),
+      ),
+    ].sort();
+    if (acceptedOwnedParticipantIds.length === 1) return acceptedOwnedParticipantIds[0];
+
+    const ownedPrimaryParticipantIds = [
+      ...new Set(
+        ownedRecords
+          .map(portalPrimaryParticipantId)
+          .filter(
+            (participantId): participantId is string =>
+              participantId !== undefined && ownedParticipantIds.includes(participantId),
+          ),
+      ),
+    ].sort();
+    if (ownedPrimaryParticipantIds.length === 1) return ownedPrimaryParticipantIds[0];
+    const deterministicOwnedParticipantId =
+      acceptedOwnedParticipantIds[0] ?? ownedPrimaryParticipantIds[0] ?? ownedParticipantIds[0];
+    if (deterministicOwnedParticipantId !== undefined) {
+      return deterministicOwnedParticipantId;
+    }
+  }
+
+  return portalPrimaryGrantedParticipantId(grantedProfiles, accountEmail);
+}
+
 function portalAnswerText(record: JsonRecord, ...keys: readonly string[]): string | null {
   const answers = isRecord(record.answers) ? record.answers : {};
   for (const key of keys) {
@@ -1857,17 +1925,13 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       accountEmail === undefined
         ? []
         : profiles.filter((profile) => profile.email?.trim().toLowerCase() === accountEmail);
-    const participantIds =
-      accountEmail === undefined
-        ? []
-        : [
-            ...new Set([
-              ...ownedRecords.flatMap((record) =>
-                portalParticipantIdsForEmail(record, accountEmail),
-              ),
-              ...accountProfiles.map((profile) => profile.participantId),
-            ]),
-          ];
+    const primaryParticipantId = portalCanonicalAccountParticipantId(
+      ownedRecords,
+      profiles,
+      accountEmail,
+      decisions,
+    );
+    const participantIds = primaryParticipantId === undefined ? [] : [primaryParticipantId];
     const acceptedGrantRecords = records.filter(
       (record) =>
         isSpeakerSubmissionRecord(record) &&
@@ -1899,30 +1963,24 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     if (submissionIds.length === 0 || participantIds.length === 0) {
       return { submissionIds: [], participantIds: [] };
     }
-    const acceptedParticipants = new Set(acceptedRecords.flatMap(portalParticipantIds));
+    const hasAcceptedAccess = acceptedRecords.some(
+      (record) => portalParticipantIds(record).length > 0,
+    );
     const submissionEditingAllowed = portalSubmissionEditingAllowed(event, ownedRecords, decisions);
-
     const capabilities: readonly SpeakerPortalCapability[] = [
-      ...(acceptedParticipants.size > 0 ? ACCEPTED_PORTAL_CAPABILITIES : []),
+      ...(hasAcceptedAccess ? ACCEPTED_PORTAL_CAPABILITIES : []),
       ...(submissionEditingAllowed ? (["submission-edit"] as const) : []),
     ];
-    const primaryParticipantId =
-      ownedRecords.map(portalPrimaryParticipantId).find(isDefinedString) ??
-      acceptedGrantRecords.map(portalPrimaryParticipantId).find(isDefinedString) ??
-      participantIds[0];
-    const capabilitiesByParticipant = Object.fromEntries(
-      participantIds.map((participantId) => [
-        participantId,
-        acceptedParticipants.has(participantId)
-          ? [
-              ...capabilities,
-              ...(participantId === primaryParticipantId ? (["roster-manage"] as const) : []),
-            ]
-          : submissionEditingAllowed
-            ? (["submission-edit"] as const)
-            : [],
-      ]),
-    );
+    const capabilitiesByParticipant =
+      primaryParticipantId === undefined
+        ? {}
+        : {
+            [primaryParticipantId]: hasAcceptedAccess
+              ? [...capabilities, "roster-manage" as const]
+              : submissionEditingAllowed
+                ? (["submission-edit"] as const)
+                : [],
+          };
     const tenantIds = [
       ...new Set(
         scopedGrants
@@ -2019,9 +2077,10 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
               grant.speaker_profile_id === profile.participantId,
           ),
       );
-      const accountProfiles = eventProfiles.filter(
-        (profile) => profile.email?.trim().toLowerCase() === accountEmail,
-      );
+      const accountProfiles =
+        accountEmail === undefined
+          ? []
+          : eventProfiles.filter((profile) => profile.email?.trim().toLowerCase() === accountEmail);
       const grantParticipantIds = new Set(accountProfiles.map((profile) => profile.participantId));
       const grantSubmissions = records.filter(
         (record) =>
@@ -2043,12 +2102,13 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
             (id): id is string => id !== null && !ownerIds.has(originalCfpSubmissionId(id) ?? id),
           ),
       ];
-      const participantIds = [
-        ...new Set([
-          ...ownerRecords.flatMap((record) => portalParticipantIdsForEmail(record, accountEmail)),
-          ...accountProfiles.map((profile) => profile.participantId),
-        ]),
-      ];
+      const primaryParticipantId = portalCanonicalAccountParticipantId(
+        ownerRecords,
+        eventProfiles,
+        accountEmail,
+        decisions,
+      );
+      const participantIds = primaryParticipantId === undefined ? [] : [primaryParticipantId];
       if (submissionIds.length === 0 || participantIds.length === 0) continue;
       const eventProfileIds = new Set(
         eventProfiles.flatMap((profile) => [profile.id, profile.participantId]),
@@ -2067,33 +2127,28 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
         (record) => portalRecordStatus(record, decisions) === "accepted",
       );
       const acceptedRecords = [...acceptedOwnerRecords, ...grantSubmissions];
-      const acceptedParticipants = new Set(acceptedRecords.flatMap(portalParticipantIds));
+      const hasAcceptedAccess = acceptedRecords.some(
+        (record) => portalParticipantIds(record).length > 0,
+      );
       const submissionEditingAllowed = portalSubmissionEditingAllowed(
         event,
         ownerRecords,
         decisions,
       );
       const capabilities: readonly SpeakerPortalCapability[] = [
-        ...(acceptedParticipants.size > 0 ? ACCEPTED_PORTAL_CAPABILITIES : []),
+        ...(hasAcceptedAccess ? ACCEPTED_PORTAL_CAPABILITIES : []),
         ...(submissionEditingAllowed ? (["submission-edit"] as const) : []),
       ];
-      const primaryParticipantId =
-        ownerRecords.map(portalPrimaryParticipantId).find(isDefinedString) ??
-        grantSubmissions.map(portalPrimaryParticipantId).find(isDefinedString) ??
-        participantIds[0];
-      const capabilitiesByParticipant = Object.fromEntries(
-        participantIds.map((participantId) => [
-          participantId,
-          acceptedParticipants.has(participantId)
-            ? [
-                ...capabilities,
-                ...(participantId === primaryParticipantId ? (["roster-manage"] as const) : []),
-              ]
-            : submissionEditingAllowed
-              ? (["submission-edit"] as const)
-              : [],
-        ]),
-      );
+      const capabilitiesByParticipant =
+        primaryParticipantId === undefined
+          ? {}
+          : {
+              [primaryParticipantId]: hasAcceptedAccess
+                ? [...capabilities, "roster-manage" as const]
+                : submissionEditingAllowed
+                  ? (["submission-edit"] as const)
+                  : [],
+            };
       const slug = textValue(event, "slug");
       const status = textValue(event, "status");
       const context: SpeakerPortalContext = {
@@ -2584,11 +2639,153 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
   }
 
   async listTasks(eventId: string, participantIds: readonly string[]): Promise<SpeakerTask[]> {
-    if (participantIds.length === 0) return [];
-    const allowed = new Set(participantIds);
-    return (await listEventScopedJson(this.#tasks, "Owner JSON", eventId))
-      .filter((task) => task.eventId === eventId && allowed.has(task.participantId))
-      .map((task) => untagged(task));
+    const requestedParticipantIds = [
+      ...new Set(
+        participantIds
+          .map((participantId) => participantId.trim())
+          .filter((participantId) => participantId.length > 0),
+      ),
+    ];
+    if (requestedParticipantIds.length === 0) return [];
+
+    const [storedTasks, profiles, submissionRecords, decisionRecords] = await Promise.all([
+      this.#tasks.list(),
+      this.#profiles.list(),
+      this.#submissions.list(),
+      this.#decisions.list(),
+    ]);
+    const requested = new Set(requestedParticipantIds);
+    const aliasesByEmail = new Map<string, Set<string>>();
+    for (const profile of profiles) {
+      if (profile.eventId !== eventId) continue;
+      const email = profile.email?.trim().toLowerCase();
+      const participantId = profile.participantId.trim();
+      if (email === undefined || email.length === 0 || participantId.length === 0) continue;
+      const aliases = aliasesByEmail.get(email) ?? new Set<string>();
+      aliases.add(participantId);
+      aliasesByEmail.set(email, aliases);
+    }
+
+    const canonicalByParticipant = new Map(
+      requestedParticipantIds.map((participantId) => [participantId, participantId]),
+    );
+    for (const aliases of aliasesByEmail.values()) {
+      const requestedAliases = [...aliases].filter((participantId) => requested.has(participantId));
+      if (requestedAliases.length !== 1) continue;
+      const canonicalParticipantId = requestedAliases[0];
+      if (canonicalParticipantId === undefined) continue;
+      for (const alias of aliases) canonicalByParticipant.set(alias, canonicalParticipantId);
+    }
+
+    const records = submissionRecords as unknown as JsonRecord[];
+    const decisions = portalDecisionProjections(decisionRecords);
+    const acceptedSubmissions = records.flatMap((record) => {
+      if (
+        textValue(record, "eventId", "Event ID") !== eventId ||
+        portalRecordStatus(record, decisions) !== "accepted"
+      ) {
+        return [];
+      }
+      const id = textValue(record, "id", APPLICATION_ID);
+      const title = portalAnswerText(record, "title", "sessionTitle", "name");
+      if (id === null || title === null) return [];
+      return [
+        {
+          sourceId: originalCfpSubmissionId(id) ?? id,
+          title,
+          participantIds: portalParticipantIds(record),
+        },
+      ];
+    });
+    const canonicalSubmissionByAlias = new Map<string, string>();
+    for (const [aliasParticipantId, canonicalParticipantId] of canonicalByParticipant) {
+      if (aliasParticipantId === canonicalParticipantId) continue;
+      const aliasSubmissions = acceptedSubmissions.filter((submission) =>
+        submission.participantIds.includes(aliasParticipantId),
+      );
+      for (const aliasSubmission of aliasSubmissions) {
+        const canonicalSourceIds = [
+          ...new Set(
+            acceptedSubmissions
+              .filter(
+                (submission) =>
+                  submission.title === aliasSubmission.title &&
+                  submission.participantIds.includes(canonicalParticipantId),
+              )
+              .map((submission) => submission.sourceId),
+          ),
+        ];
+        if (canonicalSourceIds.length !== 1) continue;
+        const canonicalSourceId = canonicalSourceIds[0];
+        if (canonicalSourceId === undefined) continue;
+        canonicalSubmissionByAlias.set(
+          `${aliasParticipantId}\u0000${aliasSubmission.sourceId}`,
+          `speaker-submission:${canonicalSourceId}`,
+        );
+      }
+    }
+
+    type ProjectedTask = {
+      readonly task: SpeakerTask;
+      readonly familyId: string;
+      readonly assignedToCanonicalParticipant: boolean;
+    };
+    const byFamily = new Map<string, ProjectedTask>();
+    for (const storedTask of storedTasks) {
+      if (storedTask.eventId !== eventId) continue;
+      const canonicalParticipantId = canonicalByParticipant.get(storedTask.participantId);
+      if (canonicalParticipantId === undefined) continue;
+
+      const task = untagged(storedTask);
+      const sourceSubmissionId = originalCfpSubmissionId(task.submissionId) ?? task.submissionId;
+      const canonicalSubmissionId =
+        canonicalSubmissionByAlias.get(`${task.participantId}\u0000${sourceSubmissionId}`) ??
+        task.submissionId;
+      const projected: SpeakerTask = {
+        ...task,
+        participantId: canonicalParticipantId,
+        submissionId: canonicalSubmissionId,
+        ...(task.assigneeIds === undefined
+          ? {}
+          : {
+              assigneeIds: [
+                ...new Set(
+                  task.assigneeIds.map(
+                    (participantId) => canonicalByParticipant.get(participantId) ?? participantId,
+                  ),
+                ),
+              ],
+            }),
+      };
+
+      let familyId = task.id.split(task.participantId).join(canonicalParticipantId);
+      if (canonicalSubmissionId !== task.submissionId) {
+        const canonicalSourceId =
+          originalCfpSubmissionId(canonicalSubmissionId) ?? canonicalSubmissionId;
+        familyId = familyId
+          .split(task.submissionId)
+          .join(canonicalSubmissionId)
+          .split(sourceSubmissionId)
+          .join(canonicalSourceId);
+      }
+      const candidate: ProjectedTask = {
+        task: projected,
+        familyId,
+        assignedToCanonicalParticipant: task.participantId === canonicalParticipantId,
+      };
+      const existing = byFamily.get(familyId);
+      if (
+        existing === undefined ||
+        (!existing.assignedToCanonicalParticipant && candidate.assignedToCanonicalParticipant) ||
+        (existing.assignedToCanonicalParticipant === candidate.assignedToCanonicalParticipant &&
+          (candidate.task.version > existing.task.version ||
+            (candidate.task.version === existing.task.version &&
+              candidate.task.updatedAt > existing.task.updatedAt)))
+      ) {
+        byFamily.set(familyId, candidate);
+      }
+    }
+    return [...byFamily.values()].map(({ task }) => task);
   }
 
   async createTask(command: SpeakerTaskRepositoryCommand): Promise<RepositoryResult<SpeakerTask>> {
@@ -5578,9 +5775,6 @@ export class AirtableOrganizerOverviewRepository implements OrganizerOverviewRou
   }
 }
 
-function isDefinedString(value: string | undefined): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
 function isNonEmpty(value: string | null): value is string {
   return value !== null && value.trim().length > 0;
 }
