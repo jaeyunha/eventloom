@@ -15,7 +15,7 @@ import type {
 
 export const portalNavigation = [
   { href: "/portal", label: "Home", icon: "⌂" },
-  { href: "/portal/submissions", label: "Sessions", icon: "▤" },
+  { href: "/portal/submissions", label: "Submissions", icon: "▤" },
   { href: "/portal/tasks", label: "Tasks", icon: "✓" },
   { href: "/portal/profile", label: "Profile", icon: "◉" },
   { href: "/portal?workspace=co-speakers", label: "Co-speakers", icon: "◎" },
@@ -72,7 +72,19 @@ export function portalContentMode(input: {
 }
 
 export function PortalFrame({ children }: Readonly<{ children: ReactNode }>) {
-  const { eventQuery, view, contexts, context, switchContext, loading, error, can } = usePortal();
+  const {
+    authorizedParticipantIds,
+    eventQuery,
+    view,
+    contexts,
+    context,
+    selectedParticipantId,
+    switchContext,
+    switchParticipant,
+    loading,
+    error,
+    can,
+  } = usePortal();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
@@ -113,6 +125,11 @@ export function PortalFrame({ children }: Readonly<{ children: ReactNode }>) {
     setAccountMenuOpen(false);
     await switchContext(contextId);
   }
+  function selectParticipant(participantId: string) {
+    if (switchParticipant(participantId)) {
+      setAccountMenuOpen(false);
+    }
+  }
 
   return (
     <div className={styles.portalRoot}>
@@ -124,7 +141,7 @@ export function PortalFrame({ children }: Readonly<{ children: ReactNode }>) {
           <span aria-hidden="true">OS</span>
           <strong>Open Sessionboard</strong>
         </Link>
-        <div>
+        <div className={styles.accountActions}>
           <button
             className={styles.secondaryButton}
             type="button"
@@ -136,7 +153,7 @@ export function PortalFrame({ children }: Readonly<{ children: ReactNode }>) {
             className={styles.account}
             type="button"
             aria-haspopup="menu"
-            aria-label="Account menu"
+            aria-label="Switch event or participant"
             aria-expanded={accountMenuOpen}
             aria-controls="portal-context-menu"
             onClick={() => setAccountMenuOpen((open) => !open)}
@@ -150,8 +167,13 @@ export function PortalFrame({ children }: Readonly<{ children: ReactNode }>) {
             </span>
           </button>
           {accountMenuOpen ? (
-            <div id="portal-context-menu" role="menu" aria-label="Switch event">
-              <p className={styles.srOnly}>Authorized event contexts</p>
+            <div
+              id="portal-context-menu"
+              className={styles.contextMenu}
+              role="menu"
+              aria-label="Switch event or participant"
+            >
+              <p className={styles.contextMenuLabel}>Event</p>
               {contexts.length === 0 ? (
                 <span role="status">No authorized events</span>
               ) : (
@@ -159,14 +181,39 @@ export function PortalFrame({ children }: Readonly<{ children: ReactNode }>) {
                   <button
                     key={candidate.id}
                     type="button"
-                    role="menuitem"
-                    aria-current={candidate.id === context?.id ? "true" : undefined}
+                    role="menuitemradio"
+                    aria-checked={candidate.id === context?.id}
                     disabled={loading}
                     onClick={() => void selectContext(candidate.id)}
                   >
                     {portalContextLabel(candidate)}
                   </button>
                 ))
+              )}
+              {authorizedParticipantIds.length > 0 ? (
+                <>
+                  <p className={styles.contextMenuLabel}>Participant</p>
+                  {authorizedParticipantIds.map((participantId, index) => (
+                    <button
+                      key={participantId}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={participantId === selectedParticipantId}
+                      disabled={loading}
+                      onClick={() => selectParticipant(participantId)}
+                    >
+                      {participantId === selectedParticipantId
+                        ? displayName
+                        : `Participant ${index + 1}`}
+                      <small>{participantId}</small>
+                    </button>
+                  ))}
+                </>
+              ) : (
+                <p className={styles.contextMenuHint}>
+                  Submission access is active. Participant tools unlock after the event links your
+                  speaker record.
+                </p>
               )}
             </div>
           ) : null}

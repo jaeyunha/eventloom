@@ -45,19 +45,20 @@ function SubmissionDetailContent({ submissionId }: Readonly<{ submissionId: stri
   if (!submission) {
     return (
       <EmptyState
-        title="Session not found"
-        description="This session is not available to your speaker account."
+        title="Submission not found"
+        description="This submission is not available to your account in the selected event."
         action={
           <Link className={styles.secondaryButton} href={`/portal/submissions${eventQuery}`}>
-            Back to sessions
+            Back to submissions
           </Link>
         }
       />
     );
   }
   const presentation = submissionStatusPresentation(submission.status);
-  const submissionTasks = view.tasks.filter((task) =>
-    portalSubmissionIdsMatch(task.submissionId, submission.id),
+  const submissionTasks = view.tasks.filter(
+    (task) =>
+      task.submissionId !== null && portalSubmissionIdsMatch(task.submissionId, submission.id),
   );
   const displayTitle = portalSubmissionDisplayTitle(submission, view.submissions);
   const currentJourneyIndex = standardJourney.indexOf(submission.status);
@@ -69,12 +70,12 @@ function SubmissionDetailContent({ submissionId }: Readonly<{ submissionId: stri
   return (
     <>
       <Link className={styles.backLink} href={`/portal/submissions${eventQuery}`}>
-        <span aria-hidden="true">←</span> All sessions
+        <span aria-hidden="true">←</span> All submissions
       </Link>
       <PageHeading
-        eyebrow={`Session ${submission.id}`}
+        eyebrow={`Submission ${submission.id}`}
         title={displayTitle}
-        description="Your latest session status and accepted-speaker requirements."
+        description="Your latest persisted proposal status and accepted-speaker requirements."
         action={<SubmissionStatusBadge status={submission.status} />}
       />
       {actionTargets === null ? null : (
@@ -115,7 +116,10 @@ function SubmissionDetailContent({ submissionId }: Readonly<{ submissionId: stri
           <p className={styles.eyebrow}>Current status</p>
           <h2>{presentation.label}</h2>
           <p>{presentation.description}</p>
-          <small>Last updated {formatPortalDate(submission.updatedAt) ?? "recently"}</small>
+          <small>
+            {submission.version === undefined ? "" : `Revision ${submission.version} · `}
+            Last updated {formatPortalDate(submission.updatedAt) ?? "recently"}
+          </small>
         </div>
       </section>
 

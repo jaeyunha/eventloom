@@ -38,6 +38,23 @@ export const portalCapabilities = [
 ] as const;
 
 export type PortalCapability = (typeof portalCapabilities)[number];
+export type PortalProfileMutationPhase =
+  | "idle"
+  | "saving"
+  | "pending"
+  | "saved"
+  | "conflict"
+  | "failure";
+
+export interface PortalTravelLogistics {
+  travelRequired: boolean;
+  arrivalAt: string | null;
+  departureAt: string | null;
+  accommodation: string;
+  dietaryRequirements: string;
+  accessibilityNeeds: string;
+  travelNotes: string;
+}
 
 export interface PortalSubmission {
   id: string;
@@ -46,6 +63,7 @@ export interface PortalSubmission {
   status: PortalSubmissionStatus;
   participantIds: readonly string[];
   updatedAt: string;
+  version?: number;
   formId?: string;
   closeAt?: string;
 }
@@ -56,9 +74,12 @@ export interface PortalProfile {
   participantId: string;
   displayName: string;
   biography: string;
+  email?: string;
   jobTitle?: string;
   company?: string;
+  status?: string;
   socialLinks?: Readonly<Record<string, string>>;
+  travelLogistics?: PortalTravelLogistics;
   headshotAssetId?: string | null;
   version: number;
   updatedAt: string;
@@ -67,7 +88,7 @@ export interface PortalProfile {
 export interface PortalTask {
   id: string;
   eventId: string;
-  submissionId: string;
+  submissionId: string | null;
   participantId: string;
   type: PortalTaskType;
   owner: "speaker" | "organizer";
@@ -84,14 +105,21 @@ export interface PortalTask {
 
 export interface PortalContext {
   id: string;
+  /** Optional tenant identity projected by newer speaker adapters. */
+  organizationId?: string;
   eventId: string;
   name: string;
   slug?: string;
   status?: string;
   capabilities: readonly PortalCapability[];
+  /** Participant IDs are explicit grants; an empty list is valid for owned submissions. */
   submissionIds: readonly string[];
   participantIds: readonly string[];
+  /** Explicit participant IDs authorized by the event grant. */
+  authorizedParticipantIds?: readonly string[];
   primaryParticipantId?: string;
+  /** Client-only selection; never used as an authority source. */
+  selectedParticipantId?: string | null;
 }
 
 export interface PortalRosterMember {

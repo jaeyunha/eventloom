@@ -63,6 +63,13 @@
   font-weight: 800;
 }
 
+.accountActions {
+  position: relative;
+  display: flex;
+  gap: 0.65rem;
+  align-items: center;
+}
+
 .account {
   display: flex;
   gap: 0.65rem;
@@ -99,6 +106,64 @@
 .accountCopy small {
   color: var(--portal-muted);
   font-size: 0.72rem;
+}
+.contextMenu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  display: grid;
+  width: min(22rem, calc(100vw - 2rem));
+  gap: 0.25rem;
+  padding: 0.65rem;
+  border: 1px solid var(--portal-border);
+  border-radius: 0.75rem;
+  box-shadow: 0 1rem 2.5rem rgb(32 35 43 / 18%);
+  background: var(--portal-surface);
+}
+
+.contextMenu button {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.65rem 0.75rem;
+  border: 0;
+  border-radius: 0.5rem;
+  background: transparent;
+  color: var(--portal-ink);
+  font: inherit;
+  text-align: left;
+}
+
+.contextMenu button:hover,
+.contextMenu button:focus-visible,
+.contextMenu button[aria-checked="true"] {
+  background: var(--portal-blue-soft);
+}
+
+.contextMenu button:focus-visible {
+  outline: 2px solid var(--portal-blue);
+  outline-offset: 1px;
+}
+
+.contextMenu button small,
+.contextMenuHint {
+  overflow-wrap: anywhere;
+  color: var(--portal-muted);
+  font-size: 0.72rem;
+}
+
+.contextMenuLabel {
+  margin: 0.45rem 0.75rem 0.15rem;
+  color: var(--portal-muted);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.contextMenuHint {
+  margin: 0.25rem 0.75rem 0.5rem;
+  line-height: 1.5;
 }
 
 .portalLayout {

@@ -108,6 +108,27 @@
 .formMessageError {
   color: var(--destructive);
 }
+.mutationStatus[data-mutation-status="saving"] {
+  border-color: var(--border);
+}
+
+.mutationStatus[data-mutation-status="pending"] {
+  border-color: #e4cf98;
+  background: #f8f1df;
+}
+
+.mutationStatus[data-mutation-status="saved"] {
+  border-color: #bfd8c8;
+  background: #edf5ef;
+}
+
+.mutationStatus[data-mutation-status="conflict"] {
+  border-color: #e4cf98;
+}
+
+.mutationStatus[data-mutation-status="failure"] {
+  border-color: var(--destructive);
+}
 
 .summaryGrid {
   display: grid;
