@@ -110,6 +110,7 @@ import {
   type EventAuditEntry,
   type EventRepository,
   EventRepositoryConflictError,
+  type ProgramPublicationManifest,
 } from "../features/events/types";
 import { publicApiV1Contract } from "../features/public-api/contract";
 import type {
@@ -864,6 +865,7 @@ interface PublishedSpeakerProjectionRecord extends PublishedSpeakerProjection {
  */
 class AirtablePublishedSpeakerProjectionStore implements PublishedSpeakerRouteDependencies {
   readonly #store: AirtableJsonStore<PublishedSpeakerProjectionRecord>;
+  readonly #releases: AirtableJsonStore<ProgramPublicationManifest>;
   readonly #privateFiles: R2Bucket;
 
   constructor(options: {
@@ -881,6 +883,16 @@ class AirtablePublishedSpeakerProjectionStore implements PublishedSpeakerRouteDe
         "Revision ID": "revisionId",
         "Revision Number": "revisionNumber",
         "Published At": "publishedAt",
+      },
+    });
+    this.#releases = new AirtableJsonStore({
+      ...options,
+      table: "Program Releases",
+      jsonField: "Manifest JSON",
+      scopeFields: { eventId: true, organizationId: true },
+      indexedFields: {
+        Status: "lifecycle",
+        Revision: "revision",
       },
     });
     this.#privateFiles = options.privateFiles;
@@ -913,6 +925,22 @@ class AirtablePublishedSpeakerProjectionStore implements PublishedSpeakerRouteDe
     }
   }
 
+  async getProgramPublicationManifest(eventSlug: string): Promise<ProgramPublicationManifest | null> {
+    const projection = await this.#recordForSlug(eventSlug);
+    if (projection === null) return null;
+    const releases = await listEventScopedJson(this.#releases, "Manifest JSON", projection.eventId);
+    const served = releases
+      .filter(
+        (release) =>
+          release.organizationId === projection.organizationId &&
+          release.eventId === projection.eventId &&
+          release.lifecycle === "served" &&
+          release.speakerProjectionId === projection.revision.id &&
+          release.speakerRevisionNumber === projection.revision.number,
+      )
+      .sort((left, right) => right.revision - left.revision);
+    return served[0] ?? null;
+  }
   async getPublishedSpeakers(eventSlug: string): Promise<PublishedSpeakerProjection | null> {
     const record = await this.#recordForSlug(eventSlug);
     if (record === null) return null;
@@ -942,6 +970,7 @@ class AirtablePublishedSpeakerProjectionStore implements PublishedSpeakerRouteDe
         sessionTitles: [...speaker.sessionTitles],
         trackNames: [...speaker.trackNames],
       })),
+      ...(record.sourceHash === undefined ? {} : { sourceHash: record.sourceHash }),
     };
   }
 
@@ -1154,17 +1183,50 @@ function portalPrimaryParticipantId(record: JsonRecord): string | undefined {
   if (primaryIds.length === 1) return primaryIds[0];
   return primaryIds.length === 0 && participantIds.length === 1 ? participantIds[0] : undefined;
 }
-function portalCanonicalGrantedParticipantId(
+function portalCanonicalGrantedParticipantIds(
   profiles: readonly SpeakerProfile[],
-): string | undefined {
-  const participantIds = [
-    ...new Set(
-      profiles
-        .map((profile) => profile.participantId.trim())
-        .filter((participantId) => participantId.length > 0),
-    ),
-  ];
-  return participantIds.length === 1 ? participantIds[0] : undefined;
+  ownerRecords: readonly JsonRecord[],
+): string[] {
+  const ownerParticipantIds = new Set(ownerRecords.flatMap(portalParticipantIds));
+  const ownerParticipantIdsByEmail = new Map<string, Set<string>>();
+  for (const record of ownerRecords) {
+    if (!Array.isArray(record.participants)) continue;
+    for (const participant of record.participants) {
+      if (!isRecord(participant) || typeof participant.id !== "string") continue;
+      const participantId = participant.id.trim();
+      const email = textValue(participant, "email")?.toLowerCase();
+      if (participantId.length === 0 || email === undefined) continue;
+      const ids = ownerParticipantIdsByEmail.get(email) ?? new Set<string>();
+      ids.add(participantId);
+      ownerParticipantIdsByEmail.set(email, ids);
+    }
+  }
+
+  const profilesByIdentity = new Map<string, SpeakerProfile[]>();
+  for (const profile of profiles) {
+    const email = profile.email?.trim().toLowerCase();
+    const key = email === undefined || email.length === 0 ? `participant:${profile.participantId}` : email;
+    profilesByIdentity.set(key, [...(profilesByIdentity.get(key) ?? []), profile]);
+  }
+
+  const participantIds = new Set(ownerParticipantIds);
+  for (const [identity, identityProfiles] of profilesByIdentity) {
+    const profileParticipantIds = [
+      ...new Set(
+        identityProfiles
+          .map((profile) => profile.participantId.trim())
+          .filter((participantId) => participantId.length > 0),
+      ),
+    ];
+    const ownerCandidates = identity.startsWith("participant:")
+      ? profileParticipantIds.filter((participantId) => ownerParticipantIds.has(participantId))
+      : [...(ownerParticipantIdsByEmail.get(identity) ?? [])];
+    if (ownerCandidates.length === 1) participantIds.add(ownerCandidates[0] as string);
+    else if (ownerCandidates.length === 0 && profileParticipantIds.length === 1) {
+      participantIds.add(profileParticipantIds[0] as string);
+    }
+  }
+  return [...participantIds];
 }
 function authoritativeAcceptedParticipantId(
   participants: readonly SubmissionParticipant[],
@@ -1856,38 +1918,108 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
   async resolveEventParticipant(
     input: ResolveEventParticipantInput,
   ): Promise<SpeakerParticipantResolution> {
-    const profiles = (await this.#profiles.list()).filter(
-      (profile) =>
-        profile.eventId === input.eventId &&
-        profile.sourceType === input.sourceType &&
-        profile.sourceId === input.sourceId,
+    const [profileRecords, rosterRecords, submissionRecords] = await Promise.all([
+      this.#profiles.list(),
+      this.#roster.list(),
+      this.#submissions.list(),
+    ]);
+    const profiles = profileRecords.filter((profile) =>
+      speakerProfileScoped(profile, input.organizationId, input.eventId, input.organizationId),
     );
-    const candidateParticipantIds = [
-      ...new Set(profiles.map((profile) => profile.participantId.trim()).filter(isNonEmpty)),
+    const roster = rosterRecords.filter(
+      (entry) =>
+        entry.eventId === input.eventId &&
+        matchesOrganizationScope(entry, input.organizationId, true),
+    );
+    const records = (submissionRecords as unknown as JsonRecord[]).filter(
+      (record) =>
+        eventReference(record) === input.eventId &&
+        matchesOrganizationScope(record, input.organizationId, true),
+    );
+    const sourceParticipantIds = [
+      ...new Set(
+        [...profiles, ...roster]
+          .filter(
+            (record) =>
+              record.sourceType === input.sourceType && record.sourceId === input.sourceId,
+          )
+          .map((record) => record.participantId.trim())
+          .filter(isNonEmpty),
+      ),
     ];
     if (
-      candidateParticipantIds.length > 1 ||
+      sourceParticipantIds.length > 1 ||
       (input.explicitParticipantId !== undefined &&
-        candidateParticipantIds.length === 1 &&
-        candidateParticipantIds[0] !== input.explicitParticipantId)
+        sourceParticipantIds.length === 1 &&
+        sourceParticipantIds[0] !== input.explicitParticipantId)
     ) {
-      return { state: "ambiguous", candidateParticipantIds };
+      return { state: "ambiguous", candidateParticipantIds: sourceParticipantIds };
     }
+
+    const normalizedEmail = input.normalizedEmail?.trim().toLowerCase();
+    const emailParticipantIds =
+      sourceParticipantIds.length > 0 ||
+      input.explicitParticipantId !== undefined ||
+      normalizedEmail === undefined ||
+      normalizedEmail.length === 0
+        ? []
+        : [
+            ...new Set([
+              ...profiles.flatMap((profile) =>
+                profile.email?.trim().toLowerCase() === normalizedEmail
+                  ? [profile.participantId]
+                  : [],
+              ),
+              ...roster.flatMap((entry) =>
+                entry.email?.trim().toLowerCase() === normalizedEmail
+                  ? [entry.participantId]
+                  : [],
+              ),
+              ...records.flatMap((record) =>
+                Array.isArray(record.participants)
+                  ? record.participants.flatMap((participant) =>
+                      isRecord(participant) &&
+                      typeof participant.id === "string" &&
+                      textValue(participant, "email")?.toLowerCase() === normalizedEmail
+                        ? [participant.id.trim()]
+                        : [],
+                    )
+                  : [],
+              ),
+            ]),
+          ].filter(isNonEmpty);
+    if (emailParticipantIds.length > 1) {
+      return { state: "ambiguous", candidateParticipantIds: emailParticipantIds };
+    }
+
     const participantId =
-      candidateParticipantIds[0] ?? input.explicitParticipantId ?? input.createParticipantId;
-    const submissionIds = (await this.#submissions.list())
-      .filter(
-        (submission) =>
-          submission.eventId === input.eventId &&
-          submission.participantIds.includes(participantId),
-      )
-      .map((submission) => submission.id);
+      sourceParticipantIds[0] ??
+      input.explicitParticipantId ??
+      emailParticipantIds[0] ??
+      input.createParticipantId;
+    const matchingSubmissionIds = records
+      .filter((record) => portalParticipantIds(record).includes(participantId))
+      .map((record) => textValue(record, "id", APPLICATION_ID))
+      .filter(isNonEmpty);
+    const matchingSubmissionIdSet = new Set(matchingSubmissionIds);
+    const submissionIds = [
+      ...new Set(
+        matchingSubmissionIds.map((submissionId) =>
+          submissionId.startsWith("speaker-submission:") ||
+          !matchingSubmissionIdSet.has(`speaker-submission:${submissionId}`)
+            ? submissionId
+            : `speaker-submission:${submissionId}`,
+        ),
+      ),
+    ];
     return {
       state: "resolved",
       participantId,
       submissionIds,
       created:
-        candidateParticipantIds.length === 0 && input.explicitParticipantId === undefined,
+        sourceParticipantIds.length === 0 &&
+        input.explicitParticipantId === undefined &&
+        emailParticipantIds.length === 0,
     };
   }
   async getOrganizerAccessScope(
@@ -2222,9 +2354,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
         (grants.has(profile.id) || grants.has(profile.participantId)),
     );
     const accountProfiles = profiles;
-    const grantedParticipantId = portalCanonicalGrantedParticipantId(accountProfiles);
-    const participantIds =
-      grantedParticipantId === undefined ? [] : [grantedParticipantId];
+    const participantIds = portalCanonicalGrantedParticipantIds(accountProfiles, ownedRecords);
     const acceptedGrantRecords = records.filter(
       (record) =>
         isSpeakerSubmissionRecord(record) &&
@@ -2396,9 +2526,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
             (id): id is string => id !== null && !ownerIds.has(originalCfpSubmissionId(id) ?? id),
           ),
       ];
-      const grantedParticipantId = portalCanonicalGrantedParticipantId(accountProfiles);
-      const participantIds =
-        grantedParticipantId === undefined ? [] : [grantedParticipantId];
+      const participantIds = portalCanonicalGrantedParticipantIds(eventProfiles, ownerRecords);
       if (submissionIds.length === 0) continue;
       const eventProfileIds = new Set(
         eventProfiles.flatMap((profile) => [profile.id, profile.participantId]),

@@ -2237,6 +2237,7 @@ describe("fixture local runtime composition", () => {
           revisionId: "revision-devflow-1",
           revisionNumber: 1,
           publishedAt: updatedAt,
+          sourceHash: "speaker-source-devflow-1",
           event: {
             slug: eventId,
             name: "Devflow Conference",
@@ -2269,6 +2270,40 @@ describe("fixture local runtime composition", () => {
     });
     transport.seed({
       baseId: "base-test",
+      table: "Program Releases",
+      fields: {
+        "Application ID": "program-release-devflow-1",
+        "Organization ID": organizationId,
+        "Event ID": eventId,
+        Status: "served",
+        Revision: 1,
+        "Manifest JSON": JSON.stringify({
+          id: "program-release-devflow-1",
+          organizationId,
+          eventId,
+          revision: 1,
+          lifecycle: "served",
+          agendaProjectionId: "agenda-revision-devflow-1",
+          agendaRevisionNumber: 1,
+          agendaSourceHash: "agenda-source-devflow-1",
+          speakerProjectionId: "revision-devflow-1",
+          speakerRevisionNumber: 1,
+          speakerSourceHash: "speaker-source-devflow-1",
+          approvedContentRevision: 1,
+          approvedProfileRevision: 1,
+          releasedAssetRevision: 1,
+          actorId: "organizer-devflow",
+          publishedAt: updatedAt,
+          parentServedRevision: null,
+          rollbackTargetRevision: null,
+          cacheRevision: 1,
+          sourceTrigger: "initial-publication",
+          failureReason: null,
+        }),
+      },
+    });
+    transport.seed({
+      baseId: "base-test",
       table: "Speaker Tasks",
       fields: {
         "Application ID": "task-marcus-accepted",
@@ -2277,6 +2312,11 @@ describe("fixture local runtime composition", () => {
           id: "task-marcus-accepted",
           eventId,
           submissionId: `speaker-submission:${acceptedSubmissionId}`,
+          subject: {
+            type: "session",
+            participantId: acceptedParticipantId,
+            submissionId: `speaker-submission:${acceptedSubmissionId}`,
+          },
           participantId: acceptedParticipantId,
           type: "action",
           owner: "speaker",
@@ -2383,6 +2423,11 @@ describe("fixture local runtime composition", () => {
           id: "task-marcus-crm",
           eventId,
           submissionId: `speaker-submission:crm-contact:${selectedContact.data.id}`,
+          subject: {
+            type: "session",
+            participantId: selectedContact.data.id,
+            submissionId: `speaker-submission:crm-contact:${selectedContact.data.id}`,
+          },
           participantId: selectedContact.data.id,
           type: "action",
           owner: "speaker",
@@ -5599,6 +5644,11 @@ describe("production organizer speaker composition", () => {
             id: input.id,
             eventId: "event-speaker",
             submissionId: input.submissionId,
+            subject: {
+              type: "session",
+              participantId: input.participantId,
+              submissionId: input.submissionId,
+            },
             participantId: input.participantId,
             assigneeIds: [input.participantId],
             type: "action",
@@ -6053,6 +6103,7 @@ describe("production organizer speaker composition", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
+          idempotencyKey: "create-priya-speaker",
           displayName: "Priya Raman",
           email: "PRIYA@example.test",
           jobTitle: "Principal Engineer",
