@@ -16,7 +16,8 @@ test("web and API foundations run as independent healthy services", async ({ pag
   expect(webHealth.status()).toBe(200);
   expect(await webHealth.json()).toMatchObject({ status: "ok", service: "web" });
 
-  const apiHealth = await request.get("http://127.0.0.1:8787/api/health");
+  const apiPort = process.env.PLAYWRIGHT_API_PORT?.trim() || "8787";
+  const apiHealth = await request.get(`http://127.0.0.1:${apiPort}/api/health`);
   expect(apiHealth.status()).toBe(200);
   expect(await apiHealth.json()).toMatchObject({ status: "ok", service: "api" });
 });
