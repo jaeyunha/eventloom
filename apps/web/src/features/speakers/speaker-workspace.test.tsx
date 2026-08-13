@@ -12,14 +12,15 @@ import {
   type SpeakerTask,
 } from "./api";
 import {
+  acceptedSpeakerSessions,
   createSpeakerTaskAssignment,
   duplicateEmailConflicts,
-  acceptedSpeakerSessions,
   filterSpeakerRoster,
   organizerHeadshotPreviewPath,
-  retainInvitationHistory,
-  SpeakerAssetDownload,
   organizerHeadshotSubmissionId,
+  retainInvitationHistory,
+  SPEAKER_WELCOME_EMAIL_STARTER,
+  SpeakerAssetDownload,
   SpeakerAssetMetadata,
   SpeakerHeadshot,
   SpeakerInvitationControls,
@@ -1171,5 +1172,13 @@ describe("speaker workspace", () => {
     expect(markup).not.toContain("dangerouslySetInnerHTML");
     expect(markup).not.toContain("srcDoc");
     expect(markup).not.toContain("iframe");
+  });
+
+  it("provides a complete editable welcome email starter", () => {
+    expect(SPEAKER_WELCOME_EMAIL_STARTER.name).toBe("Speaker welcome");
+    expect(SPEAKER_WELCOME_EMAIL_STARTER.subject).toContain("Welcome");
+    expect(SPEAKER_WELCOME_EMAIL_STARTER.html).toContain("speaker program");
+    expect(SPEAKER_WELCOME_EMAIL_STARTER.text).toContain("speaker portal");
+    expect(SPEAKER_WELCOME_EMAIL_STARTER.text).not.toBe("Hello {{first_name}},");
   });
 });

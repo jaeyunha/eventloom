@@ -970,7 +970,9 @@ function iframeSandbox(widget: EmbedWidgetDefinition): string {
   if (widget.id === "itinerary") {
     return "allow-downloads allow-same-origin allow-scripts";
   }
-  return widget.id === "agenda" ? "allow-downloads allow-scripts" : "allow-scripts";
+  return widget.id === "agenda"
+    ? "allow-downloads allow-same-origin allow-scripts"
+    : "allow-same-origin allow-scripts";
 }
 
 export function iframeSnippet(settings: EmbedSnippetSettings): string {
@@ -1854,6 +1856,7 @@ function CodePanel({
   const preview = embedCodePreview(settings);
   const format = outputFormatLabel(settings.outputFormat ?? "styled-html");
   const revision = publication.servedRevision;
+  const publicUrl = publicEmbedUrl(settings);
   const jsonUrl = publicAgendaJsonUrl(settings);
   const calendarUrl = publicAgendaCalendarUrl(settings);
 
@@ -1863,10 +1866,9 @@ function CodePanel({
         <div className={workspaceStyles.cardHeadingRow}>
           <div>
             <p className={styles.panelEyebrow}>Step 4 · export</p>
-            <CardTitle id="embed-code-heading">Copy code or export link</CardTitle>
+            <CardTitle id="embed-code-heading">Share or embed</CardTitle>
             <CardDescription>
-              Every value below reads the same published public projection used by the preview.
-              Custom CSS stays in host markup.
+              Share the public URL now. Expand developer snippets only when a host needs embed code.
             </CardDescription>
           </div>
           {revision !== null ? <Badge variant="outline">Program revision {revision}</Badge> : null}
@@ -1878,55 +1880,25 @@ function CodePanel({
         </div>
       </CardHeader>
       <CardContent className={workspaceStyles.sectionStack}>
-        <div className={workspaceStyles.codeBlock}>
+        <div className={workspaceStyles.shareBlock}>
           <div className={workspaceStyles.cardHeadingRow}>
             <div>
               <h3 className={workspaceStyles.subheading}>Live public URL</h3>
               <p className={workspaceStyles.muted}>
-                Share this link when a host cannot accept embed markup.
+                Anyone with this link can open the confirmed public revision.
               </p>
             </div>
             <Badge variant="secondary">Revision {revision}</Badge>
           </div>
-          <Input aria-label="Live public embed URL" readOnly value={publicEmbedUrl(settings)} />
-          <CopyButton label="live URL" value={publicEmbedUrl(settings)} />
-        </div>
-
-        <div className={workspaceStyles.codeBlock}>
-          <div>
-            <h3 className={workspaceStyles.subheading}>Code preview · {format}</h3>
-            <p className={workspaceStyles.muted}>
-              Safe options are encoded in the public URL; no private fields or executable custom CSS
-              are copied.
-            </p>
+          <Input aria-label="Live public embed URL" readOnly value={publicUrl} />
+          <div className={workspaceStyles.actionRow}>
+            <CopyButton label="public URL" value={publicUrl} />
+            <Button asChild variant="outline">
+              <a href={publicUrl} target="_blank" rel="noreferrer">
+                Open public view ↗
+              </a>
+            </Button>
           </div>
-          <ScrollArea className={workspaceStyles.codeScroll}>
-            <textarea
-              aria-label="Embed code preview"
-              readOnly
-              value={preview}
-              rows={10}
-              className={workspaceStyles.codeArea}
-            />
-          </ScrollArea>
-          <CopyButton label="code preview" value={preview} />
-        </div>
-
-        <div className={workspaceStyles.codeBlock}>
-          <div>
-            <h3 className={workspaceStyles.subheading}>Iframe snippet</h3>
-            <p className={workspaceStyles.muted}>
-              Paste this sandboxed, responsive iframe into a page that accepts HTML.
-            </p>
-          </div>
-          <textarea
-            aria-label="Iframe embed snippet"
-            readOnly
-            value={iframe}
-            rows={7}
-            className={workspaceStyles.codeArea}
-          />
-          <CopyButton label="iframe code" value={iframe} />
         </div>
 
         <div className={workspaceStyles.codeBlock}>
@@ -1951,33 +1923,84 @@ function CodePanel({
           <CopyButton label="iCal feed URL" value={calendarUrl} />
         </div>
 
-        {settings.widget.scriptView ? (
-          <div className={workspaceStyles.codeBlock}>
+        <Collapsible>
+          <div className={workspaceStyles.developerDisclosure}>
             <div>
-              <h3 className={workspaceStyles.subheading}>Script snippet</h3>
+              <h3 className={workspaceStyles.subheading}>Developer embed code</h3>
               <p className={workspaceStyles.muted}>
-                Use the fixed Open Sessionboard loader for supported Agenda and Speaker Gallery
-                views.
+                Iframe, script, and {format} output for websites that accept embed markup.
               </p>
             </div>
-            <textarea
-              aria-label="Script embed snippet"
-              readOnly
-              value={script}
-              rows={7}
-              className={workspaceStyles.codeArea}
-            />
-            <CopyButton label="script code" value={script} />
+            <CollapsibleTrigger asChild>
+              <Button variant="outline">Show code</Button>
+            </CollapsibleTrigger>
           </div>
-        ) : (
-          <Alert>
-            <AlertTitle>Iframe mode is the supported option for this widget.</AlertTitle>
-            <AlertDescription>
-              The fixed script loader currently supports the Agenda and Speaker Gallery widgets. Use
-              the generated iframe instead of adding an arbitrary script source.
-            </AlertDescription>
-          </Alert>
-        )}
+          <CollapsibleContent forceMount className={workspaceStyles.developerContent}>
+            <div className={workspaceStyles.codeBlock}>
+              <div>
+                <h3 className={workspaceStyles.subheading}>Code preview · {format}</h3>
+                <p className={workspaceStyles.muted}>
+                  Safe options are encoded in the public URL; no private fields or executable custom
+                  CSS are copied.
+                </p>
+              </div>
+              <ScrollArea className={workspaceStyles.codeScroll}>
+                <textarea
+                  aria-label="Embed code preview"
+                  readOnly
+                  value={preview}
+                  rows={8}
+                  className={workspaceStyles.codeArea}
+                />
+              </ScrollArea>
+              <CopyButton label="code preview" value={preview} />
+            </div>
+
+            <div className={workspaceStyles.codeBlock}>
+              <div>
+                <h3 className={workspaceStyles.subheading}>Iframe snippet</h3>
+                <p className={workspaceStyles.muted}>
+                  Paste this sandboxed, responsive iframe into a page that accepts HTML.
+                </p>
+              </div>
+              <textarea
+                aria-label="Iframe embed snippet"
+                readOnly
+                value={iframe}
+                rows={6}
+                className={workspaceStyles.codeArea}
+              />
+              <CopyButton label="iframe code" value={iframe} />
+            </div>
+
+            {settings.widget.scriptView ? (
+              <div className={workspaceStyles.codeBlock}>
+                <div>
+                  <h3 className={workspaceStyles.subheading}>Script snippet</h3>
+                  <p className={workspaceStyles.muted}>
+                    Use the fixed loader for supported Agenda and Speaker Gallery views.
+                  </p>
+                </div>
+                <textarea
+                  aria-label="Script embed snippet"
+                  readOnly
+                  value={script}
+                  rows={6}
+                  className={workspaceStyles.codeArea}
+                />
+                <CopyButton label="script code" value={script} />
+              </div>
+            ) : (
+              <Alert>
+                <AlertTitle>Iframe mode is the supported option for this widget.</AlertTitle>
+                <AlertDescription>
+                  The script loader supports Agenda and Speaker Gallery. Use the generated iframe
+                  for this view.
+                </AlertDescription>
+              </Alert>
+            )}
+          </CollapsibleContent>
+        </Collapsible>
       </CardContent>
     </Card>
   );
@@ -2528,6 +2551,8 @@ export function EmbedWorkspaceView({
         </div>
       </nav>
 
+      <PublicationStatus eventVersion={scopedEventVersion} publication={publicationState} />
+
       <div className={workspaceStyles.workspaceGrid}>
         <section className={workspaceStyles.builderColumn} aria-label="Embed builder">
           <Tabs defaultValue="choose" className={workspaceStyles.builderTabs}>
@@ -2584,9 +2609,8 @@ export function EmbedWorkspaceView({
           </Tabs>
         </section>
 
-        <aside className={workspaceStyles.rail} aria-label="Published preview and distribution">
-          <div className={workspaceStyles.stickyRail}>
-            <PublicationStatus eventVersion={scopedEventVersion} publication={publicationState} />
+        <aside className={workspaceStyles.rail} aria-label="Live preview workspace">
+          <div className={workspaceStyles.previewRail}>
             <Card aria-labelledby="embed-preview-heading">
               <CardHeader>
                 <div className={workspaceStyles.cardHeadingRow}>
@@ -2613,14 +2637,14 @@ export function EmbedWorkspaceView({
                   ) : null}
                 </div>
                 {canDistribute && previewUrl ? (
-                  <a
-                    className={workspaceStyles.externalLink}
-                    href={previewUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    Open public view ↗
-                  </a>
+                  <div className={workspaceStyles.previewActions}>
+                    <CopyButton label="public URL" value={previewUrl} />
+                    <Button asChild variant="outline">
+                      <a href={previewUrl} target="_blank" rel="noreferrer">
+                        Open public view ↗
+                      </a>
+                    </Button>
+                  </div>
                 ) : null}
               </CardHeader>
               <CardContent>
@@ -2644,32 +2668,32 @@ export function EmbedWorkspaceView({
                 )}
               </CardContent>
             </Card>
-
-            {canDistribute && settingsWithIdentity ? (
-              <CodePanel settings={settingsWithIdentity} publication={publicationState} />
-            ) : (
-              <Card aria-labelledby="embed-code-unavailable-heading">
-                <CardHeader>
-                  <p className={styles.panelEyebrow}>Step 4 · export</p>
-                  <CardTitle id="embed-code-unavailable-heading">Copy code/export link</CardTitle>
-                  <CardDescription>
-                    Snippets and links are withheld until they can point at the same confirmed
-                    published revision as the preview.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <MissingPublicProjection
-                    organizationId={organizationId}
-                    eventId={eventId}
-                    publication={publicationState}
-                    settingsAvailable={settings !== null}
-                  />
-                </CardContent>
-              </Card>
-            )}
           </div>
         </aside>
       </div>
+
+      {canDistribute && settings ? (
+        <CodePanel settings={settings} publication={publicationState} />
+      ) : (
+        <Card aria-labelledby="embed-code-unavailable-heading">
+          <CardHeader>
+            <p className={styles.panelEyebrow}>Step 4 · export</p>
+            <CardTitle id="embed-code-unavailable-heading">Copy code/export link</CardTitle>
+            <CardDescription>
+              Snippets and links are withheld until they can point at the same confirmed published
+              revision as the preview.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <MissingPublicProjection
+              organizationId={organizationId}
+              eventId={eventId}
+              publication={publicationState}
+              settingsAvailable={settings !== null}
+            />
+          </CardContent>
+        </Card>
+      )}
     </main>
   );
 }

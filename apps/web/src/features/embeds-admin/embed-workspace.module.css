@@ -35,23 +35,47 @@
 
 .workspaceGrid {
   display: grid;
-  grid-template-columns: minmax(0, 1.08fr) minmax(22rem, 0.92fr);
+  grid-template-columns: minmax(20rem, 0.68fr) minmax(38rem, 1.32fr);
   gap: 1.25rem;
   align-items: start;
 }
 
 .builderColumn,
 .rail,
-.stickyRail,
+.previewRail,
 .sectionStack {
   display: grid;
   gap: 1rem;
   min-width: 0;
 }
 
-.stickyRail {
+.previewRail {
   position: sticky;
-  top: 1rem;
+  top: calc(3.25rem + 1rem);
+}
+
+.previewActions,
+.developerDisclosure {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.developerDisclosure {
+  padding: 0.8rem 0;
+  border-top: 1px solid var(--admin-border, #e2e0db);
+}
+
+.developerContent {
+  display: grid;
+  gap: 0.75rem;
+  padding-top: 0.15rem;
+}
+
+.developerContent[data-state="closed"] {
+  display: none;
 }
 
 .builderTabs {
@@ -238,6 +262,15 @@
   background: var(--admin-canvas, #f4f3f0);
 }
 
+.shareBlock {
+  display: grid;
+  gap: 0.7rem;
+  padding: 0.9rem;
+  border: 1px solid var(--admin-border, #e2e0db);
+  border-radius: var(--admin-radius-sm, 0.4rem);
+  background: var(--admin-surface, #fff);
+}
+
 .subheading {
   margin: 0;
   color: var(--admin-ink, #1d1d1b);
@@ -265,7 +298,7 @@
 .previewFrame {
   display: block;
   width: 100%;
-  min-height: 32rem;
+  min-height: clamp(44rem, calc(100vh - 9rem), 58rem);
   border: 1px solid var(--admin-border, #e2e0db);
   border-radius: var(--admin-radius-sm, 0.4rem);
   background: var(--admin-surface, #fff);
@@ -302,7 +335,7 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .stickyRail {
+  .previewRail {
     position: static;
   }
 }
