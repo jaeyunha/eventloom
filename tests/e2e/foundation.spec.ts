@@ -6,7 +6,7 @@ test("web and API foundations run as independent healthy services", async ({ pag
   await expect(
     page.getByRole("heading", {
       level: 1,
-      name: "Move from a call for speakers to a published agenda with care.",
+      name: "Run your speaker program from first submission to published agenda.",
     }),
   ).toBeVisible();
   await expect(page.getByRole("link", { name: "Open the CFP" })).toHaveCount(0);
