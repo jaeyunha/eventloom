@@ -1,5 +1,6 @@
 "use client";
 
+import { CheckCircle2 } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -435,6 +436,15 @@ function formatScheduleDate(date: string): string {
   return formatLocalDate(`${date}T12:00`);
 }
 
+function formatCompactScheduleDate(date: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(`${date}T12:00:00Z`));
+}
+
 function safeScheduleId(value: string): string {
   return value.replace(/[^a-zA-Z0-9_-]/g, "-");
 }
@@ -601,6 +611,7 @@ export function AgendaBoard({
   const [selectedDay, setSelectedDay] = useState(() => eventDays[0]?.date ?? "");
   const [selectedSuggestionChanges, setSelectedSuggestionChanges] = useState<readonly string[]>([]);
   const viewTabRefs = useRef<Partial<Record<AgendaViewMode, HTMLButtonElement | null>>>({});
+  const dateRailRef = useRef<HTMLElement | null>(null);
   const currentRevision = data.currentPublishedRevision;
   const isBusyFor = (operation: AgendaBusyOperation): boolean =>
     busy && (busyOperation === undefined || busyOperation === null || busyOperation === operation);
@@ -618,6 +629,12 @@ export function AgendaBoard({
       setSelectedDay(eventDays[0]?.date ?? "");
     }
   }, [eventDays, selectedDay]);
+  useEffect(() => {
+    if (viewMode !== "day") return;
+    dateRailRef.current
+      ?.querySelector<HTMLElement>(`[data-date="${safeScheduleId(selectedDay)}"]`)
+      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [selectedDay, viewMode]);
 
   function selectView(nextView: AgendaViewMode) {
     setViewMode(nextView);
@@ -653,7 +670,16 @@ export function AgendaBoard({
     const editExpanded = viewMode === "day" && editingEntryId === entry.id;
     return (
       <li key={key}>
-        <article className={`${styles.sessionCard} ${hasIssues ? styles.sessionIssue : ""}`}>
+        <article
+          className={`${styles.sessionCard} ${hasIssues ? styles.sessionIssue : ""}`}
+          style={
+            {
+              "--session-accent":
+                data.tracks.find((track) => entry.trackIds.includes(track.id))?.color ??
+                "var(--color-border-strong)",
+            } as React.CSSProperties
+          }
+        >
           <div className={styles.sessionTime}>
             {showDate ? (
               <time className={styles.entryDate} dateTime={scheduleDate(entry)}>
@@ -661,7 +687,7 @@ export function AgendaBoard({
               </time>
             ) : null}
             <time dateTime={entry.startsAtLocal}>{formatLocalTime(entry.startsAtLocal)}</time>
-            <span aria-hidden="true">to</span>
+            <span aria-hidden="true">–</span>
             <time dateTime={entry.endsAtLocal}>{formatLocalTime(entry.endsAtLocal)}</time>
           </div>
           <div className={styles.sessionDetails}>
@@ -777,17 +803,21 @@ export function AgendaBoard({
     return (
       <section className={styles.unscheduledGroup} aria-labelledby="agenda-unscheduled-heading">
         <header className={styles.viewGroupHeader}>
-          <h3 id="agenda-unscheduled-heading">Unscheduled accepted sessions</h3>
+          <div>
+            <p className={styles.eyebrow}>Placement queue</p>
+            <h3 id="agenda-unscheduled-heading">Sessions to place</h3>
+          </div>
           <span>
             {sessions.length} session{sessions.length === 1 ? "" : "s"}
           </span>
         </header>
         <p className={styles.viewContext}>
-          Choose Place in schedule with keyboard or touch, or drag a session to the schedule drop
-          target.
+          {sessions.length === 0
+            ? "No accepted sessions are waiting for a time and room."
+            : "Accepted sessions waiting for a time and room."}
         </p>
         {sessions.length === 0 ? (
-          <p className={styles.viewGroupEmpty}>No unscheduled accepted sessions.</p>
+          <p className={styles.emptyPool}>No unscheduled accepted sessions.</p>
         ) : (
           <ul className={styles.unscheduledList}>
             {sessions.map((session) => (
@@ -813,7 +843,7 @@ export function AgendaBoard({
                     setShowAddForm(true);
                   }}
                 >
-                  Place in schedule
+                  Choose time and room
                 </button>
               </li>
             ))}
@@ -860,6 +890,26 @@ export function AgendaBoard({
             Next day
           </button>
         </div>
+        {groups.length > 1 ? (
+          <nav ref={dateRailRef} className={styles.dateRail} aria-label="Choose an event day">
+            {groups.map((group, index) => (
+              <button
+                key={group.id}
+                className={styles.dateRailItem}
+                type="button"
+                data-date={safeScheduleId(group.id)}
+                aria-current={group.id === currentGroup?.id ? "date" : undefined}
+                onClick={() => setSelectedDay(group.id)}
+              >
+                <span>Day {index + 1}</span>
+                <strong>{formatCompactScheduleDate(group.id)}</strong>
+                <small>
+                  {group.entries.length} {group.entries.length === 1 ? "session" : "sessions"}
+                </small>
+              </button>
+            ))}
+          </nav>
+        ) : null}
       </nav>
     );
   }
@@ -943,24 +993,6 @@ export function AgendaBoard({
       <a className={styles.skipLink} href="#agenda-content">
         Skip to agenda workspace
       </a>
-      <header className={styles.topbar}>
-        <a className={styles.brand} href="/admin">
-          Eventloom
-        </a>
-        <nav aria-label="Organizer navigation">
-          <a
-            href={`/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(data.event.id)}`}
-          >
-            Event overview
-          </a>
-          <a
-            aria-current="page"
-            href={`/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(data.event.id)}/agenda`}
-          >
-            Agenda
-          </a>
-        </nav>
-      </header>
       <main id="agenda-content" className={styles.workspace} tabIndex={-1}>
         <WorkspaceHeader
           breadcrumb={
@@ -974,13 +1006,13 @@ export function AgendaBoard({
               <strong>Agenda</strong>
             </WorkspaceBreadcrumb>
           }
-          title="Agenda workspace"
+          title="Agenda"
           status={
             <StatusBadge tone={readiness.ready ? "info" : "warning"}>
               Draft v{data.draft.version}
             </StatusBadge>
           }
-          description="Plan the private schedule, resolve conflicts, and publish one authoritative revision."
+          description="Place accepted sessions into rooms and times, resolve conflicts, and publish with confidence."
           metadata={
             <>
               <WorkspaceMetaItem>{data.draft.entries.length} scheduled</WorkspaceMetaItem>
@@ -1015,24 +1047,320 @@ export function AgendaBoard({
           {statusMessage}
         </div>
 
+        <section className={styles.agendaSummary} aria-label="Schedule at a glance">
+          <div>
+            <span>Schedule at a glance</span>
+            <strong>
+              {data.draft.entries.length} scheduled · {data.unscheduledSessions.length} to place
+            </strong>
+          </div>
+          <div>
+            <span>Event dates</span>
+            <strong>
+              {formatScheduleDate(data.event.startsOn)}
+              {data.event.endsOn === data.event.startsOn
+                ? ""
+                : ` – ${formatScheduleDate(data.event.endsOn)}`}
+            </strong>
+          </div>
+          <div>
+            <span>Timezone</span>
+            <strong>{data.event.timeZone}</strong>
+          </div>
+          <div>
+            <span>Publication</span>
+            <strong>
+              {currentRevision ? `Revision ${currentRevision.number} is live` : "Not published"}
+            </strong>
+          </div>
+        </section>
+
+        <section className={styles.releaseCenter} aria-label="Agenda release center">
+          <header className={styles.releaseCenterHeader}>
+            <div>
+              <p className={styles.eyebrow}>Release center</p>
+              <h2>Prepare the public agenda</h2>
+              <p>Validate the private draft, then publish when every requirement is clear.</p>
+            </div>
+            <div className={styles.releaseStatus}>
+              <StatusBadge tone={readiness.ready ? "info" : "warning"}>
+                Draft v{data.draft.version}
+              </StatusBadge>
+              <span>
+                {readiness.ready
+                  ? "Ready to publish"
+                  : `${readiness.reasons.length} requirement${
+                      readiness.reasons.length === 1 ? "" : "s"
+                    } remaining`}
+              </span>
+            </div>
+          </header>
+
+          <div className={styles.releaseCenterGrid}>
+            <section className={styles.releaseAction} aria-labelledby="validation-heading">
+              <div className={styles.inspectorHeading}>
+                <div>
+                  <p className={styles.eyebrow}>Required check</p>
+                  <h3 id="validation-heading">Validate draft</h3>
+                </div>
+                <span
+                  className={
+                    preview?.draftVersion === data.draft.version
+                      ? styles.validatedBadge
+                      : styles.draftBadge
+                  }
+                >
+                  {preview?.draftVersion === data.draft.version ? "Validated" : "Needs validation"}
+                </span>
+              </div>
+              <p>Check conflicts and release rules for draft v{data.draft.version}.</p>
+              <button
+                className={styles.secondaryButton}
+                type="button"
+                disabled={busy || data.draft.entries.length === 0}
+                onClick={() => void onPreview()}
+              >
+                {isBusyFor("validate") ? "Checking..." : "Preview and validate"}
+              </button>
+              {preview ? (
+                <fieldset className={styles.diffSummary}>
+                  <legend className={styles.srOnly}>Changes from published revision</legend>
+                  <span>
+                    <strong>{preview.diff.added}</strong> added
+                  </span>
+                  <span>
+                    <strong>{preview.diff.changed}</strong> changed
+                  </span>
+                  <span>
+                    <strong>{preview.diff.removed}</strong> removed
+                  </span>
+                </fieldset>
+              ) : null}
+            </section>
+
+            {hasRooms ? (
+              <AgendaSuggestionPanel
+                run={suggestionRun ?? null}
+                currentDraftVersion={data.draft.version}
+                busy={busy}
+                busyOperation={busyOperation}
+                eligibleUnscheduledCount={data.unscheduledSessions.length}
+                selectedChangeIds={selectedSuggestionChanges}
+                onSelectionChange={setSelectedSuggestionChanges}
+                onGenerate={onGenerateSuggestion}
+                onRegenerate={onRegenerateSuggestion}
+                onReject={onRejectSuggestion}
+                onApply={onApplySuggestion}
+              />
+            ) : null}
+
+            <Card className={styles.publishCard} size="sm">
+              <div className={styles.inspectorHeading}>
+                <div>
+                  <p className={styles.eyebrow}>Public release</p>
+                  <h3 id="publish-heading">Publish agenda</h3>
+                </div>
+                {currentRevision ? (
+                  <Badge variant="outline">Revision {currentRevision.number} live</Badge>
+                ) : (
+                  <Badge variant="outline">Not published</Badge>
+                )}
+              </div>
+              {!readiness.ready ? (
+                <ul className={styles.readinessList} aria-label="Publication requirements">
+                  {readiness.reasons.map((reason) => (
+                    <li key={reason}>{reason}</li>
+                  ))}
+                </ul>
+              ) : (
+                <p className={styles.readyMessage}>
+                  Draft v{data.draft.version} is ready to publish.
+                </p>
+              )}
+              <Button
+                className={styles.publishButton}
+                type="button"
+                disabled={busy || !readiness.ready}
+                onClick={() => void onPublish()}
+              >
+                {isBusyFor("publish") ? "Publishing..." : "Publish agenda"}
+              </Button>
+              <small>
+                {currentRevision
+                  ? `Current public revision: ${currentRevision.sessionCount} sessions, published ${formatRevisionTimestamp(
+                      currentRevision.publishedAt,
+                    )}.`
+                  : "Publishing creates the first immutable public revision."}
+              </small>
+            </Card>
+          </div>
+
+          {preview?.conflicts.length ? (
+            <Alert variant="destructive" className={styles.conflictPanel}>
+              <AlertTitle>
+                {preview.conflicts.length} hard conflict
+                {preview.conflicts.length === 1 ? "" : "s"}
+              </AlertTitle>
+              <AlertDescription>
+                <p>Hard conflicts block publication and cannot be overridden.</p>
+                <ul>
+                  {preview.conflicts.map((conflict) => (
+                    <li key={conflict.id}>
+                      <strong>{conflict.kind.replace("_", " ")}</strong>
+                      <span>{conflict.message}</span>
+                    </li>
+                  ))}
+                </ul>
+              </AlertDescription>
+            </Alert>
+          ) : null}
+          {preview?.releaseConflicts.length ? (
+            <Alert variant="destructive" className={styles.conflictPanel}>
+              <AlertTitle>
+                {preview.releaseConflicts.length} released commitment conflict
+                {preview.releaseConflicts.length === 1 ? "" : "s"}
+              </AlertTitle>
+              <AlertDescription>
+                <p>Released commitment conflicts block publication until resolved.</p>
+                <ul>
+                  {preview.releaseConflicts.map((conflict) => (
+                    <li key={conflict.id}>
+                      <strong>{conflict.kind.replace("_", " ")}</strong>
+                      <span>{conflict.message}</span>
+                    </li>
+                  ))}
+                </ul>
+              </AlertDescription>
+            </Alert>
+          ) : null}
+          {preview?.warnings.length ? (
+            <section className={styles.warningPanel} aria-labelledby="warnings-heading">
+              <h2 id="warnings-heading">
+                {preview.warnings.length} warning{preview.warnings.length === 1 ? "" : "s"}
+              </h2>
+              <p>Warnings require a recorded organizer reason before publication.</p>
+              <ul>
+                {preview.warnings.map((warning) => (
+                  <li key={warning.id}>
+                    <strong>{warning.kind}</strong>
+                    <span>{warning.message}</span>
+                    {warning.overridden ? (
+                      <p className={styles.overrideRecorded}>
+                        Override recorded: {warning.overrideReason}
+                      </p>
+                    ) : (
+                      <WarningOverrideForm
+                        busy={busy}
+                        onSubmit={async (reason) => {
+                          await onOverrideWarning(warning.id, reason);
+                        }}
+                      />
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
+          {calendarDelivery ? (
+            <div className={styles.calendarDelivery} aria-live="polite">
+              <strong>Released commitment calendar delivery</strong>
+              <span>Calendar: {calendarDelivery.state.replace("_", " ")}</span>
+              <span>Sent last 24 hours: {calendarDelivery.sentLast24Hours}</span>
+              <span>Failed last 24 hours: {calendarDelivery.failedLast24Hours}</span>
+              <span>
+                Last invitation:{" "}
+                {calendarDelivery.lastInvitationAt
+                  ? formatRevisionTimestamp(calendarDelivery.lastInvitationAt)
+                  : "None"}
+              </span>
+              {calendarDelivery.lastFailure ? (
+                <div role="alert">
+                  <span>Last failure: {calendarDelivery.lastFailure.summary}</span>
+                  <small>
+                    Committed UID and sequence are retained for repair; this does not claim delivery
+                    success.
+                  </small>
+                  {calendarDelivery.lastFailure.retryable && onRetryCalendarDelivery ? (
+                    <button
+                      className={styles.secondaryButton}
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void onRetryCalendarDelivery()}
+                    >
+                      {isBusyFor("retry-calendar-delivery")
+                        ? "Retrying..."
+                        : "Retry calendar delivery"}
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          {data.revisions.length > 0 ? (
+            <Collapsible>
+              <div className={styles.historyDisclosure}>
+                <div>
+                  <strong>Revision history</strong>
+                  <small>
+                    {data.revisions.length} published revision
+                    {data.revisions.length === 1 ? "" : "s"}
+                  </small>
+                </div>
+                <CollapsibleTrigger asChild>
+                  <Button variant="ghost" size="sm" type="button">
+                    View history
+                  </Button>
+                </CollapsibleTrigger>
+              </div>
+              <CollapsibleContent className={styles.historyContent}>
+                <ol>
+                  {data.revisions.map((revision) => (
+                    <li key={revision.id}>
+                      <div>
+                        <strong>Revision {revision.number}</strong>
+                        {revision.current ? <Badge variant="outline">Current</Badge> : null}
+                      </div>
+                      <small>
+                        {revision.sessionCount} sessions,{" "}
+                        {formatRevisionTimestamp(revision.publishedAt)}
+                      </small>
+                    </li>
+                  ))}
+                </ol>
+              </CollapsibleContent>
+            </Collapsible>
+          ) : null}
+        </section>
+
         <div className={styles.workspaceGrid}>
           <section className={styles.boardColumn} aria-labelledby="schedule-heading">
             <div className={styles.sectionHeading}>
               <div>
-                <p className={styles.eyebrow}>Private schedule</p>
-                <h2 id="schedule-heading">Draft schedule</h2>
-                <p>Times are shown in {data.event.timeZone}.</p>
+                <p className={styles.eyebrow}>Schedule builder</p>
+                <h2 id="schedule-heading">Build the event day</h2>
+                <p>Choose a day, then place accepted sessions into the schedule.</p>
               </div>
-              <button
-                className={styles.primaryButton}
-                type="button"
-                disabled={data.unscheduledSessions.length === 0 || busy || !hasRooms}
-                onClick={() => setShowAddForm((current) => !current)}
-                aria-expanded={showAddForm}
-                aria-controls="add-session-panel"
-              >
-                {showAddForm ? "Close add session" : "Add accepted session"}
-              </button>
+              {data.unscheduledSessions.length === 0 ? (
+                <div className={styles.placementComplete} role="status">
+                  <CheckCircle2 aria-hidden="true" />
+                  <span>
+                    <strong>Schedule complete</strong>
+                    All accepted sessions placed
+                  </span>
+                </div>
+              ) : (
+                <button
+                  className={styles.primaryButton}
+                  type="button"
+                  disabled={busy || !hasRooms}
+                  onClick={() => setShowAddForm((current) => !current)}
+                  aria-expanded={showAddForm}
+                  aria-controls="add-session-panel"
+                >
+                  {showAddForm ? "Close form" : "Schedule session"}
+                </button>
+              )}
             </div>
             {!hasRooms ? (
               <p className={styles.formError} role="status">
@@ -1042,7 +1370,7 @@ export function AgendaBoard({
               </p>
             ) : null}
 
-            <div className={styles.viewSwitcher}>
+            <div className={styles.scheduleToolbar}>
               <span id="agenda-view-label" className={styles.viewLabel}>
                 Schedule view
               </span>
@@ -1073,25 +1401,6 @@ export function AgendaBoard({
                 ))}
               </div>
             </div>
-            <button
-              type="button"
-              className={styles.scheduleDropTarget}
-              onDragOver={(event) => {
-                event.preventDefault();
-                event.dataTransfer.dropEffect = "move";
-              }}
-              onDrop={(event) => {
-                event.preventDefault();
-                const sessionId = event.dataTransfer.getData("text/plain");
-                if (data.unscheduledSessions.some((session) => session.id === sessionId)) {
-                  setPlacementSessionId(sessionId);
-                  setShowAddForm(true);
-                }
-              }}
-              aria-label="Schedule drop target"
-            >
-              Drag an unscheduled session here to open placement.
-            </button>
 
             {showAddForm && hasRooms ? (
               <div id="add-session-panel" className={styles.addPanel}>
@@ -1125,278 +1434,23 @@ export function AgendaBoard({
               className={styles.viewPanel}
               role="tabpanel"
               aria-labelledby={`agenda-view-${viewMode}`}
+              aria-label="Schedule canvas"
+              onDragOver={(event) => {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "move";
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                const sessionId = event.dataTransfer.getData("text/plain");
+                if (data.unscheduledSessions.some((session) => session.id === sessionId)) {
+                  setPlacementSessionId(sessionId);
+                  setShowAddForm(true);
+                }
+              }}
             >
               {renderScheduleView()}
             </div>
           </section>
-
-          <aside
-            className={`${styles.inspector} ${styles.actionRail}`}
-            aria-label="Agenda validation and publication"
-          >
-            <div className={styles.operationalSequence}>
-              <div className={styles.sequenceHeader}>
-                <p className={styles.eyebrow}>Publish workflow</p>
-                <h2>From draft to public agenda</h2>
-                <p>Complete these steps in order. Suggestions remain optional and private.</p>
-              </div>
-
-              <section
-                className={`${styles.inspectorCard} ${styles.sequenceStep}`}
-                aria-labelledby="validation-heading"
-              >
-                <div className={styles.stepHeader}>
-                  <span className={styles.stepNumber}>1</span>
-                  <div className={styles.inspectorHeading}>
-                    <div>
-                      <p className={styles.eyebrow}>Safety check</p>
-                      <h3 id="validation-heading">Validate draft</h3>
-                    </div>
-                    <span
-                      className={
-                        preview?.draftVersion === data.draft.version
-                          ? styles.validatedBadge
-                          : styles.draftBadge
-                      }
-                    >
-                      {preview?.draftVersion === data.draft.version
-                        ? "Validated"
-                        : "Needs validation"}
-                    </span>
-                  </div>
-                </div>
-                <p>
-                  Check room, speaker, resource, travel, track, and capacity rules against draft v
-                  {data.draft.version}.
-                </p>
-                <button
-                  className={styles.secondaryButton}
-                  type="button"
-                  disabled={busy || data.draft.entries.length === 0}
-                  onClick={() => void onPreview()}
-                >
-                  {isBusyFor("validate") ? "Checking..." : "Preview and validate"}
-                </button>
-                {preview ? (
-                  <fieldset className={styles.diffSummary}>
-                    <legend className={styles.srOnly}>Changes from published revision</legend>
-                    <span>
-                      <strong>{preview.diff.added}</strong> added
-                    </span>
-                    <span>
-                      <strong>{preview.diff.changed}</strong> changed
-                    </span>
-                    <span>
-                      <strong>{preview.diff.removed}</strong> removed
-                    </span>
-                  </fieldset>
-                ) : null}
-              </section>
-
-              {hasRooms ? (
-                <AgendaSuggestionPanel
-                  run={suggestionRun ?? null}
-                  currentDraftVersion={data.draft.version}
-                  busy={busy}
-                  busyOperation={busyOperation}
-                  eligibleUnscheduledCount={data.unscheduledSessions.length}
-                  selectedChangeIds={selectedSuggestionChanges}
-                  onSelectionChange={setSelectedSuggestionChanges}
-                  onGenerate={onGenerateSuggestion}
-                  onRegenerate={onRegenerateSuggestion}
-                  onReject={onRejectSuggestion}
-                  onApply={onApplySuggestion}
-                />
-              ) : null}
-
-              {preview?.conflicts.length ? (
-                <Alert variant="destructive" className={styles.conflictPanel}>
-                  <AlertTitle>
-                    {preview.conflicts.length} hard conflict
-                    {preview.conflicts.length === 1 ? "" : "s"}
-                  </AlertTitle>
-                  <AlertDescription>
-                    <p>Hard conflicts block publication and cannot be overridden.</p>
-                    <ul>
-                      {preview.conflicts.map((conflict) => (
-                        <li key={conflict.id}>
-                          <strong>{conflict.kind.replace("_", " ")}</strong>
-                          <span>{conflict.message}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </AlertDescription>
-                </Alert>
-              ) : null}
-              {preview?.releaseConflicts.length ? (
-                <Alert variant="destructive" className={styles.conflictPanel}>
-                  <AlertTitle>
-                    {preview.releaseConflicts.length} released commitment conflict
-                    {preview.releaseConflicts.length === 1 ? "" : "s"}
-                  </AlertTitle>
-                  <AlertDescription>
-                    <p>Released commitment conflicts block publication until resolved.</p>
-                    <ul>
-                      {preview.releaseConflicts.map((conflict) => (
-                        <li key={conflict.id}>
-                          <strong>{conflict.kind.replace("_", " ")}</strong>
-                          <span>{conflict.message}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </AlertDescription>
-                </Alert>
-              ) : null}
-
-              {preview?.warnings.length ? (
-                <section className={styles.warningPanel} aria-labelledby="warnings-heading">
-                  <h2 id="warnings-heading">
-                    {preview.warnings.length} warning{preview.warnings.length === 1 ? "" : "s"}
-                  </h2>
-                  <p>Warnings require a recorded organizer reason before publication.</p>
-                  <ul>
-                    {preview.warnings.map((warning) => (
-                      <li key={warning.id}>
-                        <strong>{warning.kind}</strong>
-                        <span>{warning.message}</span>
-                        {warning.overridden ? (
-                          <p className={styles.overrideRecorded}>
-                            Override recorded: {warning.overrideReason}
-                          </p>
-                        ) : (
-                          <WarningOverrideForm
-                            busy={busy}
-                            onSubmit={async (reason) => {
-                              await onOverrideWarning(warning.id, reason);
-                            }}
-                          />
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              ) : null}
-              {suggestionRun?.candidateDiagnostics ? (
-                <section
-                  className={styles.warningPanel}
-                  aria-labelledby="candidate-diagnostics-heading"
-                >
-                  <h2 id="candidate-diagnostics-heading">Candidate diagnostics</h2>
-                  <p>Private suggestion diagnostics are not part of the authoritative preview.</p>
-                  <ul>
-                    {suggestionRun.candidateDiagnostics.conflicts.map((conflict) => (
-                      <li key={conflict.id}>
-                        <strong>{conflict.kind.replace("_", " ")}</strong>
-                        <span>{conflict.message}</span>
-                      </li>
-                    ))}
-                    {suggestionRun.candidateDiagnostics.warnings.map((warning) => (
-                      <li key={warning.id}>
-                        <strong>{warning.kind}</strong>
-                        <span>{warning.message}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              ) : null}
-
-              <Card className={`${styles.publishCard} ${styles.sequenceStep}`} size="sm">
-                <div className={styles.stepHeader}>
-                  <span className={styles.stepNumber}>3</span>
-                  <div>
-                    <p className={styles.eyebrow}>Public revision</p>
-                    <h3 id="publish-heading">Publish agenda</h3>
-                  </div>
-                </div>
-                {currentRevision ? (
-                  <p>
-                    Revision {currentRevision.number} is public with {currentRevision.sessionCount}
-                    sessions. Published {formatRevisionTimestamp(currentRevision.publishedAt)}.
-                  </p>
-                ) : (
-                  <p>No agenda revision has been published. Public embeds remain unavailable.</p>
-                )}
-                {calendarDelivery ? (
-                  <div className={styles.calendarDelivery} aria-live="polite">
-                    <strong>Released commitment calendar delivery</strong>
-                    <span>Calendar: {calendarDelivery.state.replace("_", " ")}</span>
-                    <span>Sent last 24 hours: {calendarDelivery.sentLast24Hours}</span>
-                    <span>Failed last 24 hours: {calendarDelivery.failedLast24Hours}</span>
-                    <span>
-                      Last invitation:{" "}
-                      {calendarDelivery.lastInvitationAt
-                        ? formatRevisionTimestamp(calendarDelivery.lastInvitationAt)
-                        : "None"}
-                    </span>
-                    {calendarDelivery.lastFailure ? (
-                      <div role="alert">
-                        <span>Last failure: {calendarDelivery.lastFailure.summary}</span>
-                        <small>
-                          Committed UID and sequence are retained for repair; this does not claim
-                          delivery success.
-                        </small>
-                        {calendarDelivery.lastFailure.retryable && onRetryCalendarDelivery ? (
-                          <button
-                            className={styles.secondaryButton}
-                            type="button"
-                            disabled={busy}
-                            onClick={() => void onRetryCalendarDelivery()}
-                          >
-                            {isBusyFor("retry-calendar-delivery")
-                              ? "Retrying..."
-                              : "Retry calendar delivery"}
-                          </button>
-                        ) : null}
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
-                {!readiness.ready ? (
-                  <ul className={styles.readinessList} aria-label="Publication requirements">
-                    {readiness.reasons.map((reason) => (
-                      <li key={reason}>{reason}</li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className={styles.readyMessage}>
-                    Draft v{data.draft.version} is ready to publish.
-                  </p>
-                )}
-                <Button
-                  className={styles.publishButton}
-                  type="button"
-                  disabled={busy || !readiness.ready}
-                  onClick={() => void onPublish()}
-                >
-                  {isBusyFor("publish") ? "Publishing..." : "Publish agenda"}
-                </Button>
-                <small>
-                  Publishing creates an immutable public revision while keeping this private draft
-                  available for further edits.
-                </small>
-              </Card>
-
-              {data.revisions.length > 0 ? (
-                <section className={styles.historyCard} aria-labelledby="history-heading">
-                  <h2 id="history-heading">Revision history</h2>
-                  <ol>
-                    {data.revisions.map((revision) => (
-                      <li key={revision.id}>
-                        <div>
-                          <strong>Revision {revision.number}</strong>
-                          {revision.current ? <span>Current</span> : null}
-                        </div>
-                        <small>
-                          {revision.sessionCount} sessions,{" "}
-                          {formatRevisionTimestamp(revision.publishedAt)}
-                        </small>
-                      </li>
-                    ))}
-                  </ol>
-                </section>
-              ) : null}
-            </div>
-          </aside>
         </div>
       </main>
     </div>
@@ -1463,22 +1517,15 @@ export function AgendaSuggestionPanel({
   }
 
   return (
-    <Card className={styles.inspectorCard} size="sm">
+    <Card className={styles.suggestionCard} size="sm">
       <Collapsible open={suggestionsOpen} onOpenChange={setSuggestionsOpen}>
-        <div className={styles.stepHeader}>
-          <span className={styles.stepNumber}>2</span>
-          <div className={styles.inspectorHeading}>
-            <div>
-              <p className={styles.eyebrow}>Optional advisory</p>
-              <h2 id="suggestion-heading">Suggestions</h2>
-            </div>
-            {run ? <Badge variant="outline">Run v{run.version}</Badge> : null}
+        <div className={styles.inspectorHeading}>
+          <div>
+            <p className={styles.eyebrow}>Optional advisory</p>
+            <h2 id="suggestion-heading">Suggestions</h2>
           </div>
+          {run ? <Badge variant="outline">Run v{run.version}</Badge> : null}
         </div>
-        <p>
-          Suggestions are private candidates only. They never change this draft or publish anything
-          until an organizer explicitly selects and applies individual changes.
-        </p>
         <CollapsibleTrigger asChild>
           <Button className={styles.suggestionToggle} variant="outline" type="button">
             {suggestionsOpen
@@ -1489,6 +1536,10 @@ export function AgendaSuggestionPanel({
           </Button>
         </CollapsibleTrigger>
         <CollapsibleContent className={styles.suggestionContent}>
+          <p>
+            Suggestions are private candidates only. They never change this draft or publish
+            anything until an organizer explicitly selects and applies individual changes.
+          </p>
           {run === null ? (
             eligibleUnscheduledCount === 0 ? (
               <div className={styles.suggestionEmpty} role="status">
@@ -1634,6 +1685,20 @@ export function AgendaSuggestionPanel({
                   <ul>
                     {blockers.map((blocker) => (
                       <li key={blocker.id}>{blocker.message}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {run.candidateDiagnostics?.warnings.length ? (
+                <div className={styles.warningPanel}>
+                  <strong>
+                    {run.candidateDiagnostics.warnings.length} candidate warning
+                    {run.candidateDiagnostics.warnings.length === 1 ? "" : "s"}
+                  </strong>
+                  <p>Review these private diagnostics before applying selected changes.</p>
+                  <ul>
+                    {run.candidateDiagnostics.warnings.map((warning) => (
+                      <li key={warning.id}>{warning.message}</li>
                     ))}
                   </ul>
                 </div>

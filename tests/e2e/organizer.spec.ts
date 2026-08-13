@@ -560,8 +560,9 @@ function settingsUrl(eventId: string): string {
 }
 
 async function expectAgendaWorkspace(page: Page): Promise<void> {
-  await expect(page.getByRole("heading", { level: 1, name: "Agenda workspace" })).toBeVisible();
-  await expect(page.getByRole("heading", { level: 2, name: "Draft schedule" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Agenda" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 2, name: "Build the event day" })).toBeVisible();
+  await expect(page.getByLabel("Agenda release center")).toBeVisible();
   await expect(page.getByRole("tablist", { name: "Schedule view" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Preview and validate" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Publish agenda" })).toBeVisible();

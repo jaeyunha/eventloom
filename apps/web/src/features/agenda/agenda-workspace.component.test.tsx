@@ -321,7 +321,9 @@ describe("agenda organizer workspace", () => {
       }),
     );
 
-    expect(markup).toContain("Agenda workspace");
+    expect(markup).toContain(">Agenda<");
+    expect(markup).toContain("Place accepted sessions into rooms and times");
+    expect(markup).toContain("Schedule at a glance");
     expect(markup).toContain("Draft v7");
     expect(markup).toContain("private draft");
     expect(markup).toContain("1 hard conflict");
@@ -349,19 +351,25 @@ describe("agenda organizer workspace", () => {
     );
 
     expect(markup).toContain('href="#agenda-content"');
-    expect(markup).toContain('aria-label="Agenda validation and publication"');
-    expect(markup).toContain("Times are shown in America/Los_Angeles");
+    expect(markup).toContain('aria-label="Agenda release center"');
+    expect(markup).toContain("America/Los_Angeles");
+    expect(markup).toContain("Release center");
+    expect(markup).toContain("Draft v7");
     expect(markup).toContain("Suggestions");
-    expect(markup).toContain("Suggestions remain optional and private.");
+    expect(markup).toContain("Optional");
     expect(markup).toContain("Publish agenda");
     expect(markup).toMatch(/<button[^>]*disabled=""[^>]*>Publish agenda<\/button>/);
+    expect(markup).toContain("Revision history");
+    expect(markup).toContain('data-state="closed"');
+    expect(markup).not.toContain("From draft to public agenda");
+    expect(markup).not.toMatch(/class="[^"]*actionRail/u);
   });
   it("routes organizers to durable room settings before scheduling without a room", () => {
     const markup = renderBoard({ ...data, rooms: [] }, undefined, null);
 
     expect(markup).toContain('href="/admin/organizations/organization-1/events/evt_open/settings"');
     expect(markup).toContain("Scheduling is unavailable until you create a room.");
-    expect(markup).toMatch(/<button[^>]*disabled=""[^>]*>Add accepted session<\/button>/);
+    expect(markup).toMatch(/<button[^>]*disabled=""[^>]*>Schedule session<\/button>/);
     expect(markup).not.toContain("Generate private suggestions");
   });
   it("keeps suggestion configuration collapsed until an organizer requests it", () => {
@@ -428,16 +436,16 @@ describe("agenda organizer workspace", () => {
       "Suggestion generation is unavailable until an approved provider is connected.",
     );
   });
-  it("keeps organizer actions below sticky chrome and preserves draft context after a failed request", () => {
+  it("keeps organizer actions in the release center and preserves draft context after a failed request", () => {
     const markup = renderBoard(data, undefined, preview, true, "validate", "Validation failed.");
     expect(markup).toContain("Agenda request failed");
     expect(markup).toContain("authoritative private draft remains visible as Draft v7");
     expect(markup).toContain("Checking...");
     expect(markup).toContain("Publish agenda");
     expect(markup).not.toContain("Publishing...");
-    expect(markup).toMatch(/actionRail/u);
-    expect(workspaceStyles).toMatch(/\.actionRail[\s\S]*position:\s*sticky/u);
-    expect(workspaceStyles).toMatch(/\.actionRail[\s\S]*scroll-padding/u);
+    expect(markup).toMatch(/releaseCenter/u);
+    expect(workspaceStyles).toMatch(/\.releaseCenter[\s\S]*grid-template-columns/u);
+    expect(workspaceStyles).not.toMatch(/\.actionRail[\s\S]*position:\s*sticky/u);
     expect(workspaceSource).toContain("endOperation(token)");
     expect(workspaceSource).toContain("expectedVersion: current.draft.version");
     expect(workspaceSource).toContain("acceptedChangeIds: changeIds");
@@ -491,11 +499,25 @@ describe("agenda organizer workspace", () => {
   });
   it("shows the accepted-session pool with explicit session metadata in the default day view", () => {
     const markup = renderBoard(multiDayData);
-    expect(markup).toContain("Unscheduled accepted sessions");
+    expect(markup).toContain("Sessions to place");
+    expect(markup).toContain("Accepted sessions waiting for a time and room.");
     expect(markup).toContain("Practical review systems");
     expect(markup).toContain("Workshop");
     expect(markup).toContain("Sam Rivera");
-    expect(markup).toContain("Add accepted session");
+    expect(markup).toContain("Schedule session");
+    expect(markup).toContain('aria-label="Schedule canvas"');
+    expect(markup).not.toContain("Drag an unscheduled session here to open placement.");
+  });
+
+  it("presents an empty placement queue as complete instead of a broken action", () => {
+    const markup = renderBoard({ ...data, unscheduledSessions: [] });
+
+    expect(markup).toContain("All accepted sessions placed");
+    expect(markup).toContain("No accepted sessions are waiting for a time and room.");
+    expect(markup).toContain('role="status"');
+    expect(markup).not.toMatch(
+      /<button[^>]*disabled=""[^>]*>All accepted sessions placed<\/button>/,
+    );
   });
   it("navigates every event day, including empty days, without crossing event boundaries", () => {
     const groups = deriveAgendaViewGroups(emptyDayData, "day");
@@ -588,6 +610,18 @@ describe("agenda organizer workspace", () => {
     expect(rooms[1]?.entries).toHaveLength(0);
   });
 
+  it("renders direct date navigation for every day in a multi-day event", () => {
+    const markup = renderBoard(multiDayData, "day");
+
+    expect(markup).toContain('aria-label="Choose an event day"');
+    expect(markup).toContain("Day 1");
+    expect(markup).toContain("Fri, Sep 18");
+    expect(markup).toContain("2 sessions");
+    expect(markup).toContain("Day 2");
+    expect(markup).toContain("Sat, Sep 19");
+    expect(markup).toContain("1 session");
+  });
+
   it("keeps conflict and edit controls available in every rendered mode without mutating the draft", () => {
     const before = JSON.stringify(multiDayData.draft.entries);
     for (const mode of AGENDA_VIEW_MODES) {
@@ -604,12 +638,12 @@ describe("agenda organizer workspace", () => {
     const trackMarkup = renderBoard(multiDayData, "track", null);
     expect(trackMarkup).toContain("Empty track");
     expect(trackMarkup).toContain("No sessions scheduled in this track.");
-    expect(trackMarkup).toContain("Unscheduled accepted sessions");
+    expect(trackMarkup).toContain("Sessions to place");
     expect(trackMarkup).toContain("Practical review systems");
 
     const roomMarkup = renderBoard(multiDayData, "room", null);
     expect(roomMarkup).toContain("Empty room");
     expect(roomMarkup).toContain("No sessions scheduled in this room.");
-    expect(roomMarkup).toContain("Unscheduled accepted sessions");
+    expect(roomMarkup).toContain("Sessions to place");
   });
 });

@@ -182,10 +182,7 @@
 }
 
 .workspaceGrid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(20rem, 23rem);
-  gap: 1.5rem;
-  align-items: start;
+  display: block;
 }
 
 .agendaSummary {
@@ -226,11 +223,13 @@
 }
 
 .boardColumn,
-.inspectorCard,
+.releaseCenter,
+.releaseAction,
+.suggestionCard,
 .conflictPanel,
 .warningPanel,
 .publishCard,
-.historyCard {
+.historyContent {
   min-width: 0;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
@@ -255,13 +254,44 @@
   margin-bottom: 1.25rem;
 }
 
-.sectionHeading h2,
-.inspector h2 {
+.placementComplete {
+  display: flex;
+  max-width: 18rem;
+  gap: 0.65rem;
+  align-items: center;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid color-mix(in srgb, var(--color-success) 24%, var(--color-border));
+  border-radius: var(--radius-md);
+  background: var(--color-success-soft);
+  color: var(--color-success);
+}
+
+.placementComplete svg {
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 auto;
+}
+
+.placementComplete span {
+  display: grid;
+  gap: 0.08rem;
+  color: var(--color-muted);
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.placementComplete strong {
+  color: var(--color-success);
+  font-size: 0.78rem;
+}
+
+.sectionHeading h2 {
   font-size: 1.45rem;
 }
 
 .sectionHeading p:last-child,
-.inspectorCard > p,
+.releaseAction > p,
+.suggestionCard p,
 .conflictPanel > p,
 .warningPanel > p,
 .publishCard > p,
@@ -464,7 +494,7 @@
 .sessionList,
 .conflictPanel ul,
 .warningPanel ul,
-.historyCard ol,
+.historyContent ol,
 .readinessList {
   padding: 0;
   list-style: none;
@@ -549,8 +579,7 @@
 
 .workspace .sessionMeta span,
 .validatedBadge,
-.draftBadge,
-.historyCard li span {
+.draftBadge {
   display: inline-flex;
   align-items: center;
   min-height: 1.25rem;
@@ -615,80 +644,67 @@
   margin: 0.45rem 0 0 0.25rem;
 }
 
-.inspector {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 0.55rem;
-}
-
-.actionRail {
-  position: sticky;
-  z-index: 1;
-  top: 3.75rem;
-  max-height: none;
-  overflow: visible;
-  overscroll-behavior: contain;
-  scroll-padding-block: 0.5rem;
-  scroll-margin-top: 1rem;
-}
-
-.operationalSequence {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-}
-
-.sequenceStep {
+.releaseCenter {
   display: grid;
-  gap: 0.65rem;
-  min-width: 0;
+  gap: 1rem;
+  margin: 0 0 1.5rem;
+  padding: 1.25rem;
 }
 
-.stepHeader {
-  justify-content: flex-start;
-  gap: 0.5rem;
+.releaseCenterHeader {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  justify-content: space-between;
 }
 
-.stepNumber {
-  display: inline-grid;
-  width: 1.45rem;
-  height: 1.45rem;
+.releaseCenterHeader h2 {
+  margin-top: 0.1rem;
+  font-size: 1.1rem;
+  letter-spacing: -0.02em;
+}
+
+.releaseCenterHeader p:last-child {
+  max-width: 42rem;
+  margin: 0.25rem 0 0;
+  color: var(--color-muted);
+  font-size: 0.78rem;
+}
+
+.releaseStatus {
+  display: grid;
   flex: 0 0 auto;
-  place-items: center;
-  border: 1px solid var(--color-border-strong);
-  border-radius: 50%;
-  background: var(--color-surface);
+  gap: 0.25rem;
+  justify-items: end;
   color: var(--color-muted);
-  font-size: 0.7rem;
-  font-weight: 800;
+  font-size: 0.72rem;
 }
 
-.sequenceStepCurrent .stepNumber {
-  border-color: var(--color-ink);
-  background: var(--color-ink);
-  color: var(--color-surface);
+.releaseCenterGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+  align-items: start;
 }
 
-.sequenceLabel {
-  color: var(--color-muted);
-  font-size: 0.75rem;
-  font-weight: 700;
+.releaseAction,
+.suggestionCard,
+.publishCard {
+  padding: 1rem;
+  border-radius: var(--radius-md);
+  background: var(--color-surface-muted);
+  box-shadow: none;
 }
 
-.sequenceLabel strong {
-  color: var(--color-ink);
-}
-
-.inspectorCard,
+.releaseAction,
 .conflictPanel,
 .warningPanel,
 .publishCard,
-.historyCard {
+.historyContent {
   padding: 1rem;
 }
 
-.inspectorCard > p,
+.releaseAction > p,
 .conflictPanel > p,
 .warningPanel > p,
 .publishCard > p {
@@ -707,7 +723,7 @@
   color: var(--color-warning);
 }
 
-.inspectorCard .secondaryButton,
+.releaseAction .secondaryButton,
 .publishButton {
   width: 100%;
 }
@@ -753,7 +769,7 @@
 
 .conflictPanel ul,
 .warningPanel ul,
-.historyCard ol,
+.historyContent ol,
 .readinessList {
   display: grid;
   gap: 0.55rem;
@@ -836,32 +852,44 @@
   line-height: 1.4;
 }
 
-.historyCard h2 {
-  margin-bottom: 0.7rem;
+.historyDisclosure {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--color-border);
 }
 
-.historyCard li {
+.historyDisclosure > div {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.historyDisclosure small,
+.historyContent small {
+  color: var(--color-muted);
+}
+
+.historyContent {
+  padding: 0.75rem 0 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.historyContent li {
   display: grid;
   gap: 0.1rem;
   padding-top: 0.55rem;
   border-top: 1px solid var(--color-border);
 }
 
-.historyCard li div {
+.historyContent li div {
   display: flex;
   gap: 0.5rem;
   align-items: center;
   justify-content: space-between;
-}
-
-.historyCard li span {
-  border-color: color-mix(in srgb, var(--color-success) 30%, var(--color-border));
-  background: var(--color-success-soft);
-  color: var(--color-success);
-}
-
-.historyCard small {
-  color: var(--color-muted);
 }
 
 .suggestionToggle {
@@ -1053,6 +1081,56 @@
   text-align: center;
 }
 
+.dateRail {
+  display: flex;
+  min-width: 0;
+  gap: 0.5rem;
+  overflow-x: auto;
+  padding-top: 0.25rem;
+  scrollbar-width: thin;
+}
+
+.dateRailItem {
+  display: grid;
+  min-width: 8.5rem;
+  gap: 0.18rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dateRailItem:hover {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-muted);
+}
+
+.dateRailItem[aria-current="date"] {
+  border-color: var(--color-brand);
+  background: var(--color-brand-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-brand) 20%, transparent);
+}
+
+.dateRailItem span,
+.dateRailItem small {
+  color: var(--color-muted);
+  font-size: 0.68rem;
+}
+
+.dateRailItem span {
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.dateRailItem strong {
+  font-size: 0.82rem;
+}
+
 .viewTab {
   min-height: 2.35rem;
   padding: 0.4rem 0.7rem;
@@ -1089,9 +1167,7 @@
   padding: 1.25rem;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  background:
-    linear-gradient(var(--color-border) 1px, transparent 1px) 0 0 / 100% 3rem,
-    color-mix(in srgb, var(--color-surface) 96%, var(--color-brand-soft));
+  background: var(--color-surface-muted);
 }
 
 .viewGroupHeader {
@@ -1158,7 +1234,25 @@
   padding: 1rem;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--color-brand-soft) 42%, var(--color-surface));
+  background: var(--color-surface);
+}
+
+.unscheduledGroup:has(.emptyPool) {
+  padding: 0.85rem 1rem;
+  border-style: dashed;
+  box-shadow: none;
+}
+
+.unscheduledGroup:has(.emptyPool) .viewGroupHeader {
+  margin-bottom: 0.35rem;
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.emptyPool {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 0.78rem;
 }
 
 .unscheduledList {
@@ -1289,14 +1383,12 @@
     border-bottom: 1px solid var(--color-border);
   }
 
-  .workspaceGrid {
-    grid-template-columns: 1fr;
+  .releaseCenterGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .actionRail {
-    position: static;
-    max-height: none;
-    overflow: visible;
+  .publishCard {
+    grid-column: 1 / -1;
   }
 }
 
@@ -1331,6 +1423,32 @@
 
   .agendaSummary > div:last-child {
     border-bottom: 0;
+  }
+
+  .releaseCenter {
+    padding: 1rem;
+  }
+
+  .releaseCenterHeader {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .releaseStatus {
+    justify-items: start;
+  }
+
+  .releaseCenterGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .publishCard {
+    grid-column: auto;
+  }
+
+  .historyDisclosure {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .pageHeading,
