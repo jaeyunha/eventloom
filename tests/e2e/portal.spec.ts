@@ -101,8 +101,8 @@ test("server-authorized context switching ignores event query guesses and is key
     false,
   );
 
-  const accountMenu = page.getByRole("button", { name: "Account menu" });
-  await accountMenu.focus();
+  const contextSwitcher = page.getByRole("button", { name: "Account menu" });
+  await contextSwitcher.focus();
   await page.keyboard.press("Enter");
   const menu = page.getByRole("menu", { name: "Switch event" });
   await expect(menu).toBeVisible();
@@ -236,7 +236,7 @@ test("speaker privately uploads, finalizes, histories, comments, and downloads a
 
   await uploaded.getByText("Version history and comments", { exact: true }).click();
   await expect(uploaded.getByText(/Version 1 · runbook\.txt · pending_upload/u)).toBeVisible();
-  await uploaded.getByRole("button", { name: "Mark finalized" }).click();
+  await uploaded.getByRole("button", { name: "Mark upload complete" }).click();
   await expect(uploaded.getByText("ready · Current v1", { exact: true })).toBeVisible();
 
   await uploaded.getByLabel("Add a comment").fill("Use this runbook in the speaker briefing.");

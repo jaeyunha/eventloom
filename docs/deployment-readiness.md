@@ -1,17 +1,18 @@
 # Deployment readiness preflight
 
-The release preflight is a read-only configuration and privacy check. It reads the selected environment files, compares isolation and Wrangler resources, optionally reads Cloudflare resources, and confirms that Forge remains private. It never deploys, applies migrations, writes Airtable or OpenSend data, provisions evaluator identities, changes repository visibility, or proves that a product workflow has passed.
+The release preflight is a read-only configuration and privacy check. It reads
+the selected environment files, compares isolation and rendered Wrangler
+resources, and optionally reads Cloudflare resources. It never deploys, applies
+migrations, writes Airtable or OpenSend data, provisions evaluator identities,
+changes repository visibility, or proves that a product workflow has passed.
 
-## Current and pending hosting
+## Hosting configuration
 
-Staging and production currently use the pinned Workers origins below. Their API and web Wrangler environments have `workers_dev = true`; this is the expected current state, not a failure.
-
-| Environment | Web | API |
-| --- | --- | --- |
-| Staging | `https://open-sessionboard-web-staging.ashleyha0317.workers.dev` | `https://open-sessionboard-api-staging.ashleyha0317.workers.dev` |
-| Production | `https://open-sessionboard-web-production.ashleyha0317.workers.dev` | `https://open-sessionboard-api-production.ashleyha0317.workers.dev` |
-
-`https://sessionboard.namuh.co` and `https://api.sessionboard.namuh.co` are recommended future stable web/API domains. DNS, Worker routes, cookies, CORS, callbacks, health checks, and release evidence for them are **pending**. The preflight must not require those names and must not claim that they are configured.
+Staging and production origins are supplied by their ignored environment
+files. The public Wrangler templates contain `.example.invalid` origins, zero
+UUIDs, and stable binding/resource names. Deployment scripts render the
+selected environment into `apps/api/wrangler.generated.toml`, which is ignored
+and must never be committed.
 
 ## Inputs and secret handling
 
@@ -31,7 +32,13 @@ Each file must contain the non-secret configuration names required by `scripts/r
 - `AIRTABLE_ACCESS_TOKEN` and `AIRTABLE_BASE_ID` for that boundary.
 - `OPENSEND_API_URL`, `OPENSEND_API_KEY`, `AUTH_FROM_EMAIL`, `SPEAKERS_FROM_EMAIL`, and `CALENDAR_FROM_EMAIL`.
 
-Use the exact pinned API origin for `API_UPSTREAM_ORIGIN`, `API_URL`, and `BETTER_AUTH_URL` in these preflight inputs. `API_UPSTREAM_ORIGIN` is server-only: browsers always call same-origin `/api/*` through the browser-visible `NEXT_PUBLIC_APP_URL`, and the web Worker forwards those requests to the API Worker. `API_URL` remains the API deployment/preflight origin. Do not print values or attach environment files to evidence.
+Use each environment's configured API origin for `API_UPSTREAM_ORIGIN`,
+`API_URL`, and `BETTER_AUTH_URL` in these preflight inputs.
+`API_UPSTREAM_ORIGIN` is server-only: browsers always call same-origin
+`/api/*` through the browser-visible `NEXT_PUBLIC_APP_URL`, and the web Worker
+forwards those requests to the API Worker. `API_URL` remains the API
+deployment/preflight origin. Do not print values or attach environment files to
+evidence.
 
 The preflight requires distinct secrets, D1 IDs, R2 buckets, Queues, Airtable credentials, OpenSend keys, and origins across local, staging, and production. It rejects placeholders, cross-environment sharing, non-HTTPS non-local URLs, Wrangler mismatches, and a staging/production placeholder D1 ID. Staging must contain synthetic records and suppressed or allowlisted delivery behavior.
 
@@ -47,7 +54,10 @@ FORGE_REPOSITORY=jaeyunha/open-sessionboard
 FORGE_API_TOKEN=<repository-read-token>
 ```
 
-The online preflight performs a repository GET and fails unless Forge reports the repository as private. It does not call a visibility update endpoint. Forge and GitHub mirrors are both intentional during development; both remain private until the separate final release gate.
+The online preflight performs a repository GET and verifies that Forge reports
+the expected repository identity. It accepts private or public visibility and
+does not call a visibility update endpoint. GitHub and Forge visibility changes
+remain separate owner-controlled actions.
 
 ## Commands
 

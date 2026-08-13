@@ -12,7 +12,7 @@ import {
 } from "./preflight-lib.mjs";
 
 const environments = ["local", "staging", "production"];
-const accountId = "7bcb73282d45e4294cc70dd3e2671bfb";
+const accountId = "11111111-1111-4111-8111-111111111111";
 
 function configurationFor(environment, index) {
   const local = environment === "local";
@@ -270,7 +270,7 @@ test("rejects a token without D1 Edit even when D1 is readable", async () => {
   );
 });
 
-test("requires Forge to report the exact repository as private", async () => {
+test("requires Forge to report the exact repository identity", async () => {
   const { configurations } = fixtures();
   const configuration = configurations.production;
   const fetchImplementation = async (_url, options) => {
@@ -281,13 +281,13 @@ test("requires Forge to report the exact repository as private", async () => {
     private: true,
   });
 
-  await assert.rejects(
-    verifyForgePrivacy({
+  assert.deepEqual(
+    await verifyForgePrivacy({
       configuration,
       fetchImplementation: async () =>
         jsonResponse({ private: false, full_name: configuration.FORGE_REPOSITORY }),
     }),
-    (error) => error.code === "FORGE_NOT_PRIVATE",
+    { private: false },
   );
 });
 test("exposes bounded organization migration readiness without configuration values", () => {

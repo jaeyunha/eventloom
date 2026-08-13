@@ -2,6 +2,7 @@
   "name": "@open-sessionboard/api",
   "version": "0.1.0",
   "private": true,
+  "license": "Elastic-2.0",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev --env-file ../../.env --ip 127.0.0.1 --port 8787",

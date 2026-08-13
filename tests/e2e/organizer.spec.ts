@@ -620,10 +620,15 @@ test("verified organizer login opens the organization overview", async ({ authSe
     page.getByText("Open Sessionboard Conference", { exact: true }).first(),
   ).toBeVisible();
   await expect(page.getByRole("link", { name: "Events", exact: true })).toBeVisible();
-  await page.getByRole("link", { name: "Open agenda for Open Sessionboard Conference" }).click();
-  await expect(page).toHaveURL(
-    `/admin/organizations/${ORGANIZATION_ID}/events/open-sessionboard-conf/agenda`,
-  );
+  const agendaDestination = agendaUrl(PRIMARY_EVENT_ID);
+  const agendaLink = page.getByRole("link", {
+    name: "Open agenda for Open Sessionboard Conference",
+    exact: true,
+  });
+  await expect(agendaLink).toBeVisible();
+  await expect(agendaLink).toHaveAttribute("href", agendaDestination);
+  await agendaLink.click();
+  await expect(page).toHaveURL(agendaDestination);
   await page.goto(
     `/admin/organizations/${ORGANIZATION_ID}/events/${PRIMARY_EVENT_ID}/integrations`,
   );
@@ -669,8 +674,18 @@ test("organization overview reflows without document overflow", async ({ authSes
     fullPage: true,
   });
   await page.keyboard.press("Escape");
-  const mobileOverflow = await page.evaluate(() =>
-    [...document.querySelectorAll<HTMLElement>("body *")]
+  const mobileOverflow = await page.evaluate(() => {
+    function isInsideFixedViewportOverlay(element: HTMLElement): boolean {
+      let current: HTMLElement | null = element;
+      while (current) {
+        if (getComputedStyle(current).position === "fixed") return true;
+        current = current.parentElement;
+      }
+      return false;
+    }
+
+    return [...document.querySelectorAll<HTMLElement>("body *")]
+      .filter((element) => !isInsideFixedViewportOverlay(element))
       .map((element) => {
         const rect = element.getBoundingClientRect();
         return {
@@ -685,8 +700,8 @@ test("organization overview reflows without document overflow", async ({ authSes
         };
       })
       .filter(({ left, right, visible }) => visible && (left < -1 || right > window.innerWidth + 1))
-      .slice(0, 10),
-  );
+      .slice(0, 10);
+  });
   expect(mobileOverflow).toEqual([]);
   await expect
     .poll(() =>

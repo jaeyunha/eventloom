@@ -5,12 +5,14 @@
       "**",
       "!!**/.next",
       "!!**/.gjc",
+      "!!**/.omo",
       "!!**/.open-next",
       "!!**/.wrangler",
       "!!**/dist",
       "!!**/coverage",
       "!!**/playwright-report",
       "!!**/test-results",
+      "!!gjc-session-*.html",
       "!!Kill-My-SaaS-Competition-Brief",
       "!!evidence"
     ]

@@ -46,14 +46,10 @@ describe("public embed API", () => {
     };
 
     await expect(
-      getPublishedAgenda(
-        "https://open-sessionboard-web-staging.ashleyha0317.workers.dev/",
-        "open/systems",
-        fetcher,
-      ),
+      getPublishedAgenda("https://web-staging.example.test/", "open/systems", fetcher),
     ).resolves.toEqual(publishedAgenda);
     expect(String(calls[0]?.input)).toBe(
-      "https://open-sessionboard-web-staging.ashleyha0317.workers.dev/api/public/events/open%2Fsystems/agenda",
+      "https://web-staging.example.test/api/public/events/open%2Fsystems/agenda",
     );
     expect(calls[0]?.init).toMatchObject({
       cache: "force-cache",
@@ -76,11 +72,7 @@ describe("public embed API", () => {
     };
 
     await expect(
-      getPublishedProgram(
-        "https://open-sessionboard-web-staging.ashleyha0317.workers.dev",
-        "open-systems",
-        fetcher,
-      ),
+      getPublishedProgram("https://web-staging.example.test", "open-systems", fetcher),
     ).resolves.toEqual({ agenda: publishedAgenda, speakers: publishedSpeakers });
     expect(calls).toHaveLength(2);
     expect(calls.map(({ init }) => init?.cache)).toEqual(["no-store", "no-store"]);
@@ -111,11 +103,7 @@ describe("public embed API", () => {
     };
 
     await expect(
-      getPublishedProgram(
-        "https://open-sessionboard-web-staging.ashleyha0317.workers.dev",
-        "open-systems",
-        fetcher,
-      ),
+      getPublishedProgram("https://web-staging.example.test", "open-systems", fetcher),
     ).resolves.toEqual({ agenda: publishedAgenda, speakers: publishedSpeakers });
     expect(calls).toHaveLength(3);
     expect(calls.slice(0, 2).map(({ init }) => init?.cache)).toEqual(["no-store", "no-store"]);
@@ -168,11 +156,7 @@ describe("public embed API", () => {
       };
 
       await expect(
-        getPublishedProgram(
-          "https://open-sessionboard-web-staging.ashleyha0317.workers.dev",
-          "open-systems",
-          fetcher,
-        ),
+        getPublishedProgram("https://web-staging.example.test", "open-systems", fetcher),
       ).resolves.toEqual({ agenda: refreshedAgenda, speakers: refreshedSpeakers });
       expect(calls).toHaveLength(4);
       expect(calls.map(({ init }) => init?.cache)).toEqual([
@@ -217,11 +201,7 @@ describe("public embed API", () => {
     };
 
     await expect(
-      getPublishedProgram(
-        "https://open-sessionboard-web-staging.ashleyha0317.workers.dev",
-        "open-systems",
-        fetcher,
-      ),
+      getPublishedProgram("https://web-staging.example.test", "open-systems", fetcher),
     ).rejects.toMatchObject({
       code: "PUBLICATION_REVISION_MISMATCH",
       status: 409,
@@ -252,11 +232,7 @@ describe("public embed API", () => {
     };
 
     await expect(
-      getPublishedProgram(
-        "https://open-sessionboard-web-staging.ashleyha0317.workers.dev",
-        "open-systems",
-        fetcher,
-      ),
+      getPublishedProgram("https://web-staging.example.test", "open-systems", fetcher),
     ).rejects.toMatchObject({
       code: "PUBLICATION_REVISION_MISMATCH",
       status: 409,
@@ -285,7 +261,7 @@ describe("public embed API", () => {
       );
 
     const error = await getPublishedAgenda(
-      "https://open-sessionboard-web-staging.ashleyha0317.workers.dev",
+      "https://web-staging.example.test",
       "open",
       fetcher,
     ).catch((caught: unknown) => caught);
@@ -297,13 +273,13 @@ describe("public embed API", () => {
       traceId: "trace_public",
     });
   });
-  it("rejects unpinned remote API origins before issuing a request", async () => {
+  it("rejects non-HTTPS remote API origins before issuing a request", async () => {
     const fetcher = async () => {
       throw new Error("fetch must not run");
     };
 
     await expect(
-      getPublishedAgenda("https://api.example.com", "open", fetcher),
+      getPublishedAgenda("http://api.example.com", "open", fetcher),
     ).rejects.toMatchObject({
       code: "CONFIGURATION_ERROR",
       status: 503,

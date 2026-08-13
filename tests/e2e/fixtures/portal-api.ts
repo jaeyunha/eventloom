@@ -43,6 +43,8 @@ export interface PortalTaskSeed {
   dependencyIds: string[];
   reminderOffsetsMinutes: number[];
   acceptedAssetKinds?: Array<"headshot" | "slides" | "supporting_file">;
+  allowedMimeTypes?: string[];
+  maxBytes?: number;
   version: number;
   updatedAt: string;
 }
@@ -349,6 +351,8 @@ function initialEvaluatorState(): PortalScenarioState {
         dependencyIds: ["task-agreement"],
         reminderOffsetsMinutes: [1440],
         acceptedAssetKinds: ["headshot"],
+        allowedMimeTypes: ["image/png"],
+        maxBytes: 5_000_000,
         version: 1,
         updatedAt: now,
       },

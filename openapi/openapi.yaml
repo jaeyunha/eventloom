@@ -4,12 +4,9 @@ info:
   version: 1.0.0
   summary: Organization-scoped application operations, webhook administration, and published projections.
   description: |
-    The production API Worker is the canonical direct API origin:
-    `https://open-sessionboard-api-production.ashleyha0317.workers.dev`. Browser traffic may use the
-    production web app's same-origin `/api/*` proxy at
-    `https://open-sessionboard-web-production.ashleyha0317.workers.dev`; it forwards to this Worker
-    and is not a separate API origin. A custom `api.sessionboard.namuh.co` hostname is recommended
-    but pending/unconfigured, so it is not canonical.
+    Direct clients use the operator's configured API origin. Browser traffic
+    may use the deployed web app's same-origin `/api/*` proxy; it forwards to
+    the API Worker and is not a separate API origin.
 
     The checked-in document intentionally combines the broader internal application API paths
     (`/api/admin/...`, `/api/speaker/...`, and `/api/public/...`) with tenant-scoped public-v1
@@ -29,11 +26,11 @@ info:
     not require Idempotency-Key or If-Match. A request may not select a tenant or event outside the
     authenticated principal's grants.
   license:
-    name: AGPL-3.0-or-later
-    identifier: AGPL-3.0-or-later
+    name: Elastic License 2.0
+    identifier: Elastic-2.0
 servers:
-  - url: https://open-sessionboard-api-production.ashleyha0317.workers.dev
-    description: Canonical production API Worker origin
+  - url: https://api.example.invalid
+    description: Replace with the operator's deployed API origin
   - url: http://127.0.0.1:8787
     description: Local API origin
 tags:

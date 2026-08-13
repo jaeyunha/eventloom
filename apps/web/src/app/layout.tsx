@@ -18,11 +18,16 @@ export const metadata: Metadata = {
     template: "%s | Open Sessionboard",
   },
   description:
-    "Open-source program operations for conference teams: collect submissions, review with care, schedule without conflicts, and publish deliberately.",
+    "Source-available program operations for conference teams: collect submissions, review with care, schedule without conflicts, and publish deliberately.",
   applicationName: "Open Sessionboard",
   category: "conference program operations",
   creator: "Open Sessionboard contributors",
-  keywords: ["conference operations", "call for speakers", "program management", "open source"],
+  keywords: [
+    "conference operations",
+    "call for speakers",
+    "program management",
+    "source available",
+  ],
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {

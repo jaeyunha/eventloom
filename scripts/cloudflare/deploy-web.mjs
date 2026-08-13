@@ -3,28 +3,13 @@ import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadCloudflareEnvironment, resolveWebDeployment } from "./config.mjs";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(scriptDirectory, "../..");
 const webDirectory = join(repositoryRoot, "apps/web");
 
-const environments = {
-  local: {
-    workerName: "open-sessionboard-web-local",
-    appOrigin: "http://localhost:3015",
-    apiOrigin: "http://localhost:8787",
-  },
-  staging: {
-    workerName: "open-sessionboard-web-staging",
-    appOrigin: "https://open-sessionboard-web-staging.ashleyha0317.workers.dev",
-    apiOrigin: "https://open-sessionboard-api-staging.ashleyha0317.workers.dev",
-  },
-  production: {
-    workerName: "open-sessionboard-web-production",
-    appOrigin: "https://open-sessionboard-web-production.ashleyha0317.workers.dev",
-    apiOrigin: "https://open-sessionboard-api-production.ashleyha0317.workers.dev",
-  },
-};
+const environments = new Set(["local", "staging", "production"]);
 
 function usage() {
   return [
@@ -33,7 +18,7 @@ function usage() {
     "  node scripts/cloudflare/deploy-web.mjs <local|staging|production> --dry-run",
     "",
     "Required deployment variables:",
-    "  NEXT_PUBLIC_APP_URL   The exact HTTPS workers.dev origin for staging/production.",
+    "  NEXT_PUBLIC_APP_URL   The deployed HTTPS web origin for staging/production.",
     "  API_UPSTREAM_ORIGIN   The exact HTTPS origin of the separate API Worker.",
   ].join("\n");
 }
@@ -66,7 +51,7 @@ function parseArguments(argv) {
     throw new Error(`Unexpected argument: ${argument}\n\n${usage()}`);
   }
 
-  if (!environment || !Object.hasOwn(environments, environment)) {
+  if (!environment || !environments.has(environment)) {
     throw new Error(`Environment must be one of: local, staging, production\n\n${usage()}`);
   }
   if (!dryRun && environment === "local") {
@@ -129,30 +114,21 @@ function parseOrigin(value, label, { cloudflareWorker = false, local = false, wo
 }
 
 function resolveOrigins(environment) {
-  const defaults = environments[environment];
-  if (environment === "local") {
-    return {
-      appOrigin: parseOrigin(
-        process.env.NEXT_PUBLIC_APP_URL ?? defaults.appOrigin,
-        "NEXT_PUBLIC_APP_URL",
-        { local: true },
-      ),
-      apiOrigin: parseOrigin(
-        process.env.API_UPSTREAM_ORIGIN ?? defaults.apiOrigin,
-        "API_UPSTREAM_ORIGIN",
-        { local: true },
-      ),
-    };
-  }
-
-  const appOrigin = parseOrigin(process.env.NEXT_PUBLIC_APP_URL, "NEXT_PUBLIC_APP_URL");
-  const apiOrigin = parseOrigin(process.env.API_UPSTREAM_ORIGIN, "API_UPSTREAM_ORIGIN");
-  if (appOrigin !== defaults.appOrigin || apiOrigin !== defaults.apiOrigin) {
-    throw new Error(
-      "NEXT_PUBLIC_APP_URL and API_UPSTREAM_ORIGIN must match the pinned web/API origins for this environment.",
-    );
-  }
-  return { appOrigin, apiOrigin };
+  const deployment = resolveWebDeployment(environment, process.env);
+  if (environment !== "local") return deployment;
+  return {
+    ...deployment,
+    appOrigin: parseOrigin(
+      process.env.NEXT_PUBLIC_APP_URL ?? deployment.appOrigin,
+      "NEXT_PUBLIC_APP_URL",
+      { local: true },
+    ),
+    apiOrigin: parseOrigin(
+      process.env.API_UPSTREAM_ORIGIN ?? deployment.apiOrigin,
+      "API_UPSTREAM_ORIGIN",
+      { local: true },
+    ),
+  };
 }
 
 function run(command, args, options) {
@@ -210,6 +186,7 @@ function wranglerVariables(environment, origins) {
 
 function main() {
   const { confirmation, dryRun, environment } = parseArguments(process.argv.slice(2));
+  loadCloudflareEnvironment(environment);
   const origins = resolveOrigins(environment);
   if (origins.appOrigin === origins.apiOrigin) {
     throw new Error("NEXT_PUBLIC_APP_URL and API_UPSTREAM_ORIGIN must identify separate services.");
@@ -236,6 +213,7 @@ function main() {
   }
 
   const vars = wranglerVariables(environment, origins);
+  const deployment = resolveWebDeployment(environment, process.env);
   if (dryRun) {
     const outputDirectory = mkdtempSync(join(tmpdir(), "open-sessionboard-web-wrangler-"));
     try {
@@ -251,7 +229,7 @@ function main() {
       ];
       run("bun", wranglerArgs, {
         cwd: webDirectory,
-        env: { ...env, CLOUDFLARE_API_TOKEN: "" },
+        env: { ...env, CI: "1", CLOUDFLARE_API_TOKEN: "" },
       });
       if (!containsWorkerArtifact(outputDirectory)) {
         throw new Error("Wrangler dry run did not produce a Worker artifact.");
@@ -260,7 +238,7 @@ function main() {
         `${JSON.stringify({
           dryRun: true,
           environment,
-          worker: environments[environment].workerName,
+          worker: deployment.workerName,
           contract: "open-next-worker-and-static-assets",
         })}\n`,
       );
@@ -289,7 +267,7 @@ function main() {
     `${JSON.stringify({
       deployed: true,
       environment,
-      worker: environments[environment].workerName,
+      worker: deployment.workerName,
     })}\n`,
   );
 }

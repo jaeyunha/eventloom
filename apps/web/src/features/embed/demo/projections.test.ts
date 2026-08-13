@@ -175,7 +175,7 @@ describe("local public embed demo projections", () => {
 
     await expect(
       getPublishedProgramOrLocalDemo(
-        "https://open-sessionboard-api-production.ashleyha0317.workers.dev",
+        "https://api-production.example.test",
         "open-sessionboard-conf",
         "production",
         fetcher,
