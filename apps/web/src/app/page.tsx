@@ -14,7 +14,6 @@ import {
   UserRoundCheck,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Table,
@@ -71,8 +70,8 @@ const capabilityItems = [
   "Public agenda & embeds",
 ] as const;
 
-const sourceAvailableBenefits = [
-  "Elastic License 2.0",
+const openSourceBenefits = [
+  "AGPL-3.0-or-later",
   "Self-hostable",
   "Versioned API and webhooks",
   "Privacy-safe public projections",
@@ -125,10 +124,10 @@ function AgendaProductFrame() {
                 <h2>Organization overview</h2>
                 <p>Live operational data across events, submissions, reviews, and speaker work.</p>
               </div>
-              <Button variant="outline" size="sm" tabIndex={-1}>
+              <span className="home-demo-view-events">
                 View events
                 <ArrowRight />
-              </Button>
+              </span>
             </div>
 
             <div className="home-demo-metrics">
@@ -138,7 +137,13 @@ function AgendaProductFrame() {
                 ["Pending reviews", "4", "Awaiting attention"],
                 ["Speaker tasks", "2", "Open work items"],
               ].map(([label, value, detail]) => (
-                <Card className="home-demo-metric-card" key={label} size="sm">
+                <Card
+                  className={`home-demo-metric-card ${
+                    label === "Pending reviews" ? "home-demo-metric-card-accent" : ""
+                  }`}
+                  key={label}
+                  size="sm"
+                >
                   <CardHeader>
                     <CardTitle>{label}</CardTitle>
                   </CardHeader>
@@ -163,7 +168,9 @@ function AgendaProductFrame() {
                       <strong>Resolve speaker tasks</strong>
                       <small>2 speaker tasks remain open.</small>
                     </span>
-                    <Badge variant="secondary">Open</Badge>
+                    <Badge className="home-demo-status home-demo-status-open" variant="outline">
+                      Open
+                    </Badge>
                   </div>
                   <div className="home-demo-action-row">
                     <CalendarDays />
@@ -171,7 +178,9 @@ function AgendaProductFrame() {
                       <strong>Publish remaining sessions</strong>
                       <small>2 sessions are not in the public agenda.</small>
                     </span>
-                    <Badge variant="secondary">Open</Badge>
+                    <Badge className="home-demo-status home-demo-status-open" variant="outline">
+                      Open
+                    </Badge>
                   </div>
                 </CardContent>
               </Card>
@@ -208,7 +217,12 @@ function AgendaProductFrame() {
                         <strong>Open Systems Summit</strong>
                       </TableCell>
                       <TableCell>
-                        <Badge variant="secondary">Published</Badge>
+                        <Badge
+                          className="home-demo-status home-demo-status-published"
+                          variant="outline"
+                        >
+                          Published
+                        </Badge>
                       </TableCell>
                       <TableCell>18 sessions</TableCell>
                     </TableRow>
@@ -217,7 +231,12 @@ function AgendaProductFrame() {
                         <strong>Community Systems Lab</strong>
                       </TableCell>
                       <TableCell>
-                        <Badge variant="outline">Draft</Badge>
+                        <Badge
+                          className="home-demo-status home-demo-status-draft"
+                          variant="outline"
+                        >
+                          Draft
+                        </Badge>
                       </TableCell>
                       <TableCell>12 sessions</TableCell>
                     </TableRow>
@@ -350,7 +369,7 @@ export default function Home() {
       <main className="home-main" id="main-content" tabIndex={-1}>
         <section className="home-hero" aria-labelledby="hero-title">
           <div className="home-hero-copy">
-            <p className="home-kicker">Source-available conference program operations</p>
+            <p className="home-kicker">Open-source conference program operations</p>
             <h1 id="hero-title">
               Run your speaker program from first submission to published agenda.
             </h1>
@@ -370,9 +389,6 @@ export default function Home() {
                 View the source
               </a>
             </div>
-            <p className="home-note">
-              No fake trial or gated tour. Browse a published program, then inspect the source.
-            </p>
           </div>
 
           <AgendaProductFrame />
@@ -566,7 +582,7 @@ export default function Home() {
 
           <div className="home-boundary-list">
             <div className="home-boundary-item">
-              <span className="home-boundary-mark">
+              <span className="home-boundary-mark" aria-hidden="true">
                 <UserRoundCheck />
               </span>
               <div>
@@ -577,7 +593,7 @@ export default function Home() {
               </div>
             </div>
             <div className="home-boundary-item">
-              <span className="home-boundary-mark">
+              <span className="home-boundary-mark" aria-hidden="true">
                 <ShieldCheck />
               </span>
               <div>
@@ -588,7 +604,7 @@ export default function Home() {
               </div>
             </div>
             <div className="home-boundary-item">
-              <span className="home-boundary-mark">
+              <span className="home-boundary-mark" aria-hidden="true">
                 <LockKeyhole />
               </span>
               <div>
@@ -601,16 +617,16 @@ export default function Home() {
           </div>
         </section>
 
-        <section className="home-open-source" aria-labelledby="source-available-title">
+        <section className="home-open-source" aria-labelledby="open-source-title">
           <div className="home-open-source-copy">
-            <p className="home-kicker">Inspectable infrastructure, accountable operations</p>
-            <h2 id="source-available-title">Own the workflow your conference depends on.</h2>
+            <p className="home-kicker">Open infrastructure, accountable operations</p>
+            <h2 id="open-source-title">Own the workflow your conference depends on.</h2>
             <p>
-              Open Sessionboard is source-available software for teams who want to understand and
-              adapt their conference workflow without giving up operational rigor.
+              Open Sessionboard is inspectable, adaptable software for teams replacing expensive
+              closed program-management systems without giving up operational rigor.
             </p>
             <ul>
-              {sourceAvailableBenefits.map((benefit) => (
+              {openSourceBenefits.map((benefit) => (
                 <li key={benefit}>
                   <Check aria-hidden="true" />
                   {benefit}
@@ -649,14 +665,14 @@ export default function Home() {
       <footer className="home-footer">
         <div>
           <strong>Open Sessionboard</strong>
-          <span>Source-available program operations for conference teams.</span>
+          <span>Open-source program operations for conference teams.</span>
         </div>
         <nav aria-label="Footer navigation">
           <a href="/events">Events</a>
           <a href="/login">Sign in</a>
           <a href="https://github.com/jaeyunha/open-sessionboard">Source</a>
         </nav>
-        <span>Elastic License 2.0</span>
+        <span>AGPL-3.0-or-later</span>
       </footer>
     </div>
   );

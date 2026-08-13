@@ -6,11 +6,11 @@ import type {
   SubmissionVersion,
 } from "../features/cfp/model";
 import {
+  type CfpEffects,
   CfpError,
   type CfpFileAsset,
   type CfpFileAssetGateway,
   type CfpFileUploadAuthorization,
-  type CfpEffects,
   type CfpIdempotencyCoordinator,
   type CfpRepository,
   CfpService,
@@ -463,17 +463,15 @@ class LocalCfpFileAssetGateway implements CfpFileAssetGateway {
     return {
       authorizationId: asset.assetId,
       asset: clone(asset),
-      grant:
-        capability.grant ??
-        {
-          method: "PUT",
-          url: `/api/speaker/assets/capabilities/upload/${encodeURIComponent(asset.assetId)}/${capability.token}`,
-          headers: {
-            "content-type": asset.contentType,
-            "content-length": String(asset.sizeBytes),
-          },
-          expiresAt: capability.expiresAt,
+      grant: capability.grant ?? {
+        method: "PUT",
+        url: `/api/speaker/assets/capabilities/upload/${encodeURIComponent(asset.assetId)}/${capability.token}`,
+        headers: {
+          "content-type": asset.contentType,
+          "content-length": String(asset.sizeBytes),
         },
+        expiresAt: capability.expiresAt,
+      },
     };
   }
 

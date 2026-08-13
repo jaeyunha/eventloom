@@ -718,6 +718,7 @@ function FilesWorkspace() {
     can,
     busyAssetIds,
     uploadWorkspaceFile,
+    retryAssetUpload,
     completeAssetUpload,
     loadAssetHistory,
     loadAssetComments,
@@ -935,6 +936,9 @@ function FilesWorkspace() {
                         canComment={can("asset-comment")}
                         canCompleteUpload={can("asset-write")}
                         busy={busyAssetIds.has(currentAsset.id)}
+                        onRetryUpload={(file) =>
+                          void retryAssetUpload({ assetId: currentAsset.id, file })
+                        }
                         onCompleteUpload={() =>
                           void completeAssetUpload({ assetId: currentAsset.id })
                         }
@@ -962,6 +966,7 @@ export function AssetDetails({
   canComment,
   canCompleteUpload,
   busy,
+  onRetryUpload,
   onCompleteUpload,
   onDownload,
   commentDraft,
@@ -981,6 +986,7 @@ export function AssetDetails({
   canComment: boolean;
   canCompleteUpload: boolean;
   busy: boolean;
+  onRetryUpload: (file: File) => void;
   onCompleteUpload: () => void;
   onDownload: (asset: PortalAsset) => void;
   commentDraft: string;
@@ -1015,9 +1021,22 @@ export function AssetDetails({
         <div className={styles.formActions}>
           <div>
             <p className={styles.toolbarDescription}>
-              Completing the upload confirms your file is ready; organizer approval happens
-              separately.
+              Choose the same file to retry a failed or expired transfer. A successful retry is
+              finalized automatically; organizer approval happens separately.
             </p>
+            <label className={styles.fileField}>
+              <span>Retry file upload</span>
+              <input
+                type="file"
+                disabled={busy}
+                onChange={(event) => {
+                  const file = event.currentTarget.files?.[0];
+                  if (file) onRetryUpload(file);
+                  event.currentTarget.value = "";
+                }}
+              />
+              <small>The file name, type, and size must match the pending authorization.</small>
+            </label>
             <button
               className={styles.primaryButton}
               type="button"

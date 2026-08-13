@@ -86,6 +86,7 @@ export type SpeakerServiceErrorCode =
   | "TASK_NOT_ACTIVE"
   | "TASK_ASSET_NOT_READY"
   | "UPLOAD_POLICY_VIOLATION"
+  | "ASSET_UPLOAD_RETRY_INVALID"
   | "ASSET_FINALIZATION_INVALID"
   | "CAPABILITY_UNAVAILABLE"
   | "CAPABILITY_INVALID"
@@ -5561,6 +5562,63 @@ export class SpeakerService {
   ): Promise<SpeakerUploadAuthorization> {
     return this.issueUploadGrant({ ...input, organizer: true });
   }
+
+  async reauthorizePendingUpload(input: {
+    eventId: string;
+    accountId: string;
+    assetId: string;
+  }): Promise<SpeakerUploadAuthorization> {
+    const scope = await this.getScope(input.eventId, input.accountId);
+    const asset = await this.repository.getAsset(input.eventId, input.assetId);
+    if (
+      asset === null ||
+      asset.eventId !== input.eventId ||
+      !scope.participantIds.includes(asset.participantId) ||
+      (asset.tenantId !== undefined &&
+        scope.tenantId !== undefined &&
+        asset.tenantId !== scope.tenantId) ||
+      !speakerSubmissionAllowed(scope.submissionIds, asset.submissionId)
+    ) {
+      throw notFound();
+    }
+    assertCapability(scope, "asset-write", asset.participantId);
+    if (asset.state !== "pending_upload") {
+      throw new SpeakerServiceError(
+        "ASSET_UPLOAD_RETRY_INVALID",
+        409,
+        "Only a pending upload can be re-authorized.",
+      );
+    }
+    const policy = uploadPolicies[asset.kind];
+    const expiresAt = new Date(this.now().getTime() + uploadGrantLifetimeMs).toISOString();
+    const binding: PrivateAssetCapabilityBinding = {
+      capabilityId: asset.id,
+      tenantId: asset.tenantId ?? scope.tenantId ?? input.eventId,
+      eventId: asset.eventId,
+      ...(asset.submissionId === undefined ? {} : { submissionId: asset.submissionId }),
+      participantId: asset.participantId,
+      ...(asset.taskId === undefined ? {} : { taskId: asset.taskId }),
+      objectKey: asset.objectKey,
+      contentType: asset.contentType,
+      sizeBytes: asset.sizeBytes,
+      fileName: asset.fileName,
+      expiresAt,
+    };
+    const grant =
+      this.assetGateway.registerUploadCapability === undefined
+        ? await this.assetGateway.createUploadGrant({
+            objectKey: asset.objectKey,
+            contentType: asset.contentType,
+            sizeBytes: asset.sizeBytes,
+            expiresAt,
+            private: true,
+            requireMalwareScan: true,
+            stripMetadata: policy.stripMetadata,
+          })
+        : await this.assetGateway.registerUploadCapability(binding);
+    return { asset, grant };
+  }
+
   async issueDownloadGrant(input: {
     eventId: string;
     accountId: string;

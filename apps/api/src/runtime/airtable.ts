@@ -104,13 +104,16 @@ import type {
   EvaluationSuggestionResolution,
   SubmissionReviewMaterial,
 } from "../features/evaluations/types";
-import { EventService } from "../features/events/service";
+import { EventService, ProgramPublicationService } from "../features/events/service";
 import {
   type Event,
   type EventAuditEntry,
   type EventRepository,
   EventRepositoryConflictError,
   type ProgramPublicationManifest,
+  type ProgramPublicationRepository,
+  ProgramPublicationRepositoryConflictError,
+  type ProgramPublicationState,
 } from "../features/events/types";
 import { publicApiV1Contract } from "../features/public-api/contract";
 import type {
@@ -276,6 +279,13 @@ function isRecord(value: unknown): value is JsonRecord {
 
 function clone<T>(value: T): T {
   return structuredClone(value);
+}
+
+async function publicationSourceHash(value: unknown): Promise<string> {
+  const digest = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(value))),
+  );
+  return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function entityType(value: object): string | undefined {
@@ -991,6 +1001,61 @@ interface PublishedSpeakerProjectionRecord extends PublishedSpeakerProjection {
  * Read-only adapter for the materialized publication table. The route never
  * falls back to Participants, speaker profiles, drafts, or review records.
  */
+class AirtableProgramPublicationRepository implements ProgramPublicationRepository {
+  readonly #releases: AirtableJsonStore<ProgramPublicationManifest>;
+
+  constructor(options: { readonly baseId: string; readonly transport: AirtableTransport }) {
+    this.#releases = new AirtableJsonStore({
+      ...options,
+      table: "Program Releases",
+      jsonField: "Manifest JSON",
+      scopeFields: { eventId: true, organizationId: true },
+      indexedFields: { Status: "lifecycle", Revision: "revision" },
+    });
+  }
+
+  async getState(organizationId: string, eventId: string): Promise<ProgramPublicationState | null> {
+    const releases = (await listEventScopedJson(this.#releases, "Manifest JSON", eventId))
+      .filter((release) => release.organizationId === organizationId && release.eventId === eventId)
+      .sort((left, right) => left.revision - right.revision);
+    if (releases.length === 0) return null;
+    const servedManifest =
+      [...releases].reverse().find((release) => release.lifecycle === "served") ?? null;
+    const pending =
+      [...releases].reverse().find((release) => release.lifecycle === "pending") ?? null;
+    return {
+      organizationId,
+      eventId,
+      version: releases.length,
+      servedRevision: servedManifest?.revision ?? null,
+      servedManifest,
+      pendingRevision: pending?.revision ?? null,
+      pendingReleaseId: pending?.id ?? null,
+      releases,
+    };
+  }
+
+  async compareAndSwap(
+    organizationId: string,
+    eventId: string,
+    expectedVersion: number | null,
+    state: ProgramPublicationState,
+  ): Promise<void> {
+    const current = await this.getState(organizationId, eventId);
+    if ((current?.version ?? null) !== expectedVersion) {
+      throw new ProgramPublicationRepositoryConflictError();
+    }
+    const existing = new Map((current?.releases ?? []).map((release) => [release.id, release]));
+    for (const release of state.releases) {
+      const previous = existing.get(release.id);
+      if (previous === undefined) await this.#releases.create(release);
+      else if (JSON.stringify(previous) !== JSON.stringify(release)) {
+        await this.#releases.update(release.id, release);
+      }
+    }
+  }
+}
+
 class AirtablePublishedSpeakerProjectionStore implements PublishedSpeakerRouteDependencies {
   readonly #store: AirtableJsonStore<PublishedSpeakerProjectionRecord>;
   readonly #releases: AirtableJsonStore<ProgramPublicationManifest>;
@@ -5184,6 +5249,10 @@ function eventDateOnly(value: string, timeZone: string): string | null {
   }
 }
 
+function eventPhysicalStatus(value: unknown): string | null {
+  return value === "open" || value === "closed" ? value : null;
+}
+
 function eventRecord(value: JsonRecord): Event {
   const id = requiredId(value.id);
   const organizationId = resolvedOrganizationId(value);
@@ -5343,10 +5412,14 @@ export class AirtableEventRepository implements EventRepository {
     ) {
       throw new EventRepositoryConflictError();
     }
+    const stored = clone(event) as unknown as JsonRecord;
+    const physicalStatus = eventPhysicalStatus(existingRaw?.status);
+    if (physicalStatus !== null && existing?.status === event.status)
+      stored.status = physicalStatus;
     if (existing === undefined) {
-      await this.#events.create(clone(event) as unknown as JsonRecord);
+      await this.#events.create(stored);
     } else {
-      await this.#events.update(event.id, clone(event) as unknown as JsonRecord);
+      await this.#events.update(event.id, stored);
     }
   }
 
@@ -11423,6 +11496,23 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
   const cfpRepository = new AirtableCfpRepository(shared);
   const eventRepository = new AirtableEventRepository(shared);
   const eventService = new EventService(eventRepository);
+  const publicationRepository = new AirtableProgramPublicationRepository(shared);
+  let publicationService!: ProgramPublicationService;
+  publicationService = new ProgramPublicationService(publicationRepository, {
+    eventRepository,
+    enqueue: {
+      async enqueue(input) {
+        const state = await publicationRepository.getState(input.organizationId, input.eventId);
+        if (state === null) throw new Error("The pending program publication was not stored.");
+        await publicationService.completeRebuild({
+          ...input,
+          expectedPublicationVersion: state.version,
+        });
+        return { id: input.releaseId };
+      },
+    },
+    cacheInvalidation: { async invalidate() {} },
+  });
   const cfpIdempotency = new D1IdempotencyStore(options.database);
   const crmRepository = new AirtableCrmRepository({
     ...shared,
@@ -11742,7 +11832,7 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
   };
 
   return {
-    events: { service: eventService },
+    events: { service: eventService, publication: publicationService },
     authenticator,
     speaker: {
       service: speakerService,
@@ -11792,10 +11882,16 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
           venueName: event.venue,
         };
       },
-      async publicRevisionNumberForEventSlug(eventSlug: string) {
-        const projection = await publishedSpeakerProjections.getPublishedSpeakers(eventSlug);
-        return projection?.revision.number ?? null;
+      async eventIdForSlug(eventSlug: string) {
+        const matches = (await events.list())
+          .filter(isRecord)
+          .map(eventRecord)
+          .filter((event) => event.slug.toLowerCase() === eventSlug.toLowerCase());
+        return matches.length === 1 ? (matches[0]?.id ?? null) : null;
       },
+      getProgramPublicationManifest: publishedSpeakerProjections.getProgramPublicationManifest.bind(
+        publishedSpeakerProjections,
+      ),
       async afterPublish(eventId, revision) {
         const [rawEvent, agendaState] = await Promise.all([
           events.find(eventId),
@@ -11876,6 +11972,29 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
           });
         }
 
+        const speakers = profiles
+          .map((profile) => {
+            const speakerSessions = sessionsByParticipantId.get(profile.participantId) ?? [];
+            return {
+              id: profile.participantId,
+              displayName: profile.displayName,
+              pronouns: null,
+              jobTitle: profile.jobTitle ?? null,
+              organization: profile.company ?? null,
+              biography: profile.biography,
+              photoUrl: headshotsBySpeakerId.has(profile.participantId)
+                ? publishedSpeakerPhotoPath(rawEvent.slug, profile.participantId)
+                : null,
+              sessionIds: speakerSessions.map((session) => session.id),
+              sessionTitles: speakerSessions.map((session) => session.title),
+              trackNames: [
+                ...new Set(speakerSessions.flatMap((session) => session.trackNames)),
+              ].sort(),
+            };
+          })
+          .sort((left, right) => left.displayName.localeCompare(right.displayName));
+        const agendaHash = await publicationSourceHash(revision);
+        const speakerHash = await publicationSourceHash(speakers);
         await publishedSpeakerProjections.putPublishedSpeakers({
           id: `published-speakers:${organizationId}:${eventId}`,
           organizationId,
@@ -11904,29 +12023,43 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
             number: revision.revisionNumber,
             publishedAt: revision.publishedAt,
           },
-          speakers: profiles
-            .map((profile) => {
-              const speakerSessions = sessionsByParticipantId.get(profile.participantId) ?? [];
-              return {
-                id: profile.participantId,
-                displayName: profile.displayName,
-                pronouns: null,
-                jobTitle: profile.jobTitle ?? null,
-                organization: profile.company ?? null,
-                biography: profile.biography,
-                photoUrl: headshotsBySpeakerId.has(profile.participantId)
-                  ? publishedSpeakerPhotoPath(rawEvent.slug, profile.participantId)
-                  : null,
-                sessionIds: speakerSessions.map((session) => session.id),
-                sessionTitles: speakerSessions.map((session) => session.title),
-                trackNames: [
-                  ...new Set(speakerSessions.flatMap((session) => session.trackNames)),
-                ].sort(),
-              };
-            })
-            .sort((left, right) => left.displayName.localeCompare(right.displayName)),
+          speakers,
+          sourceHash: speakerHash,
         });
-        await invalidatePublishedSpeakerCache(publishedSpeakerProjections, rawEvent.slug);
+        const currentPublication = await publicationRepository.getState(organizationId, eventId);
+        await publicationService.requestRebuild(
+          {
+            organizationId,
+            userId: revision.publishedBy,
+            role: "owner",
+            kind: "human",
+          },
+          {
+            organizationId,
+            eventId,
+            trigger:
+              currentPublication?.servedManifest === null || currentPublication === null
+                ? "initial-publication"
+                : "released-schedule-change",
+            agendaProjectionId: revision.id,
+            agendaRevisionNumber: revision.revisionNumber,
+            agendaSourceHash: agendaHash,
+            speakerProjectionId: revision.id,
+            speakerRevisionNumber: revision.revisionNumber,
+            speakerSourceHash: speakerHash,
+            approvedContentRevision: revision.revisionNumber,
+            approvedProfileRevision: revision.revisionNumber,
+            releasedAssetRevision: revision.revisionNumber,
+            parentServedRevision: currentPublication?.servedRevision ?? null,
+          },
+        );
+        const served = await publicationRepository.getState(organizationId, eventId);
+        await invalidatePublishedSpeakerCache(
+          publishedSpeakerProjections,
+          rawEvent.slug,
+          served?.servedRevision ?? undefined,
+          served?.servedManifest?.cacheRevision,
+        );
         await enqueueCloudflareOutbox({
           database: options.database,
           queue: options.outboxQueue,
@@ -11985,11 +12118,6 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
     publicApi: {
       contract: publicApiV1Contract,
       resources: [],
-    },
-    publicCatalog: {
-      eventRepository,
-      sessionRepository,
-      speakerRepository,
     },
     webhooks,
     cfp: { service: cfpService },

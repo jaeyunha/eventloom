@@ -181,6 +181,7 @@ export interface PortalApi {
     file: File;
     supersedesAssetId?: string;
   }): Promise<PortalAsset>;
+  retryAssetUpload?(input: { eventId: string; assetId: string; file: File }): Promise<PortalAsset>;
   finalizeAsset?(input: {
     eventId: string;
     assetId: string;
@@ -359,6 +360,27 @@ export function createPortalApi(baseUrl: string, fetcher: Fetcher = fetch): Port
         }),
       },
     );
+    await uploadAuthorizedFile(input.file, authorization);
+    return authorization.asset;
+  }
+
+  async function uploadAuthorizedFile(
+    file: File,
+    authorization: PortalUploadAuthorization,
+    requireMetadataMatch = false,
+  ): Promise<void> {
+    if (
+      (requireMetadataMatch && authorization.asset.fileName !== file.name) ||
+      (requireMetadataMatch && authorization.asset.sizeBytes !== file.size) ||
+      (requireMetadataMatch &&
+        authorization.asset.contentType !== (file.type || "application/octet-stream"))
+    ) {
+      throw new PortalApiError(
+        "UPLOAD_METADATA_MISMATCH",
+        "Choose the same file that was originally authorized for this upload.",
+        400,
+      );
+    }
     const uploadController = new AbortController();
     let uploadTimedOut = false;
     let uploadTimeout!: ReturnType<typeof setTimeout>;
@@ -375,7 +397,7 @@ export function createPortalApi(baseUrl: string, fetcher: Fetcher = fetch): Port
           method: authorization.grant.method,
           credentials: "omit",
           headers: authorization.grant.headers,
-          body: input.file,
+          body: file,
           signal: uploadController.signal,
         }),
         uploadTimeoutError,
@@ -395,7 +417,6 @@ export function createPortalApi(baseUrl: string, fetcher: Fetcher = fetch): Port
     } finally {
       clearTimeout(uploadTimeout);
     }
-    return authorization.asset;
   }
 
   const api: PortalApi = {
@@ -557,6 +578,25 @@ export function createPortalApi(baseUrl: string, fetcher: Fetcher = fetch): Port
     },
 
     uploadFile: createUpload,
+
+    async retryAssetUpload(input) {
+      const authorization = await request<PortalUploadAuthorization>(
+        `/events/${routeSegment(input.eventId)}/assets/${routeSegment(input.assetId)}/upload-authorization`,
+        { method: "POST" },
+      );
+      if (
+        authorization.asset.id !== input.assetId ||
+        authorization.asset.state !== "pending_upload"
+      ) {
+        throw new PortalApiError(
+          "CONTEXT_MISMATCH",
+          "The upload authorization does not match the pending asset.",
+          409,
+        );
+      }
+      await uploadAuthorizedFile(input.file, authorization, true);
+      return authorization.asset;
+    },
 
     async finalizeAsset(input) {
       return request<PortalAsset>(

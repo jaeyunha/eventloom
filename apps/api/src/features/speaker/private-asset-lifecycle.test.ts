@@ -666,6 +666,47 @@ describe("private speaker asset lifecycle", () => {
     expect(finalized.state).toBe("ready");
   });
 
+  it("re-authorizes the same pending asset from immutable persisted metadata", async () => {
+    const repository = new LifecycleRepository();
+    const gateway = new CapabilityGateway();
+    const service = new SpeakerService(repository, gateway, {
+      now: () => new Date(now),
+      generateId: () => "asset-retry",
+    });
+    const original = await service.issueUploadGrant({
+      eventId: "event-1",
+      accountId: "account-1",
+      participantId: "participant-1",
+      taskId: "upload-task",
+      kind: "slides",
+      fileName: "slides.pdf",
+      contentType: "application/pdf",
+      sizeBytes: 3,
+    });
+
+    const retried = await service.reauthorizePendingUpload({
+      eventId: "event-1",
+      accountId: "account-1",
+      assetId: original.asset.id,
+    });
+
+    expect(retried.asset).toEqual(original.asset);
+    expect(gateway.uploadBindings).toHaveLength(2);
+    expect(gateway.uploadBindings[1]).toEqual(gateway.uploadBindings[0]);
+    expect(repository.assets).toHaveLength(1);
+
+    const stored = repository.assets[0];
+    if (stored === undefined) throw new Error("Expected the pending asset to be stored.");
+    stored.state = "ready";
+    await expect(
+      service.reauthorizePendingUpload({
+        eventId: "event-1",
+        accountId: "account-1",
+        assetId: original.asset.id,
+      }),
+    ).rejects.toMatchObject({ code: "ASSET_UPLOAD_RETRY_INVALID" });
+  });
+
   it("does not finalize a ready asset without persisted object metadata", async () => {
     const repository = new LifecycleRepository();
     const gateway = new CapabilityGateway();
@@ -957,6 +998,49 @@ describe("private speaker asset lifecycle", () => {
         body: "x",
       }),
     ).toHaveProperty("status", 201);
+  });
+
+  it("routes pending-upload re-authorization without accepting replacement metadata", async () => {
+    const repository = new LifecycleRepository();
+    const gateway = new CapabilityGateway();
+    const service = new SpeakerService(repository, gateway, {
+      now: () => new Date(now),
+      generateId: () => "asset-retry-route",
+    });
+    const original = await service.issueUploadGrant({
+      eventId: "event-1",
+      accountId: "account-1",
+      participantId: "participant-1",
+      kind: "slides",
+      fileName: "slides.pdf",
+      contentType: "application/pdf",
+      sizeBytes: 3,
+    });
+    const routes = createSpeakerRoutes({
+      service,
+      authenticate: async () => ({ accountId: "account-1" }),
+    });
+
+    const response = await routes.request(
+      `/events/event-1/assets/${original.asset.id}/upload-authorization`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ fileName: "evil.exe", sizeBytes: 99 }),
+      },
+    );
+    const body = (await response.json()) as { data: { asset: SpeakerAsset } };
+
+    expect(response.status).toBe(200);
+    expect(body.data.asset).toMatchObject({
+      id: original.asset.id,
+      fileName: "slides.pdf",
+      contentType: "application/pdf",
+      sizeBytes: 3,
+      state: "pending_upload",
+    });
+    expect(JSON.stringify(body)).not.toContain("objectKey");
+    expect(repository.assets).toHaveLength(1);
   });
 });
 describe("speaker participant workspace authorization and projections", () => {

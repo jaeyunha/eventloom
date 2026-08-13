@@ -8,6 +8,7 @@ import type {
 } from "../features/agenda/types";
 import type { AuthPrincipal, UserPrincipal } from "../features/auth/types";
 import { AuthAccessError } from "../features/auth/types";
+import type { ProgramPublicationManifest } from "../features/events/types";
 import { escapeIcalText, foldIcalLine } from "../integrations/calendar/ical";
 
 export interface AgendaRouteEnvironment {
@@ -29,6 +30,11 @@ export interface AgendaRouteDependencies {
   readonly organizationIdForEvent: (eventId: string) => Promise<string | null>;
   readonly afterPublish?: (eventId: string, revision: AgendaPublishedRevision) => Promise<void>;
   readonly eventMetadataForEvent?: (eventId: string) => Promise<AgendaEventMetadata | null>;
+  readonly eventIdForSlug?: (eventSlug: string) => Promise<string | null>;
+  readonly getProgramPublicationManifest?: (
+    eventSlug: string,
+  ) => Promise<ProgramPublicationManifest | null>;
+  /** Legacy projection selector retained for isolated route adapters. Runtime composition uses manifests. */
   readonly publicRevisionNumberForEventSlug?: (eventSlug: string) => Promise<number | null>;
 }
 
@@ -1545,22 +1551,42 @@ async function publishedProjection(
   context: AgendaContext,
   dependencies: Pick<
     AgendaRouteDependencies,
-    "engine" | "eventMetadataForEvent" | "publicRevisionNumberForEventSlug"
+    | "engine"
+    | "eventMetadataForEvent"
+    | "eventIdForSlug"
+    | "getProgramPublicationManifest"
+    | "publicRevisionNumberForEventSlug"
   >,
 ): Promise<PublishedAgendaProjectionValue | null> {
   const eventSlug = publicEventSlug(context);
   if (eventSlug === null) return null;
-  let revision = await dependencies.engine.getPublishedAgenda(eventSlug);
-  if (revision === null) return null;
-  if (dependencies.publicRevisionNumberForEventSlug !== undefined) {
-    const publicRevisionNumber = await dependencies.publicRevisionNumberForEventSlug(eventSlug);
-    if (publicRevisionNumber === null) return null;
-    if (publicRevisionNumber !== revision.revisionNumber) {
-      revision = await dependencies.engine.getPublishedAgendaRevision(
-        eventSlug,
-        publicRevisionNumber,
-      );
-      if (revision === null) return null;
+  let revision: PublishedAgendaRevision | null;
+  if (dependencies.getProgramPublicationManifest !== undefined) {
+    const manifest = await dependencies.getProgramPublicationManifest(eventSlug);
+    if (manifest === null || manifest.lifecycle !== "served") return null;
+    const eventId =
+      dependencies.eventIdForSlug === undefined
+        ? manifest.eventId
+        : await dependencies.eventIdForSlug(eventSlug);
+    if (eventId === null || eventId !== manifest.eventId) return null;
+    revision = await dependencies.engine.getPublishedAgendaRevision(
+      eventId,
+      manifest.agendaRevisionNumber,
+    );
+    if (revision === null || revision.id !== manifest.agendaProjectionId) return null;
+  } else {
+    revision = await dependencies.engine.getPublishedAgenda(eventSlug);
+    if (revision === null) return null;
+    if (dependencies.publicRevisionNumberForEventSlug !== undefined) {
+      const publicRevisionNumber = await dependencies.publicRevisionNumberForEventSlug(eventSlug);
+      if (publicRevisionNumber === null) return null;
+      if (publicRevisionNumber !== revision.revisionNumber) {
+        revision = await dependencies.engine.getPublishedAgendaRevision(
+          eventSlug,
+          publicRevisionNumber,
+        );
+        if (revision === null) return null;
+      }
     }
   }
   let eventMetadata: AgendaEventMetadata | undefined;
@@ -1579,7 +1605,11 @@ async function publishedProjection(
 export function createPublishedAgendaRoutes(
   dependencies: Pick<
     AgendaRouteDependencies,
-    "engine" | "eventMetadataForEvent" | "publicRevisionNumberForEventSlug"
+    | "engine"
+    | "eventMetadataForEvent"
+    | "eventIdForSlug"
+    | "getProgramPublicationManifest"
+    | "publicRevisionNumberForEventSlug"
   >,
 ): Hono<AgendaRouteEnvironment> {
   const routes = new Hono<AgendaRouteEnvironment>();

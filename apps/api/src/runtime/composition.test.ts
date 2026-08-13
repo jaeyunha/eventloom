@@ -224,8 +224,7 @@ function productionD1(digest: string): NonNullable<RuntimeBindings["DB"]> {
     id: "key-production",
     organization_id: LOCAL_ORGANIZATION_ID,
     label: "Production test key",
-    scopes_json:
-      '["events:read","events:write","sessions:read","speakers:read","agenda:read","agenda:write"]',
+    scopes_json: '["events:read","events:write","agenda:read","agenda:write"]',
     expires_at: null,
     revoked_at: null,
   };
@@ -1195,7 +1194,7 @@ describe("fixture local runtime composition", () => {
         {
           id: "organizer-cfp-participant",
           firstName: "Speaker",
-          lastName: "Account",
+          lastName: "Applicant",
           email: LOCAL_ORGANIZER_EMAIL,
           role: "primary",
           biography: "",
@@ -1205,7 +1204,7 @@ describe("fixture local runtime composition", () => {
       secondaryContacts: [],
       idempotencyKey: "organizer-portal-participant",
     });
-    const reviewStep = await cfp.saveDraft({
+    const reviewSaved = await cfp.saveDraft({
       tenantId: LOCAL_ORGANIZATION_ID,
       eventId: "demo-event",
       submissionId: draft.id,
@@ -1214,21 +1213,12 @@ describe("fixture local runtime composition", () => {
       completedStep: "review",
       idempotencyKey: "organizer-portal-review-step",
     });
-    await expect(
-      cfp.review({
-        tenantId: LOCAL_ORGANIZATION_ID,
-        eventId: "demo-event",
-        submissionId: draft.id,
-        ownerAccountId: LOCAL_ORGANIZER_ACCOUNT_ID,
-        idempotencyKey: "organizer-portal-review",
-      }),
-    ).resolves.toMatchObject({ canSubmit: true, issues: [] });
     const submitted = await cfp.submit({
       tenantId: LOCAL_ORGANIZATION_ID,
       eventId: "demo-event",
       submissionId: draft.id,
       ownerAccountId: LOCAL_ORGANIZER_ACCOUNT_ID,
-      expectedVersion: reviewStep.version,
+      expectedVersion: reviewSaved.version,
       idempotencyKey: "organizer-portal-submit",
     });
 
@@ -1309,15 +1299,14 @@ describe("fixture local runtime composition", () => {
       data: {
         organizationId: LOCAL_ORGANIZATION_ID,
         metrics: {
-          submissionCount: 2,
+          submissionCount: 1,
           pendingReviewCount: 1,
-          outstandingSpeakerTaskCount: 4,
+          outstandingSpeakerTaskCount: 2,
           publishedSessionCount: 2,
         },
         actionItems: [
           { id: "reviews:demo-event", count: 1 },
           { id: "speaker_tasks:demo-event", count: 2 },
-          { id: "speaker_tasks:open-sessionboard-conf", count: 2 },
         ],
       },
     });
@@ -1797,6 +1786,28 @@ describe("fixture local runtime composition", () => {
       data: { version: draftPayload.data.version },
     });
     expect(published.status).toBe(200);
+    const publication = await app.request(
+      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event/publication`,
+      { headers: organizerHeaders() },
+      localBindings,
+    );
+    expect(publication.status).toBe(200);
+    await expect(publication.json()).resolves.toMatchObject({
+      data: {
+        servedManifest: {
+          lifecycle: "served",
+          agendaRevisionNumber: 1,
+          speakerRevisionNumber: 1,
+        },
+      },
+    });
+    const speakers = await app.request(
+      "/api/public/events/demo-event/speakers",
+      undefined,
+      localBindings,
+    );
+    expect(speakers.status).toBe(200);
+    expect(speakers.headers.get("x-sessionboard-program-revision")).toBe("1");
     const publishedBody = (await published.json()) as {
       data: Record<string, unknown> & { revision: Record<string, unknown> };
     };
@@ -1849,31 +1860,24 @@ describe("fixture local runtime composition", () => {
     expect(publishedBody.data.revision).not.toHaveProperty("publishedBy");
   });
 
-  it("mounts safe nested catalog reads while withholding flat resources and writes", async () => {
+  it("withholds unsafe generic resources and advertises only mounted webhooks locally", async () => {
     const app = createRuntimeApp(localBindings);
     const apiHeaders = { authorization: `Bearer ${LOCAL_API_KEY}` };
-    const withheldRequests = [
+    const genericRequests = [
+      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/events`,
+      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event`,
       `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/speakers`,
       `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/agenda`,
       `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/sessions`,
       `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/sessions/local-session-keynote`,
     ];
 
-    for (const path of withheldRequests) {
+    for (const path of genericRequests) {
       const response = await app.request(path, { headers: apiHeaders }, localBindings);
-      expect(response.status).toBe(200);
-    }
-
-    for (const path of [
-      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/events`,
-      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event`,
-      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event/sessions`,
-      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event/sessions/local-session-keynote`,
-      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event/speakers`,
-      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event/speakers/local-participant`,
-    ]) {
-      const response = await app.request(path, { headers: apiHeaders }, localBindings);
-      expect(response.status).toBe(200);
+      expect(response.status).toBe(404);
+      await expect(response.json()).resolves.toMatchObject({
+        error: { code: "NOT_FOUND", traceId: expect.any(String) },
+      });
     }
 
     const eventCreate = await app.request(
@@ -1908,12 +1912,6 @@ describe("fixture local runtime composition", () => {
     expect(discovery.status).toBe(200);
     const document = (await discovery.json()) as { paths: Record<string, Record<string, unknown>> };
     expect(Object.keys(document.paths).sort()).toEqual([
-      "/api/v1/organizations/{organizationId}/events",
-      "/api/v1/organizations/{organizationId}/events/{eventId}",
-      "/api/v1/organizations/{organizationId}/events/{eventId}/sessions",
-      "/api/v1/organizations/{organizationId}/events/{eventId}/sessions/{sessionId}",
-      "/api/v1/organizations/{organizationId}/events/{eventId}/speakers",
-      "/api/v1/organizations/{organizationId}/events/{eventId}/speakers/{speakerId}",
       "/api/v1/organizations/{organizationId}/webhooks",
       "/api/v1/organizations/{organizationId}/webhooks/{subscriptionId}",
     ]);
@@ -1960,7 +1958,7 @@ describe("fixture local runtime composition", () => {
     expect(replay).toEqual(draft);
   });
 
-  it("serves read-only public-v1 catalog projections without mutating Airtable", async () => {
+  it("does not query or mutate raw Airtable tables through generic public-v1 routes", async () => {
     const transport = new FormulaRecordingTransport();
     transport.seed({
       baseId: "base-test",
@@ -1995,17 +1993,16 @@ describe("fixture local runtime composition", () => {
     const app = createRuntimeApp(bindings);
     const headers = { authorization: "Bearer production-api-key" };
 
-    const paths = [
-      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/events`,
-      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/events/event-airtable/sessions`,
-      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/events/event-airtable/speakers`,
-    ];
-    for (const path of paths) {
-      const response = await app.request(path, { headers }, bindings);
-      expect(response.status, path).toBe(200);
-      const body = JSON.stringify(await response.json());
-      if (path.endsWith("/events")) expect(body).toContain("Private Airtable Event");
-      expect(body).not.toContain("private@example.test");
+    for (const resource of ["events", "sessions", "speakers", "agenda"]) {
+      const response = await app.request(
+        `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/${resource}`,
+        { headers },
+        bindings,
+      );
+      expect(response.status).toBe(404);
+      await expect(response.json()).resolves.toMatchObject({
+        error: { code: "NOT_FOUND", traceId: expect.any(String) },
+      });
     }
 
     const create = await app.request(
@@ -2018,7 +2015,11 @@ describe("fixture local runtime composition", () => {
       bindings,
     );
     expect(create.status).toBe(404);
-    expect(transport.requests.every((request) => request.method === "GET")).toBe(true);
+    expect(
+      transport.requests.some((request) =>
+        ["Events", "Sessions", "Participants", "Agenda Versions"].includes(request.table),
+      ),
+    ).toBe(false);
   });
   it("matches canonical email against mixed-case authoritative CRM rows", async () => {
     const transport = new FakeAirtableTransport();
@@ -3295,35 +3296,11 @@ function acceptanceDatabase(
 ): {
   readonly database: NonNullable<RuntimeBindings["DB"]>;
   readonly outbox: Map<string, { state: string; topic: string; payload: unknown }>;
-  readonly grants: Array<{
-    organizationId: string;
-    speakerProfileId: string;
-    userId: string;
-  }>;
-  readonly audits: Array<{
-    id: string;
-    tenantId: string;
-    action: string;
-    resourceType: string;
-    resourceId: string;
-    details: Record<string, unknown>;
-  }>;
+  readonly grants: string[];
 } {
   const idempotency = new Map<string, AcceptanceIdempotencyRow>();
   const outbox = new Map<string, { state: string; topic: string; payload: unknown }>();
-  const grants: Array<{
-    organizationId: string;
-    speakerProfileId: string;
-    userId: string;
-  }> = [];
-  const audits: Array<{
-    id: string;
-    tenantId: string;
-    action: string;
-    resourceType: string;
-    resourceId: string;
-    details: Record<string, unknown>;
-  }> = [];
+  const grants: string[] = [];
   const database = {
     prepare(query: string) {
       return {
@@ -3411,36 +3388,7 @@ function acceptanceDatabase(
                 };
               }
               if (query.includes("INSERT INTO speaker_grants")) {
-                const grant = {
-                  organizationId: String(values[0]),
-                  speakerProfileId: String(values[1]),
-                  userId: String(values[2]),
-                };
-                if (
-                  !grants.some(
-                    (candidate) =>
-                      candidate.organizationId === grant.organizationId &&
-                      candidate.speakerProfileId === grant.speakerProfileId &&
-                      candidate.userId === grant.userId,
-                  )
-                ) {
-                  grants.push(grant);
-                }
-              }
-              if (query.includes("INSERT INTO audit_events")) {
-                const audit = {
-                  id: String(values[0]),
-                  tenantId: String(values[1]),
-                  action: query.includes("'speaker_access_provisioned'")
-                    ? "speaker_access_provisioned"
-                    : "evaluation_accepted",
-                  resourceType: query.includes("'speaker_profile'")
-                    ? "speaker_profile"
-                    : "submission",
-                  resourceId: String(values[3]),
-                  details: JSON.parse(String(values[4])) as Record<string, unknown>,
-                };
-                if (!audits.some((candidate) => candidate.id === audit.id)) audits.push(audit);
+                grants.push(String(values[2]));
               }
               return { success: true, meta: { changes: 1 } };
             },
@@ -3452,7 +3400,7 @@ function acceptanceDatabase(
       return [];
     },
   } as unknown as NonNullable<RuntimeBindings["DB"]>;
-  return { database, outbox, grants, audits };
+  return { database, outbox, grants };
 }
 
 function acceptanceTransport(events: string[]): {
@@ -3994,6 +3942,17 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       },
     });
     expect(JSON.stringify(projectionWrite?.body ?? {})).toContain("Priya Raman");
+    expect(JSON.stringify(projectionWrite?.body ?? {})).toContain("sourceHash");
+    const releaseWrite = transport.requests.find(
+      (request) =>
+        request.method === "PATCH" &&
+        request.table === "Program Releases" &&
+        JSON.stringify(request.body).includes('"Status":"served"'),
+    );
+    expect(releaseWrite?.body).toMatchObject({
+      fields: { Status: "served", Revision: 1 },
+    });
+    expect(JSON.stringify(releaseWrite?.body ?? {})).toContain(revision.id);
 
     expect([...state.outbox.values()]).toContainEqual(
       expect.objectContaining({
@@ -4010,6 +3969,71 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       expect.objectContaining({ tenantId: organizationId, topic: "cache-invalidation" }),
     );
   });
+  it("preserves Airtable open/closed physical status during embed-only event updates", async () => {
+    const transport = new FakeAirtableTransport();
+    const eventId = "event-embed-status";
+    transport.seed({
+      baseId: "base-test",
+      table: "Events",
+      fields: {
+        "Application ID": eventId,
+        Status: "open",
+        Version: 1,
+        "Settings JSON": JSON.stringify({
+          id: eventId,
+          organizationId: LOCAL_ORGANIZATION_ID,
+          slug: eventId,
+          name: "Embed status event",
+          status: "active",
+          timeZone: "UTC",
+          startsAt: "2027-05-12T00:00:00.000Z",
+          endsAt: "2027-05-13T00:00:00.000Z",
+          cfpSettings: { enabled: true, opensAt: null, closesAt: null },
+          defaultCalendarSettings: { durationMinutes: 30, timeZone: "UTC", location: null },
+          embedConfigurations: [],
+          version: 1,
+          createdAt: "2026-08-10T00:00:00.000Z",
+          updatedAt: "2026-08-10T00:00:00.000Z",
+          createdBy: "owner",
+          updatedBy: "owner",
+        }),
+      },
+    });
+    const repository = new AirtableEventRepository({ baseId: "base-test", transport });
+    const current = await repository.getEvent(LOCAL_ORGANIZATION_ID, eventId);
+    if (current === null) throw new Error("Expected the event fixture.");
+    await repository.saveEvent(
+      {
+        ...current,
+        embedConfigurations: [
+          {
+            id: "embed-status",
+            name: "Agenda",
+            widgetId: "agenda",
+            enabled: true,
+            theme: "light",
+            outputFormat: "styled-html",
+            layout: "comfortable",
+            accent: "#4f5ee8",
+            backgroundColor: "#ffffff",
+            textColor: "#20232b",
+            customCss: "",
+            displayFields: ["title", "date-time"],
+            trackIds: [],
+            statuses: [],
+            revision: 1,
+          },
+        ],
+        version: 2,
+      },
+      1,
+    );
+    const update = transport.requests.find(
+      (request) => request.method === "PATCH" && request.table === "Events",
+    );
+    expect(update?.body).toMatchObject({ fields: { Status: "open" } });
+  });
+
   it("exposes every owner submission status while granting capabilities only for accepted records", async () => {
     const transport = new FakeAirtableTransport();
     const eventId = "event-portal-statuses";
@@ -4237,7 +4261,7 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
         "Answers JSON": JSON.stringify(submission),
       },
     });
-    const { database, outbox, grants, audits } = acceptanceDatabase(events);
+    const { database, outbox, grants } = acceptanceDatabase(events);
     const cfp = new AirtableCfpRepository({ baseId: "base-test", transport });
     const speakers = new AirtableSpeakerRepository({
       baseId: "base-test",
@@ -4356,46 +4380,10 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       events.indexOf("airtable:POST:Sessions"),
     );
     expect(grants).toEqual([
-      {
-        organizationId: submission.tenantId,
-        speakerProfileId: "speaker-profile:event-acceptance:participant-primary",
-        userId: "account-speaker",
-      },
-      {
-        organizationId: submission.tenantId,
-        speakerProfileId: "speaker-profile:event-acceptance:participant-co",
-        userId: "account-speaker",
-      },
-    ]);
-    expect(audits.filter((audit) => audit.action === "speaker_access_provisioned")).toEqual([
-      {
-        id: "speaker-access-provisioned:event-acceptance:submission-acceptance:participant-primary:acceptance-key",
-        tenantId: submission.tenantId,
-        action: "speaker_access_provisioned",
-        resourceType: "speaker_profile",
-        resourceId: "speaker-profile:event-acceptance:participant-primary",
-        details: {
-          eventId: submission.eventId,
-          submissionId: submission.id,
-          participantId: "participant-primary",
-          decisionId: input.decisionId,
-          idempotencyKey: input.idempotencyKey,
-        },
-      },
-      {
-        id: "speaker-access-provisioned:event-acceptance:submission-acceptance:participant-co:acceptance-key",
-        tenantId: submission.tenantId,
-        action: "speaker_access_provisioned",
-        resourceType: "speaker_profile",
-        resourceId: "speaker-profile:event-acceptance:participant-co",
-        details: {
-          eventId: submission.eventId,
-          submissionId: submission.id,
-          participantId: "participant-co",
-          decisionId: input.decisionId,
-          idempotencyKey: input.idempotencyKey,
-        },
-      },
+      "account-speaker",
+      "account-speaker",
+      "account-speaker",
+      "account-speaker",
     ]);
     expect([...outbox.values()]).toContainEqual({
       state: "queued",

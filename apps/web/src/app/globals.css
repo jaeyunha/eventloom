@@ -141,6 +141,14 @@
 @layer components {
   .home-shell {
     min-height: 100dvh;
+    --radius-sm: 0.375rem;
+    --radius-md: 0.5625rem;
+    --radius-lg: 0.75rem;
+    background: #f7f7f8;
+  }
+
+  .dark .home-shell {
+    background: var(--color-canvas);
   }
 
   .skip-link {
@@ -324,7 +332,7 @@
     overflow: hidden;
     grid-template-columns: minmax(0, 1fr);
     justify-items: center;
-    padding: clamp(4.5rem, 8vw, 7.5rem) clamp(var(--space-5), 6vw, 5rem) 0;
+    padding: clamp(3rem, 5vw, 4.5rem) clamp(var(--space-5), 6vw, 5rem) 0;
     margin-top: var(--space-6);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-lg);
@@ -385,7 +393,7 @@
 
   .home-hero h1 {
     max-width: 17ch;
-    font-size: clamp(3rem, 6vw, 4.9rem);
+    font-size: clamp(3rem, 5.4vw, 4.25rem);
     font-weight: 650;
     letter-spacing: -0.065em;
     line-height: 0.99;
@@ -476,13 +484,13 @@
     z-index: 1;
     width: min(100%, 68rem);
     min-height: 37rem;
-    margin-top: clamp(var(--space-7), 7vw, 5.5rem);
+    margin-top: clamp(var(--space-6), 4vw, var(--space-7));
   }
 
   .home-product-frame {
     overflow: hidden;
     border: 1px solid rgb(177 182 215 / 70%);
-    border-radius: 0.95rem 0.95rem 0 0;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
     background: var(--color-surface);
     box-shadow: var(--shadow-product);
   }
@@ -533,7 +541,7 @@
     align-items: center;
     margin-inline: auto;
     color: var(--color-muted);
-    font-size: 0.63rem;
+    font-size: 0.75rem;
     font-weight: 650;
   }
 
@@ -547,7 +555,7 @@
 
   .home-product-toolbar-meta {
     color: var(--color-muted);
-    font-size: 0.58rem;
+    font-size: 0.7rem;
   }
 
   .home-demo-shell {
@@ -585,14 +593,14 @@
   }
 
   .home-demo-brand strong {
-    font-size: 0.65rem;
+    font-size: 0.75rem;
     line-height: 1.1;
   }
 
   .home-demo-sidebar > small {
     margin: 1.75rem 0 0.55rem 0.35rem;
     color: var(--color-subtle);
-    font-size: 0.48rem;
+    font-size: 0.62rem;
     font-weight: 850;
     letter-spacing: 0.12em;
     text-transform: uppercase;
@@ -610,7 +618,7 @@
     padding: 0.55rem 0.6rem;
     border-radius: 0.45rem;
     color: var(--color-muted);
-    font-size: 0.62rem;
+    font-size: 0.75rem;
     font-weight: 650;
   }
 
@@ -633,12 +641,12 @@
   }
 
   .home-demo-sidebar-foot strong {
-    font-size: 0.58rem;
+    font-size: 0.72rem;
   }
 
   .home-demo-sidebar-foot span {
     color: var(--color-muted);
-    font-size: 0.5rem;
+    font-size: 0.65rem;
   }
 
   .home-demo-main {
@@ -659,7 +667,7 @@
   .home-demo-heading small,
   .home-demo-overline {
     color: var(--color-accent-strong);
-    font-size: 0.48rem;
+    font-size: 0.62rem;
     font-weight: 850;
     letter-spacing: 0.11em;
     text-transform: uppercase;
@@ -675,15 +683,26 @@
   .home-demo-heading p {
     margin-top: 0.45rem;
     color: var(--color-muted);
-    font-size: 0.62rem;
+    font-size: 0.75rem;
   }
 
-  .home-demo-heading [data-slot="button"] {
-    pointer-events: none;
-    font-size: 0.58rem;
+  .home-demo-view-events {
+    display: inline-flex;
+    min-height: 2rem;
+    flex: 0 0 auto;
+    gap: 0.35rem;
+    align-items: center;
+    justify-content: center;
+    padding-inline: 0.7rem;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface);
+    color: var(--color-ink);
+    font-size: 0.72rem;
+    font-weight: 750;
   }
 
-  .home-demo-heading [data-slot="button"] svg {
+  .home-demo-view-events svg {
     width: 0.72rem;
     height: 0.72rem;
   }
@@ -722,7 +741,7 @@
 
   .home-demo-metric-card [data-slot="card-title"] {
     color: var(--color-muted);
-    font-size: 0.55rem;
+    font-size: 0.72rem;
   }
 
   .home-demo-metric-card [data-slot="card-content"] {
@@ -732,6 +751,7 @@
   }
 
   .home-demo-metric-card [data-slot="card-content"] strong {
+    color: var(--color-accent-strong);
     font-size: 1.45rem;
     letter-spacing: -0.06em;
     line-height: 1;
@@ -739,7 +759,12 @@
 
   .home-demo-metric-card [data-slot="card-content"] span {
     color: var(--color-muted);
-    font-size: 0.48rem;
+    font-size: 0.65rem;
+  }
+
+  .home-demo-metric-card-accent {
+    border-color: color-mix(in srgb, var(--color-accent) 42%, var(--color-border));
+    background: color-mix(in srgb, var(--color-accent-soft) 58%, var(--color-surface));
   }
 
   .home-demo-grid {
@@ -784,26 +809,39 @@
 
   .home-demo-action-row strong {
     overflow: hidden;
-    font-size: 0.58rem;
+    font-size: 0.72rem;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
   .home-demo-action-row small {
     color: var(--color-muted);
-    font-size: 0.48rem;
+    font-size: 0.64rem;
   }
 
   .home-demo-action-row [data-slot="badge"],
   .home-demo-events-card [data-slot="badge"] {
-    height: 1.2rem;
+    height: 1.45rem;
     padding-inline: 0.42rem;
-    font-size: 0.45rem;
+    font-size: 0.62rem;
+  }
+
+  .home-demo-status-published {
+    border-color: color-mix(in srgb, var(--color-success) 32%, transparent);
+    background: var(--color-success-soft);
+    color: var(--color-success);
+  }
+
+  .home-demo-status-draft,
+  .home-demo-status-open {
+    border-color: color-mix(in srgb, var(--color-warning) 28%, transparent);
+    background: var(--color-warning-soft);
+    color: var(--color-warning);
   }
 
   .home-demo-context-card [data-slot="card-content"] {
     color: var(--color-muted);
-    font-size: 0.55rem;
+    font-size: 0.68rem;
     line-height: 1.5;
   }
 
@@ -812,17 +850,17 @@
   }
 
   .home-demo-events-card [data-slot="table-container"] {
-    overflow: hidden;
+    overflow-x: auto;
   }
 
   .home-demo-events-card table {
-    font-size: 0.53rem;
+    font-size: 0.68rem;
   }
 
   .home-demo-events-card th {
     height: 1.6rem;
     color: var(--color-muted);
-    font-size: 0.46rem;
+    font-size: 0.62rem;
   }
 
   .home-demo-events-card td {
@@ -852,7 +890,7 @@
 
   .home-demo-float-right {
     right: -1.8rem;
-    bottom: 2.7rem;
+    top: 14rem;
   }
 
   .home-float-icon {
@@ -884,12 +922,12 @@
 
   .home-demo-float-card small {
     color: var(--color-muted);
-    font-size: 0.54rem;
+    font-size: 0.68rem;
   }
 
   .home-demo-float-card strong {
     margin-top: 0.15rem;
-    font-size: 0.7rem;
+    font-size: 0.78rem;
   }
 
   .home-capability-strip {
@@ -1273,7 +1311,9 @@
 
   .home-inline-link {
     display: inline-flex;
+    min-height: 2.75rem;
     align-items: center;
+    padding-block: 0.65rem;
     margin-top: var(--space-5);
     color: var(--color-brand-strong);
     font-size: 0.84rem;
@@ -1764,6 +1804,10 @@
   }
 
   .home-footer a {
+    display: inline-flex;
+    min-height: 2.75rem;
+    align-items: center;
+    padding-block: 0.65rem;
     text-decoration: none;
   }
 
@@ -2093,12 +2137,12 @@
 
   .home-hero {
     min-height: auto;
-    padding: var(--space-7) var(--space-4) 0;
+    padding: var(--space-6) var(--space-4) 0;
     margin-top: var(--space-4);
   }
 
   .home-hero h1 {
-    font-size: clamp(2.35rem, 13vw, 3.6rem);
+    font-size: clamp(2.25rem, 10.75vw, 2.7rem);
   }
 
   .home-actions {
@@ -2113,7 +2157,7 @@
   .home-product-stage {
     width: calc(100% + var(--space-4) * 2);
     min-height: 24rem;
-    margin-top: var(--space-7);
+    margin-top: var(--space-5);
   }
 
   .home-product-toolbar {
@@ -2154,8 +2198,39 @@
     display: none;
   }
 
-  .home-demo-heading [data-slot="button"] {
+  .home-demo-view-events {
     display: none;
+  }
+
+  .home-product-toolbar-title {
+    font-size: 0.75rem;
+  }
+
+  .home-demo-heading small,
+  .home-demo-overline {
+    font-size: 0.75rem;
+  }
+
+  .home-demo-metric-card [data-slot="card-title"] {
+    font-size: 0.75rem;
+  }
+
+  .home-demo-metric-card [data-slot="card-content"] strong {
+    font-size: 1.55rem;
+  }
+
+  .home-demo-metric-card [data-slot="card-content"] span,
+  .home-demo-action-row small {
+    font-size: 0.7rem;
+  }
+
+  .home-demo-action-row strong {
+    font-size: 0.75rem;
+  }
+
+  .home-demo-action-row [data-slot="badge"] {
+    height: 1.5rem;
+    font-size: 0.65rem;
   }
 
   .home-demo-events-card {
