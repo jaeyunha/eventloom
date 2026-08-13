@@ -1103,6 +1103,63 @@
   color: var(--color-muted);
   font-size: 0.72rem;
 }
+.inlineCreate {
+  display: grid;
+  gap: 0.4rem;
+  grid-column: 1 / -1;
+  margin-top: 0.2rem;
+}
+
+.inlineCreateFields {
+  display: flex;
+  gap: 0.45rem;
+  align-items: end;
+  flex-wrap: wrap;
+}
+
+.inlineCreateFields label {
+  min-width: 8rem;
+}
+
+.inlineCreateFields input {
+  width: 100%;
+  min-height: 2.2rem;
+  padding: 0.4rem;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font: inherit;
+}
+
+.scheduleDropTarget {
+  margin: 0.75rem 0;
+  padding: 0.75rem;
+  border: 1px dashed var(--color-brand);
+  border-radius: var(--radius-sm);
+  background: var(--color-brand-soft);
+  color: var(--color-muted);
+  font-size: 0.76rem;
+  text-align: center;
+  width: 100%;
+  font-family: inherit;
+}
+
+.calendarDelivery {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0.75rem 0;
+  padding: 0.7rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 0.76rem;
+}
+
+.calendarDelivery small {
+  display: block;
+  margin-top: 0.3rem;
+  color: var(--color-muted);
+}
 
 .loadingState {
   display: grid;
@@ -1190,6 +1247,14 @@
   .entryForm,
   .timeFields {
     grid-template-columns: 1fr;
+  }
+  .inlineCreateFields {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .scheduleDropTarget {
+    margin-inline: 0;
   }
 
   .sessionCard {

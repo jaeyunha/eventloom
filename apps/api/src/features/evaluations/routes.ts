@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { ZodError, z } from "zod";
-import { EvaluationError, forbidden } from "./errors";
+import { EvaluationError, forbidden, notFound } from "./errors";
 import type { EvaluationService } from "./service";
 import type { EvaluationActor } from "./types";
 
@@ -117,6 +117,20 @@ const updatePlanSchema = z.object({
 });
 
 const versionSchema = z.object({ expectedVersion: z.number().int().positive() });
+const distributionPreviewSchema = z.object({
+  roundId: z.string().min(1),
+  submissionIds: z.array(z.string().min(1)).min(1),
+  reviewerIds: z.array(z.string().min(1)).min(1).optional(),
+  expectedVersion: z.number().int().positive(),
+});
+const distributionApplySchema = distributionPreviewSchema.extend({
+  fingerprint: z.string().min(1),
+});
+const replacementSchema = z.object({
+  replacementReviewerId: z.string().min(1),
+  expectedVersion: z.number().int().positive(),
+  reason: z.string().min(1),
+});
 
 const assignmentSchema = z.object({
   roundId: z.string(),
@@ -145,7 +159,7 @@ const confirmScoresSchema = z.object({
 const generateSuggestionsSchema = z.object({});
 const resolveSuggestionSchema = z.object({
   action: z.enum(["accept", "edit", "reject"]),
-  expectedVersion: z.number().int().positive().optional(),
+  expectedVersion: z.number().int().positive(),
   reason: z.string().optional(),
   scores: z.record(z.string(), z.number()).optional(),
   criterionScores: z.record(z.string(), z.number()).optional(),
@@ -558,6 +572,110 @@ export function createEvaluationRoutes(
     );
   });
 
+  routes.post("/plans/:planId/distribution/preview", async (context) => {
+    const body = distributionPreviewSchema.parse(await context.req.json());
+    const currentActor = actor(context);
+    const planId = context.req.param("planId");
+    const plan = await service.getPlan(currentActor, planId);
+    const reviewerIds =
+      body.reviewerIds === undefined || options.reviewerIdentity === undefined
+        ? body.reviewerIds
+        : await options.reviewerIdentity.resolveReviewerIds(currentActor, {
+            eventId: plan.eventId,
+            reviewerIds: body.reviewerIds,
+          });
+    if (reviewerIds === null) {
+      return context.json(
+        {
+          error: {
+            code: "EVALUATION_REVIEWER_NOT_FOUND",
+            message: "Every reviewer must be a verified member of this organization.",
+          },
+        },
+        403,
+      );
+    }
+    return context.json(
+      await service.previewDistribution(currentActor, {
+        planId,
+        ...body,
+        ...(reviewerIds === undefined ? {} : { reviewerIds }),
+      }),
+    );
+  });
+
+  routes.post("/plans/:planId/distribution/apply", async (context) => {
+    const body = distributionApplySchema.parse(await context.req.json());
+    const currentActor = actor(context);
+    const planId = context.req.param("planId");
+    const plan = await service.getPlan(currentActor, planId);
+    const reviewerIds =
+      body.reviewerIds === undefined || options.reviewerIdentity === undefined
+        ? body.reviewerIds
+        : await options.reviewerIdentity.resolveReviewerIds(currentActor, {
+            eventId: plan.eventId,
+            reviewerIds: body.reviewerIds,
+          });
+    if (reviewerIds === null) {
+      return context.json(
+        {
+          error: {
+            code: "EVALUATION_REVIEWER_NOT_FOUND",
+            message: "Every reviewer must be a verified member of this organization.",
+          },
+        },
+        403,
+      );
+    }
+    return context.json(
+      await service.applyDistribution(currentActor, {
+        planId,
+        ...body,
+        ...(reviewerIds === undefined ? {} : { reviewerIds }),
+      }),
+    );
+  });
+
+  routes.post("/plans/:planId/assignments/:assignmentId/replace", async (context) => {
+    const body = replacementSchema.parse(await context.req.json());
+    const currentActor = actor(context);
+    const planId = context.req.param("planId");
+    const plan = await service.getPlan(currentActor, planId);
+    const assignmentId = context.req.param("assignmentId");
+    const assignment = (await service.listOrganizerAssignments(currentActor, planId)).find(
+      (candidate) => candidate.id === assignmentId,
+    );
+    if (assignment === undefined) {
+      throw notFound("The evaluation assignment was not found.");
+    }
+    const replacementReviewerIds =
+      options.reviewerIdentity === undefined
+        ? [body.replacementReviewerId]
+        : await options.reviewerIdentity.resolveReviewerIds(currentActor, {
+            eventId: plan.eventId,
+            reviewerIds: [body.replacementReviewerId],
+          });
+    const replacementReviewerId = replacementReviewerIds?.[0];
+    if (replacementReviewerId === undefined) {
+      return context.json(
+        {
+          error: {
+            code: "EVALUATION_REVIEWER_NOT_FOUND",
+            message: "The replacement reviewer must be a verified organization member.",
+          },
+        },
+        403,
+      );
+    }
+    return context.json(
+      await service.replaceAssignment(currentActor, assignmentId, {
+        replacementReviewerId,
+        expectedVersion: body.expectedVersion,
+        reason: body.reason,
+      }),
+    );
+  });
+
   routes.post("/plans/:planId/reminders", async (context) => {
     const body = reminderSchema.parse(await context.req.json());
     if (options.reminders === undefined) {
@@ -669,6 +787,14 @@ export function createEvaluationRoutes(
         actor(context),
         context.req.param("planId"),
       ),
+    }),
+  );
+  routes.get("/plans/:planId/assignment-history", async (context) =>
+    context.json({
+      history: await service.listAssignmentHistory(actor(context), context.req.param("planId"), {
+        roundId: context.req.query("roundId"),
+        submissionId: context.req.query("submissionId"),
+      }),
     }),
   );
 

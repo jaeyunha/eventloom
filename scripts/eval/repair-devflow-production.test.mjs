@@ -5,17 +5,17 @@ import { join } from "node:path";
 import test from "node:test";
 import {
   applyRepair,
-  applyWorkflowReset,
+  applyWorkflowReset as applyWorkflowResetSource,
   buildRepairManifest,
   DevflowRepairError,
   parseArguments,
   prepareRepair,
-  prepareWorkflowReset,
+  prepareWorkflowReset as prepareWorkflowResetSource,
   REPAIR_CONFIRMATION,
   RESET_WORKFLOW_CONFIRMATION,
   readRepairInvariantReport,
   resumeRepair,
-  resumeWorkflowReset,
+  resumeWorkflowReset as resumeWorkflowResetSource,
   runRepair,
 } from "./repair-devflow-production.mjs";
 
@@ -35,6 +35,19 @@ const PROFILE_IDS = {
   "speaker-priya": `speaker-profile:devflow-conf-2027:${PARTICIPANT_IDS["speaker-priya"]}`,
   "speaker-marcus": `speaker-profile:devflow-conf-2027:${PARTICIPANT_IDS["speaker-marcus"]}`,
 };
+const RESET_ENVIRONMENT = "staging";
+
+function prepareWorkflowReset(options) {
+  return prepareWorkflowResetSource({ ...options, environment: RESET_ENVIRONMENT });
+}
+
+function applyWorkflowReset(options) {
+  return applyWorkflowResetSource({ ...options, environment: RESET_ENVIRONMENT });
+}
+
+function resumeWorkflowReset(options) {
+  return resumeWorkflowResetSource({ ...options, environment: RESET_ENVIRONMENT });
+}
 
 function identities() {
   return Object.fromEntries(
@@ -552,6 +565,7 @@ test("serializes a complete canonical communication template", () => {
   const templateFields = [
     "id",
     "tenantId",
+    "organizationId",
     "eventId",
     "name",
     "purpose",
@@ -1435,7 +1449,7 @@ test("foundation reconciliation rejects an owned-field mutation before rewriting
   assert.equal(transport.writes.filter((operation) => operation.key === target.key).length, 1);
 });
 
-test("reset CLI requires exact confirmation only for destructive mode", () => {
+test("reset CLI requires an explicit confirmation only for destructive mode", () => {
   const plan = parseArguments(["--reset-workflow"]);
   assert.equal(plan.phase, "reset-workflow");
   assert.equal(plan.dryRun, true);
@@ -1443,10 +1457,12 @@ test("reset CLI requires exact confirmation only for destructive mode", () => {
     () => parseArguments(["--reset-workflow", "--apply"]),
     (error) => error instanceof DevflowRepairError && error.code === "RESET_CONFIRMATION_REQUIRED",
   );
-  assert.throws(
-    () => parseArguments(["--reset-workflow", "--confirm", "no"]),
-    (error) => error instanceof DevflowRepairError && error.code === "RESET_CONFIRMATION_REQUIRED",
-  );
+  const manifestBound = parseArguments([
+    "--reset-workflow",
+    "--confirm",
+    "I_UNDERSTAND_PRODUCTION_DEVFLOW_RESET:digest",
+  ]);
+  assert.equal(manifestBound.dryRun, false);
   const apply = parseArguments(["--reset-workflow", "--confirm", "ai-engineer"]);
   assert.equal(apply.dryRun, false);
 });

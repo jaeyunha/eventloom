@@ -101,20 +101,23 @@ test("server-authorized context switching ignores event query guesses and is key
     false,
   );
 
-  const accountMenu = page.getByRole("button", { name: "Account menu" });
+  const accountMenu = page.getByRole("button", { name: "Switch event or participant" });
   await accountMenu.focus();
   await page.keyboard.press("Enter");
-  const menu = page.getByRole("menu", { name: "Switch event" });
+  const menu = page.getByRole("menu", { name: "Switch event or participant" });
   await expect(menu).toBeVisible();
-  await expect(menu.getByRole("menuitem")).toHaveCount(2);
+  const eventOptions = menu.getByRole("menuitemradio", { name: /Summit$/ });
+  await expect(eventOptions).toHaveCount(2);
   await page.keyboard.press("Tab");
-  await expect(menu.getByRole("menuitem").first()).toBeFocused();
+  await expect(eventOptions.first()).toBeFocused();
 
-  const collaboration = menu.getByRole("menuitem", { name: "Collaborative Systems Summit" });
+  const collaboration = menu.getByRole("menuitemradio", {
+    name: "Collaborative Systems Summit",
+  });
   await collaboration.focus();
   await page.keyboard.press("Enter");
   await expect(page.getByRole("heading", { level: 1, name: "Welcome, Bea" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Account menu" })).toContainText(
+  await expect(page.getByRole("button", { name: "Switch event or participant" })).toContainText(
     "Collaborative Systems Summit",
   );
   expect(api.view.context?.eventId).toBe("event-collaboration");
@@ -159,8 +162,8 @@ test("co-speaker roster exposes only server-authorized permissions and clears st
   expect(api.view.roster?.organizationId).toBe("ai-engineer");
   expect(api.view.roster?.members.some((member) => member.status === "revoked")).toBe(true);
 
-  await page.getByRole("button", { name: "Account menu" }).click();
-  await page.getByRole("menuitem", { name: "Collaborative Systems Summit" }).click();
+  await page.getByRole("button", { name: "Switch event or participant" }).click();
+  await page.getByRole("menuitemradio", { name: "Collaborative Systems Summit" }).click();
   await expect(
     page.getByRole("heading", { level: 1, name: "This workspace is not available" }),
   ).toBeVisible();
@@ -180,8 +183,8 @@ test("switching context clears files before loading the next event", async ({
     page.getByRole("heading", { level: 3, name: "calm-incident-response.pdf" }),
   ).toBeVisible();
 
-  await page.getByRole("button", { name: "Account menu" }).click();
-  await page.getByRole("menuitem", { name: "Collaborative Systems Summit" }).click();
+  await page.getByRole("button", { name: "Switch event or participant" }).click();
+  await page.getByRole("menuitemradio", { name: "Collaborative Systems Summit" }).click();
   await expect(
     page.getByRole("heading", { level: 1, name: "Collaborative Systems Summit" }),
   ).toBeVisible();
@@ -191,8 +194,8 @@ test("switching context clears files before loading the next event", async ({
   ).toHaveCount(0);
   expect(api.view.assets).toEqual([]);
 
-  await page.getByRole("button", { name: "Account menu" }).click();
-  await page.getByRole("menuitem", { name: "Evaluator Summit" }).click();
+  await page.getByRole("button", { name: "Switch event or participant" }).click();
+  await page.getByRole("menuitemradio", { name: "Evaluator Summit" }).click();
   await expect(
     page.getByRole("heading", { level: 3, name: "calm-incident-response.pdf" }),
   ).toBeVisible();
@@ -216,10 +219,8 @@ test("speaker privately uploads, finalizes, histories, comments, and downloads a
   await page.getByRole("button", { name: "Upload privately" }).click();
   const uploaded = page.getByRole("article", { name: "runbook.txt" });
   await expect(uploaded).toBeVisible();
-  await expect(uploaded.getByText("pending upload · Current v1", { exact: true })).toBeVisible();
-  expect(api.view.assets?.find((asset) => asset.fileName === "runbook.txt")?.state).toBe(
-    "pending_upload",
-  );
+  await expect(uploaded.getByText("ready · Current v1", { exact: true })).toBeVisible();
+  expect(api.view.assets?.find((asset) => asset.fileName === "runbook.txt")?.state).toBe("ready");
   expect(
     api.requests.some(
       (request) => request.method() === "POST" && request.url().endsWith("/uploads"),
@@ -235,9 +236,7 @@ test("speaker privately uploads, finalizes, histories, comments, and downloads a
   expect(JSON.stringify(api.payloads)).not.toContain("privateNote");
 
   await uploaded.getByText("Version history and comments", { exact: true }).click();
-  await expect(uploaded.getByText(/Version 1 · runbook\.txt · pending_upload/u)).toBeVisible();
-  await uploaded.getByRole("button", { name: "Mark finalized" }).click();
-  await expect(uploaded.getByText("ready · Current v1", { exact: true })).toBeVisible();
+  await expect(uploaded.getByText(/Version 1 · runbook\.txt · ready/u)).toBeVisible();
 
   await uploaded.getByLabel("Add a comment").fill("Use this runbook in the speaker briefing.");
   await uploaded.getByRole("button", { name: "Post comment" }).click();

@@ -191,112 +191,189 @@ export function findProfileForTask(task: PortalTask, profiles: readonly PortalPr
 }
 
 export function findSubmissionForTask(task: PortalTask, submissions: readonly PortalSubmission[]) {
+  if (task.submissionId === null) {
+    return undefined;
+  }
+  const submissionId = task.submissionId;
   return submissions.find(
     (submission) =>
       submission.eventId === task.eventId &&
       submission.participantIds.includes(task.participantId) &&
-      portalSubmissionIdsMatch(submission.id, task.submissionId),
+      portalSubmissionIdsMatch(submission.id, submissionId),
   );
 }
+
+function normalizedIds(values: readonly string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter((value) => value.length > 0))];
+}
+
+function authorizedSubmissionIds(
+  context: PortalContext,
+  requestedSubmissionIds?: readonly string[],
+): string[] {
+  const authorized = normalizedIds(context.submissionIds);
+  const requested = normalizedIds(requestedSubmissionIds ?? authorized);
+  return requested.filter((submissionId) =>
+    authorized.some((authorizedId) => portalSubmissionIdsMatch(authorizedId, submissionId)),
+  );
+}
+
+function participantIsAuthorized(context: PortalContext, participantId: string): boolean {
+  const normalizedParticipantId = participantId.trim();
+  const authorizedParticipantIds = context.authorizedParticipantIds ?? context.participantIds;
+  return (
+    context.eventId.trim().length > 0 &&
+    normalizedParticipantId.length > 0 &&
+    authorizedParticipantIds.some((authorizedId) => authorizedId === normalizedParticipantId)
+  );
+}
+
+export function portalSelectedParticipantId(
+  context: PortalContext | null | undefined,
+  requestedParticipantId?: string | null,
+): string | null {
+  if (context === null || context === undefined || context.eventId.trim().length === 0) {
+    return null;
+  }
+  const requested = requestedParticipantId?.trim();
+  if (requested !== undefined && requested.length > 0) {
+    return participantIsAuthorized(context, requested) ? requested : null;
+  }
+  const primary = context.primaryParticipantId?.trim();
+  return primary !== undefined && participantIsAuthorized(context, primary) ? primary : null;
+}
+
+export function scopePortalContextToAuthorizedParticipants(
+  context: PortalContext,
+  selectedParticipantId?: string | null,
+  submissionIds?: readonly string[],
+): PortalContext {
+  const participantIds = normalizedIds(context.authorizedParticipantIds ?? context.participantIds);
+  const selected = portalSelectedParticipantId(
+    { ...context, participantIds, authorizedParticipantIds: participantIds },
+    selectedParticipantId ?? context.selectedParticipantId,
+  );
+  const primary = selected ?? portalSelectedParticipantId({ ...context, participantIds });
+  const scopedSubmissionIds = authorizedSubmissionIds(context, submissionIds);
+  return {
+    ...context,
+    eventId: context.eventId.trim(),
+    participantIds,
+    authorizedParticipantIds: participantIds,
+    submissionIds: scopedSubmissionIds,
+    ...(primary === null
+      ? { selectedParticipantId: null }
+      : { primaryParticipantId: primary, selectedParticipantId: primary }),
+  };
+}
+
+export function scopePortalContextToParticipant(
+  context: PortalContext,
+  participantId: string | null,
+  submissionIds?: readonly string[],
+): PortalContext {
+  return scopePortalContextToAuthorizedParticipants(context, participantId, submissionIds);
+}
+
+/** Legacy primary-only projection retained for callers that intentionally request one participant. */
 export function scopePortalContextToPrimaryParticipant(
   context: PortalContext,
   submissionIds?: readonly string[],
 ): PortalContext {
-  const primaryParticipantId = context.primaryParticipantId?.trim();
-  const hasValidPrimaryParticipant =
-    context.eventId.length > 0 &&
-    primaryParticipantId !== undefined &&
-    primaryParticipantId.length > 0 &&
-    context.participantIds.includes(primaryParticipantId);
-  const {
-    participantIds: _participantIds,
-    submissionIds: _submissionIds,
-    primaryParticipantId: _primaryParticipantId,
-    ...contextWithoutParticipants
-  } = context;
-  const requestedSubmissionIds = submissionIds ?? context.submissionIds;
-  const scopedSubmissionIds = requestedSubmissionIds.filter((submissionId) =>
-    context.submissionIds.some((authorizedId) =>
-      portalSubmissionIdsMatch(authorizedId, submissionId),
-    ),
-  );
-  return hasValidPrimaryParticipant
-    ? {
-        ...contextWithoutParticipants,
-        participantIds: [primaryParticipantId],
-        submissionIds: scopedSubmissionIds,
-        primaryParticipantId,
-      }
-    : { ...contextWithoutParticipants, participantIds: [], submissionIds: [] };
+  const primary = context.primaryParticipantId?.trim();
+  if (!primary || !participantIsAuthorized(context, primary)) {
+    return {
+      ...context,
+      participantIds: [],
+      authorizedParticipantIds: [],
+      submissionIds: [],
+      selectedParticipantId: null,
+    };
+  }
+  const scoped = scopePortalContextToAuthorizedParticipants(context, primary, submissionIds);
+  return {
+    ...scoped,
+    participantIds: [primary],
+    authorizedParticipantIds: [primary],
+    primaryParticipantId: primary,
+    selectedParticipantId: primary,
+  };
 }
 
-export function scopePortalViewToPrimaryParticipant(
+function emptyScopedPortalView(
   view: PortalView | null | undefined,
   context: PortalContext | null | undefined,
+  scopedContext: PortalContext | undefined,
+): PortalView {
+  const capabilities = view?.capabilities === undefined ? undefined : [...view.capabilities];
+  return {
+    submissions: [],
+    profiles: [],
+    tasks: [],
+    outstandingTaskCount: 0,
+    assets: [],
+    ...(capabilities === undefined ? {} : { capabilities }),
+    ...(scopedContext === undefined ? {} : { context: scopedContext }),
+  };
+}
+
+export function scopePortalViewToAuthorizedParticipants(
+  view: PortalView | null | undefined,
+  context: PortalContext | null | undefined,
+  selectedParticipantId?: string | null,
 ): PortalView {
   const scopedContext =
     context === null || context === undefined
       ? undefined
-      : scopePortalContextToPrimaryParticipant(context);
-  const primaryParticipantId = scopedContext?.primaryParticipantId;
-  const validPrimaryParticipant = primaryParticipantId !== undefined;
-
-  const capabilities = view?.capabilities === undefined ? undefined : [...view.capabilities];
-  if (
-    !validPrimaryParticipant ||
-    view === null ||
-    view === undefined ||
-    context === null ||
-    context === undefined
-  ) {
-    return {
-      submissions: [],
-      profiles: [],
-      tasks: [],
-      outstandingTaskCount: 0,
-      assets: [],
-      ...(capabilities === undefined ? {} : { capabilities }),
-      ...(scopedContext === undefined ? {} : { context: scopedContext }),
-    };
+      : scopePortalContextToAuthorizedParticipants(context, selectedParticipantId);
+  if (view === null || view === undefined || scopedContext === undefined) {
+    return emptyScopedPortalView(view, context, scopedContext);
   }
 
-  const eventId = context.eventId;
-  const submissions = view.submissions
-    .filter(
-      (submission) =>
-        submission.eventId === eventId &&
-        submission.participantIds.includes(primaryParticipantId) &&
-        context.submissionIds.some((authorizedId) =>
-          portalSubmissionIdsMatch(authorizedId, submission.id),
-        ),
-    )
-    .map((submission) => ({ ...submission, participantIds: [primaryParticipantId] }));
-  const submissionIds = submissions.map((submission) => submission.id);
+  const eventId = scopedContext.eventId;
+  const selectedParticipant = scopedContext.selectedParticipantId ?? null;
+  const authorizedIds = scopedContext.submissionIds;
   const submissionMatches = (submissionId: string): boolean =>
-    submissionIds.some((scopedSubmissionId) =>
-      portalSubmissionIdsMatch(scopedSubmissionId, submissionId),
-    );
-  const tasks = view.tasks.filter(
-    (task) =>
-      task.eventId === eventId &&
-      task.owner === "speaker" &&
-      task.participantId === primaryParticipantId &&
-      submissionMatches(task.submissionId),
-  );
+    authorizedIds.some((authorizedId) => portalSubmissionIdsMatch(authorizedId, submissionId));
+  const submissions = view.submissions
+    .filter((submission) => submission.eventId === eventId && submissionMatches(submission.id))
+    .map((submission) => ({
+      ...submission,
+      participantIds: submission.participantIds.filter((participantId) =>
+        scopedContext.participantIds.includes(participantId),
+      ),
+    }));
+  const tasks =
+    selectedParticipant === null
+      ? []
+      : view.tasks.filter(
+          (task) =>
+            task.eventId === eventId &&
+            task.owner === "speaker" &&
+            task.participantId === selectedParticipant &&
+            (task.submissionId === null || submissionMatches(task.submissionId)),
+        );
   const taskIds = new Set(tasks.map((task) => task.id));
-  const assets = (view.assets ?? []).filter(
-    (asset) =>
-      asset.eventId === eventId &&
-      asset.participantId === primaryParticipantId &&
-      (asset.taskId === undefined || taskIds.has(asset.taskId)) &&
-      (asset.submissionId === undefined || submissionMatches(asset.submissionId)),
-  );
+  const assets =
+    selectedParticipant === null
+      ? []
+      : (view.assets ?? []).filter(
+          (asset) =>
+            asset.eventId === eventId &&
+            asset.participantId === selectedParticipant &&
+            (asset.taskId === undefined || taskIds.has(asset.taskId)) &&
+            (asset.submissionId === undefined || submissionMatches(asset.submissionId)),
+        );
 
   return {
     submissions,
-    profiles: view.profiles.filter(
-      (profile) => profile.eventId === eventId && profile.participantId === primaryParticipantId,
-    ),
+    profiles:
+      selectedParticipant === null
+        ? []
+        : view.profiles.filter(
+            (profile) =>
+              profile.eventId === eventId && profile.participantId === selectedParticipant,
+          ),
     tasks,
     outstandingTaskCount: tasks.filter((task) => !isTaskFinished(task)).length,
     assets,
@@ -318,10 +395,106 @@ export function scopePortalViewToPrimaryParticipant(
       ? {}
       : { resources: view.resources.map((resource) => ({ ...resource })) }),
     ...(view.wiki === undefined ? {} : { wiki: view.wiki.map((page) => ({ ...page })) }),
-    ...(capabilities === undefined ? {} : { capabilities }),
-    context: scopePortalContextToPrimaryParticipant(context, submissionIds),
+    ...(view.capabilities === undefined ? {} : { capabilities: [...view.capabilities] }),
+    context: scopedContext,
   };
 }
+
+export function scopePortalViewToParticipant(
+  view: PortalView | null | undefined,
+  context: PortalContext | null | undefined,
+  selectedParticipantId?: string | null,
+): PortalView {
+  return scopePortalViewToAuthorizedParticipants(view, context, selectedParticipantId);
+}
+
+/** Legacy primary-only projection retained for existing task/file callers. */
+export function scopePortalViewToPrimaryParticipant(
+  view: PortalView | null | undefined,
+  context: PortalContext | null | undefined,
+): PortalView {
+  const scopedContext =
+    context === null || context === undefined
+      ? undefined
+      : scopePortalContextToPrimaryParticipant(context);
+  const scoped = scopePortalViewToAuthorizedParticipants(
+    view,
+    scopedContext,
+    scopedContext?.primaryParticipantId,
+  );
+  if (scopedContext === undefined || scopedContext.primaryParticipantId === undefined) {
+    return scoped;
+  }
+  const primaryParticipantId = scopedContext.primaryParticipantId;
+  const submissions = scoped.submissions.filter((submission) =>
+    submission.participantIds.includes(primaryParticipantId),
+  );
+  const submissionIds = submissions.map((submission) => submission.id);
+  const matches = (submissionId: string | null): boolean =>
+    submissionId !== null &&
+    submissionIds.some((authorizedId) => portalSubmissionIdsMatch(authorizedId, submissionId));
+  const tasks = scoped.tasks.filter((task) => matches(task.submissionId));
+  const taskIds = new Set(tasks.map((task) => task.id));
+  const assets = (scoped.assets ?? []).filter(
+    (asset) =>
+      (asset.taskId === undefined || taskIds.has(asset.taskId)) &&
+      (asset.submissionId === undefined || matches(asset.submissionId)),
+  );
+  return {
+    ...scoped,
+    submissions,
+    tasks,
+    assets,
+    outstandingTaskCount: tasks.filter((task) => !isTaskFinished(task)).length,
+    context: scopePortalContextToPrimaryParticipant(scopedContext, submissionIds),
+  };
+}
+
+export function profileRevisionIsStrictlyIncreasing(
+  previousVersion: number,
+  returnedProfile: PortalProfile | null | undefined,
+): boolean {
+  return (
+    returnedProfile !== null &&
+    returnedProfile !== undefined &&
+    Number.isInteger(returnedProfile.version) &&
+    returnedProfile.version > previousVersion
+  );
+}
+
+export type PortalProfileMutationClassification =
+  | { state: "saved"; revision: number }
+  | { state: "failure"; message: string };
+
+export function classifyPortalProfileMutation(
+  returnedProfile: PortalProfile | null | undefined,
+  expected: { eventId: string; participantId: string; version: number },
+): PortalProfileMutationClassification {
+  if (returnedProfile === null || returnedProfile === undefined) {
+    return {
+      state: "failure",
+      message: "The profile response did not include an authoritative profile.",
+    };
+  }
+  if (
+    returnedProfile.eventId !== expected.eventId ||
+    returnedProfile.participantId !== expected.participantId
+  ) {
+    return {
+      state: "failure",
+      message: "The saved profile does not match the active speaker.",
+    };
+  }
+  if (!profileRevisionIsStrictlyIncreasing(expected.version, returnedProfile)) {
+    return {
+      state: "failure",
+      message: "The saved profile revision did not advance authoritatively.",
+    };
+  }
+  return { state: "saved", revision: returnedProfile.version };
+}
+
+export const profileMutationStateFor = classifyPortalProfileMutation;
 
 export function portalProfileHeadshot(
   profile: PortalProfile,
@@ -344,28 +517,29 @@ export function portalTaskAsset(
   task: PortalTask,
   assets: readonly PortalAsset[],
 ): PortalAsset | undefined {
-  return assets
-    .filter(
-      (asset) =>
-        asset.taskId === task.id &&
-        asset.eventId === task.eventId &&
-        asset.participantId === task.participantId &&
-        (asset.submissionId === undefined ||
+  const candidates = assets.filter(
+    (asset) =>
+      asset.taskId === task.id &&
+      asset.eventId === task.eventId &&
+      asset.participantId === task.participantId &&
+      (task.submissionId === null
+        ? asset.submissionId === undefined
+        : asset.submissionId === undefined ||
           portalSubmissionIdsMatch(asset.submissionId, task.submissionId)),
-    )
-    .reduce<PortalAsset | undefined>((latest, candidate) => {
-      if (latest === undefined) {
-        return candidate;
-      }
-      const versionDifference = (candidate.version ?? 0) - (latest.version ?? 0);
-      if (versionDifference !== 0) {
-        return versionDifference > 0 ? candidate : latest;
-      }
-      if (candidate.createdAt !== latest.createdAt) {
-        return candidate.createdAt > latest.createdAt ? candidate : latest;
-      }
-      return candidate.id > latest.id ? candidate : latest;
-    }, undefined);
+  );
+  return candidates.reduce<PortalAsset | undefined>((latest, candidate) => {
+    if (latest === undefined) {
+      return candidate;
+    }
+    const versionDifference = (candidate.version ?? 0) - (latest.version ?? 0);
+    if (versionDifference !== 0) {
+      return versionDifference > 0 ? candidate : latest;
+    }
+    if (candidate.createdAt !== latest.createdAt) {
+      return candidate.createdAt > latest.createdAt ? candidate : latest;
+    }
+    return candidate.id > latest.id ? candidate : latest;
+  }, undefined);
 }
 
 export function portalIdentityProfile(

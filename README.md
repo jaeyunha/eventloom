@@ -1,6 +1,6 @@
 # Open Sessionboard
 
-Open Sessionboard is an open-source, program-side Sessionboard alternative for event-production teams. It covers call-for-proposals intake, speaker operations, human-authoritative review and communications, conflict-safe scheduling, publication, and public distribution. It is not a full CRM or marketing suite; the built-in Speaker CRM described below is in scope.
+Open Sessionboard is source-available, program-side Sessionboard alternative for event-production teams. It covers call-for-proposals intake, speaker operations, human-authoritative review and communications, conflict-safe scheduling, publication, and public distribution. It is not a full CRM or marketing suite; the built-in Speaker CRM described below is in scope.
 
 ## Product truth, status, and evidence
 
@@ -15,6 +15,12 @@ Use this precedence when sources disagree:
 5. [`docs/llm-judge-runs.md`](docs/llm-judge-runs.md) records evaluator evidence, coverage, and limitations.
 
 The repository and local or mocked checks do not by themselves constitute release verification. Evidence artifacts and cited product research are retained under [`evidence/`](evidence/) and linked from the spec.
+
+Integration with Airtable is a competition requirement documented in the
+retained [`Kill My SaaS competition brief`](evidence/sources/kill-my-saas-brief.pdf).
+For that reason, Airtable is the authoritative store for program and business
+records, not an optional adapter. Self-hosters must provide a separate Airtable
+base and restricted personal access token for each environment.
 
 ## Supported scope
 
@@ -61,17 +67,16 @@ OpenSend uses:
 
 ## Hosting and domains
 
-The current staging Workers endpoints are:
+The repository does not publish an operator's Cloudflare account ID, D1 IDs, or
+`workers.dev` subdomain. Each deployment supplies its account and resource
+identity through ignored environment files. The committed Wrangler
+configuration contains non-deployable placeholders and stable public binding
+names only.
 
-- Web: `https://open-sessionboard-web-staging.ashleyha0317.workers.dev`
-- API: `https://open-sessionboard-api-staging.ashleyha0317.workers.dev`
-
-The current production Workers endpoints are:
-
-- Web: `https://open-sessionboard-web-production.ashleyha0317.workers.dev`
-- API: `https://open-sessionboard-api-production.ashleyha0317.workers.dev`
-
-These pinned `workers.dev` origins are the current hosts. `https://sessionboard.namuh.co` for web and `https://api.sessionboard.namuh.co` for API are recommended stable custom domains, but they remain pending and unconfigured; do not present them as current deployment URLs.
+Operators set `NEXT_PUBLIC_APP_URL`, `API_UPSTREAM_ORIGIN`, `WEB_ORIGIN`, and
+`API_URL` to their deployed HTTPS origins. Custom domains are recommended for
+stable production URLs, but no domain is claimed as part of the public source
+distribution.
 
 ## Repository policy
 
@@ -80,7 +85,7 @@ Forge and GitHub are intentional dual mirrors:
 - Forge: `https://forge.smol.ai/jaeyunha/open-sessionboard`
 - GitHub: `https://github.com/jaeyunha/open-sessionboard`
 
-Both mirrors remain private until the release gate passes. Forge is retained for competition-bonus eligibility. Neither mirror should be described as public before that gate, and Forge is not the sole repository mirror.
+Both mirrors are currently private. Forge is retained for competition-bonus eligibility. Public visibility is a separate operator-controlled action and must not happen until the checklist in [`docs/public-release.md`](docs/public-release.md) passes.
 
 ## Local development
 
@@ -98,6 +103,77 @@ make dev
 The web app runs at `http://127.0.0.1:3015`, the API at `http://127.0.0.1:8787`, and the Mailpit inbox at `http://127.0.0.1:8025`. Integrated local mode never reads `AIRTABLE_BASE_ID` or deployed OpenSend credentials. Use `RUNTIME_PROFILE=fixture NEXT_PUBLIC_RUNTIME_PROFILE=fixture make dev` only for deterministic fixture work; Playwright selects both variables explicitly.
 
 For isolated agent work, `./hack/create_worktree.sh <name> <base-ref>` creates a sanitized local `.env` by default and never copies provider credentials. Use `--env-mode copy` only for guarded integration/release work. Local, staging, and production resources and credentials must remain separate. See [`docs/setup.md`](docs/setup.md).
+
+## Self-host on Cloudflare
+
+Competition hosts and public users can run their own isolated deployment. You
+need:
+
+- a Cloudflare account with Workers, D1, Durable Objects, R2, and Queues;
+- an Airtable personal access token and base;
+- a public HTTPS origin for the web Worker and another for the API Worker; and
+- Bun 1.3 or newer.
+
+OpenSend and OpenAI are optional until you enable outbound delivery or advisory
+AI. Better Auth secrets, provider tokens, and all operator resource IDs stay in
+ignored environment files or Cloudflare Worker Secrets.
+
+### 1. Install and configure
+
+```bash
+git clone https://github.com/jaeyunha/open-sessionboard.git
+cd open-sessionboard
+bun install
+
+cp .env.example .env
+cp .env.cloudflare.example .env.cloudflare-staging
+cp .env.cloudflare.example .env.cloudflare-production
+```
+
+Set the Airtable and authentication values in `.env`. In each
+`.env.cloudflare-<environment>` file, set:
+
+```dotenv
+CLOUDFLARE_ACCOUNT_ID=<your-account-id>
+D1_DATABASE_ID=<your-d1-database-id>
+WEB_ORIGIN=https://your-web.example.com
+API_URL=https://your-api.example.com
+NEXT_PUBLIC_APP_URL=https://your-web.example.com
+API_UPSTREAM_ORIGIN=https://your-api.example.com
+```
+
+Use separate D1, R2, Queue, Airtable, and credential resources for staging and
+production. The checked-in Wrangler files contain public placeholders only.
+Deployment generates the ignored `apps/api/wrangler.generated.toml`; do not
+commit that file or either `.env.cloudflare-*` file.
+
+### 2. Validate before deploying
+
+```bash
+node scripts/cloudflare/dry-run.mjs staging
+node scripts/cloudflare/deploy-web.mjs staging --dry-run
+make check
+make test
+```
+
+### 3. Deploy
+
+Supply `CLOUDFLARE_API_TOKEN` through the shell, root `.env`, or your CI secret
+store. Before the first deployment, add the required Airtable, Better Auth, and
+cache-invalidation values as Cloudflare Worker Secrets; follow
+[`docs/setup.md`](docs/setup.md#cloudflare-worker-deployment). Then run:
+
+```bash
+node scripts/cloudflare/deploy.mjs staging open-sessionboard:staging
+node scripts/cloudflare/deploy-web.mjs staging open-sessionboard-web:staging
+```
+
+Repeat with `production` only after the staging deployment passes the
+[QA runbook](docs/qa-runbook.md). The API deploy applies D1 migrations before
+publishing the Worker. Configure optional Worker Secrets, custom domains,
+OpenSend, OpenAI, and provider callbacks as described in
+[`docs/setup.md`](docs/setup.md) and
+[`docs/release-runbook.md`](docs/release-runbook.md).
 
 ## Quality commands
 
@@ -118,4 +194,4 @@ See the [API guide](docs/api.md), [OpenAPI contract](openapi/openapi.yaml), [cal
 
 ## License
 
-AGPL-3.0-or-later.
+Elastic License 2.0 (`Elastic-2.0`). This is source-available, not OSI open-source software.

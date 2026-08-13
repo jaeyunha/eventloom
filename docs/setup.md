@@ -2,19 +2,21 @@
 
 Open Sessionboard has two separately deployed services: a Next.js web Worker and a Hono API Worker. This guide describes the repository's current configuration and the operator procedures; it does not claim that an environment has been provisioned, deployed, or release-verified. Keep resource IDs and all secret values in the operator's secret manager or in ignored environment files.
 
-## Scope and current origins
+## Scope and deployment origins
 
 The built-in Speaker CRM is supported first-party product scope. Accelevents is a separate external event-platform integration, not the built-in CRM, and is unsupported by the current runtime; it has no credentials, setup, preflight, QA, monitoring, or release step here. Interactive authentication is Better Auth email/password plus verified email and one-time email links.
 
-The current deployment contract is pinned to these origins:
+The deployment contract is supplied per operator environment:
 
 | Environment | Web origin | API origin | Current hosting state |
 | --- | --- | --- | --- |
 | Local | `http://127.0.0.1:3015` | `http://127.0.0.1:8787` | Local processes; browser uses same-origin `/api/*` through the web proxy |
-| Staging | `https://open-sessionboard-web-staging.ashleyha0317.workers.dev` | `https://open-sessionboard-api-staging.ashleyha0317.workers.dev` | Cloudflare Workers with `workers_dev = true` |
-| Production | `https://open-sessionboard-web-production.ashleyha0317.workers.dev` | `https://open-sessionboard-api-production.ashleyha0317.workers.dev` | Cloudflare Workers with `workers_dev = true` |
+| Staging | `NEXT_PUBLIC_APP_URL` / `WEB_ORIGIN` | `API_UPSTREAM_ORIGIN` / `API_URL` | Operator-supplied Cloudflare Workers origins |
+| Production | `NEXT_PUBLIC_APP_URL` / `WEB_ORIGIN` | `API_UPSTREAM_ORIGIN` / `API_URL` | Operator-supplied Cloudflare Workers origins |
 
-`https://sessionboard.namuh.co` (web) and `https://api.sessionboard.namuh.co` (API) are the recommended future stable public contract. DNS, Worker bindings, cookies, CORS, callbacks, and health checks for those names are **pending**; do not use them as current origins or claim that routes are configured. The pinned Workers origins remain the only deployment inputs accepted by the current scripts.
+Custom domains are recommended for a stable public contract. DNS, Worker
+bindings, cookies, CORS, callbacks, and health checks must be verified by each
+operator before those domains are used as deployment inputs.
 
 ## Prerequisites and isolation
 
@@ -128,15 +130,53 @@ Use a separate key and the corresponding `production` environment only after sta
 
 ## Cloudflare resources and API deployment
 
-For staging and production, provision the environment-suffixed D1 database, private R2 bucket, and outbox Queue named in `apps/api/wrangler.toml`, then replace only the target environment's placeholder D1 ID with the real ID. Keep the binding names `DB`, `AGENDA_COORDINATOR`, `PRIVATE_FILES`, and `OUTBOX_QUEUE` unchanged. The committed staging and production Worker environments intentionally keep `workers_dev = true` and the pinned origins above.
-Set `WEB_ORIGIN` to the web origin and `API_ORIGIN` to the API origin in the corresponding Wrangler environment; both values must remain the exact pinned origins above.
+For staging and production, provision the environment-suffixed D1 database,
+private R2 bucket, and outbox Queue named in `apps/api/wrangler.toml`. Put the
+real `CLOUDFLARE_ACCOUNT_ID`, `D1_DATABASE_ID`, `WEB_ORIGIN`, `API_URL`,
+`NEXT_PUBLIC_APP_URL`, and `API_UPSTREAM_ORIGIN` in that environment's ignored
+file. Keep the binding names `DB`, `AGENDA_COORDINATOR`, `PRIVATE_FILES`, and
+`OUTBOX_QUEUE` unchanged. The deployment script renders
+`apps/api/wrangler.generated.toml` for the selected environment and never
+modifies the committed template.
+
+Copy `.env.cloudflare.example` to `.env.cloudflare-staging` and
+`.env.cloudflare-production`. These files are ignored. The root `.env` may
+hold shared credentials such as `CLOUDFLARE_API_TOKEN`; the target Cloudflare
+environment file supplies account, resource, and origin identity.
+
+Before deploying the API Worker, configure required Worker Secrets for each
+environment. Never place these values in Wrangler configuration or commit them:
+
+```bash
+for secret in \
+  AIRTABLE_ACCESS_TOKEN \
+  AIRTABLE_BASE_ID \
+  BETTER_AUTH_SECRET \
+  CACHE_INVALIDATION_TOKEN; do
+  bunx wrangler secret put "$secret" --cwd apps/api --env staging
+done
+```
+
+Repeat with `--env production` and production-specific values. Add
+`OPENSEND_API_KEY` when outbound email is enabled and `OPENAI_API_KEY` when
+`AI_PROVIDER=openai`. Configure other integration secrets from `.env.example`
+only when that integration is enabled.
+
+Set `WEB_ORIGIN` to the web origin and `API_URL` to the API origin in the
+corresponding ignored environment file. The generated Wrangler configuration
+uses those values for `WEB_ORIGIN` and `API_ORIGIN`.
 
 Validate and dry-run before a guarded API deployment:
 
 ```bash
-node scripts/cloudflare/validate-config.mjs --environment staging
 node scripts/cloudflare/dry-run.mjs staging
-node scripts/cloudflare/validate-config.mjs --environment staging --deployment
+node scripts/cloudflare/validate-config.mjs \
+  --environment staging \
+  --config apps/api/wrangler.generated.toml
+node scripts/cloudflare/validate-config.mjs \
+  --environment staging \
+  --deployment \
+  --config apps/api/wrangler.generated.toml
 ```
 
 After migration compatibility, backup/recovery ownership, and release approval are recorded, the API deployment command is:
@@ -149,13 +189,17 @@ Use `production open-sessionboard:production` for production. The command requir
 
 ## Guarded web deployment
 
-The web deploy script accepts only the pinned Workers origins for non-local environments. It requires the exact `NEXT_PUBLIC_APP_URL`, server-only `API_UPSTREAM_ORIGIN`, and deployment token. `API_UPSTREAM_ORIGIN` is validated as the API Worker origin and configured for the server-side proxy; browsers always use same-origin `/api/*` through the browser-visible `NEXT_PUBLIC_APP_URL`. Organization scope comes from authenticated memberships and organization-qualified routes, not a browser deployment variable.
+The web deploy script requires operator-supplied `NEXT_PUBLIC_APP_URL`,
+server-only `API_UPSTREAM_ORIGIN`, and the deployment token for non-local
+environments. Both URLs must be HTTPS origins. `API_UPSTREAM_ORIGIN` configures
+the server-side proxy; browsers always use same-origin `/api/*` through
+`NEXT_PUBLIC_APP_URL`.
 
 A no-side-effect build/Wrangler check is available before the guarded deployment:
 
 ```bash
-NEXT_PUBLIC_APP_URL='https://open-sessionboard-web-staging.ashleyha0317.workers.dev' \
-API_UPSTREAM_ORIGIN='https://open-sessionboard-api-staging.ashleyha0317.workers.dev' \
+NEXT_PUBLIC_APP_URL='https://web-staging.example.com' \
+API_UPSTREAM_ORIGIN='https://api-staging.example.com' \
 node scripts/cloudflare/deploy-web.mjs staging --dry-run
 ```
 
@@ -163,8 +207,8 @@ Deploy staging only after the API and release gates authorize it. The shell guar
 
 ```bash
 set -eu
-export NEXT_PUBLIC_APP_URL='https://open-sessionboard-web-staging.ashleyha0317.workers.dev'
-export API_UPSTREAM_ORIGIN='https://open-sessionboard-api-staging.ashleyha0317.workers.dev'
+export NEXT_PUBLIC_APP_URL='https://web-staging.example.com'
+export API_UPSTREAM_ORIGIN='https://api-staging.example.com'
 : "${CLOUDFLARE_API_TOKEN:?set the staging deployment token from the secret manager}"
 node scripts/cloudflare/deploy-web.mjs staging open-sessionboard-web:staging
 ```
@@ -173,8 +217,8 @@ The production form is identical except for the pinned production origins and co
 
 ```bash
 set -eu
-export NEXT_PUBLIC_APP_URL='https://open-sessionboard-web-production.ashleyha0317.workers.dev'
-export API_UPSTREAM_ORIGIN='https://open-sessionboard-api-production.ashleyha0317.workers.dev'
+export NEXT_PUBLIC_APP_URL='https://web-production.example.com'
+export API_UPSTREAM_ORIGIN='https://api-production.example.com'
 : "${CLOUDFLARE_API_TOKEN:?set the production deployment token from the secret manager}"
 node scripts/cloudflare/deploy-web.mjs production open-sessionboard-web:production
 ```
@@ -204,8 +248,8 @@ Evaluator preparation is separate from deployment and is never release evidence 
 ```bash
 set -eu
 export EVAL_ENVIRONMENT=staging
-export EVAL_WEB_ORIGIN='https://open-sessionboard-web-staging.ashleyha0317.workers.dev'
-export EVAL_API_ORIGIN='https://open-sessionboard-api-staging.ashleyha0317.workers.dev'
+export EVAL_WEB_ORIGIN='https://web-staging.example.com'
+export EVAL_API_ORIGIN='https://api-staging.example.com'
 export EVAL_ORGANIZATION_ID='ai-engineer'
 export EVAL_EVENT_ID='devflow-conf-2027'
 : "${EVAL_D1_COMMAND_ADAPTER:?set the injected D1 adapter module path}"
@@ -256,8 +300,8 @@ set -eu
 export EVAL_ENVIRONMENT=staging
 export EVAL_ORGANIZATION_ID='ai-engineer'
 export EVAL_EVENT_ID='devflow-conf-2027'
-export EVAL_WEB_ORIGIN='https://open-sessionboard-web-staging.ashleyha0317.workers.dev'
-export EVAL_API_ORIGIN='https://open-sessionboard-api-staging.ashleyha0317.workers.dev'
+export EVAL_WEB_ORIGIN='https://web-staging.example.com'
+export EVAL_API_ORIGIN='https://api-staging.example.com'
 : "${EVAL_D1_COMMAND_ADAPTER:?set the injected D1 adapter module path}"
 : "${AIRTABLE_ACCESS_TOKEN:?set the staging Airtable token from the secret manager}"
 : "${AIRTABLE_BASE_ID:?set the staging Airtable base ID}"

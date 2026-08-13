@@ -1,6 +1,11 @@
 import { spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  generatedApiWranglerPath,
+  loadCloudflareEnvironment,
+  writeApiWrangler,
+} from "./config.mjs";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(scriptDirectory, "../..");
@@ -21,14 +26,18 @@ if (confirmation !== `open-sessionboard:${environment}`) {
   process.exit(1);
 }
 
+loadCloudflareEnvironment(environment);
+
 if (!process.env.CLOUDFLARE_API_TOKEN) {
   process.stderr.write("CLOUDFLARE_API_TOKEN must be supplied by the deployment environment.\n");
   process.exit(1);
 }
 
+writeApiWrangler(environment, process.env);
+
 const validation = spawnSync(
   process.execPath,
-  [validator, "--environment", environment, "--deployment"],
+  [validator, "--environment", environment, "--deployment", "--config", generatedApiWranglerPath],
   { cwd: repositoryRoot, stdio: "inherit" },
 );
 if (validation.status !== 0) {
@@ -37,16 +46,31 @@ if (validation.status !== 0) {
 
 const migrations = spawnSync(
   "bunx",
-  ["wrangler", "d1", "migrations", "apply", "DB", "--remote", "--env", environment],
+  [
+    "wrangler",
+    "d1",
+    "migrations",
+    "apply",
+    "DB",
+    "--remote",
+    "--env",
+    environment,
+    "--config",
+    generatedApiWranglerPath,
+  ],
   { cwd: apiDirectory, env: process.env, stdio: "inherit" },
 );
 if (migrations.status !== 0) {
   process.exit(migrations.status ?? 1);
 }
 
-const deployment = spawnSync("bunx", ["wrangler", "deploy", "--env", environment], {
-  cwd: apiDirectory,
-  env: process.env,
-  stdio: "inherit",
-});
+const deployment = spawnSync(
+  "bunx",
+  ["wrangler", "deploy", "--env", environment, "--config", generatedApiWranglerPath],
+  {
+    cwd: apiDirectory,
+    env: process.env,
+    stdio: "inherit",
+  },
+);
 process.exit(deployment.status ?? 1);

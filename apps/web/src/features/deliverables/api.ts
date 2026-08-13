@@ -24,6 +24,18 @@ export type DeliverableAssetKind = "headshot" | "slides" | "supporting_file";
 export const deliverableAssetKinds = ["headshot", "slides", "supporting_file"] as const;
 export type DeliverableAssetState = "pending_upload" | "ready" | "rejected";
 export type DeliverableReviewState = "approved" | "needs_changes";
+export type DeliverableTaskSubject =
+  | { readonly type: "participant"; readonly participantId: string }
+  | {
+      readonly type: "session";
+      readonly participantId: string;
+      readonly submissionId: string;
+    };
+
+export interface DeliverableTaskAssignment {
+  readonly participantId: string;
+  readonly submissionId: string | null;
+}
 
 export interface DeliverableSessionHistoryEntry {
   readonly id: string;
@@ -60,22 +72,24 @@ export interface DeliverableSession {
 export interface DeliverableTask {
   readonly id: string;
   readonly eventId: string;
-  readonly submissionId: string;
+  readonly submissionId: string | null;
   readonly participantId: string;
+  readonly subject?: DeliverableTaskSubject;
   readonly participantName?: string;
   readonly sessionTitle?: string;
   readonly type: DeliverableTaskType;
   readonly owner: "speaker" | "organizer";
   readonly title: string;
   readonly description?: string;
+  readonly instructions?: string;
   readonly status: DeliverableTaskStatus;
   readonly dueAt?: string;
+  readonly dueDate?: string;
   readonly dependencyIds: readonly string[];
   readonly reminderOffsetsMinutes: readonly number[];
   readonly acceptedAssetKinds?: readonly DeliverableAssetKind[];
   readonly allowedMimeTypes?: readonly string[];
-  readonly maxSizeBytes?: number;
-  readonly assigneeIds?: readonly string[];
+  readonly maxBytes?: number;
   readonly version: number;
   readonly updatedAt: string;
 }
@@ -136,6 +150,11 @@ export interface DeliverableAsset {
   readonly version?: number;
   readonly versionFamilyId?: string;
   readonly supersedesAssetId?: string;
+  readonly latestVersionId?: string;
+  readonly currentVersionId?: string;
+  readonly approvedVersionId?: string;
+  readonly releasedVersionId?: string;
+  readonly versionId?: string;
   readonly commentThreadId?: string;
   readonly rejectionReason?: string;
   readonly finalizedAt?: string;
@@ -150,6 +169,7 @@ export interface DeliverableComment {
   readonly id: string;
   readonly eventId?: string;
   readonly assetId: string;
+  readonly versionId: string;
   readonly body: string;
   readonly authorLabel: string;
   readonly createdAt: string;
@@ -170,12 +190,45 @@ export interface DeliverableExportInput {
   readonly participantIds?: readonly string[];
   readonly status?: DeliverableExportStatus;
 }
+export interface DeliverableExportManifestEntry {
+  readonly assetId: string;
+  readonly participantId: string;
+  readonly participantName: string | null;
+  readonly sessionId: string | null;
+  readonly sessionTitle: string | null;
+  readonly taskId: string | null;
+  readonly taskTitle: string | null;
+  readonly status: DeliverableMatrixStatus;
+  readonly version: number;
+  readonly taskVersion: number | null;
+  readonly fileName: string;
+  readonly path: string;
+  readonly contentType: string;
+  readonly sizeBytes: number;
+}
+
+export interface DeliverableExportManifest {
+  readonly format: "speaker-deliverables-export";
+  readonly version: 1;
+  readonly organizationId: string;
+  readonly eventId: string;
+  readonly entries: readonly DeliverableExportManifestEntry[];
+}
+
+export interface DeliverableExportResponseAuthority {
+  readonly kind: "synchronous_zip";
+  readonly status: 200;
+  readonly contentType: "application/zip";
+  readonly contentLength: number;
+}
 
 export interface DeliverableExportDownload {
   readonly body: ArrayBuffer;
   readonly fileName: string;
   readonly contentType: "application/zip";
   readonly sizeBytes: number;
+  readonly manifest: DeliverableExportManifest;
+  readonly response: DeliverableExportResponseAuthority;
 }
 
 export interface DeliverableSpeakerProfile {
@@ -248,7 +301,7 @@ export interface DeliverableTaskInput {
   readonly dueAt: string;
   readonly allowedMimeTypes: readonly string[];
   readonly maxSizeBytes: number;
-  readonly assigneeIds: readonly string[];
+  readonly assignments: readonly DeliverableTaskAssignment[];
   readonly acceptedAssetKinds: readonly DeliverableAssetKind[];
 }
 export interface DeliverableHeadshotReplacementInput {
@@ -268,6 +321,8 @@ export interface DeliverableReviewInput {
   readonly assetId: string;
   readonly state: DeliverableReviewState;
   readonly note?: string;
+  readonly expectedVersion: number;
+  readonly release?: boolean;
 }
 
 export interface DeliverablesApi {
@@ -454,6 +509,19 @@ function publicAsset(value: unknown): DeliverableAsset {
     ...(typeof candidate.supersedesAssetId === "string"
       ? { supersedesAssetId: candidate.supersedesAssetId }
       : {}),
+    ...(typeof candidate.latestVersionId === "string"
+      ? { latestVersionId: candidate.latestVersionId }
+      : {}),
+    ...(typeof candidate.currentVersionId === "string"
+      ? { currentVersionId: candidate.currentVersionId }
+      : {}),
+    ...(typeof candidate.approvedVersionId === "string"
+      ? { approvedVersionId: candidate.approvedVersionId }
+      : {}),
+    ...(typeof candidate.releasedVersionId === "string"
+      ? { releasedVersionId: candidate.releasedVersionId }
+      : {}),
+    ...(typeof candidate.versionId === "string" ? { versionId: candidate.versionId } : {}),
     ...(typeof candidate.commentThreadId === "string"
       ? { commentThreadId: candidate.commentThreadId }
       : {}),
@@ -639,8 +707,255 @@ function normalizeSpeakerContentRecord(value: unknown): DeliverableSpeakerConten
   };
 }
 
+const taskStatusSet = new Set<string>(deliverableTaskStatuses);
+const taskTypeSet = new Set<DeliverableTaskType>(["form", "upload", "action"]);
+const taskOwnerSet = new Set<DeliverableTask["owner"]>(["speaker", "organizer"]);
+const mimeTypePattern = /^[\w!#$&^.+*-]+\/[\w!#$&^.+*-]+$/u;
+const maxTaskBytes = 5 * 1024 * 1024 * 1024;
+
+function invalidTaskResponse(message: string): DeliverablesApiError {
+  return new DeliverablesApiError("DELIVERABLES_TASK_INVALID_RESPONSE", message, 200);
+}
+
+function normalizedTaskMimeTypes(value: unknown, required: boolean): readonly string[] | undefined {
+  if (value === undefined) {
+    if (required) throw invalidTaskResponse("The upload task is missing allowed MIME types.");
+    return undefined;
+  }
+  if (!Array.isArray(value) || value.length === 0 || value.length > 32) {
+    throw invalidTaskResponse("The task allowed MIME type policy is invalid.");
+  }
+  const normalized = [
+    ...new Set(
+      value.map((candidate) => {
+        if (typeof candidate !== "string") {
+          throw invalidTaskResponse("The task allowed MIME type policy is invalid.");
+        }
+        const mimeType = candidate.trim().toLowerCase();
+        if (!mimeTypePattern.test(mimeType)) {
+          throw invalidTaskResponse("The task allowed MIME type policy is invalid.");
+        }
+        return mimeType;
+      }),
+    ),
+  ];
+  if (normalized.length === 0 && required) {
+    throw invalidTaskResponse("The upload task is missing allowed MIME types.");
+  }
+  return normalized;
+}
+
+function normalizedTaskMaxBytes(value: unknown, required: boolean): number | undefined {
+  if (value === undefined) {
+    if (required) throw invalidTaskResponse("The upload task is missing maxBytes.");
+    return undefined;
+  }
+  if (
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    value <= 0 ||
+    value > maxTaskBytes
+  ) {
+    throw invalidTaskResponse("The task maxBytes policy is invalid.");
+  }
+  return value;
+}
+
+function normalizedTaskSubject(
+  value: unknown,
+  participantId: string,
+  submissionId: string | null,
+): DeliverableTaskSubject {
+  if (value === undefined) throw invalidTaskResponse("The task subject is missing.");
+  if (!isRecord(value) || typeof value.type !== "string") {
+    throw invalidTaskResponse("The task subject is invalid.");
+  }
+  if (value.type === "participant") {
+    if (
+      typeof value.participantId !== "string" ||
+      value.participantId.trim().length === 0 ||
+      value.participantId !== participantId ||
+      submissionId !== null
+    ) {
+      throw invalidTaskResponse("The participant task subject is invalid.");
+    }
+    return { type: "participant", participantId: value.participantId };
+  }
+  if (
+    value.type !== "session" ||
+    typeof value.participantId !== "string" ||
+    value.participantId.trim().length === 0 ||
+    value.participantId !== participantId ||
+    typeof value.submissionId !== "string" ||
+    value.submissionId.trim().length === 0 ||
+    submissionId !== value.submissionId
+  ) {
+    throw invalidTaskResponse("The session task subject is invalid.");
+  }
+  return {
+    type: "session",
+    participantId: value.participantId,
+    submissionId: value.submissionId,
+  };
+}
+
 function normalizeTask(value: unknown): DeliverableTask {
-  return value as DeliverableTask;
+  if (!isRecord(value)) throw invalidTaskResponse("The task response was invalid.");
+  const id = typeof value.id === "string" && value.id.trim().length > 0 ? value.id : undefined;
+  const eventId =
+    typeof value.eventId === "string" && value.eventId.trim().length > 0
+      ? value.eventId
+      : undefined;
+  const participantId =
+    typeof value.participantId === "string" && value.participantId.trim().length > 0
+      ? value.participantId
+      : undefined;
+  const submissionId =
+    typeof value.submissionId === "string"
+      ? value.submissionId
+      : value.submissionId === null
+        ? null
+        : undefined;
+  if (
+    id === undefined ||
+    eventId === undefined ||
+    participantId === undefined ||
+    submissionId === undefined
+  ) {
+    throw invalidTaskResponse("The task identity or subject assignment was invalid.");
+  }
+  if (typeof value.type !== "string" || !taskTypeSet.has(value.type as DeliverableTaskType)) {
+    throw invalidTaskResponse("The task type is invalid.");
+  }
+  if (
+    typeof value.owner !== "string" ||
+    !taskOwnerSet.has(value.owner as DeliverableTask["owner"])
+  ) {
+    throw invalidTaskResponse("The task owner is invalid.");
+  }
+  if (typeof value.title !== "string" || value.title.trim().length === 0) {
+    throw invalidTaskResponse("The task title is invalid.");
+  }
+  if (typeof value.status !== "string" || !taskStatusSet.has(value.status)) {
+    throw invalidTaskResponse("The task status is invalid.");
+  }
+  if (
+    !Array.isArray(value.dependencyIds) ||
+    value.dependencyIds.some((dependencyId) => typeof dependencyId !== "string") ||
+    !Array.isArray(value.reminderOffsetsMinutes) ||
+    value.reminderOffsetsMinutes.some(
+      (offset) => typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0,
+    )
+  ) {
+    throw invalidTaskResponse("The task dependency or reminder policy is invalid.");
+  }
+  if (
+    typeof value.version !== "number" ||
+    !Number.isSafeInteger(value.version) ||
+    value.version < 0 ||
+    typeof value.updatedAt !== "string"
+  ) {
+    throw invalidTaskResponse("The task version metadata is invalid.");
+  }
+  const type = value.type as DeliverableTaskType;
+  const allowedMimeTypes = normalizedTaskMimeTypes(value.allowedMimeTypes, type === "upload");
+  const maxBytes = normalizedTaskMaxBytes(value.maxBytes, type === "upload");
+  const subject = normalizedTaskSubject(value.subject, participantId, submissionId);
+  const acceptedAssetKinds =
+    value.acceptedAssetKinds === undefined
+      ? undefined
+      : Array.isArray(value.acceptedAssetKinds) &&
+          value.acceptedAssetKinds.every((kind) =>
+            deliverableAssetKinds.includes(kind as DeliverableAssetKind),
+          )
+        ? [...new Set(value.acceptedAssetKinds as DeliverableAssetKind[])]
+        : (() => {
+            throw invalidTaskResponse("The task asset-kind policy is invalid.");
+          })();
+  return {
+    id,
+    eventId,
+    submissionId,
+    participantId,
+    subject,
+    ...(typeof value.participantName === "string"
+      ? { participantName: value.participantName }
+      : {}),
+    ...(typeof value.sessionTitle === "string" ? { sessionTitle: value.sessionTitle } : {}),
+    type,
+    owner: value.owner as DeliverableTask["owner"],
+    title: value.title,
+    ...(typeof value.description === "string" ? { description: value.description } : {}),
+    ...(typeof value.instructions === "string" ? { instructions: value.instructions } : {}),
+    status: value.status as DeliverableTaskStatus,
+    ...(typeof value.dueAt === "string" ? { dueAt: value.dueAt } : {}),
+    ...(typeof value.dueDate === "string" ? { dueDate: value.dueDate } : {}),
+    dependencyIds: [...value.dependencyIds] as string[],
+    reminderOffsetsMinutes: [...value.reminderOffsetsMinutes] as number[],
+    ...(acceptedAssetKinds === undefined ? {} : { acceptedAssetKinds }),
+    ...(allowedMimeTypes === undefined ? {} : { allowedMimeTypes }),
+    ...(maxBytes === undefined ? {} : { maxBytes }),
+    version: value.version,
+    updatedAt: value.updatedAt,
+  };
+}
+function normalizedTaskAssignments(value: unknown): readonly DeliverableTaskAssignment[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 500) {
+    throw new TypeError("At least one task assignment is required.");
+  }
+  const assignments = value.map((candidate) => {
+    if (!isRecord(candidate) || typeof candidate.participantId !== "string") {
+      throw new TypeError("Task assignments require a participant subject.");
+    }
+    const participantId = candidate.participantId.trim();
+    if (participantId.length === 0) {
+      throw new TypeError("Task assignments require a participant subject.");
+    }
+    const submissionId =
+      candidate.submissionId === null
+        ? null
+        : typeof candidate.submissionId === "string" && candidate.submissionId.trim().length > 0
+          ? candidate.submissionId.trim()
+          : undefined;
+    if (submissionId === undefined) {
+      throw new TypeError("Task assignments require a participant or session subject.");
+    }
+    return { participantId, submissionId };
+  });
+  const keys = assignments.map(
+    (assignment) => `${assignment.participantId}\u0000${assignment.submissionId ?? ""}`,
+  );
+  if (new Set(keys).size !== keys.length) {
+    throw new TypeError("Task assignments must contain unique participant and session subjects.");
+  }
+  return assignments;
+}
+
+function normalizedCreateTaskMimeTypes(value: unknown): readonly string[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 32) {
+    throw new TypeError("At least one allowed MIME type is required.");
+  }
+  const normalized = value.map((candidate) => {
+    if (typeof candidate !== "string") throw new TypeError("Allowed MIME types must be strings.");
+    const mimeType = candidate.trim().toLowerCase();
+    if (!mimeTypePattern.test(mimeType)) throw new TypeError("An allowed MIME type is invalid.");
+    return mimeType;
+  });
+  const unique = [...new Set(normalized)];
+  if (unique.length === 0) throw new TypeError("At least one allowed MIME type is required.");
+  return unique;
+}
+
+function normalizedCreateTaskMaxBytes(value: unknown): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    value <= 0 ||
+    value > maxTaskBytes
+  ) {
+    throw new TypeError("maxSizeBytes must be a positive safe integer.");
+  }
+  return value;
 }
 function normalizeMatrixItem(value: unknown): DeliverableMatrixItem {
   if (
@@ -747,14 +1062,34 @@ function normalizeProfile(value: unknown): DeliverableSpeakerProfile {
   };
 }
 
-function normalizeComment(value: unknown): DeliverableComment {
+function normalizeComment(value: unknown, expectedAssetId?: string): DeliverableComment {
   const candidate = isRecord(value) ? value : {};
+  const assetId = typeof candidate.assetId === "string" ? candidate.assetId : "";
+  const versionId = typeof candidate.versionId === "string" ? candidate.versionId : "";
+  if (
+    assetId.length === 0 ||
+    versionId.length === 0 ||
+    (expectedAssetId !== undefined && assetId !== expectedAssetId) ||
+    versionId !== assetId ||
+    typeof candidate.id !== "string" ||
+    candidate.id.length === 0 ||
+    typeof candidate.body !== "string" ||
+    typeof candidate.authorLabel !== "string" ||
+    typeof candidate.createdAt !== "string"
+  ) {
+    throw new DeliverablesApiError(
+      "DELIVERABLES_COMMENT_INVALID_RESPONSE",
+      "The asset comment response was invalid.",
+      200,
+    );
+  }
   return {
-    id: typeof candidate.id === "string" ? candidate.id : "",
-    assetId: typeof candidate.assetId === "string" ? candidate.assetId : "",
-    body: typeof candidate.body === "string" ? candidate.body : "",
-    authorLabel: typeof candidate.authorLabel === "string" ? candidate.authorLabel : "",
-    createdAt: typeof candidate.createdAt === "string" ? candidate.createdAt : "",
+    id: candidate.id,
+    assetId,
+    versionId,
+    body: candidate.body,
+    authorLabel: candidate.authorLabel,
+    createdAt: candidate.createdAt,
     ...(typeof candidate.eventId === "string" ? { eventId: candidate.eventId } : {}),
     ...(typeof candidate.updatedAt === "string" ? { updatedAt: candidate.updatedAt } : {}),
     ...(typeof candidate.version === "number" ? { version: candidate.version } : {}),
@@ -861,8 +1196,233 @@ function attachmentFileName(value: string | null): string {
   }
   return fileName;
 }
+const exportManifestStatuses = new Set<string>([...deliverableTaskStatuses, "pending", "uploaded"]);
 
-async function deliverablesExportResponse(response: Response): Promise<DeliverableExportDownload> {
+function zipInvalid(message: string): DeliverablesApiError {
+  return invalidExportResponse(`The deliverables export archive is invalid: ${message}`);
+}
+
+function zipUint16(view: DataView, offset: number): number {
+  if (offset < 0 || offset + 2 > view.byteLength) throw zipInvalid("a ZIP field is truncated.");
+  return view.getUint16(offset, true);
+}
+
+function zipUint32(view: DataView, offset: number): number {
+  if (offset < 0 || offset + 4 > view.byteLength) throw zipInvalid("a ZIP field is truncated.");
+  return view.getUint32(offset, true);
+}
+
+function zipName(bytes: Uint8Array): string {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw zipInvalid("a ZIP filename is not valid UTF-8.");
+  }
+}
+
+interface StoredZipManifestSource {
+  readonly value: unknown;
+  readonly fileNames: ReadonlySet<string>;
+}
+
+function storedZipManifest(body: ArrayBuffer): StoredZipManifestSource {
+  const bytes = new Uint8Array(body);
+  const view = new DataView(body);
+  const minimumEndRecordOffset = bytes.byteLength - 22;
+  const searchStart = Math.max(0, minimumEndRecordOffset - 0xffff);
+  let endRecordOffset = -1;
+  for (let offset = minimumEndRecordOffset; offset >= searchStart; offset -= 1) {
+    if (offset >= 0 && zipUint32(view, offset) === 0x06054b50) {
+      endRecordOffset = offset;
+      break;
+    }
+  }
+  if (endRecordOffset < 0) throw zipInvalid("the end-of-directory record is missing.");
+  const commentLength = zipUint16(view, endRecordOffset + 20);
+  if (endRecordOffset + 22 + commentLength !== bytes.byteLength) {
+    throw zipInvalid("the end-of-directory record is malformed.");
+  }
+  const entryCount = zipUint16(view, endRecordOffset + 10);
+  const centralDirectorySize = zipUint32(view, endRecordOffset + 12);
+  const centralDirectoryOffset = zipUint32(view, endRecordOffset + 16);
+  if (
+    entryCount === 0xffff ||
+    centralDirectorySize === 0xffffffff ||
+    centralDirectoryOffset === 0xffffffff ||
+    centralDirectoryOffset + centralDirectorySize !== endRecordOffset
+  ) {
+    throw zipInvalid("ZIP64 or inconsistent central-directory metadata was returned.");
+  }
+  const fileNames = new Set<string>();
+  let cursor = centralDirectoryOffset;
+  let manifest:
+    | {
+        readonly localOffset: number;
+        readonly compressedSize: number;
+        readonly uncompressedSize: number;
+        readonly name: string;
+      }
+    | undefined;
+  for (let index = 0; index < entryCount; index += 1) {
+    if (zipUint32(view, cursor) !== 0x02014b50) {
+      throw zipInvalid("a central-directory entry is invalid.");
+    }
+    const flags = zipUint16(view, cursor + 8);
+    const compression = zipUint16(view, cursor + 10);
+    const compressedSize = zipUint32(view, cursor + 20);
+    const uncompressedSize = zipUint32(view, cursor + 24);
+    const nameLength = zipUint16(view, cursor + 28);
+    const extraLength = zipUint16(view, cursor + 30);
+    const entryCommentLength = zipUint16(view, cursor + 32);
+    const localOffset = zipUint32(view, cursor + 42);
+    const entryEnd = cursor + 46 + nameLength + extraLength + entryCommentLength;
+    if (
+      (flags & 0x0001) !== 0 ||
+      compression !== 0 ||
+      compressedSize !== uncompressedSize ||
+      entryEnd > endRecordOffset
+    ) {
+      throw zipInvalid("only unencrypted stored ZIP entries are supported.");
+    }
+    const name = zipName(bytes.subarray(cursor + 46, cursor + 46 + nameLength));
+    if (fileNames.has(name)) throw zipInvalid("duplicate ZIP entry names are not allowed.");
+    fileNames.add(name);
+    if (name === "manifest.json") {
+      if (manifest !== undefined) throw zipInvalid("the manifest entry is duplicated.");
+      manifest = { localOffset, compressedSize, uncompressedSize, name };
+    }
+    cursor = entryEnd;
+  }
+  if (cursor !== endRecordOffset || manifest === undefined) {
+    throw zipInvalid("manifest.json is missing from the archive.");
+  }
+  const localOffset = manifest.localOffset;
+  if (zipUint32(view, localOffset) !== 0x04034b50) {
+    throw zipInvalid("the manifest local entry is invalid.");
+  }
+  const localFlags = zipUint16(view, localOffset + 6);
+  const localCompression = zipUint16(view, localOffset + 8);
+  const localCompressedSize = zipUint32(view, localOffset + 18);
+  const localUncompressedSize = zipUint32(view, localOffset + 22);
+  const localNameLength = zipUint16(view, localOffset + 26);
+  const localExtraLength = zipUint16(view, localOffset + 28);
+  const dataOffset = localOffset + 30 + localNameLength + localExtraLength;
+  const dataEnd = dataOffset + localCompressedSize;
+  const localName = zipName(bytes.subarray(localOffset + 30, dataOffset - localExtraLength));
+  if (
+    (localFlags & 0x0001) !== 0 ||
+    localCompression !== 0 ||
+    localName !== manifest.name ||
+    localCompressedSize !== manifest.compressedSize ||
+    localUncompressedSize !== manifest.uncompressedSize ||
+    dataEnd > centralDirectoryOffset
+  ) {
+    throw zipInvalid("the manifest local entry is inconsistent.");
+  }
+  let value: unknown;
+  try {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(
+      bytes.subarray(dataOffset, dataEnd),
+    );
+    value = JSON.parse(text) as unknown;
+  } catch {
+    throw zipInvalid("manifest.json is not valid UTF-8 JSON.");
+  }
+  return { value, fileNames };
+}
+
+function manifestString(value: unknown, field: string): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw invalidExportResponse(`The export manifest ${field} is invalid.`);
+  }
+  return value;
+}
+
+function manifestNullableString(value: unknown, field: string): string | null {
+  if (value !== null && (typeof value !== "string" || value.trim().length === 0)) {
+    throw invalidExportResponse(`The export manifest ${field} is invalid.`);
+  }
+  return value;
+}
+
+function manifestInteger(value: unknown, field: string, nullable = false): number | null {
+  if (nullable && value === null) return null;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw invalidExportResponse(`The export manifest ${field} is invalid.`);
+  }
+  return value;
+}
+
+function normalizeExportManifest(
+  value: unknown,
+  organizationId: string,
+  eventId: string,
+  fileNames: ReadonlySet<string>,
+): DeliverableExportManifest {
+  if (!isRecord(value)) throw invalidExportResponse("The export manifest is invalid.");
+  if (value.format !== "speaker-deliverables-export" || value.version !== 1) {
+    throw invalidExportResponse("The export manifest format is unsupported.");
+  }
+  const manifestOrganizationId = manifestString(value.organizationId, "organizationId");
+  const manifestEventId = manifestString(value.eventId, "eventId");
+  if (manifestOrganizationId !== organizationId || manifestEventId !== eventId) {
+    throw invalidExportResponse("The export manifest scope does not match the requested event.");
+  }
+  if (!Array.isArray(value.entries) || value.entries.length > 100) {
+    throw invalidExportResponse("The export manifest entries are invalid.");
+  }
+  const assetIds = new Set<string>();
+  const paths = new Set<string>();
+  const entries = value.entries.map((rawEntry) => {
+    if (!isRecord(rawEntry)) throw invalidExportResponse("The export manifest entry is invalid.");
+    const assetId = manifestString(rawEntry.assetId, "assetId");
+    const path = manifestString(rawEntry.path, "path");
+    if (assetIds.has(assetId) || paths.has(path) || !fileNames.has(path)) {
+      throw invalidExportResponse("The export manifest contains duplicate or missing files.");
+    }
+    assetIds.add(assetId);
+    paths.add(path);
+    const status = rawEntry.status;
+    if (typeof status !== "string" || !exportManifestStatuses.has(status)) {
+      throw invalidExportResponse("The export manifest status is invalid.");
+    }
+    return {
+      assetId,
+      participantId: manifestString(rawEntry.participantId, "participantId"),
+      participantName: manifestNullableString(rawEntry.participantName, "participantName"),
+      sessionId: manifestNullableString(rawEntry.sessionId, "sessionId"),
+      sessionTitle: manifestNullableString(rawEntry.sessionTitle, "sessionTitle"),
+      taskId: manifestNullableString(rawEntry.taskId, "taskId"),
+      taskTitle: manifestNullableString(rawEntry.taskTitle, "taskTitle"),
+      status: status as DeliverableMatrixStatus,
+      version: manifestInteger(rawEntry.version, "version") as number,
+      taskVersion: manifestInteger(rawEntry.taskVersion, "taskVersion", true),
+      fileName: manifestString(rawEntry.fileName, "fileName"),
+      path,
+      contentType: manifestString(rawEntry.contentType, "contentType"),
+      sizeBytes: manifestInteger(rawEntry.sizeBytes, "sizeBytes") as number,
+    };
+  });
+  if (
+    fileNames.size !== entries.length + 1 ||
+    [...fileNames].some((fileName) => fileName !== "manifest.json" && !paths.has(fileName))
+  ) {
+    throw invalidExportResponse("The export manifest omits an archive file.");
+  }
+  return {
+    format: "speaker-deliverables-export",
+    version: 1,
+    organizationId: manifestOrganizationId,
+    eventId: manifestEventId,
+    entries,
+  };
+}
+
+async function deliverablesExportResponse(
+  response: Response,
+  organizationId: string,
+  eventId: string,
+): Promise<DeliverableExportDownload> {
   if (!response.ok) throw await errorFrom(response);
   if (response.status !== 200) {
     throw invalidExportResponse("The deliverables export returned an unexpected status.");
@@ -892,11 +1452,25 @@ async function deliverablesExportResponse(response: Response): Promise<Deliverab
       "The deliverables export content length does not match the response body.",
     );
   }
+  const archive = storedZipManifest(body);
+  const manifest = normalizeExportManifest(
+    archive.value,
+    organizationId,
+    eventId,
+    archive.fileNames,
+  );
   return {
     body,
     fileName: attachmentFileName(response.headers.get("content-disposition")),
     contentType: "application/zip",
     sizeBytes: body.byteLength,
+    manifest,
+    response: {
+      kind: "synchronous_zip",
+      status: 200,
+      contentType: "application/zip",
+      contentLength: body.byteLength,
+    },
   };
 }
 
@@ -1035,6 +1609,10 @@ export function createDeliverablesApi(
       ) {
         throw new TypeError("At least one accepted asset kind is required for upload tasks.");
       }
+      const acceptedAssetKinds = [...new Set(input.acceptedAssetKinds)];
+      const allowedMimeTypes = normalizedCreateTaskMimeTypes(input.allowedMimeTypes);
+      const maxBytes = normalizedCreateTaskMaxBytes(input.maxSizeBytes);
+      const assignments = normalizedTaskAssignments(input.assignments);
       return speakerRequest<unknown>("/organizer/tasks", {
         method: "POST",
         body: JSON.stringify({
@@ -1043,10 +1621,10 @@ export function createDeliverablesApi(
           instructions: input.description,
           description: input.description,
           dueAt: input.dueAt,
-          allowedMimeTypes: input.allowedMimeTypes,
-          maxBytes: input.maxSizeBytes,
-          acceptedAssetKinds: [...input.acceptedAssetKinds],
-          assigneeIds: input.assigneeIds,
+          allowedMimeTypes,
+          maxBytes,
+          acceptedAssetKinds,
+          assignments,
         }),
       }).then(normalizeTask);
     },
@@ -1101,7 +1679,9 @@ export function createDeliverablesApi(
         `/organizer/assets/${segment(assetId, "asset ID")}/comments`,
         signal === undefined ? {} : { signal },
       );
-      return responseCollection<DeliverableComment>(body, "comments").map(normalizeComment);
+      return responseCollection<DeliverableComment>(body, "comments").map((value) =>
+        normalizeComment(value, assetId),
+      );
     },
     addAssetComment(input) {
       const payload: JsonRecord = { body: input.body };
@@ -1112,7 +1692,7 @@ export function createDeliverablesApi(
           method: "POST",
           body: JSON.stringify(payload),
         },
-      ).then(normalizeComment);
+      ).then((value) => normalizeComment(value, input.assetId));
     },
     getDownloadGrant(assetId) {
       return speakerRequest<DeliverableDownloadGrant>(
@@ -1160,6 +1740,8 @@ export function createDeliverablesApi(
           body: JSON.stringify({
             state: input.state,
             ...(input.note === undefined ? {} : { note: input.note }),
+            expectedVersion: input.expectedVersion,
+            ...(input.release === undefined ? {} : { release: input.release }),
           }),
         },
       ).then(publicAsset);
@@ -1194,7 +1776,7 @@ export function createDeliverablesApi(
           body: JSON.stringify(exportPayload(input)),
         }),
       );
-      return deliverablesExportResponse(response);
+      return deliverablesExportResponse(response, organizationScope, eventScope);
     },
   };
 }

@@ -6,24 +6,27 @@ import {
   type AgendaSuggestionRun,
 } from "../api";
 import type {
+  AgendaCalendarDeliveryState,
   AgendaConflict,
   AgendaEntry,
   AgendaEntryInput,
   AgendaPreview,
   AgendaRevision,
+  AgendaRoom,
   AgendaSession,
+  AgendaTrack,
   AgendaWarning,
   AgendaWorkspaceData,
 } from "../types";
 
 const INITIAL_TIMESTAMP = "2026-08-08T12:00:00.000Z";
 
-const rooms = [
+const initialRooms = [
   { id: "room_main", name: "Main hall", capacity: 500 },
   { id: "room_studio", name: "Workshop studio", capacity: 80 },
 ] as const;
 
-const tracks = [
+const initialTracks = [
   { id: "track_main", name: "Main stage", color: "#4f5ee8" },
   { id: "track_practice", name: "In practice", color: "#d45c36" },
 ] as const;
@@ -128,6 +131,7 @@ function conflictsFor(entries: readonly AgendaEntry[]): readonly AgendaConflict[
 function warningsFor(
   entries: readonly AgendaEntry[],
   overrides: ReadonlyMap<string, string>,
+  rooms: readonly AgendaRoom[],
 ): readonly AgendaWarning[] {
   return entries.flatMap((entry) => {
     const session = sessions.find((candidate) => candidate.id === entry.sessionId);
@@ -243,8 +247,8 @@ function suggestionCriteria(input: {
 
 function suggestionEntry(
   session: AgendaSession,
-  room: (typeof rooms)[number],
-  track: (typeof tracks)[number],
+  room: AgendaRoom,
+  track: AgendaTrack,
   date: string,
   startMinutes: number,
 ): AgendaEntry | null {
@@ -270,6 +274,8 @@ function findSuggestionPlacement(
   session: AgendaSession,
   scheduledEntries: readonly AgendaEntry[],
   criteria: SuggestionCriteria,
+  rooms: readonly AgendaRoom[],
+  tracks: readonly AgendaTrack[],
 ): AgendaEntry | null {
   const track = tracks.find((candidate) => candidate.id === "track_practice") ?? tracks[0];
   if (!track) return null;
@@ -301,13 +307,15 @@ function buildSuggestion(
   baseDraftVersion: number,
   entries: readonly AgendaEntry[],
   criteria: SuggestionCriteria,
+  rooms: readonly AgendaRoom[],
+  tracks: readonly AgendaTrack[],
 ): StoredSuggestionRun {
   const scheduledSessionIds = new Set(entries.map((entry) => entry.sessionId));
   const proposedEntries = [...entries];
   const changes: StoredSuggestionChange[] = [];
   for (const session of sessions) {
     if (scheduledSessionIds.has(session.id)) continue;
-    const placement = findSuggestionPlacement(session, proposedEntries, criteria);
+    const placement = findSuggestionPlacement(session, proposedEntries, criteria, rooms, tracks);
     if (!placement) continue;
     proposedEntries.push(placement);
     scheduledSessionIds.add(session.id);
@@ -324,11 +332,10 @@ function buildSuggestion(
   const publicChanges: readonly AgendaSuggestionChange[] = changes.map(
     ({ before: _before, after: _after, ...change }) => change,
   );
-  const conflicts = conflictsFor(proposedEntries).map(({ id: conflictId, kind, message }) => ({
-    id: conflictId,
-    kind,
-    message,
-  }));
+  const candidateDiagnostics = {
+    conflicts: conflictsFor(proposedEntries),
+    warnings: warningsFor(proposedEntries, new Map(), rooms),
+  };
   return {
     run: {
       id,
@@ -342,7 +349,7 @@ function buildSuggestion(
             : `${publicChanges.length} deterministic placement${publicChanges.length === 1 ? "" : "s"} are ready for human review.`,
         changes: publicChanges,
       },
-      validation: { conflicts },
+      candidateDiagnostics,
       acceptedChangeIds: [],
     },
     criteria,
@@ -352,6 +359,20 @@ function buildSuggestion(
 
 export function createAgendaDemoApi(eventId: string): AgendaApi {
   let version = 3;
+  let rooms: AgendaRoom[] = initialRooms.map((room) => ({ ...room }));
+  let tracks: AgendaTrack[] = initialTracks.map((track) => ({ ...track }));
+  let calendarDelivery: AgendaCalendarDeliveryState = {
+    state: "degraded",
+    sentLast24Hours: 7,
+    failedLast24Hours: 1,
+    lastInvitationAt: INITIAL_TIMESTAMP,
+    lastFailure: {
+      deliveryId: `calendar-demo-failure-${eventId}`,
+      summary: "One invitation needs a retry after its recipient address was corrected.",
+      occurredAt: INITIAL_TIMESTAMP,
+      retryable: true,
+    },
+  };
   let mutationCount = 0;
   let entries: readonly AgendaEntry[] = clone(initialEntries);
   let publishedEntries: readonly AgendaEntry[] = clone(initialEntries.slice(0, 1));
@@ -423,7 +444,8 @@ export function createAgendaDemoApi(eventId: string): AgendaApi {
     return clone({
       draftVersion: version,
       conflicts: conflictsFor(entries),
-      warnings: warningsFor(entries, overrides),
+      releaseConflicts: [],
+      warnings: warningsFor(entries, overrides, rooms),
       diff: diffFrom(entries, publishedEntries),
       validatedAt: timestamp(),
     });
@@ -588,6 +610,10 @@ export function createAgendaDemoApi(eventId: string): AgendaApi {
       }
     }
     const conflicts = conflictsFor(nextEntries);
+    const candidateDiagnostics = {
+      conflicts,
+      warnings: warningsFor(nextEntries, new Map(), rooms),
+    };
     if (conflicts.length > 0) {
       throw new AgendaApiError(
         "SUGGESTION_CONFLICT",
@@ -595,6 +621,11 @@ export function createAgendaDemoApi(eventId: string): AgendaApi {
         409,
         undefined,
         { conflicts },
+        {
+          evaluated: true,
+          report: candidateDiagnostics,
+          authoritativeSavedPreview: preview(),
+        },
       );
     }
     return nextEntries;
@@ -633,14 +664,81 @@ export function createAgendaDemoApi(eventId: string): AgendaApi {
       touch();
       return workspace();
     },
+    async createRoom(input) {
+      assertEvent(input.eventId);
+      const name = input.name.trim();
+      if (name.length === 0 || !Number.isInteger(input.capacity) || input.capacity < 0) {
+        throw demoError(
+          "AGENDA_ROOM_INVALID",
+          "Provide a room name and non-negative capacity.",
+          400,
+        );
+      }
+      const resource: AgendaRoom = {
+        id: `room_demo_${rooms.length + 1}`,
+        name,
+        capacity: input.capacity,
+      };
+      rooms = [...rooms, resource];
+      touch();
+      const authoritativeWorkspace = workspace();
+      const authoritativeResource = authoritativeWorkspace.rooms.find(
+        (room) => room.id === resource.id,
+      );
+      if (!authoritativeResource) {
+        throw new Error("The created room was not present in the authoritative demo workspace.");
+      }
+      return { resource: authoritativeResource, workspace: authoritativeWorkspace };
+    },
+    async createTrack(input) {
+      assertEvent(input.eventId);
+      const name = input.name.trim();
+      if (name.length === 0) {
+        throw demoError("AGENDA_TRACK_INVALID", "Provide a track name.", 400);
+      }
+      const resource: AgendaTrack = {
+        id: `track_demo_${tracks.length + 1}`,
+        name,
+        color: ["#4f5ee8", "#d45c36", "#2d9cdb", "#8e44ad"][tracks.length % 4] ?? "#4f5ee8",
+      };
+      tracks = [...tracks, resource];
+      touch();
+      const authoritativeWorkspace = workspace();
+      const authoritativeResource = authoritativeWorkspace.tracks.find(
+        (track) => track.id === resource.id,
+      );
+      if (!authoritativeResource) {
+        throw new Error("The created track was not present in the authoritative demo workspace.");
+      }
+      return { resource: authoritativeResource, workspace: authoritativeWorkspace };
+    },
     async preview(requestedEventId) {
       assertEvent(requestedEventId);
       return preview();
     },
+    async getCalendarDelivery(requestedEventId, signal) {
+      if (signal?.aborted) throw new DOMException("The request was aborted.", "AbortError");
+      assertEvent(requestedEventId);
+      return clone(calendarDelivery);
+    },
+    async retryCalendarDelivery(input) {
+      assertEvent(input.eventId);
+      const failure = calendarDelivery.lastFailure;
+      if (failure === null || failure.deliveryId !== input.deliveryId || !failure.retryable) {
+        throw demoError("CALENDAR_DELIVERY_NOT_FOUND", "The calendar delivery was not found.", 404);
+      }
+      calendarDelivery = {
+        ...calendarDelivery,
+        state: "connected",
+        sentLast24Hours: calendarDelivery.sentLast24Hours + 1,
+        lastFailure: null,
+      };
+      return clone(calendarDelivery);
+    },
     async overrideWarning(input) {
       assertEvent(input.eventId);
       assertVersion(input.expectedVersion);
-      const warning = warningsFor(entries, overrides).find(
+      const warning = warningsFor(entries, overrides, rooms).find(
         (candidate) => candidate.id === input.warningId,
       );
       if (!warning) {
@@ -662,7 +760,11 @@ export function createAgendaDemoApi(eventId: string): AgendaApi {
       assertVersion(input.expectedVersion);
       const validation = preview();
       const unoverriddenWarnings = validation.warnings.filter((warning) => !warning.overridden);
-      if (validation.conflicts.length > 0 || unoverriddenWarnings.length > 0) {
+      if (
+        validation.conflicts.length > 0 ||
+        validation.releaseConflicts.length > 0 ||
+        unoverriddenWarnings.length > 0
+      ) {
         throw new AgendaApiError(
           "PUBLICATION_BLOCKED",
           "Resolve hard conflicts and warnings before publishing.",
@@ -698,6 +800,8 @@ export function createAgendaDemoApi(eventId: string): AgendaApi {
         input.baseDraftVersion,
         entries,
         criteria,
+        rooms,
+        tracks,
       );
       suggestionRuns.set(stored.run.id, stored);
       return clone(stored.run);
@@ -725,6 +829,8 @@ export function createAgendaDemoApi(eventId: string): AgendaApi {
         input.baseDraftVersion,
         entries,
         previous.criteria,
+        rooms,
+        tracks,
       );
       suggestionRuns.set(stored.run.id, stored);
       return clone(stored.run);
@@ -744,7 +850,20 @@ export function createAgendaDemoApi(eventId: string): AgendaApi {
       assertEvent(input.eventId);
       const stored = requireSuggestion(input.runId);
       pendingSuggestion(stored);
-      assertVersion(stored.run.baseDraftVersion);
+      if (stored.run.baseDraftVersion !== version) {
+        throw new AgendaApiError(
+          "AGENDA_VERSION_CONFLICT",
+          `Draft v${version} has changed. Reload before saving again.`,
+          412,
+          undefined,
+          undefined,
+          {
+            evaluated: false,
+            report: null,
+            authoritativeSavedPreview: preview(),
+          },
+        );
+      }
       const nextEntries = applySuggestionChanges(stored, input.acceptedChangeIds);
       entries = nextEntries;
       overrides = new Map();

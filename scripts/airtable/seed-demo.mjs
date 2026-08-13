@@ -46,7 +46,7 @@ const form = {
     confirmationMessage: "Your proposal has been received.",
     successContent:
       "Thank you for submitting. Continue to your speaker portal to track status and complete tasks.",
-    redirectUrl: "https://open-sessionboard-web-production.ashleyha0317.workers.dev/portal",
+    redirectUrl: "https://sessionboard.example.invalid/portal",
   },
   sections: [
     { id: "session", title: "Submission", description: "Tell us about the session." },

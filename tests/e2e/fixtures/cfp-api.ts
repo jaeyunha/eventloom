@@ -171,6 +171,18 @@ export async function installCfpApi(
       await route.fallback();
       return;
     }
+    if (request.method() === "POST" && url.pathname === "/api/auth/sign-in/email") {
+      await fulfillJson(route, {
+        token: session.token,
+        user: {
+          id: session.userId,
+          email: session.email,
+          name: session.displayName,
+          emailVerified: true,
+        },
+      });
+      return;
+    }
     if (request.headers().cookie?.includes(`${E2E_SESSION_COOKIE}=${session.token}`) !== true) {
       await fulfillError(route, "AUTHENTICATION_REQUIRED", "Authentication is required.", 404);
       return;

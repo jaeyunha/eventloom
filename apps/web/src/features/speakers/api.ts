@@ -322,6 +322,124 @@ export class SpeakerApiError extends Error {
   }
 }
 
+export type SpeakerMutationStatus =
+  | "idle"
+  | "saving"
+  | "pending"
+  | "saved"
+  | "conflict"
+  | "failure";
+
+export class SpeakerAuthoritativeDataError extends Error {
+  readonly code = "AUTHORITATIVE_DATA_INVALID";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "SpeakerAuthoritativeDataError";
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function assertSpeakerRosterScope(
+  value: SpeakerRosterEnvelope,
+  organizationId: string,
+  eventId: string,
+): SpeakerRosterEnvelope {
+  if (
+    !isRecord(value) ||
+    value.organizationId !== organizationId ||
+    value.eventId !== eventId ||
+    !Array.isArray(value.speakers)
+  ) {
+    throw new SpeakerAuthoritativeDataError(
+      "The speaker roster response belongs to a different organization or event.",
+    );
+  }
+  const participantIds = new Set<string>();
+  for (const speaker of value.speakers) {
+    if (
+      !isRecord(speaker) ||
+      typeof speaker.participantId !== "string" ||
+      speaker.participantId.trim().length === 0 ||
+      participantIds.has(speaker.participantId)
+    ) {
+      throw new SpeakerAuthoritativeDataError(
+        "The speaker roster response contains an invalid or duplicate participant.",
+      );
+    }
+    participantIds.add(speaker.participantId);
+  }
+  return { ...value, speakers: [...value.speakers] };
+}
+
+export function assertSpeakerParticipant(
+  value: SpeakerRecord,
+  participantId: string,
+  eventId?: string,
+): SpeakerRecord {
+  if (
+    !isRecord(value) ||
+    value.participantId !== participantId ||
+    (eventId !== undefined && value.eventId !== eventId) ||
+    typeof value.version !== "number" ||
+    !Number.isSafeInteger(value.version) ||
+    value.version < 1
+  ) {
+    throw new SpeakerAuthoritativeDataError(
+      "The speaker response does not match the selected participant or event.",
+    );
+  }
+  return value;
+}
+
+export function assertAdvancedSpeakerRevision(
+  value: SpeakerRecord,
+  participantId: string,
+  expectedVersion: number,
+  eventId?: string,
+): SpeakerRecord {
+  const record = assertSpeakerParticipant(value, participantId, eventId);
+  if (record.version <= expectedVersion) {
+    throw new SpeakerAuthoritativeDataError(
+      "The speaker response did not include an advanced authoritative revision.",
+    );
+  }
+  return record;
+}
+
+export function assertSpeakerHeadshotReplacement(
+  replacement: SpeakerHeadshotReplacement,
+  eventId: string,
+  participantId: string,
+  expectedVersion: number,
+): SpeakerHeadshotReplacement {
+  const asset = replacement?.asset;
+  const profile = replacement?.profile;
+  if (
+    !isRecord(asset) ||
+    !isRecord(profile) ||
+    asset.eventId !== eventId ||
+    asset.participantId !== participantId ||
+    asset.state !== "ready" ||
+    typeof asset.id !== "string" ||
+    asset.id.trim().length === 0 ||
+    profile.eventId !== eventId ||
+    profile.participantId !== participantId ||
+    profile.headshotAssetId !== asset.id ||
+    typeof profile.version !== "number" ||
+    !Number.isSafeInteger(profile.version) ||
+    profile.version <= expectedVersion
+  ) {
+    throw new SpeakerAuthoritativeDataError(
+      "The headshot replacement response did not match the selected participant, event, pointer, or revision.",
+    );
+  }
+  return replacement;
+}
+
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 function baseWithoutTrailingSlash(value: string): string {
@@ -503,10 +621,20 @@ export function createSpeakerApi(
     normalizedEventId,
     organizerHeadshotFetcher,
   );
-  const replaceHeadshot = organizerHeadshotApi.replaceHeadshot;
-  if (replaceHeadshot === undefined) {
+  const rawReplaceHeadshot = organizerHeadshotApi.replaceHeadshot;
+  if (rawReplaceHeadshot === undefined) {
     throw new TypeError("The organizer headshot replacement adapter is unavailable.");
   }
+
+  const replaceHeadshot = async (
+    input: SpeakerHeadshotReplacementInput,
+  ): Promise<SpeakerHeadshotReplacement> =>
+    assertSpeakerHeadshotReplacement(
+      await rawReplaceHeadshot(input),
+      normalizedEventId,
+      input.participantId,
+      input.expectedVersion,
+    );
 
   async function requestAt<T>(base: string, path: string, init?: RequestInit): Promise<T> {
     const response = await fetcher(`${base}${path}`, {
@@ -558,19 +686,29 @@ export function createSpeakerApi(
 
   return {
     list(signal) {
-      return request<SpeakerRosterEnvelope>("", signal === undefined ? undefined : { signal });
+      return request<SpeakerRosterEnvelope>("", signal === undefined ? undefined : { signal }).then(
+        (value) => assertSpeakerRosterScope(value, normalizedOrganizationId, normalizedEventId),
+      );
     },
     get(participantId, signal) {
       return request<SpeakerRecord>(
         `/${pathSegment(participantId)}`,
         signal === undefined ? undefined : { signal },
-      );
+      ).then((value) => assertSpeakerParticipant(value, participantId, normalizedEventId));
     },
     create(input) {
-      return jsonRequest<SpeakerRosterEnvelope>("", "POST", input);
+      return jsonRequest<SpeakerRosterEnvelope>("", "POST", input).then((value) =>
+        assertSpeakerRosterScope(value, normalizedOrganizationId, normalizedEventId),
+      );
     },
     update(participantId, input) {
-      return jsonRequest<SpeakerRosterEnvelope>(`/${pathSegment(participantId)}`, "PATCH", input);
+      return jsonRequest<SpeakerRosterEnvelope>(
+        `/${pathSegment(participantId)}`,
+        "PATCH",
+        input,
+      ).then((value) =>
+        assertSpeakerRosterScope(value, normalizedOrganizationId, normalizedEventId),
+      );
     },
     getSessions(participantId, signal) {
       return request<readonly SpeakerSession[]>(
@@ -582,14 +720,25 @@ export function createSpeakerApi(
       return request<readonly SpeakerAsset[]>(
         `/${pathSegment(participantId)}/assets`,
         signal === undefined ? undefined : { signal },
-      ).then((assets) =>
-        assets.map((asset) => ({
+      ).then((assets) => {
+        for (const asset of assets) {
+          if (
+            isRecord(asset) &&
+            ((typeof asset.eventId === "string" && asset.eventId !== normalizedEventId) ||
+              (typeof asset.participantId === "string" && asset.participantId !== participantId))
+          ) {
+            throw new SpeakerAuthoritativeDataError(
+              "The speaker asset response belongs to a different event or participant.",
+            );
+          }
+        }
+        return assets.map((asset) => ({
           ...asset,
           // The list endpoint may include a short-lived grant for legacy callers. Keep it out of
           // the browser-facing workspace until the organizer explicitly requests a download.
           downloadUrl: null,
-        })),
-      );
+        }));
+      });
     },
     getDownloadGrant(assetId, signal) {
       return requestAt<SpeakerDownloadGrant>(
@@ -612,13 +761,27 @@ export function createSpeakerApi(
       });
     },
     commitImport(input, signal) {
-      return jsonRequest<SpeakerRosterEnvelope>("/imports", "POST", input, signal);
+      return jsonRequest<SpeakerRosterEnvelope>("/imports", "POST", input, signal).then((value) =>
+        assertSpeakerRosterScope(value, normalizedOrganizationId, normalizedEventId),
+      );
     },
     listTasks(signal) {
       return eventRequest<SpeakerTaskEnvelope>(
         "/speaker-tasks",
         signal === undefined ? undefined : { signal },
-      );
+      ).then((value) => {
+        if (
+          !isRecord(value) ||
+          value.organizationId !== normalizedOrganizationId ||
+          value.eventId !== normalizedEventId ||
+          !Array.isArray(value.tasks)
+        ) {
+          throw new SpeakerAuthoritativeDataError(
+            "The speaker task response belongs to a different organization or event.",
+          );
+        }
+        return value;
+      });
     },
     assignTasks(input) {
       return eventJsonRequest<SpeakerTaskEnvelope>("/speaker-tasks", "POST", input);

@@ -107,6 +107,7 @@ const preview: AgendaPreview = {
       message: "Main hall already has a session at this time.",
     },
   ],
+  releaseConflicts: [],
   warnings: [],
   diff: { added: 0, changed: 1, removed: 0 },
   validatedAt: "2026-08-08T12:01:00.000Z",
@@ -128,14 +129,16 @@ const suggestionRun: AgendaSuggestionRunView = {
       },
     ],
   },
-  validation: {
+  candidateDiagnostics: {
     conflicts: [
       {
         id: "conflict_room",
         kind: "room",
+        entryIds: ["entry_keynote"],
         message: "The proposed placement overlaps an existing session.",
       },
     ],
+    warnings: [],
   },
   acceptedChangeIds: [],
 };
@@ -155,7 +158,7 @@ const actionableSuggestionRun: AgendaSuggestionRunView = {
       },
     ],
   },
-  validation: { conflicts: [] },
+  candidateDiagnostics: { conflicts: [], warnings: [] },
 };
 
 const noEligibleSuggestionData: AgendaWorkspaceData = {

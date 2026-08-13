@@ -1,8 +1,72 @@
 {
+  "fixtureVersion": "c1:v1",
   "source": "/tmp/killmysaas-evals/fixtures/sample-data.json",
   "organizationId": "ai-engineer",
   "eventId": "devflow-conf-2027",
   "timezone": "America/Los_Angeles",
+  "foundation": {
+    "tables": [
+      "Events",
+      "CFP Forms",
+      "Tracks",
+      "Formats",
+      "Rooms",
+      "Session Settings",
+      "Email Templates"
+    ],
+    "scenarioOwnedTables": [
+      "Submissions",
+      "Participants",
+      "Speaker Profiles",
+      "Review Plans",
+      "Evaluations",
+      "Decisions",
+      "Speaker Tasks",
+      "Sessions",
+      "Agenda Versions",
+      "Published Speaker Projections",
+      "Agenda Entries",
+      "Publication Outbox",
+      "Audit Records",
+      "Portal Contexts",
+      "Session Roster",
+      "Task Forms",
+      "Task Responses",
+      "Portal Resources",
+      "Wiki Pages",
+      "File Assets",
+      "File Versions",
+      "File Comments",
+      "Email Send Snapshots",
+      "Report Definitions",
+      "Report Runs",
+      "Remix Candidates",
+      "Remix Audit",
+      "CRM Contacts",
+      "CRM Segments",
+      "CRM History",
+      "CRM Pipeline",
+      "CRM Notes",
+      "CRM Event Projections",
+      "CRM Outreach",
+      "CRM Imports",
+      "CRM Commands"
+    ]
+  },
+  "chainContext": {
+    "version": "chain-context:v1",
+    "keys": [
+      "submissionId",
+      "participantIds",
+      "reviewPlanId",
+      "assignmentIds",
+      "sessionIds",
+      "taskIds",
+      "assetFamilyIds",
+      "embedConfigurationId",
+      "crmContactIds"
+    ]
+  },
   "event": {
     "startsAt": "2027-05-12T07:00:00.000Z",
     "endsAt": "2027-05-14T23:59:59.999Z"
@@ -25,13 +89,52 @@
   },
   "subsetFallback": {
     "reviewPlanId": "devflow-conf-2027-initial-review",
-    "agendaRevisionId": "devflow-conf-2027-agenda-revision-1",
-    "speakerProjectionRevisionId": "devflow-conf-2027-speakers-revision-1",
+    "agendaRevisionId": "agenda-foundation:devflow-conf-2027:revision-1",
+    "speakerProjectionRevisionId": "agenda-foundation-speakers:devflow-conf-2027:revision-1",
     "publishedAt": "2026-08-09T12:00:00.000Z",
-    "marcusSessionTitle": "Lightning: Agents in Production Q&A"
+    "agendaFoundation": {
+      "personas": [
+        {
+          "id": "devflow-conf-2027-agenda-foundation-presenter-a",
+          "name": "Agenda Foundation Presenter A",
+          "email": "agenda-foundation-a@evaluator.invalid",
+          "title": "Program Operations Lead",
+          "company": "Evaluator Foundation"
+        },
+        {
+          "id": "devflow-conf-2027-agenda-foundation-presenter-b",
+          "name": "Agenda Foundation Presenter B",
+          "email": "agenda-foundation-b@evaluator.invalid",
+          "title": "Program Operations Lead",
+          "company": "Evaluator Foundation"
+        }
+      ],
+      "sessions": [
+        {
+          "key": "platform",
+          "title": "Agenda Foundation: Platform Operations",
+          "personaId": "devflow-conf-2027-agenda-foundation-presenter-a",
+          "track": "Platform & Infra",
+          "format": "Talk (30 min)",
+          "roomHint": "2A",
+          "startsAt": "2027-05-12T16:00:00.000Z",
+          "endsAt": "2027-05-12T16:30:00.000Z"
+        },
+        {
+          "key": "ai",
+          "title": "Agenda Foundation: AI Operations",
+          "personaId": "devflow-conf-2027-agenda-foundation-presenter-b",
+          "track": "AI Engineering",
+          "format": "Lightning Talk (10 min)",
+          "roomHint": "2B",
+          "startsAt": "2027-05-13T18:00:00.000Z",
+          "endsAt": "2027-05-13T18:10:00.000Z"
+        }
+      ]
+    }
   },
   "repair": {
-    "manifestVersion": "repair:v5",
+    "manifestVersion": "repair:v6",
     "identityKeys": [
       "organizer-agenda",
       "organizer-fixture",

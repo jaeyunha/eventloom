@@ -1,4 +1,4 @@
-import { closed, conflict, forbidden, invalidInput, notFound } from "./errors";
+import { advisoryUnavailable, closed, conflict, forbidden, invalidInput, notFound } from "./errors";
 import type {
   EvaluationRepository,
   OrganizerWorkspaceRecords,
@@ -9,6 +9,10 @@ import type {
   EvaluationAggregate,
   EvaluationAiSuggestionProvider,
   EvaluationAssignment,
+  EvaluationAssignmentDistributionResult,
+  EvaluationAssignmentReplacementResult,
+  EvaluationAssignmentScope,
+  EvaluationDistributionPreview,
   EvaluationConflictDeclaration,
   EvaluationDecision,
   EvaluationDecisionCommunicationProjection,
@@ -20,6 +24,7 @@ import type {
   EvaluationPlan,
   EvaluationProgress,
   EvaluationReview,
+  EvaluationReviewHistory,
   EvaluationReviewerProjection,
   EvaluationSuggestion,
   EvaluationSuggestionAuditEntry,
@@ -195,6 +200,24 @@ export interface AssignReviewersInput {
   expectedVersion?: number | undefined;
 }
 
+export interface PreviewEvaluationDistributionInput {
+  readonly planId: string;
+  readonly roundId: string;
+  readonly submissionIds: readonly string[];
+  readonly reviewerIds?: readonly string[] | undefined;
+  readonly expectedVersion: number;
+}
+
+export interface ApplyEvaluationDistributionInput extends PreviewEvaluationDistributionInput {
+  readonly fingerprint: string;
+}
+
+export interface ReplaceEvaluationAssignmentInput {
+  readonly replacementReviewerId: string;
+  readonly expectedVersion: number;
+  readonly reason: string;
+}
+
 export interface SaveScoreInput {
   criterionId: string;
   value: number | string;
@@ -279,6 +302,7 @@ function requireHumanOrganizer(actor: EvaluationActor, eventId: string): void {
 function requireHumanReviewer(actor: EvaluationActor, assignment: EvaluationAssignment): void {
   if (
     actor.kind !== "human" ||
+    assignment.status === "superseded" ||
     actor.userId !== assignment.reviewerId ||
     !hasRole(actor, assignment.eventId, "reviewer")
   ) {
@@ -493,14 +517,35 @@ function aggregateForSubmission(
   assignments: readonly EvaluationAssignment[],
   reviews: readonly EvaluationReview[],
 ): EvaluationAggregate {
+  const roundRevision = round.revision ?? gradingRevision(plan);
+  const rubricRevision = round.rubricRevision ?? gradingRevision(plan);
   const submissionAssignments = assignments.filter(
     (assignment) =>
       assignment.eventId === plan.eventId &&
       assignment.roundId === round.id &&
       assignment.submissionId === submissionId &&
-      assignment.status !== "abstained",
+      isActionableAssignment(assignment) &&
+      (assignment.rubricRevision ?? assignment.planVersion) === rubricRevision &&
+      (assignment.roundRevision ?? assignment.rubricRevision ?? assignment.planVersion) ===
+        roundRevision,
   );
-  const reviewByAssignment = new Map(reviews.map((review) => [review.assignmentId, review]));
+  const reviewByAssignment = new Map(
+    reviews
+      .filter(
+        (review) =>
+          review.roundId === round.id &&
+          (review.rubricRevision ??
+            review.rubricVersion ??
+            review.planRevision ??
+            review.planVersion) === rubricRevision &&
+          (review.roundRevision ??
+            review.rubricRevision ??
+            review.rubricVersion ??
+            review.planRevision ??
+            review.planVersion) === roundRevision,
+      )
+      .map((review) => [review.assignmentId, review]),
+  );
   const submittedReviews = submissionAssignments
     .map((assignment) => reviewByAssignment.get(assignment.id))
     .filter(
@@ -541,6 +586,8 @@ function aggregateForSubmission(
   return {
     planId: plan.id,
     roundId: round.id,
+    roundRevision,
+    rubricRevision,
     submissionId,
     submittedReviewCount: submittedReviews.length,
     expectedReviewCount: plan.assignmentRule.reviewsPerSubmission,
@@ -553,7 +600,7 @@ function effectiveAssignment(
   assignment: EvaluationAssignment,
   review: EvaluationReview | undefined,
 ): EvaluationAssignment {
-  if (assignment.status === "abstained") return assignment;
+  if (assignment.status === "abstained" || assignment.status === "superseded") return assignment;
   if (review !== undefined && review.submittedAt !== null) {
     return { ...assignment, status: "submitted" as const };
   }
@@ -591,7 +638,8 @@ function effectiveAssignmentsForPlan(
       (assignment) =>
         assignment.tenantId === plan.tenantId &&
         assignment.eventId === plan.eventId &&
-        assignment.planId === plan.id,
+        assignment.planId === plan.id &&
+        isCurrentAssignment(assignment),
     )
     .map((assignment) => effectiveAssignment(assignment, reviewByAssignment.get(assignment.id)));
 }
@@ -609,7 +657,8 @@ function progressForAssignments(
     (assignment) =>
       assignment.tenantId === plan.tenantId &&
       assignment.eventId === plan.eventId &&
-      assignment.planId === plan.id,
+      assignment.planId === plan.id &&
+      isCurrentAssignment(assignment),
   );
   const count = (status: EvaluationAssignment["status"]) =>
     relevantAssignments.filter((assignment) => assignment.status === status).length;
@@ -687,10 +736,6 @@ function organizerRound(plan: EvaluationPlan, now: Date): ReviewRound | undefine
   );
 }
 
-function suggestionStorageKey(tenantId: string, suggestionId: string): string {
-  return `${tenantId}\u0000${suggestionId}`;
-}
-
 function normalizeProjection(
   projection: EvaluationReviewerProjection | undefined,
 ): EvaluationReviewerProjection {
@@ -731,6 +776,28 @@ function decisionTemplatePurpose(
   return "decision_rejected";
 }
 
+function isCurrentAssignment(assignment: EvaluationAssignment): boolean {
+  return assignment.status !== "superseded";
+}
+
+function isActionableAssignment(assignment: EvaluationAssignment): boolean {
+  return assignment.status !== "abstained" && assignment.status !== "superseded";
+}
+
+function gradingRevision(plan: EvaluationPlan): number {
+  return plan.gradingRevision ?? plan.version;
+}
+
+function distributionFingerprint(value: unknown): string {
+  const serialized = JSON.stringify(value);
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < serialized.length; index += 1) {
+    hash ^= serialized.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `evaluation-distribution-v1-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
 export class EvaluationService {
   readonly #acceptanceHandoff: EvaluationAcceptanceHandoff | undefined;
   readonly #decisionProjection: EvaluationDecisionProjection | undefined;
@@ -746,7 +813,6 @@ export class EvaluationService {
     | EvaluationSuggestionProducer
     | undefined;
   readonly #aiSuggestionProducer: EvaluationSuggestionProducer | undefined;
-  readonly #suggestions = new Map<string, EvaluationSuggestion>();
 
   constructor(
     repository: EvaluationRepository,
@@ -1050,7 +1116,7 @@ export class EvaluationService {
       updatedAt: now,
     };
     await this.#repository.putPlan(updated, plan.version);
-    this.#markSuggestionsStaleForPlan(plan.id, now, actor.userId);
+    await this.#markSuggestionsStaleForPlan(actor.tenantId, plan.id, now, actor.userId);
     return updated;
   }
 
@@ -1078,6 +1144,7 @@ export class EvaluationService {
     }
     const now = this.#clock();
     const gradingLockedAt = plan.gradingLockedAt ?? now.toISOString();
+    const nextVersion = plan.version + 1;
     if (plan.closesAt !== null && Date.parse(plan.closesAt) <= now.getTime()) {
       throw closed("The evaluation plan close date has passed.");
     }
@@ -1085,7 +1152,13 @@ export class EvaluationService {
       ...plan,
       status: "open",
       gradingLockedAt,
-      version: plan.version + 1,
+      gradingRevision: nextVersion,
+      rounds: plan.rounds.map((round) => ({
+        ...round,
+        revision: nextVersion,
+        rubricRevision: nextVersion,
+      })),
+      version: nextVersion,
       updatedAt: now.toISOString(),
     };
     await this.#repository.putPlan(updated, plan.version);
@@ -1160,11 +1233,14 @@ export class EvaluationService {
     const allAssignments = (await this.#repository.listAssignments(actor.tenantId, plan.id)).filter(
       (assignment) => assignment.eventId === plan.eventId,
     );
+    const planRevision = gradingRevision(plan);
+    const rubricRevision = round.rubricRevision ?? planRevision;
+    const roundRevision = round.revision ?? planRevision;
     const targetAssignments = allAssignments.filter(
       (assignment) =>
         assignment.roundId === input.roundId &&
         assignment.submissionId === submissionId &&
-        assignment.status !== "abstained",
+        isActionableAssignment(assignment),
     );
     const existingByReviewer = new Map(
       targetAssignments.map((assignment) => [assignment.reviewerId, assignment]),
@@ -1188,7 +1264,7 @@ export class EvaluationService {
 
     const outsideAssignments = allAssignments.filter(
       (assignment) =>
-        assignment.status !== "abstained" &&
+        isActionableAssignment(assignment) &&
         !(assignment.roundId === input.roundId && assignment.submissionId === submissionId),
     );
     const now = this.#clock().toISOString();
@@ -1204,8 +1280,14 @@ export class EvaluationService {
         desired.push(existing);
         continue;
       }
+      const baseAssignmentId = `${plan.id}:${input.roundId}:${submissionId}:${reviewerId}`;
+      const matchingIdCount = allAssignments.filter(
+        (assignment) =>
+          assignment.id === baseAssignmentId || assignment.id.startsWith(`${baseAssignmentId}:v`),
+      ).length;
       desired.push({
-        id: `${plan.id}:${input.roundId}:${submissionId}:${reviewerId}`,
+        id:
+          matchingIdCount === 0 ? baseAssignmentId : `${baseAssignmentId}:v${matchingIdCount + 1}`,
         tenantId: actor.tenantId,
         eventId: plan.eventId,
         planId: plan.id,
@@ -1213,23 +1295,206 @@ export class EvaluationService {
         submissionId,
         reviewerId,
         status: "assigned",
-        planVersion: plan.version,
-        rubricRevision: plan.version,
+        planVersion: planRevision,
+        rubricRevision,
+        roundRevision,
         submissionRevision,
         version: 1,
         createdAt: now,
         updatedAt: now,
       });
     }
-    await this.#repository.replaceAssignments(
-      actor.tenantId,
-      plan.eventId,
-      plan.id,
-      input.roundId,
-      submissionId,
-      desired,
+    await this.#repository.applyAssignmentDistribution(
+      {
+        tenantId: actor.tenantId,
+        eventId: plan.eventId,
+        planId: plan.id,
+        roundId: input.roundId,
+        submissionId,
+        planVersion: planRevision,
+      },
+      {
+        assignments: desired,
+        expectedActiveVersions: targetAssignments.map((assignment) => ({
+          assignmentId: assignment.id,
+          version: assignment.version,
+        })),
+        reason: "Organizer updated reviewer assignments.",
+      },
     );
     return desired;
+  }
+
+  async previewDistribution(
+    actor: EvaluationActor,
+    input: PreviewEvaluationDistributionInput,
+  ): Promise<EvaluationDistributionPreview> {
+    return (await this.#buildDistributionPreview(actor, input)).preview;
+  }
+
+  async applyDistribution(
+    actor: EvaluationActor,
+    input: ApplyEvaluationDistributionInput,
+  ): Promise<EvaluationAssignmentDistributionResult> {
+    const built = await this.#buildDistributionPreview(actor, input);
+    if (
+      built.preview.fingerprint !== requireText(input.fingerprint, "Distribution fingerprint", 200)
+    ) {
+      throw conflict("Reviewer assignments changed since the distribution was previewed.");
+    }
+    return this.#repository.applyAssignmentDistribution(built.preview.scope, {
+      assignments: built.assignments,
+      expectedActiveVersions: built.preview.expectedActiveVersions,
+      reason: "Organizer applied reviewer distribution.",
+    });
+  }
+
+  async replaceAssignment(
+    actor: EvaluationActor,
+    assignmentId: string,
+    input: ReplaceEvaluationAssignmentInput,
+  ): Promise<EvaluationAssignmentReplacementResult> {
+    const assignment = await this.#getAssignment(actor.tenantId, assignmentId);
+    const plan = await this.#getPlan(actor.tenantId, assignment.planId);
+    requireHumanOrganizer(actor, plan.eventId);
+    if (
+      assignment.eventId !== plan.eventId ||
+      assignment.status === "abstained" ||
+      assignment.status === "superseded"
+    ) {
+      throw conflict("Only a current reviewer assignment can be replaced.");
+    }
+    if (assignment.version !== input.expectedVersion) {
+      throw conflict("Reviewer assignment changed since it was loaded.");
+    }
+    const round = findRound(plan, assignment.roundId);
+    assertPlanIsWritable(plan, round, this.#clock());
+    const replacementReviewerId = requireText(
+      input.replacementReviewerId,
+      "Replacement reviewer id",
+      100,
+    );
+    const reason = requireText(input.reason, "Replacement reason", 2_000);
+    if (replacementReviewerId === assignment.reviewerId) {
+      throw invalidInput("The replacement reviewer must be different.");
+    }
+    if (
+      round.reviewerPool !== undefined &&
+      !round.reviewerPool.reviewerIds.includes(replacementReviewerId)
+    ) {
+      throw forbidden("The replacement reviewer must belong to this round's reviewer pool.");
+    }
+
+    const assignments = await this.#repository.listAssignments(actor.tenantId, plan.id);
+    if (
+      assignments.some(
+        (candidate) =>
+          candidate.roundId === assignment.roundId &&
+          candidate.submissionId === assignment.submissionId &&
+          candidate.reviewerId === replacementReviewerId &&
+          candidate.status === "abstained",
+      )
+    ) {
+      throw conflict("A reviewer who declared a conflict cannot be assigned as a replacement.");
+    }
+    const replacementLoad =
+      assignments.filter(
+        (candidate) =>
+          isActionableAssignment(candidate) &&
+          candidate.id !== assignment.id &&
+          candidate.reviewerId === replacementReviewerId,
+      ).length + 1;
+    if (replacementLoad > plan.assignmentRule.maxAssignmentsPerReviewer) {
+      throw conflict(`Reviewer ${replacementReviewerId} has reached the plan assignment limit.`);
+    }
+
+    const now = this.#clock().toISOString();
+    const baseAssignmentId = `${plan.id}:${round.id}:${assignment.submissionId}:${replacementReviewerId}`;
+    const matchingIdCount = assignments.filter(
+      (candidate) =>
+        candidate.id === baseAssignmentId || candidate.id.startsWith(`${baseAssignmentId}:v`),
+    ).length;
+    const successorAssignment: EvaluationAssignment = {
+      id: matchingIdCount === 0 ? baseAssignmentId : `${baseAssignmentId}:v${matchingIdCount + 1}`,
+      tenantId: actor.tenantId,
+      eventId: plan.eventId,
+      planId: plan.id,
+      roundId: round.id,
+      submissionId: assignment.submissionId,
+      reviewerId: replacementReviewerId,
+      status: "assigned",
+      predecessorAssignmentId: assignment.id,
+      successorAssignmentId: null,
+      supersededReason: null,
+      planVersion: assignment.planVersion ?? gradingRevision(plan),
+      rubricRevision: assignment.rubricRevision ?? gradingRevision(plan),
+      roundRevision: assignment.roundRevision ?? round.revision ?? gradingRevision(plan),
+      submissionRevision: assignment.submissionRevision,
+      version: 1,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const scope: EvaluationAssignmentScope = {
+      tenantId: actor.tenantId,
+      eventId: plan.eventId,
+      planId: plan.id,
+      roundId: round.id,
+      submissionId: assignment.submissionId,
+      planVersion: assignment.planVersion,
+    };
+    return this.#repository.replaceAssignment(scope, {
+      oldAssignmentId: assignment.id,
+      replacementReviewerId,
+      successorAssignment,
+      expectedAssignmentVersion: input.expectedVersion,
+      reason,
+    });
+  }
+
+  async listAssignmentHistory(
+    actor: EvaluationActor,
+    planId: string,
+    input: {
+      readonly roundId?: string | undefined;
+      readonly submissionId?: string | undefined;
+    } = {},
+  ): Promise<readonly EvaluationReviewHistory[]> {
+    const plan = await this.#getPlan(actor.tenantId, planId);
+    requireHumanOrganizer(actor, plan.eventId);
+    const [assignments, reviews] = await Promise.all([
+      this.#repository.listAssignments(actor.tenantId, plan.id),
+      this.#repository.listReviews(actor.tenantId, plan.id),
+    ]);
+    const reviewByAssignmentId = new Map(
+      reviews
+        .filter(
+          (review) =>
+            review.tenantId === actor.tenantId &&
+            review.eventId === plan.eventId &&
+            review.planId === plan.id,
+        )
+        .map((review) => [review.assignmentId, review] as const),
+    );
+    return assignments
+      .filter(
+        (assignment) =>
+          assignment.tenantId === actor.tenantId &&
+          assignment.eventId === plan.eventId &&
+          assignment.planId === plan.id &&
+          assignment.status === "superseded" &&
+          (input.roundId === undefined || assignment.roundId === input.roundId) &&
+          (input.submissionId === undefined || assignment.submissionId === input.submissionId) &&
+          reviewByAssignmentId.has(assignment.id),
+      )
+      .map((assignment) => ({
+        assignment,
+        review: reviewByAssignmentId.get(assignment.id) as EvaluationReview,
+      }))
+      .sort(
+        (left, right) =>
+          left.assignment.updatedAt.localeCompare(right.assignment.updatedAt) ||
+          left.assignment.id.localeCompare(right.assignment.id),
+      );
   }
 
   async listReviewerAssignments(
@@ -1246,7 +1511,8 @@ export class EvaluationService {
     ]);
     return effectiveAssignmentsForPlan(plan, assignments, reviews)
       .filter(
-        (assignment) => assignment.reviewerId === actor.userId && assignment.status !== "abstained",
+        (assignment) =>
+          assignment.reviewerId === actor.userId && isActionableAssignment(assignment),
       )
       .sort(
         (left, right) =>
@@ -1298,7 +1564,7 @@ export class EvaluationService {
           assignment.planId === plan.id &&
           assignment.eventId === plan.eventId &&
           assignment.reviewerId === actor.userId &&
-          assignment.status !== "abstained",
+          isActionableAssignment(assignment),
       );
       const ownAssignmentIds = new Set(assignments.map((assignment) => assignment.id));
       const reviewsByAssignment = new Map(
@@ -1377,7 +1643,7 @@ export class EvaluationService {
           round,
           submission: this.#visibleSubmission(plan, round, material),
           review: review ?? null,
-          rubricRevision: plan.version,
+          rubricRevision: round.rubricRevision ?? gradingRevision(plan),
           submissionRevision,
           suggestions,
           plan: {
@@ -1433,8 +1699,8 @@ export class EvaluationService {
     ) {
       throw notFound("The evaluation assignment was not found.");
     }
-    if (assignment.status === "abstained") {
-      throw conflict("A reviewer who declared a conflict cannot be unassigned.");
+    if (assignment.status === "abstained" || assignment.status === "superseded") {
+      throw conflict("Only a current reviewer assignment can be unassigned.");
     }
     const assignments = await this.#repository.listAssignments(actor.tenantId, plan.id);
     const desiredByReviewer = new Map(
@@ -1444,18 +1710,35 @@ export class EvaluationService {
             candidate.eventId === plan.eventId &&
             candidate.roundId === assignment.roundId &&
             candidate.submissionId === assignment.submissionId &&
-            candidate.status !== "abstained" &&
+            isActionableAssignment(candidate) &&
             candidate.reviewerId !== assignment.reviewerId,
         )
         .map((candidate) => [candidate.reviewerId, candidate] as const),
     );
-    await this.#repository.replaceAssignments(
-      actor.tenantId,
-      plan.eventId,
-      plan.id,
-      assignment.roundId,
-      assignment.submissionId,
-      [...desiredByReviewer.values()],
+    const activeTargetAssignments = assignments.filter(
+      (candidate) =>
+        candidate.eventId === plan.eventId &&
+        candidate.roundId === assignment.roundId &&
+        candidate.submissionId === assignment.submissionId &&
+        isActionableAssignment(candidate),
+    );
+    await this.#repository.applyAssignmentDistribution(
+      {
+        tenantId: actor.tenantId,
+        eventId: plan.eventId,
+        planId: plan.id,
+        roundId: assignment.roundId,
+        submissionId: assignment.submissionId,
+        planVersion: assignment.planVersion,
+      },
+      {
+        assignments: [...desiredByReviewer.values()],
+        expectedActiveVersions: activeTargetAssignments.map((candidate) => ({
+          assignmentId: candidate.id,
+          version: candidate.version,
+        })),
+        reason: "Organizer removed reviewer assignment.",
+      },
     );
   }
   async getReviewContext(actor: EvaluationActor, assignmentId: string): Promise<ReviewContext> {
@@ -1493,7 +1776,7 @@ export class EvaluationService {
       round,
       submission: this.#visibleSubmission(plan, round, material),
       review,
-      rubricRevision: plan.version,
+      rubricRevision: round.rubricRevision ?? gradingRevision(plan),
       submissionRevision,
       suggestions,
     };
@@ -1520,6 +1803,8 @@ export class EvaluationService {
       assignment.submissionId,
       submission?.version ?? submission?.revision,
     );
+    const rubricRevision = round.rubricRevision ?? gradingRevision(plan);
+    const roundRevision = round.revision ?? gradingRevision(plan);
     this.#assertExpectedReviewVersion(current, input.expectedVersion);
     if (input.scores.length === 0 && input.comment === undefined) {
       throw invalidInput("An autosave must contain a score or comment change.");
@@ -1578,13 +1863,13 @@ export class EvaluationService {
           ? {
               suggestionId: `legacy:${assignment.id}:${criterion.id}`,
               suggestionStatus: "pending" as const,
-              rubricRevision: plan.version,
+              rubricRevision,
               submissionRevision,
             }
           : {}),
-        rubricRevision: plan.version,
+        rubricRevision,
         submissionRevision,
-        rubricVersion: plan.version,
+        rubricVersion: rubricRevision,
         submissionVersion: submissionRevision,
         updatedAt: now,
       };
@@ -1608,11 +1893,12 @@ export class EvaluationService {
       comment,
       submittedAt: null,
       version: existingVersion + 1,
-      planRevision: plan.version,
-      rubricRevision: plan.version,
+      planRevision: gradingRevision(plan),
+      rubricRevision,
+      roundRevision,
       submissionRevision,
-      planVersion: plan.version,
-      rubricVersion: plan.version,
+      planVersion: gradingRevision(plan),
+      rubricVersion: rubricRevision,
       submissionVersion: submissionRevision,
       createdAt: current?.createdAt ?? now,
       updatedAt: now,
@@ -1704,7 +1990,9 @@ export class EvaluationService {
     if (material === null) throw notFound("The assigned submission was not found.");
     const producer = this.#aiSuggestionProducer;
     if (producer === undefined) {
-      throw forbidden("AI evaluation suggestions are not configured.");
+      throw advisoryUnavailable(
+        "Advisory evaluation is not configured. Manual review remains available.",
+      );
     }
     const submissionRevision = await this.#submissionRevision(
       actor.tenantId,
@@ -1712,6 +2000,8 @@ export class EvaluationService {
       assignment.submissionId,
       material.version ?? material.revision,
     );
+    const planRevision = gradingRevision(plan);
+    const rubricRevision = round.rubricRevision ?? planRevision;
     const providerInput: EvaluationSuggestionProviderInput = {
       tenantId: actor.tenantId,
       eventId: assignment.eventId,
@@ -1719,15 +2009,20 @@ export class EvaluationService {
       roundId: round.id,
       assignmentId: assignment.id,
       submissionId: assignment.submissionId,
-      rubricRevision: plan.version,
+      rubricRevision,
       submissionRevision,
-      planRevision: plan.version,
+      planRevision,
       rubricId: round.rubric.id,
       submissionVersion: submissionRevision,
       round,
       submission: this.#visibleSubmission(plan, round, material),
     };
-    const result = await producer(providerInput);
+    let result: EvaluationSuggestionProviderResult;
+    try {
+      result = await producer(providerInput);
+    } catch {
+      throw advisoryUnavailable();
+    }
     const candidates = this.#normalizeProviderCandidates(result, round, providerInput);
     const now = this.#clock().toISOString();
     const provenance: EvaluationSuggestionProvenance = {
@@ -1755,7 +2050,7 @@ export class EvaluationService {
         criterionCandidates.push(candidate);
       }
     }
-    const suggestionId = `suggestion:${assignment.id}:${Date.now()}:${this.#suggestions.size + 1}`;
+    const suggestionId = `suggestion:${assignment.id}:${crypto.randomUUID()}`;
     const auditEntry: EvaluationSuggestionAuditEntry = {
       action: "generate",
       actorId: actor.userId,
@@ -1770,9 +2065,9 @@ export class EvaluationService {
       assignmentId: assignment.id,
       submissionId: assignment.submissionId,
       reviewerId: actor.userId,
-      rubricRevision: plan.version,
+      rubricRevision,
       submissionRevision,
-      planRevision: plan.version,
+      planRevision,
       rubricId: round.rubric.id,
       submissionVersion: submissionRevision,
       candidates: byCriterion,
@@ -1785,8 +2080,8 @@ export class EvaluationService {
       createdAt: now,
       updatedAt: now,
     };
-    this.#suggestions.set(suggestionStorageKey(actor.tenantId, suggestion.id), suggestion);
-    return structuredClone(suggestion);
+    await this.#repository.putSuggestion(suggestion, null);
+    return suggestion;
   }
 
   async generateAiSuggestion(
@@ -1833,18 +2128,11 @@ export class EvaluationService {
 
   async resolveAiSuggestion(
     actor: EvaluationActor,
-    suggestionIdOrAssignmentId: string,
-    inputOrSuggestionId: ResolveEvaluationSuggestionInput | string,
-    maybeInput?: ResolveEvaluationSuggestionInput,
+    suggestionId: string,
+    input: ResolveEvaluationSuggestionInput,
   ): Promise<EvaluationSuggestionResolution> {
-    const suggestionId =
-      maybeInput === undefined ? suggestionIdOrAssignmentId : (inputOrSuggestionId as string);
-    const input =
-      maybeInput === undefined
-        ? (inputOrSuggestionId as ResolveEvaluationSuggestionInput)
-        : maybeInput;
-    const suggestion = this.#suggestions.get(suggestionStorageKey(actor.tenantId, suggestionId));
-    if (suggestion === undefined) throw notFound("The AI evaluation suggestion was not found.");
+    const suggestion = await this.#repository.getSuggestion(actor.tenantId, suggestionId);
+    if (suggestion === null) throw notFound("The AI evaluation suggestion was not found.");
     const assignment = await this.#getAssignment(actor.tenantId, suggestion.assignmentId);
     requireHumanReviewer(actor, assignment);
     if (suggestion.reviewerId !== actor.userId) throw forbidden();
@@ -1865,110 +2153,144 @@ export class EvaluationService {
       assignment.submissionId,
       material.version ?? material.revision,
     );
-    const stale =
-      suggestion.rubricRevision !== plan.version ||
-      suggestion.submissionRevision !== submissionRevision;
-    if (stale) {
-      const updated = this.#markSuggestionStale(
+    const planRevision = gradingRevision(plan);
+    const rubricRevision = round.rubricRevision ?? planRevision;
+    const roundRevision = round.revision ?? planRevision;
+    if (
+      suggestion.rubricRevision !== rubricRevision ||
+      suggestion.submissionRevision !== submissionRevision
+    ) {
+      const staleSuggestion = this.#markSuggestionStale(
         suggestion,
         actor.userId,
         this.#clock().toISOString(),
       );
-      this.#suggestions.set(suggestionStorageKey(actor.tenantId, suggestion.id), updated);
+      await this.#repository.putSuggestion(staleSuggestion, suggestion.version);
       throw conflict("The AI evaluation suggestion is stale and must be regenerated.");
     }
     if (suggestion.status !== "pending") {
       throw conflict("Only a pending AI evaluation suggestion can be resolved.");
     }
-    if (input.expectedVersion !== undefined && input.expectedVersion !== suggestion.version) {
+    if (input.expectedVersion !== suggestion.version) {
       throw conflict("The AI evaluation suggestion changed since it was loaded.");
     }
+
     const action = input.action;
     const reason = input.reason?.trim() ?? "";
     if ((action === "reject" || action === "edit") && reason.length === 0) {
       throw invalidInput("A reason is required when rejecting or editing an AI suggestion.");
     }
-    let review: EvaluationReview | null = await this.#repository.getReview(
-      actor.tenantId,
-      assignment.id,
-    );
+    const now = this.#clock().toISOString();
+    const currentReview = await this.#repository.getReview(actor.tenantId, assignment.id);
+    let review: EvaluationReview | null = currentReview;
+    let assignmentUpdate: EvaluationAssignment | null = null;
+
     if (action === "accept" || action === "edit") {
       const values =
         action === "edit"
           ? (input.criterionScores ?? input.scores)
           : Object.fromEntries(
-              Object.entries(suggestion.candidates).map(([criterionId, values]) => [
+              Object.entries(suggestion.candidates).map(([criterionId, candidates]) => [
                 criterionId,
-                values[0]?.value,
+                candidates[0]?.value,
               ]),
             );
-      if (values === undefined) throw invalidInput("Provide at least one edited rubric score.");
-      const scores = Object.entries(values).flatMap(([criterionId, value]) => {
-        if (typeof value !== "number" || !Number.isFinite(value)) return [];
-        const candidate = suggestion.candidates[criterionId]?.[0];
-        return [
-          {
-            criterionId,
-            value,
-            origin: "human" as const,
-            evidence: action === "accept" ? (candidate?.evidence ?? []) : [],
-          },
-        ];
-      });
-      if (scores.length === 0) throw invalidInput("Provide at least one valid rubric score.");
-      review = await this.saveReview(actor, assignment.id, {
-        scores,
-        expectedVersion: review?.version,
-      });
-      const resolvedStatus = action === "accept" ? "accepted" : "edited";
-      const attachedScores: Record<string, RubricScore> = { ...review?.scores };
-      for (const score of scores) {
-        const existing = attachedScores[score.criterionId];
-        if (existing !== undefined) {
-          attachedScores[score.criterionId] = {
-            ...existing,
-            origin: "human",
-            suggestionId: suggestion.id,
-            suggestionStatus: resolvedStatus,
-            humanConfirmedBy: actor.userId,
-            updatedAt: this.#clock().toISOString(),
-          };
+      if (values === undefined || Object.keys(values).length === 0) {
+        throw invalidInput("Provide at least one edited rubric score.");
+      }
+      const criterionById = new Map(
+        round.rubric.criteria.map((criterion) => [criterion.id, criterion]),
+      );
+      const scores: Record<string, RubricScore> = { ...(currentReview?.scores ?? {}) };
+      for (const [criterionId, inputValue] of Object.entries(values)) {
+        const criterion = criterionById.get(criterionId);
+        if (
+          criterion === undefined ||
+          (criterion.inputType ?? "numeric") === "free_text" ||
+          typeof inputValue !== "number" ||
+          !Number.isFinite(inputValue) ||
+          inputValue < criterion.minimum ||
+          inputValue > criterion.maximum
+        ) {
+          throw invalidInput("An advisory score is outside the current rubric.");
         }
-      }
-      if (review !== null) {
-        const attachedReview: EvaluationReview = {
-          ...review,
-          scores: attachedScores,
-          version: review.version + 1,
-          updatedAt: this.#clock().toISOString(),
+        const value =
+          (criterion.inputType ?? "numeric") === "dropdown"
+            ? normalizeDropdownValue(criterion, inputValue)
+            : inputValue;
+        const candidate = suggestion.candidates[criterionId]?.[0];
+        scores[criterionId] = {
+          criterionId,
+          value,
+          origin: "human",
+          evidence: candidate?.evidence ?? [],
+          humanConfirmedBy: actor.userId,
+          suggestionId: suggestion.id,
+          suggestionStatus: action === "accept" ? "accepted" : "edited",
+          rubricRevision,
+          submissionRevision,
+          rubricVersion: rubricRevision,
+          submissionVersion: submissionRevision,
+          updatedAt: now,
         };
-        await this.#repository.putReview(attachedReview, review.version);
-        review = attachedReview;
       }
-    } else if (review !== null) {
-      const scores: Record<string, RubricScore> = { ...review.scores };
+      review = {
+        id: currentReview?.id ?? `review:${assignment.id}`,
+        tenantId: actor.tenantId,
+        eventId: assignment.eventId,
+        planId: plan.id,
+        roundId: round.id,
+        assignmentId: assignment.id,
+        submissionId: assignment.submissionId,
+        reviewerId: actor.userId,
+        scores,
+        comment: currentReview?.comment ?? "",
+        submittedAt: null,
+        version: (currentReview?.version ?? 0) + 1,
+        planRevision,
+        rubricRevision,
+        roundRevision,
+        submissionRevision,
+        planVersion: planRevision,
+        rubricVersion: rubricRevision,
+        submissionVersion: submissionRevision,
+        createdAt: currentReview?.createdAt ?? now,
+        updatedAt: now,
+      };
+      if (assignment.status === "assigned") {
+        assignmentUpdate = {
+          ...assignment,
+          status: "in_progress",
+          version: assignment.version + 1,
+          updatedAt: now,
+        };
+      }
+    } else if (currentReview !== null) {
+      const scores: Record<string, RubricScore> = { ...currentReview.scores };
+      let changed = false;
       for (const candidate of suggestion.criterionCandidates) {
         const score = scores[candidate.criterionId];
-        if (score?.suggestionId === suggestion.id || score?.suggestionStatus === "pending") {
+        if (score?.suggestionId === suggestion.id) {
           scores[candidate.criterionId] = {
             ...score,
             origin: "ai",
             humanConfirmedBy: null,
-            suggestionId: suggestion.id,
             suggestionStatus: "rejected",
-            updatedAt: this.#clock().toISOString(),
+            updatedAt: now,
           };
+          changed = true;
         }
       }
-      review = {
-        ...review,
-        scores,
-        version: review.version + 1,
-        updatedAt: this.#clock().toISOString(),
-      };
-      await this.#repository.putReview(review, review.version - 1);
+      if (changed) {
+        review = {
+          ...currentReview,
+          scores,
+          version: currentReview.version + 1,
+          updatedAt: now,
+        };
+      }
     }
-    const now = this.#clock().toISOString();
+
     const editedValues = input.criterionScores ?? input.scores;
     const auditEntry: EvaluationSuggestionAuditEntry = {
       action,
@@ -1979,7 +2301,7 @@ export class EvaluationService {
         ? { valueByCriterion: editedValues }
         : {}),
     };
-    const updated: EvaluationSuggestion = {
+    const resolvedSuggestion: EvaluationSuggestion = {
       ...suggestion,
       status: action === "accept" ? "accepted" : action === "edit" ? "edited" : "rejected",
       version: suggestion.version + 1,
@@ -1987,10 +2309,17 @@ export class EvaluationService {
       audit: [...suggestion.audit, auditEntry],
       updatedAt: now,
     };
-    this.#suggestions.set(suggestionStorageKey(actor.tenantId, suggestion.id), updated);
+    const resolution = await this.#repository.resolveSuggestion(
+      resolvedSuggestion,
+      suggestion.version,
+      assignmentUpdate,
+      assignmentUpdate === null ? null : assignment.version,
+      review === currentReview ? null : review,
+      review === currentReview ? null : (currentReview?.version ?? null),
+    );
     return {
-      suggestion: structuredClone(updated),
-      review: review === null ? null : structuredClone(review),
+      suggestion: resolution.suggestion,
+      review: resolution.review ?? currentReview,
     };
   }
 
@@ -2018,7 +2347,7 @@ export class EvaluationService {
   async acceptAiSuggestion(
     actor: EvaluationActor,
     suggestionId: string,
-    expectedVersion?: number,
+    expectedVersion: number,
   ): Promise<EvaluationSuggestionResolution> {
     return this.resolveAiSuggestion(actor, suggestionId, {
       action: "accept",
@@ -2031,7 +2360,7 @@ export class EvaluationService {
     suggestionId: string,
     scores: Readonly<Record<string, number>>,
     reason: string,
-    expectedVersion?: number,
+    expectedVersion: number,
   ): Promise<EvaluationSuggestionResolution> {
     return this.resolveAiSuggestion(actor, suggestionId, {
       action: "edit",
@@ -2045,7 +2374,7 @@ export class EvaluationService {
     actor: EvaluationActor,
     suggestionId: string,
     reason: string,
-    expectedVersion?: number,
+    expectedVersion: number,
   ): Promise<EvaluationSuggestionResolution> {
     return this.resolveAiSuggestion(actor, suggestionId, {
       action: "reject",
@@ -2172,7 +2501,7 @@ export class EvaluationService {
             assignment.eventId === plan.eventId &&
             assignment.roundId === roundId &&
             assignment.submissionId === submissionId &&
-            assignment.status !== "abstained",
+            isActionableAssignment(assignment),
         )
         .map((assignment) => assignment.id),
     );
@@ -2342,6 +2671,257 @@ export class EvaluationService {
     }
     await Promise.all([projection, acceptance]);
   }
+  async #buildDistributionPreview(
+    actor: EvaluationActor,
+    input: PreviewEvaluationDistributionInput,
+  ): Promise<{
+    readonly preview: EvaluationDistributionPreview;
+    readonly assignments: readonly EvaluationAssignment[];
+  }> {
+    const plan = await this.#getPlan(actor.tenantId, input.planId);
+    requireHumanOrganizer(actor, plan.eventId);
+    if (plan.status !== "open") {
+      throw closed("Reviewer distribution requires an open evaluation plan.");
+    }
+    if (plan.version !== input.expectedVersion) {
+      throw conflict("Evaluation plan changed since the distribution was requested.");
+    }
+    const round = findRound(plan, input.roundId);
+    const submissionIds = input.submissionIds.map((submissionId) =>
+      requireText(submissionId, "Submission id", MAX_SUBMISSION_ID_LENGTH),
+    );
+    if (submissionIds.length === 0 || new Set(submissionIds).size !== submissionIds.length) {
+      throw invalidInput("Provide one or more unique submission ids.");
+    }
+    submissionIds.sort((left, right) => left.localeCompare(right));
+
+    const requestedReviewerIds = (input.reviewerIds ?? round.reviewerPool?.reviewerIds ?? []).map(
+      (reviewerId) => requireText(reviewerId, "Reviewer id", 100),
+    );
+    if (
+      requestedReviewerIds.length === 0 ||
+      new Set(requestedReviewerIds).size !== requestedReviewerIds.length
+    ) {
+      throw invalidInput("Provide one or more unique reviewer ids.");
+    }
+    requestedReviewerIds.sort((left, right) => left.localeCompare(right));
+
+    const materials = await this.#submissions.getSubmissionsForReview(
+      actor.tenantId,
+      submissionIds.map((submissionId) => ({ eventId: plan.eventId, submissionId })),
+    );
+    const materialById = new Map(
+      materials
+        .filter(
+          (material) => material.tenantId === actor.tenantId && material.eventId === plan.eventId,
+        )
+        .map((material) => [material.id, material] as const),
+    );
+    for (const submissionId of submissionIds) {
+      if (!materialById.has(submissionId)) {
+        throw notFound(`Submission ${submissionId} was not found for reviewer distribution.`);
+      }
+    }
+
+    const allAssignments = (await this.#repository.listAssignments(actor.tenantId, plan.id)).filter(
+      (assignment) => assignment.eventId === plan.eventId,
+    );
+    const actionableAssignments = allAssignments.filter(isActionableAssignment);
+    const targetSubmissionIds = new Set(submissionIds);
+    const targetAssignments = actionableAssignments.filter(
+      (assignment) =>
+        assignment.roundId === round.id && targetSubmissionIds.has(assignment.submissionId),
+    );
+    const abstentions = allAssignments.filter(
+      (assignment) =>
+        assignment.roundId === round.id &&
+        targetSubmissionIds.has(assignment.submissionId) &&
+        assignment.status === "abstained",
+    );
+    const reviewerLoad = new Map<string, number>();
+    for (const assignment of actionableAssignments) {
+      reviewerLoad.set(assignment.reviewerId, (reviewerLoad.get(assignment.reviewerId) ?? 0) + 1);
+    }
+
+    const pool = round.reviewerPool?.reviewerIds;
+    const poolSet = pool === undefined ? null : new Set(pool);
+    const eligibleReviewerIds = requestedReviewerIds.filter(
+      (reviewerId) => poolSet === null || poolSet.has(reviewerId),
+    );
+    const exclusions: Array<EvaluationDistributionPreview["exclusions"][number]> = [];
+    const desired: EvaluationAssignment[] = [];
+    const desiredAssignments: Array<EvaluationDistributionPreview["desiredAssignments"][number]> =
+      [];
+    const deficits: Array<EvaluationDistributionPreview["deficits"][number]> = [];
+    const submissionRevisions: Array<EvaluationDistributionPreview["submissionRevisions"][number]> =
+      [];
+    const now = this.#clock().toISOString();
+    const planRevision = gradingRevision(plan);
+    const rubricRevision = round.rubricRevision ?? planRevision;
+    const roundRevision = round.revision ?? planRevision;
+    const trackFilter = round.trackFilter ?? plan.assignmentRule.trackFilter ?? null;
+
+    for (const submissionId of submissionIds) {
+      const material = materialById.get(submissionId);
+      if (material === undefined) continue;
+      const submissionRevision = await this.#submissionRevision(
+        actor.tenantId,
+        plan.eventId,
+        submissionId,
+        material.version ?? material.revision,
+      );
+      submissionRevisions.push({ submissionId, revision: submissionRevision });
+      const existing = targetAssignments
+        .filter((assignment) => assignment.submissionId === submissionId)
+        .sort((left, right) => left.reviewerId.localeCompare(right.reviewerId));
+      for (const assignment of existing) {
+        desired.push(assignment);
+        desiredAssignments.push({
+          submissionId,
+          reviewerId: assignment.reviewerId,
+          existingAssignmentId: assignment.id,
+        });
+      }
+
+      const outsideTrack = trackFilter !== null && !(material.trackIds ?? []).includes(trackFilter);
+      for (const reviewerId of requestedReviewerIds) {
+        if (poolSet !== null && !poolSet.has(reviewerId)) {
+          exclusions.push({ submissionId, reviewerId, reason: "outside_pool" });
+        } else if (outsideTrack) {
+          exclusions.push({ submissionId, reviewerId, reason: "outside_track" });
+        } else if (existing.some((assignment) => assignment.reviewerId === reviewerId)) {
+          exclusions.push({ submissionId, reviewerId, reason: "already_assigned" });
+        }
+      }
+
+      let missing = Math.max(0, plan.assignmentRule.reviewsPerSubmission - existing.length);
+      if (!outsideTrack) {
+        const candidates = eligibleReviewerIds
+          .filter(
+            (reviewerId) => !existing.some((assignment) => assignment.reviewerId === reviewerId),
+          )
+          .sort(
+            (left, right) =>
+              (reviewerLoad.get(left) ?? 0) - (reviewerLoad.get(right) ?? 0) ||
+              left.localeCompare(right),
+          );
+        for (const reviewerId of candidates) {
+          if (
+            abstentions.some(
+              (assignment) =>
+                assignment.submissionId === submissionId && assignment.reviewerId === reviewerId,
+            )
+          ) {
+            exclusions.push({ submissionId, reviewerId, reason: "declared_conflict" });
+            continue;
+          }
+          if (
+            (reviewerLoad.get(reviewerId) ?? 0) >= plan.assignmentRule.maxAssignmentsPerReviewer
+          ) {
+            exclusions.push({ submissionId, reviewerId, reason: "reviewer_cap" });
+            continue;
+          }
+          if (missing === 0) break;
+          const baseAssignmentId = `${plan.id}:${round.id}:${submissionId}:${reviewerId}`;
+          const matchingIdCount = allAssignments.filter(
+            (assignment) =>
+              assignment.id === baseAssignmentId ||
+              assignment.id.startsWith(`${baseAssignmentId}:v`),
+          ).length;
+          const assignment: EvaluationAssignment = {
+            id:
+              matchingIdCount === 0
+                ? baseAssignmentId
+                : `${baseAssignmentId}:v${matchingIdCount + 1}`,
+            tenantId: actor.tenantId,
+            eventId: plan.eventId,
+            planId: plan.id,
+            roundId: round.id,
+            submissionId,
+            reviewerId,
+            status: "assigned",
+            planVersion: planRevision,
+            rubricRevision,
+            roundRevision,
+            submissionRevision,
+            version: 1,
+            createdAt: now,
+            updatedAt: now,
+          };
+          desired.push(assignment);
+          desiredAssignments.push({ submissionId, reviewerId });
+          reviewerLoad.set(reviewerId, (reviewerLoad.get(reviewerId) ?? 0) + 1);
+          missing -= 1;
+        }
+      }
+      if (missing > 0) {
+        deficits.push({
+          submissionId,
+          missingReviewCount: missing,
+          reason: outsideTrack ? "submission_outside_track" : "insufficient_eligible_reviewers",
+        });
+      }
+    }
+
+    desired.sort(
+      (left, right) =>
+        left.submissionId.localeCompare(right.submissionId) ||
+        left.reviewerId.localeCompare(right.reviewerId) ||
+        left.id.localeCompare(right.id),
+    );
+    desiredAssignments.sort(
+      (left, right) =>
+        left.submissionId.localeCompare(right.submissionId) ||
+        left.reviewerId.localeCompare(right.reviewerId),
+    );
+    exclusions.sort(
+      (left, right) =>
+        left.submissionId.localeCompare(right.submissionId) ||
+        left.reviewerId.localeCompare(right.reviewerId) ||
+        left.reason.localeCompare(right.reason),
+    );
+    const expectedActiveVersions = targetAssignments
+      .map((assignment) => ({ assignmentId: assignment.id, version: assignment.version }))
+      .sort((left, right) => left.assignmentId.localeCompare(right.assignmentId));
+    const scope = {
+      tenantId: actor.tenantId,
+      eventId: plan.eventId,
+      planId: plan.id,
+      roundId: round.id,
+      planVersion: planRevision,
+    } as const;
+    const fingerprint = distributionFingerprint({
+      scope,
+      reviewsPerSubmission: plan.assignmentRule.reviewsPerSubmission,
+      maxAssignmentsPerReviewer: plan.assignmentRule.maxAssignmentsPerReviewer,
+      trackFilter,
+      submissionIds,
+      requestedReviewerIds,
+      submissionRevisions,
+      assignmentVersions: actionableAssignments
+        .map((assignment) => ({
+          id: assignment.id,
+          status: assignment.status,
+          version: assignment.version,
+        }))
+        .sort((left, right) => left.id.localeCompare(right.id)),
+      desiredAssignments,
+      deficits,
+      exclusions,
+    });
+    return {
+      preview: {
+        scope,
+        desiredAssignments,
+        deficits,
+        exclusions,
+        expectedActiveVersions,
+        submissionRevisions,
+        fingerprint,
+      },
+      assignments: desired,
+    };
+  }
   async #assignmentContext(
     assignment: EvaluationAssignment,
   ): Promise<{ plan: EvaluationPlan; round: ReviewRound }> {
@@ -2415,30 +2995,27 @@ export class EvaluationService {
     actor: EvaluationActor,
     assignment: EvaluationAssignment,
     plan: EvaluationPlan,
-    _round: ReviewRound,
+    round: ReviewRound,
     submissionRevision: number,
   ): Promise<readonly EvaluationSuggestion[]> {
-    const suggestions: EvaluationSuggestion[] = [];
-    for (const suggestion of this.#suggestions.values()) {
-      if (
-        suggestion.tenantId !== actor.tenantId ||
-        suggestion.assignmentId !== assignment.id ||
-        suggestion.reviewerId !== actor.userId
-      ) {
-        continue;
-      }
+    const suggestions = (await this.#repository.listSuggestions(actor.tenantId, plan.id)).filter(
+      (suggestion) =>
+        suggestion.assignmentId === assignment.id && suggestion.reviewerId === actor.userId,
+    );
+    const currentSuggestions: EvaluationSuggestion[] = [];
+    for (const suggestion of suggestions) {
       let current = suggestion;
       if (
         current.status === "pending" &&
-        (current.rubricRevision !== plan.version ||
+        (current.rubricRevision !== (round.rubricRevision ?? gradingRevision(plan)) ||
           current.submissionRevision !== submissionRevision)
       ) {
         current = this.#markSuggestionStale(current, actor.userId, this.#clock().toISOString());
-        this.#suggestions.set(suggestionStorageKey(actor.tenantId, current.id), current);
+        await this.#repository.putSuggestion(current, suggestion.version);
       }
-      suggestions.push(structuredClone(current));
+      currentSuggestions.push(current);
     }
-    return suggestions.sort(
+    return currentSuggestions.sort(
       (left, right) =>
         left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
     );
@@ -2466,12 +3043,21 @@ export class EvaluationService {
     };
   }
 
-  #markSuggestionsStaleForPlan(planId: string, at: string, actorId: string): void {
-    for (const suggestion of this.#suggestions.values()) {
-      if (suggestion.planId !== planId || suggestion.status !== "pending") continue;
-      const updated = this.#markSuggestionStale(suggestion, actorId, at);
-      this.#suggestions.set(suggestionStorageKey(suggestion.tenantId, suggestion.id), updated);
-    }
+  async #markSuggestionsStaleForPlan(
+    tenantId: string,
+    planId: string,
+    at: string,
+    actorId: string,
+  ): Promise<void> {
+    const suggestions = await this.#repository.listSuggestions(tenantId, planId);
+    await Promise.all(
+      suggestions
+        .filter((suggestion) => suggestion.status === "pending")
+        .map(async (suggestion) => {
+          const updated = this.#markSuggestionStale(suggestion, actorId, at);
+          await this.#repository.putSuggestion(updated, suggestion.version);
+        }),
+    );
   }
 
   #normalizeProviderCandidates(

@@ -12,6 +12,40 @@ const restoredSession = {
   speakerRoster: [{ id: "participant-1", role: "primary" }],
   version: 4,
 };
+function storedManifestZip(manifest: unknown): ArrayBuffer {
+  const payload = new TextEncoder().encode(`${JSON.stringify(manifest)}\n`);
+  const name = new TextEncoder().encode("manifest.json");
+  const localSize = 30 + name.byteLength + payload.byteLength;
+  const centralSize = 46 + name.byteLength;
+  const body = new Uint8Array(localSize + centralSize + 22);
+  const view = new DataView(body.buffer);
+  view.setUint32(0, 0x04034b50, true);
+  view.setUint16(4, 20, true);
+  view.setUint16(6, 0x0800, true);
+  view.setUint16(8, 0, true);
+  view.setUint32(18, payload.byteLength, true);
+  view.setUint32(22, payload.byteLength, true);
+  view.setUint16(26, name.byteLength, true);
+  body.set(name, 30);
+  body.set(payload, 30 + name.byteLength);
+  const centralOffset = localSize;
+  view.setUint32(centralOffset, 0x02014b50, true);
+  view.setUint16(centralOffset + 4, 20, true);
+  view.setUint16(centralOffset + 6, 20, true);
+  view.setUint16(centralOffset + 8, 0x0800, true);
+  view.setUint32(centralOffset + 20, payload.byteLength, true);
+  view.setUint32(centralOffset + 24, payload.byteLength, true);
+  view.setUint16(centralOffset + 28, name.byteLength, true);
+  view.setUint32(centralOffset + 42, 0, true);
+  body.set(name, centralOffset + 46);
+  const endOffset = centralOffset + centralSize;
+  view.setUint32(endOffset, 0x06054b50, true);
+  view.setUint16(endOffset + 8, 1, true);
+  view.setUint16(endOffset + 10, 1, true);
+  view.setUint32(endOffset + 12, centralSize, true);
+  view.setUint32(endOffset + 16, centralOffset, true);
+  return body.buffer;
+}
 
 describe("deliverables API", () => {
   it("keeps relative private-upload grants on the browser same origin", () => {
@@ -74,30 +108,63 @@ describe("deliverables API", () => {
             eventId: "event-1",
             submissionId: "submission-1",
             participantId: "participant-1",
+            subject: {
+              type: "session",
+              participantId: "participant-1",
+              submissionId: "submission-1",
+            },
             type: "upload",
             owner: "speaker",
             title: "Upload slides",
+            description: "PDF only",
+            instructions: "PDF only",
+            status: "not_started",
+            dueAt: "2026-08-22",
+            dependencyIds: [],
+            reminderOffsetsMinutes: [],
+            allowedMimeTypes: ["application/pdf"],
+            maxBytes: 5_000_000,
+            acceptedAssetKinds: ["slides", "supporting_file"],
+            version: 1,
+            updatedAt: "2026-08-12T00:00:00.000Z",
           },
         });
       },
     );
 
     if (api.createTask === undefined) throw new Error("Expected organizer task adapter.");
-    await api.createTask({
+    const created = await api.createTask({
       title: "Upload slides",
       description: "PDF only",
       dueAt: "2026-08-22",
-      allowedMimeTypes: ["application/pdf"],
+      allowedMimeTypes: ["Application/PDF"],
       maxSizeBytes: 5_000_000,
       acceptedAssetKinds: ["slides", "supporting_file"],
-      assigneeIds: ["participant-1"],
+      assignments: [{ participantId: "participant-1", submissionId: "submission-1" }],
+    });
+    expect(created).toMatchObject({
+      subject: {
+        type: "session",
+        participantId: "participant-1",
+        submissionId: "submission-1",
+      },
+      allowedMimeTypes: ["application/pdf"],
+      maxBytes: 5_000_000,
     });
 
-    expect(requests[0]).toMatchObject({
+    expect(requests[0]).toEqual({
       url: "https://api.example.test/api/speaker/events/event-1/organizer/tasks",
       method: "POST",
       body: {
+        type: "upload",
+        title: "Upload slides",
+        instructions: "PDF only",
+        description: "PDF only",
+        dueAt: "2026-08-22",
+        allowedMimeTypes: ["application/pdf"],
+        maxBytes: 5_000_000,
         acceptedAssetKinds: ["slides", "supporting_file"],
+        assignments: [{ participantId: "participant-1", submissionId: "submission-1" }],
       },
     });
     await expect(
@@ -108,12 +175,97 @@ describe("deliverables API", () => {
         allowedMimeTypes: ["application/pdf"],
         maxSizeBytes: 5_000_000,
         acceptedAssetKinds: [],
-        assigneeIds: ["participant-1"],
+        assignments: [{ participantId: "participant-1", submissionId: null }],
       }),
     ).rejects.toThrow("accepted asset kind");
+    await expect(
+      api.createTask({
+        title: "Missing assignment",
+        description: "No subject",
+        dueAt: "2026-08-22",
+        allowedMimeTypes: ["application/pdf"],
+        maxSizeBytes: 5_000_000,
+        acceptedAssetKinds: ["slides"],
+        assignments: [{ participantId: "", submissionId: null }],
+      }),
+    ).rejects.toThrow("assignment");
     expect(requests).toHaveLength(1);
   });
 
+  it("retains authoritative asset lineage pointers without exposing private storage fields", async () => {
+    const api = createDeliverablesApi("https://api.example.test", "org-1", "event-1", async () =>
+      Response.json({
+        data: [
+          {
+            id: "asset-v2",
+            eventId: "event-1",
+            participantId: "participant-1",
+            kind: "slides",
+            fileName: "slides.pdf",
+            contentType: "application/pdf",
+            sizeBytes: 10,
+            state: "ready",
+            createdAt: "2026-08-12T00:00:00.000Z",
+            version: 2,
+            versionFamilyId: "family-1",
+            versionId: "version-2",
+            latestVersionId: "asset-v2",
+            currentVersionId: "asset-v2",
+            approvedVersionId: "asset-v1",
+            releasedVersionId: "asset-v1",
+            objectKey: "private/object",
+            tenantId: "private-tenant",
+          },
+        ],
+      }),
+    );
+    const assets = await api.listAssets?.();
+    expect(assets?.[0]).toMatchObject({
+      versionId: "version-2",
+      latestVersionId: "asset-v2",
+      currentVersionId: "asset-v2",
+      approvedVersionId: "asset-v1",
+      releasedVersionId: "asset-v1",
+    });
+    expect(assets?.[0]).not.toHaveProperty("objectKey");
+    expect(assets?.[0]).not.toHaveProperty("tenantId");
+  });
+  it("exposes synchronous ZIP response and authoritative manifest facts only", async () => {
+    const manifest = {
+      format: "speaker-deliverables-export",
+      version: 1,
+      organizationId: "org-1",
+      eventId: "event-1",
+      entries: [],
+    };
+    const api = createDeliverablesApi(
+      "https://api.example.test",
+      "org-1",
+      "event-1",
+      async () =>
+        new Response(storedManifestZip(manifest), {
+          status: 200,
+          headers: {
+            "content-type": "application/zip",
+            "content-disposition": 'attachment; filename="event-1-deliverables.zip"',
+          },
+        }),
+    );
+    const result = await api.exportDeliverables?.({ status: "all" });
+    expect(result).toMatchObject({
+      fileName: "event-1-deliverables.zip",
+      contentType: "application/zip",
+      sizeBytes: expect.any(Number),
+      manifest,
+      response: {
+        kind: "synchronous_zip",
+        status: 200,
+        contentType: "application/zip",
+      },
+    });
+    expect(result).not.toHaveProperty("jobId");
+    expect(result).not.toHaveProperty("status");
+  });
   it("replaces a headshot through the organizer grant, private upload, finalization, and profile relink", async () => {
     const pendingAsset = {
       id: "asset-headshot-v2",
@@ -358,10 +510,19 @@ describe("deliverables API", () => {
       eventId: "event-1",
       submissionId: "submission-1",
       participantId: "participant-1",
+      subject: {
+        type: "session",
+        participantId: "participant-1",
+        submissionId: "submission-1",
+      },
       type: "upload",
       owner: "speaker",
       title: "Upload slides",
+      description: "Upload slides",
+      instructions: "Upload slides",
       status: "submitted",
+      allowedMimeTypes: ["application/pdf"],
+      maxBytes: 5_000_000,
       dependencyIds: [],
       reminderOffsetsMinutes: [],
       version: 1,

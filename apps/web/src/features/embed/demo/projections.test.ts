@@ -142,9 +142,17 @@ describe("local public embed demo projections", () => {
     const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
     const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
       calls.push({ input, ...(init === undefined ? {} : { init }) });
-      return Response.json({
-        data: String(input).endsWith("/agenda") ? agenda : staleSpeakers,
-      });
+      return Response.json(
+        {
+          data: String(input).endsWith("/agenda") ? agenda : staleSpeakers,
+        },
+        {
+          headers: {
+            "x-sessionboard-program-revision": "3",
+            "x-sessionboard-cache-revision": "3",
+          },
+        },
+      );
     };
 
     await expect(
@@ -154,13 +162,12 @@ describe("local public embed demo projections", () => {
         "local",
         fetcher,
       ),
-    ).rejects.toMatchObject({
-      code: "PUBLICATION_REVISION_MISMATCH",
-      status: 409,
+    ).resolves.toMatchObject({
+      servedProgramRevision: 3,
+      agenda: { revision: { number: 3 } },
+      speakers: { revision: { number: 2 } },
     });
-    expect(calls).toHaveLength(3);
-    expect(calls.map(({ init }) => init?.cache)).toEqual(["no-store", "no-store", "no-store"]);
-    expect(String(calls[2]?.input)).toMatch(/\/speakers$/u);
+    expect(calls).toHaveLength(2);
   });
 
   it("propagates non-local errors without a demo retry", async () => {
@@ -175,7 +182,7 @@ describe("local public embed demo projections", () => {
 
     await expect(
       getPublishedProgramOrLocalDemo(
-        "https://open-sessionboard-api-production.ashleyha0317.workers.dev",
+        "https://api-production.example.test",
         "open-sessionboard-conf",
         "production",
         fetcher,
@@ -194,7 +201,15 @@ describe("local public embed demo projections", () => {
     agenda.event.name = "Published by the API";
     speakers.event.name = "Published by the API";
     const fetchPublished = async (input: RequestInfo | URL) =>
-      Response.json({ data: String(input).endsWith("/agenda") ? agenda : speakers });
+      Response.json(
+        { data: String(input).endsWith("/agenda") ? agenda : speakers },
+        {
+          headers: {
+            "x-sessionboard-program-revision": "3",
+            "x-sessionboard-cache-revision": "3",
+          },
+        },
+      );
 
     const program = await getPublishedProgramOrLocalDemo(
       "http://localhost:8787",

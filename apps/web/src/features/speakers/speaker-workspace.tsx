@@ -114,7 +114,6 @@ import {
   type SpeakerEmailPreview,
   type SpeakerEmailSend,
   type SpeakerEmailTemplate,
-  type SpeakerHeadshotReplacement,
   type SpeakerImportPreview,
   type SpeakerInvitationPreview,
   type SpeakerInvitationResult,
@@ -129,6 +128,10 @@ import {
   type SpeakerTaskAssignmentInput,
   type SpeakerTravelLogistics,
   type SpeakerUpdateInput,
+  assertAdvancedSpeakerRevision,
+  assertSpeakerHeadshotReplacement,
+  assertSpeakerRosterScope,
+  type SpeakerMutationStatus,
 } from "./api";
 import styles from "./speaker-workspace.module.css";
 
@@ -274,13 +277,13 @@ function editDraftFor(speaker: SpeakerRecord): EditDraft {
 
 function errorMessage(reason: unknown): string {
   if (reason instanceof SpeakerApiError) {
-    if (
-      reason.code === "VERSION_CONFLICT" &&
-      /already|duplicate|verified email|canonical participant/iu.test(reason.message)
-    ) {
-      return reason.message;
-    }
-    if (reason.code === "CONFLICT" || reason.status === 409) {
+    if (reason.code === "CONFLICT" || reason.code === "VERSION_CONFLICT" || reason.status === 409) {
+      if (
+        reason.code === "VERSION_CONFLICT" &&
+        /already|duplicate|verified email|canonical participant/iu.test(reason.message)
+      ) {
+        return reason.message;
+      }
       return "This speaker changed elsewhere. Refresh the roster and try again.";
     }
     if (reason.status === 404) {
@@ -567,12 +570,7 @@ function normalizeRoster(
   organizationId: string,
   eventId: string,
 ): SpeakerRosterEnvelope {
-  if (roster.organizationId !== organizationId || roster.eventId !== eventId) {
-    throw new TypeError(
-      "The speaker roster response belongs to a different organization or event.",
-    );
-  }
-  return { ...roster, speakers: [...roster.speakers] };
+  return assertSpeakerRosterScope(roster, organizationId, eventId);
 }
 export function speakerSecondaryLoadKey(
   roster: SpeakerRosterEnvelope | null,
@@ -841,18 +839,6 @@ export function SpeakerHeadshot({
     </div>
   );
 }
-function speakerAssetFromHeadshot(replacement: SpeakerHeadshotReplacement): SpeakerAsset {
-  const asset = replacement.asset;
-  return {
-    assetId: asset.id,
-    fileName: asset.fileName,
-    contentType: asset.contentType,
-    byteSize: asset.sizeBytes,
-    status: asset.state === "pending_upload" ? "pending" : asset.state,
-    uploadedAt: asset.createdAt,
-    downloadUrl: null,
-  };
-}
 
 export interface SpeakerInvitationControlsProps {
   readonly previewBusy: boolean;
@@ -906,6 +892,33 @@ function FormMessage({ message, error = false }: Readonly<{ message: string; err
     >
       <AlertCircle />
       <AlertTitle>{error ? "Action needs attention" : "Workspace update"}</AlertTitle>
+      <AlertDescription>{message}</AlertDescription>
+    </Alert>
+  );
+}
+function MutationStatusMessage({
+  label,
+  status,
+  message,
+}: Readonly<{
+  label: string;
+  status: SpeakerMutationStatus;
+  message: string | null;
+}>) {
+  if (status === "idle" || message === null) return null;
+  const error = status === "conflict" || status === "failure";
+  return (
+    <Alert
+      variant={error ? "destructive" : "default"}
+      role={error ? "alert" : "status"}
+      aria-live="polite"
+      data-mutation-status={status}
+      className={styles.mutationStatus}
+    >
+      <AlertCircle />
+      <AlertTitle>
+        {label} · {statusLabel(status)}
+      </AlertTitle>
       <AlertDescription>{message}</AlertDescription>
     </Alert>
   );
@@ -1187,10 +1200,40 @@ export function SpeakerWorkspace({
   const [importCommitBusy, setImportCommitBusy] = useState(false);
   const [taskBusy, setTaskBusy] = useState(false);
   const [saveBusy, setSaveBusy] = useState(false);
+  const [profileMutationStatus, setProfileMutationStatus] = useState<SpeakerMutationStatus>("idle");
+  const [profileMutationMessage, setProfileMutationMessage] = useState<string | null>(null);
+  const [headshotMutationStatus, setHeadshotMutationStatus] =
+    useState<SpeakerMutationStatus>("idle");
+  const [headshotMutationMessage, setHeadshotMutationMessage] = useState<string | null>(null);
   const rosterRequestRef = useRef(0);
   const headshotRequestRef = useRef(0);
   const importRequestRef = useRef(0);
   const emailSelectionSnapshotRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (organizationId.length === 0 || eventId.length === 0) return;
+    rosterRequestRef.current += 1;
+    setRoster(null);
+    setProgress(null);
+    setLoading(true);
+    setError(null);
+    setProgressError(null);
+    setSelectedId(null);
+    setSelectedSpeakerIds([]);
+    setEditDraft(null);
+    setEditError(null);
+    setDetailNotice(null);
+    setHeadshotAssetsByParticipant({});
+    setDownloadUrls({});
+    setDownloadErrors({});
+    setProfileMutationStatus("idle");
+    setProfileMutationMessage(null);
+    setHeadshotMutationStatus("idle");
+    setHeadshotMutationMessage(null);
+    setHeadshotUploadStatus("idle");
+    setHeadshotUploadMessage(null);
+    secondaryLoadRef.current = null;
+    progressLoadRef.current = null;
+  }, [eventId, organizationId]);
   const emailPreviewRequestRef = useRef(0);
   const secondaryLoadRef = useRef<{ api: SpeakerApi; key: string } | null>(null);
   const progressLoadRef = useRef<{ api: SpeakerApi; key: string; requestId: number } | null>(null);
@@ -1255,10 +1298,12 @@ export function SpeakerWorkspace({
       })
       .catch((reason: unknown) => {
         if (!active || requestId !== rosterRequestRef.current) return;
+        setRoster(null);
+        setProgress(null);
+        setSelectedId(null);
+        setSelectedSpeakerIds([]);
         setError(
-          rosterTimedOut
-            ? "Speaker roster refresh timed out. The last loaded roster is still shown."
-            : errorMessage(reason),
+          rosterTimedOut ? "Speaker roster refresh timed out. Try again." : errorMessage(reason),
         );
       })
       .finally(() => {
@@ -1314,6 +1359,7 @@ export function SpeakerWorkspace({
       })
       .catch((reason: unknown) => {
         if (!active || requestId !== rosterRequestRef.current) return;
+        setProgress(null);
         setProgressError(
           timedOut ? "Speaker progress refresh timed out. Try again." : errorMessage(reason),
         );
@@ -1402,7 +1448,15 @@ export function SpeakerWorkspace({
     };
   }, [api, currentSecondaryLoadKey]);
 
-  const speakers = roster?.speakers ?? [];
+  const scopedRoster =
+    roster !== null && roster.organizationId === organizationId && roster.eventId === eventId
+      ? roster
+      : null;
+  const scopedProgress =
+    progress !== null && progress.organizationId === organizationId && progress.eventId === eventId
+      ? progress
+      : null;
+  const speakers = scopedRoster?.speakers ?? [];
   const selectedSpeaker = speakers.find((speaker) => speaker.participantId === selectedId) ?? null;
   const eligibleHeadshotSessions = useMemo(
     () => (selectedSpeaker === null ? [] : acceptedSpeakerSessions(selectedSpeaker.sessions)),
@@ -1449,21 +1503,24 @@ export function SpeakerWorkspace({
   const normalizedQuery = query.trim().toLocaleLowerCase();
   const filteredSpeakers = useMemo(
     () =>
-      filterSpeakerRoster(speakers, progress?.rows ?? [], {
+      filterSpeakerRoster(speakers, scopedProgress?.rows ?? [], {
         query,
         status: statusFilter,
         session: sessionFilter,
         progress: progressFilter,
       }),
-    [progress?.rows, progressFilter, query, sessionFilter, speakers, statusFilter],
+    [scopedProgress?.rows, progressFilter, query, sessionFilter, speakers, statusFilter],
   );
   const progressRows = useMemo(
-    () => (progress?.rows ?? []).filter((row) => speakerProgressMatches(row.tasks, progressFilter)),
-    [progress?.rows, progressFilter],
+    () =>
+      (scopedProgress?.rows ?? []).filter((row) =>
+        speakerProgressMatches(row.tasks, progressFilter),
+      ),
+    [scopedProgress?.rows, progressFilter],
   );
   const onboardingTaskDefinitions = useMemo(
-    () => speakerOnboardingTaskDefinitions(progress?.rows ?? []),
-    [progress?.rows],
+    () => speakerOnboardingTaskDefinitions(scopedProgress?.rows ?? []),
+    [scopedProgress?.rows],
   );
   const eligibleReminderItems = useMemo(
     () => reminderEligibility?.items.filter((item) => item.eligible) ?? [],
@@ -1647,6 +1704,8 @@ export function SpeakerWorkspace({
       current === null ? current : ({ ...current, [field]: value } as EditDraft),
     );
     setEditError(null);
+    setProfileMutationStatus("idle");
+    setProfileMutationMessage(null);
     setNotice(null);
     setInvitationPreview(null);
     setInvitationResult(null);
@@ -1716,13 +1775,17 @@ export function SpeakerWorkspace({
           });
       }
     } catch (reason: unknown) {
+      setRoster(null);
+      setProgress(null);
+      setSelectedId(null);
+      setSelectedSpeakerIds([]);
       setError(errorMessage(reason));
     }
   }
-  async function reload(message?: string): Promise<void> {
+  async function reload(message?: string): Promise<SpeakerRosterEnvelope | null> {
     if (api === null) {
       setError("The speaker API is unavailable.");
-      return;
+      return null;
     }
     const requestId = rosterRequestRef.current + 1;
     rosterRequestRef.current = requestId;
@@ -1747,7 +1810,7 @@ export function SpeakerWorkspace({
         organizationId,
         eventId,
       );
-      if (requestId !== rosterRequestRef.current) return;
+      if (requestId !== rosterRequestRef.current) return null;
       setRoster(nextRoster);
       setSelectedSpeakerIds((current) =>
         current.filter((participantId) =>
@@ -1794,14 +1857,25 @@ export function SpeakerWorkspace({
         .finally(() => {
           clearTimeout(progressTimeout);
         });
+      return nextRoster;
     } catch (reason: unknown) {
       if (requestId === rosterRequestRef.current) {
+        if (
+          reason instanceof Error &&
+          /different organization|different event|invalid|duplicate participant/iu.test(
+            reason.message,
+          )
+        ) {
+          setRoster(null);
+          setProgress(null);
+          setSelectedId(null);
+          setSelectedSpeakerIds([]);
+        }
         setError(
-          rosterTimedOut
-            ? "Speaker roster refresh timed out. The last loaded roster is still shown."
-            : errorMessage(reason),
+          rosterTimedOut ? "Speaker roster refresh timed out. Try again." : errorMessage(reason),
         );
       }
+      return null;
     } finally {
       clearTimeout(rosterTimeout);
       if (requestId === rosterRequestRef.current) setLoading(false);
@@ -1851,7 +1925,11 @@ export function SpeakerWorkspace({
     setHeadshotSubmissionId(null);
     setHeadshotUploadStatus("idle");
     setHeadshotUploadMessage(null);
+    setHeadshotMutationStatus("idle");
+    setHeadshotMutationMessage(null);
     setEditDraft(editDraftFor(speaker));
+    setProfileMutationStatus("idle");
+    setProfileMutationMessage(null);
     setEditError(null);
     setInvitationPreview(null);
     setInvitationResult(null);
@@ -1864,8 +1942,10 @@ export function SpeakerWorkspace({
   async function saveSpeaker(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (api === null || editDraft === null || selectedSpeaker === null) return;
+    const participantId = selectedSpeaker.participantId;
+    const expectedVersion = editDraft.expectedVersion;
     const input: SpeakerUpdateInput = {
-      expectedVersion: editDraft.expectedVersion,
+      expectedVersion,
       displayName: editDraft.displayName.trim(),
       email: editDraft.email.trim(),
       jobTitle: editDraft.title.trim(),
@@ -1877,6 +1957,8 @@ export function SpeakerWorkspace({
     };
     if (!input.displayName || !input.email) {
       setEditError("Name and email are required.");
+      setProfileMutationStatus("failure");
+      setProfileMutationMessage("Name and email are required.");
       return;
     }
     setInvitationPreview(null);
@@ -1885,18 +1967,54 @@ export function SpeakerWorkspace({
     setInvitationError(null);
     setInvitationSendIdempotencyKey(null);
     setSaveBusy(true);
+    setProfileMutationStatus("saving");
+    setProfileMutationMessage("Saving speaker profile…");
     setEditError(null);
     try {
-      const updatedRoster = await api.update(selectedSpeaker.participantId, input);
-      const updated = updatedRoster.speakers.find(
-        (speaker) => speaker.participantId === selectedSpeaker.participantId,
+      const updatedRoster = assertSpeakerRosterScope(
+        await api.update(participantId, input),
+        organizationId,
+        eventId,
       );
-      if (updated === undefined)
+      const updated = updatedRoster.speakers.find(
+        (speaker) => speaker.participantId === participantId,
+      );
+      if (updated === undefined) {
         throw new TypeError("The saved speaker is missing from the roster.");
-      setEditDraft(editDraftFor(updated));
-      applyAuthoritativeRoster(updatedRoster, "Speaker profile saved.");
+      }
+      assertAdvancedSpeakerRevision(updated, participantId, expectedVersion, eventId);
+      setProfileMutationStatus("pending");
+      setProfileMutationMessage("Profile write accepted. Reloading authoritative speaker data…");
+      const reloaded = await reload();
+      const persisted = reloaded?.speakers.find(
+        (speaker) => speaker.participantId === participantId,
+      );
+      if (persisted === undefined) {
+        throw new TypeError("The reloaded speaker is missing from the roster.");
+      }
+      assertAdvancedSpeakerRevision(persisted, participantId, expectedVersion, eventId);
+      setEditDraft(editDraftFor(persisted));
+      setProfileMutationStatus("saved");
+      setProfileMutationMessage(`Saved at revision ${persisted.version}.`);
+      setNotice("Speaker profile saved and reloaded from the server.");
     } catch (reason: unknown) {
-      setEditError(errorMessage(reason));
+      const conflict =
+        reason instanceof SpeakerApiError &&
+        (reason.status === 409 || reason.code === "CONFLICT" || reason.code === "VERSION_CONFLICT");
+      if (conflict) {
+        setProfileMutationStatus("conflict");
+        setProfileMutationMessage("Conflict detected. Authoritative speaker data was reloaded.");
+        const reloaded = await reload();
+        const current = reloaded?.speakers.find(
+          (speaker) => speaker.participantId === participantId,
+        );
+        if (current !== undefined) setEditDraft(editDraftFor(current));
+        setEditError("This speaker changed elsewhere. Review the reloaded values before saving.");
+      } else {
+        setProfileMutationStatus("failure");
+        setProfileMutationMessage(errorMessage(reason));
+        setEditError(errorMessage(reason));
+      }
     } finally {
       setSaveBusy(false);
     }
@@ -2455,14 +2573,18 @@ export function SpeakerWorkspace({
     const validationError = validateOrganizerHeadshotFile(file);
     if (validationError !== null) {
       setHeadshotUploadStatus("error");
+      setHeadshotMutationStatus("failure");
       setHeadshotUploadMessage(validationError);
+      setHeadshotMutationMessage(validationError);
       return;
     }
     if (api === null || selectedSpeaker === null || api.replaceHeadshot === undefined) {
+      const message =
+        "Organizer headshot upload is unavailable until the private upload API is provisioned.";
       setHeadshotUploadStatus("error");
-      setHeadshotUploadMessage(
-        "Organizer headshot upload is unavailable until the private upload API is provisioned.",
-      );
+      setHeadshotMutationStatus("failure");
+      setHeadshotUploadMessage(message);
+      setHeadshotMutationMessage(message);
       return;
     }
     if (selectedHeadshotSubmissionId === null) {
@@ -2479,64 +2601,61 @@ export function SpeakerWorkspace({
     const expectedVersion = selectedSpeaker.version;
     const supersedesAssetId = selectedSpeaker.headshotAssetId ?? undefined;
     setHeadshotUploadStatus("busy");
+    setHeadshotMutationStatus("saving");
+    setHeadshotMutationMessage(`Uploading ${file.name}…`);
     setHeadshotUploadMessage(`Uploading ${file.name}…`);
     try {
-      const replacement = await api.replaceHeadshot({
+      const replacement = assertSpeakerHeadshotReplacement(
+        await api.replaceHeadshot({
+          participantId,
+          submissionId: selectedHeadshotSubmissionId,
+          file,
+          expectedVersion,
+          ...(supersedesAssetId === undefined ? {} : { supersedesAssetId }),
+        }),
+        eventId,
         participantId,
-        submissionId: selectedHeadshotSubmissionId,
-        file,
         expectedVersion,
-        ...(supersedesAssetId === undefined ? {} : { supersedesAssetId }),
-      });
-      if (
-        replacement.asset.eventId !== eventId ||
-        replacement.asset.participantId !== participantId ||
-        replacement.asset.state !== "ready" ||
-        replacement.profile.participantId !== participantId ||
-        replacement.profile.headshotAssetId !== replacement.asset.id
-      ) {
-        throw new TypeError(
-          "The headshot replacement response did not match the selected speaker.",
-        );
-      }
-      const nextAsset = speakerAssetFromHeadshot(replacement);
-      setRoster((current) =>
-        current === null
-          ? current
-          : mergeSpeaker(current, participantId, {
-              headshotAssetId: replacement.asset.id,
-              assets: [
-                ...(
-                  current.speakers.find((speaker) => speaker.participantId === participantId)
-                    ?.assets ?? []
-                ).filter((asset) => asset.assetId !== nextAsset.assetId),
-                nextAsset,
-              ],
-              version: replacement.profile.version,
-              updatedAt: replacement.profile.updatedAt,
-            }),
       );
-      setHeadshotAssetsByParticipant((current) => ({
-        ...current,
-        [participantId]: nextAsset,
-      }));
+      setHeadshotMutationStatus("pending");
+      setHeadshotMutationMessage("Headshot write accepted. Reloading authoritative speaker data…");
+      setHeadshotUploadMessage("Upload accepted. Reloading speaker data…");
+      const reloaded = await reload();
+      const persisted = reloaded?.speakers.find(
+        (speaker) => speaker.participantId === participantId,
+      );
+      if (persisted === undefined) {
+        throw new TypeError("The reloaded speaker is missing from the roster.");
+      }
+      assertAdvancedSpeakerRevision(persisted, participantId, expectedVersion, eventId);
+      if (persisted.headshotAssetId !== replacement.asset.id) {
+        throw new TypeError("The reloaded speaker does not point to the uploaded headshot.");
+      }
+      setEditDraft((current) => (current === null ? current : editDraftFor(persisted)));
       setHeadshotPreviewUrl(null);
       setHeadshotPreviewError(null);
       setHeadshotPreviewRevision((current) => current + 1);
-      setEditDraft((current) =>
-        current === null
-          ? current
-          : {
-              ...current,
-              headshotAssetId: replacement.asset.id,
-              expectedVersion: replacement.profile.version,
-            },
-      );
       setHeadshotUploadStatus("success");
-      setHeadshotUploadMessage(`Headshot uploaded for ${selectedSpeaker.displayName}.`);
+      setHeadshotMutationStatus("saved");
+      setHeadshotMutationMessage(`Saved at revision ${persisted.version}.`);
+      setHeadshotUploadMessage(`Headshot uploaded for ${persisted.displayName}.`);
     } catch (reason: unknown) {
-      setHeadshotUploadStatus("error");
-      setHeadshotUploadMessage(errorMessage(reason));
+      const conflict =
+        reason instanceof SpeakerApiError &&
+        (reason.status === 409 || reason.code === "CONFLICT" || reason.code === "VERSION_CONFLICT");
+      if (conflict) {
+        setHeadshotMutationStatus("conflict");
+        setHeadshotMutationMessage("Conflict detected. Authoritative speaker data was reloaded.");
+        setHeadshotUploadStatus("error");
+        setHeadshotUploadMessage("Headshot upload conflicted; review the reloaded speaker data.");
+        await reload();
+      } else {
+        const message = errorMessage(reason);
+        setHeadshotMutationStatus("failure");
+        setHeadshotMutationMessage(message);
+        setHeadshotUploadStatus("error");
+        setHeadshotUploadMessage(message);
+      }
     }
   }
 
@@ -2683,7 +2802,7 @@ export function SpeakerWorkspace({
                 </CardDescription>
               </div>
               <Badge variant="outline">
-                {roster ? `${filteredSpeakers.length} of ${speakers.length}` : "Loading"}
+                {scopedRoster ? `${filteredSpeakers.length} of ${speakers.length}` : "Loading"}
               </Badge>
             </CardHeader>
             <CardContent className={styles.actionsStack}>
@@ -2811,11 +2930,7 @@ export function SpeakerWorkspace({
 
               {loading ? (
                 <FormMessage
-                  message={
-                    roster
-                      ? "Refreshing speaker roster… Showing the last loaded roster while it updates."
-                      : "Loading speaker roster…"
-                  }
+                  message={scopedRoster ? "Refreshing speaker roster…" : "Loading speaker roster…"}
                 />
               ) : null}
               {duplicateEmailWarnings.length > 0 ? (
@@ -2832,7 +2947,7 @@ export function SpeakerWorkspace({
 
               <div className={styles.rosterGrid}>
                 <div className={styles.rosterList}>
-                  {!loading && roster && speakers.length === 0 ? (
+                  {!loading && scopedRoster && speakers.length === 0 ? (
                     <Empty className={styles.empty}>
                       <EmptyHeader>
                         <EmptyMedia variant="icon">
@@ -2846,7 +2961,10 @@ export function SpeakerWorkspace({
                       </EmptyHeader>
                     </Empty>
                   ) : null}
-                  {!loading && roster && speakers.length > 0 && filteredSpeakers.length === 0 ? (
+                  {!loading &&
+                  scopedRoster &&
+                  speakers.length > 0 &&
+                  filteredSpeakers.length === 0 ? (
                     <Empty className={styles.empty}>
                       <EmptyHeader>
                         <EmptyTitle>No matching speakers</EmptyTitle>
@@ -3098,6 +3216,11 @@ export function SpeakerWorkspace({
                               error={headshotUploadStatus === "error"}
                             />
                           ) : null}
+                          <MutationStatusMessage
+                            label="Headshot"
+                            status={headshotMutationStatus}
+                            message={headshotMutationMessage}
+                          />
                         </CardContent>
                       </Card>
 
@@ -3132,6 +3255,11 @@ export function SpeakerWorkspace({
                               </SelectContent>
                             </Select>
                           </Field>
+                          <MutationStatusMessage
+                            label="Profile"
+                            status={profileMutationStatus}
+                            message={profileMutationMessage}
+                          />
                           {editError ? <FormMessage message={editError} error /> : null}
                           <div className={styles.actions}>
                             <Button
@@ -3140,7 +3268,11 @@ export function SpeakerWorkspace({
                               disabled={saveBusy || api === null}
                             >
                               <CheckCircle2 data-icon="inline-start" />
-                              {saveBusy ? "Saving…" : "Save profile changes"}
+                              {profileMutationStatus === "pending"
+                                ? "Pending…"
+                                : saveBusy
+                                  ? "Saving…"
+                                  : "Save profile changes"}
                             </Button>
                             <Badge variant="outline">Version {editDraft.expectedVersion}</Badge>
                           </div>

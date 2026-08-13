@@ -262,6 +262,152 @@ describe("evaluation HTTP routes", () => {
     expect(body.submission.participants).toEqual([]);
     expect(body.submission.answers).toEqual({ topic: "Visible" });
   });
+  it("previews deterministic distribution, rejects stale apply, and retains replacement evidence", async () => {
+    const app = createTestApp();
+    await jsonRequest(app, "/evaluations/plans", "POST", {
+      ...planRequest,
+      assignmentRule: { reviewsPerSubmission: 2, maxAssignmentsPerReviewer: 5 },
+    });
+    await jsonRequest(app, "/evaluations/plans/plan-1/open", "POST", { expectedVersion: 1 });
+
+    const previewResponse = await jsonRequest(
+      app,
+      "/evaluations/plans/plan-1/distribution/preview",
+      "POST",
+      {
+        roundId: "round-1",
+        submissionIds: ["submission-1"],
+        reviewerIds: ["reviewer-2", "reviewer-1"],
+        expectedVersion: 2,
+      },
+    );
+    const preview = (await previewResponse.json()) as {
+      desiredAssignments: Array<{ submissionId: string; reviewerId: string }>;
+      deficits: unknown[];
+      exclusions: unknown[];
+      fingerprint: string;
+    };
+    expect(previewResponse.status).toBe(200);
+    expect(preview.desiredAssignments).toEqual([
+      { submissionId: "submission-1", reviewerId: "reviewer-1" },
+      { submissionId: "submission-1", reviewerId: "reviewer-2" },
+    ]);
+    expect(preview.deficits).toEqual([]);
+    expect(preview.exclusions).toEqual([]);
+    expect(preview.fingerprint).toMatch(/^evaluation-distribution-v1-/u);
+
+    const apply = await jsonRequest(app, "/evaluations/plans/plan-1/distribution/apply", "POST", {
+      roundId: "round-1",
+      submissionIds: ["submission-1"],
+      reviewerIds: ["reviewer-2", "reviewer-1"],
+      expectedVersion: 2,
+      fingerprint: preview.fingerprint,
+    });
+    expect(apply.status).toBe(200);
+    await expect(apply.json()).resolves.toMatchObject({
+      activeAssignments: [
+        expect.objectContaining({ reviewerId: "reviewer-1" }),
+        expect.objectContaining({ reviewerId: "reviewer-2" }),
+      ],
+    });
+
+    const staleApply = await jsonRequest(
+      app,
+      "/evaluations/plans/plan-1/distribution/apply",
+      "POST",
+      {
+        roundId: "round-1",
+        submissionIds: ["submission-1"],
+        reviewerIds: ["reviewer-2", "reviewer-1"],
+        expectedVersion: 2,
+        fingerprint: preview.fingerprint,
+      },
+    );
+    expect(staleApply.status).toBe(409);
+    await expect(staleApply.json()).resolves.toMatchObject({
+      error: { code: "EVALUATION_CONFLICT" },
+    });
+
+    const assignmentsResponse = await app.request("/evaluations/plans/plan-1/assignments");
+    const assignments = (await assignmentsResponse.json()) as {
+      assignments: Array<{ id: string; reviewerId: string; version: number }>;
+    };
+    const original = assignments.assignments.find(
+      (assignment) => assignment.reviewerId === "reviewer-1",
+    );
+    if (original === undefined) throw new Error("Expected the first distributed assignment.");
+    const saved = await jsonRequest(
+      app,
+      `/evaluations/assignments/${original.id}/review`,
+      "PUT",
+      { scores: [{ criterionId: "quality", value: 4, origin: "human" }] },
+      "reviewer",
+    );
+    const savedReview = (await saved.json()) as { version: number };
+    await jsonRequest(
+      app,
+      `/evaluations/assignments/${original.id}/review/submit`,
+      "POST",
+      { expectedVersion: savedReview.version },
+      "reviewer",
+    );
+    const currentAssignments = (await (
+      await app.request("/evaluations/plans/plan-1/assignments")
+    ).json()) as {
+      assignments: Array<{ id: string; reviewerId: string; version: number }>;
+    };
+    const currentOriginal = currentAssignments.assignments.find(
+      (assignment) => assignment.id === original.id,
+    );
+    if (currentOriginal === undefined) throw new Error("Expected the submitted assignment.");
+
+    const replacement = await jsonRequest(
+      app,
+      `/evaluations/plans/plan-1/assignments/${original.id}/replace`,
+      "POST",
+      {
+        replacementReviewerId: "reviewer-3",
+        expectedVersion: currentOriginal.version,
+        reason: "Committee conflict discovered after submission.",
+      },
+    );
+    expect(replacement.status).toBe(200);
+    await expect(replacement.json()).resolves.toMatchObject({
+      replacedAssignment: {
+        id: original.id,
+        status: "superseded",
+        successorAssignmentId: expect.any(String),
+        supersededReason: "Committee conflict discovered after submission.",
+      },
+      successorAssignment: {
+        reviewerId: "reviewer-3",
+        predecessorAssignmentId: original.id,
+      },
+      history: [
+        {
+          assignment: { id: original.id, status: "superseded" },
+          review: { submittedAt: expect.any(String) },
+        },
+      ],
+    });
+    const retainedHistory = await app.request(
+      "/evaluations/plans/plan-1/assignment-history?roundId=round-1&submissionId=submission-1",
+    );
+    await expect(retainedHistory.json()).resolves.toMatchObject({
+      history: [
+        {
+          assignment: { id: original.id, status: "superseded" },
+          review: { submittedAt: expect.any(String) },
+        },
+      ],
+    });
+    const reviewerWorkspace = await app.request("/evaluations/reviewer/workspace?eventId=event-1", {
+      headers: { "x-test-actor": "reviewer" },
+    });
+    await expect(reviewerWorkspace.json()).resolves.toEqual({
+      data: { assignments: [] },
+    });
+  });
   it("replaces the active assignment set with an empty authoritative projection", async () => {
     const app = createTestApp();
     await jsonRequest(app, "/evaluations/plans", "POST", planRequest);

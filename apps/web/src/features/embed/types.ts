@@ -29,6 +29,11 @@ export interface PublishedAgendaEntry {
   speakerNames: readonly string[];
   roomName: string;
   trackNames: readonly string[];
+  /**
+   * Stable track identifiers from the published agenda. The API loader always
+   * normalizes this field; direct legacy fixtures may omit it.
+   */
+  trackIds?: readonly string[];
   startsAt: string;
   endsAt: string;
 }
@@ -56,6 +61,10 @@ export interface PublishedAgenda {
 export interface PublishedProgram {
   agenda: PublishedAgenda;
   speakers: PublishedSpeakerGallery;
+  /** Authoritative served release revision when loaded from the public API. */
+  servedProgramRevision?: number;
+  /** Authoritative public cache revision when loaded from the public API. */
+  cacheRevision?: number;
 }
 
 export interface PublicEmbedErrorResponse {

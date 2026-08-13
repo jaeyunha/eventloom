@@ -59,10 +59,34 @@ export interface AgendaWarning {
   overridden: boolean;
   overrideReason?: string;
 }
+export interface AgendaValidationReport {
+  conflicts: readonly AgendaConflict[];
+  warnings: readonly AgendaWarning[];
+}
+export interface AgendaCandidateDiagnostics {
+  evaluated: boolean;
+  report: AgendaValidationReport | null;
+}
+
+export type AgendaCalendarConnectionState = "connected" | "degraded" | "not_configured";
+
+export interface AgendaCalendarDeliveryState {
+  state: AgendaCalendarConnectionState;
+  sentLast24Hours: number;
+  failedLast24Hours: number;
+  lastInvitationAt: string | null;
+  lastFailure: {
+    deliveryId: string;
+    summary: string;
+    occurredAt: string;
+    retryable: boolean;
+  } | null;
+}
 
 export interface AgendaPreview {
   draftVersion: number;
   conflicts: readonly AgendaConflict[];
+  releaseConflicts: readonly AgendaConflict[];
   warnings: readonly AgendaWarning[];
   diff: {
     added: number;
@@ -70,6 +94,9 @@ export interface AgendaPreview {
     removed: number;
   };
   validatedAt: string;
+}
+export interface AgendaPlacementFailureData extends AgendaCandidateDiagnostics {
+  authoritativeSavedPreview: AgendaPreview;
 }
 
 export interface AgendaRevision {
@@ -114,5 +141,12 @@ export interface AgendaErrorResponse {
       conflicts?: readonly AgendaConflict[];
       warnings?: readonly AgendaWarning[];
     };
+  };
+  data?: {
+    candidateDiagnostics?: {
+      evaluated?: boolean;
+      report?: AgendaValidationReport | null;
+    };
+    authoritativeSavedPreview?: AgendaPreview;
   };
 }

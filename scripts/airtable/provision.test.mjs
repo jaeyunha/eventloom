@@ -309,6 +309,259 @@ test("declares dedicated CRM authority tables and payload fields", () => {
   }
 });
 
+test("asserts C0 participant, task, asset, review, embed, and release schema invariants", () => {
+  const definitions = new Map(TABLE_DEFINITIONS.map((definition) => [definition.name, definition]));
+  const requiredTables = [
+    "Participants",
+    "Speaker Profiles",
+    "Speaker Tasks",
+    "Asset Families",
+    "File Versions",
+    "Review Plans",
+    "Review Assignments",
+    "Evaluations",
+    "Embed Configurations",
+    "Program Releases",
+  ];
+
+  const fieldsFor = (tableName) => {
+    const definition = definitions.get(tableName);
+    assert.ok(definition, `missing C0 table definition: ${tableName}`);
+    assert.equal(
+      definition.fields.some((field) => field.name === APPLICATION_ID_FIELD),
+      true,
+      `${tableName} must include ${APPLICATION_ID_FIELD}`,
+    );
+    return new Map(definition.fields.map((field) => [field.name, field]));
+  };
+  const choicesFor = (fields, fieldName) =>
+    fields.get(fieldName)?.options?.choices?.map((choice) => choice.name);
+
+  for (const tableName of requiredTables) fieldsFor(tableName);
+
+  const participants = fieldsFor("Participants");
+  for (const fieldName of [
+    "Organization ID",
+    "Organization",
+    "Event ID",
+    "Submission ID",
+    "CRM Contact ID",
+    "Normalized Email",
+    "Identity State",
+    "Source Type",
+    "Source ID",
+    "Claimed User ID",
+    "Version",
+  ]) {
+    assert.equal(participants.has(fieldName), true, `Participants missing ${fieldName}`);
+  }
+  assert.deepEqual(choicesFor(participants, "Identity State"), [
+    "resolved",
+    "ambiguous",
+    "unclaimed",
+  ]);
+  assert.deepEqual(choicesFor(participants, "Source Type"), ["cfp", "manual", "csv", "crm"]);
+  assert.equal(participants.get("Normalized Email")?.type, "email");
+
+  const profiles = fieldsFor("Speaker Profiles");
+  assert.equal(profiles.has("Organization ID"), true);
+  assert.equal(profiles.has("Organization"), true);
+  assert.equal(profiles.has("Event ID"), true);
+
+  const tasks = fieldsFor("Speaker Tasks");
+  for (const fieldName of [
+    "Organization ID",
+    "Organization",
+    "Event ID",
+    "Subject Type",
+    "Participant ID",
+    "Submission ID",
+    "Submission",
+    "Asset Family ID",
+    "Asset Family",
+  ]) {
+    assert.equal(tasks.has(fieldName), true, `Speaker Tasks missing ${fieldName}`);
+  }
+  assert.deepEqual(choicesFor(tasks, "Subject Type"), ["participant", "session"]);
+  assert.equal(tasks.get("Asset Family")?.type, "multipleRecordLinks");
+
+  const assetFamilies = fieldsFor("Asset Families");
+  for (const fieldName of [
+    "Organization ID",
+    "Event ID",
+    "Task ID",
+    "Task",
+    "Participant ID",
+    "Participant",
+    "Session ID",
+    "Submission ID",
+    "Submission",
+    "Session",
+    "Latest Version ID",
+    "Latest Version",
+    "Current Version ID",
+    "Current Version",
+    "Approved Version ID",
+    "Approved Version",
+    "Released Version ID",
+    "Released Version",
+    "Version",
+    "Audit JSON",
+    "Provenance JSON",
+  ]) {
+    assert.equal(assetFamilies.has(fieldName), true, `Asset Families missing ${fieldName}`);
+  }
+  for (const fieldName of [
+    "Latest Version",
+    "Current Version",
+    "Approved Version",
+    "Released Version",
+  ]) {
+    assert.equal(assetFamilies.get(fieldName)?.type, "multipleRecordLinks");
+  }
+
+  const fileVersions = fieldsFor("File Versions");
+  assert.equal(fileVersions.has("Asset Family ID"), true);
+  assert.equal(fileVersions.get("Asset Family")?.type, "multipleRecordLinks");
+
+  const reviewPlans = fieldsFor("Review Plans");
+  for (const fieldName of ["Organization ID", "Organization"]) {
+    assert.equal(reviewPlans.has(fieldName), true);
+  }
+  for (const fieldName of [
+    "Frozen Grading JSON",
+    "Frozen Rounds JSON",
+    "Frozen Grading Version",
+    "Frozen Rounds Version",
+    "Frozen By User ID",
+    "Frozen At",
+  ]) {
+    assert.equal(reviewPlans.has(fieldName), true, `Review Plans missing ${fieldName}`);
+  }
+
+  const assignments = fieldsFor("Review Assignments");
+  for (const fieldName of ["Organization ID", "Organization", "Plan Version", "Round Version"]) {
+    assert.equal(assignments.has(fieldName), true, `Review Assignments missing ${fieldName}`);
+  }
+  assert.deepEqual(choicesFor(assignments, "Status"), [
+    "assigned",
+    "in_progress",
+    "submitted",
+    "abstained",
+    "superseded",
+  ]);
+  for (const fieldName of [
+    "Version",
+    "Predecessor Assignment ID",
+    "Predecessor Assignment",
+    "Successor Assignment ID",
+    "Successor Assignment",
+    "Superseded Reason",
+    "Superseded At",
+  ]) {
+    assert.equal(assignments.has(fieldName), true, `Review Assignments missing ${fieldName}`);
+  }
+
+  const evaluations = fieldsFor("Evaluations");
+  for (const fieldName of ["Organization ID", "Organization"]) {
+    assert.equal(evaluations.has(fieldName), true);
+  }
+  for (const fieldName of [
+    "Assignment ID",
+    "Assignment",
+    "Plan Version",
+    "Round Version",
+    "Submission Version",
+    "Version",
+  ]) {
+    assert.equal(evaluations.has(fieldName), true, `Evaluations missing ${fieldName}`);
+  }
+  assert.equal(evaluations.get("Assignment")?.type, "multipleRecordLinks");
+
+  const embeds = fieldsFor("Embed Configurations");
+  assert.deepEqual(choicesFor(embeds, "Widget Type"), [
+    "sessions",
+    "speakers",
+    "agenda",
+    "itinerary",
+    "gallery",
+  ]);
+  assert.deepEqual(choicesFor(embeds, "Layout"), [
+    "comfortable",
+    "compact",
+    "list",
+    "grid",
+    "timeline",
+  ]);
+  assert.deepEqual(choicesFor(embeds, "Theme"), ["auto", "light", "dark"]);
+  for (const fieldName of [
+    "Event ID",
+    "Widget Type",
+    "Track IDs JSON",
+    "Field Mask JSON",
+    "Layout",
+    "Theme",
+    "Enabled",
+    "Revision",
+    "Audit JSON",
+  ]) {
+    assert.equal(embeds.has(fieldName), true, `Embed Configurations missing ${fieldName}`);
+  }
+  assert.equal(embeds.get("Enabled")?.type, "checkbox");
+
+  const releases = fieldsFor("Program Releases");
+  assert.deepEqual(choicesFor(releases, "Status"), ["pending", "served", "failed"]);
+  for (const fieldName of [
+    "Agenda Revision ID",
+    "Agenda Revision",
+    "Speaker Revision ID",
+    "Speaker Revision",
+    "Agenda Source Hash",
+    "Speaker Source Hash",
+    "Approved Agenda Revision ID",
+    "Approved Agenda Revision",
+    "Approved Speaker Revision ID",
+    "Approved Speaker Revision",
+    "Actor User ID",
+    "Approved At",
+    "Parent Release ID",
+    "Parent Release",
+    "Manifest JSON",
+  ]) {
+    assert.equal(releases.has(fieldName), true, `Program Releases missing ${fieldName}`);
+  }
+  assert.equal(releases.get("Agenda Revision")?.type, "multipleRecordLinks");
+  assert.equal(releases.get("Parent Release")?.type, "multipleRecordLinks");
+});
+
+test("C0 dry-run reports additive mutations without writes, deletes, or renames", async () => {
+  const mock = metadataMock();
+  const summary = await provisionAirtableSchema({
+    accessToken: "test-token",
+    baseId: "app_test",
+    mode: "dry-run",
+    fetchImplementation: mock.fetchImplementation,
+    apiOrigin: "https://airtable.test",
+  });
+
+  assert.equal(summary.mode, "dry-run");
+  assert.equal(summary.createdTables.length, TABLE_DEFINITIONS.length);
+  assert.deepEqual(summary.updatedTables, []);
+  assert.deepEqual(summary.updatedFields, []);
+  assert.equal(
+    summary.actions.every((action) => action.action === "create-table"),
+    true,
+  );
+  assert.equal(
+    summary.actions.some((action) => /delete|rename/i.test(action.action)),
+    false,
+  );
+  assert.deepEqual(
+    mock.requests.map((request) => request.method),
+    ["GET"],
+  );
+  assert.equal(mock.tables.length, 0);
+});
 test("validates configuration and command modes", () => {
   assert.deepEqual(
     readAirtableConfiguration({ AIRTABLE_ACCESS_TOKEN: " token ", AIRTABLE_BASE_ID: " app " }),

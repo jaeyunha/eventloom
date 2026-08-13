@@ -3,6 +3,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  generatedApiWranglerPath,
+  loadCloudflareEnvironment,
+  writeApiWrangler,
+} from "./config.mjs";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(scriptDirectory, "../..");
@@ -16,24 +21,37 @@ if (!allowedEnvironments.has(environment)) {
   process.exit(1);
 }
 
-const validation = run(process.execPath, [validator, "--environment", environment], {
-  cwd: repositoryRoot,
-  stdio: "inherit",
-});
+const configArguments = [];
+if (environment !== "local") {
+  loadCloudflareEnvironment(environment);
+  writeApiWrangler(environment, process.env);
+  configArguments.push("--config", generatedApiWranglerPath);
+}
+
+const validation = run(
+  process.execPath,
+  [validator, "--environment", environment, ...configArguments],
+  {
+    cwd: repositoryRoot,
+    stdio: "inherit",
+  },
+);
 if (validation.status !== 0) {
   process.exit(validation.status ?? 1);
 }
 
 const outputDirectory = mkdtempSync(join(tmpdir(), "open-sessionboard-wrangler-"));
 const wranglerArguments = ["wrangler", "deploy", "--dry-run", "--outdir", outputDirectory];
-if (environment !== "local") {
-  wranglerArguments.push("--env", environment);
+if (environment === "local") {
+  wranglerArguments.push("--env", "");
+} else {
+  wranglerArguments.push("--env", environment, ...configArguments);
 }
 
 try {
   const result = run("bunx", wranglerArguments, {
     cwd: apiDirectory,
-    env: { ...process.env, CLOUDFLARE_API_TOKEN: "" },
+    env: { ...process.env, CI: "1", CLOUDFLARE_API_TOKEN: "" },
     stdio: "inherit",
   });
   process.exitCode = result.status ?? 1;

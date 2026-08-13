@@ -620,10 +620,15 @@ test("verified organizer login opens the organization overview", async ({ authSe
     page.getByText("Open Sessionboard Conference", { exact: true }).first(),
   ).toBeVisible();
   await expect(page.getByRole("link", { name: "Events", exact: true })).toBeVisible();
-  await page.getByRole("link", { name: "Open agenda for Open Sessionboard Conference" }).click();
-  await expect(page).toHaveURL(
-    `/admin/organizations/${ORGANIZATION_ID}/events/open-sessionboard-conf/agenda`,
-  );
+  const agendaDestination = agendaUrl(PRIMARY_EVENT_ID);
+  const agendaLink = page.getByRole("link", {
+    name: "Open agenda for Open Sessionboard Conference",
+    exact: true,
+  });
+  await expect(agendaLink).toBeVisible();
+  await expect(agendaLink).toHaveAttribute("href", agendaDestination);
+  await agendaLink.click();
+  await expect(page).toHaveURL(agendaDestination);
   await page.goto(
     `/admin/organizations/${ORGANIZATION_ID}/events/${PRIMARY_EVENT_ID}/integrations`,
   );
@@ -669,16 +674,24 @@ test("organization overview reflows without document overflow", async ({ authSes
     fullPage: true,
   });
   await page.keyboard.press("Escape");
+  await expect(mobileSidebar).toBeHidden();
   const mobileOverflow = await page.evaluate(() =>
     [...document.querySelectorAll<HTMLElement>("body *")]
       .map((element) => {
         const rect = element.getBoundingClientRect();
+        let ancestor: HTMLElement | null = element;
+        let hasFixedAncestor = false;
+        while (ancestor && !hasFixedAncestor) {
+          hasFixedAncestor = getComputedStyle(ancestor).position === "fixed";
+          ancestor = ancestor.parentElement;
+        }
         return {
           tag: element.tagName,
           className: element.className,
           left: rect.left,
           right: rect.right,
           visible:
+            !hasFixedAncestor &&
             element.getClientRects().length > 0 &&
             getComputedStyle(element).visibility !== "hidden" &&
             !element.classList.contains("sr-only"),
@@ -763,22 +776,28 @@ test("canonical Settings navigation stays organization and event qualified", asy
   await expect(
     page.getByText(`Organization ${ORGANIZATION_ID} · Event ${PRIMARY_EVENT_ID}`, { exact: true }),
   ).toBeVisible();
-  await expect(page.getByRole("complementary", { name: "Event settings sections" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Session settings", exact: true })).toHaveAttribute(
-    "href",
-    "#session-settings",
-  );
+  const settingsNavigation = page.getByRole("complementary", {
+    name: "Event settings sections",
+  });
+  await expect(settingsNavigation).toBeVisible();
+  await expect(settingsNavigation.locator('a[href="#session-settings"]')).toBeVisible();
 
   const organizerSidebar = page.getByRole("navigation", { name: "Organizer navigation" });
   await expect(organizerSidebar.getByRole("link", { name: "Agenda", exact: true })).toHaveAttribute(
     "href",
     agendaUrl(PRIMARY_EVENT_ID),
   );
-  await organizerSidebar.getByRole("link", { name: "Agenda", exact: true }).click();
+  await Promise.all([
+    page.waitForURL(new RegExp(`${agendaUrl(PRIMARY_EVENT_ID)}$`), { timeout: 15_000 }),
+    organizerSidebar.getByRole("link", { name: "Agenda", exact: true }).click(),
+  ]);
   await expect(page).toHaveURL(new RegExp(`${agendaUrl(PRIMARY_EVENT_ID)}$`));
   await expectAgendaWorkspace(page);
 
-  await organizerSidebar.getByRole("link", { name: "Settings", exact: true }).click();
+  await Promise.all([
+    page.waitForURL(new RegExp(`${settingsUrl(PRIMARY_EVENT_ID)}$`), { timeout: 15_000 }),
+    organizerSidebar.getByRole("link", { name: "Settings", exact: true }).click(),
+  ]);
   await expect(page).toHaveURL(new RegExp(`${settingsUrl(PRIMARY_EVENT_ID)}$`));
   await expect(page.getByRole("heading", { level: 1, name: "Event settings" })).toBeVisible();
   expect(

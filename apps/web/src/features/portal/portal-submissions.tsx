@@ -163,14 +163,14 @@ function PortalSubmissionsContent() {
   return (
     <>
       <PageHeading
-        eyebrow="Applicant portal"
-        title="My submissions"
-        description="Track every proposal here. Speaker tools unlock only after a proposal is accepted."
+        eyebrow="Owned proposals"
+        title="Submissions"
+        description="A submitted proposal appears here immediately. Follow it through review and into the event program."
       />
-      <section className={styles.panel} aria-labelledby="sessions-heading">
+      <section className={styles.panel} aria-labelledby="submissions-heading">
         <div className={styles.listToolbar}>
           <div>
-            <h2 id="sessions-heading">All submissions</h2>
+            <h2 id="submissions-heading">All submissions</h2>
             <p className={styles.toolbarDescription}>
               {view.submissions.length} {view.submissions.length === 1 ? "proposal" : "proposals"}
             </p>
@@ -189,7 +189,7 @@ function PortalSubmissionsContent() {
         {view.submissions.length === 0 ? (
           <EmptyState
             title="No submissions yet"
-            description="When you submit a proposal, its status will appear here."
+            description="A proposal appears here immediately after you submit it."
           />
         ) : submissions.length === 0 ? (
           <EmptyState
@@ -222,12 +222,15 @@ function PortalSubmissionsContent() {
                     <SubmissionStatusBadge status={submission.status} />
                   </div>
                   <div>
-                    <p className={styles.submissionId}>Session {submission.id}</p>
+                    <p className={styles.submissionId}>Submission {submission.id}</p>
                     <h3>{portalSubmissionDisplayTitle(submission, view.submissions)}</h3>
                     <p>{presentation.description}</p>
                   </div>
                   <footer>
-                    <span>Updated {formatPortalDate(submission.updatedAt) ?? "recently"}</span>
+                    <span>
+                      {submission.version === undefined ? "" : `Revision ${submission.version} · `}
+                      Updated {formatPortalDate(submission.updatedAt) ?? "recently"}
+                    </span>
                     {accepted ? (
                       <strong className={styles.acceptedMessage}>Your proposal was accepted</strong>
                     ) : null}
@@ -245,12 +248,12 @@ function PortalSubmissionsContent() {
                         Edit proposal
                       </Link>
                     )}
-                    <a
+                    <Link
                       href={`/portal/submissions/${encodeURIComponent(submission.id)}${eventQuery}`}
-                      aria-label={`View submission ${portalSubmissionDisplayTitle(submission, view.submissions)}`}
+                      aria-label={`View submission status for ${portalSubmissionDisplayTitle(submission, view.submissions)}`}
                     >
-                      View submission <span aria-hidden="true">→</span>
-                    </a>
+                      View submission status <span aria-hidden="true">→</span>
+                    </Link>
                     {accepted ? (
                       <Link href={`/portal${eventQuery}`} className={styles.primaryTextLink}>
                         Open speaker workspace <span aria-hidden="true">→</span>

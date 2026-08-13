@@ -2,6 +2,7 @@
   "name": "@open-sessionboard/web",
   "version": "0.1.0",
   "private": true,
+  "license": "Elastic-2.0",
   "type": "module",
   "scripts": {
     "dev": "next dev --hostname 127.0.0.1 --port 3015",
@@ -14,6 +15,7 @@
   },
   "dependencies": {
     "@open-sessionboard/contracts": "workspace:*",
+    "@swc/helpers": "0.5.15",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.31.0",

@@ -328,6 +328,88 @@ describe("agenda concurrency and revisions", () => {
     expect(await engine.getOutbox("event-1")).toHaveLength(9);
   });
 
+  it("blocks a new session on another session's active released speaker commitment", async () => {
+    const engine = createEngine();
+    await initialize(engine);
+    const releasedDraft = await engine.updateDraft({
+      eventId: "event-1",
+      expectedVersion: 1,
+      actorId: "organizer-1",
+      entries: [
+        entry("entry-1", "session-1", "room-large", "2026-08-10T09:00", "2026-08-10T10:00"),
+      ],
+    });
+    const released = await engine.publish({
+      eventId: "event-1",
+      expectedVersion: releasedDraft.version,
+      actorId: "organizer-1",
+    });
+    const candidateDraft = await engine.updateDraft({
+      eventId: "event-1",
+      expectedVersion: releasedDraft.version,
+      actorId: "organizer-1",
+      entries: [
+        entry("entry-3", "session-3", "room-large", "2026-08-10T09:15", "2026-08-10T09:45"),
+      ],
+    });
+
+    const preview = await engine.preview("event-1");
+    expect(preview.validation.conflicts).toEqual([]);
+    expect(preview.releaseValidation.conflicts).toEqual([
+      expect.objectContaining({
+        kind: "participant",
+        entryIds: ["entry-3", "entry-1"],
+        message: expect.stringContaining('active released commitment for "Opening"'),
+      }),
+    ]);
+    await expect(
+      engine.publish({
+        eventId: "event-1",
+        expectedVersion: candidateDraft.version,
+        actorId: "organizer-1",
+      }),
+    ).rejects.toBeInstanceOf(AgendaValidationError);
+    expect(await engine.getPublishedAgenda("event-1")).toEqual(released);
+  });
+
+  it("excludes a session's own released slot when publishing its update", async () => {
+    const engine = createEngine();
+    await initialize(engine);
+    const releasedDraft = await engine.updateDraft({
+      eventId: "event-1",
+      expectedVersion: 1,
+      actorId: "organizer-1",
+      entries: [
+        entry("entry-1", "session-1", "room-large", "2026-08-10T09:00", "2026-08-10T10:00"),
+      ],
+    });
+    await engine.publish({
+      eventId: "event-1",
+      expectedVersion: releasedDraft.version,
+      actorId: "organizer-1",
+    });
+    const updatedDraft = await engine.updateDraft({
+      eventId: "event-1",
+      expectedVersion: releasedDraft.version,
+      actorId: "organizer-1",
+      entries: [
+        entry("entry-1", "session-1", "room-large", "2026-08-10T09:30", "2026-08-10T10:30"),
+      ],
+    });
+
+    expect((await engine.preview("event-1")).releaseValidation.conflicts).toEqual([]);
+    await expect(
+      engine.publish({
+        eventId: "event-1",
+        expectedVersion: updatedDraft.version,
+        actorId: "organizer-1",
+      }),
+    ).resolves.toMatchObject({
+      revisionNumber: 2,
+      entries: [expect.objectContaining({ sessionId: "session-1" })],
+    });
+  });
+
   it("executes a Durable Object lock contract one mutation at a time", async () => {
     const lock = new InMemoryAgendaMutationLock();
     let active = 0;
@@ -377,6 +459,38 @@ describe("advisory agenda suggestions", () => {
     });
     expect(run.criteria.orderedRules).toEqual(["avoid hard conflicts", "prefer larger rooms"]);
     expect(run.diff.summary).toContain("proposed agenda change");
+  });
+  it("returns candidate diagnostics without polluting the authoritative saved preview", async () => {
+    const provider: AgendaSuggestionProvider = {
+      suggest: () => ({
+        placements: [
+          {
+            sessionId: "session-2",
+            roomId: "room-large",
+            startsAtLocal: "2026-08-10T09:30",
+            endsAtLocal: "2026-08-10T10:30",
+          },
+        ],
+      }),
+    };
+    const engine = createEngine(provider);
+    await initialize(engine);
+    const savedDraft = await engine.updateDraft({
+      eventId: "event-1",
+      expectedVersion: 1,
+      actorId: "organizer-1",
+      entries: [
+        entry("entry-1", "session-1", "room-large", "2026-08-10T09:00", "2026-08-10T10:00"),
+      ],
+    });
+
+    const run = await engine.generateSuggestion(suggestionInput(savedDraft.version));
+    const savedPreview = await engine.preview("event-1");
+
+    expect(run.candidateDiagnostics.conflicts).toEqual([expect.objectContaining({ kind: "room" })]);
+    expect(run).not.toHaveProperty("validation");
+    expect(savedPreview.validation.conflicts).toEqual([]);
+    expect(await engine.getDraft("event-1")).toEqual(savedDraft);
   });
 
   it("rejects applying a run after its base draft revision becomes stale", async () => {

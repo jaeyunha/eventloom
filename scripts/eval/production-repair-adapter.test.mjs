@@ -197,7 +197,7 @@ test("Airtable lookup verifies and normalizes linked Application IDs", async () 
   });
   const records = await adapter.airtable.lookup({
     table: "Review Plans",
-    id: "plan-1",
+    applicationId: "plan-1",
     fields: { Event: "event-1" },
   });
   assert.equal(records[0].fields.Event, "event-1");
@@ -292,7 +292,7 @@ test("legacy speaker profile IDs are rejected before Airtable lookup", async () 
   await assert.rejects(
     adapter.airtable.lookup({
       table: "Speaker Profiles",
-      id: "devflow-conf-2027-speaker-priya-raman",
+      applicationId: "devflow-conf-2027-speaker-priya-raman",
     }),
     (error) => error instanceof ProductionRepairAdapterError && error.code === "PROFILE_ID_INVALID",
   );

@@ -217,15 +217,15 @@ test("submitter completes the account-first CFP with two participants", async ({
   );
   await statusDashboard.click();
   await expect(page).toHaveURL(/\/portal\/submissions\?event=evt_evaluator_2026$/);
-  await expect(page.getByRole("heading", { level: 1, name: "Sessions" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Account menu" })).toContainText(
+  await expect(page.getByRole("heading", { level: 1, name: "Submissions" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Switch event or participant" })).toContainText(
     "Submitted CFP Event",
   );
   expect(portalHandoff.selectedEventIds).toEqual(["evt_evaluator_2026"]);
 
   await page.goto("/portal/submissions?event=event-not-authorized");
-  await expect(page.getByRole("heading", { level: 1, name: "Sessions" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Account menu" })).toContainText(
+  await expect(page.getByRole("heading", { level: 1, name: "Submissions" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Switch event or participant" })).toContainText(
     "Alternate Authorized Event",
   );
   expect(portalHandoff.selectedEventIds).toEqual([
@@ -244,7 +244,7 @@ test("submitter completes the account-first CFP with two participants", async ({
   await page.getByRole("button", { name: "Continue to portal →" }).click();
   await expect(page).toHaveURL(/\/portal\?event=evt_evaluator_2026$/);
   await expect(page.getByRole("heading", { level: 1, name: /Welcome, Ada/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Account menu" })).toContainText(
+  await expect(page.getByRole("button", { name: "Switch event or participant" })).toContainText(
     "Submitted CFP Event",
   );
   expect(portalHandoff.selectedEventIds).toEqual([
@@ -306,11 +306,10 @@ test("CFP shell reflows without clipping and exposes the current step", async ({
   await page.goto("/cfp/organizations/evaluator-org/events/mobile-progress");
 
   const progressNavigations = page.getByRole("navigation", { name: "Submission progress" });
-  const desktopProgress = progressNavigations.filter({ hasNotText: "Step 1 of 5" });
-  const mobileProgress = progressNavigations.filter({ hasText: "Step 1 of 5" });
-
-  await expect(desktopProgress).toBeHidden();
-  await expect(mobileProgress).toBeVisible();
+  await expect(progressNavigations).toHaveCount(1);
+  await expect(progressNavigations).toBeVisible();
+  await expect(progressNavigations.getByText("Welcome!", { exact: true })).toBeVisible();
+  await expect(progressNavigations.getByText("Review", { exact: true })).toBeVisible();
   expect(
     await page.evaluate(
       () =>
@@ -320,11 +319,9 @@ test("CFP shell reflows without clipping and exposes the current step", async ({
   ).toBe(true);
 
   await page.setViewportSize({ height: 844, width: 390 });
-  const compactProgress = page
-    .getByRole("navigation", { name: "Submission progress" })
-    .filter({ hasText: "Step 1 of 5" });
+  const compactProgress = page.getByRole("navigation", { name: "Submission progress" });
   await expect(compactProgress).toBeVisible();
-  await expect(compactProgress.getByText("Start", { exact: true }).first()).toBeVisible();
+  await expect(compactProgress.getByText("Welcome!", { exact: true }).first()).toBeVisible();
   await expect(compactProgress.locator('[aria-current="step"]').first()).toBeVisible();
 
   const fitsViewport = await page.evaluate(
@@ -750,6 +747,19 @@ async function installDynamicCfpApi(
       return;
     }
     expect(request.headers().cookie).toContain(`${E2E_SESSION_COOKIE}=${session.token}`);
+
+    if (request.method() === "POST" && url.pathname === "/api/auth/sign-in/email") {
+      await fulfillCfpJson(route, {
+        token: session.token,
+        user: {
+          id: session.userId,
+          email: session.email,
+          name: session.displayName,
+          emailVerified: true,
+        },
+      });
+      return;
+    }
 
     const publicPath = `/api/public/cfp/organizations/${CFP_ORGANIZATION_ID}/events/${CFP_EVENT_ID}`;
     const apiPath = `/api/cfp/organizations/${CFP_ORGANIZATION_ID}/events/${CFP_EVENT_ID}`;

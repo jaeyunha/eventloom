@@ -19,12 +19,6 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import styles from "@/features/admin/admin-shell.module.css";
-import {
-  createOrganizerEventsApi,
-  type OrganizerEventEmbedConfiguration,
-  type OrganizerEventRecord,
-  type OrganizerEventsApi,
-} from "@/features/admin/organizer-overview";
 import workspaceStyles from "./embed-workspace.module.css";
 
 export type EmbedWidgetId = "sessions" | "speakers" | "agenda" | "itinerary" | "gallery";
@@ -192,11 +186,114 @@ export interface EmbedConfiguration {
   readonly textColor: string;
   readonly customCss: string;
   readonly displayFields: readonly EmbedFieldId[];
-  readonly tracks: readonly string[];
+  readonly trackIds: readonly string[];
   readonly statuses: readonly string[];
+  readonly revision: number | null;
 }
+
+export interface EmbedTrackOption {
+  readonly id: string;
+  readonly name: string;
+}
+
+export interface EmbedEventRecord {
+  readonly id: string;
+  readonly organizationId: string;
+  readonly slug: string;
+  readonly name: string;
+  readonly status: "draft" | "active" | "archived";
+  readonly timeZone: string;
+  readonly startsAt: string;
+  readonly endsAt: string;
+  readonly venue: string | null;
+  readonly cfpSettings: Readonly<{
+    enabled: boolean;
+    opensAt: string | null;
+    closesAt: string | null;
+  }>;
+  readonly defaultCalendarSettings: Readonly<{
+    durationMinutes: number;
+    timeZone: string;
+    location: string | null;
+  }>;
+  readonly embedConfigurations: readonly EmbedConfiguration[];
+  readonly version: number;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly createdBy: string;
+  readonly updatedBy: string;
+}
+
+export type EmbedEventUpdateInput = Readonly<{
+  expectedVersion: number;
+  embedConfigurations: readonly EmbedConfiguration[];
+}>;
+
+export interface EmbedReleaseRecord {
+  readonly id: string;
+  readonly organizationId: string;
+  readonly eventId: string;
+  readonly revision: number;
+  readonly lifecycle: "pending" | "served" | "failed";
+  readonly agendaProjectionId: string;
+  readonly agendaRevisionNumber: number;
+  readonly agendaSourceHash: string;
+  readonly speakerProjectionId: string;
+  readonly speakerRevisionNumber: number;
+  readonly speakerSourceHash: string;
+  readonly approvedContentRevision: number;
+  readonly approvedProfileRevision: number;
+  readonly releasedAssetRevision: number;
+  readonly actorId: string;
+  readonly publishedAt: string;
+  readonly parentServedRevision: number | null;
+  readonly rollbackTargetRevision: number | null;
+  readonly cacheRevision: number;
+  readonly sourceTrigger:
+    | "initial-publication"
+    | "approved-content-change"
+    | "confirmed-profile-change"
+    | "released-asset-change"
+    | "released-schedule-change";
+  readonly failureReason: string | null;
+}
+
+export interface EmbedPublicationState {
+  readonly organizationId: string;
+  readonly eventId: string;
+  readonly version: number;
+  readonly servedRevision: number | null;
+  readonly servedManifest: EmbedReleaseRecord | null;
+  readonly pendingRevision: number | null;
+  readonly pendingReleaseId: string | null;
+  readonly releases: readonly EmbedReleaseRecord[];
+}
+
+export interface EmbedAgendaData {
+  readonly tracks: readonly EmbedTrackOption[];
+}
+
+export type EmbedWorkspaceFetcher = (
+  input: RequestInfo | URL,
+  init?: RequestInit,
+) => Promise<Response>;
+
+export interface EmbedWorkspaceApi {
+  readonly getEvent: (eventId: string, signal?: AbortSignal) => Promise<EmbedEventRecord>;
+  readonly updateEvent: (
+    eventId: string,
+    input: EmbedEventUpdateInput,
+    signal?: AbortSignal,
+  ) => Promise<EmbedEventRecord>;
+  readonly getPublication: (
+    eventId: string,
+    signal?: AbortSignal,
+  ) => Promise<EmbedPublicationState | null>;
+  readonly getAgenda: (eventId: string, signal?: AbortSignal) => Promise<EmbedAgendaData>;
+}
+
 const EMPTY_EMBED_CONFIGURATIONS: readonly EmbedConfiguration[] = [];
-const EMPTY_ORGANIZER_EVENT_EMBED_CONFIGURATIONS: readonly OrganizerEventEmbedConfiguration[] = [];
+const EMPTY_TRACK_OPTIONS: readonly EmbedTrackOption[] = [];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -206,6 +303,402 @@ function nonEmptyString(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const candidate = value.trim();
   return candidate ? candidate : null;
+}
+
+function responseError(message: string): TypeError {
+  return new TypeError(`The embed organizer response is invalid: ${message}`);
+}
+
+function requiredResponseString(value: unknown, field: string): string {
+  const result = nonEmptyString(value);
+  if (!result) throw responseError(`${field} must be a non-empty string.`);
+  return result;
+}
+
+function nullableResponseString(value: unknown, field: string): string | null {
+  if (value === null) return null;
+  if (typeof value !== "string") throw responseError(`${field} must be a string or null.`);
+  return value;
+}
+
+function positiveResponseInteger(value: unknown, field: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
+    throw responseError(`${field} must be a positive integer.`);
+  }
+  return value;
+}
+
+function nullablePositiveResponseInteger(value: unknown, field: string): number | null {
+  if (value === null) return null;
+  return positiveResponseInteger(value, field);
+}
+
+function responseData(payload: unknown, field: string): Record<string, unknown> {
+  if (!isRecord(payload) || !isRecord(payload.data)) {
+    throw responseError(`${field} must contain a data object.`);
+  }
+  return payload.data;
+}
+
+function parseEmbedConfiguration(value: unknown, field: string): EmbedConfiguration {
+  if (!isRecord(value)) throw responseError(`${field} must be an object.`);
+  const normalized = normalizeEmbedConfiguration(value);
+  if (!normalized || normalized.revision === null) {
+    throw responseError(`${field} is not a valid saved configuration.`);
+  }
+  return normalized;
+}
+
+function parseEmbedConfigurations(value: unknown, field: string): readonly EmbedConfiguration[] {
+  if (!Array.isArray(value)) throw responseError(`${field} must be an array.`);
+  const configurations = value.map((item, index) =>
+    parseEmbedConfiguration(item, `${field}[${index}]`),
+  );
+  if (new Set(configurations.map((item) => item.id)).size !== configurations.length) {
+    throw responseError(`${field} must not contain duplicate IDs.`);
+  }
+  return configurations;
+}
+
+export function parseEmbedEventRecord(
+  value: unknown,
+  expectedOrganizationId?: string,
+  expectedEventId?: string,
+): EmbedEventRecord {
+  if (!isRecord(value)) throw responseError("event must be an object.");
+  const id = requiredResponseString(value.id, "event.id");
+  const organizationId = requiredResponseString(value.organizationId, "event.organizationId");
+  if (expectedOrganizationId !== undefined && organizationId !== expectedOrganizationId) {
+    throw new Error("The organizer event response does not match this organization.");
+  }
+  if (expectedEventId !== undefined && id !== expectedEventId) {
+    throw new Error("The organizer event response does not match this event.");
+  }
+  const status = value.status;
+  if (status !== "draft" && status !== "active" && status !== "archived") {
+    throw responseError("event.status is invalid.");
+  }
+  if (!isRecord(value.cfpSettings) || typeof value.cfpSettings.enabled !== "boolean") {
+    throw responseError("event.cfpSettings is invalid.");
+  }
+  if (!isRecord(value.defaultCalendarSettings)) {
+    throw responseError("event.defaultCalendarSettings is invalid.");
+  }
+  const durationMinutes = positiveResponseInteger(
+    value.defaultCalendarSettings.durationMinutes,
+    "event.defaultCalendarSettings.durationMinutes",
+  );
+  const embedConfigurations = parseEmbedConfigurations(
+    value.embedConfigurations,
+    "event.embedConfigurations",
+  );
+  return {
+    id,
+    organizationId,
+    slug: requiredResponseString(value.slug, "event.slug"),
+    name: requiredResponseString(value.name, "event.name"),
+    status,
+    timeZone: requiredResponseString(value.timeZone, "event.timeZone"),
+    startsAt: requiredResponseString(value.startsAt, "event.startsAt"),
+    endsAt: requiredResponseString(value.endsAt, "event.endsAt"),
+    venue: nullableResponseString(value.venue, "event.venue"),
+    cfpSettings: {
+      enabled: value.cfpSettings.enabled,
+      opensAt: nullableResponseString(value.cfpSettings.opensAt, "event.cfpSettings.opensAt"),
+      closesAt: nullableResponseString(value.cfpSettings.closesAt, "event.cfpSettings.closesAt"),
+    },
+    defaultCalendarSettings: {
+      durationMinutes,
+      timeZone: requiredResponseString(
+        value.defaultCalendarSettings.timeZone,
+        "event.defaultCalendarSettings.timeZone",
+      ),
+      location: nullableResponseString(
+        value.defaultCalendarSettings.location,
+        "event.defaultCalendarSettings.location",
+      ),
+    },
+    embedConfigurations,
+    version: positiveResponseInteger(value.version, "event.version"),
+    createdAt: requiredResponseString(value.createdAt, "event.createdAt"),
+    updatedAt: requiredResponseString(value.updatedAt, "event.updatedAt"),
+    createdBy: requiredResponseString(value.createdBy, "event.createdBy"),
+    updatedBy: requiredResponseString(value.updatedBy, "event.updatedBy"),
+  };
+}
+
+function parseEmbedTrackOptions(value: unknown): readonly EmbedTrackOption[] {
+  if (!Array.isArray(value)) throw responseError("agenda.tracks must be an array.");
+  const tracks = value.map((item, index) => {
+    if (!isRecord(item)) throw responseError(`agenda.tracks[${index}] must be an object.`);
+    return {
+      id: requiredResponseString(item.id, `agenda.tracks[${index}].id`),
+      name: requiredResponseString(item.name, `agenda.tracks[${index}].name`),
+    };
+  });
+  if (new Set(tracks.map((track) => track.id)).size !== tracks.length) {
+    throw responseError("agenda.tracks must not contain duplicate IDs.");
+  }
+  return tracks;
+}
+
+export function parseEmbedEventResponse(
+  payload: unknown,
+  expectedOrganizationId?: string,
+  expectedEventId?: string,
+): EmbedEventRecord {
+  return parseEmbedEventRecord(
+    responseData(payload, "event response"),
+    expectedOrganizationId,
+    expectedEventId,
+  );
+}
+
+export function parseEmbedAgendaResponse(payload: unknown): EmbedAgendaData {
+  const data = responseData(payload, "agenda response");
+  return { tracks: parseEmbedTrackOptions(data.tracks) };
+}
+
+function parseEmbedReleaseRecord(value: unknown, field: string): EmbedReleaseRecord {
+  if (!isRecord(value)) throw responseError(`${field} must be an object.`);
+  const id = requiredResponseString(value.id, `${field}.id`);
+  const organizationId = requiredResponseString(value.organizationId, `${field}.organizationId`);
+  const eventId = requiredResponseString(value.eventId, `${field}.eventId`);
+  const lifecycle = value.lifecycle;
+  if (lifecycle !== "pending" && lifecycle !== "served" && lifecycle !== "failed") {
+    throw responseError(`${field}.lifecycle is invalid.`);
+  }
+  const sourceTrigger = value.sourceTrigger;
+  if (
+    sourceTrigger !== "initial-publication" &&
+    sourceTrigger !== "approved-content-change" &&
+    sourceTrigger !== "confirmed-profile-change" &&
+    sourceTrigger !== "released-asset-change" &&
+    sourceTrigger !== "released-schedule-change"
+  ) {
+    throw responseError(`${field}.sourceTrigger is invalid.`);
+  }
+  return {
+    id,
+    organizationId,
+    eventId,
+    revision: positiveResponseInteger(value.revision, `${field}.revision`),
+    lifecycle,
+    agendaProjectionId: requiredResponseString(
+      value.agendaProjectionId,
+      `${field}.agendaProjectionId`,
+    ),
+    agendaRevisionNumber: positiveResponseInteger(
+      value.agendaRevisionNumber,
+      `${field}.agendaRevisionNumber`,
+    ),
+    agendaSourceHash: requiredResponseString(value.agendaSourceHash, `${field}.agendaSourceHash`),
+    speakerProjectionId: requiredResponseString(
+      value.speakerProjectionId,
+      `${field}.speakerProjectionId`,
+    ),
+    speakerRevisionNumber: positiveResponseInteger(
+      value.speakerRevisionNumber,
+      `${field}.speakerRevisionNumber`,
+    ),
+    speakerSourceHash: requiredResponseString(
+      value.speakerSourceHash,
+      `${field}.speakerSourceHash`,
+    ),
+    approvedContentRevision: positiveResponseInteger(
+      value.approvedContentRevision,
+      `${field}.approvedContentRevision`,
+    ),
+    approvedProfileRevision: positiveResponseInteger(
+      value.approvedProfileRevision,
+      `${field}.approvedProfileRevision`,
+    ),
+    releasedAssetRevision: positiveResponseInteger(
+      value.releasedAssetRevision,
+      `${field}.releasedAssetRevision`,
+    ),
+    actorId: requiredResponseString(value.actorId, `${field}.actorId`),
+    publishedAt: requiredResponseString(value.publishedAt, `${field}.publishedAt`),
+    parentServedRevision: nullablePositiveResponseInteger(
+      value.parentServedRevision,
+      `${field}.parentServedRevision`,
+    ),
+    rollbackTargetRevision: nullablePositiveResponseInteger(
+      value.rollbackTargetRevision,
+      `${field}.rollbackTargetRevision`,
+    ),
+    cacheRevision: positiveResponseInteger(value.cacheRevision, `${field}.cacheRevision`),
+    sourceTrigger,
+    failureReason: nullableResponseString(value.failureReason, `${field}.failureReason`),
+  };
+}
+
+export function parseEmbedPublicationResponse(
+  payload: unknown,
+  expectedOrganizationId?: string,
+  expectedEventId?: string,
+): EmbedPublicationState | null {
+  const data = responseData(payload, "publication response");
+  if (Object.keys(data).length === 0) return null;
+  const organizationId = requiredResponseString(data.organizationId, "publication.organizationId");
+  const eventId = requiredResponseString(data.eventId, "publication.eventId");
+  if (expectedOrganizationId !== undefined && organizationId !== expectedOrganizationId) {
+    throw new Error("The publication response does not match this organization.");
+  }
+  if (expectedEventId !== undefined && eventId !== expectedEventId) {
+    throw new Error("The publication response does not match this event.");
+  }
+  const servedManifest =
+    data.servedManifest === null
+      ? null
+      : parseEmbedReleaseRecord(data.servedManifest, "publication.servedManifest");
+  if (!Array.isArray(data.releases)) throw responseError("publication.releases must be an array.");
+  const releases = data.releases.map((item, index) =>
+    parseEmbedReleaseRecord(item, `publication.releases[${index}]`),
+  );
+  for (const release of releases) {
+    if (release.organizationId !== organizationId || release.eventId !== eventId) {
+      throw new Error("The publication release response does not match this event context.");
+    }
+  }
+  if (
+    servedManifest !== null &&
+    (servedManifest.organizationId !== organizationId || servedManifest.eventId !== eventId)
+  ) {
+    throw new Error("The served publication response does not match this event context.");
+  }
+  const servedRevision = nullablePositiveResponseInteger(
+    data.servedRevision,
+    "publication.servedRevision",
+  );
+  if (servedManifest !== null && servedRevision !== servedManifest.revision) {
+    throw responseError("publication.servedRevision does not match servedManifest.revision.");
+  }
+  return {
+    organizationId,
+    eventId,
+    version: positiveResponseInteger(data.version, "publication.version"),
+    servedRevision,
+    servedManifest,
+    pendingRevision: nullablePositiveResponseInteger(
+      data.pendingRevision,
+      "publication.pendingRevision",
+    ),
+    pendingReleaseId: nullableResponseString(data.pendingReleaseId, "publication.pendingReleaseId"),
+    releases,
+  };
+}
+
+class EmbedWorkspaceApiError extends Error {
+  readonly code: string;
+  readonly status: number;
+  constructor(code: string, message: string, status: number) {
+    super(message);
+    this.name = "EmbedWorkspaceApiError";
+    this.code = code;
+    this.status = status;
+  }
+}
+
+async function embedApiError(response: Response): Promise<EmbedWorkspaceApiError> {
+  const body = (await response.json().catch(() => undefined)) as unknown;
+  const error = isRecord(body) && isRecord(body.error) ? body.error : undefined;
+  const code = error && typeof error.code === "string" ? error.code : "EMBED_REQUEST_FAILED";
+  const message =
+    error && typeof error.message === "string"
+      ? error.message
+      : `The embed organizer request failed (HTTP ${response.status}).`;
+  return new EmbedWorkspaceApiError(code, message, response.status);
+}
+
+function embedPathSegment(value: string, field: string): string {
+  const normalized = value.trim();
+  if (!normalized) throw new TypeError(`An ${field} is required for embed requests.`);
+  return encodeURIComponent(normalized);
+}
+
+function embedConfigurationBody(configuration: EmbedConfiguration): Record<string, unknown> {
+  return {
+    id: configuration.id,
+    name: configuration.name,
+    widgetId: configuration.widgetId,
+    enabled: configuration.enabled,
+    theme: configuration.theme,
+    outputFormat: configuration.outputFormat,
+    layout: configuration.layout,
+    accent: configuration.accent,
+    backgroundColor: configuration.backgroundColor,
+    textColor: configuration.textColor,
+    customCss: configuration.customCss,
+    displayFields: configuration.displayFields,
+    trackIds: configuration.trackIds,
+    statuses: configuration.statuses,
+    ...(configuration.revision === null ? {} : { revision: configuration.revision }),
+  };
+}
+
+export function createEmbedWorkspaceApi(
+  organizationId: string,
+  fetcher: EmbedWorkspaceFetcher = globalThis.fetch,
+): EmbedWorkspaceApi {
+  const organizationPath = embedPathSegment(organizationId, "organization ID");
+  const collectionPath = `/api/admin/organizations/${organizationPath}/events`;
+
+  async function request<T>(
+    path: string,
+    parser: (payload: unknown) => T,
+    init: RequestInit = {},
+  ): Promise<T> {
+    const headers = new Headers(init.headers);
+    headers.set("accept", "application/json");
+    if (init.body !== undefined) headers.set("content-type", "application/json");
+    const response = await fetcher(`${collectionPath}${path}`, {
+      ...init,
+      credentials: "include",
+      headers,
+    });
+    if (!response.ok) throw await embedApiError(response);
+    const payload: unknown = await response.json().catch(() => undefined);
+    return parser(payload);
+  }
+
+  return {
+    getEvent(eventId, signal) {
+      return request(
+        `/${embedPathSegment(eventId, "event ID")}`,
+        (payload) => parseEmbedEventResponse(payload, organizationId, eventId),
+        signal === undefined ? { cache: "no-store" } : { cache: "no-store", signal },
+      );
+    },
+    updateEvent(eventId, input, signal) {
+      return request(
+        `/${embedPathSegment(eventId, "event ID")}`,
+        (payload) => parseEmbedEventResponse(payload, organizationId, eventId),
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            expectedVersion: input.expectedVersion,
+            embedConfigurations: input.embedConfigurations.map(embedConfigurationBody),
+          }),
+          ...(signal === undefined ? {} : { signal }),
+        },
+      );
+    },
+    getPublication(eventId, signal) {
+      return request(
+        `/${embedPathSegment(eventId, "event ID")}/publication`,
+        (payload) => parseEmbedPublicationResponse(payload, organizationId, eventId),
+        signal === undefined ? { cache: "no-store" } : { cache: "no-store", signal },
+      );
+    },
+    getAgenda(eventId, signal) {
+      return request(
+        `/${embedPathSegment(eventId, "event ID")}/agenda`,
+        parseEmbedAgendaResponse,
+        signal === undefined ? { cache: "no-store" } : { cache: "no-store", signal },
+      );
+    },
+  };
 }
 
 function isEmbedWidgetId(value: unknown): value is EmbedWidgetId {
@@ -264,9 +757,17 @@ function normalizeEmbedConfiguration(value: unknown): EmbedConfiguration | null 
   const accent = normalizeHexColor(value.accent);
   const backgroundColor = normalizeHexColor(value.backgroundColor);
   const textColor = normalizeHexColor(value.textColor);
-  const tracks = normalizeStringList(value.tracks);
+  const trackIds = normalizeStringList(value.trackIds);
   const statuses = normalizeStringList(value.statuses);
   const displayFields = normalizeDisplayFields(value.displayFields);
+  const revision =
+    value.revision === undefined || value.revision === null
+      ? null
+      : typeof value.revision === "number" &&
+          Number.isSafeInteger(value.revision) &&
+          value.revision > 0
+        ? value.revision
+        : null;
 
   if (
     !id ||
@@ -280,9 +781,10 @@ function normalizeEmbedConfiguration(value: unknown): EmbedConfiguration | null 
     !backgroundColor ||
     !textColor ||
     typeof value.customCss !== "string" ||
-    !tracks ||
+    !trackIds ||
     !statuses ||
-    !displayFields
+    !displayFields ||
+    (value.revision !== undefined && value.revision !== null && revision === null)
   ) {
     return null;
   }
@@ -300,12 +802,14 @@ function normalizeEmbedConfiguration(value: unknown): EmbedConfiguration | null 
     textColor,
     customCss: value.customCss,
     displayFields,
-    tracks,
+    trackIds,
     statuses,
+    revision,
   };
 }
+
 function eventEmbedConfigurations(
-  configurations: readonly OrganizerEventEmbedConfiguration[] | undefined,
+  configurations: readonly EmbedConfiguration[] | undefined,
 ): readonly EmbedConfiguration[] {
   if (!configurations?.length) return EMPTY_EMBED_CONFIGURATIONS;
   const normalized = configurations
@@ -334,8 +838,9 @@ function builderConfiguration(
     textColor: string;
     customCss: string;
     displayFields: readonly EmbedFieldId[];
-    tracks: readonly string[];
+    trackIds: readonly string[];
     statuses: readonly string[];
+    revision: number | null;
   }>,
 ): EmbedConfiguration {
   return {
@@ -351,8 +856,9 @@ function builderConfiguration(
     textColor: values.textColor,
     customCss: values.customCss,
     displayFields: values.displayFields,
-    tracks: values.tracks,
+    trackIds: values.trackIds,
     statuses: values.statuses,
+    revision: values.revision,
   };
 }
 
@@ -367,9 +873,12 @@ export type EmbedSnippetSettings = Readonly<{
   backgroundColor?: string;
   textColor?: string;
   customCss?: string;
-  tracks?: readonly string[];
+  trackIds?: readonly string[];
   statuses?: readonly string[];
   layout?: EmbedLayout;
+  configurationId?: string;
+  configurationRevision?: number;
+  programRevision?: number;
 }>;
 
 function widgetFor(id: EmbedWidgetId): EmbedWidgetDefinition {
@@ -419,9 +928,17 @@ function queryForSettings(settings: EmbedSnippetSettings): string {
   if (backgroundColor) query.set("backgroundColor", backgroundColor);
   if (textColor) query.set("textColor", textColor);
 
-  const tracks = normalizeStringList(settings.tracks ?? []);
+  const trackIds = normalizeStringList(settings.trackIds ?? []);
   const statuses = normalizeStringList(settings.statuses ?? []);
-  if (tracks?.length) query.set("tracks", tracks.join(","));
+  if (settings.configurationId?.trim())
+    query.set("configurationId", settings.configurationId.trim());
+  if (settings.configurationRevision !== undefined) {
+    query.set("configurationRevision", String(settings.configurationRevision));
+  }
+  if (settings.programRevision !== undefined) {
+    query.set("programRevision", String(settings.programRevision));
+  }
+  if (trackIds?.length) query.set("trackIds", trackIds.join(","));
   if (statuses?.length) query.set("statuses", statuses.join(","));
 
   const encoded = query.toString();
@@ -439,7 +956,14 @@ export function publicAgendaCalendarUrl(settings: EmbedSnippetSettings): string 
   const origin = configuredPublicOrigin(settings.publicOrigin);
   const slug = encodeURIComponent(settings.eventSlug.trim());
   if (!origin || !slug) return "";
-  return `${origin}/api/public/events/${slug}/agenda.ics`;
+  return `${origin}/api/public/events/${slug}/agenda.ics${queryForSettings(settings)}`;
+}
+
+export function publicAgendaJsonUrl(settings: EmbedSnippetSettings): string {
+  const origin = configuredPublicOrigin(settings.publicOrigin);
+  const slug = encodeURIComponent(settings.eventSlug.trim());
+  if (!origin || !slug) return "";
+  return `${origin}/api/public/events/${slug}/agenda.json${queryForSettings(settings)}`;
 }
 
 function iframeSandbox(widget: EmbedWidgetDefinition): string {
@@ -494,7 +1018,7 @@ function embedCodePreview(settings: EmbedSnippetSettings): string {
     `<!-- ${outputFormatLabel(format)} preview for ${settings.widget.label}. -->`,
     "<!-- Selected safe options are encoded in the live URL. Custom CSS is not sent to the public URL. -->",
     `<!-- Display fields: ${fields.join(", ")} -->`,
-    `<!-- Tracks: ${settings.tracks?.join(", ") || "all"}; statuses: ${settings.statuses?.join(", ") || "all"} -->`,
+    `<!-- Tracks: ${settings.trackIds?.join(", ") || "all"}; statuses: ${settings.statuses?.join(", ") || "all"} -->`,
     `<!-- Accent: ${settings.accent ?? DEFAULT_EMBED_ACCENT}; custom CSS: ${settings.customCss?.trim() ? "provided for host markup" : "none"} -->`,
     `<!-- Surface: ${settings.backgroundColor ?? "#ffffff"}; text: ${settings.textColor ?? "#20232b"} -->`,
   ].join("\n");
@@ -518,11 +1042,10 @@ function embedCodePreview(settings: EmbedSnippetSettings): string {
           widget: settings.widget.id,
           layout: settings.layout ?? settings.widget.defaultLayout,
           displayFields: fields,
-          tracks: settings.tracks ?? [],
+          trackIds: settings.trackIds ?? [],
           accent: settings.accent ?? DEFAULT_EMBED_ACCENT,
           backgroundColor: settings.backgroundColor ?? "#ffffff",
           textColor: settings.textColor ?? "#20232b",
-          customCss: settings.customCss ?? "",
           statuses: settings.statuses ?? [],
         },
         null,
@@ -712,6 +1235,11 @@ export interface EmbedPublicRevision {
 export type EmbedPreviewAvailability = "checking" | "available" | "unavailable" | "failed";
 
 export interface EmbedPublicationMetadata {
+  readonly state: EmbedPublicationState | null;
+  readonly status: "loading" | "none" | "unavailable" | "pending" | "failed" | "served";
+  readonly servedRevision: number | null;
+  readonly pendingRevision: number | null;
+  readonly failedReason: string | null;
   readonly agendaDraftVersion: number | null;
   readonly publicRevision: EmbedPublicRevision | null;
   readonly previewAvailability: EmbedPreviewAvailability;
@@ -726,8 +1254,8 @@ export interface EmbedWorkspaceViewProps {
   readonly eventName?: string;
   readonly eventVersion?: number | null;
   readonly expectedPublishedRevision?: EmbedExpectedPublishedRevision | null;
-  readonly initialConfigurations?: readonly OrganizerEventEmbedConfiguration[];
-  readonly api?: Pick<OrganizerEventsApi, "updateEvent">;
+  readonly initialConfigurations?: readonly EmbedConfiguration[];
+  readonly api?: Pick<EmbedWorkspaceApi, "updateEvent">;
   readonly publication?: EmbedPublicationMetadata;
   readonly loading?: boolean;
   readonly errorMessage?: string | null;
@@ -828,7 +1356,6 @@ function EmbedConfigurationLibrary({
   onSelectConfiguration,
   onNewConfiguration,
   onSaveConfiguration,
-  onDeleteConfiguration,
   onToggleConfiguration,
 }: Readonly<{
   configurations: readonly EmbedConfiguration[];
@@ -840,7 +1367,6 @@ function EmbedConfigurationLibrary({
   onSelectConfiguration: (value: string) => void;
   onNewConfiguration: () => void;
   onSaveConfiguration: () => void;
-  onDeleteConfiguration: () => void;
   onToggleConfiguration: (id: string, enabled: boolean) => void;
 }>) {
   return (
@@ -937,20 +1463,21 @@ function EmbedConfigurationLibrary({
           >
             {selectedConfigurationId ? "Update configuration" : "Save configuration"}
           </Button>
-          <Button
-            variant="destructive"
-            type="button"
-            onClick={onDeleteConfiguration}
-            disabled={!persistenceReady || !selectedConfigurationId}
-          >
-            Delete configuration
-          </Button>
+          <span className={workspaceStyles.muted}>
+            {selectedConfigurationId
+              ? `Saved configuration revision ${
+                  configurations.find(
+                    (configuration) => configuration.id === selectedConfigurationId,
+                  )?.revision ?? "unknown"
+                } is authoritative. Updates require that revision.`
+              : "New configurations start at revision 1. Saved configurations are immutable; disable one instead of deleting it."}
+          </span>
         </div>
 
         <p role="status" aria-live="polite" className={workspaceStyles.statusMessage}>
           {statusMessage ||
             (persistenceReady
-              ? "Save creates a configuration on the event. Select one to update or delete it."
+              ? "Save creates a configuration on the event. Select one to update or disable it."
               : "Loading event configurations…")}
         </p>
       </CardContent>
@@ -968,7 +1495,7 @@ function EmbedControls({
   textColor,
   customCss,
   displayFields,
-  tracks,
+  trackIds,
   statuses,
   cacheRefreshMessage,
   cacheRefreshBusy: _cacheRefreshBusy,
@@ -994,7 +1521,7 @@ function EmbedControls({
   textColor: string;
   customCss: string;
   displayFields: readonly EmbedFieldId[];
-  tracks: readonly string[];
+  trackIds: readonly string[];
   statuses: readonly string[];
   cacheRefreshMessage: string;
   cacheRefreshBusy: boolean;
@@ -1188,7 +1715,7 @@ function EmbedControls({
                   <Input
                     id="embed-track-filter"
                     aria-label="Track filters"
-                    value={tracks.join(", ")}
+                    value={trackIds.join(", ")}
                     placeholder="All tracks"
                     onChange={(event) => setListValue(event.target.value, onTracks)}
                   />
@@ -1251,16 +1778,19 @@ function PublicationStatus({
   eventVersion: number | null | undefined;
   publication: EmbedPublicationMetadata;
 }>) {
-  const publicRevision = publication.publicRevision;
-  const previewLabel =
-    publication.previewAvailability === "available"
-      ? "Available"
-      : publication.previewAvailability === "checking"
-        ? "Checking"
-        : publication.previewAvailability === "failed"
-          ? "Failed"
-          : "Unavailable";
-
+  const statusLabel =
+    publication.status === "served"
+      ? "Served"
+      : publication.status === "pending"
+        ? "Pending rebuild"
+        : publication.status === "failed"
+          ? "Rebuild failed"
+          : publication.status === "loading"
+            ? "Loading publication"
+            : publication.status === "unavailable"
+              ? "Publication unavailable"
+              : "No publication";
+  const servedRevision = publication.servedRevision;
   return (
     <Card aria-labelledby="embed-publication-status-heading">
       <CardHeader>
@@ -1268,14 +1798,12 @@ function PublicationStatus({
           <div>
             <CardTitle id="embed-publication-status-heading">Publication truth</CardTitle>
             <CardDescription>
-              The event record and public projection have separate lifecycles. A generic event
-              status is never treated as proof of publication.
+              Served, pending, and failed program releases are authoritative. A pending or failed
+              rebuild keeps the previously served revision.
             </CardDescription>
           </div>
-          <Badge
-            variant={publication.previewAvailability === "available" ? "default" : "secondary"}
-          >
-            {previewLabel}
+          <Badge variant={publication.status === "served" ? "default" : "secondary"}>
+            {statusLabel}
           </Badge>
         </div>
       </CardHeader>
@@ -1290,35 +1818,25 @@ function PublicationStatus({
           <span className={workspaceStyles.muted}>Private organizer record.</span>
         </div>
         <div className={workspaceStyles.statusItem}>
-          <span className={workspaceStyles.statusLabel}>Agenda draft</span>
+          <span className={workspaceStyles.statusLabel}>Served program revision</span>
           <strong>
-            {publication.agendaDraftVersion === null
-              ? "Draft version not loaded"
-              : `Draft version ${publication.agendaDraftVersion}`}
+            {servedRevision === null ? "No served revision" : `Revision ${servedRevision}`}
           </strong>
           <span className={workspaceStyles.muted}>
-            Validation and publication are managed in Agenda.
+            {publication.status === "pending"
+              ? `Rebuild ${publication.pendingRevision ?? "pending"} is in progress; revision ${servedRevision ?? "none"} remains served.`
+              : publication.status === "failed"
+                ? `${publication.failedReason ?? "The latest rebuild failed."} Previously served revision remains active.`
+                : (publication.message ?? "Public outputs use this served program release.")}
           </span>
         </div>
         <div className={workspaceStyles.statusItem}>
-          <span className={workspaceStyles.statusLabel}>Public revision</span>
-          <strong>
-            {publicRevision ? `Revision ${publicRevision.number}` : "No public revision"}
-          </strong>
+          <span className={workspaceStyles.statusLabel}>Publication state</span>
+          <strong>{statusLabel}</strong>
           <span className={workspaceStyles.muted}>
-            {publicRevision
-              ? `Published ${publicRevision.publishedAt} · ID ${publicRevision.id}`
-              : "No public projection is available yet."}
-          </span>
-        </div>
-        <div className={workspaceStyles.statusItem}>
-          <span className={workspaceStyles.statusLabel}>Preview availability</span>
-          <strong>{previewLabel}</strong>
-          <span className={workspaceStyles.muted}>
-            {publication.message ??
-              (publication.previewAvailability === "available"
-                ? "Preview and code use the public revision shown above."
-                : "Preview and code remain withheld until a public revision is confirmed.")}
+            {publication.pendingRevision === null
+              ? "No pending rebuild."
+              : `Pending rebuild revision ${publication.pendingRevision}.`}
           </span>
         </div>
       </CardContent>
@@ -1337,8 +1855,10 @@ function CodePanel({
   const script = scriptSnippet(settings);
   const preview = embedCodePreview(settings);
   const format = outputFormatLabel(settings.outputFormat ?? "styled-html");
-  const revision = publication.publicRevision;
+  const revision = publication.servedRevision;
   const publicUrl = publicEmbedUrl(settings);
+  const jsonUrl = publicAgendaJsonUrl(settings);
+  const calendarUrl = publicAgendaCalendarUrl(settings);
 
   return (
     <Card aria-labelledby="embed-code-heading">
@@ -1351,10 +1871,10 @@ function CodePanel({
               Share the public URL now. Expand developer snippets only when a host needs embed code.
             </CardDescription>
           </div>
-          {revision ? <Badge variant="outline">Revision {revision.number}</Badge> : null}
-          {revision ? (
+          {revision !== null ? <Badge variant="outline">Program revision {revision}</Badge> : null}
+          {revision !== null ? (
             <p className={workspaceStyles.muted}>
-              Revision ID {revision.id} · Published {revision.publishedAt}
+              Served program revision {revision} is used by every output.
             </p>
           ) : null}
         </div>
@@ -1368,7 +1888,7 @@ function CodePanel({
                 Anyone with this link can open the confirmed public revision.
               </p>
             </div>
-            <Badge variant="secondary">Revision {revision?.number}</Badge>
+            <Badge variant="secondary">Revision {revision}</Badge>
           </div>
           <Input aria-label="Live public embed URL" readOnly value={publicUrl} />
           <div className={workspaceStyles.actionRow}>
@@ -1379,6 +1899,28 @@ function CodePanel({
               </a>
             </Button>
           </div>
+        </div>
+
+        <div className={workspaceStyles.codeBlock}>
+          <div>
+            <h3 className={workspaceStyles.subheading}>JSON feed</h3>
+            <p className={workspaceStyles.muted}>
+              Machine-readable published agenda using this configuration and program revision.
+            </p>
+          </div>
+          <Input aria-label="JSON feed URL" readOnly value={jsonUrl} />
+          <CopyButton label="JSON feed URL" value={jsonUrl} />
+        </div>
+
+        <div className={workspaceStyles.codeBlock}>
+          <div>
+            <h3 className={workspaceStyles.subheading}>iCal feed</h3>
+            <p className={workspaceStyles.muted}>
+              Calendar output using this configuration and program revision.
+            </p>
+          </div>
+          <Input aria-label="iCal feed URL" readOnly value={calendarUrl} />
+          <CopyButton label="iCal feed URL" value={calendarUrl} />
         </div>
 
         <Collapsible>
@@ -1479,23 +2021,39 @@ function MissingPublicProjection({
   publication: EmbedPublicationMetadata;
   settingsAvailable?: boolean;
 }>) {
-  const checking = publication.previewAvailability === "checking";
-  const needsConfiguration = publication.previewAvailability === "available" && !settingsAvailable;
+  const checking = publication.status === "loading";
+  const needsConfiguration =
+    (publication.status === "served" ||
+      publication.status === "pending" ||
+      publication.status === "failed") &&
+    !settingsAvailable;
   const title = checking
-    ? "Checking the public projection"
+    ? "Loading publication state"
     : needsConfiguration
-      ? "Preview needs a valid public URL"
-      : publication.previewAvailability === "failed"
-        ? "Public projection request failed"
-        : "No published public projection";
-  const description = checking
-    ? "The preview waits for an authoritative public revision response."
-    : needsConfiguration
-      ? "A published revision is confirmed, but a valid public event slug and approved app URL are required before embedding."
-      : (publication.message ??
-        "The event may have a private draft, but no published revision is available to embed yet.");
+      ? "Preview needs a saved enabled configuration"
+      : publication.status === "failed"
+        ? "Rebuild failed; previous revision retained"
+        : publication.status === "pending"
+          ? "Rebuild pending; previous revision retained"
+          : publication.status === "unavailable"
+            ? "Publication API unavailable"
+            : publication.status === "none"
+              ? "No published program revision"
+              : "Preview unavailable";
+  const description =
+    publication.message ??
+    publication.failedReason ??
+    (checking
+      ? "The current organizer publication state is loading."
+      : "Preview and outputs remain withheld until a saved enabled configuration and served program revision are available.");
   return (
-    <Alert variant={publication.previewAvailability === "failed" ? "destructive" : "default"}>
+    <Alert
+      variant={
+        publication.status === "failed" || publication.status === "unavailable"
+          ? "destructive"
+          : "default"
+      }
+    >
       <AlertTitle>{title}</AlertTitle>
       <AlertDescription>
         {description}
@@ -1559,7 +2117,7 @@ export function EmbedWorkspaceView({
   const [displayFields, setDisplayFields] = useState<readonly EmbedFieldId[]>(
     initialConfiguration?.displayFields ?? DEFAULT_EMBED_DISPLAY_FIELDS,
   );
-  const [tracks, setTracks] = useState<readonly string[]>(initialConfiguration?.tracks ?? []);
+  const [trackIds, setTrackIds] = useState<readonly string[]>(initialConfiguration?.trackIds ?? []);
   const [statuses, setStatuses] = useState<readonly string[]>(
     initialConfiguration?.statuses ?? ["Approved"],
   );
@@ -1596,7 +2154,7 @@ export function EmbedWorkspaceView({
     setTextColor("#20232b");
     setCustomCss("");
     setDisplayFields(DEFAULT_EMBED_DISPLAY_FIELDS);
-    setTracks([]);
+    setTrackIds([]);
     setStatuses(["Approved"]);
     setConfigurationStatusMessage(message);
   }, []);
@@ -1618,7 +2176,7 @@ export function EmbedWorkspaceView({
     setTextColor(configuration.textColor);
     setCustomCss(configuration.customCss);
     setDisplayFields(configuration.displayFields);
-    setTracks(configuration.tracks);
+    setTrackIds(configuration.trackIds);
     setStatuses(configuration.statuses);
   }, []);
 
@@ -1766,8 +2324,9 @@ export function EmbedWorkspaceView({
       textColor,
       customCss,
       displayFields,
-      tracks,
+      trackIds,
       statuses,
+      revision: existing?.revision ?? null,
     });
     const nextConfigurations = existing
       ? configurations.map((configuration) =>
@@ -1795,28 +2354,9 @@ export function EmbedWorkspaceView({
     statuses,
     textColor,
     theme,
-    tracks,
+    trackIds,
     widgetId,
   ]);
-
-  const deleteConfiguration = useCallback(async () => {
-    if (!selectedConfigurationId) {
-      setConfigurationStatusMessage("Select a saved configuration before deleting.");
-      return;
-    }
-    const configuration = configurations.find(
-      (candidate) => candidate.id === selectedConfigurationId,
-    );
-    if (!configuration) {
-      resetBuilder("That saved configuration is no longer available.");
-      return;
-    }
-    const nextConfigurations = configurations.filter(
-      (candidate) => candidate.id !== selectedConfigurationId,
-    );
-    if (!(await persistConfigurations(nextConfigurations))) return;
-    resetBuilder(`Deleted "${configuration.name}" successfully.`);
-  }, [configurations, persistConfigurations, resetBuilder, selectedConfigurationId]);
 
   const toggleConfiguration = useCallback(
     async (id: string, enabled: boolean) => {
@@ -1841,6 +2381,11 @@ export function EmbedWorkspaceView({
   const widget = widgetFor(widgetId);
   const origin = configuredPublicOrigin(publicOrigin);
   const normalizedSlug = normalizeEmbedSlug(eventSlug ?? undefined);
+  const selectedConfiguration =
+    snapshotScopeKey === scopeKey && selectedConfigurationId !== null
+      ? (configurations.find((configuration) => configuration.id === selectedConfigurationId) ??
+        null)
+      : null;
   const settings = useMemo<EmbedSnippetSettings | null>(() => {
     if (loading || errorMessage || snapshotScopeKey !== scopeKey || !normalizedSlug || !origin) {
       return null;
@@ -1857,7 +2402,7 @@ export function EmbedWorkspaceView({
       textColor,
       customCss,
       displayFields,
-      tracks,
+      trackIds,
       statuses,
     };
   }, [
@@ -1876,24 +2421,38 @@ export function EmbedWorkspaceView({
     statuses,
     textColor,
     theme,
-    tracks,
+    trackIds,
     widget,
   ]);
   const authoritativePublication =
     snapshotScopeKey === scopeKey && !loading && !errorMessage ? publication : undefined;
   const publicationState: EmbedPublicationMetadata = authoritativePublication ?? {
+    state: null,
+    status: loading ? "loading" : "none",
+    servedRevision: null,
+    pendingRevision: null,
+    failedReason: null,
     agendaDraftVersion: null,
     publicRevision: null,
     previewAvailability: loading ? "checking" : "unavailable",
     message: loading
-      ? "Checking the current public projection."
-      : "No published public projection has been confirmed for this event.",
+      ? "Loading the current organizer publication state."
+      : "No publication has been confirmed for this event.",
   };
-  const canDistribute =
+  const settingsWithIdentity =
     settings !== null &&
-    publicationState.previewAvailability === "available" &&
-    publicationState.publicRevision !== null;
-  const previewUrl = canDistribute && settings ? publicEmbedUrl(settings) : "";
+    selectedConfiguration !== null &&
+    selectedConfiguration.revision !== null &&
+    publicationState.servedRevision !== null
+      ? {
+          ...settings,
+          configurationId: selectedConfiguration.id,
+          configurationRevision: selectedConfiguration.revision,
+          programRevision: publicationState.servedRevision,
+        }
+      : null;
+  const canDistribute = settingsWithIdentity !== null && selectedConfiguration?.enabled === true;
+  const previewUrl = canDistribute ? publicEmbedUrl(settingsWithIdentity) : "";
   const refreshPreview = () => {
     setPreviewNonce((value) => value + 1);
     setCacheRefreshMessage(
@@ -2013,7 +2572,6 @@ export function EmbedWorkspaceView({
                   onSelectConfiguration={selectConfiguration}
                   onNewConfiguration={startNewConfiguration}
                   onSaveConfiguration={saveConfiguration}
-                  onDeleteConfiguration={deleteConfiguration}
                   onToggleConfiguration={toggleConfiguration}
                 />
                 <WidgetChooser selected={widgetId} onChange={changeWidget} />
@@ -2030,7 +2588,7 @@ export function EmbedWorkspaceView({
                 textColor={textColor}
                 customCss={customCss}
                 displayFields={displayFields}
-                tracks={tracks}
+                trackIds={trackIds}
                 statuses={statuses}
                 cacheRefreshMessage={cacheRefreshMessage}
                 cacheRefreshBusy={false}
@@ -2043,7 +2601,7 @@ export function EmbedWorkspaceView({
                 onTextColor={setTextColor}
                 onCustomCss={setCustomCss}
                 onDisplayFields={setDisplayFields}
-                onTracks={setTracks}
+                onTracks={setTrackIds}
                 onStatuses={setStatuses}
                 onRefresh={refreshPreview}
               />
@@ -2065,16 +2623,16 @@ export function EmbedWorkspaceView({
                       Preview is rendered only when the public projection and its revision metadata
                       are confirmed.
                     </CardDescription>
-                    {publicationState.publicRevision ? (
+                    {publicationState.servedRevision !== null ? (
                       <p className={workspaceStyles.muted}>
-                        Revision ID {publicationState.publicRevision.id} · Published{" "}
-                        {publicationState.publicRevision.publishedAt}
+                        Served program revision {publicationState.servedRevision} · configuration{" "}
+                        {selectedConfiguration?.revision ?? "unknown"}
                       </p>
                     ) : null}
                   </div>
-                  {publicationState.publicRevision ? (
+                  {publicationState.servedRevision !== null ? (
                     <Badge variant="outline">
-                      Revision {publicationState.publicRevision.number}
+                      Program revision {publicationState.servedRevision}
                     </Badge>
                   ) : null}
                 </div>
@@ -2090,7 +2648,7 @@ export function EmbedWorkspaceView({
                 ) : null}
               </CardHeader>
               <CardContent>
-                {canDistribute && settings ? (
+                {canDistribute && settingsWithIdentity ? (
                   <iframe
                     key={`${previewUrl}-${previewNonce}`}
                     src={previewUrl}
@@ -2144,8 +2702,8 @@ export interface EmbedWorkspaceProps {
   readonly organizationId: string;
   readonly eventId: string;
   readonly eventSlug?: string;
-  readonly initialEvent?: Pick<OrganizerEventRecord, "id" | "organizationId" | "slug" | "name">;
-  readonly api?: Pick<OrganizerEventsApi, "getEvent" | "updateEvent">;
+  readonly initialEvent?: Pick<EmbedEventRecord, "id" | "organizationId" | "slug" | "name">;
+  readonly api?: Pick<EmbedWorkspaceApi, "getEvent" | "updateEvent" | "getPublication">;
   readonly publicOrigin?: string;
 }
 
@@ -2154,7 +2712,7 @@ type EmbedLoadState =
   | {
       readonly status: "loaded";
       readonly scopeKey: string;
-      readonly event: OrganizerEventRecord;
+      readonly event: EmbedEventRecord;
       readonly eventSlug: string;
       readonly eventName: string;
     }
@@ -2193,96 +2751,73 @@ function revisionFromProjection(value: unknown): EmbedPublicRevision | null {
   return { id, number: revisionNumber, publishedAt };
 }
 
+function publicationMetadataFromState(
+  state: EmbedPublicationState | null,
+  status: "loading" | "none" | "unavailable" | "pending" | "failed" | "served",
+  message?: string,
+): EmbedPublicationMetadata {
+  const servedRevision = state?.servedRevision ?? null;
+  const pendingRevision = state?.pendingRevision ?? null;
+  const failedRelease = [...(state?.releases ?? [])]
+    .filter((release) => release.lifecycle === "failed")
+    .sort((left, right) => right.revision - left.revision)[0];
+  const effectiveStatus =
+    status !== "loading" && status !== "unavailable" && state !== null
+      ? failedRelease !== undefined && failedRelease.revision > (servedRevision ?? 0)
+        ? "failed"
+        : pendingRevision !== null
+          ? "pending"
+          : servedRevision !== null
+            ? "served"
+            : "none"
+      : status;
+  return {
+    state,
+    status: effectiveStatus,
+    servedRevision,
+    pendingRevision,
+    failedReason: failedRelease?.failureReason ?? null,
+    agendaDraftVersion: null,
+    publicRevision:
+      state?.servedManifest === null || state?.servedManifest === undefined
+        ? null
+        : {
+            id: state.servedManifest.id,
+            number: state.servedManifest.revision,
+            publishedAt: state.servedManifest.publishedAt,
+          },
+    previewAvailability:
+      effectiveStatus === "served" || effectiveStatus === "pending" || effectiveStatus === "failed"
+        ? "available"
+        : effectiveStatus === "loading"
+          ? "checking"
+          : effectiveStatus === "unavailable"
+            ? "failed"
+            : "unavailable",
+    ...(message === undefined ? {} : { message }),
+  };
+}
+
 async function loadEmbedPublication(
-  origin: string,
-  eventSlug: string,
+  api: Pick<EmbedWorkspaceApi, "getPublication">,
+  eventId: string,
   signal: AbortSignal,
 ): Promise<EmbedPublicationMetadata> {
-  if (!origin) {
-    return {
-      agendaDraftVersion: null,
-      publicRevision: null,
-      previewAvailability: "unavailable",
-      message: "The approved public app URL is not configured.",
-    };
+  try {
+    const publication = await api.getPublication(eventId, signal);
+    return publicationMetadataFromState(
+      publication,
+      publication === null ? "none" : "served",
+      publication === null ? "No publication has been created for this event." : undefined,
+    );
+  } catch (error) {
+    if (signal.aborted) throw new DOMException("The request was aborted.", "AbortError");
+    return publicationMetadataFromState(
+      null,
+      "unavailable",
+      error instanceof Error ? error.message : "The publication API is unavailable.",
+    );
   }
-
-  const projectionUrl = (projection: "agenda" | "speakers") =>
-    `${origin}/api/public/events/${encodeURIComponent(eventSlug)}/${projection}`;
-  const loadProjection = async (projection: "agenda" | "speakers") => {
-    const response = await fetch(projectionUrl(projection), {
-      headers: { accept: "application/json" },
-      cache: "no-store",
-      signal,
-    });
-    const body = (await response.json().catch(() => undefined)) as
-      | EmbedProjectionEnvelope
-      | undefined;
-    return { response, body };
-  };
-
-  const results = await Promise.allSettled([loadProjection("agenda"), loadProjection("speakers")]);
-  if (signal.aborted) throw new DOMException("The request was aborted.", "AbortError");
-
-  const responses = results.flatMap((result) =>
-    result.status === "fulfilled" ? [result.value] : [],
-  );
-  if (responses.length !== results.length) {
-    return {
-      agendaDraftVersion: null,
-      publicRevision: null,
-      previewAvailability: "failed",
-      message: "The public projection could not be checked. Try again after Agenda publication.",
-    };
-  }
-  if (responses.every(({ response }) => response.status === 404)) {
-    return {
-      agendaDraftVersion: null,
-      publicRevision: null,
-      previewAvailability: "unavailable",
-      message: "No published agenda and speaker projections exist for this event.",
-    };
-  }
-  const failedResponse = responses.find(({ response }) => !response.ok);
-  if (failedResponse) {
-    const code = nonEmptyString(failedResponse.body?.error?.code);
-    const message = nonEmptyString(failedResponse.body?.error?.message);
-    return {
-      agendaDraftVersion: null,
-      publicRevision: null,
-      previewAvailability: code === "PUBLICATION_NOT_FOUND" ? "unavailable" : "failed",
-      message: message ?? "The public projection could not be checked.",
-    };
-  }
-
-  const revisions = responses.map(({ body }) => revisionFromProjection(body?.data?.revision));
-  const [agendaRevision, speakerRevision] = revisions;
-  if (!agendaRevision || !speakerRevision) {
-    return {
-      agendaDraftVersion: null,
-      publicRevision: null,
-      previewAvailability: "failed",
-      message: "The public projection did not include complete revision metadata.",
-    };
-  }
-  if (
-    agendaRevision.id !== speakerRevision.id ||
-    agendaRevision.number !== speakerRevision.number ||
-    agendaRevision.publishedAt !== speakerRevision.publishedAt
-  ) {
-    return {
-      agendaDraftVersion: null,
-      publicRevision: null,
-      previewAvailability: "failed",
-      message: "Agenda and speaker projections are from different published revisions.",
-    };
-  }
-  return {
-    agendaDraftVersion: null,
-    publicRevision: agendaRevision,
-    previewAvailability: "available",
-    message: "Preview and code use this exact published revision.",
-  };
 }
 
 export function EmbedWorkspace({
@@ -2294,8 +2829,8 @@ export function EmbedWorkspace({
   const scopeKey = workspaceScopeKey(organizationId, eventId);
   const [state, setState] = useState<EmbedLoadState>({ status: "loading", scopeKey });
   const [loadedApi, setLoadedApi] = useState<Pick<
-    OrganizerEventsApi,
-    "getEvent" | "updateEvent"
+    EmbedWorkspaceApi,
+    "getEvent" | "updateEvent" | "getPublication"
   > | null>(providedApi ?? null);
   const [publication, setPublication] = useState<EmbedPublicationMetadata | undefined>();
 
@@ -2312,7 +2847,7 @@ export function EmbedWorkspace({
       let api = providedApi;
       if (!api) {
         try {
-          api = createOrganizerEventsApi("", organizationId);
+          api = createEmbedWorkspaceApi(organizationId);
         } catch (error) {
           setState({ status: "error", scopeKey, message: messageFrom(error) });
           return;
@@ -2357,12 +2892,13 @@ export function EmbedWorkspace({
     }
     if (state.status !== "loaded") {
       if (state.status === "loading") {
-        setPublication({
-          agendaDraftVersion: null,
-          publicRevision: null,
-          previewAvailability: "checking",
-          message: "Checking the current public projection.",
-        });
+        setPublication(
+          publicationMetadataFromState(
+            null,
+            "loading",
+            "Loading the current organizer publication state.",
+          ),
+        );
       } else {
         setPublication(undefined);
       }
@@ -2370,33 +2906,32 @@ export function EmbedWorkspace({
     }
 
     const controller = new AbortController();
-    setPublication({
-      agendaDraftVersion: null,
-      publicRevision: null,
-      previewAvailability: "checking",
-      message: "Checking the current public projection.",
-    });
-    void loadEmbedPublication(
-      configuredPublicOrigin(publicOrigin),
-      state.eventSlug,
-      controller.signal,
-    ).then(
+    setPublication(
+      publicationMetadataFromState(
+        null,
+        "loading",
+        "Loading the current organizer publication state.",
+      ),
+    );
+    if (loadedApi === null) return () => controller.abort();
+    void loadEmbedPublication(loadedApi, eventId, controller.signal).then(
       (nextPublication) => {
         if (!controller.signal.aborted) setPublication(nextPublication);
       },
       () => {
         if (!controller.signal.aborted) {
-          setPublication({
-            agendaDraftVersion: null,
-            publicRevision: null,
-            previewAvailability: "failed",
-            message: "The public projection could not be checked.",
-          });
+          setPublication(
+            publicationMetadataFromState(
+              null,
+              "unavailable",
+              "The publication API could not be checked.",
+            ),
+          );
         }
       },
     );
     return () => controller.abort();
-  }, [publicOrigin, scopeKey, state]);
+  }, [eventId, loadedApi, scopeKey, state]);
 
   const eventLoaded = state.scopeKey === scopeKey && state.status === "loaded" ? state : null;
   const isLoading = state.scopeKey !== scopeKey || state.status === "loading";
@@ -2413,8 +2948,7 @@ export function EmbedWorkspace({
       eventVersion={eventLoaded?.event.version ?? null}
       {...(eventLoaded
         ? {
-            initialConfigurations:
-              eventLoaded.event.embedConfigurations ?? EMPTY_ORGANIZER_EVENT_EMBED_CONFIGURATIONS,
+            initialConfigurations: eventLoaded.event.embedConfigurations,
           }
         : {})}
       {...(state.scopeKey === scopeKey && publication !== undefined ? { publication } : {})}

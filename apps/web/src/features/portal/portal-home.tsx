@@ -28,7 +28,7 @@ export function PortalHome() {
 }
 
 function PortalHomeContent() {
-  const { eventQuery, view } = usePortal();
+  const { can, eventQuery, view } = usePortal();
   if (!view) {
     return null;
   }
@@ -47,9 +47,11 @@ function PortalHomeContent() {
         title={`Welcome${profile ? `, ${profile.displayName.split(" ")[0]}` : ""}`}
         description="Track your proposals as they become sessions and complete everything the event team needs from you."
         action={
-          <Link className={styles.primaryButton} href={`/portal/tasks${eventQuery}`}>
-            View tasks
-          </Link>
+          can("task-response") ? (
+            <Link className={styles.primaryButton} href={`/portal/tasks${eventQuery}`}>
+              View tasks
+            </Link>
+          ) : undefined
         }
       />
 
@@ -60,7 +62,7 @@ function PortalHomeContent() {
           </span>
           <div>
             <strong>{summary.submissionCount}</strong>
-            <span>{summary.submissionCount === 1 ? "Session" : "Sessions"}</span>
+            <span>{summary.submissionCount === 1 ? "Submission" : "Submissions"}</span>
           </div>
           <small>{summary.acceptedCount} accepted</small>
         </article>
@@ -83,15 +85,15 @@ function PortalHomeContent() {
         <section className={styles.panel}>
           <div className={styles.panelHeading}>
             <div>
-              <p className={styles.eyebrow}>Your sessions</p>
-              <h2>Session status</h2>
+              <p className={styles.eyebrow}>Your submissions</p>
+              <h2>Submission status</h2>
             </div>
-            <Link href={`/portal/submissions${eventQuery}`}>View all sessions</Link>
+            <Link href={`/portal/submissions${eventQuery}`}>View all submissions</Link>
           </div>
           {view.submissions.length === 0 ? (
             <EmptyState
-              title="No sessions yet"
-              description="Submitted proposals will appear here as they become sessions."
+              title="No submissions yet"
+              description="A proposal appears here immediately after you submit it."
             />
           ) : (
             <div className={styles.cardList}>
@@ -135,7 +137,10 @@ function PortalHomeContent() {
               <div>
                 <h3>{profile.displayName}</h3>
                 <p>{profile.biography || "Add a biography for the event program."}</p>
-                <small>Updated {formatPortalDate(profile.updatedAt) ?? "recently"}</small>
+                <small>
+                  Revision {profile.version} · Updated{" "}
+                  {formatPortalDate(profile.updatedAt) ?? "recently"}
+                </small>
               </div>
             </div>
           ) : (
@@ -147,7 +152,7 @@ function PortalHomeContent() {
         </section>
       </div>
 
-      {summary.acceptedCount > 0 ? (
+      {summary.acceptedCount > 0 && can("task-response") ? (
         <section className={`${styles.panel} ${styles.taskPanel}`}>
           <div className={styles.panelHeading}>
             <div>

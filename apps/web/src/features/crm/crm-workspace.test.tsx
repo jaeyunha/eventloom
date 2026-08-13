@@ -22,6 +22,50 @@ function response(data: unknown, status = 200): Response {
     headers: { "content-type": "application/json" },
   });
 }
+const importPreview = {
+  id: "preview-import-1",
+  organizationId: "org/one",
+  created: 1,
+  updated: 1,
+  skipped: 1,
+  errors: 1,
+  contacts: [],
+  mapping: [],
+  rows: [
+    {
+      rowNumber: 1,
+      identity: "ada@example.test",
+      status: "created" as const,
+      contactId: "contact-1",
+      reason: null,
+    },
+    {
+      rowNumber: 2,
+      identity: "existing@example.test",
+      status: "updated" as const,
+      contactId: "contact-2",
+      reason: null,
+    },
+    {
+      rowNumber: 3,
+      identity: "skip@example.test",
+      status: "skipped" as const,
+      contactId: null,
+      reason: "No changes",
+    },
+    {
+      rowNumber: 4,
+      identity: null,
+      status: "error" as const,
+      contactId: null,
+      reason: "Email is invalid",
+    },
+  ],
+  idempotent: false,
+  createdAt: "2026-08-09T10:00:00.000Z",
+  planFingerprint: "plan-import-1",
+  preview: true as const,
+};
 type Deferred<T> = {
   readonly promise: Promise<T>;
   readonly resolve: (value: T | PromiseLike<T>) => void;
@@ -159,10 +203,16 @@ describe("organization CRM workspace", () => {
         analytics,
         importResult: {
           id: "import-1",
+          organizationId: "org/one",
           created: 1,
           updated: 0,
           skipped: 1,
+          errors: 0,
+          contacts: [contact],
           idempotent: false,
+          createdAt: contact.updatedAt,
+          planFingerprint: "plan-import-1",
+          preview: false,
           mapping: [
             { sourceColumn: "Name", targetField: "displayName", custom: false },
             { sourceColumn: "Email", targetField: "email", custom: false },
@@ -185,6 +235,41 @@ describe("organization CRM workspace", () => {
             },
           ],
         },
+        importPreviewResult: importPreview,
+        importPreviewSource: "Name,Email,Topics\nAda Lovelace,ada@example.test,computing",
+        mergePreview: {
+          organizationId: "org/one",
+          survivorId: contact.id,
+          retiredIds: ["contact-2"],
+          rewired: {
+            participantContactLinks: 2,
+            notes: 1,
+            segments: 1,
+            pipelineHistory: 3,
+          },
+          participantConflicts: [],
+          auditId: "audit-crm-1",
+          planFingerprint: "plan-merge-1",
+          survivor: contact,
+          tombstones: [{ ...contact, id: "contact-2" }],
+          primary: contact,
+          merged: [{ ...contact, id: "contact-2" }],
+          preview: true,
+          canCommit: true,
+        },
+        mergePreviewPlanKey: JSON.stringify({
+          duplicateContactIds: ["contact-2"],
+          fieldWinners: {
+            email: contact.id,
+            phone: contact.id,
+            name: contact.id,
+            company: contact.id,
+            title: contact.id,
+            bio: contact.id,
+            headshot: contact.id,
+          },
+          customFieldWinners: {},
+        }),
         outreachPreview: {
           subject: "Hello {{first_name}}",
           body: "Hi {{first_name}}",
@@ -431,6 +516,91 @@ describe("organization CRM workspace", () => {
 
     expect(markup.match(/Follow up once/gu)?.length).toBe(1);
   });
+  it("renders non-empty personalized outreach previews for display-name-only contacts", () => {
+    const displayNameOnlyContacts = [
+      {
+        ...contact,
+        id: "contact-dana",
+        firstName: null,
+        lastName: null,
+        displayName: "Dana Okafor",
+        email: "dana@example.test",
+      },
+      {
+        ...contact,
+        id: "contact-marcus",
+        firstName: null,
+        lastName: null,
+        displayName: "Marcus Chen",
+        email: "marcus@example.test",
+      },
+      {
+        ...contact,
+        id: "contact-explicit",
+        displayName: "Display Person",
+        firstName: "Explicit",
+        lastName: "Names",
+        email: "explicit@example.test",
+      },
+    ] as const;
+    const markup = renderToStaticMarkup(
+      createElement(CrmWorkspaceView, {
+        organizationId: "org/one",
+        contacts: displayNameOnlyContacts,
+        selectedContact: displayNameOnlyContacts[0],
+        selectedContactId: displayNameOnlyContacts[0].id,
+        segments: [],
+        events: [],
+        history: [],
+        pipelineHistory: [],
+        notes: [],
+        duplicates: null,
+        analytics: null,
+        outreachPreview: {
+          subject: "Invitation from {{first_name}}",
+          body: "Hi {{first_name}}",
+          count: displayNameOnlyContacts.length,
+          recipients: [
+            {
+              contactId: "contact-dana",
+              email: "dana@example.test",
+              displayName: "Dana Okafor",
+              subject: "Invitation from Dana",
+              body: "Hi Dana",
+              unknownTags: [],
+              idempotencyKey: "outreach-preview-dana",
+            },
+            {
+              contactId: "contact-marcus",
+              email: "marcus@example.test",
+              displayName: "Marcus Chen",
+              subject: "Invitation from Marcus",
+              body: "Hi Marcus",
+              unknownTags: [],
+              idempotencyKey: "outreach-preview-marcus",
+            },
+            {
+              contactId: "contact-explicit",
+              email: "explicit@example.test",
+              displayName: "Display Person",
+              subject: "Invitation from Explicit",
+              body: "Hi Explicit",
+              unknownTags: [],
+              idempotencyKey: "outreach-preview-explicit",
+            },
+          ],
+        },
+        onSendOutreach: async () => undefined,
+      }),
+    );
+
+    expect(markup).toContain("Invitation from Dana");
+    expect(markup).toContain("Hi Dana");
+    expect(markup).toContain("Invitation from Marcus");
+    expect(markup).toContain("Hi Marcus");
+    expect(markup).toContain("Invitation from Explicit");
+    expect(markup).toContain("Hi Explicit");
+  });
   it("seeds saved segments from active directory filters and exposes selected-contact context", () => {
     const markup = renderToStaticMarkup(
       createElement(CrmWorkspaceView, {
@@ -456,6 +626,70 @@ describe("organization CRM workspace", () => {
     expect(markup).toContain("Selected directory contacts (1)");
     expect(markup).toContain("Segment context (optional)");
     expect(markup).toContain("CSV file");
+  });
+  it("routes server-authoritative CSV and merge previews with exact request bodies", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetcher = vi.fn<TestFetcher>(async (input, init = {}) => {
+      calls.push({ url: String(input), init });
+      return response(
+        calls.length === 1
+          ? importPreview
+          : {
+              organizationId: "org/one",
+              survivorId: contact.id,
+              retiredIds: ["contact-2"],
+              rewired: {
+                participantContactLinks: 1,
+                notes: 2,
+                segments: 3,
+                pipelineHistory: 4,
+              },
+              participantConflicts: [],
+              auditId: "audit-merge",
+              planFingerprint: "plan-merge",
+              survivor: contact,
+              tombstones: [],
+              primary: contact,
+              merged: [],
+              preview: true,
+              canCommit: true,
+            },
+      );
+    });
+    const api = createCrmApi("https://api.example.test/", "org/one", fetcher);
+    await api.previewImport("Name,Email\nAda,ada@example.test");
+    await api.previewMerge(contact.id, ["contact-2"], {
+      fieldWinners: {
+        email: contact.id,
+        phone: contact.id,
+        name: contact.id,
+        company: contact.id,
+        title: contact.id,
+        bio: contact.id,
+        headshot: contact.id,
+      },
+      customFieldWinners: { region: contact.id },
+    });
+    expect(calls.map((call) => call.url)).toEqual([
+      "https://api.example.test/api/admin/organizations/org%2Fone/crm/contacts/import/preview",
+      "https://api.example.test/api/admin/organizations/org%2Fone/crm/contacts/contact-1/merge/preview",
+    ]);
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({
+      csv: "Name,Email\nAda,ada@example.test",
+    });
+    expect(JSON.parse(String(calls[1]?.init.body))).toEqual({
+      duplicateContactIds: ["contact-2"],
+      fieldWinners: {
+        email: contact.id,
+        phone: contact.id,
+        name: contact.id,
+        company: contact.id,
+        title: contact.id,
+        bio: contact.id,
+        headshot: contact.id,
+      },
+      customFieldWinners: { region: contact.id },
+    });
   });
   it("uses authoritative organization CRM and event envelopes with credentials and no-store", async () => {
     const calls: Array<{ url: string; init: RequestInit }> = [];

@@ -71,8 +71,8 @@ const capabilityItems = [
   "Public agenda & embeds",
 ] as const;
 
-const openSourceBenefits = [
-  "AGPL-3.0-or-later",
+const sourceAvailableBenefits = [
+  "Elastic License 2.0",
   "Self-hostable",
   "Versioned API and webhooks",
   "Privacy-safe public projections",
@@ -350,7 +350,7 @@ export default function Home() {
       <main className="home-main" id="main-content" tabIndex={-1}>
         <section className="home-hero" aria-labelledby="hero-title">
           <div className="home-hero-copy">
-            <p className="home-kicker">Open-source conference program operations</p>
+            <p className="home-kicker">Source-available conference program operations</p>
             <h1 id="hero-title">
               Run your speaker program from first submission to published agenda.
             </h1>
@@ -601,16 +601,16 @@ export default function Home() {
           </div>
         </section>
 
-        <section className="home-open-source" aria-labelledby="open-source-title">
+        <section className="home-open-source" aria-labelledby="source-available-title">
           <div className="home-open-source-copy">
-            <p className="home-kicker">Open infrastructure, accountable operations</p>
-            <h2 id="open-source-title">Own the workflow your conference depends on.</h2>
+            <p className="home-kicker">Inspectable infrastructure, accountable operations</p>
+            <h2 id="source-available-title">Own the workflow your conference depends on.</h2>
             <p>
-              Open Sessionboard is inspectable, adaptable software for teams replacing expensive
-              closed program-management systems without giving up operational rigor.
+              Open Sessionboard is source-available software for teams who want to understand and
+              adapt their conference workflow without giving up operational rigor.
             </p>
             <ul>
-              {openSourceBenefits.map((benefit) => (
+              {sourceAvailableBenefits.map((benefit) => (
                 <li key={benefit}>
                   <Check aria-hidden="true" />
                   {benefit}
@@ -649,14 +649,14 @@ export default function Home() {
       <footer className="home-footer">
         <div>
           <strong>Open Sessionboard</strong>
-          <span>Open-source program operations for conference teams.</span>
+          <span>Source-available program operations for conference teams.</span>
         </div>
         <nav aria-label="Footer navigation">
           <a href="/events">Events</a>
           <a href="/login">Sign in</a>
           <a href="https://github.com/jaeyunha/open-sessionboard">Source</a>
         </nav>
-        <span>AGPL-3.0-or-later</span>
+        <span>Elastic License 2.0</span>
       </footer>
     </div>
   );

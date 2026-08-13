@@ -3,8 +3,7 @@ import { DeliverablesWorkspace } from "@/features/deliverables/deliverables-work
 
 export const metadata: Metadata = {
   title: "Uploaded files",
-  description:
-    "Review, approve, and download files submitted by speakers for this event.",
+  description: "Review, approve, and download files submitted by speakers for this event.",
 };
 
 interface EventFilesPageProps {

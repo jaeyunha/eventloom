@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { createApp } from "../app";
+import { type ApiDependencies, createApp } from "../app";
 import type { AgendaState, PublishedAgendaRevision } from "../features/agenda/types";
 import type { CfpForm, EventCfp, Submission } from "../features/cfp/model";
 import type { CfpRepository } from "../features/cfp/service";
-import { CommunicationService } from "../features/communications/service";
+import {
+  CommunicationService,
+  InMemoryCommunicationRepository,
+  InMemoryReminderRepository,
+} from "../features/communications/service";
 import type { CommunicationActor, CommunicationRecipient } from "../features/communications/types";
 import type { CrmContact, CrmEventProjection } from "../features/crm/types";
 import { EvaluationService } from "../features/evaluations/service";
@@ -46,7 +50,12 @@ import {
   inspectProductionRuntime,
   type RuntimeBindings,
 } from "./cloudflare";
-import { createRuntimeApp, createRuntimeDependencies, createRuntimeWorker } from "./composition";
+import {
+  createRuntimeApp,
+  createRuntimeDependencies,
+  createRuntimeWorker,
+  runScheduledReminders,
+} from "./composition";
 import {
   LOCAL_API_KEY,
   LOCAL_ORGANIZER_ACCOUNT_ID,
@@ -79,6 +88,60 @@ class FormulaRecordingTransport implements AirtableTransport {
     });
     if (this.delayMs > 0) {
       await new Promise<void>((resolve) => setTimeout(resolve, this.delayMs));
+    }
+    const upsertRecords =
+      request.method === "PATCH" && request.recordId === undefined
+        ? (
+            request.body as
+              | {
+                  readonly records?: readonly {
+                    readonly fields?: Readonly<Record<string, unknown>>;
+                  }[];
+                }
+              | undefined
+          )?.records
+        : undefined;
+    if (upsertRecords !== undefined) {
+      const listed = await this.fake.request<{
+        readonly records: readonly {
+          readonly id: string;
+          readonly fields: Readonly<Record<string, unknown>>;
+        }[];
+      }>({
+        method: "GET",
+        baseId: request.baseId,
+        table: request.table,
+        query: { pageSize: 100 },
+      });
+      const mutations = upsertRecords.map((record) => {
+        const fields = record.fields;
+        const applicationId = fields?.["Application ID"];
+        if (
+          fields === undefined ||
+          typeof applicationId !== "string" ||
+          typeof fields["Scores JSON"] !== "string"
+        ) {
+          throw new TypeError("The evaluation batch upsert is invalid.");
+        }
+        return {
+          fields,
+          recordId: listed.body.records.find(
+            (existing) => existing.fields["Application ID"] === applicationId,
+          )?.id,
+        };
+      });
+      const records = [];
+      for (const mutation of mutations) {
+        const response = await this.fake.request({
+          method: mutation.recordId === undefined ? "POST" : "PATCH",
+          baseId: request.baseId,
+          table: request.table,
+          ...(mutation.recordId === undefined ? {} : { recordId: mutation.recordId }),
+          body: { fields: mutation.fields },
+        });
+        records.push(response.body);
+      }
+      return { status: 200, headers: {}, body: { records } as TBody };
     }
     const formula = request.query?.filterByFormula;
     if (typeof formula !== "string") return this.fake.request<TBody>(request);
@@ -218,8 +281,8 @@ function productionBindings(
   } as unknown as NonNullable<RuntimeBindings["OUTBOX_QUEUE"]>;
   return {
     APP_ENV: "production",
-    WEB_ORIGIN: "https://open-sessionboard-web-production.ashleyha0317.workers.dev",
-    API_ORIGIN: "https://open-sessionboard-api-production.ashleyha0317.workers.dev",
+    WEB_ORIGIN: "https://web-production.example.test",
+    API_ORIGIN: "https://api-production.example.test",
     DB: database,
     AGENDA_COORDINATOR: coordinator,
     PRIVATE_FILES: bucket,
@@ -235,8 +298,7 @@ function productionBindings(
     BETTER_AUTH_SECRET: "test-secret-that-is-at-least-32-characters-long",
     OPENSEND_API_URL: "https://opensend.namuh.co",
     OPENSEND_API_KEY: "opensend-test-key",
-    CACHE_INVALIDATION_URL:
-      "https://open-sessionboard-web-production.ashleyha0317.workers.dev/api/internal/cache-invalidation",
+    CACHE_INVALIDATION_URL: "https://web-production.example.test/api/internal/cache-invalidation",
     CACHE_INVALIDATION_TOKEN: "shared-cache-invalidation-token",
     AIRTABLE_TRANSPORT: transport,
   };
@@ -2089,6 +2151,8 @@ describe("fixture local runtime composition", () => {
       organizationId,
       eventId,
       contactId: contact.id,
+      participantId,
+      crmContactId: contact.id,
       sessionId: "session-marcus",
       role: "speaker",
       note: null,
@@ -2172,6 +2236,8 @@ describe("fixture local runtime composition", () => {
       organizationId,
       eventId,
       contactId: contact.id,
+      participantId: contact.id,
+      crmContactId: contact.id,
       sessionId: null,
       role: "speaker",
       note: null,
@@ -2632,6 +2698,7 @@ describe("fixture local runtime composition", () => {
           revisionId: "revision-devflow-1",
           revisionNumber: 1,
           publishedAt: updatedAt,
+          sourceHash: "speaker-source-devflow-1",
           event: {
             slug: eventId,
             name: "Devflow Conference",
@@ -2664,6 +2731,40 @@ describe("fixture local runtime composition", () => {
     });
     transport.seed({
       baseId: "base-test",
+      table: "Program Releases",
+      fields: {
+        "Application ID": "program-release-devflow-1",
+        "Organization ID": organizationId,
+        "Event ID": eventId,
+        Status: "served",
+        Revision: 1,
+        "Manifest JSON": JSON.stringify({
+          id: "program-release-devflow-1",
+          organizationId,
+          eventId,
+          revision: 1,
+          lifecycle: "served",
+          agendaProjectionId: "agenda-revision-devflow-1",
+          agendaRevisionNumber: 1,
+          agendaSourceHash: "agenda-source-devflow-1",
+          speakerProjectionId: "revision-devflow-1",
+          speakerRevisionNumber: 1,
+          speakerSourceHash: "speaker-source-devflow-1",
+          approvedContentRevision: 1,
+          approvedProfileRevision: 1,
+          releasedAssetRevision: 1,
+          actorId: "organizer-devflow",
+          publishedAt: updatedAt,
+          parentServedRevision: null,
+          rollbackTargetRevision: null,
+          cacheRevision: 1,
+          sourceTrigger: "initial-publication",
+          failureReason: null,
+        }),
+      },
+    });
+    transport.seed({
+      baseId: "base-test",
       table: "Speaker Tasks",
       fields: {
         "Application ID": "task-marcus-accepted",
@@ -2672,6 +2773,11 @@ describe("fixture local runtime composition", () => {
           id: "task-marcus-accepted",
           eventId,
           submissionId: `speaker-submission:${acceptedSubmissionId}`,
+          subject: {
+            type: "session",
+            participantId: acceptedParticipantId,
+            submissionId: `speaker-submission:${acceptedSubmissionId}`,
+          },
           participantId: acceptedParticipantId,
           type: "action",
           owner: "speaker",
@@ -2778,6 +2884,11 @@ describe("fixture local runtime composition", () => {
           id: "task-marcus-crm",
           eventId,
           submissionId: `speaker-submission:crm-contact:${selectedContact.data.id}`,
+          subject: {
+            type: "session",
+            participantId: selectedContact.data.id,
+            submissionId: `speaker-submission:crm-contact:${selectedContact.data.id}`,
+          },
           participantId: selectedContact.data.id,
           type: "action",
           owner: "speaker",
@@ -2987,11 +3098,11 @@ describe("fixture local runtime composition", () => {
     });
     await expect(dependencies.publishedSpeakers?.getPublishedSpeakers(eventId)).resolves.toBeNull();
   });
-  it("requires the fixed origin pair and OpenSend credentials", () => {
+  it("requires configured origins and OpenSend credentials", () => {
     const bindings = productionBindings(new FakeAirtableTransport(), productionD1("unused"));
     expect(inspectProductionRuntime(bindings).success).toBe(true);
     const { API_ORIGIN: _apiOrigin, ...withoutApiOrigin } = bindings;
-    expect(inspectProductionRuntime(withoutApiOrigin).success).toBe(true);
+    expect(inspectProductionRuntime(withoutApiOrigin).success).toBe(false);
     const {
       OPENSEND_API_KEY: _openSendKey,
       OPENSEND_SENDING_API_KEY: _sendingKey,
@@ -3001,7 +3112,31 @@ describe("fixture local runtime composition", () => {
     expect(
       inspectProductionRuntime({
         ...bindings,
-        API_ORIGIN: "https://attacker.example",
+        API_ORIGIN: "https://api-production.example.test",
+      }).success,
+    ).toBe(true);
+    expect(
+      inspectProductionRuntime({
+        ...bindings,
+        API_ORIGIN: "http://api-production.example.test",
+      }).success,
+    ).toBe(false);
+    expect(
+      inspectProductionRuntime({
+        ...bindings,
+        API_ORIGIN: "https://api-production.example.test/path",
+      }).success,
+    ).toBe(false);
+    expect(
+      inspectProductionRuntime({
+        ...bindings,
+        API_ORIGIN: "http://api-production.example.test",
+      }).success,
+    ).toBe(false);
+    expect(
+      inspectProductionRuntime({
+        ...bindings,
+        API_ORIGIN: "https://api-production.example.test/path",
       }).success,
     ).toBe(false);
   });
@@ -3059,6 +3194,62 @@ describe("fixture local runtime composition", () => {
       scheduled({ scheduledTime: Date.now() } as never, bindings, {} as ExecutionContext),
     ).resolves.toBeUndefined();
   });
+  it("records a failed automatic run when scheduled reminder delivery is misconfigured", async () => {
+    const reminders = new InMemoryReminderRepository();
+    const service = new CommunicationService(new InMemoryCommunicationRepository(), undefined, {
+      reminders: { repository: reminders },
+    });
+    const database = {
+      prepare() {
+        return {
+          async all() {
+            return {
+              results: [
+                {
+                  organization_id: "organization-reminders",
+                  user_id: "organizer-reminders",
+                  role: "owner",
+                },
+              ],
+            };
+          },
+        };
+      },
+    } as unknown as D1Database;
+    const dependencies = {
+      communications: {
+        service,
+        actorFor: async () => null,
+      },
+      events: {
+        service: {
+          async listEvents() {
+            return [{ id: "event-reminders", organizationId: "organization-reminders" }];
+          },
+        },
+      },
+    } as unknown as ApiDependencies;
+
+    await runScheduledReminders(
+      dependencies,
+      {
+        APP_ENV: "production",
+        WEB_ORIGIN: "https://open-sessionboard.pages.dev",
+        DB: database,
+      },
+      new Date("2026-08-12T12:30:00.000Z"),
+    );
+
+    await expect(
+      reminders.listRuns("organization-reminders", "event-reminders"),
+    ).resolves.toMatchObject([
+      {
+        triggerType: "automatic",
+        state: "failed",
+        configurationFailure: "The reminder candidate source is not configured.",
+      },
+    ]);
+  });
 
   it("exposes the production outbox queue consumer and retries when bindings fail closed", async () => {
     const worker = createRuntimeWorker();
@@ -3086,7 +3277,7 @@ describe("fixture local runtime composition", () => {
         { messages: [message] } as never,
         {
           APP_ENV: "production",
-          WEB_ORIGIN: "https://open-sessionboard-web-production.ashleyha0317.workers.dev",
+          WEB_ORIGIN: "https://web-production.example.test",
         },
         {} as ExecutionContext,
       ),
@@ -4657,14 +4848,23 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
     expect(reads.map((request) => request.table).sort()).toEqual([
       "CFP Forms",
       "Evaluations",
+      "Evaluations",
+      "Review Plans",
       "Review Plans",
       "Submissions",
     ]);
-    const evaluationsRead = reads.find((request) => request.table === "Evaluations");
+    const evaluationReads = reads.filter((request) => request.table === "Evaluations");
+    expect(evaluationReads).toHaveLength(2);
+    const evaluationsRead = evaluationReads.find((request) =>
+      String(request.query?.filterByFormula).includes(reviewerId),
+    );
     expect(evaluationsRead?.query?.filterByFormula).toContain("AND(");
     expect(evaluationsRead?.query?.filterByFormula).toContain(tenantId);
     expect(evaluationsRead?.query?.filterByFormula).toContain(reviewerId);
     expect(evaluationsRead?.query?.filterByFormula).toContain(eventId);
+    expect(
+      evaluationReads.some((request) => String(request.query?.filterByFormula).includes(planId)),
+    ).toBe(true);
   });
   it("batches organizer workspace Airtable reads under the warm latency budget", async () => {
     const tenantId = "tenant-organizer-workspace";
@@ -5071,10 +5271,11 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       ]),
     );
     const reads = transport.requests.filter((request) => request.method === "GET");
-    expect(reads).toHaveLength(4);
+    expect(reads).toHaveLength(5);
     expect(reads.map((request) => request.table).sort()).toEqual([
       "Decisions",
       "Evaluations",
+      "Review Plans",
       "Review Plans",
       "Submissions",
     ]);
@@ -5086,13 +5287,14 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
     }
     expect(JSON.stringify(workspace)).not.toContain("foreign");
   });
-  it("persists authoritative Airtable assignment replacement with internal record IDs", async () => {
+  it("atomically supersedes Airtable assignments while preserving lineage and reviews", async () => {
     const tenantId = "tenant-replacement";
     const eventId = "event-replacement";
     const planId = "plan-replacement";
     const roundId = "round-replacement";
     const submissionId = "submission-replacement";
     const now = "2026-08-10T12:00:00.000Z";
+    const replacedAt = "2026-08-10T12:10:00.000Z";
     const transport = new FormulaRecordingTransport();
     const assignmentA = {
       id: "assignment-replacement-a",
@@ -5103,9 +5305,10 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       submissionId,
       reviewerId: "reviewer-a",
       status: "assigned" as const,
-      planVersion: 1,
-      rubricRevision: 1,
-      submissionRevision: 1,
+      planVersion: 4,
+      rubricRevision: 7,
+      roundRevision: 3,
+      submissionRevision: 2,
       version: 1,
       createdAt: now,
       updatedAt: now,
@@ -5122,6 +5325,8 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       ...assignmentA,
       id: "assignment-replacement-c",
       reviewerId: "reviewer-c",
+      createdAt: replacedAt,
+      updatedAt: replacedAt,
     };
     const reviewA = {
       id: `review:${assignmentA.id}`,
@@ -5136,42 +5341,62 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       comment: "Submitted review",
       submittedAt: now,
       version: 1,
+      planRevision: 4,
+      rubricRevision: 7,
+      roundRevision: 3,
+      submissionRevision: 2,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const plan = {
+      id: planId,
+      tenantId,
+      eventId,
+      name: "Replacement plan",
+      status: "open" as const,
+      blindReview: false,
+      closesAt: null,
+      assignmentRule: { reviewsPerSubmission: 3, maxAssignmentsPerReviewer: 10 },
+      rounds: [],
+      version: 4,
       createdAt: now,
       updatedAt: now,
     };
     transport.seed({
       baseId: "base-test",
-      table: "Evaluations",
-      recordId: "rec00000000000001",
+      table: "Review Plans",
+      recordId: "rec00000000000100",
       fields: {
-        "Application ID": assignmentA.id,
-        "Scores JSON": JSON.stringify({ ...assignmentA, entityType: "evaluation_assignment" }),
+        "Application ID": plan.id,
+        "Rounds JSON": JSON.stringify(plan),
       },
     });
-    transport.seed({
-      baseId: "base-test",
-      table: "Evaluations",
-      recordId: "rec00000000000002",
-      fields: {
-        "Application ID": assignmentB.id,
-        "Scores JSON": JSON.stringify({ ...assignmentB, entityType: "evaluation_assignment" }),
-      },
-    });
-    transport.seed({
-      baseId: "base-test",
-      table: "Evaluations",
-      recordId: "rec00000000000003",
-      fields: {
-        "Application ID": reviewA.id,
-        "Scores JSON": JSON.stringify({ ...reviewA, entityType: "evaluation_review" }),
-      },
-    });
+    for (const [recordId, entity, entityType] of [
+      ["rec00000000000101", assignmentA, "evaluation_assignment"],
+      ["rec00000000000102", assignmentB, "evaluation_assignment"],
+      ["rec00000000000103", reviewA, "evaluation_review"],
+    ] as const) {
+      transport.seed({
+        baseId: "base-test",
+        table: "Evaluations",
+        recordId,
+        fields: {
+          "Application ID": entity.id,
+          "Scores JSON": JSON.stringify({ ...entity, entityType }),
+        },
+      });
+    }
 
-    let rejectNextCreate = true;
+    let rejectNextMutation = true;
     const mutationTransport: AirtableTransport = {
       async request<TBody = unknown>(request: AirtableRequest): Promise<AirtableResponse<TBody>> {
-        if (rejectNextCreate && request.method === "POST" && request.table === "Evaluations") {
-          rejectNextCreate = false;
+        if (
+          rejectNextMutation &&
+          request.method === "PATCH" &&
+          request.table === "Review Plans" &&
+          request.recordId === "rec00000000000100"
+        ) {
+          rejectNextMutation = false;
           return { status: 503, headers: {}, body: {} as TBody };
         }
         return transport.request<TBody>(request);
@@ -5181,64 +5406,521 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       baseId: "base-test",
       transport: mutationTransport,
     });
-    const staleSnapshot = {
-      ...assignmentB,
-      status: "assigned" as const,
-      version: 1,
-      updatedAt: now,
+    const scope = {
+      tenantId,
+      eventId,
+      planId,
+      roundId,
+      submissionId,
+      planVersion: assignmentA.planVersion,
     };
-    await expect(
-      repository.replaceAssignments(tenantId, eventId, planId, roundId, submissionId, [
-        staleSnapshot,
-        assignmentC,
-      ]),
-    ).rejects.toMatchObject({ status: 503 });
+    const replacement = {
+      oldAssignmentId: assignmentA.id,
+      replacementReviewerId: assignmentC.reviewerId,
+      successorAssignment: assignmentC,
+      expectedAssignmentVersion: assignmentA.version,
+      reason: "Reviewer conflict disclosed after assignment.",
+    };
+
+    await expect(repository.replaceAssignment(scope, replacement)).rejects.toMatchObject({
+      status: 503,
+    });
     await expect(repository.getAssignment(tenantId, assignmentA.id)).resolves.toMatchObject(
       assignmentA,
     );
+    await expect(repository.getAssignment(tenantId, assignmentC.id)).resolves.toBeNull();
     await expect(repository.getReview(tenantId, assignmentA.id)).resolves.toMatchObject(reviewA);
-    await repository.replaceAssignments(tenantId, eventId, planId, roundId, submissionId, [
-      staleSnapshot,
-      assignmentC,
-    ]);
 
-    await expect(repository.getAssignment(tenantId, assignmentA.id)).resolves.toBeNull();
-    await expect(repository.getReview(tenantId, assignmentA.id)).resolves.toBeNull();
+    const replaced = await repository.replaceAssignment(scope, replacement);
+    expect(replaced).toMatchObject({
+      scope,
+      replacedAssignment: {
+        ...assignmentA,
+        status: "superseded",
+        successorAssignmentId: assignmentC.id,
+        supersededReason: replacement.reason,
+        version: 2,
+        updatedAt: replacedAt,
+      },
+      successorAssignment: {
+        ...assignmentC,
+        predecessorAssignmentId: assignmentA.id,
+        successorAssignmentId: null,
+        supersededReason: null,
+      },
+      activeAssignments: [assignmentB, expect.objectContaining(assignmentC)],
+      history: [{ assignment: expect.objectContaining({ id: assignmentA.id }), review: reviewA }],
+    });
+    expect(replaced.successorAssignment).toMatchObject({
+      planVersion: 4,
+      rubricRevision: 7,
+      roundRevision: 3,
+      submissionRevision: 2,
+    });
+    await expect(repository.getReview(tenantId, assignmentA.id)).resolves.toMatchObject(reviewA);
+
+    await expect(
+      repository.applyAssignmentDistribution(scope, {
+        assignments: [replaced.successorAssignment],
+        expectedActiveVersions: [
+          { assignmentId: assignmentB.id, version: 1 },
+          { assignmentId: assignmentC.id, version: 1 },
+        ],
+        reason: "Organizer removed the completed reviewer.",
+      }),
+    ).rejects.toThrow("changed since the distribution was previewed");
     await expect(repository.getAssignment(tenantId, assignmentB.id)).resolves.toMatchObject(
       assignmentB,
     );
-    await expect(repository.getAssignment(tenantId, assignmentC.id)).resolves.toMatchObject(
-      assignmentC,
-    );
+
+    const distributed = await repository.applyAssignmentDistribution(scope, {
+      assignments: [replaced.successorAssignment],
+      expectedActiveVersions: [
+        { assignmentId: assignmentB.id, version: assignmentB.version },
+        { assignmentId: assignmentC.id, version: assignmentC.version },
+      ],
+      reason: "Organizer removed the completed reviewer.",
+    });
+    expect(distributed.activeAssignments).toEqual([
+      expect.objectContaining({
+        id: assignmentC.id,
+        planVersion: 4,
+        rubricRevision: 7,
+        roundRevision: 3,
+      }),
+    ]);
+    expect(distributed.supersededAssignments).toEqual([
+      expect.objectContaining({
+        id: assignmentB.id,
+        status: "superseded",
+        supersededReason: "Organizer removed the completed reviewer.",
+        version: 3,
+      }),
+    ]);
     await expect(
       repository.listOrganizerWorkspaceRecords(tenantId, eventId),
     ).resolves.toMatchObject({
-      assignments: [assignmentB, assignmentC],
-      reviews: [],
+      assignments: [expect.objectContaining({ id: assignmentC.id })],
+      reviews: [reviewA],
     });
     await expect(
-      repository.listReviewerWorkspaceRecords(tenantId, assignmentB.reviewerId, [eventId]),
-    ).resolves.toMatchObject({
-      assignments: [assignmentB],
-      reviews: [],
+      repository.listReviewerWorkspaceRecords(tenantId, assignmentA.reviewerId, [eventId]),
+    ).resolves.toEqual({ assignments: [], reviews: [] });
+    await expect(repository.listAssignments(tenantId, planId)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: assignmentA.id, status: "superseded" }),
+        expect.objectContaining({ id: assignmentB.id, status: "superseded" }),
+        expect.objectContaining({ id: assignmentC.id, status: "assigned" }),
+      ]),
+    );
+    expect(transport.requests.some((request) => request.method === "DELETE")).toBe(false);
+    const mutations = transport.requests.filter(
+      (request) =>
+        request.method === "PATCH" &&
+        request.table === "Evaluations" &&
+        request.recordId === undefined,
+    );
+    expect(mutations).toHaveLength(2);
+    expect(
+      mutations.every((request) => JSON.stringify(request.body).includes("performUpsert")),
+    ).toBe(true);
+  });
+
+  it("keeps a >10 assignment generation authoritative when the second materialization batch fails", async () => {
+    const tenantId = "tenant-generation";
+    const eventId = "event-generation";
+    const planId = "plan-generation";
+    const roundId = "round-generation";
+    const submissionId = "submission-generation";
+    const now = "2026-08-10T12:00:00.000Z";
+    const committedAt = "2026-08-10T12:15:00.000Z";
+    const transport = new FormulaRecordingTransport();
+    const plan = {
+      id: planId,
+      tenantId,
+      eventId,
+      name: "Generation plan",
+      status: "open" as const,
+      blindReview: false,
+      closesAt: null,
+      assignmentRule: { reviewsPerSubmission: 20, maxAssignmentsPerReviewer: 20 },
+      rounds: [],
+      version: 3,
+      createdAt: now,
+      updatedAt: now,
+    };
+    transport.seed({
+      baseId: "base-test",
+      table: "Review Plans",
+      recordId: "rec00000000000200",
+      fields: {
+        "Application ID": plan.id,
+        "Rounds JSON": JSON.stringify(plan),
+      },
     });
 
-    expect(
-      transport.requests
-        .filter((request) => request.method === "DELETE")
-        .map((request) => request.recordId),
-    ).toEqual(expect.arrayContaining(["rec00000000000001", "rec00000000000003"]));
-    expect(
-      transport.requests.find(
-        (request) => request.method === "PATCH" && request.recordId === "rec00000000000002",
-      ),
-    ).toBeUndefined();
-    const createIndex = transport.requests.findIndex(
-      (request) => request.method === "POST" && request.table === "Evaluations",
+    const previousAssignments = Array.from({ length: 6 }, (_, index) => ({
+      id: `a-assignment-generation-${String(index).padStart(2, "0")}`,
+      tenantId,
+      eventId,
+      planId,
+      roundId,
+      submissionId,
+      reviewerId: `reviewer-old-${index}`,
+      status: "assigned" as const,
+      planVersion: 3,
+      rubricRevision: 5,
+      roundRevision: 2,
+      submissionRevision: 8,
+      version: 1,
+      createdAt: now,
+      updatedAt: now,
+    }));
+    for (const [index, assignment] of previousAssignments.entries()) {
+      transport.seed({
+        baseId: "base-test",
+        table: "Evaluations",
+        recordId: `rec${String(210 + index).padStart(14, "0")}`,
+        fields: {
+          "Application ID": assignment.id,
+          "Scores JSON": JSON.stringify({
+            ...assignment,
+            entityType: "evaluation_assignment",
+          }),
+        },
+      });
+    }
+    const historicalReview = {
+      id: `review:${previousAssignments[0]?.id}`,
+      tenantId,
+      eventId,
+      planId,
+      roundId,
+      assignmentId: previousAssignments[0]?.id ?? "",
+      submissionId,
+      reviewerId: previousAssignments[0]?.reviewerId ?? "",
+      scores: {},
+      comment: "Historical review",
+      submittedAt: now,
+      version: 1,
+      planRevision: 3,
+      rubricRevision: 5,
+      roundRevision: 2,
+      submissionRevision: 8,
+      createdAt: now,
+      updatedAt: now,
+    };
+    transport.seed({
+      baseId: "base-test",
+      table: "Evaluations",
+      recordId: "rec00000000000220",
+      fields: {
+        "Application ID": historicalReview.id,
+        "Scores JSON": JSON.stringify({
+          ...historicalReview,
+          entityType: "evaluation_review",
+        }),
+      },
+    });
+
+    const desiredAssignments = Array.from({ length: 5 }, (_, index) => ({
+      id: `z-assignment-generation-${String(index).padStart(2, "0")}`,
+      tenantId,
+      eventId,
+      planId,
+      roundId,
+      submissionId,
+      reviewerId: `reviewer-new-${index}`,
+      status: "assigned" as const,
+      planVersion: 3,
+      rubricRevision: 5,
+      roundRevision: 2,
+      submissionRevision: 8,
+      version: 1,
+      createdAt: committedAt,
+      updatedAt: committedAt,
+    }));
+    let materializationBatchCount = 0;
+    const secondBatchFailureTransport: AirtableTransport = {
+      async request<TBody = unknown>(request: AirtableRequest): Promise<AirtableResponse<TBody>> {
+        if (
+          request.method === "PATCH" &&
+          request.table === "Evaluations" &&
+          request.recordId === undefined
+        ) {
+          materializationBatchCount += 1;
+          if (materializationBatchCount === 2) {
+            return { status: 503, headers: {}, body: {} as TBody };
+          }
+        }
+        return transport.request<TBody>(request);
+      },
+    };
+    const repository = new AirtableEvaluationRepository({
+      baseId: "base-test",
+      transport: secondBatchFailureTransport,
+    });
+    const scope = {
+      tenantId,
+      eventId,
+      planId,
+      roundId,
+      submissionId,
+      planVersion: 3,
+    };
+
+    const result = await repository.applyAssignmentDistribution(scope, {
+      assignments: desiredAssignments,
+      expectedActiveVersions: previousAssignments.map((assignment) => ({
+        assignmentId: assignment.id,
+        version: assignment.version,
+      })),
+      reason: "Replace the full reviewer slate.",
+    });
+
+    expect(materializationBatchCount).toBe(2);
+    expect(result.activeAssignments).toEqual(desiredAssignments);
+    expect(result.supersededAssignments).toHaveLength(6);
+    expect(result.history).toEqual([
+      {
+        assignment: expect.objectContaining({
+          id: previousAssignments[0]?.id,
+          status: "superseded",
+        }),
+        review: historicalReview,
+      },
+    ]);
+
+    const listed = await repository.listAssignments(tenantId, planId);
+    expect(listed).toHaveLength(11);
+    expect(listed.filter((assignment) => assignment.status === "superseded")).toHaveLength(6);
+    expect(listed.filter((assignment) => assignment.status === "assigned")).toHaveLength(5);
+    await expect(
+      repository.getAssignment(tenantId, previousAssignments[0]?.id ?? ""),
+    ).resolves.toMatchObject({ status: "superseded", version: 2 });
+    await expect(
+      repository.getAssignment(tenantId, desiredAssignments[4]?.id ?? ""),
+    ).resolves.toEqual(desiredAssignments[4]);
+    await expect(
+      repository.listOrganizerWorkspaceRecords(tenantId, eventId),
+    ).resolves.toMatchObject({
+      assignments: desiredAssignments,
+      reviews: [historicalReview],
+    });
+    await expect(
+      repository.listReviewerWorkspaceRecords(tenantId, desiredAssignments[4]?.reviewerId ?? "", [
+        eventId,
+      ]),
+    ).resolves.toEqual({
+      assignments: [desiredAssignments[4]],
+      reviews: [],
+    });
+    await expect(repository.getReview(tenantId, previousAssignments[0]?.id ?? "")).resolves.toEqual(
+      historicalReview,
     );
-    const deleteIndex = transport.requests.findIndex((request) => request.method === "DELETE");
-    expect(createIndex).toBeGreaterThanOrEqual(0);
-    expect(deleteIndex).toBeGreaterThan(createIndex);
+
+    const planPatch = transport.requests.find(
+      (request) =>
+        request.method === "PATCH" &&
+        request.table === "Review Plans" &&
+        request.recordId === "rec00000000000200",
+    );
+    const planFields = (
+      planPatch?.body as { readonly fields?: Readonly<Record<string, unknown>> } | undefined
+    )?.fields;
+    const storedPlan = JSON.parse(String(planFields?.["Rounds JSON"])) as {
+      readonly assignmentGenerationSnapshot?: {
+        readonly version: number;
+        readonly assignments: readonly unknown[];
+      };
+    };
+    expect(storedPlan.assignmentGenerationSnapshot).toMatchObject({
+      version: 1,
+      assignments: expect.arrayContaining([
+        expect.objectContaining({ id: desiredAssignments[4]?.id }),
+      ]),
+    });
+    expect(storedPlan.assignmentGenerationSnapshot?.assignments).toHaveLength(11);
+  });
+
+  it("persists tenant-scoped Airtable suggestions with atomic CAS resolution", async () => {
+    const tenantId = "tenant-suggestion";
+    const eventId = "event-suggestion";
+    const planId = "plan-suggestion";
+    const roundId = "round-suggestion";
+    const submissionId = "submission-suggestion";
+    const assignmentId = "assignment-suggestion";
+    const reviewerId = "reviewer-suggestion";
+    const now = "2026-08-10T12:00:00.000Z";
+    const later = "2026-08-10T12:10:00.000Z";
+    const transport = new FormulaRecordingTransport();
+    const assignment = {
+      id: assignmentId,
+      tenantId,
+      eventId,
+      planId,
+      roundId,
+      submissionId,
+      reviewerId,
+      status: "assigned" as const,
+      planVersion: 4,
+      rubricRevision: 7,
+      roundRevision: 3,
+      submissionRevision: 2,
+      version: 1,
+      createdAt: now,
+      updatedAt: now,
+    };
+    transport.seed({
+      baseId: "base-test",
+      table: "Evaluations",
+      fields: {
+        "Application ID": assignment.id,
+        "Scores JSON": JSON.stringify({
+          ...assignment,
+          entityType: "evaluation_assignment",
+        }),
+      },
+    });
+    const candidate = {
+      id: "candidate-quality",
+      criterionId: "quality",
+      value: 4,
+      evidence: ["Clear problem statement"],
+      provenance: {
+        provider: "openai",
+        model: "gpt-5-mini",
+        generatedAt: now,
+        sourceReferences: ["submission:2", "rubric:7"],
+      },
+    };
+    const suggestion = {
+      id: "suggestion-quality",
+      tenantId,
+      eventId,
+      planId,
+      roundId,
+      assignmentId,
+      submissionId,
+      reviewerId,
+      rubricRevision: 7,
+      submissionRevision: 2,
+      planRevision: 4,
+      rubricId: "rubric-main",
+      candidates: { quality: [candidate] },
+      criterionCandidates: [candidate],
+      provenance: candidate.provenance,
+      status: "pending" as const,
+      version: 1,
+      history: [{ action: "generate" as const, actorId: null, at: now }],
+      audit: [{ action: "generate" as const, actorId: null, at: now }],
+      createdAt: now,
+      updatedAt: now,
+    };
+    const repository = new AirtableEvaluationRepository({
+      baseId: "base-test",
+      transport,
+    });
+
+    await repository.putSuggestion(suggestion, null);
+    await expect(repository.getSuggestion(tenantId, suggestion.id)).resolves.toEqual(suggestion);
+    await expect(repository.getSuggestion("tenant-other", suggestion.id)).resolves.toBeNull();
+    await expect(repository.listSuggestions(tenantId, planId)).resolves.toEqual([suggestion]);
+
+    const resolvedSuggestion = {
+      ...suggestion,
+      status: "accepted" as const,
+      version: 2,
+      history: [
+        ...suggestion.history,
+        { action: "accept" as const, actorId: reviewerId, at: later },
+      ],
+      audit: [...suggestion.audit, { action: "accept" as const, actorId: reviewerId, at: later }],
+      updatedAt: later,
+    };
+    const resolvedAssignment = {
+      ...assignment,
+      status: "in_progress" as const,
+      version: 2,
+      updatedAt: later,
+    };
+    const review = {
+      id: `review:${assignmentId}`,
+      tenantId,
+      eventId,
+      planId,
+      roundId,
+      assignmentId,
+      submissionId,
+      reviewerId,
+      scores: {
+        quality: {
+          criterionId: "quality",
+          value: 4,
+          origin: "ai" as const,
+          evidence: candidate.evidence,
+          humanConfirmedBy: reviewerId,
+          suggestionId: suggestion.id,
+          suggestionStatus: "accepted" as const,
+          rubricRevision: 7,
+          submissionRevision: 2,
+          updatedAt: later,
+        },
+      },
+      comment: "",
+      submittedAt: null,
+      version: 1,
+      planRevision: 4,
+      rubricRevision: 7,
+      roundRevision: 3,
+      submissionRevision: 2,
+      createdAt: later,
+      updatedAt: later,
+    };
+
+    await expect(
+      repository.resolveSuggestion(
+        resolvedSuggestion,
+        suggestion.version,
+        resolvedAssignment,
+        assignment.version,
+        review,
+        null,
+      ),
+    ).resolves.toEqual({ suggestion: resolvedSuggestion, review });
+    await expect(repository.getSuggestion(tenantId, suggestion.id)).resolves.toEqual(
+      resolvedSuggestion,
+    );
+    await expect(repository.getAssignment(tenantId, assignmentId)).resolves.toEqual(
+      resolvedAssignment,
+    );
+    await expect(repository.getReview(tenantId, assignmentId)).resolves.toEqual(review);
+
+    await expect(
+      repository.resolveSuggestion(
+        resolvedSuggestion,
+        suggestion.version,
+        resolvedAssignment,
+        assignment.version,
+        review,
+        null,
+      ),
+    ).rejects.toThrow("Suggestion changed since it was loaded");
+    await expect(
+      repository.putSuggestion(
+        { ...resolvedSuggestion, eventId: "event-other", version: 3 },
+        resolvedSuggestion.version,
+      ),
+    ).rejects.toThrow("Suggestion changed since it was loaded");
+    expect(transport.requests.some((request) => request.method === "DELETE")).toBe(false);
+    const resolutionMutation = transport.requests.find(
+      (request) =>
+        request.method === "PATCH" &&
+        request.recordId === undefined &&
+        (request.body as { readonly records?: readonly unknown[] } | undefined)?.records?.length ===
+          3,
+    );
+    expect(resolutionMutation).toBeDefined();
   });
   it("queues reviewer reminders through the shared outbox with stable idempotency", async () => {
     const transport = new FakeAirtableTransport();
@@ -5907,6 +6589,11 @@ describe("production organizer speaker composition", () => {
             eventId: input.eventId,
             submissionId: input.submissionId,
             participantId: input.participantId,
+            subject: {
+              type: "session",
+              participantId: input.participantId,
+              submissionId: input.submissionId,
+            },
             type: "action",
             owner: "speaker",
             title: input.id,
@@ -6047,6 +6734,11 @@ describe("production organizer speaker composition", () => {
             id: input.id,
             eventId: "event-speaker",
             submissionId: input.submissionId,
+            subject: {
+              type: "session",
+              participantId: input.participantId,
+              submissionId: input.submissionId,
+            },
             participantId: input.participantId,
             assigneeIds: [input.participantId],
             type: "action",
@@ -6501,6 +7193,7 @@ describe("production organizer speaker composition", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
+          idempotencyKey: "create-priya-speaker",
           displayName: "Priya Raman",
           email: "PRIYA@example.test",
           jobTitle: "Principal Engineer",

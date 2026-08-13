@@ -4,26 +4,21 @@ This is an operator-controlled gate. Documentation, source coverage, a passing p
 
 The governing specification lists the competition deadline as **Wednesday, August 12, 2026 at 10:00 PM Pacific Time**. Recheck the organizer's current portal deadline, timezone, and required fields before submission; do not rely on a local clock assumption.
 
-## Current and pending hosting contract
+## Hosting contract
 
-Staging and production currently run separately deployed web and API Workers at these pinned origins, with `workers_dev = true`:
-
-| Environment | Web | API |
-| --- | --- | --- |
-| Staging | `https://open-sessionboard-web-staging.ashleyha0317.workers.dev` | `https://open-sessionboard-api-staging.ashleyha0317.workers.dev` |
-| Production | `https://open-sessionboard-web-production.ashleyha0317.workers.dev` | `https://open-sessionboard-api-production.ashleyha0317.workers.dev` |
-
-`sessionboard.namuh.co` (web) and `api.sessionboard.namuh.co` (API) are recommended future stable names. DNS, routes, cookies, CORS, callbacks, health checks, and evidence for them are **pending**. They are not release URLs yet; the current pinned Workers origins remain the only release inputs.
+Staging and production run separate web and API Workers. Their account,
+resource IDs, and HTTPS origins are supplied by ignored environment files and
+must match the observed candidate deployment.
 
 ## Stop conditions
 
-Keep both intentional Forge and GitHub mirrors private and stop the release when any of the following is true:
+Stop the release when any of the following is true:
 
 - The candidate SHA is dirty, unidentified, or not the commit whose evidence is attached.
 - Local automated evidence is missing/failing, or required staging Ever/`codex-cua` evidence is missing, stale, or based on mocks.
 - A staging or production D1 ID is a placeholder, resources or secrets are shared across boundaries, or staging can reach production data or recipients.
 - Cloudflare token policy lacks Workers Scripts Edit, D1 Edit, R2 Edit, or Queues Edit, or migration compatibility/backup recovery is unreviewed.
-- A deployed health origin, `WEB_ORIGIN`, API origin, CORS policy, auth callback, or same-origin web proxy does not match the pinned current contract.
+- A deployed health origin, `WEB_ORIGIN`, API origin, CORS policy, auth callback, or same-origin web proxy does not match the selected environment file.
 - Tenant isolation, private-data handling, email/calendar idempotency, webhook signatures, publication locking, rollback, or API error safety fails.
 - Sender verification/suppression evidence, real OpenSend delivery evidence, or required Airtable/D1 boundary observations are missing.
 - Security, accessibility, performance, rollback ownership, evaluator accounts, license, walkthrough, or submission assets are not ready.
@@ -58,7 +53,11 @@ git log --oneline --decorate -n 20
 sf repo get jaeyunha/open-sessionboard
 ```
 
-Accept only when the candidate status is clean, the intended Forge and GitHub mirror remotes are present, both mirrors are private, the license is AGPL-3.0-or-later, and no `.env`, Wrangler state, secrets, test results, browser profile, recording, or generated build is tracked. Do not require a sole Forge remote or remove the intentional GitHub mirror as part of release preparation.
+Accept only when the candidate status is clean, the intended Forge and GitHub
+mirror remotes are present, both mirrors point to the approved candidate, the
+license is Elastic License 2.0, and no `.env`, Wrangler state, secrets, test
+results, browser profile, recording, or generated build is tracked. Visibility
+changes remain explicit owner actions after this gate.
 
 ## 2. Automated and local browser evidence
 
@@ -87,7 +86,13 @@ node scripts/release/preflight.mjs \
   --offline
 ```
 
-Repeat online with `CLOUDFLARE_API_AUDIT_TOKEN` and `FORGE_API_TOKEN` from the secret manager and no `--offline`. The preflight must confirm exact pinned `WEB_ORIGIN`, real D1 IDs, environment-suffixed R2/Queue resources, isolated Airtable/OpenSend credentials, account-restricted token policy, migration readiness, and both mirrors' private status. It does not deploy or seed.
+Repeat online with `CLOUDFLARE_API_AUDIT_TOKEN` and `FORGE_API_TOKEN` from the
+secret manager and no `--offline`. The preflight must confirm each selected
+environment's consistent web/API/auth origin contract, real D1 IDs,
+environment-suffixed R2/Queue resources, isolated Airtable/OpenSend
+credentials, account-restricted token policy, migration readiness, and exact
+Forge repository identity. It accepts private or public mirror visibility and
+does not deploy or seed.
 
 Inspect D1 migrations before any mutation. Retain the compatibility analysis, a usable backup/time-travel recovery point, migration output, and a named recovery owner. A dry run or preflight cannot prove that a migrated schema is compatible with the currently deployed Worker.
 
@@ -107,20 +112,24 @@ Deploy the web Worker from the identical candidate commit. The script requires t
 
 ```bash
 set -eu
-export NEXT_PUBLIC_APP_URL='https://open-sessionboard-web-staging.ashleyha0317.workers.dev'
-export API_UPSTREAM_ORIGIN='https://open-sessionboard-api-staging.ashleyha0317.workers.dev'
+export NEXT_PUBLIC_APP_URL='https://web-staging.example.com'
+export API_UPSTREAM_ORIGIN='https://api-staging.example.com'
 : "${CLOUDFLARE_API_TOKEN:?set the staging deployment token from the secret manager}"
 node scripts/cloudflare/deploy-web.mjs staging open-sessionboard-web:staging
 ```
 
-For non-local deployment, the script validates the supplied server-only `API_UPSTREAM_ORIGIN` as the API Worker origin and configures the web server-side proxy. Browsers always call same-origin `/api/*` through the browser-visible `NEXT_PUBLIC_APP_URL`. Verify that `/api/*` same-origin requests, API CORS, auth cookies, and callbacks all use the observed pinned origins.
+For non-local deployment, the script validates the supplied server-only
+`API_UPSTREAM_ORIGIN` as an HTTPS origin and configures the web server-side
+proxy. Browsers always call same-origin `/api/*` through the browser-visible
+`NEXT_PUBLIC_APP_URL`. Verify that `/api/*` same-origin requests, API CORS,
+auth cookies, and callbacks all use the observed configured origins.
 
 Verify the exact staging origins before browser work:
 
 ```bash
-curl --fail https://open-sessionboard-web-staging.ashleyha0317.workers.dev/health
-curl --fail https://open-sessionboard-api-staging.ashleyha0317.workers.dev/api/health
-curl --fail https://open-sessionboard-api-staging.ashleyha0317.workers.dev/api/v1/openapi.json
+curl --fail "$NEXT_PUBLIC_APP_URL/health"
+curl --fail "$API_UPSTREAM_ORIGIN/api/health"
+curl --fail "$API_UPSTREAM_ORIGIN/api/v1/openapi.json"
 ```
 
 Then run the seeded workflow from [Browser QA](qa-runbook.md) against the real rendered staging build:
@@ -167,13 +176,15 @@ Deploy the web Worker with the production-only browser-visible app URL, server-o
 
 ```bash
 set -eu
-export NEXT_PUBLIC_APP_URL='https://open-sessionboard-web-production.ashleyha0317.workers.dev'
-export API_UPSTREAM_ORIGIN='https://open-sessionboard-api-production.ashleyha0317.workers.dev'
+export NEXT_PUBLIC_APP_URL='https://web-production.example.com'
+export API_UPSTREAM_ORIGIN='https://api-production.example.com'
 : "${CLOUDFLARE_API_TOKEN:?set the production deployment token from the secret manager}"
 node scripts/cloudflare/deploy-web.mjs production open-sessionboard-web:production
 ```
 
-Do not call an environment deployed or verified until the observed pinned origins serve the expected candidate Worker and web build. Perform only bounded production smoke with dedicated demo fixtures:
+Do not call an environment deployed or verified until its configured origins
+serve the expected candidate Worker and web build. Perform only bounded
+production smoke with dedicated demo fixtures:
 
 - health, trace/request headers, cache policy, and exact-origin CORS;
 - email-link path to a designated demo account using controlled delivery;
@@ -269,7 +280,7 @@ Check every item against the same production candidate:
 - [ ] Any manual limitation (`partial`, `fail`, `not_found`, `cannot_judge`), known implementation gap, or unavailable provider remains visible and is a no-go.
 - [ ] Manual, automated/local, provider/deployed, and LLM-judge evidence are labeled separately; mocked/local diagnostics and provider configuration are not release evidence.
 - [ ] Candidate SHA is clean and all evidence paths identify that SHA.
-- [ ] Current staging/production web and API origins match the pinned Workers values and observed `workers_dev = true` state.
+- [ ] Staging/production web and API origins match their ignored environment files and observed Worker state.
 - [ ] Future stable domain names are clearly marked pending; no evidence claims DNS or routes are configured.
 - [ ] Automated local/CI checks and local Playwright/axe evidence passed without skipped or softened assertions.
 - [ ] Read-only preflight and migration compatibility/recovery review passed.
@@ -293,7 +304,7 @@ Public visibility is the final release action, never a development step:
 2. Obtain recorded final approval with every release item checked.
 3. Using the supported authenticated provider controls, change visibility only for the intentionally selected public mirror(s). Do not change ownership, default branch, history, or remotes.
 4. Immediately re-read visibility for every mirror changed and record operator, UTC time, command/UI evidence, and public URL.
-5. Confirm unauthenticated readers can see only the intended repository, README, source, and AGPL license, with no secrets or private artifacts.
+5. Confirm unauthenticated readers can see only the intended repository, README, source, and Elastic License 2.0 license, with no secrets or private artifacts.
 
 If visibility cannot be verified, treat the product as unreleased. If a private artifact or credential is exposed, stop submission, return affected mirrors to private, rotate the credential, remove the exposure at its source, and repeat the gate on a new candidate.
 
@@ -301,7 +312,7 @@ If visibility cannot be verified, treat the product as unreleased. If a private 
 
 - [ ] Product name and one-sentence program-workflow value proposition.
 - [ ] Production web URL and health-checked API origin from the observed pinned deployment.
-- [ ] Public repository URL(s) and AGPL-3.0-or-later license.
+- [ ] Public repository URL(s) and Elastic License 2.0 license.
 - [ ] Demo organizer, reviewer, and speaker accounts/instructions delivered through a secure channel.
 - [ ] Evaluator walkthrough follows CFP → portal → review → CRM → agenda → publication → embeds/API.
 - [ ] OpenAPI link points to the verified production runtime document.

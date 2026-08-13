@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(scriptDirectory, "../..");
-const wranglerPath = join(repositoryRoot, "apps/api/wrangler.toml");
+const defaultWranglerPath = join(repositoryRoot, "apps/api/wrangler.toml");
 const migrationsDirectory = join(repositoryRoot, "apps/api/migrations");
 const environments = ["local", "staging", "production"];
 const placeholderIdPattern = /^00000000-0000-0000-0000-00000000000\d$/;
@@ -12,6 +12,7 @@ const placeholderIdPattern = /^00000000-0000-0000-0000-00000000000\d$/;
 function parseArguments(argv) {
   let environment = "local";
   let deployment = false;
+  let configPath = defaultWranglerPath;
 
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
@@ -20,6 +21,9 @@ function parseArguments(argv) {
       index += 1;
     } else if (argument === "--deployment") {
       deployment = true;
+    } else if (argument === "--config") {
+      configPath = resolve(repositoryRoot, argv[index + 1]);
+      index += 1;
     } else {
       throw new Error(`Unknown argument: ${argument}`);
     }
@@ -29,7 +33,7 @@ function parseArguments(argv) {
     throw new Error(`Environment must be one of: ${environments.join(", ")}`);
   }
 
-  return { deployment, environment };
+  return { configPath, deployment, environment };
 }
 
 function requirePattern(source, pattern, message) {
@@ -70,11 +74,9 @@ function validateMigrations() {
 }
 
 function validateWrangler(source, options) {
-  requirePattern(
-    source,
-    /^account_id = "7bcb73282d45e4294cc70dd3e2671bfb"$/m,
-    "Wrangler must target the approved Cloudflare account",
-  );
+  if (/^account_id\s*=/m.test(source)) {
+    throw new Error("Wrangler must take the Cloudflare account from CLOUDFLARE_ACCOUNT_ID");
+  }
   requirePattern(
     source,
     /^workers_dev = false$/m,
@@ -149,6 +151,9 @@ function validateWrangler(source, options) {
   }
 
   if (options.deployment) {
+    if (!process.env.CLOUDFLARE_ACCOUNT_ID?.trim()) {
+      throw new Error("CLOUDFLARE_ACCOUNT_ID must be supplied before deployment");
+    }
     const selectedId = databaseIds[environments.indexOf(options.environment)];
     if (placeholderIdPattern.test(selectedId)) {
       throw new Error(
@@ -160,7 +165,7 @@ function validateWrangler(source, options) {
 
 try {
   const options = parseArguments(process.argv.slice(2));
-  const wrangler = readFileSync(wranglerPath, "utf8");
+  const wrangler = readFileSync(options.configPath, "utf8");
   validateWrangler(wrangler, options);
   const migrations = validateMigrations();
   process.stdout.write(

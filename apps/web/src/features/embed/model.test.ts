@@ -3,7 +3,9 @@ import {
   embedTheme,
   escapeXmlValue,
   filterAgendaEntries,
+  filterAgendaEntriesByTrackIds,
   filterSpeakers,
+  filterSpeakersByTrackIds,
   formatPublishedDateTimeRange,
   formatPublishedSessionSchedule,
   parseEmbedQuery,
@@ -27,6 +29,7 @@ const entries: readonly PublishedAgendaEntry[] = [
     speakerNames: ["Morgan Lee"],
     roomName: "Lab",
     trackNames: ["Build"],
+    trackIds: ["track_build"],
     startsAt: "2026-09-19T01:30:00.000Z",
     endsAt: "2026-09-19T02:30:00.000Z",
   },
@@ -39,6 +42,7 @@ const entries: readonly PublishedAgendaEntry[] = [
     speakerNames: ["Sam Rivera"],
     roomName: "Main hall",
     trackNames: ["Main stage"],
+    trackIds: ["track_main"],
     startsAt: "2026-09-18T16:00:00.000Z",
     endsAt: "2026-09-18T16:45:00.000Z",
   },
@@ -148,6 +152,30 @@ describe("published embed model", () => {
       "speaker_sam",
     ]);
     expect(speakerInitials("Morgan Lee")).toBe("ML");
+  });
+  it("filters configured speakers through stable agenda track IDs", () => {
+    const renamedEntries = entries.map((entry) =>
+      entry.id === "entry_evening"
+        ? { ...entry, trackNames: ["Renamed track"], trackIds: ["track_build"] }
+        : entry,
+    );
+    expect(
+      filterAgendaEntriesByTrackIds(renamedEntries, ["track_build"]).map((entry) => entry.id),
+    ).toEqual(["entry_evening"]);
+    expect(
+      filterSpeakersByTrackIds(speakers, renamedEntries, ["track_build"]).map(
+        (speaker) => speaker.id,
+      ),
+    ).toEqual(["speaker_morgan"]);
+    expect(filterSpeakersByTrackIds(speakers, renamedEntries, ["missing"])).toEqual([]);
+  });
+
+  it("fails closed when stable agenda track IDs are absent", () => {
+    const withoutTrackIds = entries.map((entry) =>
+      entry.id === "entry_evening" ? { ...entry, trackIds: [] } : entry,
+    );
+    expect(filterAgendaEntriesByTrackIds(withoutTrackIds, ["track_build"])).toEqual([]);
+    expect(filterSpeakersByTrackIds(speakers, withoutTrackIds, ["track_build"])).toEqual([]);
   });
 
   it("sorts surnames deterministically without confusing suffixes or comma notation", () => {
@@ -290,7 +318,7 @@ describe("embed query parser", () => {
     });
   });
 
-  it("parses theme, layout, color tokens, and tracks from a Next.js-style query", () => {
+  it("parses theme, layout, color tokens, and stable track IDs from a Next.js-style query", () => {
     expect(
       parseEmbedQuery({
         theme: "dark",
@@ -298,30 +326,30 @@ describe("embed query parser", () => {
         accent: "#4f46e5",
         backgroundColor: "#ffffff",
         textColor: "#20232b",
-        tracks: ["Main stage", "Build"],
+        trackIds: ["track_main", "track_build"],
       }),
     ).toEqual({
       theme: "dark",
       layout: "timeline",
       displayFields: null,
-      tracks: ["Main stage", "Build"],
+      tracks: ["track_main", "track_build"],
       accent: "#4f46e5",
       backgroundColor: "#ffffff",
       textColor: "#20232b",
     });
   });
 
-  it("parses the same query through a URLSearchParams input", () => {
+  it("parses stable track IDs through URLSearchParams", () => {
     const params = new URLSearchParams();
     params.set("theme", "light");
     params.set("layout", "grid");
     params.set("accent", "#4f5ee8");
-    params.set("tracks", "Main stage,Build");
+    params.set("trackIds", "track_main,track_build");
     expect(parseEmbedQuery(params)).toEqual({
       theme: "light",
       layout: "grid",
       displayFields: null,
-      tracks: ["Main stage", "Build"],
+      tracks: ["track_main", "track_build"],
       accent: "#4f5ee8",
       backgroundColor: null,
       textColor: null,
@@ -360,9 +388,12 @@ describe("embed query parser", () => {
     ]);
   });
 
-  it("trims, dedupes, and rejects empty track tokens", () => {
-    expect(parseEmbedQuery({ tracks: "Build,, ,Build" }).tracks).toEqual(["Build"]);
-    expect(parseEmbedQuery({ tracks: ["Build"] }).tracks).toEqual(["Build"]);
+  it("trims, dedupes, and rejects empty stable track ID tokens", () => {
+    expect(parseEmbedQuery({ trackIds: "track_build,, ,track_build" }).tracks).toEqual([
+      "track_build",
+    ]);
+    expect(parseEmbedQuery({ trackIds: ["track_build"] }).tracks).toEqual(["track_build"]);
+    expect(parseEmbedQuery({ tracks: "legacy-name" }).tracks).toEqual([]);
   });
 
   it("drops unsupported internal workflow status filters", () => {
@@ -372,11 +403,13 @@ describe("embed query parser", () => {
     expect(serialized).not.toContain("statuses");
   });
 
-  it("does not preserve private or unsupported keys when serializing", () => {
+  it("does not preserve private, legacy, or unsupported keys when serializing", () => {
     const parsed = parseEmbedQuery({
       theme: "dark",
       layout: "timeline",
-      tracks: ["Main stage"],
+      trackIds: ["track_main"],
+      tracks: ["legacy-name"],
+      statuses: ["Approved"],
       customCss: "body { color: red; }",
       navigation: "top",
       view: "agenda",
@@ -384,7 +417,9 @@ describe("embed query parser", () => {
     const serialized = serializeEmbedQuery(parsed);
     expect(serialized).toContain("theme=dark");
     expect(serialized).toContain("layout=timeline");
-    expect(serialized).toContain("tracks=Main+stage");
+    expect(serialized).toContain("trackIds=track_main");
+    expect(serialized).not.toContain("tracks=");
+    expect(serialized).not.toContain("statuses");
     expect(serialized).not.toContain("customCss");
     expect(serialized).not.toContain("navigation");
     expect(serialized).not.toContain("view=");
@@ -411,9 +446,9 @@ describe("XML escape for embed attributes", () => {
 
   it("escapes a full query-string URL so it stays well-formed in an attribute", () => {
     const escaped = escapeXmlValue(
-      "https://sessionboard.example/embed/summit/agenda?theme=dark&layout=timeline&tracks=Main%20stage",
+      "https://sessionboard.example/embed/summit/agenda?theme=dark&layout=timeline&trackIds=track_main",
     );
-    expect(escaped).toContain("theme=dark&amp;layout=timeline&amp;tracks=");
+    expect(escaped).toContain("theme=dark&amp;layout=timeline&amp;trackIds=");
     expect(escaped).not.toContain("&layout");
   });
 });

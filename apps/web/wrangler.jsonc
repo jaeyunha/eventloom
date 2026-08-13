@@ -2,7 +2,6 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "open-sessionboard-web-local",
   "main": ".open-next/worker.js",
-  "account_id": "7bcb73282d45e4294cc70dd3e2671bfb",
   "compatibility_date": "2026-08-08",
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "workers_dev": true,

@@ -3,13 +3,14 @@ export type EvaluationErrorCode =
   | "EVALUATION_FORBIDDEN"
   | "EVALUATION_NOT_FOUND"
   | "EVALUATION_CONFLICT"
-  | "EVALUATION_CLOSED";
+  | "EVALUATION_CLOSED"
+  | "EVALUATION_ADVISORY_UNAVAILABLE";
 
 export class EvaluationError extends Error {
   readonly code: EvaluationErrorCode;
-  readonly status: 400 | 403 | 404 | 409;
+  readonly status: 400 | 403 | 404 | 409 | 503;
 
-  constructor(code: EvaluationErrorCode, message: string, status: 400 | 403 | 404 | 409) {
+  constructor(code: EvaluationErrorCode, message: string, status: 400 | 403 | 404 | 409 | 503) {
     super(message);
     this.name = "EvaluationError";
     this.code = code;
@@ -35,4 +36,10 @@ export function conflict(message: string): EvaluationError {
 
 export function closed(message: string): EvaluationError {
   return new EvaluationError("EVALUATION_CLOSED", message, 409);
+}
+
+export function advisoryUnavailable(
+  message = "Advisory evaluation is temporarily unavailable. Manual review remains available.",
+): EvaluationError {
+  return new EvaluationError("EVALUATION_ADVISORY_UNAVAILABLE", message, 503);
 }
