@@ -1132,7 +1132,7 @@ describe("fixture local runtime composition", () => {
         {
           id: "organizer-cfp-participant",
           firstName: "Speaker",
-          lastName: "",
+          lastName: "Account",
           email: LOCAL_ORGANIZER_EMAIL,
           role: "primary",
           biography: "",
@@ -1142,12 +1142,30 @@ describe("fixture local runtime composition", () => {
       secondaryContacts: [],
       idempotencyKey: "organizer-portal-participant",
     });
-    const submitted = await cfp.submit({
+    const reviewStep = await cfp.saveDraft({
       tenantId: LOCAL_ORGANIZATION_ID,
       eventId: "demo-event",
       submissionId: draft.id,
       ownerAccountId: LOCAL_ORGANIZER_ACCOUNT_ID,
       expectedVersion: participantSaved.version,
+      completedStep: "review",
+      idempotencyKey: "organizer-portal-review-step",
+    });
+    await expect(
+      cfp.review({
+        tenantId: LOCAL_ORGANIZATION_ID,
+        eventId: "demo-event",
+        submissionId: draft.id,
+        ownerAccountId: LOCAL_ORGANIZER_ACCOUNT_ID,
+        idempotencyKey: "organizer-portal-review",
+      }),
+    ).resolves.toMatchObject({ canSubmit: true, issues: [] });
+    const submitted = await cfp.submit({
+      tenantId: LOCAL_ORGANIZATION_ID,
+      eventId: "demo-event",
+      submissionId: draft.id,
+      ownerAccountId: LOCAL_ORGANIZER_ACCOUNT_ID,
+      expectedVersion: reviewStep.version,
       idempotencyKey: "organizer-portal-submit",
     });
 
