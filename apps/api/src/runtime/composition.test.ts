@@ -1195,7 +1195,7 @@ describe("fixture local runtime composition", () => {
         organizationId: LOCAL_ORGANIZATION_ID,
         metrics: { eventCount: 2 },
         events: [
-          { id: "demo-event", name: "Eventloom Demo" },
+          { id: "demo-event", name: "Open Sessionboard Conference" },
           {
             id: "open-sessionboard-conf",
             name: "Eventloom Conference",
@@ -1254,7 +1254,7 @@ describe("fixture local runtime composition", () => {
     };
     expect(body.data.event).toEqual({
       id: "demo-event",
-      name: "Eventloom Demo",
+      name: "Open Sessionboard Conference",
       timeZone: "America/Los_Angeles",
       publishedAgendaRevisionId: "agenda-local-revision-2",
     });
@@ -1727,7 +1727,7 @@ describe("fixture local runtime composition", () => {
       data: {
         event: {
           slug: "demo-event",
-          name: "Eventloom Demo",
+          name: "Open Sessionboard Conference",
           timeZone: "America/Los_Angeles",
           startsOn: "2026-09-18",
           endsOn: "2026-09-18",

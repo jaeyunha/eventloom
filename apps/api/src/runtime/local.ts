@@ -5,7 +5,11 @@ import {
   InMemoryAgendaMutationLock,
   InMemoryAgendaRepository,
 } from "../features/agenda/infrastructure";
-import type { AgendaEntryInput, PublishedAgendaRevision } from "../features/agenda/types";
+import type {
+  AgendaEntryInput,
+  AgendaRepository,
+  PublishedAgendaRevision,
+} from "../features/agenda/types";
 import { RequestAuthenticator } from "../features/auth/authenticator";
 import type {
   ApiKeyScope,
@@ -713,7 +717,7 @@ class LocalSpeakerRepository implements SpeakerRepository {
       {
         id: "portal:demo-event:local-participant",
         eventId: "demo-event",
-        name: "Eventloom Demo",
+        name: "Open Sessionboard Conference",
         slug: "demo-event",
         status: "active",
         capabilities: LOCAL_SPEAKER_CAPABILITIES,
@@ -1257,6 +1261,15 @@ function localAgendaEngine(suggestionProvider?: CloudflareAiProviders["agenda"])
     seeding.set(eventId, pending);
     return pending;
   };
+  const seededRepository: AgendaRepository = {
+    async load(eventId) {
+      await ensureSeeded(eventId);
+      return repository.load(eventId);
+    },
+    compareAndSwap(eventId, expectedStateVersion, nextState) {
+      return repository.compareAndSwap(eventId, expectedStateVersion, nextState);
+    },
+  };
   const methodsThatRequireSeed = new Set<PropertyKey>([
     "getDraft",
     "getPublishedAgenda",
@@ -1282,6 +1295,7 @@ function localAgendaEngine(suggestionProvider?: CloudflareAiProviders["agenda"])
   ]);
   return new Proxy(engine, {
     get(target, property, receiver) {
+      if (property === "repository") return seededRepository;
       const value = Reflect.get(target, property, receiver);
       if (typeof value !== "function") return value;
       if (!methodsThatRequireSeed.has(property)) return value.bind(target);
@@ -1317,7 +1331,7 @@ class LocalPublicApiRepository implements PublicApiRepository {
         id: "demo-event",
         version: 1,
         organizationId: LOCAL_ORGANIZATION_ID,
-        name: "Eventloom Demo",
+        name: "Open Sessionboard Conference",
         slug: "demo-event",
         timeZone: LOCAL_EVENT_TIME_ZONE,
         startsAt: LOCAL_EVENT_START,
@@ -2397,7 +2411,12 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
   const eventRepository = new InMemoryEventRepository({
     events: [
       localEventSeed("open-sessionboard-conf", "Eventloom Conference", "open-sessionboard-conf"),
-      localEventSeed("demo-event", "Eventloom Demo", "demo-event", [LOCAL_PUBLIC_EMBED]),
+      localEventSeed(
+        "demo-event",
+        "Open Sessionboard Conference",
+        "demo-event",
+        [LOCAL_PUBLIC_EMBED],
+      ),
     ],
     audit: [
       {

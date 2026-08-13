@@ -8,6 +8,36 @@ describe("local public applicant authentication", () => {
     WEB_ORIGIN: "http://localhost:3015",
   };
 
+  it("resolves the seeded demo event for the local agenda boundary", async () => {
+    const dependencies = createLocalDependencies();
+
+    await expect(dependencies.agenda?.organizationIdForEvent("demo-event")).resolves.toBe(
+      "local-organization",
+    );
+  });
+
+  it("serves the seeded demo agenda through the composed local app", async () => {
+    const app = createApp(createLocalDependencies());
+    const response = await app.request(
+      "/api/admin/organizations/local-organization/events/demo-event/agenda",
+      {
+        headers: { cookie: "better-auth.session_token=local-session" },
+      },
+      environment,
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      data: {
+        event: {
+          id: "demo-event",
+          name: "Open Sessionboard Conference",
+          timeZone: "America/Los_Angeles",
+        },
+      },
+    });
+  });
+
   it("creates and resolves an isolated applicant session", async () => {
     const dependencies = createLocalDependencies();
     const auth = dependencies.auth;
