@@ -22,7 +22,16 @@ describe("speaker workspace presentation", () => {
     expect(markup).toContain('data-slot="tabs-list"');
     expect(markup).toContain('data-slot="card"');
     expect(markup).toContain('data-slot="button"');
-    expect(markup).toContain("Speaker workspace");
+    expect(markup).toContain("Speaker operations");
+    expect(markup).toContain('aria-label="Speaker attention filters"');
+    expect(markup).toContain("All speakers");
+    expect(markup).toContain("Overdue tasks");
+    expect(markup).toContain("Awaiting invite");
+    expect(markup).toContain("Duplicate emails");
+    expect(markup).toContain("Inactive");
+    expect(markup).toContain("Filters");
+    expect(markup).not.toContain("0 speakers selected");
+    expect(markup).not.toContain("Open drawer");
     expect(markup).toContain('data-slot="input"');
     expect(markup).toContain('aria-label="Search speakers"');
     expect(markup).toContain("Import CSV");

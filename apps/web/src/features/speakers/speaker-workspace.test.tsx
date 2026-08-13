@@ -16,12 +16,14 @@ import {
   createSpeakerTaskAssignment,
   duplicateEmailConflicts,
   filterSpeakerRoster,
+  filterSpeakersByAttention,
   organizerHeadshotPreviewPath,
   organizerHeadshotSubmissionId,
   retainInvitationHistory,
   SPEAKER_WELCOME_EMAIL_STARTER,
   SpeakerAssetDownload,
   SpeakerAssetMetadata,
+  type SpeakerAttentionFilter,
   SpeakerHeadshot,
   SpeakerInvitationControls,
   SpeakerWorkspace,
@@ -786,6 +788,50 @@ describe("speaker workspace contracts", () => {
     ).toEqual(["participant-1"]);
   });
 
+  it("filters factual speaker attention segments without inventing readiness", () => {
+    const speakers: SpeakerRecord[] = [
+      speaker,
+      {
+        ...speaker,
+        participantId: "participant-2",
+        displayName: "Marcus Chen",
+        email: "marcus@example.test",
+        status: "pending",
+        taskSummary: { total: 2, completed: 1, overdue: 1 },
+      },
+      {
+        ...speaker,
+        participantId: "participant-3",
+        displayName: "Dana Scott",
+        email: "marcus@example.test",
+        status: "revoked",
+        taskSummary: { total: 1, completed: 1, overdue: 0 },
+      },
+    ];
+    const filters: readonly SpeakerAttentionFilter[] = [
+      "all",
+      "overdue",
+      "awaiting-invite",
+      "duplicate-email",
+      "inactive",
+    ];
+
+    expect(
+      Object.fromEntries(
+        filters.map((filter) => [
+          filter,
+          filterSpeakersByAttention(speakers, filter).map((candidate) => candidate.participantId),
+        ]),
+      ),
+    ).toEqual({
+      all: ["participant-1", "participant-2", "participant-3"],
+      overdue: ["participant-2"],
+      "awaiting-invite": ["participant-2"],
+      "duplicate-email": ["participant-2", "participant-3"],
+      inactive: ["participant-3"],
+    });
+  });
+
   it("reconstructs three API-loaded onboarding definitions with exact assignees and dates", () => {
     const tasks: SpeakerTask[] = [
       { ...task, taskId: "definition-1:participant-1", participantId: "participant-1" },
@@ -1120,7 +1166,9 @@ describe("speaker workspace", () => {
       }),
     );
 
-    expect(markup).toContain("Speaker roster");
+    expect(markup).toContain("Speaker operations");
+    expect(markup).toContain("All speakers");
+    expect(markup).toContain("Overdue tasks");
     expect(markup).toContain("Search speakers");
     expect(markup).toContain("Add speaker");
     expect(markup).toContain("Import CSV");

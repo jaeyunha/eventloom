@@ -85,13 +85,6 @@ import {
   SelectValue,
 } from "../../components/ui/select";
 import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "../../components/ui/sheet";
-import {
   Table,
   TableBody,
   TableCaption,
@@ -398,6 +391,35 @@ export interface SpeakerRosterFilterState {
   readonly status: string;
   readonly session: string;
   readonly progress: ProgressFilter;
+}
+
+export type SpeakerAttentionFilter =
+  | "all"
+  | "overdue"
+  | "awaiting-invite"
+  | "duplicate-email"
+  | "inactive";
+
+export function filterSpeakersByAttention(
+  speakers: readonly SpeakerRecord[],
+  filter: SpeakerAttentionFilter,
+): readonly SpeakerRecord[] {
+  if (filter === "all") return speakers;
+  if (filter === "overdue") {
+    return speakers.filter((speaker) => speaker.taskSummary.overdue > 0);
+  }
+  if (filter === "awaiting-invite") {
+    return speakers.filter((speaker) => speaker.status.toLowerCase() === "pending");
+  }
+  if (filter === "duplicate-email") {
+    const duplicateEmails = new Set(
+      duplicateEmailConflicts(speakers).map((conflict) => conflict.email),
+    );
+    return speakers.filter((speaker) => duplicateEmails.has(speaker.email.trim().toLowerCase()));
+  }
+  return speakers.filter((speaker) => {
+    return ["declined", "revoked"].includes(speaker.status.toLowerCase());
+  });
 }
 
 export function filterSpeakerRoster(
@@ -1150,9 +1172,10 @@ export function SpeakerWorkspace({
   const [visibleProgressContext, setVisibleProgressContext] = useState<string | null>(null);
   const [sessionFilter, setSessionFilter] = useState("all");
   const [progressFilter, setProgressFilter] = useState<ProgressFilter>("all");
+  const [attentionFilter, setAttentionFilter] = useState<SpeakerAttentionFilter>("all");
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [showCsv, setShowCsv] = useState(false);
-  const [showSpeakerSheet, setShowSpeakerSheet] = useState(false);
   const [createDraft, setCreateDraft] = useState<CreateDraft>(emptyCreateDraft);
   const [createIdempotencyKey, setCreateIdempotencyKey] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<EditDraft | null>(null);
@@ -1503,13 +1526,35 @@ export function SpeakerWorkspace({
   const normalizedQuery = query.trim().toLocaleLowerCase();
   const filteredSpeakers = useMemo(
     () =>
-      filterSpeakerRoster(speakers, scopedProgress?.rows ?? [], {
-        query,
-        status: statusFilter,
-        session: sessionFilter,
-        progress: progressFilter,
-      }),
-    [scopedProgress?.rows, progressFilter, query, sessionFilter, speakers, statusFilter],
+      filterSpeakerRoster(
+        filterSpeakersByAttention(speakers, attentionFilter),
+        scopedProgress?.rows ?? [],
+        {
+          query,
+          status: statusFilter,
+          session: sessionFilter,
+          progress: progressFilter,
+        },
+      ),
+    [
+      attentionFilter,
+      progressFilter,
+      query,
+      scopedProgress?.rows,
+      sessionFilter,
+      speakers,
+      statusFilter,
+    ],
+  );
+  const attentionCounts = useMemo(
+    () => ({
+      all: speakers.length,
+      overdue: filterSpeakersByAttention(speakers, "overdue").length,
+      "awaiting-invite": filterSpeakersByAttention(speakers, "awaiting-invite").length,
+      "duplicate-email": filterSpeakersByAttention(speakers, "duplicate-email").length,
+      inactive: filterSpeakersByAttention(speakers, "inactive").length,
+    }),
+    [speakers],
   );
   const progressRows = useMemo(
     () =>
@@ -1664,6 +1709,11 @@ export function SpeakerWorkspace({
     setStatusFilter("all");
     setSessionFilter("all");
     setProgressFilter("all");
+    setAttentionFilter("all");
+  }
+
+  function openSelectedEmail(): void {
+    setActiveView("email");
   }
 
   function toggleSpeakerSelection(participantId: string): void {
@@ -2664,9 +2714,9 @@ export function SpeakerWorkspace({
       <header className={styles.header}>
         <div className={styles.headerCopy}>
           <p className={styles.eyebrow}>Event operations · Speakers</p>
-          <h1 className={styles.title}>Speaker workspace</h1>
+          <h1 className={styles.title}>Speaker operations</h1>
           <p className={styles.description}>
-            Keep the event roster, speaker tasks, and communications in one focused workspace.
+            Find speakers who need attention, coordinate onboarding, and keep communication moving.
           </p>
           <p className={styles.muted}>
             Organization <strong>{organizationId}</strong> · Event <strong>{eventId}</strong>
@@ -2761,35 +2811,27 @@ export function SpeakerWorkspace({
           aria-labelledby="roster-tab"
           className={styles.view}
         >
-          <section className={styles.summaryGrid} aria-label="Speaker roster summary">
-            <Card size="sm" className={styles.summary}>
-              <CardHeader>
-                <CardDescription>Speakers</CardDescription>
-                <CardTitle>{speakers.length}</CardTitle>
-              </CardHeader>
-            </Card>
-            <Card size="sm" className={styles.summary}>
-              <CardHeader>
-                <CardDescription>Visible</CardDescription>
-                <CardTitle>{filteredSpeakers.length}</CardTitle>
-              </CardHeader>
-            </Card>
-            <Card size="sm" className={styles.summary}>
-              <CardHeader>
-                <CardDescription>Invited</CardDescription>
-                <CardTitle>
-                  {speakers.filter((speaker) => speaker.status === "invited").length}
-                </CardTitle>
-              </CardHeader>
-            </Card>
-            <Card size="sm" className={styles.summary}>
-              <CardHeader>
-                <CardDescription>Needs work</CardDescription>
-                <CardTitle>
-                  {speakers.filter((speaker) => speaker.taskSummary.overdue > 0).length}
-                </CardTitle>
-              </CardHeader>
-            </Card>
+          <section className={styles.attentionStrip} aria-label="Speaker attention filters">
+            {(
+              [
+                ["all", "All speakers"],
+                ["overdue", "Overdue tasks"],
+                ["awaiting-invite", "Awaiting invite"],
+                ["duplicate-email", "Duplicate emails"],
+                ["inactive", "Inactive"],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                className={styles.attentionFilter}
+                type="button"
+                aria-pressed={attentionFilter === value}
+                onClick={() => setAttentionFilter(value)}
+              >
+                <span>{label}</span>
+                <strong>{attentionCounts[value]}</strong>
+              </button>
+            ))}
           </section>
 
           <Card className={styles.panel} aria-busy={loading}>
@@ -2806,8 +2848,8 @@ export function SpeakerWorkspace({
               </Badge>
             </CardHeader>
             <CardContent className={styles.actionsStack}>
-              <div className={styles.toolbar}>
-                <Field>
+              <div className={styles.rosterToolbar}>
+                <Field className={styles.searchField}>
                   <FieldLabel className={adminStyles.srOnly} htmlFor="speaker-search">
                     Search speakers
                   </FieldLabel>
@@ -2816,117 +2858,124 @@ export function SpeakerWorkspace({
                     <Input
                       id="speaker-search"
                       aria-label="Search speakers"
-                      placeholder="Search by name, email, title, or company"
+                      placeholder="Search speakers"
                       value={query}
                       onChange={(event) => setQuery(event.target.value)}
                     />
                   </div>
                 </Field>
-                <Field>
-                  <FieldLabel className={adminStyles.srOnly} htmlFor="speaker-status-filter">
-                    Filter by status
-                  </FieldLabel>
-                  <Select value={statusFilter} onValueChange={setStatusFilter}>
-                    <SelectTrigger id="speaker-status-filter" aria-label="Filter by status">
-                      <SelectValue placeholder="All statuses" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        <SelectItem value="all">All statuses</SelectItem>
-                        {statusOptions.map((status) => (
-                          <SelectItem key={status} value={status}>
-                            {statusLabel(status)}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                </Field>
-                <Field>
-                  <FieldLabel className={adminStyles.srOnly} htmlFor="speaker-session-filter">
-                    Filter by session
-                  </FieldLabel>
-                  <Select value={sessionFilter} onValueChange={setSessionFilter}>
-                    <SelectTrigger id="speaker-session-filter" aria-label="Filter by session">
-                      <SelectValue placeholder="All sessions" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        <SelectItem value="all">All sessions</SelectItem>
-                        {sessionOptions.map(([sessionId, title]) => (
-                          <SelectItem key={sessionId} value={sessionId}>
-                            {title}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                </Field>
-                <Field>
-                  <FieldLabel className={adminStyles.srOnly} htmlFor="speaker-progress-filter">
-                    Filter by task progress
-                  </FieldLabel>
-                  <Select
-                    value={progressFilter}
-                    onValueChange={(value) => setProgressFilter(value as ProgressFilter)}
-                  >
-                    <SelectTrigger
-                      id="speaker-progress-filter"
-                      aria-label="Filter by task progress"
-                    >
-                      <SelectValue placeholder="All task progress" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        <SelectItem value="all">All task progress</SelectItem>
-                        <SelectItem value="complete">Complete</SelectItem>
-                        <SelectItem value="incomplete">Incomplete</SelectItem>
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                </Field>
                 <Button
                   variant="outline"
                   type="button"
-                  onClick={clearRosterFilters}
-                  disabled={!hasActiveRosterFilters}
-                  aria-label="Clear speaker filters"
+                  aria-expanded={filtersOpen}
+                  onClick={() => setFiltersOpen((current) => !current)}
                 >
-                  Clear filters
+                  Filters
                 </Button>
+                {hasActiveRosterFilters || attentionFilter !== "all" ? (
+                  <Button variant="ghost" type="button" onClick={clearRosterFilters}>
+                    Clear
+                  </Button>
+                ) : null}
               </div>
+              {filtersOpen ? (
+                <div className={styles.filterPanel}>
+                  <Field>
+                    <FieldLabel className={adminStyles.srOnly} htmlFor="speaker-status-filter">
+                      Filter by status
+                    </FieldLabel>
+                    <Select value={statusFilter} onValueChange={setStatusFilter}>
+                      <SelectTrigger id="speaker-status-filter" aria-label="Filter by status">
+                        <SelectValue placeholder="All statuses" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectItem value="all">All statuses</SelectItem>
+                          {statusOptions.map((status) => (
+                            <SelectItem key={status} value={status}>
+                              {statusLabel(status)}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field>
+                    <FieldLabel className={adminStyles.srOnly} htmlFor="speaker-session-filter">
+                      Filter by session
+                    </FieldLabel>
+                    <Select value={sessionFilter} onValueChange={setSessionFilter}>
+                      <SelectTrigger id="speaker-session-filter" aria-label="Filter by session">
+                        <SelectValue placeholder="All sessions" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectItem value="all">All sessions</SelectItem>
+                          {sessionOptions.map(([sessionId, title]) => (
+                            <SelectItem key={sessionId} value={sessionId}>
+                              {title}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field>
+                    <FieldLabel className={adminStyles.srOnly} htmlFor="speaker-progress-filter">
+                      Filter by task progress
+                    </FieldLabel>
+                    <Select
+                      value={progressFilter}
+                      onValueChange={(value) => setProgressFilter(value as ProgressFilter)}
+                    >
+                      <SelectTrigger
+                        id="speaker-progress-filter"
+                        aria-label="Filter by task progress"
+                      >
+                        <SelectValue placeholder="All task progress" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectItem value="all">All task progress</SelectItem>
+                          <SelectItem value="complete">Complete</SelectItem>
+                          <SelectItem value="incomplete">Incomplete</SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                </div>
+              ) : null}
 
               {hasActiveRosterFilters ? (
                 <p className={styles.muted} role="status" aria-live="polite">
                   Showing {filteredSpeakers.length} of {speakers.length} speakers after filters.
                 </p>
               ) : null}
-              <div className={styles.selectionBar}>
-                <span>
-                  {selectedSpeakerIds.length} speaker{selectedSpeakerIds.length === 1 ? "" : "s"}{" "}
-                  selected
-                </span>
-                <div className={styles.actions}>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    type="button"
-                    onClick={toggleVisibleSpeakerSelection}
-                    disabled={filteredSpeakers.length === 0}
-                  >
-                    {allVisibleSelected ? "Deselect visible" : "Select visible"}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    type="button"
-                    onClick={clearSpeakerSelection}
-                    disabled={selectedSpeakerIds.length === 0}
-                  >
-                    Clear selection
-                  </Button>
+              {selectedSpeakerIds.length > 0 ? (
+                <div className={styles.selectionBar} role="status">
+                  <span>
+                    <strong>{selectedSpeakerIds.length}</strong> selected for email
+                  </span>
+                  <div className={styles.actions}>
+                    <Button size="sm" type="button" onClick={openSelectedEmail}>
+                      <Mail data-icon="inline-start" />
+                      Compose email
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      type="button"
+                      onClick={toggleVisibleSpeakerSelection}
+                      disabled={filteredSpeakers.length === 0}
+                    >
+                      {allVisibleSelected ? "Deselect visible" : "Select visible"}
+                    </Button>
+                    <Button variant="ghost" size="sm" type="button" onClick={clearSpeakerSelection}>
+                      Clear
+                    </Button>
+                  </div>
                 </div>
-              </div>
+              ) : null}
 
               {loading ? (
                 <FormMessage
@@ -3060,15 +3109,6 @@ export function SpeakerWorkspace({
                         >
                           <RefreshCw data-icon="inline-start" />
                           {detailBusy ? "Refreshing details…" : "Refresh details"}
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          type="button"
-                          onClick={() => setShowSpeakerSheet(true)}
-                        >
-                          <Eye data-icon="inline-start" />
-                          Open drawer
                         </Button>
                         <SpeakerInvitationControls
                           previewBusy={invitationPreviewBusy}
@@ -3466,40 +3506,6 @@ export function SpeakerWorkspace({
               </Card>
             </CollapsibleContent>
           </Collapsible>
-
-          <Sheet open={showSpeakerSheet} onOpenChange={setShowSpeakerSheet}>
-            <SheetContent>
-              <SheetHeader>
-                <SheetTitle>
-                  {selectedSpeaker ? `${selectedSpeaker.displayName} context` : "Speaker context"}
-                </SheetTitle>
-                <SheetDescription>
-                  The full profile remains adjacent to the roster. This drawer provides a compact
-                  delivery summary.
-                </SheetDescription>
-              </SheetHeader>
-              {selectedSpeaker ? (
-                <div className={styles.sheetBody}>
-                  <Badge variant="outline">{statusLabel(selectedSpeaker.status)}</Badge>
-                  <p className={styles.muted}>{selectedSpeaker.email}</p>
-                  <h3 className={styles.subheading}>Sessions</h3>
-                  <ul className={styles.list}>
-                    {selectedSpeaker.sessions.length === 0 ? (
-                      <li className={styles.muted}>No sessions linked.</li>
-                    ) : (
-                      selectedSpeaker.sessions.map((session) => (
-                        <li key={session.submissionId}>
-                          <strong>{session.title}</strong> · {statusLabel(session.status)}
-                        </li>
-                      ))
-                    )}
-                  </ul>
-                  <h3 className={styles.subheading}>Deliverables</h3>
-                  <p className={styles.muted}>{selectedSpeaker.assets.length} uploaded file(s).</p>
-                </div>
-              ) : null}
-            </SheetContent>
-          </Sheet>
         </TabsContent>
 
         <TabsContent
