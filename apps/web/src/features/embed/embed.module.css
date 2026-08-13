@@ -1180,6 +1180,257 @@ ul.publicSessionList > li:last-child .speakerCard {
 }
 
 /* ================================================================= *
+ * Public program refresh
+ * ================================================================= */
+
+.embedRoot {
+  background:
+    radial-gradient(circle at 50% -10rem, var(--pub-accent-soft), transparent 32rem),
+    var(--pub-canvas);
+}
+
+.embedBar {
+  padding-block: var(--pub-space-3);
+}
+
+.embedNav {
+  gap: 0.2rem;
+  padding: 0.25rem;
+  border: 1px solid var(--pub-border);
+  border-radius: var(--pub-radius-3);
+  background: var(--pub-surface);
+  box-shadow: var(--pub-shadow-1);
+}
+
+.embedNav a {
+  min-height: 2.45rem;
+  border-radius: calc(var(--pub-radius-3) - 0.2rem);
+}
+
+.embedMasthead {
+  margin-top: var(--pub-space-5);
+  padding: clamp(1.5rem, 4vw, 2.75rem);
+  border: 1px solid var(--pub-border);
+  border-radius: var(--pub-radius-4);
+  background: var(--pub-surface);
+  box-shadow: var(--pub-shadow-2);
+}
+
+.embedMain {
+  padding-top: clamp(2.25rem, 5vw, 4rem);
+}
+
+.viewHeading {
+  margin-bottom: var(--pub-space-5);
+}
+
+.viewHeading h2 {
+  max-width: 16ch;
+  font-size: clamp(2rem, 5vw, 3.25rem);
+}
+
+.viewHeading > div > p:last-child {
+  max-width: 48rem;
+  font-size: 1rem;
+  line-height: 1.65;
+}
+
+.filters,
+.agendaFilters {
+  gap: var(--pub-space-3);
+  margin-bottom: var(--pub-space-4);
+  padding: var(--pub-space-4);
+  border-color: var(--pub-border);
+  border-radius: var(--pub-radius-4);
+  background: var(--pub-surface);
+  box-shadow: var(--pub-shadow-2);
+}
+
+.filters input,
+.filters select,
+.agendaFilters input,
+.agendaFilters select {
+  min-height: 3rem;
+  border-color: transparent;
+  background: var(--pub-surface-muted);
+}
+
+.resultBar {
+  margin-bottom: var(--pub-space-3);
+  padding-inline: var(--pub-space-1);
+}
+
+.publicSessionList {
+  display: grid;
+  gap: var(--pub-space-3);
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.publicSessionList > li + li {
+  border-top: 0;
+}
+
+.publicSessionCard {
+  grid-template-columns: minmax(8.25rem, 0.24fr) minmax(0, 1fr) minmax(8rem, 0.22fr);
+  gap: var(--pub-space-4);
+  padding: var(--pub-space-4);
+  overflow: hidden;
+  border: 1px solid var(--pub-border);
+  border-left: 0;
+  border-radius: var(--pub-radius-4);
+  background: var(--pub-surface);
+  box-shadow: var(--pub-shadow-1);
+  transition:
+    transform 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.publicSessionCard::before {
+  width: 0.25rem;
+  background: var(--pub-accent);
+}
+
+.publicSessionCard:hover {
+  border-color: var(--pub-border-strong);
+  box-shadow: var(--pub-shadow-2);
+  transform: translateY(-1px);
+}
+
+.publicSessionTime {
+  display: flex;
+  min-width: 0;
+  align-self: stretch;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.25rem;
+  padding: var(--pub-space-3);
+  border-radius: var(--pub-radius-3);
+  background: var(--pub-accent-soft);
+}
+
+.sessionDate,
+.sessionClock {
+  display: block;
+}
+
+.sessionDate {
+  color: var(--pub-accent-strong);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.sessionClock {
+  color: var(--pub-ink);
+  font-size: clamp(1rem, 2vw, 1.2rem);
+  font-weight: 720;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.publicSessionCopy {
+  align-content: center;
+  gap: var(--pub-space-2);
+}
+
+.publicSessionCopy h3 {
+  font-size: 1.12rem;
+  line-height: 1.25;
+}
+
+.publicSessionMeta {
+  gap: 0.35rem;
+}
+
+.publicSessionMeta span {
+  padding: 0.28rem 0.55rem;
+  border: 1px solid var(--pub-border);
+  border-radius: 999px;
+  background: var(--pub-surface-muted);
+}
+
+.publicRoom {
+  justify-content: center;
+  padding-left: var(--pub-space-4);
+}
+
+.speakerCard {
+  padding: clamp(1.25rem, 3vw, 2rem);
+  border-radius: var(--pub-radius-4);
+  box-shadow: var(--pub-shadow-1);
+}
+
+.speakerSessions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--pub-space-3);
+  padding-top: var(--pub-space-4);
+}
+
+.speakerSessions > p {
+  grid-column: 1 / -1;
+}
+
+.speakerSessions li {
+  display: grid;
+  align-content: start;
+  gap: 0.3rem;
+  margin: 0;
+  padding: var(--pub-space-3);
+  border: 1px solid var(--pub-border);
+  border-radius: var(--pub-radius-3);
+  background: var(--pub-surface-muted);
+}
+
+.speakerSessionSchedule {
+  color: var(--pub-muted);
+  font-size: 0.78rem;
+  font-weight: 620;
+  font-variant-numeric: tabular-nums;
+}
+
+.speakerGrid {
+  gap: var(--pub-space-4);
+}
+
+.speakerPhoto {
+  border-radius: var(--pub-radius-4);
+  box-shadow: var(--pub-shadow-1);
+}
+
+.itineraryTabs {
+  gap: var(--pub-space-2);
+  padding: 0.25rem;
+  border: 1px solid var(--pub-border);
+  border-radius: var(--pub-radius-3);
+  background: var(--pub-surface);
+}
+
+.itineraryTimeLabel,
+.publicDayHeading {
+  margin-block: var(--pub-space-5) var(--pub-space-3);
+  padding: 0;
+  color: var(--pub-ink);
+  font-size: 1rem;
+  font-weight: 720;
+  letter-spacing: -0.01em;
+  text-transform: none;
+}
+
+.itineraryTimeLabel {
+  display: inline-flex;
+  padding: 0.45rem 0.75rem;
+  border-radius: 999px;
+  background: var(--pub-ink);
+  color: var(--pub-surface);
+}
+
+/* ================================================================= *
  * Unavailable
  * ================================================================= */
 
@@ -1231,6 +1482,10 @@ ul.publicSessionList > li:last-child .speakerCard {
  * ================================================================= */
 
 @media (max-width: 56rem) {
+  .speakerSessions {
+    grid-template-columns: 1fr;
+  }
+
   .speakerGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1249,9 +1504,24 @@ ul.publicSessionList > li:last-child .speakerCard {
 }
 
 @media (max-width: 40rem) {
+  .embedMasthead {
+    margin-top: var(--pub-space-3);
+    padding: var(--pub-space-4);
+  }
+
+  .embedTitle {
+    font-size: clamp(2rem, 11vw, 3rem);
+  }
+
+  .embedMain {
+    padding-top: var(--pub-space-5);
+  }
+
   .embedNav {
     justify-content: flex-start;
+    padding-right: var(--pub-space-5);
     overflow-x: auto;
+    mask-image: linear-gradient(to right, #000 88%, transparent);
     overscroll-behavior-inline: contain;
     scrollbar-width: none;
   }
@@ -1301,13 +1571,19 @@ ul.publicSessionList > li:last-child .speakerCard {
 
   .publicSessionCard {
     grid-template-columns: 1fr;
-    gap: var(--pub-space-2);
+    gap: var(--pub-space-3);
+    padding: var(--pub-space-3);
   }
 
   .publicSessionTime {
-    display: flex;
-    gap: var(--pub-space-2);
-    align-items: baseline;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    padding: 0.75rem;
+  }
+
+  .sessionClock {
+    text-align: right;
   }
 
   .publicRoom {

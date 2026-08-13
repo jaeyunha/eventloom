@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import styles from "./embed.module.css";
 import {
-  formatPublishedDateTimeRange,
+  formatPublishedSessionSchedule,
   publicPhotoUrl,
   publishedSpeakerSessions,
   sortSpeakersBySurname,
@@ -133,11 +133,13 @@ function SpeakerEntry({
                     </a>
                     <br />
                     <time dateTime={session.startsAt}>
-                      {formatPublishedDateTimeRange(
-                        session.startsAt,
-                        session.endsAt,
-                        program.agenda.event.timeZone,
-                      )}
+                      {Object.values(
+                        formatPublishedSessionSchedule(
+                          session.startsAt,
+                          session.endsAt,
+                          program.agenda.event.timeZone,
+                        ),
+                      ).join(" · ")}
                     </time>
                     <br />
                     <span>Room: {session.roomName || "Room not published"}</span>

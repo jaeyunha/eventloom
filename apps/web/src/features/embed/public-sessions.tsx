@@ -2,8 +2,8 @@
 
 import { useMemo, useState } from "react";
 import styles from "./embed.module.css";
-import { formatPublishedDateTimeRange, publishedEntryPresenters } from "./model";
 import type { EmbedDisplayField, EmbedLayout } from "./model";
+import { formatPublishedSessionSchedule, publishedEntryPresenters } from "./model";
 import type { PublishedAgendaEntry, PublishedProgram, PublishedSpeaker } from "./types";
 
 const DESCRIPTION_LIMIT = 190;
@@ -233,6 +233,11 @@ export function PublicSessionsView({
         <ol className={styles.publicSessionList}>
           {entries.map((entry) => {
             const presenters = publishedEntryPresenters(entry, speakers.speakers);
+            const schedule = formatPublishedSessionSchedule(
+              entry.startsAt,
+              entry.endsAt,
+              agenda.event.timeZone,
+            );
             const isExpanded = expanded.has(entry.id);
             const hasLongDescription = entry.summary.length > DESCRIPTION_LIMIT;
             const hasDescription = entry.summary.trim().length > 0;
@@ -244,12 +249,11 @@ export function PublicSessionsView({
                   data-layout={layout ?? undefined}
                 >
                   <div className={styles.publicSessionTime}>
-                    <time dateTime={entry.startsAt}>
-                      {formatPublishedDateTimeRange(
-                        entry.startsAt,
-                        entry.endsAt,
-                        agenda.event.timeZone,
-                      )}
+                    <time dateTime={entry.startsAt} className={styles.sessionDate}>
+                      {schedule.dateLabel}
+                    </time>
+                    <time dateTime={entry.endsAt} className={styles.sessionClock}>
+                      {schedule.timeLabel}
                     </time>
                   </div>
                   <div className={styles.publicSessionCopy}>

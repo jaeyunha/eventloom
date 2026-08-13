@@ -2,7 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import styles from "./embed.module.css";
-import { formatPublishedDateTimeRange, publicAgendaDays, publishedEntryPresenters } from "./model";
+import {
+  formatPublishedDateTimeRange,
+  formatPublishedSessionSchedule,
+  publicAgendaDays,
+  publishedEntryPresenters,
+} from "./model";
 import type { PublishedAgendaEntry, PublishedProgram, PublishedSpeaker } from "./types";
 
 const DESCRIPTION_LIMIT = 190;
@@ -503,6 +508,11 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
                   })
                   .map((entry) => {
                     const presenters = publishedEntryPresenters(entry, program.speakers.speakers);
+                    const schedule = formatPublishedSessionSchedule(
+                      entry.startsAt,
+                      entry.endsAt,
+                      agenda.event.timeZone,
+                    );
                     const isDescriptionExpanded = expandedDescriptions.has(entry.id);
                     const isDetailsExpanded = expandedDetails.has(entry.id);
                     const isSelected = selectedSet.has(entry.id);
@@ -512,12 +522,11 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
                       <li key={entry.id}>
                         <article className={styles.publicSessionCard}>
                           <div className={styles.publicSessionTime}>
-                            <time dateTime={entry.startsAt}>
-                              {formatPublishedDateTimeRange(
-                                entry.startsAt,
-                                entry.endsAt,
-                                agenda.event.timeZone,
-                              )}
+                            <time dateTime={entry.startsAt} className={styles.sessionDate}>
+                              {schedule.dateLabel}
+                            </time>
+                            <time dateTime={entry.endsAt} className={styles.sessionClock}>
+                              {schedule.timeLabel}
                             </time>
                           </div>
                           <div className={styles.publicSessionCopy}>

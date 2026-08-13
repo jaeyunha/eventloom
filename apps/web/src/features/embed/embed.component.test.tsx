@@ -362,7 +362,7 @@ describe("public embeds", () => {
     expect(markup).toContain("Search speakers by name");
     expect(markup).toContain('placeholder="Search speakers and sessions"');
     expect(markup).toContain("Roles: speaker");
-    expect(markup).toContain("Friday, September 18, 2026");
+    expect(markup).toContain("Fri, Sep 18");
     expect(markup).toContain("Room: Main hall");
     expect(markup).toContain("<strong>Company:</strong> Open Works");
     expect(markup).toContain("Title not published");
@@ -504,7 +504,7 @@ describe("public embeds", () => {
     );
     expect(detailMarkup).toContain("Back to speakers");
     expect(detailMarkup).toContain("Sessions (1)");
-    expect(detailMarkup).toContain("Friday, September 18, 2026");
+    expect(detailMarkup).toContain("Fri, Sep 18");
     expect(detailMarkup).toContain("Room: Room 306");
     expect(detailMarkup).not.toContain("private@example.test");
   });
@@ -523,7 +523,7 @@ describe("public embeds", () => {
 
     expect(detailMarkup).toContain("Priya Shah");
     expect(detailMarkup).toContain("Sessions (1)");
-    expect(detailMarkup).toContain("Friday, September 18, 2026");
+    expect(detailMarkup).toContain("Fri, Sep 18");
     expect(detailMarkup).toContain("11:00 AM");
     expect(detailMarkup).toContain("Room: Room 201");
     expect(detailMarkup).not.toContain("Room: Room 202");
@@ -607,6 +607,7 @@ describe("public embeds", () => {
     expect(sessionsMarkup).toContain("Track: Main stage");
     expect(sessionsMarkup).toContain("Staff Engineer");
     expect(sessionsMarkup).toContain("Open Works");
+    expect(sessionsMarkup.match(/<time dateTime=/gu) ?? []).toHaveLength(4);
     expect(sessionsMarkup).not.toContain("private@example.test");
 
     const itineraryMarkup = renderToStaticMarkup(createElement(PublicItineraryView, { program }));
@@ -617,6 +618,7 @@ describe("public embeds", () => {
     expect(itineraryMarkup).toContain("View Details");
     expect(itineraryMarkup).toContain("Main hall");
     expect(itineraryMarkup).toContain("Staff Engineer");
+    expect(itineraryMarkup.match(/<time dateTime=/gu) ?? []).toHaveLength(4);
     const emptyFinalDayMarkup = renderToStaticMarkup(
       createElement(PublicItineraryView, {
         program: { agenda: emptyFinalDayAgenda, speakers: gallery },
