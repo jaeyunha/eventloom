@@ -125,6 +125,7 @@ function validateWrangler(source, options) {
   const bucketNames = collectValues(source, "bucket_name");
   const queueNames = [...new Set(collectValues(source, "queue"))];
   const databaseIds = collectValues(source, "database_id");
+  const migrationDirectories = collectValues(source, "migrations_dir");
 
   for (const [label, values] of [
     ["D1 database names", databaseNames],
@@ -136,6 +137,12 @@ function validateWrangler(source, options) {
       throw new Error(`${label} must have one value per environment`);
     }
     assertUnique(values, label);
+  }
+  if (
+    migrationDirectories.length !== environments.length ||
+    migrationDirectories.some((value) => value !== "migrations")
+  ) {
+    throw new Error("Every D1 binding must use the reviewed apps/api/migrations directory");
   }
 
   for (const [index, environment] of environments.entries()) {
@@ -158,6 +165,15 @@ function validateWrangler(source, options) {
     if (placeholderIdPattern.test(selectedId)) {
       throw new Error(
         `${options.environment} D1 database_id is unprovisioned; replace it before deployment`,
+      );
+    }
+    const expectedId = process.env.D1_DATABASE_ID?.trim();
+    if (!expectedId) {
+      throw new Error("D1_DATABASE_ID must be supplied before deployment");
+    }
+    if (selectedId !== expectedId) {
+      throw new Error(
+        `${options.environment} generated D1 database_id does not match D1_DATABASE_ID`,
       );
     }
   }

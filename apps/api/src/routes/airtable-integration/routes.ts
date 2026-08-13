@@ -1,4 +1,4 @@
-import { apiErrorSchema } from "@open-sessionboard/contracts";
+import { apiErrorSchema } from "@eventloom/contracts";
 import { type Context, Hono } from "hono";
 import { z } from "zod";
 import { AuthAccessError, type AuthPrincipal } from "../../features/auth/types";
