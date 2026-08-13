@@ -13,6 +13,13 @@ const baseId = "base-cfp-latency";
 const tenantId = "ai-engineer";
 const eventId = "devflow-conf-2027";
 const formId = "form-main";
+const testOrganization = {
+  getPublicOrganization: async (organizationId: string) => ({
+    id: organizationId,
+    slug: organizationId,
+    name: "Latency test organization",
+  }),
+};
 
 const event: EventCfp = {
   id: eventId,
@@ -276,6 +283,7 @@ describe("organizer CFP submission latency", () => {
       repository,
       idempotency: {} as never,
       effects: {} as never,
+      organization: testOrganization,
     });
 
     const startedAt = performance.now();
@@ -340,6 +348,7 @@ describe("organizer CFP submission latency", () => {
       repository,
       idempotency: {} as never,
       effects: {} as never,
+      organization: testOrganization,
     });
 
     const records = await service.listOrganizerSubmissions({ tenantId, eventId });
@@ -379,6 +388,7 @@ describe("organizer CFP submission latency", () => {
       effects: {
         enqueueSubmissionConfirmation: async () => undefined,
       },
+      organization: testOrganization,
       clock: { now: () => new Date("2027-02-01T00:00:00.000Z") },
     });
 

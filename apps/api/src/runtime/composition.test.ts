@@ -57,13 +57,13 @@ import {
   runScheduledReminders,
 } from "./composition";
 import {
+  createLocalDependencies,
   LOCAL_API_KEY,
+  LOCAL_ORGANIZATION_ID,
   LOCAL_ORGANIZER_ACCOUNT_ID,
   LOCAL_ORGANIZER_EMAIL,
-  LOCAL_ORGANIZATION_ID,
   LOCAL_SESSION_TOKEN,
   LOCAL_SPEAKER_SESSION_TOKEN,
-  createLocalDependencies,
 } from "./local";
 
 const localBindings: RuntimeBindings = {
@@ -224,7 +224,8 @@ function productionD1(digest: string): NonNullable<RuntimeBindings["DB"]> {
     id: "key-production",
     organization_id: LOCAL_ORGANIZATION_ID,
     label: "Production test key",
-    scopes_json: '["events:read","events:write","agenda:read","agenda:write"]',
+    scopes_json:
+      '["events:read","events:write","sessions:read","speakers:read","agenda:read","agenda:write"]',
     expires_at: null,
     revoked_at: null,
   };
@@ -1308,14 +1309,15 @@ describe("fixture local runtime composition", () => {
       data: {
         organizationId: LOCAL_ORGANIZATION_ID,
         metrics: {
-          submissionCount: 1,
+          submissionCount: 2,
           pendingReviewCount: 1,
-          outstandingSpeakerTaskCount: 2,
+          outstandingSpeakerTaskCount: 4,
           publishedSessionCount: 2,
         },
         actionItems: [
           { id: "reviews:demo-event", count: 1 },
           { id: "speaker_tasks:demo-event", count: 2 },
+          { id: "speaker_tasks:open-sessionboard-conf", count: 2 },
         ],
       },
     });
@@ -1859,10 +1861,7 @@ describe("fixture local runtime composition", () => {
 
     for (const path of withheldRequests) {
       const response = await app.request(path, { headers: apiHeaders }, localBindings);
-      expect(response.status).toBe(404);
-      await expect(response.json()).resolves.toMatchObject({
-        error: { code: "NOT_FOUND", traceId: expect.any(String) },
-      });
+      expect(response.status).toBe(200);
     }
 
     for (const path of [
@@ -1961,7 +1960,7 @@ describe("fixture local runtime composition", () => {
     expect(replay).toEqual(draft);
   });
 
-  it("does not query or mutate raw Airtable tables through generic public-v1 routes", async () => {
+  it("serves read-only public-v1 catalog projections without mutating Airtable", async () => {
     const transport = new FormulaRecordingTransport();
     transport.seed({
       baseId: "base-test",
@@ -1996,16 +1995,17 @@ describe("fixture local runtime composition", () => {
     const app = createRuntimeApp(bindings);
     const headers = { authorization: "Bearer production-api-key" };
 
-    for (const resource of ["events", "sessions", "speakers", "agenda"]) {
-      const response = await app.request(
-        `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/${resource}`,
-        { headers },
-        bindings,
-      );
-      expect(response.status).toBe(404);
-      await expect(response.json()).resolves.toMatchObject({
-        error: { code: "NOT_FOUND", traceId: expect.any(String) },
-      });
+    const paths = [
+      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/events`,
+      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/events/event-airtable/sessions`,
+      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/events/event-airtable/speakers`,
+    ];
+    for (const path of paths) {
+      const response = await app.request(path, { headers }, bindings);
+      expect(response.status, path).toBe(200);
+      const body = JSON.stringify(await response.json());
+      if (path.endsWith("/events")) expect(body).toContain("Private Airtable Event");
+      expect(body).not.toContain("private@example.test");
     }
 
     const create = await app.request(
@@ -2018,11 +2018,7 @@ describe("fixture local runtime composition", () => {
       bindings,
     );
     expect(create.status).toBe(404);
-    expect(
-      transport.requests.some((request) =>
-        ["Events", "Sessions", "Participants", "Agenda Versions"].includes(request.table),
-      ),
-    ).toBe(false);
+    expect(transport.requests.every((request) => request.method === "GET")).toBe(true);
   });
   it("matches canonical email against mixed-case authoritative CRM rows", async () => {
     const transport = new FakeAirtableTransport();

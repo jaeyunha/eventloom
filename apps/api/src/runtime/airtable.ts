@@ -54,14 +54,14 @@ import type {
   CrmContact,
   CrmEventProjection,
   CrmHistoryEntry,
+  CrmImportResult,
   CrmMergeReconciliationInput,
   CrmMergeReconciliationResult,
-  CrmImportResult,
   CrmNote,
-  CrmParticipantConflict,
-  CrmParticipantContactLink,
   CrmOutreachBoundary,
   CrmOutreachCommand,
+  CrmParticipantConflict,
+  CrmParticipantContactLink,
   CrmPipelineEntry,
   CrmRepository,
   CrmRepositoryFilter,
@@ -178,8 +178,8 @@ import type {
   RestoreSpeakerContentVersionCommand,
   SpeakerAccessScope,
   SpeakerAsset,
-  SpeakerAssetReviewCommand,
   SpeakerAssetComment,
+  SpeakerAssetReviewCommand,
   SpeakerContentHistoryEntry,
   SpeakerContentRecord,
   SpeakerEventResource,
@@ -188,9 +188,9 @@ import type {
   SpeakerOrganizerAccessScope,
   SpeakerOrganizerReadModel,
   SpeakerOrganizerReadResources,
+  SpeakerParticipantResolution,
   SpeakerPortalCapability,
   SpeakerPortalContext,
-  SpeakerParticipantResolution,
   SpeakerProfile,
   SpeakerReminderDelivery,
   SpeakerReminderDeliveryInput,
@@ -11459,6 +11459,27 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
     repository: cfpRepository,
     idempotency: cfpIdempotency,
     effects: new CloudflareCfpEffects(options.outboxQueue, options.database),
+    organization: {
+      async getPublicOrganization(tenantId) {
+        const row = await options.database
+          .prepare(
+            `SELECT organization_id, slug, name
+               FROM organizations
+              WHERE organization_id = ?
+              LIMIT 1`,
+          )
+          .bind(tenantId)
+          .first<{ organization_id: string; slug: string; name: string }>();
+        if (row === null) {
+          throw new CfpError("NOT_FOUND", "The organization was not found.");
+        }
+        return {
+          id: row.organization_id,
+          slug: row.slug,
+          name: row.name,
+        };
+      },
+    },
     fileAssets: new AirtableCfpFileAssetGateway({
       cfp: cfpRepository,
       speakers: speakerRepository,
