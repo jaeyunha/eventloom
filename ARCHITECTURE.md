@@ -86,17 +86,12 @@ The built-in Speaker CRM is an organization-scoped first-party contact system wi
 
 ## Current hosting
 
-The current staging Workers origins are:
-
-- Web: `https://open-sessionboard-web-staging.ashleyha0317.workers.dev`
-- API: `https://open-sessionboard-api-staging.ashleyha0317.workers.dev`
-
-The current production Workers origins are:
-
-- Web: `https://open-sessionboard-web-production.ashleyha0317.workers.dev`
-- API: `https://open-sessionboard-api-production.ashleyha0317.workers.dev`
-
-These pinned `workers.dev` origins are the current hosts. `https://sessionboard.namuh.co` for web and `https://api.sessionboard.namuh.co` for API are recommended stable custom domains, but they remain pending and unconfigured. Sender and calendar identities already use `sessionboard.namuh.co`, independently of web/API hosting.
+Deployment origins are operator configuration. The public repository does not
+publish a Cloudflare account, D1 identifiers, or an account-specific
+`workers.dev` subdomain. Staging and production environment files supply their
+own HTTPS web/API origins and resource IDs. Custom domains are recommended for
+stable production URLs. Sender and calendar identities use
+`sessionboard.namuh.co` independently of web/API hosting.
 
 ## Repository policy
 

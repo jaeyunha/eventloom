@@ -278,8 +278,8 @@ function productionBindings(
   } as unknown as NonNullable<RuntimeBindings["OUTBOX_QUEUE"]>;
   return {
     APP_ENV: "production",
-    WEB_ORIGIN: "https://open-sessionboard-web-production.ashleyha0317.workers.dev",
-    API_ORIGIN: "https://open-sessionboard-api-production.ashleyha0317.workers.dev",
+    WEB_ORIGIN: "https://web-production.example.test",
+    API_ORIGIN: "https://api-production.example.test",
     DB: database,
     AGENDA_COORDINATOR: coordinator,
     PRIVATE_FILES: bucket,
@@ -295,8 +295,7 @@ function productionBindings(
     BETTER_AUTH_SECRET: "test-secret-that-is-at-least-32-characters-long",
     OPENSEND_API_URL: "https://opensend.namuh.co",
     OPENSEND_API_KEY: "opensend-test-key",
-    CACHE_INVALIDATION_URL:
-      "https://open-sessionboard-web-production.ashleyha0317.workers.dev/api/internal/cache-invalidation",
+    CACHE_INVALIDATION_URL: "https://web-production.example.test/api/internal/cache-invalidation",
     CACHE_INVALIDATION_TOKEN: "shared-cache-invalidation-token",
     AIRTABLE_TRANSPORT: transport,
   };
@@ -2976,11 +2975,11 @@ describe("fixture local runtime composition", () => {
     });
     await expect(dependencies.publishedSpeakers?.getPublishedSpeakers(eventId)).resolves.toBeNull();
   });
-  it("requires the fixed origin pair and OpenSend credentials", () => {
+  it("requires configured origins and OpenSend credentials", () => {
     const bindings = productionBindings(new FakeAirtableTransport(), productionD1("unused"));
     expect(inspectProductionRuntime(bindings).success).toBe(true);
     const { API_ORIGIN: _apiOrigin, ...withoutApiOrigin } = bindings;
-    expect(inspectProductionRuntime(withoutApiOrigin).success).toBe(true);
+    expect(inspectProductionRuntime(withoutApiOrigin).success).toBe(false);
     const {
       OPENSEND_API_KEY: _openSendKey,
       OPENSEND_SENDING_API_KEY: _sendingKey,
@@ -2990,9 +2989,9 @@ describe("fixture local runtime composition", () => {
     expect(
       inspectProductionRuntime({
         ...bindings,
-        API_ORIGIN: "https://attacker.example",
+        API_ORIGIN: "https://api-production.example.test",
       }).success,
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("mounts the live Better Auth session path through the production app", async () => {
@@ -3131,7 +3130,7 @@ describe("fixture local runtime composition", () => {
         { messages: [message] } as never,
         {
           APP_ENV: "production",
-          WEB_ORIGIN: "https://open-sessionboard-web-production.ashleyha0317.workers.dev",
+          WEB_ORIGIN: "https://web-production.example.test",
         },
         {} as ExecutionContext,
       ),

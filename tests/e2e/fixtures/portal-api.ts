@@ -43,6 +43,8 @@ export interface PortalTaskSeed {
   dependencyIds: string[];
   reminderOffsetsMinutes: number[];
   acceptedAssetKinds?: Array<"headshot" | "slides" | "supporting_file">;
+  allowedMimeTypes?: string[];
+  maxBytes?: number;
   version: number;
   updatedAt: string;
 }

@@ -239,7 +239,7 @@ test("speaker privately uploads, finalizes, histories, comments, and downloads a
 
   await uploaded.getByText("Version history and comments", { exact: true }).click();
   await expect(uploaded.getByText(/Version 1 · runbook\.txt · pending_upload/u)).toBeVisible();
-  await uploaded.getByRole("button", { name: "Mark finalized" }).click();
+  await uploaded.getByRole("button", { name: "Mark upload complete" }).click();
   await expect(uploaded.getByText("ready · Current v1", { exact: true })).toBeVisible();
 
   await uploaded.getByLabel("Add a comment").fill("Use this runbook in the speaker briefing.");

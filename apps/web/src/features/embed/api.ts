@@ -45,17 +45,6 @@ type PublicFetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<R
 type PublicEmbedEnvironment = "local" | "staging" | "production" | undefined;
 const PUBLIC_PROJECTION_REVALIDATE_SECONDS = 60;
 export const PUBLIC_PROGRAM_CACHE_TAG = "public-programs";
-const REMOTE_API_ORIGINS = {
-  staging: [
-    "https://open-sessionboard-web-staging.ashleyha0317.workers.dev",
-    "https://open-sessionboard-api-staging.ashleyha0317.workers.dev",
-  ],
-  production: [
-    "https://open-sessionboard-web-production.ashleyha0317.workers.dev",
-    "https://open-sessionboard-api-production.ashleyha0317.workers.dev",
-  ],
-} as const;
-
 function configuredEnvironment(
   value: string | undefined = process.env.APP_ENV,
 ): PublicEmbedEnvironment {
@@ -107,25 +96,24 @@ function normalizeApiOrigin(
   }
 
   if (environment !== undefined) {
-    const expected = REMOTE_API_ORIGINS[environment];
-    if (!(expected as readonly string[]).includes(origin.origin)) {
+    if (origin.protocol !== "https:") {
       throw new PublicEmbedApiError(
         "CONFIGURATION_ERROR",
-        "The public API origin does not match this deployment environment.",
+        "The public API origin must use HTTPS outside local development.",
         503,
       );
     }
     return origin.origin;
   }
 
-  if (!(Object.values(REMOTE_API_ORIGINS).flat() as readonly string[]).includes(origin.origin)) {
+  if (origin.protocol !== "https:") {
     const isLocal =
       (origin.hostname === "localhost" || origin.hostname === "127.0.0.1") &&
       (origin.protocol === "http:" || origin.protocol === "https:");
     if (!isLocal) {
       throw new PublicEmbedApiError(
         "CONFIGURATION_ERROR",
-        "The public API origin is not an approved deployment origin.",
+        "The public API origin must use HTTPS outside local development.",
         503,
       );
     }

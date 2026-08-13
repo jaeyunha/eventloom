@@ -66,7 +66,7 @@ export default function Home() {
       <main className="home-main" id="main-content" tabIndex={-1}>
         <section className="home-hero" aria-labelledby="hero-title">
           <div className="home-hero-copy">
-            <p className="home-kicker">Open-source program operations</p>
+            <p className="home-kicker">Source-available program operations</p>
             <h1 id="hero-title">Move from a call for speakers to a published agenda with care.</h1>
             <p className="home-lede">
               Open Sessionboard brings collecting, reviewing, scheduling, and publishing into one
@@ -224,13 +224,13 @@ export default function Home() {
           </div>
         </section>
 
-        <section className="home-open-source" aria-labelledby="open-source-title">
+        <section className="home-open-source" aria-labelledby="source-available-title">
           <div>
-            <p className="home-kicker">Open by default</p>
-            <h2 id="open-source-title">Program infrastructure should be inspectable.</h2>
+            <p className="home-kicker">Inspectable by default</p>
+            <h2 id="source-available-title">Program infrastructure should be inspectable.</h2>
           </div>
           <p>
-            Open Sessionboard is open-source software for teams who want to understand their
+            Open Sessionboard is source-available software for teams who want to understand their
             workflow, adapt it to their events, and keep operational decisions accountable.
           </p>
           <a className="home-button home-button-secondary" href="/login">
@@ -242,9 +242,9 @@ export default function Home() {
       <footer className="home-footer">
         <div>
           <strong>Open Sessionboard</strong>
-          <span>Open-source program operations for conference teams.</span>
+          <span>Source-available program operations for conference teams.</span>
         </div>
-        <span>AGPL-3.0-or-later</span>
+        <span>Elastic License 2.0</span>
       </footer>
     </div>
   );

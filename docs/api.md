@@ -1,8 +1,12 @@
 # Public API and webhooks
 
-The tenant-scoped public API is mounted at `/api/v1` on the production API Worker. The **live canonical discovery document** is [`https://open-sessionboard-api-production.ashleyha0317.workers.dev/api/v1/openapi.json`](https://open-sessionboard-api-production.ashleyha0317.workers.dev/api/v1/openapi.json); use that Worker origin for direct API clients (replace it only for a verified deployment).
+The tenant-scoped public API is mounted at `/api/v1` on the operator's API
+Worker. The canonical discovery document is
+`<API_URL>/api/v1/openapi.json`.
 
-Browser traffic may use the production web app's same-origin `/api/*` proxy at [`https://open-sessionboard-web-production.ashleyha0317.workers.dev`](https://open-sessionboard-web-production.ashleyha0317.workers.dev). The proxy forwards to the API Worker without changing the API contract and is not a second API origin. A custom `api.sessionboard.namuh.co` hostname is recommended but pending/unconfigured, so it is not canonical.
+Browser traffic uses the deployed web app's same-origin `/api/*` proxy. The
+proxy forwards to the API Worker without changing the API contract and is not a
+second API origin.
 
 The checked-in [`openapi/openapi.yaml`](../openapi/openapi.yaml) describes the mounted routes. The tenant-scoped public-v1 surface currently exposes discovery and webhook administration only; generic program-resource routes are intentionally not mounted.
 

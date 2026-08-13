@@ -96,14 +96,12 @@ OpenSend is the email and calendar delivery boundary at `https://opensend.namuh.
 
 Calendar delivery is provider-neutral RFC 5545 `REQUEST`, `UPDATE`, and `CANCEL` through OpenSend, with stable UIDs under `calendar.sessionboard.namuh.co`, increasing `SEQUENCE`, explicit IANA `TZID`, and room/video details when present. Direct provider calendar writes and calendar-provider OAuth are not required.
 
-The current deployment uses these pinned Workers origins:
-
-| Environment | Web | API |
-| --- | --- | --- |
-| Staging | `https://open-sessionboard-web-staging.ashleyha0317.workers.dev` | `https://open-sessionboard-api-staging.ashleyha0317.workers.dev` |
-| Production | `https://open-sessionboard-web-production.ashleyha0317.workers.dev` | `https://open-sessionboard-api-production.ashleyha0317.workers.dev` |
-
-`https://sessionboard.namuh.co` and `https://api.sessionboard.namuh.co` are the recommended custom web and API domains. They remain **pending** until DNS, Worker bindings, cookies/CORS, callbacks, health checks, and release evidence are configured and verified.
+Deployment origins and Cloudflare resource identifiers are operator
+configuration and are not part of the public product contract. Each environment
+must use distinct HTTPS web/API origins and isolated D1, R2, and Queue
+resources. Custom domains are recommended after DNS, Worker bindings,
+cookies/CORS, callbacks, health checks, and release evidence are configured and
+verified.
 
 Accelevents is a separate external event platform. It is not in the competition brief or evaluator requirements and is not a supported Open Sessionboard runtime feature. No Accelevents credentials, setup, publication, synchronization, or release gate is required. Historical adapter code or references do not change that classification.
 

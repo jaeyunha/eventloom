@@ -2132,14 +2132,6 @@ const fixedOrigins = {
     web: "http://127.0.0.1:3015",
     api: "http://127.0.0.1:8787",
   },
-  staging: {
-    web: "https://open-sessionboard-web-staging.ashleyha0317.workers.dev",
-    api: "https://open-sessionboard-api-staging.ashleyha0317.workers.dev",
-  },
-  production: {
-    web: "https://open-sessionboard-web-production.ashleyha0317.workers.dev",
-    api: "https://open-sessionboard-api-production.ashleyha0317.workers.dev",
-  },
 } as const;
 
 const LOCAL_BETTER_AUTH_SECRET = "open-sessionboard-integrated-local-auth-secret-v1";
@@ -2148,7 +2140,7 @@ const LOCAL_OPENSEND_API_KEY = "local-development";
 const LOCAL_CACHE_INVALIDATION_URL = "http://127.0.0.1:3015/api/internal/cache-invalidation";
 const LOCAL_CACHE_INVALIDATION_TOKEN = "local-cache-invalidation";
 
-function authEnvironment(value: string): keyof typeof fixedOrigins | null {
+function authEnvironment(value: string): "local" | "staging" | "production" | null {
   return value === "local" || value === "staging" || value === "production" ? value : null;
 }
 
@@ -2170,8 +2162,8 @@ export function runtimeBindingsForEnvironment(source: RuntimeBindings): RuntimeB
 function configuredApiOrigin(bindings: RuntimeBindings): string | null {
   const environment = authEnvironment(bindings.APP_ENV);
   if (environment === null) return null;
-  const expected = fixedOrigins[environment].api;
-  return bindings.API_ORIGIN === undefined ? expected : bindings.API_ORIGIN;
+  if (environment === "local") return bindings.API_ORIGIN ?? fixedOrigins.local.api;
+  return bindings.API_ORIGIN?.trim() || null;
 }
 
 const aiReasoningEfforts = new Set<AdvisoryAiReasoningEffort>([
@@ -2271,20 +2263,21 @@ export function inspectProductionRuntime(source: RuntimeBindings): RuntimeConfig
 
   const environment = authEnvironment(bindings.APP_ENV);
   if (environment !== null) {
-    const origins = fixedOrigins[environment];
-    if (bindings.WEB_ORIGIN !== origins.web) {
-      issues.push(
-        environment === "local"
-          ? "WEB_ORIGIN must match the integrated local web origin."
-          : "WEB_ORIGIN does not match the fixed deployment origin.",
-      );
+    if (environment === "local" && bindings.WEB_ORIGIN !== fixedOrigins.local.web) {
+      issues.push("WEB_ORIGIN must match the integrated local web origin.");
     }
-    if (bindings.API_ORIGIN !== undefined && bindings.API_ORIGIN !== origins.api) {
-      issues.push(
-        environment === "local"
-          ? "API_ORIGIN must match the integrated local API origin."
-          : "API_ORIGIN does not match the fixed deployment origin.",
-      );
+    if (
+      environment === "local" &&
+      bindings.API_ORIGIN !== undefined &&
+      bindings.API_ORIGIN !== fixedOrigins.local.api
+    ) {
+      issues.push("API_ORIGIN must match the integrated local API origin.");
+    }
+    if (environment !== "local" && !nonEmpty(bindings.WEB_ORIGIN)) {
+      issues.push("WEB_ORIGIN is required for deployed environments.");
+    }
+    if (environment !== "local" && !nonEmpty(bindings.API_ORIGIN)) {
+      issues.push("API_ORIGIN is required for deployed environments.");
     }
   }
   const aiSelection = aiProviderSelection(bindings.AI_PROVIDER);

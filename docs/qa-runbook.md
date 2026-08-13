@@ -5,7 +5,10 @@ This runbook defines evidence collection; it does not claim that any QA pass has
 ## Evidence classes and current origins
 
 - **Local Playwright:** run against the local services at `http://127.0.0.1:3015` and `http://127.0.0.1:8787`. It is useful automated evidence for the local build only. It cannot prove staging deployment, real provider delivery, or release acceptance.
-- **Staging Ever and `codex-cua`:** run against the deployed staging web Worker at `https://open-sessionboard-web-staging.ashleyha0317.workers.dev`; its API boundary is `https://open-sessionboard-api-staging.ashleyha0317.workers.dev`. Use the real rendered build, real Airtable staging data, the deployed API, and the configured OpenSend boundary. Do not replace these with mocked routes or a local build.
+- **Staging Ever and `codex-cua`:** run against the deployed staging web and
+  API origins from the ignored staging environment file. Use the real rendered
+  build, real Airtable staging data, the deployed API, and the configured
+  OpenSend boundary. Do not replace these with mocked routes or a local build.
 - **Production smoke:** use only designated synthetic/demo records after the production deployment gate. Do not replay the complete staging dataset or use participant data.
 
 The browser-visible staging API base is the web origin: `/api/*` is proxied by the web Worker to `API_UPSTREAM_ORIGIN`, the pinned API Worker origin. Record both origins in every staging result.
@@ -110,7 +113,7 @@ Use focused, durable tasks with the exact pinned staging URL, role, expected obs
 
 ```bash
 ever run --permission-mode guard \
-  "Against the already running isolated staging app at https://open-sessionboard-web-staging.ashleyha0317.workers.dev, use the explicitly seeded synthetic organizer account already authenticated in the browser. Exercise the CFP configuration, submission, review, agenda, publication, embeds, CRM, and delivery assertions in docs/qa-runbook.md. Do not change source files or use production services. Report every assertion, failure, final URL, and redacted evidence path."
+  "Against the already running isolated staging app at $EVAL_WEB_ORIGIN, use the explicitly seeded synthetic organizer account already authenticated in the browser. Exercise the CFP configuration, submission, review, agenda, publication, embeds, CRM, and delivery assertions in docs/qa-runbook.md. Do not change source files or use production services. Report every assertion, failure, final URL, and redacted evidence path."
 ```
 
 Use separate sessions for CFP/portal, review/CRM, agenda/publication, embeds/accessibility, and API/delivery failures. Retain each session ID, task text, observed URLs, pass/fail assertion, and redacted screenshot/state path. A narrative without browser state is not release evidence.

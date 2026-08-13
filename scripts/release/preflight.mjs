@@ -3,6 +3,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { renderApiWrangler } from "../cloudflare/config.mjs";
 import {
   ENVIRONMENTS,
   inspectOrganizationIdMigrationReadiness,
@@ -162,7 +163,13 @@ async function run() {
     ]),
   );
   const migrationReport = loadMigrationReport(options.migrationReportSource);
-  const wranglerInventory = parseWranglerInventory(readFileSync(wranglerPath, "utf8"));
+  const wranglerTemplate = readFileSync(wranglerPath, "utf8");
+  const renderedWrangler = renderApiWrangler(
+    renderApiWrangler(wranglerTemplate, "staging", configurations.staging),
+    "production",
+    configurations.production,
+  );
+  const wranglerInventory = parseWranglerInventory(renderedWrangler);
   const validation = validateReleaseConfiguration({
     configurations,
     targetEnvironment: options.environment,
@@ -185,7 +192,7 @@ async function run() {
   if (options.offline) {
     checks.push(
       { name: "cloudflare-token-and-resources", status: "skipped" },
-      { name: "forge-privacy", status: "skipped" },
+      { name: "forge-repository", status: "skipped" },
     );
     return {
       ready: false,
@@ -205,7 +212,7 @@ async function run() {
   });
   checks.push({ name: "cloudflare-token-and-resources", status: "passed" });
   await verifyForgePrivacy({ configuration: targetConfiguration });
-  checks.push({ name: "forge-privacy", status: "passed" });
+  checks.push({ name: "forge-repository", status: "passed" });
 
   return {
     ready: migrationReadiness.ready,

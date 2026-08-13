@@ -620,17 +620,15 @@ test("verified organizer login opens the organization overview", async ({ authSe
     page.getByText("Open Sessionboard Conference", { exact: true }).first(),
   ).toBeVisible();
   await expect(page.getByRole("link", { name: "Events", exact: true })).toBeVisible();
+  const agendaDestination = agendaUrl(PRIMARY_EVENT_ID);
   const agendaLink = page.getByRole("link", {
     name: "Open agenda for Open Sessionboard Conference",
+    exact: true,
   });
-  await expect(agendaLink).toHaveAttribute(
-    "href",
-    `/admin/organizations/${ORGANIZATION_ID}/events/open-sessionboard-conf/agenda`,
-  );
+  await expect(agendaLink).toBeVisible();
+  await expect(agendaLink).toHaveAttribute("href", agendaDestination);
   await agendaLink.click();
-  await expect(page).toHaveURL(
-    `/admin/organizations/${ORGANIZATION_ID}/events/open-sessionboard-conf/agenda`,
-  );
+  await expect(page).toHaveURL(agendaDestination);
   await page.goto(
     `/admin/organizations/${ORGANIZATION_ID}/events/${PRIMARY_EVENT_ID}/integrations`,
   );

@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+!.env.cloudflare.example
 
 # Dependencies and builds
 node_modules/
@@ -18,6 +19,16 @@ Kill-My-SaaS-Competition-Brief/
 .wrangler/
 .dev.vars
 .gjc/
+.omo/
+apps/api/wrangler.generated.toml
+
+# Public-release exclusions
+.env.release-*
+*.session.html
+gjc-session-*.html
+evidence/private/
+evidence/raw/
+evidence/transcripts/
 
 # Tests and browser artifacts
 playwright-report/
