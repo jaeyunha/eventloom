@@ -909,6 +909,31 @@ class AirtablePublishedSpeakerProjectionStore implements PublishedSpeakerRouteDe
     };
   }
 
+  async listPublishedEventProjections(): Promise<
+    readonly Pick<
+      PublishedSpeakerProjectionRecord,
+      "organizationId" | "eventId" | "event" | "revision"
+    >[]
+  > {
+    return (await this.#store.list()).map((record) => ({
+      organizationId: record.organizationId,
+      eventId: record.eventId,
+      event: {
+        slug: record.event.slug,
+        name: record.event.name,
+        timeZone: record.event.timeZone,
+        startsOn: record.event.startsOn,
+        endsOn: record.event.endsOn,
+        venueName: record.event.venueName,
+      },
+      revision: {
+        id: record.revision.id,
+        number: record.revision.number,
+        publishedAt: record.revision.publishedAt,
+      },
+    }));
+  }
+
   async getPublishedSpeakerHeadshot(
     eventSlug: string,
     speakerId: string,
@@ -6231,6 +6256,29 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
         if (!provisioned) {
           throw new Error(`Speaker grant provisioning failed for participant ${participant.id}.`);
         }
+        await this.#database
+          .prepare(
+            `INSERT INTO audit_events
+               (id, tenant_id, actor_type, actor_id, action, resource_type, resource_id,
+                trace_id, details_json, occurred_at)
+             VALUES (?, ?, 'user', ?, 'speaker_access_provisioned', 'speaker_profile', ?, NULL, ?, ?)
+             ON CONFLICT (id) DO NOTHING`,
+          )
+          .bind(
+            `speaker-access-provisioned:${input.eventId}:${input.submissionId}:${participant.id}:${input.idempotencyKey.trim()}`,
+            input.tenantId,
+            input.decidedBy,
+            `speaker-profile:${input.eventId}:${participant.id}`,
+            JSON.stringify({
+              eventId: input.eventId,
+              submissionId: input.submissionId,
+              participantId: participant.id,
+              decisionId: input.decisionId,
+              idempotencyKey: input.idempotencyKey,
+            }),
+            input.decidedAt,
+          )
+          .run();
       }),
     );
   }
@@ -10719,6 +10767,44 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
       },
     },
     publishedSpeakers: publishedSpeakerProjections,
+    publishedEvents: {
+      async listPublishedEvents() {
+        const projections = await publishedSpeakerProjections.listPublishedEventProjections();
+        const organizationRows = await options.database
+          .prepare("SELECT organization_id, name FROM organizations")
+          .all<{ organization_id: string; name: string }>();
+        const organizationNameById = new Map(
+          organizationRows.results.map((row) => [row.organization_id, row.name]),
+        );
+        const now = new Date();
+        const records = await Promise.all(
+          projections.map(async (projection) => {
+            const event = await eventRepository.getEvent(
+              projection.organizationId,
+              projection.eventId,
+            );
+            const organizationName = organizationNameById.get(projection.organizationId);
+            if (event === null || event.status !== "active" || organizationName === undefined) {
+              return null;
+            }
+            return {
+              organization: {
+                id: projection.organizationId,
+                name: organizationName,
+              },
+              event: projection.event,
+              cfpOpen:
+                event.cfpSettings.enabled &&
+                (event.cfpSettings.opensAt === null ||
+                  new Date(event.cfpSettings.opensAt) <= now) &&
+                (event.cfpSettings.closesAt === null ||
+                  now <= new Date(event.cfpSettings.closesAt)),
+            };
+          }),
+        );
+        return records.filter((record) => record !== null);
+      },
+    },
     organizerOverview,
     publicApi: {
       contract: publicApiV1Contract,

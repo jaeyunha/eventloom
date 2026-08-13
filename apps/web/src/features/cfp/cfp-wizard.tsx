@@ -1,5 +1,6 @@
 "use client";
 
+import { CheckCircle2, FileText, Upload } from "lucide-react";
 import { useRouter } from "next/navigation";
 import {
   type ChangeEvent,
@@ -10,7 +11,6 @@ import {
   useRef,
   useState,
 } from "react";
-import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card } from "../../components/ui/card";
 import { RichTextArea } from "../../components/ui/rich-text";
@@ -31,7 +31,7 @@ import {
   isCfpSchemaVersionConflict,
   type PublishedCfp,
 } from "./api";
-import { CharacterCount, Field, Input, Select } from "./cfp-field";
+import { CharacterCount, Field, Input } from "./cfp-field";
 import { useCfpStartupStore } from "./cfp-startup-provider";
 import styles from "./cfp-wizard.module.css";
 import { clearCfpSubmissionState, getCfpSubmissionPointerStorageKey } from "./draft-persistence";
@@ -54,11 +54,11 @@ import {
 } from "./validation";
 
 const STEP_LABELS: Record<CfpStep, string> = {
-  welcome: "Welcome!",
-  account: "Account",
-  submission: "Submission",
-  participants: "Participant",
-  review: "Review",
+  welcome: "Start",
+  account: "Your account",
+  submission: "Your proposal",
+  participants: "Speakers",
+  review: "Review & submit",
 };
 
 const FORMAT_OPTIONS = ["Featured Keynote", "Breakout Session", "Panel", "Workshop"];
@@ -302,6 +302,10 @@ function fileStateKey(fieldKey: string, participantIndex?: number): string {
   return participantIndex === undefined ? fieldKey : `participants.${participantIndex}.${fieldKey}`;
 }
 
+function fileNameStorageKey(assetId: string): string {
+  return `open-sessionboard:cfp-upload-name:v1:${assetId}`;
+}
+
 interface CfpWizardProps {
   eventSlug: string;
   step: CfpStep;
@@ -336,13 +340,22 @@ function CfpProgress({ step, mobile = false }: { step: CfpStep; mobile?: boolean
         {WIZARD_STEPS.map((wizardStep, index) => (
           <li
             aria-current={index === currentIndex ? "step" : undefined}
-            className={index === currentIndex ? styles.mobileStepCurrent : undefined}
+            className={
+              index === currentIndex
+                ? styles.mobileStepCurrent
+                : index < currentIndex
+                  ? styles.mobileStepComplete
+                  : undefined
+            }
             key={wizardStep.id}
           >
             <span aria-hidden="true" className={styles.mobileStepNumber}>
               {index + 1}
             </span>
-            <span>{wizardStep.label}</span>
+            <span className="sr-only">
+              {wizardStep.label}
+              {index < currentIndex ? " complete" : ""}
+            </span>
           </li>
         ))}
       </ol>
@@ -352,6 +365,7 @@ function CfpProgress({ step, mobile = false }: { step: CfpStep; mobile?: boolean
 
 function PublicCfpShell({
   children,
+  organization,
   event,
   eventName,
   form,
@@ -360,6 +374,7 @@ function PublicCfpShell({
   className,
 }: {
   children: ReactNode;
+  organization?: PublishedCfp["organization"] | undefined;
   event?: PublishedCfp["event"] | undefined;
   eventName?: string | undefined;
   form?: CfpPublishedForm | undefined;
@@ -367,6 +382,7 @@ function PublicCfpShell({
   step?: CfpStep | undefined;
   className?: string | undefined;
 }) {
+  const resolvedOrganizationName = organization?.name ?? "Open Sessionboard";
   const resolvedEventName = event?.name ?? eventName ?? "Open Sessionboard";
   const resolvedFormName = form?.name ?? formName ?? "Call for proposals";
 
@@ -377,7 +393,7 @@ function PublicCfpShell({
           <span aria-hidden="true" className={styles.brandMark}>
             OS
           </span>
-          <span>Open Sessionboard</span>
+          <span>{resolvedOrganizationName}</span>
         </div>
         <div className={styles.publicHeaderContext}>
           <span>{resolvedEventName}</span>
@@ -403,20 +419,26 @@ function PublicCfpShell({
             {event ? (
               <>
                 <Separator className={styles.railSeparator} />
-                <dl className={styles.railMeta}>
-                  <div>
-                    <dt>Open</dt>
-                    <dd>{formatCfpWindowDate(event.opensAt, event.timezone)}</dd>
-                  </div>
-                  <div>
-                    <dt>Close</dt>
-                    <dd>{formatCfpWindowDate(event.closesAt, event.timezone)}</dd>
-                  </div>
-                </dl>
+                <section className={styles.deadlineCard} aria-labelledby="cfp-window-heading">
+                  <p id="cfp-window-heading" className={styles.deadlineLabel}>
+                    Submission window
+                  </p>
+                  <dl className={styles.railMeta}>
+                    <div>
+                      <dt>Opens</dt>
+                      <dd>{formatCfpWindowDate(event.opensAt, event.timezone)}</dd>
+                    </div>
+                    <div>
+                      <dt>Closes</dt>
+                      <dd>{formatCfpWindowDate(event.closesAt, event.timezone)}</dd>
+                    </div>
+                  </dl>
+                </section>
                 {form ? (
-                  <Badge className={styles.limitBadge} variant="outline">
-                    Submission Limit: {formSubmissionLimit(form)} submissions per user
-                  </Badge>
+                  <p className={styles.limitText}>
+                    Up to {formSubmissionLimit(form)} proposal
+                    {formSubmissionLimit(form) === 1 ? "" : "s"} per account
+                  </p>
                 ) : null}
               </>
             ) : null}
@@ -521,8 +543,11 @@ function mergeSecondaryContact(
   };
 }
 
-function fixtureRuntimeEnabled(): boolean {
-  return process.env.NODE_ENV === "test" || process.env.NEXT_PUBLIC_RUNTIME_PROFILE === "fixture";
+export function shouldAuthenticateCfpAccount(
+  step: CfpStep,
+  session: CfpAuthenticatedSession | null,
+): boolean {
+  return step === "account" && session === null;
 }
 
 function configuredCfpIdentity(
@@ -991,6 +1016,7 @@ export function CfpWizard({
   const [authenticatedSession, setAuthenticatedSession] = useState<CfpAuthenticatedSession | null>(
     null,
   );
+  const [confirmedApplicantContext, setConfirmedApplicantContext] = useState(false);
   const [password, setPassword] = useState("");
   const [errors, setErrors] = useState<ValidationErrors>({});
   const [hydrated, setHydrated] = useState(false);
@@ -1292,6 +1318,9 @@ export function CfpWizard({
 
   function setFileUploadState(key: string, state: FileUploadState): void {
     setFileUploadStates((current) => ({ ...current, [key]: state }));
+    if (state.status === "ready" && state.assetId && state.name) {
+      window.sessionStorage.setItem(fileNameStorageKey(state.assetId), state.name);
+    }
     noteLocalChange();
     setErrors({});
   }
@@ -1609,29 +1638,28 @@ export function CfpWizard({
 
     let nextDraft = draft;
     if (step === "account") nextDraft = syncPrimaryParticipant(draft);
-    const authenticateBeforePersist =
-      step === "account" && !authenticatedSession && !fixtureRuntimeEnabled()
-        ? async (candidateDraft: CfpDraft) => {
-            const authentication = await api.authenticateAccount({
-              email: candidateDraft.account.email,
-              password,
-              name: `${candidateDraft.account.firstName} ${candidateDraft.account.lastName}`.trim(),
-              ...(typeof window === "undefined"
-                ? {}
-                : { verificationCallbackUrl: window.location.href }),
-            });
-            if (authentication.status === "verification_required") {
-              throw new CfpVerificationRequiredError();
-            }
-            setAuthenticatedSession(authentication.session);
-            if (routeIdentity !== null) {
-              startupStore.updateSession(routeIdentity, authentication.session);
-            }
-            return syncPrimaryParticipant(
-              draftWithAuthenticatedSession(candidateDraft, authentication.session),
-            );
+    const authenticateBeforePersist = shouldAuthenticateCfpAccount(step, authenticatedSession)
+      ? async (candidateDraft: CfpDraft) => {
+          const authentication = await api.authenticateAccount({
+            email: candidateDraft.account.email,
+            password,
+            name: `${candidateDraft.account.firstName} ${candidateDraft.account.lastName}`.trim(),
+            ...(typeof window === "undefined"
+              ? {}
+              : { verificationCallbackUrl: window.location.href }),
+          });
+          if (authentication.status === "verification_required") {
+            throw new CfpVerificationRequiredError();
           }
-        : undefined;
+          setAuthenticatedSession(authentication.session);
+          if (routeIdentity !== null) {
+            startupStore.updateSession(routeIdentity, authentication.session);
+          }
+          return syncPrimaryParticipant(
+            draftWithAuthenticatedSession(candidateDraft, authentication.session),
+          );
+        }
+      : undefined;
     if (step === "review") {
       const invalidStep = published
         ? firstInvalidPublishedStep(
@@ -1755,7 +1783,12 @@ export function CfpWizard({
   }
 
   return (
-    <PublicCfpShell event={published?.event} form={published?.form} step={step}>
+    <PublicCfpShell
+      organization={published?.organization}
+      event={published?.event}
+      form={published?.form}
+      step={step}
+    >
       <ErrorSummary errors={errors} />
       {staleFormConflict ? (
         <section className={styles.errorSummary} role="alert">
@@ -1776,11 +1809,12 @@ export function CfpWizard({
                 staleFormConflict.pinnedDraftUnavailable || staleFormConflict.submissionId === null
               }
               onClick={reloadPinnedDraft}
+              type="button"
               variant="secondary"
             >
               Reload pinned draft
             </Button>
-            <Button onClick={discardStaleDraftAndStartNew} variant="destructive">
+            <Button onClick={discardStaleDraftAndStartNew} type="button" variant="destructive">
               Discard stale draft and start new
             </Button>
           </div>
@@ -1811,8 +1845,10 @@ export function CfpWizard({
         {step === "account" ? (
           <AccountStep
             authenticatedSession={authenticatedSession}
+            confirmedApplicantContext={confirmedApplicantContext}
             draft={draft}
             errors={errors}
+            onConfirmApplicantContext={() => setConfirmedApplicantContext(true)}
             password={password}
             setPassword={setPassword}
             updateDraft={updateDraft}
@@ -1850,6 +1886,7 @@ export function CfpWizard({
           <ReviewStep
             draft={draft}
             eventSlug={eventSlug}
+            fileUploadStates={fileUploadStates}
             organizationId={identity?.organizationId ?? ""}
             {...(published === null ? {} : { form: published.form })}
             answers={dynamicAnswers}
@@ -1862,6 +1899,7 @@ export function CfpWizard({
               className={styles.backButton}
               disabled={mutationPending}
               onClick={goBack}
+              type="button"
               variant="outline"
             >
               ← Back
@@ -1875,6 +1913,7 @@ export function CfpWizard({
               <Button
                 className={styles.draftButton}
                 onClick={() => void saveNow()}
+                type="button"
                 variant="secondary"
                 disabled={mutationPending || submissionsClosed}
               >
@@ -1882,7 +1921,16 @@ export function CfpWizard({
               </Button>
             ) : null}
             {!submissionsClosed ? (
-              <Button className={styles.primaryButton} disabled={mutationPending} type="submit">
+              <Button
+                className={styles.primaryButton}
+                disabled={
+                  mutationPending ||
+                  (step === "account" &&
+                    authenticatedSession !== null &&
+                    !confirmedApplicantContext)
+                }
+                type="submit"
+              >
                 {step === "welcome" ? "Continue →" : null}
                 {step === "account"
                   ? authenticatedSession
@@ -1938,22 +1986,6 @@ function WelcomeStep({
         Your speaker portal will show the status of your submission and any tasks assigned after
         acceptance.
       </p>
-      {event ? (
-        <section aria-labelledby="submission-window-title" className={styles.welcomeWindow}>
-          <h2 id="submission-window-title">Submission window</h2>
-          <div className={styles.welcomeDates}>
-            <div>
-              <span>Open</span>
-              <strong>{formatCfpWindowDate(event.opensAt, event.timezone)}</strong>
-            </div>
-            <div>
-              <span>Close</span>
-              <strong>{formatCfpWindowDate(event.closesAt, event.timezone)}</strong>
-            </div>
-          </div>
-          <p className={styles.welcomeTimezone}>Times shown in {event.timezone}.</p>
-        </section>
-      ) : null}
       <section aria-labelledby="resources-title" className={styles.welcomeResources}>
         <h2 id="resources-title">Resources</h2>
         <ul>
@@ -1986,11 +2018,15 @@ interface StepFormProps {
 function AccountStep({
   draft,
   errors,
+  confirmedApplicantContext,
+  onConfirmApplicantContext,
   password,
   setPassword,
   updateDraft,
   authenticatedSession,
 }: StepFormProps & {
+  confirmedApplicantContext: boolean;
+  onConfirmApplicantContext: () => void;
   password: string;
   setPassword: (value: string) => void;
   authenticatedSession: CfpAuthenticatedSession | null;
@@ -2003,6 +2039,26 @@ function AccountStep({
           ? `Continue as ${authenticatedSession.name}`
           : "Create account or sign in"}
       </h1>
+      {authenticatedSession && !confirmedApplicantContext ? (
+        <div className={styles.identityBoundary} role="note">
+          <strong>You are entering the applicant portal</strong>
+          <p>
+            This proposal will belong to {authenticatedSession.email}. Organizer and reviewer
+            permissions are not used here.
+          </p>
+          <div className={styles.identityBoundaryActions}>
+            <Button type="button" onClick={onConfirmApplicantContext}>
+              Continue as applicant
+            </Button>
+            <Button asChild type="button" variant="outline">
+              <a href="/admin">Return to organizer workspace</a>
+            </Button>
+            <Button asChild type="button" variant="ghost">
+              <a href="/login?next=%2Fportal%2Fsubmissions">Use another account</a>
+            </Button>
+          </div>
+        </div>
+      ) : null}
       {!authenticatedSession ? (
         <p>
           Enter an existing account password to sign in. If the email is new, the same action
@@ -2414,6 +2470,38 @@ function FileRequestControl({
       ? undefined
       : { status: "ready" as const, assetId: persistedAssetId });
   const uploadSequenceRef = useRef(0);
+  const acceptedTypeLabels = acceptedTypes.map((type) => {
+    const labels: Record<string, string> = {
+      "application/pdf": "PDF",
+      "application/msword": "Word",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "Word",
+      "application/vnd.ms-powerpoint": "PowerPoint",
+      "application/vnd.openxmlformats-officedocument.presentationml.presentation": "PowerPoint",
+    };
+    return labels[type.trim().toLowerCase()] ?? type;
+  });
+  const maxSizeLabel =
+    maxSize === undefined
+      ? undefined
+      : maxSize >= 1024 * 1024
+        ? `${maxSize / (1024 * 1024)} MB`
+        : `${Math.ceil(maxSize / 1024)} KB`;
+  const requirementParts = [
+    ...(acceptedTypeLabels.length > 0 ? [`Accepted: ${acceptedTypeLabels.join(", ")}`] : []),
+    ...(maxSizeLabel ? [`Max ${maxSizeLabel}`] : []),
+  ];
+  const helpId = `${field.key}-file-help`;
+  const errorId = `${field.key}-file-error`;
+  const statusId = `${field.key}-file-status`;
+  const hasUploadedFile = displayState?.status === "ready";
+  const uploadButtonLabel =
+    displayState?.status === "pending"
+      ? "Uploading…"
+      : hasUploadedFile
+        ? "Replace file"
+        : acceptedTypeLabels.length === 1 && acceptedTypeLabels[0] === "PDF"
+          ? "Choose PDF"
+          : "Choose file";
 
   function mimeTypeAllowed(contentType: string): boolean {
     const normalized = contentType.trim().toLowerCase();
@@ -2464,7 +2552,7 @@ function FileRequestControl({
           );
         }
         onChange({ assetId: result.assetId });
-        onStateChange({ status: "ready", name: file.name, assetId: result.assetId });
+        onStateChange({ status: "ready", name: result.fileName, assetId: result.assetId });
       })
       .catch((error) => {
         if (sequence !== uploadSequenceRef.current) return;
@@ -2477,26 +2565,66 @@ function FileRequestControl({
   }
 
   return (
-    <div>
-      <input
-        id={id}
-        accept={acceptedTypes.length > 0 ? acceptedTypes.join(",") : undefined}
-        aria-describedby={displayState?.status === "error" ? `${field.key}-file-error` : undefined}
-        onChange={handleFileChange}
-        type="file"
-      />
-      {displayState?.status === "pending" ? (
-        <p aria-live="polite" className={styles.fieldHint}>
-          {displayState.name} is uploading…
+    <div className={styles.fileRequestControl}>
+      {requirementParts.length > 0 ? (
+        <p className={styles.fieldHint} id={helpId}>
+          {requirementParts.join(" · ")}
         </p>
+      ) : null}
+      <div className={styles.filePicker}>
+        <input
+          id={id}
+          accept={acceptedTypes.length > 0 ? acceptedTypes.join(",") : undefined}
+          aria-describedby={[
+            ...(requirementParts.length > 0 ? [helpId] : []),
+            ...(displayState?.status === "error" ? [errorId] : []),
+            ...(displayState?.status === "pending" || displayState?.status === "ready"
+              ? [statusId]
+              : []),
+          ].join(" ")}
+          className={styles.fileInput}
+          disabled={displayState?.status === "pending"}
+          onChange={handleFileChange}
+          type="file"
+        />
+        <label
+          aria-disabled={displayState?.status === "pending"}
+          className={styles.fileButton}
+          htmlFor={id}
+        >
+          <Upload aria-hidden="true" size={18} />
+          {uploadButtonLabel}
+        </label>
+        <span className={styles.filePickerHint}>
+          {hasUploadedFile
+            ? "Choose a new file to replace this upload."
+            : "Select a file from your device."}
+        </span>
+      </div>
+      {displayState?.status === "pending" ? (
+        <div aria-live="polite" className={styles.fileStatus} id={statusId}>
+          <FileText aria-hidden="true" size={20} />
+          <div>
+            <strong>{displayState.name}</strong>
+            <span>Uploading securely…</span>
+          </div>
+        </div>
       ) : null}
       {displayState?.status === "ready" ? (
-        <p aria-live="polite" className={styles.fieldHint}>
-          {displayState.name ?? "The selected file"} is uploaded and ready.
-        </p>
+        <div
+          aria-live="polite"
+          className={`${styles.fileStatus} ${styles.fileStatusReady}`}
+          id={statusId}
+        >
+          <CheckCircle2 aria-hidden="true" size={20} />
+          <div>
+            <strong>{displayState.name ?? "Uploaded file"}</strong>
+            <span>Uploaded and ready</span>
+          </div>
+        </div>
       ) : null}
       {displayState?.status === "error" ? (
-        <p className={styles.fieldError} id={`${field.key}-file-error`} role="alert">
+        <p className={styles.fieldError} id={errorId} role="alert">
           {displayState.message}
         </p>
       ) : null}
@@ -2832,6 +2960,7 @@ function ParticipantsStep({
           disabled={draft.participants.length >= 15}
           onClick={addParticipant}
           size="sm"
+          type="button"
           variant="secondary"
         >
           ＋ Add participant
@@ -2845,9 +2974,7 @@ function ParticipantsStep({
       {draft.participants.map((participant, index) => (
         <section className={styles.participantCard} key={participant.id}>
           <div className={styles.participantCardHeading}>
-            <h2>
-              Participant {index + 1} of {draft.participants.length}
-            </h2>
+            <h2>{index === 0 ? "Primary speaker" : `Additional speaker ${index}`}</h2>
             {index > 0 ? (
               <Button
                 className={styles.removeButton}
@@ -2860,31 +2987,21 @@ function ParticipantsStep({
                   }))
                 }
                 size="sm"
+                type="button"
                 variant="ghost"
               >
                 Remove
               </Button>
             ) : null}
           </div>
-          <Field label="Role for this participant" name={`participants.${index}.role`}>
-            {(controlProps) => (
-              <Select
-                {...controlProps}
-                onChange={(event) =>
-                  updateDraft((current) =>
-                    mergeParticipant(current, index, {
-                      role: event.target.value as CfpParticipant["role"],
-                    }),
-                  )
-                }
-                value={participant.role}
-              >
-                <option>Speaker</option>
-                <option>Co-speaker</option>
-                <option>Moderator</option>
-              </Select>
-            )}
-          </Field>
+          <div className={styles.participantRole}>
+            <span>{index === 0 ? "Primary speaker" : "Co-speaker"}</span>
+            <p>
+              {index === 0
+                ? "This person is the main contact and presenter for the proposal."
+                : "This person will be listed as an additional presenter."}
+            </p>
+          </div>
           <div className={styles.twoColumns}>
             <Field
               error={errors[`participants.${index}.firstName`]}
@@ -3080,6 +3197,7 @@ function DynamicParticipantsFields({
           disabled={draft.participants.length >= 15}
           onClick={addParticipant}
           size="sm"
+          type="button"
           variant="secondary"
         >
           ＋ Add participant
@@ -3103,9 +3221,7 @@ function DynamicParticipantsFields({
         return (
           <section className={styles.participantCard} key={participant.id}>
             <div className={styles.participantCardHeading}>
-              <h2>
-                Participant {index + 1} of {draft.participants.length}
-              </h2>
+              <h2>{index === 0 ? "Primary speaker" : `Additional speaker ${index}`}</h2>
               {index > 0 ? (
                 <Button
                   className={styles.removeButton}
@@ -3118,31 +3234,21 @@ function DynamicParticipantsFields({
                     }))
                   }
                   size="sm"
+                  type="button"
                   variant="ghost"
                 >
                   Remove
                 </Button>
               ) : null}
             </div>
-            <Field label="Role for this participant" name={`participants.${index}.role`}>
-              {(controlProps) => (
-                <Select
-                  {...controlProps}
-                  onChange={(event) =>
-                    updateDraft((current) =>
-                      mergeParticipant(current, index, {
-                        role: event.target.value as CfpParticipant["role"],
-                      }),
-                    )
-                  }
-                  value={participant.role}
-                >
-                  <option>Speaker</option>
-                  <option>Co-speaker</option>
-                  <option>Moderator</option>
-                </Select>
-              )}
-            </Field>
+            <div className={styles.participantRole}>
+              <span>{index === 0 ? "Primary speaker" : "Co-speaker"}</span>
+              <p>
+                {index === 0
+                  ? "This person is the main contact and presenter for the proposal."
+                  : "This person will be listed as an additional presenter."}
+              </p>
+            </div>
             {fields.map((field) => {
               const state = evaluated.fields.get(field.key) ?? {
                 visible: true,
@@ -3222,7 +3328,13 @@ function SecondaryContacts({ draft, errors, updateDraft }: StepFormProps) {
 
   return (
     <section className={styles.secondaryContacts}>
-      <Button className={styles.textButton} onClick={addContact} size="sm" variant="ghost">
+      <Button
+        className={styles.textButton}
+        onClick={addContact}
+        size="sm"
+        type="button"
+        variant="ghost"
+      >
         ＋ Add Secondary Contact
       </Button>
       <p>Secondary contacts can assist with tasks and communication.</p>
@@ -3241,6 +3353,7 @@ function SecondaryContacts({ draft, errors, updateDraft }: StepFormProps) {
                 }))
               }
               size="sm"
+              type="button"
               variant="ghost"
             >
               Remove
@@ -3312,18 +3425,48 @@ function SecondaryContacts({ draft, errors, updateDraft }: StepFormProps) {
 function ReviewStep({
   draft,
   eventSlug,
+  fileUploadStates,
   organizationId,
   form,
   answers,
 }: {
   draft: CfpDraft;
   eventSlug: string;
+  fileUploadStates: FileUploadStates;
   organizationId: string;
   form?: CfpPublishedForm;
   answers: DynamicAnswers;
 }) {
   const router = useRouter();
   const audienceLevel = cfpReviewAudienceLevel(form, answers, draft.submission.level);
+  const uploadedFiles =
+    form?.submissionFields.flatMap((field) => {
+      if (field.kind !== "file_request") return [];
+      const uploadState = fileUploadStates[fileStateKey(field.key)];
+      const answer = answers[field.key];
+      const persistedAssetId =
+        typeof answer === "object" &&
+        answer !== null &&
+        "assetId" in answer &&
+        typeof answer.assetId === "string"
+          ? answer.assetId
+          : undefined;
+      if (uploadState?.status !== "ready" && persistedAssetId === undefined) return [];
+      const persistedFileName =
+        persistedAssetId === undefined
+          ? undefined
+          : window.sessionStorage.getItem(fileNameStorageKey(persistedAssetId)) ?? undefined;
+      return [
+        {
+          key: field.key,
+          label: field.label,
+          name:
+            uploadState?.status === "ready" && uploadState.name
+              ? uploadState.name
+              : (persistedFileName ?? "Uploaded file"),
+        },
+      ];
+    }) ?? [];
   return (
     <div>
       <h1>Review your submission</h1>
@@ -3335,6 +3478,7 @@ function ReviewStep({
             className={styles.textButton}
             onClick={() => router.push(getCfpStepRoute(organizationId, eventSlug, "submission"))}
             size="sm"
+            type="button"
             variant="ghost"
           >
             ✎ Edit session
@@ -3347,6 +3491,24 @@ function ReviewStep({
         <ReviewValue label="Track" value={draft.submission.track} />
         <ReviewValue label={audienceLevel.label} value={audienceLevel.value} />
         <ReviewValue label="Language" value={draft.submission.language || "Not specified"} />
+        {uploadedFiles.length > 0 ? (
+          <div className={styles.reviewFiles}>
+            <p className={styles.reviewFilesLabel}>Uploaded files</p>
+            {uploadedFiles.map((file) => (
+              <div className={styles.reviewFile} key={file.key}>
+                <FileText aria-hidden="true" size={20} />
+                <div>
+                  <span>{file.label}</span>
+                  <strong>{file.name}</strong>
+                </div>
+                <span className={styles.reviewFileStatus}>
+                  <CheckCircle2 aria-hidden="true" size={16} />
+                  Ready
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : null}
       </section>
       <section className={styles.reviewCard}>
         <div className={styles.reviewHeading}>
@@ -3355,6 +3517,7 @@ function ReviewStep({
             className={styles.textButton}
             onClick={() => router.push(getCfpStepRoute(organizationId, eventSlug, "participants"))}
             size="sm"
+            type="button"
             variant="ghost"
           >
             ✎ Edit participants
@@ -3376,6 +3539,7 @@ function ReviewStep({
 }
 
 function ReviewValue({ label, value }: { label: string; value: string }) {
+  if (value.trim().length === 0) return null;
   return (
     <dl className={styles.reviewValue}>
       <dt>{label}</dt>
@@ -3566,24 +3730,32 @@ export function CfpComplete({
           Check your speaker status dashboard for the submission and any tasks that need to be
           completed.
         </p>
-        <a href={getCfpPortalHandoffHref("/portal/submissions", completionIdentity?.eventId)}>
-          View submission status dashboard
-        </a>
         {completionIdentity?.canEdit ? (
-          <Button className={styles.textButton} onClick={editSubmission} variant="ghost">
+          <Button
+            className={styles.textButton}
+            onClick={editSubmission}
+            type="button"
+            variant="ghost"
+          >
             Edit submission
           </Button>
         ) : null}
-        <Button className={styles.textButton} onClick={submitAnotherSession} variant="ghost">
+        <Button
+          className={styles.textButton}
+          onClick={submitAnotherSession}
+          type="button"
+          variant="ghost"
+        >
           Submit another session
         </Button>
         <Button
           className={styles.primaryButton}
           onClick={() =>
-            router.push(getCfpPortalHandoffHref("/portal", completionIdentity?.eventId))
+            router.push(getCfpPortalHandoffHref("/portal/submissions", completionIdentity?.eventId))
           }
+          type="button"
         >
-          Continue to portal →
+          View submission status dashboard
         </Button>
       </div>
     </PublicCfpShell>

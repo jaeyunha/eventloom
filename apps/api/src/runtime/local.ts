@@ -62,6 +62,7 @@ import type {
 import { InMemoryReportRepository, ReportService } from "../features/reports/service";
 import type { ReportDefinition, ReportProgramRecord } from "../features/reports/types";
 import { InMemorySessionRepository, SessionService } from "../features/sessions/service";
+import type { Submission } from "../features/cfp/model";
 import type {
   Format,
   Level,
@@ -87,6 +88,7 @@ import type {
   SpeakerContentHistoryEntry,
   SpeakerContentRecord,
   SpeakerPortalCapability,
+  SpeakerPortalContext,
   SpeakerProfile,
   SpeakerRepository,
   SpeakerRosterEntry,
@@ -192,7 +194,7 @@ export const LOCAL_REVIEWER_SESSION_TOKEN = "local-reviewer-session";
 export const LOCAL_SPEAKER_SESSION_TOKEN = "local-speaker-session";
 
 type LocalPersona = {
-  readonly key: "organizer" | "reviewer" | "speaker";
+  readonly key: "organizer" | "reviewer" | "speaker" | "applicant";
   readonly sessionToken: string;
   readonly sessionId: string;
   readonly userId: string;
@@ -241,13 +243,20 @@ const LOCAL_PERSONAS: readonly LocalPersona[] = [
   },
 ];
 
-function localPersonaForToken(token: string): LocalPersona | null {
-  return LOCAL_PERSONAS.find((persona) => persona.sessionToken === token) ?? null;
+function localPersonaForToken(
+  personas: readonly LocalPersona[],
+  token: string,
+): LocalPersona | null {
+  return personas.find((persona) => persona.sessionToken === token) ?? null;
 }
 
-function localPersonaForCredentials(email: string, password: string): LocalPersona | null {
+function localPersonaForCredentials(
+  personas: readonly LocalPersona[],
+  email: string,
+  password: string,
+): LocalPersona | null {
   return (
-    LOCAL_PERSONAS.find(
+    personas.find(
       (persona) => persona.email === email.trim().toLowerCase() && persona.password === password,
     ) ?? null
   );
@@ -267,10 +276,10 @@ function clone<T>(value: T): T {
   return structuredClone(value);
 }
 
-function localAuthenticator(): RequestAuthenticator {
+function localAuthenticator(personas: readonly LocalPersona[]): RequestAuthenticator {
   const sessions: BetterAuthGateway = {
     async resolveSession(token) {
-      const persona = localPersonaForToken(token);
+      const persona = localPersonaForToken(personas, token);
       if (persona === null) return null;
       return {
         sessionId: persona.sessionId,
@@ -330,9 +339,12 @@ function localAuthCookieHeader(sessionToken: string): string {
   return `${LOCAL_SESSION_COOKIE}=${sessionToken}; Path=/; HttpOnly; SameSite=Lax`;
 }
 
-function localPersonaForRequest(request: Request): LocalPersona | null {
+function localPersonaForRequest(
+  personas: readonly LocalPersona[],
+  request: Request,
+): LocalPersona | null {
   const token = localCookieToken(request);
-  return token === null ? null : localPersonaForToken(token);
+  return token === null ? null : localPersonaForToken(personas, token);
 }
 function localAuthJson(payload: unknown, init: ResponseInit = {}): Response {
   const headers = new Headers(init.headers);
@@ -345,7 +357,9 @@ function localAuthJson(payload: unknown, init: ResponseInit = {}): Response {
  * better-auth instance or user database; deterministic fixture credentials issue
  * one of the organizer, reviewer, or speaker sessions.
  */
-function localAuthRoutes(): { handler: (request: Request) => Promise<Response> } {
+function localAuthRoutes(personas: LocalPersona[]): {
+  handler: (request: Request) => Promise<Response>;
+} {
   return {
     async handler(request) {
       const path = new URL(request.url).pathname;
@@ -428,6 +442,7 @@ class LocalSpeakerRepository implements SpeakerRepository {
   readonly #assetComments = new Map<string, SpeakerAssetComment[]>();
   readonly #content = new Map<string, SpeakerContentRecord>();
   readonly #contentHistory = new Map<string, SpeakerContentHistoryEntry[]>();
+  readonly #cfpPortalContexts = new Map<string, SpeakerPortalContext>();
   constructor() {
     this.#seed("demo-event");
     this.#seed("open-sessionboard-conf");
@@ -563,8 +578,90 @@ class LocalSpeakerRepository implements SpeakerRepository {
     return clone(this.#tasks.get(eventId) ?? []);
   }
 
+  registerCfpSubmission(
+    submission: Submission,
+    submissionTitle: string,
+    eventName: string,
+  ): void {
+    const primary =
+      submission.participants.find((participant) => participant.role === "primary") ??
+      submission.participants[0];
+    if (primary === undefined) return;
+    const submissions = this.#submissions.get(submission.eventId) ?? [];
+    const projectedSubmission: SpeakerSubmission = {
+      id: submission.id,
+      eventId: submission.eventId,
+      formId: submission.formId,
+      title: submissionTitle,
+      status: "submitted",
+      participantIds: submission.participants.map(({ id }) => id),
+      primaryParticipantId: primary.id,
+      version: submission.version,
+      answers: submission.answers,
+      updatedAt: submission.updatedAt,
+    };
+    this.#submissions.set(submission.eventId, [
+      ...submissions.filter(({ id }) => id !== submission.id),
+      projectedSubmission,
+    ]);
+    const profiles = this.#profiles.get(submission.eventId) ?? [];
+    const projectedProfiles = submission.participants.map(
+      (participant): SpeakerProfile => {
+        const profile: SpeakerProfile = {
+          id: `cfp-profile:${participant.id}`,
+          eventId: submission.eventId,
+          participantId: participant.id,
+          displayName:
+            [participant.firstName, participant.lastName].filter(Boolean).join(" ") ||
+            participant.email ||
+            "Speaker",
+          biography: participant.biography,
+          version: submission.version,
+          updatedAt: submission.updatedAt,
+        };
+        return participant.email ? { ...profile, email: participant.email } : profile;
+      },
+    );
+    const projectedIds = new Set(projectedProfiles.map(({ participantId }) => participantId));
+    this.#profiles.set(submission.eventId, [
+      ...profiles.filter(({ participantId }) => !projectedIds.has(participantId)),
+      ...projectedProfiles,
+    ]);
+    this.#cfpPortalContexts.set(submission.ownerAccountId, {
+      id: `portal:${submission.eventId}:${primary.id}`,
+      eventId: submission.eventId,
+      name: eventName,
+      slug: submission.eventId,
+      status: "active",
+      capabilities: ["submission-edit"],
+      submissionIds: [submission.id],
+      participantIds: submission.participants.map(({ id }) => id),
+      primaryParticipantId: primary.id,
+    });
+  }
+
   async getAccessScope(eventId: string, accountId: string): Promise<SpeakerAccessScope> {
     this.#seed(eventId);
+    const cfpContext = this.#cfpPortalContexts.get(accountId);
+    if (cfpContext?.eventId === eventId) {
+      return {
+        tenantId: LOCAL_ORGANIZATION_ID,
+        role: "speaker",
+        organizer: false,
+        submissionIds: [...cfpContext.submissionIds],
+        participantIds: [...cfpContext.participantIds],
+        capabilities: [...cfpContext.capabilities],
+        capabilitiesByParticipant: Object.fromEntries(
+          cfpContext.participantIds.map((participantId) => [
+            participantId,
+            [...cfpContext.capabilities],
+          ]),
+        ),
+        ...(cfpContext.primaryParticipantId === undefined
+          ? {}
+          : { primaryParticipantId: cfpContext.primaryParticipantId }),
+      };
+    }
     if (
       eventId !== "demo-event" ||
       (accountId !== LOCAL_SPEAKER_ACCOUNT_ID && accountId !== LOCAL_ORGANIZER_ACCOUNT_ID)
@@ -586,6 +683,8 @@ class LocalSpeakerRepository implements SpeakerRepository {
     };
   }
   async listPortalContexts(accountId: string) {
+    const cfpContext = this.#cfpPortalContexts.get(accountId);
+    if (cfpContext !== undefined) return [clone(cfpContext)];
     if (accountId !== LOCAL_SPEAKER_ACCOUNT_ID) return [];
     return [
       {
@@ -602,7 +701,12 @@ class LocalSpeakerRepository implements SpeakerRepository {
     ];
   }
   async getOrganizerAccessScope(eventId: string, accountId: string) {
-    if (eventId !== "demo-event" || accountId !== LOCAL_ORGANIZER_ACCOUNT_ID) return null;
+    if (
+      (eventId !== "demo-event" && eventId !== "open-sessionboard-conf") ||
+      accountId !== LOCAL_ORGANIZER_ACCOUNT_ID
+    ) {
+      return null;
+    }
     this.#seed(eventId);
     return {
       tenantId: LOCAL_ORGANIZATION_ID,
@@ -774,6 +878,27 @@ class LocalSpeakerRepository implements SpeakerRepository {
   async getAsset(eventId: string, assetId: string) {
     this.#seed(eventId);
     return clone(this.#assets.get(eventId)?.find(({ id }) => id === assetId) ?? null);
+  }
+
+  async listAssets(eventId: string, participantIds: readonly string[]) {
+    this.#seed(eventId);
+    const allowed = new Set(participantIds);
+    return clone(
+      (this.#assets.get(eventId) ?? []).filter(({ participantId }) => allowed.has(participantId)),
+    );
+  }
+
+  async listAssetComments(eventId: string, assetId: string) {
+    this.#seed(eventId);
+    return clone(this.#assetComments.get(`${eventId}\u0000${assetId}`) ?? []);
+  }
+
+  async createAssetComment(comment: SpeakerAssetComment) {
+    const key = `${comment.eventId}\u0000${comment.assetId}`;
+    const comments = this.#assetComments.get(key) ?? [];
+    comments.push(clone(comment));
+    this.#assetComments.set(key, comments);
+    return clone(comment);
   }
 
   async getContent(eventId: string, entityType: "session" | "speaker", entityId: string) {
@@ -1190,6 +1315,24 @@ function localAgendaEngine(suggestionProvider?: CloudflareAiProviders["agenda"])
   return new Proxy(engine, {
     get(target, property, receiver) {
       const value = Reflect.get(target, property, receiver);
+      if (property === "repository" && typeof value === "object" && value !== null) {
+        return new Proxy(value, {
+          get(repositoryTarget, repositoryProperty, repositoryReceiver) {
+            const repositoryValue = Reflect.get(
+              repositoryTarget,
+              repositoryProperty,
+              repositoryReceiver,
+            );
+            if (repositoryProperty !== "load" || typeof repositoryValue !== "function") {
+              return repositoryValue;
+            }
+            return async (eventId: string) => {
+              await ensureSeeded(eventId);
+              return repositoryValue.call(repositoryTarget, eventId);
+            };
+          },
+        });
+      }
       if (typeof value !== "function") return value;
       if (!methodsThatRequireSeed.has(property)) return value.bind(target);
       return async (input: string | { eventId: string }, ...rest: unknown[]) => {
@@ -2289,9 +2432,11 @@ function eventIdFrom(request: Request): string {
 }
 
 export function createLocalDependencies(aiProviders?: CloudflareAiProviders): ApiDependencies {
-  const authenticator = localAuthenticator();
+  const personas = [...LOCAL_PERSONAS];
+  const authenticator = localAuthenticator(personas);
   const speakerRepository = new LocalSpeakerRepository();
-  const speakerService = new SpeakerService(speakerRepository, new LocalPrivateAssetGateway(), {
+  const privateAssetGateway = new LocalPrivateAssetGateway();
+  const speakerService = new SpeakerService(speakerRepository, privateAssetGateway, {
     now: () => new Date(SEEDED_AT),
     generateId: (() => {
       let sequence = 0;
@@ -2721,7 +2866,14 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
       },
     },
   );
-  const cfpService = localCfpServiceWithSeed(createLocalCfpService());
+  const cfpService = localCfpServiceWithSeed(
+    createLocalCfpService(privateAssetGateway, {
+      async enqueueSubmissionConfirmation({ event, submission, submissionTitle }) {
+        if (submission.ownerAccountId === LOCAL_SPEAKER_ACCOUNT_ID) return;
+        speakerRepository.registerCfpSubmission(submission, submissionTitle, event.name);
+      },
+    }),
+  );
   return {
     events: { service: eventService },
     sessions: { service: sessionService },
@@ -2812,6 +2964,44 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
           endsOn: event.endsAt.slice(0, 10),
           venueName: event.venue,
         };
+      },
+    },
+    publishedEvents: {
+      async listPublishedEvents() {
+        const now = new Date();
+        const events = await eventRepository.listEvents(LOCAL_ORGANIZATION_ID);
+        const published = await Promise.all(
+          events.map(async (event) => ({
+            event,
+            revision: await agendaEngine.getPublishedAgenda(event.id),
+          })),
+        );
+        return published.flatMap(({ event, revision }) =>
+          revision === null
+            ? []
+            : [
+                {
+                  organization: {
+                    id: LOCAL_ORGANIZATION_ID,
+                    name: "Open Sessionboard",
+                  },
+                  event: {
+                    slug: event.slug,
+                    name: event.name,
+                    timeZone: event.timeZone,
+                    startsOn: event.startsAt.slice(0, 10),
+                    endsOn: event.endsAt.slice(0, 10),
+                    venueName: event.venue,
+                  },
+                  cfpOpen:
+                    event.cfpSettings.enabled &&
+                    (event.cfpSettings.opensAt === null ||
+                      new Date(event.cfpSettings.opensAt) <= now) &&
+                    (event.cfpSettings.closesAt === null ||
+                      now <= new Date(event.cfpSettings.closesAt)),
+                },
+              ],
+        );
       },
     },
     evaluations: {

@@ -206,6 +206,11 @@ export interface PublicCfpEvent {
   opensAt: EventCfp["opensAt"];
   closesAt: EventCfp["closesAt"];
 }
+export interface PublicCfpOrganization {
+  id: string;
+  slug: string;
+  name: string;
+}
 
 export type PublicFormRuleAction = Exclude<FormRuleAction, { type: "route" }>;
 export type PublicFormRule = Omit<CfpForm["rules"][number], "actions"> & {
@@ -229,6 +234,7 @@ export type PublicCfpForm = Omit<
 };
 
 export interface PublishedCfp {
+  organization: PublicCfpOrganization;
   event: PublicCfpEvent;
   form: PublicCfpForm;
 }
@@ -304,6 +310,13 @@ function addCompletedStep(
 
 function validateReview(submission: Submission, form: CfpForm): ReviewIssue[] {
   const issues: ReviewIssue[] = [];
+  if (submissionTitle(submission).length === 0) {
+    issues.push({
+      path: "answers.title",
+      code: "required",
+      message: "Title is required.",
+    });
+  }
   if (submission.participants.length === 0) {
     issues.push({
       path: "participants",
@@ -627,11 +640,17 @@ export class CfpService {
         Partial<Pick<CfpFileAssetGateway, "issueUpload" | "finalizeUpload">>)
     | undefined;
   readonly #ids: CfpIdGenerator;
+  readonly #organization: {
+    getPublicOrganization(tenantId: string): Promise<PublicCfpOrganization>;
+  };
 
   constructor(dependencies: {
     repository: CfpRepository;
     idempotency: CfpIdempotencyCoordinator;
     effects: CfpEffects;
+    organization: {
+      getPublicOrganization(tenantId: string): Promise<PublicCfpOrganization>;
+    };
     clock?: CfpClock;
     ids?: CfpIdGenerator;
     fileAssets?: CfpFileAssetAuthorizer &
@@ -640,6 +659,7 @@ export class CfpService {
     this.#repository = dependencies.repository;
     this.#idempotency = dependencies.idempotency;
     this.#effects = dependencies.effects;
+    this.#organization = dependencies.organization;
     this.#clock = dependencies.clock ?? { now: () => new Date() };
     this.#fileAssets = dependencies.fileAssets;
     this.#ids =
@@ -797,6 +817,7 @@ export class CfpService {
       ...publicForm
     } = sanitizedForm;
     return {
+      organization: await this.#organization.getPublicOrganization(input.tenantId),
       event: {
         id: event.id,
         slug: event.slug,

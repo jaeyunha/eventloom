@@ -293,7 +293,7 @@ test("submitter completes the account-first CFP with two participants", async ({
     )
     .toBeNull();
 });
-test("CFP mobile progress stays readable and exposes the current step", async ({
+test("CFP shell reflows without clipping and exposes the current step", async ({
   page,
   authSession,
 }) => {
@@ -302,16 +302,30 @@ test("CFP mobile progress stays readable and exposes the current step", async ({
     formId: "mobile-progress-cfp",
     eventName: "Mobile Progress Test Event",
   });
-  await page.setViewportSize({ height: 844, width: 390 });
+  await page.setViewportSize({ height: 900, width: 900 });
   await page.goto("/cfp/organizations/evaluator-org/events/mobile-progress");
 
-  const mobileProgress = page
+  const progressNavigations = page.getByRole("navigation", { name: "Submission progress" });
+  const desktopProgress = progressNavigations.filter({ hasNotText: "Step 1 of 5" });
+  const mobileProgress = progressNavigations.filter({ hasText: "Step 1 of 5" });
+
+  await expect(desktopProgress).toBeHidden();
+  await expect(mobileProgress).toBeVisible();
+  expect(
+    await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth <= document.documentElement.clientWidth &&
+        document.body.scrollWidth <= document.body.clientWidth,
+    ),
+  ).toBe(true);
+
+  await page.setViewportSize({ height: 844, width: 390 });
+  const compactProgress = page
     .getByRole("navigation", { name: "Submission progress" })
     .filter({ hasText: "Step 1 of 5" });
-  await expect(mobileProgress).toBeVisible();
-  await expect(mobileProgress.getByText("Welcome!", { exact: true }).first()).toBeVisible();
-  await expect(mobileProgress.locator('[aria-current="step"]').first()).toBeVisible();
-  await expect(mobileProgress.getByText("Review", { exact: true })).toBeVisible();
+  await expect(compactProgress).toBeVisible();
+  await expect(compactProgress.getByText("Start", { exact: true }).first()).toBeVisible();
+  await expect(compactProgress.locator('[aria-current="step"]').first()).toBeVisible();
 
   const fitsViewport = await page.evaluate(
     () =>

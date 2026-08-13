@@ -71,6 +71,10 @@ import {
   type OrganizerOverviewRouteDependencies,
 } from "./routes/organizer-overview";
 import {
+  createPublishedEventDirectoryRoutes,
+  type PublishedEventDirectoryRouteDependencies,
+} from "./routes/public-events";
+import {
   createPublishedSpeakerRoutes,
   type PublishedSpeakerRouteDependencies,
 } from "./routes/public-speakers";
@@ -149,6 +153,7 @@ export interface ApiDependencies<
   readonly evaluations?: EvaluationRouteDependencies;
   readonly speaker?: SpeakerRouteDependencies;
   readonly agenda?: AgendaRouteDependencies;
+  readonly publishedEvents?: PublishedEventDirectoryRouteDependencies;
   readonly publishedSpeakers?: PublishedSpeakerRouteDependencies;
   readonly cfp?: CfpRouteDependencies;
   readonly organizerOverview?: OrganizerOverviewRouteDependencies;
@@ -616,6 +621,12 @@ export function createApp<
       createAgendaAdminRoutes(dependencies.agenda),
     );
     app.route("/api/public/events/:eventSlug", createPublishedAgendaRoutes(dependencies.agenda));
+  }
+  if (dependencies.publishedEvents !== undefined) {
+    app.route(
+      "/api/public/events",
+      createPublishedEventDirectoryRoutes(dependencies.publishedEvents),
+    );
   }
   if (dependencies.events !== undefined) {
     app.route(

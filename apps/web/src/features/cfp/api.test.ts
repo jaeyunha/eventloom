@@ -124,6 +124,41 @@ describe("CFP authenticated session", () => {
     });
   });
 
+  it("falls back to sign-up when the gateway normalizes an anonymous sign-in", async () => {
+    let requestCount = 0;
+    const api = createCfpApi("https://web.example.com", (async () => {
+      requestCount += 1;
+      if (requestCount === 1) {
+        return Response.json(
+          {
+            error: {
+              code: "AUTHENTICATION_REQUIRED",
+              message: "The authentication request could not be completed.",
+            },
+          },
+          { status: 401 },
+        );
+      }
+      return Response.json({
+        token: "signup-token",
+        user: {
+          email: "speaker@example.com",
+          name: "New Speaker",
+          emailVerified: true,
+        },
+      });
+    }) as typeof fetch);
+
+    await expect(
+      api.authenticateAccount({
+        email: "speaker@example.com",
+        password: "StrongPass1!",
+        name: "New Speaker",
+      }),
+    ).resolves.toMatchObject({ status: "authenticated" });
+    expect(requestCount).toBe(2);
+  });
+
   it("fails closed when a successful sign-in omits a usable verified session", async () => {
     let requestCount = 0;
     const api = createCfpApi("https://web.example.com", (async () => {
@@ -173,6 +208,11 @@ it("parses the published dynamic schema without dropping rules or reusable metad
   const fetcher = (async () =>
     Response.json({
       data: {
+        organization: {
+          id: "org-1",
+          slug: "open-sessionboard",
+          name: "Open Sessionboard",
+        },
         event: {
           id: "event-1",
           slug: "event-1",
@@ -278,6 +318,7 @@ it("parses the published dynamic schema without dropping rules or reusable metad
   });
   expect(published.form.participantFields[0]?.key).toBe("pronouns");
   expect(published.form.rules[0]).toMatchObject({ id: "show-deck" });
+  expect(published.organization.name).toBe("Open Sessionboard");
 });
 describe("CFP mutation schema versions", () => {
   const submission = {
@@ -543,6 +584,7 @@ describe("CFP private file uploads", () => {
       state: "ready",
       contentType: "application/pdf",
       sizeBytes: 3,
+      fileName: "slides.pdf",
     });
 
     expect(requests).toHaveLength(3);

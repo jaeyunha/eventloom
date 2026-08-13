@@ -3,9 +3,9 @@ import { createApp } from "../app";
 import type { AgendaState, PublishedAgendaRevision } from "../features/agenda/types";
 import type { CfpForm, EventCfp, Submission } from "../features/cfp/model";
 import type { CfpRepository } from "../features/cfp/service";
-import type { CrmContact, CrmEventProjection } from "../features/crm/types";
 import { CommunicationService } from "../features/communications/service";
 import type { CommunicationActor, CommunicationRecipient } from "../features/communications/types";
+import type { CrmContact, CrmEventProjection } from "../features/crm/types";
 import { EvaluationService } from "../features/evaluations/service";
 import { SessionService } from "../features/sessions/service";
 import type {
@@ -3001,11 +3001,35 @@ function acceptanceDatabase(
 ): {
   readonly database: NonNullable<RuntimeBindings["DB"]>;
   readonly outbox: Map<string, { state: string; topic: string; payload: unknown }>;
-  readonly grants: string[];
+  readonly grants: Array<{
+    organizationId: string;
+    speakerProfileId: string;
+    userId: string;
+  }>;
+  readonly audits: Array<{
+    id: string;
+    tenantId: string;
+    action: string;
+    resourceType: string;
+    resourceId: string;
+    details: Record<string, unknown>;
+  }>;
 } {
   const idempotency = new Map<string, AcceptanceIdempotencyRow>();
   const outbox = new Map<string, { state: string; topic: string; payload: unknown }>();
-  const grants: string[] = [];
+  const grants: Array<{
+    organizationId: string;
+    speakerProfileId: string;
+    userId: string;
+  }> = [];
+  const audits: Array<{
+    id: string;
+    tenantId: string;
+    action: string;
+    resourceType: string;
+    resourceId: string;
+    details: Record<string, unknown>;
+  }> = [];
   const database = {
     prepare(query: string) {
       return {
@@ -3093,7 +3117,36 @@ function acceptanceDatabase(
                 };
               }
               if (query.includes("INSERT INTO speaker_grants")) {
-                grants.push(String(values[2]));
+                const grant = {
+                  organizationId: String(values[0]),
+                  speakerProfileId: String(values[1]),
+                  userId: String(values[2]),
+                };
+                if (
+                  !grants.some(
+                    (candidate) =>
+                      candidate.organizationId === grant.organizationId &&
+                      candidate.speakerProfileId === grant.speakerProfileId &&
+                      candidate.userId === grant.userId,
+                  )
+                ) {
+                  grants.push(grant);
+                }
+              }
+              if (query.includes("INSERT INTO audit_events")) {
+                const audit = {
+                  id: String(values[0]),
+                  tenantId: String(values[1]),
+                  action: query.includes("'speaker_access_provisioned'")
+                    ? "speaker_access_provisioned"
+                    : "evaluation_accepted",
+                  resourceType: query.includes("'speaker_profile'")
+                    ? "speaker_profile"
+                    : "submission",
+                  resourceId: String(values[3]),
+                  details: JSON.parse(String(values[4])) as Record<string, unknown>,
+                };
+                if (!audits.some((candidate) => candidate.id === audit.id)) audits.push(audit);
               }
               return { success: true, meta: { changes: 1 } };
             },
@@ -3105,7 +3158,7 @@ function acceptanceDatabase(
       return [];
     },
   } as unknown as NonNullable<RuntimeBindings["DB"]>;
-  return { database, outbox, grants };
+  return { database, outbox, grants, audits };
 }
 
 function acceptanceTransport(events: string[]): {
@@ -3890,7 +3943,7 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
         "Answers JSON": JSON.stringify(submission),
       },
     });
-    const { database, outbox, grants } = acceptanceDatabase(events);
+    const { database, outbox, grants, audits } = acceptanceDatabase(events);
     const cfp = new AirtableCfpRepository({ baseId: "base-test", transport });
     const speakers = new AirtableSpeakerRepository({
       baseId: "base-test",
@@ -4009,10 +4062,46 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       events.indexOf("airtable:POST:Sessions"),
     );
     expect(grants).toEqual([
-      "account-speaker",
-      "account-speaker",
-      "account-speaker",
-      "account-speaker",
+      {
+        organizationId: submission.tenantId,
+        speakerProfileId: "speaker-profile:event-acceptance:participant-primary",
+        userId: "account-speaker",
+      },
+      {
+        organizationId: submission.tenantId,
+        speakerProfileId: "speaker-profile:event-acceptance:participant-co",
+        userId: "account-speaker",
+      },
+    ]);
+    expect(audits.filter((audit) => audit.action === "speaker_access_provisioned")).toEqual([
+      {
+        id: "speaker-access-provisioned:event-acceptance:submission-acceptance:participant-primary:acceptance-key",
+        tenantId: submission.tenantId,
+        action: "speaker_access_provisioned",
+        resourceType: "speaker_profile",
+        resourceId: "speaker-profile:event-acceptance:participant-primary",
+        details: {
+          eventId: submission.eventId,
+          submissionId: submission.id,
+          participantId: "participant-primary",
+          decisionId: input.decisionId,
+          idempotencyKey: input.idempotencyKey,
+        },
+      },
+      {
+        id: "speaker-access-provisioned:event-acceptance:submission-acceptance:participant-co:acceptance-key",
+        tenantId: submission.tenantId,
+        action: "speaker_access_provisioned",
+        resourceType: "speaker_profile",
+        resourceId: "speaker-profile:event-acceptance:participant-co",
+        details: {
+          eventId: submission.eventId,
+          submissionId: submission.id,
+          participantId: "participant-co",
+          decisionId: input.decisionId,
+          idempotencyKey: input.idempotencyKey,
+        },
+      },
     ]);
     expect([...outbox.values()]).toContainEqual({
       state: "queued",

@@ -10,10 +10,16 @@ import {
   type CfpFileAsset,
   type CfpFileAssetGateway,
   type CfpFileUploadAuthorization,
+  type CfpEffects,
   type CfpIdempotencyCoordinator,
   type CfpRepository,
   CfpService,
 } from "../features/cfp/service";
+import type {
+  PrivateAssetCapabilityBinding,
+  PrivateAssetGateway,
+  PrivateUploadGrant,
+} from "../features/speaker/types";
 import { LOCAL_ORGANIZATION_ID } from "./constants";
 
 const LOCAL_CFP_NOW = "2026-08-08T12:00:00.000Z";
@@ -248,8 +254,11 @@ class LocalCfpRepository implements CfpRepository {
 type LocalFileCapability = {
   readonly assetId: string;
   readonly fieldKey: string;
+  readonly objectKey: string;
+  readonly fileName: string;
   readonly token: string;
   readonly expiresAt: string;
+  grant?: PrivateUploadGrant;
   used: boolean;
   uploaded?: {
     readonly contentType: string;
@@ -271,10 +280,18 @@ class LocalCfpFileAssetGateway implements CfpFileAssetGateway {
   readonly #capabilities = new Map<string, LocalFileCapability>();
   readonly #requestIds = new Map<string, string>();
   readonly #now: () => Date;
+  readonly #privateAssets:
+    | Pick<PrivateAssetGateway, "registerUploadCapability" | "inspectObject">
+    | undefined;
 
-  constructor(repository: LocalCfpRepository, now: () => Date) {
+  constructor(
+    repository: LocalCfpRepository,
+    now: () => Date,
+    privateAssets?: Pick<PrivateAssetGateway, "registerUploadCapability" | "inspectObject">,
+  ) {
     this.#repository = repository;
     this.#now = now;
+    this.#privateAssets = privateAssets;
   }
 
   private async context(input: {
@@ -389,6 +406,15 @@ class LocalCfpFileAssetGateway implements CfpFileAssetGateway {
     const assetId = `cfp-file-local-${digest.slice(0, 32)}`;
     const token = `local-upload-${(await localDigest(`${requestKey}:token`)).slice(0, 40)}`;
     const expiresAt = new Date(this.#now().getTime() + 15 * 60 * 1000).toISOString();
+    const objectKey = [
+      "cfp",
+      encodeURIComponent(input.tenantId),
+      encodeURIComponent(input.eventId),
+      encodeURIComponent(submission.id),
+      input.owner,
+      encodeURIComponent(input.fieldKey),
+      assetId,
+    ].join("/");
     const asset: CfpFileAsset = {
       assetId,
       tenantId: input.tenantId,
@@ -405,10 +431,27 @@ class LocalCfpFileAssetGateway implements CfpFileAssetGateway {
     const capability: LocalFileCapability = {
       assetId,
       fieldKey: input.fieldKey,
+      objectKey,
+      fileName,
       token,
       expiresAt,
       used: false,
     };
+    if (this.#privateAssets?.registerUploadCapability !== undefined) {
+      const binding: PrivateAssetCapabilityBinding = {
+        capabilityId: assetId,
+        tenantId: input.tenantId,
+        eventId: input.eventId,
+        submissionId: submission.id,
+        participantId: input.participantId ?? "cfp-submission",
+        objectKey,
+        contentType,
+        sizeBytes: input.sizeBytes,
+        fileName,
+        expiresAt,
+      };
+      capability.grant = await this.#privateAssets.registerUploadCapability(binding);
+    }
     this.#capabilities.set(assetId, capability);
     return this.authorization(asset, capability);
   }
@@ -420,15 +463,17 @@ class LocalCfpFileAssetGateway implements CfpFileAssetGateway {
     return {
       authorizationId: asset.assetId,
       asset: clone(asset),
-      grant: {
-        method: "PUT",
-        url: `/api/speaker/assets/capabilities/upload/${encodeURIComponent(asset.assetId)}/${capability.token}`,
-        headers: {
-          "content-type": asset.contentType,
-          "content-length": String(asset.sizeBytes),
+      grant:
+        capability.grant ??
+        {
+          method: "PUT",
+          url: `/api/speaker/assets/capabilities/upload/${encodeURIComponent(asset.assetId)}/${capability.token}`,
+          headers: {
+            "content-type": asset.contentType,
+            "content-length": String(asset.sizeBytes),
+          },
+          expiresAt: capability.expiresAt,
         },
-        expiresAt: capability.expiresAt,
-      },
     };
   }
 
@@ -515,7 +560,20 @@ class LocalCfpFileAssetGateway implements CfpFileAssetGateway {
       throw new CfpError("VALIDATION_FAILED", "The private upload asset is no longer available.");
     }
     if (input.state === "ready") {
-      if (capability.uploaded === undefined || capability.uploaded.sizeBytes !== asset.sizeBytes) {
+      const uploaded =
+        this.#privateAssets?.inspectObject === undefined
+          ? capability.uploaded
+          : await this.#privateAssets.inspectObject({
+              objectKey: capability.objectKey,
+              contentType: asset.contentType,
+              sizeBytes: asset.sizeBytes,
+            });
+      if (
+        uploaded === undefined ||
+        uploaded === null ||
+        uploaded.sizeBytes !== asset.sizeBytes ||
+        uploaded.contentType.trim().toLowerCase() !== asset.contentType.trim().toLowerCase()
+      ) {
         throw new CfpError("VALIDATION_FAILED", "The private upload has not been uploaded.");
       }
     }
@@ -580,16 +638,26 @@ class LocalCfpIdempotency implements CfpIdempotencyCoordinator {
   }
 }
 
-export function createLocalCfpService(): CfpService {
+export function createLocalCfpService(
+  privateAssets?: Pick<PrivateAssetGateway, "registerUploadCapability" | "inspectObject">,
+  effects?: CfpEffects,
+): CfpService {
   let sequence = 0;
   const now = () => new Date(LOCAL_CFP_NOW);
   const repository = new LocalCfpRepository();
   return new CfpService({
     repository,
+    organization: {
+      getPublicOrganization: async (tenantId) => ({
+        id: tenantId,
+        slug: tenantId,
+        name: "Open Sessionboard",
+      }),
+    },
     idempotency: new LocalCfpIdempotency(),
-    effects: { async enqueueSubmissionConfirmation() {} },
+    effects: effects ?? { async enqueueSubmissionConfirmation() {} },
     clock: { now },
     ids: { next: (prefix) => `${prefix}_local_${++sequence}` },
-    fileAssets: new LocalCfpFileAssetGateway(repository, now),
+    fileAssets: new LocalCfpFileAssetGateway(repository, () => new Date(), privateAssets),
   });
 }

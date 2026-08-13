@@ -83,6 +83,7 @@ export interface CfpFileUploadResult extends CfpFileAssetReference {
   state: "ready" | "rejected";
   contentType: string;
   sizeBytes: number;
+  fileName: string;
 }
 
 export function isCfpSchemaVersionConflict(error: unknown): error is CfpApiError {
@@ -254,6 +255,11 @@ const publicFormSchema = z
   .passthrough();
 
 export const publishedCfpSchema = z.object({
+  organization: z.object({
+    id: z.string(),
+    slug: z.string(),
+    name: z.string(),
+  }),
   event: publicEventSchema,
   form: publicFormSchema,
 });
@@ -579,6 +585,7 @@ function isInvalidCredentialsError(response: Response, body: unknown): boolean {
   const fields = authErrorFields(body);
   return (
     fields.code === "INVALID_EMAIL_OR_PASSWORD" ||
+    fields.code === "AUTHENTICATION_REQUIRED" ||
     (response.status === 401 &&
       (fields.message?.toLowerCase().includes("password") === true ||
         fields.message?.toLowerCase().includes("email") === true ||
@@ -855,7 +862,7 @@ export function createCfpApi(baseUrl: string, fetcher: Fetcher = fetch): CfpApi 
           409,
         );
       }
-      return finalized;
+      return { ...finalized, fileName: input.file.name };
     },
     getSession: async (input) => {
       const result = await authSessionRequest(fetcher, authBase, input?.signal);

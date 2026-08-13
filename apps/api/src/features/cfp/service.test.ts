@@ -346,6 +346,13 @@ function createFixture(
   const clock = { current: new Date(now), now: () => clock.current };
   const service = new CfpService({
     repository,
+    organization: {
+      getPublicOrganization: async (tenantId) => ({
+        id: tenantId,
+        slug: "open-sessionboard",
+        name: "Open Sessionboard",
+      }),
+    },
     idempotency: new MemoryIdempotency(),
     effects: {
       enqueueSubmissionConfirmation: async ({
@@ -589,6 +596,11 @@ describe("CFP rules and configuration", () => {
     });
 
     expect(published.event).toMatchObject({ id: "event_1", slug: "future-conf" });
+    expect(published.organization).toEqual({
+      id: "tenant_1",
+      slug: "open-sessionboard",
+      name: "Open Sessionboard",
+    });
     expect(published.form.id).toBe("form_1");
     await expect(
       service.getPublishedCfp({ tenantId: "tenant_2", eventSlug: "future-conf" }),
@@ -855,6 +867,56 @@ describe("CFP submission lifecycle", () => {
         ownerAccountId: "account_1",
         expectedVersion: draft.version,
         idempotencyKey: "invalid-submit",
+      }),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+  });
+
+  it("rejects submission without a title even when the form marks title optional", async () => {
+    const { service } = createFixture();
+    await service.saveForm(
+      buildForm({
+        version: 2,
+        submissionFields: buildForm().submissionFields.map((field) =>
+          field.key === "title" ? { ...field, required: false } : field,
+        ),
+      }),
+      1,
+    );
+    const ready = await completeValidDraft(service, "optional-title");
+    const untitled = await service.saveDraft({
+      tenantId: "tenant_1",
+      submissionId: ready.id,
+      ownerAccountId: "account_1",
+      expectedVersion: ready.version,
+      formVersion: ready.formVersion,
+      idempotencyKey: "optional-title-empty",
+      answers: { ...ready.answers, title: "   " },
+    });
+
+    const review = await service.review({
+      tenantId: "tenant_1",
+      submissionId: untitled.id,
+      ownerAccountId: "account_1",
+      idempotencyKey: "optional-title-review",
+    });
+    expect(review).toMatchObject({
+      canSubmit: false,
+      issues: [
+        expect.objectContaining({
+          path: "answers.title",
+          code: "required",
+          message: "Title is required.",
+        }),
+      ],
+    });
+    await expect(
+      service.submit({
+        tenantId: "tenant_1",
+        submissionId: untitled.id,
+        ownerAccountId: "account_1",
+        expectedVersion: untitled.version,
+        formVersion: untitled.formVersion,
+        idempotencyKey: "optional-title-submit",
       }),
     ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
   });

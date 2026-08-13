@@ -519,6 +519,19 @@ describe.sequential("composed local Worker", () => {
     expect(publicAgenda.entries.length).toBeGreaterThan(0);
     expect(publicSpeakersResponse.status).toBe(200);
     expect(JSON.stringify(publicSpeakers)).toContain("Alex Rivera");
+
+    const agendaWorkspaceResponse = await runtimeRequest(
+      `/api/admin/organizations/${organizationId}/events/${eventId}/agenda`,
+      { headers: organizerHeaders },
+    );
+    const agendaWorkspace = await jsonData<{
+      draft: { eventId: string; entries: unknown[] };
+      preview: { eventId: string; entries: unknown[] };
+    }>(agendaWorkspaceResponse);
+    expect(agendaWorkspaceResponse.status).toBe(200);
+    expect(agendaWorkspace.draft.eventId).toBe(eventId);
+    expect(agendaWorkspace.draft.entries.length).toBeGreaterThan(0);
+    expect(agendaWorkspace.preview.eventId).toBe(eventId);
   });
 
   it("rejects agenda conflicts and stale writes, then publishes the immutable public projection", async () => {

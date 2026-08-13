@@ -11,6 +11,8 @@ import {
   cfpConfirmationEmailMessage,
   cfpReviewAudienceLevel,
   getCfpCompletionHandoffStorageKey,
+  getCfpPortalHandoffHref,
+  shouldAuthenticateCfpAccount,
   rotateCfpCompletionIdentity,
 } from "./cfp-wizard";
 import {
@@ -85,6 +87,25 @@ describe("CFP flow", () => {
     expect(getNextCfpStep("participants")).toBe("review");
     expect(getNextCfpStep("review")).toBe("complete");
     expect(getPreviousCfpStep("review")).toBe("participants");
+  });
+
+  it("routes post-submission handoff to the applicant status dashboard", () => {
+    expect(getCfpPortalHandoffHref("/portal/submissions", "demo-event")).toBe(
+      "/portal/submissions?event=demo-event",
+    );
+  });
+
+  it("authenticates anonymous applicants before protected draft writes", () => {
+    expect(shouldAuthenticateCfpAccount("account", null)).toBe(true);
+    expect(
+      shouldAuthenticateCfpAccount("account", {
+        email: "speaker@example.com",
+        name: "Speaker",
+        firstName: "Speaker",
+        lastName: "",
+      }),
+    ).toBe(false);
+    expect(shouldAuthenticateCfpAccount("submission", null)).toBe(false);
   });
   it("rotates completed submission identity and only resumes editable records", () => {
     const identity = { organizationId: "org-1", eventId: "event-1", formId: "form-1" };
