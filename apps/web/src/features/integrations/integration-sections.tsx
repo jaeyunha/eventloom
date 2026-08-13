@@ -6,6 +6,16 @@ import {
   type WebhookEventType,
   webhookEventTypes,
 } from "@open-sessionboard/contracts";
+import {
+  ArrowUpRight,
+  BookOpen,
+  Braces,
+  Check,
+  KeyRound,
+  Radio,
+  ShieldCheck,
+  Webhook,
+} from "lucide-react";
 import { type FormEvent, useState } from "react";
 import {
   Badge,
@@ -29,6 +39,337 @@ import type {
   OneTimeSecret,
   WebhookSubscriptionSummary,
 } from "./types";
+
+const productionApiOrigin = "https://open-sessionboard-api-production.ashleyha0317.workers.dev";
+
+interface ApiDocsSectionProps {
+  readonly organizationId: string;
+  readonly basePath: string;
+}
+
+function CodeBlock({ label, children }: Readonly<{ label: string; children: string }>) {
+  return (
+    <div className={styles.codeBlock}>
+      <div className={styles.codeHeader}>
+        <span>{label}</span>
+      </div>
+      <pre>
+        <code>{children}</code>
+      </pre>
+    </div>
+  );
+}
+
+export function ApiDocsSection({ organizationId, basePath }: ApiDocsSectionProps) {
+  const encodedOrganizationId = encodeURIComponent(organizationId);
+  const webhookCollectionPath = `/api/v1/organizations/${encodedOrganizationId}/webhooks`;
+  const curlExample = `curl "${productionApiOrigin}${webhookCollectionPath}" \\
+  --header "Authorization: Bearer <api-key>" \\
+  --header "Accept: application/json"`;
+  const errorExample = `{
+  "error": {
+    "code": "VALIDATION_FAILED",
+    "message": "The request body is invalid.",
+    "traceId": "request-trace-id"
+  }
+}`;
+
+  return (
+    <div className={styles.docsLayout}>
+      <aside className={styles.docsSidebar} aria-label="On this page">
+        <p>API documentation</p>
+        <nav>
+          <a href="#introduction">Introduction</a>
+          <a href="#authentication">Authentication</a>
+          <a href="#quickstart">Quickstart</a>
+          <a href="#endpoints">Endpoints</a>
+          <a href="#webhook-security">Webhook security</a>
+          <a href="#errors">Errors &amp; limits</a>
+          <a href="#access">Who should use this</a>
+        </nav>
+      </aside>
+
+      <article className={styles.docsArticle}>
+        <section className={styles.docsHero} id="introduction">
+          <div className={styles.docsIcon} aria-hidden="true">
+            <BookOpen />
+          </div>
+          <p className={styles.docsKicker}>Developer platform</p>
+          <h1>Open Sessionboard API</h1>
+          <p className={styles.docsLead}>
+            Connect organization-owned systems to signed webhook administration. The public API is
+            deliberately small today: it exposes runtime discovery and webhook subscriptions without
+            exposing private program records.
+          </p>
+          <div className={styles.docsActions}>
+            <a className={styles.docsPrimaryAction} href={`${basePath}/api-keys`}>
+              Create an API key
+              <KeyRound aria-hidden="true" />
+            </a>
+            <a
+              className={styles.docsSecondaryAction}
+              href={`${productionApiOrigin}/api/v1/openapi.json`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              OpenAPI JSON
+              <ArrowUpRight aria-hidden="true" />
+            </a>
+          </div>
+        </section>
+
+        <section className={styles.docsSection}>
+          <div className={styles.docsFeatureGrid}>
+            <div>
+              <Braces aria-hidden="true" />
+              <h2>Stable contract</h2>
+              <p>OpenAPI 3.1 discovery, predictable JSON, and one error envelope.</p>
+            </div>
+            <div>
+              <ShieldCheck aria-hidden="true" />
+              <h2>Tenant scoped</h2>
+              <p>The bearer key and organization path must resolve to the same tenant.</p>
+            </div>
+            <div>
+              <Webhook aria-hidden="true" />
+              <h2>Signed delivery</h2>
+              <p>Timestamped HMAC-SHA256 signatures protect outbound webhook payloads.</p>
+            </div>
+          </div>
+        </section>
+
+        <section className={styles.docsSection} id="authentication">
+          <p className={styles.docsKicker}>Authentication</p>
+          <h2>Use a server-side bearer key</h2>
+          <p>
+            Create the narrowest key your integration needs. Never place API keys in browser code,
+            public repositories, screenshots, or client-side environment variables.
+          </p>
+          <CodeBlock label="HTTP header">Authorization: Bearer &lt;api-key&gt;</CodeBlock>
+          <div className={styles.docsCallout}>
+            <KeyRound aria-hidden="true" />
+            <div>
+              <strong>Available scopes</strong>
+              <p>
+                Mounted webhook operations require <code>webhooks:read</code> or{" "}
+                <code>webhooks:write</code>. Other key scopes shown in the organizer UI belong to
+                internal or future contracts and do not make unmounted public routes available.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section className={styles.docsSection} id="quickstart">
+          <p className={styles.docsKicker}>Quickstart</p>
+          <h2>List webhook subscriptions</h2>
+          <ol className={styles.docsSteps}>
+            <li>
+              <span className={styles.docsStepNumber}>1</span>
+              <div>
+                <strong>Create a key</strong>
+                <p>
+                  Open <a href={`${basePath}/api-keys`}>API keys</a> and grant{" "}
+                  <code>webhooks:read</code>.
+                </p>
+              </div>
+            </li>
+            <li>
+              <span className={styles.docsStepNumber}>2</span>
+              <div>
+                <strong>Store it once</strong>
+                <p>The full credential is only shown immediately after creation.</p>
+              </div>
+            </li>
+            <li>
+              <span className={styles.docsStepNumber}>3</span>
+              <div>
+                <strong>Call the API Worker</strong>
+                <p>Use the canonical production origin for direct server integrations.</p>
+              </div>
+            </li>
+          </ol>
+          <CodeBlock label="cURL">{curlExample}</CodeBlock>
+          <dl className={styles.docsDefinitionList}>
+            <div>
+              <dt>Production base URL</dt>
+              <dd>
+                <code>{productionApiOrigin}</code>
+              </dd>
+            </div>
+            <div>
+              <dt>Organization</dt>
+              <dd>
+                <code>{organizationId}</code>
+              </dd>
+            </div>
+            <div>
+              <dt>Runtime discovery</dt>
+              <dd>
+                <code>/api/v1/openapi.json</code>
+              </dd>
+            </div>
+          </dl>
+        </section>
+
+        <section className={styles.docsSection} id="endpoints">
+          <p className={styles.docsKicker}>API reference</p>
+          <h2>Current public surface</h2>
+          <p>
+            These are the mounted tenant API operations. Event reads expose publication-safe event,
+            accepted-session, and active-speaker projections. Agenda, CRM, files, reviews, and
+            submissions are not public-v1 resources.
+          </p>
+          <div className={styles.endpointList}>
+            <div>
+              <span className={styles.methodGet}>GET</span>
+              <code>/api/v1/organizations/{"{organizationId}"}/events</code>
+              <p>List events.</p>
+            </div>
+            <div>
+              <span className={styles.methodGet}>GET</span>
+              <code>
+                /api/v1/organizations/{"{organizationId}"}/events/{"{eventId}"}/sessions
+              </code>
+              <p>List accepted sessions.</p>
+            </div>
+            <div>
+              <span className={styles.methodGet}>GET</span>
+              <code>
+                /api/v1/organizations/{"{organizationId}"}/events/{"{eventId}"}/speakers
+              </code>
+              <p>List active speakers.</p>
+            </div>
+            <div>
+              <span className={styles.methodGet}>GET</span>
+              <code>/api/v1/openapi.json</code>
+              <p>Read the live runtime contract.</p>
+            </div>
+            <div>
+              <span className={styles.methodGet}>GET</span>
+              <code>{webhookCollectionPath}</code>
+              <p>List subscriptions.</p>
+            </div>
+            <div>
+              <span className={styles.methodPost}>POST</span>
+              <code>{webhookCollectionPath}</code>
+              <p>Create a subscription.</p>
+            </div>
+            {(["GET", "PATCH", "PUT", "DELETE"] as const).map((method) => (
+              <div key={method}>
+                <span
+                  className={
+                    method === "GET"
+                      ? styles.methodGet
+                      : method === "DELETE"
+                        ? styles.methodDelete
+                        : styles.methodWrite
+                  }
+                >
+                  {method}
+                </span>
+                <code>
+                  {webhookCollectionPath}/{"{subscriptionId}"}
+                </code>
+                <p>
+                  {method === "GET"
+                    ? "Read one subscription."
+                    : method === "DELETE"
+                      ? "Remove a subscription."
+                      : "Update a subscription."}
+                </p>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className={styles.docsSection} id="webhook-security">
+          <p className={styles.docsKicker}>Webhook security</p>
+          <h2>Verify before you process</h2>
+          <p>
+            Deliveries include <code>webhook-id</code>, <code>webhook-timestamp</code>, and{" "}
+            <code>webhook-signature</code>. Verify the HMAC-SHA256 signature against the canonical
+            JSON payload before parsing or acting, then deduplicate by delivery ID.
+          </p>
+          <ul className={styles.docsChecklist}>
+            <li>
+              <Check aria-hidden="true" />
+              Reject stale timestamps outside your tolerance window.
+            </li>
+            <li>
+              <Check aria-hidden="true" />
+              Compare signatures using a timing-safe function.
+            </li>
+            <li>
+              <Check aria-hidden="true" />
+              Store processed delivery IDs to make retries harmless.
+            </li>
+            <li>
+              <Check aria-hidden="true" />
+              Rotate a compromised signing secret from the Webhooks page.
+            </li>
+          </ul>
+        </section>
+
+        <section className={styles.docsSection} id="errors">
+          <p className={styles.docsKicker}>Errors &amp; limits</p>
+          <h2>One envelope, traceable requests</h2>
+          <p>
+            Send <code>X-Request-ID</code> when you need end-to-end correlation. Otherwise the API
+            creates a trace ID. Respect numeric <code>Retry-After</code> values on HTTP 429.
+          </p>
+          <CodeBlock label="Error response">{errorExample}</CodeBlock>
+          <div className={styles.statusList}>
+            <span className={styles.statusItem}>
+              <strong>400</strong> Invalid request
+            </span>
+            <span className={styles.statusItem}>
+              <strong>401</strong> Missing authentication
+            </span>
+            <span className={styles.statusItem}>
+              <strong>403</strong> Wrong tenant or scope
+            </span>
+            <span className={styles.statusItem}>
+              <strong>404</strong> Missing or withheld resource
+            </span>
+            <span className={styles.statusItem}>
+              <strong>429</strong> Rate limited
+            </span>
+            <span className={styles.statusItem}>
+              <strong>503</strong> Integration unavailable
+            </span>
+          </div>
+        </section>
+
+        <section className={styles.docsSection} id="access">
+          <p className={styles.docsKicker}>Access model</p>
+          <h2>Built for organization operators</h2>
+          <div className={styles.accessGrid}>
+            <div>
+              <Radio aria-hidden="true" />
+              <strong>Organizer owners and admins</strong>
+              <p>
+                Can read these docs, create keys, and administer webhooks for their organization.
+              </p>
+            </div>
+            <div>
+              <ShieldCheck aria-hidden="true" />
+              <strong>Reviewers</strong>
+              <p>Do not need API access. Their reviewer workspace exposes only assigned reviews.</p>
+            </div>
+            <div>
+              <BookOpen aria-hidden="true" />
+              <strong>Speakers</strong>
+              <p>
+                Use the first-party speaker portal. Its protected internal endpoints are not a
+                public integration contract and require no speaker-managed API key.
+              </p>
+            </div>
+          </div>
+        </section>
+      </article>
+    </div>
+  );
+}
 
 interface IntegrationActions {
   readonly busy: boolean;
@@ -221,6 +562,23 @@ export function OverviewSection({
             <CardContent>
               <p className={styles.metric}>{activeKeys}</p>
               <p className={styles.muted}>active key{activeKeys === 1 ? "" : "s"}</p>
+            </CardContent>
+          </Card>
+        </a>
+        <a className={styles.statusCardLink} href={`${base}/api-docs`}>
+          <Card>
+            <CardHeader>
+              <div className={styles.cardTitleRow}>
+                <CardTitle>API documentation</CardTitle>
+                <Badge variant="secondary">Developer guide</Badge>
+              </div>
+              <CardDescription>
+                Authentication, mounted endpoints, webhook verification, and errors.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <p className={styles.metric}>v1</p>
+              <p className={styles.muted}>organization-scoped public contract</p>
             </CardContent>
           </Card>
         </a>

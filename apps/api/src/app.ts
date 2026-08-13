@@ -30,6 +30,11 @@ import type { EvaluationService } from "./features/evaluations/service";
 import type { EvaluationActor } from "./features/evaluations/types";
 import { createEventAdminRoutes, type EventRouteDependencies } from "./features/events/routes";
 import { createMemberAdminRoutes, type MemberRouteDependencies } from "./features/members/routes";
+import {
+  createPublicCatalogRoutes,
+  type PublicCatalogDependencies,
+  publicCatalogOpenApiPaths,
+} from "./features/public-api/catalog";
 import { createPublicApiV1Routes, type PublicApiRoutesOptions } from "./features/public-api/routes";
 import { createRemixRoutes } from "./features/remix/routes";
 import type { RemixService } from "./features/remix/service";
@@ -138,6 +143,7 @@ export interface ApiDependencies<
   readonly authenticator?: Pick<RequestAuthenticator, "authenticate">;
   readonly auth?: AuthRouteDependencies;
   readonly publicApi?: PublicApiRoutesOptions<TRecord, TCreate, TUpdate>;
+  readonly publicCatalog?: PublicCatalogDependencies;
   readonly webhooks?: WebhookSubscriptionRepository;
   readonly integrations?: IntegrationAdminRouteDependencies;
   readonly evaluations?: EvaluationRouteDependencies;
@@ -454,7 +460,7 @@ export function createApp<
   app.use(
     "*",
     cors({
-      origin: (origin, context) => (origin === context.env.WEB_ORIGIN ? origin : ""),
+      origin: (origin, context) => (origin === context.env?.WEB_ORIGIN ? origin : ""),
       allowHeaders: [
         "Authorization",
         "Content-Type",
@@ -532,8 +538,14 @@ export function createApp<
       createWebhookSubscriptionRoutes(dependencies.webhooks),
     );
   }
+  if (dependencies.publicCatalog !== undefined) {
+    app.route("/api/v1", createPublicCatalogRoutes(dependencies.publicCatalog));
+  }
   if (dependencies.publicApi !== undefined) {
-    const configuredOpenApiPaths = dependencies.publicApi.openApi?.paths ?? {};
+    const configuredOpenApiPaths = {
+      ...(dependencies.publicCatalog === undefined ? {} : publicCatalogOpenApiPaths()),
+      ...(dependencies.publicApi.openApi?.paths ?? {}),
+    };
     app.route(
       "/api/v1",
       createPublicApiV1Routes({
