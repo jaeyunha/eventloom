@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { ChevronDown, LogOut, UserRound } from "lucide-react";
 import { usePathname, useSearchParams } from "next/navigation";
 import { type ReactNode, useState } from "react";
 import { submissionStatusPresentation, taskStatusPresentation } from "./model";
@@ -25,7 +26,7 @@ export const portalNavigation = [
 ] as const;
 
 const noParticipantWorkspaceDescription =
-  "Your sessions, profile, and tasks will appear here after you are added as an event participant.";
+  "Track your proposal in My submissions. Speaker tools unlock after an organizer accepts it.";
 
 export async function signOutAndRedirect(
   navigate: (path: string) => void = (path) => window.location.assign(path),
@@ -124,16 +125,9 @@ export function PortalFrame({ children }: Readonly<{ children: ReactNode }>) {
           <span aria-hidden="true">OS</span>
           <strong>Open Sessionboard</strong>
         </Link>
-        <div>
+        <div className={styles.accountArea}>
           <button
-            className={styles.secondaryButton}
-            type="button"
-            onClick={() => void signOutAndRedirect()}
-          >
-            Sign out
-          </button>
-          <button
-            className={styles.account}
+            className={styles.accountTrigger}
             type="button"
             aria-haspopup="menu"
             aria-label="Account menu"
@@ -148,6 +142,7 @@ export function PortalFrame({ children }: Readonly<{ children: ReactNode }>) {
               <strong>{displayName}</strong>
               <small>{context ? portalContextLabel(context) : "Speaker portal"}</small>
             </span>
+            <ChevronDown aria-hidden="true" size={14} />
           </button>
           {accountMenuOpen ? (
             <div id="portal-context-menu" role="menu" aria-label="Switch event">
@@ -168,11 +163,21 @@ export function PortalFrame({ children }: Readonly<{ children: ReactNode }>) {
                   </button>
                 ))
               )}
+              <Link href={`/portal/profile${eventQuery}`} role="menuitem">
+                <UserRound aria-hidden="true" size={14} />
+                Profile
+              </Link>
+              <button type="button" role="menuitem" onClick={() => void signOutAndRedirect()}>
+                <LogOut aria-hidden="true" size={14} />
+                Sign out
+              </button>
             </div>
           ) : null}
         </div>
       </header>
-      <div className={styles.portalLayout}>
+      <div
+        className={`${styles.portalLayout} ${context ? "" : styles.portalLayoutWithoutNavigation}`}
+      >
         {context ? (
           <nav className={styles.portalNav} aria-label="Speaker portal">
             <p className={styles.navLabel}>Your event</p>
@@ -243,8 +248,9 @@ export function NoParticipantWorkspaceState() {
       <span className={styles.stateIcon} aria-hidden="true">
         ◇
       </span>
-      <h1>No participant workspace</h1>
+      <h1>Your speaker workspace is not open yet</h1>
       <p>{noParticipantWorkspaceDescription}</p>
+      <Link href="/portal/submissions">View my submissions</Link>
     </div>
   );
 }

@@ -1,7 +1,12 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const requiredRoutes = [["Sign in", "/login"]] as const;
+const requiredRoutes = [
+  ["Product", "/#workflow"],
+  ["Workspaces", "/#workspaces"],
+  ["Live demo", "/events"],
+  ["Sign in", "/login"],
+] as const;
 
 const navigationSource = readFileSync(new URL("./product-navigation.tsx", import.meta.url), "utf8");
 const homePageSource = readFileSync(new URL("../../app/page.tsx", import.meta.url), "utf8");
@@ -17,6 +22,7 @@ describe("ProductNavigation", () => {
       expect(navigationSource).toContain(`label: "${label}"`);
     }
     expect(navigationSource).not.toContain("/docs/api");
+    expect(navigationSource).not.toContain("API docs");
     expect(navigationSource).not.toContain("Primary workspaces");
   });
 
@@ -34,7 +40,9 @@ describe("Home", () => {
     expect(homePageSource).toContain("Human-authoritative review");
     expect(homePageSource).toContain("Conflict-safe scheduling");
     expect(homePageSource).toContain("explicitly published");
-    expect(homePageSource).toContain("Organizers share event-specific CFP");
+    expect(homePageSource).toContain("Run your speaker program");
+    expect(homePageSource).toContain("Explore the live product");
+    expect(homePageSource).toContain("Publish the program, not your working table");
     expect(homePageSource).not.toContain("/docs/api");
     expect(homePageSource).not.toContain("NEXT_PUBLIC_API_URL");
   });

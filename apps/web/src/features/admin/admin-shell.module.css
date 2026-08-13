@@ -372,6 +372,12 @@
   backdrop-filter: blur(16px);
 }
 
+.workspaceHeaderActions {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+}
+
 .breadcrumbs {
   display: flex;
   min-width: 0;
@@ -397,6 +403,151 @@
   min-width: 0;
   flex: 1;
   background: #f7f7f8;
+}
+
+:global(.dark) .adminShell {
+  --background: #111110;
+  --foreground: #f5f5f3;
+  --card: #1a1a19;
+  --card-foreground: #f5f5f3;
+  --popover: #1a1a19;
+  --popover-foreground: #f5f5f3;
+  --primary: #f5f5f3;
+  --primary-foreground: #171717;
+  --secondary: #242422;
+  --secondary-foreground: #f5f5f3;
+  --muted: #242422;
+  --muted-foreground: #b8b8b2;
+  --accent: #30302e;
+  --accent-foreground: #ffffff;
+  --border: #30302e;
+  --input: #484845;
+  --ring: #8b83ff;
+  --sidebar: #161615;
+  --sidebar-foreground: #b8b8b2;
+  --sidebar-primary: #f5f5f3;
+  --sidebar-primary-foreground: #171717;
+  --sidebar-accent: #30302e;
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: #30302e;
+  --sidebar-ring: #8b83ff;
+  background: #111110;
+  color: #f5f5f3;
+}
+
+:global(.dark) .adminInset,
+:global(.dark) .adminMain {
+  background: #111110;
+}
+
+:global(.dark) .workspaceHeader {
+  border-bottom-color: #30302e;
+  background: rgb(17 17 16 / 88%);
+}
+
+:global(.dark) .breadcrumbs {
+  color: #999993;
+}
+
+:global(.dark) .breadcrumbs strong,
+:global(.dark) .brandCopy strong,
+:global(.dark) .organizationCopy strong,
+:global(.dark) .eventContext strong {
+  color: #f5f5f3;
+}
+
+:global(.dark) .brandCopy span,
+:global(.dark) .organizationCopy label,
+:global(.dark) .eventContext span,
+:global(.dark) .sidebarGroupLabel {
+  color: #999993;
+}
+
+:global(.dark) .commandButton,
+:global(.dark) .organizationCard,
+:global(.dark) .eventContext {
+  border-color: #30302e;
+  background: rgb(26 26 25 / 78%);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 24%);
+}
+
+:global(.dark) .commandButton:hover,
+:global(.dark) .organizationAction:hover,
+:global(.dark) .sidebarMenuButton:hover,
+:global(.dark) .sidebarMenuButton[data-active="true"] {
+  background: #30302e;
+  color: #ffffff;
+}
+
+:global(.dark) .organizationAvatar,
+:global(.dark) .commandButton kbd {
+  border-color: #484845;
+  background: #242422;
+  color: #f5f5f3;
+}
+
+:global(.dark) .organizationSelect {
+  border-color: #484845;
+  background: #1a1a19;
+  color: #f5f5f3;
+}
+
+:global(.dark) .organizationAction,
+:global(.dark) .sidebarMenuButton,
+:global(.dark) .eventContext > a {
+  color: #b8b8b2;
+}
+
+:global(.dark) .metricsSection,
+:global(.dark) .panel,
+:global(.dark) .overviewPanel,
+:global(.dark) .metricDataCard,
+:global(.dark) .metricCard {
+  border-color: #30302e;
+  background: #1a1a19;
+}
+
+:global(.dark) .sectionIntro,
+:global(.dark) .panelHeader,
+:global(.dark) .overviewPanelHeader,
+:global(.dark) .eventsTable th,
+:global(.dark) .eventsTable td,
+:global(.dark) .tableWrap,
+:global(.dark) .overviewTableWrap {
+  border-color: #30302e;
+}
+
+:global(.dark) .pageTitle,
+:global(.dark) .sectionTitle,
+:global(.dark) .panelTitle,
+:global(.dark) .metricCard strong,
+:global(.dark) .metricValue,
+:global(.dark) .taskTitle,
+:global(.dark) .eventName {
+  color: #f5f5f3;
+}
+
+:global(.dark) .pageDescription,
+:global(.dark) .metricLabel,
+:global(.dark) .metricDetail,
+:global(.dark) .panelEyebrow,
+:global(.dark) .taskDescription,
+:global(.dark) .taskMeta,
+:global(.dark) .taskPriority,
+:global(.dark) .muted,
+:global(.dark) .eventsTable th,
+:global(.dark) .eventsTable td {
+  color: #999993;
+}
+
+:global(.dark) .taskItem,
+:global(.dark) .taskItemCritical {
+  background: #1a1a19;
+}
+
+:global(.dark) .taskItem:hover,
+:global(.dark) .eventsTable tbody tr:hover td {
+  background: #242422;
 }
 
 .adminContent {
@@ -2077,6 +2228,83 @@
     min-width: 0;
     flex: 1 1 9rem;
   }
+}
+
+:global(.dark) .adminContent .pageTitle,
+:global(.dark) .adminContent .sectionTitle,
+:global(.dark) .adminContent .panelTitle,
+:global(.dark) .adminContent .metricValue,
+:global(.dark) .adminContent .taskTitle,
+:global(.dark) .adminContent .eventName {
+  color: #f5f5f3;
+}
+
+:global(.dark) .adminContent .pageDescription,
+:global(.dark) .adminContent .metricLabel,
+:global(.dark) .adminContent .metricDetail,
+:global(.dark) .adminContent .panelEyebrow,
+:global(.dark) .adminContent .taskDescription,
+:global(.dark) .adminContent .taskMeta,
+:global(.dark) .adminContent .taskPriority,
+:global(.dark) .adminContent .muted,
+:global(.dark) .adminContent .eventsTable th,
+:global(.dark) .adminContent .eventsTable td {
+  color: #999993;
+}
+
+:global(.dark) .adminContent .metricsSection,
+:global(.dark) .adminContent .panel,
+:global(.dark) .adminContent .overviewPanel,
+:global(.dark) .adminContent .metricDataCard,
+:global(.dark) .adminContent .metricCard {
+  border-color: #30302e;
+  background: #1a1a19;
+}
+
+:global(.dark) .adminContent .sectionIntro,
+:global(.dark) .adminContent .panelHeader,
+:global(.dark) .adminContent .overviewPanelHeader,
+:global(.dark) .adminContent .eventsTable th,
+:global(.dark) .adminContent .eventsTable td,
+:global(.dark) .adminContent .tableWrap,
+:global(.dark) .adminContent .overviewTableWrap {
+  border-color: #30302e;
+}
+
+:global(.dark) .adminContent .taskItem,
+:global(.dark) .adminContent .taskItemCritical {
+  background: #1a1a19;
+}
+
+:global(.dark) .adminContent .taskItem:hover,
+:global(.dark) .adminContent .eventsTable tbody tr:hover td {
+  background: #242422;
+}
+
+:global(.dark) .adminContent .statusDraft,
+:global(.dark) .adminContent .statusArchived {
+  border-color: #484845;
+  background: #242422;
+  color: #b8b8b2;
+}
+
+:global(.dark) .adminContent .secondaryButton,
+:global(.dark) .adminContent .outlineButton {
+  border-color: #484845;
+  color: #f5f5f3;
+}
+
+:global(.dark) .calendarRail {
+  border-color: #30302e;
+  background: #161615;
+}
+
+:global(.dark) .calendarCellOutside {
+  background: #141413;
+}
+
+:global(.dark) .calendarEvent:hover {
+  background: #26352e;
 }
 
 /* The redesign contract follows the legacy module so equal-specificity rules win by source order. */

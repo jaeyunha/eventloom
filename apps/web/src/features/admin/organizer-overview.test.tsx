@@ -663,6 +663,22 @@ describe("admin navigation", () => {
     expect(sessionHasOrganizerMembership(session, "other-org")).toBe(false);
     expect(sessionHasOrganizerMembership(session, null)).toBe(true);
   });
+
+  it("keeps API documentation behind the organizer shell rather than public role surfaces", () => {
+    const docsPath = "/admin/organizations/ai-engineer/events/event-live/integrations/api-docs";
+
+    expect(qualifiedEventContext(docsPath)).toEqual({
+      organizationId: "ai-engineer",
+      eventId: "event-live",
+    });
+    expect(
+      eventNavigationFor(qualifiedEventContext(docsPath))
+        .find((item) => item.label === "Integrations")
+        ?.match(docsPath),
+    ).toBe(true);
+    expect(docsPath).not.toContain("/review");
+    expect(docsPath).not.toContain("/portal");
+  });
   it("selects the organization from owner or admin session memberships", () => {
     const session = {
       user: { id: "user-1" },

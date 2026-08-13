@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import "./globals.css";
 import { Geist } from "next/font/google";
 import { DevToolsBadgeHider } from "@/components/dev-tools-badge-hider";
+import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -27,13 +28,20 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
   return (
-    <html lang="en" className={cn("font-sans", geist.variable)} data-scroll-behavior="smooth">
+    <html
+      lang="en"
+      className={cn("font-sans", geist.variable)}
+      data-scroll-behavior="smooth"
+      suppressHydrationWarning
+    >
       <body>
-        <TooltipProvider>
-          {children}
-          <Toaster />
-          {process.env.NODE_ENV === "development" ? <DevToolsBadgeHider /> : null}
-        </TooltipProvider>
+        <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+          <TooltipProvider>
+            {children}
+            <Toaster />
+            {process.env.NODE_ENV === "development" ? <DevToolsBadgeHider /> : null}
+          </TooltipProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

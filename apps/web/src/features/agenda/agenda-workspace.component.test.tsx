@@ -29,6 +29,12 @@ const workspaceSource = readFileSync(
   "utf8",
 );
 
+describe("agenda form track controls", () => {
+  it("does not add a second circular marker beside each checkbox", () => {
+    expect(workspaceStyles).not.toContain(".trackOptions label span::before");
+  });
+});
+
 const data: AgendaWorkspaceData = {
   event: {
     id: "evt_open",

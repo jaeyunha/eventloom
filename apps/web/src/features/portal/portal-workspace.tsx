@@ -370,8 +370,13 @@ export function PortalWorkspace({ section }: Readonly<{ section: PortalWorkspace
   if (!context || !view) {
     return (
       <WorkspaceState
-        title="No participant workspace"
-        description="A submitted proposal will appear here. Accepted proposals unlock your profile, tasks, and files."
+        title="Your speaker workspace is not open yet"
+        description="Track your proposal in My submissions. Profile, tasks, and files unlock after an organizer accepts it."
+        action={
+          <a className={styles.primaryButton} href="/portal/submissions">
+            View my submissions
+          </a>
+        }
       />
     );
   }

@@ -827,8 +827,10 @@ describe("organizer submission workspace", () => {
       }),
     );
 
-    expect(markup).toContain("Accept submission");
-    expect(markup).toContain("Reject submission");
+    expect(markup).toContain("Decision outcome");
+    expect(markup).toContain("Save accept");
+    expect(markup).not.toContain("Accept submission");
+    expect(markup).not.toContain("Reject submission");
     expect(markup).toContain("Decision and notification history");
     expect(markup).toContain("speaker edits are");
     expect(markup).toContain("read-only");

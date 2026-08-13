@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { createPortalApi, type PortalApi, validatePortalSocialUrl } from "./api";
 import { isPortalGenerationCurrent, loadPortalStartup, PortalProvider } from "./portal-provider";
+import { PortalSubmissions } from "./portal-submissions";
 import {
   formatPortalFileSize,
   NoParticipantWorkspaceState,
@@ -405,8 +406,9 @@ describe("speaker portal UI components", () => {
   it("renders the honest empty participant workspace state", () => {
     const markup = renderToStaticMarkup(createElement(NoParticipantWorkspaceState));
 
-    expect(markup).toContain("<h1>No participant workspace</h1>");
-    expect(markup).toContain("Your sessions, profile, and tasks will appear here");
+    expect(markup).toContain("<h1>Your speaker workspace is not open yet</h1>");
+    expect(markup).toContain('href="/portal/submissions"');
+    expect(markup).toContain("Track your proposal in My submissions");
     expect(markup).not.toContain("files");
   });
 
@@ -425,7 +427,8 @@ describe("speaker portal UI components", () => {
     );
 
     expect(markup).not.toContain('aria-label="Speaker portal"');
-    expect(markup).toContain("Sign out");
+    expect(markup).toContain('aria-haspopup="menu"');
+    expect(markup).not.toContain(">Sign out</button>");
   });
 
   it("posts sign-out with session credentials before navigating to login", async () => {

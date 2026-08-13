@@ -1067,8 +1067,18 @@ ul.publicSessionList > li:last-child .speakerCard {
   margin-top: var(--pub-space-3);
 }
 
+.speakerGallerySessions > h4,
+.speakerGallerySessions > ul {
+  grid-column: 1 / -1;
+}
+
+.speakerGallerySessions > ul {
+  grid-template-columns: 1fr;
+}
+
 .speakerGrid .speakerSessions ul {
-  padding-left: var(--pub-space-4);
+  padding-left: 0;
+  list-style: none;
 }
 
 /* detail profile (gallery + speakers list reuse) */

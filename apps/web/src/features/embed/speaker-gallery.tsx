@@ -319,7 +319,7 @@ export function SpeakerGallery({
                       <p>Biography not published.</p>
                     )}
                     {sessions.length > 0 ? (
-                      <div className={styles.speakerSessions}>
+                      <div className={`${styles.speakerSessions} ${styles.speakerGallerySessions}`}>
                         <h4>Sessions</h4>
                         <ul>
                           {sessions.map((session) => (

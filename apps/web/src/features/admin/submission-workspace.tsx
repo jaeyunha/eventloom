@@ -1923,26 +1923,6 @@ function DecisionControl({
               <option value="rejected">Reject</option>
             </select>
           </div>
-          <div className={styles.decisionActions}>
-            <button
-              className={styles.clearButton}
-              type="button"
-              aria-pressed={status === "accepted"}
-              disabled={!hasDecisionApi || busy}
-              onClick={() => setStatus("accepted")}
-            >
-              Accept submission
-            </button>
-            <button
-              className={styles.dangerButton}
-              type="button"
-              aria-pressed={status === "rejected"}
-              disabled={!hasDecisionApi || busy}
-              onClick={() => setStatus("rejected")}
-            >
-              Reject submission
-            </button>
-          </div>
         </div>
         <label className={styles.textareaLabel} htmlFor="decision-reason">
           Human-authored decision reason
@@ -1971,10 +1951,15 @@ function DecisionControl({
             {error}
           </p>
         ) : null}
-        <button className={styles.primaryLink} type="submit" disabled={!canSubmit}>
+        <Button
+          className={styles.decisionSubmit}
+          type="submit"
+          variant={status === "rejected" ? "destructive" : "default"}
+          disabled={!canSubmit}
+        >
           Save {status === "accepted" ? "accept" : status === "rejected" ? "reject" : "waitlist"}{" "}
           decision and queue notifications
-        </button>
+        </Button>
       </form>
       <section aria-labelledby="decision-history-heading">
         <h3 id="decision-history-heading">Decision and notification history</h3>

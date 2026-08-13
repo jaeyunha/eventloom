@@ -24,6 +24,7 @@ import {
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { createContext, type ReactNode, useContext, useEffect, useState } from "react";
+import { ThemeToggle } from "@/components/product-shell/theme-toggle";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -631,6 +632,9 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
                 </>
               ) : null}
               <strong>{currentPageLabel}</strong>
+            </div>
+            <div className={styles.workspaceHeaderActions}>
+              <ThemeToggle />
             </div>
           </header>
 

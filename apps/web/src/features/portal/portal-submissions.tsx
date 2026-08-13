@@ -163,20 +163,20 @@ function PortalSubmissionsContent() {
   return (
     <>
       <PageHeading
-        eyebrow="Your sessions"
-        title="Sessions"
-        description="Follow each proposal as it becomes a session or reaches a final program decision."
+        eyebrow="Applicant portal"
+        title="My submissions"
+        description="Track every proposal here. Speaker tools unlock only after a proposal is accepted."
       />
       <section className={styles.panel} aria-labelledby="sessions-heading">
         <div className={styles.listToolbar}>
           <div>
-            <h2 id="sessions-heading">All sessions</h2>
+            <h2 id="sessions-heading">All submissions</h2>
             <p className={styles.toolbarDescription}>
               {view.submissions.length} {view.submissions.length === 1 ? "proposal" : "proposals"}
             </p>
           </div>
           <label className={styles.searchField}>
-            <span className={styles.srOnly}>Search sessions</span>
+            <span className={styles.srOnly}>Search submissions</span>
             <span aria-hidden="true">⌕</span>
             <input
               type="search"
@@ -188,12 +188,12 @@ function PortalSubmissionsContent() {
         </div>
         {view.submissions.length === 0 ? (
           <EmptyState
-            title="No sessions yet"
-            description="When you submit a proposal, its session status will appear here."
+            title="No submissions yet"
+            description="When you submit a proposal, its status will appear here."
           />
         ) : submissions.length === 0 ? (
           <EmptyState
-            title="No matching sessions"
+            title="No matching submissions"
             description="Try a different title or clear your search."
             action={
               <button
@@ -209,6 +209,7 @@ function PortalSubmissionsContent() {
           <div className={styles.submissionGrid}>
             {submissions.map((submission) => {
               const presentation = submissionStatusPresentation(submission.status);
+              const accepted = submission.status.toLowerCase() === "accepted";
               const editTarget = can("submission-edit")
                 ? portalSubmissionEditTarget(context, submission)
                 : null;
@@ -227,6 +228,9 @@ function PortalSubmissionsContent() {
                   </div>
                   <footer>
                     <span>Updated {formatPortalDate(submission.updatedAt) ?? "recently"}</span>
+                    {accepted ? (
+                      <strong className={styles.acceptedMessage}>Your proposal was accepted</strong>
+                    ) : null}
                     {editTarget === null ? null : (
                       <Link
                         href={editTarget.href}
@@ -241,12 +245,17 @@ function PortalSubmissionsContent() {
                         Edit proposal
                       </Link>
                     )}
-                    <Link
+                    <a
                       href={`/portal/submissions/${encodeURIComponent(submission.id)}${eventQuery}`}
-                      aria-label={`View session status for ${portalSubmissionDisplayTitle(submission, view.submissions)}`}
+                      aria-label={`View submission ${portalSubmissionDisplayTitle(submission, view.submissions)}`}
                     >
-                      View session status <span aria-hidden="true">→</span>
-                    </Link>
+                      View submission <span aria-hidden="true">→</span>
+                    </a>
+                    {accepted ? (
+                      <Link href={`/portal${eventQuery}`} className={styles.primaryTextLink}>
+                        Open speaker workspace <span aria-hidden="true">→</span>
+                      </Link>
+                    ) : null}
                   </footer>
                 </article>
               );

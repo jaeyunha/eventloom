@@ -29,6 +29,11 @@ const agendaRouteSource = readFileSync(
   new URL("../../app/events/[eventSlug]/agenda/page.tsx", import.meta.url),
   "utf8",
 );
+const speakerGallerySource = readFileSync(
+  new URL("./speaker-gallery.tsx", import.meta.url),
+  "utf8",
+);
+const embedStylesSource = readFileSync(new URL("./embed.module.css", import.meta.url), "utf8");
 
 const event = {
   slug: "open-systems",
@@ -343,6 +348,8 @@ describe("public embeds", () => {
     expect(markup).toContain("ML");
     expect(markup).toContain("Systems that stay understandable");
     expect(markup).toContain('aria-live="polite"');
+    expect(speakerGallerySource).toContain("styles.speakerGallerySessions");
+    expect(embedStylesSource).toContain(".speakerGallerySessions >");
   });
   it("renders the distinct speakers list with name search, session details, and fallbacks", () => {
     const markup = renderToStaticMarkup(
