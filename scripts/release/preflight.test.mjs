@@ -40,8 +40,6 @@ function configurationFor(environment, index) {
     AUTH_FROM_EMAIL: "auth@foreverbrowsing.com",
     SPEAKERS_FROM_EMAIL: "speakers@foreverbrowsing.com",
     CALENDAR_FROM_EMAIL: "calendar@foreverbrowsing.com",
-    ACCELEVENTS_API_BASE_URL: `https://api-${environment}.accelevents.example`,
-    ACCELEVENTS_API_KEY: `accelevents-key-${environment}`,
     FORGE_API_URL: "https://forge.example.test",
     FORGE_REPOSITORY: "jaeyunha/open-sessionboard",
     FORGE_API_TOKEN: "forge-secret-token",
@@ -133,17 +131,20 @@ test("parses env files without expanding or exposing assignments", () => {
   );
 });
 
-test("validates provider presence, Wrangler alignment, and three-environment isolation", () => {
+test("validates D1-only configuration without Airtable or Accelevents", () => {
   const { configurations, wranglerInventory } = fixtures();
+  for (const configuration of Object.values(configurations)) {
+    delete configuration.AIRTABLE_ACCESS_TOKEN;
+    delete configuration.AIRTABLE_BASE_ID;
+    delete configuration.ACCELEVENTS_API_BASE_URL;
+    delete configuration.ACCELEVENTS_API_KEY;
+  }
   const result = validateReleaseConfiguration({
     configurations,
     targetEnvironment: "staging",
-    requiredProviders: ["accelevents"],
     wranglerInventory,
   });
-  assert.deepEqual(result.providerStates.staging, {
-    accelevents: "configured",
-  });
+  assert.deepEqual(result.providerStates.staging, {});
 });
 
 test("requires one consistent web and API origin contract per environment", () => {
@@ -196,44 +197,6 @@ test("requires one consistent web and API origin contract per environment", () =
         wranglerInventory,
       }),
     (error) => error.code === "ORIGIN_CONTRACT_MISMATCH",
-  );
-});
-
-test("rejects a partial optional integration provider", () => {
-  const { configurations, wranglerInventory } = fixtures();
-  delete configurations.production.ACCELEVENTS_API_KEY;
-
-  assert.throws(
-    () =>
-      validateReleaseConfiguration({
-        configurations,
-        targetEnvironment: "staging",
-        wranglerInventory,
-      }),
-    (error) =>
-      error instanceof PreflightError &&
-      error.code === "PARTIAL_PROVIDER_CONFIGURATION" &&
-      error.message.includes("production"),
-  );
-});
-
-test("rejects shared secrets without putting their values in the error", () => {
-  const { configurations, wranglerInventory } = fixtures();
-  const secret = configurations.local.AIRTABLE_ACCESS_TOKEN;
-  configurations.staging.AIRTABLE_ACCESS_TOKEN = secret;
-
-  assert.throws(
-    () =>
-      validateReleaseConfiguration({
-        configurations,
-        targetEnvironment: "staging",
-        wranglerInventory,
-      }),
-    (error) => {
-      assert.equal(error.code, "INVALID_ISOLATION");
-      assert.equal(error.message.includes(secret), false);
-      return true;
-    },
   );
 });
 

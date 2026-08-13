@@ -12,11 +12,16 @@ The deployment contract is supplied per operator environment:
 | --- | --- | --- | --- |
 | Local | `http://127.0.0.1:3015` | `http://127.0.0.1:8787` | Local processes; browser uses same-origin `/api/*` through the web proxy |
 | Staging | `NEXT_PUBLIC_APP_URL` / `WEB_ORIGIN` | `API_UPSTREAM_ORIGIN` / `API_URL` | Operator-supplied Cloudflare Workers origins |
-| Production | `NEXT_PUBLIC_APP_URL` / `WEB_ORIGIN` | `API_UPSTREAM_ORIGIN` / `API_URL` | Operator-supplied Cloudflare Workers origins |
+| Production | `https://eventloom.namuh.co` | `API_UPSTREAM_ORIGIN` / `API_URL` | Web Worker custom domain; operator-supplied API Worker origin |
 
 Custom domains are recommended for a stable public contract. DNS, Worker
 bindings, cookies, CORS, callbacks, and health checks must be verified by each
 operator before those domains are used as deployment inputs.
+
+The production web Worker declares `eventloom.namuh.co` as a Cloudflare custom
+domain. The `namuh.co` zone must be active in the deployment account; Wrangler
+will create and manage the required DNS record when the production Worker is
+deployed. Do not manually point the hostname at a `workers.dev` address.
 
 ## Prerequisites and isolation
 
@@ -217,7 +222,7 @@ The production form is identical except for the pinned production origins and co
 
 ```bash
 set -eu
-export NEXT_PUBLIC_APP_URL='https://web-production.example.com'
+export NEXT_PUBLIC_APP_URL='https://eventloom.namuh.co'
 export API_UPSTREAM_ORIGIN='https://api-production.example.com'
 : "${CLOUDFLARE_API_TOKEN:?set the production deployment token from the secret manager}"
 node scripts/cloudflare/deploy-web.mjs production open-sessionboard-web:production
@@ -225,9 +230,33 @@ node scripts/cloudflare/deploy-web.mjs production open-sessionboard-web:producti
 
 The web deployment receives the public app URL, server-only API upstream origin, and environment. Organization scope is resolved from authenticated memberships and organization-qualified routes. Never pass Airtable, OpenSend, Better Auth, or other private values to the web bundle.
 
-## Airtable and OpenSend
+## D1, optional Airtable, and OpenSend
 
-Create and provision a dedicated Airtable base for each environment. Airtable remains authoritative for organizations, events, CFPs, submissions, participants, reviews, sessions, agendas, CRM records, reports, and other program data; D1 stores identity/access and operational indexes. Use synthetic records in staging and inspect a dry run before any additive schema apply.
+D1 is authoritative. Drizzle owns typed schema/query definitions and schema
+generation/checking; Wrangler is the only supported numbered migration application path:
+
+```bash
+bun run --cwd apps/api db:generate
+bun run --cwd apps/api db:check
+bunx wrangler d1 migrations apply DB --cwd apps/api --local
+```
+
+Do not mix `drizzle-kit migrate` with Wrangler's `d1_migrations` history. Airtable is
+optional per organization and may be connected through OAuth or a scoped PAT. Missing
+Airtable configuration must not prevent Worker boot.
+
+Migration and reconciliation CLIs:
+
+```bash
+node scripts/d1-airtable-migration/export/export.mjs --help
+node scripts/d1-airtable-migration/import/import.mjs --help
+node scripts/d1-airtable-migration/verify/cli.mjs --help
+```
+
+If an old local `.wrangler` database fails in an internal `_cf_*` table, preserve it and
+use an isolated local persistence path rather than deleting user state.
+
+Create an Airtable base only when that environment enables the optional adapter. D1 remains authoritative for organizations, events, CFPs, submissions, participants, reviews, sessions, agendas, CRM records, reports, and other program data. Airtable receives selected projections and controlled inbound fields; use synthetic records in staging and inspect a dry run before any schema mapping change.
 
 OpenSend is the email and calendar delivery boundary at `https://opensend.namuh.co`. Use these exact sender identities:
 

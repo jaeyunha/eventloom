@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
+import { type CrmRouteEnvironment, createCrmRoutes } from "./routes";
 import { CrmService, InMemoryCrmRepository } from "./service";
-import { createCrmRoutes, type CrmRouteEnvironment } from "./routes";
 import type { CrmActor, CrmContact } from "./types";
 
 const actor: CrmActor = { kind: "user", organizationId: "org-a", userId: "owner-a", role: "owner" };

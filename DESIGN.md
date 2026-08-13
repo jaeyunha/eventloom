@@ -1,10 +1,29 @@
 # Eventloom Design System
 
+## 0. Authority and superseded references
+
+This file is the canonical visual and interaction contract for every Open
+Sessionboard surface: marketing, organizer administration, reviewer work,
+speaker portal, public event views, embeds, and CFP.
+
+Competition briefs, source-product screenshots, evaluator evidence, and prior
+clone notes are product-discovery and historical artifacts only. They may
+explain required capabilities, but they do not define layout, styling,
+information architecture, component behavior, or interaction patterns. When
+those artifacts conflict with this file, this file wins.
+
+Open Sessionboard is not a pixel-for-pixel reproduction of Sessionboard,
+Accelevents, Airtable, or any other source product. Linear is a quality
+reference for product principles, not a template to copy literally. Reuse its
+precision, speed, density, keyboard fluency, and calm hierarchy while preserving
+Open Sessionboard's own event-program vocabulary and workflows.
+
 ## 1. Product character
 
-The organizer workspace is a cool, precise operations surface: Linear's compact
-application density with Notion's quiet grouping and readable hierarchy. It must
-feel digital and operational, never warm-paper, editorial, or marketing-like.
+The product is a cool, precise program-operations surface: Linear's compact
+application density, calm hierarchy, and keyboard fluency applied to conference
+program work. It must feel digital, operational, fast, and coherent, never
+warm-paper, decorative, or like a collection of unrelated admin templates.
 
 The public marketing surface keeps that same operational character at a calmer
 scale. It is product-led rather than decorative: visitors should see a legible
@@ -13,6 +32,41 @@ signature is a large, dimensional agenda workspace with draft, validation, and
 published-revision states visible in one composition. Marketing copy is specific,
 measured, and human-authoritative; avoid generic productivity language, fake
 social proof, and automation-as-authority framing.
+
+### Product-wide principles
+
+1. **One object model.** Organization, event, submission, review, session,
+   speaker, task, communication, and publication are recognizable objects with
+   consistent names, metadata, status treatment, and detail layouts.
+2. **Context never disappears.** Every scoped surface shows where the user is,
+   which event or organization is active, and how to move to adjacent work
+   without returning to a dashboard.
+3. **Work before decoration.** The primary action, current status, next
+   decision, and blocking issue are visible before supporting explanation.
+4. **Progressive disclosure.** Dense information is welcome; simultaneous
+   visual competition is not. Secondary controls move into menus, inspectors,
+   tabs, or command actions.
+5. **Keyboard and pointer parity.** Search, navigation, selection, and common
+   actions are fast by keyboard while remaining obvious and usable by pointer.
+6. **Calm operational feedback.** Loading, saving, stale data, permissions,
+   errors, and completed work use stable inline states rather than surprising
+   layout shifts or decorative alerts.
+
+### Surface hierarchy
+
+The product uses four recurring surface levels:
+
+- **Workspace shell:** global navigation, organization/event switcher, command
+  palette, and account controls.
+- **Collection view:** filterable table, list, board, or timeline with saved
+  views, counts, bulk selection, and one clear creation action.
+- **Object detail:** persistent object identity, metadata, status, activity,
+  and a contextual inspector or action rail.
+- **Focused flow:** CFP, setup, review scoring, and other multi-step tasks that
+  remove unrelated navigation while preserving progress and exit context.
+
+Pages may vary in content density, but they must be composed from these shared
+levels rather than inventing a new visual grammar per feature.
 
 ## 2. Tokens
 
@@ -53,6 +107,17 @@ social proof, and automation-as-authority framing.
 
 - Desktop uses a fixed shadcn sidebar and a single main document scroll.
 - Main content is capped at 1180px with 24px desktop gutters.
+- Collection-heavy workspaces may use the full available content width when
+  columns, timelines, or split panes benefit from it; text-heavy detail content
+  remains constrained for scanability.
+- Page headers use one stable order: breadcrumb or scope context, title and
+  status, concise supporting metadata, then actions. Do not stack multiple
+  competing hero cards above operational content.
+- Collection pages use a compact control bar for view, filter, search, sort,
+  grouping, and bulk actions. The control bar remains visually subordinate to
+  the collection itself.
+- Detail pages use a main work region plus an optional contextual inspector.
+  Metadata should not be repeated in several disconnected cards.
 - Metrics are five columns on wide screens, two columns below 992px, and remain
   contained without page-level horizontal overflow.
 - Event tables own horizontal overflow; mobile uses event cards instead.
@@ -66,6 +131,21 @@ social proof, and automation-as-authority framing.
 ## 5. Reusable primitives and states
 
 - `AdminShell`: cool canvas, grouped sidebar, sticky context bar.
+- `WorkspaceHeader`: breadcrumb or scope switcher, object identity, status,
+  supporting metadata, and ordered primary/secondary actions.
+- `CollectionToolbar`: view switcher, query, filters, sort, grouping, saved
+  views, selection count, and creation action.
+- `ObjectList` / `DataTable`: compact selectable rows with stable columns,
+  keyboard focus, inline status, contextual actions, empty state, and bulk
+  state.
+- `ObjectDetail`: title and status header, tabbed or segmented work region,
+  activity trail, and optional inspector.
+- `Inspector`: right-side contextual metadata and actions that can collapse
+  without hiding essential information.
+- `StatusBadge`: shared semantic vocabulary across submissions, reviews,
+  sessions, speakers, tasks, communications, and publication.
+- `EmptyState`: explains why the collection is empty and offers one relevant
+  next action; it is not a marketing card.
 - `SidebarGroup`: workflow label plus compact menu rows; default, hover, active,
   keyboard-focus, collapsed-tooltip, and mobile-drawer states.
 - `CommandPalette`: trigger, dim backdrop, focused search, result rows, Escape
@@ -88,6 +168,26 @@ social proof, and automation-as-authority framing.
 - Scoped workflow routes must retain organization and event context in every
   tab, breadcrumb, command result, and sidebar link. Integrations belong under
   the event-scoped `Publish & measure` group.
+
+### Priority reference surfaces
+
+The first redesign wave establishes reusable patterns through these five
+surfaces:
+
+1. **Event workspace overview** - defines event context, workflow navigation,
+   operational summary, and next actions.
+2. **Submission collection** - defines dense collections, saved views, filters,
+   selection, status, and bulk decisions.
+3. **Submission detail** - defines object detail, review context, metadata,
+   activity, and consequential actions.
+4. **Agenda workspace** - defines high-density planning, timeline interaction,
+   validation, conflicts, and publication state.
+5. **Speaker portal home** - proves the same system can become calm and
+   task-oriented for an external participant without turning into a separate
+   product.
+
+CFP and reviewer flows inherit the focused-flow, object-detail, status, and
+progress patterns established by this wave.
 
 ## 6. Motion and interaction
 
@@ -113,9 +213,12 @@ social proof, and automation-as-authority framing.
 
 ## 8. Accepted debt
 
-- Legacy organizer screens continue to share `admin-shell.module.css`; the new
-  shell and overview styles are scoped through explicit CSS module classes
-  rather than global data-slot selectors.
+- Existing organizer, reviewer, speaker, CFP, public, and embed pages do not yet
+  consistently implement the workspace, collection, detail, and focused-flow
+  hierarchy above. This is active design debt, not precedent for new pages.
+- Legacy organizer screens continue to share `admin-shell.module.css`; migrate
+  toward shared shell, collection, detail, inspector, and status primitives
+  rather than adding feature-specific visual systems.
 - The marketing page uses scoped global `home-*` classes while the broader app
   continues its CSS-module migration.
 - The initial marketing product proof uses representative static DOM data rather

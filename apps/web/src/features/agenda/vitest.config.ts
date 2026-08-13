@@ -1,13 +1,22 @@
+import { fileURLToPath } from "node:url";
 import { JsxEmit, ModuleKind, ScriptTarget, transpileModule } from "typescript";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      "@": fileURLToPath(new URL("../../", import.meta.url)),
+    },
+  },
   plugins: [
     {
       name: "agenda-test-jsx-transform",
       enforce: "pre",
       transform(source, id) {
-        if (!id.includes("/features/agenda/") || !id.endsWith(".tsx")) {
+        if (
+          (!id.includes("/features/agenda/") && !id.includes("/components/")) ||
+          !id.endsWith(".tsx")
+        ) {
           return undefined;
         }
         return {

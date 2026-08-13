@@ -58,6 +58,12 @@ import {
   createPublishedAgendaRoutes,
 } from "./routes/agenda";
 import {
+  type AirtableIntegrationRouteDependencies,
+  createAirtableIntegrationRoutes,
+  createAirtableOAuthCallbackRoutes,
+  createAirtableWebhookRoutes,
+} from "./routes/airtable-integration/routes";
+import {
   createIntegrationAdminRoutes,
   type IntegrationAdminRouteDependencies,
 } from "./routes/integrations";
@@ -144,6 +150,7 @@ export interface ApiDependencies<
   readonly publicApi?: PublicApiRoutesOptions<TRecord, TCreate, TUpdate>;
   readonly webhooks?: WebhookSubscriptionRepository;
   readonly integrations?: IntegrationAdminRouteDependencies;
+  readonly airtableIntegration?: AirtableIntegrationRouteDependencies;
   readonly evaluations?: EvaluationRouteDependencies;
   readonly speaker?: SpeakerRouteDependencies;
   readonly agenda?: AgendaRouteDependencies;
@@ -406,6 +413,7 @@ function assertAuthenticationConfigured(
     dependencies.authenticator === undefined &&
     (dependencies.publicApi !== undefined ||
       dependencies.integrations !== undefined ||
+      dependencies.airtableIntegration !== undefined ||
       dependencies.webhooks !== undefined ||
       dependencies.evaluations !== undefined ||
       dependencies.agenda !== undefined ||
@@ -565,6 +573,20 @@ export function createApp<
     app.route(
       "/api/admin/organizations/:organizationId/events/:eventId",
       createIntegrationAdminRoutes(dependencies.integrations),
+    );
+  }
+  if (dependencies.airtableIntegration !== undefined) {
+    app.route(
+      "/api/admin/organizations/:organizationId/integrations/airtable",
+      createAirtableIntegrationRoutes(dependencies.airtableIntegration),
+    );
+    app.route(
+      "/api/integrations/airtable/organizations/:organizationId",
+      createAirtableOAuthCallbackRoutes(dependencies.airtableIntegration),
+    );
+    app.route(
+      "/api/integrations/airtable/organizations/:organizationId",
+      createAirtableWebhookRoutes(dependencies.airtableIntegration),
     );
   }
   if (dependencies.evaluations !== undefined) {

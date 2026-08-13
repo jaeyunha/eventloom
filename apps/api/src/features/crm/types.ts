@@ -444,7 +444,7 @@ export interface CrmRepositoryFilter extends CrmContactSearch {
   readonly organizationId?: string;
 }
 
-/** Airtable-backed business record boundary. D1/auth repositories must not be substituted here. */
+/** D1-authoritative CRM business-record boundary. */
 export interface CrmRepository {
   listContacts(
     organizationId: string,
@@ -498,10 +498,6 @@ export interface CrmRepository {
     value: T,
   ): Promise<void>;
 }
-
-/** Named alias used by production composition code to make Airtable authority explicit. */
-export type AirtableCrmRepository = CrmRepository;
-export type CrmAirtableRepository = CrmRepository;
 
 export interface CrmServiceDependencies {
   readonly repository?: CrmRepository;

@@ -59,7 +59,7 @@ export type CrmRouteService = Pick<
 >;
 
 export interface CrmRouteDependencies {
-  /** A composed service backed by an Airtable-authoritative CrmRepository. */
+  /** A composed service backed by a D1-authoritative CrmRepository. */
   readonly service: CrmRouteService;
 }
 

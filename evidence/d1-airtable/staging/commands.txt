@@ -1,0 +1,22 @@
+# Run from /Users/jaeyunha/dev/open-sessionboard on 2026-08-13 UTC.
+# Environment values were loaded without echoing them.
+
+set -a; source .env >/dev/null 2>&1; set +a
+bun evidence/d1-airtable/staging/acceptance.mjs > evidence/d1-airtable/staging/acceptance-report.json 2> evidence/d1-airtable/staging/acceptance-stderr.txt
+# exit 0; stderr 0 bytes
+
+bunx vitest run apps/api/src/infrastructure/airtable/airtable.test.ts
+# exit 0; 12 passed
+
+node --test scripts/d1-airtable-migration/export/export.test.mjs
+# exit 0; 7 passed
+
+AIRTABLE_BASE_ID="$AIRTABLE_BASE_STAGING_ID" node scripts/d1-airtable-migration/export/export.mjs --dry-run --output /tmp/open-sessionboard-airtable-never-written.json
+# stdout was filtered before retention to replace baseId and outputPath; exit 0
+
+# Post-run validation performed:
+# - LSP diagnostics on acceptance.mjs: none
+# - artifact secret scan against AIRTABLE_ACCESS_TOKEN, AIRTABLE_BASE_STAGING_ID,
+#   AIRTABLE_BASE_ID, AIRTABLE_BASE_DEV_ID: LEAK_SCAN_PASS
+# - /tmp open-sessionboard-airtable-staging-* search: no leftovers
+# - git status scoped to evidence/d1-airtable/staging: new owned artifacts only

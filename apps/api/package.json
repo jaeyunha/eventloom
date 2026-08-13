@@ -8,16 +8,22 @@
     "dev": "wrangler dev --env-file ../../.env --ip 127.0.0.1 --port 8787",
     "dev:fixture": "node ../../scripts/dev/run-fixture-api.mjs",
     "build": "wrangler deploy --dry-run --env='' --outdir dist",
+    "db:check": "drizzle-kit check",
+    "db:generate": "drizzle-kit generate",
+    "db:pull": "drizzle-kit pull --config=drizzle.remote.config.ts",
+    "db:studio": "drizzle-kit studio --config=drizzle.remote.config.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@eventloom/contracts": "workspace:*",
     "better-auth": "^1.6.26",
+    "drizzle-orm": "0.45.2",
     "hono": "4.13.1",
     "zod": "4.4.3"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20260808.1",
+    "drizzle-kit": "0.31.10",
     "typescript": "5.9.3",
     "wrangler": "4.120.0"
   }

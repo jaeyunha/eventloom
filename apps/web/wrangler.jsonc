@@ -63,6 +63,12 @@
     "production": {
       "name": "open-sessionboard-web-production",
       "workers_dev": true,
+      "routes": [
+        {
+          "pattern": "eventloom.namuh.co",
+          "custom_domain": true
+        }
+      ],
       "observability": {
         "enabled": true
       },

@@ -7,10 +7,10 @@ import {
   type CommunicationPreview,
   type CommunicationSend,
   type CommunicationTemplate,
+  escapeHtmlForPreview,
   type ReminderDispatch,
   type ReminderFacts,
   type ReminderRun,
-  escapeHtmlForPreview,
 } from "./api";
 import {
   CommunicationsWorkspaceView,

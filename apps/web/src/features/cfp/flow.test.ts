@@ -12,8 +12,8 @@ import {
   cfpReviewAudienceLevel,
   getCfpCompletionHandoffStorageKey,
   getCfpPortalHandoffHref,
-  shouldAuthenticateCfpAccount,
   rotateCfpCompletionIdentity,
+  shouldAuthenticateCfpAccount,
 } from "./cfp-wizard";
 import {
   clearCfpSubmissionState,

@@ -2225,5 +2225,6 @@ export function hasPortalCapability(
 }
 
 export function portalContextLabel(context: PortalContext): string {
+  if (context.eventId === "demo-event") return "Open Sessionboard Conference";
   return contextName(context);
 }

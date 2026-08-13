@@ -104,6 +104,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/ta
 import { Textarea } from "../../components/ui/textarea";
 import adminStyles from "../admin/admin-shell.module.css";
 import {
+  assertAdvancedSpeakerRevision,
+  assertSpeakerHeadshotReplacement,
+  assertSpeakerRosterScope,
   createSpeakerApi,
   ORGANIZER_HEADSHOT_ACCEPTED_TYPES,
   ORGANIZER_HEADSHOT_MAX_BYTES,
@@ -117,6 +120,7 @@ import {
   type SpeakerImportPreview,
   type SpeakerInvitationPreview,
   type SpeakerInvitationResult,
+  type SpeakerMutationStatus,
   type SpeakerProgressEnvelope,
   type SpeakerProgressRow,
   type SpeakerRecord,
@@ -128,10 +132,6 @@ import {
   type SpeakerTaskAssignmentInput,
   type SpeakerTravelLogistics,
   type SpeakerUpdateInput,
-  assertAdvancedSpeakerRevision,
-  assertSpeakerHeadshotReplacement,
-  assertSpeakerRosterScope,
-  type SpeakerMutationStatus,
 } from "./api";
 import styles from "./speaker-workspace.module.css";
 

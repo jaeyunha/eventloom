@@ -1,5 +1,12 @@
 # Deployment readiness preflight
 
+## D1 and optional Airtable
+
+- Apply and verify numbered D1 migrations before Worker deployment.
+- Verify that normal Worker boot and traffic do not require Airtable variables.
+- When Airtable is enabled, isolate credentials and bases by environment and
+  organization, and verify projection/reconciliation separately.
+
 The release preflight is a read-only configuration and privacy check. It reads
 the selected environment files, compares isolation and rendered Wrangler
 resources, and optionally reads Cloudflare resources. It never deploys, applies

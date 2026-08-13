@@ -172,11 +172,19 @@ export interface ListEventsInput {
   includeArchived?: boolean;
 }
 
+export interface EventRepositoryCommand {
+  event: Event;
+  expectedVersion: number | null;
+  audit?: EventAuditEntry;
+}
+
 export interface EventRepository {
   getEvent(organizationId: string, eventId: string): Promise<Event | null>;
   listEvents(organizationId: string): Promise<readonly Event[]>;
   findEventBySlug(organizationId: string, slug: string): Promise<Event | null>;
   saveEvent(event: Event, expectedVersion: number | null): Promise<void>;
+  /** Optional atomic command used by transactional providers. */
+  commitEvent?(command: EventRepositoryCommand): Promise<void>;
   appendAudit(entry: EventAuditEntry): Promise<void>;
   listAudit(organizationId: string, eventId: string): Promise<readonly EventAuditEntry[]>;
 }

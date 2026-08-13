@@ -7,6 +7,12 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
+  StatusBadge,
+  WorkspaceBreadcrumb,
+  WorkspaceHeader,
+  WorkspaceMetaItem,
+} from "@/components/workspace/workspace-ui";
+import {
   createScopedReadFlightCoordinator,
   type ScopedReadFlightCoordinator,
 } from "@/lib/scoped-read-flight";
@@ -955,32 +961,41 @@ export function AgendaBoard({
           </a>
         </nav>
       </header>
-
       <main id="agenda-content" className={styles.workspace} tabIndex={-1}>
-        <header className={styles.pageHeading}>
-          <div>
-            <p className={styles.eyebrow}>{data.event.name}</p>
-            <h1>Agenda workspace</h1>
-            <p className={styles.pageDescription}>
-              Schedule accepted sessions in a private draft. Public embeds continue to use the last
-              published revision until you publish again.
-            </p>
-            <p>
-              <a className={styles.secondaryButton} href={settingsHref}>
-                Rooms and tracks settings
+        <WorkspaceHeader
+          breadcrumb={
+            <WorkspaceBreadcrumb>
+              <a
+                href={`/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(data.event.id)}`}
+              >
+                {data.event.name}
               </a>
-            </p>
-          </div>
-          <div className={styles.draftStatus}>
-            <span className={styles.statusDot} aria-hidden="true" />
-            <div>
-              <strong>Draft v{data.draft.version}</strong>
-              <small>
+              <span>/</span>
+              <strong>Agenda</strong>
+            </WorkspaceBreadcrumb>
+          }
+          title="Agenda workspace"
+          status={
+            <StatusBadge tone={readiness.ready ? "info" : "warning"}>
+              Draft v{data.draft.version}
+            </StatusBadge>
+          }
+          description="Plan the private schedule, resolve conflicts, and publish one authoritative revision."
+          metadata={
+            <>
+              <WorkspaceMetaItem>{data.draft.entries.length} scheduled</WorkspaceMetaItem>
+              <WorkspaceMetaItem>{data.unscheduledSessions.length} unscheduled</WorkspaceMetaItem>
+              <WorkspaceMetaItem>
                 Updated {formatRevisionTimestamp(data.draft.updatedAt)} by {data.draft.updatedBy}
-              </small>
-            </div>
-          </div>
-        </header>
+              </WorkspaceMetaItem>
+            </>
+          }
+          actions={
+            <Button asChild size="sm" variant="outline">
+              <a href={settingsHref}>Rooms and tracks</a>
+            </Button>
+          }
+        />
 
         {error ? (
           <div className={styles.errorBanner} role="alert">
@@ -1765,6 +1780,8 @@ function ScopedAgendaWorkspace({
     () => providedApi ?? createAgendaApi("", organizationId),
     [organizationId, providedApi],
   );
+  const fixtureMode =
+    process.env.NODE_ENV === "test" || process.env.NEXT_PUBLIC_RUNTIME_PROFILE === "fixture";
   const localDemoApiRef = useRef<{ eventId: string; api: AgendaApi } | null>(null);
   const resolveLocalDemoApi = useCallback(
     async (signal?: AbortSignal) => {
@@ -1772,19 +1789,22 @@ function ScopedAgendaWorkspace({
         return localDemoApiRef.current.api;
       }
       const environment = await resolveAgendaAppEnvironment(appEnvironment, signal);
-      const fixtureMode =
-        process.env.NODE_ENV === "test" || process.env.NEXT_PUBLIC_RUNTIME_PROFILE === "fixture";
       const localApi = fixtureMode ? createLocalAgendaDemoApi(environment, eventId) : null;
       if (localApi) {
         localDemoApiRef.current = { eventId, api: localApi };
       }
       return localApi;
     },
-    [appEnvironment, eventId],
+    [appEnvironment, eventId, fixtureMode],
   );
+  const primaryAgendaApi = useMemo(() => {
+    if (!fixtureMode) return api;
+    const localApi = createLocalAgendaDemoApi("local", eventId);
+    return localApi ?? api;
+  }, [api, eventId, fixtureMode]);
   const initialReadKey = useMemo(
-    () => ({ api, resolveLocalDemoApi, scopeKey }),
-    [api, resolveLocalDemoApi, scopeKey],
+    () => ({ api: primaryAgendaApi, resolveLocalDemoApi, scopeKey }),
+    [primaryAgendaApi, resolveLocalDemoApi, scopeKey],
   );
   const [snapshot, setSnapshot] = useState<ScopedAgendaSnapshot | null>(null);
   const [preview, setPreview] = useState<AgendaPreview | null>(null);
@@ -1866,7 +1886,7 @@ function ScopedAgendaWorkspace({
       }
       try {
         const loaded = await (initialRead ??
-          loadAgendaWorkspace(api, resolveLocalDemoApi, eventId, signal));
+          loadAgendaWorkspace(primaryAgendaApi, resolveLocalDemoApi, eventId, signal));
         if (!agendaWorkspaceDataMatchesEvent(loaded.data, eventId)) {
           throw new Error("The agenda response belongs to another event.");
         }
@@ -1892,16 +1912,23 @@ function ScopedAgendaWorkspace({
         }
       }
     },
-    [api, eventId, resolveLocalDemoApi, scopeKey],
+    [eventId, primaryAgendaApi, resolveLocalDemoApi, scopeKey],
   );
 
   useEffect(() => {
     const lease = initialReadCoordinator.acquire(initialReadKey, (signal) =>
-      loadAgendaWorkspace(api, resolveLocalDemoApi, eventId, signal),
+      loadAgendaWorkspace(primaryAgendaApi, resolveLocalDemoApi, eventId, signal),
     );
     void load(lease.signal, lease.promise);
     return () => lease.release();
-  }, [api, eventId, initialReadCoordinator, initialReadKey, load, resolveLocalDemoApi]);
+  }, [
+    eventId,
+    initialReadCoordinator,
+    initialReadKey,
+    load,
+    primaryAgendaApi,
+    resolveLocalDemoApi,
+  ]);
 
   async function mutate(
     operation: (activeApi: AgendaApi, current: AgendaWorkspaceData) => Promise<AgendaWorkspaceData>,
@@ -1919,14 +1946,12 @@ function ScopedAgendaWorkspace({
     }
     const token = beginOperation(busyKind);
     if (token === null) return false;
-    let authoritativeData = currentSnapshot.data;
     try {
       const nextData = await operation(currentSnapshot.api, currentSnapshot.data);
       if (!agendaWorkspaceDataMatchesEvent(nextData, eventId)) {
         throw new Error("The agenda mutation returned data for another event.");
       }
       if (!operationIsCurrent(token)) return false;
-      authoritativeData = nextData;
       setSnapshot({ ...currentSnapshot, data: nextData });
       if (refreshPreview) {
         const nextPreview = await currentSnapshot.api.preview(eventId);

@@ -1,0 +1,8 @@
+{
+  "mode": "dry-run",
+  "baseId": "[REDACTED]",
+  "tables": "all",
+  "outputPath": "[TEMP_PATH_REDACTED]",
+  "resume": false,
+  "airtableAccess": "read-only"
+}

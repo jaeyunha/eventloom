@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { mergeCloudflareEnvironment, renderApiWrangler, resolveWebDeployment } from "./config.mjs";
+
+const webWrangler = readFileSync(new URL("../../apps/web/wrangler.jsonc", import.meta.url), "utf8");
 
 const template = `
 account_id = ""
@@ -59,6 +62,13 @@ test("keeps local web defaults when no remote configuration is needed", () => {
     appOrigin: "http://localhost:3015",
     apiOrigin: "http://localhost:8787",
   });
+});
+
+test("binds the production web Worker to the Eventloom custom domain", () => {
+  assert.match(
+    webWrangler,
+    /"production":\s*\{[\s\S]*?"routes":\s*\[\s*\{\s*"pattern":\s*"eventloom\.namuh\.co",\s*"custom_domain":\s*true\s*\}\s*\]/,
+  );
 });
 
 test("merges shell over target environment over root defaults", () => {

@@ -24,12 +24,12 @@ import {
   eventEmbedWidgetIds,
   eventStatuses,
   type ListEventsInput,
-  type UpdateEventInput,
-  type ProgramAgendaProjection,
   type ProgramPublicationCacheInvalidationPort,
   type ProgramPublicationCompletionInput,
-  type ProgramPublicationFailureInput,
   type ProgramPublicationEnqueuePort,
+  type ProgramPublicationFailureInput,
+  type ProgramPublicationManifest,
+  type ProgramPublicationPreviewRequest,
   type ProgramPublicationRebuildRequest,
   type ProgramPublicationRepository,
   ProgramPublicationRepositoryConflictError,
@@ -38,12 +38,10 @@ import {
   type ProgramPublicationServiceDependencies,
   type ProgramPublicationServiceOptions,
   type ProgramPublicationState,
-  type ProgramPublicationManifest,
   type ProgramResolvedPublication,
-  type ProgramSpeakerProjection,
-  type ResolveProgramPublicationInput,
-  type ProgramPublicationPreviewRequest,
   programPublicationSourceTriggers,
+  type ResolveProgramPublicationInput,
+  type UpdateEventInput,
 } from "./types";
 
 export type EventServiceErrorCode =
@@ -647,13 +645,7 @@ export class EventService {
     };
     const existingSlug = await this.#repository.findEventBySlug(organizationId, eventSlug);
     if (existingSlug !== null) throw conflict("An event with this slug already exists.");
-    try {
-      await this.#repository.saveEvent(event, null);
-    } catch (error) {
-      if (repositoryConflict(error)) throw conflict("An event with this id already exists.");
-      throw error;
-    }
-    await this.#repository.appendAudit({
+    const audit: EventAuditEntry = {
       id: this.#auditId(),
       organizationId,
       eventId: event.id,
@@ -662,7 +654,18 @@ export class EventService {
       actorId: userId,
       occurredAt: now,
       after: clone(event),
-    });
+    };
+    try {
+      if (this.#repository.commitEvent !== undefined) {
+        await this.#repository.commitEvent({ event, expectedVersion: null, audit });
+      } else {
+        await this.#repository.saveEvent(event, null);
+        await this.#repository.appendAudit(audit);
+      }
+    } catch (error) {
+      if (repositoryConflict(error)) throw conflict("An event with this id already exists.");
+      throw error;
+    }
     return clone(event);
   }
 
@@ -734,13 +737,7 @@ export class EventService {
       updatedAt: now,
       updatedBy: userId,
     };
-    try {
-      await this.#repository.saveEvent(updated, expectedVersion);
-    } catch (error) {
-      if (repositoryConflict(error)) throw versionConflict();
-      throw error;
-    }
-    await this.#repository.appendAudit({
+    const audit: EventAuditEntry = {
       id: this.#auditId(),
       organizationId,
       eventId: updated.id,
@@ -751,7 +748,18 @@ export class EventService {
       occurredAt: now,
       before: clone(current),
       after: clone(updated),
-    });
+    };
+    try {
+      if (this.#repository.commitEvent !== undefined) {
+        await this.#repository.commitEvent({ event: updated, expectedVersion, audit });
+      } else {
+        await this.#repository.saveEvent(updated, expectedVersion);
+        await this.#repository.appendAudit(audit);
+      }
+    } catch (error) {
+      if (repositoryConflict(error)) throw versionConflict();
+      throw error;
+    }
     return clone(updated);
   }
 
@@ -772,13 +780,7 @@ export class EventService {
       updatedAt: now,
       updatedBy: userId,
     };
-    try {
-      await this.#repository.saveEvent(archived, expectedVersion);
-    } catch (error) {
-      if (repositoryConflict(error)) throw versionConflict();
-      throw error;
-    }
-    await this.#repository.appendAudit({
+    const audit: EventAuditEntry = {
       id: this.#auditId(),
       organizationId,
       eventId: archived.id,
@@ -788,7 +790,18 @@ export class EventService {
       occurredAt: now,
       before: clone(current),
       after: clone(archived),
-    });
+    };
+    try {
+      if (this.#repository.commitEvent !== undefined) {
+        await this.#repository.commitEvent({ event: archived, expectedVersion, audit });
+      } else {
+        await this.#repository.saveEvent(archived, expectedVersion);
+        await this.#repository.appendAudit(audit);
+      }
+    } catch (error) {
+      if (repositoryConflict(error)) throw versionConflict();
+      throw error;
+    }
     return clone(archived);
   }
 

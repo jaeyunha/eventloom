@@ -4,6 +4,13 @@ This runbook defines evidence collection; it does not claim that any QA pass has
 
 ## Evidence classes and current origins
 
+For D1 authority and the optional Airtable adapter, deployed acceptance records the
+candidate SHA, API/web origins, D1 database, Queue, and isolated Airtable base. Exercise
+Worker boot without Airtable variables, D1 CRUD/migrations, OAuth or PAT connection,
+projection and replay, pause/resume/disconnect, webhook MAC success/failure, an
+allowlisted inbound edit, a version conflict, explicit resolution, and the matching UI.
+Local and mocked evidence is diagnostic and is not deployed provider evidence.
+
 - **Local Playwright:** run against the local services at `http://127.0.0.1:3015` and `http://127.0.0.1:8787`. It is useful automated evidence for the local build only. It cannot prove staging deployment, real provider delivery, or release acceptance.
 - **Staging Ever and `codex-cua`:** run against the deployed staging web and
   API origins from the ignored staging environment file. Use the real rendered

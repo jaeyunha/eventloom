@@ -3,9 +3,9 @@ import type { ApiBindings } from "../app";
 import { createApp } from "../app";
 import type { ProgramPublicationManifest } from "../features/events/types";
 import {
+  invalidatePublishedSpeakerCache,
   type PublishedSpeakerProjection,
   type PublishedSpeakerRouteDependencies,
-  invalidatePublishedSpeakerCache,
   publishedSpeakerPhotoPath,
 } from "./public-speakers";
 

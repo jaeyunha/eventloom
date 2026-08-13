@@ -421,7 +421,8 @@ export function createAgendaDemoApi(eventId: string): AgendaApi {
     return clone({
       event: {
         id: eventId,
-        name: "Open Systems Summit 2026",
+        name:
+          eventId === "demo-event" ? "Open Sessionboard Conference" : "Open Systems Summit 2026",
         timeZone: "America/Los_Angeles",
         startsOn: "2026-09-18",
         endsOn: "2026-09-19",

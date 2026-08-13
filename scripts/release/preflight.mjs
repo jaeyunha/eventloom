@@ -23,7 +23,7 @@ function usage() {
   return [
     "Usage: node scripts/release/preflight.mjs --environment <local|staging|production>",
     "  --env local=<path|-> --env staging=<path|-> --env production=<path|->",
-    "  [--require-providers accelevents] [--migration-report <path|->] [--offline]",
+    "  [--migration-report <path|->] [--offline]",
     "",
     'Use "-" for exactly one environment to read that environment from the current process.',
   ].join("\n");
@@ -34,7 +34,6 @@ function parseArguments(argv) {
     environment: "",
     environmentSources: {},
     offline: false,
-    requiredProviders: [],
     migrationReportSource: "",
   };
 
@@ -61,12 +60,6 @@ function parseArguments(argv) {
         throw new PreflightError("INVALID_ARGUMENT", `Duplicate --env for ${environment}`);
       }
       options.environmentSources[environment] = path;
-    } else if (argument === "--require-providers") {
-      options.requiredProviders = (argv[index + 1] ?? "")
-        .split(",")
-        .map((provider) => provider.trim())
-        .filter(Boolean);
-      index += 1;
     } else if (argument === "--migration-report") {
       const source = argv[index + 1] ?? "";
       index += 1;
@@ -173,7 +166,7 @@ async function run() {
   const validation = validateReleaseConfiguration({
     configurations,
     targetEnvironment: options.environment,
-    requiredProviders: options.requiredProviders,
+    requiredProviders: [],
     wranglerInventory,
   });
   const migrationReadiness = inspectOrganizationIdMigrationReadiness({

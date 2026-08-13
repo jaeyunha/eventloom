@@ -66,10 +66,10 @@ AI is not seed infrastructure. Provisioning personas and seeding fixtures create
 ## Architecture constraints
 
 - Next.js is the browser frontend only. Hono on Cloudflare Workers is the separately deployed application API. The frontend has no Airtable, D1, R2, queue, or provider credentials.
-- Airtable is authoritative for organization, event, CFP, submission, participant, review, session, agenda, CRM, report, and other program business records. Stable application IDs are independent of Airtable record IDs.
-- Cloudflare D1 (via Better Auth/Drizzle) owns account and session state, API keys, idempotency, webhook and delivery indexes, durable outbox state, publication receipts, and integration metadata. Durable Objects serialize tenant/event mutations, schedule locks, and calendar sequence allocation. R2 stores private uploads and export artifacts. The supported Queue contract carries communications, calendar, webhook, and cache-invalidation work.
+- Cloudflare D1 (via Better Auth/Drizzle) is authoritative for organization, event, CFP, submission, participant, review, session, agenda, CRM, report, account/session, API-key, idempotency, audit, outbox, publication, and integration state. Durable Objects coordinate tenant/event concurrency but do not replace D1 authority. R2 stores private uploads and export artifacts.
+- Airtable is an optional organization-scoped adapter. D1 projects mapped records asynchronously by stable `Application ID`; allowlisted inbound fields are translated into audited, version-checked D1 domain commands. Provider record IDs remain integration details.
 - Integrations are explicit adapters. External effects are queued, idempotent, observable, retryable, and auditable. Deterministic mocks/fakes validate contracts only; they are not deployment evidence. AI provider availability is feature-specific and is not an application boot or ordinary seed/provision prerequisite.
-- Local, staging, and production use separate Airtable bases, D1 databases, R2 buckets, queues, secrets, API keys, and delivery behavior. Staging uses synthetic data and suppressed or sandboxed recipients.
+- Local, staging, and production use separate D1 databases, R2 buckets, queues, secrets, API keys, and delivery behavior. Optional Airtable connections also use isolated bases and credentials. Staging uses synthetic data and suppressed or sandboxed recipients.
 - Public performance targets are LCP ≤1.5 s p75, INP ≤200 ms, CLS ≤0.1; cached API reads target ≤300 ms p95, ordinary writes ≤1 s p95, and Airtable workflows ≤2 s p95. These are release criteria, not current claims.
 
 ## Advisory AI provider contract

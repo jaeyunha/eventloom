@@ -75,6 +75,14 @@ When OpenAI is the candidate provider, also run the opt-in synthetic real-API ad
 
 ## 3. Read-only preflight and migration review
 
+Drizzle Kit generates and checks schema history; Wrangler applies numbered D1 SQL
+migrations and owns `d1_migrations`. Capture the pre-migration recovery point and run a
+foreign-key check before Worker deployment.
+
+Airtable is optional. Releases enabling the adapter verify an isolated staging
+connection separately; Airtable availability is never required for ordinary traffic and
+never provides fallback reads after D1 cutover.
+
 Run the read-only release preflight without an optional-provider requirement:
 
 ```bash

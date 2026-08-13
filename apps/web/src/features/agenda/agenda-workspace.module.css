@@ -67,11 +67,15 @@
 }
 
 .workspace {
-  width: min(calc(100% - 2rem), 96rem);
+  width: min(calc(100% - 1.5rem), 110rem);
   min-width: 0;
   max-width: none;
   margin-inline: auto;
-  padding: 2rem 0 4rem;
+  padding: 0.75rem 0 4rem;
+}
+
+.workspace > header {
+  margin: -0.75rem -0.75rem 0;
 }
 
 .pageHeading {
@@ -173,8 +177,8 @@
 
 .workspaceGrid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(19rem, 24rem);
-  gap: 1.25rem;
+  grid-template-columns: minmax(0, 1fr) minmax(18rem, 22rem);
+  gap: 0.75rem;
   align-items: start;
 }
 
@@ -186,13 +190,13 @@
 .historyCard {
   min-width: 0;
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+  border-radius: 0.62rem;
   background: var(--color-surface);
-  box-shadow: var(--shadow-card);
+  box-shadow: 0 1px 2px rgb(15 23 42 / 3%);
 }
 
 .boardColumn {
-  padding: 1.1rem;
+  padding: 0.75rem;
 }
 
 .sectionHeading,
@@ -205,7 +209,7 @@
 }
 
 .sectionHeading {
-  margin-bottom: 1rem;
+  margin-bottom: 0.65rem;
 }
 
 .sectionHeading h2,
@@ -228,7 +232,7 @@
 .publishButton,
 .textButton,
 .dangerButton {
-  min-height: 2.35rem;
+  min-height: 2rem;
   border-radius: var(--radius-sm);
   font: inherit;
   font-size: 0.8rem;
@@ -554,14 +558,14 @@
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 0.55rem;
 }
 
 .actionRail {
   position: sticky;
   z-index: 1;
-  top: 1rem;
-  max-height: calc(100vh - 2rem);
+  top: 3.75rem;
+  max-height: calc(100vh - 4.5rem);
   overflow-y: auto;
   overscroll-behavior: contain;
   scroll-padding-block: 0.5rem;
@@ -571,7 +575,7 @@
 .operationalSequence {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 0.55rem;
 }
 
 .sequenceStep {
@@ -620,7 +624,7 @@
 .warningPanel,
 .publishCard,
 .historyCard {
-  padding: 0.9rem;
+  padding: 0.75rem;
 }
 
 .inspectorCard > p,

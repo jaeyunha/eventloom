@@ -911,4 +911,8 @@ describe("organizer submission workspace", () => {
     );
     expect(detailMarkup).not.toContain("/admin/events/");
   });
+
+  it("serves the canonical fixture event from the seeded demo workspace", () => {
+    expect(getSeededSubmission("demo-event", "submission_local_1")).toBeDefined();
+  });
 });

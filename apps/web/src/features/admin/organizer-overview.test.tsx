@@ -616,6 +616,7 @@ describe("admin navigation", () => {
       ["Overview", "/admin"],
       ["Events", "/admin/events"],
       ["Members", "/admin/organizations/org%2Flive/members"],
+      ["Event overview", "/admin/organizations/org%2Flive/events/event%2Flive"],
       ["CFP Form", "/admin/organizations/org%2Flive/events/event%2Flive/cfp"],
       ["Submissions", "/admin/organizations/org%2Flive/events/event%2Flive/submissions"],
       ["Reviews", "/admin/organizations/org%2Flive/events/event%2Flive/reviews"],
@@ -644,8 +645,8 @@ describe("admin navigation", () => {
       expect(item?.match(href)).toBe(true);
     }
     const agenda = items.find((item) => item.label === "Agenda");
-    expect(agenda?.match(`${expected[9][1]}/sessions`)).toBe(true);
-    expect(agenda?.match(`${expected[9][1]}-draft`)).toBe(false);
+    expect(agenda?.match(`${expected[10][1]}/sessions`)).toBe(true);
+    expect(agenda?.match(`${expected[10][1]}-draft`)).toBe(false);
   });
 
   it("keeps organization Members available outside and inside an event", () => {

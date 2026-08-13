@@ -166,56 +166,6 @@ async function generateLocalSuggestion(
 }
 
 describe("Cloudflare runtime AI composition", () => {
-  it("injects all configured providers into the Airtable runtime and propagates AI_MODEL", async () => {
-    const calls: Array<{ model: string; inputs: Record<string, unknown> }> = [];
-    const ai: CloudflareAiBinding = {
-      async run(model, inputs) {
-        calls.push({ model, inputs });
-        return { response: JSON.stringify({ placements: [] }) };
-      },
-    };
-    const bindings = productionBindings(ai);
-    const transport = new FakeAirtableTransport();
-    transport.seed({
-      baseId: BASE_ID,
-      table: "Agenda Versions",
-      fields: {
-        "Application ID": "event-1",
-        "Conflicts JSON": JSON.stringify(agendaState()),
-      },
-    });
-
-    const dependencies = createCloudflareDependencies({
-      ...bindings,
-      AIRTABLE_TRANSPORT: transport,
-    });
-    expect(dependencies.authenticator).toBeDefined();
-    expect(dependencies.agenda?.engine).toBeDefined();
-    expect(dependencies.evaluations?.service).toBeDefined();
-    expect(dependencies.remix?.service).toBeDefined();
-
-    const run = await dependencies.agenda?.engine.generateSuggestion({
-      eventId: "event-1",
-      actorId: "organizer-1",
-      baseDraftVersion: 1,
-      dates: ["2026-08-09"],
-      eligibleStatuses: ["accepted"],
-      rooms: [{ id: "room-1", name: "Main room", capacity: 100 }],
-      roomIds: ["room-1"],
-      dayWindows: [{ date: "2026-08-09", startLocal: "09:00", endLocal: "17:00" }],
-      orderedRules: [],
-      ignoreExistingTimes: false,
-      ignoreExistingRooms: false,
-      ignoreExistingSchedule: { times: false, rooms: false },
-    });
-
-    expect(run?.eventId).toBe("event-1");
-    expect(calls[0]?.model).toBe(MODEL);
-    expect(calls[0]?.inputs).toMatchObject({
-      response_format: { type: "json_schema", name: "agenda_proposal" },
-    });
-  });
-
   it("requires the configured provider's explicit credentials", () => {
     const ai: CloudflareAiBinding = {
       async run() {
@@ -294,66 +244,6 @@ describe("Cloudflare runtime AI composition", () => {
       expect(new Headers(calls[0]?.init?.headers).get("authorization")).toBe(
         "Bearer local-openai-secret",
       );
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it("uses OpenAI Responses when explicitly selected without exposing the key", async () => {
-    const ai: CloudflareAiBinding = {
-      async run() {
-        return { response: "{}" };
-      },
-    };
-    const bindings = productionBindings(ai);
-    const calls: Array<{ input: RequestInfo | URL; init: RequestInit | undefined }> = [];
-    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
-      calls.push({ input, init });
-      return Response.json({
-        output: [
-          {
-            type: "message",
-            content: [{ type: "output_text", text: JSON.stringify({ placements: [] }) }],
-          },
-        ],
-      });
-    });
-    try {
-      const transport = new FakeAirtableTransport();
-      transport.seed({
-        baseId: BASE_ID,
-        table: "Agenda Versions",
-        fields: {
-          "Application ID": "event-openai",
-          "Conflicts JSON": JSON.stringify({ ...agendaState(), eventId: "event-openai" }),
-        },
-      });
-      const dependencies = createCloudflareDependencies({
-        ...bindings,
-        AI_PROVIDER: "openai",
-        OPENAI_API_KEY: "openai-secret-never-print",
-        OPENAI_MODEL: "gpt-test",
-        AIRTABLE_TRANSPORT: transport,
-      });
-      await expect(
-        dependencies.agenda?.engine.generateSuggestion({
-          eventId: "event-openai",
-          actorId: "organizer-1",
-          baseDraftVersion: 1,
-          dates: ["2026-08-09"],
-          eligibleStatuses: ["accepted"],
-          rooms: [{ id: "room-1", name: "Main room", capacity: 100 }],
-          roomIds: ["room-1"],
-          dayWindows: [{ date: "2026-08-09", startLocal: "09:00", endLocal: "17:00" }],
-          orderedRules: [],
-          ignoreExistingTimes: false,
-          ignoreExistingRooms: false,
-          ignoreExistingSchedule: { times: false, rooms: false },
-        }),
-      ).resolves.toMatchObject({ eventId: "event-openai" });
-      expect(calls).toHaveLength(1);
-      expect(String(calls[0]?.input)).toBe("https://api.openai.com/v1/responses");
-      expect(JSON.parse(String(calls[0]?.init?.body))).toMatchObject({ model: "gpt-test" });
     } finally {
       vi.unstubAllGlobals();
     }

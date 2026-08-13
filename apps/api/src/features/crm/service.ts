@@ -25,10 +25,10 @@ import {
   type CrmMergeResult,
   type CrmMergeScalarField,
   type CrmNote,
-  type CrmParticipantConflict,
-  type CrmParticipantContactLink,
   type CrmOutreachBoundary,
   type CrmOutreachCommand,
+  type CrmParticipantConflict,
+  type CrmParticipantContactLink,
   type CrmPipelineEntry,
   type CrmPipelineStage,
   type CrmRepository,
@@ -48,7 +48,7 @@ import {
   type UpdateCrmSegmentInput,
 } from "./types";
 
-export type { AirtableCrmRepository, CrmRepository, CrmServiceErrorCode } from "./types";
+export type { CrmRepository, CrmServiceErrorCode } from "./types";
 export { CrmServiceError } from "./types";
 
 export class CrmRepositoryConflictError extends Error {
@@ -60,7 +60,6 @@ export class CrmRepositoryConflictError extends Error {
     this.name = "CrmRepositoryConflictError";
   }
 }
-
 const MAX_ID = 200;
 const MAX_TEXT = 20_000;
 const MAX_TAG = 100;
@@ -1533,15 +1532,15 @@ export class CrmService {
         plan.survivorId,
       );
       if (currentSurvivor === null) throw notFound("The survivor contact was not found.");
-      let savedPrimary: CrmContact;
+      let _savedPrimary: CrmContact;
       if (
         currentSurvivor.status === "active" &&
         sameRecord(contactComparable(currentSurvivor), contactComparable(plan.survivor))
       ) {
-        savedPrimary = clone(currentSurvivor);
+        _savedPrimary = clone(currentSurvivor);
       } else if (currentSurvivor.status === "active") {
         const saved = await repository.saveContact(plan.survivor, currentSurvivor.version);
-        savedPrimary = assertTenant(saved, normalized.organizationId);
+        _savedPrimary = assertTenant(saved, normalized.organizationId);
       } else {
         throw invalid("The survivor contact must be active.");
       }
@@ -2996,5 +2995,3 @@ export class InMemoryCrmRepository implements CrmRepository {
     return `${organizationId}\u0000${key}`;
   }
 }
-
-export type InMemoryAirtableCrmRepository = InMemoryCrmRepository;

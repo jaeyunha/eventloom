@@ -370,7 +370,91 @@ export interface SessionListPage {
   offset: number;
 }
 
+export type SessionRepositoryCommand =
+  | {
+      operation: "putSession";
+      value: Session;
+      expectedVersion: number | null;
+      audit: SessionAuditEntry;
+    }
+  | {
+      operation: "deleteSession";
+      tenantId: string;
+      eventId: string;
+      id: string;
+      expectedVersion: number;
+      audit: SessionAuditEntry;
+    }
+  | { operation: "putRoom"; value: Room; expectedVersion: number | null; audit: SessionAuditEntry }
+  | {
+      operation: "deleteRoom";
+      tenantId: string;
+      eventId: string;
+      id: string;
+      expectedVersion: number;
+      audit: SessionAuditEntry;
+    }
+  | {
+      operation: "putTrack";
+      value: Track;
+      expectedVersion: number | null;
+      audit: SessionAuditEntry;
+    }
+  | {
+      operation: "deleteTrack";
+      tenantId: string;
+      eventId: string;
+      id: string;
+      expectedVersion: number;
+      audit: SessionAuditEntry;
+    }
+  | {
+      operation: "putFormat";
+      value: Format;
+      expectedVersion: number | null;
+      audit: SessionAuditEntry;
+    }
+  | {
+      operation: "deleteFormat";
+      tenantId: string;
+      eventId: string;
+      id: string;
+      expectedVersion: number;
+      audit: SessionAuditEntry;
+    }
+  | {
+      operation: "putLevel";
+      value: Level;
+      expectedVersion: number | null;
+      audit: SessionAuditEntry;
+    }
+  | {
+      operation: "deleteLevel";
+      tenantId: string;
+      eventId: string;
+      id: string;
+      expectedVersion: number;
+      audit: SessionAuditEntry;
+    }
+  | { operation: "putTag"; value: Tag; expectedVersion: number | null; audit: SessionAuditEntry }
+  | {
+      operation: "deleteTag";
+      tenantId: string;
+      eventId: string;
+      id: string;
+      expectedVersion: number;
+      audit: SessionAuditEntry;
+    }
+  | {
+      operation: "putSettings";
+      value: SessionSettings;
+      expectedVersion: number | null;
+      audit: SessionAuditEntry;
+    };
+
 export interface SessionRepository {
+  /** Optional atomic domain + audit + sync-job command used by transactional providers. */
+  commit?(command: SessionRepositoryCommand): Promise<void>;
   getSession(tenantId: string, eventId: string, sessionId: string): Promise<Session | null>;
   listSessions(tenantId: string, eventId: string): Promise<readonly Session[]>;
   putSession(session: Session, expectedVersion: number | null): Promise<void>;

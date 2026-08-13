@@ -271,7 +271,7 @@ function publicSpeakers(value: unknown): PublishedSpeakerGallery {
 
 function publicEnvelope(value: unknown, projection: PublicProjection): unknown {
   const record = publicRecord(value, projection);
-  if (!Object.prototype.hasOwnProperty.call(record, "data")) {
+  if (!Object.hasOwn(record, "data")) {
     throw invalidPublicResponse(`The published ${projection} response envelope is malformed.`);
   }
   return record.data;

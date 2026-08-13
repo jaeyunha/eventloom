@@ -1,0 +1,15 @@
+✔ exports deterministic schema, canonical raw records, stable IDs, and derived tenant scope (28.916292ms)
+✔ resumes from the exact Airtable offset without rereading completed pages (6.727875ms)
+✔ rejects missing and duplicate Application IDs (4.47875ms)
+✔ validates arguments and configuration without exposing credentials (0.261375ms)
+✔ CLI help and dry-run make no network or file writes (0.577667ms)
+✔ CLI reports bad input and Airtable errors without logging the token or response body (0.53625ms)
+✔ canonical JSON recursively sorts object keys but preserves arrays (0.060666ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 7
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 86.597167

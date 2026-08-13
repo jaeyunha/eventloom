@@ -18,10 +18,10 @@ import {
   eventEmbedOutputFormats,
   eventEmbedThemes,
   eventEmbedWidgetIds,
-  type ProgramPublicationPreviewRequest,
   eventStatuses,
-  type UpdateEventInput,
+  type ProgramPublicationPreviewRequest,
   programPublicationSourceTriggers,
+  type UpdateEventInput,
 } from "./types";
 
 export interface EventRouteEnvironment {

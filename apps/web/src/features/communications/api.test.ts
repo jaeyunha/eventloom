@@ -2,12 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import {
   CommunicationApiError,
   type CommunicationTemplate,
-  type ReminderDispatch,
-  type ReminderFacts,
-  type ReminderRun,
   createCommunicationApi,
   formatCommunicationAudience,
   formatCommunicationPurpose,
+  type ReminderDispatch,
+  type ReminderFacts,
+  type ReminderRun,
 } from "./api";
 
 type TestFetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;

@@ -16,6 +16,7 @@ import type {
   StoredApiKey,
 } from "../features/auth/types";
 import { apiKeyScopes, organizationRoles } from "../features/auth/types";
+import type { EventRepository } from "../features/events/types";
 import {
   type OrganizationMembership as MemberOrganizationMembership,
   MemberRepositoryConflictError,
@@ -30,8 +31,6 @@ import type {
   MemberInvitationDelivery,
   MemberMembership,
   MemberUser,
-  ReviewerPool,
-  ReviewerPoolRepository,
   SetupLinkClaim,
 } from "../features/members/types";
 import type { AirtableTransport } from "../infrastructure/airtable";
@@ -49,6 +48,7 @@ import {
   createOpenAiResponsesBinding,
   DEFAULT_OPENAI_RESPONSES_MODEL,
 } from "../integrations/ai";
+import { createAirtableIntegrationDependencies } from "../integrations/airtable/runtime";
 import { DEFAULT_OPEN_SEND_SENDERS, OpenSendClient } from "../integrations/opensend/client";
 import type { OpenSendMessage } from "../integrations/opensend/types";
 import type {
@@ -57,12 +57,8 @@ import type {
   IntegrationApiKeySummary,
   IntegrationDeliveryStatus,
 } from "../routes/integrations";
-import {
-  AirtableEventRepository,
-  AirtableJsonStore,
-  createAirtableDependencies,
-  D1IdempotencyStore,
-} from "./airtable";
+import { createD1ApplicationDependencies, D1IdempotencyStore } from "./airtable";
+import { createD1RuntimeDependencies } from "./d1";
 
 export type RuntimeBindings = ApiBindings &
   Partial<Omit<CloudflareBindings, keyof ApiBindings>> & {
@@ -81,6 +77,8 @@ export type RuntimeBindings = ApiBindings &
     readonly SPEAKERS_FROM_EMAIL?: string;
     readonly CALENDAR_FROM_EMAIL?: string;
     readonly AIRTABLE_API_ORIGIN?: string;
+    readonly AIRTABLE_OAUTH_CLIENT_ID?: string;
+    readonly AIRTABLE_OAUTH_CLIENT_SECRET?: string;
     readonly AIRTABLE_TRANSPORT?: AirtableTransport;
     readonly AI?: CloudflareAiBinding;
     readonly AI_MODEL?: string;
@@ -193,9 +191,6 @@ interface MemberInvitationEnvelope {
   readonly activationDigest: string | null;
 }
 
-interface ReviewerPoolRecord extends ReviewerPool {
-  readonly id: string;
-}
 function nonEmpty(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
@@ -1793,52 +1788,6 @@ export class CloudflareMemberInvitationDelivery implements MemberInvitationDeliv
   }
 }
 
-/** Airtable/evaluation reviewer pools are keyed by organization, event, and round. */
-export class AirtableReviewerPoolRepository implements ReviewerPoolRepository {
-  readonly #store: AirtableJsonStore<ReviewerPoolRecord>;
-
-  constructor(options: { readonly baseId: string; readonly transport: AirtableTransport }) {
-    this.#store = new AirtableJsonStore({
-      ...options,
-      table: "Reviewer Pools",
-      jsonField: "Pool JSON",
-    });
-  }
-
-  async getReviewerPool(
-    organizationId: string,
-    eventId: string,
-    roundId: string,
-  ): Promise<ReviewerPool | null> {
-    const record = await this.#store.find(this.poolKey(organizationId, eventId, roundId));
-    if (record === undefined) return null;
-    if (
-      record.organizationId !== organizationId ||
-      record.eventId !== eventId ||
-      record.roundId !== roundId
-    ) {
-      return null;
-    }
-    const { id: _id, ...pool } = record;
-    return cloneValue(pool);
-  }
-
-  async saveReviewerPool(pool: ReviewerPool, expectedVersion: number | null): Promise<void> {
-    const id = this.poolKey(pool.organizationId, pool.eventId, pool.roundId);
-    const current = await this.#store.find(id);
-    if ((current?.version ?? null) !== expectedVersion) {
-      throw new MemberRepositoryConflictError("The reviewer pool changed.");
-    }
-    const record: ReviewerPoolRecord = { ...cloneValue(pool), id };
-    if (current === undefined) await this.#store.create(record);
-    else await this.#store.update(id, record);
-  }
-
-  private poolKey(organizationId: string, eventId: string, roundId: string): string {
-    return `reviewer-pool:${organizationId}:${eventId}:${roundId}`;
-  }
-}
-
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/gu, (character) => {
     switch (character) {
@@ -1990,7 +1939,7 @@ export class CloudflareIntegrationAdminRepository
 {
   constructor(
     private readonly database: D1Database,
-    private readonly events: AirtableEventRepository,
+    private readonly events: EventRepository,
     private readonly encryptionKey: string,
   ) {}
 
@@ -2321,19 +2270,6 @@ export function inspectProductionRuntime(source: RuntimeBindings): RuntimeConfig
       }
     }
   }
-  if (source.APP_ENV === "local" && !nonEmpty(source.AIRTABLE_BASE_DEV_ID)) {
-    issues.push("AIRTABLE_BASE_DEV_ID is required for integrated local development");
-  }
-  if (!nonEmpty(bindings.AIRTABLE_ACCESS_TOKEN)) {
-    issues.push("AIRTABLE_ACCESS_TOKEN is required for the integrated runtime");
-  }
-  if (!nonEmpty(bindings.AIRTABLE_BASE_ID)) {
-    issues.push(
-      source.APP_ENV === "local"
-        ? "AIRTABLE_BASE_DEV_ID is required for integrated local development"
-        : "AIRTABLE_BASE_ID is required outside local development",
-    );
-  }
   if (!nonEmpty(bindings.BETTER_AUTH_SECRET) || bindings.BETTER_AUTH_SECRET.trim().length < 32) {
     issues.push("BETTER_AUTH_SECRET must contain at least 32 characters");
   }
@@ -2483,19 +2419,31 @@ export function createCloudflareDependencies(source: RuntimeBindings): ApiDepend
           : "better-auth.session_token",
     },
   );
-  const transport =
+  const airtableConfigured =
+    nonEmpty(bindings.AIRTABLE_ACCESS_TOKEN) && nonEmpty(bindings.AIRTABLE_BASE_ID);
+  const transport: AirtableTransport =
     bindings.AIRTABLE_TRANSPORT ??
-    new RetryingAirtableTransport(
-      new FetchAirtableTransport({
-        token: bindings.AIRTABLE_ACCESS_TOKEN ?? "",
-        ...(bindings.AIRTABLE_API_ORIGIN === undefined
-          ? {}
-          : { apiOrigin: bindings.AIRTABLE_API_ORIGIN }),
-      }),
-    );
-  const dependencies = createAirtableDependencies({
+    (airtableConfigured
+      ? new RetryingAirtableTransport(
+          new FetchAirtableTransport({
+            token: bindings.AIRTABLE_ACCESS_TOKEN ?? "",
+            ...(bindings.AIRTABLE_API_ORIGIN === undefined
+              ? {}
+              : { apiOrigin: bindings.AIRTABLE_API_ORIGIN }),
+          }),
+        )
+      : {
+          request: async () => {
+            throw new Error("Airtable integration is not configured.");
+          },
+        });
+  const businessRepositories = createD1RuntimeDependencies({ DB: bindings.DB });
+  const optionalAirtableBaseId = nonEmpty(bindings.AIRTABLE_BASE_ID)
+    ? bindings.AIRTABLE_BASE_ID
+    : "optional-airtable-disabled";
+  const dependencies = createD1ApplicationDependencies({
     authenticator,
-    baseId: bindings.AIRTABLE_BASE_ID ?? "",
+    baseId: optionalAirtableBaseId,
     transport,
     database: bindings.DB,
     agendaCoordinator: bindings.AGENDA_COORDINATOR,
@@ -2503,22 +2451,17 @@ export function createCloudflareDependencies(source: RuntimeBindings): ApiDepend
     outboxQueue: bindings.OUTBOX_QUEUE,
     webOrigin: bindings.WEB_ORIGIN,
     aiProviders,
+    businessRepositories,
   });
   const memberService = new MemberService({
     identity: new D1MemberIdentityRepository(bindings.DB),
     auth: new D1MemberAuthBoundary(bindings.DB, bindings.WEB_ORIGIN),
     invitationDelivery: new CloudflareMemberInvitationDelivery(bindings.DB, bindings.OUTBOX_QUEUE),
-    reviewerPools: new AirtableReviewerPoolRepository({
-      baseId: bindings.AIRTABLE_BASE_ID ?? "",
-      transport,
-    }),
+    reviewerPools: businessRepositories.reviewerPool,
   });
   const integrationRepository = new CloudflareIntegrationAdminRepository(
     bindings.DB,
-    new AirtableEventRepository({
-      baseId: bindings.AIRTABLE_BASE_ID ?? "",
-      transport,
-    }),
+    businessRepositories.events,
     bindings.BETTER_AUTH_SECRET ?? "",
   );
   const integrations: IntegrationAdminRouteDependencies = {
@@ -2535,10 +2478,78 @@ export function createCloudflareDependencies(source: RuntimeBindings): ApiDepend
       })(),
     retryCalendarDelivery: async () => false,
   };
+  const airtableIntegration =
+    nonEmpty(bindings.AIRTABLE_OAUTH_CLIENT_ID) && nonEmpty(bindings.AIRTABLE_BASE_ID)
+      ? createAirtableIntegrationDependencies({
+          database: bindings.DB,
+          authenticator,
+          clientId: bindings.AIRTABLE_OAUTH_CLIENT_ID,
+          ...(bindings.AIRTABLE_OAUTH_CLIENT_SECRET === undefined
+            ? {}
+            : { clientSecret: bindings.AIRTABLE_OAUTH_CLIENT_SECRET }),
+          defaultBaseId: bindings.AIRTABLE_BASE_ID,
+          redirectUri: `${(bindings.API_ORIGIN ?? bindings.WEB_ORIGIN).replace(/\/$/, "")}/api/integrations/airtable/organizations/{organizationId}/oauth/callback`,
+          cipher: createAirtableSecretCipher(bindings.BETTER_AUTH_SECRET ?? ""),
+          sessions: businessRepositories.sessions,
+          ...(bindings.AIRTABLE_API_ORIGIN === undefined
+            ? {}
+            : { apiOrigin: bindings.AIRTABLE_API_ORIGIN }),
+        })
+      : undefined;
   return {
     ...dependencies,
     auth: betterAuthRuntime,
     members: { service: memberService },
     integrations,
+    ...(airtableIntegration === undefined ? {} : { airtableIntegration }),
   };
+}
+
+function createAirtableSecretCipher(secret: string) {
+  const keyPromise = crypto.subtle
+    .digest("SHA-256", new TextEncoder().encode(`airtable:${secret}`))
+    .then((key) => crypto.subtle.importKey("raw", key, "AES-GCM", false, ["encrypt", "decrypt"]));
+  return {
+    encrypt: async (value: string) => {
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const key = await keyPromise;
+      const encrypted = await crypto.subtle.encrypt(
+        { name: "AES-GCM", iv },
+        key,
+        new TextEncoder().encode(value),
+      );
+      return `${encodeBase64Url(iv)}.${encodeBase64Url(new Uint8Array(encrypted))}`;
+    },
+    decrypt: async (value: string) => {
+      const [iv, encrypted] = value.split(".");
+      if (iv === undefined || encrypted === undefined) {
+        throw new Error("Invalid Airtable secret reference.");
+      }
+      const key = await keyPromise;
+      const decrypted = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: decodeBase64Url(iv) as Uint8Array<ArrayBuffer> },
+        key,
+        decodeBase64Url(encrypted),
+      );
+      return new TextDecoder().decode(decrypted);
+    },
+  };
+}
+
+function encodeBase64Url(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+}
+
+function decodeBase64Url(value: string): Uint8Array {
+  const binary = atob(
+    value
+      .replaceAll("-", "+")
+      .replaceAll("_", "/")
+      .padEnd(Math.ceil(value.length / 4) * 4, "="),
+  );
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
 }

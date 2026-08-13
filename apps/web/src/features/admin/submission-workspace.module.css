@@ -18,6 +18,10 @@
   background: var(--admin-canvas);
   color: var(--admin-ink);
 }
+
+.workspaceRoot > header {
+  margin: -1rem -1rem 0;
+}
 /* The submission list follows the same restrained neutral system as the surrounding organizer workspaces. */
 
 .workspaceRoot * {
@@ -64,7 +68,7 @@
 
 .eyebrow {
   margin: 0 0 0.35rem;
-  color: var(--admin-soft-muted);
+  color: #65656d;
   font-size: 0.68rem;
   font-weight: 620;
   letter-spacing: 0.01em;
@@ -108,7 +112,7 @@
 .workspaceMain {
   width: min(100%, 94rem);
   margin: 0 auto;
-  padding: clamp(1rem, 3vw, 2rem) clamp(1rem, 4vw, 3rem) 3rem;
+  padding: 0.85rem clamp(0.75rem, 2vw, 1.5rem) 3rem;
 }
 
 .workspaceMain:focus {
@@ -494,19 +498,22 @@
 .detailGrid {
   display: grid;
   grid-template-columns: minmax(0, 1.65fr) minmax(19rem, 0.9fr);
-  gap: 1.5rem;
+  gap: 0.75rem;
   align-items: start;
 }
 
 .detailPrimary,
 .detailAside {
   display: grid;
-  gap: 1.5rem;
+  gap: 0.7rem;
   min-width: 0;
 }
 
 .detailPanel {
-  padding: clamp(1rem, 2.4vw, 1.5rem);
+  padding: clamp(0.9rem, 2vw, 1.25rem);
+  border-color: #e2e4ea;
+  border-radius: 0.62rem;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 2.5%);
 }
 
 .panelHeading {
@@ -900,10 +907,15 @@
   .detailAside {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     align-items: start;
+    grid-row: 1;
   }
 }
 
 @media (max-width: 46rem) {
+  .workspaceRoot > header {
+    margin-inline: 0;
+  }
+
   .workspaceHeader {
     display: grid;
     gap: 1.25rem;
@@ -937,16 +949,26 @@
 .metricGrid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.75rem;
-  margin-bottom: 1rem;
+  gap: 0.55rem;
+  margin-bottom: 0.65rem;
 }
 
 .metricCard {
-  min-height: 6rem;
+  min-height: 5rem;
   border: 1px solid var(--admin-border);
   border-radius: 0.65rem;
   background: var(--admin-surface);
   box-shadow: none;
+}
+
+.savedViews {
+  display: flex;
+  gap: 0.2rem;
+  align-items: center;
+  margin-bottom: 0.55rem;
+  padding-bottom: 0.55rem;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--admin-border);
 }
 
 .metricCard > div {
@@ -967,10 +989,10 @@
 .toolbar {
   display: grid;
   grid-template-columns: minmax(15rem, 1.6fr) repeat(3, minmax(8.5rem, 0.75fr)) auto;
-  gap: 0.6rem;
+  gap: 0.5rem;
   align-items: end;
   margin: 0;
-  padding: 0 0 0.9rem;
+  padding: 0 0 0.65rem;
   border: 0;
 }
 
@@ -1025,9 +1047,50 @@
   min-width: 60rem;
 }
 
+.mobileSubmissionList {
+  display: none;
+}
+
+.mobileSubmissionCard {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.85rem;
+  border-top: 1px solid var(--admin-border);
+  background: var(--admin-surface);
+}
+
+.mobileSubmissionHeading {
+  display: flex;
+  gap: 0.65rem;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.mobileSubmissionHeading a {
+  color: var(--admin-ink);
+  font-size: 0.84rem;
+  font-weight: 720;
+  line-height: 1.35;
+  text-decoration: none;
+}
+
+.mobileSubmissionCard > p {
+  margin: 0;
+  color: var(--admin-muted);
+  font-size: 0.72rem;
+}
+
+.mobileSubmissionMeta {
+  display: flex;
+  gap: 0.35rem 0.75rem;
+  flex-wrap: wrap;
+  color: var(--admin-muted);
+  font-size: 0.68rem;
+}
+
 .submissionTable [data-slot="table-head"],
 .submissionTable [data-slot="table-cell"] {
-  padding: 0.75rem 0.65rem;
+  padding: 0.55rem 0.65rem;
 }
 
 .statusBadge {
@@ -1044,10 +1107,21 @@
   }
 }
 
-@media (max-width: 46rem) {
+@media (max-width: 58rem) {
   .metricGrid {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .submissionTable {
+    display: none;
+  }
+
+  .mobileSubmissionList {
+    display: grid;
+  }
+}
+
+@media (max-width: 46rem) {
 
   .toolbar {
     grid-template-columns: 1fr;
@@ -1055,6 +1129,11 @@
 
   .toolbarSearch {
     grid-column: auto;
+  }
+
+  .savedViews {
+    flex-wrap: wrap;
+    padding-right: 0;
   }
 
   .emptyState [data-slot="empty-content"] {

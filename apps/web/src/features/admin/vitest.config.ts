@@ -1,7 +1,13 @@
+import { fileURLToPath } from "node:url";
 import { JsxEmit, ModuleKind, ScriptTarget, transpileModule } from "typescript";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      "@": fileURLToPath(new URL("../../", import.meta.url)),
+    },
+  },
   plugins: [
     {
       enforce: "pre",
@@ -28,6 +34,7 @@ export default defineConfig({
     environment: "node",
     include: [
       "apps/web/src/features/admin/**/*.test.tsx",
+      "apps/web/src/features/events/**/*.test.ts",
       "apps/web/src/features/reviews/**/*.test.tsx",
     ],
     restoreMocks: true,

@@ -633,8 +633,31 @@ export class SessionService {
           ),
         ],
       };
+      const audit = auditEntry(
+        auditId,
+        tenantId,
+        eventId,
+        "session",
+        sessionId,
+        current === null ? "created" : "updated",
+        nextVersion,
+        actorId,
+        updatedAt,
+        current === null ? undefined : current,
+        next,
+      );
       try {
-        await this.#repository.putSession(next, current?.version ?? null);
+        if (this.#repository.commit !== undefined) {
+          await this.#repository.commit({
+            operation: "putSession",
+            value: next,
+            expectedVersion: current?.version ?? null,
+            audit,
+          });
+        } else {
+          await this.#repository.putSession(next, current?.version ?? null);
+          await this.recordAudit(audit);
+        }
       } catch (error) {
         if (repositoryConflict(error)) {
           if (attempt < 2) continue;
@@ -642,21 +665,6 @@ export class SessionService {
         }
         throw error;
       }
-      await this.recordAudit(
-        auditEntry(
-          auditId,
-          tenantId,
-          eventId,
-          "session",
-          sessionId,
-          current === null ? "created" : "updated",
-          nextVersion,
-          actorId,
-          updatedAt,
-          current === null ? undefined : current,
-          next,
-        ),
-      );
       await this.synchronizeAgenda(projectionActor, eventId);
       return sessionProjection(next);
     }
@@ -717,27 +725,35 @@ export class SessionService {
         }),
       ],
     };
+    const audit = auditEntry(
+      auditId,
+      actor.tenantId,
+      eventId,
+      "session",
+      id,
+      "created",
+      1,
+      actor.userId,
+      now,
+      undefined,
+      session,
+    );
     try {
-      await this.#repository.putSession(session, null);
+      if (this.#repository.commit !== undefined) {
+        await this.#repository.commit({
+          operation: "putSession",
+          value: session,
+          expectedVersion: null,
+          audit,
+        });
+      } else {
+        await this.#repository.putSession(session, null);
+        await this.recordAudit(audit);
+      }
     } catch (error) {
       if (repositoryConflict(error)) throw conflict("A session with this id already exists.");
       throw error;
     }
-    await this.recordAudit(
-      auditEntry(
-        auditId,
-        actor.tenantId,
-        eventId,
-        "session",
-        id,
-        "created",
-        1,
-        actor.userId,
-        now,
-        undefined,
-        session,
-      ),
-    );
     await this.synchronizeAgenda(actor, eventId);
     return sessionProjection(session);
   }
@@ -842,27 +858,35 @@ export class SessionService {
         }),
       ],
     };
+    const audit = auditEntry(
+      auditId,
+      actor.tenantId,
+      eventId,
+      "session",
+      sessionId,
+      "restored",
+      nextVersion,
+      actor.userId,
+      now,
+      current,
+      next,
+    );
     try {
-      await this.#repository.putSession(next, expected);
+      if (this.#repository.commit !== undefined) {
+        await this.#repository.commit({
+          operation: "putSession",
+          value: next,
+          expectedVersion: expected,
+          audit,
+        });
+      } else {
+        await this.#repository.putSession(next, expected);
+        await this.recordAudit(audit);
+      }
     } catch (error) {
       if (repositoryConflict(error)) throw versionConflict("session");
       throw error;
     }
-    await this.recordAudit(
-      auditEntry(
-        auditId,
-        actor.tenantId,
-        eventId,
-        "session",
-        sessionId,
-        "restored",
-        nextVersion,
-        actor.userId,
-        now,
-        current,
-        next,
-      ),
-    );
     await this.synchronizeAgenda(actor, eventId);
     return sessionProjection(next);
   }
@@ -1096,27 +1120,35 @@ export class SessionService {
         }),
       ],
     };
+    const audit = auditEntry(
+      auditId,
+      actor.tenantId,
+      eventId,
+      "session",
+      sessionId,
+      contentAction,
+      nextVersion,
+      actor.userId,
+      now,
+      current,
+      next,
+    );
     try {
-      await this.#repository.putSession(next, expected);
+      if (this.#repository.commit !== undefined) {
+        await this.#repository.commit({
+          operation: "putSession",
+          value: next,
+          expectedVersion: expected,
+          audit,
+        });
+      } else {
+        await this.#repository.putSession(next, expected);
+        await this.recordAudit(audit);
+      }
     } catch (error) {
       if (repositoryConflict(error)) throw versionConflict("session");
       throw error;
     }
-    await this.recordAudit(
-      auditEntry(
-        auditId,
-        actor.tenantId,
-        eventId,
-        "session",
-        sessionId,
-        contentAction,
-        nextVersion,
-        actor.userId,
-        now,
-        current,
-        next,
-      ),
-    );
     await this.synchronizeAgenda(actor, eventId);
     return sessionProjection(next);
   }
@@ -1134,27 +1166,37 @@ export class SessionService {
     if (current.version !== expected) throw versionConflict("session");
     const now = this.instant();
     const auditId = this.#generateId();
+    const audit = auditEntry(
+      auditId,
+      actor.tenantId,
+      eventId,
+      "session",
+      sessionId,
+      "deleted",
+      expected,
+      actor.userId,
+      now,
+      current,
+      undefined,
+    );
     try {
-      await this.#repository.deleteSession(actor.tenantId, eventId, sessionId, expected);
+      if (this.#repository.commit !== undefined) {
+        await this.#repository.commit({
+          operation: "deleteSession",
+          tenantId: actor.tenantId,
+          eventId,
+          id: sessionId,
+          expectedVersion: expected,
+          audit,
+        });
+      } else {
+        await this.#repository.deleteSession(actor.tenantId, eventId, sessionId, expected);
+        await this.recordAudit(audit);
+      }
     } catch (error) {
       if (repositoryConflict(error)) throw versionConflict("session");
       throw error;
     }
-    await this.recordAudit(
-      auditEntry(
-        auditId,
-        actor.tenantId,
-        eventId,
-        "session",
-        sessionId,
-        "deleted",
-        expected,
-        actor.userId,
-        now,
-        current,
-        undefined,
-      ),
-    );
     await this.synchronizeAgenda(actor, eventId);
     return sessionProjection(current);
   }

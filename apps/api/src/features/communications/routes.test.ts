@@ -1,11 +1,11 @@
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
+import { type CommunicationRouteEnvironment, createCommunicationRoutes } from "./routes";
 import {
   CommunicationService,
   InMemoryCommunicationRepository,
   InMemoryReminderRepository,
 } from "./service";
-import { createCommunicationRoutes, type CommunicationRouteEnvironment } from "./routes";
 import type { CommunicationActor, ReminderCandidate, ReminderOutboxDelivery } from "./types";
 
 const organizationId = "organization-1";

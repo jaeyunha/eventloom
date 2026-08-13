@@ -35,11 +35,11 @@ import type {
   SpeakerInvitationResult,
   SpeakerOrganizerProfileInput,
   SpeakerOrganizerReadModel,
+  SpeakerParticipantResolution,
+  SpeakerParticipantSourceType,
   SpeakerPortalCapability,
   SpeakerPortalContext,
   SpeakerPortalView,
-  SpeakerParticipantResolution,
-  SpeakerParticipantSourceType,
   SpeakerProfile,
   SpeakerReminderDelivery,
   SpeakerReminderDeliveryInput,
@@ -3567,15 +3567,28 @@ export class SpeakerService {
       input.note === undefined
         ? undefined
         : normalizeUserText(input.note, "The review note", 2_000, true);
+    const reviewedAt = this.now().toISOString();
+    const audit: SpeakerAssetAuditEntry = {
+      id: this.generateId(),
+      organizationId: scope.tenantId,
+      eventId: input.eventId,
+      assetId: input.assetId,
+      action: input.state,
+      actorAccountId: input.accountId,
+      ...(note === undefined ? {} : { note }),
+      occurredAt: reviewedAt,
+      version: expectedVersion + 1,
+    };
     const command = {
       eventId: input.eventId,
       assetId: input.assetId,
       state: input.state,
       ...(note === undefined ? {} : { note }),
       expectedVersion,
-      reviewedAt: this.now().toISOString(),
+      reviewedAt,
       reviewedBy: input.accountId,
       release: input.release === true,
+      audit,
     };
     const reviewAsset = this.repository.reviewAsset ?? this.repository.updateAssetReview;
     if (reviewAsset === undefined) throw notFound();
@@ -3590,17 +3603,6 @@ export class SpeakerService {
       }
       throw notFound();
     }
-    const audit: SpeakerAssetAuditEntry = {
-      id: this.generateId(),
-      organizationId: scope.tenantId,
-      eventId: input.eventId,
-      assetId: input.assetId,
-      action: input.state,
-      actorAccountId: input.accountId,
-      ...(note === undefined ? {} : { note }),
-      occurredAt: command.reviewedAt,
-      version: expectedVersion + 1,
-    };
     const cachedAudit = this.assetAuditCache.get(`${input.eventId}:${input.assetId}`) ?? [];
     this.assetAuditCache.set(`${input.eventId}:${input.assetId}`, [...cachedAudit, audit]);
     if (this.repository.appendAssetAudit !== undefined)

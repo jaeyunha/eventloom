@@ -5,6 +5,7 @@ import {
   createPortalProviderApi,
   loadPortalRosters,
   portalContextResponseForTarget,
+  portalContextLabel,
   profileAssetBelongsToPortalContext,
 } from "./portal-provider";
 import type {
@@ -24,6 +25,16 @@ const target: PortalContext = {
   participantIds: ["participant-1"],
   primaryParticipantId: "participant-1",
 };
+
+it("uses the canonical product event name for the local fixture context", () => {
+  expect(
+    portalContextLabel({
+      ...target,
+      eventId: "demo-event",
+      name: "Open Sessionboard Demo",
+    }),
+  ).toBe("Open Sessionboard Conference");
+});
 
 function roster(submissionId: string, eventId = "event-1"): PortalRosterEnvelope {
   return {

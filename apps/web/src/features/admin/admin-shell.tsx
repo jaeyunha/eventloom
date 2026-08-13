@@ -67,7 +67,10 @@ interface AdminNavigationGroup {
 }
 
 const navigationGroupOrder = [
-  { label: "Workspace", itemLabels: ["Overview", "Events", "Members", "Settings"] },
+  {
+    label: "Workspace",
+    itemLabels: ["Overview", "Events", "Event overview", "Members", "Settings"],
+  },
   {
     label: "Program operations",
     itemLabels: ["CFP Form", "Submissions", "Reviews", "Agenda"],
@@ -287,6 +290,12 @@ export function eventNavigationFor(
   const eventBasePath = `/admin/organizations/${encodeURIComponent(scopedEventContext.organizationId)}/events/${encodeURIComponent(scopedEventContext.eventId)}`;
   const eventItems = [
     ...organizationItems,
+    {
+      href: eventBasePath,
+      label: "Event overview",
+      icon: "overview",
+      match: (pathname: string) => pathname === eventBasePath,
+    },
     eventNavigationItem(eventBasePath, "cfp", "CFP Form", "form"),
     eventNavigationItem(eventBasePath, "submissions", "Submissions", "submissions"),
     eventNavigationItem(eventBasePath, "reviews", "Reviews", "reviews"),
@@ -307,6 +316,16 @@ export function eventNavigationFor(
   }
   return [...itemsByHref.values()];
 }
+
+function eventContextName(eventId: string): string {
+  if (eventId === "demo-event") return "Open Sessionboard Conference";
+  return eventId
+    .split(/[-_]/u)
+    .filter(Boolean)
+    .map((part) => `${part[0]?.toLocaleUpperCase() ?? ""}${part.slice(1)}`)
+    .join(" ");
+}
+
 export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
   const pathname = usePathname();
   const publicMemberSetup = isPublicMemberSetupPath(pathname);
@@ -523,7 +542,7 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
           </SidebarHeader>
 
           <nav className="flex min-h-0 flex-1 flex-col" aria-label="Organizer navigation">
-            <SidebarContent>
+            <SidebarContent className={styles.sidebarContent}>
               {eventContext !== null ? (
                 <div className={styles.eventContext}>
                   <div className={styles.eventContextIcon} aria-hidden="true">
@@ -531,7 +550,7 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
                   </div>
                   <div>
                     <span>Event workspace</span>
-                    <strong>{eventContext.eventId}</strong>
+                    <strong>{eventContextName(eventContext.eventId)}</strong>
                   </div>
                   <Link href="/admin/events">Switch</Link>
                 </div>
@@ -631,7 +650,7 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
               <span aria-hidden="true">/</span>
               {eventContext !== null ? (
                 <>
-                  <span>{eventContext.eventId}</span>
+                  <span>{eventContextName(eventContext.eventId)}</span>
                   <span aria-hidden="true">/</span>
                 </>
               ) : null}

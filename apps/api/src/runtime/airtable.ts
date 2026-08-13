@@ -11,7 +11,7 @@ import {
   AgendaRepositoryConflictError,
   type DurableObjectAgendaCoordinator,
 } from "../features/agenda/infrastructure";
-import type { AgendaEntry, AgendaState } from "../features/agenda/types";
+import type { AgendaEntry, AgendaState, PublishedAgendaRevision } from "../features/agenda/types";
 import type { RequestAuthenticator } from "../features/auth/authenticator";
 import type { AuthPrincipal } from "../features/auth/types";
 import type {
@@ -111,9 +111,6 @@ import {
   type EventRepository,
   EventRepositoryConflictError,
   type ProgramPublicationManifest,
-  type ProgramPublicationRepository,
-  ProgramPublicationRepositoryConflictError,
-  type ProgramPublicationState,
 } from "../features/events/types";
 import { publicApiV1Contract } from "../features/public-api/contract";
 import type {
@@ -223,6 +220,7 @@ import {
   applicationIdFormula,
 } from "../infrastructure/airtable";
 import type { CloudflareOutboxMessage } from "../infrastructure/cloudflare/bindings";
+import { D1OrganizerOverviewReadModel } from "../infrastructure/cloudflare/repositories/public-read-models";
 import type { CloudflareAiProviders } from "../integrations/ai";
 import { DEFAULT_OPEN_SEND_SENDERS } from "../integrations/opensend/client";
 import type {
@@ -249,6 +247,7 @@ import {
   type PublishedSpeakerRouteDependencies,
   publishedSpeakerPhotoPath,
 } from "../routes/public-speakers";
+import type { D1RuntimeDependencies } from "./d1";
 import {
   matchesOrganizationScope,
   resolvedOrganizationId,
@@ -958,25 +957,6 @@ export async function listEventScopedJson<T extends object>(
 ): Promise<T[]> {
   return store.list({ filterByFormula: eventFilterFormula(jsonField, eventId) });
 }
-export const PUBLISHED_SPEAKER_PROJECTIONS_TABLE = "Published Speaker Projections";
-const PUBLISHED_SPEAKER_PROJECTION_INDEXED_FIELDS = {
-  "Event Slug": "eventSlug",
-  "Revision ID": "revisionId",
-  "Revision Number": "revisionNumber",
-  "Published At": "publishedAt",
-} as const satisfies Readonly<Record<string, string>>;
-
-interface PublishedSpeakerHeadshotBinding {
-  readonly speakerId: string;
-  readonly tenantId: string;
-  readonly eventId: string;
-  readonly assetId: string;
-  readonly objectKey: string;
-  readonly fileName: string;
-  readonly contentType: PublishedSpeakerHeadshot["contentType"];
-  readonly sizeBytes: number;
-}
-
 function publishedHeadshotContentType(
   value: string,
 ): PublishedSpeakerHeadshot["contentType"] | null {
@@ -990,262 +970,311 @@ interface PublishedSpeakerProjectionRecord extends PublishedSpeakerProjection {
   readonly id: string;
   readonly organizationId: string;
   readonly eventId: string;
-  readonly eventSlug: string;
-  readonly revisionId: string;
-  readonly revisionNumber: number;
-  readonly publishedAt: string;
-  readonly headshots: readonly PublishedSpeakerHeadshotBinding[];
 }
 
-/**
- * Read-only adapter for the materialized publication table. The route never
- * falls back to Participants, speaker profiles, drafts, or review records.
- */
-class AirtableProgramPublicationRepository implements ProgramPublicationRepository {
-  readonly #releases: AirtableJsonStore<ProgramPublicationManifest>;
+interface D1PublishedEventProjection {
+  readonly organizationId: string;
+  readonly eventId: string;
+  readonly event: PublishedSpeakerProjection["event"];
+  readonly revision: PublishedSpeakerProjection["revision"];
+}
 
-  constructor(options: { readonly baseId: string; readonly transport: AirtableTransport }) {
-    this.#releases = new AirtableJsonStore({
-      ...options,
-      table: "Program Releases",
-      jsonField: "Manifest JSON",
-      scopeFields: { eventId: true, organizationId: true },
-      indexedFields: { Status: "lifecycle", Revision: "revision" },
-    });
-  }
+class D1PublishedSpeakerProjectionStore implements PublishedSpeakerRouteDependencies {
+  constructor(
+    private readonly database: D1Database,
+    private readonly events: EventRepository,
+    private readonly publications: D1RuntimeDependencies["programPublication"],
+    private readonly speakers: SpeakerRepository,
+    private readonly privateFiles: R2Bucket,
+  ) {}
 
-  async getState(organizationId: string, eventId: string): Promise<ProgramPublicationState | null> {
-    const releases = (await listEventScopedJson(this.#releases, "Manifest JSON", eventId))
-      .filter((release) => release.organizationId === organizationId && release.eventId === eventId)
-      .sort((left, right) => left.revision - right.revision);
-    if (releases.length === 0) return null;
-    const servedManifest =
-      [...releases].reverse().find((release) => release.lifecycle === "served") ?? null;
-    const pending =
-      [...releases].reverse().find((release) => release.lifecycle === "pending") ?? null;
-    return {
-      organizationId,
-      eventId,
-      version: releases.length,
-      servedRevision: servedManifest?.revision ?? null,
-      servedManifest,
-      pendingRevision: pending?.revision ?? null,
-      pendingReleaseId: pending?.id ?? null,
-      releases,
-    };
-  }
-
-  async compareAndSwap(
-    organizationId: string,
-    eventId: string,
-    expectedVersion: number | null,
-    state: ProgramPublicationState,
+  async putPublishedSpeakers(
+    record: PublishedSpeakerProjectionRecord,
+    agenda: PublishedAgendaRevision,
+    agendaSourceHash: string,
   ): Promise<void> {
-    const current = await this.getState(organizationId, eventId);
-    if ((current?.version ?? null) !== expectedVersion) {
-      throw new ProgramPublicationRepositoryConflictError();
+    const statements: D1PreparedStatement[] = [
+      this.database
+        .prepare(
+          `INSERT OR IGNORE INTO program_agenda_projections
+             (id, organization_id, event_id, revision_number, source_hash, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .bind(
+          agenda.id,
+          record.organizationId,
+          record.eventId,
+          agenda.revisionNumber,
+          agendaSourceHash,
+          agenda.publishedAt,
+        ),
+      this.database
+        .prepare(
+          `INSERT OR IGNORE INTO program_speaker_projections
+             (id, organization_id, event_id, revision_number, source_hash, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .bind(
+          record.id,
+          record.organizationId,
+          record.eventId,
+          record.revision.number,
+          record.sourceHash ?? record.id,
+          record.revision.publishedAt,
+        ),
+    ];
+    for (const [ordinal, entry] of agenda.entries.entries()) {
+      const metadata = entry.metadata;
+      statements.push(
+        this.database
+          .prepare(
+            `INSERT OR IGNORE INTO program_agenda_projection_entries
+               (projection_id, id, session_id, title, summary, format, starts_at, ends_at,
+                starts_at_local, ends_at_local, time_zone, room_name, track_names_json,
+                speaker_names_json, track_ids_json, status, ordinal)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .bind(
+            agenda.id,
+            entry.id,
+            entry.sessionId,
+            metadata?.title ?? "",
+            metadata?.summary ?? null,
+            metadata?.format ?? null,
+            entry.startsAt,
+            entry.endsAt,
+            entry.startsAtLocal,
+            entry.endsAtLocal,
+            entry.timeZone,
+            metadata?.roomName ?? null,
+            JSON.stringify(metadata?.trackNames ?? []),
+            JSON.stringify(metadata?.speakerNames ?? []),
+            JSON.stringify(entry.trackIds),
+            "published",
+            ordinal,
+          ),
+      );
     }
-    const existing = new Map((current?.releases ?? []).map((release) => [release.id, release]));
-    for (const release of state.releases) {
-      const previous = existing.get(release.id);
-      if (previous === undefined) await this.#releases.create(release);
-      else if (JSON.stringify(previous) !== JSON.stringify(release)) {
-        await this.#releases.update(release.id, release);
-      }
+    for (const [ordinal, speaker] of record.speakers.entries()) {
+      statements.push(
+        this.database
+          .prepare(
+            `INSERT OR IGNORE INTO program_speaker_projection_entries
+               (projection_id, id, participant_id, session_ids_json, display_name, title,
+                company, bio, avatar_url, ordinal)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .bind(
+            record.id,
+            speaker.id,
+            speaker.id,
+            JSON.stringify(speaker.sessionIds),
+            speaker.displayName,
+            speaker.jobTitle,
+            speaker.organization,
+            speaker.biography,
+            speaker.photoUrl,
+            ordinal,
+          ),
+      );
     }
-  }
-}
-
-class AirtablePublishedSpeakerProjectionStore implements PublishedSpeakerRouteDependencies {
-  readonly #store: AirtableJsonStore<PublishedSpeakerProjectionRecord>;
-  readonly #releases: AirtableJsonStore<ProgramPublicationManifest>;
-  readonly #privateFiles: R2Bucket;
-
-  constructor(options: {
-    readonly baseId: string;
-    readonly transport: AirtableTransport;
-    readonly privateFiles: R2Bucket;
-  }) {
-    this.#store = new AirtableJsonStore({
-      ...options,
-      table: PUBLISHED_SPEAKER_PROJECTIONS_TABLE,
-      jsonField: "Projection JSON",
-      scopeFields: { organizationId: true },
-      indexedFields: PUBLISHED_SPEAKER_PROJECTION_INDEXED_FIELDS,
-    });
-    this.#releases = new AirtableJsonStore({
-      ...options,
-      table: "Program Releases",
-      jsonField: "Manifest JSON",
-      scopeFields: { eventId: true, organizationId: true },
-      indexedFields: {
-        Status: "lifecycle",
-        Revision: "revision",
-      },
-    });
-    this.#privateFiles = options.privateFiles;
-  }
-  async putPublishedSpeakers(record: PublishedSpeakerProjectionRecord): Promise<void> {
-    const existing = await this.#store.findWithRecordId(record.id);
-    if (
-      existing !== undefined &&
-      existing.entity.organizationId === record.organizationId &&
-      existing.entity.eventId === record.eventId &&
-      existing.entity.revisionNumber > record.revisionNumber
-    ) {
-      return;
-    }
-    if (existing === undefined) {
-      await this.#store.create(record);
-    } else {
-      await this.#store.updateByRecordId(record.id, existing.recordId, record);
-    }
-
-    const legacyId = `published-speakers:${record.eventSlug}`;
-    if (legacyId === record.id) return;
-    const legacy = await this.#store.findWithRecordId(legacyId);
-    if (
-      legacy !== undefined &&
-      legacy.entity.organizationId === record.organizationId &&
-      legacy.entity.event.slug === record.eventSlug
-    ) {
-      await this.#store.deleteByRecordId(legacy.recordId);
-    }
+    await this.database.batch(statements);
   }
 
   async getProgramPublicationManifest(
     eventSlug: string,
   ): Promise<ProgramPublicationManifest | null> {
-    const projection = await this.#recordForSlug(eventSlug);
-    if (projection === null) return null;
-    const releases = await listEventScopedJson(this.#releases, "Manifest JSON", projection.eventId);
-    const served = releases
-      .filter(
-        (release) =>
-          release.organizationId === projection.organizationId &&
-          release.eventId === projection.eventId &&
-          release.lifecycle === "served" &&
-          release.speakerProjectionId === projection.revision.id &&
-          release.speakerRevisionNumber === projection.revision.number,
-      )
-      .sort((left, right) => right.revision - left.revision);
-    return served[0] ?? null;
+    const event = await this.#eventForSlug(eventSlug);
+    if (event === null) return null;
+    return (
+      (await this.publications.getState(event.organizationId, event.id))?.servedManifest ?? null
+    );
   }
-  async getPublishedSpeakers(eventSlug: string): Promise<PublishedSpeakerProjection | null> {
-    const record = await this.#recordForSlug(eventSlug);
-    if (record === null) return null;
+
+  async getPublishedSpeakers(
+    eventSlug: string,
+    speakerRevisionId?: string,
+    speakerRevisionNumber?: number,
+  ): Promise<PublishedSpeakerProjection | null> {
+    const event = await this.#eventForSlug(eventSlug);
+    if (event === null) return null;
+    const manifest = (await this.publications.getState(event.organizationId, event.id))
+      ?.servedManifest;
+    if (manifest === null || manifest === undefined) return null;
+    const projectionId = speakerRevisionId ?? manifest.speakerProjectionId;
+    const revisionNumber = speakerRevisionNumber ?? manifest.speakerRevisionNumber;
+    const projection = await this.database
+      .prepare(
+        `SELECT id, revision_number, source_hash, created_at
+           FROM program_speaker_projections
+          WHERE organization_id = ? AND event_id = ? AND id = ? AND revision_number = ?`,
+      )
+      .bind(event.organizationId, event.id, projectionId, revisionNumber)
+      .first<{ id: string; revision_number: number; source_hash: string; created_at: string }>();
+    if (projection === null) return null;
+    const rows = await this.database
+      .prepare(
+        `SELECT id, participant_id, session_ids_json, display_name, title, company, bio, avatar_url
+           FROM program_speaker_projection_entries
+          WHERE projection_id = ? ORDER BY ordinal`,
+      )
+      .bind(projection.id)
+      .all<Record<string, unknown>>();
+    const agendaRows = await this.database
+      .prepare(
+        `SELECT session_id, title, track_names_json
+           FROM program_agenda_projection_entries
+          WHERE projection_id = ? ORDER BY ordinal`,
+      )
+      .bind(manifest.agendaProjectionId)
+      .all<Record<string, unknown>>();
+    const agendaBySession = new Map(
+      (agendaRows.results ?? []).map((row) => [String(row.session_id), row] as const),
+    );
     return {
-      event: {
-        slug: record.event.slug,
-        name: record.event.name,
-        timeZone: record.event.timeZone,
-        startsOn: record.event.startsOn,
-        endsOn: record.event.endsOn,
-        venueName: record.event.venueName,
-      },
+      event: this.#publicEvent(event),
       revision: {
-        id: record.revision.id,
-        number: record.revision.number,
-        publishedAt: record.revision.publishedAt,
+        id: projection.id,
+        number: Number(projection.revision_number),
+        publishedAt: projection.created_at,
       },
-      speakers: record.speakers.map((speaker) => ({
-        id: speaker.id,
-        displayName: speaker.displayName,
-        pronouns: speaker.pronouns,
-        jobTitle: speaker.jobTitle,
-        organization: speaker.organization,
-        biography: speaker.biography,
-        photoUrl: speaker.photoUrl,
-        sessionIds: [...speaker.sessionIds],
-        sessionTitles: [...speaker.sessionTitles],
-        trackNames: [...speaker.trackNames],
-      })),
-      ...(record.sourceHash === undefined ? {} : { sourceHash: record.sourceHash }),
+      speakers: (rows.results ?? []).map((row) => {
+        const sessionIds = JSON.parse(String(row.session_ids_json)) as string[];
+        const agendaEntries = sessionIds.flatMap((sessionId) => {
+          const entry = agendaBySession.get(sessionId);
+          return entry === undefined ? [] : [entry];
+        });
+        return {
+          id: String(row.participant_id),
+          displayName: String(row.display_name),
+          pronouns: null,
+          jobTitle: row.title == null ? null : String(row.title),
+          organization: row.company == null ? null : String(row.company),
+          biography: row.bio == null ? "" : String(row.bio),
+          photoUrl: row.avatar_url == null ? null : String(row.avatar_url),
+          sessionIds,
+          sessionTitles: agendaEntries.map((entry) => String(entry.title)),
+          trackNames: [
+            ...new Set(
+              agendaEntries.flatMap(
+                (entry) => JSON.parse(String(entry.track_names_json)) as string[],
+              ),
+            ),
+          ].sort(),
+        };
+      }),
+      sourceHash: projection.source_hash,
     };
   }
 
-  async listPublishedEventProjections(): Promise<
-    readonly Pick<
-      PublishedSpeakerProjectionRecord,
-      "organizationId" | "eventId" | "event" | "revision"
-    >[]
-  > {
-    return (await this.#store.list()).map((record) => ({
-      organizationId: record.organizationId,
-      eventId: record.eventId,
-      event: {
-        slug: record.event.slug,
-        name: record.event.name,
-        timeZone: record.event.timeZone,
-        startsOn: record.event.startsOn,
-        endsOn: record.event.endsOn,
-        venueName: record.event.venueName,
-      },
-      revision: {
-        id: record.revision.id,
-        number: record.revision.number,
-        publishedAt: record.revision.publishedAt,
-      },
-    }));
+  async listPublishedEventProjections(): Promise<readonly D1PublishedEventProjection[]> {
+    const rows = await this.database
+      .prepare(
+        `SELECT e.organization_id, e.id
+           FROM events e
+           INNER JOIN program_publication_states p
+             ON p.organization_id = e.organization_id AND p.event_id = e.id
+          WHERE p.served_revision IS NOT NULL AND e.deleted_at IS NULL`,
+      )
+      .all<{ organization_id: string; id: string }>();
+    const projections: D1PublishedEventProjection[] = [];
+    for (const row of rows.results ?? []) {
+      const event = await this.events.getEvent(row.organization_id, row.id);
+      if (event === null) continue;
+      const manifest = (await this.publications.getState(row.organization_id, row.id))
+        ?.servedManifest;
+      if (manifest === null || manifest === undefined) continue;
+      projections.push({
+        organizationId: row.organization_id,
+        eventId: row.id,
+        event: this.#publicEvent(event),
+        revision: {
+          id: manifest.speakerProjectionId,
+          number: manifest.speakerRevisionNumber,
+          publishedAt: manifest.publishedAt,
+        },
+      });
+    }
+    return projections;
   }
 
   async getPublishedSpeakerHeadshot(
     eventSlug: string,
     speakerId: string,
+    _programRevision?: number,
+    speakerRevisionId?: string,
+    speakerRevisionNumber?: number,
   ): Promise<PublishedSpeakerHeadshot | null> {
-    const record = await this.#recordForSlug(eventSlug);
-    if (record === null) return null;
+    const event = await this.#eventForSlug(eventSlug);
+    if (event === null) return null;
+    const projection = await this.getPublishedSpeakers(
+      eventSlug,
+      speakerRevisionId,
+      speakerRevisionNumber,
+    );
     const normalizedSpeakerId = speakerId.trim();
-    const expectedPath = publishedSpeakerPhotoPath(record.event.slug, normalizedSpeakerId);
-    const speaker = record.speakers.find(
-      (candidate) => candidate.id === normalizedSpeakerId && candidate.photoUrl === expectedPath,
-    );
-    const binding = record.headshots?.find(
+    const publicSpeaker = projection?.speakers.find(
       (candidate) =>
-        candidate.speakerId === normalizedSpeakerId &&
-        candidate.tenantId === record.organizationId &&
-        candidate.eventId === record.eventId,
+        candidate.id === normalizedSpeakerId &&
+        candidate.photoUrl === publishedSpeakerPhotoPath(event.slug, normalizedSpeakerId),
     );
-    if (
-      speaker === undefined ||
-      binding === undefined ||
-      binding.sizeBytes <= 0 ||
-      !Number.isSafeInteger(binding.sizeBytes)
-    ) {
+    if (publicSpeaker === undefined) return null;
+    const assets = await this.speakers.listAssets?.(event.id, [normalizedSpeakerId]);
+    if (assets === undefined) return null;
+    const asset = assets.find(
+      (candidate) =>
+        candidate.participantId === normalizedSpeakerId &&
+        candidate.kind === "headshot" &&
+        candidate.state === "ready" &&
+        candidate.reviewState === "approved" &&
+        (candidate.releasedVersionId === candidate.id ||
+          candidate.approvedVersionId === candidate.id),
+    );
+    if (asset === undefined || asset.sizeBytes <= 0 || !Number.isSafeInteger(asset.sizeBytes)) {
       return null;
     }
-    const object = await this.#privateFiles.get(binding.objectKey);
-    const contentType = object?.httpMetadata?.contentType?.trim().toLowerCase();
+    const contentType = publishedHeadshotContentType(asset.contentType);
+    if (contentType === null) return null;
+    const object = await this.privateFiles.get(asset.objectKey);
     if (
       object === null ||
       object.body === null ||
-      object.size !== binding.sizeBytes ||
-      contentType !== binding.contentType
+      object.size !== asset.sizeBytes ||
+      object.httpMetadata?.contentType?.trim().toLowerCase() !== contentType
     ) {
       return null;
     }
     const body = await object.arrayBuffer();
-    if (body.byteLength !== binding.sizeBytes) return null;
-    return { body, contentType: binding.contentType, sizeBytes: binding.sizeBytes };
+    return body.byteLength === asset.sizeBytes
+      ? { body, contentType, sizeBytes: asset.sizeBytes }
+      : null;
   }
 
-  async #recordForSlug(eventSlug: string): Promise<PublishedSpeakerProjectionRecord | null> {
-    const normalizedSlug = eventSlug.trim();
+  async #eventForSlug(eventSlug: string): Promise<Event | null> {
+    const normalizedSlug = eventSlug.trim().toLowerCase();
     if (normalizedSlug.length === 0) return null;
-    const page = await this.#store.listPage({
-      pageSize: 2,
-      fields: [
-        APPLICATION_ID,
-        "Organization ID",
-        ...Object.keys(PUBLISHED_SPEAKER_PROJECTION_INDEXED_FIELDS),
-        "Projection JSON",
-      ],
-      filterByFormula: applicationIdFormula("Event Slug", normalizedSlug),
-    });
-    const matches = page.items.filter(
-      (record) => record.event.slug === normalizedSlug && record.organizationId.trim().length > 0,
-    );
-    return matches.length === 1 ? (matches[0] ?? null) : null;
+    const rows = await this.database
+      .prepare(
+        `SELECT organization_id, id FROM events
+          WHERE lower(slug) = ? AND deleted_at IS NULL LIMIT 2`,
+      )
+      .bind(normalizedSlug)
+      .all<{ organization_id: string; id: string }>();
+    const matches = rows.results ?? [];
+    if (matches.length !== 1) return null;
+    const match = matches[0];
+    return match === undefined ? null : this.events.getEvent(match.organization_id, match.id);
+  }
+
+  #publicEvent(event: Event): PublishedSpeakerProjection["event"] {
+    return {
+      slug: event.slug,
+      name: event.name,
+      timeZone: event.timeZone,
+      startsOn: eventDateOnly(event.startsAt, event.timeZone) ?? event.startsAt.slice(0, 10),
+      endsOn: eventDateOnly(event.endsAt, event.timeZone) ?? event.endsAt.slice(0, 10),
+      venueName: event.venue,
+    };
   }
 }
 
@@ -4909,7 +4938,7 @@ type CfpPrivateAssetProvider = Pick<
   "registerUploadCapability" | "verifyUploadCapability" | "invalidateUploadCapability"
 >;
 
-/** Airtable-authoritative CFP file assets backed by the existing speaker asset and R2 stores. */
+/** CFP file assets backed by the D1 speaker asset repository and R2 bytes. */
 export class AirtableCfpFileAssetGateway implements CfpFileAssetGateway {
   readonly #cfp: CfpRepository;
   readonly #speakers: CfpSpeakerAssetStore;
@@ -6629,10 +6658,10 @@ function submissionAbstract(submission: Submission): string {
 export class AirtableSubmissionReviewSource
   implements SubmissionReviewSource, EvaluationSubmissionSource
 {
-  readonly #cfp: AirtableCfpRepository;
+  readonly #cfp: CfpRepository;
   readonly #cfpService: CfpService | undefined;
 
-  constructor(cfp: AirtableCfpRepository, cfpService?: CfpService) {
+  constructor(cfp: CfpRepository, cfpService?: CfpService) {
     this.#cfp = cfp;
     this.#cfpService = cfpService;
   }
@@ -6658,9 +6687,9 @@ export class AirtableSubmissionReviewSource
       ).values(),
     ];
     if (uniqueLookups.length === 0) return [];
-    const submissions = await this.#cfp.listSubmissionsByIds(
-      uniqueLookups.map((lookup) => lookup.submissionId),
-    );
+    const submissions = await Promise.all(
+      uniqueLookups.map((lookup) => this.#cfp.getSubmission(tenantId, lookup.submissionId)),
+    ).then((values) => values.filter((value): value is Submission => value !== null));
     const lookupKeys = new Set(
       uniqueLookups.map((lookup) => `${lookup.eventId}\u0000${lookup.submissionId}`),
     );
@@ -6680,9 +6709,14 @@ export class AirtableSubmissionReviewSource
       }
     }
     const matchedSubmissions = [...submissionsByKey.values()];
-    const forms = await this.#cfp.listFormsByIds([
-      ...new Set(matchedSubmissions.map((submission) => submission.formId)),
-    ]);
+    const formIds = [...new Set(matchedSubmissions.map((submission) => submission.formId))];
+    const listFormsByIds = this.#cfp.listFormsByIds;
+    const forms =
+      listFormsByIds === undefined
+        ? await Promise.all(formIds.map((formId) => this.#cfp.getForm(tenantId, formId))).then(
+            (values) => values.filter((value): value is CfpForm => value !== null),
+          )
+        : await listFormsByIds.call(this.#cfp, formIds);
     const formsById = new Map<string, CfpForm>();
     for (const form of forms) {
       if (form.tenantId !== tenantId) continue;
@@ -6738,8 +6772,14 @@ export class AirtableSubmissionReviewSource
     tenantId: string,
     eventId: string,
   ): Promise<readonly EvaluationSubmissionRecord[]> {
-    const submissions = await this.#cfp.listSubmissionsForEvent(tenantId, eventId);
-    return submissions.map((submission) => this.toAdminRecord(submission));
+    const listSubmissionsForEvent = this.#cfp.listSubmissionsForEvent;
+    if (listSubmissionsForEvent === undefined) return [];
+    const submissions: Submission[] = await listSubmissionsForEvent.call(
+      this.#cfp,
+      tenantId,
+      eventId,
+    );
+    return submissions.map((submission: Submission) => this.toAdminRecord(submission));
   }
 
   async reopenSubmission(
@@ -6865,17 +6905,43 @@ function sessionsDiffer(left: Session, right: Session): boolean {
     JSON.stringify(left.resourceIds) !== JSON.stringify(right.resourceIds)
   );
 }
+interface EvaluationAcceptanceSpeakerRepository extends SpeakerRepository {
+  ensureAcceptedSubmission?(input: {
+    readonly submission: Submission;
+    readonly updatedAt: string;
+  }): Promise<SpeakerSubmission>;
+  ensureProfile?(input: {
+    readonly eventId: string;
+    readonly participant: SubmissionParticipant;
+    readonly updatedAt: string;
+    readonly organizationId?: string;
+  }): Promise<SpeakerProfile>;
+  ensureProfileTask?(input: {
+    readonly eventId: string;
+    readonly submissionId: string;
+    readonly participantId: string;
+    readonly updatedAt: string;
+  }): Promise<SpeakerTask>;
+  ensureVerifiedSpeakerGrant?(input: {
+    readonly organizationId: string;
+    readonly eventId: string;
+    readonly participantId: string;
+    readonly email: string;
+    readonly createdAt: string;
+  }): Promise<boolean>;
+}
+
 export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptanceHandoff {
-  readonly #cfp: AirtableCfpRepository;
-  readonly #speakers: AirtableSpeakerRepository;
+  readonly #cfp: CfpRepository;
+  readonly #speakers: EvaluationAcceptanceSpeakerRepository;
   readonly #database: D1Database;
   readonly #sessions: SessionRepository;
   readonly #sessionService: SessionService | undefined;
   readonly #queue: Queue<CloudflareOutboxMessage>;
 
   constructor(options: {
-    readonly cfp: AirtableCfpRepository;
-    readonly speakers: AirtableSpeakerRepository;
+    readonly cfp: CfpRepository;
+    readonly speakers: EvaluationAcceptanceSpeakerRepository;
     readonly sessions: SessionRepository;
     readonly database: D1Database;
     readonly sessionService?: SessionService;
@@ -6906,25 +6972,12 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
       acceptedSubmission = submission;
       const [session, , profiles] = await Promise.all([
         this.#ensureCanonicalSession(input, submission),
-        this.#speakers.ensureAcceptedSubmission({
-          submission,
-          updatedAt: input.decidedAt,
-        }),
+        this.#ensureAcceptedSubmission(submission, input.decidedAt),
         Promise.all(
           submission.participants.map(async (participant) => {
             const [profile] = await Promise.all([
-              this.#speakers.ensureProfile({
-                eventId: input.eventId,
-                participant,
-                organizationId: input.tenantId,
-                updatedAt: input.decidedAt,
-              }),
-              this.#speakers.ensureProfileTask({
-                eventId: input.eventId,
-                submissionId: input.submissionId,
-                participantId: participant.id,
-                updatedAt: input.decidedAt,
-              }),
+              this.#ensureProfile(input, participant),
+              this.#ensureProfileTask(input, participant.id),
             ]);
             return profile.id;
           }),
@@ -6990,6 +7043,86 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
       acceptedSubmission ?? (await this.#cfp.getSubmission(input.tenantId, input.submissionId));
     if (submission === null || submission.eventId !== input.eventId) return;
     await this.#ensureSpeakerGrants(input, submission);
+  }
+
+  async #ensureAcceptedSubmission(submission: Submission, updatedAt: string): Promise<void> {
+    await this.#speakers.ensureAcceptedSubmission?.({ submission, updatedAt });
+  }
+
+  async #ensureProfile(
+    input: EvaluationAcceptanceHandoffInput,
+    participant: SubmissionParticipant,
+  ): Promise<SpeakerProfile> {
+    const ensureProfile = this.#speakers.ensureProfile;
+    if (ensureProfile !== undefined) {
+      return ensureProfile.call(this.#speakers, {
+        eventId: input.eventId,
+        participant,
+        organizationId: input.tenantId,
+        updatedAt: input.decidedAt,
+      });
+    }
+    const existing = await this.#speakers.getProfile(input.eventId, participant.id);
+    if (existing !== null) return existing;
+    const profile: SpeakerProfile = {
+      id: `speaker-profile:${input.eventId}:${participant.id}`,
+      eventId: input.eventId,
+      participantId: participant.id,
+      displayName: `${participant.firstName} ${participant.lastName}`.trim(),
+      ...(participant.email.trim().length === 0
+        ? {}
+        : { email: participant.email.trim().toLowerCase() }),
+      biography: participant.biography,
+      status: "accepted",
+      version: 1,
+      updatedAt: input.decidedAt,
+    };
+    const created = await this.#speakers.createProfile?.(profile);
+    if (created?.ok === true) return created.value;
+    throw new Error("The accepted speaker profile could not be persisted.");
+  }
+
+  async #ensureProfileTask(
+    input: EvaluationAcceptanceHandoffInput,
+    participantId: string,
+  ): Promise<void> {
+    const ensureProfileTask = this.#speakers.ensureProfileTask;
+    if (ensureProfileTask !== undefined) {
+      await ensureProfileTask.call(this.#speakers, {
+        eventId: input.eventId,
+        submissionId: input.submissionId,
+        participantId,
+        updatedAt: input.decidedAt,
+      });
+      return;
+    }
+    const id = `speaker-task:${input.eventId}:${input.submissionId}:${participantId}:profile`;
+    if ((await this.#speakers.getTask(input.eventId, id)) !== null) return;
+    const task: SpeakerTask = {
+      id,
+      eventId: input.eventId,
+      submissionId: input.submissionId,
+      participantId,
+      type: "form",
+      owner: "speaker",
+      title: "Complete your speaker profile",
+      description: "Review your public name and biography before the program is published.",
+      status: "not_started",
+      dependencyIds: [],
+      reminderOffsetsMinutes: [10080, 1440],
+      version: 1,
+      updatedAt: input.decidedAt,
+    };
+    const createTask = this.#speakers.createTask;
+    if (createTask === undefined) {
+      throw new Error("The accepted speaker profile task repository is not configured.");
+    }
+    const created = await createTask.call(this.#speakers, {
+      task,
+      expectedVersion: null,
+      actorAccountId: input.decidedBy,
+    });
+    if (!created.ok) throw new Error("The accepted speaker profile task was not persisted.");
   }
 
   async #ensureCanonicalSession(
@@ -7149,13 +7282,16 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
     await Promise.all(
       submission.participants.map(async (participant) => {
         const email = participant.email.trim();
-        const provisioned = await this.#speakers.ensureVerifiedSpeakerGrant({
-          organizationId: input.tenantId,
-          eventId: input.eventId,
-          participantId: participant.id,
-          email,
-          createdAt: input.decidedAt,
-        });
+        const provisioned =
+          this.#speakers.ensureVerifiedSpeakerGrant === undefined
+            ? await this.#ensureD1SpeakerGrant(input, participant.id, email)
+            : await this.#speakers.ensureVerifiedSpeakerGrant({
+                organizationId: input.tenantId,
+                eventId: input.eventId,
+                participantId: participant.id,
+                email,
+                createdAt: input.decidedAt,
+              });
         if (!provisioned) {
           throw new Error(`Speaker grant provisioning failed for participant ${participant.id}.`);
         }
@@ -7184,6 +7320,38 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
           .run();
       }),
     );
+  }
+
+  async #ensureD1SpeakerGrant(
+    input: EvaluationAcceptanceHandoffInput,
+    participantId: string,
+    email: string,
+  ): Promise<boolean> {
+    const profile = await this.#speakers.getProfile(input.eventId, participantId);
+    if (profile === null || profile.email?.trim().toLowerCase() !== email.toLowerCase())
+      return false;
+    const users = await this.#database
+      .prepare(
+        `SELECT id FROM auth_users
+          WHERE LOWER(email) = LOWER(?) AND email_verified = 1
+          ORDER BY id LIMIT 2`,
+      )
+      .bind(email)
+      .all<{ id: string }>();
+    if ((users.results ?? []).length !== 1) return false;
+    const user = users.results[0];
+    if (user === undefined) return false;
+    await this.#database
+      .prepare(
+        `INSERT INTO speaker_grants
+           (organization_id, speaker_profile_id, user_id, created_at, revoked_at)
+         VALUES (?, ?, ?, ?, NULL)
+         ON CONFLICT (organization_id, speaker_profile_id, user_id)
+         DO UPDATE SET revoked_at = NULL`,
+      )
+      .bind(input.tenantId, profile.id, user.id, input.decidedAt)
+      .run();
+    return true;
   }
 
   async #enqueue(
@@ -9204,9 +9372,8 @@ export class AirtableReportRepository implements ReportRepository {
   }
 }
 /**
- * Airtable-authoritative CRM records. CRM data is deliberately kept in
- * dedicated tables rather than D1; D1 remains only the coordination/outbox
- * boundary used by integrations.
+ * Legacy Airtable CRM adapter retained only for migration-source reads.
+ * Production CRM authority is D1.
  */
 export class AirtableCrmRepository implements CrmRepository {
   readonly #contacts: AirtableJsonStore<CrmContact>;
@@ -11296,6 +11463,7 @@ export interface AirtableRuntimeOptions {
   readonly outboxQueue: Queue<CloudflareOutboxMessage>;
   readonly webOrigin: string;
   readonly aiProviders?: CloudflareAiProviders;
+  readonly businessRepositories: D1RuntimeDependencies;
 }
 
 function eventIdFromRequest(request: Request): string | undefined {
@@ -11308,7 +11476,7 @@ function eventIdFromRequest(request: Request): string | undefined {
 
 export class AirtableEvaluationDecisionProjection {
   constructor(
-    private readonly cfp: AirtableCfpRepository,
+    private readonly cfp: Pick<CfpRepository, "getSubmission">,
     private readonly database: D1Database,
     private readonly queue: Queue<CloudflareOutboxMessage>,
   ) {}
@@ -11406,7 +11574,7 @@ export class D1EvaluationReviewerIdentityBoundary implements EvaluationReviewerI
 
 export class AirtableEvaluationReminderBoundary implements EvaluationReminderBoundary {
   constructor(
-    private readonly plans: AirtableEvaluationRepository,
+    private readonly plans: Pick<EvaluationRepository, "getPlan" | "listAssignments">,
     private readonly database: D1Database,
     private readonly queue: Queue<CloudflareOutboxMessage>,
   ) {}
@@ -11491,12 +11659,12 @@ export class AirtableEvaluationReminderBoundary implements EvaluationReminderBou
     return { queued, reviewerIds };
   }
 }
-export function createAirtableDependencies(options: AirtableRuntimeOptions): ApiDependencies {
+export function createD1ApplicationDependencies(options: AirtableRuntimeOptions): ApiDependencies {
   const shared = { baseId: options.baseId, transport: options.transport };
-  const cfpRepository = new AirtableCfpRepository(shared);
-  const eventRepository = new AirtableEventRepository(shared);
+  const cfpRepository = options.businessRepositories.cfp;
+  const eventRepository = options.businessRepositories.events;
   const eventService = new EventService(eventRepository);
-  const publicationRepository = new AirtableProgramPublicationRepository(shared);
+  const publicationRepository = options.businessRepositories.programPublication;
   let publicationService!: ProgramPublicationService;
   publicationService = new ProgramPublicationService(publicationRepository, {
     eventRepository,
@@ -11514,10 +11682,7 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
     cacheInvalidation: { async invalidate() {} },
   });
   const cfpIdempotency = new D1IdempotencyStore(options.database);
-  const crmRepository = new AirtableCrmRepository({
-    ...shared,
-    events: eventRepository,
-  });
+  const crmRepository = options.businessRepositories.crm;
   const crmService = new CrmService({
     repository: crmRepository,
     outreach: new AirtableCrmOutreachBoundary(
@@ -11527,10 +11692,7 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
       eventRepository,
     ),
   });
-  const speakerRepository = new AirtableSpeakerRepository({
-    ...shared,
-    database: options.database,
-  });
+  const speakerRepository = options.businessRepositories.speaker;
   const privateAssets = new R2PrivateAssetGateway(
     options.privateFiles,
     options.webOrigin,
@@ -11576,9 +11738,9 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
       privateAssets,
     }),
   });
-  const sessionRepository = new AirtableSessionRepository(shared);
+  const sessionRepository = options.businessRepositories.sessions;
   let sessionService!: SessionService;
-  const agendaRepository = new AirtableAgendaRepository(shared);
+  const agendaRepository = options.businessRepositories.agenda;
   const agendaEngine = new AgendaEngine(
     agendaRepository,
     new CloudflareAgendaMutationLock(options.agendaCoordinator),
@@ -11622,18 +11784,18 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
   sessionService = new SessionService(sessionRepository, {
     agendaCatalogSynchronizer: cacheInvalidatingAgendaCatalogSynchronizer,
   });
-  const communicationRepository = new AirtableCommunicationRepository(shared);
+  const communicationRepository = options.businessRepositories.communications;
   const communicationService = new CommunicationService(
     communicationRepository,
     new AirtableCommunicationDeliveryAdapter(options.database, options.outboxQueue),
   );
-  const reportRepository = new AirtableReportRepository(shared);
+  const reportRepository = options.businessRepositories.reports;
   const reportService = new ReportService(
     reportRepository,
     reportRepository,
     new SafeReportExporter(),
   );
-  const remixRepository = new AirtableRemixRepository(shared);
+  const remixRepository = options.businessRepositories.remix;
   const remixContentGateway = new AirtableRemixContentGateway({
     ...shared,
     database: options.database,
@@ -11644,7 +11806,7 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
     remixContentGateway,
     options.aiProviders?.remix,
   );
-  const evaluationRepository = new AirtableEvaluationRepository(shared);
+  const evaluationRepository = options.businessRepositories.evaluations;
   const evaluationSource = new AirtableSubmissionReviewSource(cfpRepository, cfpService);
   const acceptanceHandoff = new AirtableEvaluationAcceptanceHandoff({
     cfp: cfpRepository,
@@ -11687,7 +11849,7 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
         const planId = /\/plans\/([^/]+)/u.exec(new URL(request.url).pathname)?.[1];
         if (planId !== undefined) {
           for (const membership of principal.memberships) {
-            const plan = await evaluationRepository.findPlanForTenant(
+            const plan = await evaluationRepository.getPlan(
               membership.organizationId,
               decodeURIComponent(planId),
             );
@@ -11702,7 +11864,7 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
         const assignmentId = /\/assignments\/([^/]+)/u.exec(new URL(request.url).pathname)?.[1];
         if (assignmentId !== undefined) {
           for (const membership of principal.memberships) {
-            const assignment = await evaluationRepository.findAssignmentForTenant(
+            const assignment = await evaluationRepository.getAssignment(
               membership.organizationId,
               decodeURIComponent(assignmentId),
             );
@@ -11757,18 +11919,15 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
   };
   const authenticator = options.authenticator;
 
-  const events = new AirtableJsonStore<EventCfp>({
-    ...shared,
-    table: "Events",
-    jsonField: "Settings JSON",
-    indexedFields: EVENT_INDEXED_FIELDS,
-  });
-  const webhooks = new AirtableWebhookRepository(shared);
-  const publishedSpeakerProjections = new AirtablePublishedSpeakerProjectionStore({
-    ...shared,
-    privateFiles: options.privateFiles,
-  });
-  const organizerOverview = new AirtableOrganizerOverviewRepository(shared);
+  const webhooks = options.businessRepositories.webhooks;
+  const publishedSpeakerProjections = new D1PublishedSpeakerProjectionStore(
+    options.database,
+    eventRepository,
+    publicationRepository,
+    speakerRepository,
+    options.privateFiles,
+  );
+  const organizerOverview = new D1OrganizerOverviewReadModel(options.database);
 
   const organizerMembership = async (
     principal: AuthPrincipal,
@@ -11859,19 +12018,25 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
     agenda: {
       engine: agendaEngine,
       async organizationIdForEvent(eventId: string) {
-        const event = await events.find(eventId);
-        const organizationId = resolvedOrganizationId(event);
-        return organizationId ?? null;
+        const rows = await options.database
+          .prepare("SELECT organization_id FROM events WHERE id = ? AND deleted_at IS NULL LIMIT 2")
+          .bind(eventId)
+          .all<{ organization_id: string }>();
+        const matches = rows.results ?? [];
+        return matches.length === 1 ? (matches[0]?.organization_id ?? null) : null;
       },
       async eventMetadataForEvent(eventId: string) {
-        const rawEvent = await events.find(eventId);
-        if (rawEvent === undefined || !isRecord(rawEvent)) return null;
-        const startsAt = textValue(rawEvent, "startsAt", "startAt");
-        const endsAt = textValue(rawEvent, "endsAt", "endAt");
-        if (startsAt === null || endsAt === null) return null;
-        const event = eventRecord(rawEvent);
-        const startsOn = eventDateOnly(startsAt, event.timeZone);
-        const endsOn = eventDateOnly(endsAt, event.timeZone);
+        const rows = await options.database
+          .prepare("SELECT organization_id FROM events WHERE id = ? AND deleted_at IS NULL LIMIT 2")
+          .bind(eventId)
+          .all<{ organization_id: string }>();
+        const matches = rows.results ?? [];
+        const organizationId = matches.length === 1 ? matches[0]?.organization_id : undefined;
+        if (organizationId === undefined) return null;
+        const event = await eventRepository.getEvent(organizationId, eventId);
+        if (event === null) return null;
+        const startsOn = eventDateOnly(event.startsAt, event.timeZone);
+        const endsOn = eventDateOnly(event.endsAt, event.timeZone);
         if (startsOn === null || endsOn === null) return null;
         return {
           slug: event.slug,
@@ -11883,27 +12048,32 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
         };
       },
       async eventIdForSlug(eventSlug: string) {
-        const matches = (await events.list())
-          .filter(isRecord)
-          .map(eventRecord)
-          .filter((event) => event.slug.toLowerCase() === eventSlug.toLowerCase());
+        const rows = await options.database
+          .prepare("SELECT id FROM events WHERE lower(slug) = ? AND deleted_at IS NULL LIMIT 2")
+          .bind(eventSlug.trim().toLowerCase())
+          .all<{ id: string }>();
+        const matches = rows.results ?? [];
         return matches.length === 1 ? (matches[0]?.id ?? null) : null;
       },
       getProgramPublicationManifest: publishedSpeakerProjections.getProgramPublicationManifest.bind(
         publishedSpeakerProjections,
       ),
       async afterPublish(eventId, revision) {
-        const [rawEvent, agendaState] = await Promise.all([
-          events.find(eventId),
-          agendaRepository.load(eventId),
-        ]);
-        const rawEventRecord: unknown = rawEvent;
-        const rawEventView: JsonRecord = isRecord(rawEventRecord) ? rawEventRecord : {};
-        const organizationId = resolvedOrganizationId(rawEvent);
+        const organizationRows = await options.database
+          .prepare("SELECT organization_id FROM events WHERE id = ? AND deleted_at IS NULL LIMIT 2")
+          .bind(eventId)
+          .all<{ organization_id: string }>();
+        const organizationMatches = organizationRows.results ?? [];
+        const organizationId =
+          organizationMatches.length === 1 ? organizationMatches[0]?.organization_id : undefined;
         if (organizationId === undefined) {
           throw new Error("The published event organization could not be resolved.");
         }
-        if (rawEvent === undefined || agendaState === null) {
+        const [event, agendaState] = await Promise.all([
+          eventRepository.getEvent(organizationId, eventId),
+          agendaRepository.load(eventId),
+        ]);
+        if (event === null || agendaState === null) {
           throw new Error("The published event projection could not be loaded.");
         }
 
@@ -11938,7 +12108,7 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
           }
         }
 
-        const headshotsBySpeakerId = new Map<string, PublishedSpeakerHeadshotBinding>();
+        const headshotSpeakerIds = new Set<string>();
         for (const profile of profiles) {
           if (profile.headshotAssetId === undefined) continue;
           const asset = assets.find(
@@ -11960,16 +12130,7 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
           ) {
             continue;
           }
-          headshotsBySpeakerId.set(profile.participantId, {
-            speakerId: profile.participantId,
-            tenantId: organizationId,
-            eventId,
-            assetId: asset.id,
-            objectKey: asset.objectKey,
-            fileName: asset.fileName,
-            contentType,
-            sizeBytes: asset.sizeBytes,
-          });
+          headshotSpeakerIds.add(profile.participantId);
         }
 
         const speakers = profiles
@@ -11982,8 +12143,8 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
               jobTitle: profile.jobTitle ?? null,
               organization: profile.company ?? null,
               biography: profile.biography,
-              photoUrl: headshotsBySpeakerId.has(profile.participantId)
-                ? publishedSpeakerPhotoPath(rawEvent.slug, profile.participantId)
+              photoUrl: headshotSpeakerIds.has(profile.participantId)
+                ? publishedSpeakerPhotoPath(event.slug, profile.participantId)
                 : null,
               sessionIds: speakerSessions.map((session) => session.id),
               sessionTitles: speakerSessions.map((session) => session.title),
@@ -11995,28 +12156,17 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
           .sort((left, right) => left.displayName.localeCompare(right.displayName));
         const agendaHash = await publicationSourceHash(revision);
         const speakerHash = await publicationSourceHash(speakers);
-        await publishedSpeakerProjections.putPublishedSpeakers({
-          id: `published-speakers:${organizationId}:${eventId}`,
+        const publishedSpeakerProjection: PublishedSpeakerProjectionRecord = {
+          id: revision.id,
           organizationId,
           eventId,
-          eventSlug: rawEvent.slug,
-          revisionId: revision.id,
-          revisionNumber: revision.revisionNumber,
-          publishedAt: revision.publishedAt,
-          headshots: [...headshotsBySpeakerId.values()],
           event: {
-            slug: rawEvent.slug,
-            name: rawEvent.name,
-            timeZone: textValue(rawEventView, "timeZone", "timezone") ?? rawEvent.timezone,
-            startsOn: (textValue(rawEventView, "startsAt", "opensAt") ?? rawEvent.opensAt).slice(
-              0,
-              10,
-            ),
-            endsOn: (textValue(rawEventView, "endsAt", "closesAt") ?? rawEvent.closesAt).slice(
-              0,
-              10,
-            ),
-            venueName: textValue(rawEventView, "venue"),
+            slug: event.slug,
+            name: event.name,
+            timeZone: event.timeZone,
+            startsOn: eventDateOnly(event.startsAt, event.timeZone) ?? event.startsAt.slice(0, 10),
+            endsOn: eventDateOnly(event.endsAt, event.timeZone) ?? event.endsAt.slice(0, 10),
+            venueName: event.venue,
           },
           revision: {
             id: revision.id,
@@ -12025,7 +12175,12 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
           },
           speakers,
           sourceHash: speakerHash,
-        });
+        };
+        await publishedSpeakerProjections.putPublishedSpeakers(
+          publishedSpeakerProjection,
+          revision,
+          agendaHash,
+        );
         const currentPublication = await publicationRepository.getState(organizationId, eventId);
         await publicationService.requestRebuild(
           {
@@ -12056,7 +12211,7 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
         const served = await publicationRepository.getState(organizationId, eventId);
         await invalidatePublishedSpeakerCache(
           publishedSpeakerProjections,
-          rawEvent.slug,
+          event.slug,
           served?.servedRevision ?? undefined,
           served?.servedManifest?.cacheRevision,
         );

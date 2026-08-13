@@ -563,6 +563,8 @@ export interface SpeakerAssetReviewCommand {
   reviewedAt: string;
   reviewedBy: string;
   release: boolean;
+  /** Persisted atomically with the review by repositories that support transactional audit. */
+  audit?: SpeakerAssetAuditEntry;
 }
 
 export interface SpeakerAssetAuditEntry {

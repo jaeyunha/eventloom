@@ -1,5 +1,6 @@
 "use client";
 
+import { ArrowRight, CalendarClock, CheckCircle2, CircleAlert, Sparkles } from "lucide-react";
 import Link from "next/link";
 import {
   findSubmissionForTask,
@@ -8,16 +9,20 @@ import {
   summarizePortal,
 } from "./model";
 import styles from "./portal.module.css";
-import { usePortal } from "./portal-provider";
+import { portalContextLabel, usePortal } from "./portal-provider";
 import {
   EmptyState,
   formatPortalDate,
-  PageHeading,
   PortalContentState,
   Progress,
   SubmissionStatusBadge,
   TaskStatusBadge,
 } from "./portal-ui";
+import {
+  StatusBadge,
+  WorkspaceHeader,
+  WorkspaceMetaItem,
+} from "@/components/workspace/workspace-ui";
 
 export function PortalHome() {
   return (
@@ -28,7 +33,7 @@ export function PortalHome() {
 }
 
 function PortalHomeContent() {
-  const { can, eventQuery, view } = usePortal();
+  const { can, context, eventQuery, view } = usePortal();
   if (!view) {
     return null;
   }
@@ -39,21 +44,67 @@ function PortalHomeContent() {
   const visibleTasks = view.tasks.filter(
     (task) => task.status !== "completed" && task.status !== "waived",
   );
+  const nextTask = visibleTasks.find((task) => !isTaskBlocked(task, view.tasks));
+  const primarySubmission = view.submissions[0];
 
   return (
     <>
-      <PageHeading
-        eyebrow="Speaker portal"
+      <WorkspaceHeader
+        eyebrow={context ? portalContextLabel(context) : "Speaker portal"}
         title={`Welcome${profile ? `, ${profile.displayName.split(" ")[0]}` : ""}`}
-        description="Track your proposals as they become sessions and complete everything the event team needs from you."
-        action={
+        status={
+          <StatusBadge tone={summary.outstandingTaskCount === 0 ? "success" : "info"}>
+            {summary.outstandingTaskCount === 0 ? "Ready" : "In progress"}
+          </StatusBadge>
+        }
+        description="Everything the event team needs from you, ordered by what should happen next."
+        metadata={
+          <>
+            <WorkspaceMetaItem>{summary.acceptedCount} accepted sessions</WorkspaceMetaItem>
+            <WorkspaceMetaItem>{summary.outstandingTaskCount} tasks remaining</WorkspaceMetaItem>
+            <WorkspaceMetaItem>{summary.completionPercent}% ready</WorkspaceMetaItem>
+          </>
+        }
+        actions={
           can("task-response") ? (
             <Link className={styles.primaryButton} href={`/portal/tasks${eventQuery}`}>
-              View tasks
+              Open tasks
+              <ArrowRight aria-hidden="true" size={14} />
             </Link>
           ) : undefined
         }
       />
+
+      {can("task-response") ? (
+        <section className={styles.nextAction} aria-labelledby="next-action-heading">
+          <span className={styles.nextActionIcon}>
+            {nextTask ? (
+              isTaskBlocked(nextTask, view.tasks) ? (
+                <CircleAlert aria-hidden="true" />
+              ) : (
+                <Sparkles aria-hidden="true" />
+              )
+            ) : (
+              <CheckCircle2 aria-hidden="true" />
+            )}
+          </span>
+          <div>
+            <p className={styles.eyebrow}>Your next action</p>
+            <h2 id="next-action-heading">{nextTask?.title ?? "You are ready for the event"}</h2>
+            <p>
+              {nextTask
+                ? `${findSubmissionForTask(nextTask, view.submissions)?.title ?? "Speaker task"}${
+                    nextTask.dueAt ? ` · Due ${formatPortalDate(nextTask.dueAt)}` : ""
+                  }`
+                : "Every assigned speaker task is complete."}
+            </p>
+          </div>
+          <Link href={`/portal/tasks${eventQuery}`}>
+            {nextTask ? "Continue" : "Review tasks"}
+            <ArrowRight aria-hidden="true" size={14} />
+          </Link>
+        </section>
+      ) : null}
 
       <section className={styles.summaryGrid} aria-label="Portal summary">
         <article className={styles.metricCard}>
@@ -90,7 +141,7 @@ function PortalHomeContent() {
             </div>
             <Link href={`/portal/submissions${eventQuery}`}>View all submissions</Link>
           </div>
-          {view.submissions.length === 0 ? (
+          {primarySubmission === undefined ? (
             <EmptyState
               title="No submissions yet"
               description="A proposal appears here immediately after you submit it."
@@ -151,6 +202,17 @@ function PortalHomeContent() {
           )}
         </section>
       </div>
+
+      <section className={styles.milestoneStrip} aria-label="Event milestones">
+        <span className={styles.milestoneIcon}>
+          <CalendarClock aria-hidden="true" size={16} />
+        </span>
+        <div>
+          <strong>Next milestone</strong>
+          <span>Speaker assets due Aug 30 · Agenda publishes Sep 4</span>
+        </div>
+        <Link href={`/portal/tasks${eventQuery}`}>View timeline</Link>
+      </section>
 
       {summary.acceptedCount > 0 && can("task-response") ? (
         <section className={`${styles.panel} ${styles.taskPanel}`}>

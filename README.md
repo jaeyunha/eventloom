@@ -16,11 +16,11 @@ Use this precedence when sources disagree:
 
 The repository and local or mocked checks do not by themselves constitute release verification. Evidence artifacts and cited product research are retained under [`evidence/`](evidence/) and linked from the spec.
 
-Integration with Airtable is a competition requirement documented in the
-retained [`Kill My SaaS competition brief`](evidence/sources/kill-my-saas-brief.pdf).
-For that reason, Airtable is the authoritative store for program and business
-records, not an optional adapter. Self-hosters must provide a separate Airtable
-base and restricted personal access token for each environment.
+The retained [`Kill My SaaS competition brief`](evidence/sources/kill-my-saas-brief.pdf)
+awards bonus credit for Airtable use; it does not define an Airtable schema or require
+it to be authoritative. D1 is the business database. Organizations may optionally
+connect an isolated Airtable base through OAuth or a restricted personal access token
+for asynchronous projections and controlled selected-field inbound updates.
 
 ## Supported scope
 
@@ -89,18 +89,16 @@ Both mirrors are currently private. Forge is retained for competition-bonus elig
 
 ## Local development
 
-Normal `make dev` runs the production-shaped integrated runtime with a dedicated development Airtable base, Wrangler-local D1/Durable Objects/R2/Queue, real local Better Auth, and Mailpit-captured email. Staging and production keep isolated deployed resources.
+Normal `make dev` runs the production-shaped D1 runtime with Wrangler-local D1/Durable Objects/R2/Queue, real local Better Auth, and Mailpit-captured email. Airtable is optional and can be connected to a dedicated development base when integration work requires it.
 
 ```bash
 bun install
 cp .env.example .env
-# Set AIRTABLE_ACCESS_TOKEN to a development-base-restricted token.
-# Set AIRTABLE_BASE_DEV_ID to the dedicated development base.
 bunx wrangler d1 migrations apply DB --cwd apps/api --local
 make dev
 ```
 
-The web app runs at `http://127.0.0.1:3015`, the API at `http://127.0.0.1:8787`, and the Mailpit inbox at `http://127.0.0.1:8025`. Integrated local mode never reads `AIRTABLE_BASE_ID` or deployed OpenSend credentials. Use `RUNTIME_PROFILE=fixture NEXT_PUBLIC_RUNTIME_PROFILE=fixture make dev` only for deterministic fixture work; Playwright selects both variables explicitly.
+The web app runs at `http://127.0.0.1:3015`, the API at `http://127.0.0.1:8787`, and the Mailpit inbox at `http://127.0.0.1:8025`. Use `RUNTIME_PROFILE=fixture NEXT_PUBLIC_RUNTIME_PROFILE=fixture make dev` only for deterministic fixture work; Playwright selects both variables explicitly.
 
 For isolated agent work, `./hack/create_worktree.sh <name> <base-ref>` creates a sanitized local `.env` by default and never copies provider credentials. Use `--env-mode copy` only for guarded integration/release work. Local, staging, and production resources and credentials must remain separate. See [`docs/setup.md`](docs/setup.md).
 
@@ -110,7 +108,6 @@ Competition hosts and public users can run their own isolated deployment. You
 need:
 
 - a Cloudflare account with Workers, D1, Durable Objects, R2, and Queues;
-- an Airtable personal access token and base;
 - a public HTTPS origin for the web Worker and another for the API Worker; and
 - Bun 1.3 or newer.
 
@@ -130,7 +127,8 @@ cp .env.cloudflare.example .env.cloudflare-staging
 cp .env.cloudflare.example .env.cloudflare-production
 ```
 
-Set the Airtable and authentication values in `.env`. In each
+Set the authentication values in `.env`. Configure Airtable only when enabling
+the optional adapter. In each
 `.env.cloudflare-<environment>` file, set:
 
 ```dotenv
@@ -142,8 +140,9 @@ NEXT_PUBLIC_APP_URL=https://your-web.example.com
 API_UPSTREAM_ORIGIN=https://your-api.example.com
 ```
 
-Use separate D1, R2, Queue, Airtable, and credential resources for staging and
-production. The checked-in Wrangler files contain public placeholders only.
+Use separate D1, R2, Queue, and credential resources for staging and
+production. If Airtable is enabled, its bases and credentials must also remain
+isolated. The checked-in Wrangler files contain public placeholders only.
 Deployment generates the ignored `apps/api/wrangler.generated.toml`; do not
 commit that file or either `.env.cloudflare-*` file.
 
@@ -159,8 +158,9 @@ make test
 ### 3. Deploy
 
 Supply `CLOUDFLARE_API_TOKEN` through the shell, root `.env`, or your CI secret
-store. Before the first deployment, add the required Airtable, Better Auth, and
-cache-invalidation values as Cloudflare Worker Secrets; follow
+store. Before the first deployment, add the required Better Auth and
+cache-invalidation values as Cloudflare Worker Secrets. Add Airtable credentials
+only when enabling the optional adapter; follow
 [`docs/setup.md`](docs/setup.md#cloudflare-worker-deployment). Then run:
 
 ```bash
@@ -170,7 +170,7 @@ node scripts/cloudflare/deploy-web.mjs staging open-sessionboard-web:staging
 
 Repeat with `production` only after the staging deployment passes the
 [QA runbook](docs/qa-runbook.md). The API deploy applies D1 migrations before
-publishing the Worker. Configure optional Worker Secrets, custom domains,
+publishing the Worker. Configure optional Airtable, Worker Secrets, custom domains,
 OpenSend, OpenAI, and provider callbacks as described in
 [`docs/setup.md`](docs/setup.md) and
 [`docs/release-runbook.md`](docs/release-runbook.md).

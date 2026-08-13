@@ -8,11 +8,12 @@ The browser uses the Next.js application as its same-origin transport. Requests 
 browser
   -> Next.js web + same-origin /api/* gateway
   -> Hono API Worker
-  -> Airtable business authority
-     + D1 operational state/outbox/audit
+  -> D1 business + operational authority
+     + Drizzle schema/query boundary
      + Durable Object coordination
-     + R2 private files
-     + one multiplexed Cloudflare Queue
+     + R2 private files and artifacts
+     + D1 outbox + Cloudflare Queue delivery
+     + optional organization-scoped Airtable adapter
      + optional OpenAI Responses advisory provider
 ```
 
@@ -29,37 +30,78 @@ Next.js renders the accessible organizer, speaker, and public-embed surfaces. It
 The Hono Worker is an independent Cloudflare deployment. It owns authentication, tenant authorization, request validation, business workflows, versioned API resources, webhooks, and integration orchestration. It exports three Cloudflare ingress handlers:
 
 - `fetch` handles HTTP API requests, health checks, and callbacks.
-- `queue` consumes the single multiplexed outbox Queue.
+- `queue` consumes persisted generic outbox jobs from the bound Cloudflare Queue.
 - `scheduled` runs production Cron Trigger work; production is configured for `0 * * * *` scheduled reminders.
+
+The exported runtime composes D1 repositories for supported product domains. Airtable-free startup is the normal path; legacy Airtable repository adapters remain in the tree for migration fixtures and compatibility tests, not as the default authority.
 
 ## Data and coordination boundaries
 
-### Airtable business authority
+### D1 business and operational authority
 
-Airtable is authoritative for tenant and program business records: organizations, events, forms and fields, submissions, participants and speaker profiles, reviews and decisions, tasks, sessions, rooms, tracks, agenda revisions, portal resources, file metadata, message templates, report definitions/runs, and publication-facing business records. Airtable record IDs are provider details; stable application IDs remain part of the application contract.
+Cloudflare D1 is the authoritative store for tenant, program, identity, and operational state: organizations and memberships; events, CFP, submissions, speakers, evaluations, sessions, and agenda; communications, reports, CRM, remix, and publication; authentication, API credentials, audit, idempotency, customer webhooks, integration state, and delivery coordination. Supported runtime repositories resolve these records from D1, and ordinary product traffic does not read Airtable or wait for it.
 
-### D1 operational state
+Event creation and empty Agenda initialization commit in the same D1 batch. Every event
+therefore has exactly one Agenda workspace from state/draft version 1 before rooms,
+tracks, or sessions exist. `scripts/d1-airtable-migration/backfill-agendas/` repairs
+older D1 events that predate this invariant using additive, idempotent inserts.
 
-Cloudflare D1 stores operational state that needs transactional, retryable, or local coordination semantics rather than business authority:
+Mutable domain roots use stable application IDs, explicit organization/event scope, versions, and timestamps. Relational constraints and repository predicates enforce tenant ownership. Consequential workflows retain domain history or audit records and use compare-and-swap/version checks where concurrent edits matter.
 
-- Better Auth accounts, sessions, verification tokens, and identity state
-- organization/API credentials, idempotency keys, and request receipts
-- durable outbox jobs, delivery attempts, retry/dead-letter state, and integration receipts
-- private-upload lifecycle metadata and audit events
+### Drizzle ORM and migration boundary
 
-D1 does not replace Airtable as the source of program truth.
+`apps/api/src/db/schema/` is the typed SQLite schema boundary. `createDatabase()` wraps the injected Cloudflare `D1Database` with `drizzle-orm/d1`; repositories use Drizzle for typed CRUD where adopted and D1 prepared SQL/`DB.batch()` for complex or atomic statements. Drizzle does not open a second database.
 
-### Durable Objects
+Drizzle Kit reads that schema to generate, check, introspect, and inspect schema history. Generated artifacts under `apps/api/drizzle/` are review inputs; deployable schema history is the forward-only numbered SQL under `apps/api/migrations/`. Wrangler owns migration application and `d1_migrations`; `drizzle-kit push` is not the staging/production deployment path.
 
-The `AgendaCoordinator` Durable Object serializes tenant/event mutations, agenda revisions, schedule locks, conflict checks, and monotonic calendar sequence allocation. It coordinates concurrent writes; it is not a business-record store.
+Local integrated development uses `wrangler dev` and the `DB` binding from `wrangler.toml`. Wrangler persists a local SQLite-backed D1 database, so local application code exercises the same D1 API and migrations rather than a separate `better-sqlite3` or PostgreSQL runtime.
 
 ### R2 private files
 
-R2 stores private uploads and export artifacts. Objects are addressed through authorized, expiring access and never become public merely because they exist in a bucket. File lifecycle and audit metadata remain operational state in D1 and business references remain in Airtable.
+The `PRIVATE_FILES` R2 bucket stores private upload bytes and generated artifacts. D1 stores object keys, lifecycle/version metadata, authorization state, and audit references. API serializers remove internal object keys, and access is mediated by fresh authorization or expiring capabilities; an R2 object is not public merely because it exists.
 
-### One multiplexed Queue
+### Durable Object coordination
 
-Each environment binds one `OUTBOX_QUEUE`. Typed messages multiplex communications, calendar delivery, webhook delivery, and cache invalidation through that queue. D1 outbox records provide deduplication, leases, retry state, delivery attempts, and auditability; a provider side effect is not considered complete until its receipt is recorded.
+`AgendaCoordinator` is addressed per organization/event and serializes agenda mutation admission. Its storage atomically checks an expected coordinator revision and records an idempotent operation receipt. The agenda engine and D1 repository remain responsible for domain state, versioning, and deterministic conflict validation; Durable Object storage is coordination state, not the business source of truth and is not transactionally coupled to D1.
+
+### D1 outbox and Cloudflare Queue
+
+Each environment binds one `OUTBOX_QUEUE` with a dead-letter queue. Generic side effects persist first in D1 `outbox_jobs`; Queue messages carry the job identity and topic for communications, calendar delivery, customer webhook delivery, or cache invalidation. The consumer conditionally claims the D1 row with a lease, validates the persisted payload, invokes the provider adapter, records delivery status/receipts, and transitions the row to delivered, retry, failed, or dead-letter state. Duplicate Queue delivery is therefore an idempotent wake-up, not the durable record.
+
+Airtable projection uses its own durable `airtable_sync_jobs` state machine rather than the generic topic enum. Projection dispatcher/sweeper and version-2 Queue-message contracts are implemented, but the exported Worker currently composes only the generic version-1 outbox consumer and scheduled reminders. Airtable projection dispatch and consumption must be explicitly composed before it can be claimed as deployed runtime behavior.
+
+### Optional organization-scoped Airtable adapter
+
+Airtable is an optional per-organization integration, never a boot requirement, fallback database, or authority for authentication, authorization, decisions, publication, delivery, audit, idempotency, or private-file access. The control plane stores connection, OAuth attempt, encrypted credential reference, base/mapping, health, and sync state in D1. Organization owner/admin routes expose OAuth and PAT connection operations, base/mapping selection, pause/resume, retry, disconnect, conflict, and webhook surfaces. The routes are mounted only when the Airtable integration environment is configured; static `AIRTABLE_ACCESS_TOKEN`/`AIRTABLE_BASE_ID` support remains an optional compatibility/diagnostic path.
+
+OAuth implements one-use, expiring state and PKCE attempt records plus leased token exchange/refresh semantics. PAT credentials use the same organization-scoped D1 connection model. Tokens remain server-side encrypted references and Airtable availability does not affect D1 domain commands.
+
+### Outbound Airtable projection
+
+Selected D1 repository mutations can insert deduplicated `airtable_sync_jobs` alongside domain/history changes. Projection workers claim jobs with owner/token leases, discard stale source versions, and upsert by stable `Application ID`; provider record IDs live only in mapping tables. Success updates the mapping and job through conditional completion. Retryable network, rate-limit, conflict, and server errors are rescheduled; terminal mapping errors fail visibly. Initial-export checkpoints, reconciliation, stale-mapping repair, expired-lease release, and Queue wake-up dispatch are implemented as adapter components.
+
+Projection is asynchronous and one-way with respect to normal commands: no user-facing request synchronously dual-writes Airtable, and no product read falls back to Airtable. Because the projection dispatcher/worker is not yet wired into the exported `queue` or `scheduled` handlers, current implementation should be described as a built projection subsystem awaiting runtime composition, not as observed convergence in deployed environments.
+
+### Controlled inbound Airtable changes
+
+Inbound support is deliberately constrained. The implemented webhook boundary reads a bounded raw body, verifies `X-Airtable-Content-MAC` over the exact bytes, durably deduplicates the notification, and returns `204`. Cursor workers use owner/token leases and row-version compare-and-swap; a page's individual changes and cursor advance form one persistence boundary, and a payload-retention gap requests reconciliation rather than skipping data.
+
+The change worker accepts only enabled projection fields with an existing application-ID mapping and registered translator. Export echoes, already-observed hashes, unchanged values, and disallowed fields become no-ops. An allowed value is applied through an idempotent, version-checked domain command, never by copying provider JSON directly into a D1 row. If D1 has changed since the mapping's last exported version, the worker records an open conflict instead of choosing a winner. Conflict records support idempotent `use_d1`, `use_airtable`, or manual resolution state transitions.
+
+These webhook, cursor, change, and conflict components are implemented and tested in isolation, but the current organization integration composition still returns a `503` webhook response and placeholder conflict route results. Controlled inbound behavior is therefore not yet active through the exported Worker.
+
+## Migration and authority cutover
+
+The repository includes a forward-only Airtable-to-D1 migration toolchain:
+
+- export captures Airtable schema/records, provider IDs, stable application IDs, and raw source evidence;
+- import validates mappings and emits a deterministic dependency-ordered D1 import plan;
+- canonical verification compares counts/hashes and requires unexplained drift to be resolved or explicitly recorded;
+- cutover helpers enforce `shadow -> read-d1 -> write-d1`, require a clean verification report before D1 reads, and require a write fence for the final transition.
+
+The checked-in import CLI currently validates and prints a plan; it explicitly does not write D1 without an injected execution adapter. Likewise, marker and fence adapters are injection boundaries rather than proof that a tenant has been cut over. Before `write-d1`, operators export, import, reconcile, shadow-read, acquire a short write fence, apply final deltas, and record the marker. A `read-d1` marker may roll back to `shadow`; after the first accepted D1-authoritative write, rollback to Airtable writes is prohibited. Recovery is forward repair from D1, with Airtable projection paused if necessary. Remote schema changes stay additive so the previous Worker can run against the expanded schema if deployment fails after migration.
+
+The current default runtime is already D1-backed and Airtable-optional. The migration/cutover tooling exists to move legacy organization data safely; documentation or a generated plan alone is not evidence that any remote dataset was imported, reconciled, or cut over.
 
 ## Authentication and product scope
 

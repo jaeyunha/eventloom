@@ -29,6 +29,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  StatusBadge as WorkspaceStatusBadge,
+  WorkspaceBreadcrumb,
+  WorkspaceHeader,
+  WorkspaceMetaItem,
+} from "@/components/workspace/workspace-ui";
 import { getCfpStepRoute } from "../cfp/routes";
 import styles from "./submission-workspace.module.css";
 
@@ -431,6 +437,20 @@ const seededSubmissions: SubmissionRecord[] = [
 
 export { seededSubmissions };
 
+const fixtureSubmissionAliases: Readonly<Record<string, string>> = {
+  submission_local_1: "sub-001",
+  submission_local_2: "sub-002",
+  submission_local_3: "sub-003",
+  submission_local_4: "sub-004",
+};
+
+function fixtureSubmissionForDemoEvent(submission: SubmissionRecord): SubmissionRecord {
+  const alias = Object.entries(fixtureSubmissionAliases).find(
+    ([, sourceId]) => sourceId === submission.id,
+  )?.[0];
+  return alias === undefined ? submission : { ...submission, id: alias, eventId: "demo-event" };
+}
+
 const statusLabels: Record<SubmissionStatus, string> = {
   draft: "Draft",
   submitted: "Submitted",
@@ -459,6 +479,11 @@ const sortLabels: Record<SortKey, string> = {
 };
 
 export function getSeededSubmissionsForEvent(eventId: string): SubmissionRecord[] {
+  if (eventId === "demo-event") {
+    return seededSubmissions
+      .filter((submission) => submission.eventId === "summit-2026")
+      .map(fixtureSubmissionForDemoEvent);
+  }
   return seededSubmissions.filter((submission) => submission.eventId === eventId);
 }
 
@@ -466,6 +491,13 @@ export function getSeededSubmission(
   eventId: string,
   submissionId: string,
 ): SubmissionRecord | undefined {
+  if (eventId === "demo-event") {
+    const sourceId = fixtureSubmissionAliases[submissionId] ?? submissionId;
+    const submission = seededSubmissions.find(
+      (candidate) => candidate.eventId === "summit-2026" && candidate.id === sourceId,
+    );
+    return submission === undefined ? undefined : fixtureSubmissionForDemoEvent(submission);
+  }
   return seededSubmissions.find(
     (submission) => submission.eventId === eventId && submission.id === submissionId,
   );
@@ -1112,6 +1144,9 @@ export async function enrichCanonicalSubmission(
 }
 
 function eventTitle(eventId: string): string {
+  if (eventId === "demo-event") {
+    return "Open Sessionboard Conference";
+  }
   if (eventId === "summit-2026") {
     return "Eventloom Summit 2026";
   }
@@ -1464,18 +1499,49 @@ export function SubmissionListWorkspace({
       <a className={styles.skipLink} href="#submission-list-content">
         Skip to submissions
       </a>
-      <header className={styles.workspaceHeader}>
-        <div>
-          <p className={styles.eyebrow}>Organizer workspace</p>
-          <h1>Submissions</h1>
-          <p className={styles.pageDescription}>
-            Review and manage proposals for <strong>{eventName}</strong>.
-          </p>
-        </div>
-        <Button asChild variant="outline">
-          <Link href="/admin/events">Back to events</Link>
-        </Button>
-      </header>
+      <WorkspaceHeader
+        breadcrumb={
+          <WorkspaceBreadcrumb>
+            <span>{eventName}</span>
+            <span>/</span>
+            <strong>Submissions</strong>
+          </WorkspaceBreadcrumb>
+        }
+        title="Submissions"
+        status={<WorkspaceStatusBadge tone="info">{submissions.length} total</WorkspaceStatusBadge>}
+        description="Move proposals from intake through review and a final organizer decision."
+        metadata={
+          <>
+            <WorkspaceMetaItem>{filteredSubmissions.length} in this view</WorkspaceMetaItem>
+            <WorkspaceMetaItem>
+              {submissions.filter((submission) => submission.status === "accepted").length} accepted
+            </WorkspaceMetaItem>
+            <WorkspaceMetaItem>
+              {
+                submissions.filter(
+                  (submission) =>
+                    submission.status === "submitted" || submission.status === "under_review",
+                ).length
+              }{" "}
+              awaiting decision
+            </WorkspaceMetaItem>
+          </>
+        }
+        actions={
+          <>
+            <Button asChild size="sm" variant="outline">
+              <Link href="/admin/events">Back to events</Link>
+            </Button>
+            <Button asChild size="sm">
+              <Link
+                href={`/cfp/organizations/${encodeURIComponent(organizationId ?? "local-organization")}/events/${encodeURIComponent(eventSlug ?? eventId)}`}
+              >
+                Open CFP
+              </Link>
+            </Button>
+          </>
+        }
+      />
 
       <div id="submission-list-content" className={styles.workspaceMain} tabIndex={-1}>
         <section className={styles.metricGrid} aria-label="Submission summary">
@@ -1529,6 +1595,25 @@ export function SubmissionListWorkspace({
                 state={evaluationLoadState}
                 onRetry={() => setEvaluationReloadVersion((current) => current + 1)}
               />
+              <fieldset className={styles.savedViews} aria-label="Submission saved views">
+                <legend className={styles.srOnly}>Saved views</legend>
+                {[
+                  { label: "All", value: "all" as const },
+                  { label: "Needs review", value: "under_review" as const },
+                  { label: "Ready for decision", value: "submitted" as const },
+                  { label: "Accepted", value: "accepted" as const },
+                ].map((view) => (
+                  <Button
+                    key={view.value}
+                    size="sm"
+                    type="button"
+                    variant={status === view.value ? "secondary" : "ghost"}
+                    onClick={() => setStatus(view.value)}
+                  >
+                    {view.label}
+                  </Button>
+                ))}
+              </fieldset>
               <fieldset className={styles.toolbar} aria-label="Submission filters">
                 <legend className={styles.srOnly}>Filter submissions</legend>
                 <label className={styles.toolbarSearch} htmlFor="submission-search">
@@ -1745,6 +1830,33 @@ export function SubmissionListWorkspace({
                       ))}
                     </TableBody>
                   </Table>
+                  <div className={styles.mobileSubmissionList}>
+                    {filteredSubmissions.map((submission) => (
+                      <article className={styles.mobileSubmissionCard} key={submission.id}>
+                        <div className={styles.mobileSubmissionHeading}>
+                          <Link
+                            href={submissionHref(submission.eventId, submission.id, organizationId)}
+                          >
+                            {submission.title}
+                          </Link>
+                          <StatusBadge status={submission.status} />
+                        </div>
+                        <p>
+                          {submission.track} · {submission.format}
+                        </p>
+                        <div className={styles.mobileSubmissionMeta}>
+                          <span>
+                            Reviews {submission.reviewSummary.completed}/
+                            {submission.reviewSummary.total}
+                          </span>
+                          <span>{submission.participants.length} participants</span>
+                          <time dateTime={submission.updatedAt}>
+                            Updated {formatDate(submission.updatedAt)}
+                          </time>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
                 </div>
               )}
             </CardContent>
@@ -2161,29 +2273,39 @@ export function SubmissionDetailWorkspace({
       <a className={styles.skipLink} href="#submission-detail-content">
         Skip to submission details
       </a>
-      <header className={styles.workspaceHeader}>
-        <div>
-          <nav className={styles.breadcrumbs} aria-label="Breadcrumb">
+      <WorkspaceHeader
+        breadcrumb={
+          <WorkspaceBreadcrumb>
             <Link href="/admin/events">{eventTitle(eventId)}</Link>
-            <span aria-hidden="true">/</span>
+            <span>/</span>
             <Link href={submissionListHref(eventId, organizationId)}>Submissions</Link>
-            <span aria-hidden="true">/</span>
-            <span aria-current="page">{submission.id}</span>
-          </nav>
-          <p className={styles.eyebrow}>Organizer submission detail</p>
-          <div className={styles.detailTitleRow}>
-            <h1>{submission.title}</h1>
-            <StatusBadge status={submission.status} />
-          </div>
-          <p className={styles.pageDescription}>
-            {submission.id} · version {submission.version} · last updated{" "}
-            <time dateTime={submission.updatedAt}>{formatDate(submission.updatedAt)}</time>
-          </p>
-        </div>
-        <Link className={styles.backLink} href={submissionListHref(eventId, organizationId)}>
-          Back to submissions
-        </Link>
-      </header>
+            <span>/</span>
+            <strong>{submission.id}</strong>
+          </WorkspaceBreadcrumb>
+        }
+        title={submission.title}
+        status={
+          <WorkspaceStatusBadge tone={submission.status === "accepted" ? "success" : "info"}>
+            {statusLabels[submission.status]}
+          </WorkspaceStatusBadge>
+        }
+        description={`${submission.format} · ${submission.track}`}
+        metadata={
+          <>
+            <WorkspaceMetaItem>Version {submission.version}</WorkspaceMetaItem>
+            <WorkspaceMetaItem>
+              Updated{" "}
+              <time dateTime={submission.updatedAt}>{formatDate(submission.updatedAt)}</time>
+            </WorkspaceMetaItem>
+            <WorkspaceMetaItem>{submission.participants.length} participants</WorkspaceMetaItem>
+          </>
+        }
+        actions={
+          <Button asChild size="sm" variant="outline">
+            <Link href={submissionListHref(eventId, organizationId)}>Back to queue</Link>
+          </Button>
+        }
+      />
 
       <div id="submission-detail-content" className={styles.workspaceMain} tabIndex={-1}>
         <div className={styles.detailGrid}>
