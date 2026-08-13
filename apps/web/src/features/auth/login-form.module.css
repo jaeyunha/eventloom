@@ -1,9 +1,31 @@
 .pageShell {
+  --background: var(--color-canvas);
+  --foreground: var(--color-ink);
+  --card: var(--color-surface);
+  --card-foreground: var(--color-ink);
+  --popover: var(--color-surface);
+  --popover-foreground: var(--color-ink);
+  --primary: var(--color-ink);
+  --primary-foreground: var(--color-surface);
+  --secondary: var(--color-brand-soft);
+  --secondary-foreground: var(--color-ink);
+  --muted: var(--color-brand-soft);
+  --muted-foreground: var(--color-muted);
+  --accent: var(--color-brand-soft);
+  --accent-foreground: var(--color-ink);
+  --border: var(--color-border);
+  --input: var(--color-border-strong);
+  --ring: var(--color-accent);
+
   min-height: 100dvh;
   display: flex;
   flex-direction: column;
   background: var(--background);
   color: var(--foreground);
+}
+
+.pageShell :focus-visible {
+  outline-color: color-mix(in oklch, var(--color-accent) 50%, transparent);
 }
 
 .skipLink {
@@ -87,6 +109,41 @@
   color: var(--muted-foreground);
   font-size: 0.75rem;
   font-weight: 500;
+}
+
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.workspaceSwitcher {
+  display: inline-flex;
+  padding: 0.1875rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--muted);
+}
+
+.workspaceSwitcher a {
+  min-height: 2rem;
+  padding: 0.4375rem 0.75rem;
+  border-radius: var(--radius-sm);
+  color: var(--muted-foreground);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1;
+  text-decoration: none;
+}
+
+.workspaceSwitcher a[aria-current="page"] {
+  background: var(--background);
+  color: var(--foreground);
+  box-shadow: 0 1px 2px color-mix(in oklch, var(--foreground) 10%, transparent);
+}
+
+.workspaceSwitcher a:hover {
+  color: var(--foreground);
 }
 
 .main {
@@ -266,6 +323,7 @@
 }
 
 .brand:focus-visible,
+.workspaceSwitcher a:focus-visible,
 .cfpNote a:focus-visible {
   border-radius: var(--radius-sm);
 }
@@ -304,6 +362,14 @@
 
   .headerContext {
     display: none;
+  }
+
+  .headerActions {
+    gap: 0;
+  }
+
+  .workspaceSwitcher a {
+    padding-inline: 0.625rem;
   }
 
   .main {

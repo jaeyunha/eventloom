@@ -8,6 +8,7 @@ import {
   LoginRequestError,
   resolveLoginConfig,
   resolveLoginLandingRoute,
+  resolveLoginWorkspace,
   signInAndRedirect,
 } from "./login-form";
 import { safeLoginReturnTo } from "./return-path";
@@ -296,11 +297,12 @@ describe("organizer login", () => {
     expect(markup).toContain("Email me a magic link");
     expect(markup).toContain("Account access mode");
     expect(markup).toContain("Create account");
-    expect(markup).toContain("Organizer and reviewer access");
+    expect(markup).toContain("One account, separate workspaces");
     expect(markup).toContain("Sign in to Open Sessionboard");
     expect(markup).toContain("Organizers");
     expect(markup).toContain("Reviewers");
-    expect(markup).toContain("CFP applicants create accounts from the event-specific application");
+    expect(markup).toContain("applicant and speaker portal");
+    expect(markup).toContain("Applicants and speakers");
     expect(markup).not.toContain("Welcome back to the program desk.");
     expect(markup).not.toContain("01");
     expect(markup).not.toContain("Google");
@@ -321,6 +323,24 @@ describe("organizer login", () => {
     );
     expect(markup).not.toContain("Google");
     expect(markup).not.toContain("Email me a magic link");
+  });
+
+  it("renders a distinct applicant and speaker sign-in mode for the portal destination", () => {
+    const markup = renderToStaticMarkup(
+      createElement(LoginForm, {
+        apiBaseUrl: API_ORIGIN,
+        returnTo: "/portal/submissions",
+      }),
+    );
+
+    expect(resolveLoginWorkspace("/portal")).toBe("portal");
+    expect(resolveLoginWorkspace("/portal/submissions?event=event-1")).toBe("portal");
+    expect(resolveLoginWorkspace("/admin")).toBe("operator");
+    expect(resolveLoginWorkspace("https://evil.example/portal")).toBe("operator");
+    expect(markup).toContain('data-login-workspace="portal"');
+    expect(markup).toContain('href="/login"');
+    expect(markup).toContain('href="/login?next=%2Fportal" aria-current="page"');
+    expect(markup).not.toContain('data-slot="tabs-list"');
   });
 
   it("uses the same-origin gateway without browser API configuration", () => {

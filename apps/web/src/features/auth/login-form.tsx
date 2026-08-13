@@ -27,6 +27,7 @@ const NETWORK_ERROR_MESSAGE =
   "We couldn't reach the sign-in service. Check your connection and try again.";
 const REVIEW_PATH = "/review";
 const PORTAL_PATH = "/portal";
+const PORTAL_LOGIN_PATH = "/login?next=%2Fportal";
 const AUTHENTICATION_ERROR_MESSAGE =
   "We couldn't verify your account access. Sign in again or contact an administrator.";
 const LOGIN_MEMBERSHIP_ROLES = new Set(["owner", "admin", "reviewer"]);
@@ -255,6 +256,11 @@ export function resolveLoginLandingRoute(value: unknown, returnTo?: unknown): st
     return PORTAL_PATH;
   }
   throw new LoginRequestError("authentication", AUTHENTICATION_ERROR_MESSAGE);
+}
+
+export function resolveLoginWorkspace(returnTo: unknown): "operator" | "portal" {
+  const destination = explicitSafeLoginReturnTo(returnTo);
+  return destination?.startsWith(PORTAL_PATH) ? "portal" : "operator";
 }
 
 function isRecord(value: unknown): value is UnknownRecord {
@@ -660,9 +666,10 @@ export function LoginForm({
     setSubmitting(false);
   }
   const isSignup = mode === "sign-up";
+  const isPortalLogin = resolveLoginWorkspace(returnTo) === "portal";
 
   return (
-    <div className={styles.pageShell}>
+    <div className={styles.pageShell} data-login-workspace={isPortalLogin ? "portal" : "operator"}>
       <a className={styles.skipLink} href="#login-main">
         Skip to sign in
       </a>
@@ -676,35 +683,80 @@ export function LoginForm({
             <small>Program operations</small>
           </span>
         </a>
-        <p className={styles.headerContext}>Organizer and reviewer access</p>
+        <div className={styles.headerActions}>
+          <nav className={styles.workspaceSwitcher} aria-label="Sign-in workspace">
+            <a href="/login" aria-current={!isPortalLogin ? "page" : undefined}>
+              Organizer
+            </a>
+            <a href={PORTAL_LOGIN_PATH} aria-current={isPortalLogin ? "page" : undefined}>
+              Applicant / speaker
+            </a>
+          </nav>
+          <p className={styles.headerContext}>One account, separate workspaces</p>
+        </div>
       </header>
 
       <main className={styles.main} id="login-main" tabIndex={-1}>
         <section className={styles.intro} aria-labelledby="login-title">
-          <p className={styles.kicker}>Operator access</p>
-          <h1 id="login-title">Sign in to Open Sessionboard</h1>
-          <p>Manage event programs, review submissions, and keep your team aligned.</p>
+          <p className={styles.kicker}>{isPortalLogin ? "Speaker access" : "Operator access"}</p>
+          <h1 id="login-title">
+            {isPortalLogin ? "Applicant and speaker sign in" : "Sign in to Open Sessionboard"}
+          </h1>
+          <p>
+            {isPortalLogin
+              ? "Track your proposals and finish accepted-event speaker tasks."
+              : "Sign in once, then enter the workspace your event role allows."}
+          </p>
           <ul className={styles.accessList} aria-label="Workspace access">
-            <li>
-              <strong>Organizers</strong>
-              <span>Manage events, CFPs, and review operations.</span>
-            </li>
-            <li>
-              <strong>Reviewers</strong>
-              <span>Access assigned review work and decisions.</span>
-            </li>
+            {isPortalLogin ? (
+              <>
+                <li>
+                  <strong>My proposals</strong>
+                  <span>Review submitted sessions and their current status.</span>
+                </li>
+                <li>
+                  <strong>Speaker profile</strong>
+                  <span>Keep your biography and public details current.</span>
+                </li>
+                <li>
+                  <strong>Event tasks</strong>
+                  <span>Complete forms, files, and accepted-speaker requests.</span>
+                </li>
+              </>
+            ) : (
+              <>
+                <li>
+                  <strong>Organizers</strong>
+                  <span>Manage events, CFPs, and review operations.</span>
+                </li>
+                <li>
+                  <strong>Reviewers</strong>
+                  <span>Access assigned review work and decisions.</span>
+                </li>
+                <li>
+                  <strong>Applicants and speakers</strong>
+                  <span>Track proposals and open accepted-event speaker tools.</span>
+                </li>
+              </>
+            )}
           </ul>
         </section>
 
         <Card className={styles.card} aria-labelledby="login-form-title">
           <CardHeader className={styles.cardHeader}>
             <CardTitle id="login-form-title">
-              {isSignup ? "Create organizer account" : "Sign in"}
+              {isSignup
+                ? "Create organizer account"
+                : isPortalLogin
+                  ? "Sign in to your portal"
+                  : "Sign in"}
             </CardTitle>
             <CardDescription>
               {isSignup
                 ? "Use your work email. Organization access is granted by an owner or administrator."
-                : "Use your organizer or reviewer account to continue."}
+                : isPortalLogin
+                  ? "Use the same email address you used for your proposal."
+                  : "Your memberships and speaker access determine where you land."}
             </CardDescription>
           </CardHeader>
 
@@ -718,10 +770,12 @@ export function LoginForm({
                 }
               }}
             >
-              <TabsList className={styles.tabsList} aria-label="Account access mode">
-                <TabsTrigger value="sign-in">Sign in</TabsTrigger>
-                <TabsTrigger value="sign-up">Create account</TabsTrigger>
-              </TabsList>
+              {!isPortalLogin ? (
+                <TabsList className={styles.tabsList} aria-label="Account access mode">
+                  <TabsTrigger value="sign-in">Sign in</TabsTrigger>
+                  <TabsTrigger value="sign-up">Create account</TabsTrigger>
+                </TabsList>
+              ) : null}
 
               <TabsContent value={mode} className={styles.tabPanel}>
                 {verificationRequired ? (
@@ -845,7 +899,9 @@ export function LoginForm({
                           : "Signing in…"
                         : isSignup
                           ? "Create organizer account"
-                          : "Sign in to workspace"}
+                          : isPortalLogin
+                            ? "Sign in to portal"
+                            : "Sign in to workspace"}
                     </Button>
                   </form>
                 )}
@@ -880,17 +936,19 @@ export function LoginForm({
               </TabsContent>
             </Tabs>
 
-            <p className={styles.cfpNote}>
-              CFP applicants create accounts from the event-specific application link shared by the
-              organizer.
-            </p>
+            {!isPortalLogin ? (
+              <p className={styles.cfpNote}>
+                Submitted a proposal or speaking at an event?{" "}
+                <a href={PORTAL_LOGIN_PATH}>Sign in to the applicant and speaker portal</a>.
+              </p>
+            ) : null}
           </CardContent>
         </Card>
       </main>
 
       <footer className={styles.footer}>
         <span>Open Sessionboard</span>
-        <span>Organizer and reviewer workspace</span>
+        <span>Organizer, reviewer, applicant, and speaker access</span>
       </footer>
     </div>
   );
