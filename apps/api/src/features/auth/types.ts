@@ -5,6 +5,8 @@ export type OrganizationRole = (typeof organizationRoles)[number];
 export const apiKeyScopes = [
   "events:read",
   "events:write",
+  "sessions:read",
+  "speakers:read",
   "submissions:read",
   "submissions:write",
   "agenda:read",

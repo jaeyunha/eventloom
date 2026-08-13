@@ -21,6 +21,8 @@ export type EventRole = z.infer<typeof eventRoleSchema>;
 export const apiScopes = [
   "events:read",
   "events:write",
+  "sessions:read",
+  "speakers:read",
   "forms:read",
   "forms:write",
   "submissions:read",

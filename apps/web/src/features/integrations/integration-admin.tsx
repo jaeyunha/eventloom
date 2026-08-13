@@ -9,6 +9,7 @@ import {
   IntegrationAdminApiError,
 } from "./api";
 import {
+  ApiDocsSection,
   ApiKeysSection,
   DeliverySection,
   OneTimeSecretPanel,
@@ -18,7 +19,7 @@ import {
 import styles from "./integrations.module.css";
 import type { IntegrationAdminSnapshot, OneTimeSecret } from "./types";
 
-type SupportedIntegrationSection = "overview" | "api-keys" | "webhooks" | "delivery";
+type SupportedIntegrationSection = "overview" | "api-docs" | "api-keys" | "webhooks" | "delivery";
 
 export interface IntegrationAdminProps {
   readonly eventId: string;
@@ -39,6 +40,10 @@ const sectionCopy: Record<
   "api-keys": {
     title: "API keys",
     description: "Issue least-privilege credentials for tenant-scoped API clients.",
+  },
+  "api-docs": {
+    title: "API documentation",
+    description: "Build server-side integrations against the mounted, organization-scoped API.",
   },
   webhooks: {
     title: "Webhooks",
@@ -240,6 +245,7 @@ export function IntegrationAdmin({
     readonly href: string;
   }[] = [
     { section: "overview", label: "Overview", href: base },
+    { section: "api-docs", label: "API docs", href: `${base}/api-docs` },
     { section: "api-keys", label: "API keys", href: `${base}/api-keys` },
     { section: "webhooks", label: "Webhooks", href: `${base}/webhooks` },
     { section: "delivery", label: "Email & calendar", href: `${base}/delivery` },
@@ -320,6 +326,8 @@ export function IntegrationAdmin({
         {snapshot ? (
           section === "overview" ? (
             <OverviewSection basePath={base} snapshot={snapshot} />
+          ) : section === "api-docs" ? (
+            <ApiDocsSection organizationId={organizationId} basePath={base} />
           ) : section === "api-keys" ? (
             <ApiKeysSection keys={snapshot.apiKeys} actions={actions} />
           ) : section === "webhooks" ? (

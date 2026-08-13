@@ -89,6 +89,7 @@ import type {
   SpeakerPortalCapability,
   SpeakerProfile,
   SpeakerRepository,
+  SpeakerRosterEntry,
   SpeakerSubmission,
   SpeakerTask,
   TransitionSpeakerTaskCommand,
@@ -135,6 +136,8 @@ const FAR_FUTURE = new Date("2099-01-01T00:00:00.000Z");
 const LOCAL_API_KEY_SCOPES: readonly ApiKeyScope[] = [
   "events:read",
   "events:write",
+  "sessions:read",
+  "speakers:read",
   "submissions:read",
   "submissions:write",
   "agenda:read",
@@ -627,6 +630,35 @@ class LocalSpeakerRepository implements SpeakerRepository {
     return clone(
       (this.#profiles.get(eventId) ?? []).filter(({ participantId }) => allowed.has(participantId)),
     );
+  }
+
+  async listRosterForEvent(eventId: string): Promise<SpeakerRosterEntry[]> {
+    const profiles = this.#profiles.get(eventId) ?? [];
+    const submissions = this.#submissions.get(eventId) ?? [];
+    return profiles.map((profile) => {
+      const submission = submissions.find((candidate) =>
+        candidate.participantIds.includes(profile.participantId),
+      );
+      return {
+        id: `roster:${eventId}:${profile.participantId}`,
+        eventId,
+        submissionId: submission?.id ?? `profile:${profile.participantId}`,
+        participantId: profile.participantId,
+        displayName: profile.displayName,
+        ...(profile.jobTitle === undefined ? {} : { jobTitle: profile.jobTitle }),
+        ...(profile.company === undefined ? {} : { company: profile.company }),
+        biography: profile.biography,
+        ...(profile.socialLinks === undefined ? {} : { socialLinks: profile.socialLinks }),
+        ...(profile.headshotAssetId === undefined
+          ? {}
+          : { headshotAssetId: profile.headshotAssetId }),
+        role: submission?.primaryParticipantId === profile.participantId ? "primary" : "co_speaker",
+        status: "active",
+        version: profile.version,
+        createdAt: profile.updatedAt,
+        updatedAt: profile.updatedAt,
+      };
+    });
   }
 
   async getProfile(eventId: string, participantId: string) {
@@ -2866,6 +2898,11 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
     },
     publicApi: {
       resources: [],
+    },
+    publicCatalog: {
+      eventRepository,
+      sessionRepository,
+      speakerRepository,
     },
     integrations: {
       getEvent: integrationRepository.getEvent.bind(integrationRepository),

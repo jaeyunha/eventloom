@@ -175,6 +175,8 @@ export interface PublicApiRoutesOptions<
 const apiKeyScopes = new Set<ApiKeyScope>([
   "events:read",
   "events:write",
+  "sessions:read",
+  "speakers:read",
   "submissions:read",
   "submissions:write",
   "agenda:read",

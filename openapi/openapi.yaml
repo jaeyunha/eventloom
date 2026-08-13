@@ -3089,6 +3089,165 @@ paths:
                 additionalProperties: false
         "404": { $ref: "#/components/responses/NotFoundError" }
 
+  /api/v1/organizations/{organizationId}/events:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationId"
+    get:
+      tags: [Public API]
+      operationId: listPublicEvents
+      summary: List publication-safe organization events
+      security:
+        - apiKey: ["events:read"]
+      parameters:
+        - $ref: "#/components/parameters/PublicCursor"
+        - $ref: "#/components/parameters/PublicLimit"
+      responses:
+        "200":
+          description: Cursor page of event projections.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublicEventPage"
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/AuthenticationError" }
+        "403": { $ref: "#/components/responses/AuthorizationError" }
+        "429": { $ref: "#/components/responses/RateLimitError" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/organizations/{organizationId}/events/{eventId}:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationId"
+      - $ref: "#/components/parameters/EventId"
+    get:
+      tags: [Public API]
+      operationId: getPublicEvent
+      summary: Get a publication-safe organization event
+      security:
+        - apiKey: ["events:read"]
+      responses:
+        "200":
+          description: Event projection.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/PublicEvent" }
+                additionalProperties: false
+        "401": { $ref: "#/components/responses/AuthenticationError" }
+        "403": { $ref: "#/components/responses/AuthorizationError" }
+        "404": { $ref: "#/components/responses/NotFoundError" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/organizations/{organizationId}/events/{eventId}/sessions:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationId"
+      - $ref: "#/components/parameters/EventId"
+    get:
+      tags: [Public API]
+      operationId: listPublicSessions
+      summary: List accepted event sessions
+      security:
+        - apiKey: ["sessions:read"]
+      parameters:
+        - $ref: "#/components/parameters/PublicCursor"
+        - $ref: "#/components/parameters/PublicLimit"
+      responses:
+        "200":
+          description: Cursor page of accepted session projections.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublicSessionPage"
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/AuthenticationError" }
+        "403": { $ref: "#/components/responses/AuthorizationError" }
+        "404": { $ref: "#/components/responses/NotFoundError" }
+        "429": { $ref: "#/components/responses/RateLimitError" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/organizations/{organizationId}/events/{eventId}/sessions/{sessionId}:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationId"
+      - $ref: "#/components/parameters/EventId"
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      tags: [Public API]
+      operationId: getPublicSession
+      summary: Get an accepted event session
+      security:
+        - apiKey: ["sessions:read"]
+      responses:
+        "200":
+          description: Accepted session projection.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/PublicSession" }
+                additionalProperties: false
+        "401": { $ref: "#/components/responses/AuthenticationError" }
+        "403": { $ref: "#/components/responses/AuthorizationError" }
+        "404": { $ref: "#/components/responses/NotFoundError" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/organizations/{organizationId}/events/{eventId}/speakers:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationId"
+      - $ref: "#/components/parameters/EventId"
+    get:
+      tags: [Public API]
+      operationId: listPublicSpeakers
+      summary: List active event speakers
+      security:
+        - apiKey: ["speakers:read"]
+      parameters:
+        - $ref: "#/components/parameters/PublicCursor"
+        - $ref: "#/components/parameters/PublicLimit"
+      responses:
+        "200":
+          description: Cursor page of active speaker projections.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublicSpeakerPage"
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/AuthenticationError" }
+        "403": { $ref: "#/components/responses/AuthorizationError" }
+        "404": { $ref: "#/components/responses/NotFoundError" }
+        "429": { $ref: "#/components/responses/RateLimitError" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/organizations/{organizationId}/events/{eventId}/speakers/{speakerId}:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationId"
+      - $ref: "#/components/parameters/EventId"
+      - $ref: "#/components/parameters/SpeakerId"
+    get:
+      tags: [Public API]
+      operationId: getPublicSpeaker
+      summary: Get an active event speaker
+      security:
+        - apiKey: ["speakers:read"]
+      responses:
+        "200":
+          description: Active speaker projection.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/PublicSpeaker" }
+                additionalProperties: false
+        "401": { $ref: "#/components/responses/AuthenticationError" }
+        "403": { $ref: "#/components/responses/AuthorizationError" }
+        "404": { $ref: "#/components/responses/NotFoundError" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
   /api/v1/organizations/{organizationId}/webhooks:
     parameters:
       - $ref: "#/components/parameters/OrganizationId"
@@ -3324,6 +3483,11 @@ components:
       schema: { type: string, minLength: 1, maxLength: 200 }
     SessionId:
       name: sessionId
+      in: path
+      required: true
+      schema: { type: string, minLength: 1, maxLength: 200 }
+    SpeakerId:
+      name: speakerId
       in: path
       required: true
       schema: { type: string, minLength: 1, maxLength: 200 }
@@ -3598,6 +3762,101 @@ components:
         data:
           type: array
           items: { $ref: "#/components/schemas/PublicApiEventsRecord" }
+        page:
+          type: object
+          required: [nextCursor, hasMore]
+          properties:
+            nextCursor: { type: [string, "null"] }
+            hasMore: { type: boolean }
+          additionalProperties: false
+      additionalProperties: false
+    PublicEvent:
+      type: object
+      required: [id, slug, name, status, timeZone, startsAt, endsAt, venue, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Identifier" }
+        slug: { type: string }
+        name: { type: string }
+        status: { type: string }
+        timeZone: { type: string }
+        startsAt: { $ref: "#/components/schemas/Timestamp" }
+        endsAt: { $ref: "#/components/schemas/Timestamp" }
+        venue: { type: [string, "null"] }
+        updatedAt: { $ref: "#/components/schemas/Timestamp" }
+      additionalProperties: false
+    PublicSession:
+      type: object
+      required: [id, eventId, title, description, status, durationMinutes, capacityRequired, trackIds, tagIds, speakerIds, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Identifier" }
+        eventId: { $ref: "#/components/schemas/Identifier" }
+        title: { type: string }
+        description: { type: string }
+        status: { type: string, const: Accepted }
+        durationMinutes: { type: integer, minimum: 1 }
+        capacityRequired: { type: integer, minimum: 0 }
+        roomId: { $ref: "#/components/schemas/Identifier" }
+        trackIds:
+          type: array
+          items: { $ref: "#/components/schemas/Identifier" }
+        formatId: { $ref: "#/components/schemas/Identifier" }
+        levelId: { $ref: "#/components/schemas/Identifier" }
+        tagIds:
+          type: array
+          items: { $ref: "#/components/schemas/Identifier" }
+        speakerIds:
+          type: array
+          items: { $ref: "#/components/schemas/Identifier" }
+        updatedAt: { $ref: "#/components/schemas/Timestamp" }
+      additionalProperties: false
+    PublicSpeaker:
+      type: object
+      required: [id, eventId, displayName, role, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Identifier" }
+        eventId: { $ref: "#/components/schemas/Identifier" }
+        displayName: { type: string }
+        jobTitle: { type: string }
+        company: { type: string }
+        biography: { type: string }
+        socialLinks:
+          type: object
+          additionalProperties: { type: string }
+        headshotAssetId: { $ref: "#/components/schemas/Identifier" }
+        role: { type: string, enum: [primary, co_speaker] }
+        updatedAt: { $ref: "#/components/schemas/Timestamp" }
+      additionalProperties: false
+    PublicEventPage:
+      allOf:
+        - $ref: "#/components/schemas/PublicCatalogPage"
+        - type: object
+          properties:
+            data:
+              type: array
+              items: { $ref: "#/components/schemas/PublicEvent" }
+    PublicSessionPage:
+      allOf:
+        - $ref: "#/components/schemas/PublicCatalogPage"
+        - type: object
+          properties:
+            data:
+              type: array
+              items: { $ref: "#/components/schemas/PublicSession" }
+    PublicSpeakerPage:
+      allOf:
+        - $ref: "#/components/schemas/PublicCatalogPage"
+        - type: object
+          properties:
+            data:
+              type: array
+              items: { $ref: "#/components/schemas/PublicSpeaker" }
+    PublicCatalogPage:
+      type: object
+      required: [data, page]
+      properties:
+        data:
+          type: array
+          items: {}
         page:
           type: object
           required: [nextCursor, hasMore]

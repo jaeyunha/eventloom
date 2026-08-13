@@ -1678,24 +1678,34 @@ describe("fixture local runtime composition", () => {
     expect(publishedBody.data.revision).not.toHaveProperty("publishedBy");
   });
 
-  it("withholds unsafe generic resources and advertises only mounted webhooks locally", async () => {
+  it("mounts safe nested catalog reads while withholding flat resources and writes", async () => {
     const app = createRuntimeApp(localBindings);
     const apiHeaders = { authorization: `Bearer ${LOCAL_API_KEY}` };
-    const genericRequests = [
-      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/events`,
-      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event`,
+    const withheldRequests = [
       `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/speakers`,
       `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/agenda`,
       `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/sessions`,
       `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/sessions/local-session-keynote`,
     ];
 
-    for (const path of genericRequests) {
+    for (const path of withheldRequests) {
       const response = await app.request(path, { headers: apiHeaders }, localBindings);
       expect(response.status).toBe(404);
       await expect(response.json()).resolves.toMatchObject({
         error: { code: "NOT_FOUND", traceId: expect.any(String) },
       });
+    }
+
+    for (const path of [
+      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/events`,
+      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event`,
+      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event/sessions`,
+      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event/sessions/local-session-keynote`,
+      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event/speakers`,
+      `/api/v1/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event/speakers/local-participant`,
+    ]) {
+      const response = await app.request(path, { headers: apiHeaders }, localBindings);
+      expect(response.status).toBe(200);
     }
 
     const eventCreate = await app.request(
@@ -1730,6 +1740,12 @@ describe("fixture local runtime composition", () => {
     expect(discovery.status).toBe(200);
     const document = (await discovery.json()) as { paths: Record<string, Record<string, unknown>> };
     expect(Object.keys(document.paths).sort()).toEqual([
+      "/api/v1/organizations/{organizationId}/events",
+      "/api/v1/organizations/{organizationId}/events/{eventId}",
+      "/api/v1/organizations/{organizationId}/events/{eventId}/sessions",
+      "/api/v1/organizations/{organizationId}/events/{eventId}/sessions/{sessionId}",
+      "/api/v1/organizations/{organizationId}/events/{eventId}/speakers",
+      "/api/v1/organizations/{organizationId}/events/{eventId}/speakers/{speakerId}",
       "/api/v1/organizations/{organizationId}/webhooks",
       "/api/v1/organizations/{organizationId}/webhooks/{subscriptionId}",
     ]);
