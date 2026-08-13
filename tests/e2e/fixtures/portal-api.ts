@@ -349,6 +349,8 @@ function initialEvaluatorState(): PortalScenarioState {
         dependencyIds: ["task-agreement"],
         reminderOffsetsMinutes: [1440],
         acceptedAssetKinds: ["headshot"],
+        allowedMimeTypes: ["image/png"],
+        maxBytes: 5_000_000,
         version: 1,
         updatedAt: now,
       },

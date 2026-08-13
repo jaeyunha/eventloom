@@ -34,6 +34,8 @@ export type CrmRouteService = Pick<
   | "createContact"
   | "updateContact"
   | "importContacts"
+  | "previewImport"
+  | "previewImportContacts"
   | "listSegments"
   | "getSegment"
   | "createSegment"
@@ -41,6 +43,8 @@ export type CrmRouteService = Pick<
   | "deleteSegment"
   | "listSegmentContacts"
   | "findDuplicates"
+  | "previewMergeContacts"
+  | "previewMerge"
   | "mergeContacts"
   | "getContactHistory"
   | "listEventHistory"
@@ -161,6 +165,8 @@ const noteSchema = z.object({ body: z.string().trim().min(1).max(10_000) }).stri
 const eventSchema = z
   .object({
     eventId: idSchema,
+    participantId: idSchema.optional(),
+    crmContactId: idSchema.optional(),
     sessionId: idSchema.nullable().optional(),
     role: z.enum(["speaker", "prospect", "attendee", "sponsor"]).optional(),
     note: z.string().trim().max(2_000).nullable().optional(),
@@ -227,6 +233,24 @@ function idempotencyKey(context: CrmContext, candidate: string | undefined): str
   if (key.length > 512)
     throw new CrmServiceError("CRM_INVALID_INPUT", "The idempotency key is too long.", 400);
   return key;
+}
+function optionalIdempotencyKey(
+  context: CrmContext,
+  candidate: string | undefined,
+): string | undefined {
+  const header = context.req.header("idempotency-key")?.trim();
+  const bodyKey = candidate?.trim();
+  if (header !== undefined && header.length > 0 && bodyKey !== undefined && bodyKey !== header) {
+    throw new CrmServiceError(
+      "CRM_INVALID_INPUT",
+      "The Idempotency-Key header and body key must match.",
+      400,
+    );
+  }
+  const key = header || bodyKey;
+  if (key !== undefined && key.length > 512)
+    throw new CrmServiceError("CRM_INVALID_INPUT", "The idempotency key is too long.", 400);
+  return key === undefined || key.length === 0 ? undefined : key;
 }
 
 function organizer(context: CrmContext, organizationId: string): CrmActor {
@@ -390,21 +414,29 @@ export function createCrmRoutes(dependencies: CrmRouteDependencies): Hono<CrmRou
     }
   });
 
+  const makeImportInput = (
+    organizationId: string,
+    input: z.infer<typeof importSchema>,
+    key: string | undefined,
+  ): ImportCrmContactsInput => ({
+    organizationId,
+    ...(input.csv === undefined ? {} : { csv: input.csv }),
+    ...(input.rows === undefined ? {} : { rows: input.rows as ImportCrmContactsInput["rows"] }),
+    ...(input.mode === undefined ? {} : { mode: input.mode }),
+    ...(key === undefined ? {} : { idempotencyKey: key }),
+  });
+
   const importHandler = async (context: CrmContext): Promise<Response> => {
     try {
       const organizationId = routeParam(context, "organizationId");
       const input = await body<z.infer<typeof importSchema>>(context, importSchema);
       const key = idempotencyKey(context, input.idempotencyKey);
-      const data: ImportCrmContactsInput = {
-        organizationId,
-        ...(input.csv === undefined ? {} : { csv: input.csv }),
-        ...(input.rows === undefined ? {} : { rows: input.rows as ImportCrmContactsInput["rows"] }),
-        ...(input.mode === undefined ? {} : { mode: input.mode }),
-        idempotencyKey: key,
-      };
       return context.json(
         {
-          data: await dependencies.service.importContacts(organizer(context, organizationId), data),
+          data: await dependencies.service.importContacts(
+            organizer(context, organizationId),
+            makeImportInput(organizationId, input, key),
+          ),
         },
         201,
       );
@@ -412,6 +444,24 @@ export function createCrmRoutes(dependencies: CrmRouteDependencies): Hono<CrmRou
       return handleError(context, error);
     }
   };
+
+  const importPreviewHandler = async (context: CrmContext): Promise<Response> => {
+    try {
+      const organizationId = routeParam(context, "organizationId");
+      const input = await body<z.infer<typeof importSchema>>(context, importSchema);
+      const key = optionalIdempotencyKey(context, input.idempotencyKey);
+      return context.json({
+        data: await dependencies.service.previewImport(
+          organizer(context, organizationId),
+          makeImportInput(organizationId, input, key),
+        ),
+      });
+    } catch (error) {
+      return handleError(context, error);
+    }
+  };
+  routes.post("/contacts/import/preview", importPreviewHandler);
+  routes.post("/import/preview", importPreviewHandler);
   routes.post("/contacts/import", importHandler);
   routes.post("/import", importHandler);
 
@@ -520,26 +570,52 @@ export function createCrmRoutes(dependencies: CrmRouteDependencies): Hono<CrmRou
       return handleError(context, error);
     }
   });
+  const mergeInput = (
+    organizationId: string,
+    primaryContactId: string,
+    input: z.infer<typeof mergeSchema>,
+    key: string | undefined,
+  ): MergeCrmContactsInput => ({
+    organizationId,
+    primaryContactId,
+    duplicateContactIds: input.duplicateContactIds,
+    ...(input.fieldWinners === undefined ? {} : { fieldWinners: input.fieldWinners }),
+    ...(input.customFieldWinners === undefined
+      ? {}
+      : { customFieldWinners: input.customFieldWinners }),
+    ...(key === undefined ? {} : { idempotencyKey: key }),
+  });
+
+  routes.post("/contacts/:contactId/merge/preview", async (context) => {
+    try {
+      const organizationId = routeParam(context, "organizationId");
+      const input = await body<z.infer<typeof mergeSchema>>(context, mergeSchema);
+      return context.json({
+        data: await dependencies.service.previewMergeContacts(
+          organizer(context, organizationId),
+          mergeInput(
+            organizationId,
+            routeParam(context, "contactId"),
+            input,
+            optionalIdempotencyKey(context, input.idempotencyKey),
+          ),
+        ),
+      });
+    } catch (error) {
+      return handleError(context, error);
+    }
+  });
+
   routes.post("/contacts/:contactId/merge", async (context) => {
     try {
       const organizationId = routeParam(context, "organizationId");
       const input = await body<z.infer<typeof mergeSchema>>(context, mergeSchema);
-      const key =
-        input.idempotencyKey === undefined && context.req.header("idempotency-key") === undefined
-          ? undefined
-          : idempotencyKey(context, input.idempotencyKey);
-      const data: MergeCrmContactsInput = {
-        organizationId,
-        primaryContactId: routeParam(context, "contactId"),
-        duplicateContactIds: input.duplicateContactIds,
-        ...(input.fieldWinners === undefined ? {} : { fieldWinners: input.fieldWinners }),
-        ...(input.customFieldWinners === undefined
-          ? {}
-          : { customFieldWinners: input.customFieldWinners }),
-        ...(key === undefined ? {} : { idempotencyKey: key }),
-      };
+      const key = idempotencyKey(context, input.idempotencyKey);
       return context.json({
-        data: await dependencies.service.mergeContacts(organizer(context, organizationId), data),
+        data: await dependencies.service.mergeContacts(
+          organizer(context, organizationId),
+          mergeInput(organizationId, routeParam(context, "contactId"), input, key),
+        ),
       });
     } catch (error) {
       return handleError(context, error);
@@ -646,6 +722,8 @@ export function createCrmRoutes(dependencies: CrmRouteDependencies): Hono<CrmRou
       const data: AddContactToEventInput = {
         organizationId,
         contactId: routeParam(context, "contactId"),
+        ...(input.crmContactId === undefined ? {} : { crmContactId: input.crmContactId }),
+        ...(input.participantId === undefined ? {} : { participantId: input.participantId }),
         eventId: input.eventId,
         ...(input.sessionId === undefined ? {} : { sessionId: input.sessionId }),
         ...(input.role === undefined ? {} : { role: input.role }),

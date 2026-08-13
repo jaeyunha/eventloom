@@ -54,6 +54,7 @@ function preview(overrides: Partial<AgendaPreview> = {}): AgendaPreview {
   return {
     draftVersion: 4,
     conflicts: [],
+    releaseConflicts: [],
     warnings: [],
     diff: { added: 2, changed: 0, removed: 0 },
     validatedAt: "2026-08-08T12:01:00.000Z",

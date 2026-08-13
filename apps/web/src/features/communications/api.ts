@@ -33,6 +33,7 @@ export type CommunicationSenderIdentity = (typeof COMMUNICATION_SENDERS)[number]
 export type CommunicationTemplateStatus = "draft" | "approved" | "archived";
 export type CommunicationDeliveryStatus =
   | "queued"
+  | "provider_accepted"
   | "delivered"
   | "failed"
   | "bounced"
@@ -176,6 +177,107 @@ export interface CommunicationDeliveryHistory {
   readonly failedCount: number;
   readonly terminal: boolean;
 }
+export const REMINDER_TRIGGER_TYPES = ["automatic", "manual"] as const;
+export type ReminderTriggerType = (typeof REMINDER_TRIGGER_TYPES)[number];
+
+export const REMINDER_AUDIENCE_TYPES = ["task", "review", "combined"] as const;
+export type ReminderAudienceType = (typeof REMINDER_AUDIENCE_TYPES)[number];
+
+export const REMINDER_RUN_STATES = ["pending", "running", "completed", "failed"] as const;
+export type ReminderRunState = (typeof REMINDER_RUN_STATES)[number];
+
+export const REMINDER_DISPATCH_STATUSES = [
+  "candidate",
+  "eligible",
+  "skipped",
+  "queued",
+  "provider_accepted",
+  "delivered",
+  "failed",
+  "bounced",
+] as const;
+export type ReminderDispatchStatus = (typeof REMINDER_DISPATCH_STATUSES)[number];
+
+export type ReminderSubject =
+  | Readonly<{ type: "task"; taskId: string }>
+  | Readonly<{ type: "review"; reviewAssignmentId: string }>;
+
+export interface ReminderRenderedMessage {
+  readonly from: CommunicationSenderIdentity;
+  readonly subject: string;
+  readonly html: string;
+  readonly text: string;
+}
+
+export interface ReminderCandidate {
+  readonly id: string;
+  readonly organizationId: string;
+  readonly eventId: string;
+  readonly recipientApplicationId: string;
+  readonly normalizedEmail: string | null;
+  readonly displayName: string;
+  readonly subject: ReminderSubject;
+  readonly eligibilityReason: string;
+  readonly cadenceWindow: string;
+  readonly nextEligibleAt: string | null;
+  readonly eligible: boolean;
+  readonly renderedMessage: ReminderRenderedMessage;
+}
+
+export interface ReminderRun {
+  readonly id: string;
+  readonly organizationId: string;
+  readonly eventId: string;
+  readonly triggerType: ReminderTriggerType;
+  readonly audienceType: ReminderAudienceType;
+  readonly audienceRevision: string;
+  readonly candidateCount: number;
+  readonly eligibleCount: number;
+  readonly queuedCount: number;
+  readonly skippedCount: number;
+  readonly failedCount: number;
+  readonly state: ReminderRunState;
+  readonly configurationFailure: string | null;
+  readonly actorId: string | null;
+  readonly startedAt: string;
+  readonly completedAt: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface ReminderDispatch {
+  readonly id: string;
+  readonly runId: string;
+  readonly organizationId: string;
+  readonly eventId: string;
+  readonly recipient: string;
+  readonly subject: ReminderSubject;
+  readonly eligibilityReason: string;
+  readonly cadenceWindow: string;
+  readonly idempotencyKey: string;
+  readonly providerMessageId: string | null;
+  readonly status: ReminderDispatchStatus;
+  readonly skipMetadata: Readonly<Record<string, unknown>> | null;
+  readonly failureMetadata: Readonly<Record<string, unknown>> | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly eligibleAt: string | null;
+  readonly skippedAt: string | null;
+  readonly queuedAt: string | null;
+  readonly providerAcceptedAt: string | null;
+  readonly deliveredAt: string | null;
+  readonly failedAt: string | null;
+  readonly bouncedAt: string | null;
+  readonly completedAt: string | null;
+  readonly outboxJobId: string | null;
+}
+
+export interface ReminderFacts {
+  readonly lastAutomatic: ReminderRun | null;
+  readonly lastManual: ReminderRun | null;
+  readonly nextEligibleAt: string | null;
+  readonly lastOutcome: ReminderDispatch | null;
+}
 
 export class CommunicationApiError extends Error {
   readonly code: string;
@@ -250,6 +352,92 @@ function invalidCommunicationResponse(): CommunicationApiError {
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null;
+}
+function isReminderSubject(value: unknown): value is ReminderSubject {
+  if (!isRecord(value) || typeof value.type !== "string") return false;
+  if (value.type === "task") return isRequiredCommunicationString(value.taskId);
+  if (value.type === "review") return isRequiredCommunicationString(value.reviewAssignmentId);
+  return false;
+}
+
+function isReminderRun(value: unknown): value is ReminderRun {
+  if (!isRecord(value)) return false;
+  return (
+    isRequiredCommunicationString(value.id) &&
+    isRequiredCommunicationString(value.organizationId) &&
+    isRequiredCommunicationString(value.eventId) &&
+    typeof value.triggerType === "string" &&
+    REMINDER_TRIGGER_TYPES.includes(value.triggerType as ReminderTriggerType) &&
+    typeof value.audienceType === "string" &&
+    REMINDER_AUDIENCE_TYPES.includes(value.audienceType as ReminderAudienceType) &&
+    isRequiredCommunicationString(value.audienceRevision) &&
+    typeof value.candidateCount === "number" &&
+    Number.isSafeInteger(value.candidateCount) &&
+    value.candidateCount >= 0 &&
+    typeof value.eligibleCount === "number" &&
+    Number.isSafeInteger(value.eligibleCount) &&
+    value.eligibleCount >= 0 &&
+    typeof value.queuedCount === "number" &&
+    Number.isSafeInteger(value.queuedCount) &&
+    value.queuedCount >= 0 &&
+    typeof value.skippedCount === "number" &&
+    Number.isSafeInteger(value.skippedCount) &&
+    value.skippedCount >= 0 &&
+    typeof value.failedCount === "number" &&
+    Number.isSafeInteger(value.failedCount) &&
+    value.failedCount >= 0 &&
+    typeof value.state === "string" &&
+    REMINDER_RUN_STATES.includes(value.state as ReminderRunState) &&
+    isNullableCommunicationString(value.configurationFailure) &&
+    (value.actorId === null || isRequiredCommunicationString(value.actorId)) &&
+    isRequiredCommunicationString(value.startedAt) &&
+    isNullableCommunicationString(value.completedAt) &&
+    isRequiredCommunicationString(value.createdAt) &&
+    isRequiredCommunicationString(value.updatedAt)
+  );
+}
+
+function isReminderDispatch(value: unknown): value is ReminderDispatch {
+  if (!isRecord(value)) return false;
+  const nullableMetadata = (entry: unknown): entry is Readonly<Record<string, unknown>> | null =>
+    entry === null || isRecord(entry);
+  return (
+    isRequiredCommunicationString(value.id) &&
+    isRequiredCommunicationString(value.runId) &&
+    isRequiredCommunicationString(value.organizationId) &&
+    isRequiredCommunicationString(value.eventId) &&
+    isRequiredCommunicationString(value.recipient) &&
+    isReminderSubject(value.subject) &&
+    isRequiredCommunicationString(value.eligibilityReason) &&
+    isRequiredCommunicationString(value.cadenceWindow) &&
+    isRequiredCommunicationString(value.idempotencyKey) &&
+    isNullableCommunicationString(value.providerMessageId) &&
+    typeof value.status === "string" &&
+    REMINDER_DISPATCH_STATUSES.includes(value.status as ReminderDispatchStatus) &&
+    nullableMetadata(value.skipMetadata) &&
+    nullableMetadata(value.failureMetadata) &&
+    isRequiredCommunicationString(value.createdAt) &&
+    isRequiredCommunicationString(value.updatedAt) &&
+    isNullableCommunicationString(value.eligibleAt) &&
+    isNullableCommunicationString(value.skippedAt) &&
+    isNullableCommunicationString(value.queuedAt) &&
+    isNullableCommunicationString(value.providerAcceptedAt) &&
+    isNullableCommunicationString(value.deliveredAt) &&
+    isNullableCommunicationString(value.failedAt) &&
+    isNullableCommunicationString(value.bouncedAt) &&
+    isNullableCommunicationString(value.completedAt) &&
+    isNullableCommunicationString(value.outboxJobId)
+  );
+}
+
+function isReminderFacts(value: unknown): value is ReminderFacts {
+  if (!isRecord(value)) return false;
+  return (
+    (value.lastAutomatic === null || isReminderRun(value.lastAutomatic)) &&
+    (value.lastManual === null || isReminderRun(value.lastManual)) &&
+    isNullableCommunicationString(value.nextEligibleAt) &&
+    (value.lastOutcome === null || isReminderDispatch(value.lastOutcome))
+  );
 }
 
 function trimTrailingSlash(value: string): string {
@@ -391,6 +579,48 @@ export interface CommunicationApi {
   getHistory(eventId: string, sendId: string): Promise<CommunicationDeliveryHistory>;
   listDeliveryHistory(eventId: string, sendId: string): Promise<CommunicationDeliveryHistory>;
   retryFailed(eventId: string, sendId: string): Promise<CommunicationSend>;
+  listReminderRuns(eventId: string, signal?: AbortSignal): Promise<readonly ReminderRun[]>;
+  listReminderDispatches(
+    eventId: string,
+    runId?: string,
+    signal?: AbortSignal,
+  ): Promise<readonly ReminderDispatch[]>;
+  getReminderFacts(
+    eventId: string,
+    inputOrRecipient:
+      | string
+      | {
+          readonly recipientApplicationId: string;
+          readonly subject: ReminderSubject;
+        },
+    subjectOrSignal?: ReminderSubject | AbortSignal,
+    signal?: AbortSignal,
+  ): Promise<ReminderFacts>;
+  runManualReminders(input: {
+    eventId: string;
+    idempotencyKey: string;
+    expectedAudienceRevision: string;
+    scheduledAt?: string;
+  }): Promise<ReminderRun>;
+  refreshReminderDelivery(
+    eventId: string,
+    dispatchId: string,
+    signal?: AbortSignal,
+  ): Promise<ReminderDispatch>;
+  refreshDeliveryTruth(input: {
+    eventId: string;
+    dispatchId: string;
+    providerMessageId?: string;
+    status: ReminderDispatchStatus;
+    failureMetadata?: Readonly<Record<string, unknown>>;
+  }): Promise<ReminderDispatch>;
+  recordReminderDispatchStatus(input: {
+    eventId: string;
+    dispatchId: string;
+    providerMessageId?: string;
+    status: ReminderDispatchStatus;
+    failureMetadata?: Readonly<Record<string, unknown>>;
+  }): Promise<ReminderDispatch>;
 }
 
 export function createCommunicationApi(
@@ -552,6 +782,136 @@ export function createCommunicationApi(
       return request<CommunicationSend>(eventId, `/sends/${segment(sendId, "send ID")}/retry`, {
         method: "POST",
       });
+    },
+    async listReminderRuns(eventId, signal) {
+      const raw = await request<unknown>(
+        eventId,
+        "/reminders/runs",
+        signal === undefined ? {} : { signal },
+      );
+      const runs = Array.isArray(raw)
+        ? raw
+        : isRecord(raw) && Array.isArray(raw.runs)
+          ? raw.runs
+          : undefined;
+      if (runs === undefined || !runs.every(isReminderRun)) {
+        throw invalidCommunicationResponse();
+      }
+      return runs;
+    },
+    async listReminderDispatches(eventId, runId, signal) {
+      const query = runId === undefined ? "" : `?runId=${encodeURIComponent(runId)}`;
+      const raw = await request<unknown>(
+        eventId,
+        `/reminders/dispatches${query}`,
+        signal === undefined ? {} : { signal },
+      );
+      const dispatches = Array.isArray(raw)
+        ? raw
+        : isRecord(raw) && Array.isArray(raw.dispatches)
+          ? raw.dispatches
+          : undefined;
+      if (dispatches === undefined || !dispatches.every(isReminderDispatch)) {
+        throw invalidCommunicationResponse();
+      }
+      return dispatches;
+    },
+    async getReminderFacts(eventId, inputOrRecipient, subjectOrSignal, signal) {
+      const input =
+        typeof inputOrRecipient === "string"
+          ? {
+              recipientApplicationId: inputOrRecipient,
+              subject: subjectOrSignal as ReminderSubject,
+            }
+          : inputOrRecipient;
+      const requestSignal =
+        typeof inputOrRecipient === "string"
+          ? signal
+          : typeof AbortSignal !== "undefined" && subjectOrSignal instanceof AbortSignal
+            ? subjectOrSignal
+            : signal;
+      if (!isReminderSubject(input.subject)) {
+        throw new TypeError("A reminder subject is required for reminder facts.");
+      }
+      const query = new URLSearchParams({
+        recipientApplicationId: input.recipientApplicationId,
+        subjectType: input.subject.type,
+        ...(input.subject.type === "task"
+          ? { taskId: input.subject.taskId }
+          : { reviewAssignmentId: input.subject.reviewAssignmentId }),
+      });
+      const raw = await request<unknown>(
+        eventId,
+        `/reminders/facts?${query.toString()}`,
+        requestSignal === undefined ? {} : { signal: requestSignal },
+      );
+      const facts = isRecord(raw) && isRecord(raw.facts) ? raw.facts : raw;
+      if (!isReminderFacts(facts)) {
+        throw invalidCommunicationResponse();
+      }
+      return facts;
+    },
+    async runManualReminders(input) {
+      const idempotencyKey = input.idempotencyKey.trim();
+      const expectedAudienceRevision = input.expectedAudienceRevision.trim();
+      if (idempotencyKey.length === 0) {
+        throw new TypeError("An idempotency key is required for reminder runs.");
+      }
+      if (expectedAudienceRevision.length === 0) {
+        throw new TypeError("An audience revision is required for reminder runs.");
+      }
+      const raw = await request<unknown>(input.eventId, "/reminders/runs/manual", {
+        method: "POST",
+        headers: { "idempotency-key": idempotencyKey },
+        body: JSON.stringify({
+          idempotencyKey,
+          expectedAudienceRevision,
+          ...(input.scheduledAt === undefined ? {} : { scheduledAt: input.scheduledAt }),
+        }),
+      });
+      const run = isRecord(raw) && isRecord(raw.run) ? raw.run : raw;
+      if (!isReminderRun(run)) {
+        throw invalidCommunicationResponse();
+      }
+      return run;
+    },
+    async refreshReminderDelivery(eventId, dispatchId, signal) {
+      const raw = await request<unknown>(
+        eventId,
+        `/reminders/dispatches/${segment(dispatchId, "dispatch ID")}`,
+        signal === undefined ? {} : { signal },
+      );
+      const dispatch = isRecord(raw) && isRecord(raw.dispatch) ? raw.dispatch : raw;
+      if (!isReminderDispatch(dispatch)) {
+        throw invalidCommunicationResponse();
+      }
+      return dispatch;
+    },
+    async refreshDeliveryTruth(input) {
+      const raw = await request<unknown>(
+        input.eventId,
+        `/reminders/dispatches/${segment(input.dispatchId, "dispatch ID")}/status`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            status: input.status,
+            ...(input.providerMessageId === undefined
+              ? {}
+              : { providerMessageId: input.providerMessageId }),
+            ...(input.failureMetadata === undefined
+              ? {}
+              : { failureMetadata: input.failureMetadata }),
+          }),
+        },
+      );
+      const dispatch = isRecord(raw) && isRecord(raw.dispatch) ? raw.dispatch : raw;
+      if (!isReminderDispatch(dispatch)) {
+        throw invalidCommunicationResponse();
+      }
+      return dispatch;
+    },
+    recordReminderDispatchStatus(input) {
+      return this.refreshDeliveryTruth(input);
     },
   };
 }

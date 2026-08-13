@@ -101,20 +101,23 @@ test("server-authorized context switching ignores event query guesses and is key
     false,
   );
 
-  const accountMenu = page.getByRole("button", { name: "Account menu" });
+  const accountMenu = page.getByRole("button", { name: "Switch event or participant" });
   await accountMenu.focus();
   await page.keyboard.press("Enter");
-  const menu = page.getByRole("menu", { name: "Switch event" });
+  const menu = page.getByRole("menu", { name: "Switch event or participant" });
   await expect(menu).toBeVisible();
-  await expect(menu.getByRole("menuitem")).toHaveCount(2);
+  const eventOptions = menu.getByRole("menuitemradio", { name: /Summit$/ });
+  await expect(eventOptions).toHaveCount(2);
   await page.keyboard.press("Tab");
-  await expect(menu.getByRole("menuitem").first()).toBeFocused();
+  await expect(eventOptions.first()).toBeFocused();
 
-  const collaboration = menu.getByRole("menuitem", { name: "Collaborative Systems Summit" });
+  const collaboration = menu.getByRole("menuitemradio", {
+    name: "Collaborative Systems Summit",
+  });
   await collaboration.focus();
   await page.keyboard.press("Enter");
   await expect(page.getByRole("heading", { level: 1, name: "Welcome, Bea" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Account menu" })).toContainText(
+  await expect(page.getByRole("button", { name: "Switch event or participant" })).toContainText(
     "Collaborative Systems Summit",
   );
   expect(api.view.context?.eventId).toBe("event-collaboration");
@@ -159,8 +162,8 @@ test("co-speaker roster exposes only server-authorized permissions and clears st
   expect(api.view.roster?.organizationId).toBe("ai-engineer");
   expect(api.view.roster?.members.some((member) => member.status === "revoked")).toBe(true);
 
-  await page.getByRole("button", { name: "Account menu" }).click();
-  await page.getByRole("menuitem", { name: "Collaborative Systems Summit" }).click();
+  await page.getByRole("button", { name: "Switch event or participant" }).click();
+  await page.getByRole("menuitemradio", { name: "Collaborative Systems Summit" }).click();
   await expect(
     page.getByRole("heading", { level: 1, name: "This workspace is not available" }),
   ).toBeVisible();
@@ -180,8 +183,8 @@ test("switching context clears files before loading the next event", async ({
     page.getByRole("heading", { level: 3, name: "calm-incident-response.pdf" }),
   ).toBeVisible();
 
-  await page.getByRole("button", { name: "Account menu" }).click();
-  await page.getByRole("menuitem", { name: "Collaborative Systems Summit" }).click();
+  await page.getByRole("button", { name: "Switch event or participant" }).click();
+  await page.getByRole("menuitemradio", { name: "Collaborative Systems Summit" }).click();
   await expect(
     page.getByRole("heading", { level: 1, name: "Collaborative Systems Summit" }),
   ).toBeVisible();
@@ -191,8 +194,8 @@ test("switching context clears files before loading the next event", async ({
   ).toHaveCount(0);
   expect(api.view.assets).toEqual([]);
 
-  await page.getByRole("button", { name: "Account menu" }).click();
-  await page.getByRole("menuitem", { name: "Evaluator Summit" }).click();
+  await page.getByRole("button", { name: "Switch event or participant" }).click();
+  await page.getByRole("menuitemradio", { name: "Evaluator Summit" }).click();
   await expect(
     page.getByRole("heading", { level: 3, name: "calm-incident-response.pdf" }),
   ).toBeVisible();

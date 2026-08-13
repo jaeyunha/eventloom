@@ -108,7 +108,7 @@ function seedEvent(transport: DelayedAirtableTransport): void {
 }
 
 describe("scoped adapter read ordering", () => {
-  it("starts grants, account, event, and projection reads in one wave", async () => {
+  it("starts grants, event, and projection reads in one wave", async () => {
     const starts: string[] = [];
     const transport = new DelayedAirtableTransport(starts);
     seedEvent(transport);
@@ -127,7 +127,6 @@ describe("scoped adapter read ordering", () => {
 
     expect(starts).toEqual([
       "d1:grants",
-      "d1:account",
       "airtable:Events",
       "airtable:Submissions",
       "airtable:Decisions",
@@ -142,7 +141,7 @@ describe("scoped adapter read ordering", () => {
     expect(readTables.filter((table) => table === "Decisions")).toHaveLength(1);
     expect(readTables.filter((table) => table === "Speaker Profiles")).toHaveLength(1);
   });
-  it("does not discover portal contexts without a verified account email", async () => {
+  it("discovers exact account-owned portal contexts without email matching", async () => {
     const starts: string[] = [];
     const transport = new DelayedAirtableTransport(starts);
     seedEvent(transport);
@@ -178,12 +177,18 @@ describe("scoped adapter read ordering", () => {
     });
 
     const startedAt = performance.now();
-    await expect(repository.listPortalContexts("account-1")).resolves.toEqual([]);
+    await expect(repository.listPortalContexts("account-1")).resolves.toEqual([
+      expect.objectContaining({
+        eventId: "event-123",
+        submissionIds: ["submission-1"],
+        participantIds: ["participant-1"],
+        primaryParticipantId: "participant-1",
+      }),
+    ]);
 
     expect(performance.now() - startedAt).toBeLessThan(1_000);
     expect(starts).toEqual([
       "d1:grants",
-      "d1:account",
       "airtable:Speaker Profiles",
       "airtable:Submissions",
       "airtable:Decisions",
@@ -236,7 +241,7 @@ describe("scoped adapter read ordering", () => {
 
     expect(performance.now() - startedAt).toBeLessThan(1_000);
     expect(projections).toHaveLength(1);
-    expect(projections[0]?.context.primaryParticipantId).toBe("participant-draft");
+    expect(projections[0]?.context.primaryParticipantId).toBeUndefined();
     expect(projections[0]?.scope.capabilitiesByParticipant).toMatchObject({
       "participant-draft": ["submission-edit"],
       "participant-accepted": expect.arrayContaining(["asset-read", "submission-edit"]),

@@ -274,3 +274,168 @@ export interface CommunicationDeliveryResult {
 export interface CommunicationDeliveryAdapter {
   send(request: CommunicationDeliveryRequest): Promise<CommunicationDeliveryResult>;
 }
+export type ReminderTriggerType = "automatic" | "manual";
+
+export type ReminderAudienceType = "task" | "review" | "combined";
+
+export type ReminderRunState = "pending" | "running" | "completed" | "failed";
+
+export type ReminderDispatchStatus =
+  | "candidate"
+  | "eligible"
+  | "skipped"
+  | "queued"
+  | "provider_accepted"
+  | "delivered"
+  | "failed"
+  | "bounced";
+
+export type ReminderSubject =
+  | { type: "task"; taskId: string }
+  | { type: "review"; reviewAssignmentId: string };
+
+export interface ReminderRenderedMessage {
+  from: CommunicationSenderIdentity;
+  subject: string;
+  html: string;
+  text: string;
+}
+
+export interface ReminderCandidate {
+  id: string;
+  organizationId: string;
+  eventId: string;
+  recipientApplicationId: string;
+  normalizedEmail: string | null;
+  displayName: string;
+  subject: ReminderSubject;
+  eligibilityReason: string;
+  cadenceWindow: string;
+  nextEligibleAt: string | null;
+  eligible: boolean;
+  renderedMessage: ReminderRenderedMessage;
+}
+
+export interface ReminderCandidateSourceInput {
+  organizationId: string;
+  eventId: string;
+  triggerType: ReminderTriggerType;
+  scheduledAt: string;
+}
+
+export interface ReminderCandidateSourceResult {
+  audienceType: ReminderAudienceType;
+  audienceRevision: string;
+  candidates: readonly ReminderCandidate[];
+}
+
+export interface ReminderCandidateSource {
+  listCandidates(input: ReminderCandidateSourceInput): Promise<ReminderCandidateSourceResult>;
+}
+
+export interface ReminderRun {
+  id: string;
+  organizationId: string;
+  eventId: string;
+  triggerType: ReminderTriggerType;
+  audienceType: ReminderAudienceType;
+  audienceRevision: string;
+  candidateCount: number;
+  eligibleCount: number;
+  queuedCount: number;
+  skippedCount: number;
+  failedCount: number;
+  state: ReminderRunState;
+  configurationFailure: string | null;
+  actorId: string | null;
+  startedAt: string;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ReminderDispatch {
+  id: string;
+  runId: string;
+  organizationId: string;
+  eventId: string;
+  recipient: string;
+  subject: ReminderSubject;
+  eligibilityReason: string;
+  cadenceWindow: string;
+  idempotencyKey: string;
+  providerMessageId: string | null;
+  status: ReminderDispatchStatus;
+  skipMetadata: Readonly<Record<string, unknown>> | null;
+  failureMetadata: Readonly<Record<string, unknown>> | null;
+  createdAt: string;
+  updatedAt: string;
+  eligibleAt: string | null;
+  skippedAt: string | null;
+  queuedAt: string | null;
+  providerAcceptedAt: string | null;
+  deliveredAt: string | null;
+  failedAt: string | null;
+  bouncedAt: string | null;
+  completedAt: string | null;
+  outboxJobId: string | null;
+}
+
+export interface ReminderRepository {
+  getRun(organizationId: string, eventId: string, runId: string): Promise<ReminderRun | undefined>;
+  listRuns(organizationId: string, eventId: string): Promise<readonly ReminderRun[]>;
+  insertRun(run: ReminderRun): Promise<ReminderRun>;
+  updateRun(run: ReminderRun): Promise<ReminderRun>;
+  getDispatch(
+    organizationId: string,
+    eventId: string,
+    dispatchId: string,
+  ): Promise<ReminderDispatch | undefined>;
+  findDispatchByIdempotency(
+    organizationId: string,
+    eventId: string,
+    idempotencyKey: string,
+  ): Promise<ReminderDispatch | undefined>;
+  findDispatchByProviderMessageId(
+    organizationId: string,
+    eventId: string,
+    providerMessageId: string,
+  ): Promise<ReminderDispatch | undefined>;
+  listDispatches(
+    organizationId: string,
+    eventId: string,
+    runId?: string,
+  ): Promise<readonly ReminderDispatch[]>;
+  insertDispatch(dispatch: ReminderDispatch): Promise<ReminderDispatch>;
+  updateDispatch(dispatch: ReminderDispatch): Promise<ReminderDispatch>;
+}
+
+export interface ReminderOutboxEnqueueInput {
+  dispatchId: string;
+  runId: string;
+  organizationId: string;
+  eventId: string;
+  recipient: string;
+  from: CommunicationSenderIdentity;
+  subject: string;
+  html: string;
+  text: string;
+  idempotencyKey: string;
+}
+
+export interface ReminderOutboxDelivery {
+  enqueue(input: ReminderOutboxEnqueueInput): Promise<{ outboxJobId: string }>;
+}
+
+export interface ReminderRuntime {
+  repository: ReminderRepository;
+  source?: ReminderCandidateSource;
+  outbox?: ReminderOutboxDelivery;
+}
+
+export interface ReminderFacts {
+  lastAutomatic: ReminderRun | null;
+  lastManual: ReminderRun | null;
+  nextEligibleAt: string | null;
+  lastOutcome: ReminderDispatch | null;
+}

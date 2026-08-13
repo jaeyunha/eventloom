@@ -138,6 +138,11 @@ export function publicationReadiness(
         `Resolve ${preview.conflicts.length} hard conflict${preview.conflicts.length === 1 ? "" : "s"}.`,
       );
     }
+    if (preview.releaseConflicts.length > 0) {
+      reasons.push(
+        `Resolve ${preview.releaseConflicts.length} released commitment conflict${preview.releaseConflicts.length === 1 ? "" : "s"}.`,
+      );
+    }
     const unoverriddenWarnings = preview.warnings.filter((warning) => !warning.overridden);
     if (unoverriddenWarnings.length > 0) {
       reasons.push(

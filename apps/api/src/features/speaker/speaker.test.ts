@@ -1,7 +1,12 @@
+import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import { FakeAirtableTransport } from "../../infrastructure/airtable";
 import { AirtableSpeakerRepository } from "../../runtime/airtable";
-import { createSpeakerRoutes } from "./routes";
+import {
+  createSpeakerAdminRoutes,
+  createSpeakerRoutes,
+  createSpeakerTaskAdminRoutes,
+} from "./routes";
 import { SpeakerService, SpeakerServiceError } from "./service";
 import type {
   CreatePrivateUploadGrantCommand,
@@ -9,7 +14,7 @@ import type {
   PrivateDownloadGrant,
   PrivateUploadGrant,
   RepositoryResult,
-  SpeakerAcceptedParticipantLookup,
+  ResolveEventParticipantInput,
   SpeakerAccessScope,
   SpeakerAsset,
   SpeakerAssetComment,
@@ -19,6 +24,7 @@ import type {
   SpeakerOrganizerReadModel,
   SpeakerOrganizerReadResources,
   SpeakerPortalContext,
+  SpeakerParticipantResolution,
   SpeakerProfile,
   SpeakerRepository,
   SpeakerRosterEntry,
@@ -214,6 +220,7 @@ class FakeSpeakerRepository implements SpeakerRepository {
 class OrganizerSpeakerRepository extends FakeSpeakerRepository {
   readonly organizerScopes = new Map<string, SpeakerOrganizerAccessScope>();
   readonly verifiedEmails = new Map<string, string>();
+  readonly participantResolutions = new Map<string, SpeakerParticipantResolution>();
   readonly roster: SpeakerRosterEntry[] = [];
   rosterEventReads = 0;
 
@@ -224,36 +231,24 @@ class OrganizerSpeakerRepository extends FakeSpeakerRepository {
     return Promise.resolve(this.organizerScopes.get(`${eventId}:${accountId}`) ?? null);
   }
 
-  findAcceptedParticipantByEmail(
-    eventId: string,
-    submissionIds: readonly string[],
-    email: string,
-  ): Promise<SpeakerAcceptedParticipantLookup | null> {
-    const normalizedEmail = email.trim().toLowerCase();
-    const matches = this.submissions.flatMap((candidate) => {
-      if (
-        candidate.eventId !== eventId ||
-        candidate.status !== "accepted" ||
-        !submissionIds.some(
-          (allowed) =>
-            allowed === candidate.id ||
-            allowed === `speaker-submission:${candidate.id}` ||
-            candidate.id === `speaker-submission:${allowed}`,
-        )
-      ) {
-        return [];
-      }
-      return candidate.participantIds
-        .filter((participantId) => this.verifiedEmails.get(participantId) === normalizedEmail)
-        .map((participantId) => ({
-          participantId,
-          submissionId: candidate.id,
-          email: normalizedEmail,
-        }));
+  resolveEventParticipant(
+    input: ResolveEventParticipantInput,
+  ): Promise<SpeakerParticipantResolution> {
+    const configured = this.participantResolutions.get(`${input.sourceType}:${input.sourceId}`);
+    if (configured !== undefined) return Promise.resolve(structuredClone(configured));
+    const participantId = input.explicitParticipantId ?? input.createParticipantId;
+    const submissionIds = this.submissions
+      .filter(
+        (submission) =>
+          submission.eventId === input.eventId && submission.participantIds.includes(participantId),
+      )
+      .map((submission) => submission.id);
+    return Promise.resolve({
+      state: "resolved",
+      participantId,
+      submissionIds,
+      created: input.explicitParticipantId === undefined,
     });
-    return Promise.resolve(
-      matches.length > 1 ? { ambiguous: true } : matches.length === 1 ? (matches[0] ?? null) : null,
-    );
   }
 
   listRoster(eventId: string, submissionId: string): Promise<SpeakerRosterEntry[]> {
@@ -713,9 +708,16 @@ function profile(participantId: string, eventId = "event-1"): SpeakerProfile {
 function task(
   input: Partial<SpeakerTask> & Pick<SpeakerTask, "id" | "participantId">,
 ): SpeakerTask {
+  const participantId = input.participantId;
+  const submissionId = input.submissionId === undefined ? "submission-1" : input.submissionId;
   return {
     eventId: "event-1",
-    submissionId: "submission-1",
+    submissionId,
+    subject:
+      input.subject ??
+      (submissionId === null
+        ? { type: "participant", participantId }
+        : { type: "session", participantId, submissionId }),
     type: "upload",
     owner: "speaker",
     title: `Task ${input.id}`,
@@ -924,6 +926,7 @@ function createDualRoleFixture() {
       id: "dual-role-comment-1",
       eventId: "event-1",
       assetId: "dual-role-asset-1",
+      versionId: "dual-role-asset-1",
       body: "Participant one comment",
       authorLabel: "Speaker",
       createdAt: now,
@@ -933,6 +936,7 @@ function createDualRoleFixture() {
       id: "dual-role-comment-2",
       eventId: "event-1",
       assetId: "dual-role-asset-2",
+      versionId: "dual-role-asset-2",
       body: "Participant two comment",
       authorLabel: "Speaker",
       createdAt: now,
@@ -976,7 +980,7 @@ describe("SpeakerService organizer aggregate reads", () => {
       task({
         id: "manual-task",
         participantId: "participant-manual",
-        submissionId: "speaker-submission:crm-contact:manual",
+        submissionId: null,
       }),
       task({
         id: "declined-task",
@@ -1009,7 +1013,6 @@ describe("SpeakerService organizer aggregate reads", () => {
         id: "manual-asset",
         tenantId: "org-1",
         eventId: "event-1",
-        submissionId: "speaker-submission:crm-contact:manual",
         participantId: "participant-manual",
         taskId: "manual-task",
         kind: "slides",
@@ -1178,7 +1181,7 @@ describe("SpeakerService organizer roster read model", () => {
       task({
         id: "task-manual",
         participantId: "participant-manual",
-        submissionId: "speaker-submission:crm-contact:manual",
+        submissionId: null,
         type: "action",
       }),
       task({
@@ -1218,7 +1221,6 @@ describe("SpeakerService organizer roster read model", () => {
         id: "asset-manual",
         tenantId: "org-1",
         eventId: "event-1",
-        submissionId: "speaker-submission:crm-contact:manual",
         participantId: "participant-manual",
         taskId: "task-manual",
         kind: "slides",
@@ -1624,6 +1626,38 @@ describe("SpeakerService organizer asset reads", () => {
   });
 });
 describe("SpeakerService organizer speaker writes", () => {
+  it.each(["manual", "cfp", "csv", "crm"] as const)(
+    "uses the authoritative %s source relationship for canonical participant identity",
+    async (sourceType) => {
+      const { repository, service } = createOrganizerFixture();
+      repository.participantResolutions.set(`${sourceType}:external-${sourceType}`, {
+        state: "resolved",
+        participantId: "participant-1",
+        submissionIds: ["submission-1"],
+        created: false,
+      });
+
+      const roster = await service.createOrganizerSpeaker({
+        organizationId: "org-1",
+        eventId: "event-1",
+        accountId: "account-1",
+        displayName: `Candidate ${sourceType}`,
+        email: `${sourceType}@example.test`,
+        jobTitle: "Speaker",
+        company: "Example",
+        biography: "Candidate metadata does not select the identity.",
+        socialLinks: {},
+        status: "pending",
+        idempotencyKey: `identity-${sourceType}`,
+        sourceType,
+        sourceId: `external-${sourceType}`,
+      });
+
+      expect(roster.speakers).toEqual([
+        expect.objectContaining({ participantId: "participant-1" }),
+      ]);
+    },
+  );
   it("replays canonical saves by accepted identity and returns one task per assignee", async () => {
     const { repository, service } = createOrganizerFixture();
     const baseInput = {
@@ -1635,24 +1669,31 @@ describe("SpeakerService organizer speaker writes", () => {
       biography: "Builds reliable developer platforms.",
       socialLinks: {},
       status: "pending",
+      sourceType: "cfp",
     } as const;
     const first = await service.createOrganizerSpeaker({
       ...baseInput,
       displayName: "Priya Raman",
       email: "PRIYA@example.test",
       idempotencyKey: "manual-priya",
+      sourceId: "submission-1:participant-1",
+      explicitParticipantId: "participant-1",
     });
     const replay = await service.createOrganizerSpeaker({
       ...baseInput,
       displayName: "Priya Raman",
       email: "priya@example.test",
       idempotencyKey: "manual-priya",
+      sourceId: "submission-1:participant-1",
+      explicitParticipantId: "participant-1",
     });
     const second = await service.createOrganizerSpeaker({
       ...baseInput,
       displayName: "Marcus Okafor",
       email: "marcus@example.test",
       idempotencyKey: "manual-marcus",
+      sourceId: "submission-2:participant-2",
+      explicitParticipantId: "participant-2",
     });
     expect(first.speakers.map((speaker) => speaker.participantId)).toEqual(["participant-1"]);
     expect(replay.speakers.map((speaker) => speaker.participantId)).toEqual(["participant-1"]);
@@ -1672,7 +1713,10 @@ describe("SpeakerService organizer speaker writes", () => {
       title: "Confirm participation",
       description: "General speaker onboarding task.",
       dueAt: "2027-04-01",
-      participantIds: ["participant-1", "participant-2"],
+      assignments: [
+        { participantId: "participant-1", submissionId: null },
+        { participantId: "participant-2", submissionId: null },
+      ],
     });
     expect(taskEnvelope.tasks.map((task) => task.participantId)).toEqual([
       "participant-1",
@@ -1786,9 +1830,52 @@ describe("SpeakerService organizer speaker writes", () => {
           dietaryRequirements: "Vegan",
           travelNotes: "Arrive before check-in.",
         }),
-        version: 2,
+        version: 1,
       }),
     ]);
+  });
+  it("rejects an aggregate organizer write when the profile revision is stale", async () => {
+    const { repository, service } = createOrganizerFixture();
+    repository.roster.push({
+      id: "roster:event-1:speaker-submission:submission-1:participant-1",
+      eventId: "event-1",
+      submissionId: "speaker-submission:submission-1",
+      participantId: "participant-1",
+      displayName: "Priya Raman",
+      email: "priya@example.test",
+      role: "primary",
+      status: "active",
+      version: 2,
+      createdAt: now,
+      updatedAt: now,
+    });
+    repository.profiles.push({
+      ...profile("participant-1"),
+      email: "priya@example.test",
+      version: 3,
+    });
+
+    await expect(
+      service.updateOrganizerSpeaker({
+        organizationId: "org-1",
+        eventId: "event-1",
+        accountId: "account-1",
+        participantId: "participant-1",
+        expectedVersion: 2,
+        displayName: "Priya Raman",
+        email: "priya@example.test",
+        jobTitle: "Principal Engineer",
+        company: "Latticework Systems",
+        biography: "Must not be persisted.",
+        socialLinks: {},
+        status: "confirmed",
+      }),
+    ).rejects.toSatisfy((error: unknown) => {
+      expectServiceError(error, "VERSION_CONFLICT");
+      return true;
+    });
+    expect(repository.roster[0]?.version).toBe(2);
+    expect(repository.profiles[0]?.version).toBe(3);
   });
   it("persists manual speakers, profile changes, and single-assignee task changes across services", async () => {
     const { repository, gateway, service } = createOrganizerFixture();
@@ -1858,7 +1945,7 @@ describe("SpeakerService organizer speaker writes", () => {
       title: "Confirm travel",
       description: "Confirm the travel plan.",
       dueAt: "2027-04-01",
-      participantIds: ["participant:generated-1"],
+      assignments: [{ participantId: "participant:generated-1", submissionId: null }],
     });
     const assignedTask = assignment.tasks[0];
     expect(assignedTask).toMatchObject({
@@ -1867,7 +1954,10 @@ describe("SpeakerService organizer speaker writes", () => {
       status: "not_started",
       version: 1,
     });
-    expect(repository.tasks[0]?.assigneeIds).toEqual(["participant:generated-1"]);
+    expect(repository.tasks[0]?.subject).toEqual({
+      type: "participant",
+      participantId: "participant:generated-1",
+    });
 
     const changedTask = await service.updateOrganizerSpeakerTask({
       organizationId: "org-1",
@@ -2012,8 +2102,10 @@ describe("SpeakerService organizer speaker writes", () => {
   });
   it("validates every canonical import identity before persisting any row", async () => {
     const { repository, service } = createOrganizerFixture();
-    repository.verifiedEmails.set("participant-1", "ambiguous@example.test");
-    repository.verifiedEmails.set("participant-2", "ambiguous@example.test");
+    repository.participantResolutions.set("csv:canonical-import-preflight:row:3", {
+      state: "ambiguous",
+      candidateParticipantIds: ["p", "participant-with-a-much-longer-id"],
+    });
 
     await expect(
       service.commitSpeakerImport({
@@ -2043,7 +2135,7 @@ describe("SpeakerService organizer speaker writes", () => {
         ],
       }),
     ).rejects.toSatisfy((error: unknown) => {
-      expectServiceError(error, "VALIDATION_ERROR");
+      expectServiceError(error, "IDENTITY_AMBIGUOUS");
       return true;
     });
     expect(repository.roster).toEqual([]);
@@ -2083,7 +2175,7 @@ describe("SpeakerService organizer speaker writes", () => {
         title: "Stale assignment",
         description: "Must not be assigned.",
         dueAt: "2027-04-01",
-        assigneeIds: ["participant-stale"],
+        assignments: [{ participantId: "participant-stale", submissionId: null }],
       }),
     ).rejects.toSatisfy((error: unknown) => {
       expectServiceError(error, "NOT_FOUND");
@@ -2097,8 +2189,7 @@ describe("SpeakerService organizer speaker writes", () => {
       title: "Canonical assignment",
       description: "Use the accepted submission.",
       dueAt: "2027-04-01",
-      submissionId: "submission-1",
-      assigneeIds: ["participant-1"],
+      assignments: [{ participantId: "participant-1", submissionId: "submission-1" }],
     });
     expect(task?.submissionId).toBe("speaker-submission:submission-1");
     expect(
@@ -2106,6 +2197,42 @@ describe("SpeakerService organizer speaker writes", () => {
         (candidate) => candidate.id === task?.id,
       )?.sessionTitle,
     ).toBe("Descriptive accepted session");
+  });
+  it("persists one explicit task mapping for each affected session", async () => {
+    const { repository, service } = createOrganizerFixture();
+    repository.submissions.push(submission("submission-1-breakout", "participant-1"));
+    const scope = repository.organizerScopes.get("event-1:account-1");
+    if (scope === undefined) throw new Error("Expected organizer scope.");
+    repository.organizerScopes.set("event-1:account-1", {
+      ...scope,
+      submissionIds: [...scope.submissionIds, "submission-1-breakout"],
+    });
+
+    const tasks = await service.createOrganizerTask({
+      eventId: "event-1",
+      accountId: "account-1",
+      type: "action",
+      title: "Confirm session details",
+      assignments: [
+        { participantId: "participant-1", submissionId: "submission-1" },
+        { participantId: "participant-1", submissionId: "submission-1-breakout" },
+      ],
+    });
+
+    expect(tasks).toHaveLength(2);
+    expect(tasks.map((task) => task.subject)).toEqual([
+      {
+        type: "session",
+        participantId: "participant-1",
+        submissionId: "speaker-submission:submission-1",
+      },
+      {
+        type: "session",
+        participantId: "participant-1",
+        submissionId: "speaker-submission:submission-1-breakout",
+      },
+    ]);
+    expect(new Set(tasks.map((task) => task.id)).size).toBe(2);
   });
 
   it("filters organizer task contamination by canonical submission participant", async () => {
@@ -2259,7 +2386,10 @@ describe("SpeakerService organizer speaker writes", () => {
   });
   it("fails closed when verified email resolves to multiple accepted participants", async () => {
     const { repository, service } = createOrganizerFixture();
-    repository.verifiedEmails.set("participant-2", "priya@example.test");
+    repository.participantResolutions.set("manual:duplicate-priya", {
+      state: "ambiguous",
+      candidateParticipantIds: ["p", "participant-with-a-much-longer-id"],
+    });
     await expect(
       service.createOrganizerSpeaker({
         organizationId: "org-1",
@@ -2275,7 +2405,7 @@ describe("SpeakerService organizer speaker writes", () => {
         idempotencyKey: "duplicate-priya",
       }),
     ).rejects.toSatisfy((error: unknown) => {
-      expectServiceError(error, "VALIDATION_ERROR");
+      expectServiceError(error, "IDENTITY_AMBIGUOUS");
       return true;
     });
   });
@@ -2308,9 +2438,10 @@ describe("SpeakerService organizer speaker writes", () => {
         socialLinks: {},
         status: "pending",
         idempotencyKey: "canonical-email-mismatch",
+        explicitParticipantId: "participant-1",
       }),
     ).rejects.toSatisfy((error: unknown) => {
-      expectServiceError(error, "VALIDATION_ERROR");
+      expectServiceError(error, "IDENTITY_AMBIGUOUS");
       return true;
     });
     expect(repository.roster).toHaveLength(1);
@@ -2342,6 +2473,9 @@ describe("SpeakerService organizer speaker writes", () => {
       socialLinks: { linkedin: "https://linkedin.com/in/priya" },
       status: "confirmed",
       idempotencyKey: "canonical-profile-sync",
+      sourceType: "cfp",
+      sourceId: "submission-1:participant-1",
+      explicitParticipantId: "participant-1",
     });
 
     expect(repository.profiles).toHaveLength(1);
@@ -2373,6 +2507,96 @@ function expectServiceError(error: unknown, code: string): void {
 }
 
 describe("SpeakerService portal access", () => {
+  it("exposes an owned submission context before participant acceptance", async () => {
+    const repository = new CountingPortalRepository();
+    repository.scopes.set("event-1:account-1", {
+      tenantId: "org-1",
+      submissionIds: ["submission-draft"],
+      participantIds: [],
+      capabilities: ["submission-edit"],
+    });
+    repository.submissions.push({
+      id: "submission-draft",
+      eventId: "event-1",
+      title: "Draft proposal",
+      status: "submitted",
+      participantIds: [],
+      updatedAt: now,
+    });
+    repository.portalContexts.push({
+      id: "portal:org-1:event-1",
+      eventId: "event-1",
+      name: "Draft event",
+      capabilities: ["submission-edit"],
+      submissionIds: ["submission-draft"],
+      participantIds: [],
+    });
+    const service = new SpeakerService(repository, new FakePrivateAssetGateway(), {
+      now: () => new Date(now),
+    });
+
+    await expect(service.listPortalContexts("account-1")).resolves.toEqual([
+      expect.objectContaining({
+        submissionIds: ["submission-draft"],
+        participantIds: [],
+        capabilities: ["submission-edit"],
+      }),
+    ]);
+    await expect(service.getPortal("event-1", "account-1")).resolves.toMatchObject({
+      submissions: [expect.objectContaining({ id: "submission-draft", status: "submitted" })],
+      profiles: [],
+      tasks: [],
+      context: {
+        submissionIds: ["submission-draft"],
+        participantIds: [],
+      },
+    });
+  });
+  it("fails closed when an event has multiple viable portal contexts", async () => {
+    const repository = new CountingPortalRepository();
+    repository.scopes.set("event-1:account-1", {
+      tenantId: "org-1",
+      submissionIds: ["submission-1"],
+      participantIds: ["participant-1"],
+      primaryParticipantId: "participant-1",
+      capabilities: ["profile-self", "task-response"],
+    });
+    repository.submissions.push(submission("submission-1", "participant-1"));
+    repository.portalContexts.push(
+      {
+        id: "portal:org-1:event-1:a",
+        eventId: "event-1",
+        name: "Context A",
+        capabilities: ["profile-self", "task-response"],
+        submissionIds: ["submission-1"],
+        participantIds: ["participant-1"],
+        primaryParticipantId: "participant-1",
+      },
+      {
+        id: "portal:org-1:event-1:b",
+        eventId: "event-1",
+        name: "Context B",
+        capabilities: ["profile-self", "task-response"],
+        submissionIds: ["submission-1"],
+        participantIds: ["participant-1"],
+        primaryParticipantId: "participant-1",
+      },
+    );
+    const service = new SpeakerService(repository, new FakePrivateAssetGateway(), {
+      now: () => new Date(now),
+    });
+
+    await expect(service.getPortalContext("event-1", "account-1")).rejects.toSatisfy(
+      (error: unknown) => {
+        expectServiceError(error, "NOT_FOUND");
+        return true;
+      },
+    );
+    await expect(service.getPortal("event-1", "account-1")).rejects.toSatisfy((error: unknown) => {
+      expectServiceError(error, "NOT_FOUND");
+      return true;
+    });
+  });
   it("projects authorized portal contexts in one parallel submission wave", async () => {
     const repository = new DelayedPortalContextRepository();
     repository.scopes.set("event-1:account-1", {
@@ -2466,7 +2690,7 @@ describe("SpeakerService portal access", () => {
       accessScope: repository.accessScopeReads,
       contexts: repository.contextReads,
       submissions: repository.submissionReads,
-    }).toEqual({ accessScope: 1, contexts: 1, submissions: 0 });
+    }).toEqual({ accessScope: 1, contexts: 1, submissions: 1 });
   });
   it("keeps raw and canonical submission aliases scoped to their discovered contexts", async () => {
     const repository = new CountingPortalRepository();
@@ -2911,6 +3135,26 @@ describe("SpeakerService portal access", () => {
     expect(JSON.stringify(portal)).not.toContain("organizer-task");
     expect(JSON.stringify(portal)).not.toContain("participant-2");
     expect(JSON.stringify(portal)).not.toContain("participant-other-event");
+  });
+  it("fails closed when roster submission candidates remain ambiguous", async () => {
+    const repository = new CountingPortalRepository();
+    repository.scopes.set("event-1:account-1", {
+      submissionIds: [" submission-1 ", "  speaker-submission:submission-1  "],
+      participantIds: ["participant-1"],
+      primaryParticipantId: "participant-1",
+      capabilities: ["profile-self", "roster-manage"],
+    });
+    repository.submissions.push(
+      submission(" submission-1 ", "participant-1"),
+      submission("  speaker-submission:submission-1  ", "participant-1"),
+    );
+    const service = new SpeakerService(repository, new FakePrivateAssetGateway(), {
+      now: () => new Date(now),
+    });
+
+    await expect(service.getRoster("event-1", "account-1", "submission-1")).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
   });
   it("loads canonical accepted rosters for the owning speaker and versions roster mutations", async () => {
     const { repository, service } = createOrganizerFixture();
@@ -3788,6 +4032,92 @@ describe("speaker routes", () => {
     expect(JSON.stringify(payload)).not.toContain("secret-route-private-asset");
   });
 });
+describe("canonical speaker admin routes", () => {
+  it("requires canonical identity, task subject, and revision wire shapes", async () => {
+    const { service } = createOrganizerFixture();
+    const authenticate = async (request: Request) =>
+      request.headers.get("authorization") === "Bearer account-1"
+        ? { accountId: "account-1" }
+        : null;
+    const app = new Hono();
+    app.route(
+      "/api/admin/organizations/:organizationId/events/:eventId/speakers",
+      createSpeakerAdminRoutes({ service, authenticate }),
+    );
+    app.route(
+      "/api/admin/organizations/:organizationId/events/:eventId/speaker-tasks",
+      createSpeakerTaskAdminRoutes({ service, authenticate }),
+    );
+    const headers = {
+      authorization: "Bearer account-1",
+      "content-type": "application/json",
+    };
+
+    const speaker = await app.request("/api/admin/organizations/org-1/events/event-1/speakers", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        idempotencyKey: "route-cfp-participant-1",
+        sourceType: "cfp",
+        sourceId: "submission-1:participant-1",
+        participantId: "participant-1",
+        displayName: "Priya Raman",
+        email: "priya@example.test",
+        jobTitle: "Principal Engineer",
+        company: "Latticework Systems",
+        biography: "Builds reliable platforms.",
+        socialLinks: {},
+        status: "confirmed",
+      }),
+    });
+    expect(speaker.status).toBe(201);
+    expect(await speaker.json()).toMatchObject({
+      data: {
+        speakers: [expect.objectContaining({ participantId: "participant-1" })],
+      },
+    });
+
+    const task = await app.request("/api/admin/organizations/org-1/events/event-1/speaker-tasks", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: "Confirm session",
+        description: "Confirm the session details.",
+        dueAt: "2027-04-01",
+        assignments: [{ participantId: "participant-1", submissionId: "submission-1" }],
+      }),
+    });
+    expect(task.status).toBe(201);
+    expect(await task.json()).toMatchObject({
+      data: {
+        tasks: [
+          expect.objectContaining({
+            participantId: "participant-1",
+            sessionId: "speaker-submission:submission-1",
+          }),
+        ],
+      },
+    });
+
+    const legacyTask = await app.request(
+      "/api/admin/organizations/org-1/events/event-1/speaker-tasks",
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          title: "Legacy task",
+          description: "Must fail.",
+          dueAt: "2027-04-01",
+          participantIds: ["participant-1"],
+        }),
+      },
+    );
+    expect(legacyTask.status).toBe(400);
+    expect(await legacyTask.json()).toMatchObject({
+      error: { code: "VALIDATION_ERROR" },
+    });
+  });
+});
 describe("SpeakerService organizer email previews", () => {
   const createTemplate = (service: SpeakerService) =>
     service.createOrganizerSpeakerEmailTemplate({
@@ -3931,6 +4261,9 @@ it("persists logistics, exposes reminder eligibility, and queues a versioned bul
       travelNotes: "Arrange airport transfer",
     },
     idempotencyKey: "speaker-priya",
+    sourceType: "cfp",
+    sourceId: "submission-1:participant-1",
+    explicitParticipantId: "participant-1",
   });
   const roster = await service.createOrganizerSpeaker({
     organizationId: "org-1",
@@ -3944,6 +4277,9 @@ it("persists logistics, exposes reminder eligibility, and queues a versioned bul
     socialLinks: {},
     status: "confirmed",
     idempotencyKey: "speaker-marcus",
+    sourceType: "cfp",
+    sourceId: "submission-2:participant-2",
+    explicitParticipantId: "participant-2",
   });
   const priya = roster.speakers.find((speaker) => speaker.participantId === "participant-1");
   expect(
@@ -3963,13 +4299,16 @@ it("persists logistics, exposes reminder eligibility, and queues a versioned bul
     description: "Share the confirmed arrival plan.",
     dueAt: "2026-08-07",
     reminderOffsetsMinutes: [60],
-    assigneeIds: ["participant-1", "participant-2"],
+    assignments: [
+      { participantId: "participant-1", submissionId: null },
+      { participantId: "participant-2", submissionId: null },
+    ],
   });
   expect(task).toHaveLength(2);
   expect(new Set(task.map((item) => item.participantId))).toEqual(
     new Set(["participant-1", "participant-2"]),
   );
-  expect(task.map((item) => item.assigneeIds)).toEqual([["participant-1"], ["participant-2"]]);
+  expect(task.map((item) => item.subject?.type)).toEqual(["participant", "participant"]);
   expect(task.every((item) => item.dueAt === "2026-08-07")).toBe(true);
 
   const eligibility = await service.getReminderEligibility({

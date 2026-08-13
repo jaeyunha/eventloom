@@ -29,6 +29,39 @@ import {
   triggerDeliverablesDownload,
 } from "./deliverables-workspace";
 
+function storedManifestZip(manifest: unknown): Uint8Array {
+  const payload = new TextEncoder().encode(`${JSON.stringify(manifest)}\n`);
+  const name = new TextEncoder().encode("manifest.json");
+  const localSize = 30 + name.byteLength + payload.byteLength;
+  const centralSize = 46 + name.byteLength;
+  const body = new Uint8Array(localSize + centralSize + 22);
+  const view = new DataView(body.buffer);
+  view.setUint32(0, 0x04034b50, true);
+  view.setUint16(4, 20, true);
+  view.setUint16(6, 0x0800, true);
+  view.setUint32(18, payload.byteLength, true);
+  view.setUint32(22, payload.byteLength, true);
+  view.setUint16(26, name.byteLength, true);
+  body.set(name, 30);
+  body.set(payload, 30 + name.byteLength);
+  const centralOffset = localSize;
+  view.setUint32(centralOffset, 0x02014b50, true);
+  view.setUint16(centralOffset + 4, 20, true);
+  view.setUint16(centralOffset + 6, 20, true);
+  view.setUint16(centralOffset + 8, 0x0800, true);
+  view.setUint32(centralOffset + 20, payload.byteLength, true);
+  view.setUint32(centralOffset + 24, payload.byteLength, true);
+  view.setUint16(centralOffset + 28, name.byteLength, true);
+  view.setUint32(centralOffset + 42, 0, true);
+  body.set(name, centralOffset + 46);
+  const endOffset = centralOffset + centralSize;
+  view.setUint32(endOffset, 0x06054b50, true);
+  view.setUint16(endOffset + 8, 1, true);
+  view.setUint16(endOffset + 10, 1, true);
+  view.setUint32(endOffset + 12, centralSize, true);
+  view.setUint32(endOffset + 16, centralOffset, true);
+  return body;
+}
 const session: DeliverableSession = {
   id: "session-1",
   eventId: "event-1",
@@ -86,6 +119,11 @@ const task: DeliverableTask = {
   submissionId: "submission-1",
   participantId: "speaker-1",
   sessionTitle: session.title,
+  subject: {
+    type: "session",
+    participantId: "speaker-1",
+    submissionId: "submission-1",
+  },
   type: "upload",
   owner: "speaker",
   title: "Upload Session Presentation",
@@ -95,6 +133,8 @@ const task: DeliverableTask = {
   dependencyIds: [],
   reminderOffsetsMinutes: [10080, 1440],
   acceptedAssetKinds: ["slides"],
+  allowedMimeTypes: ["application/pdf"],
+  maxBytes: 5_000_000,
   version: 2,
   updatedAt: "2026-08-09T12:00:00.000Z",
 };
@@ -113,6 +153,9 @@ const assetV1: DeliverableAsset = {
   createdAt: "2026-08-08T12:00:00.000Z",
   version: 1,
   versionFamilyId: "family-1",
+  versionId: "asset-1",
+  latestVersionId: "asset-2",
+  currentVersionId: "asset-1",
 };
 
 const assetV2: DeliverableAsset = {
@@ -121,6 +164,9 @@ const assetV2: DeliverableAsset = {
   createdAt: "2026-08-09T12:00:00.000Z",
   version: 2,
   supersedesAssetId: "asset-1",
+  versionId: "asset-2",
+  latestVersionId: "asset-2",
+  currentVersionId: "asset-1",
 };
 
 const matrixItem: DeliverableMatrixItem = {
@@ -253,7 +299,7 @@ describe("deliverables API adapter", () => {
         dueAt: "2027-05-01",
         allowedMimeTypes: ["application/pdf"],
         maxSizeBytes: 5_000_000,
-        assigneeIds: ["speaker-1"],
+        assignments: [{ participantId: "speaker-1", submissionId: "submission-1" }],
         acceptedAssetKinds: ["slides"],
       }),
     ).resolves.toMatchObject({ id: task.id });
@@ -268,6 +314,8 @@ describe("deliverables API adapter", () => {
         assetId: "asset-2",
         state: "approved",
         note: "Ready",
+        expectedVersion: 0,
+        release: false,
       }),
     ).resolves.toMatchObject({ id: "asset-2", state: "approved" });
 
@@ -281,7 +329,7 @@ describe("deliverables API adapter", () => {
       allowedMimeTypes: ["application/pdf"],
       maxBytes: 5_000_000,
       acceptedAssetKinds: ["slides"],
-      assigneeIds: ["speaker-1"],
+      assignments: [{ participantId: "speaker-1", submissionId: "submission-1" }],
     });
     expect(String(calls[1]?.input)).toContain("/organizer/reminders/queue");
     expect(JSON.parse(String(calls[1]?.init?.body))).toMatchObject({
@@ -296,10 +344,16 @@ describe("deliverables API adapter", () => {
       input: RequestInfo | URL;
       init: RequestInit | undefined;
     }> = [];
-    const bytes = Uint8Array.from([80, 75, 3, 4]);
+    const bytes = storedManifestZip({
+      format: "speaker-deliverables-export",
+      version: 1,
+      organizationId: "org-1",
+      eventId: "event-1",
+      entries: [],
+    });
     const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
       calls.push({ input, init });
-      return new Response(bytes, {
+      return new Response(bytes.buffer as ArrayBuffer, {
         status: 200,
         headers: {
           "content-type": "application/zip",
@@ -793,6 +847,7 @@ describe("deliverables workspace", () => {
             id: "comment-1",
             eventId: "event-1",
             assetId: assetV2.id,
+            versionId: assetV2.id,
             body: "Sibling comments remain visible.",
             authorLabel: "Priya Raman",
             createdAt: "2026-08-09T12:01:00.000Z",
@@ -820,7 +875,7 @@ describe("deliverables workspace", () => {
             key: "asset-comment",
             label: "Reply to asset thread",
             phase: "succeeded",
-            message: "Organizer reply added to the asset-family thread.",
+            message: "Organizer reply added to asset version asset-2.",
           },
         ],
         selectedAssetId: "asset-2",
@@ -830,6 +885,7 @@ describe("deliverables workspace", () => {
             id: "comment-1",
             eventId: "event-1",
             assetId: "asset-2",
+            versionId: "asset-2",
             body: "Draft deck - final version coming Friday.",
             authorLabel: "Priya Raman",
             createdAt: "2026-08-09T12:01:00.000Z",
@@ -882,7 +938,7 @@ describe("deliverables workspace", () => {
     expect(markup).toContain("Monorepo Labs");
     expect(markup).toContain("priya@example.test");
     expect(markup).toContain("Organizer operation status");
-    expect(markup).toContain("Organizer reply added to the asset-family thread.");
+    expect(markup).toContain("Organizer reply added to asset version asset-2.");
     expect(markup).not.toContain("must-not-cross-boundary");
     expect(markup).toContain("Download selected deliverables ZIP");
   });
@@ -1069,7 +1125,7 @@ describe("deliverables workspace", () => {
       }),
     );
 
-    expect(markup).toContain("current version unavailable");
+    expect(markup).toContain("current file");
     expect(markup).not.toContain('data-current-version="asset-2"');
     expect(markup).toContain("Select row-level ready current files.");
   });
@@ -1153,12 +1209,51 @@ describe("deliverables workspace", () => {
     ]);
     expect(deliverablesExportStatusLabels.queued).toContain("queued");
     expect(deliverablesExportStatusLabels.generating).toContain("generating");
-    expect(deliverablesExportStatusLabels.ready).toContain("validated ZIP response");
+    expect(deliverablesExportStatusLabels.ready).toContain("validated authoritative manifest");
     expect(deliverablesExportActionLabels.queued).toBe("ZIP export queued");
-    expect(deliverablesExportActionLabels.ready).toBe("Download ready ZIP");
+    expect(deliverablesExportActionLabels.ready).toBe("Inspect authoritative manifest");
     expect(deliverablesExportActionLabels.failure).toBe("Retry ZIP export");
     expect(deliverablesExportStatusLabels["download-started"]).toContain("download");
     expect(deliverablesExportStatusLabels.failure).toContain("failed");
+  });
+  it("renders explicit subject controls and authoritative version pointer badges", () => {
+    const pointerAsset: DeliverableAsset = {
+      ...assetV2,
+      latestVersionId: assetV2.id,
+      currentVersionId: assetV2.id,
+      approvedVersionId: assetV1.id,
+      releasedVersionId: assetV1.id,
+      versionId: assetV2.id,
+    };
+    const pointerV1: DeliverableAsset = {
+      ...assetV1,
+      versionId: assetV1.id,
+      latestVersionId: assetV2.id,
+      currentVersionId: assetV2.id,
+      approvedVersionId: assetV1.id,
+      releasedVersionId: assetV1.id,
+    };
+    const markup = renderToStaticMarkup(
+      createElement(DeliverablesWorkspaceView, {
+        organizationId: "org-1",
+        eventId: "event-1",
+        sessions: [session],
+        tasks: [task],
+        assets: [pointerV1, pointerAsset],
+        profiles: [profile],
+        matrixItems: [
+          { ...matrixItem, assets: [pointerV1, pointerAsset], currentAsset: pointerAsset },
+        ],
+        selectedAssetId: pointerAsset.id,
+        assetHistory: [pointerV1, pointerAsset],
+        comments: [],
+        onCreateTask: async () => undefined,
+        onReviewAsset: async () => undefined,
+      }),
+    );
+
+    expect(markup).toContain("Request subject");
+    expect(markup).toContain("one accepted session per speaker");
   });
 
   it("renders honest disabled capability states rather than fabricated success", () => {
@@ -1206,6 +1301,19 @@ describe("deliverables workspace", () => {
       fileName: "event-1-deliverables.zip",
       contentType: "application/zip",
       sizeBytes: 4,
+      manifest: {
+        format: "speaker-deliverables-export",
+        version: 1,
+        organizationId: "org-1",
+        eventId: "event-1",
+        entries: [],
+      },
+      response: {
+        kind: "synchronous_zip",
+        status: 200,
+        contentType: "application/zip",
+        contentLength: 4,
+      },
     };
     try {
       triggerDeliverablesDownload(download);

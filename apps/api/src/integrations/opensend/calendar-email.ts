@@ -1,5 +1,5 @@
 import type { CalendarInvitationPayload } from "@open-sessionboard/contracts";
-import type { CalendarInvitationResult } from "../calendar";
+import { createCalendarInvitation, type CalendarInvitationResult } from "../calendar";
 import type { OpenSendMessage } from "./types";
 
 export interface CalendarOpenSendMessageOptions {
@@ -12,10 +12,7 @@ export function createCalendarOpenSendMessage(
   invitation: CalendarInvitationResult,
   options: CalendarOpenSendMessageOptions = {},
 ): OpenSendMessage {
-  const expectedMethod = payload.method === "CANCEL" ? "CANCEL" : "REQUEST";
-  if (invitation.method !== expectedMethod) {
-    throw new TypeError("Calendar invitation MIME method does not match its lifecycle action.");
-  }
+  assertInvitationMatchesPayload(payload, invitation);
 
   const action = actionLabel(payload.method);
   const when = formatEventTime(payload.startsAt, payload.endsAt, payload.timeZone);
@@ -24,6 +21,10 @@ export function createCalendarOpenSendMessage(
     options.textIntroduction ?? `${action} calendar information for ${payload.summary}.`;
   const htmlIntroduction =
     options.htmlIntroduction ?? `${action} calendar information for ${payload.summary}.`;
+  const instruction =
+    payload.method === "CANCEL"
+      ? "Open the attached iCalendar cancellation to remove this event from your calendar."
+      : "Open the attached iCalendar file to add or update this event.";
 
   return {
     from: payload.organizer,
@@ -33,13 +34,13 @@ export function createCalendarOpenSendMessage(
       textIntroduction,
       `When: ${when}`,
       ...(location.length === 0 ? [] : [`Where: ${location}`]),
-      "Open the attached iCalendar file to add or update this event.",
+      instruction,
     ].join("\n\n"),
     html: [
       `<p>${escapeHtml(htmlIntroduction)}</p>`,
       `<p><strong>When:</strong> ${escapeHtml(when)}</p>`,
       ...(location.length === 0 ? [] : [`<p><strong>Where:</strong> ${escapeHtml(location)}</p>`]),
-      "<p>Open the attached iCalendar file to add or update this event.</p>",
+      `<p>${escapeHtml(instruction)}</p>`,
     ].join(""),
     idempotencyKey: payload.idempotencyKey,
     headers: {
@@ -55,6 +56,23 @@ export function createCalendarOpenSendMessage(
       },
     ],
   };
+}
+function assertInvitationMatchesPayload(
+  payload: CalendarInvitationPayload,
+  invitation: CalendarInvitationResult,
+): void {
+  const expected = createCalendarInvitation(payload, {
+    generatedAt: invitation.generatedAt,
+  });
+  if (
+    invitation.method !== expected.method ||
+    invitation.contentType !== expected.contentType ||
+    invitation.ics !== expected.ics
+  ) {
+    throw new TypeError(
+      "Calendar invitation bytes and MIME metadata do not match the committed lifecycle payload.",
+    );
+  }
 }
 
 function actionLabel(method: CalendarInvitationPayload["method"]): string {

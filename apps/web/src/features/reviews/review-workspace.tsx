@@ -62,6 +62,8 @@ export interface ReviewRound {
   id: string;
   name: string;
   status: RoundStatus;
+  readonly roundRevision?: number | undefined;
+  readonly rubricRevision?: number | undefined;
   opensAt: string;
   closesAt: string;
   completionPercent: number;
@@ -97,6 +99,9 @@ interface AggregateRow {
   conflicts: number;
   abstentions: number;
   participants?: readonly AggregateParticipant[];
+  readonly roundId?: string;
+  readonly roundRevision?: number;
+  readonly rubricRevision?: number;
 }
 
 export interface ReviewPlanSeed {
@@ -163,7 +168,10 @@ interface ApiSuggestion {
         provenance?: {
           provider: string;
           model: string;
+          generatedAt?: string;
           sourceReferences: readonly string[];
+          promptVersion?: string;
+          traceId?: string;
         };
       }[]
     >
@@ -171,7 +179,10 @@ interface ApiSuggestion {
   provenance: {
     provider: string;
     model: string;
+    generatedAt?: string;
     sourceReferences: readonly string[];
+    promptVersion?: string;
+    traceId?: string;
   };
 }
 interface ReviewerProgressSummary {
@@ -192,8 +203,21 @@ export interface ReviewPlanAssignment {
   roundId: string;
   submissionId: string;
   reviewerId: string;
-  status: "assigned" | "in_progress" | "submitted" | "abstained";
+  status: "assigned" | "in_progress" | "submitted" | "abstained" | "superseded";
   version: number;
+  predecessorAssignmentId?: string | null;
+  successorAssignmentId?: string | null;
+  supersededReason?: string | null;
+  lineage?: {
+    predecessorAssignmentId: string | null;
+    successorAssignmentId: string | null;
+    reason: string;
+    supersededAt?: string;
+  };
+  planVersion?: number;
+  rubricRevision?: number;
+  roundRevision?: number;
+  submissionRevision?: number;
 }
 type ApiAssignment = ReviewPlanAssignment;
 export interface EvaluatorAssignment {
@@ -214,6 +238,13 @@ export interface EvaluatorAssignment {
   round: ReviewRound;
   aiSuggestions: Readonly<Record<string, { value: number; evidence: readonly string[] }>>;
   readonly assignmentStatus?: ApiAssignment["status"] | undefined;
+  readonly predecessorAssignmentId?: string | null | undefined;
+  readonly successorAssignmentId?: string | null | undefined;
+  readonly supersededReason?: string | null | undefined;
+  readonly lineage?: ReviewPlanAssignment["lineage"] | undefined;
+  readonly roundRevision?: number | undefined;
+  readonly rubricRevision?: number | undefined;
+  readonly submissionRevision?: number | undefined;
   readonly track?: string | null | undefined;
   readonly participants?: readonly AggregateParticipant[] | undefined;
   readonly identityRedacted?: boolean | undefined;
@@ -264,6 +295,8 @@ interface ApiPlan {
     id: string;
     name: string;
     sequence: number;
+    revision?: number;
+    rubricRevision?: number;
     opensAt?: string | null | undefined;
     closesAt: string | null;
     blindReview?: boolean | undefined;
@@ -306,6 +339,8 @@ interface ApiProgress {
 
 interface ApiAggregate {
   roundId: string;
+  roundRevision: number;
+  rubricRevision: number;
   submissionId: string;
   submittedReviewCount: number;
   expectedReviewCount: number;
@@ -329,8 +364,12 @@ interface ApiReviewContext {
     submissionId: string;
     roundId: string;
     reviewerId: string;
-    status: "assigned" | "in_progress" | "submitted" | "abstained";
+    status: "assigned" | "in_progress" | "submitted" | "abstained" | "superseded";
     version: number;
+    predecessorAssignmentId?: string | null;
+    successorAssignmentId?: string | null;
+    supersededReason?: string | null;
+    lineage?: ReviewPlanAssignment["lineage"];
     updatedAt?: string;
     createdAt?: string;
   };
@@ -527,49 +566,218 @@ async function evaluationRequest<T>(
   }
   return body as T;
 }
-export interface ReplaceReviewAssignmentsInput {
+export interface DistributionPreviewInput {
   readonly roundId: string;
-  readonly submissionId: string;
-  readonly reviewerIds: readonly string[];
-  readonly expectedVersion?: number | undefined;
+  readonly submissionIds: readonly string[];
+  readonly reviewerIds?: readonly string[] | undefined;
+  readonly expectedVersion: number;
+}
+export function distributionPreviewKey(input: DistributionPreviewInput): string {
+  return JSON.stringify({
+    roundId: input.roundId,
+    submissionIds: [...input.submissionIds],
+    ...(input.reviewerIds === undefined ? {} : { reviewerIds: [...input.reviewerIds] }),
+    expectedVersion: input.expectedVersion,
+  });
 }
 
-export async function replaceReviewAssignments(
+export interface DistributionPreview {
+  readonly scope: {
+    readonly tenantId: string;
+    readonly eventId: string;
+    readonly planId: string;
+    readonly roundId: string;
+    readonly planVersion: number;
+  };
+  readonly desiredAssignments: readonly {
+    readonly submissionId: string;
+    readonly reviewerId: string;
+    readonly existingAssignmentId?: string | undefined;
+  }[];
+  readonly deficits: readonly {
+    readonly submissionId: string;
+    readonly missingReviewCount: number;
+    readonly reason: string;
+  }[];
+  readonly exclusions: readonly {
+    readonly submissionId: string;
+    readonly reviewerId: string;
+    readonly reason: string;
+  }[];
+  readonly expectedActiveVersions: readonly {
+    readonly assignmentId: string;
+    readonly version: number;
+  }[];
+  readonly submissionRevisions: readonly {
+    readonly submissionId: string;
+    readonly revision: number;
+  }[];
+  readonly fingerprint: string;
+}
+
+export interface DistributionApplyResult {
+  readonly scope: DistributionPreview["scope"];
+  readonly activeAssignments: readonly ReviewPlanAssignment[];
+  readonly supersededAssignments: readonly ReviewPlanAssignment[];
+  readonly history: readonly {
+    readonly assignment: ReviewPlanAssignment;
+    readonly review: unknown;
+  }[];
+}
+
+export async function previewReviewAssignments(
   baseUrl: string,
   planId: string,
-  input: ReplaceReviewAssignmentsInput,
+  input: DistributionPreviewInput,
   fetcher: Fetcher = fetch,
-): Promise<readonly ReviewPlanAssignment[]> {
-  const result = await evaluationRequest<{
-    assignments: readonly ApiAssignment[];
-  }>(
+): Promise<DistributionPreview> {
+  return evaluationRequest<DistributionPreview>(
     baseUrl,
-    `/plans/${encodeURIComponent(planId)}/assignments`,
+    `/plans/${encodeURIComponent(planId)}/distribution/preview`,
     {
       method: "POST",
       body: JSON.stringify({
         roundId: input.roundId,
-        submissionId: input.submissionId,
-        reviewerIds: input.reviewerIds,
-        ...(input.expectedVersion === undefined ? {} : { expectedVersion: input.expectedVersion }),
+        submissionIds: input.submissionIds,
+        ...(input.reviewerIds === undefined ? {} : { reviewerIds: input.reviewerIds }),
+        expectedVersion: input.expectedVersion,
       }),
     },
     fetcher,
   );
-  return result.assignments;
 }
-export async function unassignReviewAssignment(
+
+export async function applyReviewAssignments(
+  baseUrl: string,
+  planId: string,
+  input: DistributionPreviewInput & { readonly fingerprint: string },
+  fetcher: Fetcher = fetch,
+): Promise<DistributionApplyResult> {
+  return evaluationRequest<DistributionApplyResult>(
+    baseUrl,
+    `/plans/${encodeURIComponent(planId)}/distribution/apply`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        roundId: input.roundId,
+        submissionIds: input.submissionIds,
+        ...(input.reviewerIds === undefined ? {} : { reviewerIds: input.reviewerIds }),
+        expectedVersion: input.expectedVersion,
+        fingerprint: input.fingerprint,
+      }),
+    },
+    fetcher,
+  );
+}
+
+export interface ReplaceAssignmentInput {
+  readonly replacementReviewerId: string;
+  readonly expectedVersion: number;
+  readonly reason: string;
+}
+
+export interface AssignmentReplacementResult {
+  readonly scope: {
+    readonly tenantId: string;
+    readonly eventId: string;
+    readonly planId: string;
+    readonly roundId: string;
+    readonly submissionId?: string | undefined;
+    readonly planVersion?: number | undefined;
+  };
+  readonly replacedAssignment: ReviewPlanAssignment;
+  readonly successorAssignment: ReviewPlanAssignment;
+  readonly activeAssignments: readonly ReviewPlanAssignment[];
+  readonly history: readonly {
+    readonly assignment: ReviewPlanAssignment;
+    readonly review: unknown;
+  }[];
+}
+
+export async function replaceSingleReviewAssignment(
   baseUrl: string,
   planId: string,
   assignmentId: string,
+  input: ReplaceAssignmentInput,
   fetcher: Fetcher = fetch,
-): Promise<void> {
-  await evaluationRequest<unknown>(
+): Promise<AssignmentReplacementResult> {
+  return evaluationRequest<AssignmentReplacementResult>(
     baseUrl,
-    `/plans/${encodeURIComponent(planId)}/assignments/${encodeURIComponent(assignmentId)}`,
-    { method: "DELETE" },
+    `/plans/${encodeURIComponent(planId)}/assignments/${encodeURIComponent(assignmentId)}/replace`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        replacementReviewerId: input.replacementReviewerId,
+        expectedVersion: input.expectedVersion,
+        reason: input.reason,
+      }),
+    },
     fetcher,
   );
+}
+export interface ReminderDeliveryFact {
+  readonly runId?: string;
+  readonly outboxId?: string;
+  readonly providerId?: string;
+  readonly status?: string;
+  readonly timestamp?: string;
+  readonly createdAt?: string;
+}
+
+export interface ReminderDeliveryResponse {
+  readonly queued: number;
+  readonly reviewerIds?: readonly string[];
+  readonly runId?: string;
+  readonly outboxId?: string;
+  readonly providerId?: string;
+  readonly status?: string;
+  readonly timestamp?: string;
+  readonly createdAt?: string;
+  readonly facts?: readonly ReminderDeliveryFact[];
+  readonly reminders?: readonly ReminderDeliveryFact[];
+}
+
+export function reminderDeliveryMessage(result: ReminderDeliveryResponse): string {
+  const facts = [
+    ...(result.facts ?? []),
+    ...(result.reminders ?? []),
+    {
+      runId: result.runId,
+      outboxId: result.outboxId,
+      providerId: result.providerId,
+      status: result.status,
+      timestamp: result.timestamp,
+      createdAt: result.createdAt,
+    },
+  ].filter((fact) =>
+    Object.values(fact).some((value) => typeof value === "string" && value.trim().length > 0),
+  );
+  const delivered = facts.filter((fact) => fact.status?.toLowerCase() === "delivered");
+  const identifiers = facts
+    .flatMap((fact) =>
+      [fact.runId, fact.outboxId, fact.providerId].filter(
+        (value): value is string => typeof value === "string" && value.trim().length > 0,
+      ),
+    )
+    .join(", ");
+  const durableFacts = facts
+    .map((fact) =>
+      [
+        fact.status ? `status ${fact.status}` : null,
+        (fact.timestamp ?? fact.createdAt) ? `timestamp ${fact.timestamp ?? fact.createdAt}` : null,
+        fact.runId ? `run ${fact.runId}` : null,
+        fact.outboxId ? `outbox ${fact.outboxId}` : null,
+        fact.providerId ? `provider ${fact.providerId}` : null,
+      ]
+        .filter((value): value is string => value !== null)
+        .join(", "),
+    )
+    .filter((value) => value.length > 0)
+    .join("; ");
+  if (delivered.length > 0) {
+    return `Reminder delivery confirmed for ${delivered.length} durable record(s)${durableFacts.length > 0 ? `: ${durableFacts}` : identifiers.length > 0 ? ` (${identifiers})` : ""}.`;
+  }
+  return `Reminder request queued (${result.queued}); delivery is pending/unconfirmed and is not reported as delivered${durableFacts.length > 0 ? `: ${durableFacts}` : identifiers.length > 0 ? ` (${identifiers})` : ""}.`;
 }
 
 function dateLabel(value: string | null): string {
@@ -618,6 +826,23 @@ function criterionNumericValue(criterion: RubricCriterion, value: string): numbe
     return index < 0 ? Number.NaN : criterion.minimum + index;
   }
   return Number(value);
+}
+export function validateSuggestionEditValue(
+  criterion: RubricCriterion,
+  rawValue: number | string,
+): string | null {
+  if (criterionType(criterion) === "free_text") {
+    return "Free-text criteria cannot resolve a numeric suggestion.";
+  }
+  const numericValue =
+    criterionType(criterion) === "dropdown"
+      ? criterionNumericValue(criterion, String(rawValue))
+      : Number(rawValue);
+  if (!Number.isFinite(numericValue)) return `Enter a numeric value for ${criterion.label}.`;
+  if (numericValue < criterion.minimum || numericValue > criterion.maximum) {
+    return `${criterion.label} must be between ${criterion.minimum} and ${criterion.maximum}.`;
+  }
+  return null;
 }
 
 function parseScorecardResponses(comment: string): {
@@ -668,7 +893,7 @@ export function assignmentCompletionPercent(
       ? assignments
       : assignments.filter((assignment) => assignment.roundId === roundId);
   const activeAssignments = relevantAssignments.filter(
-    (assignment) => assignment.status !== "abstained",
+    (assignment) => assignment.status !== "abstained" && assignment.status !== "superseded",
   );
   const submitted = activeAssignments.filter(
     (assignment) => assignment.status === "submitted",
@@ -687,11 +912,15 @@ function mapPlan(
   assignments: readonly ReviewPlanAssignment[] = [],
 ): ReviewPlanSeed {
   const reviewerProgress = progress.reviewers?.map(normalizeReviewerProgress);
-  const activeAssignments = assignments.filter((assignment) => assignment.status !== "abstained");
+  const activeAssignments = assignments.filter(
+    (assignment) => assignment.status !== "abstained" && assignment.status !== "superseded",
+  );
   const submittedAssignments = activeAssignments.filter(
     (assignment) => assignment.status === "submitted",
   ).length;
-  const abstainedAssignments = assignments.length - activeAssignments.length;
+  const abstainedAssignments = assignments.filter(
+    (assignment) => assignment.status === "abstained",
+  ).length;
   const now = Date.now();
   return {
     planId: plan.id,
@@ -728,6 +957,8 @@ function mapPlan(
     rounds: plan.rounds.map((round) => ({
       id: round.id,
       sequence: round.sequence,
+      revision: round.revision,
+      rubricRevision: round.rubricRevision,
       name: round.name,
       status:
         plan.status === "closed" || (round.closesAt !== null && Date.parse(round.closesAt) <= now)
@@ -829,7 +1060,7 @@ function deriveReviewerProgress(
       completionPercent: 0,
     };
     if (assignment.status === "abstained") current.abstained += 1;
-    else {
+    else if (assignment.status !== "superseded") {
       current.assigned += 1;
       if (assignment.status === "in_progress") current.inProgress += 1;
       if (assignment.status === "submitted") current.submitted += 1;
@@ -866,6 +1097,83 @@ function normalizeApiSubmission(submission: ApiSubmission): ApiSubmission | null
     abstract: typeof submission.abstract === "string" ? submission.abstract : "",
     participants: Array.isArray(submission.participants) ? submission.participants : [],
   };
+}
+export async function loadRoundAggregates(
+  baseUrl: string,
+  planId: string,
+  roundId: string,
+  fetcher: Fetcher = fetch,
+): Promise<readonly ApiAggregate[]> {
+  const result = await evaluationRequest<{ aggregates: readonly ApiAggregate[] }>(
+    baseUrl,
+    `/plans/${encodeURIComponent(planId)}/rounds/${encodeURIComponent(roundId)}/aggregates`,
+    {},
+    fetcher,
+  );
+  return result.aggregates;
+}
+
+export function mapRoundAggregates(
+  submissions: readonly ApiSubmission[],
+  assignments: readonly ReviewPlanAssignment[],
+  aggregates: readonly ApiAggregate[],
+  roundId: string,
+): readonly AggregateRow[] {
+  const aggregateBySubmissionId = new Map(
+    aggregates
+      .filter((aggregate) => aggregate.roundId === roundId)
+      .map((aggregate) => [aggregate.submissionId, aggregate] as const),
+  );
+  return submissions.map((submission) => {
+    const aggregate = aggregateBySubmissionId.get(submission.id);
+    const submissionAssignments = assignments.filter(
+      (assignment) =>
+        assignment.submissionId === submission.id &&
+        assignment.roundId === roundId &&
+        assignment.status !== "superseded",
+    );
+    return {
+      id: submission.id,
+      reference: submission.id,
+      title: submission.title,
+      countedScore: aggregate?.averageWeightedTotal?.toFixed(1) ?? "—",
+      possibleScore: aggregate?.possibleWeightedTotal?.toFixed(1) ?? "—",
+      countedReviews: aggregate?.submittedReviewCount ?? 0,
+      expectedReviews:
+        aggregate?.expectedReviewCount ??
+        submissionAssignments.filter((assignment) => assignment.status !== "abstained").length,
+      conflicts: submissionAssignments.filter((assignment) => assignment.status === "abstained")
+        .length,
+      abstentions: submissionAssignments.filter((assignment) => assignment.status === "abstained")
+        .length,
+      participants: submission.participants ?? [],
+      roundId,
+      ...(aggregate?.roundRevision === undefined ? {} : { roundRevision: aggregate.roundRevision }),
+      ...(aggregate?.rubricRevision === undefined
+        ? {}
+        : { rubricRevision: aggregate.rubricRevision }),
+    };
+  });
+}
+export function mapSeedRoundAggregates(
+  seed: ReviewPlanSeed,
+  aggregates: readonly ApiAggregate[],
+  roundId: string,
+): readonly AggregateRow[] {
+  const submissionRows = seed.aggregates.map((aggregate) => ({
+    id: aggregate.id,
+    title: aggregate.title,
+    abstract: "",
+    ...(aggregate.participants === undefined ? {} : { participants: aggregate.participants }),
+  }));
+  const mapped = mapRoundAggregates(submissionRows, seed.assignments, aggregates, roundId);
+  const referenceById = new Map(
+    seed.aggregates.map((aggregate) => [aggregate.id, aggregate.reference]),
+  );
+  return mapped.map((aggregate) => ({
+    ...aggregate,
+    reference: referenceById.get(aggregate.id) ?? aggregate.reference,
+  }));
 }
 export async function loadOrganizerData(
   eventId: string,
@@ -914,31 +1222,13 @@ export async function loadOrganizerData(
           (candidate.closesAt === null || Date.parse(candidate.closesAt) > Date.now()),
       ) ??
     [...plan.rounds].sort((left, right) => left.sequence - right.sequence)[0];
-  const aggregateBySubmissionId = new Map(
-    workspace.aggregates.map((aggregate) => [aggregate.submissionId, aggregate] as const),
+  const selectedRoundId = round?.id ?? aggregateRoundId ?? "";
+  const aggregateEntries = mapRoundAggregates(
+    uniqueSubmissions,
+    assignments,
+    workspace.aggregates,
+    selectedRoundId,
   );
-  const aggregateEntries = uniqueSubmissions.map((submission) => {
-    const aggregate = aggregateBySubmissionId.get(submission.id);
-    const submissionAssignments = assignments.filter(
-      (assignment) => assignment.submissionId === submission.id && assignment.roundId === round?.id,
-    );
-    return {
-      id: submission.id,
-      reference: submission.id,
-      title: submission.title,
-      countedScore: aggregate?.averageWeightedTotal?.toFixed(1) ?? "—",
-      possibleScore: aggregate?.possibleWeightedTotal?.toFixed(1) ?? "—",
-      countedReviews: aggregate?.submittedReviewCount ?? 0,
-      expectedReviews:
-        aggregate?.expectedReviewCount ??
-        submissionAssignments.filter((assignment) => assignment.status !== "abstained").length,
-      conflicts: submissionAssignments.filter((assignment) => assignment.status === "abstained")
-        .length,
-      abstentions: submissionAssignments.filter((assignment) => assignment.status === "abstained")
-        .length,
-      participants: submission.participants ?? [],
-    };
-  });
   return mapPlan(plan, eventId, aggregateEntries, mappedProgress, workspace.decisions, assignments);
 }
 
@@ -1014,6 +1304,8 @@ function mapEvaluatorAssignment(
     opensAt: dateLabel(context.round.opensAt ?? plan.createdAt),
     closesAt: dateLabel(context.round.closesAt),
     completionPercent: 0,
+    roundRevision: context.round.revision,
+    rubricRevision: context.round.rubricRevision ?? context.rubricRevision,
     blindReview:
       context.round.blindReview === true ||
       (context.round.anonymization !== undefined && context.round.anonymization !== "none") ||
@@ -1108,6 +1400,13 @@ function mapEvaluatorAssignment(
     title: context.submission.title,
     abstract: context.submission.abstract,
     assignmentStatus: context.assignment.status,
+    predecessorAssignmentId: context.assignment.predecessorAssignmentId,
+    successorAssignmentId: context.assignment.successorAssignmentId,
+    supersededReason: context.assignment.supersededReason,
+    lineage: context.assignment.lineage,
+    roundRevision: context.round.revision,
+    rubricRevision: context.round.rubricRevision ?? context.rubricRevision,
+    submissionRevision: context.submissionRevision,
     track: submissionTrack(round, context.submission.answers),
     participants: context.submission.participants ?? [],
     identityRedacted: context.submission.identityRedacted === true,
@@ -1132,7 +1431,10 @@ async function loadReviewerWorkspace(
   try {
     const result = await evaluationRequest<ApiReviewerWorkspaceResponse>(baseUrl, path);
     return result.assignments
-      .filter((entry) => entry.assignment.status !== "abstained")
+      .filter(
+        (entry) =>
+          entry.assignment.status !== "abstained" && entry.assignment.status !== "superseded",
+      )
       .map((entry) => ({
         ...entry,
         plan: {
@@ -1207,9 +1509,15 @@ function formatAssignmentStatus(status: EvaluatorAssignment["assignmentStatus"])
   if (status === "submitted") return "Submitted";
   if (status === "in_progress") return "In progress";
   if (status === "abstained") return "Recused";
+  if (status === "superseded") return "Superseded";
   return "Needs review";
 }
-type AssignmentReviewStatus = "needs-review" | "in-progress" | "submitted" | "recused";
+type AssignmentReviewStatus =
+  | "needs-review"
+  | "in-progress"
+  | "submitted"
+  | "recused"
+  | "superseded";
 
 function assignmentReviewStatus(
   status: EvaluatorAssignment["assignmentStatus"],
@@ -1217,6 +1525,7 @@ function assignmentReviewStatus(
   if (status === "submitted") return "submitted";
   if (status === "in_progress") return "in-progress";
   if (status === "abstained") return "recused";
+  if (status === "superseded") return "superseded";
   return "needs-review";
 }
 
@@ -1229,7 +1538,7 @@ function AssignmentStatusBadge({
       ? styles.statusSubmitted
       : normalized === "in-progress"
         ? styles.statusInProgress
-        : normalized === "recused"
+        : normalized === "recused" || normalized === "superseded"
           ? styles.statusRecused
           : styles.statusNeedsReview;
   return (
@@ -1344,10 +1653,20 @@ export function ReviewWorkspace({
     mode === "organizer" ? (initialState?.organizer ?? null) : null,
   );
   const [assignment, setAssignment] = useState<EvaluatorAssignment | null>(() =>
-    mode === "evaluator" && !reviewerQueueMode ? (initialState?.assignment ?? null) : null,
+    mode === "evaluator" &&
+    !reviewerQueueMode &&
+    initialState?.assignment?.assignmentStatus !== "superseded"
+      ? (initialState?.assignment ?? null)
+      : null,
   );
   const [queue, setQueue] = useState<readonly ReviewerQueueEntry[] | null>(() =>
-    mode === "evaluator" && reviewerQueueMode ? (initialState?.queue ?? null) : null,
+    mode === "evaluator" && reviewerQueueMode
+      ? (initialState?.queue ?? []).filter(
+          (entry) =>
+            entry.assignment.assignmentStatus !== "abstained" &&
+            entry.assignment.assignmentStatus !== "superseded",
+        )
+      : null,
   );
   const [loading, setLoading] = useState(!initialStateProvided);
   const [error, setError] = useState<string | null>(null);
@@ -1887,12 +2206,14 @@ function OrganizerAuthoring({
       id: round.id,
       name: round.name,
       sequence: round.sequence ?? index + 1,
+      ...(round.roundRevision === undefined ? {} : { revision: round.roundRevision }),
+      ...(round.rubricRevision === undefined ? {} : { rubricRevision: round.rubricRevision }),
       opensAt: null,
       closesAt: null,
-      blindReview: round.blindReview,
-      anonymization: round.anonymization,
-      reviewerPool: round.reviewerPool,
-      trackFilter: round.trackFilter,
+      ...(round.blindReview === undefined ? {} : { blindReview: round.blindReview }),
+      ...(round.anonymization === undefined ? {} : { anonymization: round.anonymization }),
+      ...(round.reviewerPool === undefined ? {} : { reviewerPool: round.reviewerPool }),
+      ...(round.trackFilter === undefined ? {} : { trackFilter: round.trackFilter }),
       rubric: {
         id: `rubric-${round.id}`,
         name: round.rubric.name,
@@ -1914,7 +2235,8 @@ function OrganizerAuthoring({
   const [assignmentRoundId, setAssignmentRoundId] = useState(
     seed.rounds[0]?.id ?? initialRounds[0]?.id ?? "",
   );
-  const [assignmentPreview, setAssignmentPreview] = useState<string | null>(null);
+  const [assignmentPreview, setAssignmentPreview] = useState<DistributionPreview | null>(null);
+  const [assignmentPreviewKey, setAssignmentPreviewKey] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [assignmentSubmissionId, setAssignmentSubmissionId] = useState("");
   const [assignmentReviewerIds, setAssignmentReviewerIds] = useState<readonly string[]>([]);
@@ -1945,6 +2267,12 @@ function OrganizerAuthoring({
     reviewerMembers,
     seed.assignments,
   ]);
+  const assignmentSelectionKey = `${assignmentRoundId}:${assignmentSubmissionId}:${assignmentReviewerIds.join(",")}:${version}`;
+  useEffect(() => {
+    if (assignmentSelectionKey.length === 0) return;
+    setAssignmentPreview(null);
+    setAssignmentPreviewKey(null);
+  }, [assignmentSelectionKey]);
 
   function updateRound(
     roundIndex: number,
@@ -2095,44 +2423,55 @@ function OrganizerAuthoring({
       setBusy(false);
     }
   }
-  function previewAssignments(): void {
+  async function previewAssignments(): Promise<void> {
     if (status !== "open") {
-      setAssignmentPreview("Reviewer assignments require an open evaluation plan.");
+      setAssignmentPreview(null);
+      setAssignmentPreviewKey(null);
+      setMessage("Reviewer assignments require an open evaluation plan.");
       return;
     }
     const round = rounds.find((candidate) => candidate.id === assignmentRoundId);
     const reviewerIds = [...assignmentReviewerIds];
     const submissionId = assignmentSubmissionId.trim();
     if (round === undefined || submissionId.length === 0) {
-      setAssignmentPreview(
-        "Enter a round and submission id to preview a complete reviewer-set replacement.",
-      );
+      setMessage("Enter a round and submission id to preview reviewer distribution.");
       return;
     }
     if (!reviewerDirectoryReady) {
-      setAssignmentPreview(
+      setMessage(
         reviewerMembersError ??
-          "Load the active, verified organization reviewers before previewing a replacement.",
+          "Load the active, verified organization reviewers before previewing a distribution.",
       );
       return;
     }
     if (reviewerIds.some((reviewerId) => !reviewerIdSet.has(reviewerId))) {
-      setAssignmentPreview("Select only active, verified organization reviewers.");
+      setMessage("Select only active, verified organization reviewers.");
       return;
     }
-    const pool = round.reviewerPool?.reviewerIds;
-    const inPoolCount = pool?.filter((reviewerId) => reviewerIds.includes(reviewerId)).length ?? 0;
-    const replacementSummary =
-      reviewerIds.length === 0
-        ? `No reviewers selected; all active reviewer assignments for ${submissionId} in ${round.name} will be cleared.`
-        : `${reviewerIds.length} reviewer(s) will replace the complete active reviewer set for ${submissionId} in ${round.name}.`;
-    const poolSummary =
-      pool === undefined
-        ? " No round pool is configured."
-        : reviewerIds.length === 0
-          ? " The round reviewer pool remains unchanged."
-          : ` ${inPoolCount} of ${reviewerIds.length} selected reviewer(s) are in the configured pool.`;
-    setAssignmentPreview(`${replacementSummary}${poolSummary}`);
+    setBusy(true);
+    setMessage(null);
+    try {
+      const input = {
+        roundId: round.id,
+        submissionIds: [submissionId],
+        ...(reviewerIds.length === 0 ? {} : { reviewerIds }),
+        expectedVersion: version,
+      } satisfies DistributionPreviewInput;
+      const preview = await previewReviewAssignments(baseUrl, seed.planId, input);
+      setAssignmentPreview(preview);
+      setAssignmentPreviewKey(distributionPreviewKey(input));
+      setMessage("Authoritative reviewer distribution preview loaded.");
+    } catch (reason: unknown) {
+      setAssignmentPreview(null);
+      setAssignmentPreviewKey(null);
+      setMessage(
+        reason instanceof Error
+          ? reason.message
+          : "The reviewer distribution preview could not be loaded.",
+      );
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function assignReviewers(): Promise<void> {
@@ -2150,7 +2489,7 @@ function OrganizerAuthoring({
     if (!reviewerDirectoryReady) {
       setMessage(
         reviewerMembersError ??
-          "Load the active, verified organization reviewers before replacing assignments.",
+          "Load the active, verified organization reviewers before applying a distribution.",
       );
       return;
     }
@@ -2158,39 +2497,46 @@ function OrganizerAuthoring({
       setMessage("Select only active, verified organization reviewers.");
       return;
     }
-    const configuredPool = round.reviewerPool?.reviewerIds;
+    const preview = assignmentPreview;
+    const input = {
+      roundId: round.id,
+      submissionIds: [submissionId],
+      ...(reviewerIds.length === 0 ? {} : { reviewerIds }),
+      expectedVersion: version,
+    } satisfies DistributionPreviewInput;
     if (
-      reviewerIds.length > 0 &&
-      configuredPool !== undefined &&
-      reviewerIds.some((reviewerId) => !configuredPool.includes(reviewerId))
+      preview === null ||
+      assignmentPreviewKey !== distributionPreviewKey(input) ||
+      preview.scope.roundId !== round.id ||
+      preview.fingerprint.trim().length === 0
     ) {
-      setMessage("Every selected reviewer must belong to this round's reviewer pool.");
+      setMessage("Load a fresh authoritative preview before applying reviewer distribution.");
       return;
     }
     setBusy(true);
     setMessage(null);
     try {
-      const assignments = await replaceReviewAssignments(baseUrl, seed.planId, {
-        roundId: round.id,
-        submissionId,
-        reviewerIds,
-        expectedVersion: version,
+      const result = await applyReviewAssignments(baseUrl, seed.planId, {
+        ...input,
+        fingerprint: preview.fingerprint,
       });
-      const assignmentIds = assignments.map((assignment) => assignment.id);
-      setAssignmentPreview(
-        reviewerIds.length === 0
-          ? `Reviewer set replacement persisted; all active assignments for ${submissionId} were cleared.`
-          : `Reviewer set replacement persisted for ${submissionId}: ${assignmentIds.join(", ")}`,
-      );
+      setAssignmentPreview(null);
+      setAssignmentPreviewKey(null);
+      const activeIds = [...result.activeAssignments]
+        .sort((left, right) => left.id.localeCompare(right.id))
+        .map((assignment) => assignment.id);
+      const supersededIds = [...result.supersededAssignments]
+        .sort((left, right) => left.id.localeCompare(right.id))
+        .map((assignment) => assignment.id);
       setMessage(
-        reviewerIds.length === 0
-          ? "Reviewer assignments replaced; no active reviewers remain."
-          : `${assignments.length} reviewer assignment(s) now make up the complete active reviewer set.`,
+        `Distribution applied atomically. Active assignments: ${activeIds.join(", ") || "none"}. Superseded: ${supersededIds.join(", ") || "none"}. History preserved: ${result.history.length}.`,
       );
       await onAssignmentsPersisted?.();
     } catch (reason: unknown) {
       setMessage(
-        reason instanceof Error ? reason.message : "Reviewer assignments could not be replaced.",
+        reason instanceof Error
+          ? reason.message
+          : "Reviewer distribution could not be applied atomically.",
       );
     } finally {
       setBusy(false);
@@ -2425,20 +2771,72 @@ function OrganizerAuthoring({
           onClick={previewAssignments}
           disabled={busy || status !== "open" || !reviewerDirectoryReady}
         >
-          Preview reviewer assignment replacement
+          Preview authoritative reviewer distribution
         </Button>
         {assignmentPreview ? (
-          <p className={styles.fieldHint} role="status">
-            {assignmentPreview}
-          </p>
+          <div className={styles.fieldHint} role="status" aria-live="polite">
+            <p>
+              Fingerprint: <code>{assignmentPreview.fingerprint}</code>
+            </p>
+            <p>
+              Desired assignments ({assignmentPreview.desiredAssignments.length}):{" "}
+              {[...assignmentPreview.desiredAssignments]
+                .sort(
+                  (left, right) =>
+                    left.submissionId.localeCompare(right.submissionId) ||
+                    left.reviewerId.localeCompare(right.reviewerId),
+                )
+                .map(
+                  (assignment) =>
+                    `${assignment.submissionId} → ${assignment.reviewerId}${assignment.existingAssignmentId ? ` (existing ${assignment.existingAssignmentId})` : ""}`,
+                )
+                .join(", ") || "none"}
+            </p>
+            <p>
+              Deficits ({assignmentPreview.deficits.length}):{" "}
+              {[...assignmentPreview.deficits]
+                .sort((left, right) => left.submissionId.localeCompare(right.submissionId))
+                .map(
+                  (deficit) =>
+                    `${deficit.submissionId}: ${deficit.missingReviewCount} (${deficit.reason})`,
+                )
+                .join(", ") || "none"}
+            </p>
+            <p>
+              Exclusions ({assignmentPreview.exclusions.length}):{" "}
+              {[...assignmentPreview.exclusions]
+                .sort(
+                  (left, right) =>
+                    left.submissionId.localeCompare(right.submissionId) ||
+                    left.reviewerId.localeCompare(right.reviewerId),
+                )
+                .map(
+                  (exclusion) =>
+                    `${exclusion.submissionId}/${exclusion.reviewerId}: ${exclusion.reason}`,
+                )
+                .join(", ") || "none"}
+            </p>
+            <p>
+              Submission revisions:{" "}
+              {[...assignmentPreview.submissionRevisions]
+                .sort((left, right) => left.submissionId.localeCompare(right.submissionId))
+                .map((revision) => `${revision.submissionId}=${revision.revision}`)
+                .join(", ") || "none"}
+            </p>
+          </div>
         ) : null}
         <Button
           type="button"
           variant="outline"
           onClick={() => void assignReviewers()}
-          disabled={busy || status !== "open" || !reviewerDirectoryReady}
+          disabled={
+            busy ||
+            status !== "open" ||
+            !reviewerDirectoryReady ||
+            assignmentPreview === null
+          }
         >
-          Replace reviewer assignments
+          Apply authoritative reviewer distribution
         </Button>
       </details>
       <div className={styles.scoreList}>
@@ -2944,11 +3342,55 @@ function OrganizerWorkspaceView({
       .filter((round) => round.status === "open")
       .sort((left, right) => (right.sequence ?? 0) - (left.sequence ?? 0))[0] ??
     [...seed.rounds].sort((left, right) => (right.sequence ?? 0) - (left.sequence ?? 0))[0];
+  const initialRoundId =
+    seed.aggregates.find((aggregate) => aggregate.roundId !== undefined)?.roundId ??
+    activeRound?.id ??
+    seed.rounds[0]?.id ??
+    "";
+  const [selectedRoundId, setSelectedRoundId] = useState(initialRoundId);
+  const [roundAggregates, setRoundAggregates] = useState<readonly AggregateRow[]>(seed.aggregates);
+  const [aggregateLoading, setAggregateLoading] = useState(false);
+  const [aggregateError, setAggregateError] = useState<string | null>(null);
   const [aggregateSort, setAggregateSort] = useState<"ascending" | "descending">("descending");
   const [exportMessage, setExportMessage] = useState<string | null>(null);
   const [view, setView] = useState<"overview" | "setup" | "assignments" | "decisions">("overview");
   const [selectedDecisionId, setSelectedDecisionId] = useState<string | null>(null);
-  const sortedAggregates = [...seed.aggregates].sort((left, right) => {
+  const selectedRound = seed.rounds.find((round) => round.id === selectedRoundId) ?? activeRound;
+  useEffect(() => {
+    setRoundAggregates(seed.aggregates);
+    setAggregateError(null);
+    if (!seed.rounds.some((round) => round.id === selectedRoundId)) {
+      setSelectedRoundId(initialRoundId);
+    }
+  }, [initialRoundId, seed, selectedRoundId]);
+  useEffect(() => {
+    if (selectedRoundId.length === 0) return;
+    let cancelled = false;
+    setAggregateLoading(true);
+    setAggregateError(null);
+    void loadRoundAggregates(baseUrl, seed.planId, selectedRoundId)
+      .then((aggregates) => {
+        if (!cancelled) {
+          setRoundAggregates(mapSeedRoundAggregates(seed, aggregates, selectedRoundId));
+        }
+      })
+      .catch((reason: unknown) => {
+        if (!cancelled) {
+          setAggregateError(
+            reason instanceof Error
+              ? reason.message
+              : `Aggregates for ${selectedRoundId} are unavailable; other organizer data remains available.`,
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setAggregateLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [baseUrl, seed, selectedRoundId]);
+  const sortedAggregates = [...roundAggregates].sort((left, right) => {
     const leftScore = Number(left.countedScore);
     const rightScore = Number(right.countedScore);
     const leftHasScore = Number.isFinite(leftScore);
@@ -2960,13 +3402,13 @@ function OrganizerWorkspaceView({
     return left.reference.localeCompare(right.reference);
   });
   const outstandingReviews = Math.max(0, seed.progress.totalAssignments - seed.progress.submitted);
-  const undecidedCount = seed.aggregates.filter(
+  const undecidedCount = roundAggregates.filter(
     (aggregate) => seed.decisionBySubmission[aggregate.id] === undefined,
   ).length;
   const selectedAggregate =
     selectedDecisionId === null
       ? undefined
-      : seed.aggregates.find((aggregate) => aggregate.id === selectedDecisionId);
+      : roundAggregates.find((aggregate) => aggregate.id === selectedDecisionId);
 
   async function exportResults(): Promise<void> {
     setExportMessage(`Preparing evaluation-${seed.planId}.csv…`);
@@ -3065,7 +3507,7 @@ function OrganizerWorkspaceView({
                 <p className={styles.sectionEyebrow}>Overview</p>
                 <h2>Review at a glance</h2>
               </div>
-              <span className={styles.mutedLabel}>{seed.aggregates.length} submissions</span>
+              <span className={styles.mutedLabel}>{roundAggregates.length} submissions</span>
             </div>
             <div className={styles.overviewGrid}>
               <Card>
@@ -3263,6 +3705,44 @@ function OrganizerWorkspaceView({
                   </Button>
                 </div>
               </div>
+              <div className={styles.formField}>
+                <label htmlFor="organizer-aggregate-round">Aggregate round</label>
+                <select
+                  id="organizer-aggregate-round"
+                  value={selectedRoundId}
+                  onChange={(event) => {
+                    setSelectedRoundId(event.currentTarget.value);
+                    setSelectedDecisionId(null);
+                  }}
+                  disabled={aggregateLoading}
+                >
+                  {seed.rounds.map((round) => (
+                    <option value={round.id} key={round.id}>
+                      {round.name}
+                    </option>
+                  ))}
+                </select>
+                <span className={styles.fieldHint}>
+                  Exact round: {selectedRound?.name ?? selectedRoundId} · round revision{" "}
+                  {selectedRound?.roundRevision ?? "unavailable"} · rubric revision{" "}
+                  {selectedRound?.rubricRevision ?? "unavailable"}
+                </span>
+              </div>
+              {aggregateLoading ? (
+                <p className={styles.fieldHint} role="status">
+                  Loading aggregates for {selectedRound?.name ?? selectedRoundId}…
+                </p>
+              ) : null}
+              {aggregateError ? (
+                <p className={styles.formError} role="alert">
+                  {aggregateError} Existing organizer data remains available.
+                </p>
+              ) : null}
+              <p className={styles.fieldHint}>
+                Scores shown below are only from {selectedRound?.name ?? selectedRoundId}, with
+                round revision {selectedRound?.roundRevision ?? "unavailable"} and rubric revision{" "}
+                {selectedRound?.rubricRevision ?? "unavailable"}.
+              </p>
               {exportMessage ? (
                 <p className={styles.fieldHint} role="status">
                   {exportMessage}
@@ -3270,7 +3750,11 @@ function OrganizerWorkspaceView({
               ) : null}
               <div className={styles.tableWrap}>
                 <table className={styles.dataTable}>
-                  <caption>Submission aggregates available to organizers</caption>
+                  <caption>
+                    Submission aggregates for {selectedRound?.name ?? selectedRoundId} · round
+                    revision {selectedRound?.roundRevision ?? "unavailable"} · rubric revision{" "}
+                    {selectedRound?.rubricRevision ?? "unavailable"}
+                  </caption>
                   <thead>
                     <tr>
                       <th scope="col">Submission</th>
@@ -3339,7 +3823,7 @@ function OrganizerWorkspaceView({
                 record a decision.
               </p>
               <div className={styles.decisionList}>
-                {seed.aggregates.map((aggregate) => {
+                {roundAggregates.map((aggregate) => {
                   const decision = seed.decisionBySubmission[aggregate.id];
                   const selected = selectedDecisionId === aggregate.id;
                   return (
@@ -3441,18 +3925,20 @@ function ReviewerProgressDashboard({
         if (!ids.includes(reviewer.reviewerId)) ids.push(reviewer.reviewerId);
         byRound.set(reviewer.roundId, ids);
       }
-      let queued = 0;
+      const deliveryMessages: string[] = [];
       for (const [roundId, reviewerIds] of byRound) {
-        const result = await evaluationRequest<{
-          queued: number;
-          reviewerIds: readonly string[];
-        }>(baseUrl, `/plans/${encodeURIComponent(seed.planId)}/reminders`, {
-          method: "POST",
-          body: JSON.stringify({ roundId, reviewerIds: reviewerIds.sort() }),
-        });
-        queued += result.queued;
+        const result = await evaluationRequest<ReminderDeliveryResponse>(
+          baseUrl,
+          `/plans/${encodeURIComponent(seed.planId)}/reminders`,
+          {
+            method: "POST",
+            body: JSON.stringify({ roundId, reviewerIds: reviewerIds.sort() }),
+          },
+        );
+        const roundName = seed.rounds.find((round) => round.id === roundId)?.name ?? roundId;
+        deliveryMessages.push(`${roundName}: ${reminderDeliveryMessage(result)}`);
       }
-      setMessage(`Reminder queued for ${queued} outstanding review assignment(s).`);
+      setMessage(deliveryMessages.join(" "));
       setSelected(new Set<string>());
     } catch (reason: unknown) {
       setMessage(
@@ -3579,6 +4065,7 @@ export function reviewerIdsForAssignmentTarget(
             assignment.roundId === roundId &&
             assignment.submissionId === submissionId &&
             assignment.status !== "abstained" &&
+            assignment.status !== "superseded" &&
             assignment.reviewerId !== excludedReviewerId,
         )
         .map((assignment) => assignment.reviewerId),
@@ -3599,28 +4086,49 @@ function ReviewerAssignmentList({
 }>) {
   const [busyAssignmentId, setBusyAssignmentId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [replacementReviewerByAssignment, setReplacementReviewerByAssignment] = useState<
+    Readonly<Record<string, string>>
+  >({});
+  const [replacementReasonByAssignment, setReplacementReasonByAssignment] = useState<
+    Readonly<Record<string, string>>
+  >({});
   const submissionById = new Map(seed.aggregates.map((aggregate) => [aggregate.id, aggregate]));
   const roundById = new Map(seed.rounds.map((round) => [round.id, round]));
+  const verifiedReviewerIds = new Set(reviewerMembers.map((member) => member.userId));
 
-  async function unassign(assignment: ReviewPlanAssignment): Promise<void> {
-    if (busyAssignmentId !== null) return;
-    if (
-      typeof window !== "undefined" &&
-      !window.confirm("Remove this reviewer from the active reviewer set?")
-    ) {
+  async function replaceAssignment(assignment: ReviewPlanAssignment): Promise<void> {
+    const replacementReviewerId = replacementReviewerByAssignment[assignment.id]?.trim() ?? "";
+    const reason = replacementReasonByAssignment[assignment.id]?.trim() ?? "";
+    if (!verifiedReviewerIds.has(replacementReviewerId)) {
+      setMessage("Choose an active, verified organization member as the replacement reviewer.");
       return;
     }
+    if (reason.length === 0) {
+      setMessage("A non-empty replacement reason is required.");
+      return;
+    }
+    if (assignment.status === "superseded" || assignment.status === "abstained") {
+      setMessage("Protected assignment history cannot be mutated.");
+      return;
+    }
+    if (busyAssignmentId !== null) return;
     setBusyAssignmentId(assignment.id);
     setMessage(null);
     try {
-      await unassignReviewAssignment(baseUrl, seed.planId, assignment.id);
-      await onAssignmentsPersisted?.();
-      setMessage("Reviewer assignment unassigned.");
-    } catch (reason: unknown) {
+      const result = await replaceSingleReviewAssignment(baseUrl, seed.planId, assignment.id, {
+        replacementReviewerId,
+        expectedVersion: assignment.version,
+        reason,
+      });
       setMessage(
-        reason instanceof Error
-          ? reason.message
-          : "The reviewer assignment could not be unassigned.",
+        `Assignment ${result.replacedAssignment.id} superseded by ${result.successorAssignment.id}. Lineage predecessor: ${result.successorAssignment.predecessorAssignmentId ?? result.replacedAssignment.id}; successor: ${result.replacedAssignment.successorAssignmentId ?? result.successorAssignment.id}. History preserved: ${result.history.length}.`,
+      );
+      await onAssignmentsPersisted?.();
+    } catch (reasonError: unknown) {
+      setMessage(
+        reasonError instanceof Error
+          ? reasonError.message
+          : "The reviewer assignment could not be replaced.",
       );
     } finally {
       setBusyAssignmentId(null);
@@ -3631,24 +4139,24 @@ function ReviewerAssignmentList({
     <section className={styles.section} aria-labelledby="current-assignments-heading">
       <div className={styles.sectionHeading}>
         <div>
-          <p className={styles.sectionEyebrow}>Current assignments</p>
-          <h2 id="current-assignments-heading">Current reviewer assignments</h2>
+          <p className={styles.sectionEyebrow}>Current assignments and lineage</p>
+          <h2 id="current-assignments-heading">Reviewer assignment history</h2>
         </div>
-        <span className={styles.mutedLabel}>{seed.assignments.length} assignments</span>
+        <span className={styles.mutedLabel}>{seed.assignments.length} records</span>
       </div>
       {seed.assignments.length === 0 ? (
         <p className={styles.fieldHint}>No reviewer assignments have been persisted yet.</p>
       ) : (
         <div className={styles.tableWrap}>
           <table className={styles.dataTable}>
-            <caption>Current reviewer assignments</caption>
+            <caption>Active reviewer assignments and protected history</caption>
             <thead>
               <tr>
                 <th scope="col">Submission</th>
                 <th scope="col">Reviewer</th>
                 <th scope="col">Round</th>
-                <th scope="col">Status</th>
-                <th scope="col">Action</th>
+                <th scope="col">Status / lineage</th>
+                <th scope="col">Atomic replacement</th>
               </tr>
             </thead>
             <tbody>
@@ -3657,6 +4165,8 @@ function ReviewerAssignmentList({
                 const round = roundById.get(assignment.roundId);
                 const reviewer = reviewerDisplayLabel(assignment.reviewerId, reviewerMembers);
                 const busy = busyAssignmentId === assignment.id;
+                const protectedHistory =
+                  assignment.status === "abstained" || assignment.status === "superseded";
                 const submissionTitle = aggregate?.title ?? "Untitled submission";
                 return (
                   <tr key={assignment.id}>
@@ -3669,23 +4179,82 @@ function ReviewerAssignmentList({
                     </td>
                     <td>{round?.name ?? "Round unavailable"}</td>
                     <td>
-                      <AssignmentStatusBadge
-                        status={assignment.status === "assigned" ? undefined : assignment.status}
-                      />
+                      <AssignmentStatusBadge status={assignment.status} />
+                      {assignment.predecessorAssignmentId || assignment.successorAssignmentId ? (
+                        <span className={styles.fieldHint}>
+                          predecessor: {assignment.predecessorAssignmentId ?? "none"} · successor:{" "}
+                          {assignment.successorAssignmentId ?? "none"}
+                        </span>
+                      ) : null}
+                      {assignment.supersededReason ? (
+                        <span className={styles.fieldHint}>
+                          Reason: {assignment.supersededReason}
+                        </span>
+                      ) : null}
                     </td>
                     <td>
-                      {assignment.status === "abstained" ? (
-                        <span className={styles.mutedLabel}>Protected conflict history</span>
+                      {protectedHistory ? (
+                        <span className={styles.mutedLabel}>
+                          Protected {assignment.status === "superseded" ? "superseded" : "conflict"}{" "}
+                          history
+                        </span>
                       ) : (
-                        <button
-                          className={styles.dangerButton}
-                          type="button"
-                          onClick={() => void unassign(assignment)}
-                          disabled={busyAssignmentId !== null}
-                          aria-label={`Unassign ${reviewer} from ${aggregate?.title ?? assignment.submissionId}`}
-                        >
-                          {busy ? "Unassigning…" : "Unassign"}
-                        </button>
+                        <div className={styles.formField}>
+                          <label
+                            className={styles.srOnly}
+                            htmlFor={`replacement-reviewer-${assignment.id}`}
+                          >
+                            Replacement reviewer for {submissionTitle}
+                          </label>
+                          <select
+                            id={`replacement-reviewer-${assignment.id}`}
+                            value={replacementReviewerByAssignment[assignment.id] ?? ""}
+                            onChange={(event) =>
+                              setReplacementReviewerByAssignment((current) => ({
+                                ...current,
+                                [assignment.id]: event.currentTarget.value,
+                              }))
+                            }
+                            disabled={busyAssignmentId !== null}
+                          >
+                            <option value="">Choose verified reviewer</option>
+                            {reviewerMembers
+                              .filter((member) => member.userId !== assignment.reviewerId)
+                              .map((member) => (
+                                <option value={member.userId} key={member.userId}>
+                                  {member.name ?? member.email} · {member.email}
+                                </option>
+                              ))}
+                          </select>
+                          <label
+                            className={styles.srOnly}
+                            htmlFor={`replacement-reason-${assignment.id}`}
+                          >
+                            Replacement reason for {submissionTitle}
+                          </label>
+                          <textarea
+                            id={`replacement-reason-${assignment.id}`}
+                            rows={2}
+                            placeholder="Reason for replacement"
+                            value={replacementReasonByAssignment[assignment.id] ?? ""}
+                            onChange={(event) =>
+                              setReplacementReasonByAssignment((current) => ({
+                                ...current,
+                                [assignment.id]: event.currentTarget.value,
+                              }))
+                            }
+                            disabled={busyAssignmentId !== null}
+                          />
+                          <button
+                            className={styles.dangerButton}
+                            type="button"
+                            onClick={() => void replaceAssignment(assignment)}
+                            disabled={busyAssignmentId !== null}
+                            aria-label={`Replace ${reviewer} on ${submissionTitle}`}
+                          >
+                            {busy ? "Replacing…" : "Replace atomically"}
+                          </button>
+                        </div>
                       )}
                     </td>
                   </tr>
@@ -4172,6 +4741,8 @@ function EvaluatorWorkspace({
   const [abstentionBusy, setAbstentionBusy] = useState(false);
   const [suggestions, setSuggestions] = useState<readonly ApiSuggestion[]>(assignment.suggestions);
   const [suggestionBusy, setSuggestionBusy] = useState(false);
+  const [suggestionUnavailable, setSuggestionUnavailable] = useState<string | null>(null);
+  const [suggestionConflict, setSuggestionConflict] = useState<string | null>(null);
   function reportDraft(
     nextScores: Readonly<Record<string, string>> = scoreValues,
     nextResponses: Readonly<Record<string, string>> = responseValues,
@@ -4210,6 +4781,8 @@ function EvaluatorWorkspace({
   async function generateSuggestions(): Promise<void> {
     setSuggestionBusy(true);
     setSubmitError(null);
+    setSuggestionUnavailable(null);
+    setSuggestionConflict(null);
     try {
       const suggestion = await evaluationRequest<ApiSuggestion>(
         baseUrl,
@@ -4219,7 +4792,13 @@ function EvaluatorWorkspace({
       setSuggestions((current) => [...current, suggestion]);
       setAutosaveState("AI suggestion is pending human resolution");
     } catch (reason: unknown) {
-      setSubmitError(reason instanceof Error ? reason.message : "AI suggestions are unavailable.");
+      const message = reason instanceof Error ? reason.message : "AI suggestions are unavailable.";
+      if (reason instanceof EvaluationRequestError && reason.status === 503) {
+        setSuggestionUnavailable(message);
+        setAutosaveState("AI unavailable; manual scoring and save remain available");
+        return;
+      }
+      setSubmitError(message);
     } finally {
       setSuggestionBusy(false);
     }
@@ -4231,8 +4810,23 @@ function EvaluatorWorkspace({
     criterionId?: string,
     value?: number,
   ): Promise<void> {
+    if (action === "edit") {
+      const criterion = assignment.round.rubric.criteria.find(
+        (candidate) => candidate.id === criterionId,
+      );
+      if (criterion === undefined || value === undefined) {
+        setSubmitError("Choose a rubric criterion and valid edit value before saving.");
+        return;
+      }
+      const validationError = validateSuggestionEditValue(criterion, value);
+      if (validationError !== null) {
+        setSubmitError(validationError);
+        return;
+      }
+    }
     setSuggestionBusy(true);
     setSubmitError(null);
+    setSuggestionConflict(null);
     try {
       const response = await evaluationRequest<{
         suggestion: ApiSuggestion;
@@ -4260,6 +4854,7 @@ function EvaluatorWorkspace({
           candidate.id === response.suggestion.id ? response.suggestion : candidate,
         ),
       );
+      setSuggestionUnavailable(null);
       if (response.review !== null) {
         applyAuthoritativeReview(response.review);
       }
@@ -4271,9 +4866,24 @@ function EvaluatorWorkspace({
             : "Suggestion rejected by a human",
       );
     } catch (reason: unknown) {
-      setSubmitError(
-        reason instanceof Error ? reason.message : "The suggestion could not be resolved.",
-      );
+      const message =
+        reason instanceof Error ? reason.message : "The suggestion could not be resolved.";
+      if (
+        reason instanceof EvaluationRequestError &&
+        (reason.status === 409 || reason.status === 412)
+      ) {
+        setSuggestions((current) =>
+          current.map((candidate) =>
+            candidate.id === suggestion.id ? { ...candidate, status: "stale" as const } : candidate,
+          ),
+        );
+        setSuggestionConflict(
+          `${message} This suggestion is stale; regenerate it before resolving. Manual scoring, save, and submit remain available.`,
+        );
+        setAutosaveState("AI suggestion stale; manual scoring remains available");
+      } else {
+        setSubmitError(message);
+      }
     } finally {
       setSuggestionBusy(false);
     }
@@ -4830,6 +5440,52 @@ function EvaluatorWorkspace({
             <span className={styles.fieldHint}>
               Pending suggestions include exact revisions, evidence, and provider provenance.
             </span>
+            {suggestionUnavailable ? (
+              <p className={styles.fieldHint} role="status">
+                AI provider unavailable locally: {suggestionUnavailable} Manual scoring, save draft,
+                and submit evaluation remain usable.
+              </p>
+            ) : null}
+            {suggestionConflict ? (
+              <p className={styles.formError} role="alert">
+                {suggestionConflict}{" "}
+                <button
+                  className={styles.secondaryButton}
+                  type="button"
+                  onClick={() => void generateSuggestions()}
+                  disabled={suggestionBusy || reviewLocked}
+                >
+                  Regenerate suggestions
+                </button>
+              </p>
+            ) : null}
+            {suggestions.length > 0 ? (
+              <details className={styles.disclosure}>
+                <summary>AI suggestion status and provenance</summary>
+                <ul>
+                  {suggestions.map((suggestion) => (
+                    <li key={suggestion.id}>
+                      <strong>{suggestion.status}</strong> · suggestion {suggestion.id} · rubric
+                      revision {suggestion.rubricRevision} · submission revision{" "}
+                      {suggestion.submissionRevision} · provider {suggestion.provenance.provider} ·
+                      model {suggestion.provenance.model}
+                      {suggestion.provenance.generatedAt
+                        ? ` · generated ${suggestion.provenance.generatedAt}`
+                        : ""}
+                      {suggestion.provenance.promptVersion
+                        ? ` · prompt ${suggestion.provenance.promptVersion}`
+                        : ""}
+                      {suggestion.provenance.traceId
+                        ? ` · trace ${suggestion.provenance.traceId}`
+                        : ""}
+                      {suggestion.provenance.sourceReferences.length > 0
+                        ? ` · sources ${suggestion.provenance.sourceReferences.join(", ")}`
+                        : " · sources unavailable"}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            ) : null}
           </div>
           {suggestions
             .filter((suggestion) => suggestion.status === "stale")
@@ -5048,10 +5704,30 @@ function EvaluatorWorkspace({
                           ))}
                         </ul>
                         {suggestionRecord ? (
-                          <p className={styles.fieldHint}>
-                            Provider: {suggestionRecord.provenance.provider} · model{" "}
-                            {suggestionRecord.provenance.model}
-                          </p>
+                          <div className={styles.fieldHint}>
+                            <p>
+                              Provider: {suggestionRecord.provenance.provider} · model{" "}
+                              {suggestionRecord.provenance.model}
+                              {suggestionRecord.provenance.generatedAt
+                                ? ` · generated ${suggestionRecord.provenance.generatedAt}`
+                                : ""}
+                            </p>
+                            <p>
+                              Rubric revision {suggestionRecord.rubricRevision} · submission
+                              revision {suggestionRecord.submissionRevision}
+                            </p>
+                            {suggestionRecord.provenance.promptVersion ? (
+                              <p>Prompt version: {suggestionRecord.provenance.promptVersion}</p>
+                            ) : null}
+                            {suggestionRecord.provenance.traceId ? (
+                              <p>Trace ID: {suggestionRecord.provenance.traceId}</p>
+                            ) : null}
+                            <p>
+                              Source references:{" "}
+                              {suggestionRecord.provenance.sourceReferences.join(", ") ||
+                                "none returned"}
+                            </p>
+                          </div>
                         ) : null}
                         <div className={styles.confirmationActions}>
                           <button

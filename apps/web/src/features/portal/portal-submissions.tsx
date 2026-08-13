@@ -163,20 +163,20 @@ function PortalSubmissionsContent() {
   return (
     <>
       <PageHeading
-        eyebrow="Your sessions"
-        title="Sessions"
-        description="Follow each proposal as it becomes a session or reaches a final program decision."
+        eyebrow="Owned proposals"
+        title="Submissions"
+        description="A submitted proposal appears here immediately. Follow it through review and into the event program."
       />
-      <section className={styles.panel} aria-labelledby="sessions-heading">
+      <section className={styles.panel} aria-labelledby="submissions-heading">
         <div className={styles.listToolbar}>
           <div>
-            <h2 id="sessions-heading">All sessions</h2>
+            <h2 id="submissions-heading">All submissions</h2>
             <p className={styles.toolbarDescription}>
               {view.submissions.length} {view.submissions.length === 1 ? "proposal" : "proposals"}
             </p>
           </div>
           <label className={styles.searchField}>
-            <span className={styles.srOnly}>Search sessions</span>
+            <span className={styles.srOnly}>Search submissions</span>
             <span aria-hidden="true">⌕</span>
             <input
               type="search"
@@ -188,12 +188,12 @@ function PortalSubmissionsContent() {
         </div>
         {view.submissions.length === 0 ? (
           <EmptyState
-            title="No sessions yet"
-            description="When you submit a proposal, its session status will appear here."
+            title="No submissions yet"
+            description="A proposal appears here immediately after you submit it."
           />
         ) : submissions.length === 0 ? (
           <EmptyState
-            title="No matching sessions"
+            title="No matching submissions"
             description="Try a different title or clear your search."
             action={
               <button
@@ -221,12 +221,15 @@ function PortalSubmissionsContent() {
                     <SubmissionStatusBadge status={submission.status} />
                   </div>
                   <div>
-                    <p className={styles.submissionId}>Session {submission.id}</p>
+                    <p className={styles.submissionId}>Submission {submission.id}</p>
                     <h3>{portalSubmissionDisplayTitle(submission, view.submissions)}</h3>
                     <p>{presentation.description}</p>
                   </div>
                   <footer>
-                    <span>Updated {formatPortalDate(submission.updatedAt) ?? "recently"}</span>
+                    <span>
+                      {submission.version === undefined ? "" : `Revision ${submission.version} · `}
+                      Updated {formatPortalDate(submission.updatedAt) ?? "recently"}
+                    </span>
                     {editTarget === null ? null : (
                       <Link
                         href={editTarget.href}
@@ -243,9 +246,9 @@ function PortalSubmissionsContent() {
                     )}
                     <Link
                       href={`/portal/submissions/${encodeURIComponent(submission.id)}${eventQuery}`}
-                      aria-label={`View session status for ${portalSubmissionDisplayTitle(submission, view.submissions)}`}
+                      aria-label={`View submission status for ${portalSubmissionDisplayTitle(submission, view.submissions)}`}
                     >
-                      View session status <span aria-hidden="true">→</span>
+                      View submission status <span aria-hidden="true">→</span>
                     </Link>
                   </footer>
                 </article>

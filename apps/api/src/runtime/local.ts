@@ -170,8 +170,9 @@ const LOCAL_PUBLIC_EMBED: EventEmbedConfiguration = {
   textColor: "#20232b",
   customCss: "",
   displayFields: ["title", "date-time", "room", "speakers", "track", "summary"],
-  tracks: ["local-track-main", "local-track-practice"],
+  trackIds: ["local-track-main", "local-track-practice"],
   statuses: ["Accepted"],
+  revision: 1,
 };
 
 export const LOCAL_ORGANIZER_ACCOUNT_ID = "local-organizer";
@@ -467,6 +468,11 @@ class LocalSpeakerRepository implements SpeakerRepository {
         eventId,
         submissionId: "local-submission",
         participantId: "local-participant",
+        subject: {
+          type: "session",
+          participantId: "local-participant",
+          submissionId: "local-submission",
+        },
         type: "form",
         owner: "speaker",
         title: "Review your speaker profile",
@@ -483,6 +489,11 @@ class LocalSpeakerRepository implements SpeakerRepository {
         eventId,
         submissionId: "local-submission",
         participantId: "local-participant",
+        subject: {
+          type: "session",
+          participantId: "local-participant",
+          submissionId: "local-submission",
+        },
         type: "upload",
         owner: "speaker",
         title: "Upload presentation slides",

@@ -25,6 +25,25 @@ import {
   eventStatuses,
   type ListEventsInput,
   type UpdateEventInput,
+  type ProgramAgendaProjection,
+  type ProgramPublicationCacheInvalidationPort,
+  type ProgramPublicationCompletionInput,
+  type ProgramPublicationFailureInput,
+  type ProgramPublicationEnqueuePort,
+  type ProgramPublicationRebuildRequest,
+  type ProgramPublicationRepository,
+  ProgramPublicationRepositoryConflictError,
+  type ProgramPublicationRepositorySeed,
+  type ProgramPublicationRollbackInput,
+  type ProgramPublicationServiceDependencies,
+  type ProgramPublicationServiceOptions,
+  type ProgramPublicationState,
+  type ProgramPublicationManifest,
+  type ProgramResolvedPublication,
+  type ProgramSpeakerProjection,
+  type ResolveProgramPublicationInput,
+  type ProgramPublicationPreviewRequest,
+  programPublicationSourceTriggers,
 } from "./types";
 
 export type EventServiceErrorCode =
@@ -113,8 +132,9 @@ const EMBED_CONFIGURATION_FIELDS = [
   "textColor",
   "customCss",
   "displayFields",
-  "tracks",
+  "trackIds",
   "statuses",
+  "revision",
 ] as const;
 const MAX_EMBED_CONFIGURATIONS = 100;
 const MAX_EMBED_LIST_ITEMS = 100;
@@ -264,6 +284,52 @@ function embedDisplayFields(value: unknown, field: string): readonly EventEmbedD
   return [...required, ...normalized.filter((item) => !required.includes(item))];
 }
 
+function embedConfigurationRevision(value: unknown, field: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+    throw validation(`${field} must be a positive integer.`);
+  }
+  return value;
+}
+
+function embedConfigurationSemanticallyEqual(
+  left: EventEmbedConfiguration,
+  right: EventEmbedConfiguration,
+): boolean {
+  return (
+    JSON.stringify({
+      id: left.id,
+      name: left.name,
+      widgetId: left.widgetId,
+      enabled: left.enabled,
+      theme: left.theme,
+      outputFormat: left.outputFormat,
+      layout: left.layout,
+      accent: left.accent,
+      backgroundColor: left.backgroundColor,
+      textColor: left.textColor,
+      customCss: left.customCss,
+      displayFields: left.displayFields,
+      trackIds: left.trackIds,
+      statuses: left.statuses,
+    }) ===
+    JSON.stringify({
+      id: right.id,
+      name: right.name,
+      widgetId: right.widgetId,
+      enabled: right.enabled,
+      theme: right.theme,
+      outputFormat: right.outputFormat,
+      layout: right.layout,
+      accent: right.accent,
+      backgroundColor: right.backgroundColor,
+      textColor: right.textColor,
+      customCss: right.customCss,
+      displayFields: right.displayFields,
+      trackIds: right.trackIds,
+      statuses: right.statuses,
+    })
+  );
+}
 function normalizeEmbedConfigurations(
   input: readonly EventEmbedConfigurationInput[] | undefined,
   current: readonly EventEmbedConfiguration[] = [],
@@ -276,6 +342,22 @@ function normalizeEmbedConfigurations(
     );
   }
   const ids = new Set<string>();
+  const currentById = new Map(current.map((configuration) => [configuration.id, configuration]));
+  for (let index = 0; index < input.length; index += 1) {
+    const field = `embedConfigurations[${index}]`;
+    const value = objectValue(input[index], field);
+    const id = text(value.id, `${field}.id`, 128);
+    if (ids.has(id)) throw validation("embedConfigurations ids must be unique.");
+    ids.add(id);
+  }
+  for (const configuration of current) {
+    if (!ids.has(configuration.id)) {
+      throw validation(
+        `Saved embed configuration ${configuration.id} cannot be removed; disable it instead.`,
+      );
+    }
+  }
+  ids.clear();
   const normalized: EventEmbedConfiguration[] = [];
   for (let index = 0; index < input.length; index += 1) {
     const field = `embedConfigurations[${index}]`;
@@ -288,7 +370,28 @@ function normalizeEmbedConfigurations(
     const enabled = value.enabled;
     if (typeof enabled !== "boolean") throw validation(`${field}.enabled must be a boolean.`);
     const customCss = embedCustomCss(value.customCss, `${field}.customCss`);
-    normalized.push({
+    const trackIds = embedStringList(value.trackIds, `${field}.trackIds`);
+    const statuses = embedStringList(value.statuses, `${field}.statuses`);
+    const currentConfiguration = currentById.get(id);
+    const suppliedRevision =
+      value.revision === undefined
+        ? undefined
+        : embedConfigurationRevision(value.revision, `${field}.revision`);
+    if (
+      currentConfiguration === undefined &&
+      suppliedRevision !== undefined &&
+      suppliedRevision !== 1
+    ) {
+      throw validation(`${field}.revision must start at 1.`);
+    }
+    if (
+      currentConfiguration !== undefined &&
+      suppliedRevision !== undefined &&
+      suppliedRevision !== currentConfiguration.revision
+    ) {
+      throw conflict(`Saved embed configuration ${id} changed. Reload it before saving.`);
+    }
+    const candidate: EventEmbedConfiguration = {
       id,
       name,
       widgetId: embedEnum(value.widgetId, eventEmbedWidgetIds, `${field}.widgetId`),
@@ -301,9 +404,22 @@ function normalizeEmbedConfigurations(
       textColor: embedColor(value.textColor, `${field}.textColor`),
       customCss,
       displayFields: embedDisplayFields(value.displayFields, `${field}.displayFields`),
-      tracks: embedStringList(value.tracks, `${field}.tracks`),
-      statuses: embedStringList(value.statuses, `${field}.statuses`),
-    });
+      trackIds,
+      statuses,
+      revision: 1,
+    };
+    if (currentConfiguration === undefined) {
+      normalized.push(candidate);
+      continue;
+    }
+    const currentRevision = embedConfigurationRevision(
+      currentConfiguration.revision,
+      `${field}.revision`,
+    );
+    candidate.revision = embedConfigurationSemanticallyEqual(candidate, currentConfiguration)
+      ? currentRevision
+      : currentRevision + 1;
+    normalized.push(candidate);
   }
   return normalized;
 }
@@ -772,4 +888,504 @@ export class InMemoryEventRepository implements EventRepository {
   }
 }
 
+export class InMemoryProgramPublicationRepository implements ProgramPublicationRepository {
+  readonly #states = new Map<string, ProgramPublicationState>();
+
+  constructor(seed: ProgramPublicationRepositorySeed = {}) {
+    for (const state of seed.states ?? []) {
+      this.#states.set(this.key(state.organizationId, state.eventId), clone(state));
+    }
+  }
+
+  async getState(
+    organizationId: string,
+    eventIdValue: string,
+  ): Promise<ProgramPublicationState | null> {
+    const state = this.#states.get(this.key(organizationId, eventIdValue));
+    return state === undefined ? null : clone(state);
+  }
+
+  async compareAndSwap(
+    organizationId: string,
+    eventIdValue: string,
+    expectedVersion: number | null,
+    state: ProgramPublicationState,
+  ): Promise<void> {
+    const key = this.key(organizationId, eventIdValue);
+    const current = this.#states.get(key);
+    if (
+      (current?.version ?? null) !== expectedVersion ||
+      state.organizationId !== organizationId ||
+      state.eventId !== eventIdValue
+    ) {
+      throw new ProgramPublicationRepositoryConflictError();
+    }
+    this.#states.set(key, clone(state));
+  }
+
+  private key(organizationId: string, eventIdValue: string): string {
+    return `${organizationId}\u0000${eventIdValue}`;
+  }
+}
+
+function publicationVersionConflict(): EventServiceError {
+  return new EventServiceError(
+    "VERSION_CONFLICT",
+    409,
+    "The program publication changed. Reload it before continuing.",
+  );
+}
+
+function positiveInteger(value: unknown, field: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
+    throw validation(`${field} must be a positive integer.`);
+  }
+  return value;
+}
+
+function sourceHash(value: unknown, field: string): string {
+  return text(value, field, 256);
+}
+
+function releaseForCompletion(
+  state: ProgramPublicationState,
+  input: ProgramPublicationCompletionInput,
+): ProgramPublicationManifest {
+  if (
+    state.version !==
+    positiveInteger(input.expectedPublicationVersion, "expectedPublicationVersion")
+  ) {
+    throw publicationVersionConflict();
+  }
+  const revision = positiveInteger(input.revision, "revision");
+  const release = state.releases.find(
+    (candidate) => candidate.id === input.releaseId && candidate.revision === revision,
+  );
+  if (
+    release === undefined ||
+    release.lifecycle !== "pending" ||
+    state.pendingReleaseId !== release.id ||
+    state.pendingRevision !== release.revision
+  ) {
+    throw conflict("The pending program release is no longer current.");
+  }
+  return release;
+}
+
+export class ProgramPublicationService {
+  readonly #repository: ProgramPublicationRepository;
+  readonly #enqueue: ProgramPublicationEnqueuePort;
+  readonly #cacheInvalidation: ProgramPublicationCacheInvalidationPort;
+  readonly #eventRepository: Pick<EventRepository, "getEvent">;
+  readonly #clock: () => Date;
+  readonly #generateId: () => string;
+
+  constructor(
+    repository: ProgramPublicationRepository,
+    dependencies: ProgramPublicationServiceDependencies,
+    options: ProgramPublicationServiceOptions = {},
+  ) {
+    this.#repository = repository;
+    this.#enqueue = dependencies.enqueue;
+    this.#cacheInvalidation = dependencies.cacheInvalidation;
+    this.#eventRepository = dependencies.eventRepository;
+    this.#clock = options.clock ?? (() => new Date());
+    this.#generateId = options.generateId ?? (() => crypto.randomUUID());
+  }
+
+  async getState(
+    actor: EventActor,
+    input: { organizationId?: string; eventId: string },
+  ): Promise<ProgramPublicationState | null> {
+    const organizationId = organizationFromInput(actor, input.organizationId);
+    const scopedEventId = eventId(input.eventId);
+    await this.#requireEvent(organizationId, scopedEventId);
+    return this.#repository.getState(organizationId, scopedEventId);
+  }
+
+  async requestRebuild(
+    actor: EventActor,
+    input: ProgramPublicationRebuildRequest,
+  ): Promise<ProgramPublicationState> {
+    const organizationId = organizationFromInput(actor, input.organizationId);
+    const scopedEventId = eventId(input.eventId);
+    const actorId = actorUserId(actor);
+    await this.#requireEvent(organizationId, scopedEventId);
+    if (!programPublicationSourceTriggers.includes(input.trigger)) {
+      throw validation("trigger is not an approved program publication source transition.");
+    }
+
+    const current = await this.#repository.getState(organizationId, scopedEventId);
+    if (current?.pendingRevision !== null && current?.pendingRevision !== undefined) {
+      throw conflict("A program publication rebuild is already pending.");
+    }
+    if (
+      input.trigger === "initial-publication" &&
+      current?.servedManifest !== null &&
+      current !== null
+    ) {
+      throw conflict("The program already has publication intent.");
+    }
+    if (
+      input.trigger !== "initial-publication" &&
+      (current === null || current.servedManifest === null)
+    ) {
+      throw conflict(
+        "Approved source changes cannot publish a program before explicit publication.",
+      );
+    }
+    if (
+      input.parentServedRevision !== undefined &&
+      input.parentServedRevision !== (current?.servedRevision ?? null)
+    ) {
+      throw publicationVersionConflict();
+    }
+
+    const revision = (current?.releases.at(-1)?.revision ?? 0) + 1;
+    const releaseId = text(this.#generateId(), "release id", 128);
+    const now = instant(this.#clock().toISOString(), "publishedAt");
+    const manifest: ProgramPublicationManifest = {
+      id: releaseId,
+      organizationId,
+      eventId: scopedEventId,
+      revision,
+      lifecycle: "pending",
+      agendaProjectionId: text(input.agendaProjectionId, "agendaProjectionId", 128),
+      agendaRevisionNumber: positiveInteger(input.agendaRevisionNumber, "agendaRevisionNumber"),
+      agendaSourceHash: sourceHash(input.agendaSourceHash, "agendaSourceHash"),
+      speakerProjectionId: text(input.speakerProjectionId, "speakerProjectionId", 128),
+      speakerRevisionNumber: positiveInteger(input.speakerRevisionNumber, "speakerRevisionNumber"),
+      speakerSourceHash: sourceHash(input.speakerSourceHash, "speakerSourceHash"),
+      approvedContentRevision: positiveInteger(
+        input.approvedContentRevision,
+        "approvedContentRevision",
+      ),
+      approvedProfileRevision: positiveInteger(
+        input.approvedProfileRevision,
+        "approvedProfileRevision",
+      ),
+      releasedAssetRevision: positiveInteger(input.releasedAssetRevision, "releasedAssetRevision"),
+      actorId,
+      publishedAt: now,
+      parentServedRevision: current?.servedRevision ?? null,
+      rollbackTargetRevision: null,
+      cacheRevision: (current?.releases.at(-1)?.cacheRevision ?? 0) + 1,
+      sourceTrigger: input.trigger,
+      failureReason: null,
+    };
+    const pending: ProgramPublicationState = {
+      organizationId,
+      eventId: scopedEventId,
+      version: (current?.version ?? 0) + 1,
+      servedRevision: current?.servedRevision ?? null,
+      servedManifest: current?.servedManifest ?? null,
+      pendingRevision: revision,
+      pendingReleaseId: releaseId,
+      releases: [...(current?.releases ?? []), manifest],
+    };
+    try {
+      await this.#repository.compareAndSwap(
+        organizationId,
+        scopedEventId,
+        current?.version ?? null,
+        pending,
+      );
+    } catch (error) {
+      if (error instanceof ProgramPublicationRepositoryConflictError) {
+        throw publicationVersionConflict();
+      }
+      throw error;
+    }
+
+    try {
+      await this.#enqueue.enqueue({ organizationId, eventId: scopedEventId, releaseId, revision });
+      return clone(pending);
+    } catch (error) {
+      return this.failRebuild({
+        organizationId,
+        eventId: scopedEventId,
+        releaseId,
+        revision,
+        expectedPublicationVersion: pending.version,
+        reason: error instanceof Error ? error.message : "Publication rebuild enqueue failed.",
+      });
+    }
+  }
+
+  async completeRebuild(
+    input: ProgramPublicationCompletionInput,
+  ): Promise<ProgramPublicationState> {
+    const organizationId = text(input.organizationId, "organizationId", 128);
+    const scopedEventId = eventId(input.eventId);
+    const current = await this.#repository.getState(organizationId, scopedEventId);
+    if (current === null) throw notFound();
+    const pendingRelease = releaseForCompletion(current, input);
+    const servedRelease: ProgramPublicationManifest = {
+      ...pendingRelease,
+      lifecycle: "served",
+      publishedAt: instant(this.#clock().toISOString(), "publishedAt"),
+      failureReason: null,
+    };
+    const next: ProgramPublicationState = {
+      ...current,
+      version: current.version + 1,
+      servedRevision: servedRelease.revision,
+      servedManifest: servedRelease,
+      pendingRevision: null,
+      pendingReleaseId: null,
+      releases: current.releases.map((release) =>
+        release.id === servedRelease.id ? servedRelease : release,
+      ),
+    };
+    await this.#savePublication(current, next);
+    await this.#cacheInvalidation.invalidate({
+      organizationId,
+      eventId: scopedEventId,
+      revision: servedRelease.revision,
+      cacheRevision: servedRelease.cacheRevision,
+    });
+    return clone(next);
+  }
+
+  async failRebuild(input: ProgramPublicationFailureInput): Promise<ProgramPublicationState> {
+    const organizationId = text(input.organizationId, "organizationId", 128);
+    const scopedEventId = eventId(input.eventId);
+    const current = await this.#repository.getState(organizationId, scopedEventId);
+    if (current === null) throw notFound();
+    const pendingRelease = releaseForCompletion(current, input);
+    const failedRelease: ProgramPublicationManifest = {
+      ...pendingRelease,
+      lifecycle: "failed",
+      failureReason: text(input.reason, "reason", 2_000),
+    };
+    const next: ProgramPublicationState = {
+      ...current,
+      version: current.version + 1,
+      pendingRevision: null,
+      pendingReleaseId: null,
+      releases: current.releases.map((release) =>
+        release.id === failedRelease.id ? failedRelease : release,
+      ),
+    };
+    await this.#savePublication(current, next);
+    return clone(next);
+  }
+
+  async rollback(
+    actor: EventActor,
+    input: ProgramPublicationRollbackInput,
+  ): Promise<ProgramPublicationState> {
+    const organizationId = organizationFromInput(actor, input.organizationId);
+    const scopedEventId = eventId(input.eventId);
+    const actorId = actorUserId(actor);
+    await this.#requireEvent(organizationId, scopedEventId);
+    const current = await this.#repository.getState(organizationId, scopedEventId);
+    if (current === null || current.servedManifest === null) throw notFound();
+    if (
+      input.expectedPublicationVersion !== undefined &&
+      input.expectedPublicationVersion !== current.version
+    ) {
+      throw publicationVersionConflict();
+    }
+    if (input.expectedServedRevision !== current.servedRevision) throw publicationVersionConflict();
+    if (current.pendingRevision !== null) {
+      throw conflict("A pending rebuild must complete or fail before rollback.");
+    }
+    const targetRevision = positiveInteger(input.targetRevision, "targetRevision");
+    const target = current.releases.find(
+      (release) => release.revision === targetRevision && release.lifecycle === "served",
+    );
+    if (target === undefined) throw notFound();
+
+    const revision = (current.releases.at(-1)?.revision ?? 0) + 1;
+    const rolledBack: ProgramPublicationManifest = {
+      ...target,
+      id: text(this.#generateId(), "release id", 128),
+      revision,
+      lifecycle: "served",
+      actorId,
+      publishedAt: instant(this.#clock().toISOString(), "publishedAt"),
+      parentServedRevision: current.servedRevision,
+      rollbackTargetRevision: target.revision,
+      cacheRevision: (current.releases.at(-1)?.cacheRevision ?? 0) + 1,
+      sourceTrigger: "released-schedule-change",
+      failureReason: null,
+    };
+    const next: ProgramPublicationState = {
+      ...current,
+      version: current.version + 1,
+      servedRevision: revision,
+      servedManifest: rolledBack,
+      releases: [...current.releases, rolledBack],
+    };
+    await this.#savePublication(current, next);
+    await this.#cacheInvalidation.invalidate({
+      organizationId,
+      eventId: scopedEventId,
+      revision,
+      cacheRevision: rolledBack.cacheRevision,
+    });
+    return clone(next);
+  }
+
+  resolvePreview(
+    actor: EventActor,
+    input: ProgramPublicationPreviewRequest,
+  ): ProgramResolvedPublication {
+    const organizationId = organizationFromInput(actor, input.organizationId);
+    if (
+      organizationId !== input.manifest.organizationId ||
+      eventId(input.eventId) !== input.manifest.eventId
+    ) {
+      throw forbidden("The published program does not belong to this event.");
+    }
+    return resolvePublishedProgram(input);
+  }
+
+  async #requireEvent(organizationId: string, scopedEventId: string): Promise<void> {
+    const event = await this.#eventRepository.getEvent(organizationId, scopedEventId);
+    if (event === null) throw notFound();
+  }
+
+  async #savePublication(
+    current: ProgramPublicationState,
+    next: ProgramPublicationState,
+  ): Promise<void> {
+    try {
+      await this.#repository.compareAndSwap(
+        current.organizationId,
+        current.eventId,
+        current.version,
+        next,
+      );
+    } catch (error) {
+      if (error instanceof ProgramPublicationRepositoryConflictError) {
+        throw publicationVersionConflict();
+      }
+      throw error;
+    }
+  }
+}
+
+function projectionMatches(
+  binding: { id: string; revisionNumber: number; sourceHash: string },
+  projectionId: string,
+  revisionNumber: number,
+  sourceHashValue: string,
+): boolean {
+  return (
+    binding.id === projectionId &&
+    binding.revisionNumber === revisionNumber &&
+    binding.sourceHash === sourceHashValue
+  );
+}
+
+function safeProgramAvatarUrl(value: string | null | undefined): string | null | undefined {
+  if (value === undefined || value === null) return value;
+  if (
+    value.startsWith("/api/public/events/") &&
+    value.includes("/speakers/") &&
+    value.endsWith("/headshot") &&
+    !value.includes("?") &&
+    !value.includes("#")
+  ) {
+    return value;
+  }
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" &&
+      url.username === "" &&
+      url.password === "" &&
+      url.search === "" &&
+      url.hash === "" &&
+      url.pathname.includes("/public/")
+      ? url.toString()
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function resolvePublishedProgram(
+  input: ResolveProgramPublicationInput,
+): ProgramResolvedPublication {
+  const { manifest, configuration, agendaProjection, speakerProjection } = input;
+  if (manifest.lifecycle !== "served" || !configuration.enabled) {
+    throw new EventServiceError("NOT_FOUND", 404, "The published program was not found.");
+  }
+  if (
+    !projectionMatches(
+      agendaProjection,
+      manifest.agendaProjectionId,
+      manifest.agendaRevisionNumber,
+      manifest.agendaSourceHash,
+    ) ||
+    !projectionMatches(
+      speakerProjection,
+      manifest.speakerProjectionId,
+      manifest.speakerRevisionNumber,
+      manifest.speakerSourceHash,
+    )
+  ) {
+    throw conflict("The served program release is incomplete.");
+  }
+
+  const configuredTrackIds = new Set(configuration.trackIds);
+  const configuredStatuses = new Set(configuration.statuses);
+  const filteredEntries = agendaProjection.entries.filter(
+    (entry) =>
+      (configuredTrackIds.size === 0 ||
+        entry.trackIds.some((trackId) => configuredTrackIds.has(trackId))) &&
+      (configuredStatuses.size === 0 || configuredStatuses.has(entry.status)),
+  );
+  const sessionIds = new Set(filteredEntries.map((entry) => entry.sessionId));
+  const fields = new Set(configuration.displayFields);
+  const agenda = filteredEntries.map((entry): ProgramResolvedPublication["agenda"][number] => ({
+    id: entry.id,
+    sessionId: entry.sessionId,
+    title: entry.title,
+    ...(fields.has("summary") && entry.summary !== undefined ? { summary: entry.summary } : {}),
+    ...(fields.has("format") && entry.format !== undefined ? { format: entry.format } : {}),
+    ...(fields.has("date-time") && entry.startsAt !== undefined
+      ? { startsAt: entry.startsAt }
+      : {}),
+    ...(fields.has("date-time") && entry.endsAt !== undefined ? { endsAt: entry.endsAt } : {}),
+    ...(fields.has("date-time") && entry.startsAtLocal !== undefined
+      ? { startsAtLocal: entry.startsAtLocal }
+      : {}),
+    ...(fields.has("date-time") && entry.endsAtLocal !== undefined
+      ? { endsAtLocal: entry.endsAtLocal }
+      : {}),
+    ...(fields.has("date-time") && entry.timeZone !== undefined
+      ? { timeZone: entry.timeZone }
+      : {}),
+    ...(fields.has("room") && entry.roomName !== undefined ? { roomName: entry.roomName } : {}),
+    trackNames: fields.has("track") ? [...(entry.trackNames ?? [])] : [],
+    speakerNames: fields.has("speakers") ? [...(entry.speakerNames ?? [])] : [],
+  }));
+  const speakers = speakerProjection.speakers
+    .filter((speaker) => speaker.sessionIds.some((sessionId) => sessionIds.has(sessionId)))
+    .map((speaker): ProgramResolvedPublication["speakers"][number] => ({
+      id: speaker.id,
+      participantId: speaker.participantId,
+      sessionIds: speaker.sessionIds.filter((sessionId) => sessionIds.has(sessionId)),
+      displayName: speaker.displayName,
+      ...(fields.has("company") && speaker.company !== undefined
+        ? { company: speaker.company }
+        : {}),
+      ...(fields.has("bio") && speaker.bio !== undefined ? { bio: speaker.bio } : {}),
+      ...(speaker.avatarUrl !== undefined
+        ? { avatarUrl: safeProgramAvatarUrl(speaker.avatarUrl) ?? null }
+        : {}),
+    }));
+
+  return {
+    configurationRevision: configuration.revision,
+    servedProgramRevision: manifest.revision,
+    programRevision: manifest.revision,
+    cacheRevision: manifest.cacheRevision,
+    agenda,
+    speakers,
+  };
+}
 export { EventServiceError as EventError };

@@ -127,7 +127,12 @@ describe("speaker API adapter", () => {
           status: 200,
         });
       }
-      return new Response(JSON.stringify({ data: roster }), { status: 200 });
+      return new Response(
+        JSON.stringify({
+          data: { ...roster, organizationId: "org/1", eventId: "event/1" },
+        }),
+        { status: 200 },
+      );
     };
     const api = createSpeakerApi("https://api.example.test/", "org/1", "event/1", fetcher);
 
@@ -445,6 +450,9 @@ describe("speaker API adapter", () => {
           }),
           { status: 200 },
         );
+      }
+      if (path.endsWith("/speakers/participant-1")) {
+        return new Response(JSON.stringify({ data: roster }), { status: 200 });
       }
       return new Response(JSON.stringify({ data: speaker }), { status: 200 });
     };

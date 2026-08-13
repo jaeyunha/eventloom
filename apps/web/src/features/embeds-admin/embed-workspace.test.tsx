@@ -1,10 +1,12 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { createOrganizerEventsApi, type OrganizerEventRecord } from "../admin/organizer-overview";
 import {
+  createEmbedWorkspaceApi,
   DEFAULT_EMBED_ACCENT,
   EMBED_WIDGETS,
+  type EmbedEventRecord,
+  type EmbedPublicationMetadata,
   EmbedWorkspaceView,
   iframeSnippet,
   normalizeEmbedSlug,
@@ -34,10 +36,16 @@ const configuration = {
   textColor: "#20232b",
   customCss: ".host { color: red; }",
   displayFields: ["title", "date-time", "room"] as const,
-  tracks: ["Track A", "Track B"] as const,
+  trackIds: ["track-a", "track-b"] as const,
   statuses: ["Approved"] as const,
+  revision: 4,
 };
-const publication = {
+const publication: EmbedPublicationMetadata = {
+  state: null,
+  status: "served",
+  servedRevision: 12,
+  pendingRevision: null,
+  failedReason: null,
   agendaDraftVersion: 12,
   publicRevision: {
     id: "agenda-revision-12",
@@ -48,7 +56,7 @@ const publication = {
   message: "Preview and code use this exact published revision.",
 };
 
-const eventRecord: OrganizerEventRecord = {
+const eventRecord: EmbedEventRecord = {
   id: "event-1",
   organizationId: "org-1",
   slug: "summit-2026",
@@ -72,18 +80,14 @@ describe("authoritative embed configuration transport", () => {
   it("replaces the complete event configuration list with expectedVersion", async () => {
     let requestedUrl = "";
     let requestedInit: RequestInit | undefined;
-    const api = createOrganizerEventsApi(
-      "https://api.example.test/",
-      "org-1",
-      async (url, init) => {
-        requestedUrl = String(url);
-        requestedInit = init;
-        return new Response(JSON.stringify({ data: { ...eventRecord, version: 8 } }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
-      },
-    );
+    const api = createEmbedWorkspaceApi("org-1", async (url, init) => {
+      requestedUrl = String(url);
+      requestedInit = init;
+      return new Response(JSON.stringify({ data: { ...eventRecord, version: 8 } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
 
     await expect(
       api.updateEvent("event-1", {
@@ -91,9 +95,7 @@ describe("authoritative embed configuration transport", () => {
         embedConfigurations: [configuration],
       }),
     ).resolves.toMatchObject({ version: 8, embedConfigurations: [configuration] });
-    expect(requestedUrl).toBe(
-      "https://api.example.test/api/admin/organizations/org-1/events/event-1",
-    );
+    expect(requestedUrl).toBe("/api/admin/organizations/org-1/events/event-1");
     expect(requestedInit?.credentials).toBe("include");
     expect(JSON.parse(String(requestedInit?.body))).toEqual({
       expectedVersion: 7,
@@ -101,8 +103,7 @@ describe("authoritative embed configuration transport", () => {
     });
   });
   it("loads the server configuration list rather than browser state", async () => {
-    const api = createOrganizerEventsApi(
-      "https://api.example.test",
+    const api = createEmbedWorkspaceApi(
       "org-1",
       async () =>
         new Response(JSON.stringify({ data: eventRecord }), {
@@ -131,7 +132,7 @@ describe("safe live embed URLs", () => {
         accent: configuration.accent,
         backgroundColor: configuration.backgroundColor,
         textColor: configuration.textColor,
-        tracks: configuration.tracks,
+        trackIds: configuration.trackIds,
         statuses: configuration.statuses,
         customCss: configuration.customCss,
       }),
@@ -146,7 +147,7 @@ describe("safe live embed URLs", () => {
     expect(url.searchParams.get("accent")).toBe("#13885f");
     expect(url.searchParams.get("backgroundColor")).toBe("#ffffff");
     expect(url.searchParams.get("textColor")).toBe("#20232b");
-    expect(url.searchParams.get("tracks")).toBe("Track A,Track B");
+    expect(url.searchParams.get("trackIds")).toBe("track-a,track-b");
     expect(url.searchParams.get("statuses")).toBe("Approved");
     expect(url.searchParams.get("customCss")).toBeNull();
     expect(url.toString()).not.toContain("color%3A");
@@ -180,14 +181,16 @@ describe("safe live embed URLs", () => {
   });
 
   it("uses the real same-origin agenda feed for iCal output", () => {
-    expect(
+    const url = new URL(
       publicAgendaCalendarUrl({
         widget: itinerary,
         eventSlug: "summit / 2026",
         publicOrigin: "https://sessionboard.example/",
         theme: "auto",
       }),
-    ).toBe("https://sessionboard.example/api/public/events/summit%20%2F%202026/agenda.ics");
+    );
+    expect(url.origin).toBe("https://sessionboard.example");
+    expect(url.pathname).toBe("/api/public/events/summit%20%2F%202026/agenda.ics");
   });
 
   it("uses the same safe query on copied iframe and script sources", () => {
@@ -200,7 +203,7 @@ describe("safe live embed URLs", () => {
       layout: "timeline" as const,
       accent: DEFAULT_EMBED_ACCENT,
       displayFields: ["title", "date-time"] as const,
-      tracks: ["Track A"] as const,
+      trackIds: ["track-a"] as const,
       statuses: ["Approved"] as const,
     };
     const iframe = iframeSnippet(settings);
@@ -363,9 +366,8 @@ describe("embed workspace view", () => {
     expect(markup).toContain("Public boundary");
     expect(markup).toContain("Publication truth");
     expect(markup).toContain("Draft event");
-    expect(markup).toContain("Agenda draft");
-    expect(markup).toContain("Public revision");
-    expect(markup).toContain("Preview availability");
+    expect(markup).toContain("Served program revision");
+    expect(markup).toContain("Publication state");
     expect(markup).not.toContain("browser-local");
     expect(markup).not.toContain("privateDraft");
     expect(markup).not.toContain("objectKey");
@@ -422,7 +424,7 @@ describe("embed workspace view", () => {
       }),
     );
 
-    expect(markup).toContain("No published public projection");
+    expect(markup).toContain("No published program revision");
     expect(markup).toContain("Preview unavailable");
     expect(markup).toContain("Open Agenda validation and publish");
     expect(markup).not.toContain("<iframe");
@@ -443,11 +445,10 @@ describe("embed workspace view", () => {
     );
 
     expect(markup).toContain("Draft event");
-    expect(markup).toContain("Agenda draft");
-    expect(markup).toContain("Public revision");
-    expect(markup).toContain("Preview availability");
+    expect(markup).toContain("Served program revision");
+    expect(markup).toContain("Publication state");
     expect(markup).toContain("Revision 12");
-    expect(markup.match(/Revision 12/g)?.length).toBeGreaterThanOrEqual(3);
+    expect(markup.match(/Revision 12/g)?.length).toBeGreaterThanOrEqual(2);
     expect(markup).toContain("Preview and code use this exact published revision.");
   });
 

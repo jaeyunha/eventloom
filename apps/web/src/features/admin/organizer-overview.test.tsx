@@ -493,6 +493,64 @@ describe("organizer overview", () => {
       defaultCalendarSettings: eventRecord.defaultCalendarSettings,
     });
   });
+  it("parses canonical embed track IDs and rejects the obsolete tracks field", () => {
+    const canonicalEmbed = {
+      id: "embed-main",
+      name: "Main sessions",
+      widgetId: "sessions",
+      enabled: true,
+      theme: "auto",
+      outputFormat: "styled-html",
+      layout: "comfortable",
+      accent: "#123456",
+      backgroundColor: "#ffffff",
+      textColor: "#111111",
+      customCss: "",
+      displayFields: ["title"],
+      trackIds: ["track-ai"],
+      statuses: ["published"],
+    };
+    const parsed = parseOrganizerEventsResponse({
+      data: [
+        {
+          ...eventRecord,
+          embedConfigurations: [canonicalEmbed],
+        },
+      ],
+    });
+
+    expect(parsed[0]?.embedConfigurations?.[0]).toMatchObject({
+      trackIds: ["track-ai"],
+    });
+
+    expect(() =>
+      parseOrganizerEventsResponse({
+        data: [
+          {
+            ...eventRecord,
+            embedConfigurations: [
+              {
+                id: "embed-main",
+                name: "Main sessions",
+                widgetId: "sessions",
+                enabled: true,
+                theme: "auto",
+                outputFormat: "styled-html",
+                layout: "comfortable",
+                accent: "#123456",
+                backgroundColor: "#ffffff",
+                textColor: "#111111",
+                customCss: "",
+                displayFields: ["title"],
+                tracks: ["track-ai"],
+                statuses: ["published"],
+              },
+            ],
+          },
+        ],
+      }),
+    ).toThrow("embedConfigurations[0].trackIds");
+  });
   it("uses the same-origin gateway when no browser API origin is configured", async () => {
     let requestedUrl = "";
     const api = createOrganizerEventsApi("", "ai-engineer", async (url) => {

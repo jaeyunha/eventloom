@@ -105,6 +105,90 @@ describe("agenda catalog synchronization", () => {
       ]),
     );
   });
+  it("refreshes a catalog change that becomes visible while initialization commits", async () => {
+    let current = catalog();
+    const repository = new InMemoryAgendaRepository();
+    const engine = new AgendaEngine(repository, new InMemoryAgendaMutationLock());
+    const refreshed = {
+      ...catalog(),
+      rooms: [...catalog().rooms, { id: "room-b", name: "Workshop room", capacity: 40 }],
+      tracks: [...catalog().tracks, { id: "track-b", name: "Workshop track" }],
+    };
+    const synchronizer = new AgendaCatalogSynchronizer({
+      engine: {
+        getDraft: (eventId) => engine.getDraft(eventId),
+        createAgenda: async (value) => {
+          const draft = await engine.createAgenda(value);
+          current = refreshed;
+          return draft;
+        },
+        updateCatalog: (value) => engine.updateCatalog(value),
+      },
+      catalogReader: {
+        getAgendaCatalog: async () => structuredClone(current),
+      },
+      eventTimeZone: "UTC",
+    });
+
+    const synchronized = await synchronizer.synchronize(input);
+    const state = await repository.load("event-a");
+
+    expect(synchronized.version).toBe(2);
+    expect(state?.rooms.map((room) => room.id)).toEqual(["room-a", "room-b"]);
+    expect(state?.tracks.map((track) => track.id)).toEqual(["track-a", "track-b"]);
+    await expect(
+      engine.updateDraft({
+        eventId: "event-a",
+        expectedVersion: synchronized.version,
+        actorId: "organizer-a",
+        entries: [
+          {
+            id: "entry-b",
+            sessionId: "session-accepted",
+            roomId: "room-b",
+            trackIds: ["track-b"],
+            startsAtLocal: "2026-08-09T09:00",
+            endsAtLocal: "2026-08-09T09:45",
+          },
+        ],
+      }),
+    ).resolves.toMatchObject({
+      entries: [{ roomId: "room-b", trackIds: ["track-b"] }],
+    });
+  });
+  it("does not rewrite a newly created agenda when only catalog ordering changes", async () => {
+    let current = catalog();
+    let updateCount = 0;
+    const repository = new InMemoryAgendaRepository();
+    const engine = new AgendaEngine(repository, new InMemoryAgendaMutationLock());
+    const synchronizer = new AgendaCatalogSynchronizer({
+      engine: {
+        getDraft: (eventId) => engine.getDraft(eventId),
+        createAgenda: async (value) => {
+          const draft = await engine.createAgenda(value);
+          current = {
+            sessions: [...current.sessions].reverse(),
+            rooms: [...current.rooms].reverse(),
+            tracks: [...current.tracks].reverse(),
+          };
+          return draft;
+        },
+        updateCatalog: async (value) => {
+          updateCount += 1;
+          return engine.updateCatalog(value);
+        },
+      },
+      catalogReader: {
+        getAgendaCatalog: async () => structuredClone(current),
+      },
+      eventTimeZone: "UTC",
+    });
+
+    const synchronized = await synchronizer.synchronize(input);
+
+    expect(synchronized.version).toBe(1);
+    expect(updateCount).toBe(0);
+  });
 
   it("retains deapproved scheduled sessions as ineligible while removing unscheduled omissions", async () => {
     const { engine, repository, synchronizer, setCatalog } = setup();

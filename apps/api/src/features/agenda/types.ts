@@ -202,7 +202,7 @@ export interface AgendaSuggestionRun {
   placements: readonly AgendaEntry[];
   proposedEntries: readonly AgendaEntry[];
   diff: AgendaSuggestionDiff;
-  validation: AgendaValidationReport;
+  candidateDiagnostics: AgendaValidationReport;
   generatedAt: string;
   generatedBy: string;
   regenerationOfRunId: string | null;
@@ -325,6 +325,7 @@ export type AgendaCustomRule = (context: AgendaRuleContext) => readonly AgendaWa
 export interface AgendaPreview {
   draftVersion: number;
   validation: AgendaValidationReport;
+  releaseValidation: AgendaValidationReport;
   unoverriddenWarnings: readonly AgendaWarning[];
   diff: {
     addedEntryIds: readonly string[];

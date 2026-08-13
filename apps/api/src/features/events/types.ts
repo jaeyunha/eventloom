@@ -74,11 +74,14 @@ export interface EventEmbedConfiguration {
   textColor: string;
   customCss: string;
   displayFields: readonly EventEmbedDisplayField[];
-  tracks: readonly string[];
+  trackIds: readonly string[];
   statuses: readonly string[];
+  revision: number;
 }
 
-export type EventEmbedConfigurationInput = EventEmbedConfiguration;
+export type EventEmbedConfigurationInput = Omit<EventEmbedConfiguration, "revision"> & {
+  revision?: number;
+};
 
 export interface Event {
   id: string;
@@ -188,4 +191,245 @@ export class EventRepositoryConflictError extends Error {
     super(message);
     this.name = "EventRepositoryConflictError";
   }
+}
+export const programPublicationStatuses = ["pending", "served", "failed"] as const;
+export type ProgramPublicationStatus = (typeof programPublicationStatuses)[number];
+
+/**
+ * Only source changes which have crossed the public approval boundary may trigger
+ * an automatic rebuild. Draft and private source changes are intentionally not
+ * represented by this union.
+ */
+export const programPublicationSourceTriggers = [
+  "initial-publication",
+  "approved-content-change",
+  "confirmed-profile-change",
+  "released-asset-change",
+  "released-schedule-change",
+] as const;
+export type ProgramPublicationSourceTrigger = (typeof programPublicationSourceTriggers)[number];
+
+export interface ProgramProjectionBinding {
+  projectionId: string;
+  revisionNumber: number;
+  sourceHash: string;
+}
+
+export interface ProgramPublicationManifest {
+  id: string;
+  organizationId: string;
+  eventId: string;
+  revision: number;
+  lifecycle: ProgramPublicationStatus;
+  agendaProjectionId: string;
+  agendaRevisionNumber: number;
+  agendaSourceHash: string;
+  speakerProjectionId: string;
+  speakerRevisionNumber: number;
+  speakerSourceHash: string;
+  approvedContentRevision: number;
+  approvedProfileRevision: number;
+  releasedAssetRevision: number;
+  actorId: string;
+  publishedAt: string;
+  parentServedRevision: number | null;
+  rollbackTargetRevision: number | null;
+  cacheRevision: number;
+  sourceTrigger: ProgramPublicationSourceTrigger;
+  failureReason: string | null;
+}
+
+export type ProgramReleaseRecord = ProgramPublicationManifest;
+
+export interface ProgramPublicationState {
+  organizationId: string;
+  eventId: string;
+  version: number;
+  servedRevision: number | null;
+  servedManifest: ProgramPublicationManifest | null;
+  pendingRevision: number | null;
+  pendingReleaseId: string | null;
+  releases: readonly ProgramReleaseRecord[];
+}
+
+export interface ProgramPublicationRepositorySeed {
+  states?: readonly ProgramPublicationState[];
+}
+
+export class ProgramPublicationRepositoryConflictError extends Error {
+  constructor(message = "The program publication changed concurrently.") {
+    super(message);
+    this.name = "ProgramPublicationRepositoryConflictError";
+  }
+}
+
+export interface ProgramPublicationRepository {
+  getState(organizationId: string, eventId: string): Promise<ProgramPublicationState | null>;
+  compareAndSwap(
+    organizationId: string,
+    eventId: string,
+    expectedVersion: number | null,
+    state: ProgramPublicationState,
+  ): Promise<void>;
+}
+
+export interface ProgramPublicationRebuildRequest {
+  organizationId?: string;
+  eventId: string;
+  trigger: ProgramPublicationSourceTrigger;
+  agendaProjectionId: string;
+  agendaRevisionNumber: number;
+  agendaSourceHash: string;
+  speakerProjectionId: string;
+  speakerRevisionNumber: number;
+  speakerSourceHash: string;
+  approvedContentRevision: number;
+  approvedProfileRevision: number;
+  releasedAssetRevision: number;
+  parentServedRevision?: number | null;
+}
+
+export interface ProgramPublicationCompletionInput {
+  organizationId: string;
+  eventId: string;
+  releaseId: string;
+  revision: number;
+  expectedPublicationVersion: number;
+}
+export interface ProgramPublicationFailureInput extends ProgramPublicationCompletionInput {
+  reason: string;
+}
+
+export interface ProgramPublicationRollbackInput {
+  organizationId?: string;
+  eventId: string;
+  targetRevision: number;
+  expectedServedRevision: number | null;
+  expectedPublicationVersion?: number;
+}
+
+export interface ProgramPublicationEnqueueInput {
+  organizationId: string;
+  eventId: string;
+  releaseId: string;
+  revision: number;
+}
+
+export interface ProgramPublicationEnqueueReceipt {
+  id: string;
+}
+
+export interface ProgramPublicationEnqueuePort {
+  enqueue(input: ProgramPublicationEnqueueInput): Promise<ProgramPublicationEnqueueReceipt>;
+}
+
+export interface ProgramPublicationCacheInvalidationInput {
+  organizationId: string;
+  eventId: string;
+  revision: number;
+  cacheRevision: number;
+}
+
+export interface ProgramPublicationCacheInvalidationPort {
+  invalidate(input: ProgramPublicationCacheInvalidationInput): Promise<void>;
+}
+
+export interface ProgramPublicationServiceDependencies {
+  enqueue: ProgramPublicationEnqueuePort;
+  cacheInvalidation: ProgramPublicationCacheInvalidationPort;
+  eventRepository: Pick<EventRepository, "getEvent">;
+}
+export interface ProgramPublicationServiceOptions {
+  clock?: () => Date;
+  generateId?: () => string;
+}
+
+export interface ProgramAgendaProjectionEntry {
+  id: string;
+  sessionId: string;
+  trackIds: readonly string[];
+  status: string;
+  title: string;
+  summary?: string;
+  format?: string;
+  startsAt?: string;
+  endsAt?: string;
+  startsAtLocal?: string;
+  endsAtLocal?: string;
+  timeZone?: string;
+  roomName?: string;
+  trackNames?: readonly string[];
+  speakerNames?: readonly string[];
+}
+
+export interface ProgramAgendaProjection {
+  id: string;
+  revisionNumber: number;
+  sourceHash: string;
+  entries: readonly ProgramAgendaProjectionEntry[];
+}
+
+export interface ProgramSpeakerProjectionRecord {
+  id: string;
+  participantId: string;
+  sessionIds: readonly string[];
+  displayName: string;
+  title?: string;
+  company?: string;
+  bio?: string;
+  avatarUrl?: string | null;
+}
+
+export interface ProgramSpeakerProjection {
+  id: string;
+  revisionNumber: number;
+  sourceHash: string;
+  speakers: readonly ProgramSpeakerProjectionRecord[];
+}
+
+export interface ProgramResolvedAgendaEntry {
+  id: string;
+  sessionId: string;
+  title: string;
+  summary?: string;
+  format?: string;
+  startsAt?: string;
+  endsAt?: string;
+  startsAtLocal?: string;
+  endsAtLocal?: string;
+  timeZone?: string;
+  roomName?: string;
+  trackNames: readonly string[];
+  speakerNames: readonly string[];
+}
+
+export interface ProgramResolvedSpeaker {
+  id: string;
+  participantId: string;
+  sessionIds: readonly string[];
+  displayName: string;
+  title?: string;
+  company?: string;
+  bio?: string;
+  avatarUrl?: string | null;
+}
+
+export interface ProgramResolvedPublication {
+  configurationRevision: number;
+  servedProgramRevision: number;
+  cacheRevision: number;
+  programRevision: number;
+  agenda: readonly ProgramResolvedAgendaEntry[];
+  speakers: readonly ProgramResolvedSpeaker[];
+}
+
+export interface ResolveProgramPublicationInput {
+  manifest: ProgramPublicationManifest;
+  agendaProjection: ProgramAgendaProjection;
+  speakerProjection: ProgramSpeakerProjection;
+  configuration: EventEmbedConfiguration;
+}
+export interface ProgramPublicationPreviewRequest extends ResolveProgramPublicationInput {
+  organizationId?: string;
+  eventId: string;
 }

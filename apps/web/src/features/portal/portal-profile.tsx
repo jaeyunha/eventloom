@@ -16,7 +16,7 @@ import {
   PortalContentState,
   portalAssetStateLabel,
 } from "./portal-ui";
-import type { PortalDownloadGrant, PortalProfile } from "./types";
+import type { PortalDownloadGrant, PortalProfile, PortalTravelLogistics } from "./types";
 
 const maxJobTitleLength = 160;
 const maxCompanyLength = 200;
@@ -29,6 +29,13 @@ type ProfileDraft = {
   company: string;
   twitter: string;
   linkedin: string;
+  travelRequired: boolean;
+  arrivalAt: string;
+  departureAt: string;
+  accommodation: string;
+  dietaryRequirements: string;
+  accessibilityNeeds: string;
+  travelNotes: string;
 };
 
 function profileDraftFor(profile: PortalProfile): ProfileDraft {
@@ -38,6 +45,13 @@ function profileDraftFor(profile: PortalProfile): ProfileDraft {
     company: profile.company ?? "",
     twitter: profile.socialLinks?.twitter ?? "",
     linkedin: profile.socialLinks?.linkedin ?? "",
+    travelRequired: profile.travelLogistics?.travelRequired ?? false,
+    arrivalAt: profile.travelLogistics?.arrivalAt ?? "",
+    departureAt: profile.travelLogistics?.departureAt ?? "",
+    accommodation: profile.travelLogistics?.accommodation ?? "",
+    dietaryRequirements: profile.travelLogistics?.dietaryRequirements ?? "",
+    accessibilityNeeds: profile.travelLogistics?.accessibilityNeeds ?? "",
+    travelNotes: profile.travelLogistics?.travelNotes ?? "",
   };
 }
 
@@ -54,6 +68,17 @@ function profileSocialLinksFor(
   if (cleanLinkedin) socialLinks.linkedin = cleanLinkedin;
   else delete socialLinks.linkedin;
   return socialLinks;
+}
+function travelLogisticsForDraft(draft: ProfileDraft): PortalTravelLogistics {
+  return {
+    travelRequired: draft.travelRequired,
+    arrivalAt: draft.arrivalAt.trim() || null,
+    departureAt: draft.departureAt.trim() || null,
+    accommodation: draft.accommodation.trim(),
+    dietaryRequirements: draft.dietaryRequirements.trim(),
+    accessibilityNeeds: draft.accessibilityNeeds.trim(),
+    travelNotes: draft.travelNotes.trim(),
+  };
 }
 
 function validProfileText(value: string, label: string, maxLength: number): string | null {

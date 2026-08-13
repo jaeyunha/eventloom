@@ -187,11 +187,17 @@ export class AgendaCatalogSynchronizer implements AgendaCatalogSynchronizerContr
       positionalTimeZone,
     );
     const initialized = await this.initialize(input);
-    if (initialized.created) return initialized.draft;
     let draft = initialized.draft;
     for (let attempt = 0; attempt <= this.#maxRetries; attempt += 1) {
       const catalog = await this.readCatalog(input);
       assertScheduledReferencesRemain(draft.entries, catalog);
+      if (
+        attempt === 0 &&
+        initialized.createdFromCatalog !== null &&
+        catalogsEqual(initialized.createdFromCatalog, catalog)
+      ) {
+        return draft;
+      }
       try {
         return await this.#engine.updateCatalog({
           eventId: input.eventId,
@@ -214,11 +220,15 @@ export class AgendaCatalogSynchronizer implements AgendaCatalogSynchronizerContr
       `Agenda changed while synchronizing event ${input.eventId}`,
     );
   }
-  private async initialize(
-    input: AgendaCatalogSyncInput,
-  ): Promise<{ draft: AgendaDraft; created: boolean }> {
+  private async initialize(input: AgendaCatalogSyncInput): Promise<{
+    draft: AgendaDraft;
+    createdFromCatalog: AgendaCatalog | null;
+  }> {
     try {
-      return { draft: await this.#engine.getDraft(input.eventId), created: false };
+      return {
+        draft: await this.#engine.getDraft(input.eventId),
+        createdFromCatalog: null,
+      };
     } catch (error) {
       if (!isAgendaCode(error, "AGENDA_NOT_FOUND")) throw error;
     }
@@ -233,11 +243,17 @@ export class AgendaCatalogSynchronizer implements AgendaCatalogSynchronizerContr
       ...catalog,
     };
     try {
-      return { draft: await this.#engine.createAgenda(createInput), created: true };
+      return {
+        draft: await this.#engine.createAgenda(createInput),
+        createdFromCatalog: catalog,
+      };
     } catch (error) {
       // Another initializer may have won the race between getDraft and createAgenda.
       if (!isAgendaCode(error, "AGENDA_ALREADY_EXISTS")) throw error;
-      return { draft: await this.#engine.getDraft(input.eventId), created: false };
+      return {
+        draft: await this.#engine.getDraft(input.eventId),
+        createdFromCatalog: null,
+      };
     }
   }
 
@@ -314,6 +330,24 @@ function assertScheduledReferencesRemain(
       }
     }
   }
+}
+
+function catalogsEqual(left: AgendaCatalog, right: AgendaCatalog): boolean {
+  return (
+    catalogValuesEqual(left.sessions, right.sessions) &&
+    catalogValuesEqual(left.rooms, right.rooms) &&
+    catalogValuesEqual(left.tracks, right.tracks)
+  );
+}
+
+function catalogValuesEqual<T extends { readonly id: string }>(
+  left: readonly T[],
+  right: readonly T[],
+): boolean {
+  if (left.length !== right.length) return false;
+  const ordered = (values: readonly T[]) =>
+    [...values].sort((first, second) => first.id.localeCompare(second.id));
+  return JSON.stringify(ordered(left)) === JSON.stringify(ordered(right));
 }
 
 export type { AgendaCatalog, AgendaDraft, AgendaRoom, AgendaSession, AgendaTrack };

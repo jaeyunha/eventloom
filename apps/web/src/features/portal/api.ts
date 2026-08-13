@@ -14,6 +14,7 @@ import type {
   PortalTaskForm,
   PortalTaskResponseEnvelope,
   PortalTaskStatus,
+  PortalTravelLogistics,
   PortalUploadAuthorization,
   PortalView,
   PortalWikiPage,
@@ -33,15 +34,17 @@ export class PortalApiError extends Error {
   }
 }
 export interface PortalProfileDetails {
+  email?: string;
   jobTitle?: string;
   company?: string;
+  status?: string;
   socialLinks?: Readonly<Record<string, string>>;
+  travelLogistics?: PortalTravelLogistics;
 }
 
-export type PortalProfileDto = Omit<PortalProfile, "headshotAssetId"> &
-  PortalProfileDetails & {
-    headshotAssetId?: string | null;
-  };
+export type PortalProfileDto = Omit<PortalProfile, "headshotAssetId"> & {
+  headshotAssetId?: string | null;
+};
 export type PortalSocialNetwork = "twitter" | "linkedin";
 
 function isLocalHostname(value: string): boolean {
@@ -96,7 +99,9 @@ export interface PortalApi {
     biography?: string;
     jobTitle?: string;
     company?: string;
+    status?: string;
     socialLinks?: Readonly<Record<string, string>>;
+    travelLogistics?: PortalTravelLogistics;
     headshotAssetId?: string | null;
     expectedVersion: number;
   }): Promise<PortalProfileDto>;
@@ -420,6 +425,10 @@ export function createPortalApi(baseUrl: string, fetcher: Fetcher = fetch): Port
             ...(input.biography === undefined ? {} : { biography: input.biography }),
             ...(input.jobTitle === undefined ? {} : { jobTitle: input.jobTitle }),
             ...(input.company === undefined ? {} : { company: input.company }),
+            ...(input.status === undefined ? {} : { status: input.status }),
+            ...(input.travelLogistics === undefined
+              ? {}
+              : { travelLogistics: input.travelLogistics }),
             ...(input.socialLinks === undefined ? {} : { socialLinks: input.socialLinks }),
             ...(input.headshotAssetId === undefined
               ? {}

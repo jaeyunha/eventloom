@@ -272,20 +272,20 @@ describe("public embeds", () => {
     expect(markup).toContain('href="/api/public/events/open-systems/agenda.json"');
     expect(markup).toContain('href="/api/public/events/open-systems/agenda.ics"');
   });
-  it("does not enrich an agenda with speakers from another revision", () => {
-    const staleGallery: PublishedSpeakerGallery = {
+  it("allows distinct child revisions selected by one served program release", () => {
+    const independentlyVersionedGallery: PublishedSpeakerGallery = {
       ...gallery,
-      revision: { ...gallery.revision, id: "revision_2", number: 2 },
+      revision: { ...gallery.revision, id: "speaker_revision_2", number: 2 },
     };
     const markup = renderToStaticMarkup(
       createElement(PublicAgendaView, {
-        program: { agenda, speakers: staleGallery },
+        program: { agenda, speakers: independentlyVersionedGallery },
       }),
     );
 
     expect(markup).toContain("Morgan Lee");
-    expect(markup).not.toContain("Staff Engineer");
-    expect(markup).not.toContain("Open Works");
+    expect(markup).toContain("Staff Engineer");
+    expect(markup).toContain("Open Works");
   });
   it("hides feed links that the published projection marks unavailable", () => {
     const unavailableAgenda = {

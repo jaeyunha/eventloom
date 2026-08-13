@@ -341,7 +341,7 @@ describe("speaker portal UI components", () => {
   it("keeps primary portal pages and restored operational workspaces visible", () => {
     expect(portalNavigation.map(({ label }) => label)).toEqual([
       "Home",
-      "Sessions",
+      "Submissions",
       "Tasks",
       "Profile",
       "Co-speakers",

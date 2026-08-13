@@ -217,15 +217,15 @@ test("submitter completes the account-first CFP with two participants", async ({
   );
   await statusDashboard.click();
   await expect(page).toHaveURL(/\/portal\/submissions\?event=evt_evaluator_2026$/);
-  await expect(page.getByRole("heading", { level: 1, name: "Sessions" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Account menu" })).toContainText(
+  await expect(page.getByRole("heading", { level: 1, name: "Submissions" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Switch event or participant" })).toContainText(
     "Submitted CFP Event",
   );
   expect(portalHandoff.selectedEventIds).toEqual(["evt_evaluator_2026"]);
 
   await page.goto("/portal/submissions?event=event-not-authorized");
-  await expect(page.getByRole("heading", { level: 1, name: "Sessions" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Account menu" })).toContainText(
+  await expect(page.getByRole("heading", { level: 1, name: "Submissions" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Switch event or participant" })).toContainText(
     "Alternate Authorized Event",
   );
   expect(portalHandoff.selectedEventIds).toEqual([
@@ -244,7 +244,7 @@ test("submitter completes the account-first CFP with two participants", async ({
   await page.getByRole("button", { name: "Continue to portal →" }).click();
   await expect(page).toHaveURL(/\/portal\?event=evt_evaluator_2026$/);
   await expect(page.getByRole("heading", { level: 1, name: /Welcome, Ada/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Account menu" })).toContainText(
+  await expect(page.getByRole("button", { name: "Switch event or participant" })).toContainText(
     "Submitted CFP Event",
   );
   expect(portalHandoff.selectedEventIds).toEqual([

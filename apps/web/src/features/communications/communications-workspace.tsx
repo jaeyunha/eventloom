@@ -63,6 +63,10 @@ import {
   escapeHtmlForPreview,
   formatCommunicationAudience,
   formatCommunicationPurpose,
+  type ReminderDispatch,
+  type ReminderDispatchStatus,
+  type ReminderFacts,
+  type ReminderRun,
 } from "./api";
 import styles from "./communications-workspace.module.css";
 
@@ -71,6 +75,17 @@ export type CommunicationProviderState =
   | "available"
   | "unavailable"
   | "domain-unverified";
+export type ReminderTruthState =
+  | "idle"
+  | "ready"
+  | "pending"
+  | "conflict"
+  | "stale"
+  | "unavailable";
+
+export interface ReminderRunActionInput {
+  readonly expectedAudienceRevision: string;
+}
 
 export interface CommunicationsWorkspaceProps {
   readonly eventId: string;
@@ -80,6 +95,9 @@ export interface CommunicationsWorkspaceProps {
   readonly initialPreview?: CommunicationPreview | null;
   readonly initialSend?: CommunicationSend | null;
   readonly providerState?: CommunicationProviderState;
+  readonly initialReminderRuns?: readonly ReminderRun[];
+  readonly initialReminderDispatches?: readonly ReminderDispatch[];
+  readonly initialReminderFacts?: ReminderFacts | null;
 }
 
 export interface CommunicationTemplateSelection {
@@ -93,6 +111,14 @@ export interface CommunicationsWorkspaceViewProps {
   readonly templates: readonly CommunicationTemplate[];
   readonly preview?: CommunicationPreview | null;
   readonly send?: CommunicationSend | null;
+  readonly reminderRuns?: readonly ReminderRun[];
+  readonly reminderDispatches?: readonly ReminderDispatch[];
+  readonly reminderFacts?: ReminderFacts | null;
+  readonly reminderState?: ReminderTruthState;
+  readonly reminderError?: string | null;
+  readonly reminderLoading?: boolean;
+  readonly onRunManualReminders?: (input: ReminderRunActionInput) => Promise<void>;
+  readonly onRefreshDeliveryTruth?: () => Promise<void>;
   readonly loading?: boolean;
   readonly busy?: boolean;
   readonly error?: string | null;
@@ -184,23 +210,24 @@ export function invalidateCommunicationPreviewState(
   };
 }
 
-function statusLabel(
-  status:
-    | CommunicationTemplate["status"]
-    | CommunicationSend["status"]
-    | CommunicationDelivery["status"],
-): string {
-  return status.charAt(0).toUpperCase() + status.slice(1);
+function statusLabel(status: string): string {
+  return status
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 function statusVariant(
   status:
     | CommunicationTemplate["status"]
     | CommunicationSend["status"]
-    | CommunicationDelivery["status"],
+    | CommunicationDelivery["status"]
+    | ReminderDispatchStatus,
 ): "default" | "secondary" | "outline" | "destructive" {
   if (status === "failed" || status === "bounced" || status === "complained") return "destructive";
-  if (status === "approved" || status === "delivered") return "secondary";
+  if (status === "approved" || status === "provider_accepted" || status === "delivered") {
+    return "secondary";
+  }
   return "outline";
 }
 
@@ -212,6 +239,9 @@ function StatusBadge({
     | CommunicationSend["status"]
     | CommunicationDelivery["status"];
 }>) {
+  return <Badge variant={statusVariant(status)}>{statusLabel(status)}</Badge>;
+}
+function ReminderStatusBadge({ status }: Readonly<{ status: ReminderDispatchStatus }>) {
   return <Badge variant={statusVariant(status)}>{statusLabel(status)}</Badge>;
 }
 
@@ -309,6 +339,15 @@ function stateFromError(error: unknown): CommunicationProviderState | undefined 
     return /domain|verif/iu.test(error.message) ? "domain-unverified" : "unavailable";
   }
   return undefined;
+}
+function reminderTruthStateFromError(error: unknown): ReminderTruthState {
+  if (error instanceof CommunicationApiError) {
+    if (error.code === "COMMUNICATION_CONFLICT" || error.status === 409) return "conflict";
+    if (error.code === "COMMUNICATION_UNAVAILABLE" || error.status === 503) {
+      return "unavailable";
+    }
+  }
+  return "stale";
 }
 
 function formatTime(value: string): string {
@@ -817,7 +856,15 @@ function DeliveryHistory({
   busy,
 }: Readonly<{ send: CommunicationSend; onRetryFailed?: () => Promise<void>; busy: boolean }>) {
   const recipientById = new Map(send.recipients.map((recipient) => [recipient.id, recipient]));
-  const failed = send.terminal && send.deliveries.some((delivery) => delivery.status === "failed");
+  const retryable =
+    send.terminal &&
+    send.deliveries.some(
+      (delivery) => delivery.status === "failed" || delivery.status === "bounced",
+    );
+  const providerAcceptedCount = send.deliveries.filter(
+    (delivery) => delivery.status === "provider_accepted",
+  ).length;
+  const bouncedCount = send.deliveries.filter((delivery) => delivery.status === "bounced").length;
   return (
     <Card className={styles.workflowCard}>
       <CardHeader>
@@ -845,6 +892,10 @@ function DeliveryHistory({
           <span>{send.queuedCount} queued</span>
           <span>{send.deliveredCount} delivered</span>
           <span>{send.failedCount} failed</span>
+          <span>{bouncedCount} bounced</span>
+          {providerAcceptedCount > 0 ? (
+            <span>{providerAcceptedCount} provider accepted</span>
+          ) : null}
         </div>
         <details className={styles.disclosure} open>
           <summary>Recipient delivery details</summary>
@@ -883,14 +934,14 @@ function DeliveryHistory({
             </Table>
           </div>
         </details>
-        {failed && onRetryFailed !== undefined ? (
+        {retryable && onRetryFailed !== undefined ? (
           <Button
             variant="outline"
             type="button"
             disabled={busy}
             onClick={() => void onRetryFailed()}
           >
-            {busy ? "Retrying…" : "Retry failed recipients"}
+            {busy ? "Retrying…" : "Retry failed or bounced recipients"}
           </Button>
         ) : null}
         <div>
@@ -899,12 +950,16 @@ function DeliveryHistory({
             <p className={styles.mutedText}>No audit history has been returned.</p>
           ) : (
             <ol className={styles.auditList}>
-              {send.history.map((entry: CommunicationAuditEntry) => (
-                <li key={entry.id}>
-                  {formatTime(entry.occurredAt)} · {entry.action}
-                  {entry.recipientId === null ? "" : ` · ${entry.recipientId}`}
-                </li>
-              ))}
+              {send.history.map((entry: CommunicationAuditEntry) => {
+                const auditAnchor = `audit-${entry.id}`;
+                return (
+                  <li key={entry.id} id={auditAnchor}>
+                    <a href={`#${auditAnchor}`}>Audit {entry.id}</a> ·{" "}
+                    {formatTime(entry.occurredAt)} · {entry.action}
+                    {entry.recipientId === null ? "" : ` · ${entry.recipientId}`}
+                  </li>
+                );
+              })}
             </ol>
           )}
         </div>
@@ -932,6 +987,339 @@ function DeliveryHistory({
     </Card>
   );
 }
+function reminderSubjectLabel(subject: ReminderDispatch["subject"]): string {
+  return subject.type === "task"
+    ? `Task ${subject.taskId}`
+    : `Review assignment ${subject.reviewAssignmentId}`;
+}
+
+function reminderRunVariant(
+  state: ReminderRun["state"],
+): "default" | "secondary" | "outline" | "destructive" {
+  if (state === "failed") return "destructive";
+  if (state === "completed") return "secondary";
+  return "outline";
+}
+
+function latestReminderRun(runs: readonly ReminderRun[]): ReminderRun | undefined {
+  return runs.reduce<ReminderRun | undefined>(
+    (latest, candidate) =>
+      latest === undefined || candidate.updatedAt > latest.updatedAt ? candidate : latest,
+    undefined,
+  );
+}
+
+function ReminderTruth({
+  eventId,
+  runs,
+  dispatches,
+  facts,
+  state,
+  error,
+  loading,
+  busy,
+  onRunManualReminders,
+  onRefreshDeliveryTruth,
+}: Readonly<{
+  eventId: string;
+  runs: readonly ReminderRun[];
+  dispatches: readonly ReminderDispatch[];
+  facts: ReminderFacts | null;
+  state: ReminderTruthState;
+  error: string | null;
+  loading: boolean;
+  busy: boolean;
+  onRunManualReminders?: (input: ReminderRunActionInput) => Promise<void>;
+  onRefreshDeliveryTruth?: () => Promise<void>;
+}>) {
+  const effectiveState = loading ? "pending" : state;
+  const latestRun = latestReminderRun(runs);
+  const expectedAudienceRevision =
+    latestRun?.audienceRevision ??
+    facts?.lastAutomatic?.audienceRevision ??
+    facts?.lastManual?.audienceRevision ??
+    "";
+  const manualDisabled =
+    busy ||
+    onRunManualReminders === undefined ||
+    expectedAudienceRevision.length === 0 ||
+    effectiveState === "pending" ||
+    effectiveState === "conflict" ||
+    effectiveState === "stale" ||
+    effectiveState === "unavailable";
+
+  return (
+    <Card
+      id="reminder-truth"
+      className={styles.workflowCard}
+      role="region"
+      aria-labelledby="reminder-truth-heading"
+    >
+      <CardHeader>
+        <div className={styles.cardEyebrow}>Reminder and delivery truth</div>
+        <div className={styles.cardHeadingRow}>
+          <div>
+            <CardTitle id="reminder-truth-heading">Automatic and manual reminders</CardTitle>
+            <CardDescription>
+              Queue insertion is not delivery success. Provider-accepted, delivered, failed, and
+              bounced states come only from the reminder delivery ledger.
+            </CardDescription>
+          </div>
+          <Badge
+            variant={
+              effectiveState === "unavailable" || effectiveState === "conflict"
+                ? "destructive"
+                : effectiveState === "ready"
+                  ? "secondary"
+                  : "outline"
+            }
+          >
+            {effectiveState === "idle"
+              ? "Not loaded"
+              : effectiveState === "ready"
+                ? "Truth current"
+                : effectiveState.charAt(0).toUpperCase() + effectiveState.slice(1)}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className={styles.formStack}>
+        {effectiveState === "pending" ? (
+          <Alert role="status">
+            <AlertTitle>Reminder truth pending</AlertTitle>
+            <AlertDescription>
+              Loading event-scoped runs and dispatches. No provider outcome is assumed while this
+              read is pending.
+            </AlertDescription>
+          </Alert>
+        ) : null}
+        {effectiveState === "conflict" ? (
+          <Alert variant="destructive">
+            <AlertTitle>Reminder audience conflict</AlertTitle>
+            <AlertDescription>
+              The audience revision changed before the reminder run could be confirmed. Reconcile
+              the current audience revision before running manual reminders.
+              {error === null ? null : ` ${error}`}
+            </AlertDescription>
+          </Alert>
+        ) : null}
+        {effectiveState === "stale" ? (
+          <Alert>
+            <AlertTitle>Reminder truth is stale</AlertTitle>
+            <AlertDescription>
+              These facts may have changed in the provider or outbox. Refresh delivery truth before
+              treating a queued or provider-accepted state as terminal.
+              {error === null ? null : ` ${error}`}
+            </AlertDescription>
+          </Alert>
+        ) : null}
+        {effectiveState === "unavailable" ? (
+          <Alert variant="destructive">
+            <AlertTitle>Reminder delivery truth unavailable</AlertTitle>
+            <AlertDescription>
+              The reminder repository or delivery provider did not return authoritative facts. No
+              delivery success is shown.
+              {error === null ? null : ` ${error}`}
+            </AlertDescription>
+          </Alert>
+        ) : null}
+        {(effectiveState === "conflict" ||
+          effectiveState === "stale" ||
+          effectiveState === "unavailable") &&
+        onRefreshDeliveryTruth !== undefined ? (
+          <div className={styles.actionRow}>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={busy}
+              onClick={() => void onRefreshDeliveryTruth()}
+            >
+              Refresh delivery truth
+            </Button>
+          </div>
+        ) : null}
+        {effectiveState !== "pending" &&
+        effectiveState !== "conflict" &&
+        effectiveState !== "stale" &&
+        effectiveState !== "unavailable" ? (
+          <>
+            <div className={styles.actionRow}>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={busy || onRefreshDeliveryTruth === undefined}
+                onClick={() =>
+                  onRefreshDeliveryTruth === undefined ? undefined : void onRefreshDeliveryTruth()
+                }
+              >
+                {loading ? "Refreshing delivery truth…" : "Refresh delivery truth"}
+              </Button>
+              <Button
+                type="button"
+                disabled={manualDisabled}
+                onClick={() =>
+                  onRunManualReminders === undefined
+                    ? undefined
+                    : void onRunManualReminders({ expectedAudienceRevision })
+                }
+              >
+                {busy ? "Running manual reminders…" : "Run manual reminders"}
+              </Button>
+              {expectedAudienceRevision.length === 0 ? (
+                <span className={styles.mutedText}>
+                  A server audience revision is required before a manual run.
+                </span>
+              ) : null}
+            </div>
+            {facts === null ? (
+              <Alert>
+                <AlertTitle>No reminder facts returned</AlertTitle>
+                <AlertDescription>
+                  Select a task or review subject to fetch automatic and manual reminder facts.
+                </AlertDescription>
+              </Alert>
+            ) : (
+              <div className={styles.detailGrid}>
+                <div>
+                  <span className={styles.detailLabel}>Last automatic reminder</span>
+                  <strong>
+                    {facts.lastAutomatic === null
+                      ? "No automatic run returned"
+                      : `${facts.lastAutomatic.id} · ${statusLabel(facts.lastAutomatic.state)}`}
+                  </strong>
+                  {facts.lastAutomatic !== null ? (
+                    <span className={styles.mutedText}>
+                      {formatTime(facts.lastAutomatic.updatedAt)}
+                    </span>
+                  ) : null}
+                </div>
+                <div>
+                  <span className={styles.detailLabel}>Last manual reminder</span>
+                  <strong>
+                    {facts.lastManual === null
+                      ? "No manual run returned"
+                      : `${facts.lastManual.id} · ${statusLabel(facts.lastManual.state)}`}
+                  </strong>
+                  {facts.lastManual !== null ? (
+                    <span className={styles.mutedText}>
+                      {formatTime(facts.lastManual.updatedAt)}
+                    </span>
+                  ) : null}
+                </div>
+                <div>
+                  <span className={styles.detailLabel}>Next eligible time</span>
+                  <strong>
+                    {facts.nextEligibleAt === null
+                      ? "No next eligible time returned"
+                      : formatTime(facts.nextEligibleAt)}
+                  </strong>
+                </div>
+                <div>
+                  <span className={styles.detailLabel}>Last outcome</span>
+                  <strong>
+                    {facts.lastOutcome === null
+                      ? "No dispatch outcome returned"
+                      : statusLabel(facts.lastOutcome.status)}
+                  </strong>
+                  {facts.lastOutcome !== null ? (
+                    <span className={styles.mutedText}>
+                      {facts.lastOutcome.id} · {reminderSubjectLabel(facts.lastOutcome.subject)}
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+            )}
+            <p className={styles.mutedText}>
+              Historical recipient and task/review subject snapshots are immutable. A new audience
+              revision requires a new run and does not rewrite prior dispatches.
+            </p>
+          </>
+        ) : null}
+        {runs.length > 0 ? (
+          <details className={styles.disclosure} open>
+            <summary>Reminder runs ({runs.length})</summary>
+            <div className={styles.tableWrap}>
+              <Table>
+                <TableCaption>Event-scoped automatic and manual reminder runs</TableCaption>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead scope="col">Run</TableHead>
+                    <TableHead scope="col">Trigger</TableHead>
+                    <TableHead scope="col">State</TableHead>
+                    <TableHead scope="col">Candidates</TableHead>
+                    <TableHead scope="col">Eligible</TableHead>
+                    <TableHead scope="col">Queued</TableHead>
+                    <TableHead scope="col">Skipped</TableHead>
+                    <TableHead scope="col">Failed</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {runs.map((run) => (
+                    <TableRow key={run.id}>
+                      <TableHead scope="row">
+                        <a href={`#reminder-run-${run.id}`}>{run.id}</a>
+                        <div className={styles.mutedText}>{run.audienceRevision}</div>
+                      </TableHead>
+                      <TableCell>{statusLabel(run.triggerType)}</TableCell>
+                      <TableCell>
+                        <Badge variant={reminderRunVariant(run.state)}>
+                          {statusLabel(run.state)}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>{run.candidateCount}</TableCell>
+                      <TableCell>{run.eligibleCount}</TableCell>
+                      <TableCell>{run.queuedCount}</TableCell>
+                      <TableCell>{run.skippedCount}</TableCell>
+                      <TableCell>{run.failedCount}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </details>
+        ) : null}
+        {dispatches.length > 0 ? (
+          <details className={styles.disclosure} open>
+            <summary>Reminder dispatches ({dispatches.length})</summary>
+            <div className={styles.tableWrap}>
+              <Table>
+                <TableCaption>
+                  Historical recipient snapshots and provider delivery states for event {eventId}
+                </TableCaption>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead scope="col">Dispatch</TableHead>
+                    <TableHead scope="col">Recipient snapshot</TableHead>
+                    <TableHead scope="col">Subject snapshot</TableHead>
+                    <TableHead scope="col">Status</TableHead>
+                    <TableHead scope="col">Provider id</TableHead>
+                    <TableHead scope="col">Cadence</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {dispatches.map((dispatch) => (
+                    <TableRow key={dispatch.id} id={`reminder-dispatch-${dispatch.id}`}>
+                      <TableHead scope="row">
+                        <a href={`#reminder-dispatch-${dispatch.id}`}>{dispatch.id}</a>
+                        <div className={styles.mutedText}>Run {dispatch.runId}</div>
+                      </TableHead>
+                      <TableCell>{dispatch.recipient}</TableCell>
+                      <TableCell>{reminderSubjectLabel(dispatch.subject)}</TableCell>
+                      <TableCell>
+                        <ReminderStatusBadge status={dispatch.status} />
+                      </TableCell>
+                      <TableCell>{dispatch.providerMessageId ?? "—"}</TableCell>
+                      <TableCell>{dispatch.cadenceWindow}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </details>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
 
 const workflowSteps = [
   ["draft-template", "Draft template"],
@@ -939,6 +1327,7 @@ const workflowSteps = [
   ["preview-snapshot", "Preview snapshot"],
   ["confirm-send", "Confirm send"],
   ["delivery-history", "Delivery history"],
+  ["reminder-truth", "Reminder truth"],
 ] as const;
 
 function WorkflowNavigation({
@@ -1004,6 +1393,14 @@ export function CommunicationsWorkspaceView({
   templates,
   preview = null,
   send = null,
+  reminderRuns = [],
+  reminderDispatches = [],
+  reminderFacts = null,
+  reminderState = "idle",
+  reminderError = null,
+  reminderLoading = false,
+  onRunManualReminders,
+  onRefreshDeliveryTruth,
   loading = false,
   busy = false,
   error = null,
@@ -1333,6 +1730,18 @@ export function CommunicationsWorkspaceView({
               {...(onRetryFailed === undefined ? {} : { onRetryFailed })}
             />
           ) : null}
+          <ReminderTruth
+            eventId={eventId}
+            runs={reminderRuns}
+            dispatches={reminderDispatches}
+            facts={reminderFacts}
+            state={reminderState}
+            error={reminderError}
+            loading={reminderLoading}
+            busy={busy}
+            {...(onRunManualReminders === undefined ? {} : { onRunManualReminders })}
+            {...(onRefreshDeliveryTruth === undefined ? {} : { onRefreshDeliveryTruth })}
+          />
         </main>
         <AlertDialog
           open={sendConfirmationOpen && preview !== null}
@@ -1413,6 +1822,9 @@ export function CommunicationsWorkspace({
   initialTemplates,
   initialPreview = null,
   initialSend = null,
+  initialReminderRuns,
+  initialReminderDispatches,
+  initialReminderFacts = null,
   providerState: initialProviderState = "unknown",
 }: CommunicationsWorkspaceProps) {
   const api = useMemo(
@@ -1424,6 +1836,17 @@ export function CommunicationsWorkspace({
   );
   const [preview, setPreview] = useState<CommunicationPreview | null>(initialPreview);
   const [send, setSend] = useState<CommunicationSend | null>(initialSend);
+  const [reminderRuns, setReminderRuns] = useState<readonly ReminderRun[]>(
+    initialReminderRuns ?? [],
+  );
+  const [reminderDispatches, setReminderDispatches] = useState<readonly ReminderDispatch[]>(
+    initialReminderDispatches ?? [],
+  );
+  const [reminderFacts, setReminderFacts] = useState<ReminderFacts | null>(initialReminderFacts);
+  const [reminderState, setReminderState] = useState<ReminderTruthState>(
+    initialReminderRuns !== undefined || initialReminderDispatches !== undefined ? "ready" : "idle",
+  );
+  const [reminderError, setReminderError] = useState<string | null>(null);
   const [selectedTemplateId, setSelectedTemplateId] = useState(
     initialTemplates?.[0]?.id ?? initialPreview?.templateId ?? "",
   );
@@ -1442,6 +1865,7 @@ export function CommunicationsWorkspace({
     useState<CommunicationProviderState>(initialProviderState);
   const [sendConfirmationOpen, setSendConfirmationOpen] = useState(false);
   const idempotencyKeyRef = useRef<string | null>(null);
+  const reminderIdempotencyKeyRef = useRef<string | null>(null);
   const templateLoadGenerationRef = useRef(0);
   const selectedTemplateSelectionRef = useRef<CommunicationTemplateSelection | undefined>(
     selectedTemplateId.length === 0 || selectedTemplateVersion === undefined
@@ -1511,6 +1935,30 @@ export function CommunicationsWorkspace({
     },
     [initialReadKey],
   );
+  const refreshDeliveryTruth = useCallback(async () => {
+    if (
+      typeof api.listReminderRuns !== "function" ||
+      typeof api.listReminderDispatches !== "function"
+    ) {
+      setReminderState("unavailable");
+      setReminderError("Reminder delivery truth is not exposed by this API surface.");
+      return;
+    }
+    setReminderState("pending");
+    setReminderError(null);
+    try {
+      const [runs, dispatches] = await Promise.all([
+        api.listReminderRuns(eventId),
+        api.listReminderDispatches(eventId),
+      ]);
+      setReminderRuns(runs);
+      setReminderDispatches(dispatches);
+      setReminderState("ready");
+    } catch (reason) {
+      setReminderState(reminderTruthStateFromError(reason));
+      setReminderError(messageFromError(reason));
+    }
+  }, [api, eventId]);
 
   useEffect(() => {
     if (initialTemplates !== undefined) return;
@@ -1531,6 +1979,12 @@ export function CommunicationsWorkspace({
       lease.release();
     };
   }, [initialReadCoordinator, initialReadKey, initialTemplates, loadTemplates]);
+  useEffect(() => {
+    if (initialReminderRuns !== undefined || initialReminderDispatches !== undefined) return;
+    setReminderRuns([]);
+    setReminderDispatches([]);
+    void refreshDeliveryTruth();
+  }, [initialReminderDispatches, initialReminderRuns, refreshDeliveryTruth]);
 
   function replaceTemplate(next: CommunicationTemplate): void {
     setTemplates((current) =>
@@ -1712,6 +2166,51 @@ export function CommunicationsWorkspace({
       setBusy(false);
     }
   }
+  async function runManualReminders(input: ReminderRunActionInput): Promise<void> {
+    if (typeof api.runManualReminders !== "function") {
+      setReminderState("unavailable");
+      setReminderError("Manual reminder runs are not exposed by this API surface.");
+      return;
+    }
+    const expectedAudienceRevision = input.expectedAudienceRevision.trim();
+    if (expectedAudienceRevision.length === 0) {
+      setReminderState("conflict");
+      setReminderError("A current audience revision is required before a manual run.");
+      return;
+    }
+    reminderIdempotencyKeyRef.current ??= `web-reminder-${
+      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random()}`
+    }`;
+    const idempotencyKey = reminderIdempotencyKeyRef.current;
+    if (idempotencyKey === null) {
+      setReminderState("unavailable");
+      setReminderError("A reminder idempotency key could not be created.");
+      return;
+    }
+    setBusy(true);
+    setReminderState("pending");
+    setReminderError(null);
+    setStatusMessage(null);
+    try {
+      const next = await api.runManualReminders({
+        eventId,
+        idempotencyKey,
+        expectedAudienceRevision,
+      });
+      setReminderRuns((current) => [...current.filter((run) => run.id !== next.id), next]);
+      reminderIdempotencyKeyRef.current = null;
+      setReminderState("ready");
+      setStatusMessage(`Manual reminder run ${next.id} is ${statusLabel(next.state)}.`);
+      await refreshDeliveryTruth();
+    } catch (reason) {
+      setReminderState(reminderTruthStateFromError(reason));
+      setReminderError(messageFromError(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <CommunicationsWorkspaceView
@@ -1720,6 +2219,14 @@ export function CommunicationsWorkspace({
       templates={templates}
       preview={preview}
       send={send}
+      reminderRuns={reminderRuns}
+      reminderDispatches={reminderDispatches}
+      reminderFacts={reminderFacts}
+      reminderState={reminderState}
+      reminderError={reminderError}
+      reminderLoading={reminderState === "pending"}
+      onRunManualReminders={runManualReminders}
+      onRefreshDeliveryTruth={refreshDeliveryTruth}
       loading={loading}
       busy={busy}
       error={error}
