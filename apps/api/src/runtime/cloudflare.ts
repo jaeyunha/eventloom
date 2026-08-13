@@ -33,8 +33,6 @@ import type {
   MemberUser,
   SetupLinkClaim,
 } from "../features/members/types";
-import type { AirtableTransport } from "../infrastructure/airtable";
-import { FetchAirtableTransport, RetryingAirtableTransport } from "../infrastructure/airtable";
 import {
   type CloudflareBindings,
   type CloudflareOutboxInvitationTransient,
@@ -79,7 +77,6 @@ export type RuntimeBindings = ApiBindings &
     readonly AIRTABLE_API_ORIGIN?: string;
     readonly AIRTABLE_OAUTH_CLIENT_ID?: string;
     readonly AIRTABLE_OAUTH_CLIENT_SECRET?: string;
-    readonly AIRTABLE_TRANSPORT?: AirtableTransport;
     readonly AI?: CloudflareAiBinding;
     readonly AI_MODEL?: string;
     readonly AI_PROVIDER?: string;
@@ -2419,32 +2416,9 @@ export function createCloudflareDependencies(source: RuntimeBindings): ApiDepend
           : "better-auth.session_token",
     },
   );
-  const airtableConfigured =
-    nonEmpty(bindings.AIRTABLE_ACCESS_TOKEN) && nonEmpty(bindings.AIRTABLE_BASE_ID);
-  const transport: AirtableTransport =
-    bindings.AIRTABLE_TRANSPORT ??
-    (airtableConfigured
-      ? new RetryingAirtableTransport(
-          new FetchAirtableTransport({
-            token: bindings.AIRTABLE_ACCESS_TOKEN ?? "",
-            ...(bindings.AIRTABLE_API_ORIGIN === undefined
-              ? {}
-              : { apiOrigin: bindings.AIRTABLE_API_ORIGIN }),
-          }),
-        )
-      : {
-          request: async () => {
-            throw new Error("Airtable integration is not configured.");
-          },
-        });
   const businessRepositories = createD1RuntimeDependencies({ DB: bindings.DB });
-  const optionalAirtableBaseId = nonEmpty(bindings.AIRTABLE_BASE_ID)
-    ? bindings.AIRTABLE_BASE_ID
-    : "optional-airtable-disabled";
   const dependencies = createD1ApplicationDependencies({
     authenticator,
-    baseId: optionalAirtableBaseId,
-    transport,
     database: bindings.DB,
     agendaCoordinator: bindings.AGENDA_COORDINATOR,
     privateFiles: bindings.PRIVATE_FILES,

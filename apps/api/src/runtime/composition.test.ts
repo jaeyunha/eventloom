@@ -192,7 +192,7 @@ function productionD1(digest: string): NonNullable<RuntimeBindings["DB"]> {
 }
 
 function productionBindings(
-  transport: AirtableTransport,
+  _transport: AirtableTransport,
   database: NonNullable<RuntimeBindings["DB"]>,
 ): RuntimeBindings {
   const coordinator = {
@@ -239,7 +239,6 @@ function productionBindings(
     OPENSEND_API_KEY: "opensend-test-key",
     CACHE_INVALIDATION_URL: "https://web-production.example.test/api/internal/cache-invalidation",
     CACHE_INVALIDATION_TOKEN: "shared-cache-invalidation-token",
-    AIRTABLE_TRANSPORT: transport,
   };
 }
 
@@ -982,6 +981,18 @@ describe("production authenticated tenant scope", () => {
     const bindings = productionBindings(new FakeAirtableTransport(), productionD1("unused"));
     expect(inspectProductionRuntime(bindings).success).toBe(true);
     expect(() => createRuntimeApp(bindings)).not.toThrow();
+  });
+
+  it("boots production D1 authority without legacy Airtable business credentials", () => {
+    const bindings = productionBindings(new FakeAirtableTransport(), productionD1("unused"));
+    const {
+      AIRTABLE_ACCESS_TOKEN: _airtableAccessToken,
+      AIRTABLE_BASE_ID: _airtableBaseId,
+      ...d1Only
+    } = bindings;
+
+    expect(inspectProductionRuntime(d1Only).success).toBe(true);
+    expect(() => createRuntimeApp(d1Only)).not.toThrow();
   });
 });
 

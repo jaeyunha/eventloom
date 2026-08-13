@@ -168,6 +168,19 @@ Create a result row for every walkthrough area:
 
 A release QA result requires staging Ever and `codex-cua` evidence against the release commit plus real deployed-boundary observations. Local Playwright evidence remains labeled local and cannot substitute for staging browser, real Airtable/OpenSend, or manual calendar evidence. Never mark a stale commit, mocked provider response, skipped-auth walkthrough, or known timezone/DST gap as a pass.
 
+For an Airtable-to-D1 cutover, the evidence bundle must additionally include:
+
+- the Airtable inventory schema hash and per-table importable/quarantined
+  counts;
+- the D1 Time Travel bookmark captured before the first write;
+- the exact transformed import-plan hash;
+- local rehearsal results, including `PRAGMA foreign_key_check`;
+- remote before/after counts and canonical hashes;
+- the missing-Agenda invariant for every imported Event;
+- confirmation that no quarantined record was written; and
+- live acceptance with Airtable unavailable, proving it remains an optional
+  adapter rather than a business-read fallback.
+
 ## Frozen evaluator model and evidence boundaries
 
 The evaluator configuration is fixed: **Terra medium** is the agent model and

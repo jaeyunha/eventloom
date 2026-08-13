@@ -39,7 +39,7 @@ function fakeAirtable(schema, records, { failSecondSessionPage = false } = {}) {
       }
       assert.equal(parsed.searchParams.get("offset"), "offset-session-2");
       if (failSecondSessionPage) throw new Error("simulated network failure");
-      return response({ records: [records[tableId][1]] });
+      return response({ records: records[tableId].slice(1) });
     }
     return response({ records: records[tableId] });
   };
@@ -160,31 +160,137 @@ test("resumes from the exact Airtable offset without rereading completed pages",
   await assert.rejects(readFile(`${outputPath}.checkpoint.json`, "utf8"), { code: "ENOENT" });
 });
 
-test("rejects missing and duplicate Application IDs", async () => {
+test("strict mode rejects missing and duplicate Application IDs", async () => {
   const schema = await fixture("schema.json");
-  const records = await fixture("records.json");
+  const missingRecords = await fixture("records.json");
+  const duplicateRecords = await fixture("records.json");
   const directory = await mkdtemp(join(tmpdir(), "airtable-export-invalid-id-"));
-  records.tblSessions[1].fields["Application ID"] = "session-b";
+  delete missingRecords.tblSessions[0].fields["Application ID"];
   await assert.rejects(
     exportAirtableInventory({
       accessToken: "secret-token",
       baseId: "appTest",
-      outputPath: join(directory, "manifest.json"),
+      outputPath: join(directory, "missing-manifest.json"),
       apiOrigin: "https://airtable.test",
-      fetchImplementation: fakeAirtable(schema, records).fetchImplementation,
+      fetchImplementation: fakeAirtable(schema, missingRecords).fetchImplementation,
+    }),
+    (error) => error.code === "APPLICATION_ID_INVALID" && !error.message.includes("secret-token"),
+  );
+
+  duplicateRecords.tblSessions[1].fields["Application ID"] = "session-b";
+  await assert.rejects(
+    exportAirtableInventory({
+      accessToken: "secret-token",
+      baseId: "appTest",
+      outputPath: join(directory, "duplicate-manifest.json"),
+      apiOrigin: "https://airtable.test",
+      fetchImplementation: fakeAirtable(schema, duplicateRecords).fetchImplementation,
     }),
     (error) => error.code === "APPLICATION_ID_DUPLICATE" && !error.message.includes("secret-token"),
   );
 });
 
-test("validates arguments and configuration without exposing credentials", () => {
-  assert.deepEqual(parseExportArguments(["--dry-run", "--table", "Events", "--resume"]), {
-    help: false,
-    dryRun: true,
-    resume: true,
-    output: "airtable-inventory.json",
-    tables: ["Events"],
+test("quarantine mode preserves raw invalid records and exports only the valid remainder", async () => {
+  const schema = await fixture("schema.json");
+  const records = await fixture("records.json");
+  records.tblSessions.push(
+    {
+      id: "recMissing",
+      createdTime: "2026-01-05T00:00:00.000Z",
+      fields: { Title: "Missing ID", "Organization ID": "org-acme" },
+    },
+    {
+      id: "recInvalid",
+      createdTime: "2026-01-06T00:00:00.000Z",
+      fields: {
+        Title: "Invalid ID",
+        "Application ID": " invalid-id ",
+        "Organization ID": "org-acme",
+      },
+    },
+  );
+  records.tblSessions[1].fields["Application ID"] = "session-b";
+  const directory = await mkdtemp(join(tmpdir(), "airtable-export-quarantine-"));
+  const outputPath = join(directory, "manifest.json");
+  const reportPath = join(directory, "quarantine.json");
+
+  const result = await exportAirtableInventory({
+    accessToken: "secret-token",
+    baseId: "appTest",
+    outputPath,
+    quarantineReportPath: reportPath,
+    apiOrigin: "https://airtable.test",
+    fetchImplementation: fakeAirtable(schema, records).fetchImplementation,
   });
+
+  assert.equal(result.manifest.recordCount, 2);
+  assert.equal(result.manifest.quarantineCount, 4);
+  const sessions = result.manifest.tables.find((table) => table.name === "Sessions");
+  assert.deepEqual(sessions.records, []);
+  assert.equal(sessions.quarantineCount, 4);
+  assert.deepEqual(
+    sessions.quarantine.map((record) => record.reason),
+    [
+      "DUPLICATE_APPLICATION_ID",
+      "DUPLICATE_APPLICATION_ID",
+      "INVALID_APPLICATION_ID",
+      "MISSING_APPLICATION_ID",
+    ],
+  );
+  assert.deepEqual(
+    new Set(sessions.quarantine.map((record) => record.airtableRecordId)),
+    new Set(["recSessionA", "recSessionB", "recMissing", "recInvalid"]),
+  );
+  assert.deepEqual(
+    sessions.quarantine.find((record) => record.airtableRecordId === "recMissing").raw,
+    records.tblSessions.find((record) => record.id === "recMissing"),
+  );
+  assert.match(sessions.schemaSha256, /^[a-f0-9]{64}$/u);
+  assert.equal(result.quarantineReport.quarantineCount, 4);
+  assert.deepEqual(result.quarantineReport.tables[0].reasons, {
+    DUPLICATE_APPLICATION_ID: 2,
+    INVALID_APPLICATION_ID: 1,
+    MISSING_APPLICATION_ID: 1,
+  });
+  const reportSource = await readFile(reportPath, "utf8");
+  assert.equal(reportSource.includes("recMissing"), false);
+  assert.equal(reportSource.includes("invalid-id"), false);
+  assert.equal(reportSource.includes("Missing ID"), false);
+  assert.equal(reportSource.includes("appTest"), false);
+  assert.match(result.quarantineReport.baseIdSha256, /^[a-f0-9]{64}$/u);
+  assert.equal(result.quarantineReport.schemaSha256, result.manifest.schema.rawSha256);
+
+  const secondDirectory = await mkdtemp(join(tmpdir(), "airtable-export-quarantine-second-"));
+  await exportAirtableInventory({
+    accessToken: "secret-token",
+    baseId: "appTest",
+    outputPath: join(secondDirectory, "manifest.json"),
+    quarantineReportPath: join(secondDirectory, "quarantine.json"),
+    apiOrigin: "https://airtable.test",
+    fetchImplementation: fakeAirtable(schema, records).fetchImplementation,
+  });
+  assert.equal(reportSource, await readFile(join(secondDirectory, "quarantine.json"), "utf8"));
+});
+
+test("validates arguments and configuration without exposing credentials", () => {
+  assert.deepEqual(
+    parseExportArguments([
+      "--dry-run",
+      "--table",
+      "Events",
+      "--resume",
+      "--quarantine-report",
+      "quarantine.json",
+    ]),
+    {
+      help: false,
+      dryRun: true,
+      resume: true,
+      output: "airtable-inventory.json",
+      tables: ["Events"],
+      quarantineReport: "quarantine.json",
+    },
+  );
   assert.throws(
     () => parseExportArguments(["--unknown"]),
     (error) => error.code === "ARGUMENT_ERROR",
@@ -239,8 +345,40 @@ test("CLI help and dry-run make no network or file writes", async () => {
   );
   assert.equal(fetches, 0);
   assert.match(dryStdout.value(), /"airtableAccess": "read-only"/u);
+  assert.match(dryStdout.value(), /"invalidApplicationIds": "reject"/u);
   assert.equal(dryStdout.value().includes("secret-token"), false);
   await assert.rejects(readFile(output), { code: "ENOENT" });
+});
+
+test("CLI quarantine mode writes the valid fixture remainder and redacted report", async () => {
+  const schema = await fixture("schema.json");
+  const records = await fixture("records.json");
+  delete records.tblSessions[1].fields["Application ID"];
+  const directory = await mkdtemp(join(tmpdir(), "airtable-export-cli-quarantine-"));
+  const outputPath = join(directory, "manifest.json");
+  const reportPath = join(directory, "quarantine.json");
+  const stdout = capture();
+  const stderr = capture();
+
+  assert.equal(
+    await runExportCli({
+      arguments: ["--output", outputPath, "--quarantine-report", reportPath],
+      environment: { AIRTABLE_ACCESS_TOKEN: "secret-token", AIRTABLE_BASE_ID: "appTest" },
+      stdout,
+      stderr,
+      fetchImplementation: fakeAirtable(schema, records).fetchImplementation,
+    }),
+    0,
+  );
+  assert.match(stdout.value(), /Exported 3 records/u);
+  assert.match(stdout.value(), /Quarantined 1 records/u);
+  assert.equal(stderr.value(), "");
+  const manifest = JSON.parse(await readFile(outputPath, "utf8"));
+  const report = JSON.parse(await readFile(reportPath, "utf8"));
+  assert.equal(manifest.recordCount, 3);
+  assert.equal(manifest.quarantineCount, 1);
+  assert.equal(report.quarantineCount, 1);
+  assert.equal(JSON.stringify(report).includes("recSessionA"), false);
 });
 
 test("CLI reports bad input and Airtable errors without logging the token or response body", async () => {

@@ -11205,6 +11205,209 @@ export class AirtableRemixRepository implements RemixRepository {
   }
 }
 
+interface D1RemixSessionSource {
+  listSessions(tenantId: string, eventId: string): Promise<readonly Session[]>;
+  getSession(tenantId: string, eventId: string, sessionId: string): Promise<Session | null>;
+  putSession(session: Session, expectedVersion: number | null): Promise<void>;
+}
+
+interface D1RemixSpeakerSource {
+  listProfilesForEvent(organizationId: string, eventId: string): Promise<SpeakerProfile[]>;
+  getProfile(eventId: string, participantId: string): Promise<SpeakerProfile | null>;
+  updateBiography(command: UpdateBiographyCommand): Promise<RepositoryResult<SpeakerProfile>>;
+}
+
+export class D1RemixContentGateway implements RemixContentGateway {
+  constructor(
+    private readonly options: {
+      readonly sessions: D1RemixSessionSource;
+      readonly speakers: D1RemixSpeakerSource;
+      readonly database: D1Database;
+      readonly queue: Queue<CloudflareOutboxMessage>;
+    },
+  ) {}
+
+  async listSessions(input: {
+    tenantId: string;
+    eventId: string;
+  }): Promise<readonly RemixSessionRecord[]> {
+    return (await this.options.sessions.listSessions(input.tenantId, input.eventId)).map(
+      (session) => remixSessionRecord(session),
+    );
+  }
+
+  async listSpeakers(input: {
+    tenantId: string;
+    eventId: string;
+  }): Promise<readonly RemixSpeakerRecord[]> {
+    const profiles = await this.options.speakers.listProfilesForEvent(
+      input.tenantId,
+      input.eventId,
+    );
+    return profiles.map((profile) => remixSpeakerRecord(profile));
+  }
+
+  async getSession(input: {
+    tenantId: string;
+    eventId: string;
+    sourceId: string;
+  }): Promise<RemixSessionRecord | null> {
+    const session = await this.options.sessions.getSession(
+      input.tenantId,
+      input.eventId,
+      input.sourceId,
+    );
+    return session === null ? null : remixSessionRecord(session);
+  }
+
+  async getSpeaker(input: {
+    tenantId: string;
+    eventId: string;
+    sourceId: string;
+  }): Promise<RemixSpeakerRecord | null> {
+    const profile = await this.options.speakers.getProfile(input.eventId, input.sourceId);
+    return profile === null ? null : remixSpeakerRecord(profile);
+  }
+
+  async applyRevision(input: {
+    tenantId: string;
+    eventId: string;
+    sourceType: "session" | "speaker";
+    sourceId: string;
+    expectedSourceRevision: number;
+    fields: readonly RemixField[];
+    content: RemixContent;
+    candidateId: string;
+    actorId: string;
+    appliedAt: string;
+  }): Promise<ContentRevision> {
+    if (input.sourceType === "session") {
+      const current = await this.options.sessions.getSession(
+        input.tenantId,
+        input.eventId,
+        input.sourceId,
+      );
+      if (current === null || current.version !== input.expectedSourceRevision) {
+        throw new Error("The session content changed since remix generation.");
+      }
+      const content = input.content as Extract<RemixContent, { title: string }>;
+      const next: Session = {
+        ...current,
+        title: content.title,
+        description: content.description,
+        tagIds: [...(content.tags ?? [])],
+        trackIds: [...(content.tracks ?? [])],
+        version: current.version + 1,
+        updatedAt: input.appliedAt,
+        updatedBy: input.actorId,
+        history: [
+          ...current.history,
+          {
+            id: `remix:${input.candidateId}`,
+            action: "updated",
+            version: current.version + 1,
+            actorId: input.actorId,
+            occurredAt: input.appliedAt,
+          },
+        ],
+      };
+      await this.options.sessions.putSession(next, current.version);
+      await this.enqueueInvalidation(input, next.version);
+      return remixRevision(input, next.version, content);
+    }
+
+    const content = input.content as Extract<RemixContent, { biography: string }>;
+    const result = await this.options.speakers.updateBiography({
+      eventId: input.eventId,
+      participantId: input.sourceId,
+      biography: content.biography,
+      expectedVersion: input.expectedSourceRevision,
+      updatedAt: input.appliedAt,
+    });
+    if (!result.ok) throw new Error("The speaker content changed since remix generation.");
+    await this.enqueueInvalidation(input, result.value.version);
+    return remixRevision(input, result.value.version, content);
+  }
+
+  private async enqueueInvalidation(
+    input: {
+      tenantId: string;
+      eventId: string;
+      sourceType: "session" | "speaker";
+      sourceId: string;
+      appliedAt: string;
+    },
+    revision: number,
+  ): Promise<void> {
+    await enqueueCloudflareOutbox({
+      database: this.options.database,
+      queue: this.options.queue,
+      tenantId: input.tenantId,
+      topic: "cache-invalidation",
+      deduplicationKey: `remix:${input.eventId}:${input.sourceType}:${input.sourceId}:v${revision}`,
+      payload: {
+        eventId: input.eventId,
+        sourceType: input.sourceType,
+        sourceId: input.sourceId,
+        revision,
+      },
+      now: input.appliedAt,
+    });
+  }
+}
+
+function remixSessionRecord(session: Session): RemixSessionRecord {
+  return {
+    kind: "session",
+    id: session.id,
+    eventId: session.eventId,
+    revision: session.version,
+    title: session.title,
+    description: session.description,
+    tags: [...session.tagIds],
+    tracks: [...session.trackIds],
+  };
+}
+
+function remixSpeakerRecord(profile: SpeakerProfile): RemixSpeakerRecord {
+  return {
+    kind: "speaker",
+    id: profile.participantId,
+    eventId: profile.eventId,
+    revision: profile.version,
+    biography: profile.biography,
+  };
+}
+
+function remixRevision(
+  input: {
+    tenantId: string;
+    eventId: string;
+    sourceType: "session" | "speaker";
+    sourceId: string;
+    fields: readonly RemixField[];
+    candidateId: string;
+    actorId: string;
+    appliedAt: string;
+  },
+  sourceRevision: number,
+  content: RemixContent,
+): ContentRevision {
+  return {
+    id: `revision:${input.candidateId}`,
+    tenantId: input.tenantId,
+    eventId: input.eventId,
+    sourceType: input.sourceType,
+    sourceId: input.sourceId,
+    sourceRevision,
+    fields: [...input.fields],
+    content: clone(content),
+    candidateId: input.candidateId,
+    appliedBy: input.actorId,
+    appliedAt: input.appliedAt,
+  };
+}
+
 export class AirtableRemixContentGateway implements RemixContentGateway {
   readonly #sessions: AirtableJsonStore<Session>;
   readonly #events: AirtableJsonStore<JsonRecord>;
@@ -11453,10 +11656,8 @@ export class AirtableRemixContentGateway implements RemixContentGateway {
     };
   }
 }
-export interface AirtableRuntimeOptions {
+export interface D1ApplicationRuntimeOptions {
   readonly authenticator: Pick<RequestAuthenticator, "authenticate">;
-  readonly baseId: string;
-  readonly transport: AirtableTransport;
   readonly database: D1Database;
   readonly agendaCoordinator: DurableObjectNamespace;
   readonly privateFiles: R2Bucket;
@@ -11659,8 +11860,9 @@ export class AirtableEvaluationReminderBoundary implements EvaluationReminderBou
     return { queued, reviewerIds };
   }
 }
-export function createD1ApplicationDependencies(options: AirtableRuntimeOptions): ApiDependencies {
-  const shared = { baseId: options.baseId, transport: options.transport };
+export function createD1ApplicationDependencies(
+  options: D1ApplicationRuntimeOptions,
+): ApiDependencies {
   const cfpRepository = options.businessRepositories.cfp;
   const eventRepository = options.businessRepositories.events;
   const eventService = new EventService(eventRepository);
@@ -11796,8 +11998,9 @@ export function createD1ApplicationDependencies(options: AirtableRuntimeOptions)
     new SafeReportExporter(),
   );
   const remixRepository = options.businessRepositories.remix;
-  const remixContentGateway = new AirtableRemixContentGateway({
-    ...shared,
+  const remixContentGateway = new D1RemixContentGateway({
+    sessions: sessionRepository,
+    speakers: speakerRepository,
     database: options.database,
     queue: options.outboxQueue,
   });

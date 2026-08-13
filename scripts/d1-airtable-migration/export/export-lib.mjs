@@ -9,6 +9,7 @@ export const DEFAULT_OUTPUT = "airtable-inventory.json";
 export const DEFAULT_APPLICATION_ID_FIELD = "Application ID";
 export const DEFAULT_ORGANIZATION_ID_FIELD = "Organization ID";
 export const DEFAULT_EVENT_ID_FIELD = "Event ID";
+export const QUARANTINE_REPORT_FORMAT = "open-sessionboard.airtable-inventory-quarantine";
 
 const CHECKPOINT_FORMAT = "open-sessionboard.airtable-inventory-checkpoint";
 const CHECKPOINT_VERSION = 1;
@@ -134,13 +135,23 @@ export function parseExportArguments(arguments_) {
     if (argument === "--help" || argument === "-h") options.help = true;
     else if (argument === "--dry-run") options.dryRun = true;
     else if (argument === "--resume") options.resume = true;
-    else if (["--output", "--config", "--base-id", "--api-origin", "--table"].includes(argument)) {
+    else if (
+      [
+        "--output",
+        "--config",
+        "--base-id",
+        "--api-origin",
+        "--table",
+        "--quarantine-report",
+      ].includes(argument)
+    ) {
       const value = takeValue(argument, index);
       index += 1;
       if (argument === "--output") options.output = value;
       else if (argument === "--config") options.config = value;
       else if (argument === "--base-id") options.baseId = value;
       else if (argument === "--api-origin") options.apiOrigin = value;
+      else if (argument === "--quarantine-report") options.quarantineReport = value;
       else options.tables.push(value);
     } else fail("ARGUMENT_ERROR", `Unknown argument: ${argument}`);
   }
@@ -159,6 +170,8 @@ Options:
   --output <path>      Manifest path (default: airtable-inventory.json)
   --api-origin <url>   Airtable API origin (for testing)
   --resume             Resume from <output>.checkpoint.json
+  --quarantine-report <path>
+                       Export the valid remainder and write a redacted invalid-ID report
   --dry-run            Validate config and print the planned read without network or files
   -h, --help           Show this help
 
@@ -329,6 +342,21 @@ function applicationId(record, table, fieldName) {
   return value;
 }
 
+function applicationIdIssue(record, fieldName) {
+  const value = record.fields[fieldName];
+  if (value === undefined || value === null || (typeof value === "string" && value.trim() === "")) {
+    return "MISSING_APPLICATION_ID";
+  }
+  if (typeof value !== "string" || value !== value.trim()) return "INVALID_APPLICATION_ID";
+  return null;
+}
+
+function validateRawRecord(record, table) {
+  if (!isObject(record) || typeof record.id !== "string" || !isObject(record.fields)) {
+    fail("AIRTABLE_RESPONSE_INVALID", `${table.name} contains an invalid record.`);
+  }
+}
+
 function scalarScope(value, table, record, fieldName) {
   if (value === undefined || value === null || value === "") return null;
   if (typeof value !== "string" || value !== value.trim() || value.length === 0) {
@@ -432,39 +460,124 @@ function deriveScopes(tables, recordsByTable, settingsByTable) {
   return scopes;
 }
 
-function buildManifest(baseId, schemaPayload, tables, recordsByTable, configurations) {
+function partitionRecords(tables, recordsByTable, settingsByTable, quarantineMode) {
+  const validRecordsByTable = new Map();
+  const quarantineByTable = new Map();
+  for (const table of tables) {
+    const settings = settingsByTable.get(table.id);
+    const sourceRecords = recordsByTable.get(table.id);
+    const applicationIdCounts = new Map();
+    for (const record of sourceRecords) {
+      validateRawRecord(record, table);
+      if (applicationIdIssue(record, settings.applicationIdField) === null) {
+        const value = record.fields[settings.applicationIdField];
+        applicationIdCounts.set(value, (applicationIdCounts.get(value) ?? 0) + 1);
+      }
+    }
+
+    const valid = [];
+    const quarantined = [];
+    for (const record of sourceRecords) {
+      const appId = record.fields[settings.applicationIdField];
+      let reason = applicationIdIssue(record, settings.applicationIdField);
+      if (reason === null && applicationIdCounts.get(appId) > 1) {
+        reason = "DUPLICATE_APPLICATION_ID";
+      }
+      if (reason === null) {
+        valid.push(record);
+        continue;
+      }
+      if (!quarantineMode) {
+        if (reason === "DUPLICATE_APPLICATION_ID") {
+          fail(
+            "APPLICATION_ID_DUPLICATE",
+            `${table.name} contains duplicate ${settings.applicationIdField} ${appId}.`,
+          );
+        }
+        applicationId(record, table, settings.applicationIdField);
+      }
+      quarantined.push({
+        airtableRecordId: record.id,
+        reason,
+        raw: record,
+        rawSha256: digest(record),
+      });
+    }
+    validRecordsByTable.set(table.id, valid);
+    quarantineByTable.set(table.id, quarantined);
+  }
+  return { quarantineByTable, validRecordsByTable };
+}
+
+function buildQuarantineReport(manifest) {
+  const tables = manifest.tables
+    .filter((table) => table.quarantineCount > 0)
+    .map((table) => ({
+      tableIdSha256: digest(table.id),
+      schemaSha256: table.schemaSha256,
+      quarantineCount: table.quarantineCount,
+      reasons: Object.fromEntries(
+        [...new Set(table.quarantine.map((record) => record.reason))]
+          .sort((left, right) => left.localeCompare(right, "en"))
+          .map((reason) => [
+            reason,
+            table.quarantine.filter((record) => record.reason === reason).length,
+          ]),
+      ),
+      records: table.quarantine.map((record) => ({
+        reason: record.reason,
+        airtableRecordIdSha256: digest(record.airtableRecordId),
+        rawSha256: record.rawSha256,
+      })),
+    }));
+  return {
+    format: QUARANTINE_REPORT_FORMAT,
+    version: 1,
+    baseIdSha256: digest(manifest.base.id),
+    schemaSha256: manifest.schema.rawSha256,
+    quarantineCount: tables.reduce((sum, table) => sum + table.quarantineCount, 0),
+    tables,
+  };
+}
+
+function buildManifest(
+  baseId,
+  schemaPayload,
+  tables,
+  recordsByTable,
+  configurations,
+  quarantineMode,
+) {
   const settingsByTable = new Map(
     tables.map((table) => [table.id, tableSettings(table, configurations)]),
   );
-  const scopes = deriveScopes(tables, recordsByTable, settingsByTable);
+  const { quarantineByTable, validRecordsByTable } = partitionRecords(
+    tables,
+    recordsByTable,
+    settingsByTable,
+    quarantineMode,
+  );
+  const scopes = deriveScopes(tables, validRecordsByTable, settingsByTable);
   const manifestTables = tables.map((table) => {
     const settings = settingsByTable.get(table.id);
-    const seenApplicationIds = new Set();
-    const records = recordsByTable.get(table.id).map((record) => {
-      if (!isObject(record) || typeof record.id !== "string" || !isObject(record.fields)) {
-        fail("AIRTABLE_RESPONSE_INVALID", `${table.name} contains an invalid record.`);
-      }
-      const appId = applicationId(record, table, settings.applicationIdField);
-      if (seenApplicationIds.has(appId)) {
-        fail(
-          "APPLICATION_ID_DUPLICATE",
-          `${table.name} contains duplicate ${settings.applicationIdField} ${appId}.`,
-        );
-      }
-      seenApplicationIds.add(appId);
-      return {
-        airtableRecordId: record.id,
-        applicationId: appId,
-        scope: scopes.get(record.id),
-        fields: record.fields,
-        raw: record,
-        rawSha256: digest(record),
-      };
-    });
+    const records = validRecordsByTable.get(table.id).map((record) => ({
+      airtableRecordId: record.id,
+      applicationId: applicationId(record, table, settings.applicationIdField),
+      scope: scopes.get(record.id),
+      fields: record.fields,
+      raw: record,
+      rawSha256: digest(record),
+    }));
     records.sort(
       (left, right) =>
         left.applicationId.localeCompare(right.applicationId, "en") ||
         left.airtableRecordId.localeCompare(right.airtableRecordId, "en"),
+    );
+    const quarantine = quarantineByTable.get(table.id);
+    quarantine.sort(
+      (left, right) =>
+        left.reason.localeCompare(right.reason, "en") ||
+        left.rawSha256.localeCompare(right.rawSha256, "en"),
     );
     return {
       id: table.id,
@@ -476,6 +589,7 @@ function buildManifest(baseId, schemaPayload, tables, recordsByTable, configurat
       schemaSha256: digest(table),
       recordCount: records.length,
       records,
+      ...(quarantineMode ? { quarantineCount: quarantine.length, quarantine } : {}),
     };
   });
   manifestTables.sort(
@@ -489,6 +603,11 @@ function buildManifest(baseId, schemaPayload, tables, recordsByTable, configurat
     schema: { raw: schemaPayload, rawSha256: digest(schemaPayload) },
     tableCount: manifestTables.length,
     recordCount: manifestTables.reduce((sum, table) => sum + table.recordCount, 0),
+    ...(quarantineMode
+      ? {
+          quarantineCount: manifestTables.reduce((sum, table) => sum + table.quarantineCount, 0),
+        }
+      : {}),
     tables: manifestTables,
   };
 }
@@ -563,10 +682,32 @@ export async function exportAirtableInventory(options) {
   const recordsByTable = new Map(
     tables.map((table) => [table.id, checkpoint.tables[table.id].records]),
   );
-  const manifest = buildManifest(baseId, schemaPayload, tables, recordsByTable, options.tables);
+  const quarantineReportPath =
+    options.quarantineReportPath === undefined ? undefined : resolve(options.quarantineReportPath);
+  if (quarantineReportPath === outputPath) {
+    fail("CONFIGURATION_ERROR", "The quarantine report path must differ from the manifest path.");
+  }
+  const manifest = buildManifest(
+    baseId,
+    schemaPayload,
+    tables,
+    recordsByTable,
+    options.tables,
+    quarantineReportPath !== undefined,
+  );
   await atomicWrite(outputPath, manifest);
+  let quarantineReport;
+  if (quarantineReportPath !== undefined) {
+    quarantineReport = buildQuarantineReport(manifest);
+    await atomicWrite(quarantineReportPath, quarantineReport);
+  }
   await rm(checkpointPath, { force: true });
-  return { manifest, outputPath, checkpointPath };
+  return {
+    manifest,
+    outputPath,
+    checkpointPath,
+    ...(quarantineReportPath === undefined ? {} : { quarantineReport, quarantineReportPath }),
+  };
 }
 
 export async function readJsonConfiguration(path) {

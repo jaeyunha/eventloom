@@ -143,6 +143,19 @@ export class D1SpeakerRepository implements SpeakerRepository {
     return (await this.listProfiles(eventId, [participantId]))[0] ?? null;
   }
 
+  async listProfilesForEvent(organizationId: string, eventId: string): Promise<SpeakerProfile[]> {
+    const rows = await this.#orm
+      .select()
+      .from(speakerProfiles)
+      .where(
+        and(
+          eq(speakerProfiles.organizationId, organizationId),
+          eq(speakerProfiles.eventId, eventId),
+        ),
+      );
+    return rows.map((row) => this.#profile(row));
+  }
+
   async createProfile(profile: SpeakerProfile): Promise<RepositoryResult<SpeakerProfile>> {
     const scope = await this.#eventScope(profile.eventId);
     if (scope === null) return { ok: false, reason: "not_found" };
