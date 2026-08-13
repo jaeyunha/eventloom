@@ -679,7 +679,7 @@ describe("published program shell", () => {
     expect(markup).toContain("backgroundColor=%23fff4e6");
     expect(markup).toContain("textColor=%23123456");
     expect(markup).toContain("layout=compact");
-    expect(markup).toContain("tracks=Main+stage");
+    expect(markup).toContain("trackIds=Main+stage");
     expect(markup).toContain("displayFields=title%2Cdate-time%2Croom");
   });
 
