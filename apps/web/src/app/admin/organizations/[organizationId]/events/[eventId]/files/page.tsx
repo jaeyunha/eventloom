@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import { DeliverablesWorkspace } from "@/features/deliverables/deliverables-workspace";
 
 export const metadata: Metadata = {
-  title: "Files",
+  title: "Uploaded files",
   description:
-    "Organizer-side authorized uploaded-asset library with server-authoritative eligibility and history.",
+    "Review, approve, and download files submitted by speakers for this event.",
 };
 
 interface EventFilesPageProps {

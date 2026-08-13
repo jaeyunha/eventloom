@@ -904,7 +904,7 @@ describe("deliverables workspace", () => {
         onRestoreSessionVersion: async () => undefined,
       }),
     );
-    expect(markup).toContain("Deliverables");
+    expect(markup).toContain("Requests");
     expect(markup).toContain("Needs attention");
     expect(markup).toContain("Outstanding");
     expect(markup).toContain("Ready for review");
@@ -1032,8 +1032,8 @@ describe("deliverables workspace", () => {
         onInspectAsset: () => undefined,
       }),
     );
-    expect(filesMarkup).toContain("Organizer-side authorized uploaded-asset library");
-    expect(filesMarkup).toContain("Add eligible files by session");
+    expect(filesMarkup).toContain("Review and download");
+    expect(filesMarkup).toContain("Select approved files from a session");
     expect(filesMarkup).toContain("Download selected files ZIP");
     expect(filesMarkup).not.toContain("New file request");
     expect(filesMarkup).toContain("Files");
@@ -1048,7 +1048,7 @@ describe("deliverables workspace", () => {
         profiles: [profile],
       }),
     );
-    expect(deliverablesMarkup).toContain("Requests &amp; tracking");
+    expect(deliverablesMarkup).toContain("Assign &amp; track");
     expect(deliverablesMarkup).not.toContain("Organizer-side authorized uploaded-asset library");
   });
 
@@ -1084,11 +1084,11 @@ describe("deliverables workspace", () => {
         profiles: [profile],
       }),
     );
-    expect(markup).toContain("Filter files");
+    expect(markup).toContain("Search files");
     expect(markup).toContain("Filter by session");
     expect(markup).toContain("Filter by review state");
-    expect(markup).toContain("Add eligible files by session");
-    expect(markup).toContain("Server-authoritative eligibility");
+    expect(markup).toContain("Select approved files from a session");
+    expect(markup).toContain("Download rules");
     expect(markup).toContain(">Select ready current file slides.pdf</");
   });
 
@@ -1138,7 +1138,7 @@ describe("deliverables workspace", () => {
 
     expect(markup).toContain("current file");
     expect(markup).not.toContain('data-current-version="asset-2"');
-    expect(markup).toContain("Select row-level ready current files.");
+    expect(markup).toContain("Only confirmed current files can be downloaded.");
   });
 
   it("requires explicit confirmation of the exact outstanding reminder snapshot", () => {
@@ -1202,10 +1202,10 @@ describe("deliverables workspace", () => {
       }),
     );
     expect((filesMarkup.match(/<h1\b/g) ?? []).length).toBe(1);
-    expect(filesMarkup).toContain("Organizer-side authorized uploaded-asset library");
-    expect(filesMarkup).toContain("Server-authoritative eligibility");
+    expect(filesMarkup).toContain("Review and download");
+    expect(filesMarkup).toContain("Download rules");
     expect(filesMarkup).toContain("ready");
-    expect(filesMarkup).toContain("Add eligible files by session");
+    expect(filesMarkup).toContain("Select approved files from a session");
   });
 
   it("keeps every ZIP response state explicit and non-fabricated", () => {

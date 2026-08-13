@@ -1315,23 +1315,31 @@ function DeliverablesTable({
 }
 
 function FileLibrary({
+  organizationId,
+  eventId,
   assets,
   sessions,
   tasks,
   profiles,
   matrixItems,
   busy,
+  loadFailed,
   onInspectAsset,
   onExport,
+  onRetry,
 }: Readonly<{
+  organizationId: string;
+  eventId: string;
   assets: readonly DeliverableAsset[];
   sessions: readonly DeliverableSession[];
   tasks: readonly DeliverableTask[];
   profiles: readonly DeliverableSpeakerProfile[];
   matrixItems?: readonly DeliverableMatrixItem[];
   busy: boolean;
+  loadFailed: boolean;
   onInspectAsset?: (assetId: string) => void;
   onExport?: (input: DeliverableExportInput) => Promise<DeliverableExportDownload | undefined>;
+  onRetry?: () => void;
 }>) {
   const [selectedAssetIds, setSelectedAssetIds] = useState<readonly string[]>([]);
   const [search, setSearch] = useState("");
@@ -1542,31 +1550,38 @@ function FileLibrary({
     <Card className={sectionClass} aria-labelledby="file-library-heading" data-files-library>
       <CardHeader className={clusterClass}>
         <div>
-          <p className={mutedClass}>Organizer-side authorized uploaded-asset library</p>
-          <CardTitle id="file-library-heading">Files</CardTitle>
-          <CardDescription>
-            {families.length} version famil{families.length === 1 ? "y" : "ies"} · asset history,
-            comments, review, and downloads remain event-scoped.
-          </CardDescription>
+          <CardTitle id="file-library-heading">Review and download</CardTitle>
+          <CardDescription>Manage the files currently submitted by speakers.</CardDescription>
         </div>
-        <Badge variant="outline">Authorized files only</Badge>
+        <Badge variant="outline">
+          {families.length} uploaded file{families.length === 1 ? "" : "s"}
+        </Badge>
       </CardHeader>
       <CardContent className={stackClass}>
+        {loadFailed ? (
+          <Alert variant="destructive">
+            <AlertTitle>Uploaded files could not be loaded</AlertTitle>
+            <AlertDescription>
+              Speaker and file information is temporarily unavailable. Retry before deciding that
+              no files have been submitted.
+              {onRetry === undefined ? null : (
+                <Button variant="outline" type="button" onClick={onRetry}>
+                  Retry
+                </Button>
+              )}
+            </AlertDescription>
+          </Alert>
+        ) : null}
         <Alert>
-          <AlertTitle>Server-authoritative eligibility</AlertTitle>
+          <AlertTitle>Download rules</AlertTitle>
           <AlertDescription>
-            Only a server-authoritative current version in <strong>ready</strong> state is eligible
-            for ZIP export. A latest projection without a confirmed current version stays visible
-            but cannot be selected.
+            Only a confirmed current version can be downloaded. Older versions remain available in
+            file history.
           </AlertDescription>
         </Alert>
-        <p className={mutedClass}>
-          View version history opens authorized controls for each immutable version. Object keys are
-          never shown; private authorization and short-lived download grants remain enforced.
-        </p>
         <div className={gridClass}>
           <div className={fieldClass}>
-            <Label htmlFor="files-filter-search">Filter files</Label>
+            <Label htmlFor="files-filter-search">Search files</Label>
             <Input
               id="files-filter-search"
               value={search}
@@ -1646,7 +1661,7 @@ function FileLibrary({
             disabled={sessionToAdd === "all"}
             onClick={addEligibleFilesBySession}
           >
-            Add eligible files by session
+            Select approved files from a session
           </Button>
           <span className={mutedClass}>
             {selectedReadyIds.length} selected file{selectedReadyIds.length === 1 ? "" : "s"}
@@ -1673,10 +1688,10 @@ function FileLibrary({
         </div>
         <p className={mutedClass}>
           {onExport === undefined
-            ? "Bulk ZIP export is unavailable because the authorized export capability is not provisioned."
+            ? "Bulk ZIP download is unavailable for this event."
             : selectedReadyIds.length === 0
-              ? "Select row-level ready current files."
-              : `${selectedReadyIds.length} server-authoritative current file${selectedReadyIds.length === 1 ? "" : "s"} selected.`}
+              ? "Only confirmed current files can be downloaded."
+              : `${selectedReadyIds.length} current file${selectedReadyIds.length === 1 ? "" : "s"} selected.`}
         </p>
         {exportStatus !== "idle" ? (
           <Alert
@@ -1744,8 +1759,18 @@ function FileLibrary({
             </CardContent>
           </Card>
         ) : null}
-        {families.length === 0 ? (
-          <p className={mutedClass}>No private speaker files have been uploaded.</p>
+        {!loadFailed && families.length === 0 ? (
+          <div className={stackClass}>
+            <strong>No files have been submitted yet</strong>
+            <p className={mutedClass}>
+              Files will appear here after speakers complete upload requests in their portal.
+            </p>
+            <Button asChild variant="outline">
+              <a href={`/admin/organizations/${organizationId}/events/${eventId}/deliverables`}>
+                Create a file request
+              </a>
+            </Button>
+          </div>
         ) : visibleRows.length === 0 ? (
           <p className={mutedClass}>No files match these filters.</p>
         ) : (
@@ -3142,38 +3167,40 @@ export function DeliverablesWorkspaceView({
         <Card className={styles.header}>
           <CardHeader className={clusterClass}>
             <div>
-              <p className={styles.eyebrow}>Organizer event workspace</p>
-              <h1>{filesMode ? "Files" : "Deliverables"}</h1>
+              <p className={styles.eyebrow}>
+                {filesMode ? "Speaker materials" : "Speaker operations"}
+              </p>
+              <h1>{filesMode ? "Uploaded files" : "Requests"}</h1>
               <p className={styles.lede}>
                 {filesMode
-                  ? "Authorized uploaded-asset library for review, history, comments, and downloads."
+                  ? "Review files submitted by speakers, request changes, and download final versions."
                   : "Organizer-created speaker requests, task status, and follow-up tracking."}
               </p>
             </div>
             <Badge variant="outline">
               {filesMode
-                ? `${matrixAssetsForView.length} asset projection${matrixAssetsForView.length === 1 ? "" : "s"}`
+                ? `${matrixAssetsForView.length} uploaded file${matrixAssetsForView.length === 1 ? "" : "s"}`
                 : `${rows.length} task${rows.length === 1 ? "" : "s"}`}
             </Badge>
           </CardHeader>
           <CardContent className={styles.switcherWrap}>
             <nav
               className={styles.modeNav}
-              aria-label="Deliverables and Files mode switcher"
+              aria-label="Speaker requests and uploaded files"
               data-mode-switcher
             >
               <a href={deliverablesHref} aria-current={!filesMode ? "page" : undefined}>
-                Deliverables <span>Requests &amp; tracking</span>
+                Requests <span>Assign &amp; track</span>
               </a>
               <a href={filesHref} aria-current={filesMode ? "page" : undefined}>
-                Files <span>Authorized uploaded assets</span>
+                Uploaded files <span>Review &amp; download</span>
               </a>
             </nav>
             <details className={styles.mobileSwitcher}>
-              <summary>Switch section: {filesMode ? "Files" : "Deliverables"}</summary>
+              <summary>Switch section: {filesMode ? "Uploaded files" : "Requests"}</summary>
               <nav aria-label="Mobile section switcher">
-                <a href={deliverablesHref}>Deliverables — Requests &amp; tracking</a>
-                <a href={filesHref}>Files — Authorized uploaded assets</a>
+                <a href={deliverablesHref}>Requests — Assign &amp; track</a>
+                <a href={filesHref}>Uploaded files — Review &amp; download</a>
               </nav>
             </details>
           </CardContent>
@@ -3200,7 +3227,7 @@ export function DeliverablesWorkspaceView({
               </AlertDescription>
             </Alert>
           ) : null}
-          {capabilityMessages.length > 0 ? (
+          {capabilityMessages.length > 0 && !filesMode ? (
             <Card className={sectionClass} aria-labelledby="capability-heading">
               <CardHeader>
                 <CardTitle id="capability-heading">Capability status</CardTitle>
@@ -3300,14 +3327,20 @@ export function DeliverablesWorkspaceView({
           ) : null}
           {filesMode ? (
             <FileLibrary
+              organizationId={organizationId}
+              eventId={eventId}
               assets={assets}
               sessions={sessions}
               tasks={tasks}
               profiles={profiles}
               {...(matrixItems === undefined ? {} : { matrixItems })}
               busy={busy}
+              loadFailed={capabilityMessages.some((message) =>
+                /private asset library unavailable|asset library unavailable/i.test(message),
+              )}
               {...(onInspectAsset === undefined ? {} : { onInspectAsset })}
               {...(onExportFiles === undefined ? {} : { onExport: onExportFiles })}
+              {...(onRetry === undefined ? {} : { onRetry })}
             />
           ) : null}
           {!filesMode ? (
