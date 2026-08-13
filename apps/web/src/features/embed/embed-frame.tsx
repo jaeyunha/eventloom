@@ -1,6 +1,6 @@
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import styles from "./embed.module.css";
-import type { EmbedDisplayField, EmbedLayout } from "./model";
+import { type EmbedDisplayField, type EmbedLayout, serializeEmbedQuery } from "./model";
 import type { EmbedTheme, PublishedEvent } from "./types";
 
 type EmbedView = "sessions" | "itinerary" | "agenda" | "speakers-list" | "speakers";
@@ -38,16 +38,43 @@ export function EmbedFrame({
   tracks?: readonly string[];
   displayFields?: readonly EmbedDisplayField[] | null;
 }>) {
-  void layout;
-  void accent;
-  void backgroundColor;
-  void textColor;
-  void tracks;
-  void displayFields;
-  const themeQuery = theme === "auto" ? "" : `?theme=${theme}`;
+  const viewQuery = serializeEmbedQuery({
+    theme,
+    layout,
+    displayFields,
+    tracks,
+    accent,
+    backgroundColor,
+    textColor,
+  });
+  const customProperties = {
+    ...(accent
+      ? {
+          "--pub-accent": accent,
+          "--pub-accent-strong": accent,
+          "--pub-accent-soft": `color-mix(in srgb, ${accent} 12%, transparent)`,
+        }
+      : {}),
+    ...(backgroundColor
+      ? {
+          "--pub-canvas": backgroundColor,
+          "--pub-surface": `color-mix(in srgb, ${backgroundColor} 92%, white)`,
+          "--pub-surface-muted": `color-mix(in srgb, ${backgroundColor} 88%, black)`,
+          "--pub-surface-sunken": `color-mix(in srgb, ${backgroundColor} 82%, black)`,
+        }
+      : {}),
+    ...(textColor
+      ? {
+          "--pub-ink": textColor,
+          "--pub-ink-secondary": `color-mix(in srgb, ${textColor} 82%, transparent)`,
+          "--pub-muted": `color-mix(in srgb, ${textColor} 68%, transparent)`,
+          "--pub-subtle": `color-mix(in srgb, ${textColor} 52%, transparent)`,
+        }
+      : {}),
+  } as CSSProperties;
   const currentViewLabel = embedViews.find(([path]) => path === view)?.[1] ?? "program";
   return (
-    <div className={styles.embedRoot} data-theme={theme}>
+    <div className={styles.embedRoot} data-theme={theme} style={customProperties}>
       <a className={styles.skipLink} href="#embed-content">
         Skip to {currentViewLabel.toLowerCase()}
       </a>
@@ -66,7 +93,7 @@ export function EmbedFrame({
                 key={path}
                 aria-current={view === path ? "page" : undefined}
                 className={styles.embedNavLink}
-                href={`/embed/${encodeURIComponent(eventSlug)}/${path}${themeQuery}`}
+                href={`/embed/${encodeURIComponent(eventSlug)}/${path}${viewQuery}`}
               >
                 {label}
               </a>

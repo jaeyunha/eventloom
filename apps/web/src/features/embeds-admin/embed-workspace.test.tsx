@@ -212,7 +212,7 @@ describe("safe live embed URLs", () => {
     expect(script).toContain("displayFields=title%2Cdate-time");
   });
 
-  it("grants schedule storage and downloads only to the itinerary iframe", () => {
+  it("keeps same-origin styling in every iframe and grants extra capabilities narrowly", () => {
     const base = {
       eventSlug: "summit-2026",
       publicOrigin: "https://sessionboard.example",
@@ -226,9 +226,11 @@ describe("safe live embed URLs", () => {
     );
     expect(iframeSnippet({ ...base, widget: itinerary })).toContain("min-height:720px");
     expect(iframeSnippet({ ...base, widget: agenda })).toContain(
-      'sandbox="allow-downloads allow-scripts"',
+      'sandbox="allow-downloads allow-same-origin allow-scripts"',
     );
-    expect(iframeSnippet({ ...base, widget: gallery })).toContain('sandbox="allow-scripts"');
+    expect(iframeSnippet({ ...base, widget: gallery })).toContain(
+      'sandbox="allow-same-origin allow-scripts"',
+    );
     expect(iframeSnippet({ ...base, widget: gallery })).toContain("min-height:760px");
   });
   it("keeps the gallery alias on the speakers route and never emits private fields", () => {
@@ -469,5 +471,29 @@ describe("embed workspace view", () => {
     expect(markup).toContain("2 Configure widget");
     expect(markup).toContain("Advanced public options");
     expect(markup).toContain('data-slot="collapsible"');
+  });
+
+  it("orders publication, builder, preview, and export as readable workflow stages", () => {
+    const markup = renderToStaticMarkup(
+      createElement(EmbedWorkspaceView, {
+        organizationId: "org-1",
+        eventId: "event-1",
+        eventSlug: "summit-2026",
+        eventVersion: eventRecord.version,
+        initialConfigurations: eventRecord.embedConfigurations ?? [],
+        publicOrigin: "https://sessionboard.example",
+        publication,
+      }),
+    );
+
+    const publicationIndex = markup.indexOf("Publication truth");
+    const builderIndex = markup.indexOf('aria-label="Embed builder"');
+    const previewIndex = markup.indexOf('aria-label="Live preview workspace"');
+    const exportIndex = markup.indexOf("Share or embed");
+
+    expect(publicationIndex).toBeGreaterThanOrEqual(0);
+    expect(publicationIndex).toBeLessThan(builderIndex);
+    expect(builderIndex).toBeLessThan(previewIndex);
+    expect(previewIndex).toBeLessThan(exportIndex);
   });
 });

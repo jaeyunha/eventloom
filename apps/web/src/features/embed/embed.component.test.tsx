@@ -20,6 +20,7 @@ import type {
   PublishedSpeaker,
   PublishedSpeakerGallery,
 } from "./types";
+
 const sessionsRouteSource = readFileSync(
   new URL("../../app/events/[eventSlug]/page.tsx", import.meta.url),
   "utf8",
@@ -653,6 +654,33 @@ describe("published program shell", () => {
       );
       expect(markup).toContain(`data-theme="${theme}"`);
     }
+  });
+
+  it("applies safe color options and preserves them across public view navigation", () => {
+    const markup = renderToStaticMarkup(
+      createElement(EmbedFrame, {
+        event,
+        eventSlug: event.slug,
+        theme: "light",
+        view: "sessions",
+        layout: "compact",
+        accent: "#d45573",
+        backgroundColor: "#fff4e6",
+        textColor: "#123456",
+        tracks: ["Main stage"],
+        displayFields: ["title", "date-time", "room"],
+      }),
+    );
+
+    expect(markup).toContain("--pub-accent:#d45573");
+    expect(markup).toContain("--pub-canvas:#fff4e6");
+    expect(markup).toContain("--pub-ink:#123456");
+    expect(markup).toContain("accent=%23d45573");
+    expect(markup).toContain("backgroundColor=%23fff4e6");
+    expect(markup).toContain("textColor=%23123456");
+    expect(markup).toContain("layout=compact");
+    expect(markup).toContain("tracks=Main+stage");
+    expect(markup).toContain("displayFields=title%2Cdate-time%2Croom");
   });
 
   it("exposes itinerary days as a tablist with exactly one selected tab", () => {
