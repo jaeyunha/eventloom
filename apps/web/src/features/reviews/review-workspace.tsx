@@ -2830,10 +2830,7 @@ function OrganizerAuthoring({
           variant="outline"
           onClick={() => void assignReviewers()}
           disabled={
-            busy ||
-            status !== "open" ||
-            !reviewerDirectoryReady ||
-            assignmentPreview === null
+            busy || status !== "open" || !reviewerDirectoryReady || assignmentPreview === null
           }
         >
           Apply authoritative reviewer distribution

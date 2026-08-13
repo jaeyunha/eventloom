@@ -3783,6 +3783,7 @@ describe("SpeakerService private asset authorization", () => {
     const firstStored = repository.assets.find((asset) => asset.id === first.asset.id);
     if (firstStored === undefined) throw new Error("Expected the first asset to be stored.");
     firstStored.state = "ready";
+    firstStored.currentVersionId = firstStored.id;
 
     const second = await service.issueOrganizerUploadGrant({
       eventId: "event-1",
@@ -3803,6 +3804,7 @@ describe("SpeakerService private asset authorization", () => {
     const secondStored = repository.assets.find((asset) => asset.id === second.asset.id);
     if (secondStored === undefined) throw new Error("Expected the successor asset to be stored.");
     secondStored.state = "ready";
+    secondStored.currentVersionId = secondStored.id;
 
     const deliverables = await service.listDeliverables("event-1", "account-1");
     expect(deliverables.items).toHaveLength(1);

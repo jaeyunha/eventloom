@@ -709,7 +709,6 @@ describe("CrmService", () => {
       expect(fallbackOutreach.renderedBody).toBe(`Hi ${lastName} ${lastName}`);
     }
   });
-  });
   it("starts analytics reads together and scopes each source to the organization", async () => {
     const repository = new CountingDelayedCrmRepository({
       listContacts: 25,
