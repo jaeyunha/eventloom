@@ -154,11 +154,7 @@ class LocalCfpRepository implements CfpRepository {
   constructor() {
     for (const [event, formId] of [
       [
-        seededEvent(
-          LOCAL_ORGANIZATION_ID,
-          "demo-event",
-          "Open Sessionboard Conference",
-        ),
+        seededEvent(LOCAL_ORGANIZATION_ID, "demo-event", "Open Sessionboard Conference"),
         "main-cfp",
       ],
       [

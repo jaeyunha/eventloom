@@ -2411,12 +2411,9 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
   const eventRepository = new InMemoryEventRepository({
     events: [
       localEventSeed("open-sessionboard-conf", "Eventloom Conference", "open-sessionboard-conf"),
-      localEventSeed(
-        "demo-event",
-        "Open Sessionboard Conference",
-        "demo-event",
-        [LOCAL_PUBLIC_EMBED],
-      ),
+      localEventSeed("demo-event", "Open Sessionboard Conference", "demo-event", [
+        LOCAL_PUBLIC_EMBED,
+      ]),
     ],
     audit: [
       {
