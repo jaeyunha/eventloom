@@ -3,7 +3,13 @@
 .workspaceRoot {
   min-height: 100vh;
   overflow-x: clip;
-  background: var(--color-canvas);
+  background:
+    radial-gradient(
+      circle at 15% 0%,
+      color-mix(in srgb, var(--color-brand-soft) 65%, transparent),
+      transparent 30rem
+    ),
+    var(--color-canvas);
   color: var(--color-ink);
   font-family: var(--font-sans);
 }
@@ -67,15 +73,15 @@
 }
 
 .workspace {
-  width: min(calc(100% - 1.5rem), 110rem);
+  width: min(calc(100% - 3rem), 96rem);
   min-width: 0;
   max-width: none;
   margin-inline: auto;
-  padding: 0.75rem 0 4rem;
+  padding: 1.5rem 0 5rem;
 }
 
 .workspace > header {
-  margin: -0.75rem -0.75rem 0;
+  margin: -1.5rem -1.5rem 0;
 }
 
 .pageHeading {
@@ -177,9 +183,46 @@
 
 .workspaceGrid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(18rem, 22rem);
-  gap: 0.75rem;
+  grid-template-columns: minmax(0, 1fr) minmax(20rem, 23rem);
+  gap: 1.5rem;
   align-items: start;
+}
+
+.agendaSummary {
+  display: grid;
+  grid-template-columns: 1.25fr 1fr 1fr 1fr;
+  margin: 1.5rem 0;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--color-surface) 92%, var(--color-brand-soft));
+  box-shadow: var(--shadow-card);
+}
+
+.agendaSummary > div {
+  display: grid;
+  min-width: 0;
+  gap: 0.3rem;
+  padding: 1.1rem 1.25rem;
+  border-right: 1px solid var(--color-border);
+}
+
+.agendaSummary > div:last-child {
+  border-right: 0;
+}
+
+.agendaSummary span {
+  color: var(--color-muted);
+  font-size: 0.72rem;
+  font-weight: 750;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+.agendaSummary strong {
+  overflow-wrap: anywhere;
+  font-size: 0.92rem;
+  line-height: 1.35;
 }
 
 .boardColumn,
@@ -190,13 +233,13 @@
 .historyCard {
   min-width: 0;
   border: 1px solid var(--color-border);
-  border-radius: 0.62rem;
+  border-radius: var(--radius-lg);
   background: var(--color-surface);
-  box-shadow: 0 1px 2px rgb(15 23 42 / 3%);
+  box-shadow: var(--shadow-card);
 }
 
 .boardColumn {
-  padding: 0.75rem;
+  padding: 1.35rem;
 }
 
 .sectionHeading,
@@ -209,12 +252,12 @@
 }
 
 .sectionHeading {
-  margin-bottom: 0.65rem;
+  margin-bottom: 1.25rem;
 }
 
 .sectionHeading h2,
 .inspector h2 {
-  font-size: 1.2rem;
+  font-size: 1.45rem;
 }
 
 .sectionHeading p:last-child,
@@ -429,21 +472,32 @@
 
 .sessionList {
   display: grid;
-  gap: 0.55rem;
+  gap: 0.75rem;
   margin: 0;
 }
 
 .sessionCard {
   display: grid;
-  grid-template-columns: 5.6rem minmax(0, 1fr) auto;
-  gap: 0.8rem;
+  grid-template-columns: 7rem minmax(0, 1fr) auto;
+  gap: 1rem;
   align-items: start;
   min-width: 0;
-  padding: 0.8rem;
+  padding: 1rem 1.1rem;
   border: 1px solid var(--color-border);
-  border-left: 0.2rem solid var(--color-border-strong);
-  border-radius: var(--radius-sm);
+  border-left: 0.28rem solid var(--session-accent);
+  border-radius: var(--radius-md);
   background: var(--color-surface);
+  box-shadow: 0 1px 2px rgb(15 23 42 / 3%);
+  transition:
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    transform 140ms ease;
+}
+
+.sessionCard:hover {
+  border-color: var(--color-border-strong);
+  box-shadow: 0 8px 24px rgb(15 23 42 / 7%);
+  transform: translateY(-1px);
 }
 
 .sessionIssue {
@@ -452,15 +506,19 @@
 }
 
 .sessionTime {
-  display: grid;
+  display: flex;
+  gap: 0.35rem;
+  align-items: baseline;
+  flex-wrap: wrap;
   color: var(--color-ink);
-  font-size: 0.78rem;
-  font-weight: 700;
+  font-size: 0.86rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 750;
 }
 
 .workspace .sessionTime span {
   color: var(--color-subtle);
-  font-size: 0.62rem;
+  font-size: 0.76rem;
   font-weight: 600;
 }
 
@@ -469,9 +527,9 @@
 }
 
 .sessionDetails h4 {
-  margin: 0.2rem 0 0.1rem;
+  margin: 0.3rem 0 0.2rem;
   overflow-wrap: anywhere;
-  font-size: 0.92rem;
+  font-size: 1rem;
   letter-spacing: -0.015em;
   line-height: 1.25;
 }
@@ -479,7 +537,8 @@
 .sessionDetails > p {
   overflow-wrap: anywhere;
   color: var(--color-muted);
-  font-size: 0.78rem;
+  font-size: 0.82rem;
+  line-height: 1.5;
 }
 
 .sessionMeta {
@@ -526,28 +585,30 @@
 
 .cardActions {
   display: flex;
-  gap: 0.25rem;
+  gap: 0.4rem;
   flex-wrap: wrap;
   justify-content: flex-end;
 }
 
 .textButton,
 .dangerButton {
-  min-height: auto;
-  padding: 0.25rem 0.35rem;
-  border: 0;
-  background: transparent;
+  min-height: 2rem;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
   color: var(--color-ink);
 }
 
 .dangerButton {
+  border-color: color-mix(in srgb, var(--color-destructive) 24%, var(--color-border));
   color: var(--color-destructive);
 }
 
 .textButton:hover:not(:disabled),
 .dangerButton:hover:not(:disabled) {
-  text-decoration: underline;
-  text-underline-offset: 0.15em;
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-muted);
 }
 
 .editPanel {
@@ -565,8 +626,8 @@
   position: sticky;
   z-index: 1;
   top: 3.75rem;
-  max-height: calc(100vh - 4.5rem);
-  overflow-y: auto;
+  max-height: none;
+  overflow: visible;
   overscroll-behavior: contain;
   scroll-padding-block: 0.5rem;
   scroll-margin-top: 1rem;
@@ -575,7 +636,7 @@
 .operationalSequence {
   display: flex;
   flex-direction: column;
-  gap: 0.55rem;
+  gap: 1rem;
 }
 
 .sequenceStep {
@@ -624,7 +685,7 @@
 .warningPanel,
 .publishCard,
 .historyCard {
-  padding: 0.75rem;
+  padding: 1rem;
 }
 
 .inspectorCard > p,
@@ -939,14 +1000,15 @@
   line-height: 1.4;
 }
 
-.viewSwitcher {
-  display: grid;
-  gap: 0.45rem;
-  margin: 0 0 1rem;
-  padding: 0.6rem;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface-muted);
+.scheduleToolbar {
+  display: flex;
+  min-width: 0;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 0 1.25rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--color-border);
 }
 
 .viewLabel {
@@ -960,17 +1022,21 @@
 .viewTablist {
   display: flex;
   min-width: 0;
-  gap: 0.25rem;
+  gap: 0.2rem;
   flex-wrap: wrap;
+  padding: 0.2rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-muted);
 }
 .dayPager {
   display: grid;
-  gap: 0.45rem;
-  margin: 0 0 1rem;
-  padding: 0.6rem;
+  gap: 0.55rem;
+  margin: 0 0 1.5rem;
+  padding: 0.9rem 1rem;
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface-muted);
+  border-radius: var(--radius-md);
+  background: linear-gradient(135deg, var(--color-surface), var(--color-surface-muted));
 }
 
 .dayPagerControls {
@@ -988,11 +1054,11 @@
 }
 
 .viewTab {
-  min-height: 2.15rem;
+  min-height: 2.35rem;
   padding: 0.4rem 0.7rem;
-  border: 1px solid var(--color-border-strong);
+  border: 0;
   border-radius: var(--radius-sm);
-  background: var(--color-surface);
+  background: transparent;
   color: var(--color-ink);
   font: inherit;
   font-size: 0.76rem;
@@ -1006,9 +1072,9 @@
 }
 
 .viewTab[aria-selected="true"] {
-  border-color: var(--color-ink);
-  background: var(--color-ink);
-  color: var(--color-surface);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  box-shadow: 0 1px 4px rgb(15 23 42 / 12%);
 }
 
 .viewPanel,
@@ -1018,20 +1084,30 @@
   min-width: 0;
 }
 
+.viewPanel {
+  min-height: 28rem;
+  padding: 1.25rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background:
+    linear-gradient(var(--color-border) 1px, transparent 1px) 0 0 / 100% 3rem,
+    color-mix(in srgb, var(--color-surface) 96%, var(--color-brand-soft));
+}
+
 .viewGroupHeader {
   display: flex;
   gap: 0.75rem;
   align-items: baseline;
   justify-content: space-between;
-  margin-bottom: 0.55rem;
-  padding-bottom: 0.5rem;
+  margin-bottom: 0.9rem;
+  padding-bottom: 0.75rem;
   border-bottom: 1px solid var(--color-border);
 }
 
 .viewGroupHeader h3 {
   margin: 0;
   overflow-wrap: anywhere;
-  font-size: 0.98rem;
+  font-size: 1.08rem;
 }
 
 .workspace .viewGroupHeader span {
@@ -1078,16 +1154,17 @@
 
 .unscheduledGroup {
   min-width: 0;
-  margin-top: 1rem;
-  padding: 0.85rem;
-  border: 1px dashed var(--color-border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface-muted);
+  margin-top: 1.5rem;
+  padding: 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--color-brand-soft) 42%, var(--color-surface));
 }
 
 .unscheduledList {
   display: grid;
-  gap: 0.45rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -1095,17 +1172,22 @@
 
 .unscheduledItem {
   display: grid;
-  gap: 0.12rem;
+  gap: 0.35rem;
   min-width: 0;
-  padding-top: 0.45rem;
-  border-top: 1px solid var(--color-border);
-  font-size: 0.78rem;
+  padding: 0.85rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: 0 1px 2px rgb(15 23 42 / 3%);
+  font-size: 0.82rem;
+  cursor: grab;
 }
 
 .workspace .unscheduledItem span {
   overflow-wrap: anywhere;
   color: var(--color-muted);
-  font-size: 0.72rem;
+  font-size: 0.76rem;
+  line-height: 1.45;
 }
 .inlineCreate {
   display: grid;
@@ -1134,19 +1216,6 @@
   background: var(--color-surface);
   color: var(--color-ink);
   font: inherit;
-}
-
-.scheduleDropTarget {
-  margin: 0.75rem 0;
-  padding: 0.75rem;
-  border: 1px dashed var(--color-brand);
-  border-radius: var(--radius-sm);
-  background: var(--color-brand-soft);
-  color: var(--color-muted);
-  font-size: 0.76rem;
-  text-align: center;
-  width: 100%;
-  font-family: inherit;
 }
 
 .calendarDelivery {
@@ -1208,6 +1277,18 @@
 }
 
 @media (max-width: 68rem) {
+  .agendaSummary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .agendaSummary > div:nth-child(2) {
+    border-right: 0;
+  }
+
+  .agendaSummary > div:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--color-border);
+  }
+
   .workspaceGrid {
     grid-template-columns: 1fr;
   }
@@ -1233,6 +1314,25 @@
     padding-top: 1rem;
   }
 
+  .workspace > header {
+    margin: -1rem -0.5rem 0;
+  }
+
+  .agendaSummary {
+    grid-template-columns: 1fr;
+    margin: 1rem 0;
+  }
+
+  .agendaSummary > div,
+  .agendaSummary > div:nth-child(2) {
+    border-right: 0;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .agendaSummary > div:last-child {
+    border-bottom: 0;
+  }
+
   .pageHeading,
   .sectionHeading {
     align-items: stretch;
@@ -1245,7 +1345,7 @@
   }
 
   .boardColumn {
-    padding: 0.75rem;
+    padding: 1rem;
   }
 
   .entryForm,
@@ -1257,8 +1357,9 @@
     grid-template-columns: 1fr;
   }
 
-  .scheduleDropTarget {
-    margin-inline: 0;
+  .scheduleToolbar {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .sessionCard {
@@ -1274,6 +1375,12 @@
 
   .cardActions {
     justify-content: flex-start;
+  }
+
+  .textButton,
+  .dangerButton {
+    min-height: 2.75rem;
+    padding-inline: 0.85rem;
   }
 
   .viewTablist {
@@ -1297,5 +1404,14 @@
 
   .viewTab {
     width: 100%;
+  }
+
+  .viewPanel {
+    min-height: 20rem;
+    padding: 0.85rem;
+  }
+
+  .unscheduledList {
+    grid-template-columns: 1fr;
   }
 }

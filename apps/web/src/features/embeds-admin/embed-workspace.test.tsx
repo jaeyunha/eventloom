@@ -189,7 +189,7 @@ describe("safe live embed URLs", () => {
         theme: "auto",
       }),
     );
-    expect(url.origin).toBe("https://sessionboard.example");
+    expect(url.origin).toBe("https://eventloom.example");
     expect(url.pathname).toBe("/api/public/events/summit%20%2F%202026/agenda.ics");
   });
 

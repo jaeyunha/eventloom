@@ -19,8 +19,13 @@
 
 ## Architecture boundaries
 
-- Airtable is authoritative for program business records.
-- D1 owns operational state, durable outbox, idempotency, and audit records; Durable Objects serialize tenant/event coordination and schedule mutations.
+- D1 is authoritative for program business records and operational state, including
+  durable outbox, idempotency, audit, and optional-integration coordination.
+- Airtable is an optional organization-scoped adapter: outbound projection is
+  asynchronous, and selected inbound fields enter through validated domain commands.
+  Airtable availability must never block ordinary product reads or writes.
+- Durable Objects serialize tenant/event coordination and schedule mutations where
+  ordered admission is required; D1 optimistic concurrency remains authoritative.
 - R2 stores private files and artifacts behind authorization. One multiplexed Cloudflare Queue carries typed outbox work for communications, calendar, webhooks, and cache invalidation.
 - The Hono Worker accepts HTTP fetches, Queue deliveries, and the production Cron Trigger. Sender and calendar identities temporarily use the verified legacy domain `sessionboard.namuh.co` during the Eventloom infrastructure migration.
 

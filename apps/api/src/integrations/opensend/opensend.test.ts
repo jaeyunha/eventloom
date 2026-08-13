@@ -148,8 +148,9 @@ describe("createCalendarOpenSendMessage", () => {
       subject: "Updated invitation: A <safer> session",
       idempotencyKey: "calendar-update-0003",
       headers: {
-        "X-Sessionboard-Calendar-Action": "UPDATE",
-        "X-Sessionboard-Calendar-Uid": "tenant-event-session@calendar.sessionboard.namuh.co",
+        "Content-Class": "urn:content-classes:calendarmessage",
+        "X-Eventloom-Calendar-Action": "UPDATE",
+        "X-Eventloom-Calendar-Uid": "tenant-event-session@calendar.sessionboard.namuh.co",
       },
       attachments: [
         {
@@ -195,8 +196,9 @@ describe("createCalendarOpenSendMessage", () => {
       subject: "Cancelled: A <safer> session",
       idempotencyKey: payload.idempotencyKey,
       headers: {
-        "X-Sessionboard-Calendar-Action": "CANCEL",
-        "X-Sessionboard-Calendar-Uid": payload.uid,
+        "Content-Class": "urn:content-classes:calendarmessage",
+        "X-Eventloom-Calendar-Action": "CANCEL",
+        "X-Eventloom-Calendar-Uid": payload.uid,
       },
       attachments: [
         {
