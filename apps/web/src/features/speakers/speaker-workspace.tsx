@@ -187,6 +187,26 @@ export interface SpeakerOnboardingTaskDefinition {
 const DEFAULT_STATUS_OPTIONS = ["pending", "invited", "confirmed", "accepted", "declined"] as const;
 const ASYNC_ACTION_TIMEOUT_MS = 15_000;
 
+export const SPEAKER_WELCOME_EMAIL_STARTER = {
+  name: "Speaker welcome",
+  subject: "Welcome to the speaker program, {{first_name}}",
+  html: `<p>Hello {{first_name}},</p>
+<p>Welcome to the speaker program. We’re excited to have you join us.</p>
+<p>We’ll use this email address for important event updates, speaker tasks, and schedule information.</p>
+<p>Please sign in to your speaker portal to review your profile and outstanding tasks.</p>
+<p>Best,<br />The event team</p>`,
+  text: `Hello {{first_name}},
+
+Welcome to the speaker program. We’re excited to have you join us.
+
+We’ll use this email address for important event updates, speaker tasks, and schedule information.
+
+Please sign in to your speaker portal to review your profile and outstanding tasks.
+
+Best,
+The event team`,
+} as const;
+
 function withTimeout<T>(operation: (signal: AbortSignal) => Promise<T>, label: string): Promise<T> {
   const controller = new AbortController();
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -1096,10 +1116,10 @@ export function SpeakerWorkspace({
   const [emailTemplates, setEmailTemplates] = useState<readonly SpeakerEmailTemplate[]>([]);
   const [emailTemplateId, setEmailTemplateId] = useState("");
   const [emailTemplateVersion, setEmailTemplateVersion] = useState<number | undefined>(undefined);
-  const [emailTemplateName, setEmailTemplateName] = useState("Speaker update");
-  const [emailSubject, setEmailSubject] = useState("Update for {{first_name}}");
-  const [emailHtml, setEmailHtml] = useState("<p>Hello {{first_name}},</p>");
-  const [emailText, setEmailText] = useState("Hello {{first_name}},");
+  const [emailTemplateName, setEmailTemplateName] = useState("New speaker message");
+  const [emailSubject, setEmailSubject] = useState("");
+  const [emailHtml, setEmailHtml] = useState("");
+  const [emailText, setEmailText] = useState("");
   const [emailPreview, setEmailPreview] = useState<SpeakerEmailPreview | null>(null);
   const [emailEditorMode, setEmailEditorMode] = useState<"visual" | "html" | "text">("visual");
   const [emailConfirmOpen, setEmailConfirmOpen] = useState(false);
@@ -3674,7 +3694,8 @@ export function SpeakerWorkspace({
                   <CardDescription>
                     Compose an event-scoped message for {selectedSpeakerIds.length} selected speaker
                     {selectedSpeakerIds.length === 1 ? "" : "s"}. Save a draft, preview selected
-                    recipients, then confirm the send.
+                    recipients, then confirm the send. Start with a blank message or apply an
+                    editable starter.
                   </CardDescription>
                 </div>
                 <Badge variant="outline">Preview required before send</Badge>
@@ -3756,7 +3777,28 @@ export function SpeakerWorkspace({
                     </div>
 
                     <Field>
-                      <FieldLabel htmlFor="email-template-name">Template name</FieldLabel>
+                      <div className={styles.actions}>
+                        <FieldLabel htmlFor="email-template-name">Template name</FieldLabel>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={emailSaveBusy}
+                          onClick={() => {
+                            setEmailTemplateId("");
+                            setEmailCreateTemplateId(null);
+                            setEmailTemplateVersion(undefined);
+                            setEmailTemplateName(SPEAKER_WELCOME_EMAIL_STARTER.name);
+                            setEmailSubject(SPEAKER_WELCOME_EMAIL_STARTER.subject);
+                            setEmailHtml(SPEAKER_WELCOME_EMAIL_STARTER.html);
+                            setEmailText(SPEAKER_WELCOME_EMAIL_STARTER.text);
+                            setEmailEditorMode("visual");
+                            invalidateEmailPreview();
+                          }}
+                        >
+                          Use welcome starter
+                        </Button>
+                      </div>
                       <Input
                         id="email-template-name"
                         value={emailTemplateName}
@@ -3777,7 +3819,7 @@ export function SpeakerWorkspace({
                           setEmailSubject(event.target.value);
                           invalidateEmailPreview();
                         }}
-                        placeholder="Update for {{first_name}}"
+                        placeholder="Add a clear subject for {{first_name}}"
                         maxLength={500}
                         disabled={emailSaveBusy}
                       />
@@ -3827,6 +3869,7 @@ export function SpeakerWorkspace({
                               setEmailHtml(event.target.value);
                               invalidateEmailPreview();
                             }}
+                            placeholder="<p>Hello {{first_name}},</p><p>Add your message here.</p>"
                             maxLength={100_000}
                             disabled={emailSaveBusy}
                           />
@@ -3842,6 +3885,7 @@ export function SpeakerWorkspace({
                               setEmailText(event.target.value);
                               invalidateEmailPreview();
                             }}
+                            placeholder={"Hello {{first_name}},\n\nAdd your message here."}
                             maxLength={100_000}
                             disabled={emailSaveBusy}
                           />
