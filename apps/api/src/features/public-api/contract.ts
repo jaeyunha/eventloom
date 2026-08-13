@@ -184,7 +184,7 @@ export const publicApiV1Contract = {
       path: "speakers",
       name: "Speakers",
       operations: ["list", "get"],
-      security: { scheme: "apiKey", readScope: "speakers:read" },
+      security: { scheme: "apiKey", readScope: "submissions:read" },
       allowedSorts: ["id", "displayName", "updatedAt"],
       defaultSort: "id",
       pagination: {
@@ -221,10 +221,11 @@ export const publicApiV1Contract = {
     {
       path: "sessions",
       name: "Sessions",
-      operations: ["list", "get"],
+      operations: ["list", "get", "create", "update"],
       security: {
         scheme: "apiKey",
-        readScope: "sessions:read",
+        readScope: "agenda:read",
+        writeScope: "agenda:write",
       },
       allowedSorts: ["id", "title", "updatedAt"],
       defaultSort: "id",
@@ -238,7 +239,11 @@ export const publicApiV1Contract = {
         encodings: ["json", "dotted", "bracketed"],
         fields: ["eventId", "status"],
       },
-      schemas: { record: publicRecordSchema },
+      mutations: {
+        create: { idempotencyKey: true },
+        update: { idempotencyKey: true, ifMatch: true },
+      },
+      schemas: { record: publicRecordSchema, create: mutationSchema, update: mutationSchema },
     },
   ],
 } as const satisfies PublicApiV1Contract;

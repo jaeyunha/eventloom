@@ -11879,11 +11879,6 @@ export function createAirtableDependencies(options: AirtableRuntimeOptions): Api
       contract: publicApiV1Contract,
       resources: [],
     },
-    publicCatalog: {
-      eventRepository,
-      sessionRepository,
-      speakerRepository,
-    },
     webhooks,
     cfp: { service: cfpService },
   };

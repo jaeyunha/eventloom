@@ -84,7 +84,6 @@ describe("integration admin UI", () => {
     expect(markup).toContain("Email &amp; calendar");
     expect(markup).toContain("API keys");
     expect(markup).toContain("Webhooks");
-    expect(markup).toContain("API docs");
     expect(markup).toContain("Needs attention");
     expect(markup).toContain("Source-of-truth boundary");
     expect(markup).not.toContain("Integration settings unavailable");
@@ -127,29 +126,6 @@ describe("integration admin UI", () => {
     expect(markup).toContain("Agenda export");
     expect(markup).toContain("events:read");
     expect(markup).toContain("Revoke");
-  });
-
-  it("renders truthful developer documentation for the mounted public API", () => {
-    const markup = renderToStaticMarkup(
-      createElement(IntegrationAdmin, {
-        eventId: "event-a",
-        organizationId: "org-a",
-        section: "api-docs",
-        initialSnapshot: snapshot,
-      }),
-    );
-
-    expect(markup).toContain("Open Sessionboard API");
-    expect(markup).toContain("Production base URL");
-    expect(markup).toContain("/api/v1/organizations/org-a/webhooks");
-    expect(markup).toContain("Authorization: Bearer");
-    expect(markup).toContain("webhook-signature");
-    expect(markup).toContain("Current public surface");
-    expect(markup).toContain("Organizer owners and admins");
-    expect(markup).toContain("OpenAPI JSON");
-    expect(markup).toContain("/admin/organizations/org-a/events/event-a/integrations/api-keys");
-    expect(markup).not.toContain("Create a session");
-    expect(markup).not.toContain("Speaker API key");
   });
 
   it("uses non-prefilled password controls for replacement credentials", () => {

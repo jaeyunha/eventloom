@@ -8,7 +8,7 @@ Browser traffic uses the deployed web app's same-origin `/api/*` proxy. The
 proxy forwards to the API Worker without changing the API contract and is not a
 second API origin.
 
-The checked-in [`openapi/openapi.yaml`](../openapi/openapi.yaml) describes the mounted routes. The tenant-scoped public-v1 surface exposes discovery, publication-safe catalog reads, and webhook administration.
+The checked-in [`openapi/openapi.yaml`](../openapi/openapi.yaml) describes the mounted routes. The tenant-scoped public-v1 surface currently exposes discovery and webhook administration only; generic program-resource routes are intentionally not mounted.
 
 ## Authentication and scopes
 
@@ -18,9 +18,9 @@ Send an organization-scoped API key as a bearer token:
 Authorization: Bearer <api-key>
 ```
 
-Every tenant path contains `/organizations/{organizationId}`. The path organization must equal the API key organization. Browser/user sessions are not accepted, and a path value never grants access to another tenant.
+Every webhook path contains `/organizations/{organizationId}`. The path organization must equal the API key organization. Browser/user sessions are not accepted, and a path value never grants access to another tenant.
 
-Catalog operations require `events:read`, `sessions:read`, or `speakers:read`. Webhook operations require `webhooks:read` or `webhooks:write`. Use the smallest set required. Keep keys server-side, rotate them after operator changes, and revoke suspected keys. Responses never return API-key material or webhook signing secrets.
+Mounted webhook operations require `webhooks:read` or `webhooks:write`. Use the smallest set required. Keep keys server-side, rotate them after operator changes, and revoke suspected keys. Responses never return API-key material or webhook signing secrets.
 
 ## Mounted public-v1 operations
 
@@ -28,12 +28,6 @@ The current public-v1 surface consists of:
 
 ```text
 GET    /api/v1/openapi.json
-GET    /api/v1/organizations/{organizationId}/events
-GET    /api/v1/organizations/{organizationId}/events/{eventId}
-GET    /api/v1/organizations/{organizationId}/events/{eventId}/sessions
-GET    /api/v1/organizations/{organizationId}/events/{eventId}/sessions/{sessionId}
-GET    /api/v1/organizations/{organizationId}/events/{eventId}/speakers
-GET    /api/v1/organizations/{organizationId}/events/{eventId}/speakers/{speakerId}
 GET    /api/v1/organizations/{organizationId}/webhooks
 POST   /api/v1/organizations/{organizationId}/webhooks
 GET    /api/v1/organizations/{organizationId}/webhooks/{subscriptionId}
@@ -42,15 +36,9 @@ PUT    /api/v1/organizations/{organizationId}/webhooks/{subscriptionId}
 DELETE /api/v1/organizations/{organizationId}/webhooks/{subscriptionId}
 ```
 
-Event reads expose a field allowlist. Session reads expose only accepted sessions and omit history, actor IDs, private resources, and organizer-only state. Speaker reads expose active roster entries and omit email, submission IDs, travel logistics, workflow state, and revoked entries. Collection routes use opaque cursor pagination with `limit` from 1 to 100 (default 25). Detail routes return `404 NOT_FOUND` for both missing and withheld records.
+Generic `events`, `sessions`, `speakers`, and `agenda` routes are withheld. The previous adapters could expose raw Airtable or draft records, drained unbounded Airtable pages before applying collection limits, and could not provide atomic cross-request optimistic concurrency for writes. Missing program-resource routes return the standard `404 NOT_FOUND` envelope and never fall back to raw tables.
 
-Writes for events, sessions, and speakers remain withheld. Any future writes require a durable per-resource command coordinator shared by every overlapping writer. Runtime discovery, the checked-in OpenAPI document, tests, and this guide must be updated together.
-
-```bash
-curl "https://open-sessionboard-api-production.ashleyha0317.workers.dev/api/v1/organizations/{organizationId}/events/{eventId}/sessions?limit=25" \
-  -H "Authorization: Bearer <api-key>" \
-  -H "Accept: application/json"
-```
+These resource families may be mounted only after they use publication-safe, field-allowlisted projections with bounded keyset reads. Any future writes additionally require a durable per-resource command coordinator shared by every overlapping writer. Runtime discovery, the checked-in OpenAPI document, tests, and this guide must be updated together when that boundary exists.
 
 Public agenda, speaker, JSON, iCal, iframe, and script endpoints under `/api/public/*` and `/embed/*` are separate anonymous published-projection surfaces. They do not grant API-key access to drafts or private program records.
 
@@ -99,4 +87,4 @@ Endpoints must use HTTPS without embedded credentials. A subscription can be org
 
 ## Explicit limitations
 
-This contract does not expose catalog writes, forms, submissions, reviews, tasks, files, publications, CRM, sponsors, exhibitors, transcription/media, insights/SbQL, OAuth management, or any other unlisted resource family. Public embeds and feeds are separate published projections and do not grant API-key access or parity with these tenant-scoped routes.
+This contract does not expose forms, submissions, reviews, tasks, files, publications, CRM, sponsors, exhibitors, transcription/media, insights/SbQL, OAuth management, or any other unlisted resource family. Public embeds and feeds are separate published projections and do not grant API-key access or parity with these tenant-scoped routes.
