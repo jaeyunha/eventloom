@@ -20,10 +20,10 @@ import {
   deliverablesExportStatusLabels,
   deliverablesSessionHistoryKey,
   eligibleSpeakerHeadshotSessions,
-  resolveSpeakerHeadshotSubmissionId,
   isDeliverablesWorkspaceScopeCurrent,
   loadDeliverablesSessionHistory,
   ReminderPreview,
+  resolveSpeakerHeadshotSubmissionId,
   settleDeliverablesAssetDetailRequests,
   startDeliverablesCoreRequests,
   triggerDeliverablesDownload,
@@ -863,13 +863,13 @@ describe("deliverables workspace", () => {
       "Speakers can upload only the selected asset kinds, MIME types, and maximum size.",
     );
     expect(markup).not.toContain('data-slot="dialog-content"');
-    expect(markup).toContain("Allowed MIME types");
-    expect(markup).toContain("Accepted asset kinds (required)");
+    expect(markup).not.toContain("Allowed MIME types");
+    expect(markup).not.toContain("Accepted asset kinds (required)");
     expect(deliverableAssetKinds).toContain("slides");
     expect(markup).toContain("The replacement is staged through a");
     expect(markup).not.toContain("current API does not expose organizer headshot replacement");
-    expect(markup).toContain("Maximum file size");
-    expect(markup).toContain("Assignees");
+    expect(markup).not.toContain("Maximum file size");
+    expect(markup).not.toContain("<legend>Assignees</legend>");
     expect(markup).toContain("Filter by speaker");
     expect(markup).toContain("Filter by task");
     expect(markup).toContain("Send reminder");
@@ -976,11 +976,10 @@ describe("deliverables workspace", () => {
         onInspectAsset: () => undefined,
       }),
     );
-    expect(filesMarkup).toContain("Organizer-side authorized uploaded-asset library");
-    expect(filesMarkup).toContain("Add eligible files by session");
-    expect(filesMarkup).toContain("Download selected files ZIP");
+    expect(filesMarkup).toContain("Review files submitted by speakers");
+    expect(filesMarkup).toContain("Download approved files");
     expect(filesMarkup).not.toContain("New file request");
-    expect(filesMarkup).toContain("Files");
+    expect(filesMarkup).toContain("Uploaded files");
     const deliverablesMarkup = renderToStaticMarkup(
       createElement(DeliverablesWorkspaceView, {
         organizationId: "org-1",
@@ -992,7 +991,7 @@ describe("deliverables workspace", () => {
         profiles: [profile],
       }),
     );
-    expect(deliverablesMarkup).toContain("Requests &amp; tracking");
+    expect(deliverablesMarkup).toContain("Assign &amp; track");
     expect(deliverablesMarkup).not.toContain("Organizer-side authorized uploaded-asset library");
   });
 
@@ -1011,9 +1010,10 @@ describe("deliverables workspace", () => {
       }),
     );
     expect(markup).toContain("slides.pdf");
-    expect(markup).toContain("Authoritative current v2 · 2 versions");
-    expect(markup).toContain("Review state");
-    expect(markup).toContain("View version history");
+    expect(markup).toContain("Current version · v2");
+    expect(markup).toContain("2 versions");
+    expect(markup).toContain("Needs review");
+    expect(markup).toContain(">Review</");
   });
 
   it("exposes file filtering and latest asset/session selection controls", () => {
@@ -1028,12 +1028,12 @@ describe("deliverables workspace", () => {
         profiles: [profile],
       }),
     );
-    expect(markup).toContain("Filter files");
+    expect(markup).toContain("Search files");
     expect(markup).toContain("Filter by session");
     expect(markup).toContain("Filter by review state");
-    expect(markup).toContain("Add eligible files by session");
-    expect(markup).toContain("Server-authoritative eligibility");
-    expect(markup).toContain(">Select ready current file slides.pdf</");
+    expect(markup).toContain("Select approved files from a session");
+    expect(markup).not.toContain("Server-authoritative eligibility");
+    expect(markup).toContain(">Select current file slides.pdf</");
   });
 
   it("selects only the server-authoritative current ready version", () => {
@@ -1052,8 +1052,9 @@ describe("deliverables workspace", () => {
     );
 
     expect(markup).toContain('data-current-version="asset-1"');
-    expect(markup).toContain("Authoritative current v1 · 2 versions");
-    expect(markup).toContain("Slides · application/pdf · 1024 bytes");
+    expect(markup).toContain("Current version · v1");
+    expect(markup).toContain("2 versions");
+    expect(markup).toContain("Slides · PDF · 1 KB");
     expect(markup).not.toContain('data-current-version="asset-2"');
   });
 
@@ -1080,9 +1081,9 @@ describe("deliverables workspace", () => {
       }),
     );
 
-    expect(markup).toContain("current version unavailable");
+    expect(markup).toContain("Current version could not be confirmed");
     expect(markup).not.toContain('data-current-version="asset-2"');
-    expect(markup).toContain("Select row-level ready current files.");
+    expect(markup).toContain("Only confirmed current files can be downloaded.");
   });
 
   it("requires explicit confirmation of the exact outstanding reminder snapshot", () => {
@@ -1128,8 +1129,8 @@ describe("deliverables workspace", () => {
     );
     expect((deliverablesMarkup.match(/<h1\b/g) ?? []).length).toBe(1);
     expect(deliverablesMarkup).toContain("Organizer-created speaker requests");
-    expect(deliverablesMarkup).toContain("For reminder");
-    expect(deliverablesMarkup).toContain("For ZIP export");
+    expect(deliverablesMarkup).toContain("Send reminder");
+    expect(deliverablesMarkup).toContain("Download selected");
     expect(deliverablesMarkup).toContain("changes public eligibility");
     expect(deliverablesMarkup).toContain("does not publish immediately");
 
@@ -1146,10 +1147,48 @@ describe("deliverables workspace", () => {
       }),
     );
     expect((filesMarkup.match(/<h1\b/g) ?? []).length).toBe(1);
-    expect(filesMarkup).toContain("Organizer-side authorized uploaded-asset library");
-    expect(filesMarkup).toContain("Server-authoritative eligibility");
-    expect(filesMarkup).toContain("ready");
-    expect(filesMarkup).toContain("Add eligible files by session");
+    expect(filesMarkup).toContain("Review files submitted by speakers");
+    expect(filesMarkup).toContain("Select approved files from a session");
+    expect(filesMarkup).not.toContain("Server-authoritative eligibility");
+  });
+
+  it("does not present a failed Files load as an empty upload library", () => {
+    const markup = renderToStaticMarkup(
+      createElement(DeliverablesWorkspaceView, {
+        organizationId: "org-1",
+        eventId: "event-1",
+        mode: "files",
+        sessions: [],
+        tasks: [],
+        assets: [],
+        profiles: [],
+        capabilityMessages: [
+          "Private asset library unavailable: The requested speaker resource was not found.",
+        ],
+      }),
+    );
+
+    expect(markup).toContain("Uploaded files could not be loaded");
+    expect(markup).toContain("Retry");
+    expect(markup).not.toContain("No files have been submitted yet");
+  });
+
+  it("teaches organizers how an actually empty file library gets populated", () => {
+    const markup = renderToStaticMarkup(
+      createElement(DeliverablesWorkspaceView, {
+        organizationId: "org-1",
+        eventId: "event-1",
+        mode: "files",
+        sessions: [],
+        tasks: [],
+        assets: [],
+        profiles: [],
+      }),
+    );
+
+    expect(markup).toContain("No files have been submitted yet");
+    expect(markup).toContain("Files will appear here after speakers complete upload requests");
+    expect(markup).toContain("Create a file request");
   });
 
   it("keeps every ZIP response state explicit and non-fabricated", () => {
@@ -1188,10 +1227,8 @@ describe("deliverables workspace", () => {
     expect(markup).toContain("This content changed elsewhere. Reload before trying again.");
     expect(markup).toContain("Task tracking unavailable");
     expect(markup).toContain("Bulk reminder sending is unavailable");
-    expect(markup).toContain("Task creation unavailable");
-    expect(markup).toContain("Session editing unavailable");
     expect(markup).not.toContain("objectKey");
-    expect(markup).toContain("Download selected deliverables ZIP");
+    expect(markup).toContain("Download selected files");
     expect(markup).toContain('disabled=""');
   });
   it("revokes the transient object URL after starting a ZIP download", () => {

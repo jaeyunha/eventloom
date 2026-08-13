@@ -347,6 +347,7 @@ describe.sequential("composed local Worker", () => {
     });
     expect(speakerPortal.status).toBe(200);
   });
+
   it("serves one event lifecycle across organizer surfaces and public projections", async () => {
     const eventResponse = await runtimeRequest(
       `/api/admin/organizations/${organizationId}/events`,
@@ -463,6 +464,23 @@ describe.sequential("composed local Worker", () => {
     expect(files).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: "local-slides-asset", state: "ready" }),
+      ]),
+    );
+
+    const advertisedEventFilesResponse = await runtimeRequest(
+      "/api/speaker/events/open-sessionboard-conf/organizer/assets",
+      { headers: organizerHeaders },
+    );
+    const advertisedEventFiles =
+      await jsonData<Array<Record<string, unknown>>>(advertisedEventFilesResponse);
+    expect(advertisedEventFilesResponse.status).toBe(200);
+    expect(advertisedEventFiles).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          eventId: "open-sessionboard-conf",
+          id: "local-slides-asset",
+          state: "ready",
+        }),
       ]),
     );
 

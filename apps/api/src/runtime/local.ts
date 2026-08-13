@@ -83,6 +83,7 @@ import type {
   RestoreSpeakerContentVersionCommand,
   SpeakerAccessScope,
   SpeakerAsset,
+  SpeakerAssetComment,
   SpeakerContentHistoryEntry,
   SpeakerContentRecord,
   SpeakerPortalCapability,
@@ -349,14 +350,39 @@ function localAuthRoutes(): { handler: (request: Request) => Promise<Response> }
         (path === "/api/auth/sign-in/email" || path === "/api/auth/sign-up/email") &&
         request.method === "POST"
       ) {
-        const body: { email?: unknown; password?: unknown } = await request
+        const body: { email?: unknown; password?: unknown; name?: unknown } = await request
           .clone()
-          .json<{ email?: unknown; password?: unknown }>()
+          .json<{ email?: unknown; password?: unknown; name?: unknown }>()
           .catch(() => ({}));
-        const persona =
+        let persona =
           typeof body.email === "string" && typeof body.password === "string"
-            ? localPersonaForCredentials(body.email, body.password)
+            ? localPersonaForCredentials(personas, body.email, body.password)
             : null;
+        if (
+          persona === null &&
+          path === "/api/auth/sign-up/email" &&
+          typeof body.email === "string" &&
+          typeof body.password === "string" &&
+          typeof body.name === "string"
+        ) {
+          const email = body.email.trim().toLowerCase();
+          const name = body.name.trim();
+          if (email.length > 0 && body.password.length > 0 && name.length > 0) {
+            const identity = crypto.randomUUID();
+            persona = {
+              key: "applicant",
+              sessionToken: `local-applicant-${identity}`,
+              sessionId: `local-applicant-session-${identity}`,
+              userId: `local-applicant-${identity}`,
+              email,
+              name,
+              password: body.password,
+              memberships: [],
+              speakerGrants: [],
+            };
+            personas.push(persona);
+          }
+        }
         if (persona === null) {
           return localAuthJson({ error: { code: "INVALID_EMAIL_OR_PASSWORD" } }, { status: 401 });
         }
@@ -369,7 +395,7 @@ function localAuthRoutes(): { handler: (request: Request) => Promise<Response> }
         return localAuthJson({ status: true });
       }
       if (path === "/api/auth/get-session" && request.method === "GET") {
-        const persona = localPersonaForRequest(request);
+        const persona = localPersonaForRequest(personas, request);
         if (persona === null) return localAuthJson(null, { status: 401 });
         return localAuthJson(localSessionPayload(persona));
       }
@@ -396,10 +422,12 @@ class LocalSpeakerRepository implements SpeakerRepository {
   readonly #profiles = new Map<string, SpeakerProfile[]>();
   readonly #tasks = new Map<string, SpeakerTask[]>();
   readonly #assets = new Map<string, SpeakerAsset[]>();
+  readonly #assetComments = new Map<string, SpeakerAssetComment[]>();
   readonly #content = new Map<string, SpeakerContentRecord>();
   readonly #contentHistory = new Map<string, SpeakerContentHistoryEntry[]>();
   constructor() {
     this.#seed("demo-event");
+    this.#seed("open-sessionboard-conf");
   }
 
   #contentKey(eventId: string, entityType: "session" | "speaker", entityId: string): string {
@@ -408,7 +436,7 @@ class LocalSpeakerRepository implements SpeakerRepository {
 
   #seed(eventId: string): void {
     if (this.#submissions.has(eventId)) return;
-    if (eventId !== "demo-event") return;
+    if (eventId !== "demo-event" && eventId !== "open-sessionboard-conf") return;
     this.#submissions.set(eventId, [
       {
         id: "local-submission",
@@ -2725,7 +2753,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
       },
     },
     authenticator,
-    auth: localAuthRoutes(),
+    auth: localAuthRoutes(personas),
     organizerOverview,
     crm: { service: crmService },
     speaker: {
