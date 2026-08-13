@@ -4,7 +4,7 @@ import {
   apiScopes,
   type WebhookEventType,
   webhookEventTypes,
-} from "@open-sessionboard/contracts";
+} from "@eventloom/contracts";
 import { type Context, Hono } from "hono";
 import { ZodError, z } from "zod";
 import { requireOrganizationRole } from "../features/auth/authorization";

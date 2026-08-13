@@ -578,7 +578,7 @@ export function portalSubmissionEditTarget(
   if (!organizationId) return null;
   return {
     href: getCfpStepRoute(organizationId, eventSlug, "submission"),
-    pointerKey: `open-sessionboard:cfp-submission:v1:${encodeURIComponent(
+    pointerKey: `eventloom:cfp-submission:v1:${encodeURIComponent(
       organizationId,
     )}:${encodeURIComponent(context.eventId)}:${encodeURIComponent(submission.formId)}`,
   };

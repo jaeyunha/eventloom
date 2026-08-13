@@ -20,7 +20,7 @@ const fixtureEnvironment = /^RUNTIME_PROFILE=.*$/m.test(sourceEnvironment)
   : `${sourceEnvironment.replace(/\s*$/u, "")}\n${fixtureLine}\n`;
 const port = process.env.API_PORT?.trim() || "8787";
 if (!/^\d{2,5}$/u.test(port)) throw new Error("API_PORT must be a valid TCP port.");
-const temporaryDirectory = mkdtempSync(join(tmpdir(), "open-sessionboard-fixture-"));
+const temporaryDirectory = mkdtempSync(join(tmpdir(), "eventloom-fixture-"));
 const environmentPath = join(temporaryDirectory, "runtime.env");
 writeFileSync(environmentPath, fixtureEnvironment, { mode: 0o600 });
 

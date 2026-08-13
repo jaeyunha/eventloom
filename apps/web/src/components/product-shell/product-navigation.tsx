@@ -11,12 +11,12 @@ export function ProductNavigation() {
   return (
     <header className="product-nav-shell">
       <div className="product-nav-inner">
-        <a className="product-brand" href="/" aria-label="Open Sessionboard home">
+        <a className="product-brand" href="/" aria-label="Eventloom home">
           <span className="product-brand-mark" aria-hidden="true">
-            OS
+            EL
           </span>
           <span>
-            <strong>Open Sessionboard</strong>
+            <strong>Eventloom</strong>
             <small>Conference program operations</small>
           </span>
         </a>

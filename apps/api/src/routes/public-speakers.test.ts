@@ -17,7 +17,7 @@ const bindings: ApiBindings = {
 const projection: PublishedSpeakerProjection = {
   event: {
     slug: "open-sessionboard-conf",
-    name: "Open Sessionboard Conference",
+    name: "Eventloom Conference",
     timeZone: "America/Los_Angeles",
     startsOn: "2026-09-18",
     endsOn: "2026-09-19",

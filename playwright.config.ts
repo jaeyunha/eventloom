@@ -23,7 +23,7 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: "bun run --filter @open-sessionboard/api dev:fixture",
+      command: "bun run --filter @eventloom/api dev:fixture",
       url: `${apiBaseUrl}/api/health`,
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
@@ -35,7 +35,7 @@ export default defineConfig({
       },
     },
     {
-      command: "bun run --filter @open-sessionboard/web dev:playwright",
+      command: "bun run --filter @eventloom/web dev:playwright",
       url: `${webBaseUrl}/health`,
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,

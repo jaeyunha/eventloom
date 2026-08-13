@@ -1,6 +1,6 @@
 # Public release checklist
 
-Open Sessionboard is licensed under the Elastic License 2.0 (`Elastic-2.0`).
+Eventloom is licensed under the Elastic License 2.0 (`Elastic-2.0`).
 That license is source-available and is not an OSI-approved open-source
 license. Do not describe the project as "open source" in public copy unless
 the licensing decision changes.

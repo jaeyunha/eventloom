@@ -295,12 +295,9 @@ describe.sequential("composed local Worker", () => {
       expect(response.status).toBe(200);
       return response;
     };
-    const organizerSignIn = await signIn(
-      "organizer@local.open-sessionboard.test",
-      "organizer-local",
-    );
-    const reviewerSignIn = await signIn("reviewer@local.open-sessionboard.test", "reviewer-local");
-    const speakerSignIn = await signIn("speaker@local.open-sessionboard.test", "speaker-local");
+    const organizerSignIn = await signIn("organizer@local.eventloom.test", "organizer-local");
+    const reviewerSignIn = await signIn("reviewer@local.eventloom.test", "reviewer-local");
+    const speakerSignIn = await signIn("speaker@local.eventloom.test", "speaker-local");
 
     expect((await organizerSignIn.json()).token).toBe("local-session");
     expect((await reviewerSignIn.json()).token).toBe("local-reviewer-session");
@@ -471,8 +468,9 @@ describe.sequential("composed local Worker", () => {
       "/api/speaker/events/open-sessionboard-conf/organizer/assets",
       { headers: organizerHeaders },
     );
-    const advertisedEventFiles =
-      await jsonData<Array<Record<string, unknown>>>(advertisedEventFilesResponse);
+    const advertisedEventFiles = await jsonData<Array<Record<string, unknown>>>(
+      advertisedEventFilesResponse,
+    );
     expect(advertisedEventFilesResponse.status).toBe(200);
     expect(advertisedEventFiles).toEqual(
       expect.arrayContaining([

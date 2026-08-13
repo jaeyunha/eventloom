@@ -146,7 +146,7 @@ function createCalendar(
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
     "METHOD:PUBLISH",
-    "PRODID:-//Open Sessionboard//Public Schedule//EN",
+    "PRODID:-//Eventloom//Public Schedule//EN",
     "CALSCALE:GREGORIAN",
     `X-WR-CALNAME:${icsEscape(eventName)}`,
   ];
@@ -172,7 +172,8 @@ function createCalendar(
 
 export function PublicItineraryView({ program }: Readonly<{ program: PublishedProgram }>) {
   const { agenda, speakers } = program;
-  const storageKey = `open-sessionboard:public-schedule:${agenda.event.slug}`;
+  const storageKey = `eventloom:public-schedule:${agenda.event.slug}`;
+  const legacyStorageKey = `open-sessionboard:public-schedule:${agenda.event.slug}`;
   const days = useMemo(
     () => publicEventDays(agenda.entries, agenda.event),
     [agenda.entries, agenda.event],
@@ -199,23 +200,27 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
 
   useEffect(() => {
     try {
-      const stored = window.localStorage.getItem(storageKey);
+      const current = window.localStorage.getItem(storageKey);
+      const stored = current ?? window.localStorage.getItem(legacyStorageKey);
       const parsed: unknown = stored ? JSON.parse(stored) : [];
       const availableIds = new Set(agenda.entries.map((entry) => entry.id));
-      setSelectedIds(
-        Array.isArray(parsed)
-          ? parsed.filter(
-              (value): value is string => typeof value === "string" && availableIds.has(value),
-            )
-          : [],
-      );
+      const selected = Array.isArray(parsed)
+        ? parsed.filter(
+            (value): value is string => typeof value === "string" && availableIds.has(value),
+          )
+        : [];
+      setSelectedIds(selected);
+      if (current === null && stored !== null) {
+        window.localStorage.setItem(storageKey, JSON.stringify(selected));
+        window.localStorage.removeItem(legacyStorageKey);
+      }
     } catch {
       setSelectedIds([]);
     } finally {
       setLoadedStorageKey(storageKey);
       setStorageReady(true);
     }
-  }, [agenda.entries, storageKey]);
+  }, [agenda.entries, legacyStorageKey, storageKey]);
 
   useEffect(() => {
     if (!storageReady || loadedStorageKey !== storageKey) return;

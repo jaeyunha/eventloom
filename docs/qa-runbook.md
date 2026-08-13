@@ -21,7 +21,7 @@ The browser-visible staging API base is the web origin: `/api/*` is proxied by t
 4. Use test inboxes and suppressed, sandboxed, or recipient-allowlisted OpenSend delivery. Never paste a password, magic link, API key, or private inbox content into evidence.
 5. For local work, start both services with `make dev` and check both health endpoints. For staging work, check the exact pinned web and API health endpoints after deployment.
 6. Record before browser interaction: commit SHA and dirty/clean state, `APP_ENV`, exact origins, evaluator fixture/manifest version, browser and viewport, tool/session ID, operator, and UTC start time.
-7. Store redacted screenshots, accessibility trees, traces, and reports outside the repository, for example `/tmp/open-sessionboard-qa/<commit>-<utc-run>`. Do not commit browser profiles, recordings, or generated output.
+7. Store redacted screenshots, accessibility trees, traces, and reports outside the repository, for example `/tmp/eventloom-qa/<commit>-<utc-run>`. Do not commit browser profiles, recordings, or generated output.
 
 ## Local automated pass
 
@@ -126,7 +126,7 @@ Use the `codex-cua` skill against the same rendered staging build. Confirm the b
 cua status
 cua apps
 cua start <app>
-cua state --full --shot /tmp/open-sessionboard-qa/<run>/landing.png <app>
+cua state --full --shot /tmp/eventloom-qa/<run>/landing.png <app>
 ```
 
 After every navigation, dialog, re-rendered list, scroll, and drag/drop, re-read the accessibility state because element indexes may change:
@@ -139,7 +139,7 @@ cua key <app> 'Shift+Tab'
 cua key <app> 'Return'
 cua scroll --pages 1 <app> <element-index> down
 cua drag <app> <from-x> <from-y> <to-x> <to-y>
-cua state --shot /tmp/open-sessionboard-qa/<run>/after-action.png <app>
+cua state --shot /tmp/eventloom-qa/<run>/after-action.png <app>
 ```
 
 The CUA evidence must cover tab order, visible focus, landmarks, Enter/Space activation, Escape dismissal and focus return, form labels/descriptions and error relationships, live announcements, dialog containment, table/list semantics, keyboard drag/drop alternatives, text zoom/reflow, contrast/non-color cues, loading/empty/validation/forbidden/conflict/failure/retry states, and exact screenshots for CFP completion, reviewer confirmation, conflict-blocked agenda, publication, CRM, and both embeds. Never type real credentials; use the approved synthetic fixture or a pre-authenticated isolated profile.

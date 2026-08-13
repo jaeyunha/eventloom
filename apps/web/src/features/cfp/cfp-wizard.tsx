@@ -66,7 +66,7 @@ const TRACK_OPTIONS = ["Track 1", "Track 2", "Track 3", "Community"];
 const LEVEL_OPTIONS = ["Introductory", "Intermediate", "Advanced", "All levels"];
 const LANGUAGE_OPTIONS = ["English"];
 const TAG_OPTIONS = ["Tag A", "Tag B", "Tag C", "Leadership"];
-const CFP_COMPLETION_HANDOFF_PREFIX = "open-sessionboard:cfp-completion:v1";
+const CFP_COMPLETION_HANDOFF_PREFIX = "eventloom:cfp-completion:v1";
 
 export function getCfpCompletionHandoffStorageKey(
   organizationId: string,
@@ -303,7 +303,7 @@ function fileStateKey(fieldKey: string, participantIndex?: number): string {
 }
 
 function fileNameStorageKey(assetId: string): string {
-  return `open-sessionboard:cfp-upload-name:v1:${assetId}`;
+  return `eventloom:cfp-upload-name:v1:${assetId}`;
 }
 
 interface CfpWizardProps {
@@ -382,8 +382,8 @@ function PublicCfpShell({
   step?: CfpStep | undefined;
   className?: string | undefined;
 }) {
-  const resolvedOrganizationName = organization?.name ?? "Open Sessionboard";
-  const resolvedEventName = event?.name ?? eventName ?? "Open Sessionboard";
+  const resolvedOrganizationName = organization?.name ?? "Eventloom";
+  const resolvedEventName = event?.name ?? eventName ?? "Eventloom";
   const resolvedFormName = form?.name ?? formName ?? "Call for proposals";
 
   return (
@@ -3455,7 +3455,7 @@ function ReviewStep({
       const persistedFileName =
         persistedAssetId === undefined
           ? undefined
-          : window.sessionStorage.getItem(fileNameStorageKey(persistedAssetId)) ?? undefined;
+          : (window.sessionStorage.getItem(fileNameStorageKey(persistedAssetId)) ?? undefined);
       return [
         {
           key: field.key,

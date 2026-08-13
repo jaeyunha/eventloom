@@ -1,4 +1,4 @@
-import { apiErrorSchema } from "@open-sessionboard/contracts";
+import { apiErrorSchema } from "@eventloom/contracts";
 import { type ApiDependencies, createApp } from "../app";
 import type {
   ReminderCandidate,

@@ -1,4 +1,4 @@
-# Open Sessionboard Architecture
+# Eventloom Architecture
 
 ## Boundary diagram
 
@@ -111,4 +111,4 @@ Both remain private until the release gate passes. Forge is retained for competi
 - Secrets stay in environment/provider secret stores and never appear in API responses or evidence.
 - Backend provider secrets stay in environment/provider secret stores and never appear in `NEXT_PUBLIC_*`, Wrangler variables, browser evidence, logs, API responses, or committed files.
 
-For supported scope and current status, read [`spec/open-sessionboard.md`](spec/open-sessionboard.md). For executable procedures, use [`docs/setup.md`](docs/setup.md), [`docs/deployment-readiness.md`](docs/deployment-readiness.md), [`docs/qa-runbook.md`](docs/qa-runbook.md), and [`docs/release-runbook.md`](docs/release-runbook.md). Evaluator outcomes and limitations are recorded in [`docs/llm-judge-runs.md`](docs/llm-judge-runs.md); this architecture document does not claim release verification. Advisory AI remains partial until deployed, real-provider end-to-end evidence is accepted.
+For supported scope and current status, read [`spec/eventloom.md`](spec/eventloom.md). For executable procedures, use [`docs/setup.md`](docs/setup.md), [`docs/deployment-readiness.md`](docs/deployment-readiness.md), [`docs/qa-runbook.md`](docs/qa-runbook.md), and [`docs/release-runbook.md`](docs/release-runbook.md). Evaluator outcomes and limitations are recorded in [`docs/llm-judge-runs.md`](docs/llm-judge-runs.md); this architecture document does not claim release verification. Advisory AI remains partial until deployed, real-provider end-to-end evidence is accepted.

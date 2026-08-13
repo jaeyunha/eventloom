@@ -1,4 +1,4 @@
-import { deploymentEnvironmentSchema } from "@open-sessionboard/contracts";
+import { deploymentEnvironmentSchema } from "@eventloom/contracts";
 import { z } from "zod";
 
 const apiEnvironmentSchema = z.object({

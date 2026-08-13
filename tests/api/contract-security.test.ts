@@ -378,7 +378,7 @@ describe("assembled API contract and security", () => {
         method: "POST",
         headers: { ...authorizedHeaders, "content-type": "application/json" },
         body: JSON.stringify({
-          endpointUrl: "https://hooks.example.test/sessionboard",
+          endpointUrl: "https://hooks.example.test/eventloom",
           events: ["agenda.published"],
           signingSecret,
         }),
@@ -472,7 +472,7 @@ describe("checked-in OpenAPI contract security", () => {
     expect(openApiContract).not.toMatch(/\bobjectKey\b/);
   });
 
-  it("uses exact request, version, error, and Sessionboard sender identities", () => {
+  it("uses exact request, version, error, and Eventloom sender identities", () => {
     expect(openApiContract).toContain("name: Idempotency-Key");
     expect(openApiContract).toContain("name: If-Match");
     expect(openApiContract).toContain("X-Request-ID");

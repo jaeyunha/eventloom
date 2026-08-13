@@ -1,6 +1,6 @@
 # Calendar and timezone semantics
 
-Open Sessionboard sends provider-neutral RFC 5545 attachments through OpenSend at `https://opensend.namuh.co`. It does not write directly to a calendar provider account. Calendar delivery is an email attachment/outbox boundary, not an external sign-in integration.
+Eventloom sends provider-neutral RFC 5545 attachments through OpenSend at `https://opensend.namuh.co`. It does not write directly to a calendar provider account. Calendar delivery is an email attachment/outbox boundary, not an external sign-in integration.
 
 ## Current implementation status
 

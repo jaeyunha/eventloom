@@ -210,8 +210,8 @@ it("parses the published dynamic schema without dropping rules or reusable metad
       data: {
         organization: {
           id: "org-1",
-          slug: "open-sessionboard",
-          name: "Open Sessionboard",
+          slug: "eventloom",
+          name: "Eventloom",
         },
         event: {
           id: "event-1",
@@ -318,7 +318,7 @@ it("parses the published dynamic schema without dropping rules or reusable metad
   });
   expect(published.form.participantFields[0]?.key).toBe("pronouns");
   expect(published.form.rules[0]).toMatchObject({ id: "show-deck" });
-  expect(published.organization.name).toBe("Open Sessionboard");
+  expect(published.organization.name).toBe("Eventloom");
 });
 describe("CFP mutation schema versions", () => {
   const submission = {

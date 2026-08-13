@@ -1,7 +1,7 @@
 {
   "version": 1,
   "purpose": "Evidence baseline for product behavior, visual fidelity, acceptance tests, and implementation decisions.",
-  "governing_spec": "spec/open-sessionboard.md",
+  "governing_spec": "spec/eventloom.md",
   "sources": [
     {
       "path": "evidence/sources/kill-my-saas-brief.pdf",

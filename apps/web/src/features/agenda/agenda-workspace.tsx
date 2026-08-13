@@ -939,7 +939,7 @@ export function AgendaBoard({
       </a>
       <header className={styles.topbar}>
         <a className={styles.brand} href="/admin">
-          Open Sessionboard
+          Eventloom
         </a>
         <nav aria-label="Organizer navigation">
           <a

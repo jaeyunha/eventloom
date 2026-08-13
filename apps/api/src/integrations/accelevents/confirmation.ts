@@ -1,4 +1,4 @@
-import type { IntegrationPublicationId } from "@open-sessionboard/contracts";
+import type { IntegrationPublicationId } from "@eventloom/contracts";
 import type { AcceleventsConfirmationTokens } from "./types";
 
 const TOKEN_PREFIX = "accelevents-confirm-v1.";

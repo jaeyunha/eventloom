@@ -1,4 +1,4 @@
-import type { CalendarInvitationPayload } from "@open-sessionboard/contracts";
+import type { CalendarInvitationPayload } from "@eventloom/contracts";
 import { describe, expect, it } from "vitest";
 import { createCalendarInvitation } from "../calendar";
 import {
@@ -67,7 +67,7 @@ describe("OpenSendClient", () => {
     const result = await client.send({
       ...message,
       from: "calendar@sessionboard.namuh.co",
-      headers: { "X-Sessionboard-Calendar-Action": "REQUEST" },
+      headers: { "X-Eventloom-Calendar-Action": "REQUEST" },
       attachments: [
         {
           filename: "session.ics",

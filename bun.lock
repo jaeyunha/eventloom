@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "open-sessionboard",
+      "name": "eventloom",
       "devDependencies": {
         "@biomejs/biome": "2.5.7",
         "@playwright/test": "1.62.1",
@@ -16,10 +16,10 @@
       },
     },
     "apps/api": {
-      "name": "@open-sessionboard/api",
+      "name": "@eventloom/api",
       "version": "0.1.0",
       "dependencies": {
-        "@open-sessionboard/contracts": "workspace:*",
+        "@eventloom/contracts": "workspace:*",
         "better-auth": "^1.6.26",
         "hono": "4.13.1",
         "zod": "4.4.3",
@@ -31,10 +31,10 @@
       },
     },
     "apps/web": {
-      "name": "@open-sessionboard/web",
+      "name": "@eventloom/web",
       "version": "0.1.0",
       "dependencies": {
-        "@open-sessionboard/contracts": "workspace:*",
+        "@eventloom/contracts": "workspace:*",
         "@swc/helpers": "0.5.15",
         "class-variance-authority": "^0.7.1",
         "clsx": "^2.1.1",
@@ -60,7 +60,7 @@
       },
     },
     "packages/contracts": {
-      "name": "@open-sessionboard/contracts",
+      "name": "@eventloom/contracts",
       "version": "0.1.0",
       "dependencies": {
         "zod": "4.4.3",
@@ -471,11 +471,11 @@
 
     "@nodelib/fs.walk": ["@nodelib/fs.walk@1.2.8", "", { "dependencies": { "@nodelib/fs.scandir": "2.1.5", "fastq": "^1.6.0" } }, "sha512-oGB+UxlgWcgQkgwo8GcEGwemoTFt3FIO9ababBmaGwXIoBKZ+GTy0pP185beGg7Llih/NSHSV2XAs1lnznocSg=="],
 
-    "@open-sessionboard/api": ["@open-sessionboard/api@workspace:apps/api"],
+    "@eventloom/api": ["@eventloom/api@workspace:apps/api"],
 
-    "@open-sessionboard/contracts": ["@open-sessionboard/contracts@workspace:packages/contracts"],
+    "@eventloom/contracts": ["@eventloom/contracts@workspace:packages/contracts"],
 
-    "@open-sessionboard/web": ["@open-sessionboard/web@workspace:apps/web"],
+    "@eventloom/web": ["@eventloom/web@workspace:apps/web"],
 
     "@opennextjs/aws": ["@opennextjs/aws@4.1.0", "", { "dependencies": { "@ast-grep/napi": "^0.40.5", "@aws-sdk/client-cloudfront": "3.984.0", "@aws-sdk/client-dynamodb": "3.984.0", "@aws-sdk/client-lambda": "3.984.0", "@aws-sdk/client-s3": "3.984.0", "@aws-sdk/client-sqs": "3.984.0", "@node-minify/core": "^8.0.6", "@node-minify/terser": "^8.0.6", "@tsconfig/node18": "^1.0.3", "aws4fetch": "^1.0.20", "chalk": "^5.6.2", "cookie": "^1.0.2", "esbuild": "0.25.4", "express": "^5.1.0", "path-to-regexp": "^6.3.0", "urlpattern-polyfill": "^10.1.0", "yaml": "^2.8.1" }, "peerDependencies": { "next": ">=15.5.21 <16 || >=16.2.11" }, "bin": { "open-next": "dist/index.js" } }, "sha512-GuKkdUbnJhLvtwTiJlytNtWIcSYN3+Dzi+OusUlRgf+Ur7dGoXdzBopd+VFiSdTBduPOvr9lPFDg6BYNjEV3wQ=="],
 

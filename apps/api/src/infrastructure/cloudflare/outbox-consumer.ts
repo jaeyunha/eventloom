@@ -2,7 +2,7 @@ import {
   type CalendarInvitationPayload,
   calendarInvitationPayloadSchema,
   openSendEmailPayloadSchema,
-} from "@open-sessionboard/contracts";
+} from "@eventloom/contracts";
 import { createCalendarInvitation } from "../../integrations/calendar/ical";
 import {
   DEFAULT_OPEN_SEND_SENDERS,

@@ -496,7 +496,7 @@ describe("agenda and integration boundaries", () => {
       }),
     ).toThrow();
   });
-  it("locks integration sender and organizer identities to sessionboard", () => {
+  it("locks integration sender and organizer identities to eventloom", () => {
     const senders = [
       "auth@sessionboard.namuh.co",
       "speakers@sessionboard.namuh.co",

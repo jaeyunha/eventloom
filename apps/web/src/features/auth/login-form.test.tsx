@@ -298,7 +298,7 @@ describe("organizer login", () => {
     expect(markup).toContain("Account access mode");
     expect(markup).toContain("Create account");
     expect(markup).toContain("One account, separate workspaces");
-    expect(markup).toContain("Sign in to Open Sessionboard");
+    expect(markup).toContain("Sign in to Eventloom");
     expect(markup).toContain("Organizers");
     expect(markup).toContain("Reviewers");
     expect(markup).toContain("applicant and speaker portal");

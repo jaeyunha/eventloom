@@ -1113,7 +1113,7 @@ export async function enrichCanonicalSubmission(
 
 function eventTitle(eventId: string): string {
   if (eventId === "summit-2026") {
-    return "Open Sessionboard Summit 2026";
+    return "Eventloom Summit 2026";
   }
   if (eventId === "forge-2025") {
     return "Forge Community Day 2025";

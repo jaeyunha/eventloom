@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 
-const STYLE_MARKER = "data-open-sessionboard-dev-tools";
+const STYLE_MARKER = "data-eventloom-dev-tools";
 
 function hideNextDevToolsBadge(): boolean {
   const portal = document.querySelector("nextjs-portal");

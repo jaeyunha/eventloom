@@ -60,7 +60,7 @@ function eventRecord(input: {
     timeZone,
     startsAt: input.startsAt,
     endsAt: input.endsAt,
-    venue: "Sessionboard Hall",
+    venue: "Eventloom Hall",
     cfpSettings: {
       enabled: true,
       opensAt: "2026-06-01T16:00:00.000Z",
@@ -69,7 +69,7 @@ function eventRecord(input: {
     defaultCalendarSettings: {
       durationMinutes: 45,
       timeZone,
-      location: "Sessionboard Hall",
+      location: "Eventloom Hall",
     },
     version: 1,
     createdAt: SEEDED_AT,
@@ -324,7 +324,7 @@ async function installOrganizerApi(
   const primaryEvent = eventRecord({
     id: PRIMARY_EVENT_ID,
     slug: PRIMARY_EVENT_ID,
-    name: "Open Sessionboard Conference",
+    name: "Eventloom Conference",
     startsAt: "2026-09-18T16:00:00.000Z",
     endsAt: "2026-09-19T23:00:00.000Z",
     createdBy: session.userId,
@@ -578,9 +578,7 @@ test("verified organizer login opens the organization overview", async ({ authSe
   const api = await installOrganizerApi(page, authSession);
 
   await page.goto("/login");
-  await expect(
-    page.getByRole("heading", { level: 1, name: "Sign in to Open Sessionboard" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Sign in to Eventloom" })).toBeVisible();
   await page.getByLabel("Email address").fill(ORGANIZER_EMAIL);
   await page.getByLabel("Password").fill(ORGANIZER_PASSWORD);
   await page.getByRole("button", { name: "Sign in to workspace" }).click();
@@ -616,13 +614,11 @@ test("verified organizer login opens the organization overview", async ({ authSe
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog", { name: "Jump to a page or action" })).toBeHidden();
   await expect(page.getByRole("button", { name: "Search or jump to" })).toBeFocused();
-  await expect(
-    page.getByText("Open Sessionboard Conference", { exact: true }).first(),
-  ).toBeVisible();
+  await expect(page.getByText("Eventloom Conference", { exact: true }).first()).toBeVisible();
   await expect(page.getByRole("link", { name: "Events", exact: true })).toBeVisible();
   const agendaDestination = agendaUrl(PRIMARY_EVENT_ID);
   const agendaLink = page.getByRole("link", {
-    name: "Open agenda for Open Sessionboard Conference",
+    name: "Open agenda for Eventloom Conference",
     exact: true,
   });
   await expect(agendaLink).toBeVisible();
@@ -663,7 +659,7 @@ test("organization overview reflows without document overflow", async ({ authSes
   await expect(
     page
       .getByRole("region", { name: "Events" })
-      .getByRole("heading", { level: 2, name: "Open Sessionboard Conference" }),
+      .getByRole("heading", { level: 2, name: "Eventloom Conference" }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Toggle Sidebar" }).click();
   const mobileSidebar = page.getByRole("dialog", { name: "Sidebar" });
@@ -767,10 +763,7 @@ test("canonical Settings navigation stays organization and event qualified", asy
   const api = await installOrganizerApi(page, authSession);
 
   await page.goto("/admin/events");
-  await page
-    .getByRole("link", { name: "Open Sessionboard Conference", exact: true })
-    .first()
-    .click();
+  await page.getByRole("link", { name: "Eventloom Conference", exact: true }).first().click();
   await expect(page).toHaveURL(new RegExp(`${settingsUrl(PRIMARY_EVENT_ID)}$`));
   await expect(page.getByRole("heading", { level: 1, name: "Event settings" })).toBeVisible();
   await expect(
@@ -840,9 +833,7 @@ test("agenda data remains isolated between organization-qualified events", async
 
   await page.goto(agendaUrl(PRIMARY_EVENT_ID));
   await expectAgendaWorkspace(page);
-  await expect(
-    page.getByText("Open Sessionboard Conference", { exact: true }).first(),
-  ).toBeVisible();
+  await expect(page.getByText("Eventloom Conference", { exact: true }).first()).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "Opening keynote: Systems that earn trust" }),
   ).toBeVisible();
@@ -852,7 +843,7 @@ test("agenda data remains isolated between organization-qualified events", async
   await expectAgendaWorkspace(page);
   await expect(page.getByText("DevFlow Conf 2027", { exact: true }).first()).toBeVisible();
   await expect(page.getByRole("heading", { name: "DevFlow platform patterns" })).toBeVisible();
-  await expect(page.getByText("Open Sessionboard Conference", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Eventloom Conference", { exact: true })).toHaveCount(0);
 
   const agendaRequests = api.requests.filter(
     (request) => request.method() === "GET" && new URL(request.url()).pathname.endsWith("/agenda"),

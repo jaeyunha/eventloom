@@ -53,11 +53,8 @@ describe("deliverables API", () => {
       "/api/private-assets/grant-1",
     );
     expect(
-      resolveDeliverablesUploadGrantUrl(
-        "/api/private-assets/grant-1",
-        "https://sessionboard.example",
-      ),
-    ).toBe("https://sessionboard.example/api/private-assets/grant-1");
+      resolveDeliverablesUploadGrantUrl("/api/private-assets/grant-1", "https://eventloom.example"),
+    ).toBe("https://eventloom.example/api/private-assets/grant-1");
   });
   it("restores immutable session content through the canonical admin mutation envelope", async () => {
     const requests: Array<{ url: string; method: string; body: unknown }> = [];

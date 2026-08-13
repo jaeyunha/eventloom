@@ -89,7 +89,7 @@ function AgendaProductFrame() {
           </div>
           <div className="home-product-toolbar-title">
             <span className="home-product-live-dot" aria-hidden="true" />
-            Open Sessionboard · Organizer workspace
+            Eventloom · Organizer workspace
           </div>
           <span className="home-product-toolbar-meta">Demo organization</span>
         </div>
@@ -97,8 +97,8 @@ function AgendaProductFrame() {
         <div className="home-demo-shell">
           <aside className="home-demo-sidebar">
             <div className="home-demo-brand">
-              <span>OS</span>
-              <strong>Open Sessionboard</strong>
+              <span>EL</span>
+              <strong>Eventloom</strong>
             </div>
             <small>Workspace</small>
             <div className="home-demo-navigation">
@@ -622,8 +622,8 @@ export default function Home() {
             <p className="home-kicker">Open infrastructure, accountable operations</p>
             <h2 id="open-source-title">Own the workflow your conference depends on.</h2>
             <p>
-              Open Sessionboard is inspectable, adaptable software for teams replacing expensive
-              closed program-management systems without giving up operational rigor.
+              Eventloom is inspectable, adaptable software for teams replacing expensive closed
+              program-management systems without giving up operational rigor.
             </p>
             <ul>
               {openSourceBenefits.map((benefit) => (
@@ -640,7 +640,7 @@ export default function Home() {
               <Sparkles />
             </span>
             <div>
-              <span className="home-card-label">Open Sessionboard</span>
+              <span className="home-card-label">Eventloom</span>
               <strong>Conference program operations, end to end.</strong>
               <p>
                 Start with a real public event surface, inspect the source, and deploy the stack on
@@ -664,7 +664,7 @@ export default function Home() {
 
       <footer className="home-footer">
         <div>
-          <strong>Open Sessionboard</strong>
+          <strong>Eventloom</strong>
           <span>Open-source program operations for conference teams.</span>
         </div>
         <nav aria-label="Footer navigation">

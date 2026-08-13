@@ -1,6 +1,6 @@
-# Open Sessionboard product contract
+# Eventloom product contract
 
-This document is the current product contract for Open Sessionboard. It describes the supported program-operations product, its system boundaries, and the evidence-backed implementation status. It is intentionally concise; executable code and deployment configuration remain the authority for details that are not stated here.
+This document is the current product contract for Eventloom. It describes the supported program-operations product, its system boundaries, and the evidence-backed implementation status. It is intentionally concise; executable code and deployment configuration remain the authority for details that are not stated here.
 
 ## Source hierarchy and status vocabulary
 
@@ -23,7 +23,7 @@ Status labels have precise meanings:
 
 ## Goals
 
-Open Sessionboard serves nontechnical event-production professionals who need one coherent path from call for papers (CFP) through speaker operations, human-authoritative review, communications, agenda publication, and public distribution. The product should be understandable through the browser, tenant-safe by construction, auditable when it changes consequential state, and efficient enough for real program work.
+Eventloom serves nontechnical event-production professionals who need one coherent path from call for papers (CFP) through speaker operations, human-authoritative review, communications, agenda publication, and public distribution. The product should be understandable through the browser, tenant-safe by construction, auditable when it changes consequential state, and efficient enough for real program work.
 
 The built-in Speaker CRM is part of the supported first-party product. It is an organizer-facing, organization-scoped contact workspace connected to program operations; it is not an external CRM synchronization promise.
 
@@ -103,7 +103,7 @@ resources. Custom domains are recommended after DNS, Worker bindings,
 cookies/CORS, callbacks, health checks, and release evidence are configured and
 verified.
 
-Accelevents is a separate external event platform. It is not in the competition brief or evaluator requirements and is not a supported Open Sessionboard runtime feature. No Accelevents credentials, setup, publication, synchronization, or release gate is required. Historical adapter code or references do not change that classification.
+Accelevents is a separate external event platform. It is not in the competition brief or evaluator requirements and is not a supported Eventloom runtime feature. No Accelevents credentials, setup, publication, synchronization, or release gate is required. Historical adapter code or references do not change that classification.
 
 ## Security and tenant invariants
 

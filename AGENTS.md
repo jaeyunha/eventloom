@@ -1,8 +1,8 @@
-# Open Sessionboard Agent Guide
+# Eventloom Agent Guide
 
 ## Source precedence and status
 
-- `spec/open-sessionboard.md` is the product truth source for supported scope and status.
+- `spec/eventloom.md` is the product truth source for supported scope and status.
 - The authoritative competition reference is `/Users/jaeyunha/dev/open-sessionboard/Kill-My-SaaS-Competition-Brief`. It is intentionally ignored by Git and may not exist inside worktrees; read it from that absolute path and treat it as read-only.
 - Executable code/configuration and observed deployment behavior define what is currently running.
 - `ARCHITECTURE.md` defines system boundaries. `docs/setup.md`, `docs/api.md`, `docs/calendar-semantics.md`, `docs/qa-runbook.md`, `docs/deployment-readiness.md`, and `docs/release-runbook.md` define operational procedures.
@@ -22,7 +22,7 @@
 - Airtable is authoritative for program business records.
 - D1 owns operational state, durable outbox, idempotency, and audit records; Durable Objects serialize tenant/event coordination and schedule mutations.
 - R2 stores private files and artifacts behind authorization. One multiplexed Cloudflare Queue carries typed outbox work for communications, calendar, webhooks, and cache invalidation.
-- The Hono Worker accepts HTTP fetches, Queue deliveries, and the production Cron Trigger. Sender and calendar identities use `sessionboard.namuh.co`.
+- The Hono Worker accepts HTTP fetches, Queue deliveries, and the production Cron Trigger. Sender and calendar identities temporarily use the verified legacy domain `sessionboard.namuh.co` during the Eventloom infrastructure migration.
 
 ## Commands
 

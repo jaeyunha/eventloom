@@ -5,7 +5,7 @@ import {
   apiErrorSchema,
   type HealthResponse,
   healthResponseSchema,
-} from "@open-sessionboard/contracts";
+} from "@eventloom/contracts";
 import { type Context, Hono, type MiddlewareHandler } from "hono";
 import { cors } from "hono/cors";
 import { z } from "zod";

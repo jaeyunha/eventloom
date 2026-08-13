@@ -226,7 +226,7 @@ export function MemberSetup({
     <main style={shellStyle}>
       <section style={cardStyle} aria-labelledby="member-setup-title">
         <div>
-          <p style={{ margin: 0, color: "#53617a", fontWeight: 700 }}>Open Sessionboard</p>
+          <p style={{ margin: 0, color: "#53617a", fontWeight: 700 }}>Eventloom</p>
           <h1 id="member-setup-title">Set up organization access</h1>
           <p>
             Choose a password to accept your invitation. Evaluators are routed to My Evaluations

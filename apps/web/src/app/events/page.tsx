@@ -60,7 +60,7 @@ export default async function PublicEventsPage() {
 
       <footer className="home-footer">
         <div>
-          <strong>Open Sessionboard</strong>
+          <strong>Eventloom</strong>
           <span>Public programs and open calls, organized by event.</span>
         </div>
         <a className="home-inline-link" href="/">

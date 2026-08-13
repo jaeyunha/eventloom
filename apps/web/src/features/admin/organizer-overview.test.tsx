@@ -675,7 +675,7 @@ describe("admin navigation", () => {
       createElement(AdminShell, null, createElement("p", null, "Primary organizer content")),
     );
 
-    expect(output).toContain("Open Sessionboard");
+    expect(output).toContain("Eventloom");
     expect(output).toContain("Workspace");
     expect(output).not.toContain("Program operations");
     expect(output).not.toContain("Publish &amp; measure");

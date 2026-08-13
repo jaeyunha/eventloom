@@ -1,6 +1,6 @@
 # Release and competition submission runbook
 
-This is an operator-controlled gate. Documentation, source coverage, a passing preflight, or a local test run does not mean Open Sessionboard is deployed, public, or submitted. Every claim must be tied to one clean candidate commit, one environment, and an observable artifact.
+This is an operator-controlled gate. Documentation, source coverage, a passing preflight, or a local test run does not mean Eventloom is deployed, public, or submitted. Every claim must be tied to one clean candidate commit, one environment, and an observable artifact.
 
 The governing specification lists the competition deadline as **Wednesday, August 12, 2026 at 10:00 PM Pacific Time**. Recheck the organizer's current portal deadline, timezone, and required fields before submission; do not rely on a local clock assumption.
 

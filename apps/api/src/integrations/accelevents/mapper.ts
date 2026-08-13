@@ -5,7 +5,7 @@ import {
   acceleventsSpeakerPayloadSchema,
   type IntegrationFieldMapping,
   type IntegrationRecordError,
-} from "@open-sessionboard/contracts";
+} from "@eventloom/contracts";
 import type {
   AcceleventsDiffRecord,
   AcceleventsMappedProgram,

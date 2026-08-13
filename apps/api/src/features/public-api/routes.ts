@@ -1035,7 +1035,7 @@ function openApiDocument<TRecord, TCreate, TUpdate>(
   return {
     openapi: "3.1.0",
     info: {
-      title: options?.title ?? "Open Sessionboard Public API",
+      title: options?.title ?? "Eventloom Public API",
       version: options?.version ?? "1.0.0",
       description:
         options?.description ??

@@ -1,4 +1,4 @@
-import { apiErrorSchema } from "@open-sessionboard/contracts";
+import { apiErrorSchema } from "@eventloom/contracts";
 import { type Context, Hono } from "hono";
 import { z } from "zod";
 import type { ProgramPublicationManifest } from "../features/events/types";
@@ -84,7 +84,7 @@ type PublishedSpeakerContext = Context<PublishedSpeakerRouteEnvironment>;
 const eventSlugSchema = z.string().trim().min(1).max(200);
 const PUBLIC_SPEAKER_CACHE_CONTROL =
   "public, max-age=0, s-maxage=60, stale-while-revalidate=30, must-revalidate";
-const PUBLIC_SPEAKER_CACHE_ORIGIN = "https://sessionboard-public-cache.invalid/v2";
+const PUBLIC_SPEAKER_CACHE_ORIGIN = "https://eventloom-public-cache.invalid/v2";
 const PUBLIC_SPEAKER_CACHE_TTL_MS = 60_000;
 const PUBLIC_SPEAKER_CACHE_MAX_ENTRIES = 128;
 

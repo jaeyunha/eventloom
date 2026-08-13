@@ -34,7 +34,7 @@ describe("CFP editor", () => {
     expect(markup).toContain('aria-label="Event and CFP configuration"');
     expect(markup).toContain('for="event-name"');
     expect(markup).toContain('for="event-timezone"');
-    expect(markup).toContain("Open Sessionboard Summit 2026");
+    expect(markup).toContain("Eventloom Summit 2026");
     expect(markup).toContain("America/Los_Angeles");
     expect(markup).toContain("2026-03-31");
   });

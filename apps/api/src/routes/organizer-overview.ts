@@ -1,4 +1,4 @@
-import { apiErrorSchema } from "@open-sessionboard/contracts";
+import { apiErrorSchema } from "@eventloom/contracts";
 import { type Context, Hono } from "hono";
 import { z } from "zod";
 import { requireOrganizationRole } from "../features/auth/authorization";

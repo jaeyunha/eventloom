@@ -13,9 +13,9 @@ fail() {
   exit 1
 }
 
-REPO="$TMP/open-sessionboard"
+REPO="$TMP/eventloom"
 OVERRIDE="$TMP/wt"
-git -C "$TMP" init -b main open-sessionboard >/dev/null
+git -C "$TMP" init -b main eventloom >/dev/null
 git -C "$REPO" config user.email test@example.com
 git -C "$REPO" config user.name Test
 printf 'tracked\n' > "$REPO/README.md"
@@ -32,7 +32,7 @@ cleanup() {
 }
 
 create dirty
-DIRTY_PATH="$OVERRIDE/open-sessionboard/dirty"
+DIRTY_PATH="$OVERRIDE/eventloom/dirty"
 printf 'uncommitted\n' > "$DIRTY_PATH/local.txt"
 if cleanup dirty >/dev/null 2>&1; then
   fail 'dirty worktree was removed without --force'
@@ -45,7 +45,7 @@ if git -C "$REPO" show-ref --verify --quiet refs/heads/dirty; then
 fi
 
 create merged
-MERGED_PATH="$OVERRIDE/open-sessionboard/merged"
+MERGED_PATH="$OVERRIDE/eventloom/merged"
 cleanup --delete-branch merged >/dev/null
 [ ! -e "$MERGED_PATH" ] || fail 'clean merged worktree was not removed'
 if git -C "$REPO" show-ref --verify --quiet refs/heads/merged; then
@@ -54,7 +54,7 @@ fi
 
 create listed
 LIST_OUTPUT=$(cleanup)
-printf '%s\n' "$LIST_OUTPUT" | grep -F "$OVERRIDE/open-sessionboard/listed" >/dev/null || \
+printf '%s\n' "$LIST_OUTPUT" | grep -F "$OVERRIDE/eventloom/listed" >/dev/null || \
   fail 'managed worktree was not listed'
 
 if cleanup "$REPO" >/dev/null 2>&1; then

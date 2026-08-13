@@ -1,4 +1,4 @@
-import type { OpenSendEmailPayload } from "@open-sessionboard/contracts";
+import type { OpenSendEmailPayload } from "@eventloom/contracts";
 
 export interface OpenSendAttachment {
   readonly filename: string;

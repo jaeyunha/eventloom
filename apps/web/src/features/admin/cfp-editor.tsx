@@ -123,7 +123,7 @@ export interface CfpConfiguration {
 const DEFAULT_EVENT_ID = "summit-2026";
 
 const SEEDED_CONFIGURATION: CfpConfiguration = {
-  eventName: "Open Sessionboard Summit 2026",
+  eventName: "Eventloom Summit 2026",
   slug: DEFAULT_EVENT_ID,
   timezone: "America/Los_Angeles",
   opensAt: "2026-01-15",
@@ -140,14 +140,14 @@ const SEEDED_CONFIGURATION: CfpConfiguration = {
     "Thanks for sharing your idea. We will review every proposal and email you when the program moves forward.",
   successMessage: "Thanks — your proposal has been submitted successfully.",
   redirectUrl:
-    "https://open-sessionboard.local/cfp/organizations/organization-1/events/summit-2026/complete",
+    "https://eventloom.local/cfp/organizations/organization-1/events/summit-2026/complete",
   tracks: ["Product craft", "Community systems", "Responsible AI"],
   tags: ["Accessibility", "Leadership", "Open source", "Operations"],
   formats: ["Talk · 30 minutes", "Workshop · 60 minutes", "Panel · 45 minutes"],
   levels: ["Introductory", "Intermediate", "Advanced"],
   helpfulLinks: [
-    { label: "Speaker guide", href: "https://open-sessionboard.local/summit-2026/guide" },
-    { label: "Code of conduct", href: "https://open-sessionboard.local/code-of-conduct" },
+    { label: "Speaker guide", href: "https://eventloom.local/summit-2026/guide" },
+    { label: "Code of conduct", href: "https://eventloom.local/code-of-conduct" },
   ],
   fields: [
     {

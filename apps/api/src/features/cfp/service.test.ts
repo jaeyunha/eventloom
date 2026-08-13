@@ -349,8 +349,8 @@ function createFixture(
     organization: {
       getPublicOrganization: async (tenantId) => ({
         id: tenantId,
-        slug: "open-sessionboard",
-        name: "Open Sessionboard",
+        slug: "eventloom",
+        name: "Eventloom",
       }),
     },
     idempotency: new MemoryIdempotency(),
@@ -598,8 +598,8 @@ describe("CFP rules and configuration", () => {
     expect(published.event).toMatchObject({ id: "event_1", slug: "future-conf" });
     expect(published.organization).toEqual({
       id: "tenant_1",
-      slug: "open-sessionboard",
-      name: "Open Sessionboard",
+      slug: "eventloom",
+      name: "Eventloom",
     });
     expect(published.form.id).toBe("form_1");
     await expect(

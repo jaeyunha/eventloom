@@ -1,4 +1,4 @@
-import type { CalendarInvitationPayload } from "@open-sessionboard/contracts";
+import type { CalendarInvitationPayload } from "@eventloom/contracts";
 import { createCalendarInvitation, type CalendarInvitationResult } from "../calendar";
 import type { OpenSendMessage } from "./types";
 
@@ -45,8 +45,8 @@ export function createCalendarOpenSendMessage(
     idempotencyKey: payload.idempotencyKey,
     headers: {
       "Content-Class": "urn:content-classes:calendarmessage",
-      "X-Sessionboard-Calendar-Action": payload.method,
-      "X-Sessionboard-Calendar-Uid": payload.uid,
+      "X-Eventloom-Calendar-Action": payload.method,
+      "X-Eventloom-Calendar-Uid": payload.uid,
     },
     attachments: [
       {

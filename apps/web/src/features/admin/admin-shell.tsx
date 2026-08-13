@@ -97,7 +97,8 @@ const navigation: readonly AdminNavigationItem[] = [
   },
 ] as const;
 const OrganizerOrganizationContext = createContext<string | null>(null);
-const ORGANIZER_ORGANIZATION_STORAGE_KEY = "open-sessionboard.organizer-organization";
+const ORGANIZER_ORGANIZATION_STORAGE_KEY = "eventloom.organizer-organization";
+const LEGACY_ORGANIZER_ORGANIZATION_STORAGE_KEY = "open-sessionboard.organizer-organization";
 
 export function useOrganizerOrganizationId(): string | null {
   return useContext(OrganizerOrganizationContext);
@@ -360,7 +361,8 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
         const organizationIds = organizerOrganizationIdsFromSession(session);
         const preferredOrganizationId =
           requiredOrganizationId === null
-            ? window.localStorage.getItem(ORGANIZER_ORGANIZATION_STORAGE_KEY)
+            ? (window.localStorage.getItem(ORGANIZER_ORGANIZATION_STORAGE_KEY) ??
+              window.localStorage.getItem(LEGACY_ORGANIZER_ORGANIZATION_STORAGE_KEY))
             : null;
         const organizationId = organizerOrganizationIdFromSession(
           session,
@@ -376,6 +378,8 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
         }
         setAvailableOrganizationIds(organizationIds);
         setAuthenticatedOrganizationId(organizationId);
+        window.localStorage.setItem(ORGANIZER_ORGANIZATION_STORAGE_KEY, organizationId);
+        window.localStorage.removeItem(LEGACY_ORGANIZER_ORGANIZATION_STORAGE_KEY);
         setVerifiedAccessScopeKey(accessScopeKey);
         setAuthentication("authenticated");
       })
@@ -453,11 +457,11 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
           <SidebarHeader className={styles.sidebarHeader}>
             <SidebarMenu>
               <SidebarMenuItem>
-                <SidebarMenuButton asChild size="lg" tooltip="Open Sessionboard">
-                  <Link href="/admin" aria-label="Open Sessionboard organizer overview">
-                    <span className={styles.brandMark}>OS</span>
+                <SidebarMenuButton asChild size="lg" tooltip="Eventloom">
+                  <Link href="/admin" aria-label="Eventloom organizer overview">
+                    <span className={styles.brandMark}>EL</span>
                     <span className={styles.brandCopy}>
-                      <strong>Open Sessionboard</strong>
+                      <strong>Eventloom</strong>
                       <span>Organizer workspace</span>
                     </span>
                   </Link>

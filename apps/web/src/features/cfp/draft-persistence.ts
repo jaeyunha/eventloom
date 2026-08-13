@@ -12,10 +12,15 @@ interface StorageLike {
   removeItem(key: string): void;
 }
 
-const STORAGE_PREFIX = "open-sessionboard:cfp-draft:v1";
+const STORAGE_PREFIX = "eventloom:cfp-draft:v1";
+const LEGACY_STORAGE_PREFIX = "open-sessionboard:cfp-draft:v1";
 
 export function getCfpDraftStorageKey(eventSlug: string): string {
   return `${STORAGE_PREFIX}:${encodeURIComponent(eventSlug)}`;
+}
+
+function getLegacyCfpDraftStorageKey(eventSlug: string): string {
+  return `${LEGACY_STORAGE_PREFIX}:${encodeURIComponent(eventSlug)}`;
 }
 
 export function clearCfpDraftStorage(
@@ -23,9 +28,11 @@ export function clearCfpDraftStorage(
   storage: Pick<StorageLike, "removeItem">,
 ): void {
   storage.removeItem(getCfpDraftStorageKey(eventSlug));
+  storage.removeItem(getLegacyCfpDraftStorageKey(eventSlug));
 }
 
-const SUBMISSION_POINTER_PREFIX = "open-sessionboard:cfp-submission:v1";
+const SUBMISSION_POINTER_PREFIX = "eventloom:cfp-submission:v1";
+const LEGACY_SUBMISSION_POINTER_PREFIX = "open-sessionboard:cfp-submission:v1";
 
 export interface CfpSubmissionPointerIdentity {
   organizationId: string;
@@ -41,6 +48,14 @@ export function getCfpSubmissionPointerStorageKey(
   return `${SUBMISSION_POINTER_PREFIX}:${encodeURIComponent(organizationId)}:${encodeURIComponent(eventId)}:${encodeURIComponent(formId)}`;
 }
 
+function getLegacyCfpSubmissionPointerStorageKey(
+  organizationId: string,
+  eventId: string,
+  formId: string,
+): string {
+  return `${LEGACY_SUBMISSION_POINTER_PREFIX}:${encodeURIComponent(organizationId)}:${encodeURIComponent(eventId)}:${encodeURIComponent(formId)}`;
+}
+
 export function clearCfpSubmissionState(
   eventSlug: string,
   identity: CfpSubmissionPointerIdentity,
@@ -49,6 +64,13 @@ export function clearCfpSubmissionState(
   clearCfpDraftStorage(eventSlug, storage);
   storage.removeItem(
     getCfpSubmissionPointerStorageKey(identity.organizationId, identity.eventId, identity.formId),
+  );
+  storage.removeItem(
+    getLegacyCfpSubmissionPointerStorageKey(
+      identity.organizationId,
+      identity.eventId,
+      identity.formId,
+    ),
   );
 }
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -124,12 +146,20 @@ export class BrowserCfpDraftPersistence implements CfpDraftPersistence {
   }
 
   async load(eventSlug: string): Promise<CfpDraft | null> {
-    const serialized = this.#storage.getItem(getCfpDraftStorageKey(eventSlug));
+    const storageKey = getCfpDraftStorageKey(eventSlug);
+    const legacyStorageKey = getLegacyCfpDraftStorageKey(eventSlug);
+    const current = this.#storage.getItem(storageKey);
+    const serialized = current ?? this.#storage.getItem(legacyStorageKey);
     if (!serialized) return null;
 
     try {
       const candidate: unknown = JSON.parse(serialized);
-      return isCfpDraft(candidate, eventSlug) ? candidate : null;
+      if (!isCfpDraft(candidate, eventSlug)) return null;
+      if (current === null) {
+        this.#storage.setItem(storageKey, serialized);
+        this.#storage.removeItem(legacyStorageKey);
+      }
+      return candidate;
     } catch {
       return null;
     }

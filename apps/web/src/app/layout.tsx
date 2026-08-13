@@ -15,14 +15,14 @@ const geist = Geist({
 
 export const metadata: Metadata = {
   title: {
-    default: "Open Sessionboard | Open program operations",
-    template: "%s | Open Sessionboard",
+    default: "Eventloom | Open program operations",
+    template: "%s | Eventloom",
   },
   description:
     "Open-source program operations for conference teams: collect submissions, review with care, schedule without conflicts, and publish deliberately.",
-  applicationName: "Open Sessionboard",
+  applicationName: "Eventloom",
   category: "conference program operations",
-  creator: "Open Sessionboard contributors",
+  creator: "Eventloom contributors",
   keywords: ["conference operations", "call for speakers", "program management", "open source"],
 };
 

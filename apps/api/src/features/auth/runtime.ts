@@ -615,7 +615,7 @@ export function createBetterAuthRuntime(options: BetterAuthRuntimeOptions): Bett
   const { configuration } = options;
   const secureCookies = new URL(configuration.baseUrl).protocol === "https:";
   const authOptions: BetterAuthOptions = {
-    appName: "Open Sessionboard",
+    appName: "Eventloom",
     baseURL: configuration.baseUrl,
     basePath: "/api/auth",
     secret: configuration.secret,
@@ -727,17 +727,15 @@ export function createOpenSendMagicLinkMessage(input: {
 }): OpenSendMessage {
   const verification = input.url.includes("/verify-email");
   const url = escapeHtml(input.url);
-  const subject = verification
-    ? "Verify your Open Sessionboard email"
-    : "Your Open Sessionboard sign-in link";
+  const subject = verification ? "Verify your Eventloom email" : "Your Eventloom sign-in link";
   const action = verification ? "Verify your email" : "Sign in";
   const verb = verification ? "verify your email" : "sign in";
   return {
     from: input.sender,
     to: [input.email],
     subject,
-    html: `<p>Use this link to ${verb} to Open Sessionboard:</p><p><a href="${url}">${action}</a></p><p>This link expires in 15 minutes and can only be used once.</p>`,
-    text: `Use this link to ${verb} to Open Sessionboard: ${input.url}\n\nThis link expires in 15 minutes and can only be used once.`,
+    html: `<p>Use this link to ${verb} to Eventloom:</p><p><a href="${url}">${action}</a></p><p>This link expires in 15 minutes and can only be used once.</p>`,
+    text: `Use this link to ${verb} to Eventloom: ${input.url}\n\nThis link expires in 15 minutes and can only be used once.`,
     idempotencyKey: `auth-${crypto.randomUUID()}`,
   };
 }

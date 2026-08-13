@@ -3,7 +3,7 @@ import type {
   AcceleventsSpeakerPayload,
   EventId,
   IntegrationPublicationId,
-} from "@open-sessionboard/contracts";
+} from "@eventloom/contracts";
 import { canonicalJson } from "./mapper";
 import {
   type AcceleventsPreview,

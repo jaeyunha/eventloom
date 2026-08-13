@@ -1,4 +1,4 @@
-import type { CalendarInvitationPayload } from "@open-sessionboard/contracts";
+import type { CalendarInvitationPayload } from "@eventloom/contracts";
 import { createCalendarInvitation, validateCalendarInvitationPayload } from "./ical";
 import {
   CALENDAR_ORGANIZER,

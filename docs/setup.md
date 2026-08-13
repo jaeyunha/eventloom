@@ -1,6 +1,6 @@
 # Environment and deployment setup
 
-Open Sessionboard has two separately deployed services: a Next.js web Worker and a Hono API Worker. This guide describes the repository's current configuration and the operator procedures; it does not claim that an environment has been provisioned, deployed, or release-verified. Keep resource IDs and all secret values in the operator's secret manager or in ignored environment files.
+Eventloom has two separately deployed services: a Next.js web Worker and a Hono API Worker. This guide describes the repository's current configuration and the operator procedures; it does not claim that an environment has been provisioned, deployed, or release-verified. Keep resource IDs and all secret values in the operator's secret manager or in ignored environment files.
 
 ## Scope and deployment origins
 
@@ -77,14 +77,14 @@ The deterministic personas below belong to the fixture runtime only; they are no
 
 | Persona | Email | Password | Access |
 | --- | --- | --- | --- |
-| Organizer | `organizer@local.open-sessionboard.test` | `organizer-local` | Organization administration and organizer evaluation work |
-| Reviewer | `reviewer@local.open-sessionboard.test` | `reviewer-local` | Only the seeded assigned-review workspace |
-| Speaker | `speaker@local.open-sessionboard.test` | `speaker-local` | Only the seeded speaker portal and CFP applicant flow |
+| Organizer | `organizer@local.eventloom.test` | `organizer-local` | Organization administration and organizer evaluation work |
+| Reviewer | `reviewer@local.eventloom.test` | `reviewer-local` | Only the seeded assigned-review workspace |
+| Speaker | `speaker@local.eventloom.test` | `speaker-local` | Only the seeded speaker portal and CFP applicant flow |
 
 To run the fixture API for deterministic persona checks, start it instead of the integrated API:
 
 ```bash
-bun run --filter @open-sessionboard/api dev:fixture
+bun run --filter @eventloom/api dev:fixture
 ```
 
 Run the web app separately with `NEXT_PUBLIC_RUNTIME_PROFILE=fixture`. Use organization `local-organization` and event `demo-event`. The fixture runtime does not grant a persona another role implicitly: reviewer and speaker sessions are denied organizer routes, and organizer membership does not grant the speaker portal.

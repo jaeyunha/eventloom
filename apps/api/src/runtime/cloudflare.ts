@@ -1725,12 +1725,12 @@ export class CloudflareMemberInvitationDelivery implements MemberInvitationDeliv
     const message: OpenSendMessage = {
       from: DEFAULT_OPEN_SEND_SENDERS.auth,
       to: [input.email],
-      subject: `You are invited to Open Sessionboard as ${roleLabel}`,
+      subject: `You are invited to Eventloom as ${roleLabel}`,
       html:
-        `<p>You have been invited to join Open Sessionboard with the assigned role ` +
+        `<p>You have been invited to join Eventloom with the assigned role ` +
         `<strong>${escapeHtml(roleLabel)}</strong>.</p>` +
         `<p><a href="${escapeHtml(input.setupUrl)}">Set up ${escapeHtml(roleLabel)} access</a></p>`,
-      text: `You have been invited to join Open Sessionboard as ${roleLabel}. Set up ${roleLabel} access: ${input.setupUrl}`,
+      text: `You have been invited to join Eventloom as ${roleLabel}. Set up ${roleLabel} access: ${input.setupUrl}`,
       idempotencyKey: `member-invitation:${input.invitationId}`,
     };
     const now = new Date().toISOString();
@@ -2151,7 +2151,7 @@ const fixedOrigins = {
   },
 } as const;
 
-const LOCAL_BETTER_AUTH_SECRET = "open-sessionboard-integrated-local-auth-secret-v1";
+const LOCAL_BETTER_AUTH_SECRET = "eventloom-integrated-local-auth-secret-v1";
 const LOCAL_OPENSEND_API_URL = "http://127.0.0.1:8026";
 const LOCAL_OPENSEND_API_KEY = "local-development";
 const LOCAL_CACHE_INVALIDATION_URL = "http://127.0.0.1:3015/api/internal/cache-invalidation";

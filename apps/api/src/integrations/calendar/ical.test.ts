@@ -1,4 +1,4 @@
-import type { CalendarInvitationPayload } from "@open-sessionboard/contracts";
+import type { CalendarInvitationPayload } from "@eventloom/contracts";
 import { describe, expect, it } from "vitest";
 import {
   type CalendarInvitationActionInput,

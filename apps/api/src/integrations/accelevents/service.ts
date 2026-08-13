@@ -1,7 +1,4 @@
-import type {
-  IntegrationPublicationId,
-  IntegrationRecordError,
-} from "@open-sessionboard/contracts";
+import type { IntegrationPublicationId, IntegrationRecordError } from "@eventloom/contracts";
 import {
   diffAcceleventsProgram,
   mapAcceptedProgram,

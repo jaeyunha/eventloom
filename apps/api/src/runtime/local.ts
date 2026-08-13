@@ -1,4 +1,4 @@
-import type { ApiScope } from "@open-sessionboard/contracts";
+import type { ApiScope } from "@eventloom/contracts";
 import type { ApiDependencies } from "../app";
 import { AgendaEngine } from "../features/agenda/engine";
 import {
@@ -167,7 +167,7 @@ const LOCAL_SPEAKER_CAPABILITIES = [
 const LOCAL_EVENT_START = "2026-09-18T16:00:00.000Z";
 const LOCAL_EVENT_END = "2026-09-18T23:00:00.000Z";
 const LOCAL_EVENT_TIME_ZONE = "America/Los_Angeles";
-const LOCAL_EVENT_VENUE = "Open Sessionboard Hall";
+const LOCAL_EVENT_VENUE = "Eventloom Hall";
 
 const LOCAL_PUBLIC_EMBED: EventEmbedConfiguration = {
   id: "public-schedule",
@@ -189,9 +189,9 @@ const LOCAL_PUBLIC_EMBED: EventEmbedConfiguration = {
 
 export const LOCAL_ORGANIZER_ACCOUNT_ID = "local-organizer";
 export const LOCAL_REVIEWER_ACCOUNT_ID = "local-reviewer";
-export const LOCAL_ORGANIZER_EMAIL = "organizer@local.open-sessionboard.test";
-export const LOCAL_REVIEWER_EMAIL = "reviewer@local.open-sessionboard.test";
-export const LOCAL_SPEAKER_EMAIL = "speaker@local.open-sessionboard.test";
+export const LOCAL_ORGANIZER_EMAIL = "organizer@local.eventloom.test";
+export const LOCAL_REVIEWER_EMAIL = "reviewer@local.eventloom.test";
+export const LOCAL_SPEAKER_EMAIL = "speaker@local.eventloom.test";
 export const LOCAL_ORGANIZER_PASSWORD = "organizer-local";
 export const LOCAL_REVIEWER_PASSWORD = "reviewer-local";
 export const LOCAL_SPEAKER_PASSWORD = "speaker-local";
@@ -713,7 +713,7 @@ class LocalSpeakerRepository implements SpeakerRepository {
       {
         id: "portal:demo-event:local-participant",
         eventId: "demo-event",
-        name: "Open Sessionboard Demo",
+        name: "Eventloom Demo",
         slug: "demo-event",
         status: "active",
         capabilities: LOCAL_SPEAKER_CAPABILITIES,
@@ -1304,7 +1304,7 @@ class LocalPublicApiRepository implements PublicApiRepository {
         id: "open-sessionboard-conf",
         version: 1,
         organizationId: LOCAL_ORGANIZATION_ID,
-        name: "Open Sessionboard Conference",
+        name: "Eventloom Conference",
         slug: "open-sessionboard-conf",
         timeZone: "America/Los_Angeles",
         startsAt: "2026-09-17T16:00:00.000Z",
@@ -1317,7 +1317,7 @@ class LocalPublicApiRepository implements PublicApiRepository {
         id: "demo-event",
         version: 1,
         organizationId: LOCAL_ORGANIZATION_ID,
-        name: "Open Sessionboard Demo",
+        name: "Eventloom Demo",
         slug: "demo-event",
         timeZone: LOCAL_EVENT_TIME_ZONE,
         startsAt: LOCAL_EVENT_START,
@@ -1637,7 +1637,7 @@ function localEventSeed(
     timeZone: LOCAL_EVENT_TIME_ZONE,
     startsAt: id === "demo-event" ? LOCAL_EVENT_START : "2026-09-17T16:00:00.000Z",
     endsAt: id === "demo-event" ? LOCAL_EVENT_END : "2026-09-18T23:00:00.000Z",
-    venue: id === "demo-event" ? LOCAL_EVENT_VENUE : "Open Sessionboard Hall",
+    venue: id === "demo-event" ? LOCAL_EVENT_VENUE : "Eventloom Hall",
     cfpSettings: {
       enabled: true,
       opensAt: "2026-08-01T07:00:00.000Z",
@@ -1646,7 +1646,7 @@ function localEventSeed(
     defaultCalendarSettings: {
       durationMinutes: 60,
       timeZone: LOCAL_EVENT_TIME_ZONE,
-      location: id === "demo-event" ? LOCAL_EVENT_VENUE : "Open Sessionboard Hall",
+      location: id === "demo-event" ? LOCAL_EVENT_VENUE : "Eventloom Hall",
     },
     embedConfigurations: embedConfigurations.map(clone),
     version: 1,
@@ -2396,12 +2396,8 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
   const publicRepository = new LocalPublicApiRepository();
   const eventRepository = new InMemoryEventRepository({
     events: [
-      localEventSeed(
-        "open-sessionboard-conf",
-        "Open Sessionboard Conference",
-        "open-sessionboard-conf",
-      ),
-      localEventSeed("demo-event", "Open Sessionboard Demo", "demo-event", [LOCAL_PUBLIC_EMBED]),
+      localEventSeed("open-sessionboard-conf", "Eventloom Conference", "open-sessionboard-conf"),
+      localEventSeed("demo-event", "Eventloom Demo", "demo-event", [LOCAL_PUBLIC_EMBED]),
     ],
     audit: [
       {
@@ -2570,7 +2566,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
         {
           id: "local-participant",
           displayName: "Alex Rivera",
-          email: "speaker@local.open-sessionboard.test",
+          email: "speaker@local.eventloom.test",
           biography: "Alex builds dependable, accessible systems for communities.",
         },
       ],
@@ -2678,7 +2674,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
         id: "local-webhook-demo",
         organizationId: LOCAL_ORGANIZATION_ID,
         eventId: "demo-event",
-        endpointUrl: "https://hooks.local.open-sessionboard.test/demo",
+        endpointUrl: "https://hooks.local.eventloom.test/demo",
         events: ["agenda.published", "integration.publication_completed"],
         active: true,
         signingSecret: "local-demo-webhook-secret-20260808-000000",
@@ -2690,7 +2686,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
         id: "local-webhook-conference",
         organizationId: LOCAL_ORGANIZATION_ID,
         eventId: "open-sessionboard-conf",
-        endpointUrl: "https://hooks.local.open-sessionboard.test/conference",
+        endpointUrl: "https://hooks.local.eventloom.test/conference",
         events: ["submission.created", "participant.updated"],
         active: true,
         signingSecret: "local-conference-webhook-secret-20260808",
@@ -3099,7 +3095,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
                 {
                   organization: {
                     id: LOCAL_ORGANIZATION_ID,
-                    name: "Open Sessionboard",
+                    name: "Eventloom",
                   },
                   event: {
                     slug: event.slug,

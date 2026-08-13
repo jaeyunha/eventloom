@@ -1,4 +1,4 @@
-import { apiErrorSchema } from "@open-sessionboard/contracts";
+import { apiErrorSchema } from "@eventloom/contracts";
 import { type Context, Hono } from "hono";
 import { ZodError, z } from "zod";
 import { type AgendaEngine, AgendaError, AgendaValidationError } from "../features/agenda/engine";
@@ -1076,7 +1076,7 @@ type PublishedAgendaProjectionValue = {
   readonly revisionNumber: number;
   readonly projection: PublishedAgendaProjection;
 };
-const PUBLIC_CACHE_ORIGIN = "https://sessionboard-public-cache.invalid";
+const PUBLIC_CACHE_ORIGIN = "https://eventloom-public-cache.invalid";
 const PUBLIC_AGENDA_CACHE_TTL_MS = 60_000;
 const PUBLIC_AGENDA_CACHE_MAX_ENTRIES = 128;
 const PUBLIC_AGENDA_CACHE_MAX_BYPASS_ENTRIES = 256;
@@ -1511,7 +1511,7 @@ function publicAgendaCalendar(projection: PublishedAgendaProjection, eventSlug: 
   const timeZone = publicCalendarTimeZone(projection.event.timeZone);
   const lines = [
     "BEGIN:VCALENDAR",
-    "PRODID:-//Open Sessionboard//Public Agenda//EN",
+    "PRODID:-//Eventloom//Public Agenda//EN",
     "VERSION:2.0",
     "CALSCALE:GREGORIAN",
     "METHOD:PUBLISH",
@@ -1539,7 +1539,7 @@ function publicAgendaCalendar(projection: PublishedAgendaProjection, eventSlug: 
       `LOCATION:${escapeIcalText(location)}`,
       ...(entry.speakerNames.length === 0
         ? []
-        : [`X-SESSIONBOARD-SPEAKERS:${escapeIcalText(entry.speakerNames.join(", "))}`]),
+        : [`X-EVENTLOOM-SPEAKERS:${escapeIcalText(entry.speakerNames.join(", "))}`]),
       "END:VEVENT",
     );
   }

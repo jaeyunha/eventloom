@@ -1,4 +1,4 @@
-import type { ApiScope, WebhookEventType } from "@open-sessionboard/contracts";
+import type { ApiScope, WebhookEventType } from "@eventloom/contracts";
 import type { IntegrationAdminSnapshot, IntegrationErrorBody, OneTimeSecret } from "./types";
 
 export class IntegrationAdminApiError extends Error {

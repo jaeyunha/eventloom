@@ -86,7 +86,7 @@ function invitationTransient(
     message: {
       from: "auth@sessionboard.namuh.co",
       to: [recipient],
-      subject: "You are invited to Open Sessionboard as Owner",
+      subject: "You are invited to Eventloom as Owner",
       html: `<p>Set up access: ${setupUrl}</p>`,
       text: `Set up access: ${setupUrl}`,
       idempotencyKey: `member-invitation:${invitationId}`,

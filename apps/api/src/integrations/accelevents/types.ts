@@ -10,7 +10,7 @@ import type {
   IntegrationRecordError,
   ParticipantId,
   SessionId,
-} from "@open-sessionboard/contracts";
+} from "@eventloom/contracts";
 
 export type AcceleventsSourceDecision = "accepted" | "declined" | "pending" | "waitlisted";
 

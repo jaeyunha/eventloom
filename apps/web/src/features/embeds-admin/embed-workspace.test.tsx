@@ -124,7 +124,7 @@ describe("safe live embed URLs", () => {
       publicEmbedUrl({
         widget: agenda,
         eventSlug: "summit / 2026",
-        publicOrigin: "https://sessionboard.example/",
+        publicOrigin: "https://eventloom.example/",
         theme: configuration.theme,
         outputFormat: configuration.outputFormat,
         layout: configuration.layout,
@@ -138,7 +138,7 @@ describe("safe live embed URLs", () => {
       }),
     );
 
-    expect(url.origin).toBe("https://sessionboard.example");
+    expect(url.origin).toBe("https://eventloom.example");
     expect(url.pathname).toBe("/embed/summit%20%2F%202026/agenda");
     expect(url.searchParams.get("theme")).toBe("dark");
     expect(url.searchParams.get("outputFormat")).toBe("json");
@@ -158,7 +158,7 @@ describe("safe live embed URLs", () => {
       publicEmbedUrl({
         widget: agenda,
         eventSlug: "",
-        publicOrigin: "https://sessionboard.example",
+        publicOrigin: "https://eventloom.example",
         theme: "light",
       }),
     ).toBe("");
@@ -166,7 +166,7 @@ describe("safe live embed URLs", () => {
       publicAgendaCalendarUrl({
         widget: agenda,
         eventSlug: " ",
-        publicOrigin: "https://sessionboard.example",
+        publicOrigin: "https://eventloom.example",
         theme: "light",
       }),
     ).toBe("");
@@ -174,7 +174,7 @@ describe("safe live embed URLs", () => {
       scriptSnippet({
         widget: agenda,
         eventSlug: "",
-        publicOrigin: "https://sessionboard.example",
+        publicOrigin: "https://eventloom.example",
         theme: "light",
       }),
     ).toBe("");
@@ -185,7 +185,7 @@ describe("safe live embed URLs", () => {
       publicAgendaCalendarUrl({
         widget: itinerary,
         eventSlug: "summit / 2026",
-        publicOrigin: "https://sessionboard.example/",
+        publicOrigin: "https://eventloom.example/",
         theme: "auto",
       }),
     );
@@ -197,7 +197,7 @@ describe("safe live embed URLs", () => {
     const settings = {
       widget: agenda,
       eventSlug: "summit-2026",
-      publicOrigin: "https://sessionboard.example",
+      publicOrigin: "https://eventloom.example",
       theme: "light" as const,
       outputFormat: "styled-html" as const,
       layout: "timeline" as const,
@@ -209,16 +209,16 @@ describe("safe live embed URLs", () => {
     const iframe = iframeSnippet(settings);
     const script = scriptSnippet(settings);
 
-    expect(iframe).toContain('src="https://sessionboard.example/embed/summit-2026/agenda?');
+    expect(iframe).toContain('src="https://eventloom.example/embed/summit-2026/agenda?');
     expect(iframe).toContain("outputFormat=styled-html");
-    expect(script).toContain('src="https://sessionboard.example/embed/summit-2026/script?');
+    expect(script).toContain('src="https://eventloom.example/embed/summit-2026/script?');
     expect(script).toContain("displayFields=title%2Cdate-time");
   });
 
   it("keeps same-origin styling in every iframe and grants extra capabilities narrowly", () => {
     const base = {
       eventSlug: "summit-2026",
-      publicOrigin: "https://sessionboard.example",
+      publicOrigin: "https://eventloom.example",
       theme: "light" as const,
       outputFormat: "styled-html" as const,
       accent: DEFAULT_EMBED_ACCENT,
@@ -240,7 +240,7 @@ describe("safe live embed URLs", () => {
     const settings = {
       widget: gallery,
       eventSlug: "summit-2026",
-      publicOrigin: "https://sessionboard.example",
+      publicOrigin: "https://eventloom.example",
       theme: "light" as const,
       outputFormat: "styled-html" as const,
       layout: "grid" as const,
@@ -347,7 +347,7 @@ describe("embed workspace view", () => {
         eventSlug: "summit-2026",
         eventVersion: eventRecord.version,
         initialConfigurations: eventRecord.embedConfigurations ?? [],
-        publicOrigin: "https://sessionboard.example",
+        publicOrigin: "https://eventloom.example",
         publication,
       }),
     );
@@ -382,7 +382,7 @@ describe("embed workspace view", () => {
         eventSlug: "stale-summit-2025",
         eventVersion: eventRecord.version,
         initialConfigurations: eventRecord.embedConfigurations ?? [],
-        publicOrigin: "https://sessionboard.example",
+        publicOrigin: "https://eventloom.example",
         publication,
         loading: true,
       }),
@@ -402,14 +402,12 @@ describe("embed workspace view", () => {
         eventSlug: "summit-2026",
         eventVersion: eventRecord.version,
         initialConfigurations: [{ ...configuration, outputFormat: "ical" }],
-        publicOrigin: "https://sessionboard.example",
+        publicOrigin: "https://eventloom.example",
         publication,
       }),
     );
 
-    expect(markup).toContain(
-      "https://sessionboard.example/api/public/events/summit-2026/agenda.ics",
-    );
+    expect(markup).toContain("https://eventloom.example/api/public/events/summit-2026/agenda.ics");
     expect(markup).not.toContain(
       "# Use the published agenda calendar link when that feed is enabled.",
     );
@@ -422,7 +420,7 @@ describe("embed workspace view", () => {
         eventSlug: "summit-2026",
         eventVersion: eventRecord.version,
         initialConfigurations: eventRecord.embedConfigurations ?? [],
-        publicOrigin: "https://sessionboard.example",
+        publicOrigin: "https://eventloom.example",
       }),
     );
 
@@ -441,7 +439,7 @@ describe("embed workspace view", () => {
         eventSlug: "summit-2026",
         eventVersion: eventRecord.version,
         initialConfigurations: eventRecord.embedConfigurations ?? [],
-        publicOrigin: "https://sessionboard.example",
+        publicOrigin: "https://eventloom.example",
         publication,
       }),
     );
@@ -462,7 +460,7 @@ describe("embed workspace view", () => {
         eventSlug: "summit-2026",
         eventVersion: eventRecord.version,
         initialConfigurations: [],
-        publicOrigin: "https://sessionboard.example",
+        publicOrigin: "https://eventloom.example",
         publication,
       }),
     );
@@ -482,7 +480,7 @@ describe("embed workspace view", () => {
         eventSlug: "summit-2026",
         eventVersion: eventRecord.version,
         initialConfigurations: eventRecord.embedConfigurations ?? [],
-        publicOrigin: "https://sessionboard.example",
+        publicOrigin: "https://eventloom.example",
         publication,
       }),
     );

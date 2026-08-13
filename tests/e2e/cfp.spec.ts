@@ -255,11 +255,11 @@ test("submitter completes the account-first CFP with two participants", async ({
 
   const browserState = await page.evaluate(() => ({
     pointer: window.localStorage.getItem(
-      "open-sessionboard:cfp-submission:v1:evaluator-org:evt_evaluator_2026:evaluator-2026-cfp",
+      "eventloom:cfp-submission:v1:evaluator-org:evt_evaluator_2026:evaluator-2026-cfp",
     ),
     legacyDraft: window.localStorage.getItem("open-sessionboard:cfp-draft:v1:evaluator-2026"),
     completionHandoff: window.sessionStorage.getItem(
-      "open-sessionboard:cfp-completion:v1:evaluator-org:evt_evaluator_2026:evaluator-2026-cfp",
+      "eventloom:cfp-completion:v1:evaluator-org:evt_evaluator_2026:evaluator-2026-cfp",
     ),
   }));
   expect(browserState.pointer).toBeNull();
@@ -278,7 +278,7 @@ test("submitter completes the account-first CFP with two participants", async ({
     .poll(() =>
       page.evaluate(() =>
         window.localStorage.getItem(
-          "open-sessionboard:cfp-submission:v1:evaluator-org:evt_evaluator_2026:evaluator-2026-cfp",
+          "eventloom:cfp-submission:v1:evaluator-org:evt_evaluator_2026:evaluator-2026-cfp",
         ),
       ),
     )
@@ -287,7 +287,7 @@ test("submitter completes the account-first CFP with two participants", async ({
     .poll(() =>
       page.evaluate(() =>
         window.sessionStorage.getItem(
-          "open-sessionboard:cfp-completion:v1:evaluator-org:evt_evaluator_2026:evaluator-2026-cfp",
+          "eventloom:cfp-completion:v1:evaluator-org:evt_evaluator_2026:evaluator-2026-cfp",
         ),
       ),
     )
@@ -372,7 +372,7 @@ const CFP_PATH = `/cfp/organizations/${CFP_ORGANIZATION_ID}/events/${CFP_EVENT_I
 const CFP_EVENT = {
   id: CFP_EVENT_ID,
   slug: CFP_EVENT_ID,
-  name: "Open Sessionboard Conference",
+  name: "Eventloom Conference",
   timezone: "America/Los_Angeles",
   opensAt: "2026-08-01T07:00:00.000Z",
   closesAt: "2026-09-15T07:00:00.000Z",
@@ -944,7 +944,7 @@ async function installDynamicCfpApi(
 }
 
 function pointerKey(): string {
-  return `open-sessionboard:cfp-submission:v1:${encodeURIComponent(CFP_ORGANIZATION_ID)}:${encodeURIComponent(CFP_EVENT_ID)}:${encodeURIComponent(CFP_FORM_ID)}`;
+  return `eventloom:cfp-submission:v1:${encodeURIComponent(CFP_ORGANIZATION_ID)}:${encodeURIComponent(CFP_EVENT_ID)}:${encodeURIComponent(CFP_FORM_ID)}`;
 }
 
 function cfpMutationBody(request: import("@playwright/test").Request): Record<string, unknown> {
@@ -959,9 +959,7 @@ test("published dynamic CFP keeps conditional sections, custom answers, and sche
   const harness = await installDynamicCfpApi(page, authSession);
   await page.goto(CFP_PATH);
 
-  await expect(
-    page.getByRole("heading", { level: 1, name: "Open Sessionboard Conference" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Eventloom Conference" })).toBeVisible();
   await expect(page.getByText(CFP_FORM.welcomeContent, { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Continue →" }).click();
   await expect(page).toHaveURL(new RegExp(`${CFP_PATH}/account$`));
@@ -1031,9 +1029,7 @@ test("published dynamic CFP keeps conditional sections, custom answers, and sche
   ).toBeVisible();
   await expect(page.getByText(CFP_FORM.settings.successContent, { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Continue to portal →" })).toBeVisible();
-  await expect(
-    page.getByText(/Open Sessionboard Conference received your proposal\./),
-  ).toBeVisible();
+  await expect(page.getByText(/Eventloom Conference received your proposal\./)).toBeVisible();
   await expect(page.getByRole("link", { name: "View submission status dashboard" })).toBeVisible();
 
   expect(harness.publishedResponses.length).toBeGreaterThan(0);

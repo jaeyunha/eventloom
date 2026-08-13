@@ -1,15 +1,15 @@
-# Open Sessionboard
+# Eventloom
 
-Open Sessionboard is source-available, program-side Sessionboard alternative for event-production teams. It covers call-for-proposals intake, speaker operations, human-authoritative review and communications, conflict-safe scheduling, publication, and public distribution. It is not a full CRM or marketing suite; the built-in Speaker CRM described below is in scope.
+Eventloom is a source-available, program-side Sessionboard alternative for event-production teams. It covers call-for-proposals intake, speaker operations, human-authoritative review and communications, conflict-safe scheduling, publication, and public distribution. It is not a full CRM or marketing suite; the built-in Speaker CRM described below is in scope.
 
 ## Product truth, status, and evidence
 
-[`spec/open-sessionboard.md`](spec/open-sessionboard.md) is the product truth source. It defines the supported contract and current status without implying that every acceptance item or release gate has passed.
+[`spec/eventloom.md`](spec/eventloom.md) is the product truth source. It defines the supported contract and current status without implying that every acceptance item or release gate has passed.
 
 Use this precedence when sources disagree:
 
 1. Executable code/configuration and observed deployment behavior define what is currently running.
-2. `spec/open-sessionboard.md` defines supported product scope and status.
+2. `spec/eventloom.md` defines supported product scope and status.
 3. [`ARCHITECTURE.md`](ARCHITECTURE.md) defines current system boundaries.
 4. Operational documents define executable procedures.
 5. [`docs/llm-judge-runs.md`](docs/llm-judge-runs.md) records evaluator evidence, coverage, and limitations.

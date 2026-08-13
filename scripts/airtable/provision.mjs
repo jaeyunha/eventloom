@@ -7,7 +7,7 @@ const METADATA_WRITE_SCOPE = "schema.bases:write";
 const APPLICATION_ID_FIELD = "Application ID";
 
 /**
- * Airtable field definitions for the Open Sessionboard business-data model.
+ * Airtable field definitions for the Eventloom business-data model.
  *
  * `linkTable` is an internal reference used while provisioning. Airtable needs
  * the linked table's generated `tbl...` identifier in the API payload, so link
@@ -59,7 +59,7 @@ const link = (name, linkTable, description) => ({
 const applicationId = () =>
   text(
     APPLICATION_ID_FIELD,
-    "Unique stable Open Sessionboard application ID; never use an Airtable record ID.",
+    "Unique stable Eventloom application ID; never use an Airtable record ID.",
   );
 const organizationScopeFields = () => [
   text("Organization ID", "Owning organization application ID."),
@@ -86,7 +86,7 @@ const versionedAuditFields = () => [
 export const TABLE_DEFINITIONS = [
   {
     name: "Organizations",
-    description: "Tenant organizations that own Open Sessionboard events.",
+    description: "Tenant organizations that own Eventloom events.",
     fields: [
       applicationId(),
       text("Name", "Organization display name."),

@@ -1,10 +1,10 @@
 # LLM judge run history
 
-This file is the historical evidence ledger for Open Sessionboard evaluator runs. It stores no credentials, magic links, API keys, browser session state, or private payloads. Evaluator artifacts remain outside the repository under `/tmp`. A ledger entry records evidence and limitations; it never upgrades source-present or partial behavior to release verification.
+This file is the historical evidence ledger for Eventloom evaluator runs. It stores no credentials, magic links, API keys, browser session state, or private payloads. Evaluator artifacts remain outside the repository under `/tmp`. A ledger entry records evidence and limitations; it never upgrades source-present or partial behavior to release verification.
 
 ## Evidence and source hierarchy
 
-The governing hierarchy is the one in [`spec/open-sessionboard.md`](../spec/open-sessionboard.md):
+The governing hierarchy is the one in [`spec/eventloom.md`](../spec/eventloom.md):
 
 1. Executable code, configuration, and observed deployment define current behavior.
 2. The product contract defines supported scope and status vocabulary.
@@ -79,7 +79,7 @@ The partial report records **54.0% overall** and **92.5% coverage across complet
 - Status: invalid as product-scoring evidence
 - Run directory: `/tmp/killmysaas-evals-updated/runs/2026-08-10T13-46-51`
 
-The judge provider returned an HTTP 520 response with Cloudflare HTML during judging. This is retained for incident diagnosis only, not as an Open Sessionboard product score. Its report may change if stored evidence is later rescored, so any future rescore must be recorded as a separate entry with the rescore time and provider status.
+The judge provider returned an HTTP 520 response with Cloudflare HTML during judging. This is retained for incident diagnosis only, not as an Eventloom product score. Its report may change if stored evidence is later rescored, so any future rescore must be recorded as a separate entry with the rescore time and provider status.
 
 ## 2026-08-11 — OpenAI Responses local integration diagnostic
 

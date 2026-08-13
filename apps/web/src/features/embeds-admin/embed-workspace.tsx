@@ -982,7 +982,7 @@ export function iframeSnippet(settings: EmbedSnippetSettings): string {
   return [
     "<iframe",
     `  src="${src}"`,
-    `  title="Open Sessionboard ${widget.label}"`,
+    `  title="Eventloom ${widget.label}"`,
     '  loading="lazy"',
     '  referrerpolicy="no-referrer"',
     `  sandbox="${iframeSandbox(widget)}"`,

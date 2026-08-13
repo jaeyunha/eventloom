@@ -510,14 +510,12 @@ describe("speaker portal view model", () => {
 
     expect(portalSubmissionEditTarget(context, submission)).toEqual({
       href: "/cfp/organizations/ai-engineer/events/devflow-conf-2027/submission",
-      pointerKey:
-        "open-sessionboard:cfp-submission:v1:ai-engineer:devflow-conf-2027:devflow-conf-2027-cfp",
+      pointerKey: "eventloom:cfp-submission:v1:ai-engineer:devflow-conf-2027:devflow-conf-2027-cfp",
     });
     expect(portalSubmissionActionTargets(context, submission)).toEqual({
       editHref: "/cfp/organizations/ai-engineer/events/devflow-conf-2027/submission",
       newProposalHref: "/cfp/organizations/ai-engineer/events/devflow-conf-2027",
-      pointerKey:
-        "open-sessionboard:cfp-submission:v1:ai-engineer:devflow-conf-2027:devflow-conf-2027-cfp",
+      pointerKey: "eventloom:cfp-submission:v1:ai-engineer:devflow-conf-2027:devflow-conf-2027-cfp",
       identity: {
         organizationId: "ai-engineer",
         eventId: "devflow-conf-2027",

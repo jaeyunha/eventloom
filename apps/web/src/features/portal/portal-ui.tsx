@@ -139,8 +139,8 @@ export function PortalFrame({ children }: Readonly<{ children: ReactNode }>) {
       </a>
       <header className={styles.topbar}>
         <Link className={styles.brand} href={`/portal${eventQuery}`}>
-          <span aria-hidden="true">OS</span>
-          <strong>Open Sessionboard</strong>
+          <span aria-hidden="true">EL</span>
+          <strong>Eventloom</strong>
         </Link>
         <div className={styles.accountArea}>
           <button

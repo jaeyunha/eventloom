@@ -28,7 +28,7 @@ describe("ProductNavigation", () => {
 
   it("keeps the brand link discoverable and keyboard-focusable", () => {
     expect(navigationSource).toContain('href="/"');
-    expect(navigationSource).toContain('aria-label="Open Sessionboard home"');
+    expect(navigationSource).toContain('aria-label="Eventloom home"');
     expect(navigationSource).toContain("product-nav-link");
   });
 });

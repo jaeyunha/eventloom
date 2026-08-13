@@ -252,7 +252,7 @@ export function parseWranglerInventory(source) {
   const appEnvironments = collectWranglerValues(source, "APP_ENV");
   const webOrigins = collectWranglerValues(source, "WEB_ORIGIN");
   const workerNames = collectWranglerValues(source, "name").filter((name) =>
-    name.startsWith("open-sessionboard-api-"),
+    name.startsWith("eventloom-api-"),
   );
   const databaseNames = collectWranglerValues(source, "database_name");
   const databaseIds = collectWranglerValues(source, "database_id");

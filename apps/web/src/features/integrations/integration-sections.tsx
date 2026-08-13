@@ -5,7 +5,7 @@ import {
   apiScopes,
   type WebhookEventType,
   webhookEventTypes,
-} from "@open-sessionboard/contracts";
+} from "@eventloom/contracts";
 import { type FormEvent, useState } from "react";
 import {
   Badge,
@@ -102,7 +102,7 @@ export function OneTimeSecretPanel({
       <div>
         <p className={styles.eyebrow}>Shown once</p>
         <h2 id="one-time-secret-heading">Save this {label} now</h2>
-        <p>For security, Open Sessionboard will not display this value again.</p>
+        <p>For security, Eventloom will not display this value again.</p>
       </div>
       <code className={styles.secretValue}>{secret.secret}</code>
       <div className={styles.actionRow}>
@@ -477,7 +477,7 @@ export function WebhooksSection({
                 name="endpointUrl"
                 type="url"
                 inputMode="url"
-                placeholder="https://example.com/open-sessionboard"
+                placeholder="https://example.com/eventloom"
                 pattern="https://.*"
                 required
               />

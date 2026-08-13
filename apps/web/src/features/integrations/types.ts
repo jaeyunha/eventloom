@@ -1,4 +1,4 @@
-import type { ApiScope, WebhookEventType } from "@open-sessionboard/contracts";
+import type { ApiScope, WebhookEventType } from "@eventloom/contracts";
 
 export type IntegrationSection = "overview" | "api-keys" | "webhooks" | "delivery";
 

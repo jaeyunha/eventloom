@@ -1,5 +1,5 @@
 {
-  "name": "open-sessionboard",
+  "name": "eventloom",
   "version": "0.1.0",
   "private": true,
   "license": "Elastic-2.0",
@@ -10,11 +10,11 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "bun run dev:infra && bun run --filter @open-sessionboard/contracts build && concurrently --kill-others-on-fail --names api,web,mail \"bun run --filter @open-sessionboard/api dev\" \"bun run --filter @open-sessionboard/web dev\" \"bun run dev:mail\"",
+    "dev": "bun run dev:infra && bun run --filter @eventloom/contracts build && concurrently --kill-others-on-fail --names api,web,mail \"bun run --filter @eventloom/api dev\" \"bun run --filter @eventloom/web dev\" \"bun run dev:mail\"",
     "dev:infra": "docker compose -f compose.dev.yaml up -d --wait mailpit",
     "dev:mail": "bun run scripts/dev/mailpit-opensend-bridge.ts",
     "build": "bun run --filter '*' build",
-    "cloudflare:web:build": "bun run --filter @open-sessionboard/web cloudflare:build",
+    "cloudflare:web:build": "bun run --filter @eventloom/web cloudflare:build",
     "cloudflare:web:deploy": "node scripts/cloudflare/deploy-web.mjs",
     "check": "bun run typecheck && bun run lint && bun run format:check",
     "typecheck": "bun run --filter '*' typecheck",
@@ -23,7 +23,7 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "fix": "biome check --write .",
-    "postinstall": "bun run --filter @open-sessionboard/contracts build"
+    "postinstall": "bun run --filter @eventloom/contracts build"
   },
   "devDependencies": {
     "@types/nodemailer": "7.0.4",

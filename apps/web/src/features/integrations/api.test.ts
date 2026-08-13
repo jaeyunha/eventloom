@@ -111,7 +111,7 @@ describe("integration admin API", () => {
       api.createWebhook({
         organizationId: "org/a",
         eventId: "event/a",
-        endpointUrl: "https://hooks.example.test/sessionboard",
+        endpointUrl: "https://hooks.example.test/eventloom",
         events: ["submission.created"],
       }),
     ).resolves.toEqual({ id: "webhook-1", secret: "secret-1" });

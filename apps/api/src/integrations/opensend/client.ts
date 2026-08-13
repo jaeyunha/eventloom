@@ -1,4 +1,4 @@
-import { openSendEmailPayloadSchema, openSendSenderSchema } from "@open-sessionboard/contracts";
+import { openSendEmailPayloadSchema, openSendSenderSchema } from "@eventloom/contracts";
 import {
   OpenSendError,
   type OpenSendErrorCode,

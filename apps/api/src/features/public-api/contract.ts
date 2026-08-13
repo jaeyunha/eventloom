@@ -129,7 +129,7 @@ export const publicApiV1Contract = {
     name: "apiKey",
     type: "http",
     scheme: "bearer",
-    bearerFormat: "Open Sessionboard scoped API key",
+    bearerFormat: "Eventloom scoped API key",
   },
   schemas: {
     page: {

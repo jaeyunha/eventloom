@@ -1,4 +1,4 @@
-# Open Sessionboard Design System
+# Eventloom Design System
 
 ## 1. Product character
 

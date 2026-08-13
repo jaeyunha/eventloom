@@ -1283,10 +1283,10 @@ describe("fixture local runtime composition", () => {
         organizationId: LOCAL_ORGANIZATION_ID,
         metrics: { eventCount: 2 },
         events: [
-          { id: "demo-event", name: "Open Sessionboard Demo" },
+          { id: "demo-event", name: "Eventloom Demo" },
           {
             id: "open-sessionboard-conf",
-            name: "Open Sessionboard Conference",
+            name: "Eventloom Conference",
           },
         ],
       },
@@ -1342,7 +1342,7 @@ describe("fixture local runtime composition", () => {
     };
     expect(body.data.event).toEqual({
       id: "demo-event",
-      name: "Open Sessionboard Demo",
+      name: "Eventloom Demo",
       timeZone: "America/Los_Angeles",
       publishedAgendaRevisionId: "agenda-local-revision-2",
     });
@@ -1359,7 +1359,7 @@ describe("fixture local runtime composition", () => {
     expect(body.data.webhooks).toEqual([
       expect.objectContaining({
         id: "local-webhook-demo",
-        endpointUrl: "https://hooks.local.open-sessionboard.test/demo",
+        endpointUrl: "https://hooks.local.eventloom.test/demo",
       }),
     ]);
     expect(body.data).not.toHaveProperty("accelevents");
@@ -1414,7 +1414,7 @@ describe("fixture local runtime composition", () => {
         method: "POST",
         headers: { ...organizerHeaders(), "content-type": "application/json" },
         body: JSON.stringify({
-          endpointUrl: "https://hooks.local.open-sessionboard.test/qa",
+          endpointUrl: "https://hooks.local.eventloom.test/qa",
           events: ["agenda.published"],
         }),
       },
@@ -1815,11 +1815,11 @@ describe("fixture local runtime composition", () => {
       data: {
         event: {
           slug: "demo-event",
-          name: "Open Sessionboard Demo",
+          name: "Eventloom Demo",
           timeZone: "America/Los_Angeles",
           startsOn: "2026-09-18",
           endsOn: "2026-09-18",
-          venueName: "Open Sessionboard Hall",
+          venueName: "Eventloom Hall",
         },
         revision: {
           id: "revision_local_3",
@@ -3156,7 +3156,7 @@ describe("fixture local runtime composition", () => {
     const worker = createRuntimeWorker();
     const bindings: RuntimeBindings = {
       APP_ENV: "production",
-      WEB_ORIGIN: "https://open-sessionboard.pages.dev",
+      WEB_ORIGIN: "https://eventloom.pages.dev",
     };
     const response = await worker.fetch?.(
       new Request("https://api.example.com/api/health", {
@@ -3184,7 +3184,7 @@ describe("fixture local runtime composition", () => {
     if (scheduled === undefined) throw new Error("The runtime worker did not expose scheduled.");
     const bindings: RuntimeBindings = {
       APP_ENV: "production",
-      WEB_ORIGIN: "https://open-sessionboard.pages.dev",
+      WEB_ORIGIN: "https://eventloom.pages.dev",
     };
 
     await expect(

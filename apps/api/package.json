@@ -1,5 +1,5 @@
 {
-  "name": "@open-sessionboard/api",
+  "name": "@eventloom/api",
   "version": "0.1.0",
   "private": true,
   "license": "Elastic-2.0",
@@ -11,7 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@open-sessionboard/contracts": "workspace:*",
+    "@eventloom/contracts": "workspace:*",
     "better-auth": "^1.6.26",
     "hono": "4.13.1",
     "zod": "4.4.3"

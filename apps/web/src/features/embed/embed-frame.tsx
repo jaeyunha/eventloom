@@ -84,7 +84,7 @@ export function EmbedFrame({
             <span aria-hidden="true" className={styles.embedMark}>
               OS
             </span>
-            <span className={styles.embedBrandName}>Open Sessionboard</span>
+            <span className={styles.embedBrandName}>Eventloom</span>
             <span className={styles.embedBrandSmall}>Published program</span>
           </span>
           <nav aria-label="Published event views">
@@ -113,7 +113,7 @@ export function EmbedFrame({
         {children}
       </main>
       <footer className={styles.embedFooter}>
-        <span>Program powered by Open Sessionboard</span>
+        <span>Program powered by Eventloom</span>
         <span>Published information only</span>
       </footer>
     </div>

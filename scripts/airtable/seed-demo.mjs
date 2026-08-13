@@ -231,7 +231,7 @@ const revision = {
   entries,
   warningOverrides: [],
   publishedAt: agenda.revision.publishedAt,
-  publishedBy: "Open Sessionboard demo organizer",
+  publishedBy: "Eventloom demo organizer",
   rollbackOfRevisionId: null,
   event: agenda.event,
 };
@@ -250,7 +250,7 @@ const agendaState = {
     entries,
     warningOverrides: [],
     updatedAt: agenda.revision.publishedAt,
-    updatedBy: "Open Sessionboard demo organizer",
+    updatedBy: "Eventloom demo organizer",
   },
   revisions: [revision],
   currentPublishedRevisionId: revision.id,

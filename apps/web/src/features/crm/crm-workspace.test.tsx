@@ -128,7 +128,7 @@ const contact: CrmContact = {
 const event: CrmEvent = {
   id: "event/one",
   organizationId: "org/one",
-  name: "Open Sessionboard Summit",
+  name: "Eventloom Summit",
   status: "active",
 };
 

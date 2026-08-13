@@ -99,7 +99,7 @@ function fixture() {
   let id = 0;
   const identity = new InMemoryMemberIdentityRepository(seed());
   const auth = new InMemoryMemberAuthBoundary({
-    baseUrl: "https://sessionboard.test/member-setup",
+    baseUrl: "https://eventloom.test/member-setup",
     clock: () => new Date(initialNow),
     generateToken: () => `secret-token-${++id}`,
   });
@@ -199,7 +199,7 @@ describe("member provisioning service", () => {
       users: [...(seed().users ?? []), verifiedUser],
     });
     const auth = new InMemoryMemberAuthBoundary({
-      baseUrl: "https://sessionboard.test/member-setup",
+      baseUrl: "https://eventloom.test/member-setup",
       clock: () => new Date(initialNow),
       generateToken: () => "verified-user-token",
     });
@@ -237,7 +237,7 @@ describe("member provisioning service", () => {
   it("retries delivery with the same idempotency key after a transient send failure", async () => {
     const identity = new InMemoryMemberIdentityRepository(seed());
     const auth = new InMemoryMemberAuthBoundary({
-      baseUrl: "https://sessionboard.test/member-setup",
+      baseUrl: "https://eventloom.test/member-setup",
       clock: () => new Date(initialNow),
     });
     const delivered = new InMemoryMemberInvitationDelivery();
@@ -279,7 +279,7 @@ describe("member provisioning service", () => {
   it("keeps the setup token retryable when activation fails before finalization", async () => {
     const identity = new InMemoryMemberIdentityRepository(seed());
     const underlyingAuth = new InMemoryMemberAuthBoundary({
-      baseUrl: "https://sessionboard.test/member-setup",
+      baseUrl: "https://eventloom.test/member-setup",
       clock: () => new Date(initialNow),
       generateToken: () => "resumable-activation-token",
     });

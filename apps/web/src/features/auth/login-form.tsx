@@ -674,12 +674,12 @@ export function LoginForm({
         Skip to sign in
       </a>
       <header className={styles.header}>
-        <a className={styles.brand} href="/" aria-label="Open Sessionboard home">
+        <a className={styles.brand} href="/" aria-label="Eventloom home">
           <span className={styles.brandMark} aria-hidden="true">
-            SB
+            EL
           </span>
           <span>
-            <strong>Open Sessionboard</strong>
+            <strong>Eventloom</strong>
             <small>Program operations</small>
           </span>
         </a>
@@ -700,7 +700,7 @@ export function LoginForm({
         <section className={styles.intro} aria-labelledby="login-title">
           <p className={styles.kicker}>{isPortalLogin ? "Speaker access" : "Operator access"}</p>
           <h1 id="login-title">
-            {isPortalLogin ? "Applicant and speaker sign in" : "Sign in to Open Sessionboard"}
+            {isPortalLogin ? "Applicant and speaker sign in" : "Sign in to Eventloom"}
           </h1>
           <p>
             {isPortalLogin
@@ -947,7 +947,7 @@ export function LoginForm({
       </main>
 
       <footer className={styles.footer}>
-        <span>Open Sessionboard</span>
+        <span>Eventloom</span>
         <span>Organizer, reviewer, applicant, and speaker access</span>
       </footer>
     </div>

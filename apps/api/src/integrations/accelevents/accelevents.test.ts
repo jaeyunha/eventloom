@@ -4,7 +4,7 @@ import {
   integrationPublicationIdSchema,
   participantIdSchema,
   sessionIdSchema,
-} from "@open-sessionboard/contracts";
+} from "@eventloom/contracts";
 import { describe, expect, it } from "vitest";
 import {
   type AcceleventsClock,

@@ -1,7 +1,4 @@
-import {
-  type DeploymentEnvironment,
-  deploymentEnvironmentSchema,
-} from "@open-sessionboard/contracts";
+import { type DeploymentEnvironment, deploymentEnvironmentSchema } from "@eventloom/contracts";
 import type { OpenSendMessage } from "../../integrations/opensend/types";
 
 export const cloudflareBindingNames = {

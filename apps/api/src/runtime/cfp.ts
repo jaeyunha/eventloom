@@ -153,7 +153,7 @@ class LocalCfpRepository implements CfpRepository {
 
   constructor() {
     for (const [event, formId] of [
-      [seededEvent(LOCAL_ORGANIZATION_ID, "demo-event", "Open Sessionboard Demo"), "main-cfp"],
+      [seededEvent(LOCAL_ORGANIZATION_ID, "demo-event", "Eventloom Demo"), "main-cfp"],
       [
         seededEvent(LOCAL_ORGANIZATION_ID, "evaluator-2026", "Welcome to our event!"),
         "evaluator-2026-cfp",
@@ -166,7 +166,7 @@ class LocalCfpRepository implements CfpRepository {
         seededEvent(LOCAL_ORGANIZATION_ID, "validation-check", "Validation Test Event"),
         "validation-check-cfp",
       ],
-      [seededEvent("organization-1", "summit-2026", "Open Sessionboard Summit 2026"), "main-cfp"],
+      [seededEvent("organization-1", "summit-2026", "Eventloom Summit 2026"), "main-cfp"],
     ] as const) {
       this.#events.set(key(event.tenantId, event.id), event);
       const form = seededForm(event.tenantId, event.id, formId);
@@ -649,7 +649,7 @@ export function createLocalCfpService(
       getPublicOrganization: async (tenantId) => ({
         id: tenantId,
         slug: tenantId,
-        name: "Open Sessionboard",
+        name: "Eventloom",
       }),
     },
     idempotency: new LocalCfpIdempotency(),

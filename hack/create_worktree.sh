@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Create or reuse an Open Sessionboard worktree under ~/wt/open-sessionboard,
+# Create or reuse an Eventloom worktree under ~/wt/open-sessionboard,
 # provision its ignored environment files, and install dependencies.
 
 set -euo pipefail

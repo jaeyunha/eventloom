@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Safely remove Open Sessionboard worktrees created under ~/wt/open-sessionboard.
+# Safely remove Eventloom worktrees created under ~/wt/open-sessionboard.
 
 set -euo pipefail
 

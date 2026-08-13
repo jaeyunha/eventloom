@@ -1,4 +1,4 @@
-import { apiErrorSchema, healthResponseSchema } from "@open-sessionboard/contracts";
+import { apiErrorSchema, healthResponseSchema } from "@eventloom/contracts";
 import { describe, expect, it } from "vitest";
 import { type ApiBindings, createApp } from "./app";
 import { AuthAccessError, type AuthPrincipal, type UserPrincipal } from "./features/auth/types";

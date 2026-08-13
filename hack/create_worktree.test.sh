@@ -16,10 +16,10 @@ assert() {
   "$@" || fail "command failed: $*"
 }
 
-REPO="$TMP/open-sessionboard"
+REPO="$TMP/eventloom"
 OVERRIDE="$TMP/wt"
 mkdir -p "$REPO/apps/web" "$REPO/apps/api"
-git -C "$TMP" init -b main open-sessionboard >/dev/null
+git -C "$TMP" init -b main eventloom >/dev/null
 REPO=$(cd "$REPO" && pwd -P)
 git -C "$REPO" config user.email test@example.com
 git -C "$REPO" config user.name Test
@@ -38,7 +38,7 @@ printf 'example\n' > "$REPO/.env.example"
     "$CREATE" --no-launch --no-install --env-mode symlink feature/test main >/dev/null
 )
 
-WORKTREE="$OVERRIDE/open-sessionboard/feature/test"
+WORKTREE="$OVERRIDE/eventloom/feature/test"
 assert test -d "$WORKTREE"
 assert test -L "$WORKTREE/.env"
 assert test -L "$WORKTREE/apps/web/.env.local"
@@ -62,7 +62,7 @@ assert grep -q updated "$WORKTREE/.env"
   OPEN_SESSIONBOARD_WORKTREE_OVERRIDE_BASE="$OVERRIDE" \
     "$CREATE" --no-launch --no-install --env-mode none no-env main >/dev/null
 )
-assert test ! -e "$OVERRIDE/open-sessionboard/no-env/.env"
+assert test ! -e "$OVERRIDE/eventloom/no-env/.env"
 
 # The default local mode creates only regular, sanitized development files.
 (
@@ -70,7 +70,7 @@ assert test ! -e "$OVERRIDE/open-sessionboard/no-env/.env"
   OPEN_SESSIONBOARD_WORKTREE_OVERRIDE_BASE="$OVERRIDE" \
     "$CREATE" --no-launch --no-install local-env main >/dev/null
 )
-LOCAL_WORKTREE="$OVERRIDE/open-sessionboard/local-env"
+LOCAL_WORKTREE="$OVERRIDE/eventloom/local-env"
 assert test -f "$LOCAL_WORKTREE/.env"
 assert test ! -L "$LOCAL_WORKTREE/.env"
 assert test -f "$LOCAL_WORKTREE/apps/web/.env.local"

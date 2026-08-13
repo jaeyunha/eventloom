@@ -3,7 +3,7 @@ import {
   apiErrorSchema,
   type HealthResponse,
   healthResponseSchema,
-} from "@open-sessionboard/contracts";
+} from "@eventloom/contracts";
 import { type EnvironmentSource, readWebEnvironment } from "../../env";
 
 export function createWebHealthResponse(source: EnvironmentSource) {

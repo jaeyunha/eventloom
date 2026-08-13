@@ -6,7 +6,7 @@ const nextConfig: NextConfig = {
   output: "standalone",
   poweredByHeader: false,
   reactStrictMode: true,
-  transpilePackages: ["@open-sessionboard/contracts"],
+  transpilePackages: ["@eventloom/contracts"],
 };
 
 export default nextConfig;

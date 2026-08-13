@@ -3,7 +3,7 @@ import { LoginForm } from "@/features/auth/login-form";
 
 export const metadata: Metadata = {
   title: "Sign in",
-  description: "Sign in to an authorized Open Sessionboard workspace.",
+  description: "Sign in to an authorized Eventloom workspace.",
 };
 
 export default async function LoginPage({

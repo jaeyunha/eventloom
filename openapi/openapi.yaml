@@ -1,6 +1,6 @@
 openapi: 3.1.0
 info:
-  title: Open Sessionboard API
+  title: Eventloom API
   version: 1.0.0
   summary: Organization-scoped application operations, webhook administration, and published projections.
   description: |
@@ -3242,7 +3242,7 @@ components:
     apiKey:
       type: http
       scheme: bearer
-      bearerFormat: Open Sessionboard scoped API key
+      bearerFormat: Eventloom scoped API key
       description: Organization-scoped API key for mounted public-v1 webhook administration.
     capabilityToken:
       type: apiKey

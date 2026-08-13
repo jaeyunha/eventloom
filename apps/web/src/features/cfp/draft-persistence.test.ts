@@ -61,7 +61,19 @@ describe("CFP draft persistence", () => {
 
   it("uses an encoded, versioned browser key", () => {
     expect(getCfpDraftStorageKey("community summit/2026")).toBe(
-      "open-sessionboard:cfp-draft:v1:community%20summit%2F2026",
+      "eventloom:cfp-draft:v1:community%20summit%2F2026",
     );
+  });
+
+  it("migrates a valid legacy draft into the Eventloom namespace", async () => {
+    const storage = new FakeStorage();
+    const persistence = new BrowserCfpDraftPersistence(storage);
+    const draft = createEmptyDraft("legacy-event");
+    const legacyKey = "open-sessionboard:cfp-draft:v1:legacy-event";
+    storage.setItem(legacyKey, JSON.stringify(draft));
+
+    await expect(persistence.load("legacy-event")).resolves.toEqual(draft);
+    expect(storage.getItem(getCfpDraftStorageKey("legacy-event"))).toBe(JSON.stringify(draft));
+    expect(storage.getItem(legacyKey)).toBeNull();
   });
 });

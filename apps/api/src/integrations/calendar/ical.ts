@@ -1,4 +1,4 @@
-import type { CalendarInvitationPayload } from "@open-sessionboard/contracts";
+import type { CalendarInvitationPayload } from "@eventloom/contracts";
 import {
   CALENDAR_ORGANIZER,
   CalendarInvitationError,
@@ -63,7 +63,7 @@ export function serializeCalendarInvitation(
   const method = validated.method === "CANCEL" ? "CANCEL" : "REQUEST";
   const lines: string[] = [
     "BEGIN:VCALENDAR",
-    "PRODID:-//Forever Browsing//Open Sessionboard//EN",
+    "PRODID:-//Forever Browsing//Eventloom//EN",
     "VERSION:2.0",
     "CALSCALE:GREGORIAN",
     `METHOD:${method}`,

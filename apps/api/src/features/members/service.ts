@@ -1678,7 +1678,7 @@ export class InMemoryMemberAuthBoundary implements MemberAuthBoundary {
       readonly generateToken?: () => string;
     } = {},
   ) {
-    this.#baseUrl = options.baseUrl ?? "https://sessionboard.test/setup";
+    this.#baseUrl = options.baseUrl ?? "https://eventloom.test/setup";
     this.#clock = options.clock ?? (() => new Date());
     this.#generateToken = options.generateToken ?? randomToken;
   }

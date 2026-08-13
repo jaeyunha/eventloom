@@ -300,7 +300,7 @@ describe("published embed model", () => {
     expect(publicPhotoUrl("/api/public/events/open-systems/headshot#main")).toBeNull();
     expect(publicPhotoUrl("//attacker.test/api/public/events/open-systems/headshot")).toBeNull();
     expect(
-      publicPhotoUrl("https://sessionboard.test/api/public/events/open-systems/headshot"),
+      publicPhotoUrl("https://eventloom.test/api/public/events/open-systems/headshot"),
     ).toBeNull();
   });
 });

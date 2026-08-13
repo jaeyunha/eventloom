@@ -1,6 +1,6 @@
 import { type BrowserContext, test as base, expect } from "@playwright/test";
 
-export const E2E_SESSION_COOKIE = "open-sessionboard.session";
+export const E2E_SESSION_COOKIE = "eventloom.session";
 const e2eWebBaseUrl = `http://127.0.0.1:${process.env.PLAYWRIGHT_WEB_PORT?.trim() || "3015"}`;
 
 export type E2eRole = "organizer" | "reviewer" | "speaker" | "submitter";
@@ -97,10 +97,7 @@ async function installAuthenticatedSession(
     });
   });
   await context.addInitScript((authenticatedSession) => {
-    window.localStorage.setItem(
-      "open-sessionboard:e2e-auth:v1",
-      JSON.stringify(authenticatedSession),
-    );
+    window.localStorage.setItem("eventloom:e2e-auth:v1", JSON.stringify(authenticatedSession));
   }, session);
 }
 

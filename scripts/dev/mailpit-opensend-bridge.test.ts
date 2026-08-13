@@ -7,7 +7,7 @@ const payload = {
   subject: "Verify your account",
   html: "<p>Open the local verification link.</p>",
   text: "Open the local verification link.",
-  headers: { "x-open-sessionboard-purpose": "verification" },
+  headers: { "x-eventloom-purpose": "verification" },
   attachments: [
     {
       filename: "invite.ics",

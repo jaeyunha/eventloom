@@ -1,4 +1,4 @@
-import { healthResponseSchema } from "@open-sessionboard/contracts";
+import { healthResponseSchema } from "@eventloom/contracts";
 import { describe, expect, it } from "vitest";
 import { createWebHealthResponse } from "./route";
 
