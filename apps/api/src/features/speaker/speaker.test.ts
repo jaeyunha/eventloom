@@ -2552,6 +2552,51 @@ describe("SpeakerService portal access", () => {
       },
     });
   });
+  it("fails closed when an event has multiple viable portal contexts", async () => {
+    const repository = new CountingPortalRepository();
+    repository.scopes.set("event-1:account-1", {
+      tenantId: "org-1",
+      submissionIds: ["submission-1"],
+      participantIds: ["participant-1"],
+      primaryParticipantId: "participant-1",
+      capabilities: ["profile-self", "task-response"],
+    });
+    repository.submissions.push(submission("submission-1", "participant-1"));
+    repository.portalContexts.push(
+      {
+        id: "portal:org-1:event-1:a",
+        eventId: "event-1",
+        name: "Context A",
+        capabilities: ["profile-self", "task-response"],
+        submissionIds: ["submission-1"],
+        participantIds: ["participant-1"],
+        primaryParticipantId: "participant-1",
+      },
+      {
+        id: "portal:org-1:event-1:b",
+        eventId: "event-1",
+        name: "Context B",
+        capabilities: ["profile-self", "task-response"],
+        submissionIds: ["submission-1"],
+        participantIds: ["participant-1"],
+        primaryParticipantId: "participant-1",
+      },
+    );
+    const service = new SpeakerService(repository, new FakePrivateAssetGateway(), {
+      now: () => new Date(now),
+    });
+
+    await expect(service.getPortalContext("event-1", "account-1")).rejects.toSatisfy(
+      (error: unknown) => {
+        expectServiceError(error, "NOT_FOUND");
+        return true;
+      },
+    );
+    await expect(service.getPortal("event-1", "account-1")).rejects.toSatisfy((error: unknown) => {
+      expectServiceError(error, "NOT_FOUND");
+      return true;
+    });
+  });
   it("projects authorized portal contexts in one parallel submission wave", async () => {
     const repository = new DelayedPortalContextRepository();
     repository.scopes.set("event-1:account-1", {
@@ -3090,6 +3135,26 @@ describe("SpeakerService portal access", () => {
     expect(JSON.stringify(portal)).not.toContain("organizer-task");
     expect(JSON.stringify(portal)).not.toContain("participant-2");
     expect(JSON.stringify(portal)).not.toContain("participant-other-event");
+  });
+  it("fails closed when roster submission candidates remain ambiguous", async () => {
+    const repository = new CountingPortalRepository();
+    repository.scopes.set("event-1:account-1", {
+      submissionIds: [" submission-1 ", "  speaker-submission:submission-1  "],
+      participantIds: ["participant-1"],
+      primaryParticipantId: "participant-1",
+      capabilities: ["profile-self", "roster-manage"],
+    });
+    repository.submissions.push(
+      submission(" submission-1 ", "participant-1"),
+      submission("  speaker-submission:submission-1  ", "participant-1"),
+    );
+    const service = new SpeakerService(repository, new FakePrivateAssetGateway(), {
+      now: () => new Date(now),
+    });
+
+    await expect(service.getRoster("event-1", "account-1", "submission-1")).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
   });
   it("loads canonical accepted rosters for the owning speaker and versions roster mutations", async () => {
     const { repository, service } = createOrganizerFixture();

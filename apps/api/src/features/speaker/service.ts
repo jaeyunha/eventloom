@@ -1810,9 +1810,11 @@ export class SpeakerService {
   async getPortalContext(eventId: string, accountId: string): Promise<SpeakerPortalContext> {
     const scope = await this.getScope(eventId, accountId);
     if (scope.submissionIds.length === 0) throw notFound();
-    const discovered = (await this.listPortalContexts(accountId)).find(
+    const discoveredContexts = (await this.listPortalContexts(accountId)).filter(
       (context) => context.eventId === eventId,
     );
+    if (discoveredContexts.length > 1) throw notFound();
+    const discovered = discoveredContexts[0];
     if (discovered !== undefined) return discovered;
 
     const primaryParticipantId = portalPrimaryParticipantId(scope);
@@ -2129,23 +2131,20 @@ export class SpeakerService {
     submissions: readonly SpeakerSubmission[],
     contexts: readonly SpeakerPortalContext[],
   ): SpeakerPortalContext {
-    const discovered = contexts
-      .filter(
-        (context) =>
-          context.eventId === eventId &&
-          (context.submissionIds.length === 0 ||
-            context.submissionIds.some((submissionId) =>
-              scope.submissionIds.some((allowed) => sameSpeakerSubmission(allowed, submissionId)),
-            )) &&
-          (context.participantIds.length === 0 ||
-            context.participantIds.some((participantId) =>
-              scope.participantIds.includes(participantId),
-            )),
-      )
-      .sort(
-        (left, right) =>
-          left.name.localeCompare(right.name) || left.eventId.localeCompare(right.eventId),
-      )[0];
+    const discoveredContexts = contexts.filter(
+      (context) =>
+        context.eventId === eventId &&
+        (context.submissionIds.length === 0 ||
+          context.submissionIds.some((submissionId) =>
+            scope.submissionIds.some((allowed) => sameSpeakerSubmission(allowed, submissionId)),
+          )) &&
+        (context.participantIds.length === 0 ||
+          context.participantIds.some((participantId) =>
+            scope.participantIds.includes(participantId),
+          )),
+    );
+    if (discoveredContexts.length > 1) throw notFound();
+    const discovered = discoveredContexts[0];
     if (discovered !== undefined) {
       const submissionIds = unique(
         discovered.submissionIds.length === 0
@@ -5633,19 +5632,25 @@ export class SpeakerService {
     const scope = await this.getScope(eventId, accountId);
     const direct = await this.repository.getSubmission(eventId, normalizedRequestedId);
     const listed = await this.repository.listSubmissions(eventId, scope.submissionIds);
-    const candidates = [direct, ...listed].filter(
-      (candidate): candidate is SpeakerSubmission =>
+    const candidatesById = new Map<string, SpeakerSubmission>();
+    for (const candidate of [direct, ...listed]) {
+      if (
         candidate !== null &&
         candidate.eventId === eventId &&
         sameSpeakerSubmission(candidate.id, normalizedRequestedId) &&
-        submissionIsVisibleToSpeaker(scope, candidate),
-    );
-    const canonicalRequestedId = canonicalSpeakerSubmissionId(normalizedRequestedId);
-    const submission =
-      candidates.find((candidate) => candidate.id === canonicalRequestedId) ?? candidates[0];
-    if (submission === undefined) {
-      throw notFound();
+        submissionIsVisibleToSpeaker(scope, candidate)
+      ) {
+        candidatesById.set(candidate.id, candidate);
+      }
     }
+    const candidates = [...candidatesById.values()];
+    const canonicalRequestedId = canonicalSpeakerSubmissionId(normalizedRequestedId);
+    const exact = candidates.filter((candidate) => candidate.id === normalizedRequestedId);
+    const canonical = candidates.filter((candidate) => candidate.id === canonicalRequestedId);
+    const preferred = exact.length > 0 ? exact : canonical.length > 0 ? canonical : candidates;
+    if (preferred.length !== 1) throw notFound();
+    const submission = preferred[0];
+    if (submission === undefined) throw notFound();
     const canonicalSubmissionId = canonicalSpeakerSubmissionId(submission.id);
     return {
       scope,
@@ -5944,6 +5949,28 @@ export class SpeakerService {
     }
     return this.getRoster(input.eventId, input.accountId, input.submissionId);
   }
+  private async speakerAssetAllowedByScope(
+    scope: SpeakerAccessScope,
+    eventId: string,
+    asset: SpeakerAsset,
+  ): Promise<boolean> {
+    if (asset.submissionId !== undefined) {
+      return scope.submissionIds.some((submissionId) =>
+        sameSpeakerSubmission(submissionId, asset.submissionId as string),
+      );
+    }
+    if (asset.taskId === undefined) return false;
+    const task = await this.repository.getTask(eventId, asset.taskId);
+    const subject = task === null ? undefined : speakerTaskSubject(task);
+    return (
+      subject?.type === "participant" &&
+      task?.eventId === eventId &&
+      task.owner === "speaker" &&
+      task.type === "upload" &&
+      subject.participantId === asset.participantId &&
+      scope.participantIds.includes(subject.participantId)
+    );
+  }
 
   async listAssetHistory(
     eventId: string,
@@ -5994,13 +6021,16 @@ export class SpeakerService {
   ): Promise<SpeakerAssetComment[]> {
     const scope = await this.getScope(eventId, accountId);
     const asset = await this.repository.getAsset(eventId, assetId);
+    const allowedByScope =
+      asset === null ? false : await this.speakerAssetAllowedByScope(scope, eventId, asset);
     if (
       asset === null ||
       asset.eventId !== eventId ||
       !scope.participantIds.includes(asset.participantId) ||
       (asset.tenantId !== undefined &&
         scope.tenantId !== undefined &&
-        asset.tenantId !== scope.tenantId)
+        asset.tenantId !== scope.tenantId) ||
+      !allowedByScope
     ) {
       throw notFound();
     }
@@ -6028,13 +6058,16 @@ export class SpeakerService {
   }): Promise<SpeakerAssetComment> {
     const scope = await this.getScope(input.eventId, input.accountId);
     const asset = await this.repository.getAsset(input.eventId, input.assetId);
+    const allowedByScope =
+      asset === null ? false : await this.speakerAssetAllowedByScope(scope, input.eventId, asset);
     if (
       asset === null ||
       asset.eventId !== input.eventId ||
       !scope.participantIds.includes(asset.participantId) ||
       (asset.tenantId !== undefined &&
         scope.tenantId !== undefined &&
-        asset.tenantId !== scope.tenantId)
+        asset.tenantId !== scope.tenantId) ||
+      !allowedByScope
     ) {
       throw notFound();
     }

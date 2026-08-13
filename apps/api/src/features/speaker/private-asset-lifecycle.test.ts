@@ -1143,6 +1143,72 @@ describe("speaker participant workspace authorization and projections", () => {
         createdAt: now,
       }),
     ]);
+    const { submissionId: _submissionId, ...unboundAsset } = first.asset;
+    repository.assets.push({
+      ...unboundAsset,
+      id: "legacy-unbound-version",
+      objectKey: "opaque/legacy-unbound-version",
+      latestVersionId: "legacy-unbound-version",
+      versionId: "legacy-unbound-version",
+    });
+    await expect(
+      service.listAssetComments("event-1", "account-1", "legacy-unbound-version"),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(
+      service.addAssetComment({
+        eventId: "event-1",
+        accountId: "account-1",
+        assetId: "legacy-unbound-version",
+        body: "Must not cross the session boundary.",
+      }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    const uploadTask = repository.tasks[0];
+    if (uploadTask === undefined) throw new Error("Expected upload task fixture.");
+    const { submissionId: _taskSubmissionId, ...participantTask } = uploadTask;
+    repository.tasks.push({
+      ...participantTask,
+      id: "participant-upload-task",
+      submissionId: null,
+      subject: { type: "participant", participantId: "participant-1" },
+    });
+    repository.assets.push({
+      ...unboundAsset,
+      id: "participant-task-version",
+      taskId: "participant-upload-task",
+      objectKey: "opaque/participant-task-version",
+      latestVersionId: "participant-task-version",
+      versionId: "participant-task-version",
+    });
+    await expect(
+      service.addAssetComment({
+        eventId: "event-1",
+        accountId: "account-1",
+        assetId: "participant-task-version",
+        body: "This participant-scoped upload remains accessible.",
+      }),
+    ).resolves.toMatchObject({
+      body: "This participant-scoped upload remains accessible.",
+    });
+
+    repository.tasks.push({
+      ...participantTask,
+      id: "organizer-action-task",
+      submissionId: null,
+      owner: "organizer",
+      type: "action",
+      subject: { type: "participant", participantId: "participant-1" },
+    });
+    repository.assets.push({
+      ...unboundAsset,
+      id: "invalid-task-version",
+      taskId: "organizer-action-task",
+      objectKey: "opaque/invalid-task-version",
+      latestVersionId: "invalid-task-version",
+      versionId: "invalid-task-version",
+    });
+    await expect(
+      service.listAssetComments("event-1", "account-1", "invalid-task-version"),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
     await expect(
       service.listAssetHistory("event-1", "account-2", first.asset.id),
     ).rejects.toMatchObject({
