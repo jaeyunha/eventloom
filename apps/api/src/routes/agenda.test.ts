@@ -445,7 +445,74 @@ describe("canonical agenda draft routes", () => {
       endsOn: "2026-08-10",
       timeZone: "UTC",
     });
-    expect(eventMetadataForEvent).toHaveBeenCalledTimes(1);
+    expect(eventMetadataForEvent).toHaveBeenCalledTimes(2);
+  });
+  it("enforces authoritative event dates on draft writes and publication", async () => {
+    const metadata = async () => ({
+      slug: "devflow-conf-2027",
+      name: "DevFlow Conf 2027",
+      timeZone: "America/Los_Angeles",
+      startsOn: "2027-05-12",
+      endsOn: "2027-05-14",
+      venueName: "DevFlow venue",
+    });
+    const root = "/api/admin/organizations/org-a/events/event-a/agenda";
+    const entry = (startsAtLocal: string, endsAtLocal: string) => ({
+      id: "entry-date-range",
+      sessionId: "session-1",
+      roomId: "room-large",
+      trackIds: [],
+      startsAtLocal,
+      endsAtLocal,
+    });
+
+    const engine = createEngine();
+    await initialize(engine);
+    const app = appFor(engine, principal(), "org-a", undefined, metadata);
+    const valid = await app.request(`${root}/draft`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        expectedVersion: 1,
+        entries: [entry("2027-05-14T09:00", "2027-05-14T10:00")],
+      }),
+    });
+    expect(valid.status).toBe(200);
+
+    for (const invalidEntry of [
+      entry("2026-08-12T09:00", "2026-08-12T10:00"),
+      entry("2027-05-12T23:30", "2027-05-13T00:30"),
+    ]) {
+      const response = await app.request(`${root}/draft`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ expectedVersion: 2, entries: [invalidEntry] }),
+      });
+      expect(response.status).toBe(400);
+      expect(await responseError(response)).toMatchObject({ code: "VALIDATION_FAILED" });
+    }
+
+    const legacyEngine = createEngine();
+    await initialize(legacyEngine);
+    const legacyApp = appFor(legacyEngine);
+    const legacyWrite = await legacyApp.request(`${root}/draft`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        expectedVersion: 1,
+        entries: [entry("2026-08-12T09:00", "2026-08-12T10:00")],
+      }),
+    });
+    expect(legacyWrite.status).toBe(200);
+
+    const guardedApp = appFor(legacyEngine, principal(), "org-a", undefined, metadata);
+    const publish = await guardedApp.request(`${root}/publish`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ expectedVersion: 2 }),
+    });
+    expect(publish.status).toBe(400);
+    expect(await responseError(publish)).toMatchObject({ code: "VALIDATION_FAILED" });
   });
   it("projects the root workspace and supports full-draft create/update/remove, preview, and publish", async () => {
     const engine = createEngine();

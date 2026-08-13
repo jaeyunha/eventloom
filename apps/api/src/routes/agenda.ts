@@ -331,6 +331,73 @@ async function body<T>(context: AgendaContext, schema: z.ZodType<T>): Promise<T>
   const payload = await context.req.json().catch(() => undefined);
   return schema.parse(payload);
 }
+type AgendaLocalEntry = Readonly<{
+  id: string;
+  startsAtLocal: string;
+  endsAtLocal: string;
+}>;
+
+function agendaDate(value: string): string | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(value);
+  if (match === null) return null;
+  const [, year, month, day] = match;
+  const parsed = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+  return parsed.getUTCFullYear() === Number(year) &&
+    parsed.getUTCMonth() + 1 === Number(month) &&
+    parsed.getUTCDate() === Number(day)
+    ? value
+    : null;
+}
+
+function agendaDateRange(metadata: AgendaEventMetadata): ReadonlySet<string> {
+  const start = agendaDate(metadata.startsOn);
+  const end = agendaDate(metadata.endsOn);
+  if (start === null || end === null || start > end) {
+    throw new AgendaError("INVALID_AGENDA", "The event date range is invalid.");
+  }
+  const dates = new Set<string>();
+  for (
+    let current = Date.parse(`${start}T00:00:00.000Z`);
+    current <= Date.parse(`${end}T00:00:00.000Z`);
+    current += 86_400_000
+  ) {
+    dates.add(new Date(current).toISOString().slice(0, 10));
+  }
+  return dates;
+}
+
+function validateAgendaEntryDates(
+  metadata: AgendaEventMetadata | null,
+  entries: readonly AgendaLocalEntry[],
+): void {
+  if (metadata === null) return;
+  const allowedDates = agendaDateRange(metadata);
+  for (const entry of entries) {
+    const start = agendaDate(entry.startsAtLocal.slice(0, 10));
+    const end = agendaDate(entry.endsAtLocal.slice(0, 10));
+    if (start === null || end === null || start !== end) {
+      throw new AgendaError(
+        "INVALID_AGENDA",
+        `Agenda entry ${entry.id} must start and end on the same valid calendar date.`,
+      );
+    }
+    if (!allowedDates.has(start)) {
+      throw new AgendaError(
+        "INVALID_AGENDA",
+        `Agenda entry ${entry.id} must fall within event dates ${metadata.startsOn} through ${metadata.endsOn}.`,
+      );
+    }
+  }
+}
+
+async function agendaEventMetadata(
+  dependencies: AgendaRouteDependencies,
+  eventId: string,
+): Promise<AgendaEventMetadata | null> {
+  return dependencies.eventMetadataForEvent === undefined
+    ? null
+    : dependencies.eventMetadataForEvent(eventId);
+}
 function agendaRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 }
@@ -544,8 +611,9 @@ export function createAgendaAdminRoutes(
   routes.post("/", async (context) => {
     const principal = await organizerForEvent(context, dependencies);
     const input = await body(context, createAgendaSchema);
+    const eventId = routeParam(context, "eventId");
     const data = await dependencies.engine.createAgenda({
-      eventId: routeParam(context, "eventId"),
+      eventId,
       actorId: principal.userId,
       ...input,
       sessions: input.sessions.map((session) => ({
@@ -656,8 +724,10 @@ export function createAgendaAdminRoutes(
   routes.put("/draft", async (context) => {
     const principal = await organizerForEvent(context, dependencies);
     const input = await body(context, updateDraftSchema);
+    const eventId = routeParam(context, "eventId");
+    validateAgendaEntryDates(await agendaEventMetadata(dependencies, eventId), input.entries);
     const data = await dependencies.engine.updateDraft({
-      eventId: routeParam(context, "eventId"),
+      eventId,
       actorId: principal.userId,
       expectedVersion: input.expectedVersion,
       entries: input.entries.map((entry) => ({
@@ -700,6 +770,10 @@ export function createAgendaAdminRoutes(
         ? null
         : (state.revisions.find((revision) => revision.id === state.currentPublishedRevisionId) ??
           null);
+    validateAgendaEntryDates(
+      await agendaEventMetadata(dependencies, eventId),
+      state?.draft.entries ?? [],
+    );
     if (current?.sourceDraftVersion === input.expectedVersion) {
       await completePublicationHandoff(dependencies, eventId, current);
       return context.json({ data: current });
