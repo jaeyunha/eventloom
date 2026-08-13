@@ -14,7 +14,7 @@ import { D1ReportRepository } from "../infrastructure/cloudflare/repositories/re
 import { D1ReviewerPoolRepository } from "../infrastructure/cloudflare/repositories/reviewer-pool";
 import { D1SessionRepository } from "../infrastructure/cloudflare/repositories/sessions";
 import { D1SpeakerRepository } from "../infrastructure/cloudflare/repositories/speaker";
-import { D1RemixContentGateway } from "./airtable";
+import { D1PublishedSpeakerProjectionStore, D1RemixContentGateway } from "./airtable";
 import {
   createD1RuntimeComposition,
   createD1RuntimeDependencies,
@@ -130,6 +130,42 @@ describe("D1 runtime composition", () => {
     await dependencies.agenda.load("event-1");
 
     expect(statements[0]).toBe("SELECT organization_id FROM events WHERE id = ?");
+  });
+
+  it("lists published events without requiring an event tombstone column", async () => {
+    const statements: string[] = [];
+    const db = {
+      prepare(query: string) {
+        statements.push(query);
+        return {
+          bind() {
+            return {
+              async first<T>() {
+                return null as T | null;
+              },
+              async all<T>() {
+                return { results: [] as T[] };
+              },
+            };
+          },
+          async all<T>() {
+            return { results: [] as T[] };
+          },
+        };
+      },
+    } as unknown as D1Database;
+    const store = new D1PublishedSpeakerProjectionStore(
+      db,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await store.listPublishedEventProjections();
+
+    expect(statements[0]).toContain("WHERE p.served_revision IS NOT NULL");
+    expect(statements[0]).not.toContain("deleted_at");
   });
 
   it("uses D1 source repositories for remix content without an Airtable fallback", async () => {

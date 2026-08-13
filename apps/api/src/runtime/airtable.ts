@@ -979,7 +979,7 @@ interface D1PublishedEventProjection {
   readonly revision: PublishedSpeakerProjection["revision"];
 }
 
-class D1PublishedSpeakerProjectionStore implements PublishedSpeakerRouteDependencies {
+export class D1PublishedSpeakerProjectionStore implements PublishedSpeakerRouteDependencies {
   constructor(
     private readonly database: D1Database,
     private readonly events: EventRepository,
@@ -1174,7 +1174,7 @@ class D1PublishedSpeakerProjectionStore implements PublishedSpeakerRouteDependen
            FROM events e
            INNER JOIN program_publication_states p
              ON p.organization_id = e.organization_id AND p.event_id = e.id
-          WHERE p.served_revision IS NOT NULL AND e.deleted_at IS NULL`,
+          WHERE p.served_revision IS NOT NULL`,
       )
       .all<{ organization_id: string; id: string }>();
     const projections: D1PublishedEventProjection[] = [];
