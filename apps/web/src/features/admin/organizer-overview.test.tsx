@@ -613,7 +613,7 @@ describe("admin navigation", () => {
     const eventContext = { organizationId: "org/live", eventId: "event/live" };
     const items = eventNavigationFor(eventContext);
     const expected = [
-      ["Overview", "/admin"],
+      ["Home", "/admin"],
       ["Events", "/admin/events"],
       ["Members", "/admin/organizations/org%2Flive/members"],
       ["Event overview", "/admin/organizations/org%2Flive/events/event%2Flive"],
@@ -651,7 +651,7 @@ describe("admin navigation", () => {
 
   it("keeps organization Members available outside and inside an event", () => {
     expect(eventNavigationFor(null, "ai-engineer").map((item) => item.label)).toEqual([
-      "Overview",
+      "Home",
       "Events",
       "Members",
     ]);

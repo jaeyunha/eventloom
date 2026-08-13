@@ -69,7 +69,7 @@ interface AdminNavigationGroup {
 const navigationGroupOrder = [
   {
     label: "Workspace",
-    itemLabels: ["Overview", "Events", "Event overview", "Members", "Settings"],
+    itemLabels: ["Home", "Events", "Event overview", "Members", "Settings"],
   },
   {
     label: "Program operations",
@@ -88,7 +88,7 @@ const navigationGroupOrder = [
 const navigation: readonly AdminNavigationItem[] = [
   {
     href: "/admin",
-    label: "Overview",
+    label: "Home",
     icon: "overview",
     match: (pathname: string) => pathname === "/admin",
   },
@@ -460,7 +460,7 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
     : commandItems;
   const currentPageLabel =
     navigationGroups.flatMap((group) => group.items).find((item) => item.match(pathname))?.label ??
-    "Overview";
+    "Home";
 
   return (
     <TooltipProvider>
