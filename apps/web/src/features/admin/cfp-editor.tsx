@@ -23,6 +23,23 @@ import {
 import { getCfpStepRoute } from "../cfp/routes";
 import styles from "./cfp-editor.module.css";
 
+const ORGANIZER_STICKY_HEADER_HEIGHT = 52;
+const STICKY_SECTION_GAP = 16;
+
+export function cfpSectionScrollOffset(
+  organizerHeaderHeight: number,
+  navigationHeight: number,
+): number {
+  return organizerHeaderHeight + navigationHeight + STICKY_SECTION_GAP;
+}
+
+export function cfpActiveSectionThreshold(
+  organizerHeaderHeight: number,
+  navigationHeight: number,
+): number {
+  return cfpSectionScrollOffset(organizerHeaderHeight, navigationHeight) + 24;
+}
+
 type FieldType =
   | "text"
   | "email"
@@ -1079,6 +1096,7 @@ export function CfpEditor({ eventId, organizationId, formId, api: providedApi }:
     level: "Introductory",
   });
   const [previewMessage, setPreviewMessage] = useState("");
+  const [publicLinkCopied, setPublicLinkCopied] = useState(false);
   const [authoritativeConfigLoaded, setAuthoritativeConfigLoaded] = useState(
     process.env.NEXT_PUBLIC_RUNTIME_PROFILE === "fixture",
   );
@@ -1171,10 +1189,11 @@ export function CfpEditor({ eventId, organizationId, formId, api: providedApi }:
       if (frame !== null) return;
       frame = window.requestAnimationFrame(() => {
         frame = null;
-        const navigationHeight = window.matchMedia("(max-width: 44rem)").matches
-          ? 0
-          : (sectionNavRef.current?.getBoundingClientRect().height ?? 0);
-        const threshold = navigationHeight + 24;
+        const navigationHeight = sectionNavRef.current?.getBoundingClientRect().height ?? 0;
+        const threshold = cfpActiveSectionThreshold(
+          ORGANIZER_STICKY_HEADER_HEIGHT,
+          navigationHeight,
+        );
         let currentId: (typeof SECTION_LINKS)[number]["id"] =
           (sections[0]?.id as (typeof SECTION_LINKS)[number]["id"] | undefined) ?? "event-details";
         for (const section of sections) {
@@ -1389,12 +1408,12 @@ export function CfpEditor({ eventId, organizationId, formId, api: providedApi }:
     if (!target) return;
     const isMobile = window.matchMedia("(max-width: 44rem)").matches;
     const scrollToTarget = () => {
-      const navigationHeight = isMobile
-        ? 0
-        : (sectionNavRef.current?.getBoundingClientRect().height ?? 0);
+      const navigationHeight = sectionNavRef.current?.getBoundingClientRect().height ?? 0;
       const top = Math.max(
         0,
-        target.getBoundingClientRect().top + window.scrollY - navigationHeight - 16,
+        target.getBoundingClientRect().top +
+          window.scrollY -
+          cfpSectionScrollOffset(ORGANIZER_STICKY_HEADER_HEIGHT, navigationHeight),
       );
       const behavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches
         ? "auto"
@@ -1491,6 +1510,14 @@ export function CfpEditor({ eventId, organizationId, formId, api: providedApi }:
       ? getCfpStepRoute(resolvedOrganizationId, configuration.slug, "welcome")
       : null;
 
+  async function copyPublicLink(): Promise<void> {
+    if (!publicRoute || typeof navigator === "undefined" || !navigator.clipboard) return;
+    const publicUrl = new URL(publicRoute, window.location.origin).toString();
+    await navigator.clipboard.writeText(publicUrl);
+    setPublicLinkCopied(true);
+    window.setTimeout(() => setPublicLinkCopied(false), 1800);
+  }
+
   return (
     <div className={styles.viewport}>
       <header className={styles.pageHeader}>
@@ -1504,9 +1531,17 @@ export function CfpEditor({ eventId, organizationId, formId, api: providedApi }:
         </div>
         <div className={styles.headerActions}>
           {publicRoute ? (
-            <a className={styles.secondaryButton} href={publicRoute}>
-              View public form
-            </a>
+            <>
+              <button className={styles.secondaryButton} type="button" onClick={copyPublicLink}>
+                {publicLinkCopied ? "Copied" : "Copy public link"}
+              </button>
+              <a className={styles.secondaryButton} href={publicRoute}>
+                View public form
+              </a>
+              <span className="sr-only" aria-live="polite">
+                {publicLinkCopied ? "Public CFP link copied to clipboard." : ""}
+              </span>
+            </>
           ) : null}
           <button className={styles.primaryButton} type="submit" form="cfp-editor-form">
             Save changes

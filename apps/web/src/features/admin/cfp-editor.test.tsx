@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 import type { CfpApi } from "../cfp/api";
 import {
   CfpEditor,
+  cfpActiveSectionThreshold,
+  cfpSectionScrollOffset,
   closeCfpNowConfiguration,
   closeCfpNowInstant,
   configurationFromServer,
@@ -17,6 +19,11 @@ import {
 } from "./cfp-editor";
 
 describe("CFP editor", () => {
+  it("keeps sticky section targets below the organizer header and navigator", () => {
+    expect(cfpSectionScrollOffset(52, 64)).toBe(132);
+    expect(cfpActiveSectionThreshold(52, 64)).toBe(156);
+  });
+
   it("renders an accessible organizer hierarchy and labeled seeded controls", () => {
     const markup = renderToStaticMarkup(
       createElement(CfpEditor, { eventId: "summit-2026", organizationId: "organization-1" }),
@@ -30,6 +37,19 @@ describe("CFP editor", () => {
     expect(markup).toContain("Open Sessionboard Summit 2026");
     expect(markup).toContain("America/Los_Angeles");
     expect(markup).toContain("2026-03-31");
+  });
+  it("exposes copy and open actions only when the public slug is authoritative", () => {
+    const previousRuntimeProfile = process.env.NEXT_PUBLIC_RUNTIME_PROFILE;
+    process.env.NEXT_PUBLIC_RUNTIME_PROFILE = "fixture";
+    try {
+      const markup = renderToStaticMarkup(
+        createElement(CfpEditor, { eventId: "summit-2026", organizationId: "organization-1" }),
+      );
+      expect(markup).toContain("Copy public link");
+      expect(markup).toContain("View public form");
+    } finally {
+      process.env.NEXT_PUBLIC_RUNTIME_PROFILE = previousRuntimeProfile;
+    }
   });
   it("renders one responsive section navigator and an explicit publish confirmation", () => {
     const markup = renderToStaticMarkup(
