@@ -5,10 +5,12 @@ import {
   ChartNoAxesColumn,
   ClipboardList,
   ContactRound,
+  ExternalLink,
   FileText,
   Folder,
   LayoutDashboard,
   ListChecks,
+  LogOut,
   type LucideIcon,
   Mail,
   PanelsTopLeft,
@@ -546,14 +548,19 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
             </SidebarContent>
           </nav>
 
-          <SidebarFooter>
-            <div className="grid gap-1 rounded-md border bg-background p-2 group-data-[collapsible=icon]:hidden">
-              <label
-                className="truncate text-xs text-muted-foreground"
-                htmlFor="organizer-organization"
-              >
-                Organization
-              </label>
+          <SidebarFooter className={styles.accountFooter}>
+            <div className={styles.organizationCard}>
+              <div className={styles.organizationIdentity}>
+                <div className={styles.organizationAvatar} aria-hidden="true">
+                  <span>{currentOrganizationId?.slice(0, 1).toUpperCase() ?? "O"}</span>
+                </div>
+                <div className={styles.organizationCopy}>
+                  <label htmlFor="organizer-organization">Current workspace</label>
+                  {availableOrganizationIds.length > 1 && currentOrganizationId !== null ? null : (
+                    <strong>{currentOrganizationId ?? "Workspace not selected"}</strong>
+                  )}
+                </div>
+              </div>
               {availableOrganizationIds.length > 1 && currentOrganizationId !== null ? (
                 <select
                   className={styles.organizationSelect}
@@ -573,22 +580,23 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
                     </option>
                   ))}
                 </select>
-              ) : (
-                <strong className="truncate text-sm font-medium">
-                  {currentOrganizationId ?? "Workspace not selected"}
-                </strong>
-              )}
-              <Button asChild className="mt-1 justify-start" size="sm" variant="ghost">
-                <Link href="/admin/events">View all events</Link>
+              ) : null}
+              <Button asChild className={styles.organizationAction} size="sm" variant="ghost">
+                <Link href="/admin/events">
+                  <CalendarDays aria-hidden="true" />
+                  <span>View all events</span>
+                  <ExternalLink className={styles.organizationActionEnd} aria-hidden="true" />
+                </Link>
               </Button>
               <Button
-                className="justify-start"
+                className={`${styles.organizationAction} ${styles.signOutAction}`}
                 size="sm"
                 type="button"
                 variant="ghost"
                 onClick={() => void signOut()}
               >
-                Sign out
+                <LogOut aria-hidden="true" />
+                <span>Sign out</span>
               </Button>
             </div>
           </SidebarFooter>

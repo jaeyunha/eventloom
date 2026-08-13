@@ -96,6 +96,98 @@
   outline-offset: 2px;
 }
 
+.accountFooter {
+  padding: 0.55rem;
+}
+
+.organizationCard {
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.55rem;
+  border: 1px solid #e4e4e7;
+  border-radius: 0.55rem;
+  background: rgb(255 255 255 / 72%);
+  box-shadow: 0 1px 2px rgb(24 24 27 / 4%);
+}
+
+.organizationIdentity {
+  display: flex;
+  gap: 0.55rem;
+  align-items: center;
+  min-width: 0;
+  padding: 0.15rem 0.2rem 0.45rem;
+}
+
+.organizationAvatar {
+  display: grid;
+  width: 1.85rem;
+  height: 1.85rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid #dedee3;
+  border-radius: 0.45rem;
+  background: #f4f4f5;
+  color: #3f3f46;
+  font-size: 0.72rem;
+  font-weight: 680;
+}
+
+.organizationCopy {
+  display: grid;
+  min-width: 0;
+  gap: 0.08rem;
+}
+
+.organizationCopy label {
+  color: #929299;
+  font-size: 0.625rem;
+  font-weight: 580;
+  letter-spacing: 0.01em;
+}
+
+.organizationCopy strong {
+  overflow: hidden;
+  color: #27272a;
+  font-size: 0.72rem;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.organizationAction {
+  display: flex;
+  width: 100%;
+  height: 2rem;
+  justify-content: flex-start;
+  gap: 0.48rem;
+  border-radius: 0.4rem;
+  padding-inline: 0.48rem;
+  color: #52525b;
+  font-size: 0.68rem;
+  font-weight: 540;
+}
+
+.organizationAction:hover {
+  background: #f1f1f2;
+  color: #27272a;
+}
+
+.organizationAction svg {
+  width: 0.85rem;
+  height: 0.85rem;
+  flex: 0 0 auto;
+}
+
+.organizationActionEnd {
+  margin-left: auto;
+  color: #a1a1aa;
+}
+
+.signOutAction:hover {
+  background: #fef2f2;
+  color: #b42318;
+}
+
 .sidebarMenuButton:hover {
   background: #eeeef0;
   color: #1b1b1f;

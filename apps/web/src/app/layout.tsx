@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import "./globals.css";
 import { Geist } from "next/font/google";
+import { DevToolsBadgeHider } from "@/components/dev-tools-badge-hider";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -31,6 +32,7 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
         <TooltipProvider>
           {children}
           <Toaster />
+          {process.env.NODE_ENV === "development" ? <DevToolsBadgeHider /> : null}
         </TooltipProvider>
       </body>
     </html>
