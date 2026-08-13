@@ -86,7 +86,13 @@ node scripts/release/preflight.mjs \
   --offline
 ```
 
-Repeat online with `CLOUDFLARE_API_AUDIT_TOKEN` and `FORGE_API_TOKEN` from the secret manager and no `--offline`. The preflight must confirm exact pinned `WEB_ORIGIN`, real D1 IDs, environment-suffixed R2/Queue resources, isolated Airtable/OpenSend credentials, account-restricted token policy, migration readiness, and both mirrors' private status. It does not deploy or seed.
+Repeat online with `CLOUDFLARE_API_AUDIT_TOKEN` and `FORGE_API_TOKEN` from the
+secret manager and no `--offline`. The preflight must confirm each selected
+environment's consistent web/API/auth origin contract, real D1 IDs,
+environment-suffixed R2/Queue resources, isolated Airtable/OpenSend
+credentials, account-restricted token policy, migration readiness, and exact
+Forge repository identity. It accepts private or public mirror visibility and
+does not deploy or seed.
 
 Inspect D1 migrations before any mutation. Retain the compatibility analysis, a usable backup/time-travel recovery point, migration output, and a named recovery owner. A dry run or preflight cannot prove that a migrated schema is compatible with the currently deployed Worker.
 

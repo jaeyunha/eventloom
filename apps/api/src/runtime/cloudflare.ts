@@ -200,6 +200,23 @@ function nonEmpty(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+function isHttpsOrigin(value: unknown): value is string {
+  if (!nonEmpty(value)) return false;
+  try {
+    const parsed = new URL(value);
+    return (
+      parsed.protocol === "https:" &&
+      parsed.username === "" &&
+      parsed.password === "" &&
+      parsed.pathname === "/" &&
+      parsed.search === "" &&
+      parsed.hash === ""
+    );
+  } catch {
+    return false;
+  }
+}
+
 function validDate(value: string): Date | null {
   const date = new Date(value);
   return Number.isFinite(date.getTime()) ? date : null;
@@ -2273,11 +2290,11 @@ export function inspectProductionRuntime(source: RuntimeBindings): RuntimeConfig
     ) {
       issues.push("API_ORIGIN must match the integrated local API origin.");
     }
-    if (environment !== "local" && !nonEmpty(bindings.WEB_ORIGIN)) {
-      issues.push("WEB_ORIGIN is required for deployed environments.");
+    if (environment !== "local" && !isHttpsOrigin(bindings.WEB_ORIGIN)) {
+      issues.push("WEB_ORIGIN must be an HTTPS origin for deployed environments.");
     }
-    if (environment !== "local" && !nonEmpty(bindings.API_ORIGIN)) {
-      issues.push("API_ORIGIN is required for deployed environments.");
+    if (environment !== "local" && !isHttpsOrigin(bindings.API_ORIGIN)) {
+      issues.push("API_ORIGIN must be an HTTPS origin for deployed environments.");
     }
   }
   const aiSelection = aiProviderSelection(bindings.AI_PROVIDER);

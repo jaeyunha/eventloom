@@ -3,13 +3,13 @@ import { type ApiDependencies, createApp } from "../app";
 import type { AgendaState, PublishedAgendaRevision } from "../features/agenda/types";
 import type { CfpForm, EventCfp, Submission } from "../features/cfp/model";
 import type { CfpRepository } from "../features/cfp/service";
-import type { CrmContact, CrmEventProjection } from "../features/crm/types";
 import {
   CommunicationService,
   InMemoryCommunicationRepository,
   InMemoryReminderRepository,
 } from "../features/communications/service";
 import type { CommunicationActor, CommunicationRecipient } from "../features/communications/types";
+import type { CrmContact, CrmEventProjection } from "../features/crm/types";
 import { EvaluationService } from "../features/evaluations/service";
 import { SessionService } from "../features/sessions/service";
 import type {
@@ -2992,6 +2992,30 @@ describe("fixture local runtime composition", () => {
         API_ORIGIN: "https://api-production.example.test",
       }).success,
     ).toBe(true);
+    expect(
+      inspectProductionRuntime({
+        ...bindings,
+        API_ORIGIN: "http://api-production.example.test",
+      }).success,
+    ).toBe(false);
+    expect(
+      inspectProductionRuntime({
+        ...bindings,
+        API_ORIGIN: "https://api-production.example.test/path",
+      }).success,
+    ).toBe(false);
+    expect(
+      inspectProductionRuntime({
+        ...bindings,
+        API_ORIGIN: "http://api-production.example.test",
+      }).success,
+    ).toBe(false);
+    expect(
+      inspectProductionRuntime({
+        ...bindings,
+        API_ORIGIN: "https://api-production.example.test/path",
+      }).success,
+    ).toBe(false);
   });
 
   it("mounts the live Better Auth session path through the production app", async () => {

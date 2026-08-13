@@ -159,7 +159,9 @@ make test
 ### 3. Deploy
 
 Supply `CLOUDFLARE_API_TOKEN` through the shell, root `.env`, or your CI secret
-store, then run:
+store. Before the first deployment, add the required Airtable, Better Auth, and
+cache-invalidation values as Cloudflare Worker Secrets; follow
+[`docs/setup.md`](docs/setup.md#cloudflare-worker-deployment). Then run:
 
 ```bash
 node scripts/cloudflare/deploy.mjs staging open-sessionboard:staging

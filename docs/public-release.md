@@ -50,12 +50,9 @@ explicit confirmation token.
 
 ## Before changing GitHub or Forge visibility
 
-- [ ] Decide whether the public artifact is this history, a rewritten branch, or
-      a separate repository.
-- [ ] Obtain permission for third-party competition/reference material and
-      remove anything without permission.
-- [ ] Remove private conversations, transcripts, recordings, and generated
-      session exports from the public artifact and its reachable history.
+- [x] Publish the current history, including the owner-approved evidence set.
+- [x] Treat historical Cloudflare account and resource identifiers as approved
+      public metadata; active credentials remain secret.
 - [ ] Run a secret scanner against the complete public history, not only the
       working tree.
 - [ ] Confirm every contributor has agreed to the ELv2 licensing terms or has
@@ -70,10 +67,9 @@ explicit confirmation token.
 
 ## Questions requiring owner decisions
 
-1. Is Elastic License 2.0 intended for all first-party code, or should any
-   separately authored/package-level code use a different license?
-2. Do all contributors agree to publish their contributions under ELv2, or is
-   a contributor license agreement / copyright assignment required?
+1. Confirm that Elastic License 2.0 applies to all first-party code.
+2. Confirm that the sole contributor has the right to publish the repository
+   under ELv2.
 
 ## GitHub visibility command
 

@@ -29,6 +29,7 @@ gjc-session-*.html
 evidence/private/
 evidence/raw/
 evidence/transcripts/
+docs/plans/
 
 # Tests and browser artifacts
 playwright-report/

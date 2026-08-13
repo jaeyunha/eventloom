@@ -1562,8 +1562,8 @@ function FileLibrary({
           <Alert variant="destructive">
             <AlertTitle>Uploaded files could not be loaded</AlertTitle>
             <AlertDescription>
-              Speaker and file information is temporarily unavailable. Retry before deciding that
-              no files have been submitted.
+              Speaker and file information is temporarily unavailable. Retry before deciding that no
+              files have been submitted.
               {onRetry === undefined ? null : (
                 <Button variant="outline" type="button" onClick={onRetry}>
                   Retry

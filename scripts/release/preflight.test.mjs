@@ -145,6 +145,60 @@ test("validates provider presence, Wrangler alignment, and three-environment iso
     accelevents: "configured",
   });
 });
+
+test("requires one consistent web and API origin contract per environment", () => {
+  const { configurations, wranglerInventory } = fixtures();
+
+  configurations.staging.NEXT_PUBLIC_APP_URL = "https://different-web.example.test";
+  assert.throws(
+    () =>
+      validateReleaseConfiguration({
+        configurations,
+        targetEnvironment: "staging",
+        wranglerInventory,
+      }),
+    (error) => error.code === "ORIGIN_CONTRACT_MISMATCH",
+  );
+
+  configurations.staging.NEXT_PUBLIC_APP_URL = configurations.staging.WEB_ORIGIN;
+  configurations.staging.API_UPSTREAM_ORIGIN = "https://different-api.example.test";
+  assert.throws(
+    () =>
+      validateReleaseConfiguration({
+        configurations,
+        targetEnvironment: "staging",
+        wranglerInventory,
+      }),
+    (error) => error.code === "ORIGIN_CONTRACT_MISMATCH",
+  );
+
+  configurations.staging.API_UPSTREAM_ORIGIN = configurations.staging.API_URL;
+  configurations.staging.BETTER_AUTH_URL = `${configurations.staging.API_URL}/unexpected`;
+  assert.throws(
+    () =>
+      validateReleaseConfiguration({
+        configurations,
+        targetEnvironment: "staging",
+        wranglerInventory,
+      }),
+    (error) => error.code === "ORIGIN_CONTRACT_MISMATCH",
+  );
+
+  configurations.staging.BETTER_AUTH_URL = configurations.staging.API_URL;
+  configurations.staging.API_URL = configurations.staging.WEB_ORIGIN;
+  configurations.staging.API_UPSTREAM_ORIGIN = configurations.staging.WEB_ORIGIN;
+  configurations.staging.BETTER_AUTH_URL = configurations.staging.WEB_ORIGIN;
+  assert.throws(
+    () =>
+      validateReleaseConfiguration({
+        configurations,
+        targetEnvironment: "staging",
+        wranglerInventory,
+      }),
+    (error) => error.code === "ORIGIN_CONTRACT_MISMATCH",
+  );
+});
+
 test("rejects a partial optional integration provider", () => {
   const { configurations, wranglerInventory } = fixtures();
   delete configurations.production.ACCELEVENTS_API_KEY;
@@ -288,6 +342,14 @@ test("requires Forge to report the exact repository identity", async () => {
         jsonResponse({ private: false, full_name: configuration.FORGE_REPOSITORY }),
     }),
     { private: false },
+  );
+
+  await assert.rejects(
+    verifyForgePrivacy({
+      configuration,
+      fetchImplementation: async () => jsonResponse({ private: false }),
+    }),
+    (error) => error.code === "FORGE_REPOSITORY_MISMATCH",
   );
 });
 test("exposes bounded organization migration readiness without configuration values", () => {

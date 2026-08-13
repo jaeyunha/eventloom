@@ -55,9 +55,9 @@ FORGE_API_TOKEN=<repository-read-token>
 ```
 
 The online preflight performs a repository GET and verifies that Forge reports
-the expected repository identity. It accepts private or public visibility and
-does not call a visibility update endpoint. GitHub and Forge visibility changes
-remain separate owner-controlled actions.
+the exact configured repository identity. It accepts private or public
+visibility and does not call a visibility update endpoint. GitHub and Forge
+visibility changes remain separate owner-controlled actions.
 
 ## Commands
 

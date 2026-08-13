@@ -143,6 +143,25 @@ Copy `.env.cloudflare.example` to `.env.cloudflare-staging` and
 `.env.cloudflare-production`. These files are ignored. The root `.env` may
 hold shared credentials such as `CLOUDFLARE_API_TOKEN`; the target Cloudflare
 environment file supplies account, resource, and origin identity.
+
+Before deploying the API Worker, configure required Worker Secrets for each
+environment. Never place these values in Wrangler configuration or commit them:
+
+```bash
+for secret in \
+  AIRTABLE_ACCESS_TOKEN \
+  AIRTABLE_BASE_ID \
+  BETTER_AUTH_SECRET \
+  CACHE_INVALIDATION_TOKEN; do
+  bunx wrangler secret put "$secret" --cwd apps/api --env staging
+done
+```
+
+Repeat with `--env production` and production-specific values. Add
+`OPENSEND_API_KEY` when outbound email is enabled and `OPENAI_API_KEY` when
+`AI_PROVIDER=openai`. Configure other integration secrets from `.env.example`
+only when that integration is enabled.
+
 Set `WEB_ORIGIN` to the web origin and `API_URL` to the API origin in the
 corresponding ignored environment file. The generated Wrangler configuration
 uses those values for `WEB_ORIGIN` and `API_ORIGIN`.
@@ -150,9 +169,14 @@ uses those values for `WEB_ORIGIN` and `API_ORIGIN`.
 Validate and dry-run before a guarded API deployment:
 
 ```bash
-node scripts/cloudflare/validate-config.mjs --environment staging
 node scripts/cloudflare/dry-run.mjs staging
-node scripts/cloudflare/validate-config.mjs --environment staging --deployment
+node scripts/cloudflare/validate-config.mjs \
+  --environment staging \
+  --config apps/api/wrangler.generated.toml
+node scripts/cloudflare/validate-config.mjs \
+  --environment staging \
+  --deployment \
+  --config apps/api/wrangler.generated.toml
 ```
 
 After migration compatibility, backup/recovery ownership, and release approval are recorded, the API deployment command is:

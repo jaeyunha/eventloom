@@ -391,6 +391,22 @@ export function validateReleaseConfiguration({
     ) {
       fail("WRANGLER_ENV_MISMATCH", `${environment} D1_DATABASE_ID does not match Wrangler`);
     }
+    const webOrigin = configValue(configuration, "WEB_ORIGIN");
+    const appOrigin = configValue(configuration, "NEXT_PUBLIC_APP_URL");
+    const apiOrigin = configValue(configuration, "API_URL");
+    const upstreamOrigin = configValue(configuration, "API_UPSTREAM_ORIGIN");
+    const authOrigin = configValue(configuration, "BETTER_AUTH_URL");
+    if (
+      webOrigin !== appOrigin ||
+      apiOrigin !== upstreamOrigin ||
+      apiOrigin !== authOrigin ||
+      webOrigin === apiOrigin
+    ) {
+      fail(
+        "ORIGIN_CONTRACT_MISMATCH",
+        `${environment} web, API, proxy, and auth origins must form one consistent contract`,
+      );
+    }
 
     for (const [key, expected] of [
       ["R2_BUCKET_NAME", `-${environment}`],
@@ -894,7 +910,7 @@ export async function verifyForgePrivacy({ configuration, fetchImplementation = 
     "Forge repository visibility",
     "token",
   );
-  if (payload?.full_name && payload.full_name !== repository) {
+  if (payload?.full_name !== repository) {
     fail("FORGE_REPOSITORY_MISMATCH", "Forge returned a different repository identity");
   }
   return { private: payload?.private === true };
