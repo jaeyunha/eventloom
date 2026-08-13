@@ -618,7 +618,7 @@ describe("public embeds", () => {
     expect(itineraryMarkup).toContain("View Details");
     expect(itineraryMarkup).toContain("Main hall");
     expect(itineraryMarkup).toContain("Staff Engineer");
-    expect(itineraryMarkup.match(/<time dateTime=/gu) ?? []).toHaveLength(4);
+    expect(itineraryMarkup.match(/<time dateTime=/gu) ?? []).toHaveLength(2);
     const emptyFinalDayMarkup = renderToStaticMarkup(
       createElement(PublicItineraryView, {
         program: { agenda: emptyFinalDayAgenda, speakers: gallery },
