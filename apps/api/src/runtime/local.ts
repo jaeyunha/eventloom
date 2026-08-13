@@ -13,6 +13,7 @@ import type {
   BetterAuthGateway,
   D1ApiKeyGateway,
 } from "../features/auth/types";
+import type { Submission } from "../features/cfp/model";
 import {
   CommunicationService,
   InMemoryCommunicationRepository,
@@ -96,6 +97,7 @@ import type {
   SpeakerContentHistoryEntry,
   SpeakerContentRecord,
   SpeakerPortalCapability,
+  SpeakerPortalContext,
   SpeakerProfile,
   SpeakerRepository,
   SpeakerSubmission,
@@ -416,6 +418,7 @@ class LocalSpeakerRepository implements SpeakerRepository {
   readonly #assets = new Map<string, SpeakerAsset[]>();
   readonly #content = new Map<string, SpeakerContentRecord>();
   readonly #contentHistory = new Map<string, SpeakerContentHistoryEntry[]>();
+  readonly #cfpPortalContexts = new Map<string, SpeakerPortalContext>();
   constructor() {
     this.#seed("demo-event");
   }
@@ -560,8 +563,83 @@ class LocalSpeakerRepository implements SpeakerRepository {
     return clone(this.#tasks.get(eventId) ?? []);
   }
 
+  registerCfpSubmission(submission: Submission, submissionTitle: string, eventName: string): void {
+    const primary =
+      submission.participants.find((participant) => participant.role === "primary") ??
+      submission.participants[0];
+    if (primary === undefined) return;
+    const submissions = this.#submissions.get(submission.eventId) ?? [];
+    this.#submissions.set(submission.eventId, [
+      ...submissions.filter(({ id }) => id !== submission.id),
+      {
+        id: submission.id,
+        eventId: submission.eventId,
+        formId: submission.formId,
+        title: submissionTitle,
+        status: "submitted",
+        participantIds: submission.participants.map(({ id }) => id),
+        primaryParticipantId: primary.id,
+        version: submission.version,
+        answers: submission.answers,
+        updatedAt: submission.updatedAt,
+      },
+    ]);
+    const profiles = this.#profiles.get(submission.eventId) ?? [];
+    const projectedProfiles = submission.participants.map((participant): SpeakerProfile => {
+      const profile: SpeakerProfile = {
+        id: `cfp-profile:${participant.id}`,
+        eventId: submission.eventId,
+        participantId: participant.id,
+        displayName:
+          [participant.firstName, participant.lastName].filter(Boolean).join(" ") ||
+          participant.email ||
+          "Speaker",
+        biography: participant.biography,
+        version: submission.version,
+        updatedAt: submission.updatedAt,
+      };
+      return participant.email ? { ...profile, email: participant.email } : profile;
+    });
+    const projectedIds = new Set(projectedProfiles.map(({ participantId }) => participantId));
+    this.#profiles.set(submission.eventId, [
+      ...profiles.filter(({ participantId }) => !projectedIds.has(participantId)),
+      ...projectedProfiles,
+    ]);
+    this.#cfpPortalContexts.set(submission.ownerAccountId, {
+      id: `portal:${submission.eventId}:${primary.id}`,
+      eventId: submission.eventId,
+      name: eventName,
+      slug: submission.eventId,
+      status: "active",
+      capabilities: ["submission-edit"],
+      submissionIds: [submission.id],
+      participantIds: submission.participants.map(({ id }) => id),
+      primaryParticipantId: primary.id,
+    });
+  }
+
   async getAccessScope(eventId: string, accountId: string): Promise<SpeakerAccessScope> {
     this.#seed(eventId);
+    const cfpContext = this.#cfpPortalContexts.get(accountId);
+    if (cfpContext?.eventId === eventId) {
+      return {
+        tenantId: LOCAL_ORGANIZATION_ID,
+        role: "speaker",
+        organizer: false,
+        submissionIds: [...cfpContext.submissionIds],
+        participantIds: [...cfpContext.participantIds],
+        capabilities: [...cfpContext.capabilities],
+        capabilitiesByParticipant: Object.fromEntries(
+          cfpContext.participantIds.map((participantId) => [
+            participantId,
+            [...cfpContext.capabilities],
+          ]),
+        ),
+        ...(cfpContext.primaryParticipantId === undefined
+          ? {}
+          : { primaryParticipantId: cfpContext.primaryParticipantId }),
+      };
+    }
     if (
       eventId !== "demo-event" ||
       (accountId !== LOCAL_SPEAKER_ACCOUNT_ID && accountId !== LOCAL_ORGANIZER_ACCOUNT_ID)
@@ -583,6 +661,8 @@ class LocalSpeakerRepository implements SpeakerRepository {
     };
   }
   async listPortalContexts(accountId: string) {
+    const cfpContext = this.#cfpPortalContexts.get(accountId);
+    if (cfpContext !== undefined) return [clone(cfpContext)];
     if (accountId !== LOCAL_SPEAKER_ACCOUNT_ID) return [];
     return [
       {
@@ -2716,7 +2796,14 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
       },
     },
   );
-  const cfpService = localCfpServiceWithSeed(createLocalCfpService());
+  const cfpService = localCfpServiceWithSeed(
+    createLocalCfpService({
+      async enqueueSubmissionConfirmation({ event, submission, submissionTitle }) {
+        if (submission.ownerAccountId === LOCAL_SPEAKER_ACCOUNT_ID) return;
+        speakerRepository.registerCfpSubmission(submission, submissionTitle, event.name);
+      },
+    }),
+  );
   const speakerProjections = new Map<string, PublishedSpeakerProjection>();
   const manifestForSlug = async (eventSlug: string): Promise<ProgramPublicationManifest | null> => {
     const event = await eventRepository.findEventBySlug(LOCAL_ORGANIZATION_ID, eventSlug);

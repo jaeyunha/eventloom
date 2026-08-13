@@ -6,6 +6,7 @@ import type {
   SubmissionVersion,
 } from "../features/cfp/model";
 import {
+  type CfpEffects,
   CfpError,
   type CfpFileAsset,
   type CfpFileAssetGateway,
@@ -580,14 +581,14 @@ class LocalCfpIdempotency implements CfpIdempotencyCoordinator {
   }
 }
 
-export function createLocalCfpService(): CfpService {
+export function createLocalCfpService(effects?: CfpEffects): CfpService {
   let sequence = 0;
   const now = () => new Date(LOCAL_CFP_NOW);
   const repository = new LocalCfpRepository();
   return new CfpService({
     repository,
     idempotency: new LocalCfpIdempotency(),
-    effects: { async enqueueSubmissionConfirmation() {} },
+    effects: effects ?? { async enqueueSubmissionConfirmation() {} },
     clock: { now },
     ids: { next: (prefix) => `${prefix}_local_${++sequence}` },
     fileAssets: new LocalCfpFileAssetGateway(repository, now),

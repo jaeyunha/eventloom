@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
   type CfpAuthenticatedSession,
@@ -85,6 +86,13 @@ describe("CFP flow", () => {
     expect(getNextCfpStep("participants")).toBe("review");
     expect(getNextCfpStep("review")).toBe("complete");
     expect(getPreviousCfpStep("review")).toBe("participants");
+  });
+
+  it("keeps one submission-dashboard call to action on completion", () => {
+    const source = readFileSync(new URL("./cfp-wizard.tsx", import.meta.url), "utf8");
+
+    expect(source.match(/View submission status dashboard/g)).toHaveLength(1);
+    expect(source).not.toContain("Continue to portal");
   });
   it("rotates completed submission identity and only resumes editable records", () => {
     const identity = { organizationId: "org-1", eventId: "event-1", formId: "form-1" };

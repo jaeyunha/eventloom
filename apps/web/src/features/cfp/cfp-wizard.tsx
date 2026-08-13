@@ -3566,9 +3566,6 @@ export function CfpComplete({
           Check your speaker status dashboard for the submission and any tasks that need to be
           completed.
         </p>
-        <a href={getCfpPortalHandoffHref("/portal/submissions", completionIdentity?.eventId)}>
-          View submission status dashboard
-        </a>
         {completionIdentity?.canEdit ? (
           <Button className={styles.textButton} onClick={editSubmission} variant="ghost">
             Edit submission
@@ -3583,7 +3580,7 @@ export function CfpComplete({
             router.push(getCfpPortalHandoffHref("/portal", completionIdentity?.eventId))
           }
         >
-          Continue to portal →
+          View submission status dashboard
         </Button>
       </div>
     </PublicCfpShell>

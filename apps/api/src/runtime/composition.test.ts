@@ -57,8 +57,11 @@ import {
   runScheduledReminders,
 } from "./composition";
 import {
+  createLocalDependencies,
   LOCAL_API_KEY,
   LOCAL_ORGANIZATION_ID,
+  LOCAL_ORGANIZER_ACCOUNT_ID,
+  LOCAL_ORGANIZER_EMAIL,
   LOCAL_SESSION_TOKEN,
   LOCAL_SPEAKER_SESSION_TOKEN,
 } from "./local";
@@ -1140,6 +1143,101 @@ describe("fixture local runtime composition", () => {
         },
       ],
     });
+  });
+  it("projects submitted CFP proposals into the submitting account portal", async () => {
+    const dependencies = createLocalDependencies();
+    const cfp = dependencies.cfp?.service;
+    const speaker = dependencies.speaker?.service;
+    expect(cfp).toBeDefined();
+    expect(speaker).toBeDefined();
+    if (cfp === undefined || speaker === undefined) return;
+
+    const draft = await cfp.createDraft({
+      tenantId: LOCAL_ORGANIZATION_ID,
+      eventId: "demo-event",
+      formId: "main-cfp",
+      ownerAccountId: LOCAL_ORGANIZER_ACCOUNT_ID,
+      idempotencyKey: "organizer-portal-draft",
+    });
+    let version = draft.version;
+    for (const [index, completedStep] of (
+      ["welcome", "account", "submission"] as const
+    ).entries()) {
+      const saved = await cfp.saveDraft({
+        tenantId: LOCAL_ORGANIZATION_ID,
+        eventId: "demo-event",
+        submissionId: draft.id,
+        ownerAccountId: LOCAL_ORGANIZER_ACCOUNT_ID,
+        expectedVersion: version,
+        completedStep,
+        ...(completedStep === "submission"
+          ? {
+              answers: {
+                title: "Testing submission",
+                abstract: "A proposal submitted through the public CFP.",
+                format: "Workshop",
+              },
+            }
+          : {}),
+        idempotencyKey: `organizer-portal-step-${index}`,
+      });
+      version = saved.version;
+    }
+    const participantSaved = await cfp.saveDraft({
+      tenantId: LOCAL_ORGANIZATION_ID,
+      eventId: "demo-event",
+      submissionId: draft.id,
+      ownerAccountId: LOCAL_ORGANIZER_ACCOUNT_ID,
+      expectedVersion: version,
+      completedStep: "participant",
+      participants: [
+        {
+          id: "organizer-cfp-participant",
+          firstName: "Speaker",
+          lastName: "Applicant",
+          email: LOCAL_ORGANIZER_EMAIL,
+          role: "primary",
+          biography: "",
+          answers: {},
+        },
+      ],
+      secondaryContacts: [],
+      idempotencyKey: "organizer-portal-participant",
+    });
+    const reviewSaved = await cfp.saveDraft({
+      tenantId: LOCAL_ORGANIZATION_ID,
+      eventId: "demo-event",
+      submissionId: draft.id,
+      ownerAccountId: LOCAL_ORGANIZER_ACCOUNT_ID,
+      expectedVersion: participantSaved.version,
+      completedStep: "review",
+      idempotencyKey: "organizer-portal-review-step",
+    });
+    const submitted = await cfp.submit({
+      tenantId: LOCAL_ORGANIZATION_ID,
+      eventId: "demo-event",
+      submissionId: draft.id,
+      ownerAccountId: LOCAL_ORGANIZER_ACCOUNT_ID,
+      expectedVersion: reviewSaved.version,
+      idempotencyKey: "organizer-portal-submit",
+    });
+
+    const contexts = await speaker.listPortalContexts(LOCAL_ORGANIZER_ACCOUNT_ID);
+    expect(contexts).toMatchObject([
+      {
+        eventId: "demo-event",
+        submissionIds: [submitted.submission.id],
+        participantIds: ["organizer-cfp-participant"],
+      },
+    ]);
+    const portal = await speaker.getPortal("demo-event", LOCAL_ORGANIZER_ACCOUNT_ID);
+    expect(portal.submissions).toMatchObject([
+      {
+        id: submitted.submission.id,
+        title: "Testing submission",
+        status: "submitted",
+      },
+    ]);
   });
   it("serves the seeded canonical submission list to its organization organizer", async () => {
     const app = createRuntimeApp(localBindings);
