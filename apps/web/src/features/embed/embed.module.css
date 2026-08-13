@@ -1326,10 +1326,17 @@ ul.publicSessionList > li:last-child .speakerCard {
 }
 
 .sessionClock {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.18rem 0.35rem;
+  align-items: baseline;
   color: var(--pub-ink);
   font-size: clamp(1rem, 2vw, 1.2rem);
   font-weight: 720;
   line-height: 1.2;
+}
+
+.sessionClock span:not([aria-hidden]) {
   white-space: nowrap;
 }
 
@@ -1583,6 +1590,8 @@ ul.publicSessionList > li:last-child .speakerCard {
   }
 
   .sessionClock {
+    flex-wrap: nowrap;
+    justify-content: flex-end;
     text-align: right;
   }
 

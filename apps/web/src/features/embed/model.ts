@@ -508,6 +508,8 @@ export function formatPublishedTime(value: string, timeZone: string): string {
 
 export interface PublishedSessionSchedule {
   readonly dateLabel: string;
+  readonly endTimeLabel: string;
+  readonly startTimeLabel: string;
   readonly timeLabel: string;
 }
 
@@ -521,6 +523,8 @@ export function formatPublishedSessionSchedule(
   if (Number.isNaN(start.valueOf()) || Number.isNaN(end.valueOf())) {
     return {
       dateLabel: startsAt,
+      endTimeLabel: endsAt,
+      startTimeLabel: startsAt,
       timeLabel: endsAt,
     };
   }
@@ -538,11 +542,22 @@ export function formatPublishedSessionSchedule(
   if (eventDateKey(startsAt, timeZone) === eventDateKey(endsAt, timeZone)) {
     return {
       dateLabel,
+      endTimeLabel: endTime,
+      startTimeLabel: startTime,
       timeLabel: `${compactStart} – ${endTime}`,
     };
   }
   return {
     dateLabel,
+    endTimeLabel: new Intl.DateTimeFormat("en-US", {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      timeZone,
+    }).format(end),
+    startTimeLabel: startTime,
     timeLabel: `${startTime} – ${new Intl.DateTimeFormat("en-US", {
       weekday: "short",
       month: "short",

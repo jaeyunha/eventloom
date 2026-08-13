@@ -526,7 +526,9 @@ export function PublicItineraryView({ program }: Readonly<{ program: PublishedPr
                               {schedule.dateLabel}
                             </time>
                             <time dateTime={entry.endsAt} className={styles.sessionClock}>
-                              {schedule.timeLabel}
+                              <span>{schedule.startTimeLabel}</span>
+                              <span aria-hidden="true">–</span>
+                              <span>{schedule.endTimeLabel}</span>
                             </time>
                           </div>
                           <div className={styles.publicSessionCopy}>
