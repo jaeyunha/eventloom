@@ -1256,7 +1256,7 @@ export class D1PublishedSpeakerProjectionStore implements PublishedSpeakerRouteD
     const rows = await this.database
       .prepare(
         `SELECT organization_id, id FROM events
-          WHERE lower(slug) = ? AND deleted_at IS NULL LIMIT 2`,
+          WHERE lower(slug) = ? LIMIT 2`,
       )
       .bind(normalizedSlug)
       .all<{ organization_id: string; id: string }>();

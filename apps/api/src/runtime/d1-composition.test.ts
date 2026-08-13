@@ -168,6 +168,39 @@ describe("D1 runtime composition", () => {
     expect(statements[0]).not.toContain("deleted_at");
   });
 
+  it("resolves a publication manifest without requiring an event tombstone column", async () => {
+    const statements: string[] = [];
+    const db = {
+      prepare(query: string) {
+        statements.push(query);
+        return {
+          bind() {
+            return {
+              async first<T>() {
+                return null as T | null;
+              },
+              async all<T>() {
+                return { results: [] as T[] };
+              },
+            };
+          },
+        };
+      },
+    } as unknown as D1Database;
+    const store = new D1PublishedSpeakerProjectionStore(
+      db,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await store.getProgramPublicationManifest("forward-summit-2028");
+
+    expect(statements[0]).toContain("WHERE lower(slug) = ? LIMIT 2");
+    expect(statements[0]).not.toContain("deleted_at");
+  });
+
   it("uses D1 source repositories for remix content without an Airtable fallback", async () => {
     const session = {
       id: "session-1",
