@@ -447,6 +447,15 @@ describe("public embeds", () => {
     expect(markup).not.toContain('tabindex="0"');
     expect(markup).not.toContain("private@example.test");
 
+    const incompatibleTrackMarkup = renderToStaticMarkup(
+      createElement(SpeakerGallery, {
+        gallery: galleryWithDetails,
+        tracks: ["local-track-main"],
+      }),
+    );
+    expect(incompatibleTrackMarkup).toContain("Zoe Adams");
+    expect(incompatibleTrackMarkup).not.toContain("No speakers match these filters");
+
     const speaker = galleryWithDetails.speakers[0];
     if (!speaker) {
       throw new Error("Expected a speaker with session details");
@@ -607,6 +616,7 @@ describe("public embeds", () => {
     expect(sessionsMarkup).toContain("Track: Main stage");
     expect(sessionsMarkup).toContain("Staff Engineer");
     expect(sessionsMarkup).toContain("Open Works");
+    expect(sessionsMarkup).not.toContain("10:00 AM · 9:00 AM");
     expect(sessionsMarkup.match(/<time dateTime=/gu) ?? []).toHaveLength(4);
     expect(sessionsMarkup).not.toContain("private@example.test");
 

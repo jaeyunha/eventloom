@@ -231,13 +231,26 @@ function resourceTitle(kind: EventSettingsResourceKind): string {
 function resourceDescription(kind: EventSettingsResourceKind): string {
   switch (kind) {
     case "track":
-      return "Group sessions for agenda views and filtering.";
+      return "Primary topic or program stream. Use one track per session.";
     case "format":
-      return "Describe how a session is delivered, such as a workshop or panel.";
+      return "How the session is delivered, such as a workshop or panel.";
     case "level":
-      return "Help participants find sessions by experience level.";
+      return "The experience level participants should expect.";
     case "tag":
-      return "Add flexible labels without changing the session status workflow.";
+      return "Optional labels for flexible filtering, such as Hands-on or Remote.";
+  }
+}
+
+function resourceGuidance(kind: EventSettingsResourceKind): string {
+  switch (kind) {
+    case "track":
+      return "Recommended";
+    case "format":
+      return "Recommended";
+    case "level":
+      return "Recommended";
+    case "tag":
+      return "Optional";
   }
 }
 
@@ -255,10 +268,10 @@ type SectionNavigationItem = Readonly<{
 }>;
 
 export const eventSettingsSectionNavigation: readonly SectionNavigationItem[] = [
-  { id: "session-settings", label: "Session settings", group: "Event setup" },
-  { id: "rooms", label: "Rooms", group: "Event setup" },
-  { id: "library", label: "Program library", group: "Library" },
-  { id: "audit", label: "Audit", group: "Safety and history" },
+  { id: "session-settings", label: "Session workflow", group: "Configuration" },
+  { id: "rooms", label: "Rooms and venues", group: "Configuration" },
+  { id: "library", label: "Session classification", group: "Configuration" },
+  { id: "audit", label: "Audit history", group: "Safety and history" },
 ];
 
 function navigationGroupId(prefix: string, group: string): string {
@@ -299,7 +312,7 @@ function SettingsSectionNavigation() {
   }, []);
   const active =
     eventSettingsSectionNavigation.find((item) => item.id === activeId) ??
-    ({ id: "session-settings", label: "Session settings", group: "Event setup" } as const);
+    ({ id: "session-settings", label: "Session workflow", group: "Configuration" } as const);
 
   const links = (items: readonly SectionNavigationItem[]) => (
     <ul className={styles.navigationList}>
@@ -311,7 +324,10 @@ function SettingsSectionNavigation() {
             aria-current={activeId === item.id ? "location" : undefined}
             onClick={() => setMobileOpen(false)}
           >
-            {item.label}
+            <span className={styles.navigationStep} aria-hidden="true">
+              {eventSettingsSectionNavigation.indexOf(item) + 1}
+            </span>
+            <span>{item.label}</span>
           </a>
         </li>
       ))}
@@ -322,8 +338,11 @@ function SettingsSectionNavigation() {
     <div className={styles.navigationWrapper}>
       <aside className={styles.desktopNavigation} aria-label="Event settings sections">
         <div className={styles.navigationHeader}>
-          <p className={shellStyles.panelEyebrow}>Event settings</p>
-          <p className={styles.navigationHint}>Jump to a settings section</p>
+          <p className={shellStyles.panelEyebrow}>Configure this event</p>
+          <h2 className={styles.navigationTitle}>Settings navigation</h2>
+          <p className={styles.navigationHint}>
+            Choose a section. Your place stays visible as you scroll.
+          </p>
         </div>
         {groups.map(([group, items]) => (
           <section
@@ -353,7 +372,7 @@ function SettingsSectionNavigation() {
             type="button"
             aria-label="Choose event settings section"
           >
-            <span>Section</span>
+            <span>Settings navigation</span>
             <strong>{active.label}</strong>
             <span aria-hidden="true">{mobileOpen ? "−" : "+"}</span>
           </Button>
@@ -1083,15 +1102,25 @@ function TaxonomySection({
   const canUpdate = Boolean(actions.updateResource);
   const canDelete = Boolean(actions.deleteResource);
   const capabilityNoteId = `${kind}-capability-note`;
+  const guidance = resourceGuidance(kind);
+  const emptyAction = kind === "tag" ? "Add a tag" : `Add your first ${kind}`;
 
   return (
     <article className={styles.taxonomyCard} aria-labelledby={`${kind}-heading`}>
       <header className={styles.taxonomyHeader}>
-        <div>
-          <p className={shellStyles.panelEyebrow}>Program library</p>
-          <h3 id={`${kind}-heading`} className={styles.subheading}>
-            {title}
-          </h3>
+        <div className={styles.taxonomyHeading}>
+          <div className={styles.taxonomyTitleRow}>
+            <h3 id={`${kind}-heading`} className={styles.subheading}>
+              {title}
+            </h3>
+            <span
+              className={`${styles.guidanceBadge} ${
+                guidance === "Optional" ? styles.guidanceBadgeOptional : ""
+              }`}
+            >
+              {guidance}
+            </span>
+          </div>
           <p className={styles.mutedText}>{resourceDescription(kind)}</p>
         </div>
         <Button
@@ -1119,12 +1148,31 @@ function TaxonomySection({
       <ul className={styles.resourceList} aria-label={`Event ${title.toLowerCase()}`}>
         {resources.length === 0 ? (
           <li className={styles.emptyState}>
-            <strong>No {kind}s configured yet.</strong>
+            <strong>{kind === "tag" ? "No tags yet" : `No ${kind}s configured`}</strong>
             <span>
               {canCreate
-                ? `Use Add ${kind} to create the first event-scoped value.`
+                ? kind === "track"
+                  ? "Start with broad topics such as Engineering, Product, or Leadership."
+                  : kind === "format"
+                    ? "Common formats include Talk, Workshop, Panel, and Roundtable."
+                    : kind === "level"
+                      ? "A simple set is Introductory, Intermediate, and Advanced."
+                      : "Add tags only when you need labels that cut across tracks."
                 : "Adding values is unavailable in this view."}
             </span>
+            {canCreate ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setEditingId(null);
+                  setShowForm(true);
+                }}
+              >
+                {emptyAction}
+              </Button>
+            ) : null}
           </li>
         ) : (
           resources.map((resource) => (
@@ -1429,56 +1477,67 @@ export function EventSettingsWorkspaceView({
             <RoomsSection rooms={data.rooms} busy={busy} actions={actions} />
             <section
               id="library"
-              className={styles.librarySection}
+              className={`${styles.panel} ${styles.librarySection}`}
               aria-labelledby="library-heading"
             >
-              <div className={styles.sectionIntro}>
+              <header className={styles.panelHeader}>
                 <div>
-                  <p className={shellStyles.eyebrow}>Program library</p>
+                  <p className={shellStyles.eyebrow}>Session classification</p>
                   <h2 id="library-heading" className={styles.sectionTitle}>
-                    Program library
+                    Session classification
                   </h2>
                   <p className={styles.mutedText}>
-                    Event-scoped values keep the event vocabulary predictable without crossing
-                    organization boundaries.
+                    Define how sessions are organized and discovered. These options appear in
+                    submissions, session editing, agenda filters, and the public program.
+                  </p>
+                  <p className={styles.sectionNote}>
+                    Tracks, formats, and levels are recommended. Tags are optional and can be added
+                    later.
                   </p>
                 </div>
+              </header>
+              <div className={styles.classificationContent}>
+                {detailsStatus === "loading" ? (
+                  <Card className={styles.detailsState} role="status" aria-live="polite">
+                    <CardContent>
+                      <p>Loading session classification and audit history…</p>
+                    </CardContent>
+                  </Card>
+                ) : detailsStatus === "error" ? (
+                  <Card className={styles.detailsState} role="alert">
+                    <CardContent>
+                      <p>Session classification unavailable. {detailsMessage}</p>
+                    </CardContent>
+                  </Card>
+                ) : (
+                  <div className={styles.taxonomyGrid}>
+                    <TaxonomySection
+                      kind="track"
+                      resources={data.tracks}
+                      busy={busy}
+                      actions={actions}
+                    />
+                    <TaxonomySection
+                      kind="format"
+                      resources={data.formats}
+                      busy={busy}
+                      actions={actions}
+                    />
+                    <TaxonomySection
+                      kind="level"
+                      resources={data.levels}
+                      busy={busy}
+                      actions={actions}
+                    />
+                    <TaxonomySection
+                      kind="tag"
+                      resources={data.tags}
+                      busy={busy}
+                      actions={actions}
+                    />
+                  </div>
+                )}
               </div>
-              {detailsStatus === "loading" ? (
-                <Card className={styles.detailsState} role="status" aria-live="polite">
-                  <CardContent>
-                    <p>Loading event library and audit history…</p>
-                  </CardContent>
-                </Card>
-              ) : detailsStatus === "error" ? (
-                <Card className={styles.detailsState} role="alert">
-                  <CardContent>
-                    <p>Event library unavailable. {detailsMessage}</p>
-                  </CardContent>
-                </Card>
-              ) : (
-                <div className={styles.taxonomyGrid}>
-                  <TaxonomySection
-                    kind="track"
-                    resources={data.tracks}
-                    busy={busy}
-                    actions={actions}
-                  />
-                  <TaxonomySection
-                    kind="format"
-                    resources={data.formats}
-                    busy={busy}
-                    actions={actions}
-                  />
-                  <TaxonomySection
-                    kind="level"
-                    resources={data.levels}
-                    busy={busy}
-                    actions={actions}
-                  />
-                  <TaxonomySection kind="tag" resources={data.tags} busy={busy} actions={actions} />
-                </div>
-              )}
             </section>
             <RelatedWorkflows organizationId={organizationId} eventId={eventId} />
             {detailsStatus === "loaded" ? (

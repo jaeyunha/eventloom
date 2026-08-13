@@ -198,7 +198,7 @@ describe("event settings progressive loading", () => {
     );
     expect(coreMarkup).toContain("Session settings");
     expect(coreMarkup).toContain("Main room");
-    expect(coreMarkup).toContain("Loading event library");
+    expect(coreMarkup).toContain("Loading session classification");
     expect(coreMarkup).toContain("Loading settings audit history");
     expect(coreMarkup).not.toContain("One track");
 
@@ -418,14 +418,47 @@ describe("event settings view", () => {
       }),
     );
     expect(output).toContain('aria-label="Event settings sections"');
-    expect(output).toContain("Event setup");
-    expect(output).toContain("Library");
+    expect(output).toContain("Settings navigation");
+    expect(output).toContain("Choose a section");
+    expect(output).toContain("Configuration");
+    expect(output).toContain("Session classification");
     expect(output).toContain("Communications");
     expect(output).toContain("Calendar");
     expect(output).toContain("Accepted");
     expect(output).toContain("Settings audit history");
     expect(output).toContain("Agenda eligibility and status settings updated to version 3.");
     expect(output).toContain("Organization org_a · Event event-a");
+  });
+
+  it("explains how session classification values affect the program", () => {
+    const output = renderToStaticMarkup(
+      createElement(EventSettingsWorkspaceView, {
+        organizationId: "org_a",
+        eventId: "event-a",
+        state: {
+          status: "loaded",
+          data: {
+            ...overview,
+            tracks: [],
+            formats: [],
+            levels: [],
+            tags: [],
+          },
+        },
+        actions: {
+          createResource: async () => undefined,
+          updateResource: async () => undefined,
+          deleteResource: async () => undefined,
+        },
+      }),
+    );
+    expect(output).toContain("Define how sessions are organized and discovered.");
+    expect(output).toContain("Primary topic or program stream");
+    expect(output).toContain("How the session is delivered");
+    expect(output).toContain("Recommended");
+    expect(output).toContain("Optional");
+    expect(output).toContain("Add your first track");
+    expect(output).not.toContain("event-scoped value");
   });
 
   it("renders loading, empty, and error states without inventing records", () => {
@@ -528,7 +561,7 @@ describe("event settings view", () => {
     expect(output).toContain("Session settings");
     expect(output).toContain("Library reads timed out.");
     expect(output).toContain("Settings audit history unavailable.");
-    expect(output).toContain("Event library unavailable.");
+    expect(output).toContain("Session classification unavailable.");
   });
 
   it("renders one semantic status table with labelled eligibility controls and honest disabled actions", () => {

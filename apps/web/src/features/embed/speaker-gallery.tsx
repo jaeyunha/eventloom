@@ -113,13 +113,18 @@ export function SpeakerProfileDetail({
                     <strong>{session.title}</strong>
                     <br />
                     <time dateTime={session.startsAt}>
-                      {Object.values(
+                      {[
                         formatPublishedSessionSchedule(
                           session.startsAt,
                           session.endsAt,
                           gallery.event.timeZone,
-                        ),
-                      ).join(" · ")}
+                        ).dateLabel,
+                        formatPublishedSessionSchedule(
+                          session.startsAt,
+                          session.endsAt,
+                          gallery.event.timeZone,
+                        ).timeLabel,
+                      ].join(" · ")}
                     </time>
                     <br />
                     <span>Room: {session.roomName || "Room not published"}</span>
@@ -165,9 +170,14 @@ export function SpeakerGallery({
   );
   const speakers = useMemo(() => {
     const configured = new Set(configuredTracks);
+    const knownTracks = new Set(gallery.speakers.flatMap((speaker) => speaker.trackNames));
+    const applicableTracks = new Set(
+      [...configured].filter((trackName) => knownTracks.has(trackName)),
+    );
     return filterSpeakers(gallery.speakers, query, track).filter(
       (speaker) =>
-        configured.size === 0 || speaker.trackNames.some((trackName) => configured.has(trackName)),
+        applicableTracks.size === 0 ||
+        speaker.trackNames.some((trackName) => applicableTracks.has(trackName)),
     );
   }, [configuredTracks, gallery.speakers, query, track]);
   const selectedSpeaker = selectedSpeakerId

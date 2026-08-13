@@ -272,6 +272,8 @@ describe("published embed model", () => {
       formatPublishedSessionSchedule("2026-09-18T09:00:00.000Z", "2026-09-18T10:00:00.000Z", "UTC"),
     ).toEqual({
       dateLabel: "Fri, Sep 18",
+      endTimeLabel: "10:00 AM",
+      startTimeLabel: "9:00 AM",
       timeLabel: "9:00 – 10:00 AM",
     });
   });

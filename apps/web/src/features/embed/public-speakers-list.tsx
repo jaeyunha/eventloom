@@ -133,13 +133,18 @@ function SpeakerEntry({
                     </a>
                     <br />
                     <time dateTime={session.startsAt}>
-                      {Object.values(
+                      {[
                         formatPublishedSessionSchedule(
                           session.startsAt,
                           session.endsAt,
                           program.agenda.event.timeZone,
-                        ),
-                      ).join(" · ")}
+                        ).dateLabel,
+                        formatPublishedSessionSchedule(
+                          session.startsAt,
+                          session.endsAt,
+                          program.agenda.event.timeZone,
+                        ).timeLabel,
+                      ].join(" · ")}
                     </time>
                     <br />
                     <span>Room: {session.roomName || "Room not published"}</span>
