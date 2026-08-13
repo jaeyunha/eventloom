@@ -1232,7 +1232,7 @@ export interface OrganizerEventEmbedConfiguration {
   readonly textColor: string;
   readonly customCss: string;
   readonly displayFields: readonly string[];
-  readonly tracks: readonly string[];
+  readonly trackIds: readonly string[];
   readonly statuses: readonly string[];
 }
 export type EventEmbedConfiguration = OrganizerEventEmbedConfiguration;
@@ -1429,7 +1429,7 @@ function parseOrganizerEventEmbedConfiguration(
     textColor: textColor.toLowerCase(),
     customCss,
     displayFields: stringList(value.displayFields, `${field}.displayFields`),
-    tracks: stringList(value.tracks, `${field}.tracks`),
+    trackIds: stringList(value.trackIds, `${field}.trackIds`),
     statuses: stringList(value.statuses, `${field}.statuses`),
   };
 }
