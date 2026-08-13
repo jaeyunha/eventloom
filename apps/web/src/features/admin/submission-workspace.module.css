@@ -1,13 +1,13 @@
 .workspaceRoot {
-  --admin-ink: #1f2937;
-  --admin-muted: #657084;
-  --admin-soft-muted: #8892a3;
-  --admin-border: #dbe1ea;
+  --admin-ink: #202024;
+  --admin-muted: #68686f;
+  --admin-soft-muted: #929299;
+  --admin-border: #e1e1e5;
   --admin-surface: #ffffff;
-  --admin-canvas: #f5f7fa;
-  --admin-blue: #3157d5;
-  --admin-blue-dark: #2445b0;
-  --admin-blue-soft: #edf2ff;
+  --admin-canvas: #f7f7f8;
+  --admin-blue: #3f3f46;
+  --admin-blue-dark: #27272a;
+  --admin-blue-soft: #f1f1f2;
   --admin-green: #20704b;
   --admin-green-soft: #e8f6ee;
   --admin-amber: #8a5a13;
@@ -47,7 +47,7 @@
   gap: 2rem;
   align-items: flex-start;
   justify-content: space-between;
-  padding: clamp(1.5rem, 4vw, 3rem) clamp(1rem, 5vw, 4rem) 1.75rem;
+  padding: clamp(1.25rem, 3vw, 2.25rem) clamp(1rem, 4vw, 3rem) 1.35rem;
   border-bottom: 1px solid var(--admin-border);
   background: var(--admin-surface);
 }
@@ -57,25 +57,25 @@
   max-width: 52rem;
   margin: 0;
   color: var(--admin-ink);
-  font-size: clamp(2rem, 4vw, 3.15rem);
-  letter-spacing: -0.045em;
-  line-height: 1.08;
+  font-size: clamp(1.8rem, 3vw, 2.35rem);
+  letter-spacing: -0.035em;
+  line-height: 1.12;
 }
 
 .eyebrow {
-  margin: 0 0 0.45rem;
-  color: var(--admin-blue-dark);
-  font-size: 0.7rem;
-  font-weight: 800;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  margin: 0 0 0.35rem;
+  color: var(--admin-soft-muted);
+  font-size: 0.68rem;
+  font-weight: 620;
+  letter-spacing: 0.01em;
+  text-transform: none;
 }
 
 .pageDescription {
   max-width: 52rem;
-  margin: 0.75rem 0 0;
+  margin: 0.55rem 0 0;
   color: var(--admin-muted);
-  font-size: 1rem;
+  font-size: 0.88rem;
   line-height: 1.55;
 }
 
@@ -93,7 +93,7 @@
   flex: 0 0 auto;
   padding: 0.65rem 0.85rem;
   border: 1px solid var(--admin-border);
-  border-radius: 0.45rem;
+  border-radius: 0.4rem;
   background: var(--admin-surface);
 }
 
@@ -106,9 +106,9 @@
 }
 
 .workspaceMain {
-  width: min(100%, 104rem);
+  width: min(100%, 94rem);
   margin: 0 auto;
-  padding: clamp(1rem, 4vw, 2.75rem) clamp(1rem, 5vw, 4rem) 4rem;
+  padding: clamp(1rem, 3vw, 2rem) clamp(1rem, 4vw, 3rem) 3rem;
 }
 
 .workspaceMain:focus {
@@ -119,24 +119,24 @@
   display: grid;
   grid-template-columns: repeat(3, minmax(8rem, 1fr)) minmax(14rem, 2fr);
   gap: 1px;
-  margin-bottom: 1.5rem;
+  margin-bottom: 1rem;
   overflow: hidden;
   border: 1px solid var(--admin-border);
-  border-radius: 0.7rem;
+  border-radius: 0.55rem;
   background: var(--admin-border);
 }
 
 .summaryBar > div {
   display: grid;
   gap: 0.25rem;
-  min-height: 5.4rem;
+  min-height: 4.7rem;
   align-content: center;
   padding: 0.9rem 1.1rem;
   background: var(--admin-surface);
 }
 
 .summaryBar strong {
-  font-size: 1.5rem;
+  font-size: 1.35rem;
   letter-spacing: -0.03em;
 }
 
@@ -159,9 +159,9 @@
 .listPanel,
 .detailPanel {
   border: 1px solid var(--admin-border);
-  border-radius: 0.75rem;
+  border-radius: 0.55rem;
   background: var(--admin-surface);
-  box-shadow: 0 0.65rem 2rem rgb(32 45 77 / 5%);
+  box-shadow: 0 1px 2px rgb(24 24 27 / 3%);
 }
 
 .listPanel {
@@ -440,7 +440,7 @@
   display: grid;
   justify-items: center;
   gap: 0.45rem;
-  padding: 4rem 1.5rem;
+  padding: 3rem 1.5rem;
   text-align: center;
 }
 

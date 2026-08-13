@@ -434,6 +434,9 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
         `${item.label} ${item.keywords}`.toLocaleLowerCase().includes(normalizedCommandQuery),
       )
     : commandItems;
+  const currentPageLabel =
+    navigationGroups.flatMap((group) => group.items).find((item) => item.match(pathname))?.label ??
+    "Overview";
 
   return (
     <TooltipProvider>
@@ -516,6 +519,18 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
 
           <nav className="flex min-h-0 flex-1 flex-col" aria-label="Organizer navigation">
             <SidebarContent>
+              {eventContext !== null ? (
+                <div className={styles.eventContext}>
+                  <div className={styles.eventContextIcon} aria-hidden="true">
+                    <CalendarDays />
+                  </div>
+                  <div>
+                    <span>Event workspace</span>
+                    <strong>{eventContext.eventId}</strong>
+                  </div>
+                  <Link href="/admin/events">Switch</Link>
+                </div>
+              ) : null}
               {navigationGroups.map((group) => (
                 <SidebarGroup className={styles.sidebarGroup} key={group.label}>
                   <SidebarGroupLabel className={styles.sidebarGroupLabel}>
@@ -609,7 +624,13 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
             <div className={styles.breadcrumbs}>
               <span>{currentOrganizationId ?? "Organization"}</span>
               <span aria-hidden="true">/</span>
-              <strong>Overview</strong>
+              {eventContext !== null ? (
+                <>
+                  <span>{eventContext.eventId}</span>
+                  <span aria-hidden="true">/</span>
+                </>
+              ) : null}
+              <strong>{currentPageLabel}</strong>
             </div>
           </header>
 

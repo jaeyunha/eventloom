@@ -204,6 +204,71 @@
   height: 0.94rem;
 }
 
+.eventContext {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0.55rem 0.65rem 0.3rem;
+  padding: 0.6rem;
+  border: 1px solid #dedee3;
+  border-radius: 0.5rem;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(24 24 27 / 4%);
+}
+
+.eventContextIcon {
+  display: grid;
+  width: 1.75rem;
+  height: 1.75rem;
+  place-items: center;
+  border-radius: 0.4rem;
+  background: #f1f1f2;
+  color: #52525b;
+}
+
+.eventContextIcon svg {
+  width: 0.85rem;
+  height: 0.85rem;
+}
+
+.eventContext div:nth-child(2) {
+  display: grid;
+  min-width: 0;
+  gap: 0.05rem;
+}
+
+.eventContext span {
+  color: #929299;
+  font-size: 0.59rem;
+  font-weight: 580;
+}
+
+.eventContext strong {
+  overflow: hidden;
+  color: #27272a;
+  font-size: 0.68rem;
+  font-weight: 640;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.eventContext > a {
+  color: #71717a;
+  font-size: 0.61rem;
+  font-weight: 580;
+  text-decoration: none;
+}
+
+.eventContext > a:hover {
+  color: #27272a;
+  text-decoration: underline;
+}
+
+[data-collapsible="icon"] .eventContext {
+  display: none;
+}
+
 .sidebarHeader {
   gap: 0.2rem;
   padding: 0.4rem 0.55rem 0.65rem;
