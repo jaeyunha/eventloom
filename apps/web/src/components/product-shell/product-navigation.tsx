@@ -1,4 +1,11 @@
-const productNavigationLinks = [{ href: "/login", label: "Sign in" }] as const;
+import { ThemeToggle } from "./theme-toggle";
+
+const productNavigationLinks = [
+  { href: "/#workflow", label: "Product", primary: false },
+  { href: "/#workspaces", label: "Workspaces", primary: false },
+  { href: "/events", label: "Live demo", primary: false },
+  { href: "/login", label: "Sign in", primary: true },
+] as const;
 
 export function ProductNavigation() {
   return (
@@ -19,17 +26,16 @@ export function ProductNavigation() {
             {productNavigationLinks.map((link) => (
               <li key={link.href}>
                 <a
-                  className={
-                    link.href === "/login"
-                      ? "product-nav-link product-nav-link-primary"
-                      : "product-nav-link"
-                  }
+                  className={`product-nav-link${link.primary ? " product-nav-link-primary" : ""}`}
                   href={link.href}
                 >
                   {link.label}
                 </a>
               </li>
             ))}
+            <li>
+              <ThemeToggle />
+            </li>
           </ul>
         </nav>
       </div>
