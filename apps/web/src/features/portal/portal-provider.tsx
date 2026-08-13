@@ -127,6 +127,7 @@ interface PortalContextValue {
     file: File;
     supersedesAssetId?: string;
   }): Promise<boolean>;
+  retryAssetUpload(input: { assetId: string; file: File }): Promise<boolean>;
   completeAssetUpload(input: { assetId: string }): Promise<boolean>;
   loadAssetHistory(assetId: string): Promise<PortalAssetHistoryEntry[]>;
   loadAssetComments(assetId: string): Promise<PortalAssetComment[]>;
@@ -1548,7 +1549,7 @@ export function PortalProvider({
         setMutationError("You do not have permission to upload files.");
         return false;
       }
-      if (!api.uploadFile) {
+      if (!api.uploadFile || !api.finalizeAsset) {
         setMutationError("File uploads are not available yet.");
         return false;
       }
@@ -1589,22 +1590,39 @@ export function PortalProvider({
       setBusyAssetIds((current) => new Set(current).add(busyKey));
       setMutationError(null);
       try {
-        const asset = await api.uploadFile({
+        const pendingAsset = await api.uploadFile({
           eventId: targetContext.eventId,
           ...input,
           submissionId: uploadSubmissionId,
         });
         if (
-          !assetBelongsToPortalContext(asset, targetContext, view?.tasks ?? []) ||
-          asset.participantId !== input.participantId ||
-          asset.submissionId === undefined ||
-          !portalSubmissionIdsMatch(asset.submissionId, uploadSubmissionId) ||
-          (input.taskId !== undefined && asset.taskId !== input.taskId) ||
-          asset.supersedesAssetId !== input.supersedesAssetId
+          pendingAsset.state !== "pending_upload" ||
+          !assetBelongsToPortalContext(pendingAsset, targetContext, view?.tasks ?? []) ||
+          pendingAsset.participantId !== input.participantId ||
+          pendingAsset.submissionId === undefined ||
+          !portalSubmissionIdsMatch(pendingAsset.submissionId, uploadSubmissionId) ||
+          (input.taskId !== undefined && pendingAsset.taskId !== input.taskId) ||
+          pendingAsset.supersedesAssetId !== input.supersedesAssetId
         ) {
           throw new PortalApiError(
             "CONTEXT_MISMATCH",
             "The file response belongs to a different speaker or session.",
+            409,
+          );
+        }
+        const asset = await api.finalizeAsset({
+          eventId: targetContext.eventId,
+          assetId: pendingAsset.id,
+          state: "ready",
+        });
+        if (
+          asset.id !== pendingAsset.id ||
+          asset.state !== "ready" ||
+          !assetBelongsToPortalContext(asset, targetContext, view?.tasks ?? [])
+        ) {
+          throw new PortalApiError(
+            "CONTEXT_MISMATCH",
+            "The finalized file belongs to a different speaker or session.",
             409,
           );
         }
@@ -1622,6 +1640,93 @@ export function PortalProvider({
         setBusyAssetIds((current) => {
           const next = new Set(current);
           next.delete(busyKey);
+          return next;
+        });
+      }
+    },
+    [api, can, context, view, workspace.assets],
+  );
+
+  const retryAssetUpload = useCallback(
+    async (input: { assetId: string; file: File }) => {
+      if (!context) {
+        setMutationError("No authorized portal context is available.");
+        return false;
+      }
+      if (!can("asset-write") || !api.retryAssetUpload || !api.finalizeAsset) {
+        setMutationError("Upload retry is not available yet.");
+        return false;
+      }
+      const knownAsset =
+        workspace.assets.find((candidate) => candidate.id === input.assetId) ??
+        view?.assets?.find((candidate) => candidate.id === input.assetId);
+      if (
+        knownAsset === undefined ||
+        knownAsset.state !== "pending_upload" ||
+        !assetBelongsToPortalContext(knownAsset, context, view?.tasks ?? [])
+      ) {
+        setMutationError(
+          "This upload is no longer pending or does not belong to the active speaker.",
+        );
+        return false;
+      }
+      const targetContext = context;
+      const generation = loadGeneration.current;
+      setBusyAssetIds((current) => new Set(current).add(input.assetId));
+      setMutationError(null);
+      try {
+        const pendingAsset = await api.retryAssetUpload({
+          eventId: targetContext.eventId,
+          assetId: input.assetId,
+          file: input.file,
+        });
+        if (
+          pendingAsset.id !== knownAsset.id ||
+          pendingAsset.state !== "pending_upload" ||
+          pendingAsset.fileName !== knownAsset.fileName ||
+          pendingAsset.contentType !== knownAsset.contentType ||
+          pendingAsset.sizeBytes !== knownAsset.sizeBytes ||
+          !assetBelongsToPortalContext(pendingAsset, targetContext, view?.tasks ?? [])
+        ) {
+          throw new PortalApiError(
+            "CONTEXT_MISMATCH",
+            "The retried upload does not match the pending file.",
+            409,
+          );
+        }
+        const asset = await api.finalizeAsset({
+          eventId: targetContext.eventId,
+          assetId: pendingAsset.id,
+          state: "ready",
+        });
+        if (
+          asset.id !== knownAsset.id ||
+          asset.state !== "ready" ||
+          !assetBelongsToPortalContext(asset, targetContext, view?.tasks ?? [])
+        ) {
+          throw new PortalApiError(
+            "CONTEXT_MISMATCH",
+            "The retried upload finalized in a different speaker context.",
+            409,
+          );
+        }
+        if (!isPortalGenerationCurrent(generation, loadGeneration.current)) return false;
+        setWorkspace((current) => ({
+          ...current,
+          assets: current.assets.map((candidate) =>
+            candidate.id === asset.id ? asset : candidate,
+          ),
+        }));
+        return true;
+      } catch (retryError) {
+        if (isPortalGenerationCurrent(generation, loadGeneration.current)) {
+          setMutationError(messageFrom(retryError));
+        }
+        return false;
+      } finally {
+        setBusyAssetIds((current) => {
+          const next = new Set(current);
+          next.delete(input.assetId);
           return next;
         });
       }
@@ -2040,6 +2145,7 @@ export function PortalProvider({
       updateRosterEntry,
       removeRosterEntry,
       uploadWorkspaceFile,
+      retryAssetUpload,
       completeAssetUpload,
       loadAssetHistory,
       loadAssetComments,
@@ -2076,6 +2182,7 @@ export function PortalProvider({
       loading,
       mutationError,
       reload,
+      retryAssetUpload,
       removeRosterEntry,
       saveProfile,
       profileMutationState,

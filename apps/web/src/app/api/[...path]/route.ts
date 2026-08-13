@@ -6,6 +6,18 @@ interface ApiProxyContext {
   params: Promise<{ path: string[] }>;
 }
 const API_PROXY_DEADLINE_MS = 15_000;
+const CAPABILITY_UPLOAD_DEADLINE_MS = 5 * 60_000;
+
+function proxyDeadlineMs(method: string, path: readonly string[]): number {
+  return method === "PUT" &&
+    path.length === 6 &&
+    path[0] === "speaker" &&
+    path[1] === "assets" &&
+    path[2] === "capabilities" &&
+    path[3] === "upload"
+    ? CAPABILITY_UPLOAD_DEADLINE_MS
+    : API_PROXY_DEADLINE_MS;
+}
 
 function gatewayTimeout(request: NextRequest): Response {
   return Response.json(
@@ -87,12 +99,15 @@ async function proxy(request: NextRequest, context: ApiProxyContext): Promise<Re
 
   const upstreamController = new AbortController();
   let timedOut = false;
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    upstreamController.abort(
-      new DOMException("The upstream API request timed out.", "TimeoutError"),
-    );
-  }, API_PROXY_DEADLINE_MS);
+  const timeout = setTimeout(
+    () => {
+      timedOut = true;
+      upstreamController.abort(
+        new DOMException("The upstream API request timed out.", "TimeoutError"),
+      );
+    },
+    proxyDeadlineMs(request.method, path),
+  );
   const abortUpstream = (): void => {
     clearTimeout(timeout);
     upstreamController.abort(request.signal.reason);

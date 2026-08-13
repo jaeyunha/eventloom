@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { GET } from "./route";
+import { GET, PUT } from "./route";
 
 const context = {
   params: Promise.resolve({ path: ["admin", "events"] }),
@@ -118,5 +118,41 @@ describe("same-origin API proxy", () => {
     expect(body.error.code).toBe("INTEGRATION_UNAVAILABLE");
     expect(body.error.message).toContain("gateway deadline");
     expect(body.error.traceId).toBe("trace-proxy-timeout");
+  });
+
+  it("allows capability PUT uploads beyond the ordinary request deadline", async () => {
+    vi.useFakeTimers();
+    let resolveUpstream: ((response: Response) => void) | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            resolveUpstream = resolve;
+          }),
+      ),
+    );
+
+    const pending = PUT(
+      new NextRequest(
+        "https://web.example.test/api/speaker/assets/capabilities/upload/asset-1/token-1",
+        { method: "PUT", body: "payload" },
+      ),
+      {
+        params: Promise.resolve({
+          path: ["speaker", "assets", "capabilities", "upload", "asset-1", "token-1"],
+        }),
+      },
+    );
+    await vi.advanceTimersByTimeAsync(15_000);
+    let settled = false;
+    void pending.finally(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    resolveUpstream?.(new Response(null, { status: 201 }));
+    await expect(pending).resolves.toHaveProperty("status", 201);
   });
 });

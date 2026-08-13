@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createPortalApi, PortalApiError } from "./api";
-import type { PortalTask, PortalView } from "./types";
+import type { PortalAsset, PortalTask, PortalView } from "./types";
 
 const emptyPortal: PortalView = {
   submissions: [],
@@ -175,6 +175,49 @@ describe("speaker portal API adapter", () => {
       input: "https://uploads.example.com/private/object",
       init: { credentials: "omit", method: "PUT", body: file },
     });
+  });
+
+  it("re-authorizes and uploads an existing pending asset without sending mutable metadata", async () => {
+    const pending: PortalAsset = {
+      id: "asset-pending",
+      eventId: "event-1",
+      submissionId: "submission-1",
+      participantId: "participant-1",
+      kind: "slides",
+      fileName: "slides.pdf",
+      contentType: "application/pdf",
+      sizeBytes: 6,
+      state: "pending_upload",
+      createdAt: "2026-08-08T12:00:00.000Z",
+    };
+    const calls: Array<{ input: RequestInfo | URL; init: RequestInit | undefined }> = [];
+    const api = createPortalApi("https://api.example.com", async (input, init) => {
+      calls.push({ input, init });
+      return calls.length === 1
+        ? jsonResponse({
+            data: {
+              asset: pending,
+              grant: {
+                method: "PUT",
+                url: "/api/speaker/assets/capabilities/upload/asset-pending/fresh-token",
+                headers: { "content-type": "application/pdf" },
+                expiresAt: "2026-08-08T12:05:00.000Z",
+              },
+            },
+          })
+        : new Response(null, { status: 204 });
+    });
+    const file = new File(["slides"], "slides.pdf", { type: "application/pdf" });
+
+    await expect(
+      api.retryAssetUpload?.({ eventId: "event-1", assetId: pending.id, file }),
+    ).resolves.toEqual(pending);
+    expect(String(calls[0]?.input)).toBe(
+      "https://api.example.com/api/speaker/events/event-1/assets/asset-pending/upload-authorization",
+    );
+    expect(calls[0]?.init).toMatchObject({ method: "POST", credentials: "include" });
+    expect(calls[0]?.init?.body).toBeUndefined();
+    expect(calls[1]?.init).toMatchObject({ method: "PUT", credentials: "omit", body: file });
   });
 
   it("resolves a relative upload grant against window.location.origin", async () => {

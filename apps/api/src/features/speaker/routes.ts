@@ -1312,6 +1312,15 @@ export function createSpeakerRoutes(dependencies: SpeakerRouteDependencies) {
     return context.json({ data: publicAsset(asset) });
   });
 
+  app.post("/events/:eventId/assets/:assetId/upload-authorization", async (context) => {
+    const data = await dependencies.service.reauthorizePendingUpload({
+      eventId: context.req.param("eventId"),
+      accountId: context.get("speakerAccountId"),
+      assetId: context.req.param("assetId"),
+    });
+    return context.json({ data: { ...data, asset: publicAsset(data.asset) } });
+  });
+
   app.post("/events/:eventId/assets/:assetId/download", async (context) => {
     const data = await dependencies.service.issueDownloadGrant({
       eventId: context.req.param("eventId"),

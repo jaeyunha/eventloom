@@ -368,7 +368,7 @@ describe("speaker portal UI components", () => {
     expect(portalAssetStateLabel("ready")).toBe("Ready");
     expect(portalAssetStateLabel("rejected")).toBe("Rejected");
   });
-  it("keeps pending speaker uploads to completion-only actions", () => {
+  it("offers secure retry and completion actions for pending speaker uploads", () => {
     const pendingAsset: PortalAsset = {
       id: "asset-pending",
       eventId: "event-1",
@@ -389,6 +389,7 @@ describe("speaker portal UI components", () => {
         canComment: false,
         canCompleteUpload: true,
         busy: false,
+        onRetryUpload: vi.fn(),
         onCompleteUpload: vi.fn(),
         onDownload: vi.fn(),
         commentDraft: "",
@@ -398,6 +399,8 @@ describe("speaker portal UI components", () => {
     );
 
     expect(markup).toContain(">Mark upload complete</button>");
+    expect(markup).toContain("Retry file upload");
+    expect(markup).toContain('type="file"');
     expect(markup).toContain("organizer approval happens separately");
     expect(markup).not.toContain("Reject file");
     expect(markup).not.toMatch(/<button[^>]*>[^<]*(?:approve|review|reject)/iu);
