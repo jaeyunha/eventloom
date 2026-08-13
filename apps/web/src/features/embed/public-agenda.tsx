@@ -8,6 +8,7 @@ import type { EmbedDisplayField, EmbedLayout } from "./model";
 import {
   filterAgendaEntries,
   formatPublishedDateTimeRange,
+  formatPublishedSessionSchedule,
   publicAgendaDays,
   publishedEntryPresenters,
   uniqueSorted,
@@ -455,6 +456,11 @@ export function PublicAgendaView({
                   <ol className={styles.publicSessionList}>
                     {agendaDay.entries.map((entry) => {
                       const presenters = publishedEntryPresenters(entry, speakers);
+                      const schedule = formatPublishedSessionSchedule(
+                        entry.startsAt,
+                        entry.endsAt,
+                        displayTimeZone,
+                      );
                       return (
                         <li key={entry.id}>
                           <button
@@ -466,12 +472,11 @@ export function PublicAgendaView({
                           >
                             {showField("date-time") ? (
                               <div className={styles.publicSessionTime}>
-                                <time dateTime={entry.startsAt}>
-                                  {formatPublishedDateTimeRange(
-                                    entry.startsAt,
-                                    entry.endsAt,
-                                    displayTimeZone,
-                                  )}
+                                <time dateTime={entry.startsAt} className={styles.sessionDate}>
+                                  {schedule.dateLabel}
+                                </time>
+                                <time dateTime={entry.endsAt} className={styles.sessionClock}>
+                                  {schedule.timeLabel}
                                 </time>
                               </div>
                             ) : null}

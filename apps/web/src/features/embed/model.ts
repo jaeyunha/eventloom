@@ -506,6 +506,54 @@ export function formatPublishedTime(value: string, timeZone: string): string {
   }).format(instant);
 }
 
+export interface PublishedSessionSchedule {
+  readonly dateLabel: string;
+  readonly timeLabel: string;
+}
+
+export function formatPublishedSessionSchedule(
+  startsAt: string,
+  endsAt: string,
+  timeZone: string,
+): PublishedSessionSchedule {
+  const start = new Date(startsAt);
+  const end = new Date(endsAt);
+  if (Number.isNaN(start.valueOf()) || Number.isNaN(end.valueOf())) {
+    return {
+      dateLabel: startsAt,
+      timeLabel: endsAt,
+    };
+  }
+  const dateLabel = new Intl.DateTimeFormat("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    timeZone,
+  }).format(start);
+  const startTime = formatPublishedTime(startsAt, timeZone);
+  const endTime = formatPublishedTime(endsAt, timeZone);
+  const [startClock, startPeriod] = startTime.split(" ");
+  const [, endPeriod] = endTime.split(" ");
+  const compactStart = startPeriod === endPeriod ? startClock : startTime;
+  if (eventDateKey(startsAt, timeZone) === eventDateKey(endsAt, timeZone)) {
+    return {
+      dateLabel,
+      timeLabel: `${compactStart} – ${endTime}`,
+    };
+  }
+  return {
+    dateLabel,
+    timeLabel: `${startTime} – ${new Intl.DateTimeFormat("en-US", {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      timeZone,
+    }).format(end)}`,
+  };
+}
+
 export function formatPublishedDateTimeRange(
   startsAt: string,
   endsAt: string,

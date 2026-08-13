@@ -5,6 +5,7 @@ import {
   filterAgendaEntries,
   filterSpeakers,
   formatPublishedDateTimeRange,
+  formatPublishedSessionSchedule,
   parseEmbedQuery,
   publicAgendaDays,
   publicPhotoUrl,
@@ -236,6 +237,15 @@ describe("published embed model", () => {
     expect(
       formatPublishedDateTimeRange("2026-09-18T23:30:00.000Z", "2026-09-19T00:30:00.000Z", "UTC"),
     ).toBe("Friday, September 18, 2026: 11:30 PM – Saturday, September 19, 2026: 12:30 AM");
+  });
+
+  it("splits a session schedule into a compact date and time range", () => {
+    expect(
+      formatPublishedSessionSchedule("2026-09-18T09:00:00.000Z", "2026-09-18T10:00:00.000Z", "UTC"),
+    ).toEqual({
+      dateLabel: "Fri, Sep 18",
+      timeLabel: "9:00 – 10:00 AM",
+    });
   });
 
   it("accepts only stable public HTTPS headshot URLs", () => {
