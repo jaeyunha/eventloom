@@ -92,6 +92,7 @@ const tableWrapClass = styles.tableWrap;
 const statusClass = styles.status;
 
 export type DeliverablesWorkspaceMode = "deliverables" | "files";
+type DeliverablesContentMode = "assignments" | "session-content" | "speaker-profiles";
 
 export type DeliverablesExportUiStatus =
   | "idle"
@@ -271,6 +272,32 @@ function formatDate(value: string | undefined): string {
 
 function formatStatus(status: string): string {
   return status.replace(/[_-]+/gu, " ").replace(/\b\w/gu, (letter) => letter.toUpperCase());
+}
+
+function deliverablesSummary(items: readonly DeliverableMatrixItem[]) {
+  return items.reduce(
+    (summary, item) => {
+      if (item.status === "overdue" || item.status === "needs_changes") {
+        summary.needsAttention += 1;
+      }
+      if (
+        item.status === "not_started" ||
+        item.status === "in_progress" ||
+        item.status === "pending" ||
+        item.status === "reopened"
+      ) {
+        summary.outstanding += 1;
+      }
+      if (item.status === "submitted" || item.status === "uploaded") {
+        summary.readyForReview += 1;
+      }
+      if (item.status === "completed" || item.status === "waived") {
+        summary.complete += 1;
+      }
+      return summary;
+    },
+    { needsAttention: 0, outstanding: 0, readyForReview: 0, complete: 0 },
+  );
 }
 const speakerContentHistoryFields = [
   ["title", "Title"],
@@ -643,6 +670,64 @@ interface DeliverableSubjectParticipant {
   readonly sessions: readonly { readonly id: string; readonly label: string }[];
 }
 
+function DeliverablesSummary({
+  items,
+  participants,
+  busy,
+  onCreateTask,
+}: {
+  readonly items: readonly DeliverableMatrixItem[];
+  readonly participants: readonly DeliverableSubjectParticipant[];
+  readonly busy: boolean;
+  readonly onCreateTask?: (input: DeliverableTaskInput) => Promise<void>;
+}) {
+  const summary = deliverablesSummary(items);
+  const metrics = [
+    [
+      "Needs attention",
+      summary.needsAttention,
+      "Overdue or sent back for changes",
+      styles.summaryMetricAttention,
+    ],
+    ["Outstanding", summary.outstanding, "Still waiting on the speaker", ""],
+    [
+      "Ready for review",
+      summary.readyForReview,
+      "Submitted files to check",
+      styles.summaryMetricReview,
+    ],
+    ["Complete", summary.complete, "Approved or no longer required", styles.summaryMetricComplete],
+  ] as const;
+
+  return (
+    <section className={styles.overviewPanel} aria-labelledby="deliverables-overview-heading">
+      <div className={styles.overviewHeader}>
+        <div>
+          <p className={styles.eyebrow}>Operations overview</p>
+          <h2 id="deliverables-overview-heading">What needs attention</h2>
+          <p className={mutedClass}>
+            See what speakers still owe, what is ready to review, and what is complete.
+          </p>
+        </div>
+        <TaskComposer
+          participants={participants}
+          busy={busy}
+          {...(onCreateTask === undefined ? {} : { onCreateTask })}
+        />
+      </div>
+      <div className={styles.summaryGrid}>
+        {metrics.map(([label, value, description, tone]) => (
+          <article key={label} className={`${styles.summaryMetric} ${tone}`}>
+            <strong>{value}</strong>
+            <span>{label}</span>
+            <small>{description}</small>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function TaskComposer({
   participants,
   busy,
@@ -757,236 +842,222 @@ function TaskComposer({
   }
 
   return (
-    <Card className={sectionClass} aria-labelledby="create-task-heading">
-      <CardHeader className={clusterClass}>
-        <div>
-          <p className={mutedClass}>Organizer-created speaker requests and follow-up</p>
-          <CardTitle id="create-task-heading">Requests &amp; tracking</CardTitle>
-          <CardDescription>
-            Create a subject-scoped file request with policy enforced again by the private upload
-            service.
-          </CardDescription>
-        </div>
-        <Dialog open={open} onOpenChange={setOpen}>
-          <DialogTrigger asChild>
-            <Button type="button" disabled={onCreateTask === undefined}>
-              {onCreateTask === undefined ? "Task creation unavailable" : "New file request"}
-            </Button>
-          </DialogTrigger>
-          <DialogContent className={styles.dialogContent}>
-            <DialogHeader>
-              <DialogTitle>New file request</DialogTitle>
-              <DialogDescription>
-                Choose whether this request belongs to each participant or to one explicit accepted
-                session, then set the upload policy.
-              </DialogDescription>
-            </DialogHeader>
-            <form onSubmit={(event) => void submit(event)} className={stackClass}>
-              <div className={gridClass}>
-                <div className={fieldClass}>
-                  <Label htmlFor="task-name">Task name</Label>
-                  <Input
-                    id="task-name"
-                    value={title}
-                    onChange={(event) => setTitle(event.currentTarget.value)}
-                    placeholder="Upload Session Presentation"
-                    required
-                  />
-                </div>
-                <div className={fieldClass}>
-                  <Label htmlFor="task-due-date">Due date</Label>
-                  <Input
-                    id="task-due-date"
-                    type="date"
-                    value={dueAt}
-                    onChange={(event) => setDueAt(event.currentTarget.value)}
-                    required
-                  />
-                </div>
-              </div>
+    <div className={styles.createTaskAction}>
+      <div>
+        <span className={styles.createTaskLabel}>Collect a new speaker deliverable</span>
+        <small>Set the request, deadline, and assignees in one step.</small>
+      </div>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogTrigger asChild>
+          <Button type="button" disabled={onCreateTask === undefined}>
+            {onCreateTask === undefined ? "Task creation unavailable" : "New file request"}
+          </Button>
+        </DialogTrigger>
+        <DialogContent className={styles.dialogContent}>
+          <DialogHeader>
+            <DialogTitle>New file request</DialogTitle>
+            <DialogDescription>
+              Speakers can upload only the selected asset kinds, MIME types, and maximum size.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={(event) => void submit(event)} className={stackClass}>
+            <div className={gridClass}>
               <div className={fieldClass}>
-                <Label htmlFor="task-instructions">Instructions</Label>
-                <Textarea
-                  id="task-instructions"
-                  rows={3}
-                  value={description}
-                  onChange={(event) => setDescription(event.currentTarget.value)}
-                  placeholder="Final slide deck as a PDF, 16:9 aspect ratio."
+                <Label htmlFor="task-name">Task name</Label>
+                <Input
+                  id="task-name"
+                  value={title}
+                  onChange={(event) => setTitle(event.currentTarget.value)}
+                  placeholder="Upload Session Presentation"
                   required
                 />
               </div>
               <div className={fieldClass}>
-                <Label htmlFor="task-subject-type">Request subject</Label>
-                <Select
-                  value={subjectType}
-                  onValueChange={(value) => setSubjectType(value as "participant" | "session")}
-                >
-                  <SelectTrigger id="task-subject-type" aria-describedby="task-subject-help">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="session">One accepted session per speaker</SelectItem>
-                    <SelectItem value="participant">Participant profile (all sessions)</SelectItem>
-                  </SelectContent>
-                </Select>
-                <small id="task-subject-help" className={mutedClass}>
-                  Session requests require an explicit session for every assignee. Participant
-                  requests are profile-wide and intentionally have no session.
+                <Label htmlFor="task-due-date">Due date</Label>
+                <Input
+                  id="task-due-date"
+                  type="date"
+                  value={dueAt}
+                  onChange={(event) => setDueAt(event.currentTarget.value)}
+                  required
+                />
+              </div>
+            </div>
+            <div className={fieldClass}>
+              <Label htmlFor="task-instructions">Instructions</Label>
+              <Textarea
+                id="task-instructions"
+                rows={3}
+                value={description}
+                onChange={(event) => setDescription(event.currentTarget.value)}
+                placeholder="Final slide deck as a PDF, 16:9 aspect ratio."
+                required
+              />
+            </div>
+            <div className={fieldClass}>
+              <Label htmlFor="task-subject-type">Request subject</Label>
+              <Select
+                value={subjectType}
+                onValueChange={(value) => setSubjectType(value as "participant" | "session")}
+              >
+                <SelectTrigger id="task-subject-type" aria-describedby="task-subject-help">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="session">One accepted session per speaker</SelectItem>
+                  <SelectItem value="participant">Participant profile (all sessions)</SelectItem>
+                </SelectContent>
+              </Select>
+              <small id="task-subject-help" className={mutedClass}>
+                Session requests require an explicit accepted session for every assignee.
+                Participant requests are profile-wide and intentionally have no session.
+              </small>
+            </div>
+            <fieldset className={styles.fieldset} aria-describedby="asset-kind-help">
+              <legend>Accepted asset kinds (required)</legend>
+              <div className={stackClass}>
+                {deliverableAssetKinds.map((kind) => (
+                  <div key={kind} className={clusterClass}>
+                    <Checkbox
+                      id={`task-asset-kind-${kind}`}
+                      checked={acceptedAssetKinds.includes(kind)}
+                      onCheckedChange={() => toggleAssetKind(kind)}
+                    />
+                    <Label htmlFor={`task-asset-kind-${kind}`}>{formatStatus(kind)}</Label>
+                  </div>
+                ))}
+              </div>
+              <small id="asset-kind-help" className={mutedClass}>
+                Selected:{" "}
+                {acceptedAssetKinds.length === 0
+                  ? "None — choose at least one."
+                  : acceptedAssetKinds.map(formatStatus).join(", ")}
+                .
+              </small>
+            </fieldset>
+            <div className={gridClass}>
+              <div className={fieldClass}>
+                <Label htmlFor="task-mime-types">Allowed MIME types</Label>
+                <Input
+                  id="task-mime-types"
+                  value={mimeTypes}
+                  onChange={(event) => setMimeTypes(event.currentTarget.value)}
+                  aria-describedby="mime-help"
+                />
+                <small id="mime-help" className={mutedClass}>
+                  Comma-separated values, for example application/pdf.
                 </small>
               </div>
-              <fieldset className={styles.fieldset} aria-describedby="asset-kind-help">
-                <legend>Accepted asset kinds (required)</legend>
+              <div className={fieldClass}>
+                <Label htmlFor="task-max-size-mb">Maximum file size (MB)</Label>
+                <Input
+                  id="task-max-size-mb"
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={maxSizeMb}
+                  onChange={(event) => setMaxSizeMb(event.currentTarget.value)}
+                />
+              </div>
+            </div>
+            <fieldset className={styles.fieldset}>
+              <legend>Assignees and subjects</legend>
+              {participants.length === 0 ? (
+                <p className={mutedClass}>
+                  No authorized speaker records were returned. Task creation cannot be assigned
+                  safely.
+                </p>
+              ) : (
                 <div className={stackClass}>
-                  {deliverableAssetKinds.map((kind) => (
-                    <div key={kind} className={clusterClass}>
-                      <Checkbox
-                        id={`task-asset-kind-${kind}`}
-                        checked={acceptedAssetKinds.includes(kind)}
-                        onCheckedChange={() => toggleAssetKind(kind)}
-                      />
-                      <Label htmlFor={`task-asset-kind-${kind}`}>{formatStatus(kind)}</Label>
-                    </div>
-                  ))}
-                </div>
-                <small id="asset-kind-help" className={mutedClass}>
-                  Selected:{" "}
-                  {acceptedAssetKinds.length === 0
-                    ? "None — choose at least one."
-                    : acceptedAssetKinds.map(formatStatus).join(", ")}
-                  .
-                </small>
-              </fieldset>
-              <div className={gridClass}>
-                <div className={fieldClass}>
-                  <Label htmlFor="task-mime-types">Allowed MIME types</Label>
-                  <Input
-                    id="task-mime-types"
-                    value={mimeTypes}
-                    onChange={(event) => setMimeTypes(event.currentTarget.value)}
-                    aria-describedby="mime-help"
-                  />
-                  <small id="mime-help" className={mutedClass}>
-                    Comma-separated values, for example application/pdf.
-                  </small>
-                </div>
-                <div className={fieldClass}>
-                  <Label htmlFor="task-max-size-mb">Maximum file size (MB)</Label>
-                  <Input
-                    id="task-max-size-mb"
-                    type="number"
-                    min={1}
-                    step={1}
-                    value={maxSizeMb}
-                    onChange={(event) => setMaxSizeMb(event.currentTarget.value)}
-                  />
-                </div>
-              </div>
-              <fieldset className={styles.fieldset}>
-                <legend>Assignees and subjects</legend>
-                {participants.length === 0 ? (
-                  <p className={mutedClass}>
-                    No authorized speaker records were returned. Task creation cannot be assigned
-                    safely.
-                  </p>
-                ) : (
-                  <div className={stackClass}>
-                    {participants.map((participant) => {
-                      const selected = assigneeIds.includes(participant.id);
-                      return (
-                        <div key={participant.id} className={stackClass}>
-                          <div className={clusterClass}>
-                            <Checkbox
-                              id={`task-assignee-${participant.id}`}
-                              checked={selected}
-                              onCheckedChange={() => toggleAssignee(participant.id)}
-                            />
-                            <Label htmlFor={`task-assignee-${participant.id}`}>
-                              {participant.label}
-                            </Label>
-                            {participant.sessions.length > 1 ? (
-                              <Badge variant="outline">
-                                {participant.sessions.length} accepted sessions
-                              </Badge>
-                            ) : null}
-                          </div>
-                          {selected && subjectType === "session" ? (
-                            participant.sessions.length === 0 ? (
-                              <Alert variant="destructive">
-                                <AlertDescription>
-                                  No accepted session is available for this participant. Remove the
-                                  assignee or choose participant scope.
-                                </AlertDescription>
-                              </Alert>
-                            ) : (
-                              <div className={fieldClass}>
-                                <Label htmlFor={`task-session-${participant.id}`}>
-                                  Accepted session for {participant.label}
-                                </Label>
-                                <Select
-                                  {...(sessionByParticipant[participant.id] === undefined
-                                    ? {}
-                                    : { value: sessionByParticipant[participant.id] })}
-                                  onValueChange={(submissionId) =>
-                                    setSessionByParticipant((current) => ({
-                                      ...current,
-                                      [participant.id]: submissionId,
-                                    }))
-                                  }
-                                >
-                                  <SelectTrigger id={`task-session-${participant.id}`}>
-                                    <SelectValue placeholder="Choose an accepted session" />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    {participant.sessions.map((session) => (
-                                      <SelectItem key={session.id} value={session.id}>
-                                        {session.label}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
-                              </div>
-                            )
+                  {participants.map((participant) => {
+                    const selected = assigneeIds.includes(participant.id);
+                    return (
+                      <div key={participant.id} className={stackClass}>
+                        <div className={clusterClass}>
+                          <Checkbox
+                            id={`task-assignee-${participant.id}`}
+                            checked={selected}
+                            onCheckedChange={() => toggleAssignee(participant.id)}
+                          />
+                          <Label htmlFor={`task-assignee-${participant.id}`}>
+                            {participant.label}
+                          </Label>
+                          {participant.sessions.length > 1 ? (
+                            <Badge variant="outline">
+                              {participant.sessions.length} accepted sessions
+                            </Badge>
                           ) : null}
                         </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </fieldset>
-              {formError !== null ? (
-                <Alert variant="destructive">
-                  <AlertTitle>Request not saved</AlertTitle>
-                  <AlertDescription>{formError}</AlertDescription>
-                </Alert>
-              ) : null}
-              <DialogFooter>
-                <Button type="button" variant="outline" onClick={() => setOpen(false)}>
-                  Cancel
-                </Button>
-                <Button type="submit" disabled={busy || onCreateTask === undefined}>
-                  {busy
-                    ? "Saving task…"
-                    : onCreateTask === undefined
-                      ? "Task creation unavailable"
-                      : "Save file-request task"}
-                </Button>
-              </DialogFooter>
-            </form>
-          </DialogContent>
-        </Dialog>
-      </CardHeader>
-      <CardContent className={stackClass}>
-        <p className={mutedClass}>
-          Tasks stay separate from Files: this view assigns subject-scoped speaker work, records
-          status, and provides follow-up. Uploaded assets are reviewed in Files.
-        </p>
-        <p className={mutedClass}>
-          Request controls: Request subject, one accepted session per speaker when session-scoped,
-          Allowed MIME types, Maximum file size (MB), Accepted asset kinds (required), and
-          Assignees.
-        </p>
-      </CardContent>
-    </Card>
+                        {selected && subjectType === "session" ? (
+                          participant.sessions.length === 0 ? (
+                            <Alert variant="destructive">
+                              <AlertDescription>
+                                No accepted session is available for this participant. Remove the
+                                assignee or choose participant scope.
+                              </AlertDescription>
+                            </Alert>
+                          ) : (
+                            <div className={fieldClass}>
+                              <Label htmlFor={`task-session-${participant.id}`}>
+                                Accepted session for {participant.label}
+                              </Label>
+                              <Select
+                                {...(sessionByParticipant[participant.id] === undefined
+                                  ? {}
+                                  : { value: sessionByParticipant[participant.id] })}
+                                onValueChange={(submissionId) =>
+                                  setSessionByParticipant((current) => ({
+                                    ...current,
+                                    [participant.id]: submissionId,
+                                  }))
+                                }
+                              >
+                                <SelectTrigger id={`task-session-${participant.id}`}>
+                                  <SelectValue placeholder="Choose an accepted session" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {participant.sessions.map((session) => (
+                                    <SelectItem key={session.id} value={session.id}>
+                                      {session.label}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+                          )
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </fieldset>
+            {formError !== null ? (
+              <Alert variant="destructive">
+                <AlertTitle>Request not saved</AlertTitle>
+                <AlertDescription>{formError}</AlertDescription>
+              </Alert>
+            ) : null}
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={busy || onCreateTask === undefined}>
+                {busy
+                  ? "Saving task…"
+                  : onCreateTask === undefined
+                    ? "Task creation unavailable"
+                    : "Save file-request task"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+      <p className={mutedClass}>
+        Request controls: Request subject, one accepted session per speaker when session-scoped,
+        Accepted asset kinds (required), Allowed MIME types, Maximum file size (MB), and Assignees.
+      </p>
+    </div>
   );
 }
 
@@ -1047,11 +1118,11 @@ function DeliverablesTable({
     <Card className={sectionClass} aria-labelledby="tracking-heading">
       <CardHeader className={clusterClass}>
         <div>
-          <p className={mutedClass}>Organizer follow-up</p>
-          <CardTitle id="tracking-heading">Requests &amp; tracking</CardTitle>
+          <p className={mutedClass}>Speaker follow-up</p>
+          <CardTitle id="tracking-heading">Assignments</CardTitle>
           <CardDescription>
-            Select tasks <strong>For reminder</strong>. ZIP export has a separate selection intent
-            so reminder recipients can never be exported accidentally.
+            Select assignments, then choose the follow-up action you need. File downloads are
+            available only for rows with a current submitted file.
           </CardDescription>
         </div>
         <Badge variant="outline">{visibleRows.length} visible</Badge>
@@ -1121,22 +1192,23 @@ function DeliverablesTable({
             onClick={onPreviewReminders}
             disabled={incompleteCount === 0}
           >
-            Preview reminder recipients ({incompleteCount})
+            Send reminder ({incompleteCount})
           </Button>
           <Button
             variant="outline"
             type="button"
             aria-describedby="deliverables-export-help"
+            aria-label="Download selected deliverables ZIP"
             disabled={busy || onExport === undefined || !exportAvailable || exportableCount === 0}
             onClick={onExport}
           >
-            {busy ? "Preparing ZIP…" : "Download selected deliverables ZIP"}
+            {busy ? "Preparing ZIP…" : "Download selected files"}
           </Button>
           <span id="deliverables-export-help" className={mutedClass}>
             {!exportAvailable
               ? "ZIP export is unavailable because the organizer export capability is not provisioned."
               : exportableCount === 0
-                ? "Select at least one uploaded deliverable under “For ZIP export”."
+                ? "Select at least one assignment with a submitted file."
                 : `${exportableCount} selected deliverable${exportableCount === 1 ? "" : "s"} eligible for export.`}
           </span>
         </div>
@@ -1182,7 +1254,7 @@ function DeliverablesTable({
                           onCheckedChange={() => onToggleTask(row.task.id)}
                         />
                         <Label className="sr-only" htmlFor={`deliverables-reminder-${row.task.id}`}>
-                          {`For reminder: ${row.speakerLabel} ${row.task.title}`}
+                          {`Select assignment: ${row.speakerLabel} ${row.task.title}`}
                         </Label>
                       </TableCell>
                       <TableCell>
@@ -1193,7 +1265,7 @@ function DeliverablesTable({
                           onCheckedChange={() => onToggleExportTask(row.task.id)}
                         />
                         <Label className="sr-only" htmlFor={`deliverables-export-${row.task.id}`}>
-                          {`For ZIP export: ${row.speakerLabel} ${row.task.title}`}
+                          {`Select submitted file: ${row.speakerLabel} ${row.task.title}`}
                         </Label>
                       </TableCell>
                       <TableHead scope="row">{row.speakerLabel}</TableHead>
@@ -3182,7 +3254,8 @@ export function DeliverablesWorkspaceView({
           ) : null}
           {!filesMode ? (
             <>
-              <TaskComposer
+              <DeliverablesSummary
+                items={matrixItems ?? []}
                 participants={participants}
                 busy={busy}
                 {...(onCreateTask === undefined ? {} : { onCreateTask })}
@@ -3378,38 +3451,46 @@ export function DeliverablesWorkspaceView({
           ) : null}
           {!filesMode ? (
             <section className={styles.contentSection} aria-labelledby="secondary-content-heading">
-              <h2 id="secondary-content-heading">Content</h2>
-              <p className={mutedClass}>
-                Session content and speaker profiles live in this secondary section, below request
-                tracking.
-              </p>
-              <SessionEditor
-                {...(selectedSessionId === undefined ? {} : { selectedSessionId })}
-                {...(sessionHistory === undefined ? {} : { sessionHistory })}
-                {...(sessionHistoryError === undefined ? {} : { sessionHistoryError })}
-                {...(onSelectSession === undefined ? {} : { onSelectSession })}
-                sessions={sessions}
-                loadingHistory={loadingSessionHistories}
-                busy={busy}
-                {...(onSaveSession === undefined ? {} : { onSave: onSaveSession })}
-                {...(onApproveSession === undefined ? {} : { onApprove: onApproveSession })}
-                {...(onRestoreSessionVersion === undefined
-                  ? {}
-                  : { onRestore: onRestoreSessionVersion })}
-              />
-              <SpeakerEditor
-                eventId={eventId}
-                sessions={sessions}
-                profiles={profiles}
-                assets={assets}
-                busy={busy}
-                {...(speakerContentHistory === undefined ? {} : { speakerContentHistory })}
-                {...(onSaveBiography === undefined ? {} : { onSaveBiography })}
-                {...(onReplaceHeadshot === undefined ? {} : { onReplaceHeadshot })}
-                {...(onRestoreSpeakerContentVersion === undefined
-                  ? {}
-                  : { onRestoreSpeakerContentVersion })}
-              />
+              <div className={styles.contentSectionHeader}>
+                <div>
+                  <p className={styles.eyebrow}>Content editing</p>
+                  <h2 id="secondary-content-heading">Session content and Speaker profiles</h2>
+                </div>
+                <p className={mutedClass}>
+                  Review public session copy, biographies, and event-specific headshots.
+                </p>
+              </div>
+              <div>
+                <SessionEditor
+                  {...(selectedSessionId === undefined ? {} : { selectedSessionId })}
+                  {...(sessionHistory === undefined ? {} : { sessionHistory })}
+                  {...(sessionHistoryError === undefined ? {} : { sessionHistoryError })}
+                  {...(onSelectSession === undefined ? {} : { onSelectSession })}
+                  sessions={sessions}
+                  loadingHistory={loadingSessionHistories}
+                  busy={busy}
+                  {...(onSaveSession === undefined ? {} : { onSave: onSaveSession })}
+                  {...(onApproveSession === undefined ? {} : { onApprove: onApproveSession })}
+                  {...(onRestoreSessionVersion === undefined
+                    ? {}
+                    : { onRestore: onRestoreSessionVersion })}
+                />
+              </div>
+              <div>
+                <SpeakerEditor
+                  eventId={eventId}
+                  sessions={sessions}
+                  profiles={profiles}
+                  assets={assets}
+                  busy={busy}
+                  {...(speakerContentHistory === undefined ? {} : { speakerContentHistory })}
+                  {...(onSaveBiography === undefined ? {} : { onSaveBiography })}
+                  {...(onReplaceHeadshot === undefined ? {} : { onReplaceHeadshot })}
+                  {...(onRestoreSpeakerContentVersion === undefined
+                    ? {}
+                    : { onRestoreSpeakerContentVersion })}
+                />
+              </div>
             </section>
           ) : null}
         </main>

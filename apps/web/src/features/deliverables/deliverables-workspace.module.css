@@ -92,6 +92,150 @@
   outline: none;
 }
 
+.overviewPanel {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--color-border, #dfe2e8);
+  border-radius: 0.75rem;
+  background: var(--color-surface, #fff);
+}
+
+.overviewHeader {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: start;
+  justify-content: space-between;
+}
+
+.createTaskAction {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+  align-items: center;
+  justify-content: space-between;
+  min-width: min(100%, 19rem);
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--color-border, #dfe2e8);
+  border-radius: 0.55rem;
+  background: var(--color-canvas, #f5f6f9);
+}
+
+.createTaskAction > div:first-child {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.createTaskLabel {
+  font-size: 0.78rem;
+  font-weight: 750;
+}
+
+.createTaskAction small {
+  color: var(--color-muted, #697181);
+  font-size: 0.68rem;
+}
+
+.overviewHeader h2,
+.contentSectionHeader h2 {
+  margin: 0.15rem 0 0;
+  font-size: 1.2rem;
+}
+
+.summaryGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.summaryMetric {
+  display: grid;
+  min-width: 0;
+  gap: 0.2rem;
+  padding: 0.8rem;
+  border: 1px solid var(--color-border, #dfe2e8);
+  border-radius: 0.6rem;
+  background: var(--color-canvas, #f5f6f9);
+}
+
+.summaryMetric strong {
+  font-size: 1.55rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.summaryMetric span {
+  font-size: 0.82rem;
+  font-weight: 750;
+}
+
+.summaryMetric small {
+  color: var(--color-muted, #697181);
+  font-size: 0.7rem;
+  line-height: 1.4;
+}
+
+.summaryMetricAttention {
+  border-color: color-mix(in srgb, var(--color-destructive, #b42318) 30%, transparent);
+  background: color-mix(in srgb, var(--color-destructive, #b42318) 6%, white);
+}
+
+.summaryMetricReview {
+  border-color: color-mix(in srgb, var(--color-primary, #5065e8) 30%, transparent);
+  background: color-mix(in srgb, var(--color-primary, #5065e8) 6%, white);
+}
+
+.summaryMetricComplete {
+  border-color: color-mix(in srgb, #16835b 30%, transparent);
+  background: color-mix(in srgb, #16835b 6%, white);
+}
+
+.workspaceNav {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+  padding: 0.4rem;
+  border: 1px solid var(--color-border, #dfe2e8);
+  border-radius: 0.7rem;
+  background: var(--color-surface, #fff);
+}
+
+.workspaceNav button {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid transparent;
+  border-radius: 0.5rem;
+  background: transparent;
+  color: var(--color-muted, #697181);
+  text-align: left;
+  cursor: pointer;
+}
+
+.workspaceNav button:hover,
+.workspaceNav button:focus-visible {
+  border-color: var(--color-border, #dfe2e8);
+  background: var(--color-canvas, #f5f6f9);
+  color: var(--color-foreground, #25272d);
+}
+
+.workspaceNav button span {
+  font-size: 0.86rem;
+  font-weight: 750;
+}
+
+.workspaceNav button small {
+  font-size: 0.68rem;
+  line-height: 1.4;
+}
+
+.workspaceNav .workspaceNavActive {
+  border-color: var(--color-primary, #5065e8);
+  background: color-mix(in srgb, var(--color-primary, #5065e8) 8%, white);
+  color: var(--color-foreground, #25272d);
+}
+
 .section {
   min-width: 0;
 }
@@ -106,6 +250,13 @@
 .contentSection > h2 {
   margin: 0;
   font-size: 1.25rem;
+}
+
+.contentSectionHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 0.7fr) minmax(16rem, 1fr);
+  gap: 1rem;
+  align-items: end;
 }
 
 .stack {
@@ -239,6 +390,15 @@
   .assetSheet {
     width: 100%;
     max-width: none;
+  }
+
+  .summaryGrid,
+  .workspaceNav {
+    grid-template-columns: 1fr;
+  }
+
+  .contentSectionHeader {
+    grid-template-columns: 1fr;
   }
 }
 .assetScroll {

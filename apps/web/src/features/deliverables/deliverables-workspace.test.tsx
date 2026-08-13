@@ -905,6 +905,15 @@ describe("deliverables workspace", () => {
       }),
     );
     expect(markup).toContain("Deliverables");
+    expect(markup).toContain("Needs attention");
+    expect(markup).toContain("Outstanding");
+    expect(markup).toContain("Ready for review");
+    expect(markup).toContain("Complete");
+    expect(markup).toContain("Assignments");
+    expect(markup).toContain("Submitted files");
+    expect(markup).toContain("Content editing");
+    expect(markup).toContain("Session content");
+    expect(markup).toContain("Speaker profiles");
     expect(markup).toContain("New file request");
     expect(markup).not.toContain(
       "Speakers can upload only the selected asset kinds, MIME types, and maximum size.",
@@ -919,7 +928,7 @@ describe("deliverables workspace", () => {
     expect(markup).toContain("Assignees");
     expect(markup).toContain("Filter by speaker");
     expect(markup).toContain("Filter by task");
-    expect(markup).toContain("Preview reminder recipients");
+    expect(markup).toContain("Send reminder");
     expect(markup).toContain("Outstanding only");
     expect(markup).toContain("Status");
     expect(markup).toContain("slides.pdf");
@@ -940,7 +949,9 @@ describe("deliverables workspace", () => {
     expect(markup).toContain("Organizer operation status");
     expect(markup).toContain("Organizer reply added to asset version asset-2.");
     expect(markup).not.toContain("must-not-cross-boundary");
-    expect(markup).toContain("Download selected deliverables ZIP");
+    expect(markup).toContain("Download selected files");
+    expect(markup).toContain("For reminder");
+    expect(markup).toContain("For ZIP export");
   });
   it("renders settled speaker history loading, populated, empty, and error states", () => {
     const historyEntries = [
