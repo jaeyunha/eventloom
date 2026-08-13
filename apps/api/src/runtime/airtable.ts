@@ -12222,7 +12222,7 @@ export function createD1ApplicationDependencies(
       engine: agendaEngine,
       async organizationIdForEvent(eventId: string) {
         const rows = await options.database
-          .prepare("SELECT organization_id FROM events WHERE id = ? AND deleted_at IS NULL LIMIT 2")
+          .prepare("SELECT organization_id FROM events WHERE id = ? LIMIT 2")
           .bind(eventId)
           .all<{ organization_id: string }>();
         const matches = rows.results ?? [];
@@ -12230,7 +12230,7 @@ export function createD1ApplicationDependencies(
       },
       async eventMetadataForEvent(eventId: string) {
         const rows = await options.database
-          .prepare("SELECT organization_id FROM events WHERE id = ? AND deleted_at IS NULL LIMIT 2")
+          .prepare("SELECT organization_id FROM events WHERE id = ? LIMIT 2")
           .bind(eventId)
           .all<{ organization_id: string }>();
         const matches = rows.results ?? [];
@@ -12252,7 +12252,7 @@ export function createD1ApplicationDependencies(
       },
       async eventIdForSlug(eventSlug: string) {
         const rows = await options.database
-          .prepare("SELECT id FROM events WHERE lower(slug) = ? AND deleted_at IS NULL LIMIT 2")
+          .prepare("SELECT id FROM events WHERE lower(slug) = ? LIMIT 2")
           .bind(eventSlug.trim().toLowerCase())
           .all<{ id: string }>();
         const matches = rows.results ?? [];
@@ -12263,7 +12263,7 @@ export function createD1ApplicationDependencies(
       ),
       async afterPublish(eventId, revision) {
         const organizationRows = await options.database
-          .prepare("SELECT organization_id FROM events WHERE id = ? AND deleted_at IS NULL LIMIT 2")
+          .prepare("SELECT organization_id FROM events WHERE id = ? LIMIT 2")
           .bind(eventId)
           .all<{ organization_id: string }>();
         const organizationMatches = organizationRows.results ?? [];

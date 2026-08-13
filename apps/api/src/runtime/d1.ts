@@ -166,9 +166,7 @@ export function createD1RuntimeDependencies(
     sessions: repositories.sessions,
     speaker: repositories.speaker,
     agenda: new D1RuntimeAgendaRepository(bindings.DB, async (eventId) => {
-      const row = await bindings.DB.prepare(
-        "SELECT organization_id FROM events WHERE id = ? AND deleted_at IS NULL",
-      )
+      const row = await bindings.DB.prepare("SELECT organization_id FROM events WHERE id = ?")
         .bind(eventId)
         .first<{ organization_id: string }>();
       return row?.organization_id ?? null;

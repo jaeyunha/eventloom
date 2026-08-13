@@ -15,7 +15,11 @@ import { D1ReviewerPoolRepository } from "../infrastructure/cloudflare/repositor
 import { D1SessionRepository } from "../infrastructure/cloudflare/repositories/sessions";
 import { D1SpeakerRepository } from "../infrastructure/cloudflare/repositories/speaker";
 import { D1RemixContentGateway } from "./airtable";
-import { createD1RuntimeComposition, D1RuntimeAgendaRepository } from "./d1";
+import {
+  createD1RuntimeComposition,
+  createD1RuntimeDependencies,
+  D1RuntimeAgendaRepository,
+} from "./d1";
 
 function database(): D1Database {
   return {
@@ -98,6 +102,34 @@ describe("D1 runtime composition", () => {
     expect(composition.repositories.reviewerPools).toBeInstanceOf(D1ReviewerPoolRepository);
     expect(composition.dependencies.webhooks).toBeInstanceOf(D1WebhookRepository);
     expect(composition.airtable).toEqual({ enabled: false });
+  });
+
+  it("resolves Agenda event scope using deployed event columns", async () => {
+    const statements: string[] = [];
+    const db = {
+      prepare(query: string) {
+        statements.push(query);
+        return {
+          bind() {
+            return {
+              async first<T>() {
+                return query === "SELECT organization_id FROM events WHERE id = ?"
+                  ? ({ organization_id: "organization-1" } as T)
+                  : null;
+              },
+              async all<T>() {
+                return { results: [] as T[] };
+              },
+            };
+          },
+        };
+      },
+    } as unknown as D1Database;
+    const dependencies = createD1RuntimeDependencies({ DB: db });
+
+    await dependencies.agenda.load("event-1");
+
+    expect(statements[0]).toBe("SELECT organization_id FROM events WHERE id = ?");
   });
 
   it("uses D1 source repositories for remix content without an Airtable fallback", async () => {
