@@ -92,6 +92,7 @@ const tableWrapClass = styles.tableWrap;
 const statusClass = styles.status;
 
 export type DeliverablesWorkspaceMode = "deliverables" | "files";
+type DeliverablesContentMode = "assignments" | "session-content" | "speaker-profiles";
 
 export type DeliverablesExportUiStatus =
   | "idle"
@@ -273,6 +274,33 @@ function formatDate(value: string | undefined): string {
 
 function formatStatus(status: string): string {
   return status.replace(/[_-]+/gu, " ").replace(/\b\w/gu, (letter) => letter.toUpperCase());
+}
+
+
+function deliverablesSummary(items: readonly DeliverableMatrixItem[]) {
+  return items.reduce(
+    (summary, item) => {
+      if (item.status === "overdue" || item.status === "needs_changes") {
+        summary.needsAttention += 1;
+      }
+      if (
+        item.status === "not_started" ||
+        item.status === "in_progress" ||
+        item.status === "pending" ||
+        item.status === "reopened"
+      ) {
+        summary.outstanding += 1;
+      }
+      if (item.status === "submitted" || item.status === "uploaded") {
+        summary.readyForReview += 1;
+      }
+      if (item.status === "completed" || item.status === "waived") {
+        summary.complete += 1;
+      }
+      return summary;
+    },
+    { needsAttention: 0, outstanding: 0, readyForReview: 0, complete: 0 },
+  );
 }
 const speakerContentHistoryFields = [
   ["title", "Title"],
@@ -599,6 +627,62 @@ export function triggerDeliverablesDownload(download: DeliverableExportDownload)
   }
 }
 
+function DeliverablesSummary({
+  items,
+  participants,
+  busy,
+  onCreateTask,
+}: {
+  readonly items: readonly DeliverableMatrixItem[];
+  readonly participants: readonly { readonly id: string; readonly label: string }[];
+  readonly busy: boolean;
+  readonly onCreateTask?: (input: DeliverableTaskInput) => Promise<void>;
+}) {
+  const summary = deliverablesSummary(items);
+  const metrics = [
+    [
+      "Needs attention",
+      summary.needsAttention,
+      "Overdue or sent back for changes",
+      styles.summaryMetricAttention,
+    ],
+    ["Outstanding", summary.outstanding, "Still waiting on the speaker", ""],
+    [
+      "Ready for review",
+      summary.readyForReview,
+      "Submitted files to check",
+      styles.summaryMetricReview,
+    ],
+    ["Complete", summary.complete, "Approved or no longer required", styles.summaryMetricComplete],
+  ] as const;
+
+  return (
+    <section className={styles.overviewPanel} aria-labelledby="deliverables-overview-heading">
+      <div className={styles.overviewHeader}>
+        <div>
+          <p className={styles.eyebrow}>Operations overview</p>
+          <h2 id="deliverables-overview-heading">What needs attention</h2>
+          <p className={mutedClass}>
+            See what speakers still owe, what is ready to review, and what is complete.
+          </p>
+        </div>
+        {onCreateTask ? (
+          <TaskComposer participants={participants} busy={busy} onCreateTask={onCreateTask} />
+        ) : null}
+      </div>
+      <div className={styles.summaryGrid}>
+        {metrics.map(([label, value, description, tone]) => (
+          <article key={label} className={`${styles.summaryMetric} ${tone}`}>
+            <strong>{value}</strong>
+            <span>{label}</span>
+            <small>{description}</small>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function TaskComposer({
   participants,
   busy,
@@ -696,166 +780,149 @@ function TaskComposer({
   }
 
   return (
-    <Card className={sectionClass} aria-labelledby="create-task-heading">
-      <CardHeader className={clusterClass}>
-        <div>
-          <p className={mutedClass}>Organizer-created speaker requests and follow-up</p>
-          <CardTitle id="create-task-heading">Requests &amp; tracking</CardTitle>
-          <CardDescription>
-            Create a file request with the policy enforced again by the private upload service.
-          </CardDescription>
-        </div>
-        <Dialog open={open} onOpenChange={setOpen}>
-          <DialogTrigger asChild>
-            <Button type="button" disabled={onCreateTask === undefined}>
-              {onCreateTask === undefined ? "Task creation unavailable" : "New file request"}
-            </Button>
-          </DialogTrigger>
-          <DialogContent className={styles.dialogContent}>
-            <DialogHeader>
-              <DialogTitle>New file request</DialogTitle>
-              <DialogDescription>
-                Speakers can upload only the selected asset kinds, MIME types, and maximum size.
-              </DialogDescription>
-            </DialogHeader>
-            <form onSubmit={(event) => void submit(event)} className={stackClass}>
-              <div className={gridClass}>
-                <div className={fieldClass}>
-                  <Label htmlFor="task-name">Task name</Label>
-                  <Input
-                    id="task-name"
-                    value={title}
-                    onChange={(event) => setTitle(event.currentTarget.value)}
-                    placeholder="Upload Session Presentation"
-                    required
-                  />
-                </div>
-                <div className={fieldClass}>
-                  <Label htmlFor="task-due-date">Due date</Label>
-                  <Input
-                    id="task-due-date"
-                    type="date"
-                    value={dueAt}
-                    onChange={(event) => setDueAt(event.currentTarget.value)}
-                    required
-                  />
-                </div>
-              </div>
+    <div className={styles.createTaskAction}>
+      <div>
+        <span className={styles.createTaskLabel}>Collect a new speaker deliverable</span>
+        <small>Set the request, deadline, and assignees in one step.</small>
+      </div>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogTrigger asChild>
+          <Button type="button" disabled={onCreateTask === undefined}>
+            {onCreateTask === undefined ? "Task creation unavailable" : "New file request"}
+          </Button>
+        </DialogTrigger>
+        <DialogContent className={styles.dialogContent}>
+          <DialogHeader>
+            <DialogTitle>New file request</DialogTitle>
+            <DialogDescription>
+              Speakers can upload only the selected asset kinds, MIME types, and maximum size.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={(event) => void submit(event)} className={stackClass}>
+            <div className={gridClass}>
               <div className={fieldClass}>
-                <Label htmlFor="task-instructions">Instructions</Label>
-                <Textarea
-                  id="task-instructions"
-                  rows={3}
-                  value={description}
-                  onChange={(event) => setDescription(event.currentTarget.value)}
-                  placeholder="Final slide deck as a PDF, 16:9 aspect ratio."
+                <Label htmlFor="task-name">Task name</Label>
+                <Input
+                  id="task-name"
+                  value={title}
+                  onChange={(event) => setTitle(event.currentTarget.value)}
+                  placeholder="Upload Session Presentation"
                   required
                 />
               </div>
-              <fieldset className={styles.fieldset} aria-describedby="asset-kind-help">
-                <legend>Accepted asset kinds (required)</legend>
+              <div className={fieldClass}>
+                <Label htmlFor="task-due-date">Due date</Label>
+                <Input
+                  id="task-due-date"
+                  type="date"
+                  value={dueAt}
+                  onChange={(event) => setDueAt(event.currentTarget.value)}
+                  required
+                />
+              </div>
+            </div>
+            <div className={fieldClass}>
+              <Label htmlFor="task-instructions">Instructions</Label>
+              <Textarea
+                id="task-instructions"
+                rows={3}
+                value={description}
+                onChange={(event) => setDescription(event.currentTarget.value)}
+                placeholder="Final slide deck as a PDF, 16:9 aspect ratio."
+                required
+              />
+            </div>
+            <fieldset className={styles.fieldset} aria-describedby="asset-kind-help">
+              <legend>Accepted asset kinds (required)</legend>
+              <div className={stackClass}>
+                {deliverableAssetKinds.map((kind) => (
+                  <div key={kind} className={clusterClass}>
+                    <Checkbox
+                      id={`task-asset-kind-${kind}`}
+                      checked={acceptedAssetKinds.includes(kind)}
+                      onCheckedChange={() => toggleAssetKind(kind)}
+                    />
+                    <Label htmlFor={`task-asset-kind-${kind}`}>{formatStatus(kind)}</Label>
+                  </div>
+                ))}
+              </div>
+              <small id="asset-kind-help" className={mutedClass}>
+                Selected:{" "}
+                {acceptedAssetKinds.length === 0
+                  ? "None — choose at least one."
+                  : acceptedAssetKinds.map(formatStatus).join(", ")}
+                .
+              </small>
+            </fieldset>
+            <div className={gridClass}>
+              <div className={fieldClass}>
+                <Label htmlFor="task-mime-types">Allowed MIME types</Label>
+                <Input
+                  id="task-mime-types"
+                  value={mimeTypes}
+                  onChange={(event) => setMimeTypes(event.currentTarget.value)}
+                  aria-describedby="mime-help"
+                />
+                <small id="mime-help" className={mutedClass}>
+                  Comma-separated values, for example application/pdf.
+                </small>
+              </div>
+              <div className={fieldClass}>
+                <Label htmlFor="task-max-size-mb">Maximum file size (MB)</Label>
+                <Input
+                  id="task-max-size-mb"
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={maxSizeMb}
+                  onChange={(event) => setMaxSizeMb(event.currentTarget.value)}
+                />
+              </div>
+            </div>
+            <fieldset className={styles.fieldset}>
+              <legend>Assignees</legend>
+              {participants.length === 0 ? (
+                <p className={mutedClass}>
+                  No authorized speaker records were returned. Task creation cannot be assigned
+                  safely.
+                </p>
+              ) : (
                 <div className={stackClass}>
-                  {deliverableAssetKinds.map((kind) => (
-                    <div key={kind} className={clusterClass}>
+                  {participants.map((participant) => (
+                    <div key={participant.id} className={clusterClass}>
                       <Checkbox
-                        id={`task-asset-kind-${kind}`}
-                        checked={acceptedAssetKinds.includes(kind)}
-                        onCheckedChange={() => toggleAssetKind(kind)}
+                        id={`task-assignee-${participant.id}`}
+                        checked={assigneeIds.includes(participant.id)}
+                        onCheckedChange={() => toggleAssignee(participant.id)}
                       />
-                      <Label htmlFor={`task-asset-kind-${kind}`}>{formatStatus(kind)}</Label>
+                      <Label htmlFor={`task-assignee-${participant.id}`}>{participant.label}</Label>
                     </div>
                   ))}
                 </div>
-                <small id="asset-kind-help" className={mutedClass}>
-                  Selected:{" "}
-                  {acceptedAssetKinds.length === 0
-                    ? "None — choose at least one."
-                    : acceptedAssetKinds.map(formatStatus).join(", ")}
-                  .
-                </small>
-              </fieldset>
-              <div className={gridClass}>
-                <div className={fieldClass}>
-                  <Label htmlFor="task-mime-types">Allowed MIME types</Label>
-                  <Input
-                    id="task-mime-types"
-                    value={mimeTypes}
-                    onChange={(event) => setMimeTypes(event.currentTarget.value)}
-                    aria-describedby="mime-help"
-                  />
-                  <small id="mime-help" className={mutedClass}>
-                    Comma-separated values, for example application/pdf.
-                  </small>
-                </div>
-                <div className={fieldClass}>
-                  <Label htmlFor="task-max-size-mb">Maximum file size (MB)</Label>
-                  <Input
-                    id="task-max-size-mb"
-                    type="number"
-                    min={1}
-                    step={1}
-                    value={maxSizeMb}
-                    onChange={(event) => setMaxSizeMb(event.currentTarget.value)}
-                  />
-                </div>
-              </div>
-              <fieldset className={styles.fieldset}>
-                <legend>Assignees</legend>
-                {participants.length === 0 ? (
-                  <p className={mutedClass}>
-                    No authorized speaker records were returned. Task creation cannot be assigned
-                    safely.
-                  </p>
-                ) : (
-                  <div className={stackClass}>
-                    {participants.map((participant) => (
-                      <div key={participant.id} className={clusterClass}>
-                        <Checkbox
-                          id={`task-assignee-${participant.id}`}
-                          checked={assigneeIds.includes(participant.id)}
-                          onCheckedChange={() => toggleAssignee(participant.id)}
-                        />
-                        <Label htmlFor={`task-assignee-${participant.id}`}>
-                          {participant.label}
-                        </Label>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </fieldset>
-              {formError !== null ? (
-                <Alert variant="destructive">
-                  <AlertTitle>Request not saved</AlertTitle>
-                  <AlertDescription>{formError}</AlertDescription>
-                </Alert>
-              ) : null}
-              <DialogFooter>
-                <Button type="button" variant="outline" onClick={() => setOpen(false)}>
-                  Cancel
-                </Button>
-                <Button type="submit" disabled={busy || onCreateTask === undefined}>
-                  {busy
-                    ? "Saving task…"
-                    : onCreateTask === undefined
-                      ? "Task creation unavailable"
-                      : "Save file-request task"}
-                </Button>
-              </DialogFooter>
-            </form>
-          </DialogContent>
-        </Dialog>
-      </CardHeader>
-      <CardContent className={stackClass}>
-        <p className={mutedClass}>
-          Tasks stay separate from Files: this view assigns speaker work, records status, and
-          provides follow-up. Uploaded assets are reviewed in Files.
-        </p>
-        <p className={mutedClass}>
-          Request controls: Task name, Due date, Instructions, Accepted asset kinds (required),
-          Allowed MIME types, Maximum file size (MB), and Assignees.
-        </p>
-      </CardContent>
-    </Card>
+              )}
+            </fieldset>
+            {formError !== null ? (
+              <Alert variant="destructive">
+                <AlertTitle>Request not saved</AlertTitle>
+                <AlertDescription>{formError}</AlertDescription>
+              </Alert>
+            ) : null}
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={busy || onCreateTask === undefined}>
+                {busy
+                  ? "Saving task…"
+                  : onCreateTask === undefined
+                    ? "Task creation unavailable"
+                    : "Save file-request task"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </div>
   );
 }
 
@@ -916,11 +983,11 @@ function DeliverablesTable({
     <Card className={sectionClass} aria-labelledby="tracking-heading">
       <CardHeader className={clusterClass}>
         <div>
-          <p className={mutedClass}>Organizer follow-up</p>
-          <CardTitle id="tracking-heading">Requests &amp; tracking</CardTitle>
+          <p className={mutedClass}>Speaker follow-up</p>
+          <CardTitle id="tracking-heading">Assignments</CardTitle>
           <CardDescription>
-            Select tasks <strong>For reminder</strong>. ZIP export has a separate selection intent
-            so reminder recipients can never be exported accidentally.
+            Select assignments, then choose the follow-up action you need. File downloads are
+            available only for rows with a current submitted file.
           </CardDescription>
         </div>
         <Badge variant="outline">{visibleRows.length} visible</Badge>
@@ -990,7 +1057,7 @@ function DeliverablesTable({
             onClick={onPreviewReminders}
             disabled={incompleteCount === 0}
           >
-            Preview reminder recipients ({incompleteCount})
+            Send reminder ({incompleteCount})
           </Button>
           <Button
             variant="outline"
@@ -999,13 +1066,13 @@ function DeliverablesTable({
             disabled={busy || onExport === undefined || !exportAvailable || exportableCount === 0}
             onClick={onExport}
           >
-            {busy ? "Preparing ZIP…" : "Download selected deliverables ZIP"}
+            {busy ? "Preparing ZIP…" : "Download selected files"}
           </Button>
           <span id="deliverables-export-help" className={mutedClass}>
             {!exportAvailable
               ? "ZIP export is unavailable because the organizer export capability is not provisioned."
               : exportableCount === 0
-                ? "Select at least one uploaded deliverable under “For ZIP export”."
+                ? "Select at least one assignment with a submitted file."
                 : `${exportableCount} selected deliverable${exportableCount === 1 ? "" : "s"} eligible for export.`}
           </span>
         </div>
@@ -1017,8 +1084,8 @@ function DeliverablesTable({
               <TableCaption>Per-speaker file-request status and due dates</TableCaption>
               <TableHeader>
                 <TableRow>
-                  <TableHead scope="col">For reminder</TableHead>
-                  <TableHead scope="col">For ZIP export</TableHead>
+                  <TableHead scope="col">Select</TableHead>
+                  <TableHead scope="col">File</TableHead>
                   <TableHead scope="col">Speaker</TableHead>
                   <TableHead scope="col">Session</TableHead>
                   <TableHead scope="col">Task</TableHead>
@@ -1049,7 +1116,7 @@ function DeliverablesTable({
                           onCheckedChange={() => onToggleTask(row.task.id)}
                         />
                         <Label className="sr-only" htmlFor={`deliverables-reminder-${row.task.id}`}>
-                          {`For reminder: ${row.speakerLabel} ${row.task.title}`}
+                          {`Select assignment: ${row.speakerLabel} ${row.task.title}`}
                         </Label>
                       </TableCell>
                       <TableCell>
@@ -1060,7 +1127,7 @@ function DeliverablesTable({
                           onCheckedChange={() => onToggleExportTask(row.task.id)}
                         />
                         <Label className="sr-only" htmlFor={`deliverables-export-${row.task.id}`}>
-                          {`For ZIP export: ${row.speakerLabel} ${row.task.title}`}
+                          {`Select submitted file: ${row.speakerLabel} ${row.task.title}`}
                         </Label>
                       </TableCell>
                       <TableHead scope="row">{row.speakerLabel}</TableHead>
@@ -3104,39 +3171,55 @@ export function DeliverablesWorkspaceView({
             </Card>
           ) : null}
           {!filesMode ? (
-            <section className={styles.contentSection} aria-labelledby="secondary-content-heading">
-              <h2 id="secondary-content-heading">Content</h2>
-              <p className={mutedClass}>
-                Session content and speaker profiles live in this secondary section, below request
-                tracking.
-              </p>
-              <SessionEditor
-                {...(selectedSessionId === undefined ? {} : { selectedSessionId })}
-                {...(sessionHistory === undefined ? {} : { sessionHistory })}
-                {...(sessionHistoryError === undefined ? {} : { sessionHistoryError })}
-                {...(onSelectSession === undefined ? {} : { onSelectSession })}
-                sessions={sessions}
-                loadingHistory={loadingSessionHistories}
-                busy={busy}
-                {...(onSaveSession === undefined ? {} : { onSave: onSaveSession })}
-                {...(onApproveSession === undefined ? {} : { onApprove: onApproveSession })}
-                {...(onRestoreSessionVersion === undefined
-                  ? {}
-                  : { onRestore: onRestoreSessionVersion })}
-              />
-              <SpeakerEditor
-                eventId={eventId}
-                sessions={sessions}
-                profiles={profiles}
-                assets={assets}
-                busy={busy}
-                {...(speakerContentHistory === undefined ? {} : { speakerContentHistory })}
-                {...(onSaveBiography === undefined ? {} : { onSaveBiography })}
-                {...(onReplaceHeadshot === undefined ? {} : { onReplaceHeadshot })}
-                {...(onRestoreSpeakerContentVersion === undefined
-                  ? {}
-                  : { onRestoreSpeakerContentVersion })}
-              />
+            <section
+              className={styles.contentSection}
+              aria-labelledby="secondary-content-heading"
+              hidden={contentMode === "assignments"}
+            >
+              <div className={styles.contentSectionHeader}>
+                <div>
+                  <p className={styles.eyebrow}>Content editing</p>
+                  <h2 id="secondary-content-heading">
+                    {contentMode === "session-content" ? "Session content" : "Speaker profiles"}
+                  </h2>
+                </div>
+                <p className={mutedClass}>
+                  {contentMode === "session-content"
+                    ? "Review titles and abstracts before they appear in the public program."
+                    : "Update biographies and event-specific headshots without changing other events."}
+                </p>
+              </div>
+              <div hidden={contentMode !== "session-content"}>
+                <SessionEditor
+                  {...(selectedSessionId === undefined ? {} : { selectedSessionId })}
+                  {...(sessionHistory === undefined ? {} : { sessionHistory })}
+                  {...(sessionHistoryError === undefined ? {} : { sessionHistoryError })}
+                  {...(onSelectSession === undefined ? {} : { onSelectSession })}
+                  sessions={sessions}
+                  loadingHistory={loadingSessionHistories}
+                  busy={busy}
+                  {...(onSaveSession === undefined ? {} : { onSave: onSaveSession })}
+                  {...(onApproveSession === undefined ? {} : { onApprove: onApproveSession })}
+                  {...(onRestoreSessionVersion === undefined
+                    ? {}
+                    : { onRestore: onRestoreSessionVersion })}
+                />
+              </div>
+              <div hidden={contentMode !== "speaker-profiles"}>
+                <SpeakerEditor
+                  eventId={eventId}
+                  sessions={sessions}
+                  profiles={profiles}
+                  assets={assets}
+                  busy={busy}
+                  {...(speakerContentHistory === undefined ? {} : { speakerContentHistory })}
+                  {...(onSaveBiography === undefined ? {} : { onSaveBiography })}
+                  {...(onReplaceHeadshot === undefined ? {} : { onReplaceHeadshot })}
+                  {...(onRestoreSpeakerContentVersion === undefined
+                    ? {}
+                    : { onRestoreSpeakerContentVersion })}
+                />
+              </div>
             </section>
           ) : null}
         </main>
