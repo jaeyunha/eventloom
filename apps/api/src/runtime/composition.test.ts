@@ -1688,6 +1688,28 @@ describe("fixture local runtime composition", () => {
       data: { version: draftPayload.data.version },
     });
     expect(published.status).toBe(200);
+    const publication = await app.request(
+      `/api/admin/organizations/${LOCAL_ORGANIZATION_ID}/events/demo-event/publication`,
+      { headers: organizerHeaders() },
+      localBindings,
+    );
+    expect(publication.status).toBe(200);
+    await expect(publication.json()).resolves.toMatchObject({
+      data: {
+        servedManifest: {
+          lifecycle: "served",
+          agendaRevisionNumber: 1,
+          speakerRevisionNumber: 1,
+        },
+      },
+    });
+    const speakers = await app.request(
+      "/api/public/events/demo-event/speakers",
+      undefined,
+      localBindings,
+    );
+    expect(speakers.status).toBe(200);
+    expect(speakers.headers.get("x-sessionboard-program-revision")).toBe("1");
     const publishedBody = (await published.json()) as {
       data: Record<string, unknown> & { revision: Record<string, unknown> };
     };
@@ -3822,6 +3844,17 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       },
     });
     expect(JSON.stringify(projectionWrite?.body ?? {})).toContain("Priya Raman");
+    expect(JSON.stringify(projectionWrite?.body ?? {})).toContain("sourceHash");
+    const releaseWrite = transport.requests.find(
+      (request) =>
+        request.method === "PATCH" &&
+        request.table === "Program Releases" &&
+        JSON.stringify(request.body).includes('"Status":"served"'),
+    );
+    expect(releaseWrite?.body).toMatchObject({
+      fields: { Status: "served", Revision: 1 },
+    });
+    expect(JSON.stringify(releaseWrite?.body ?? {})).toContain(revision.id);
 
     expect([...state.outbox.values()]).toContainEqual(
       expect.objectContaining({
@@ -3838,6 +3871,71 @@ describe("production agenda, portal, acceptance, and reminder boundaries", () =>
       expect.objectContaining({ tenantId: organizationId, topic: "cache-invalidation" }),
     );
   });
+  it("preserves Airtable open/closed physical status during embed-only event updates", async () => {
+    const transport = new FakeAirtableTransport();
+    const eventId = "event-embed-status";
+    transport.seed({
+      baseId: "base-test",
+      table: "Events",
+      fields: {
+        "Application ID": eventId,
+        Status: "open",
+        Version: 1,
+        "Settings JSON": JSON.stringify({
+          id: eventId,
+          organizationId: LOCAL_ORGANIZATION_ID,
+          slug: eventId,
+          name: "Embed status event",
+          status: "active",
+          timeZone: "UTC",
+          startsAt: "2027-05-12T00:00:00.000Z",
+          endsAt: "2027-05-13T00:00:00.000Z",
+          cfpSettings: { enabled: true, opensAt: null, closesAt: null },
+          defaultCalendarSettings: { durationMinutes: 30, timeZone: "UTC", location: null },
+          embedConfigurations: [],
+          version: 1,
+          createdAt: "2026-08-10T00:00:00.000Z",
+          updatedAt: "2026-08-10T00:00:00.000Z",
+          createdBy: "owner",
+          updatedBy: "owner",
+        }),
+      },
+    });
+    const repository = new AirtableEventRepository({ baseId: "base-test", transport });
+    const current = await repository.getEvent(LOCAL_ORGANIZATION_ID, eventId);
+    if (current === null) throw new Error("Expected the event fixture.");
+    await repository.saveEvent(
+      {
+        ...current,
+        embedConfigurations: [
+          {
+            id: "embed-status",
+            name: "Agenda",
+            widgetId: "agenda",
+            enabled: true,
+            theme: "light",
+            outputFormat: "styled-html",
+            layout: "comfortable",
+            accent: "#4f5ee8",
+            backgroundColor: "#ffffff",
+            textColor: "#20232b",
+            customCss: "",
+            displayFields: ["title", "date-time"],
+            trackIds: [],
+            statuses: [],
+            revision: 1,
+          },
+        ],
+        version: 2,
+      },
+      1,
+    );
+    const update = transport.requests.find(
+      (request) => request.method === "PATCH" && request.table === "Events",
+    );
+    expect(update?.body).toMatchObject({ fields: { Status: "open" } });
+  });
+
   it("exposes every owner submission status while granting capabilities only for accepted records", async () => {
     const transport = new FakeAirtableTransport();
     const eventId = "event-portal-statuses";

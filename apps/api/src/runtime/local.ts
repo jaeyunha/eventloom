@@ -5,7 +5,7 @@ import {
   InMemoryAgendaMutationLock,
   InMemoryAgendaRepository,
 } from "../features/agenda/infrastructure";
-import type { AgendaEntryInput } from "../features/agenda/types";
+import type { AgendaEntryInput, PublishedAgendaRevision } from "../features/agenda/types";
 import { RequestAuthenticator } from "../features/auth/authenticator";
 import type {
   ApiKeyScope,
@@ -32,8 +32,18 @@ import type {
   EvaluationAssignment,
   EvaluationPlan,
 } from "../features/evaluations/types";
-import { EventService, InMemoryEventRepository } from "../features/events/service";
-import type { Event, EventAuditEntry, EventEmbedConfiguration } from "../features/events/types";
+import {
+  EventService,
+  InMemoryEventRepository,
+  InMemoryProgramPublicationRepository,
+  ProgramPublicationService,
+} from "../features/events/service";
+import type {
+  Event,
+  EventAuditEntry,
+  EventEmbedConfiguration,
+  ProgramPublicationManifest,
+} from "../features/events/types";
 import {
   InMemoryMemberAuthBoundary,
   InMemoryMemberIdentityRepository,
@@ -262,6 +272,13 @@ function localCookieToken(request: Request): string | null {
 }
 function clone<T>(value: T): T {
   return structuredClone(value);
+}
+
+async function sourceHash(value: unknown): Promise<string> {
+  const digest = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(value))),
+  );
+  return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function localAuthenticator(): RequestAuthenticator {
@@ -2287,6 +2304,33 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
       return () => `local-event-id-${++sequence}`;
     })(),
   });
+  const publicationRepository = new InMemoryProgramPublicationRepository();
+  let publicationService!: ProgramPublicationService;
+  publicationService = new ProgramPublicationService(
+    publicationRepository,
+    {
+      eventRepository,
+      enqueue: {
+        async enqueue(input) {
+          const state = await publicationRepository.getState(input.organizationId, input.eventId);
+          if (state === null) throw new Error("The pending program publication was not stored.");
+          await publicationService.completeRebuild({
+            ...input,
+            expectedPublicationVersion: state.version,
+          });
+          return { id: input.releaseId };
+        },
+      },
+      cacheInvalidation: { async invalidate() {} },
+    },
+    {
+      clock: () => new Date(SEEDED_AT),
+      generateId: (() => {
+        let sequence = 0;
+        return () => `local-program-release-${++sequence}`;
+      })(),
+    },
+  );
   const sessionRepository = new InMemorySessionRepository(localSessionSeed());
   const agendaEngine = localAgendaEngine(aiProviders?.agenda);
   const sessionService = new SessionService(sessionRepository, {
@@ -2673,8 +2717,107 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
     },
   );
   const cfpService = localCfpServiceWithSeed(createLocalCfpService());
+  const speakerProjections = new Map<string, PublishedSpeakerProjection>();
+  const manifestForSlug = async (eventSlug: string): Promise<ProgramPublicationManifest | null> => {
+    const event = await eventRepository.findEventBySlug(LOCAL_ORGANIZATION_ID, eventSlug);
+    if (event === null) return null;
+    let manifest =
+      (await publicationRepository.getState(event.organizationId, event.id))?.servedManifest ??
+      null;
+    if (manifest === null) {
+      const revision = await agendaEngine.getPublishedAgenda(event.id);
+      if (revision !== null) {
+        await materializePublication(event.id, revision);
+        manifest =
+          (await publicationRepository.getState(event.organizationId, event.id))?.servedManifest ??
+          null;
+      }
+    }
+    return manifest;
+  };
+  const materializePublication = async (
+    eventId: string,
+    revision: PublishedAgendaRevision,
+  ): Promise<void> => {
+    const event = await eventRepository.getEvent(LOCAL_ORGANIZATION_ID, eventId);
+    if (event === null) throw new Error("The published event could not be loaded.");
+    const sessions = await sessionRepository.listSessions(LOCAL_ORGANIZATION_ID, event.id);
+    const sessionById = new Map(sessions.map((session) => [session.id, session]));
+    const speakerSessions = new Map<string, Array<{ id: string; title: string }>>();
+    for (const entry of revision.entries) {
+      const session = sessionById.get(entry.sessionId);
+      if (session === undefined) continue;
+      for (const participantId of session.speakerIds) {
+        const entries = speakerSessions.get(participantId) ?? [];
+        entries.push({ id: session.id, title: session.title });
+        speakerSessions.set(participantId, entries);
+      }
+    }
+    const profiles = await speakerRepository.listProfiles(event.id, [...speakerSessions.keys()]);
+    const speakers = profiles.map((profile) => {
+      const speakerSessionList = speakerSessions.get(profile.participantId) ?? [];
+      return {
+        id: profile.participantId,
+        displayName: profile.displayName,
+        pronouns: null,
+        jobTitle: profile.jobTitle ?? null,
+        organization: profile.company ?? null,
+        biography: profile.biography,
+        photoUrl: null,
+        sessionIds: speakerSessionList.map((session) => session.id),
+        sessionTitles: speakerSessionList.map((session) => session.title),
+        trackNames: [],
+      };
+    });
+    const agendaHash = await sourceHash(revision);
+    const speakerHash = await sourceHash(speakers);
+    speakerProjections.set(event.slug, {
+      event: {
+        slug: event.slug,
+        name: event.name,
+        timeZone: event.timeZone,
+        startsOn: event.startsAt.slice(0, 10),
+        endsOn: event.endsAt.slice(0, 10),
+        venueName: event.venue,
+      },
+      revision: {
+        id: revision.id,
+        number: revision.revisionNumber,
+        publishedAt: revision.publishedAt,
+      },
+      speakers,
+      sourceHash: speakerHash,
+    });
+    const current = await publicationRepository.getState(event.organizationId, event.id);
+    await publicationService.requestRebuild(
+      {
+        organizationId: event.organizationId,
+        userId: revision.publishedBy,
+        role: "owner",
+        kind: "human",
+      },
+      {
+        organizationId: event.organizationId,
+        eventId: event.id,
+        trigger:
+          current?.servedManifest === null || current === null
+            ? "initial-publication"
+            : "released-schedule-change",
+        agendaProjectionId: revision.id,
+        agendaRevisionNumber: revision.revisionNumber,
+        agendaSourceHash: agendaHash,
+        speakerProjectionId: revision.id,
+        speakerRevisionNumber: revision.revisionNumber,
+        speakerSourceHash: speakerHash,
+        approvedContentRevision: revision.revisionNumber,
+        approvedProfileRevision: revision.revisionNumber,
+        releasedAssetRevision: revision.revisionNumber,
+        parentServedRevision: current?.servedRevision ?? null,
+      },
+    );
+  };
   return {
-    events: { service: eventService },
+    events: { service: eventService, publication: publicationService },
     sessions: { service: sessionService },
     members: { service: memberService },
     communications: {
@@ -2764,6 +2907,13 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
           venueName: event.venue,
         };
       },
+      async eventIdForSlug(eventSlug) {
+        return (
+          (await eventRepository.findEventBySlug(LOCAL_ORGANIZATION_ID, eventSlug))?.id ?? null
+        );
+      },
+      getProgramPublicationManifest: manifestForSlug,
+      afterPublish: materializePublication,
     },
     evaluations: {
       service: evaluationService,
@@ -2793,58 +2943,9 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
       },
     },
     publishedSpeakers: {
+      getProgramPublicationManifest: manifestForSlug,
       async getPublishedSpeakers(eventSlug: string): Promise<PublishedSpeakerProjection | null> {
-        const event = (await eventRepository.listEvents(LOCAL_ORGANIZATION_ID)).find(
-          (candidate) => candidate.slug === eventSlug,
-        );
-        if (event === undefined) return null;
-        const revision = await agendaEngine.getPublishedAgenda(event.id);
-        if (revision === null) return null;
-        const sessions = await sessionRepository.listSessions(LOCAL_ORGANIZATION_ID, event.id);
-        const sessionById = new Map(sessions.map((session) => [session.id, session]));
-        const speakerSessions = new Map<string, Array<{ id: string; title: string }>>();
-        for (const entry of revision.entries) {
-          const session = sessionById.get(entry.sessionId);
-          if (session === undefined) continue;
-          for (const participantId of session.speakerIds) {
-            const entries = speakerSessions.get(participantId) ?? [];
-            entries.push({ id: session.id, title: session.title });
-            speakerSessions.set(participantId, entries);
-          }
-        }
-        const profiles = await speakerRepository.listProfiles(event.id, [
-          ...speakerSessions.keys(),
-        ]);
-        return {
-          event: {
-            slug: event.slug,
-            name: event.name,
-            timeZone: event.timeZone,
-            startsOn: event.startsAt.slice(0, 10),
-            endsOn: event.endsAt.slice(0, 10),
-            venueName: event.venue,
-          },
-          revision: {
-            id: revision.id,
-            number: revision.revisionNumber,
-            publishedAt: revision.publishedAt,
-          },
-          speakers: profiles.map((profile) => {
-            const speakerSessionList = speakerSessions.get(profile.participantId) ?? [];
-            return {
-              id: profile.participantId,
-              displayName: profile.displayName,
-              pronouns: null,
-              jobTitle: profile.jobTitle ?? null,
-              organization: profile.company ?? null,
-              biography: profile.biography,
-              photoUrl: null,
-              sessionIds: speakerSessionList.map((session) => session.id),
-              sessionTitles: speakerSessionList.map((session) => session.title),
-              trackNames: [],
-            };
-          }),
-        };
+        return speakerProjections.get(eventSlug) ?? null;
       },
     },
     publicApi: {
