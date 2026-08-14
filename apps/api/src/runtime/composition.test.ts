@@ -1122,7 +1122,13 @@ describe("fixture local runtime composition", () => {
       data: {
         organizationId: LOCAL_ORGANIZATION_ID,
         eventId: "demo-event",
-        tasks: [{ taskId: "local-biography-task" }, { taskId: "local-slides-task" }],
+        tasks: [
+          {
+            taskId: "local-speaker-id-1",
+            title: "Upload your presentation slides",
+            status: "not_started",
+          },
+        ],
       },
     });
   });

@@ -263,7 +263,12 @@ const LOCAL_PERSONAS: readonly LocalPersona[] = [
     name: "Alex Rivera",
     password: LOCAL_SPEAKER_PASSWORD,
     memberships: [],
-    speakerGrants: [{ organizationId: LOCAL_ORGANIZATION_ID, speakerProfileId: "local-profile" }],
+    speakerGrants: [
+      {
+        organizationId: LOCAL_ORGANIZATION_ID,
+        speakerProfileId: "cfp-profile:local-participant",
+      },
+    ],
   },
 ];
 
@@ -2913,6 +2918,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
         }));
       },
       async listSpeakerContextScopes(userId) {
+        await programGraphSeeded;
         if (speakerRepository.listPortalContextScopes === undefined) return [];
         return (await speakerRepository.listPortalContextScopes(userId)).map(
           ({ context, scope, speakerProfileIds }) => ({
@@ -2931,6 +2937,7 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
       },
       speakerTasks: {
         async resolveScope(principal, organizationId, eventId) {
+          await programGraphSeeded;
           const scope = await speakerRepository.getAccessScopeForOrganization(
             organizationId,
             eventId,
@@ -2969,17 +2976,22 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
             eventId,
             participantIds,
           );
-          return tasks.map((task) => ({
-            organizationId: task.tenantId,
-            eventId: task.eventId,
-            taskId: task.id,
-            submissionId: task.submissionId,
-            participantId: task.participantId,
-            owner: task.owner,
-            title: task.title,
-            dueAt: task.dueAt ?? task.dueDate ?? null,
-            status: task.status,
-          }));
+          return tasks.map((task) => {
+            const submissionId = task.submissionId?.startsWith("speaker-submission:")
+              ? task.submissionId.slice("speaker-submission:".length)
+              : task.submissionId;
+            return {
+              organizationId: task.tenantId,
+              eventId: task.eventId,
+              taskId: task.id,
+              submissionId,
+              participantId: task.participantId,
+              owner: task.owner,
+              title: task.title,
+              dueAt: task.dueAt ?? task.dueDate ?? null,
+              status: task.status,
+            };
+          });
         },
       },
       reviewerWorkspace: {
