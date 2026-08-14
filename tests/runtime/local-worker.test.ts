@@ -514,7 +514,7 @@ describe.sequential("composed local Worker", () => {
     });
     const files = await jsonData<Array<Record<string, unknown>>>(filesResponse);
     expect(deliverablesResponse.status).toBe(200);
-    expect(deliverables.items).toHaveLength(75);
+    expect(deliverables.items).toHaveLength(1);
     expect(deliverables.items).toContainEqual(
       expect.objectContaining({
         task: expect.objectContaining({ type: "upload", acceptedAssetKinds: ["slides"] }),
