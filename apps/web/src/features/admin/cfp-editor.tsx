@@ -25,6 +25,13 @@ import styles from "./cfp-editor.module.css";
 
 const ORGANIZER_STICKY_HEADER_HEIGHT = 52;
 const STICKY_SECTION_GAP = 16;
+const DEFAULT_FILE_REQUEST_ALLOWED_MIME_TYPES = [
+  "application/pdf",
+  "image/jpeg",
+  "image/png",
+  "text/plain",
+] as const;
+const DEFAULT_FILE_REQUEST_MAX_BYTES = 25 * 1024 * 1024;
 
 export function cfpSectionScrollOffset(
   organizerHeaderHeight: number,
@@ -445,10 +452,25 @@ export function toFormConfiguration(
   organizationId: string,
   eventId: string,
 ): CfpFormConfiguration {
-  const toServerField = (field: CfpFormField, fallbackSectionId: string): ApiCfpFormField => {
+  const toServerField = (
+    field: CfpFormField,
+    fallbackSectionId: string,
+    fileOwner: "submission" | "participant",
+  ): ApiCfpFormField => {
     const kind =
       field.kind ??
       (field.type === "textarea" ? "rich_text" : field.type === "email" ? "email" : field.type);
+    const fileRequest =
+      kind === "file_request"
+        ? {
+            allowedMimeTypes:
+              field.fileRequest?.allowedMimeTypes ??
+              [...DEFAULT_FILE_REQUEST_ALLOWED_MIME_TYPES],
+            maxBytes: field.fileRequest?.maxBytes ?? DEFAULT_FILE_REQUEST_MAX_BYTES,
+            required: field.required,
+            owner: fileOwner,
+          }
+        : undefined;
     return {
       id: field.id,
       sectionId: field.sectionId ?? fallbackSectionId,
@@ -461,7 +483,7 @@ export function toFormConfiguration(
       options: field.options ?? [],
       ...(field.fieldRef === undefined ? {} : { fieldRef: field.fieldRef }),
       ...(field.fieldVersion === undefined ? {} : { fieldVersion: field.fieldVersion }),
-      ...(field.fileRequest === undefined ? {} : { fileRequest: field.fileRequest }),
+      ...(fileRequest === undefined ? {} : { fileRequest }),
       ...(field.config === undefined ? {} : { config: field.config }),
     };
   };
@@ -475,7 +497,11 @@ export function toFormConfiguration(
   };
   const fields = configuration.fields.map((field) => {
     const options = field.key === undefined ? undefined : taxonomyOptions[field.key];
-    return toServerField(options === undefined ? field : { ...field, options }, defaultSectionId);
+    return toServerField(
+      options === undefined ? field : { ...field, options },
+      defaultSectionId,
+      "submission",
+    );
   });
   const existingFieldKeys = new Set(fields.map((field) => field.key));
   const taxonomyFields = [
@@ -500,6 +526,7 @@ export function toFormConfiguration(
           options: field.options,
         },
         defaultSectionId,
+        "submission",
       ),
     );
   const editorRuleId = configuration.editorRuleId ?? "editor-conditional-rule";
@@ -515,7 +542,9 @@ export function toFormConfiguration(
   const participantFields =
     configuration.participantFields && configuration.participantFields.length > 0
       ? [
-          ...configuration.participantFields.map((field) => toServerField(field, defaultSectionId)),
+          ...configuration.participantFields.map((field) =>
+            toServerField(field, defaultSectionId, "participant"),
+          ),
           ...(configuration.participantFields.some(
             (field) => (field.key ?? field.id) === "biography",
           )
@@ -1996,6 +2025,11 @@ export function CfpEditor({ eventId, organizationId, formId, api: providedApi }:
                         <option value="number">Number</option>
                         <option value="file_request">File request</option>
                       </select>
+                      {field.type === "file_request" ? (
+                        <p className={styles.fieldHint}>
+                          Accepts PDF, JPEG, PNG, or text files up to 25 MB.
+                        </p>
+                      ) : null}
                     </div>
                     {field.type === "select" || field.type === "multi_select" ? (
                       <div className={styles.fieldGroup}>

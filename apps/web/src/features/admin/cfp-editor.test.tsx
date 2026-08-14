@@ -336,6 +336,34 @@ describe("CFP editor", () => {
     });
   });
 
+  it("authorizes newly selected file-request fields with safe submission defaults", () => {
+    const configuration = createTestCfpConfiguration("devflow-conf-2027");
+    configuration.fields.push({
+      id: "proposal-deck",
+      key: "proposal_deck",
+      label: "Session proposal deck",
+      type: "file_request",
+      kind: "file_request",
+      required: true,
+      visible: true,
+      placeholder: "",
+      options: [],
+    });
+
+    const form = toFormConfiguration(configuration, "ai-engineer", "devflow-conf-2027");
+
+    expect(form.submissionFields.find((field) => field.key === "proposal_deck")).toMatchObject({
+      kind: "file_request",
+      required: true,
+      fileRequest: {
+        allowedMimeTypes: ["application/pdf", "image/jpeg", "image/png", "text/plain"],
+        maxBytes: 25 * 1024 * 1024,
+        required: true,
+        owner: "submission",
+      },
+    });
+  });
+
   it("round-trips equals Workshop to show_field prerequisites without inversion", () => {
     const configuration = createTestCfpConfiguration("devflow-conf-2027");
     configuration.rule = {
