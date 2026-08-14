@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { SpeakerAccountWorkloadRepository } from "../features/speaker/types";
 import type {
   AirtableListOptions,
   AirtableRequest,
@@ -451,6 +452,83 @@ describe("scoped adapter read ordering", () => {
       .filter((request) => request.method === "GET")
       .map((request) => request.table);
     expect(readTables).toEqual(["Events", "Submissions", "Session Roster"]);
+  });
+});
+
+describe("organization-qualified speaker workload reads", () => {
+  it("isolates duplicate event, submission, participant, and task IDs by organization", async () => {
+    const transport = new FakeAirtableTransport();
+    for (const organizationId of ["org-a", "org-b"]) {
+      transport.seed({
+        baseId: "base-test",
+        table: "Submissions",
+        fields: {
+          "Application ID": "submission-shared",
+          "Answers JSON": JSON.stringify({
+            id: "submission-shared",
+            tenantId: organizationId,
+            eventId: "event-shared",
+            title: `${organizationId} session`,
+            status: "accepted",
+            participantIds: ["participant-shared"],
+            primaryParticipantId: "participant-shared",
+            updatedAt: "2026-08-13T00:00:00.000Z",
+            entityType: "speaker_submission",
+          }),
+        },
+      });
+      transport.seed({
+        baseId: "base-test",
+        table: "Speaker Tasks",
+        fields: {
+          "Application ID": "task-shared",
+          "Owner JSON": JSON.stringify({
+            id: "task-shared",
+            tenantId: organizationId,
+            eventId: "event-shared",
+            submissionId: "submission-shared",
+            participantId: "participant-shared",
+            subject: {
+              type: "session",
+              participantId: "participant-shared",
+              submissionId: "submission-shared",
+            },
+            type: "upload",
+            owner: "speaker",
+            title: `${organizationId} slides`,
+            status: "not_started",
+            dependencyIds: [],
+            reminderOffsetsMinutes: [],
+            version: 1,
+            updatedAt: "2026-08-13T00:00:00.000Z",
+          }),
+        },
+      });
+    }
+    const repository = new AirtableSpeakerRepository({
+      baseId: "base-test",
+      transport,
+      database: delayedDatabase([], 0),
+    }) as SpeakerAccountWorkloadRepository;
+
+    await expect(
+      repository.listSubmissionsForOrganization("org-a", "event-shared", ["submission-shared"]),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        tenantId: "org-a",
+        id: "submission-shared",
+        title: "org-a session",
+      }),
+    ]);
+    await expect(
+      repository.listTasksForOrganization("org-a", "event-shared", ["participant-shared"]),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        tenantId: "org-a",
+        id: "task-shared",
+        title: "org-a slides",
+      }),
+    ]);
   });
 });
 

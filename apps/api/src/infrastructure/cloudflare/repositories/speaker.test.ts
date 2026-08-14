@@ -1,18 +1,46 @@
 import type { D1Database } from "@cloudflare/workers-types";
 import { describe, expect, it } from "vitest";
 
+import {
+  AccessContextDependencyError,
+  AccessContextService,
+} from "../../../features/access/service";
+import { AccountSpeakerTasksService } from "../../../features/access/speaker-tasks";
+import type { UserPrincipal } from "../../../features/auth/types";
+import { capabilityAllows } from "../../../features/speaker/capabilities";
 import type { SpeakerAssetAuditEntry, SpeakerTask } from "../../../features/speaker/types";
 import { D1SpeakerRepository } from "./speaker";
 
+type QueryRow = Record<string, unknown>;
+
 class RecordingD1 {
   readonly batches: string[][] = [];
+  readonly reads: { sql: string; values: unknown[] }[] = [];
+
+  constructor(
+    private readonly contextRows: readonly QueryRow[] = [],
+    private readonly contextRow: QueryRow | null = null,
+  ) {}
   prepare(sql: string) {
     const statement = {
       sql,
-      bind: (..._values: unknown[]) => statement,
-      all: async () => ({ results: [] }),
-      first: async () => null,
-      raw: async () => (sql.includes('from "events"') ? [["org-1", "event-1"]] : []),
+      values: [] as unknown[],
+      bind: (...values: unknown[]) => {
+        statement.values = values;
+        return statement;
+      },
+      all: async () => {
+        this.reads.push({ sql, values: statement.values });
+        return { results: sql.includes("FROM portal_contexts pc") ? this.contextRows : [] };
+      },
+      first: async () => {
+        this.reads.push({ sql, values: statement.values });
+        return sql.includes("FROM portal_contexts pc") ? this.contextRow : null;
+      },
+      raw: async () => {
+        this.reads.push({ sql, values: statement.values });
+        return sql.includes('from "events"') ? [["org-1", "event-1"]] : [];
+      },
       run: async () => ({ meta: { changes: 1 } }),
     };
     return statement;
@@ -54,6 +82,206 @@ const audit: SpeakerAssetAuditEntry = {
 };
 
 describe("D1SpeakerRepository", () => {
+  it("projects mixed participant capabilities from tenant-qualified D1 grants", async () => {
+    const contextRow = {
+      organization_id: "org-a",
+      event_id: "event-1",
+      id: "context-1",
+      name: "Event One",
+      slug: "event-one",
+      status: "active",
+      primary_participant_id: "participant-a",
+      capabilities_json: '["submission-edit","task-response"]',
+      participant_ids: "participant-a,participant-b",
+      granted_participant_ids: "participant-a",
+      granted_speaker_profile_ids: "profile:event-1:participant-a",
+      submission_ids: "submission-1",
+    };
+    const database = new RecordingD1([contextRow], contextRow);
+    const repository = new D1SpeakerRepository(database as unknown as D1Database);
+
+    const organizationScope = await repository.getAccessScopeForOrganization(
+      "org-a",
+      "event-1",
+      "account-1",
+    );
+    const projections = await repository.listPortalContextScopes("account-1");
+
+    expect(organizationScope.capabilitiesByParticipant).toEqual({
+      "participant-a": ["submission-edit", "task-response"],
+      "participant-b": ["submission-edit"],
+    });
+    expect(projections[0]).toMatchObject({
+      speakerProfileIds: ["profile:event-1:participant-a"],
+      context: { participantIds: ["participant-a", "participant-b"] },
+      scope: { capabilitiesByParticipant: organizationScope.capabilitiesByParticipant },
+    });
+    expect(
+      organizationScope.participantIds.filter((participantId) =>
+        capabilityAllows(organizationScope, "task-response", participantId),
+      ),
+    ).toEqual(["participant-a"]);
+    expect(database.reads).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sql: expect.stringContaining("granted_speaker_profile_ids"),
+          values: ["account-1"],
+        }),
+      ]),
+    );
+
+    const validPrincipal: UserPrincipal = {
+      kind: "user",
+      sessionId: "session-1",
+      userId: "account-1",
+      email: "speaker@example.test",
+      memberships: [],
+      speakerGrants: [
+        { organizationId: "org-a", speakerProfileId: "profile:event-1:participant-a" },
+      ],
+    };
+    const access = new AccessContextService({
+      listOrganizationsForUser: async () => [{ organizationId: "org-a", name: "Org A" }],
+      listEvents: async () => [{ organizationId: "org-a", eventId: "event-1", name: "Event One" }],
+      listEvaluationPlans: async () => [],
+      listSpeakerContextScopes: async () =>
+        projections.map(({ context, scope, speakerProfileIds }) => ({
+          organizationId: scope.tenantId ?? "",
+          resolvedOrganizationIds: scope.tenantId === undefined ? [] : [scope.tenantId],
+          eventId: context.eventId,
+          accountId: "account-1",
+          speakerProfileIds,
+          participantIds: scope.participantIds,
+          ...(scope.capabilities === undefined ? {} : { capabilities: scope.capabilities }),
+          ...(scope.capabilitiesByParticipant === undefined
+            ? {}
+            : { capabilitiesByParticipant: scope.capabilitiesByParticipant }),
+        })),
+    });
+
+    await expect(access.list(validPrincipal)).resolves.toEqual([
+      {
+        scope: "organization",
+        organization: { id: "org-a", name: "Org A" },
+        roles: [],
+        capabilities: [],
+      },
+      {
+        scope: "event",
+        organization: { id: "org-a", name: "Org A" },
+        event: { id: "event-1", name: "Event One" },
+        roles: ["speaker"],
+        capabilities: ["speaker.portal.read", "speaker.tasks.read"],
+      },
+    ]);
+    await expect(
+      access.list({
+        ...validPrincipal,
+        speakerGrants: [
+          { organizationId: "org-a", speakerProfileId: "profile:event-1:participant-b" },
+        ],
+      }),
+    ).rejects.toBeInstanceOf(AccessContextDependencyError);
+
+    const taskParticipantReads: string[][] = [];
+    const tasks = new AccountSpeakerTasksService({
+      speakerTasks: {
+        resolveScope: async () => ({
+          ...organizationScope,
+          tenantId: "org-a",
+          organizationId: "org-a",
+          eventId: "event-1",
+          accountId: "account-1",
+        }),
+        listSubmissions: async () => [
+          {
+            organizationId: "org-a",
+            eventId: "event-1",
+            submissionId: "submission-1",
+            participantIds: ["participant-a", "participant-b"],
+          },
+        ],
+        listTasks: async (organizationId, eventId, participantIds) => {
+          taskParticipantReads.push([...participantIds]);
+          return [
+            {
+              organizationId,
+              eventId,
+              taskId: "task-a",
+              submissionId: "submission-1",
+              participantId: "participant-a",
+              owner: "speaker",
+              title: "Authorized task",
+              dueAt: null,
+              status: "not_started",
+            },
+          ];
+        },
+      },
+    });
+
+    await expect(tasks.list(validPrincipal, "org-a", "event-1")).resolves.toMatchObject({
+      tasks: [{ taskId: "task-a" }],
+    });
+    expect(taskParticipantReads).toEqual([["participant-a"]]);
+  });
+
+  it("fails task reads closed for a submission-edit-only D1 context", async () => {
+    const contextRow = {
+      organization_id: "org-a",
+      event_id: "event-1",
+      id: "context-1",
+      name: "Event One",
+      slug: "event-one",
+      status: "active",
+      primary_participant_id: "participant-a",
+      capabilities_json: '["submission-edit"]',
+      participant_ids: "participant-a,participant-b",
+      granted_participant_ids: "",
+      submission_ids: "submission-1",
+    };
+    const database = new RecordingD1([contextRow], contextRow);
+    const repository = new D1SpeakerRepository(database as unknown as D1Database);
+
+    const scope = await repository.getAccessScopeForOrganization("org-a", "event-1", "account-1");
+
+    expect(scope.capabilitiesByParticipant).toEqual({
+      "participant-a": ["submission-edit"],
+      "participant-b": ["submission-edit"],
+    });
+    expect(
+      scope.participantIds.filter((participantId) =>
+        capabilityAllows(scope, "task-response", participantId),
+      ),
+    ).toEqual([]);
+  });
+
+  it("qualifies account speaker scope, submission, and task reads by organization", async () => {
+    const database = new RecordingD1();
+    const repository = new D1SpeakerRepository(database as unknown as D1Database);
+
+    await repository.getAccessScopeForOrganization("org-a", "event-shared", "account-1");
+    await repository.listSubmissionsForOrganization("org-a", "event-shared", ["submission-shared"]);
+    await repository.listTasksForOrganization("org-a", "event-shared", ["participant-shared"]);
+
+    expect(database.reads).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sql: expect.stringContaining("pc.organization_id = ?"),
+          values: ["org-a", "event-shared", "account-1"],
+        }),
+        expect.objectContaining({
+          sql: expect.stringContaining('"submissions"."organization_id" = ?'),
+          values: expect.arrayContaining(["org-a", "event-shared", "submission-shared"]),
+        }),
+        expect.objectContaining({
+          sql: expect.stringContaining('"speaker_tasks"."organization_id" = ?'),
+          values: expect.arrayContaining(["org-a", "event-shared", "participant-shared"]),
+        }),
+      ]),
+    );
+  });
+
   it("batches task metadata with the task create", async () => {
     const database = new RecordingD1();
     const repository = new D1SpeakerRepository(database as unknown as D1Database);

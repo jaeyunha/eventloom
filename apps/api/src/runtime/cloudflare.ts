@@ -2498,6 +2498,7 @@ export function createCloudflareDependencies(source: RuntimeBindings): ApiDepend
       : undefined;
   return {
     ...dependencies,
+    ...(dependencies.access === undefined ? {} : { access: dependencies.access }),
     auth: betterAuthRuntime,
     members: { service: memberService },
     integrations,

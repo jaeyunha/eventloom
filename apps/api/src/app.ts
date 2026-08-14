@@ -10,6 +10,7 @@ import { type Context, Hono, type MiddlewareHandler } from "hono";
 import { cors } from "hono/cors";
 import { z } from "zod";
 import { parseApiEnvironment } from "./env";
+import { type AccessRouteDependencies, createAccessRoutes } from "./features/access/routes";
 import type { RequestAuthenticator } from "./features/auth/authenticator";
 import { AuthAccessError, type AuthPrincipal } from "./features/auth/types";
 import {
@@ -147,6 +148,7 @@ export interface ApiDependencies<
 > {
   readonly authenticator?: Pick<RequestAuthenticator, "authenticate">;
   readonly auth?: AuthRouteDependencies;
+  readonly access?: AccessRouteDependencies;
   readonly publicApi?: PublicApiRoutesOptions<TRecord, TCreate, TUpdate>;
   readonly webhooks?: WebhookSubscriptionRepository;
   readonly integrations?: IntegrationAdminRouteDependencies;
@@ -411,7 +413,8 @@ function assertAuthenticationConfigured(
 } {
   if (
     dependencies.authenticator === undefined &&
-    (dependencies.publicApi !== undefined ||
+    (dependencies.access !== undefined ||
+      dependencies.publicApi !== undefined ||
       dependencies.integrations !== undefined ||
       dependencies.airtableIntegration !== undefined ||
       dependencies.webhooks !== undefined ||
@@ -525,6 +528,7 @@ export function createApp<
   if (authenticator !== undefined) {
     const authenticate = authenticationMiddleware(authenticator);
     app.use("/api/v1/organizations/*", authenticate);
+    app.use("/api/account/*", authenticate);
     app.use("/api/admin/*", async (context, next) => {
       if (context.req.path.endsWith("/members/setup/activate")) {
         context.set("authPrincipal", null);
@@ -537,6 +541,9 @@ export function createApp<
 
   if (dependencies.evaluations !== undefined) {
     app.use("/api/admin/evaluations/*", evaluationActorMiddleware(dependencies.evaluations));
+  }
+  if (dependencies.access !== undefined) {
+    app.route("/api/account", createAccessRoutes(dependencies.access));
   }
 
   if (dependencies.webhooks !== undefined) {
