@@ -61,6 +61,21 @@
         "typescript": "5.9.3",
       },
     },
+    "packages/cli": {
+      "name": "@eventloom/cli",
+      "version": "0.1.0",
+      "bin": {
+        "eventloom": "./dist/eventloom",
+      },
+      "dependencies": {
+        "@eventloom/contracts": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/node": "26.2.0",
+        "typescript": "5.9.3",
+        "vitest": "4.1.10",
+      },
+    },
     "packages/contracts": {
       "name": "@eventloom/contracts",
       "version": "0.1.0",
@@ -363,6 +378,14 @@
 
     "@esbuild/win32-x64": ["@esbuild/win32-x64@0.25.4", "", { "os": "win32", "cpu": "x64" }, "sha512-nOT2vZNw6hJ+z43oP1SPea/G/6AbN6X+bGNhNuq8NtRHy4wsMhw765IKLNmnjek7GvjWBYQ8Q5VBoYTFg9y1UQ=="],
 
+    "@eventloom/api": ["@eventloom/api@workspace:apps/api"],
+
+    "@eventloom/cli": ["@eventloom/cli@workspace:packages/cli"],
+
+    "@eventloom/contracts": ["@eventloom/contracts@workspace:packages/contracts"],
+
+    "@eventloom/web": ["@eventloom/web@workspace:apps/web"],
+
     "@floating-ui/core": ["@floating-ui/core@1.8.0", "", { "dependencies": { "@floating-ui/utils": "^0.2.12" } }, "sha512-0CIZ5itps/8x7BG8dEIhs53BvCUH2PCoogtakwRTut+Arm58sJooJ0AuZhLw2HJYIR5cMLNPBSS728sPho2khQ=="],
 
     "@floating-ui/dom": ["@floating-ui/dom@1.8.0", "", { "dependencies": { "@floating-ui/core": "^1.8.0", "@floating-ui/utils": "^0.2.12" } }, "sha512-yXSrzeHZBTZadLOlfyhCkJHNeLJnHRnRInwdZ40L7ZiaAtrBwoYlsDrX3v5zB1Utk7CLfzcOVnVVWoXEky7Ceg=="],
@@ -478,12 +501,6 @@
     "@nodelib/fs.stat": ["@nodelib/fs.stat@2.0.5", "", {}, "sha512-RkhPPp2zrqDAQA/2jNhnztcPAlv64XdhIp7a7454A5ovI7Bukxgt7MX7udwAu3zg1DcpPU0rz3VV1SeaqvY4+A=="],
 
     "@nodelib/fs.walk": ["@nodelib/fs.walk@1.2.8", "", { "dependencies": { "@nodelib/fs.scandir": "2.1.5", "fastq": "^1.6.0" } }, "sha512-oGB+UxlgWcgQkgwo8GcEGwemoTFt3FIO9ababBmaGwXIoBKZ+GTy0pP185beGg7Llih/NSHSV2XAs1lnznocSg=="],
-
-    "@eventloom/api": ["@eventloom/api@workspace:apps/api"],
-
-    "@eventloom/contracts": ["@eventloom/contracts@workspace:packages/contracts"],
-
-    "@eventloom/web": ["@eventloom/web@workspace:apps/web"],
 
     "@opennextjs/aws": ["@opennextjs/aws@4.1.0", "", { "dependencies": { "@ast-grep/napi": "^0.40.5", "@aws-sdk/client-cloudfront": "3.984.0", "@aws-sdk/client-dynamodb": "3.984.0", "@aws-sdk/client-lambda": "3.984.0", "@aws-sdk/client-s3": "3.984.0", "@aws-sdk/client-sqs": "3.984.0", "@node-minify/core": "^8.0.6", "@node-minify/terser": "^8.0.6", "@tsconfig/node18": "^1.0.3", "aws4fetch": "^1.0.20", "chalk": "^5.6.2", "cookie": "^1.0.2", "esbuild": "0.25.4", "express": "^5.1.0", "path-to-regexp": "^6.3.0", "urlpattern-polyfill": "^10.1.0", "yaml": "^2.8.1" }, "peerDependencies": { "next": ">=15.5.21 <16 || >=16.2.11" }, "bin": { "open-next": "dist/index.js" } }, "sha512-GuKkdUbnJhLvtwTiJlytNtWIcSYN3+Dzi+OusUlRgf+Ur7dGoXdzBopd+VFiSdTBduPOvr9lPFDg6BYNjEV3wQ=="],
 
