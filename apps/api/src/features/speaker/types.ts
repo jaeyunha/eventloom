@@ -76,6 +76,13 @@ export interface SpeakerPortalContext {
   primaryParticipantId?: string;
 }
 
+export interface SpeakerPortalContextScopeProjection {
+  readonly context: SpeakerPortalContext;
+  readonly scope: SpeakerAccessScope;
+  /** Authoritative speaker profile identities represented by current account grants. */
+  readonly speakerProfileIds: readonly string[];
+}
+
 export interface SpeakerRosterMember {
   participantId: string;
   displayName: string;
@@ -113,6 +120,8 @@ export interface SpeakerAccessScope {
 }
 
 export interface SpeakerSubmission {
+  /** Authoritative organization identity when the storage adapter exposes it. */
+  tenantId?: string;
   id: string;
   eventId: string;
   title: string;
@@ -158,6 +167,8 @@ export interface SpeakerProfile {
 }
 
 export interface SpeakerTask {
+  /** Authoritative organization identity when the storage adapter exposes it. */
+  tenantId?: string;
   /** Optional MIME policy for organizer-created file requests. */
   allowedMimeTypes?: readonly string[];
   /** Canonical byte limit for organizer-created file requests. */
@@ -935,6 +946,16 @@ export interface SpeakerOrganizerReadModel {
   assets: readonly SpeakerAsset[];
 }
 
+export interface OrganizationQualifiedSpeakerSubmission extends SpeakerSubmission {
+  /** Authoritative organization identity read from the repository record. */
+  tenantId: string;
+}
+
+export interface OrganizationQualifiedSpeakerTask extends SpeakerTask {
+  /** Authoritative organization identity read from the repository record. */
+  tenantId: string;
+}
+
 export interface SpeakerRepository {
   getAccessScope(eventId: string, accountId: string): Promise<SpeakerAccessScope>;
   /** Organizer authority is event-qualified and must never be inferred from a participant grant. */
@@ -996,7 +1017,7 @@ export interface SpeakerRepository {
   listPortalContexts?(accountId: string): Promise<SpeakerPortalContext[]>;
   listPortalContextScopes?(
     accountId: string,
-  ): Promise<readonly { context: SpeakerPortalContext; scope: SpeakerAccessScope }[]>;
+  ): Promise<readonly SpeakerPortalContextScopeProjection[]>;
   listRoster?(eventId: string, submissionId: string): Promise<SpeakerRosterEntry[]>;
   /** Efficient event-wide roster projection used by organizer workspaces. */
   listRosterForEvent?(eventId: string): Promise<SpeakerRosterEntry[]>;
@@ -1066,6 +1087,25 @@ export interface SpeakerRepository {
   ): Promise<RepositoryResult<SpeakerContentRecord>>;
   getReminder?(eventId: string, idempotencyKey: string): Promise<SpeakerReminderRecord | null>;
   saveReminder?(record: SpeakerReminderRecord): Promise<SpeakerReminderRecord>;
+}
+
+/** Mandatory repository boundary for organization-qualified account speaker workload reads. */
+export interface SpeakerAccountWorkloadRepository extends SpeakerRepository {
+  getAccessScopeForOrganization(
+    organizationId: string,
+    eventId: string,
+    accountId: string,
+  ): Promise<SpeakerAccessScope>;
+  listSubmissionsForOrganization(
+    organizationId: string,
+    eventId: string,
+    submissionIds: readonly string[],
+  ): Promise<OrganizationQualifiedSpeakerSubmission[]>;
+  listTasksForOrganization(
+    organizationId: string,
+    eventId: string,
+    participantIds: readonly string[],
+  ): Promise<OrganizationQualifiedSpeakerTask[]>;
 }
 
 export interface CreatePrivateUploadGrantCommand {

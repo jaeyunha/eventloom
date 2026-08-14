@@ -25,3 +25,4 @@ export const apiErrorSchema = apiErrorResponseSchema;
 
 export type ApiError = z.infer<typeof apiErrorSchema>;
 export * from "./domain/index";
+export * from "./agent/index";

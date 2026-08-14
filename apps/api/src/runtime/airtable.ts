@@ -167,6 +167,8 @@ import {
 import type {
   CreatePrivateUploadGrantCommand,
   FinalizeSpeakerAssetCommand,
+  OrganizationQualifiedSpeakerSubmission,
+  OrganizationQualifiedSpeakerTask,
   PrivateAssetCapabilityBinding,
   PrivateAssetGateway,
   PrivateDownloadGrant,
@@ -177,6 +179,7 @@ import type {
   ResolveEventParticipantInput,
   RestoreSpeakerContentVersionCommand,
   SpeakerAccessScope,
+  SpeakerAccountWorkloadRepository,
   SpeakerAsset,
   SpeakerAssetComment,
   SpeakerAssetReviewCommand,
@@ -191,6 +194,7 @@ import type {
   SpeakerParticipantResolution,
   SpeakerPortalCapability,
   SpeakerPortalContext,
+  SpeakerPortalContextScopeProjection,
   SpeakerProfile,
   SpeakerReminderDelivery,
   SpeakerReminderDeliveryInput,
@@ -1539,7 +1543,9 @@ function speakerSubmissionFromRecord(record: JsonRecord): SpeakerSubmission | nu
       : undefined;
   const primaryParticipantId = portalPrimaryParticipantId(record);
   const formId = textValue(record, "formId", "Form ID");
+  const tenantId = resolvedOrganizationId(record);
   return {
+    ...(tenantId === undefined ? {} : { tenantId }),
     id,
     eventId,
     title,
@@ -1594,7 +1600,9 @@ function portalSubmissionFromRecord(
     record.version >= 1
       ? record.version
       : undefined;
+  const tenantId = resolvedOrganizationId(record);
   const projected: SpeakerSubmission & { readonly reason?: string } = {
+    ...(tenantId === undefined ? {} : { tenantId }),
     id: requestedId,
     eventId,
     title,
@@ -2049,7 +2057,7 @@ function sessionContentHistory(session: Session): SpeakerContentHistoryEntry[] {
 }
 
 /** Speaker records and task state are business records in Airtable. */
-export class AirtableSpeakerRepository implements SpeakerRepository {
+export class AirtableSpeakerRepository implements SpeakerAccountWorkloadRepository {
   readonly #submissions: AirtableJsonStore<SpeakerSubmission>;
   readonly #profiles: AirtableJsonStore<SpeakerProfile>;
   readonly #tasks: AirtableJsonStore<SpeakerTask>;
@@ -2598,9 +2606,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
         : matchesOrganizationScope(record, eventOrganizationId, true);
     });
     const profiles = profileRecords.filter(
-      (profile) =>
-        profile.eventId === eventId &&
-        (grants.has(profile.id) || grants.has(profile.participantId)),
+      (profile) => profile.eventId === eventId && grants.has(profile.id),
     );
     const accountProfiles = profiles;
     const participantIds = portalCanonicalGrantedParticipantIds(accountProfiles, ownedRecords);
@@ -2611,9 +2617,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
         portalRecordStatus(record, decisions) === "accepted" &&
         portalParticipantIds(record).some((participantId) =>
           accountProfiles.some(
-            (profile) =>
-              profile.participantId === participantId &&
-              (grants.has(profile.id) || grants.has(profile.participantId)),
+            (profile) => profile.participantId === participantId && grants.has(profile.id),
           ),
         ),
     );
@@ -2669,13 +2673,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     const tenantIds = [
       ...new Set(
         scopedGrants
-          .filter((row) =>
-            profiles.some(
-              (profile) =>
-                profile.id === row.speaker_profile_id ||
-                profile.participantId === row.speaker_profile_id,
-            ),
-          )
+          .filter((row) => profiles.some((profile) => profile.id === row.speaker_profile_id))
           .map((row) => row.organization_id)
           .filter((value) => typeof value === "string" && value.trim().length > 0),
       ),
@@ -2699,7 +2697,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
 
   async listPortalContextScopes(
     accountId: string,
-  ): Promise<readonly { context: SpeakerPortalContext; scope: SpeakerAccessScope }[]> {
+  ): Promise<readonly SpeakerPortalContextScopeProjection[]> {
     const [grants, profiles, submissionRecords, decisionRecords, events] = await Promise.all([
       this.#database
         .prepare(
@@ -2717,7 +2715,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     ]);
     const records = submissionRecords as unknown as JsonRecord[];
     const decisions = portalDecisionProjections(decisionRecords);
-    const contextScopes: Array<{ context: SpeakerPortalContext; scope: SpeakerAccessScope }> = [];
+    const contextScopes: SpeakerPortalContextScopeProjection[] = [];
     for (const event of events) {
       const eventId = typeof event.id === "string" ? event.id : null;
       if (eventId === null) continue;
@@ -2744,11 +2742,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       const eventProfiles = profiles.filter(
         (profile) =>
           profile.eventId === eventId &&
-          eventGrants.some(
-            (grant) =>
-              grant.speaker_profile_id === profile.id ||
-              grant.speaker_profile_id === profile.participantId,
-          ),
+          eventGrants.some((grant) => grant.speaker_profile_id === profile.id),
       );
       const accountProfiles = eventProfiles;
       const grantParticipantIds = new Set(accountProfiles.map((profile) => profile.participantId));
@@ -2774,9 +2768,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       ];
       const participantIds = portalCanonicalGrantedParticipantIds(eventProfiles, ownerRecords);
       if (submissionIds.length === 0) continue;
-      const eventProfileIds = new Set(
-        eventProfiles.flatMap((profile) => [profile.id, profile.participantId]),
-      );
+      const eventProfileIds = new Set(eventProfiles.map((profile) => profile.id));
       const tenantIds = [
         ...new Set([
           ...eventGrants
@@ -2841,6 +2833,7 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
         ...(primaryParticipantId === undefined ? {} : { primaryParticipantId }),
       };
       contextScopes.push({
+        speakerProfileIds: eventProfiles.map((profile) => profile.id),
         context,
         scope: {
           ...(tenantId === undefined ? {} : { tenantId }),
@@ -2859,14 +2852,40 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     eventId: string,
     submissionIds: readonly string[],
   ): Promise<SpeakerSubmission[]> {
+    return this.#listSubmissions(eventId, submissionIds);
+  }
+
+  async listSubmissionsForOrganization(
+    organizationId: string,
+    eventId: string,
+    submissionIds: readonly string[],
+  ): Promise<OrganizationQualifiedSpeakerSubmission[]> {
+    return (await this.#listSubmissions(eventId, submissionIds, organizationId)).flatMap(
+      (submission) =>
+        submission.tenantId === organizationId
+          ? [submission as OrganizationQualifiedSpeakerSubmission]
+          : [],
+    );
+  }
+
+  async #listSubmissions(
+    eventId: string,
+    submissionIds: readonly string[],
+    organizationId?: string,
+  ): Promise<SpeakerSubmission[]> {
     const allowed = new Set(submissionIds);
-    const [submissionRecords, decisionRecords] = await Promise.all([
+    const [submissionRecords, rawDecisionRecords] = await Promise.all([
       this.#submissions.listByIds([
         ...new Set(submissionIds.flatMap((id) => [id, originalCfpSubmissionId(id) ?? id])),
       ]),
       listEventScopedJson(this.#decisions, "Metadata JSON", eventId),
     ]);
-    const records = submissionRecords as unknown as JsonRecord[];
+    const records = (submissionRecords as unknown as JsonRecord[]).filter(
+      (record) => organizationId === undefined || matchesOrganizationScope(record, organizationId),
+    );
+    const decisionRecords = rawDecisionRecords.filter(
+      (record) => organizationId === undefined || matchesOrganizationScope(record, organizationId),
+    );
     const byId = new Map(
       records
         .map((record) => [textValue(record, "id", APPLICATION_ID), record] as const)
@@ -2894,6 +2913,21 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       }
     }
     return result;
+  }
+
+  async getAccessScopeForOrganization(
+    organizationId: string,
+    eventId: string,
+    accountId: string,
+  ): Promise<SpeakerAccessScope> {
+    const projections = await this.listPortalContextScopes(accountId);
+    const matches = projections.filter(
+      ({ context, scope }) => context.eventId === eventId && scope.tenantId === organizationId,
+    );
+    const match = matches[0];
+    return matches.length === 1 && match !== undefined
+      ? match.scope
+      : { submissionIds: [], participantIds: [] };
   }
 
   async getSubmission(eventId: string, submissionId: string): Promise<SpeakerSubmission | null> {
@@ -3727,6 +3761,24 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
   }
 
   async listTasks(eventId: string, participantIds: readonly string[]): Promise<SpeakerTask[]> {
+    return this.#listTasks(eventId, participantIds);
+  }
+
+  async listTasksForOrganization(
+    organizationId: string,
+    eventId: string,
+    participantIds: readonly string[],
+  ): Promise<OrganizationQualifiedSpeakerTask[]> {
+    return (await this.#listTasks(eventId, participantIds, organizationId)).flatMap((task) =>
+      task.tenantId === organizationId ? [task as OrganizationQualifiedSpeakerTask] : [],
+    );
+  }
+
+  async #listTasks(
+    eventId: string,
+    participantIds: readonly string[],
+    organizationId?: string,
+  ): Promise<SpeakerTask[]> {
     const requestedParticipantIds = [
       ...new Set(
         participantIds
@@ -3742,10 +3794,16 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
       this.#decisions.list(),
       this.listRosterForEvent(eventId),
     ]);
-    const decisions = portalDecisionProjections(decisionRecords);
+    const decisions = portalDecisionProjections(
+      decisionRecords.filter(
+        (record) =>
+          organizationId === undefined || matchesOrganizationScope(record, organizationId),
+      ),
+    );
     const acceptedParticipantsBySubmission = new Map<string, ReadonlySet<string>>();
     for (const record of submissionRecords as unknown as JsonRecord[]) {
       if (
+        (organizationId !== undefined && !matchesOrganizationScope(record, organizationId)) ||
         textValue(record, "eventId", "Event ID") !== eventId ||
         portalRecordStatus(record, decisions) !== "accepted"
       ) {
@@ -3765,12 +3823,20 @@ export class AirtableSpeakerRepository implements SpeakerRepository {
     const requested = new Set(requestedParticipantIds);
     const manualRosterMatches = new Set(
       rosterEntries
-        .filter(isCrmRosterAdmission)
+        .filter(
+          (entry) =>
+            isCrmRosterAdmission(entry) &&
+            (organizationId === undefined || matchesOrganizationScope(entry, organizationId)),
+        )
         .map((entry) => `${entry.participantId}\u0000${entry.submissionId}`),
     );
     return storedTasks
       .filter((storedTask) => {
-        if (storedTask.eventId !== eventId || !requested.has(storedTask.participantId)) {
+        if (
+          (organizationId !== undefined && !matchesOrganizationScope(storedTask, organizationId)) ||
+          storedTask.eventId !== eventId ||
+          !requested.has(storedTask.participantId)
+        ) {
           return false;
         }
         const subject = storedTask.subject;
@@ -12194,6 +12260,123 @@ export function createD1ApplicationDependencies(
   };
 
   return {
+    access: {
+      async listOrganizationsForUser(principal) {
+        const rows = await options.database
+          .prepare(
+            `SELECT organizations.organization_id, organizations.name
+               FROM organizations
+              WHERE organizations.organization_id IN (
+                SELECT organization_id
+                  FROM organization_memberships
+                 WHERE user_id = ?
+                UNION
+                SELECT organization_id
+                  FROM speaker_grants
+                 WHERE user_id = ? AND revoked_at IS NULL
+              )
+              ORDER BY organizations.name, organizations.organization_id`,
+          )
+          .bind(principal.userId, principal.userId)
+          .all<{ organization_id?: unknown; name?: unknown }>();
+        return rows.results.flatMap((row) =>
+          typeof row.organization_id === "string" &&
+          row.organization_id.trim().length > 0 &&
+          typeof row.name === "string" &&
+          row.name.trim().length > 0
+            ? [{ organizationId: row.organization_id, name: row.name }]
+            : [],
+        );
+      },
+      async listEvents(organizationId) {
+        return (await eventRepository.listEvents(organizationId)).map((event) => ({
+          organizationId: event.organizationId,
+          eventId: event.id,
+          name: event.name,
+        }));
+      },
+      async listEvaluationPlans(organizationId) {
+        return (await evaluationRepository.listPlans(organizationId)).map((plan) => ({
+          organizationId: plan.tenantId,
+          eventId: plan.eventId,
+          planId: plan.id,
+          closesAt: plan.closesAt,
+        }));
+      },
+      async listSpeakerContextScopes(userId) {
+        if (speakerRepository.listPortalContextScopes === undefined) return [];
+        return (await speakerRepository.listPortalContextScopes(userId)).map(
+          ({ context, scope, speakerProfileIds }) => ({
+            organizationId: scope.tenantId ?? "",
+            resolvedOrganizationIds: scope.tenantId === undefined ? [] : [scope.tenantId],
+            eventId: context.eventId,
+            accountId: userId,
+            speakerProfileIds: [...speakerProfileIds],
+            participantIds: [...scope.participantIds],
+            ...(scope.capabilities === undefined ? {} : { capabilities: [...scope.capabilities] }),
+            ...(scope.capabilitiesByParticipant === undefined
+              ? {}
+              : { capabilitiesByParticipant: scope.capabilitiesByParticipant }),
+          }),
+        );
+      },
+      speakerTasks: {
+        async resolveScope(principal, organizationId, eventId) {
+          const scope = await speakerRepository.getAccessScopeForOrganization(
+            organizationId,
+            eventId,
+            principal.userId,
+          );
+          if (scope.tenantId !== organizationId) return null;
+          return {
+            tenantId: scope.tenantId,
+            organizationId: scope.tenantId,
+            eventId,
+            accountId: principal.userId,
+            participantIds: scope.participantIds,
+            submissionIds: scope.submissionIds,
+            ...(scope.capabilities === undefined ? {} : { capabilities: scope.capabilities }),
+            ...(scope.capabilitiesByParticipant === undefined
+              ? {}
+              : { capabilitiesByParticipant: scope.capabilitiesByParticipant }),
+          };
+        },
+        async listSubmissions(organizationId, eventId, submissionIds) {
+          const submissions = await speakerRepository.listSubmissionsForOrganization(
+            organizationId,
+            eventId,
+            submissionIds,
+          );
+          return submissions.map((submission) => ({
+            organizationId: submission.tenantId,
+            eventId: submission.eventId,
+            submissionId: submission.id,
+            participantIds: submission.participantIds,
+          }));
+        },
+        async listTasks(organizationId, eventId, participantIds) {
+          const tasks = await speakerRepository.listTasksForOrganization(
+            organizationId,
+            eventId,
+            participantIds,
+          );
+          return tasks.map((task) => ({
+            organizationId: task.tenantId,
+            eventId: task.eventId,
+            taskId: task.id,
+            submissionId: task.submissionId,
+            participantId: task.participantId,
+            owner: task.owner,
+            title: task.title,
+            dueAt: task.dueAt ?? task.dueDate ?? null,
+            status: task.status,
+          }));
+        },
+      },
+      reviewerWorkspace: {
+        listReviewerWorkspace: evaluationService.listReviewerWorkspace.bind(evaluationService),
+      },
+    },
     events: { service: eventService, publication: publicationService },
     authenticator,
     speaker: {

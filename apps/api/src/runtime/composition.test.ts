@@ -1050,11 +1050,15 @@ describe("fixture local runtime composition", () => {
       },
     });
 
-    const contexts = await app.request(
-      "/api/speaker/portal/contexts",
-      { headers: speakerHeaders() },
-      localBindings,
-    );
+    const [contexts, accessContexts, speakerTasks] = await Promise.all([
+      app.request("/api/speaker/portal/contexts", { headers: speakerHeaders() }, localBindings),
+      app.request("/api/account/access-contexts", { headers: speakerHeaders() }, localBindings),
+      app.request(
+        `/api/account/speaker-tasks?organizationId=${LOCAL_ORGANIZATION_ID}&eventId=demo-event`,
+        { headers: speakerHeaders() },
+        localBindings,
+      ),
+    ]);
     expect(contexts.status).toBe(200);
     await expect(contexts.json()).resolves.toMatchObject({
       data: [
@@ -1065,6 +1069,27 @@ describe("fixture local runtime composition", () => {
           primaryParticipantId: "local-participant",
         },
       ],
+    });
+    expect(accessContexts.status).toBe(200);
+    await expect(accessContexts.json()).resolves.toMatchObject({
+      data: [
+        { scope: "organization", organization: { id: LOCAL_ORGANIZATION_ID } },
+        {
+          scope: "event",
+          organization: { id: LOCAL_ORGANIZATION_ID },
+          event: { id: "demo-event" },
+          roles: ["speaker"],
+          capabilities: ["speaker.portal.read", "speaker.tasks.read"],
+        },
+      ],
+    });
+    expect(speakerTasks.status).toBe(200);
+    await expect(speakerTasks.json()).resolves.toMatchObject({
+      data: {
+        organizationId: LOCAL_ORGANIZATION_ID,
+        eventId: "demo-event",
+        tasks: [{ taskId: "local-biography-task" }, { taskId: "local-slides-task" }],
+      },
     });
   });
   it("projects submitted CFP proposals into the submitting account portal", async () => {

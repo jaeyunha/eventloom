@@ -97,13 +97,13 @@ import type {
   RepositoryResult,
   RestoreSpeakerContentVersionCommand,
   SpeakerAccessScope,
+  SpeakerAccountWorkloadRepository,
   SpeakerAsset,
   SpeakerContentHistoryEntry,
   SpeakerContentRecord,
   SpeakerPortalCapability,
   SpeakerPortalContext,
   SpeakerProfile,
-  SpeakerRepository,
   SpeakerSubmission,
   SpeakerTask,
   TransitionSpeakerTaskCommand,
@@ -248,9 +248,7 @@ const LOCAL_PERSONAS: readonly LocalPersona[] = [
     name: "Alex Rivera",
     password: LOCAL_SPEAKER_PASSWORD,
     memberships: [],
-    speakerGrants: [
-      { organizationId: LOCAL_ORGANIZATION_ID, speakerProfileId: "local-participant" },
-    ],
+    speakerGrants: [{ organizationId: LOCAL_ORGANIZATION_ID, speakerProfileId: "local-profile" }],
   },
 ];
 
@@ -460,7 +458,7 @@ function localAuthRoutes(personas: LocalPersona[]): {
   };
 }
 
-class LocalSpeakerRepository implements SpeakerRepository {
+class LocalSpeakerRepository implements SpeakerAccountWorkloadRepository {
   readonly #submissions = new Map<string, SpeakerSubmission[]>();
   readonly #profiles = new Map<string, SpeakerProfile[]>();
   readonly #tasks = new Map<string, SpeakerTask[]>();
@@ -709,21 +707,51 @@ class LocalSpeakerRepository implements SpeakerRepository {
       primaryParticipantId: "local-participant",
     };
   }
+  async getAccessScopeForOrganization(
+    organizationId: string,
+    eventId: string,
+    accountId: string,
+  ): Promise<SpeakerAccessScope> {
+    if (organizationId !== LOCAL_ORGANIZATION_ID) {
+      return { submissionIds: [], participantIds: [] };
+    }
+    const scope = await this.getAccessScope(eventId, accountId);
+    return scope.tenantId === organizationId ? scope : { submissionIds: [], participantIds: [] };
+  }
   async listPortalContexts(accountId: string) {
+    return (await this.listPortalContextScopes(accountId)).map(({ context }) => context);
+  }
+  async listPortalContextScopes(accountId: string) {
     const cfpContext = this.#cfpPortalContexts.get(accountId);
-    if (cfpContext !== undefined) return [clone(cfpContext)];
+    if (cfpContext !== undefined) {
+      const scope = await this.getAccessScope(cfpContext.eventId, accountId);
+      return [
+        {
+          context: clone(cfpContext),
+          scope,
+          speakerProfileIds: (
+            await this.listProfiles(cfpContext.eventId, scope.participantIds)
+          ).map((profile) => profile.id),
+        },
+      ];
+    }
     if (accountId !== LOCAL_SPEAKER_ACCOUNT_ID) return [];
+    const context = {
+      id: "portal:demo-event:local-participant",
+      eventId: "demo-event",
+      name: "Eventloom Demo",
+      slug: "demo-event",
+      status: "active",
+      capabilities: LOCAL_SPEAKER_CAPABILITIES,
+      submissionIds: ["local-submission"],
+      participantIds: ["local-participant"],
+      primaryParticipantId: "local-participant",
+    };
     return [
       {
-        id: "portal:demo-event:local-participant",
-        eventId: "demo-event",
-        name: "Open Sessionboard Conference",
-        slug: "demo-event",
-        status: "active",
-        capabilities: LOCAL_SPEAKER_CAPABILITIES,
-        submissionIds: ["local-submission"],
-        participantIds: ["local-participant"],
-        primaryParticipantId: "local-participant",
+        context,
+        scope: await this.getAccessScope(context.eventId, accountId),
+        speakerProfileIds: ["local-profile"],
       },
     ];
   }
@@ -743,6 +771,18 @@ class LocalSpeakerRepository implements SpeakerRepository {
     this.#seed(eventId);
     const allowed = new Set(submissionIds);
     return clone((this.#submissions.get(eventId) ?? []).filter(({ id }) => allowed.has(id)));
+  }
+
+  async listSubmissionsForOrganization(
+    organizationId: string,
+    eventId: string,
+    submissionIds: readonly string[],
+  ) {
+    if (organizationId !== LOCAL_ORGANIZATION_ID) return [];
+    return (await this.listSubmissions(eventId, submissionIds)).map((submission) => ({
+      ...submission,
+      tenantId: LOCAL_ORGANIZATION_ID,
+    }));
   }
 
   async getSubmission(eventId: string, submissionId: string) {
@@ -827,6 +867,18 @@ class LocalSpeakerRepository implements SpeakerRepository {
     return clone(
       (this.#tasks.get(eventId) ?? []).filter(({ participantId }) => allowed.has(participantId)),
     );
+  }
+
+  async listTasksForOrganization(
+    organizationId: string,
+    eventId: string,
+    participantIds: readonly string[],
+  ) {
+    if (organizationId !== LOCAL_ORGANIZATION_ID) return [];
+    return (await this.listTasks(eventId, participantIds)).map((task) => ({
+      ...task,
+      tenantId: LOCAL_ORGANIZATION_ID,
+    }));
   }
 
   async getTask(eventId: string, taskId: string) {
@@ -2963,6 +3015,108 @@ export function createLocalDependencies(aiProviders?: CloudflareAiProviders): Ap
     );
   };
   return {
+    access: {
+      async listOrganizationsForUser(principal) {
+        const organizations = await memberIdentity.listOrganizationsForUser(principal.userId);
+        const known = new Map(
+          organizations.map((organization) => [organization.organizationId, organization.name]),
+        );
+        for (const grant of principal.speakerGrants) {
+          if (!known.has(grant.organizationId) && grant.organizationId === LOCAL_ORGANIZATION_ID) {
+            known.set(grant.organizationId, "Eventloom");
+          }
+        }
+        return [...known.entries()].map(([organizationId, name]) => ({ organizationId, name }));
+      },
+      async listEvents(organizationId) {
+        return (await eventRepository.listEvents(organizationId)).map((event) => ({
+          organizationId: event.organizationId,
+          eventId: event.id,
+          name: event.name,
+        }));
+      },
+      async listEvaluationPlans(organizationId) {
+        return (await evaluationRepository.listPlans(organizationId)).map((plan) => ({
+          organizationId: plan.tenantId,
+          eventId: plan.eventId,
+          planId: plan.id,
+          closesAt: plan.closesAt,
+        }));
+      },
+      async listSpeakerContextScopes(userId) {
+        if (speakerRepository.listPortalContextScopes === undefined) return [];
+        return (await speakerRepository.listPortalContextScopes(userId)).map(
+          ({ context, scope, speakerProfileIds }) => ({
+            organizationId: scope.tenantId ?? "",
+            resolvedOrganizationIds: scope.tenantId === undefined ? [] : [scope.tenantId],
+            eventId: context.eventId,
+            accountId: userId,
+            speakerProfileIds: [...speakerProfileIds],
+            participantIds: [...scope.participantIds],
+            ...(scope.capabilities === undefined ? {} : { capabilities: [...scope.capabilities] }),
+            ...(scope.capabilitiesByParticipant === undefined
+              ? {}
+              : { capabilitiesByParticipant: scope.capabilitiesByParticipant }),
+          }),
+        );
+      },
+      speakerTasks: {
+        async resolveScope(principal, organizationId, eventId) {
+          const scope = await speakerRepository.getAccessScopeForOrganization(
+            organizationId,
+            eventId,
+            principal.userId,
+          );
+          if (scope.tenantId !== organizationId) return null;
+          return {
+            tenantId: scope.tenantId,
+            organizationId: scope.tenantId,
+            eventId,
+            accountId: principal.userId,
+            participantIds: scope.participantIds,
+            submissionIds: scope.submissionIds,
+            ...(scope.capabilities === undefined ? {} : { capabilities: scope.capabilities }),
+            ...(scope.capabilitiesByParticipant === undefined
+              ? {}
+              : { capabilitiesByParticipant: scope.capabilitiesByParticipant }),
+          };
+        },
+        async listSubmissions(organizationId, eventId, submissionIds) {
+          const submissions = await speakerRepository.listSubmissionsForOrganization(
+            organizationId,
+            eventId,
+            submissionIds,
+          );
+          return submissions.map((submission) => ({
+            organizationId: submission.tenantId,
+            eventId: submission.eventId,
+            submissionId: submission.id,
+            participantIds: submission.participantIds,
+          }));
+        },
+        async listTasks(organizationId, eventId, participantIds) {
+          const tasks = await speakerRepository.listTasksForOrganization(
+            organizationId,
+            eventId,
+            participantIds,
+          );
+          return tasks.map((task) => ({
+            organizationId: task.tenantId,
+            eventId: task.eventId,
+            taskId: task.id,
+            submissionId: task.submissionId,
+            participantId: task.participantId,
+            owner: task.owner,
+            title: task.title,
+            dueAt: task.dueAt ?? task.dueDate ?? null,
+            status: task.status,
+          }));
+        },
+      },
+      reviewerWorkspace: {
+        listReviewerWorkspace: evaluationService.listReviewerWorkspace.bind(evaluationService),
+      },
+    },
     events: { service: eventService, publication: publicationService },
     sessions: { service: sessionService },
     members: { service: memberService },
