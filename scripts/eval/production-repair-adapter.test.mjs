@@ -17,6 +17,61 @@ const CONFIG = {
   baseId: "base-test",
   accessToken: "airtable-secret",
 };
+const TEST_FIXTURE = {
+  event: {
+    name: "DevFlow Conf 2027",
+    tagline: "A deterministic evaluator fixture.",
+    dates: "2027-05-12 to 2027-05-13",
+    location: "Test Convention Center",
+    description: "Repository-owned data for the evaluator repair unit tests.",
+    tracks: ["Platform & Infra", "AI Engineering", "Developer Experience"],
+    session_formats: ["Talk (30 min)", "Lightning Talk (10 min)", "Workshop (120 min)"],
+    rooms: ["Room 2A", "Room 2B"],
+  },
+  identities: {
+    organizer: { name: "Jordan Alvarez", email: "organizer@example.test" },
+    reviewer: { name: "Sam Reviewer", email: "reviewer@example.test" },
+    speaker: {
+      name: "Priya Raman",
+      email: "priya@example.test",
+      bio: "Platform engineer focused on reliable build systems.",
+      company: "Latticework Systems",
+    },
+    speaker2: {
+      name: "Marcus Okafor",
+      email: "marcus@example.test",
+      bio: "Developer experience engineer building retrieval-grounded tools.",
+      company: "Northstar Labs",
+    },
+  },
+  submissions: [
+    {
+      title: "Taming 40-Minute CI: Incremental Builds at Monorepo Scale",
+      abstract: "Practical techniques for making large monorepo builds incremental.",
+      track: "Platform & Infra",
+      format: "Talk (30 min)",
+      audience_level: "Advanced",
+    },
+    {
+      title: "Your AI Pair Programmer Is Lying to You: Verification Patterns That Scale",
+      abstract: "Verification patterns for safely using AI-assisted development.",
+      track: "AI Engineering",
+      format: "Talk (30 min)",
+      audience_level: "Intermediate",
+    },
+    {
+      title: "Docs That Answer Back: Retrieval-Grounded Documentation Sites",
+      abstract: "Building useful documentation experiences with retrieval grounding.",
+      track: "Developer Experience",
+      format: "Lightning Talk (10 min)",
+      audience_level: "Intermediate",
+    },
+  ],
+  communications: {
+    acceptance_subject: "Your session has been accepted",
+    acceptance_body: "Hi {speaker_name}, your session '{talk_title}' has been accepted.",
+  },
+};
 const PARTICIPANT_ID = "devflow-conf-2027-participant-speaker-priya";
 const PROFILE_ID = `speaker-profile:devflow-conf-2027:${PARTICIPANT_ID}`;
 const CONTACT_ID = `crm-contact:${PROFILE_ID}`;
@@ -148,7 +203,10 @@ test("prepare with the built-in adapter performs no provider writes", async () =
     if (String(url).includes("api.cloudflare.com")) return d1([]);
     return response({ records: [] });
   });
-  const manifest = buildRepairManifest({ identities: identityInputs() });
+  const manifest = buildRepairManifest({
+    fixture: TEST_FIXTURE,
+    identities: identityInputs(),
+  });
   const prepared = await prepareRepair({
     manifest,
     transport: createRepairTransport({ airtable: adapter.airtable, commandAdapter: adapter }),

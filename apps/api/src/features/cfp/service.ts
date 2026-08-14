@@ -1245,7 +1245,10 @@ export class CfpService {
           this.#getForm(input.tenantId, current.formId),
         ]);
         ensureEventFormMatch(event, form);
-        ensureSubmissionSchemaVersion(current, form);
+        const usesCurrentSchema = current.formVersion === form.version;
+        if (!usesCurrentSchema && input.answers !== undefined) {
+          ensureSubmissionSchemaVersion(current, form);
+        }
         if (input.formVersion !== undefined && input.formVersion !== current.formVersion) {
           throw new CfpError("CONFLICT", "The submission schema version is stale.", {
             expectedFormVersion: input.formVersion,
@@ -1254,31 +1257,51 @@ export class CfpService {
         }
         this.#ensureEditable(current, event);
 
-        const next = sanitizeSubmission(
-          submissionSchema.parse({
-            ...current,
-            version: current.version + 1,
-            completedSteps: addCompletedStep(current.completedSteps, input.completedStep),
-            answers:
-              input.answers === undefined
-                ? current.answers
-                : { ...current.answers, ...input.answers },
-            participants: input.participants ?? current.participants,
-            secondaryContacts: input.secondaryContacts ?? current.secondaryContacts,
-            updatedAt: this.#clock.now().toISOString(),
-          }),
-          form,
-        );
+        const parsed = submissionSchema.parse({
+          ...current,
+          version: current.version + 1,
+          completedSteps: addCompletedStep(current.completedSteps, input.completedStep),
+          answers:
+            input.answers === undefined
+              ? current.answers
+              : { ...current.answers, ...input.answers },
+          participants: input.participants ?? current.participants,
+          secondaryContacts: input.secondaryContacts ?? current.secondaryContacts,
+          updatedAt: this.#clock.now().toISOString(),
+        });
+        const next = usesCurrentSchema
+          ? sanitizeSubmission(parsed, form)
+          : {
+              ...parsed,
+              answers: current.answers,
+              participants: parsed.participants.map((participant) => ({
+                ...participant,
+                firstName: sanitizePlainText(participant.firstName),
+                lastName: sanitizePlainText(participant.lastName),
+                email: sanitizePlainText(participant.email).toLowerCase(),
+                biography: sanitizeRichText(participant.biography),
+                answers:
+                  current.participants.find((candidate) => candidate.id === participant.id)
+                    ?.answers ?? {},
+              })),
+              secondaryContacts: parsed.secondaryContacts.map((contact) => ({
+                ...contact,
+                name: sanitizePlainText(contact.name),
+                email: sanitizePlainText(contact.email).toLowerCase(),
+              })),
+            };
         if (next.participants.length > form.settings.speakerLimit) {
           throw new CfpError(
             "VALIDATION_FAILED",
             `This form allows at most ${form.settings.speakerLimit} speakers.`,
           );
         }
-        const fileIssues = [
-          ...validateFileRequestShapes(form, next),
-          ...(await this.#validateFileRequestAssets(form, next)),
-        ];
+        const fileIssues = usesCurrentSchema
+          ? [
+              ...validateFileRequestShapes(form, next),
+              ...(await this.#validateFileRequestAssets(form, next)),
+            ]
+          : [];
         if (fileIssues.length > 0) {
           throw new CfpError("VALIDATION_FAILED", "The file request payload is invalid.", {
             issues: fileIssues,

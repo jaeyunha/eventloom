@@ -112,6 +112,11 @@ export async function installCfpApi(
   const formId = options.formId ?? `${options.eventId}-cfp`;
   const formVersion = options.formVersion ?? DEFAULT_FORM_VERSION;
   const eventSlug = options.eventSlug ?? options.eventId;
+  const organization = {
+    id: DEFAULT_ORGANIZATION_ID,
+    slug: DEFAULT_ORGANIZATION_ID,
+    name: DEFAULT_ORGANIZATION_ID,
+  };
   const event = {
     id: options.eventId,
     slug: eventSlug,
@@ -133,7 +138,71 @@ export async function installCfpApi(
       successContent: "Thank you for contributing to the program.",
     },
     sections: [],
-    submissionFields: [],
+    submissionFields: [
+      {
+        id: "field-title",
+        sectionId: "submission",
+        key: "title",
+        label: "Title",
+        kind: "text",
+        required: true,
+        options: [],
+      },
+      {
+        id: "field-abstract",
+        sectionId: "submission",
+        key: "abstract",
+        label: "Description",
+        kind: "rich_text",
+        required: true,
+        options: [],
+      },
+      {
+        id: "field-format",
+        sectionId: "submission",
+        key: "format",
+        label: "Format",
+        kind: "select",
+        required: true,
+        options: ["Featured Keynote", "Breakout Session", "Panel", "Workshop"],
+      },
+      {
+        id: "field-tags",
+        sectionId: "submission",
+        key: "tags",
+        label: "Tags",
+        kind: "multi_select",
+        required: false,
+        options: ["Leadership", "Platform", "Community"],
+      },
+      {
+        id: "field-track",
+        sectionId: "submission",
+        key: "track",
+        label: "Track",
+        kind: "select",
+        required: true,
+        options: ["Track 1", "Track 2", "Track 3"],
+      },
+      {
+        id: "field-level",
+        sectionId: "submission",
+        key: "level",
+        label: "Level",
+        kind: "select",
+        required: true,
+        options: ["Introductory", "Intermediate", "Advanced"],
+      },
+      {
+        id: "field-language",
+        sectionId: "submission",
+        key: "language",
+        label: "Language",
+        kind: "select",
+        required: true,
+        options: ["English"],
+      },
+    ],
     participantFields: [],
     rules: [],
   };
@@ -192,7 +261,11 @@ export async function installCfpApi(
       request.method() === "GET" &&
       (url.pathname === publicPath || url.pathname === `${publicPath}/forms/${formId}`)
     ) {
-      await fulfillJson(route, { event: clone(event), form: clone(form) });
+      await fulfillJson(route, {
+        organization: clone(organization),
+        event: clone(event),
+        form: clone(form),
+      });
       return;
     }
     if (request.method() === "GET" && url.pathname === draftPath) {

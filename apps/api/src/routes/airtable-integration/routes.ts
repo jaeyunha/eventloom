@@ -37,6 +37,8 @@ export type AirtableConflictResolutionInput =
     };
 
 export interface AirtableIntegrationRouteDependencies {
+  /** Browser origin permitted to issue session-authenticated mutations. */
+  readonly webOrigin: string;
   /** Authorizes the current user for organizer administration of the organization. */
   readonly requireOrganizationAccess: (
     context: AirtableIntegrationRouteContext,
@@ -47,14 +49,15 @@ export interface AirtableIntegrationRouteDependencies {
     organizationId: string,
     command: AirtableIdempotentCommand,
   ) => Promise<AirtableIntegrationJson>;
-  /** Completes OAuth after the provider state has been verified by the service. */
-  readonly completeOAuth: (
+  /** Completes OAuth after the provider state has recovered its organization from D1. */
+  readonly completeOAuth: (input: {
+    readonly code: string;
+    readonly state: string;
+  }) => Promise<Response>;
+  /** Present only when explicitly enabled by the hosted runtime. */
+  readonly connectPat?: (
     organizationId: string,
-    input: { readonly code: string; readonly state: string },
-  ) => Promise<Response>;
-  readonly connectPat: (
-    organizationId: string,
-    input: { readonly token: string },
+    input: { readonly token: string; readonly baseId: string },
     command: AirtableIdempotentCommand,
   ) => Promise<AirtableIntegrationJson>;
   readonly selectBase: (
@@ -115,7 +118,9 @@ const oauthCallbackSchema = z
     state: z.string().trim().min(1).max(2_000),
   })
   .strict();
-const patSchema = z.object({ token: z.string().trim().min(1).max(2_000) }).strict();
+const patSchema = z
+  .object({ token: z.string().trim().min(1).max(2_000), baseId: boundedIdentifier })
+  .strict();
 const baseSchema = z.object({ baseId: boundedIdentifier }).strict();
 const mappingSchema = z
   .object({
@@ -190,6 +195,17 @@ async function authorizedOrganization(
   return { organizationId: id, user };
 }
 
+async function authorizedMutation(
+  context: AirtableIntegrationRouteContext,
+  dependencies: AirtableIntegrationRouteDependencies,
+): Promise<{ readonly organizationId: string; readonly user: AirtableAuthenticatedUserIdentity }> {
+  const principal = context.get("authPrincipal");
+  if (principal?.kind === "user" && context.req.header("origin") !== dependencies.webOrigin) {
+    throw new AuthAccessError("FORBIDDEN", "Airtable mutations require the configured web origin.");
+  }
+  return authorizedOrganization(context, dependencies);
+}
+
 function command(
   context: AirtableIntegrationRouteContext,
   user: AirtableAuthenticatedUserIdentity,
@@ -249,28 +265,27 @@ export function createAirtableIntegrationRoutes(
   });
 
   routes.post("/oauth/start", async (context) => {
-    const authorized = await authorizedOrganization(context, dependencies);
+    const authorized = await authorizedMutation(context, dependencies);
     return data(
       context,
       await dependencies.startOAuth(authorized.organizationId, command(context, authorized.user)),
     );
   });
 
-  routes.post("/pat", async (context) => {
-    const authorized = await authorizedOrganization(context, dependencies);
-    const input = parse(patSchema, await requestBody(context));
-    return data(
-      context,
-      await dependencies.connectPat(
-        authorized.organizationId,
-        input,
-        command(context, authorized.user),
-      ),
-    );
-  });
+  const connectPat = dependencies.connectPat;
+  if (connectPat !== undefined) {
+    routes.post("/pat", async (context) => {
+      const authorized = await authorizedMutation(context, dependencies);
+      const input = parse(patSchema, await requestBody(context));
+      return data(
+        context,
+        await connectPat(authorized.organizationId, input, command(context, authorized.user)),
+      );
+    });
+  }
 
   routes.put("/base", async (context) => {
-    const authorized = await authorizedOrganization(context, dependencies);
+    const authorized = await authorizedMutation(context, dependencies);
     const input = parse(baseSchema, await requestBody(context));
     return data(
       context,
@@ -283,7 +298,7 @@ export function createAirtableIntegrationRoutes(
   });
 
   routes.put("/mapping", async (context) => {
-    const authorized = await authorizedOrganization(context, dependencies);
+    const authorized = await authorizedMutation(context, dependencies);
     const input = parse(mappingSchema, await requestBody(context));
     return data(
       context,
@@ -296,7 +311,7 @@ export function createAirtableIntegrationRoutes(
   });
 
   routes.post("/pause", async (context) => {
-    const authorized = await authorizedOrganization(context, dependencies);
+    const authorized = await authorizedMutation(context, dependencies);
     return data(
       context,
       await dependencies.pause(authorized.organizationId, command(context, authorized.user)),
@@ -304,7 +319,7 @@ export function createAirtableIntegrationRoutes(
   });
 
   routes.post("/resume", async (context) => {
-    const authorized = await authorizedOrganization(context, dependencies);
+    const authorized = await authorizedMutation(context, dependencies);
     return data(
       context,
       await dependencies.resume(authorized.organizationId, command(context, authorized.user)),
@@ -312,7 +327,7 @@ export function createAirtableIntegrationRoutes(
   });
 
   routes.delete("/connection", async (context) => {
-    const authorized = await authorizedOrganization(context, dependencies);
+    const authorized = await authorizedMutation(context, dependencies);
     return data(
       context,
       await dependencies.disconnect(authorized.organizationId, command(context, authorized.user)),
@@ -320,7 +335,7 @@ export function createAirtableIntegrationRoutes(
   });
 
   routes.post("/retry", async (context) => {
-    const authorized = await authorizedOrganization(context, dependencies);
+    const authorized = await authorizedMutation(context, dependencies);
     return data(
       context,
       await dependencies.retry(authorized.organizationId, command(context, authorized.user)),
@@ -333,7 +348,7 @@ export function createAirtableIntegrationRoutes(
   });
 
   routes.post("/conflicts/:conflictId/resolve", async (context) => {
-    const authorized = await authorizedOrganization(context, dependencies);
+    const authorized = await authorizedMutation(context, dependencies);
     const conflictId = parse(boundedIdentifier, context.req.param("conflictId"));
     const input = parse(resolutionSchema, await requestBody(context));
     const idempotentCommand = command(context, authorized.user);
@@ -362,7 +377,7 @@ export function createAirtableOAuthCallbackRoutes(
       code: context.req.query("code"),
       state: context.req.query("state"),
     });
-    return dependencies.completeOAuth(organizationId(context), input);
+    return dependencies.completeOAuth(input);
   });
 
   installErrorHandler(routes);

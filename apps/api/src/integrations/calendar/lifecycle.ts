@@ -1,14 +1,14 @@
-import type { CalendarInvitationPayload } from "@eventloom/contracts";
 import { createCalendarInvitation, validateCalendarInvitationPayload } from "./ical";
 import {
-  CALENDAR_ORGANIZER,
-  CALENDAR_UID_DOMAIN,
+  type CalendarIntegrationOptions,
   type CalendarInvitationDetails,
   CalendarInvitationError,
   type CalendarInvitationInput,
+  type CalendarInvitationPayload,
   type CalendarInvitationRecord,
   type CalendarInvitationRepository,
   type CalendarInvitationScope,
+  validateCalendarIntegrationOptions,
 } from "./types";
 
 export type CalendarInvitationActionInput = Omit<CalendarInvitationInput, "method">;
@@ -17,21 +17,37 @@ export type CalendarInvitationActionInput = Omit<CalendarInvitationInput, "metho
  * Builds a UID from all three tenancy coordinates. Encoding each coordinate
  * prevents delimiter collisions while keeping the UID readable in mail clients.
  */
-export function createCalendarUid(scope: CalendarInvitationScope): string;
-export function createCalendarUid(tenantId: string, eventId: string, sessionId: string): string;
+export function createCalendarUid(
+  scope: CalendarInvitationScope,
+  options: CalendarIntegrationOptions,
+): string;
+export function createCalendarUid(
+  tenantId: string,
+  eventId: string,
+  sessionId: string,
+  options: CalendarIntegrationOptions,
+): string;
 export function createCalendarUid(
   scopeOrTenantId: CalendarInvitationScope | string,
-  eventId?: string,
+  eventIdOrOptions: string | CalendarIntegrationOptions,
   sessionId?: string,
+  stringOptions?: CalendarIntegrationOptions,
 ): string {
   const scope =
     typeof scopeOrTenantId === "string"
-      ? { tenantId: scopeOrTenantId, eventId: eventId ?? "", sessionId: sessionId ?? "" }
+      ? {
+          tenantId: scopeOrTenantId,
+          eventId: typeof eventIdOrOptions === "string" ? eventIdOrOptions : "",
+          sessionId: sessionId ?? "",
+        }
       : scopeOrTenantId;
+  const options = validateCalendarIntegrationOptions(
+    typeof scopeOrTenantId === "string" ? stringOptions : eventIdOrOptions,
+  );
   const tenantId = encodeUidPart(scope.tenantId, "tenantId");
   const scopedEventId = encodeUidPart(scope.eventId, "eventId");
   const scopedSessionId = encodeUidPart(scope.sessionId, "sessionId");
-  return `${tenantId}.${scopedEventId}.${scopedSessionId}@${CALENDAR_UID_DOMAIN}`;
+  return `${tenantId}.${scopedEventId}.${scopedSessionId}@${options.uidDomain}`;
 }
 
 export const createStableCalendarUid = createCalendarUid;
@@ -40,11 +56,14 @@ export const generateCalendarUid = createCalendarUid;
 export function createCalendarInvitationPayload(
   scope: CalendarInvitationScope,
   details: CalendarInvitationDetails,
+  integrationOptions: CalendarIntegrationOptions,
 ): CalendarInvitationPayload {
+  const options = validateCalendarIntegrationOptions(integrationOptions);
   return {
     ...details,
-    uid: createCalendarUid(scope),
+    uid: createCalendarUid(scope, options),
     sequence: 0,
+    organizer: options.organizer,
   };
 }
 
@@ -103,7 +122,7 @@ export class InMemoryCalendarInvitationRepository implements CalendarInvitationR
     const committedPayload: CalendarInvitationPayload = {
       ...validated,
       sequence,
-      organizer: CALENDAR_ORGANIZER,
+      organizer: current?.payload.organizer ?? validated.organizer,
       attendees: [...validated.attendees],
     };
     const invitation = createCalendarInvitation(committedPayload, {
@@ -142,14 +161,23 @@ export class InMemoryCalendarInvitationRepository implements CalendarInvitationR
 }
 
 export class CalendarInvitationLifecycle {
+  readonly integrationOptions: CalendarIntegrationOptions;
+
   constructor(
-    readonly repository: CalendarInvitationRepository = new InMemoryCalendarInvitationRepository(),
-  ) {}
+    readonly repository: CalendarInvitationRepository,
+    integrationOptions: CalendarIntegrationOptions,
+  ) {
+    this.integrationOptions = validateCalendarIntegrationOptions(integrationOptions);
+  }
 
   async publish(input: CalendarInvitationInput): Promise<CalendarInvitationRecord> {
     const { tenantId, eventId, sessionId, ...details } = input;
     return this.repository.publish(
-      createCalendarInvitationPayload({ tenantId, eventId, sessionId }, details),
+      createCalendarInvitationPayload(
+        { tenantId, eventId, sessionId },
+        details,
+        this.integrationOptions,
+      ),
     );
   }
 

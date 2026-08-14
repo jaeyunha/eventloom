@@ -16,6 +16,7 @@ export interface ApiKeySummary {
   readonly label: string;
   readonly prefix: string;
   readonly scopes: readonly ApiScope[];
+  readonly eventId?: string | null;
   readonly createdAt: string;
   readonly lastUsedAt: string | null;
   readonly expiresAt: string | null;

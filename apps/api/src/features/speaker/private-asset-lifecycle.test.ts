@@ -38,6 +38,7 @@ import type {
   UpdateSpeakerProfileCommand,
 } from "./types";
 
+const speakerSender = "speakers@self-hosted.example";
 const now = "2026-08-09T00:00:00.000Z";
 
 class LifecycleRepository implements SpeakerRepository {
@@ -625,6 +626,7 @@ describe("private speaker asset lifecycle", () => {
     const repository = new LifecycleRepository();
     const gateway = new CapabilityGateway();
     const service = new SpeakerService(repository, gateway, {
+      speakerSender,
       now: () => new Date(now),
       generateId: () => "asset-1",
     });
@@ -670,6 +672,7 @@ describe("private speaker asset lifecycle", () => {
     const repository = new LifecycleRepository();
     const gateway = new CapabilityGateway();
     const service = new SpeakerService(repository, gateway, {
+      speakerSender,
       now: () => new Date(now),
       generateId: () => "asset-retry",
     });
@@ -713,6 +716,7 @@ describe("private speaker asset lifecycle", () => {
     const missingInspection = gateway as unknown as { inspectObject?: unknown };
     missingInspection.inspectObject = undefined;
     const service = new SpeakerService(repository, gateway, {
+      speakerSender,
       now: () => new Date(now),
       generateId: () => "asset-no-inspect",
     });
@@ -742,6 +746,7 @@ describe("private speaker asset lifecycle", () => {
     const repository = new LifecycleRepository();
     const gateway = new CapabilityGateway();
     const service = new SpeakerService(repository, gateway, {
+      speakerSender,
       now: () => new Date(now),
       generateId: () => "asset-1",
     });
@@ -775,6 +780,7 @@ describe("private speaker asset lifecycle", () => {
     const gateway = new CapabilityGateway();
     const ids = ["asset-1", "asset-2"];
     const service = new SpeakerService(repository, gateway, {
+      speakerSender,
       now: () => new Date(now),
       generateId: () => ids.shift() ?? "asset-3",
     });
@@ -827,6 +833,7 @@ describe("private speaker asset lifecycle", () => {
     const gateway = new CapabilityGateway();
     const ids = ["task-asset-1", "task-transition-1", "task-asset-2", "task-transition-2"];
     const service = new SpeakerService(repository, gateway, {
+      speakerSender,
       now: () => new Date(now),
       generateId: () => ids.shift() ?? "generated-id",
     });
@@ -972,6 +979,7 @@ describe("private speaker asset lifecycle", () => {
     const repository = new LifecycleRepository();
     const gateway = new CapabilityGateway();
     const service = new SpeakerService(repository, gateway, {
+      speakerSender,
       now: () => new Date(now),
       generateId: () => "asset-1",
     });
@@ -1004,6 +1012,7 @@ describe("private speaker asset lifecycle", () => {
     const repository = new LifecycleRepository();
     const gateway = new CapabilityGateway();
     const service = new SpeakerService(repository, gateway, {
+      speakerSender,
       now: () => new Date(now),
       generateId: () => "asset-retry-route",
     });
@@ -1069,6 +1078,7 @@ describe("speaker participant workspace authorization and projections", () => {
       participantIds: ["participant-2"],
     });
     const service = new SpeakerService(repository, new CapabilityGateway(), {
+      speakerSender,
       now: () => new Date(now),
     });
     await expect(service.listPortalContexts("account-1")).resolves.toEqual(
@@ -1092,6 +1102,7 @@ describe("speaker participant workspace authorization and projections", () => {
       capabilities: ["asset-read"],
     });
     const service = new SpeakerService(repository, new CapabilityGateway(), {
+      speakerSender,
       now: () => new Date(now),
       generateId: () => "generated-participant",
     });
@@ -1154,6 +1165,7 @@ describe("speaker participant workspace authorization and projections", () => {
     });
     const ids = ["asset-history-1", "asset-history-2", "comment-1"];
     const service = new SpeakerService(repository, gateway, {
+      speakerSender,
       now: () => new Date(now),
       generateId: () => ids.shift() ?? "generated-id",
     });
@@ -1303,6 +1315,7 @@ describe("speaker participant workspace authorization and projections", () => {
   it("validates versioned task responses and keeps immutable response history", async () => {
     const repository = new LifecycleRepository();
     const service = new SpeakerService(repository, new CapabilityGateway(), {
+      speakerSender,
       now: () => new Date(now),
     });
     const form = await service.getTaskForm("event-1", "account-1", "upload-task");
@@ -1366,6 +1379,7 @@ describe("speaker participant workspace authorization and projections", () => {
   it("orders published resources and strips unsafe HTML and URLs", async () => {
     const repository = new LifecycleRepository();
     const service = new SpeakerService(repository, new CapabilityGateway(), {
+      speakerSender,
       now: () => new Date(now),
     });
     const resources = await service.listResources("event-1", "account-1");
@@ -1513,6 +1527,7 @@ describe("organizer content-management contracts", () => {
     const gateway = new CapabilityGateway();
     gateway.uploaded.add("opaque/r2/pending-headshot");
     const service = new SpeakerService(repository, gateway, {
+      speakerSender,
       now: () => new Date(now),
       generateId: (() => {
         let sequence = 0;
@@ -1688,6 +1703,7 @@ it("projects exactly one latest ready asset as the organizer current version", a
     },
   );
   const service = new SpeakerService(repository, new CapabilityGateway(), {
+    speakerSender,
     now: () => new Date(now),
   });
 
@@ -1992,6 +2008,7 @@ describe("organizer immutable content history", () => {
       return { ok: true, value: structuredClone(current) };
     };
     const service = new SpeakerService(repository, new CapabilityGateway(), {
+      speakerSender,
       now: () => new Date(now),
     });
     const first = await service.updateContent({
@@ -2235,6 +2252,7 @@ describe("organizer deliverables exports", () => {
       audits.push(entry);
     };
     const service = new SpeakerService(repository, gateway, {
+      speakerSender,
       now: () => new Date(now),
       generateId: (() => {
         let sequence = 0;
@@ -2373,7 +2391,10 @@ describe("organizer deliverables exports", () => {
       body: new TextEncoder().encode("ready-v1"),
       contentType: "application/pdf",
     });
-    const service = new SpeakerService(repository, gateway, { now: () => new Date(now) });
+    const service = new SpeakerService(repository, gateway, {
+      speakerSender,
+      now: () => new Date(now),
+    });
 
     const exported = await service.exportDeliverables({
       eventId: "event-1",
@@ -2403,7 +2424,10 @@ describe("organizer deliverables exports", () => {
     const gateway = new CapabilityGateway();
     const missingGateway = gateway as unknown as { readObject?: unknown };
     missingGateway.readObject = undefined;
-    const service = new SpeakerService(repository, gateway, { now: () => new Date(now) });
+    const service = new SpeakerService(repository, gateway, {
+      speakerSender,
+      now: () => new Date(now),
+    });
     await expect(
       service.exportDeliverables({
         eventId: "event-1",

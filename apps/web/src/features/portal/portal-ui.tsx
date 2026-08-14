@@ -1,7 +1,7 @@
 "use client";
 
-import Link from "next/link";
 import { ChevronDown, LogOut, UserRound } from "lucide-react";
+import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { type ReactNode, useState } from "react";
 import { submissionStatusPresentation, taskStatusPresentation } from "./model";
@@ -17,10 +17,10 @@ import type {
 export const portalNavigation = [
   { href: "/portal", label: "Home", icon: "⌂" },
   { href: "/portal/submissions", label: "Submissions", icon: "▤" },
-  { href: "/portal/tasks", label: "Tasks", icon: "✓" },
+  { href: "/portal/tasks", label: "Requests & tasks", icon: "✓" },
   { href: "/portal/profile", label: "Profile", icon: "◉" },
   { href: "/portal?workspace=co-speakers", label: "Co-speakers", icon: "◎" },
-  { href: "/portal?workspace=files", label: "Files", icon: "▱" },
+  { href: "/portal?workspace=files", label: "Uploaded files", icon: "▱" },
   { href: "/portal?workspace=resources", label: "Resources", icon: "◇" },
   { href: "/portal?workspace=wiki", label: "Wiki", icon: "◫" },
 ] as const;
@@ -210,6 +210,10 @@ export function PortalFrame({ children }: Readonly<{ children: ReactNode }>) {
                   speaker record.
                 </p>
               )}
+              <Link href="/work" role="menuitem">
+                <span aria-hidden="true">⌂</span>
+                All work
+              </Link>
               <Link href={`/portal/profile${eventQuery}`} role="menuitem">
                 <UserRound aria-hidden="true" size={14} />
                 Profile
@@ -236,7 +240,7 @@ export function PortalFrame({ children }: Readonly<{ children: ReactNode }>) {
               >
                 <span aria-hidden="true">{item.icon}</span>
                 {item.label}
-                {item.label === "Tasks" && (view?.outstandingTaskCount ?? 0) > 0 ? (
+                {item.href === "/portal/tasks" && (view?.outstandingTaskCount ?? 0) > 0 ? (
                   <span className={styles.navCount}>
                     {view?.outstandingTaskCount}
                     <span className={styles.srOnly}> outstanding tasks</span>
@@ -435,8 +439,8 @@ export function formatPortalFileSize(sizeBytes: number): string {
 
 export function portalAssetStateLabel(state: PortalAssetState): string {
   return {
-    pending_upload: "Upload pending",
-    ready: "Ready",
-    rejected: "Rejected",
+    pending_upload: "Processing upload",
+    ready: "Uploaded",
+    rejected: "Upload failed",
   }[state];
 }

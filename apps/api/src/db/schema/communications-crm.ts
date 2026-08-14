@@ -51,7 +51,7 @@ export const communicationTemplates = sqliteTable(
     ),
     check(
       "communication_templates_sender_check",
-      sql`${t.sender} IN ('auth@sessionboard.namuh.co','speakers@sessionboard.namuh.co','calendar@sessionboard.namuh.co')`,
+      sql`${t.sender} = trim(${t.sender}) AND length(${t.sender}) BETWEEN 3 AND 320 AND ${t.sender} NOT LIKE '%@%@%' AND instr(${t.sender}, '@') > 1 AND substr(${t.sender}, 1, 1) <> '.' AND substr(${t.sender}, instr(${t.sender}, '@') - 1, 1) GLOB '[A-Za-z0-9_+-]' AND substr(${t.sender}, 1, instr(${t.sender}, '@') - 1) NOT GLOB '*[^A-Za-z0-9_+.''-]*' AND ${t.sender} NOT LIKE '%..%' AND substr(${t.sender}, instr(${t.sender}, '@') + 1) LIKE '%.%' AND substr(${t.sender}, instr(${t.sender}, '@') + 1) NOT GLOB '*[^A-Za-z0-9.-]*' AND substr(${t.sender}, instr(${t.sender}, '@') + 1, 1) GLOB '[A-Za-z0-9]' AND substr(${t.sender}, -1, 1) GLOB '[A-Za-z]' AND substr(${t.sender}, -2, 1) GLOB '[A-Za-z]' AND substr(rtrim(substr(${t.sender}, instr(${t.sender}, '@') + 1), 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'), -1, 1) = '.' AND substr(${t.sender}, instr(${t.sender}, '@') + 1) NOT LIKE '.%' AND substr(${t.sender}, instr(${t.sender}, '@') + 1) NOT LIKE '%.' AND substr(${t.sender}, instr(${t.sender}, '@') + 1) NOT LIKE '-%' AND substr(${t.sender}, instr(${t.sender}, '@') + 1) NOT LIKE '%-' AND substr(${t.sender}, instr(${t.sender}, '@') + 1) NOT LIKE '%.-%' AND substr(${t.sender}, instr(${t.sender}, '@') + 1) NOT LIKE '%-.%'`,
     ),
     check(
       "communication_templates_variables_json_check",
@@ -247,6 +247,10 @@ export const communicationSends = sqliteTable(
     check(
       "communication_sends_data_json_check",
       sql`json_valid(${t.dataJson}) AND json_type(${t.dataJson}) = 'object'`,
+    ),
+    check(
+      "communication_sends_template_sender_check",
+      sql`${t.templateSender} = trim(${t.templateSender}) AND length(${t.templateSender}) BETWEEN 3 AND 320 AND ${t.templateSender} NOT LIKE '%@%@%' AND instr(${t.templateSender}, '@') > 1 AND substr(${t.templateSender}, 1, 1) <> '.' AND substr(${t.templateSender}, instr(${t.templateSender}, '@') - 1, 1) GLOB '[A-Za-z0-9_+-]' AND substr(${t.templateSender}, 1, instr(${t.templateSender}, '@') - 1) NOT GLOB '*[^A-Za-z0-9_+.''-]*' AND ${t.templateSender} NOT LIKE '%..%' AND substr(${t.templateSender}, instr(${t.templateSender}, '@') + 1) LIKE '%.%' AND substr(${t.templateSender}, instr(${t.templateSender}, '@') + 1) NOT GLOB '*[^A-Za-z0-9.-]*' AND substr(${t.templateSender}, instr(${t.templateSender}, '@') + 1, 1) GLOB '[A-Za-z0-9]' AND substr(${t.templateSender}, -1, 1) GLOB '[A-Za-z]' AND substr(${t.templateSender}, -2, 1) GLOB '[A-Za-z]' AND substr(rtrim(substr(${t.templateSender}, instr(${t.templateSender}, '@') + 1), 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'), -1, 1) = '.' AND substr(${t.templateSender}, instr(${t.templateSender}, '@') + 1) NOT LIKE '.%' AND substr(${t.templateSender}, instr(${t.templateSender}, '@') + 1) NOT LIKE '%.' AND substr(${t.templateSender}, instr(${t.templateSender}, '@') + 1) NOT LIKE '-%' AND substr(${t.templateSender}, instr(${t.templateSender}, '@') + 1) NOT LIKE '%-' AND substr(${t.templateSender}, instr(${t.templateSender}, '@') + 1) NOT LIKE '%.-%' AND substr(${t.templateSender}, instr(${t.templateSender}, '@') + 1) NOT LIKE '%-.%'`,
     ),
     foreignKey({
       columns: [t.templateId, t.templateVersion],

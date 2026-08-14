@@ -496,18 +496,14 @@ describe("agenda and integration boundaries", () => {
       }),
     ).toThrow();
   });
-  it("locks integration sender and organizer identities to eventloom", () => {
+  it("accepts self-hosted email sender identities for email and calendar delivery", () => {
     const senders = [
       "auth@sessionboard.namuh.co",
-      "speakers@sessionboard.namuh.co",
-      "calendar@sessionboard.namuh.co",
+      "speakers@conference.example",
+      "notifications@events.self-hosted.test",
     ] as const;
     expect(senders.map((sender) => openSendSenderSchema.parse(sender))).toEqual(senders);
-    for (const sender of [
-      "auth@foreverbrowsing.com",
-      "speakers@foreverbrowsing.com",
-      "calendar@foreverbrowsing.com",
-    ]) {
+    for (const sender of ["", "speakers", "@conference.example", "sender@"] as const) {
       expect(() => openSendSenderSchema.parse(sender)).toThrow();
     }
 
@@ -518,17 +514,17 @@ describe("agenda and integration boundaries", () => {
       timeZone: "America/Los_Angeles",
       startsAt: now,
       endsAt: later,
-      organizer: "calendar@sessionboard.namuh.co",
+      organizer: "calendar@conference.example",
       attendees: ["speaker@example.com"],
       summary: "Session",
       location: "Room 1",
       idempotencyKey: "calendar-0001",
     });
-    expect(invitation.organizer).toBe("calendar@sessionboard.namuh.co");
+    expect(invitation.organizer).toBe("calendar@conference.example");
     expect(() =>
       calendarInvitationPayloadSchema.parse({
         ...invitation,
-        organizer: "calendar@foreverbrowsing.com",
+        organizer: "not-an-email",
       }),
     ).toThrow();
   });

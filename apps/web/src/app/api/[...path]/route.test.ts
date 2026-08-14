@@ -155,4 +155,48 @@ describe("same-origin API proxy", () => {
     resolveUpstream?.(new Response(null, { status: 201 }));
     await expect(pending).resolves.toHaveProperty("status", 201);
   });
+
+  it("allows evaluation decision PUTs beyond the ordinary request deadline", async () => {
+    vi.useFakeTimers();
+    let resolveUpstream: ((response: Response) => void) | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            resolveUpstream = resolve;
+          }),
+      ),
+    );
+
+    const pending = PUT(
+      new NextRequest(
+        "https://web.example.test/api/admin/evaluations/plans/plan-1/submissions/submission-1/decision",
+        { method: "PUT", body: "{}" },
+      ),
+      {
+        params: Promise.resolve({
+          path: [
+            "admin",
+            "evaluations",
+            "plans",
+            "plan-1",
+            "submissions",
+            "submission-1",
+            "decision",
+          ],
+        }),
+      },
+    );
+    await vi.advanceTimersByTimeAsync(15_000);
+    let settled = false;
+    void pending.finally(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    resolveUpstream?.(Response.json({ status: "accepted" }));
+    await expect(pending).resolves.toHaveProperty("status", 200);
+  });
 });

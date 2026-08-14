@@ -92,7 +92,7 @@ describe("organizer login", () => {
         accountRoute,
       ),
     ).toBe(accountRoute);
-    expect(safeLoginReturnTo("/cfp/devflow-conf-2027/account")).toBe("/admin");
+    expect(safeLoginReturnTo("/cfp/devflow-conf-2027/account")).toBe("/work");
   });
 
   it("classifies magic-link network and server failures consistently", async () => {
@@ -102,7 +102,7 @@ describe("organizer login", () => {
     await expect(
       networkApi.requestMagicLink({
         email: "organizer@example.com",
-        callbackURL: "https://app.example.com/admin",
+        callbackURL: "https://app.example.com/work",
       }),
     ).rejects.toMatchObject({ kind: "network" });
 
@@ -111,7 +111,7 @@ describe("organizer login", () => {
     await expect(
       serverApi.requestMagicLink({
         email: "organizer@example.com",
-        callbackURL: "https://app.example.com/admin",
+        callbackURL: "https://app.example.com/work",
       }),
     ).rejects.toMatchObject({
       kind: "server",
@@ -240,7 +240,7 @@ describe("organizer login", () => {
       navigate,
     });
     expect(navigate).toHaveBeenCalledOnce();
-    expect(navigate).toHaveBeenCalledWith("/admin");
+    expect(navigate).toHaveBeenCalledWith("/work");
     await signInAndRedirect({
       api,
       email: "speaker@example.com",
@@ -255,21 +255,22 @@ describe("organizer login", () => {
         "/cfp/organizations/ai-engineer/events/devflow-conf-2027/account",
       ),
     ).toBe("/cfp/organizations/ai-engineer/events/devflow-conf-2027/account");
-    expect(safeLoginReturnTo("https://evil.example")).toBe("/admin");
-    expect(safeLoginReturnTo("//evil.example")).toBe("/admin");
+    expect(safeLoginReturnTo("/work")).toBe("/work");
+    expect(safeLoginReturnTo("https://evil.example")).toBe("/work");
+    expect(safeLoginReturnTo("//evil.example")).toBe("/work");
   });
 
-  it("chooses reviewer, organizer, and speaker defaults while rejecting unsafe next routes", () => {
+  it("uses one account hub default while preserving safe requested destinations", () => {
     const reviewer = { memberships: [{ role: "reviewer" as const }], speakerGrants: [] };
     const organizer = { memberships: [{ role: "owner" as const }], speakerGrants: [] };
     const speaker = { memberships: [], speakerGrants: [{ organizationId: "ai-engineer" }] };
 
-    expect(resolveLoginLandingRoute(reviewer)).toBe("/review");
-    expect(resolveLoginLandingRoute(organizer)).toBe("/admin");
-    expect(resolveLoginLandingRoute(speaker)).toBe("/portal");
+    expect(resolveLoginLandingRoute(reviewer)).toBe("/work");
+    expect(resolveLoginLandingRoute(organizer)).toBe("/work");
+    expect(resolveLoginLandingRoute(speaker)).toBe("/work");
     expect(resolveLoginLandingRoute(reviewer, "/admin/events")).toBe("/admin/events");
-    expect(resolveLoginLandingRoute(reviewer, "https://evil.example")).toBe("/review");
-    expect(resolveLoginLandingRoute(reviewer, "//evil.example")).toBe("/review");
+    expect(resolveLoginLandingRoute(reviewer, "https://evil.example")).toBe("/work");
+    expect(resolveLoginLandingRoute(reviewer, "//evil.example")).toBe("/work");
   });
 
   it("fails closed for a missing or malformed authenticated session", () => {
@@ -295,14 +296,9 @@ describe("organizer login", () => {
     expect(markup).toContain('method="post"');
     expect(markup).toContain('type="button"');
     expect(markup).toContain("Email me a magic link");
-    expect(markup).toContain("Account access mode");
-    expect(markup).toContain("Create account");
-    expect(markup).toContain("One account, separate workspaces");
-    expect(markup).toContain("Sign in to Eventloom");
-    expect(markup).toContain("Organizers");
-    expect(markup).toContain("Reviewers");
-    expect(markup).toContain("applicant and speaker portal");
-    expect(markup).toContain("Applicants and speakers");
+    expect(markup).toContain('data-account-entry="single"');
+    expect(markup).not.toContain('href="/admin"');
+    expect(markup).not.toContain('href="/portal"');
     expect(markup).not.toContain("Welcome back to the program desk.");
     expect(markup).not.toContain("01");
     expect(markup).not.toContain("Google");
@@ -325,7 +321,7 @@ describe("organizer login", () => {
     expect(markup).not.toContain("Email me a magic link");
   });
 
-  it("renders a distinct applicant and speaker sign-in mode for the portal destination", () => {
+  it("keeps one account entry while preserving portal return context", () => {
     const markup = renderToStaticMarkup(
       createElement(LoginForm, {
         apiBaseUrl: API_ORIGIN,
@@ -338,8 +334,8 @@ describe("organizer login", () => {
     expect(resolveLoginWorkspace("/admin")).toBe("operator");
     expect(resolveLoginWorkspace("https://evil.example/portal")).toBe("operator");
     expect(markup).toContain('data-login-workspace="portal"');
-    expect(markup).toContain('href="/login"');
-    expect(markup).toContain('href="/login?next=%2Fportal" aria-current="page"');
+    expect(markup).toContain('data-account-entry="single"');
+    expect(markup).not.toContain('aria-label="Sign-in workspace"');
     expect(markup).not.toContain('data-slot="tabs-list"');
   });
 

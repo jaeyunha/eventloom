@@ -21,6 +21,10 @@ const json = (name, description) => ({
   description: `${description} Store valid JSON text.`,
 });
 const email = (name, description) => ({ name, type: "email", description });
+const senderEmail = (description) => ({
+  ...email("Sender", description),
+  migrateFromType: "singleSelect",
+});
 const url = (name, description) => ({ name, type: "url", description });
 const number = (name, description, precision = 0) => ({
   name,
@@ -984,15 +988,7 @@ export const TABLE_DEFINITIONS = [
         "Approved communication template purpose.",
       ),
       select("Status", ["draft", "approved", "archived"], "Template lifecycle state."),
-      select(
-        "Sender",
-        [
-          "auth@sessionboard.namuh.co",
-          "speakers@sessionboard.namuh.co",
-          "calendar@sessionboard.namuh.co",
-        ],
-        "Approved sender identity.",
-      ),
+      senderEmail("Validated sender identity email address."),
       text("Subject", "Rendered email subject template."),
       longText("HTML", "Sanitized HTML email template."),
       longText("Text", "Plain-text email template."),
@@ -1015,15 +1011,7 @@ export const TABLE_DEFINITIONS = [
       number("Template Version", "Template version captured by this send.", 0),
       text("Purpose", "Communication purpose."),
       text("Audience", "Recipient audience discriminator."),
-      select(
-        "Sender",
-        [
-          "auth@sessionboard.namuh.co",
-          "speakers@sessionboard.namuh.co",
-          "calendar@sessionboard.namuh.co",
-        ],
-        "Sender identity captured by this send.",
-      ),
+      senderEmail("Sender identity captured by this send for delivery audit."),
       text("Idempotency Key", "Stable communication idempotency key."),
       text("Preview ID", "Optional preview application ID."),
       json("Data JSON", "Render data captured for this send."),
@@ -1528,7 +1516,11 @@ function buildPlan(existingTables) {
     }
     const fields = definition.fields.map((field) => {
       const matching = existingFields.get(field.name);
-      if (matching !== undefined && matching.type !== field.type) {
+      if (
+        matching !== undefined &&
+        matching.type !== field.type &&
+        !isSupportedFieldTypeTransition(matching.type, field)
+      ) {
         incompatible.push(
           `${definition.name}.${field.name} has Airtable type ${matching.type}; expected ${field.type}.`,
         );
@@ -1612,6 +1604,9 @@ function summarizePlan(plan, mode) {
 
 function reconcileFieldPatch(existing, desired, tableIds) {
   const patch = {};
+  if (existing.type !== desired.type && isSupportedFieldTypeTransition(existing.type, desired)) {
+    patch.type = desired.type;
+  }
   if (desired.description !== undefined && existing.description !== desired.description) {
     patch.description = desired.description;
   }
@@ -1625,6 +1620,10 @@ function reconcileFieldPatch(existing, desired, tableIds) {
     }
   }
   return patch;
+}
+
+function isSupportedFieldTypeTransition(existingType, desired) {
+  return existingType === desired.migrateFromType;
 }
 
 function fieldPayload(field, tableIds) {

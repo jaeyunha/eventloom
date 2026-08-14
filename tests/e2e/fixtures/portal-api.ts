@@ -109,6 +109,10 @@ export interface PortalAssetSeed {
   version?: number;
   versionFamilyId?: string;
   supersedesAssetId?: string;
+  latestVersionId?: string | null;
+  currentVersionId?: string | null;
+  approvedVersionId?: string | null;
+  releasedVersionId?: string | null;
   commentThreadId?: string;
   rejectionReason?: string;
   finalizedAt?: string;
@@ -290,6 +294,8 @@ function initialEvaluatorState(): PortalScenarioState {
       createdAt: now,
       version: 1,
       versionFamilyId: "asset-family-slides",
+      latestVersionId: "asset-slides-v1",
+      currentVersionId: "asset-slides-v1",
       commentThreadId: "asset-comments:asset-family-slides",
       finalizedAt: now,
       objectKey: "ai-engineer/event-evaluator/participant-ada/asset-slides-v1",
@@ -1192,6 +1198,10 @@ export async function installPortalApi(
       expect(["ready", "rejected"]).toContain(nextState);
       asset.state = nextState;
       asset.finalizedAt = later;
+      if (nextState === "ready") {
+        asset.latestVersionId = asset.id;
+        asset.currentVersionId = asset.id;
+      }
       if (body.rejectionReason !== undefined)
         asset.rejectionReason = stringValue(body, "rejectionReason");
       syncView(state);

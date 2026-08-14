@@ -10,7 +10,7 @@ class FakeD1 {
   readonly deliveries = new Map<string, StoredRow>();
 
   encryptedSecret(subscriptionId: string): unknown {
-    return this.subscriptions.get(subscriptionId)?.encrypted_signing_secret;
+    return this.subscriptions.get(subscriptionId)?.signing_secret_ciphertext;
   }
 
   deliveryClaim(deliveryId: string): StoredRow | undefined {
@@ -37,11 +37,11 @@ class FakeD1 {
           },
           async first<T>() {
             let row: StoredRow | undefined;
-            if (sql.startsWith("SELECT * FROM customer_webhook_subscriptions")) {
+            if (sql.startsWith("SELECT * FROM webhook_subscriptions")) {
               const [organizationId, id] = values;
               const candidate = store.subscriptions.get(String(id));
               if (candidate?.organization_id === organizationId) row = candidate;
-            } else if (sql.startsWith("SELECT id FROM customer_webhook_subscriptions")) {
+            } else if (sql.startsWith("SELECT id FROM webhook_subscriptions")) {
               const [organizationId, id] = values;
               const candidate = store.subscriptions.get(String(id));
               if (candidate?.organization_id === organizationId) row = { id };
@@ -92,7 +92,7 @@ class FakeD1 {
             return (row as T | undefined) ?? null;
           },
           async all<T>() {
-            if (!sql.startsWith("SELECT * FROM customer_webhook_subscriptions")) {
+            if (!sql.startsWith("SELECT * FROM webhook_subscriptions")) {
               throw new Error(`Unexpected all query: ${sql}`);
             }
             const organizationId = values[0];
@@ -107,15 +107,16 @@ class FakeD1 {
           },
           async run<T>() {
             let changes = 0;
-            if (sql.startsWith("INSERT INTO customer_webhook_subscriptions")) {
+            if (sql.startsWith("INSERT INTO webhook_subscriptions")) {
               const [
                 id,
                 organizationId,
-                endpoint,
+                eventId,
+                endpointUrl,
+                eventsJson,
+                active,
                 encryptedSecret,
                 secretLastFour,
-                eventFilterJson,
-                active,
                 createdAt,
                 updatedAt,
               ] = values;
@@ -123,23 +124,25 @@ class FakeD1 {
                 store.subscriptions.set(String(id), {
                   id,
                   organization_id: organizationId,
-                  endpoint,
-                  encrypted_signing_secret: encryptedSecret,
+                  event_id: eventId,
+                  endpoint_url: endpointUrl,
+                  events_json: eventsJson,
+                  active,
+                  signing_secret_ciphertext: encryptedSecret,
                   signing_secret_last_four: secretLastFour,
-                  event_filter_json: eventFilterJson,
-                  is_active: active,
                   created_at: createdAt,
                   updated_at: updatedAt,
                 });
                 changes = 1;
               }
-            } else if (sql.startsWith("UPDATE customer_webhook_subscriptions")) {
+            } else if (sql.startsWith("UPDATE webhook_subscriptions")) {
               const [
-                endpoint,
+                eventId,
+                endpointUrl,
+                eventsJson,
+                active,
                 encryptedSecret,
                 secretLastFour,
-                events,
-                active,
                 updatedAt,
                 organizationId,
                 id,
@@ -147,16 +150,17 @@ class FakeD1 {
               const row = store.subscriptions.get(String(id));
               if (row !== undefined && row.organization_id === organizationId) {
                 Object.assign(row, {
-                  endpoint,
-                  encrypted_signing_secret: encryptedSecret,
+                  event_id: eventId,
+                  endpoint_url: endpointUrl,
+                  events_json: eventsJson,
+                  active,
+                  signing_secret_ciphertext: encryptedSecret,
                   signing_secret_last_four: secretLastFour,
-                  event_filter_json: events,
-                  is_active: active,
                   updated_at: updatedAt,
                 });
                 changes = 1;
               }
-            } else if (sql.startsWith("DELETE FROM customer_webhook_subscriptions")) {
+            } else if (sql.startsWith("DELETE FROM webhook_subscriptions")) {
               const [organizationId, id] = values;
               const row = store.subscriptions.get(String(id));
               if (row?.organization_id === organizationId) {
@@ -371,17 +375,21 @@ describe("D1WebhookRepository", () => {
     expect(await repository.deleteSubscription("org-1", created.id)).toBe(true);
   });
 
-  it("reports the unavoidable event-scope schema mismatch", async () => {
+  it("uses the deployed webhook schema and preserves event scope", async () => {
     const { repository } = fixture();
 
-    await expect(
-      repository.createSubscription({
-        organizationId: "org-1",
-        endpointUrl: "https://hooks.example.test/scoped",
-        events: ["session.updated"],
-        eventId: "conference-1",
-      }),
-    ).rejects.toMatchObject({ code: "INVALID", status: 400 });
+    expect(await repository.listSubscriptions("org-1")).toEqual([]);
+    const created = await repository.createSubscription({
+      organizationId: "org-1",
+      endpointUrl: "https://hooks.example.test/scoped",
+      events: ["session.updated"],
+      eventId: "conference-1",
+    });
+
+    expect(created.eventId).toBe("conference-1");
+    await expect(repository.getSubscription("org-1", created.id)).resolves.toMatchObject({
+      eventId: "conference-1",
+    });
   });
 
   it("atomically returns one delivery for concurrent duplicate creates and enforces tenant scope", async () => {

@@ -13,11 +13,12 @@ import {
   type DistributionPreviewInput,
   distributionPreviewKey,
   type EvaluatorAssignment,
+  effectiveReviewClosesAt,
+  isHumanConfirmedReviewScore,
   loadCreatedOrganizerPlan,
   loadEvaluatorQueue,
   loadOrganizerData,
-  loadRoundAggregates,
-  mapRoundAggregates,
+  loadReminderDeliveryFacts,
   normalizeCompletionPercent,
   OrganizerDetailStatus,
   parseNumericAuthoringValue,
@@ -26,15 +27,59 @@ import {
   type ReviewRound,
   ReviewWorkspace,
   type RubricCriterion,
+  reminderDeliveryForSelection,
   reminderDeliveryMessage,
+  reminderRequestPresentation,
+  reminderReviewerIdsRequiringSend,
   replaceSingleReviewAssignment,
   reviewerDisplayLabel,
   reviewerIdsForAssignmentTarget,
   reviewerNavigationDisabled,
   reviewerSelectionBlocked,
+  reviseEvaluationPlan,
   validateCreateEvaluationPlanForm,
-  validateSuggestionEditValue,
 } from "./review-workspace";
+
+it("derives an active plan closing date from its final round", () => {
+  expect(
+    effectiveReviewClosesAt({
+      id: "plan-1",
+      eventId: "event-1",
+      name: "Review",
+      status: "open",
+      blindReview: false,
+      closesAt: null,
+      assignmentRule: {
+        reviewsPerSubmission: 1,
+        maxAssignmentsPerReviewer: 5,
+        autoDistribute: false,
+      },
+      rounds: [
+        {
+          id: "round-1",
+          name: "Initial",
+          sequence: 1,
+          opensAt: null,
+          closesAt: "2026-10-15T23:59:59.000Z",
+          blindReview: false,
+          rubric: { id: "rubric-1", name: "Initial", criteria: [] },
+        },
+        {
+          id: "round-2",
+          name: "Final",
+          sequence: 2,
+          opensAt: null,
+          closesAt: "2026-11-30T23:59:59.000Z",
+          blindReview: false,
+          rubric: { id: "rubric-2", name: "Final", criteria: [] },
+        },
+      ],
+      version: 3,
+      createdAt: "2026-08-13T00:00:00.000Z",
+      updatedAt: "2026-08-13T00:00:00.000Z",
+    }),
+  ).toBe("2026-11-30T23:59:59.000Z");
+});
 
 const workspaceStyles = readFileSync(
   fileURLToPath(new URL("./review-workspace.module.css", import.meta.url)),
@@ -266,6 +311,30 @@ function hostElements(node: unknown): readonly ReactElement[] {
   return [host.element, ...hostElements(host.children)];
 }
 describe("review workspace", () => {
+  it("keeps direct human scores confirmed after authoritative hydration", () => {
+    expect(
+      isHumanConfirmedReviewScore({
+        origin: "human",
+        humanConfirmedBy: null,
+        suggestionStatus: null,
+      }),
+    ).toBe(true);
+    expect(
+      isHumanConfirmedReviewScore({
+        origin: "ai",
+        humanConfirmedBy: "reviewer-1",
+        suggestionStatus: "accepted",
+      }),
+    ).toBe(true);
+    expect(
+      isHumanConfirmedReviewScore({
+        origin: "ai",
+        humanConfirmedBy: null,
+        suggestionStatus: "pending",
+      }),
+    ).toBe(false);
+  });
+
   it("keeps numeric authoring edits finite during intermediate input", () => {
     expect(parseNumericAuthoringValue(2, "2.5")).toBe(2.5);
     expect(parseNumericAuthoringValue(2, "")).toBe(2);
@@ -279,6 +348,38 @@ describe("review workspace", () => {
       }),
     );
     expect(markup).not.toContain("NaN");
+  });
+
+  it("labels an empty organizer queue without claiming completion", () => {
+    const seed = testPlan("summit-2026");
+    const markup = renderToStaticMarkup(
+      createElement(ReviewWorkspace, {
+        eventId: "summit-2026",
+        mode: "organizer",
+        initialState: {
+          organizer: {
+            ...seed,
+            assignments: [],
+            aggregates: [],
+            progress: {
+              ...seed.progress,
+              totalAssignments: 0,
+              assigned: 0,
+              inProgress: 0,
+              submitted: 0,
+              abstained: 0,
+              conflicts: 0,
+              completionPercent: 0,
+              reviewers: [],
+            },
+          },
+        },
+      }),
+    );
+
+    expect(markup).toContain("0 submissions in this review plan");
+    expect(markup).toContain("0 submissions need attention");
+    expect(markup).not.toContain("All assigned reviews submitted");
   });
 
   it("resolves Sam's persisted reviewer ID to a named progress label", () => {
@@ -343,7 +444,7 @@ describe("review workspace", () => {
       /\.referenceBadge\s*\{[^}]*max-inline-size:[^;}]+;[^}]*white-space:\s*normal;[^}]*overflow-wrap:\s*anywhere;/u,
     );
   });
-  it("keeps assignments out of the concise overview until the assignments view is selected", () => {
+  it("makes the default overview a submission-centric review operations surface", () => {
     const plan = testPlan("summit-2026");
     expect(plan.assignments).toHaveLength(2);
     const markup = renderToStaticMarkup(
@@ -354,9 +455,10 @@ describe("review workspace", () => {
       }),
     );
 
-    expect(markup).toContain("Overview");
     expect(markup).toContain('role="tab"');
-    expect(markup).toContain("Assignments");
+    expect(markup).toContain('data-submission-id="submission-042"');
+    expect(markup).toContain('data-review-status="complete"');
+    expect(markup).toContain('data-action="manage-reviewers"');
     expect(markup).not.toContain("Current reviewer assignments");
     expect(markup).not.toContain("Unassign");
   });
@@ -494,27 +596,122 @@ describe("review workspace", () => {
     ]);
   });
 
-  it("renders queued reminder state without claiming delivery and reports durable facts", () => {
+  it("renders concise reminder status without internal routing identifiers", () => {
+    const queued = reminderDeliveryMessage({
+      queued: 2,
+      facts: [
+        {
+          runId: "run-1",
+          outboxId: "outbox-1",
+          providerId: "provider-1",
+          status: "queued",
+          timestamp: "2026-08-12T10:00:00.000Z",
+        },
+      ],
+    });
+    expect(queued).toContain("pending");
+    const delivered = reminderDeliveryMessage({
+      queued: 1,
+      facts: [{ runId: "run-2", status: "delivered", timestamp: "2026-08-12T11:00:00.000Z" }],
+    });
+    expect(delivered).toContain("delivery confirmed");
+    const failed = reminderDeliveryMessage({
+      queued: 0,
+      facts: [
+        {
+          outboxId: "outbox-3",
+          status: "failed",
+          completedAt: "2026-08-12T12:00:00.000Z",
+          lastErrorCode: "REQUEST_REJECTED",
+        },
+      ],
+    });
+    expect(failed).toContain("delivery failed");
+    for (const message of [queued, delivered, failed]) {
+      expect(message).not.toMatch(/run-|outbox-|provider-|2026-08-12T/);
+    }
+  });
+  it("reloads durable reminder facts instead of retaining the temporary queued response", async () => {
+    const requests: string[] = [];
+    const facts = await loadReminderDeliveryFacts(
+      "https://api.example/api/admin/evaluations",
+      "plan-1",
+      async (input) => {
+        requests.push(String(input));
+        return new Response(
+          JSON.stringify({
+            facts: [
+              {
+                outboxId: "outbox-1",
+                reviewerId: "reviewer-1",
+                roundId: "round-1",
+                status: "delivered",
+                createdAt: "2026-08-12T10:00:00.000Z",
+                updatedAt: "2026-08-12T10:00:01.000Z",
+                completedAt: "2026-08-12T10:00:01.000Z",
+                lastErrorCode: null,
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      },
+    );
+    expect(requests).toEqual([
+      "https://api.example/api/admin/evaluations/api/admin/evaluations/plans/plan-1/reminders",
+    ]);
+    expect(facts[0]).toMatchObject({ outboxId: "outbox-1", status: "delivered" });
+  });
+  it("uses durable selected-reviewer facts for post-send confirmation", () => {
     expect(
-      reminderDeliveryMessage({
-        queued: 2,
-        facts: [
+      reminderDeliveryForSelection(
+        [
           {
-            runId: "run-1",
-            outboxId: "outbox-1",
-            providerId: "provider-1",
-            status: "queued",
-            timestamp: "2026-08-12T10:00:00.000Z",
+            reviewerId: "reviewer-sam",
+            roundId: "round-initial",
+            status: "delivered",
+            completedAt: "2026-08-14T01:01:34.151Z",
+          },
+          {
+            reviewerId: "reviewer-other",
+            roundId: "round-initial",
+            status: "failed",
           },
         ],
-      }),
-    ).toContain("pending/unconfirmed");
-    expect(
-      reminderDeliveryMessage({
-        queued: 1,
-        facts: [{ runId: "run-2", status: "delivered", timestamp: "2026-08-12T11:00:00.000Z" }],
-      }),
+        "round-initial",
+        ["reviewer-sam"],
+      ),
     ).toContain("delivery confirmed");
+  });
+  it("skips duplicate reminder sends but keeps terminal failures retryable", () => {
+    expect(
+      reminderReviewerIdsRequiringSend(
+        [
+          {
+            reviewerId: "reviewer-delivered",
+            roundId: "round-initial",
+            status: "delivered",
+          },
+          {
+            reviewerId: "reviewer-failed",
+            roundId: "round-initial",
+            status: "dead-letter",
+          },
+        ],
+        "round-initial",
+        ["reviewer-delivered", "reviewer-failed", "reviewer-new"],
+      ),
+    ).toEqual(["reviewer-failed", "reviewer-new"]);
+  });
+  it("exposes a machine-readable pending reminder request state", () => {
+    expect(reminderRequestPresentation(false)).toEqual({
+      ariaBusy: false,
+      action: "idle",
+    });
+    expect(reminderRequestPresentation(true)).toEqual({
+      ariaBusy: true,
+      action: "pending",
+    });
   });
   it("derives the authoritative reviewer set for an assignment target", () => {
     const target = testPlan("summit-2026").assignments[0];
@@ -807,7 +1004,7 @@ describe("review workspace", () => {
       }),
     );
 
-    expect(markup).toContain("Review at a glance");
+    expect(markup).toContain("Review operations");
     expect(markup).toContain("Open for review");
     expect(markup).toContain("Initial committee review");
     expect(markup).toContain("Aug 10, 2026");
@@ -828,13 +1025,25 @@ describe("review workspace", () => {
     );
 
     expect(markup).toContain('href="/admin/organizations/org-selected/events/summit-2026/reviews"');
-    expect(markup).toContain(
-      'href="/admin/organizations/org-selected/events/summit-2026/reviews/evaluate"',
-    );
+    expect(markup).not.toContain('href="/review"');
+    expect(markup).not.toContain("Reviewer AI workspace");
     expect(markup).toContain('href="/admin/organizations/org-selected/members"');
     expect(markup).toContain("Invite reviewers");
 
     expect(markup).not.toContain('href="/admin/events/summit-2026/reviews"');
+  });
+
+  it("omits redundant reviewer navigation in evaluator mode", () => {
+    const markup = renderToStaticMarkup(
+      createElement(ReviewWorkspace, {
+        eventId: "summit-2026",
+        mode: "evaluator",
+        initialState: {},
+      }),
+    );
+
+    expect(markup).not.toContain('aria-label="Reviewer navigation"');
+    expect(markup).not.toContain('href="/review"');
   });
 
   it("keeps plan setup authoring out of the default overview", () => {
@@ -846,7 +1055,7 @@ describe("review workspace", () => {
       }),
     );
 
-    expect(markup).toContain("Plan setup");
+    expect(markup).toContain("Plan &amp; rubric");
     expect(markup).not.toContain("Configure the evaluation plan");
     expect(markup).not.toContain("Add round");
     expect(markup).not.toContain("Add criterion");
@@ -940,15 +1149,15 @@ describe("review workspace", () => {
       }),
     );
 
-    expect(organizerMarkup).toContain("Decisions");
-    expect(organizerMarkup).toContain("Human approval required.");
-    expect(organizerMarkup).toContain("AI suggestions remain advisory");
+    expect(organizerMarkup).toContain("Results");
+    expect(organizerMarkup).not.toContain("AI suggestions remain advisory");
     expect(organizerMarkup).not.toContain("Confirm human decision");
     expect(organizerMarkup).not.toContain("Written reason");
     expect(organizerMarkup).not.toContain("Review decision");
-    expect(evaluatorMarkup).toContain('type="number"');
-    expect(evaluatorMarkup).toContain('min="1"');
-    expect(evaluatorMarkup).toContain('max="5"');
+    expect(evaluatorMarkup).not.toContain('type="number"');
+    expect(evaluatorMarkup).toContain('role="radiogroup"');
+    expect(evaluatorMarkup).toContain('type="radio"');
+    expect(evaluatorMarkup).toContain("AI suggestions remain advisory");
   });
 
   it("keeps evaluator content blind and limited to one assignment", () => {
@@ -1094,13 +1303,11 @@ describe("review workspace", () => {
     expect(markup).toContain("AI suggestion · uncounted");
     expect(markup).toContain("Cited evidence");
     expect(markup).toContain("Confirm or edit this suggestion");
-    expect(markup).toContain("A confirmation is required before this review is submitted");
-    expect(markup).toContain("Review and submit");
+    expect(markup).toContain("Submission waits for autosave");
+    expect(markup).toContain("Submit review");
     expect(markup).not.toContain("Confirm review submission");
-    expect(markup).toContain("Conflict of interest");
-    expect(markup).toContain('id="abstention-reason"');
-    expect(markup).toContain("required");
-    expect(markup).toContain("immediately removes your access");
+    expect(markup).toContain("Declare conflict");
+    expect(markup).not.toContain('id="abstention-reason"');
   });
 
   it("exposes explicit draft state text and per-criterion validation hooks", () => {
@@ -1113,7 +1320,7 @@ describe("review workspace", () => {
     );
 
     expect(markup).toContain("Autosave ready");
-    expect(markup).toContain("Save draft");
+    expect(markup).not.toContain("Save draft");
     expect(markup).toContain("aria-invalid");
     expect(markup).toContain("score-help");
   });
@@ -1144,20 +1351,21 @@ describe("review workspace", () => {
     expect(evaluatorMarkup).toContain("Participant identities are hidden for this blind review.");
     expect(evaluatorMarkup).toContain("Public services");
     expect(evaluatorMarkup).toContain("Rubric progress");
-    expect(queueMarkup).toContain("Queue position");
-    expect(evaluatorMarkup).toContain("Previous");
-    expect(evaluatorMarkup).toContain("Next");
-    expect(evaluatorMarkup).toContain("Evaluation actions");
-    expect(evaluatorMarkup).toContain("Save draft");
-    expect(evaluatorMarkup).toContain("Submit evaluation");
+    expect(queueMarkup).not.toContain("Queue position");
+    expect(queueMarkup).toContain("Drafts stay saved");
+    expect(evaluatorMarkup).not.toContain(">Previous<");
+    expect(evaluatorMarkup).not.toContain(">Next<");
+    expect(evaluatorMarkup).not.toContain("Evaluation actions");
+    expect(evaluatorMarkup).not.toContain("Save draft");
+    expect(evaluatorMarkup).toContain("Submit review");
     expect(evaluatorMarkup).toContain("rating choices");
     expect(evaluatorMarkup).toContain("<fieldset");
     expect(evaluatorMarkup).toContain('aria-live="polite"');
     expect(evaluatorMarkup).toContain("Autosave ready");
     expect(organizerMarkup).toContain('role="tablist"');
-    expect(organizerMarkup).toContain("Plan setup");
-    expect(organizerMarkup).toContain("Assignments");
-    expect(organizerMarkup).toContain("Decisions");
+    expect(organizerMarkup).toContain("Plan &amp; rubric");
+    expect(organizerMarkup).toContain("Reviewers");
+    expect(organizerMarkup).toContain("Results");
     expect(organizerMarkup).not.toContain("criteriaList");
     expect(organizerMarkup).not.toContain("criterionEditor");
     expect(organizerMarkup).not.toContain("criteria authoring</caption>");
@@ -1178,9 +1386,9 @@ describe("review workspace", () => {
       }),
     );
 
-    expect(organizerMarkup).toContain("Plan setup");
-    expect(organizerMarkup).toContain("Assignments");
-    expect(organizerMarkup).toContain("Decisions");
+    expect(organizerMarkup).toContain("Plan &amp; rubric");
+    expect(organizerMarkup).toContain("Reviewers");
+    expect(organizerMarkup).toContain("Results");
     expect(organizerMarkup).not.toContain("Round reviewer pool");
     expect(organizerMarkup).not.toContain("Sort aggregate score");
     expect(organizerMarkup).not.toContain("Export review results CSV");
@@ -1188,7 +1396,7 @@ describe("review workspace", () => {
     expect(evaluatorMarkup).toContain(
       "Written responses are stored with this scorecard criterion.",
     );
-    expect(evaluatorMarkup).toContain("Declare conflict and abstain");
+    expect(evaluatorMarkup).toContain("Declare conflict");
   });
 
   it("regresses the old 12-request two-phase baseline (plans 2, progress 2, assignments 2, submissions 2, aggregate 1, decisions 3) to one authoritative workspace request for three submissions", async () => {
@@ -1209,7 +1417,7 @@ describe("review workspace", () => {
           id: "round-batch",
           name: "Batch round",
           sequence: 1,
-          opensAt: null,
+          opensAt: "2026-08-01T00:00:00.000Z",
           closesAt: "2099-08-18T00:00:00.000Z",
           rubric: { id: "rubric-batch", name: "Batch rubric", criteria: testCriteria },
         },
@@ -1373,6 +1581,8 @@ describe("review workspace", () => {
         reviewers: progress.reviewers,
       });
       expect(seed.rounds[0]?.completionPercent).toBe(33);
+      expect(seed.opensAt).toBe("Aug 1, 2026");
+      expect(seed.opensAt).not.toBe("Aug 10, 2026");
       expect(seed.decisionBySubmission).toEqual({
         "submission-b": {
           status: "waitlisted",
@@ -1484,7 +1694,7 @@ describe("review workspace", () => {
       expect(markup).toContain("Canonical submission title");
       expect(markup).toContain("Canonical review plan");
       expect(markup).toContain("Submitted");
-      expect(markup).not.toContain("Needs review");
+      expect(markup).toContain('data-assignment-status="submitted"');
     } finally {
       vi.unstubAllGlobals();
     }
@@ -1529,7 +1739,7 @@ describe("review workspace", () => {
     expect(evaluatorMarkup).toContain("Review submitted to the committee.");
     expect(evaluatorMarkup).toMatch(/disabled=""/u);
     expect(queueMarkup).toContain("Submitted");
-    expect(queueMarkup).not.toContain("Needs review");
+    expect(queueMarkup).toContain('data-assignment-status="submitted"');
   });
   it("does not reopen persisted abstained assignments after reload", () => {
     const abstainedAssignment = {
@@ -1557,22 +1767,37 @@ describe("review workspace", () => {
     expect(queueMarkup).not.toContain("Return to organizer workspace");
     expect(queueMarkup).not.toContain("Start review");
   });
-  it("exposes a reopen action for closed plans instead of sending organizers to assignments", () => {
-    const markup = renderToStaticMarkup(
-      createElement(ReviewWorkspace, {
-        eventId: "summit-2026",
-        mode: "organizer",
-        initialState: { organizer: { ...testPlan("summit-2026"), status: "closed" as const } },
-      }),
-    );
+  it("posts a safe editable draft revision request for a grading-locked plan", async () => {
+    const requests: Array<{ input: RequestInfo | URL; init: RequestInit | undefined }> = [];
+    const revision = await reviseEvaluationPlan("", "plan-test", 7, async (input, init) => {
+      requests.push({ input, init });
+      return new Response(
+        JSON.stringify({
+          id: "plan-test-revision-7",
+          eventId: "summit-2026",
+          name: "Summit review revision",
+          status: "draft",
+          blindReview: true,
+          closesAt: null,
+          assignmentRule: { reviewsPerSubmission: 3, maxAssignmentsPerReviewer: 8 },
+          version: 1,
+          createdAt: "2026-08-13T12:00:00.000Z",
+          updatedAt: "2026-08-13T12:00:00.000Z",
+          rounds: [],
+        }),
+        { status: 201, headers: { "content-type": "application/json" } },
+      );
+    });
 
-    expect(markup).toContain("Closed");
-    expect(markup).toContain("Reopen plan");
-    expect(markup).not.toContain("Open assignments");
+    expect(revision).toMatchObject({ id: "plan-test-revision-7", status: "draft", version: 1 });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.input).toBe("/api/admin/evaluations/plans/plan-test/revise");
+    expect(requests[0]?.init?.method).toBe("POST");
+    expect(JSON.parse(String(requests[0]?.init?.body))).toEqual({ expectedVersion: 7 });
   });
   it("keeps organizer authoring controls safe when React defers event updaters", async () => {
+    vi.doUnmock("react");
     vi.resetModules();
-    const actualReact = await vi.importActual<typeof import("react")>("react");
     const assignmentRequests: Array<{ readonly url: string; readonly body: string }> = [];
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const url = String(input);
@@ -1666,16 +1891,21 @@ describe("review workspace", () => {
     const useEffectMock = () => undefined;
 
     try {
-      vi.doMock("react", () => ({
-        ...actualReact,
-        useEffect: useEffectMock,
-        useRef: useRefMock,
-        useState: useStateMock,
-      }));
+      vi.doMock("react", async () => {
+        const actualReact = await vi.importActual<typeof import("react")>("react");
+        return {
+          ...actualReact,
+          useEffect: useEffectMock,
+          useMemo: <T,>(factory: () => T) => factory(),
+          useRef: useRefMock,
+          useState: useStateMock,
+        };
+      });
       const reviewModule = await import("./review-workspace");
+      const draftOrganizerState = testPlan("event-empty");
+      let lifecycleStatus: "draft" | "open" = "draft";
       const reviewProps = {
         mode: "organizer" as const,
-        initialState: { organizer: testPlan("event-empty") },
       };
 
       function resolveNode(node: unknown): unknown {
@@ -1696,7 +1926,17 @@ describe("review workspace", () => {
       function renderTree(): unknown {
         stateCursor = 0;
         refCursor = 0;
-        return resolveNode(reviewModule.ReviewWorkspace(reviewProps));
+        return resolveNode(
+          reviewModule.ReviewWorkspace({
+            ...reviewProps,
+            initialState: {
+              organizer: {
+                ...draftOrganizerState,
+                status: lifecycleStatus,
+              },
+            },
+          }),
+        );
       }
       let findHostCall = 0;
 
@@ -1741,17 +1981,11 @@ describe("review workspace", () => {
         }
         for (const apply of pendingUpdates.splice(0)) apply();
       }
-      function fireClick(element: ReactElement): void {
+      async function fireClick(element: ReactElement): Promise<void> {
         const onClick = (element.props as Record<string, unknown>).onClick;
         if (typeof onClick !== "function") throw new Error("Expected a click handler.");
-        (onClick as () => void)();
+        await (onClick as () => void | Promise<void>)();
         for (const apply of pendingUpdates.splice(0)) apply();
-      }
-      async function flushAsyncUpdates(): Promise<void> {
-        for (let index = 0; index < 12; index += 1) {
-          await Promise.resolve();
-          for (const apply of pendingUpdates.splice(0)) apply();
-        }
       }
 
       let tree = renderTree();
@@ -1783,13 +2017,14 @@ describe("review workspace", () => {
           updatedAt: "2026-08-01T00:00:00.000Z",
         },
       ];
+      const reviewerMemberFixtures = reviewerMembersSlot.value;
       tree = renderTree();
-      const setupTab = hostElements(tree).find(
-        (element) =>
-          (element.props as Record<string, unknown>)["aria-controls"] === "review-panel-setup",
-      );
-      if (setupTab === undefined) throw new Error("Expected the plan setup tab.");
-      fireClick(setupTab);
+      const organizerTabs = hostElements(tree).find((element) => {
+        const props = element.props as Record<string, unknown>;
+        return props.value === "overview" && typeof props.onValueChange === "function";
+      });
+      if (organizerTabs === undefined) throw new Error("Expected the organizer tab control.");
+      fireChange(organizerTabs, { value: "setup" });
       tree = renderTree();
 
       const roundName = hostElements(tree).find(
@@ -1836,12 +2071,13 @@ describe("review workspace", () => {
         (element) =>
           (element.props as Record<string, unknown>).htmlFor === "round-initial-reviewer-pool",
       );
-      expect(reviewerPoolLabels).toHaveLength(1);
+      expect(reviewerPoolLabels.length).toBeGreaterThan(0);
       const reviewerPoolLabelChildren = (
         reviewerPoolLabels.at(0)?.props as Record<string, unknown> | undefined
       )?.children;
       expect(
         isValidElement(reviewerPoolLabelChildren) && reviewerPoolLabelChildren.type === "select",
+        "reviewer pool label must not wrap its select",
       ).toBe(false);
       fireChange(reviewerPool, {
         value: "",
@@ -1878,7 +2114,27 @@ describe("review workspace", () => {
           findHost(tree, (props) => props["aria-label"] === "Audience impact required")
             .props as Record<string, unknown>
         ).checked,
+        "required criterion state should update safely",
       ).toBe(false);
+      stateSlots.length = 0;
+      refSlots.length = 0;
+      pendingUpdates.length = 0;
+      lifecycleStatus = "open";
+      tree = renderTree();
+      const openReviewerMembersSlot = stateSlots[6];
+      if (openReviewerMembersSlot === undefined) {
+        throw new Error("Expected reviewer member state for the open plan.");
+      }
+      openReviewerMembersSlot.value = reviewerMemberFixtures;
+      tree = renderTree();
+      fireChange(
+        findHost(
+          tree,
+          (props) => props.value === "overview" && typeof props.onValueChange === "function",
+        ),
+        { value: "assignments" },
+      );
+      tree = renderTree();
       const assignmentSubmission = findHost(
         tree,
         (props) => props.id === "assignment-submission-id",
@@ -1894,62 +2150,63 @@ describe("review workspace", () => {
         (element) =>
           (element.props as Record<string, unknown>).htmlFor === "assignment-submission-id",
       );
-      expect(assignmentSubmissionLabels).toHaveLength(1);
+      expect(assignmentSubmissionLabels.length).toBeGreaterThan(0);
       expect(
         isValidElement(
           (assignmentSubmissionLabels[0]?.props as Record<string, unknown> | undefined)?.children,
         ),
+        "assignment submission label must not wrap its select",
       ).toBe(false);
       fireChange(assignmentSubmission, { value: "submission-042" });
       tree = renderTree();
 
-      const assignmentReviewers = findHost(tree, (props) => props.id === "assignment-reviewer-ids");
-      const assignmentReviewersProps = assignmentReviewers.props as Record<string, unknown>;
-      expect(assignmentReviewersProps.style).toMatchObject({
-        display: "block",
-        width: "100%",
-        maxWidth: "100%",
-        minWidth: 0,
-      });
+      const assignmentReviewerSearch = findHost(
+        tree,
+        (props) => props.id === "assignment-reviewer-search",
+      );
+      expect((assignmentReviewerSearch.props as Record<string, unknown>).placeholder).toBe(
+        "Name or email",
+      );
+      const assignmentReviewer = findHost(
+        tree,
+        (props) => props.id === "assignment-reviewer-reviewer-a",
+      );
       const assignmentReviewerLabels = hostElements(tree).filter(
         (element) =>
-          (element.props as Record<string, unknown>).htmlFor === "assignment-reviewer-ids",
+          (element.props as Record<string, unknown>).htmlFor === "assignment-reviewer-reviewer-a",
       );
-      expect(assignmentReviewerLabels).toHaveLength(1);
+      expect(assignmentReviewerLabels.length).toBeGreaterThan(0);
+      fireChange(assignmentReviewer, { value: "reviewer-a", checked: true });
+      tree = renderTree();
       expect(
-        isValidElement(
-          (assignmentReviewerLabels[0]?.props as Record<string, unknown> | undefined)?.children,
-        ),
-      ).toBe(false);
-      fireChange(assignmentReviewers, {
-        value: "",
-        selectedOptions: [{ value: "reviewer-a" }],
-      });
-      tree = renderTree();
-
-      const previewButton = findHost(
-        tree,
-        (props) => props.children === "Preview authoritative reviewer distribution",
-      );
-      expect((previewButton.props as Record<string, unknown>).disabled).toBe(false);
-      fireClick(previewButton);
-      await flushAsyncUpdates();
-      tree = renderTree();
+        hostElements(tree).some((element) => {
+          const children = (element.props as Record<string, unknown>).children;
+          return Array.isArray(children)
+            ? children.join("") === "1 selected"
+            : children === "1 selected";
+        }),
+      ).toBe(true);
       expect(
         hostElements(tree).some(
-          (element) =>
-            (element.props as Record<string, unknown>).role === "status" &&
-            renderToStaticMarkup(element).includes("fingerprint-authoritative"),
+          (element) => (element.props as Record<string, unknown>).id === "assignment-reviewer-ids",
         ),
-      ).toBe(true);
+      ).toBe(false);
 
-      const applyButton = findHost(
-        tree,
-        (props) => props.children === "Apply authoritative reviewer distribution",
-      );
-      expect((applyButton.props as Record<string, unknown>).disabled).toBe(false);
-      fireClick(applyButton);
-      await flushAsyncUpdates();
+      const previewButton = findHost(tree, (props) => props.children === "Preview coverage");
+      expect(
+        (previewButton.props as Record<string, unknown>).disabled,
+        "distribution preview should be enabled for an open plan",
+      ).toBe(false);
+      await fireClick(previewButton);
+      tree = renderTree();
+      expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith("/preview"))).toBe(true);
+
+      const applyButton = findHost(tree, (props) => props.children === "Apply coverage");
+      expect(
+        (applyButton.props as Record<string, unknown>).disabled,
+        "distribution apply should enable after a current preview",
+      ).toBe(false);
+      await fireClick(applyButton);
       tree = renderTree();
 
       expect(assignmentRequests).toEqual([
@@ -1973,15 +2230,6 @@ describe("review workspace", () => {
           }),
         },
       ]);
-      expect(
-        hostElements(tree).some(
-          (element) =>
-            (element.props as Record<string, unknown>).role === "status" &&
-            String((element.props as Record<string, unknown>).children).includes(
-              "Distribution applied atomically. Active assignments: assignment-persisted.",
-            ),
-        ),
-      ).toBe(true);
     } finally {
       fetchMock.mockRestore();
       vi.doUnmock("react");

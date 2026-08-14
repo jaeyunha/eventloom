@@ -92,7 +92,7 @@ export interface CfpConfiguration {
   opensAt: string;
   closesAt: string;
   participantLimit: number;
-  formLimit: number;
+  proposalLimit: number;
   reminderEmails: boolean;
   adminNotifications: boolean;
   welcomeTitle: string;
@@ -120,160 +120,17 @@ export interface CfpConfiguration {
   formVersion?: number;
 }
 
-const DEFAULT_EVENT_ID = "summit-2026";
-
-const SEEDED_CONFIGURATION: CfpConfiguration = {
-  eventName: "Eventloom Summit 2026",
-  slug: DEFAULT_EVENT_ID,
-  timezone: "America/Los_Angeles",
-  opensAt: "2026-01-15",
-  closesAt: "2026-03-31",
-  participantLimit: 3,
-  formLimit: 20,
-  reminderEmails: true,
-  adminNotifications: true,
-  welcomeTitle: "Bring your best session to the Summit",
-  welcomeBody:
-    "We are looking for practical, generous ideas from people shaping the future of programs and communities. Tell us what you have learned and what attendees can take home.",
-  confirmationTitle: "Your proposal is in",
-  confirmationBody:
-    "Thanks for sharing your idea. We will review every proposal and email you when the program moves forward.",
-  successMessage: "Thanks — your proposal has been submitted successfully.",
-  redirectUrl:
-    "https://eventloom.local/cfp/organizations/organization-1/events/summit-2026/complete",
-  tracks: ["Product craft", "Community systems", "Responsible AI"],
-  tags: ["Accessibility", "Leadership", "Open source", "Operations"],
-  formats: ["Talk · 30 minutes", "Workshop · 60 minutes", "Panel · 45 minutes"],
-  levels: ["Introductory", "Intermediate", "Advanced"],
-  helpfulLinks: [
-    { label: "Speaker guide", href: "https://eventloom.local/summit-2026/guide" },
-    { label: "Code of conduct", href: "https://eventloom.local/code-of-conduct" },
-  ],
-  fields: [
-    {
-      id: "first-name",
-      label: "First name",
-      type: "text",
-      required: true,
-      visible: true,
-      placeholder: "Ada",
-    },
-    {
-      id: "last-name",
-      label: "Last name",
-      type: "text",
-      required: true,
-      visible: true,
-      placeholder: "Lovelace",
-    },
-    {
-      id: "email",
-      label: "Email address",
-      type: "email",
-      required: true,
-      visible: true,
-      placeholder: "ada@example.com",
-    },
-    {
-      id: "proposal-title",
-      label: "Proposal title",
-      type: "text",
-      required: true,
-      visible: true,
-      placeholder: "A clear, attendee-friendly title",
-    },
-    {
-      id: "abstract",
-      label: "Proposal abstract",
-      type: "textarea",
-      required: true,
-      visible: true,
-      placeholder: "What will attendees learn?",
-    },
-    {
-      id: "accessibility-notes",
-      label: "Accessibility notes",
-      type: "textarea",
-      required: false,
-      visible: true,
-      placeholder: "Share access needs or presentation requirements",
-    },
-    {
-      id: "website",
-      label: "Website or profile URL",
-      type: "url",
-      required: false,
-      visible: false,
-      placeholder: "https://",
-    },
-  ],
-  rule: {
-    type: "group",
-    operator: "AND",
-    conditions: [
-      { type: "condition", field: "Format", operator: "is", value: "Workshop · 60 minutes" },
-      {
-        type: "group",
-        operator: "OR",
-        conditions: [
-          { type: "condition", field: "Track", operator: "is", value: "Community systems" },
-          { type: "condition", field: "Level", operator: "is", value: "Introductory" },
-        ],
-      },
-    ],
-  },
-  ruleAction: "show Accessibility notes and require a workshop materials link",
-  ruleTargetField: "accessibility-notes",
-};
-
-const SECTION_LINKS = [
-  { id: "event-details", label: "Event details" },
-  { id: "messaging", label: "Messaging" },
-  { id: "taxonomy", label: "Taxonomy & links" },
-  { id: "fields-rules", label: "Fields & rules" },
-  { id: "public-preview", label: "Public preview" },
-] as const;
-
-const TIMEZONE_OPTIONS = [
-  "America/Los_Angeles",
-  "America/New_York",
-  "Europe/London",
-  "Europe/Berlin",
-  "Asia/Singapore",
-];
-
-function cloneConfiguration(): CfpConfiguration {
+function createEmptyCfpConfiguration(eventId: string): CfpConfiguration {
   return {
-    ...SEEDED_CONFIGURATION,
-    tracks: [...SEEDED_CONFIGURATION.tracks],
-    tags: [...SEEDED_CONFIGURATION.tags],
-    formats: [...SEEDED_CONFIGURATION.formats],
-    levels: [...SEEDED_CONFIGURATION.levels],
-    helpfulLinks: SEEDED_CONFIGURATION.helpfulLinks.map((link) => ({ ...link })),
-    fields: SEEDED_CONFIGURATION.fields.map((field) => ({ ...field })),
-    ...(SEEDED_CONFIGURATION.participantFields
-      ? { participantFields: SEEDED_CONFIGURATION.participantFields.map((field) => ({ ...field })) }
-      : {}),
-    ...(SEEDED_CONFIGURATION.sections ? { sections: [...SEEDED_CONFIGURATION.sections] } : {}),
-    ...(SEEDED_CONFIGURATION.rules ? { rules: [...SEEDED_CONFIGURATION.rules] } : {}),
-    rule: SEEDED_CONFIGURATION.rule,
-  };
-}
-
-export function createSeededCfpConfiguration(eventId = DEFAULT_EVENT_ID): CfpConfiguration {
-  const configuration = cloneConfiguration();
-  configuration.slug = eventId || DEFAULT_EVENT_ID;
-  return configuration;
-}
-
-function createEditorInitialConfiguration(eventId: string): CfpConfiguration {
-  if (process.env.NODE_ENV === "test" || process.env.NEXT_PUBLIC_RUNTIME_PROFILE === "fixture") {
-    return createSeededCfpConfiguration(eventId);
-  }
-  const seeded = createSeededCfpConfiguration("");
-  return {
-    ...seeded,
     eventName: "",
+    slug: "",
+    timezone: "UTC",
+    opensAt: "",
+    closesAt: "",
+    participantLimit: 1,
+    proposalLimit: 3,
+    reminderEmails: false,
+    adminNotifications: false,
     welcomeTitle: "",
     welcomeBody: "",
     confirmationTitle: "",
@@ -287,13 +144,34 @@ function createEditorInitialConfiguration(eventId: string): CfpConfiguration {
     helpfulLinks: [],
     fields: [],
     rule: {
-      type: "group",
-      operator: "AND",
-      conditions: [{ type: "condition", field: "title", operator: "is not", value: "" }],
+      type: "condition",
+      field: "title",
+      operator: "is not",
+      value: "",
     },
     ruleAction: "",
+    id: `${eventId}-cfp`,
+    status: "draft",
   };
 }
+
+const SECTION_LINKS = [
+  { id: "event-details", label: "Event details" },
+  { id: "messaging", label: "Messaging" },
+  { id: "taxonomy", label: "Taxonomy & links" },
+  { id: "fields-rules", label: "Fields & rules" },
+  { id: "public-preview", label: "Public preview" },
+] as const;
+
+const TIMEZONE_OPTIONS = [
+  "UTC",
+  "America/Los_Angeles",
+  "America/New_York",
+  "Europe/London",
+  "Europe/Berlin",
+  "Asia/Singapore",
+];
+
 function validCfpTimeZone(value: string): boolean {
   try {
     new Intl.DateTimeFormat("en-US", { timeZone: value }).format();
@@ -413,6 +291,40 @@ export function selectEditorForm(
         (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)
       );
     })[0];
+}
+
+export async function loadCfpEditorConfiguration(
+  api: CfpApi,
+  input: { readonly organizationId: string; readonly eventId: string; readonly formId?: string },
+): Promise<{
+  readonly event: CfpEventConfiguration;
+  readonly form: CfpFormConfiguration | undefined;
+}> {
+  const event = await api.getEvent({
+    organizationId: input.organizationId,
+    eventId: input.eventId,
+  });
+  if (input.formId !== undefined) {
+    try {
+      const form = await api.getForm({
+        organizationId: input.organizationId,
+        eventId: input.eventId,
+        formId: input.formId,
+      });
+      return { event, form };
+    } catch (error) {
+      if (!(error instanceof CfpApiError) || error.status !== 404) throw error;
+      return { event, form: undefined };
+    }
+  }
+  const forms = await api.listForms({
+    organizationId: input.organizationId,
+    eventId: input.eventId,
+  });
+  return {
+    event,
+    form: selectEditorForm(forms, input.organizationId, input.eventId),
+  };
 }
 
 function editorFieldType(kind: string): FieldType {
@@ -594,17 +506,8 @@ export function toFormConfiguration(
   const ruleRecords = [...(configuration.rules ?? [])].filter(
     (rule) => !(typeof rule === "object" && rule !== null && rule.id === editorRuleId),
   );
-  const hasEditorRule = (configuration.rules ?? []).some(
-    (rule) => typeof rule === "object" && rule !== null && rule.id === editorRuleId,
-  );
-  const editorRuleChanged =
-    configuration.ruleTargetField !== SEEDED_CONFIGURATION.ruleTargetField ||
-    configuration.ruleAction !== SEEDED_CONFIGURATION.ruleAction;
   const editorFields = [...fields, ...taxonomyFields].map(toEditorField);
-  const generatedRule =
-    ruleRecords.length === 0 || hasEditorRule || editorRuleChanged
-      ? editorConditionalRule(configuration, editorFields)
-      : null;
+  const generatedRule = editorConditionalRule(configuration, editorFields);
   const sections =
     configuration.sections && configuration.sections.length > 0
       ? configuration.sections.map((section) => ({ ...section }))
@@ -677,7 +580,7 @@ export function toFormConfiguration(
     welcomeContent: `${configuration.welcomeTitle}\n${configuration.welcomeBody}`,
     settings: {
       speakerLimit: configuration.participantLimit,
-      maxSubmissionsPerAccount: configuration.formLimit,
+      maxSubmissionsPerAccount: configuration.proposalLimit,
       remindersEnabled: configuration.reminderEmails,
       adminNotificationsEnabled: configuration.adminNotifications,
       confirmationMessage: `${configuration.confirmationTitle}\n${configuration.confirmationBody}`,
@@ -823,7 +726,7 @@ export function configurationFromServer(
     opensAt: dateFromInstant(event.opensAt),
     closesAt: dateFromInstant(event.closesAt),
     participantLimit: readNumber("speakerLimit", current.participantLimit),
-    formLimit: readNumber("maxSubmissionsPerAccount", current.formLimit),
+    proposalLimit: readNumber("maxSubmissionsPerAccount", current.proposalLimit),
     tracks: optionsFor("track", current.tracks),
     tags: optionsFor("tags", current.tags),
     formats: optionsFor("format", current.formats),
@@ -1078,7 +981,7 @@ interface CfpEditorProps {
 
 export function CfpEditor({ eventId, organizationId, formId, api: providedApi }: CfpEditorProps) {
   const [configuration, setConfiguration] = useState<CfpConfiguration>(() =>
-    createEditorInitialConfiguration(eventId),
+    createEmptyCfpConfiguration(eventId),
   );
   const api = useMemo(() => providedApi ?? createCfpApi(""), [providedApi]);
   const [activeSection, setActiveSection] =
@@ -1097,9 +1000,9 @@ export function CfpEditor({ eventId, organizationId, formId, api: providedApi }:
   });
   const [previewMessage, setPreviewMessage] = useState("");
   const [publicLinkCopied, setPublicLinkCopied] = useState(false);
-  const [authoritativeConfigLoaded, setAuthoritativeConfigLoaded] = useState(
-    process.env.NEXT_PUBLIC_RUNTIME_PROFILE === "fixture",
-  );
+  const [configurationLoadState, setConfigurationLoadState] = useState<
+    "loading" | "ready" | "error"
+  >("loading");
 
   const resolvedOrganizationId = organizationId.trim();
   const requestedFormId = formId?.trim() || undefined;
@@ -1118,60 +1021,50 @@ export function CfpEditor({ eventId, organizationId, formId, api: providedApi }:
 
   useEffect(() => {
     if (!resolvedOrganizationId) {
+      setConfigurationLoadState("error");
       setSaveState("error");
       return;
     }
     let active = true;
-    void api
-      .getEvent({ organizationId: resolvedOrganizationId, eventId })
-      .then(async (eventConfiguration) => {
-        let formConfiguration: CfpFormConfiguration | undefined;
-        if (requestedFormId !== undefined) {
-          try {
-            formConfiguration = await api.getForm({
-              organizationId: resolvedOrganizationId,
-              eventId,
-              formId: requestedFormId,
-            });
-          } catch (error) {
-            if (!(error instanceof CfpApiError) || error.status !== 404) throw error;
-          }
-        } else {
-          const forms = await api.listForms({
-            organizationId: resolvedOrganizationId,
-            eventId,
-          });
-          formConfiguration = selectEditorForm(forms, resolvedOrganizationId, eventId);
-        }
+    setConfigurationLoadState("loading");
+    setSaveError(null);
+    void loadCfpEditorConfiguration(api, {
+      organizationId: resolvedOrganizationId,
+      eventId,
+      ...(requestedFormId === undefined ? {} : { formId: requestedFormId }),
+    })
+      .then(({ event: eventConfiguration, form: formConfiguration }) => {
         if (!active) return;
-        setAuthoritativeConfigLoaded(true);
         if (formConfiguration !== undefined) {
           setConfiguration((current) =>
             configurationFromServer(current, eventConfiguration, formConfiguration),
           );
-          return;
+        } else {
+          const newFormId = requestedFormId ?? `${eventId}-cfp`;
+          setConfiguration((current) => {
+            const { formVersion: _formVersion, ...withoutFormVersion } = current;
+            return {
+              ...withoutFormVersion,
+              id: newFormId,
+              status: "draft",
+              eventVersion: eventConfiguration.version,
+              eventName: eventConfiguration.name,
+              slug: eventConfiguration.slug,
+              timezone: eventConfiguration.timezone,
+              opensAt: dateFromInstant(eventConfiguration.opensAt),
+              closesAt: dateFromInstant(eventConfiguration.closesAt),
+            };
+          });
         }
-        const newFormId = requestedFormId ?? `${eventId}-cfp`;
-        setConfiguration((current) => {
-          const { formVersion: _formVersion, ...withoutFormVersion } = current;
-          return {
-            ...withoutFormVersion,
-            id: newFormId,
-            status: "draft",
-            eventVersion: eventConfiguration.version,
-            eventName: eventConfiguration.name,
-            slug: eventConfiguration.slug,
-            timezone: eventConfiguration.timezone,
-            opensAt: dateFromInstant(eventConfiguration.opensAt),
-            closesAt: dateFromInstant(eventConfiguration.closesAt),
-          };
-        });
+        setConfigurationLoadState("ready");
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (active) {
-          setAuthoritativeConfigLoaded(false);
-          setConfiguration((current) => ({ ...current, slug: "" }));
+          setConfigurationLoadState("error");
           setSaveState("error");
+          setSaveError(
+            error instanceof Error ? error.message : "The CFP configuration could not be loaded.",
+          );
         }
       });
     return () => {
@@ -1505,10 +1398,35 @@ export function CfpEditor({ eventId, organizationId, formId, api: providedApi }:
     );
   }
 
-  const publicRoute =
-    authoritativeConfigLoaded && configuration.slug
-      ? getCfpStepRoute(resolvedOrganizationId, configuration.slug, "welcome")
-      : null;
+  if (configurationLoadState !== "ready") {
+    return (
+      <div className={styles.viewport}>
+        <section
+          className={styles.pageHeader}
+          role={configurationLoadState === "error" ? "alert" : "status"}
+          aria-live="polite"
+        >
+          <div>
+            <p className={styles.eyebrow}>Organizer workspace / {eventId}</p>
+            <h1>
+              {configurationLoadState === "error"
+                ? "Unable to load CFP configuration"
+                : "Loading CFP configuration"}
+            </h1>
+            <p className={styles.pageIntro}>
+              {configurationLoadState === "error"
+                ? (saveError ?? "The event and CFP form could not be loaded.")
+                : "Loading the authoritative event and form configuration."}
+            </p>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  const publicRoute = configuration.slug
+    ? getCfpStepRoute(resolvedOrganizationId, configuration.slug, "welcome")
+    : null;
 
   async function copyPublicLink(): Promise<void> {
     if (!publicRoute || typeof navigator === "undefined" || !navigator.clipboard) return;
@@ -1781,21 +1699,24 @@ export function CfpEditor({ eventId, organizationId, formId, api: providedApi }:
                 </p>
               </div>
               <div className={styles.fieldGroup}>
-                <label htmlFor="form-limit">Submission limit (forms per event)</label>
+                <label htmlFor="proposal-limit">Maximum proposals per account</label>
                 <input
-                  id="form-limit"
-                  name="submissionLimit"
+                  id="proposal-limit"
+                  name="proposalLimit"
                   type="number"
                   required
                   min={1}
-                  max={20}
+                  max={100}
                   step={1}
-                  value={configuration.formLimit}
-                  onChange={(event) => updateConfiguration("formLimit", Number(event.target.value))}
-                  aria-describedby="form-limit-help"
+                  value={configuration.proposalLimit}
+                  onChange={(event) =>
+                    updateConfiguration("proposalLimit", Number(event.target.value))
+                  }
+                  aria-describedby="proposal-limit-help"
                 />
-                <p id="form-limit-help" className={styles.fieldHint}>
-                  An event can publish between 1 and 20 forms; this form limit is 20.
+                <p id="proposal-limit-help" className={styles.fieldHint}>
+                  Each account can create between 1 and 100 distinct proposals for this CFP. Editing
+                  an existing proposal does not use another slot.
                 </p>
               </div>
             </div>

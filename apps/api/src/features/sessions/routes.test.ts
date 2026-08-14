@@ -322,13 +322,19 @@ describe("organizer session settings domain", () => {
       expectedVersion: waitlisted.version,
       contentStatus: "Approved",
     });
-    await service.createSession(organizer, {
+    const accepted = await service.createSession(organizer, {
       eventId: "event-a",
       id: "a-session",
       title: "Alpha",
       durationMinutes: 45,
       status: "Accepted",
       speakerIds: ["speaker-2"],
+    });
+    await service.updateSession(organizer, {
+      eventId: "event-a",
+      sessionId: accepted.id,
+      expectedVersion: accepted.version,
+      contentStatus: "Approved",
     });
     const listed = await service.listSessions(organizer, {
       eventId: "event-a",
@@ -455,30 +461,19 @@ describe("organizer session settings domain", () => {
     );
     const created = (
       (await createdResponse.json()) as {
-        data: { id: string; version: number };
+        data: { id: string; version: number; contentStatus?: string };
       }
     ).data;
     expect(createdResponse.status).toBe(201);
-    expect(created).toMatchObject({ id: "content-session", version: 1 });
+    expect(created).toMatchObject({
+      id: "content-session",
+      version: 1,
+      contentStatus: "Needs changes",
+    });
     expect(await readPublishedContent()).toEqual({
       tenantId: "tenant-a",
       eventId: "event-a",
-      sessions: [
-        {
-          id: "content-session",
-          title: "Original title",
-          abstract: "Original abstract",
-          contentStatus: "Approved",
-          durationMinutes: 30,
-          capacityRequired: 0,
-          trackIds: [],
-          speakerIds: ["speaker-1"],
-          speakerNames: ["Speaker"],
-          resourceIds: [],
-          version: 1,
-          updatedAt: now.toISOString(),
-        },
-      ],
+      sessions: [],
     });
 
     const firstResponse = await app.request(
@@ -826,7 +821,7 @@ describe("organizer session settings domain", () => {
     const created = (
       (await createResponse.json()) as { data: { version: number; contentStatus?: string } }
     ).data;
-    expect(created).toMatchObject({ version: 1, contentStatus: "Approved" });
+    expect(created).toMatchObject({ version: 1, contentStatus: "Needs changes" });
     const listResponse = await app.request(
       "http://localhost/api/admin/organizations/tenant-a/events/event-a/sessions",
     );

@@ -75,11 +75,12 @@ describe("airtable integration UI", () => {
     expect(markup).toContain("Disconnected");
     expect(markup).toContain("Airtable is not linked to this organization");
     expect(markup).toContain(">Connect Airtable<");
-    expect(markup).toContain("never stores Airtable credentials");
     expect(markup).toContain('aria-label="Connect Airtable for this organization"');
     expect(markup).toContain('href="#airtable-content"');
     expect(markup).toContain("Skip to Airtable settings");
     expect(markup).not.toContain('type="password"');
+    expect(markup).not.toContain('name="token"');
+    expect(markup).not.toContain('name="clientSecret"');
     expect(markup).not.toContain(">Pause<");
     expect(markup).not.toContain(">Disconnect<");
   });

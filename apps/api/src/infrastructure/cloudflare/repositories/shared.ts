@@ -18,6 +18,21 @@ export interface ConsequentialWrite {
   };
 }
 
+export interface AirtableSyncWrite {
+  readonly id: string;
+  readonly tenantId: string;
+  readonly entityType: string;
+  readonly applicationId: string;
+  readonly sourceVersion: number;
+  readonly operation: "upsert" | "archive" | "delete" | "reconcile";
+  readonly payloadJson: string;
+  readonly availableAt: string;
+  readonly condition?: {
+    readonly sql: string;
+    readonly values: readonly D1Value[];
+  };
+}
+
 export function statement(
   database: D1Database,
   sql: string,
@@ -89,6 +104,48 @@ function hash(value: string): string {
     result = Math.imul(result, 16_777_619);
   }
   return (result >>> 0).toString(16).padStart(8, "0");
+}
+
+export function airtableSyncStatement(
+  database: D1Database,
+  write: AirtableSyncWrite,
+): D1PreparedStatement {
+  const deduplicationSuffix = [
+    write.entityType,
+    write.applicationId,
+    write.sourceVersion,
+    write.operation,
+  ].join(":");
+  const condition = write.condition ?? { sql: "1 = 1", values: [] };
+  return statement(
+    database,
+    `INSERT INTO airtable_sync_jobs
+       (id, organization_id, connection_id, connection_version, entity_type,
+        application_id, source_version, operation, state, deduplication_key,
+        attempt_count, available_at, payload_json, payload_hash, created_at, updated_at)
+     SELECT ?, connection.organization_id, connection.id, connection.connection_version,
+            ?, ?, ?, ?, 'pending', connection.id || ':' || ?, 0, ?, ?, ?, ?, ?
+       FROM airtable_connections AS connection
+      WHERE connection.organization_id = ?
+        AND connection.status = 'connected'
+        AND (${condition.sql})
+     ON CONFLICT (deduplication_key) DO NOTHING`,
+    [
+      write.id,
+      write.entityType,
+      write.applicationId,
+      write.sourceVersion,
+      write.operation,
+      deduplicationSuffix,
+      write.availableAt,
+      write.payloadJson,
+      hash(write.payloadJson),
+      write.availableAt,
+      write.availableAt,
+      write.tenantId,
+      ...condition.values,
+    ],
+  );
 }
 
 function auditStatement(database: D1Database, write: ConsequentialWrite): D1PreparedStatement {

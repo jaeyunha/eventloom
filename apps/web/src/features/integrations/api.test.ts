@@ -122,4 +122,39 @@ describe("integration admin API", () => {
     expect(requestedUrl).not.toMatch(/^https?:\/\//);
     expect(requestInit?.credentials).toBe("include");
   });
+  it("uses organization-scoped API-key contracts while retaining eventId as metadata", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const api = createIntegrationAdminApi("https://api.example.test", async (input, init = {}) => {
+      calls.push({ url: String(input), init });
+      if (init.method === "DELETE") return response(undefined, 204);
+      if (init.method === "POST") return response({ id: "key-1", secret: "one-time-secret" }, 201);
+      return response([]);
+    });
+
+    await expect(api.listApiKeys("org/a")).resolves.toEqual([]);
+    await expect(
+      api.createApiKey({
+        organizationId: "org/a",
+        eventId: "event/a",
+        label: " Automation ",
+        scopes: ["events:read"],
+        expiresAt: null,
+      }),
+    ).resolves.toEqual({ id: "key-1", secret: "one-time-secret" });
+    await api.revokeApiKey("org/a", "key/1");
+    await api.revokeApiKey("org/a", "event/a", "key/legacy");
+
+    expect(calls.map((call) => call.url)).toEqual([
+      "https://api.example.test/api/admin/organizations/org%2Fa/api-keys",
+      "https://api.example.test/api/admin/organizations/org%2Fa/api-keys",
+      "https://api.example.test/api/admin/organizations/org%2Fa/api-keys/key%2F1",
+      "https://api.example.test/api/admin/organizations/org%2Fa/api-keys/key%2Flegacy",
+    ]);
+    expect(JSON.parse(String(calls[1]?.init.body))).toEqual({
+      label: "Automation",
+      scopes: ["events:read"],
+      expiresAt: null,
+      eventId: "event/a",
+    });
+  });
 });

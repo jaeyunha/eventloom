@@ -587,7 +587,7 @@ export function AirtableIntegration({
                     <>
                       <p className={styles.securityNote}>
                         You will finish authorization in a separate Airtable tab. This workspace
-                        never stores Airtable credentials.
+                        keeps OAuth tokens server-side and encrypts them at rest.
                       </p>
                       <div className={styles.actionRow}>
                         <Button

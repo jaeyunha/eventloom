@@ -23,13 +23,7 @@ export const COMMUNICATION_AUDIENCES = [
 
 export type CommunicationAudience = (typeof COMMUNICATION_AUDIENCES)[number];
 
-export const COMMUNICATION_SENDERS = [
-  "auth@sessionboard.namuh.co",
-  "speakers@sessionboard.namuh.co",
-  "calendar@sessionboard.namuh.co",
-] as const;
-
-export type CommunicationSenderIdentity = (typeof COMMUNICATION_SENDERS)[number];
+export type CommunicationSenderIdentity = string;
 export type CommunicationTemplateStatus = "draft" | "approved" | "archived";
 export type CommunicationDeliveryStatus =
   | "queued"
@@ -313,6 +307,18 @@ function isNullableCommunicationString(value: unknown): value is string | null {
   return value === null || isRequiredCommunicationString(value);
 }
 
+const COMMUNICATION_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/u;
+
+function isCommunicationEmail(value: unknown): value is CommunicationSenderIdentity {
+  return (
+    typeof value === "string" &&
+    value.length <= 320 &&
+    value === value.trim() &&
+    !/[\r\n]/u.test(value) &&
+    COMMUNICATION_EMAIL_PATTERN.test(value)
+  );
+}
+
 function isCommunicationTemplate(value: unknown): value is CommunicationTemplate {
   if (!isRecord(value)) return false;
   return (
@@ -327,8 +333,7 @@ function isCommunicationTemplate(value: unknown): value is CommunicationTemplate
     value.version > 0 &&
     typeof value.status === "string" &&
     COMMUNICATION_TEMPLATE_STATUSES.includes(value.status as CommunicationTemplateStatus) &&
-    typeof value.sender === "string" &&
-    COMMUNICATION_SENDERS.includes(value.sender as CommunicationSenderIdentity) &&
+    isCommunicationEmail(value.sender) &&
     isRequiredCommunicationString(value.subject) &&
     isRequiredCommunicationString(value.html) &&
     isRequiredCommunicationString(value.text) &&
@@ -340,6 +345,11 @@ function isCommunicationTemplate(value: unknown): value is CommunicationTemplate
     isNullableCommunicationString(value.approvedBy) &&
     isNullableCommunicationString(value.approvedAt)
   );
+}
+
+function communicationTemplateResponse(value: unknown): CommunicationTemplate {
+  if (!isCommunicationTemplate(value)) throw invalidCommunicationResponse();
+  return value;
 }
 
 function invalidCommunicationResponse(): CommunicationApiError {
@@ -451,24 +461,6 @@ function segment(value: string, field: string): string {
   return encodeURIComponent(normalized);
 }
 
-function senderForPurpose(purpose: CommunicationTemplatePurpose): CommunicationSenderIdentity {
-  if (purpose === "verification") return "auth@sessionboard.namuh.co";
-  if (
-    purpose === "schedule_publish" ||
-    purpose === "schedule_update" ||
-    purpose === "schedule_cancel"
-  ) {
-    return "calendar@sessionboard.namuh.co";
-  }
-  return "speakers@sessionboard.namuh.co";
-}
-
-export function approvedSenderForPurpose(
-  purpose: CommunicationTemplatePurpose,
-): CommunicationSenderIdentity {
-  return senderForPurpose(purpose);
-}
-
 export function escapeHtmlForPreview(value: string): string {
   return value
     .replaceAll("&", "&amp;")
@@ -553,7 +545,7 @@ export interface CommunicationApi {
   }): Promise<CommunicationTemplate>;
   preview(input: {
     eventId: string;
-    purpose: "organizer_group_email";
+    purpose: "organizer_group_email" | "decision";
     templateId: string;
     templateVersion?: number;
     audience: CommunicationAudience;
@@ -667,47 +659,55 @@ export function createCommunicationApi(
       }
       return templates;
     },
-    getTemplate(eventId, templateId, version, signal) {
+    async getTemplate(eventId, templateId, version, signal) {
       const query = version === undefined ? "" : `?version=${encodeURIComponent(String(version))}`;
-      return request<CommunicationTemplate>(
-        eventId,
-        `/templates/${segment(templateId, "template ID")}${query}`,
-        signal === undefined ? {} : { signal },
+      return communicationTemplateResponse(
+        await request<unknown>(
+          eventId,
+          `/templates/${segment(templateId, "template ID")}${query}`,
+          signal === undefined ? {} : { signal },
+        ),
       );
     },
-    createTemplate(input) {
-      return request<CommunicationTemplate>(input.eventId, "/templates", {
-        method: "POST",
-        body: JSON.stringify({
-          name: input.name,
-          purpose: input.purpose,
-          subject: input.subject,
-          html: input.html,
-          text: input.text,
-          ...(input.variables === undefined ? {} : { variables: input.variables }),
-        }),
-      });
-    },
-    createTemplateVersion(input) {
-      return request<CommunicationTemplate>(
-        input.eventId,
-        `/templates/${segment(input.templateId, "template ID")}/versions`,
-        {
+    async createTemplate(input) {
+      return communicationTemplateResponse(
+        await request<unknown>(input.eventId, "/templates", {
           method: "POST",
           body: JSON.stringify({
+            name: input.name,
+            purpose: input.purpose,
             subject: input.subject,
             html: input.html,
             text: input.text,
             ...(input.variables === undefined ? {} : { variables: input.variables }),
           }),
-        },
+        }),
       );
     },
-    approveTemplate(input) {
-      return request<CommunicationTemplate>(
-        input.eventId,
-        `/templates/${segment(input.templateId, "template ID")}/approve`,
-        { method: "POST", body: JSON.stringify({ version: input.version }) },
+    async createTemplateVersion(input) {
+      return communicationTemplateResponse(
+        await request<unknown>(
+          input.eventId,
+          `/templates/${segment(input.templateId, "template ID")}/versions`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              subject: input.subject,
+              html: input.html,
+              text: input.text,
+              ...(input.variables === undefined ? {} : { variables: input.variables }),
+            }),
+          },
+        ),
+      );
+    },
+    async approveTemplate(input) {
+      return communicationTemplateResponse(
+        await request<unknown>(
+          input.eventId,
+          `/templates/${segment(input.templateId, "template ID")}/approve`,
+          { method: "POST", body: JSON.stringify({ version: input.version }) },
+        ),
       );
     },
     preview(input) {

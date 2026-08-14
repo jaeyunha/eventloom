@@ -21,9 +21,10 @@ export function createAirtableIntegrationDependencies(input: {
   authenticator: RequestAuthenticator;
   clientId: string;
   clientSecret?: string;
-  defaultBaseId: string;
+  patConnectionsEnabled: boolean;
   cipher: AirtableSecretCipher;
   apiOrigin?: string;
+  webOrigin: string;
   redirectUri: string;
   sessions: D1RuntimeDependencies["sessions"];
 }): AirtableIntegrationRouteDependencies {
@@ -123,6 +124,7 @@ export function createAirtableIntegrationDependencies(input: {
   };
 
   return {
+    webOrigin: input.webOrigin,
     requireOrganizationAccess: async (context, organizationId) => {
       const principal = await input.authenticator.authenticate(context.req.raw);
       if (
@@ -142,25 +144,39 @@ export function createAirtableIntegrationDependencies(input: {
       const authorization = await oauth.startForUserId({
         userId: user.userId,
         organizationId,
-        returnPath: "/admin/integrations/airtable",
+        returnPath: organizationIntegrationPath(organizationId),
       });
       return { authorizationUrl: authorization.authorizationUrl };
     },
-    completeOAuth: async (_organizationId, request) => {
+    completeOAuth: async (request) => {
       const callback = await oauth.handlePublicCallback({
         state: request.state,
         code: request.code,
       });
-      return Response.redirect(new URL(callback.redirectTo, input.redirectUri).toString(), 302);
+      return Response.redirect(
+        resolveAirtableOAuthCallbackRedirect({
+          webOrigin: input.webOrigin,
+          organizationId: callback.organizationId,
+          returnPath: callback.redirectTo,
+        }).toString(),
+        302,
+      );
     },
-    connectPat: async (organizationId, request) => {
-      await control.connectPat({
-        organizationId,
-        token: request.token,
-        baseId: input.defaultBaseId,
-      });
-      return status(organizationId);
-    },
+    ...(input.patConnectionsEnabled
+      ? {
+          connectPat: async (
+            organizationId: string,
+            request: { readonly token: string; readonly baseId: string },
+          ) => {
+            await control.connectPat({
+              organizationId,
+              token: request.token,
+              baseId: request.baseId,
+            });
+            return status(organizationId);
+          },
+        }
+      : {}),
     selectBase: async (organizationId, request) => {
       const connection = await requireConnection(connectionFor, organizationId);
       await oauth.selectBase({
@@ -223,6 +239,29 @@ export function createAirtableIntegrationDependencies(input: {
       return handleWebhook(request, registrationId);
     },
   };
+}
+
+function organizationIntegrationPath(organizationId: string): string {
+  return `/admin/organizations/${encodeURIComponent(organizationId)}/integrations/airtable`;
+}
+
+export function resolveAirtableOAuthCallbackRedirect(input: {
+  webOrigin: string;
+  organizationId: string;
+  returnPath: string;
+}): URL {
+  const fallback = organizationIntegrationPath(input.organizationId);
+  const webOrigin = new URL(input.webOrigin);
+  const expectedPrefix = `/admin/organizations/${encodeURIComponent(input.organizationId)}/`;
+  try {
+    const resolved = new URL(input.returnPath, webOrigin);
+    if (resolved.origin === webOrigin.origin && resolved.pathname.startsWith(expectedPrefix)) {
+      return resolved;
+    }
+  } catch {
+    // Fall through to the canonical organization integration route.
+  }
+  return new URL(fallback, webOrigin);
 }
 
 async function requireConnection(

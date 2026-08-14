@@ -19,6 +19,7 @@ import type {
   SpeakerAsset,
   SpeakerAssetAuditEntry,
   SpeakerAssetReviewCommand,
+  SpeakerPortalContext,
   SpeakerProfile,
   SpeakerRepository,
   SpeakerSubmission,
@@ -28,6 +29,26 @@ import type {
   UpdateBiographyCommand,
   UpdateSpeakerProfileCommand,
 } from "../../../features/speaker/types";
+
+export function portalSubmissionStatus(
+  submissionStatus: string,
+  decisionStatus: string | undefined,
+): SpeakerSubmission["status"] {
+  if (decisionStatus === "accepted") return "accepted";
+  if (decisionStatus === "rejected") return "declined";
+  if (decisionStatus === "waitlisted") return "under_review";
+  if (
+    submissionStatus === "draft" ||
+    submissionStatus === "submitted" ||
+    submissionStatus === "under_review" ||
+    submissionStatus === "accepted" ||
+    submissionStatus === "declined" ||
+    submissionStatus === "withdrawn"
+  ) {
+    return submissionStatus;
+  }
+  return "submitted";
+}
 
 const json = (value: unknown): string => JSON.stringify(value);
 const auditLabel = "__speaker_asset_audit__";
@@ -43,8 +64,88 @@ export class D1SpeakerRepository implements SpeakerRepository {
     this.#orm = createDatabase(db);
   }
 
+  async listPortalContexts(accountId: string): Promise<SpeakerPortalContext[]> {
+    const result = await this.#db
+      .withSession("first-primary")
+      .prepare(
+        `SELECT e.organization_id,
+                e.id AS event_id,
+                e.name AS event_name,
+                e.slug AS event_slug,
+                e.status AS event_status,
+                s.id AS submission_id,
+                sp.participant_id
+           FROM submissions AS s
+           JOIN events AS e
+             ON e.organization_id = s.organization_id
+            AND e.id = s.event_id
+      LEFT JOIN submission_participants AS sp
+             ON sp.organization_id = s.organization_id
+            AND sp.event_id = s.event_id
+            AND sp.submission_id = s.id
+            AND sp.role = 'primary'
+          WHERE s.owner_account_id = ?
+       ORDER BY e.updated_at DESC, s.updated_at DESC`,
+      )
+      .bind(accountId)
+      .all<Record<string, unknown>>();
+    const contexts = new Map<string, SpeakerPortalContext>();
+    for (const row of result.results ?? []) {
+      const eventId = String(row.event_id);
+      const submissionId = String(row.submission_id);
+      const participantId =
+        row.participant_id === null || row.participant_id === undefined
+          ? undefined
+          : String(row.participant_id);
+      const existing = contexts.get(eventId);
+      if (existing !== undefined) {
+        contexts.set(eventId, {
+          ...existing,
+          submissionIds: existing.submissionIds.includes(submissionId)
+            ? existing.submissionIds
+            : [...existing.submissionIds, submissionId],
+          participantIds:
+            participantId === undefined || existing.participantIds.includes(participantId)
+              ? existing.participantIds
+              : [...existing.participantIds, participantId],
+        });
+        continue;
+      }
+      contexts.set(eventId, {
+        id: eventId,
+        organizationId: String(row.organization_id),
+        eventId,
+        name: String(row.event_name),
+        slug: String(row.event_slug),
+        status: String(row.event_status),
+        capabilities: ["submission-edit"],
+        submissionIds: [submissionId],
+        participantIds: participantId === undefined ? [] : [participantId],
+        ...(participantId === undefined ? {} : { primaryParticipantId: participantId }),
+      });
+    }
+    return [...contexts.values()];
+  }
+
+  async listPortalContextScopes(accountId: string): Promise<
+    readonly {
+      context: SpeakerPortalContext;
+      scope: SpeakerAccessScope;
+    }[]
+  > {
+    return (await this.listPortalContexts(accountId)).map((context) => ({
+      context,
+      scope: {
+        submissionIds: context.submissionIds,
+        participantIds: context.participantIds,
+        capabilities: context.capabilities,
+      },
+    }));
+  }
+
   async getAccessScope(eventId: string, accountId: string): Promise<SpeakerAccessScope> {
-    const contexts = await this.#db
+    const session = this.#db.withSession("first-primary");
+    const projected = await session
       .prepare(
         `SELECT pc.organization_id, pc.primary_participant_id, pc.capabilities_json,
               group_concat(DISTINCT pcp.participant_id) AS participant_ids,
@@ -58,17 +159,50 @@ export class D1SpeakerRepository implements SpeakerRepository {
       )
       .bind(eventId, accountId)
       .first<Record<string, unknown>>();
-    if (contexts === null) return { submissionIds: [], participantIds: [] };
+    if (projected !== null) {
+      return {
+        tenantId: String(projected.organization_id),
+        submissionIds: String(projected.submission_ids ?? "")
+          .split(",")
+          .filter(Boolean),
+        participantIds: String(projected.participant_ids ?? "")
+          .split(",")
+          .filter(Boolean),
+        capabilities: JSON.parse(String(projected.capabilities_json ?? "[]")),
+        primaryParticipantId: String(projected.primary_participant_id),
+        role: "speaker",
+      };
+    }
+    const owned = await session
+      .prepare(
+        `SELECT s.organization_id,
+                group_concat(DISTINCT s.id) AS submission_ids,
+                group_concat(DISTINCT sp.participant_id) AS participant_ids,
+                max(CASE WHEN sp.role = 'primary' THEN sp.participant_id END)
+                  AS primary_participant_id
+           FROM submissions AS s
+      LEFT JOIN submission_participants AS sp
+             ON sp.organization_id = s.organization_id
+            AND sp.event_id = s.event_id
+            AND sp.submission_id = s.id
+          WHERE s.event_id = ?
+            AND s.owner_account_id = ?
+       GROUP BY s.organization_id
+          LIMIT 1`,
+      )
+      .bind(eventId, accountId)
+      .first<Record<string, unknown>>();
+    if (owned === null) return { submissionIds: [], participantIds: [] };
     return {
-      tenantId: String(contexts.organization_id),
-      submissionIds: String(contexts.submission_ids ?? "")
+      tenantId: String(owned.organization_id),
+      submissionIds: String(owned.submission_ids ?? "")
         .split(",")
         .filter(Boolean),
-      participantIds: String(contexts.participant_ids ?? "")
+      participantIds: String(owned.participant_ids ?? "")
         .split(",")
         .filter(Boolean),
-      capabilities: JSON.parse(String(contexts.capabilities_json ?? "[]")),
-      primaryParticipantId: String(contexts.primary_participant_id),
+      capabilities: ["submission-edit"],
+      primaryParticipantId: String(owned.primary_participant_id ?? ""),
       role: "speaker",
     };
   }
@@ -88,10 +222,23 @@ export class D1SpeakerRepository implements SpeakerRepository {
     for (const row of rows) {
       const links = await this.#db
         .prepare(
-          "SELECT participant_id, role FROM submission_participants WHERE organization_id = ? AND submission_id = ? ORDER BY ordinal",
+          `SELECT sp.participant_id, sp.role, p.first_name, p.last_name, p.email
+             FROM submission_participants sp
+             JOIN participants p
+               ON p.organization_id = sp.organization_id
+              AND p.event_id = sp.event_id
+              AND p.id = sp.participant_id
+            WHERE sp.organization_id = ? AND sp.submission_id = ?
+            ORDER BY sp.ordinal`,
         )
         .bind(row.organizationId, row.id)
-        .all<{ participant_id: string; role: string }>();
+        .all<{
+          participant_id: string;
+          role: string;
+          first_name: string;
+          last_name: string;
+          email: string;
+        }>();
       const answers = await this.#db
         .prepare(
           "SELECT field_key, value_json FROM submission_answers WHERE organization_id = ? AND submission_id = ?",
@@ -101,12 +248,26 @@ export class D1SpeakerRepository implements SpeakerRepository {
       const answerRecord = Object.fromEntries(
         (answers.results ?? []).map((answer) => [answer.field_key, JSON.parse(answer.value_json)]),
       );
+      const decision = await this.#db
+        .withSession("first-primary")
+        .prepare(
+          "SELECT status FROM evaluation_decisions WHERE organization_id = ? AND event_id = ? AND submission_id = ? LIMIT 1",
+        )
+        .bind(row.organizationId, row.eventId, row.id)
+        .first<{ status: string }>();
       result.push({
         id: row.id,
         eventId: row.eventId,
         title: typeof answerRecord.title === "string" ? answerRecord.title : row.id,
-        status: row.status,
+        status: portalSubmissionStatus(row.status, decision?.status),
         participantIds: (links.results ?? []).map((link) => link.participant_id),
+        participants: (links.results ?? []).map((link) => ({
+          id: link.participant_id,
+          firstName: link.first_name,
+          lastName: link.last_name,
+          email: link.email,
+          role: link.role === "primary" ? "primary" : "co_author",
+        })),
         primaryParticipantId: (links.results ?? []).find((link) => link.role === "primary")
           ?.participant_id,
         formId: row.formId,

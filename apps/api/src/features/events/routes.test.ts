@@ -117,7 +117,12 @@ async function responseError(response: Response): Promise<{ code: string; messag
 describe("organizer event domain", () => {
   it("creates, lists, updates, gets, and archives only the event record", async () => {
     const { repository, service } = createService();
-    const created = await service.createEvent(actor(), createInput());
+    const created = await service.createEvent(
+      actor(),
+      createInput({
+        scheduleDates: ["2026-10-01", "2026-10-03"],
+      }),
+    );
 
     expect(created).toMatchObject({
       id: "generated-1",
@@ -126,6 +131,7 @@ describe("organizer event domain", () => {
       version: 1,
       createdBy: "organizer-1",
       updatedBy: "organizer-1",
+      scheduleDates: ["2026-10-01", "2026-10-03"],
       cfpSettings: { enabled: false, opensAt: null, closesAt: null },
       embedConfigurations: [],
       defaultCalendarSettings: {
@@ -287,6 +293,15 @@ describe("organizer event domain", () => {
         }),
       ),
     ).rejects.toMatchObject({ code: "VALIDATION_ERROR", status: 400 });
+    await expect(
+      service.createEvent(
+        actor(),
+        createInput({
+          id: "bad-schedule-date",
+          scheduleDates: ["2026-10-01", "2026-10-04"],
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR", status: 400 });
   });
 
   it("rejects stale versions, aliases, and every non-owner/admin or cross-organization actor", async () => {
@@ -336,11 +351,12 @@ describe("organizer event routes", () => {
     const createdResponse = await app.request(base, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(createInput()),
+      body: JSON.stringify(createInput({ scheduleDates: ["2026-10-01", "2026-10-03"] })),
     });
     expect(createdResponse.status).toBe(201);
     const created = await responseData<Event>(createdResponse);
     expect(created.embedConfigurations).toEqual([]);
+    expect(created.scheduleDates).toEqual(["2026-10-01", "2026-10-03"]);
 
     const listResponse = await app.request(base);
     expect(listResponse.status).toBe(200);
@@ -354,6 +370,7 @@ describe("organizer event routes", () => {
       body: JSON.stringify({
         expectedVersion: 1,
         name: "Updated",
+        scheduleDates: [],
         embedConfigurations: [embedConfiguration()],
       }),
     });
@@ -368,6 +385,9 @@ describe("organizer event routes", () => {
         }),
       ],
     });
+    expect(
+      (await responseData<Event>(await app.request(`${base}/${created.id}`))).scheduleDates,
+    ).toBe(undefined);
 
     const reloadedResponse = await app.request(`${base}/${created.id}`);
     expect(reloadedResponse.status).toBe(200);

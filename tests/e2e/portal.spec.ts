@@ -178,7 +178,7 @@ test("switching context clears files before loading the next event", async ({
 }) => {
   const api = await installPortalApi(page, authSession);
   await page.goto("/portal?workspace=files");
-  await expect(page.getByRole("heading", { level: 2, name: "Session files" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 2, name: "Uploaded files" })).toBeVisible();
   await expect(
     page.getByRole("heading", { level: 3, name: "calm-incident-response.pdf" }),
   ).toBeVisible();
@@ -208,7 +208,7 @@ test("speaker privately uploads, finalizes, histories, comments, and downloads a
 }) => {
   const api = await installPortalApi(page, authSession);
   await page.goto("/portal?workspace=files");
-  await expect(page.getByRole("heading", { level: 2, name: "Session files" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 2, name: "Uploaded files" })).toBeVisible();
 
   await page.getByLabel("File type").selectOption("supporting_file");
   await page.getByLabel("Choose file").setInputFiles({
@@ -219,7 +219,8 @@ test("speaker privately uploads, finalizes, histories, comments, and downloads a
   await page.getByRole("button", { name: "Upload privately" }).click();
   const uploaded = page.getByRole("article", { name: "runbook.txt" });
   await expect(uploaded).toBeVisible();
-  await expect(uploaded.getByText("ready · Current v1", { exact: true })).toBeVisible();
+  await expect(uploaded.getByText("Current v1", { exact: true })).toBeVisible();
+  await expect(uploaded.getByText("Uploaded", { exact: true })).toBeVisible();
   expect(api.view.assets?.find((asset) => asset.fileName === "runbook.txt")?.state).toBe("ready");
   expect(
     api.requests.some(
@@ -236,7 +237,7 @@ test("speaker privately uploads, finalizes, histories, comments, and downloads a
   expect(JSON.stringify(api.payloads)).not.toContain("privateNote");
 
   await uploaded.getByText("Version history and comments", { exact: true }).click();
-  await expect(uploaded.getByText(/Version 1 · runbook\.txt · ready/u)).toBeVisible();
+  await expect(uploaded.getByText(/Version 1 · runbook\.txt · Uploaded/u)).toBeVisible();
 
   await uploaded.getByLabel("Add a comment").fill("Use this runbook in the speaker briefing.");
   await uploaded.getByRole("button", { name: "Post comment" }).click();
@@ -248,7 +249,7 @@ test("speaker privately uploads, finalizes, histories, comments, and downloads a
     (request) =>
       request.method() === "GET" && request.url().includes("/assets/capabilities/download/"),
   );
-  await uploaded.getByRole("button", { name: "Download current" }).click();
+  await uploaded.getByRole("button", { name: "Download current version" }).click();
   expect((await downloadRequest).url()).toContain("opaque-download-token");
   expect(api.view.assets?.find((asset) => asset.fileName === "runbook.txt")?.state).toBe("ready");
 });

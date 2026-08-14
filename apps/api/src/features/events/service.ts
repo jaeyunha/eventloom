@@ -92,6 +92,7 @@ const CREATE_EVENT_FIELDS = [
   "timeZone",
   "startsAt",
   "endsAt",
+  "scheduleDates",
   "venue",
   "cfpSettings",
   "defaultCalendarSettings",
@@ -107,6 +108,7 @@ const UPDATE_EVENT_FIELDS = [
   "timeZone",
   "startsAt",
   "endsAt",
+  "scheduleDates",
   "venue",
   "cfpSettings",
   "defaultCalendarSettings",
@@ -459,6 +461,60 @@ function dateOrdering(startsAt: string, endsAt: string): void {
   }
 }
 
+function eventLocalDate(instantValue: string, timeZoneValue: string): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timeZoneValue,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(instantValue));
+  const values = new Map(parts.map((part) => [part.type, part.value]));
+  return `${values.get("year")}-${values.get("month")}-${values.get("day")}`;
+}
+
+function normalizeScheduleDates(
+  value: unknown,
+  startsAt: string,
+  endsAt: string,
+  eventTimeZone: string,
+): readonly string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw validation("scheduleDates must be an array of calendar dates.");
+  }
+  if (value.length === 0) return undefined;
+  if (value.length > 366) {
+    throw validation("scheduleDates cannot contain more than 366 dates.");
+  }
+  const dates = value.map((candidate, index) => {
+    if (typeof candidate !== "string" || !/^\d{4}-\d{2}-\d{2}$/u.test(candidate)) {
+      throw validation(`scheduleDates[${index}] must use YYYY-MM-DD.`);
+    }
+    const [year, month, day] = candidate.split("-").map(Number);
+    const parsed = new Date(Date.UTC(year ?? 0, (month ?? 0) - 1, day ?? 0));
+    if (
+      parsed.getUTCFullYear() !== year ||
+      parsed.getUTCMonth() + 1 !== month ||
+      parsed.getUTCDate() !== day
+    ) {
+      throw validation(`scheduleDates[${index}] must be a valid calendar date.`);
+    }
+    return candidate;
+  });
+  if (new Set(dates).size !== dates.length) {
+    throw validation("scheduleDates must not contain duplicate dates.");
+  }
+  if (dates.some((date, index) => index > 0 && date <= (dates[index - 1] ?? ""))) {
+    throw validation("scheduleDates must be ordered from earliest to latest.");
+  }
+  const firstDate = eventLocalDate(startsAt, eventTimeZone);
+  const lastDate = eventLocalDate(endsAt, eventTimeZone);
+  if (dates[0] !== firstDate || dates.at(-1) !== lastDate) {
+    throw validation("scheduleDates must include the first and last event date.");
+  }
+  return dates;
+}
+
 function repositoryConflict(error: unknown): boolean {
   return (
     error instanceof EventRepositoryConflictError ||
@@ -607,6 +663,12 @@ export class EventService {
     const endsAt = instant(input.endsAt, "endsAt");
     dateOrdering(startsAt, endsAt);
     const eventTimeZone = timeZone(input.timeZone, "timeZone");
+    const scheduleDates = normalizeScheduleDates(
+      input.scheduleDates,
+      startsAt,
+      endsAt,
+      eventTimeZone,
+    );
     const eventStatus = input.status === undefined ? "draft" : status(input.status);
     const id =
       input.id === undefined ? text(this.#generateId(), "event id", 128) : eventId(input.id);
@@ -633,6 +695,7 @@ export class EventService {
       timeZone: eventTimeZone,
       startsAt,
       endsAt,
+      ...(scheduleDates === undefined ? {} : { scheduleDates }),
       venue,
       cfpSettings,
       defaultCalendarSettings,
@@ -706,6 +769,12 @@ export class EventService {
     const nextEndsAt =
       input.endsAt === undefined ? current.endsAt : instant(input.endsAt, "endsAt");
     dateOrdering(nextStartsAt, nextEndsAt);
+    const nextScheduleDates = normalizeScheduleDates(
+      input.scheduleDates === undefined ? current.scheduleDates : input.scheduleDates,
+      nextStartsAt,
+      nextEndsAt,
+      nextTimeZone,
+    );
     const nextVenue =
       input.venue === undefined ? current.venue : optionalText(input.venue, "venue");
     const nextStatus = input.status === undefined ? current.status : status(input.status);
@@ -729,6 +798,7 @@ export class EventService {
       timeZone: nextTimeZone,
       startsAt: nextStartsAt,
       endsAt: nextEndsAt,
+      scheduleDates: nextScheduleDates,
       venue: nextVenue,
       cfpSettings,
       defaultCalendarSettings,

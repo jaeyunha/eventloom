@@ -44,13 +44,17 @@ export class D1AirtableOAuthAttemptStore implements AirtableOAuthAttemptStore {
   constructor(private readonly db: AirtableD1Database) {}
 
   async create(attempt: AirtableOAuthAttempt): Promise<void> {
-    await this.db
+    const result = await this.db
       .prepare(`INSERT INTO airtable_oauth_attempts (
         id, organization_id, initiating_user_id, connection_id, state_hash,
         pkce_verifier_ciphertext, return_path, callback_code_hash, status,
         exchange_owner, exchange_token, exchange_lease_expires_at, attempt_version,
-        expires_at, consumed_at, result_redirect, error_code, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        authorization_connection_version, expires_at, consumed_at, result_redirect,
+        error_code, created_at, updated_at
+      ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      FROM airtable_connections
+      WHERE id = ? AND organization_id = ? AND auth_mode = 'oauth'
+        AND status = 'authorizing' AND connection_version = ?`)
       .bind(
         attempt.id,
         attempt.organizationId,
@@ -65,12 +69,42 @@ export class D1AirtableOAuthAttemptStore implements AirtableOAuthAttemptStore {
         attempt.exchangeToken,
         attempt.exchangeLeaseExpiresAt,
         attempt.attemptVersion,
+        attempt.authorizationConnectionVersion,
         attempt.expiresAt,
         attempt.consumedAt,
         attempt.resultRedirect,
         attempt.errorCode,
         attempt.createdAt,
         attempt.updatedAt,
+        attempt.connectionId,
+        attempt.organizationId,
+        attempt.authorizationConnectionVersion,
+      )
+      .run();
+    if (!changed(result)) {
+      throw new Error("The Airtable authorization connection is no longer current.");
+    }
+  }
+
+  async supersede(input: {
+    organizationId: string;
+    connectionId: string;
+    authorizationConnectionVersion: number;
+    supersededAt: string;
+  }): Promise<void> {
+    await this.db
+      .prepare(`UPDATE airtable_oauth_attempts SET
+        status = 'failed', exchange_owner = NULL, exchange_token = NULL,
+        exchange_lease_expires_at = NULL, attempt_version = attempt_version + 1,
+        error_code = 'authorization_superseded', updated_at = ?
+      WHERE organization_id = ? AND connection_id = ?
+        AND authorization_connection_version < ?
+        AND status IN ('pending', 'exchanging')`)
+      .bind(
+        input.supersededAt,
+        input.organizationId,
+        input.connectionId,
+        input.authorizationConnectionVersion,
       )
       .run();
   }
@@ -161,13 +195,15 @@ export class D1AirtableOAuthAttemptStore implements AirtableOAuthAttemptStore {
         connection_version = connection_version + 1,
         refresh_owner = NULL, refresh_token = NULL, refresh_lease_expires_at = NULL,
         last_error_code = NULL, last_error = NULL, updated_at = ?, disconnected_at = NULL
-      WHERE id = ? AND organization_id = ? AND EXISTS (
-        SELECT 1 FROM airtable_oauth_attempts
-        WHERE id = ? AND connection_id = airtable_connections.id
-          AND organization_id = airtable_connections.organization_id
-          AND attempt_version = ? AND status = 'exchanging'
-          AND exchange_token = ? AND exchange_lease_expires_at > ?
-      ) RETURNING *`)
+      WHERE id = ? AND organization_id = ? AND auth_mode = 'oauth'
+        AND status = 'authorizing' AND EXISTS (
+          SELECT 1 FROM airtable_oauth_attempts
+          WHERE id = ? AND connection_id = airtable_connections.id
+            AND organization_id = airtable_connections.organization_id
+            AND authorization_connection_version = airtable_connections.connection_version
+            AND attempt_version = ? AND status = 'exchanging'
+            AND exchange_token = ? AND exchange_lease_expires_at > ?
+        ) RETURNING *`)
       .bind(
         input.connection.credentialReference,
         input.connection.airtableUserId,
@@ -194,7 +230,9 @@ export class D1AirtableOAuthAttemptStore implements AirtableOAuthAttemptStore {
           SELECT 1 FROM airtable_connections
           WHERE id = airtable_oauth_attempts.connection_id
             AND organization_id = airtable_oauth_attempts.organization_id
-            AND credential_reference = ? AND status = 'connected' AND updated_at = ?
+            AND credential_reference = ? AND status = 'connected'
+            AND connection_version = airtable_oauth_attempts.authorization_connection_version + 1
+            AND updated_at = ?
         ) RETURNING *`)
       .bind(
         input.finalizedAt,
@@ -656,6 +694,7 @@ function mapAttempt(row: Row | null): AirtableOAuthAttempt | null {
     exchangeToken: nullableText(row.exchange_token),
     exchangeLeaseExpiresAt: nullableText(row.exchange_lease_expires_at),
     attemptVersion: integer(row.attempt_version),
+    authorizationConnectionVersion: integer(row.authorization_connection_version),
     expiresAt: text(row.expires_at),
     consumedAt: nullableText(row.consumed_at),
     resultRedirect: nullableText(row.result_redirect),

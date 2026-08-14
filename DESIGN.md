@@ -68,6 +68,27 @@ The product uses four recurring surface levels:
 Pages may vary in content density, but they must be composed from these shared
 levels rather than inventing a new visual grammar per feature.
 
+### Event creation and collection states
+
+- Event creation is a focused setup flow, not a dump of the event schema.
+  Constrain the editor to a readable settings width and use one column whenever
+  the shell leaves less than two comfortable fields.
+- Keep identity, canonical time zone, dates, and public location visible. Put
+  optional CFP scheduling behind progressive disclosure.
+- The event name is the editable display title. The normalized event ID is a
+  separate stable routing and data-isolation identifier and must be visible
+  wherever similar event names could be confused.
+- New-event date controls disallow dates before the current day in the selected
+  event time zone. End and CFP-close controls inherit the corresponding
+  start/open lower bound.
+- Do not expose duplicated or unconsumed calendar-delivery metadata during
+  creation. Calendar defaults inherit the event time zone and location until a
+  real downstream configuration surface exists.
+- A successful collection response with zero records is an empty state. A
+  missing optional workflow such as CFP intake is a setup state with a direct
+  configuration action. Transport, authorization, and server failures are
+  error states with recovery guidance.
+
 ## 2. Tokens
 
 - Canvas: `#f7f7f8`
@@ -148,14 +169,41 @@ levels rather than inventing a new visual grammar per feature.
   next action; it is not a marketing card.
 - `SidebarGroup`: workflow label plus compact menu rows; default, hover, active,
   keyboard-focus, collapsed-tooltip, and mobile-drawer states.
-- `CommandPalette`: trigger, dim backdrop, focused search, result rows, Escape
-  close, backdrop close, query filtering, and an explicit no-results state.
+- `SettingsShell`: scoped breadcrumb and identity, grouped local navigation, one
+  focused destination, and a compact mobile destination selector. Settings
+  destinations own stable URLs rather than scroll-position state.
+- `SettingGroup`: one quiet bounded surface for a related configuration domain;
+  rows use separators instead of nested cards and expose a single creation
+  action in the group header.
+- `SettingRow`: primary label, optional supporting copy, right-aligned value or
+  switch, and a contextual action menu. Destructive actions stay inside the
+  menu and require confirmation.
+- `RevisionInspector`: chronological change rows open a right-side sheet with
+  actor, time, version transition, semantic before/after differences, and
+  technical identifiers behind progressive disclosure.
+- `CommandPalette`: trigger, dim backdrop, focused search, grouped event and
+  page results, current-route suppression, loading/unavailable/no-results
+  states, active-row treatment, and a compact keyboard-hint footer. Results
+  preserve organization and event scope rather than linking to generic routes.
 - `MetricStrip`: bordered panel containing five contiguous metric cells;
   loaded, refreshing, unavailable, and stale states.
 - `AttentionList`: compact task rows with semantic warning/failure markers and
   action buttons; empty, loading, stale, and unavailable states.
 - `EventsPanel`: compact table on desktop and cards on mobile; empty, loaded,
   and stale states.
+- `AgendaTimetable`: planning-first organizer surface with a bounded
+  accepted-session tray and a selected-day time-by-room grid. The tray renders
+  at most six sessions; larger queues add inline search and a temporary
+  inventory dialog with track, format, duration, and sort controls. Session
+  cards use position for start time and height for duration; conflicts stay
+  visible in place. Dropping a session onto a room interval prefills an
+  explicit placement form rather than silently mutating the draft. Desktop
+  keeps the compact tray and timetable in one bounded workspace. Narrow screens
+  replace the two-dimensional grid with chronological room sections, make the
+  queue browser full-screen, keep date navigation and placement actions
+  visible, and retain the list view as the accessible non-spatial fallback.
+  Validation and immutable publication follow the planning surface instead of
+  preceding it.
 - `MarketingHero`: outcome-led copy, evaluation CTA, product proof frame, and
   concise capability strip.
 - `AgendaProductFrame`: reusable static product composition with draft schedule,
@@ -165,6 +213,9 @@ levels rather than inventing a new visual grammar per feature.
   product micro-surfaces.
 - `RoleSurface`: organizer, reviewer, and speaker cards with distinct product
   previews rather than interchangeable feature-card copy.
+- `LegalDocument`: public policy shell with product navigation, effective-date
+  metadata, plain-language summary, sticky section index, readable prose
+  measure, print treatment, and a shared legal footer.
 - Scoped workflow routes must retain organization and event context in every
   tab, breadcrumb, command result, and sidebar link. Integrations belong under
   the event-scoped `Publish & measure` group.
@@ -197,7 +248,8 @@ progress patterns established by this wave.
 - Marketing product previews may lift by 2px on hover only when the entire
   preview is linked; static preview elements do not animate.
 - Keyboard focus must remain visible with the focus token.
-- `Cmd/Ctrl+K` opens and focuses search; Escape closes it.
+- `Cmd/Ctrl+K` opens and focuses search; Arrow keys move the active result,
+  Enter opens it, and Escape closes the palette.
 
 ## 7. Accessibility constraints
 

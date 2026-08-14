@@ -77,10 +77,6 @@ function formatDate(value: string | null): string {
   }).format(parsed);
 }
 
-function secretEnding(lastFour: string | null): string {
-  return lastFour ? `•••• ${lastFour}` : "No credential saved";
-}
-
 export function OneTimeSecretPanel({
   secret,
   label,
@@ -122,53 +118,6 @@ export function OneTimeSecretPanel({
   );
 }
 
-function CredentialForm({
-  provider,
-  label,
-  hint,
-  busy,
-  onSave,
-}: Readonly<{
-  provider: "opensend";
-  label: string;
-  hint: string;
-  busy: boolean;
-  onSave(provider: "opensend", secret: string): Promise<boolean>;
-}>) {
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const secret = String(new FormData(form).get("secret") ?? "");
-    if (await onSave(provider, secret)) {
-      form.reset();
-    }
-  }
-
-  return (
-    <form className={styles.formStack} onSubmit={(event) => void submit(event)}>
-      <Field>
-        <FieldLabel htmlFor={`${provider}-secret`}>{label}</FieldLabel>
-        <Input
-          id={`${provider}-secret`}
-          name="secret"
-          type="password"
-          autoComplete="off"
-          autoCapitalize="none"
-          spellCheck={false}
-          required
-        />
-        <FieldDescription>{hint}</FieldDescription>
-      </Field>
-      <p className={styles.securityNote}>
-        Credentials are encrypted at rest. Existing values are never returned to this browser.
-      </p>
-      <Button type="submit" variant="secondary" disabled={busy}>
-        {busy ? "Saving…" : "Save credential"}
-      </Button>
-    </form>
-  );
-}
-
 export function OverviewSection({
   snapshot,
   basePath,
@@ -194,7 +143,7 @@ export function OverviewSection({
                 <StatusBadge state={deliveryState} />
               </div>
               <CardDescription>
-                OpenSend delivery and provider-neutral calendar invitations.
+                Deployment-managed email delivery and provider-neutral calendar invitations.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -209,13 +158,13 @@ export function OverviewSection({
           <Card>
             <CardHeader>
               <div className={styles.cardTitleRow}>
-                <CardTitle>API keys</CardTitle>
+                <CardTitle>Organization API keys</CardTitle>
                 <Badge variant={activeKeys > 0 ? "default" : "outline"}>
                   {activeKeys > 0 ? "Active" : "None"}
                 </Badge>
               </div>
               <CardDescription>
-                Scoped credentials for tenant-owned public API access.
+                Organization-scoped credentials for public API access.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -246,8 +195,8 @@ export function OverviewSection({
         <CardHeader>
           <CardTitle>Source-of-truth boundary</CardTitle>
           <CardDescription>
-            Airtable remains authoritative for event and program records. Integrations may publish
-            outward, but they cannot overwrite source records.
+            D1 remains authoritative for event and program records. Airtable is an optional
+            asynchronous projection and validated inbound adapter.
           </CardDescription>
         </CardHeader>
       </Card>
@@ -612,18 +561,19 @@ export function DeliverySection({
         <Card>
           <CardHeader>
             <div className={styles.cardTitleRow}>
-              <CardTitle>OpenSend</CardTitle>
+              <CardTitle>Email delivery provider</CardTitle>
               <StatusBadge state={openSend.state} />
             </div>
             <CardDescription>
-              Transactional delivery through sending-scoped credentials and approved identities.
+              Delivery uses deployment-managed provider credentials and verified sender identities.
+              Event organizers can inspect operations but cannot replace provider secrets here.
             </CardDescription>
           </CardHeader>
           <CardContent className={styles.formStack}>
             <dl className={styles.definitionList}>
               <div>
-                <dt>Credential</dt>
-                <dd>{secretEnding(openSend.credentialLastFour)}</dd>
+                <dt>Credential ownership</dt>
+                <dd>Deployment managed</dd>
               </div>
               <div>
                 <dt>Delivered, 24 hours</dt>
@@ -634,13 +584,6 @@ export function DeliverySection({
                 <dd>{openSend.failedLast24Hours}</dd>
               </div>
             </dl>
-            <CredentialForm
-              provider="opensend"
-              label="Replace OpenSend sending key"
-              hint="Sending-scoped keys only. Account administration keys are rejected."
-              busy={actions.busy}
-              onSave={actions.saveCredential}
-            />
           </CardContent>
         </Card>
 

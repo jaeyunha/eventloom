@@ -140,7 +140,8 @@ export function createRuntimeDependencies(bindings: RuntimeBindings): ApiDepende
   }
   const inspection = inspectProductionRuntime(bindings);
   if (!inspection.success) throw new RuntimeConfigurationError(inspection.issues);
-  const dependencies = createCloudflareDependencies(bindings);
+  const effectiveBindings = runtimeBindingsForEnvironment(bindings);
+  const dependencies = createCloudflareDependencies(effectiveBindings);
   const communicationService = dependencies.communications?.service;
   if (
     communicationService !== undefined &&
@@ -149,7 +150,11 @@ export function createRuntimeDependencies(bindings: RuntimeBindings): ApiDepende
   ) {
     communicationService.configureReminders({
       repository: new D1ReminderRepository(bindings.DB),
-      source: new RuntimeReminderCandidateSource(dependencies, bindings.DB),
+      source: new RuntimeReminderCandidateSource(
+        dependencies,
+        bindings.DB,
+        effectiveBindings.SPEAKERS_FROM_EMAIL as string,
+      ),
       outbox: new CloudflareReminderOutbox(bindings.DB, bindings.OUTBOX_QUEUE),
     });
   }
@@ -249,6 +254,7 @@ class RuntimeReminderCandidateSource implements ReminderCandidateSource {
   constructor(
     private readonly dependencies: ApiDependencies,
     private readonly database: D1Database,
+    private readonly sender: string,
   ) {}
 
   async listCandidates(input: {
@@ -372,7 +378,7 @@ class RuntimeReminderCandidateSource implements ReminderCandidateSource {
         nextEligibleAt: cadence.nextEligibleAt,
         eligible: item.eligible,
         renderedMessage: {
-          from: "speakers@sessionboard.namuh.co",
+          from: this.sender,
           subject: `Reminder: ${summary}`,
           html: `<p>Please complete ${escapeReminderHtml(summary)}.</p>`,
           text: `Please complete ${summary}.`,
@@ -425,7 +431,7 @@ class RuntimeReminderCandidateSource implements ReminderCandidateSource {
           nextEligibleAt,
           eligible: true,
           renderedMessage: {
-            from: "speakers@sessionboard.namuh.co",
+            from: this.sender,
             subject: `Review reminder: ${plan.name}`,
             html: `<p>You have an outstanding review for <strong>${escapeReminderHtml(plan.name)}</strong> (${escapeReminderHtml(roundLabel)}).</p>`,
             text: `You have an outstanding review for ${plan.name} (${roundLabel}).`,
@@ -577,7 +583,13 @@ export function createRuntimeApp(bindings: RuntimeBindings) {
 
 export function createRuntimeWorker(): ExportedHandler<RuntimeBindings> {
   const runtimes = new WeakMap<object, RuntimeApplication>();
+  let fixtureRuntime: RuntimeApplication | undefined;
   const runtimeFor = (bindings: RuntimeBindings): RuntimeApplication => {
+    const profile = bindings.RUNTIME_PROFILE?.trim().toLowerCase() || "integrated";
+    if (bindings.APP_ENV === "local" && profile === "fixture") {
+      fixtureRuntime ??= createRuntimeApplication(bindings);
+      return fixtureRuntime;
+    }
     const cached = runtimes.get(bindings);
     if (cached !== undefined) return cached;
     const runtime = createRuntimeApplication(bindings);

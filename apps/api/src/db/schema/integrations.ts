@@ -220,6 +220,7 @@ export const airtableOauthAttempts = sqliteTable(
     claimToken: text("exchange_token"),
     leaseExpiresAt: text("exchange_lease_expires_at"),
     attemptVersion: integer("attempt_version").notNull(),
+    authorizationConnectionVersion: integer("authorization_connection_version").notNull(),
     expiresAt: text("expires_at").notNull(),
     consumedAt: text("consumed_at"),
     callbackResultJson: text("result_redirect"),
@@ -237,6 +238,10 @@ export const airtableOauthAttempts = sqliteTable(
       sql`${table.status} IN ('pending', 'exchanging', 'consumed', 'failed', 'expired')`,
     ),
     check("airtable_oauth_attempts_attempt_version_check", sql`${table.attemptVersion} > 0`),
+    check(
+      "airtable_oauth_attempts_authorization_connection_version_check",
+      sql`${table.authorizationConnectionVersion} > 0`,
+    ),
     check(
       "airtable_oauth_attempts_exchange_lease_check",
       sql`(${table.status} = 'exchanging' AND ${table.claimOwner} IS NOT NULL AND ${table.claimToken} IS NOT NULL AND ${table.leaseExpiresAt} IS NOT NULL) OR (${table.status} <> 'exchanging' AND ${table.claimOwner} IS NULL AND ${table.claimToken} IS NULL AND ${table.leaseExpiresAt} IS NULL)`,

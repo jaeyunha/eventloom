@@ -151,10 +151,10 @@ describe("local speaker portal fallback", () => {
         }),
     );
 
-    await expect(isLocalApiEnvironment("http://localhost:8787/", undefined, fetcher)).resolves.toBe(
+    await expect(isLocalApiEnvironment("http://127.0.0.1:8787/", undefined, fetcher)).resolves.toBe(
       true,
     );
-    expect(fetcher).toHaveBeenCalledWith("http://localhost:8787/api/health", {
+    expect(fetcher).toHaveBeenCalledWith("http://127.0.0.1:8787/api/health", {
       method: "GET",
       credentials: "omit",
       cache: "no-store",
@@ -177,7 +177,7 @@ describe("local speaker portal fallback", () => {
       loadPortalWithLocalDemo({
         api,
         demoApi: createLocalPortalDemoApi(eventId),
-        apiBaseUrl: "http://localhost:8787",
+        apiBaseUrl: "http://127.0.0.1:8787",
         eventId,
         checkEnvironment,
       }),
@@ -210,7 +210,7 @@ describe("local speaker portal fallback", () => {
           throw unauthorized;
         }),
         demoApi: createLocalPortalDemoApi(eventId),
-        apiBaseUrl: "http://localhost:8787",
+        apiBaseUrl: "http://127.0.0.1:8787",
         eventId,
         checkEnvironment,
       }),

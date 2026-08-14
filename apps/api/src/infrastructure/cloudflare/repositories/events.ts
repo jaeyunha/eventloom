@@ -10,7 +10,7 @@ import type {
   EventRepositoryCommand,
 } from "../../../features/events/types";
 import { EventRepositoryConflictError } from "../../../features/events/types";
-import { createAirtableSyncDeduplicationKey } from "../../../integrations/airtable/sync/contracts";
+import { airtableSyncStatement } from "./shared";
 
 const EMBED_METADATA_PREFIX = "__osb_embed_v1:";
 
@@ -93,6 +93,9 @@ function eventFromRows(
     timeZone: row.timeZone,
     startsAt: row.startsAt,
     endsAt: row.endsAt,
+    ...(row.scheduleDatesJson.length === 0
+      ? {}
+      : { scheduleDates: row.scheduleDatesJson as readonly string[] }),
     venue: row.venue,
     cfpSettings: {
       enabled: row.cfpEnabled,
@@ -196,15 +199,15 @@ export class D1EventRepository implements EventRepository {
       expectedVersion === null
         ? this.binding
             .prepare(
-              `INSERT INTO events (id, organization_id, slug, name, status, time_zone, starts_at, ends_at, venue, cfp_enabled, cfp_opens_at, cfp_closes_at, default_duration_minutes, default_calendar_time_zone, default_calendar_location, version, created_at, updated_at, created_by, updated_by)
-               SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-               WHERE NOT EXISTS (SELECT 1 FROM events WHERE id = ?)`,
+              `INSERT INTO events (id, organization_id, slug, name, status, time_zone, starts_at, ends_at, schedule_dates_json, venue, cfp_enabled, cfp_opens_at, cfp_closes_at, default_duration_minutes, default_calendar_time_zone, default_calendar_location, version, created_at, updated_at, created_by, updated_by)
+               SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                WHERE NOT EXISTS (SELECT 1 FROM events WHERE id = ?)`,
             )
             .bind(...this.#eventValues(event), event.id)
         : this.binding
             .prepare(
-              `UPDATE events SET slug = ?, name = ?, status = ?, time_zone = ?, starts_at = ?, ends_at = ?, venue = ?, cfp_enabled = ?, cfp_opens_at = ?, cfp_closes_at = ?, default_duration_minutes = ?, default_calendar_time_zone = ?, default_calendar_location = ?, version = ?, updated_at = ?, updated_by = ?
-               WHERE organization_id = ? AND id = ? AND version = ?`,
+              `UPDATE events SET slug = ?, name = ?, status = ?, time_zone = ?, starts_at = ?, ends_at = ?, schedule_dates_json = ?, venue = ?, cfp_enabled = ?, cfp_opens_at = ?, cfp_closes_at = ?, default_duration_minutes = ?, default_calendar_time_zone = ?, default_calendar_location = ?, version = ?, updated_at = ?, updated_by = ?
+                WHERE organization_id = ? AND id = ? AND version = ?`,
             )
             .bind(
               event.slug,
@@ -213,6 +216,7 @@ export class D1EventRepository implements EventRepository {
               event.timeZone,
               event.startsAt,
               event.endsAt,
+              JSON.stringify(event.scheduleDates ?? []),
               event.venue,
               event.cfpSettings.enabled ? 1 : 0,
               event.cfpSettings.opensAt,
@@ -230,18 +234,19 @@ export class D1EventRepository implements EventRepository {
 
     const statements: D1PreparedStatement[] = [primary];
     const auditId = audit?.id;
+    const eventGuard =
+      "EXISTS (SELECT 1 FROM events WHERE organization_id = ? AND id = ? AND version = ?)";
+    const eventGuardValues = [event.organizationId, event.id, event.version];
     if (audit !== undefined) {
-      statements.push(this.#auditStatement(audit, "changes() = 1"));
+      statements.push(this.#auditStatement(audit, eventGuard, eventGuardValues));
       statements.push(
         this.#syncStatement(event, audit, `EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`),
       );
     }
     if (expectedVersion === null) {
       const createGuard =
-        auditId === undefined
-          ? `(SELECT changes()) = 1`
-          : `EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`;
-      const createGuardValues = auditId === undefined ? [] : [auditId];
+        auditId === undefined ? eventGuard : `EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`;
+      const createGuardValues = auditId === undefined ? eventGuardValues : [auditId];
       statements.push(
         this.binding
           .prepare(
@@ -285,11 +290,11 @@ export class D1EventRepository implements EventRepository {
     }
     const guard =
       auditId === undefined
-        ? `organization_id = ? AND event_id = ? AND (SELECT changes()) = 1`
+        ? `organization_id = ? AND event_id = ? AND ${eventGuard}`
         : `organization_id = ? AND event_id = ? AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`;
     const guardValues =
       auditId === undefined
-        ? [event.organizationId, event.id]
+        ? [event.organizationId, event.id, ...eventGuardValues]
         : [event.organizationId, event.id, auditId];
     statements.push(
       this.binding
@@ -378,6 +383,7 @@ export class D1EventRepository implements EventRepository {
       event.timeZone,
       event.startsAt,
       event.endsAt,
+      JSON.stringify(event.scheduleDates ?? []),
       event.venue,
       event.cfpSettings.enabled ? 1 : 0,
       event.cfpSettings.opensAt,
@@ -393,7 +399,11 @@ export class D1EventRepository implements EventRepository {
     ];
   }
 
-  #auditStatement(entry: EventAuditEntry, condition: string): D1PreparedStatement {
+  #auditStatement(
+    entry: EventAuditEntry,
+    condition: string,
+    conditionValues: readonly unknown[] = [],
+  ): D1PreparedStatement {
     return this.binding
       .prepare(
         `INSERT INTO audit_events (id, tenant_id, actor_type, actor_id, action, resource_type, resource_id, details_json, occurred_at)
@@ -407,38 +417,26 @@ export class D1EventRepository implements EventRepository {
         entry.eventId,
         JSON.stringify(entry),
         entry.occurredAt,
+        ...conditionValues,
       );
   }
 
   #syncStatement(event: Event, audit: EventAuditEntry, condition: string): D1PreparedStatement {
     const operation = audit.action === "archived" ? "archive" : "upsert";
     const payloadJson = JSON.stringify(event);
-    const deduplicationKey = createAirtableSyncDeduplicationKey({
-      connectionId: "connection",
+    return airtableSyncStatement(this.binding, {
+      id: `sync:${audit.id}`,
+      tenantId: event.organizationId,
       entityType: "event",
       applicationId: event.id,
       sourceVersion: event.version,
       operation,
+      payloadJson,
+      availableAt: audit.occurredAt,
+      condition: {
+        sql: condition,
+        values: condition.includes("?") ? [audit.id] : [],
+      },
     });
-    return this.binding
-      .prepare(
-        `INSERT OR IGNORE INTO airtable_sync_jobs (id, organization_id, connection_id, connection_version, entity_type, application_id, source_version, operation, state, deduplication_key, attempts, available_at, payload_json, created_at, updated_at)
-         SELECT ?, c.organization_id, c.id, c.connection_version, 'event', ?, ?, ?, 'pending', replace(?, 'connection:', c.id || ':'), 0, ?, ?, ?, ?
-         FROM airtable_connections c
-         WHERE c.organization_id = ? AND c.state IN ('connected', 'refreshing', 'paused') AND ${condition}`,
-      )
-      .bind(
-        `sync:${audit.id}`,
-        event.id,
-        event.version,
-        operation,
-        deduplicationKey,
-        audit.occurredAt,
-        payloadJson,
-        audit.occurredAt,
-        audit.occurredAt,
-        event.organizationId,
-        ...(condition.includes("?") ? [audit.id] : []),
-      );
   }
 }

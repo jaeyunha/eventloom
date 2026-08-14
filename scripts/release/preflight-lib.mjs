@@ -18,6 +18,12 @@ const REQUIRED_CONFIGURATION = [
   "AUTH_FROM_EMAIL",
   "SPEAKERS_FROM_EMAIL",
   "CALENDAR_FROM_EMAIL",
+  "CALENDAR_UID_DOMAIN",
+  "AI_PROVIDER",
+  "OPENAI_MODEL",
+  "OPENAI_AGENDA_MODEL",
+  "OPENAI_EVALUATION_MODEL",
+  "OPENAI_REMIX_MODEL",
 ];
 
 const OPTIONAL_PROVIDERS = {};
@@ -148,6 +154,28 @@ function collectWranglerValues(source, key) {
   const pattern = new RegExp(`^${key}\\s*=\\s*"([^"]+)"$`, "gm");
   return [...source.matchAll(pattern)].map((match) => match[1]);
 }
+
+function collectWorkerNames(source) {
+  const namesByEnvironment = Object.fromEntries(
+    ENVIRONMENTS.map((environment) => [environment, []]),
+  );
+  let environment = "local";
+
+  for (const rawLine of source.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line.startsWith("[")) {
+      environment = /^\[env\.(staging|production)\](?:\s*#.*)?$/.exec(line)?.[1];
+      continue;
+    }
+    if (!environment) continue;
+
+    const match = /^name\s*=\s*"([^"]+)"\s*(?:#.*)?$/.exec(line);
+    if (match) namesByEnvironment[environment].push(match[1]);
+  }
+
+  return namesByEnvironment;
+}
+
 function collapseConsecutiveDuplicates(values) {
   return values.filter((value, index) => index === 0 || value !== values[index - 1]);
 }
@@ -244,9 +272,7 @@ export function parseWranglerInventory(source) {
   const accountIds = collectWranglerValues(source, "account_id");
   const appEnvironments = collectWranglerValues(source, "APP_ENV");
   const webOrigins = collectWranglerValues(source, "WEB_ORIGIN");
-  const workerNames = collectWranglerValues(source, "name").filter((name) =>
-    name.startsWith("eventloom-api-"),
-  );
+  const workerNamesByEnvironment = collectWorkerNames(source);
   const databaseNames = collectWranglerValues(source, "database_name");
   const databaseIds = collectWranglerValues(source, "database_id");
   const bucketNames = collectWranglerValues(source, "bucket_name");
@@ -255,7 +281,6 @@ export function parseWranglerInventory(source) {
   for (const [label, values] of [
     ["APP_ENV", appEnvironments],
     ["WEB_ORIGIN", webOrigins],
-    ["Worker name", workerNames],
     ["D1 database name", databaseNames],
     ["D1 database ID", databaseIds],
     ["R2 bucket name", bucketNames],
@@ -264,6 +289,19 @@ export function parseWranglerInventory(source) {
     if (values.length !== ENVIRONMENTS.length) {
       fail("INVALID_WRANGLER_CONFIGURATION", `${label} must be declared once per environment`);
     }
+  }
+  const workerNames = ENVIRONMENTS.map((environment) => {
+    const names = workerNamesByEnvironment[environment];
+    if (names.length !== 1) {
+      fail(
+        "INVALID_WRANGLER_CONFIGURATION",
+        `Worker name must be declared once for ${environment}`,
+      );
+    }
+    return names[0];
+  });
+  if (new Set(workerNames).size !== ENVIRONMENTS.length) {
+    fail("INVALID_WRANGLER_CONFIGURATION", "Worker names must be unique across environments");
   }
   if (accountIds.length > 1) {
     fail("INVALID_WRANGLER_CONFIGURATION", "Wrangler may declare at most one Cloudflare account");
@@ -338,6 +376,24 @@ export function validateReleaseConfiguration({
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(assertPresent(configuration, key, environment))) {
         fail("INVALID_CONFIGURATION", `${environment} has an invalid ${key}`);
       }
+    }
+    const aiProvider = assertPresent(configuration, "AI_PROVIDER", environment).toLowerCase();
+    if (aiProvider !== "disabled" && aiProvider !== "openai") {
+      fail("INVALID_CONFIGURATION", `${environment} AI_PROVIDER must be disabled or openai`);
+    }
+    if (aiProvider === "openai") {
+      assertPresent(configuration, "OPENAI_API_KEY", environment);
+    }
+
+    const calendarUidDomain = assertPresent(configuration, "CALENDAR_UID_DOMAIN", environment);
+    const domainLabel = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
+    if (
+      calendarUidDomain.length > 253 ||
+      calendarUidDomain.endsWith(".") ||
+      !calendarUidDomain.includes(".") ||
+      !calendarUidDomain.split(".").every((label) => domainLabel.test(label))
+    ) {
+      fail("INVALID_CONFIGURATION", `${environment} has an invalid CALENDAR_UID_DOMAIN`);
     }
 
     providerStates[environment] = {};

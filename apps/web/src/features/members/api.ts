@@ -18,9 +18,7 @@ export interface OrganizationMember {
 export function activeVerifiedReviewers(
   members: readonly OrganizationMember[],
 ): readonly OrganizationMember[] {
-  return members.filter(
-    (member) => member.role === "reviewer" && member.status === "active" && member.emailVerified,
-  );
+  return members.filter((member) => member.status === "active" && member.emailVerified);
 }
 export type MemberRecord = OrganizationMember;
 export type Member = OrganizationMember;

@@ -90,6 +90,22 @@ describe("D1 OAuth stores", () => {
     expect(statement?.values).toContain("new-token");
   });
 
+  test("supersedes older active attempts only after a newer authorization generation", async () => {
+    const db = new Database();
+    const store = new D1AirtableOAuthAttemptStore(db);
+    await store.supersede({
+      organizationId: "organization-1",
+      connectionId: "connection-1",
+      authorizationConnectionVersion: 4,
+      supersededAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    const [statement] = db.statements;
+    expect(statement?.sql).toContain("status = 'failed'");
+    expect(statement?.sql).toContain("authorization_connection_version < ?");
+    expect(statement?.sql).toContain("status IN ('pending', 'exchanging')");
+  });
+
   test("finalize batches the connection and attempt updates", async () => {
     const db = new Database();
     const store = new D1AirtableOAuthAttemptStore(db);
@@ -115,6 +131,10 @@ describe("D1 OAuth stores", () => {
     expect(db.batches).toHaveLength(1);
     expect(db.batches[0]).toHaveLength(2);
     expect(db.batches[0]?.[0]?.sql).toContain("UPDATE airtable_connections");
+    expect(db.batches[0]?.[0]?.sql).toContain("status = 'authorizing'");
+    expect(db.batches[0]?.[0]?.sql).toContain(
+      "authorization_connection_version = airtable_connections.connection_version",
+    );
     expect(db.batches[0]?.[1]?.sql).toContain("UPDATE airtable_oauth_attempts");
   });
 

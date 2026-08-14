@@ -4,7 +4,6 @@ import {
   buildSeedRecords,
   DevflowSeedError,
   FULL_CHAIN_MODE,
-  loadFixture,
   PRODUCTION_CONFIRMATION,
   planUpserts,
   runSeed,
@@ -17,6 +16,33 @@ const ENV = {
   AIRTABLE_ACCESS_TOKEN: "test-token",
   AIRTABLE_BASE_ID: "app_test",
 };
+const TEST_FIXTURE = {
+  event: {
+    name: "Evaluator Test Conference",
+    tagline: "A deterministic evaluator fixture.",
+    dates: "2027-09-15 to 2027-09-16",
+    location: "Test Convention Center",
+    description: "Repository-owned data for the evaluator seed unit tests.",
+    tracks: ["Platform & Infra", "AI Engineering"],
+    session_formats: ["Talk (30 min)", "Lightning Talk (10 min)", "Workshop (120 min)"],
+    rooms: ["Room 2A", "Room 2B"],
+  },
+  identities: {
+    organizer: { name: "Test Organizer", email: "organizer@example.test" },
+    reviewer: { name: "Test Reviewer", email: "reviewer@example.test" },
+    reviewer2: { name: "Second Reviewer", email: "reviewer2@example.test" },
+    speaker: { name: "Test Speaker", email: "speaker@example.test" },
+    speaker2: { name: "Second Speaker", email: "speaker2@example.test" },
+  },
+  submissions: [
+    { title: "Official evaluator scenario one" },
+    { title: "Official evaluator scenario two" },
+  ],
+};
+
+function runTestSeed(options) {
+  return runSeed({ fixture: TEST_FIXTURE, ...options });
+}
 
 function fieldsFor(records, table, applicationId) {
   const record = records.find(
@@ -81,7 +107,7 @@ function fakeAirtable() {
 }
 
 test("builds exact fixture-driven CFP schema and leaves downstream state empty in full-chain mode", () => {
-  const fixture = loadFixture();
+  const fixture = TEST_FIXTURE;
   const records = buildSeedRecords({ fixture, mode: FULL_CHAIN_MODE, now: NOW });
   const eventFields = fieldsFor(records, "Events", "devflow-conf-2027");
   const event = JSON.parse(eventFields["Settings JSON"]);
@@ -150,7 +176,7 @@ test("builds exact fixture-driven CFP schema and leaves downstream state empty i
 
 test("is idempotent, additive, and never issues destructive Airtable operations", async () => {
   const fake = fakeAirtable();
-  const first = await runSeed({
+  const first = await runTestSeed({
     env: ENV,
     apiOrigin: "https://airtable.test",
     dryRun: false,
@@ -161,7 +187,7 @@ test("is idempotent, additive, and never issues destructive Airtable operations"
   const eventRow = fake.tables.get("Events")?.[0];
   assert.ok(eventRow);
   eventRow.fields.Unrelated = "keep-me";
-  const second = await runSeed({
+  const second = await runTestSeed({
     env: ENV,
     apiOrigin: "https://airtable.test",
     dryRun: false,
@@ -187,7 +213,7 @@ test("is idempotent, additive, and never issues destructive Airtable operations"
 
 test("dry-run reads existing records but performs no writes", async () => {
   const fake = fakeAirtable();
-  const summary = await runSeed({
+  const summary = await runTestSeed({
     env: ENV,
     apiOrigin: "https://airtable.test",
     dryRun: true,
@@ -209,7 +235,7 @@ test("dry-run reads existing records but performs no writes", async () => {
 test("production requires the exact confirmation before Airtable lookup", async () => {
   const fake = fakeAirtable();
   await assert.rejects(
-    runSeed({
+    runTestSeed({
       env: { ...ENV, EVAL_ENVIRONMENT: "production" },
       apiOrigin: "https://airtable.test",
       dryRun: false,
@@ -220,7 +246,7 @@ test("production requires the exact confirmation before Airtable lookup", async 
   );
   assert.equal(fake.requests.length, 0);
 
-  const allowed = await runSeed({
+  const allowed = await runTestSeed({
     env: {
       ...ENV,
       EVAL_ENVIRONMENT: "production",
@@ -235,7 +261,7 @@ test("production requires the exact confirmation before Airtable lookup", async 
 });
 
 test("duplicate Application IDs abort before any write", async () => {
-  const fixture = loadFixture();
+  const fixture = TEST_FIXTURE;
   const records = buildSeedRecords({ fixture, mode: FULL_CHAIN_MODE, now: NOW });
   assert.throws(
     () => planUpserts([records[0], { ...records[0], fields: { ...records[0].fields } }]),
@@ -248,7 +274,7 @@ test("duplicate Application IDs abort before any write", async () => {
     { id: "rec_duplicate_b", fields: duplicateFields },
   ]);
   await assert.rejects(
-    runSeed({
+    runTestSeed({
       env: ENV,
       apiOrigin: "https://airtable.test",
       dryRun: false,
@@ -264,7 +290,11 @@ test("duplicate Application IDs abort before any write", async () => {
 });
 
 test("subset fallback is explicit and adds only downstream fixture projections", () => {
-  const records = buildSeedRecords({ mode: SUBSET_FALLBACK_MODE, now: NOW });
+  const records = buildSeedRecords({
+    fixture: TEST_FIXTURE,
+    mode: SUBSET_FALLBACK_MODE,
+    now: NOW,
+  });
   const tables = new Set(records.map((record) => record.table));
   assert.equal(tables.has("Review Plans"), true);
   assert.equal(tables.has("Sessions"), true);
@@ -291,7 +321,7 @@ test("subset fallback is explicit and adds only downstream fixture projections",
     ["Agenda Foundation Presenter A", "Agenda Foundation Presenter B"],
   );
   assert.equal(JSON.stringify(projection).includes("sbek-"), false);
-  const fixture = loadFixture();
+  const fixture = TEST_FIXTURE;
   const scenarioTitles = new Set(fixture.submissions.map((submission) => submission.title));
   const fallbackSessions = records
     .filter((record) => record.table === "Sessions")

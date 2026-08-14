@@ -61,11 +61,6 @@ const STEP_LABELS: Record<CfpStep, string> = {
   review: "Review & submit",
 };
 
-const FORMAT_OPTIONS = ["Featured Keynote", "Breakout Session", "Panel", "Workshop"];
-const TRACK_OPTIONS = ["Track 1", "Track 2", "Track 3", "Community"];
-const LEVEL_OPTIONS = ["Introductory", "Intermediate", "Advanced", "All levels"];
-const LANGUAGE_OPTIONS = ["English"];
-const TAG_OPTIONS = ["Tag A", "Tag B", "Tag C", "Leadership"];
 const CFP_COMPLETION_HANDOFF_PREFIX = "eventloom:cfp-completion:v1";
 
 export function getCfpCompletionHandoffStorageKey(
@@ -711,11 +706,6 @@ function submissionPayload(
   };
 }
 
-function publishedOptions(form: CfpPublishedForm, key: string, fallback: string[]): string[] {
-  const field = form.submissionFields.find((candidate) => candidate.key === key);
-  const options = field ? fieldOptions(field).map((option) => option.label) : [];
-  return options.length > 0 ? options : fallback;
-}
 function reviewValueString(value: unknown): string {
   if (Array.isArray(value)) {
     const items = value
@@ -1781,12 +1771,22 @@ export function CfpWizard({
       </PublicCfpShell>
     );
   }
+  if (published === null) {
+    return (
+      <PublicCfpShell step={step}>
+        <section className={styles.errorSummary} role="alert">
+          <h2>Submission form unavailable</h2>
+          <p>{saveError ?? "The published submission form could not be loaded."}</p>
+        </section>
+      </PublicCfpShell>
+    );
+  }
 
   return (
     <PublicCfpShell
-      organization={published?.organization}
-      event={published?.event}
-      form={published?.form}
+      organization={published.organization}
+      event={published.event}
+      form={published.form}
       step={step}
     >
       <ErrorSummary errors={errors} />
@@ -1858,7 +1858,7 @@ export function CfpWizard({
           <SubmissionStep
             draft={draft}
             errors={errors}
-            {...(published === null ? {} : { form: published.form })}
+            form={published.form}
             answers={dynamicAnswers}
             fileUploadStates={fileUploadStates}
             onAnswerChange={setSubmissionAnswer}
@@ -2227,215 +2227,36 @@ function SubmissionStep({
   onAnswerChange,
   onFileUpload,
   onFileUploadStateChange,
-  updateDraft,
 }: StepFormProps & {
-  form?: CfpPublishedForm;
+  form: CfpPublishedForm;
   answers: DynamicAnswers;
   fileUploadStates: FileUploadStates;
   onAnswerChange: (key: string, value: unknown) => void;
   onFileUpload: (field: CfpFormField, file: File) => Promise<CfpFileUploadResult>;
   onFileUploadStateChange: (key: string, state: FileUploadState) => void;
 }) {
-  if (form && form.submissionFields.length > 0) {
+  if (form.submissionFields.length === 0) {
     return (
-      <DynamicSubmissionFields
-        answers={answers}
-        draft={draft}
-        errors={errors}
-        fileUploadStates={fileUploadStates}
-        form={form}
-        onAnswerChange={onAnswerChange}
-        onFileUpload={onFileUpload}
-        onFileUploadStateChange={onFileUploadStateChange}
-      />
+      <section className={styles.errorSummary} role="alert">
+        <h2>Submission form unavailable</h2>
+        <p>The published form does not contain any proposal fields.</p>
+      </section>
     );
   }
-  const formatOptions = form ? publishedOptions(form, "format", FORMAT_OPTIONS) : FORMAT_OPTIONS;
-  const trackOptions = form ? publishedOptions(form, "track", TRACK_OPTIONS) : TRACK_OPTIONS;
-  const levelOptions = form ? publishedOptions(form, "level", LEVEL_OPTIONS) : LEVEL_OPTIONS;
-  const languageOptions = form
-    ? publishedOptions(form, "language", LANGUAGE_OPTIONS)
-    : LANGUAGE_OPTIONS;
-  const tagOptions = form ? publishedOptions(form, "tags", TAG_OPTIONS) : TAG_OPTIONS;
-  function toggleTag(tag: string): void {
-    updateDraft((current) => ({
-      ...current,
-      submission: {
-        ...current.submission,
-        tags: current.submission.tags.includes(tag)
-          ? current.submission.tags.filter((item) => item !== tag)
-          : [...current.submission.tags, tag],
-      },
-    }));
-  }
-
   return (
-    <div>
-      <h1>Tell us about your submission</h1>
-      <p>What do you want to present? Fill out the following information to tell us more.</p>
-      <Field error={errors["submission.title"]} label="Title" name="submission.title" required>
-        {(controlProps) => (
-          <>
-            <Input
-              {...controlProps}
-              maxLength={255}
-              onChange={(event) =>
-                updateDraft((current) => ({
-                  ...current,
-                  submission: { ...current.submission, title: event.target.value },
-                }))
-              }
-              value={draft.submission.title}
-            />
-            <CharacterCount current={draft.submission.title.length} maximum={255} />
-          </>
-        )}
-      </Field>
-      <Field
-        error={errors["submission.description"]}
-        label="Description"
-        name="submission.description"
-        required
-      >
-        {(controlProps) => (
-          <RichTextArea
-            {...controlProps}
-            maxLength={5000}
-            onValueChange={(value) =>
-              updateDraft((current) => ({
-                ...current,
-                submission: { ...current.submission, description: value },
-              }))
-            }
-            placeholder="Enter text here…"
-            rows={8}
-            value={draft.submission.description}
-          />
-        )}
-      </Field>
-      <SearchableField
-        errorKey="submission.format"
-        errors={errors}
-        label="Format"
-        options={formatOptions}
-        required
-        value={draft.submission.format}
-        onChange={(value) =>
-          updateDraft((current) => ({
-            ...current,
-            submission: { ...current.submission, format: value },
-          }))
-        }
-      />
-      <fieldset
-        className={errors["submission.tags"] ? styles.invalidFieldset : styles.tagFieldset}
-        id="submission.tags"
-        tabIndex={-1}
-      >
-        <legend>
-          Tags{" "}
-          <span aria-hidden="true" className={styles.required}>
-            *
-          </span>
-        </legend>
-        <div className={styles.tagOptions}>
-          {tagOptions.map((tag) => (
-            <label key={tag}>
-              <input
-                checked={draft.submission.tags.includes(tag)}
-                onChange={() => toggleTag(tag)}
-                type="checkbox"
-              />{" "}
-              {tag}
-            </label>
-          ))}
-        </div>
-        {errors["submission.tags"] ? (
-          <span className={styles.fieldError} role="alert">
-            {errors["submission.tags"]}
-          </span>
-        ) : null}
-      </fieldset>
-      <SearchableField
-        errorKey="submission.track"
-        errors={errors}
-        label="Track"
-        options={trackOptions}
-        required
-        value={draft.submission.track}
-        onChange={(value) =>
-          updateDraft((current) => ({
-            ...current,
-            submission: { ...current.submission, track: value },
-          }))
-        }
-      />
-      <SearchableField
-        errorKey="submission.level"
-        errors={errors}
-        label="Level"
-        options={levelOptions}
-        value={draft.submission.level}
-        onChange={(value) =>
-          updateDraft((current) => ({
-            ...current,
-            submission: { ...current.submission, level: value },
-          }))
-        }
-      />
-      <SearchableField
-        errorKey="submission.language"
-        errors={errors}
-        label="Language"
-        options={languageOptions}
-        value={draft.submission.language}
-        onChange={(value) =>
-          updateDraft((current) => ({
-            ...current,
-            submission: { ...current.submission, language: value },
-          }))
-        }
-      />
-    </div>
+    <DynamicSubmissionFields
+      answers={answers}
+      draft={draft}
+      errors={errors}
+      fileUploadStates={fileUploadStates}
+      form={form}
+      onAnswerChange={onAnswerChange}
+      onFileUpload={onFileUpload}
+      onFileUploadStateChange={onFileUploadStateChange}
+    />
   );
 }
 
-function SearchableField({
-  errorKey,
-  errors,
-  label,
-  onChange,
-  options,
-  required = false,
-  value,
-}: {
-  errorKey: string;
-  errors: ValidationErrors;
-  label: string;
-  onChange: (value: string) => void;
-  options: string[];
-  required?: boolean;
-  value: string;
-}) {
-  return (
-    <Field error={errors[errorKey]} label={label} name={errorKey} required={required}>
-      {(controlProps) => (
-        <SearchableSelect
-          {...(controlProps["aria-describedby"]
-            ? { describedBy: controlProps["aria-describedby"] }
-            : {})}
-          id={controlProps.id}
-          invalid={Boolean(controlProps["aria-invalid"])}
-          onValueChange={onChange}
-          options={options.map((option) => ({ label: option, value: option }))}
-          placeholder="Search or select…"
-          required={required}
-          value={value}
-        />
-      )}
-    </Field>
-  );
-}
 function FileRequestControl({
   field,
   state,

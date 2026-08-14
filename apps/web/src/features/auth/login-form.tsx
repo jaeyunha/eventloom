@@ -14,6 +14,7 @@ import { normalizeSessionSpeakerGrants } from "./session";
 
 const AUTH_PATH = "/api/auth";
 const ADMIN_PATH = "/admin";
+const WORK_PATH = "/work";
 const INVALID_CREDENTIALS_MESSAGE = "The email or password is incorrect.";
 const UNVERIFIED_EMAIL_MESSAGE =
   "Your email is not verified yet. Check your inbox for a verification link.";
@@ -25,9 +26,7 @@ const SIGNUP_VERIFICATION_MESSAGE = "Account created. Check your email for a ver
 const MAGIC_LINK_SUCCESS_MESSAGE = "Magic link sent. Check your email for a link to sign in.";
 const NETWORK_ERROR_MESSAGE =
   "We couldn't reach the sign-in service. Check your connection and try again.";
-const REVIEW_PATH = "/review";
 const PORTAL_PATH = "/portal";
-const PORTAL_LOGIN_PATH = "/login?next=%2Fportal";
 const AUTHENTICATION_ERROR_MESSAGE =
   "We couldn't verify your account access. Sign in again or contact an administrator.";
 const LOGIN_MEMBERSHIP_ROLES = new Set(["owner", "admin", "reviewer"]);
@@ -246,16 +245,7 @@ export function resolveLoginLandingRoute(value: unknown, returnTo?: unknown): st
   const explicit = explicitSafeLoginReturnTo(returnTo);
   if (explicit !== undefined) return explicit;
 
-  if (session.memberships.some(({ role }) => role === "owner" || role === "admin")) {
-    return ADMIN_PATH;
-  }
-  if (session.memberships.some(({ role }) => role === "reviewer")) {
-    return REVIEW_PATH;
-  }
-  if (session.memberships.length === 0) {
-    return PORTAL_PATH;
-  }
-  throw new LoginRequestError("authentication", AUTHENTICATION_ERROR_MESSAGE);
+  return WORK_PATH;
 }
 
 export function resolveLoginWorkspace(returnTo: unknown): "operator" | "portal" {
@@ -683,16 +673,8 @@ export function LoginForm({
             <small>Program operations</small>
           </span>
         </a>
-        <div className={styles.headerActions}>
-          <nav className={styles.workspaceSwitcher} aria-label="Sign-in workspace">
-            <a href="/login" aria-current={!isPortalLogin ? "page" : undefined}>
-              Organizer
-            </a>
-            <a href={PORTAL_LOGIN_PATH} aria-current={isPortalLogin ? "page" : undefined}>
-              Applicant / speaker
-            </a>
-          </nav>
-          <p className={styles.headerContext}>One account, separate workspaces</p>
+        <div className={styles.headerActions} data-account-entry="single">
+          <p className={styles.headerContext}>One account, all your work</p>
         </div>
       </header>
 
@@ -898,10 +880,8 @@ export function LoginForm({
                           ? "Creating account…"
                           : "Signing in…"
                         : isSignup
-                          ? "Create organizer account"
-                          : isPortalLogin
-                            ? "Sign in to portal"
-                            : "Sign in to workspace"}
+                          ? "Create account"
+                          : "Sign in to workspace"}
                     </Button>
                   </form>
                 )}
@@ -936,12 +916,9 @@ export function LoginForm({
               </TabsContent>
             </Tabs>
 
-            {!isPortalLogin ? (
-              <p className={styles.cfpNote}>
-                Submitted a proposal or speaking at an event?{" "}
-                <a href={PORTAL_LOGIN_PATH}>Sign in to the applicant and speaker portal</a>.
-              </p>
-            ) : null}
+            <p className={styles.cfpNote}>
+              One sign-in opens every workspace available to this account.
+            </p>
           </CardContent>
         </Card>
       </main>

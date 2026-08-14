@@ -39,6 +39,8 @@ const sessions = [
     durationMinutes: 45,
     speakerNames: ["Morgan Lee"],
     capacityRequired: 300,
+    trackIds: ["track_main"],
+    trackNames: ["Main stage"],
   },
   {
     id: "session_operations",
@@ -47,6 +49,8 @@ const sessions = [
     durationMinutes: 45,
     speakerNames: ["Avery Kim"],
     capacityRequired: 70,
+    trackIds: ["track_practice"],
+    trackNames: ["In practice"],
   },
   {
     id: "session_review",
@@ -55,6 +59,8 @@ const sessions = [
     durationMinutes: 60,
     speakerNames: ["Sam Rivera"],
     capacityRequired: 120,
+    trackIds: ["track_practice"],
+    trackNames: ["In practice"],
   },
 ] as const satisfies readonly AgendaSession[];
 

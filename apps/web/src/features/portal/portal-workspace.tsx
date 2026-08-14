@@ -2,6 +2,12 @@
 
 import { type FormEvent, Fragment, type ReactNode, useEffect, useMemo, useState } from "react";
 import styles from "./portal.module.css";
+import {
+  assetPointerLabels,
+  portalFileStatus,
+  portalReviewStatus,
+  resolvePortalAssetFamily,
+} from "./portal-assets";
 import { portalContextLabel, usePortal } from "./portal-provider";
 import type {
   PortalAsset,
@@ -16,12 +22,12 @@ import type {
 
 export type PortalWorkspaceSection = "co-speakers" | "files" | "tasks" | "resources" | "wiki";
 
-const sections: readonly { id: PortalWorkspaceSection; label: string }[] = [
-  { id: "co-speakers", label: "Co-speakers" },
-  { id: "files", label: "Files" },
-  { id: "tasks", label: "Tasks" },
-  { id: "resources", label: "Resources" },
-  { id: "wiki", label: "Wiki" },
+const sections: readonly { id: PortalWorkspaceSection; label: string; href: string }[] = [
+  { id: "co-speakers", label: "Co-speakers", href: "/portal?workspace=co-speakers" },
+  { id: "files", label: "Uploaded files", href: "/portal?workspace=files" },
+  { id: "tasks", label: "Requests & tasks", href: "/portal/tasks" },
+  { id: "resources", label: "Resources", href: "/portal?workspace=resources" },
+  { id: "wiki", label: "Wiki", href: "/portal?workspace=wiki" },
 ];
 
 function formatBytes(value: number): string {
@@ -394,11 +400,7 @@ export function PortalWorkspace({ section }: Readonly<{ section: PortalWorkspace
       </header>
       <nav aria-label="Participant workspace" className={styles.segmentedControl}>
         {sections.map((item) => (
-          <a
-            key={item.id}
-            href={`/portal?workspace=${item.id}`}
-            aria-current={item.id === section ? "page" : undefined}
-          >
+          <a key={item.id} href={item.href} aria-current={item.id === section ? "page" : undefined}>
             {item.label}
           </a>
         ))}
@@ -414,8 +416,8 @@ export function PortalWorkspace({ section }: Readonly<{ section: PortalWorkspace
       <section aria-label={`${section} workspace`}>
         {section === "co-speakers" ? <CoSpeakersWorkspace /> : null}
         {section === "files" ? <FilesWorkspace /> : null}
-        {section === "tasks" ? <TasksWorkspace /> : null}
         {section === "resources" ? <PublishedResources /> : null}
+        {section === "tasks" ? <TasksWorkspace /> : null}
         {section === "wiki" ? <PublishedWiki /> : null}
       </section>
     </>
@@ -806,13 +808,17 @@ function FilesWorkspace() {
         >
           <div className={styles.panelHeading}>
             <div>
-              <p className={styles.eyebrow}>Private files</p>
-              <h2 id="upload-heading">Upload a new version</h2>
+              <p className={styles.eyebrow}>Standalone private upload</p>
+              <h2 id="upload-heading">Upload another private file</h2>
             </div>
             <span className={styles.toolbarDescription}>
               Files stay private to authorized participants.
             </span>
           </div>
+          <p className={styles.blockedNotice}>
+            This uploads a private file but does not complete a content request. Open Requests &amp;
+            tasks to respond to an event-team request.
+          </p>
           <label className={styles.readOnlyField}>
             <span>Version family</span>
             <select
@@ -822,7 +828,7 @@ function FilesWorkspace() {
               <option value="">New file</option>
               {families.map((family) => (
                 <option key={family.id} value={family.id}>
-                  {family.current.fileName} · {family.kind.replaceAll("_", " ")} · current v
+                  {family.current.fileName} · {family.kind.replaceAll("_", " ")} · latest upload v
                   {family.current.version ?? "?"}
                 </option>
               ))}
@@ -867,7 +873,7 @@ function FilesWorkspace() {
         <div className={styles.panelHeading}>
           <div>
             <p className={styles.eyebrow}>File history</p>
-            <h2 id="files-heading">Session files</h2>
+            <h2 id="files-heading">Uploaded files</h2>
           </div>
           <span>{families.length} version families</span>
         </div>
@@ -884,7 +890,10 @@ function FilesWorkspace() {
                 family,
                 workspace.assetHistories[asset.id] ?? [],
               );
-              const currentAsset = versions.at(-1) ?? asset;
+              const resolution = resolvePortalAssetFamily(versions, asset);
+              const latestAsset = resolution.latest ?? asset;
+              const currentAsset = resolution.current;
+              const displayAsset = currentAsset ?? latestAsset;
               return (
                 <article
                   key={family.id}
@@ -896,33 +905,56 @@ function FilesWorkspace() {
                       ▧
                     </div>
                     <div className={styles.taskTitle}>
-                      <p>{currentAsset.kind.replaceAll("_", " ")}</p>
-                      <h3 id={`asset-${family.id}`}>{currentAsset.fileName}</h3>
+                      <p>{displayAsset.kind.replaceAll("_", " ")}</p>
+                      <h3 id={`asset-${family.id}`}>{displayAsset.fileName}</h3>
                     </div>
                     <span className={styles.badge}>
-                      {currentAsset.state.replaceAll("_", " ")} · Current v
-                      {currentAsset.version ?? "?"}
+                      {currentAsset === undefined
+                        ? "Version status unavailable"
+                        : `Current v${currentAsset.version ?? "?"}`}
                     </span>
                   </div>
                   <div className={styles.taskMetadata}>
                     <span>
-                      <strong>Size</strong> {formatBytes(currentAsset.sizeBytes)}
+                      <strong>File status</strong> {portalFileStatus(latestAsset)}
                     </span>
                     <span>
-                      <strong>Uploaded</strong> {formatDate(currentAsset.createdAt)}
+                      <strong>Review status</strong> {portalReviewStatus(currentAsset)}
+                    </span>
+                    <span>
+                      <strong>Size</strong> {formatBytes(displayAsset.sizeBytes)}
+                    </span>
+                    <span>
+                      <strong>Uploaded</strong> {formatDate(latestAsset.createdAt)}
                     </span>
                     <span>
                       <strong>Versions</strong> {versions.length}
                     </span>
                   </div>
+                  {resolution.status === "pending" && currentAsset !== undefined ? (
+                    <p className={styles.blockedNotice}>
+                      Version {latestAsset.version ?? "?"} is still processing. Version{" "}
+                      {currentAsset.version ?? "?"} remains current.
+                    </p>
+                  ) : null}
+                  {resolution.pointers.status !== "ready" ? (
+                    <p className={styles.blockedNotice} role="status">
+                      Version status unavailable. Current-version actions stay disabled until
+                      authoritative pointers are available.
+                    </p>
+                  ) : null}
                   <footer className={styles.taskCardFooter}>
                     <button
                       className={styles.secondaryButton}
                       type="button"
-                      disabled={currentAsset.state !== "ready" || busyAssetIds.has(currentAsset.id)}
-                      onClick={() => void download(currentAsset)}
+                      disabled={
+                        currentAsset === undefined ||
+                        currentAsset.state !== "ready" ||
+                        busyAssetIds.has(currentAsset.id)
+                      }
+                      onClick={() => currentAsset && void download(currentAsset)}
                     >
-                      Download current
+                      Download current version
                     </button>
                     <details
                       open={expandedFamily === family.id}
@@ -930,22 +962,22 @@ function FilesWorkspace() {
                     >
                       <summary>Version history and comments</summary>
                       <AssetDetails
-                        asset={currentAsset}
+                        asset={latestAsset}
                         versions={versions}
-                        comments={workspace.assetComments[currentAsset.id] ?? []}
+                        comments={workspace.assetComments[latestAsset.id] ?? []}
                         canComment={can("asset-comment")}
                         canCompleteUpload={can("asset-write")}
-                        busy={busyAssetIds.has(currentAsset.id)}
+                        busy={busyAssetIds.has(latestAsset.id)}
                         onRetryUpload={(file) =>
-                          void retryAssetUpload({ assetId: currentAsset.id, file })
+                          void retryAssetUpload({ assetId: latestAsset.id, file })
                         }
                         onCompleteUpload={() =>
-                          void completeAssetUpload({ assetId: currentAsset.id })
+                          void completeAssetUpload({ assetId: latestAsset.id })
                         }
                         onDownload={(version) => void download(version)}
                         commentDraft={commentDraft}
                         onCommentDraftChange={setCommentDraft}
-                        onComment={(event) => void comment(event, currentAsset)}
+                        onComment={(event) => void comment(event, latestAsset)}
                       />
                     </details>
                   </footer>
@@ -993,6 +1025,7 @@ export function AssetDetails({
   onCommentDraftChange: (value: string) => void;
   onComment: (event: FormEvent<HTMLFormElement>) => void;
 }>) {
+  const resolution = resolvePortalAssetFamily(versions, asset);
   return (
     <div className={styles.profileForm}>
       <h4>Immutable version history</h4>
@@ -1000,29 +1033,37 @@ export function AssetDetails({
         <p className={styles.toolbarDescription}>No prior versions.</p>
       ) : null}
       <ol>
-        {versions.map((version) => (
-          <li key={version.id}>
-            <span>
-              {`Version ${version.version ?? "?"} · ${version.fileName} · ${version.state} · ${formatDate(version.createdAt)}`}
-            </span>{" "}
-            {version.id === asset.id ? <strong>Current</strong> : <span>Archived</span>}{" "}
-            <button
-              className={styles.tertiaryButton}
-              type="button"
-              disabled={version.state !== "ready" || busy}
-              onClick={() => onDownload(version)}
-            >
-              Download version {version.version ?? "?"}
-            </button>
-          </li>
-        ))}
+        {versions.map((version) => {
+          const pointerLabels = assetPointerLabels(version, resolution.pointers);
+          return (
+            <li key={version.id}>
+              <span>
+                {`Version ${version.version ?? "?"} · ${version.fileName} · ${portalFileStatus(version)} · ${formatDate(version.createdAt)}`}
+              </span>{" "}
+              {pointerLabels.length > 0 ? (
+                pointerLabels.map((label) => <strong key={label}> {label}</strong>)
+              ) : (
+                <span> Previous version</span>
+              )}{" "}
+              <span>Review: {portalReviewStatus(version)}</span>{" "}
+              <button
+                className={styles.tertiaryButton}
+                type="button"
+                disabled={version.state !== "ready" || busy}
+                onClick={() => onDownload(version)}
+              >
+                Download version {version.version ?? "?"}
+              </button>
+            </li>
+          );
+        })}
       </ol>
       {canCompleteUpload && asset.state === "pending_upload" ? (
         <div className={styles.formActions}>
           <div>
             <p className={styles.toolbarDescription}>
               Choose the same file to retry a failed or expired transfer. A successful retry is
-              finalized automatically; organizer approval happens separately.
+              finalized automatically; event-team approval happens separately.
             </p>
             <label className={styles.fileField}>
               <span>Retry file upload</span>

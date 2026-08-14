@@ -35,7 +35,7 @@ Organizers manage event and session settings, rooms, tracks, tags, formats, stat
 
 ### CFP and submission intake
 
-A published CFP can contain sections, built-in and tenant-reusable fields, custom field types, validation, file requests, conditional show/hide/require rules, routing, close dates, reminders, and submission limits. The account-first flow is Welcome → Account → Submission → Participant → Review. Applicants can create drafts, autosave and resume them, add participants and secondary contacts, submit once, edit until close, request an audited organizer reopen after close, and withdraw before a final decision. Form and answer versions prevent a changed reusable field from reinterpreting stored answers.
+A published CFP can contain sections, built-in and tenant-reusable fields, custom field types, validation, file requests, conditional show/hide/require rules, routing, close dates, reminders, and per-account submission limits. The account-first flow is Welcome → Account → Submission → Participant → Review. An account can own multiple distinct proposals up to the configured limit for that CFP form. Each proposal transitions from draft to submitted once; autosave, ordinary edits, and audited reopen changes create versions of that same proposal without consuming another slot. Applicants can add participants and secondary contacts, edit until close, request an audited organizer reopen after close, and withdraw before a final decision. Form and answer versions prevent a changed reusable field from reinterpreting stored answers.
 
 ### Speaker portal and deliverables
 

@@ -2373,6 +2373,12 @@
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
   --destructive: oklch(0.577 0.245 27.325);
+  --success: #17835c;
+  --success-surface: #e9f7f1;
+  --warning: #a66811;
+  --warning-surface: #fff5df;
+  --failure: #c44138;
+  --failure-surface: #fff0ee;
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);
@@ -2408,6 +2414,12 @@
   --accent: oklch(0.269 0 0);
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);
+  --success: #4ade80;
+  --success-surface: #123524;
+  --warning: #fbbf24;
+  --warning-surface: #3a2a0c;
+  --failure: #f87171;
+  --failure-surface: #3b1515;
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.556 0 0);

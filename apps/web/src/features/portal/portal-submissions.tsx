@@ -132,7 +132,7 @@ export function portalSubmissionActionTargets(
   const editTarget = portalSubmissionEditTarget(context, editableSubmission);
   if (editTarget === null) return null;
   const eventSlug = context.slug?.trim() || context.eventId.trim();
-  const organizationId = context.id.split(":")[1]?.trim();
+  const organizationId = context.organizationId?.trim() || context.id.split(":")[1]?.trim() || "";
   if (eventSlug.length === 0 || organizationId === undefined || organizationId.length === 0) {
     return null;
   }

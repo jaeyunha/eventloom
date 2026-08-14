@@ -1,8 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { PageHeader } from "../../components/layout";
 import { Button } from "../../components/ui";
+import { SettingsShell } from "@/components/workspace/settings-ui";
+import {
+  WorkspaceBreadcrumb,
+  WorkspaceHeader,
+  WorkspaceMetaItem,
+  workspaceClassNames,
+} from "@/components/workspace/workspace-ui";
 import {
   createIntegrationAdminApi,
   type IntegrationAdminApi,
@@ -37,16 +43,18 @@ const sectionCopy: Record<
     description: "Connect distribution services and monitor every outbound program handoff.",
   },
   "api-keys": {
-    title: "API keys",
-    description: "Issue least-privilege credentials for tenant-scoped API clients.",
+    title: "Organization API keys",
+    description:
+      "Issue organization-scoped credentials. Event context is operational metadata, not an authorization boundary.",
   },
   webhooks: {
     title: "Webhooks",
     description: "Deliver signed event notifications and inspect endpoint health.",
   },
   delivery: {
-    title: "Email & calendar",
-    description: "Monitor OpenSend identities, transactional email, and RFC 5545 delivery.",
+    title: "Delivery operations",
+    description:
+      "Monitor deployment-managed email delivery, verified identities, and RFC 5545 operations.",
   },
 };
 
@@ -240,95 +248,112 @@ export function IntegrationAdmin({
     readonly href: string;
   }[] = [
     { section: "overview", label: "Overview", href: base },
-    { section: "api-keys", label: "API keys", href: `${base}/api-keys` },
+    {
+      section: "api-keys",
+      label: "Organization API keys",
+      href: `${base}/api-keys`,
+    },
     { section: "webhooks", label: "Webhooks", href: `${base}/webhooks` },
     { section: "delivery", label: "Email & calendar", href: `${base}/delivery` },
   ];
   const copy = sectionCopy[section];
 
   return (
-    <div className={styles.integrationPage}>
-      <a className={styles.skipLink} href="#integration-content">
-        Skip to integration settings
-      </a>
-      <nav className={styles.breadcrumbs} aria-label="Breadcrumb">
-        <a href="/admin">Events</a>
-        <span aria-hidden="true">/</span>
-        <a href={eventBase}>{snapshot?.event.name ?? "Event"}</a>
-        <span aria-hidden="true">/</span>
-        <span>Integrations</span>
-      </nav>
-      <PageHeader
-        eyebrow={<span className={styles.eyebrow}>Organizer workspace</span>}
-        title={copy.title}
+    <main className={`${workspaceClassNames.page} ${styles.integrationPage}`}>
+      <WorkspaceHeader
+        breadcrumb={
+          <WorkspaceBreadcrumb>
+            <a href={eventBase}>{snapshot?.event.name ?? "Event"}</a>
+            <span aria-hidden="true">/</span>
+            <span>Integrations</span>
+          </WorkspaceBreadcrumb>
+        }
         description={copy.description}
+        metadata={
+          <>
+            <WorkspaceMetaItem>Event {eventId}</WorkspaceMetaItem>
+            <WorkspaceMetaItem>Organization {organizationId}</WorkspaceMetaItem>
+          </>
+        }
+        title={copy.title}
       />
-      <nav className={styles.tabs} aria-label="Integration settings">
-        {tabs.map((tab) => (
-          <a
-            key={tab.section}
-            href={tab.href}
-            aria-current={tab.section === section ? "page" : undefined}
-          >
-            {tab.label}
-          </a>
-        ))}
-      </nav>
 
-      <div id="integration-content" className={styles.integrationContent} tabIndex={-1}>
-        {notice ? (
-          <div className={styles.successPanel} role="status" aria-live="polite">
-            <p>{notice}</p>
-          </div>
-        ) : null}
-        {mutationError ? (
-          <div className={styles.errorPanel} role="alert">
-            <div>
-              <h2>Could not save the change</h2>
-              <p>{mutationError}</p>
+      <SettingsShell
+        wide
+        navigation={
+          <nav className={styles.settingsNavigation} aria-label="Integration settings">
+            {tabs.map((tab) => (
+              <a
+                key={tab.section}
+                href={tab.href}
+                aria-current={tab.section === section ? "page" : undefined}
+              >
+                {tab.label}
+              </a>
+            ))}
+          </nav>
+        }
+      >
+        <div className={styles.integrationContent}>
+          {notice ? (
+            <div className={styles.successPanel} role="status" aria-live="polite">
+              <p>{notice}</p>
             </div>
-            <Button type="button" variant="ghost" size="sm" onClick={() => setMutationError(null)}>
-              Dismiss
-            </Button>
-          </div>
-        ) : null}
-        {oneTimeSecret ? (
-          <OneTimeSecretPanel
-            secret={oneTimeSecret.value}
-            label={oneTimeSecret.label}
-            onDismiss={() => setOneTimeSecret(null)}
-          />
-        ) : null}
+          ) : null}
+          {mutationError ? (
+            <div className={styles.errorPanel} role="alert">
+              <div>
+                <h2>Could not save the change</h2>
+                <p>{mutationError}</p>
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setMutationError(null)}
+              >
+                Dismiss
+              </Button>
+            </div>
+          ) : null}
+          {oneTimeSecret ? (
+            <OneTimeSecretPanel
+              secret={oneTimeSecret.value}
+              label={oneTimeSecret.label}
+              onDismiss={() => setOneTimeSecret(null)}
+            />
+          ) : null}
 
-        {loading && !snapshot ? (
-          <div className={styles.statePanel} role="status" aria-live="polite">
-            <span className={styles.spinner} aria-hidden="true" />
-            <h2>Loading integration settings</h2>
-            <p>Retrieving tenant-scoped connection and delivery status.</p>
-          </div>
-        ) : null}
-        {loadError && !snapshot ? (
-          <div className={styles.statePanel} role="alert">
-            <h2>Integration settings are unavailable</h2>
-            <p>{loadError}</p>
-            <Button type="button" onClick={() => void loadSnapshot()}>
-              Try again
-            </Button>
-          </div>
-        ) : null}
+          {loading && !snapshot ? (
+            <div className={styles.statePanel} role="status" aria-live="polite">
+              <span className={styles.spinner} aria-hidden="true" />
+              <h2>Loading integration settings</h2>
+              <p>Retrieving tenant-scoped connection and delivery status.</p>
+            </div>
+          ) : null}
+          {loadError && !snapshot ? (
+            <div className={styles.statePanel} role="alert">
+              <h2>Integration settings are unavailable</h2>
+              <p>{loadError}</p>
+              <Button type="button" onClick={() => void loadSnapshot()}>
+                Try again
+              </Button>
+            </div>
+          ) : null}
 
-        {snapshot ? (
-          section === "overview" ? (
-            <OverviewSection basePath={base} snapshot={snapshot} />
-          ) : section === "api-keys" ? (
-            <ApiKeysSection keys={snapshot.apiKeys} actions={actions} />
-          ) : section === "webhooks" ? (
-            <WebhooksSection webhooks={snapshot.webhooks} actions={actions} />
-          ) : (
-            <DeliverySection snapshot={snapshot} actions={actions} />
-          )
-        ) : null}
-      </div>
-    </div>
+          {snapshot ? (
+            section === "overview" ? (
+              <OverviewSection basePath={base} snapshot={snapshot} />
+            ) : section === "api-keys" ? (
+              <ApiKeysSection keys={snapshot.apiKeys} actions={actions} />
+            ) : section === "webhooks" ? (
+              <WebhooksSection webhooks={snapshot.webhooks} actions={actions} />
+            ) : (
+              <DeliverySection snapshot={snapshot} actions={actions} />
+            )
+          ) : null}
+        </div>
+      </SettingsShell>
+    </main>
   );
 }

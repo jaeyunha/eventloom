@@ -35,6 +35,8 @@ export interface EvaluationRepository {
   getPlan(tenantId: string, planId: string): Promise<EvaluationPlan | null>;
   listPlans(tenantId: string, eventId?: string): Promise<readonly EvaluationPlan[]>;
   putPlan(plan: EvaluationPlan, expectedVersion: number | null): Promise<void>;
+  putPlanState?(plan: EvaluationPlan, expectedVersion: number): Promise<void>;
+  putPlanSchedule?(plan: EvaluationPlan, expectedVersion: number): Promise<void>;
   getAssignment(tenantId: string, assignmentId: string): Promise<EvaluationAssignment | null>;
   listAssignments(tenantId: string, planId: string): Promise<readonly EvaluationAssignment[]>;
   replaceAssignment(
@@ -191,6 +193,10 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
     this.#plans.set(key, clone(plan));
   }
 
+  async putPlanSchedule(plan: EvaluationPlan, expectedVersion: number): Promise<void> {
+    await this.putPlan(plan, expectedVersion);
+  }
+
   async getAssignment(
     tenantId: string,
     assignmentId: string,
@@ -217,6 +223,7 @@ export class InMemoryEvaluationRepository implements EvaluationRepository {
       this.#assignments.set(storageKey(assignment.tenantId, assignment.id), clone(assignment));
     }
   }
+
   async replaceAssignment(
     scope: EvaluationAssignmentScope,
     input: EvaluationAssignmentReplacementInput,
@@ -687,7 +694,7 @@ export class InMemorySubmissionReviewSource implements SubmissionReviewSource {
       .filter((submission) => submission.tenantId === tenantId && submission.eventId === eventId)
       .map((submission) => ({
         ...clone(submission),
-        status: "submitted",
+        status: submission.status ?? "submitted",
         version: 1,
         submittedAt: "2026-08-08T12:00:00.000Z",
         updatedAt: "2026-08-08T12:00:00.000Z",

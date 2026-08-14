@@ -46,9 +46,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { createScopedReadFlightCoordinator } from "@/lib/scoped-read-flight";
 import {
-  approvedSenderForPurpose,
   COMMUNICATION_AUDIENCES,
-  COMMUNICATION_SENDERS,
   COMMUNICATION_TEMPLATE_PURPOSES,
   type CommunicationApi,
   CommunicationApiError,
@@ -162,6 +160,14 @@ export function communicationTemplateSelectionKey(
   return `${encodeURIComponent(templateId)}:${templateVersion}`;
 }
 
+export function previewAudienceForTemplate(template: CommunicationTemplate): CommunicationAudience {
+  if (template.purpose !== "decision") return "all_participants";
+  const value = `${template.name} ${template.subject}`.toLowerCase();
+  if (value.includes("waitlist")) return "waitlisted_participants";
+  if (value.includes("reject") || value.includes("declin")) return "rejected_participants";
+  return "accepted_participants";
+}
+
 export function communicationTemplateSelectionFromKey(
   value: string,
 ): CommunicationTemplateSelection | undefined {
@@ -246,9 +252,7 @@ function ReminderStatusBadge({ status }: Readonly<{ status: ReminderDispatchStat
 }
 
 function senderLabel(template: CommunicationTemplate | CommunicationPreview["template"]): string {
-  return COMMUNICATION_SENDERS.includes(template.sender)
-    ? template.sender
-    : "Unapproved sender identity";
+  return template.sender;
 }
 
 function providerLabel(state: CommunicationProviderState): string {
@@ -266,7 +270,7 @@ function providerDescription(state: CommunicationProviderState): string {
     return "The email provider is unavailable. No send was attempted; resolve provider configuration before retrying.";
   }
   if (state === "domain-unverified") {
-    return "The sender domain is not verified. No send was attempted; verify the approved sessionboard.namuh.co domain first.";
+    return "The configured sender domain is not verified. No send was attempted; verify the server-configured sender domain first.";
   }
   return "This workspace does not assume provider availability. A send can proceed only after an approved preview, and any provider failure is shown honestly.";
 }
@@ -477,7 +481,6 @@ function TemplateEditor({
     }
   }
 
-  const sender = approvedSenderForPurpose(draft.purpose);
   return (
     <Card id="draft-template" className={styles.workflowCard}>
       <CardHeader>
@@ -550,8 +553,14 @@ function TemplateEditor({
             </div>
           </div>
           <p className={styles.mutedText}>
-            Approved sender identity: <strong>{sender}</strong>. Sender identities are controlled by
-            purpose and cannot be entered manually.
+            {selected === undefined ? (
+              "The server assigns the sender identity when this draft is saved."
+            ) : (
+              <>
+                Server-assigned sender identity: <strong>{senderLabel(selected)}</strong>. Sender
+                identities are controlled by purpose and cannot be entered manually.
+              </>
+            )}
           </p>
           <div className={styles.field}>
             <Label htmlFor="communication-template-subject">Subject</Label>
@@ -1432,15 +1441,21 @@ export function CommunicationsWorkspaceView({
   const selectedForEditor = creatingTemplate ? undefined : selected;
   const approvedGroupTemplates = templates
     .filter(
-      (template) => template.purpose === "organizer_group_email" && template.status === "approved",
+      (template) =>
+        (template.purpose === "organizer_group_email" || template.purpose === "decision") &&
+        template.status === "approved",
     )
     .sort((left, right) => left.id.localeCompare(right.id) || left.version - right.version);
   const selectedPreviewKey =
     selected !== undefined &&
     selected.status === "approved" &&
-    selected.purpose === "organizer_group_email"
+    (selected.purpose === "organizer_group_email" || selected.purpose === "decision")
       ? communicationTemplateSelectionKey(selected.id, selected.version)
       : "";
+  const previewAudienceOptions =
+    selected?.purpose === "decision"
+      ? (["accepted_participants", "waitlisted_participants", "rejected_participants"] as const)
+      : COMMUNICATION_AUDIENCES;
 
   return (
     <div className={styles.page}>
@@ -1666,7 +1681,7 @@ export function CommunicationsWorkspaceView({
                     }
                     disabled={busy}
                   >
-                    {COMMUNICATION_AUDIENCES.map((audience) => (
+                    {previewAudienceOptions.map((audience) => (
                       <option key={audience} value={audience}>
                         {formatCommunicationAudience(audience)}
                       </option>
@@ -1684,7 +1699,7 @@ export function CommunicationsWorkspaceView({
                 </Button>
                 {approvedGroupTemplates.length === 0 ? (
                   <span className={styles.mutedText}>
-                    Create and approve an organizer group email template before previewing.
+                    Create and approve a group or decision template before previewing.
                   </span>
                 ) : selectedPreviewKey.length === 0 ? (
                   <span className={styles.mutedText}>
@@ -2073,11 +2088,11 @@ export function CommunicationsWorkspace({
     const template = resolveEditorTemplate(templates, selectedTemplateId, selectedTemplateVersion);
     if (
       template === undefined ||
-      template.purpose !== "organizer_group_email" ||
+      (template.purpose !== "organizer_group_email" && template.purpose !== "decision") ||
       template.status !== "approved"
     ) {
       setError(
-        "Select one exact approved organizer group email template version before creating a recipient preview.",
+        "Select one exact approved group or decision template version before creating a recipient preview.",
       );
       return;
     }
@@ -2086,12 +2101,19 @@ export function CommunicationsWorkspace({
     setError(null);
     setStatusMessage(null);
     try {
+      const audience =
+        template.purpose === "decision" &&
+        selectedAudience !== "accepted_participants" &&
+        selectedAudience !== "waitlisted_participants" &&
+        selectedAudience !== "rejected_participants"
+          ? previewAudienceForTemplate(template)
+          : selectedAudience;
       const next = await api.preview({
         eventId,
-        purpose: "organizer_group_email",
+        purpose: template.purpose,
         templateId: template.id,
         templateVersion: template.version,
-        audience: selectedAudience,
+        audience,
         data: {},
       });
       setPreview(next);
@@ -2239,9 +2261,13 @@ export function CommunicationsWorkspace({
       onSelectTemplate={(templateId, templateVersion) => {
         const selectionChanged =
           templateId !== selectedTemplateId || templateVersion !== selectedTemplateVersion;
+        const template = templates.find(
+          (candidate) => candidate.id === templateId && candidate.version === templateVersion,
+        );
         setCreatingTemplate(false);
         setSelectedTemplateId(templateId);
         setSelectedTemplateVersion(templateVersion);
+        if (template !== undefined) setSelectedAudience(previewAudienceForTemplate(template));
         if (selectionChanged) invalidatePreview();
       }}
       onSelectAudience={(audience) => {

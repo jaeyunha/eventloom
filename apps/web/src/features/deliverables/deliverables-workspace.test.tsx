@@ -14,12 +14,15 @@ import {
   deliverableAssetKinds,
 } from "./api";
 import {
+  ContentRequestInspector,
+  contentRequestMetrics,
   type DeliverableRow,
   DeliverablesWorkspaceView,
   deliverablesExportActionLabels,
   deliverablesExportStatusLabels,
   deliverablesSessionHistoryKey,
   eligibleSpeakerHeadshotSessions,
+  filterContentRequestRows,
   isDeliverablesWorkspaceScopeCurrent,
   loadDeliverablesSessionHistory,
   ReminderPreview,
@@ -28,6 +31,8 @@ import {
   startDeliverablesCoreRequests,
   triggerDeliverablesDownload,
 } from "./deliverables-workspace";
+import { projectFileFamilies } from "./file-family-model";
+import { FileReviewDrawerBody } from "./file-review-drawer";
 
 function storedManifestZip(manifest: unknown): Uint8Array {
   const payload = new TextEncoder().encode(`${JSON.stringify(manifest)}\n`);
@@ -798,6 +803,54 @@ describe("deliverables core request starter", () => {
     expect(markup).toContain("slides.pdf");
     expect(markup).toContain("Current");
   });
+  it("derives request metrics, filters assignments, and inspects the no-upload state", () => {
+    const row: DeliverableRow = {
+      task,
+      session,
+      sessionLabel: session.title,
+      speaker: profile,
+      speakerLabel: profile.displayName,
+      assets: [assetV1],
+      currentAsset: assetV1,
+      status: "overdue",
+    };
+    const waitingRow: DeliverableRow = {
+      task: { ...task, id: "task-2", title: "Upload headshot", status: "not_started" },
+      session,
+      sessionLabel: session.title,
+      speaker: profile,
+      speakerLabel: profile.displayName,
+      assets: [],
+      currentAsset: undefined,
+      status: "not_started",
+    };
+
+    expect(contentRequestMetrics([row, waitingRow])).toEqual({
+      all: 2,
+      outstanding: 2,
+      attention: 1,
+      review: 0,
+      complete: 0,
+    });
+    expect(
+      filterContentRequestRows([row, waitingRow], {
+        query: "headshot",
+        speakerId: "all",
+        sessionId: "all",
+        taskId: "all",
+        status: "outstanding",
+      }).map((candidate) => candidate.task.id),
+    ).toEqual(["task-2"]);
+
+    const markup = renderToStaticMarkup(
+      createElement(ContentRequestInspector, { row: waitingRow }),
+    );
+    expect(markup).toContain("Waiting for upload");
+    expect(markup).toContain("The speaker has not submitted a current file for this assignment.");
+    expect(markup).toContain("application/pdf");
+    expect(markup).toContain("Maximum 5 MB");
+  });
+
   it("retains a successful asset-detail sibling when the other request fails", async () => {
     const settled = await settleDeliverablesAssetDetailRequests(
       Promise.resolve([assetV2]),
@@ -813,7 +866,7 @@ describe("deliverables core request starter", () => {
 });
 
 describe("deliverables workspace", () => {
-  it("renders core session content while optional history is still loading", () => {
+  it("routes session content work to the canonical Sessions workspace", () => {
     const markup = renderToStaticMarkup(
       createElement(DeliverablesWorkspaceView, {
         organizationId: "org-1",
@@ -826,9 +879,10 @@ describe("deliverables workspace", () => {
       }),
     );
 
-    expect(markup).toContain("Session title and abstract");
-    expect(markup).toContain("Loading session change history");
-    expect(markup).not.toContain("No session history was returned");
+    expect(markup).toContain("Session content lives in Sessions");
+    expect(markup).toContain("Open Sessions");
+    expect(markup).not.toContain("Session title and abstract");
+    expect(markup).not.toContain("Loading session change history");
   });
   it("shows a detail-resource error without replacing a successful sibling", () => {
     const markup = renderToStaticMarkup(
@@ -904,120 +958,67 @@ describe("deliverables workspace", () => {
         onRestoreSessionVersion: async () => undefined,
       }),
     );
-    expect(markup).toContain("Requests");
+    expect(markup).toContain("Content requests");
+    expect(markup).toContain("All requests");
     expect(markup).toContain("Needs attention");
     expect(markup).toContain("Outstanding");
     expect(markup).toContain("Ready for review");
     expect(markup).toContain("Complete");
     expect(markup).toContain("Assignments");
-    expect(markup).toContain("Submitted files");
-    expect(markup).toContain("Content editing");
+    expect(markup).toContain("Related records");
     expect(markup).toContain("Session content");
     expect(markup).toContain("Speaker profiles");
-    expect(markup).toContain("New file request");
-    expect(markup).not.toContain(
-      "Speakers can upload only the selected asset kinds, MIME types, and maximum size.",
-    );
+    expect(markup).toContain("New content request");
     expect(markup).not.toContain('data-slot="dialog-content"');
-    expect(markup).toContain("Allowed MIME types");
-    expect(markup).toContain("Accepted asset kinds (required)");
     expect(deliverableAssetKinds).toContain("slides");
-    expect(markup).toContain("The replacement is staged through a");
-    expect(markup).not.toContain("current API does not expose organizer headshot replacement");
-    expect(markup).toContain("Maximum file size");
-    expect(markup).toContain("Assignees");
+    expect(markup).not.toContain("The replacement is staged through a");
+    expect(markup).not.toContain("organizer headshot replacement");
     expect(markup).toContain("Filter by speaker");
-    expect(markup).toContain("Filter by task");
-    expect(markup).toContain("Send reminder");
-    expect(markup).toContain("Outstanding only");
-    expect(markup).toContain("Status");
+    expect(markup).toContain("Filter by request");
+    expect(markup).toContain("Filter by session");
+    expect(markup).toContain("Remind all outstanding");
+    expect(markup).toContain("Search assignments");
     expect(markup).toContain("slides.pdf");
     expect(markup).toContain("Current");
     expect(markup).toContain("Draft deck - final version coming Friday.");
     expect(markup).toContain("Selected asset comment evidence");
-    expect(markup).toContain("Approve content");
-    expect(markup).toContain("Session title and abstract");
-    expect(markup).toContain("Public approval gate");
-    expect(markup).toContain("Unapproved content");
-    expect(markup).toContain("Review status:");
-    expect(markup).toContain("Prior version to restore");
-    expect(markup).toContain("Restore selected prior version");
-    expect(markup).toContain("Speaker bio and headshot");
-    expect(markup).toContain("Principal Build Engineer");
-    expect(markup).toContain("Monorepo Labs");
-    expect(markup).toContain("priya@example.test");
+    expect(markup).toContain("Open Sessions");
+    expect(markup).toContain("Session content lives in Sessions");
+    expect(markup).toContain("Open Sessions");
+    expect(markup).toContain("Canonical content and profiles stay");
+    expect(markup).not.toContain("Prior version to restore");
+    expect(markup).not.toContain("Restore selected prior version");
+    expect(markup).toContain("Speaker profiles live in Speakers");
+    expect(markup).toContain("Open Speakers");
+    expect(markup).not.toContain("Monorepo Labs");
+    expect(markup).not.toContain("priya@example.test");
     expect(markup).toContain("Organizer operation status");
     expect(markup).toContain("Organizer reply added to asset version asset-2.");
     expect(markup).not.toContain("must-not-cross-boundary");
-    expect(markup).toContain("Download selected files");
-    expect(markup).toContain("For reminder");
-    expect(markup).toContain("For ZIP export");
+    expect(markup).toContain("Select outstanding assignment");
   });
-  it("renders settled speaker history loading, populated, empty, and error states", () => {
-    const historyEntries = [
-      {
-        id: "speaker-history-1",
-        action: "created" as const,
-        version: 1,
-        actorId: "organizer-1",
-        actorLabel: "Jordan Alvarez",
-        occurredAt: "2026-08-08T12:00:00.000Z",
-        snapshot: { biography: "Earlier biography." },
-      },
-      {
-        id: "speaker-history-2",
-        action: "updated" as const,
-        version: 2,
-        actorId: "organizer-2",
-        actorLabel: "Sam Lee",
-        occurredAt: "2026-08-09T12:00:00.000Z",
-        snapshot: { biography: "Current biography." },
-      },
-    ];
-    const renderHistory = (
-      historyState:
-        | {
-            readonly status: "loading" | "empty" | "success" | "error";
-            readonly entries: typeof historyEntries;
-            readonly error?: string;
-          }
-        | {
-            readonly status: "empty" | "loading" | "error";
-            readonly entries: readonly [];
-            readonly error?: string;
+  it("keeps speaker profile history out of Content requests", () => {
+    const markup = renderToStaticMarkup(
+      createElement(DeliverablesWorkspaceView, {
+        organizationId: "org-1",
+        eventId: "event-1",
+        sessions: [session],
+        tasks: [task],
+        assets: [assetV2],
+        profiles: [profile],
+        speakerContentHistory: {
+          [profile.participantId]: {
+            status: "loading",
+            entries: [],
           },
-    ) =>
-      renderToStaticMarkup(
-        createElement(DeliverablesWorkspaceView, {
-          organizationId: "org-1",
-          eventId: "event-1",
-          sessions: [session],
-          tasks: [task],
-          assets: [assetV1],
-          profiles: [profile],
-          speakerContentHistory: { "speaker-1": historyState },
-          onRestoreSpeakerContentVersion: async () => undefined,
-        }),
-      );
+        },
+      }),
+    );
 
-    const loadingMarkup = renderHistory({ status: "loading", entries: [] });
-    expect(loadingMarkup).toContain("Loading speaker content history");
-    const populatedMarkup = renderHistory({ status: "success", entries: historyEntries });
-    expect(populatedMarkup).toContain("Version 1");
-    expect(populatedMarkup).toContain("Version 2");
-    expect(populatedMarkup).toContain("Jordan Alvarez");
-    expect(populatedMarkup).toContain("Changed fields:");
-    expect(populatedMarkup).toContain("Biography");
-    expect(populatedMarkup).toContain("Restore selected speaker version");
-    const emptyMarkup = renderHistory({ status: "empty", entries: [] });
-    expect(emptyMarkup).toContain("No speaker content history was returned");
-    const errorMarkup = renderHistory({
-      status: "error",
-      entries: [],
-      error: "History request failed.",
-    });
-    expect(errorMarkup).toContain("Speaker content history could not be loaded");
-    expect(errorMarkup).toContain("History request failed.");
+    expect(markup).toContain("Speaker profiles live in Speakers");
+    expect(markup).toContain("Open Speakers");
+    expect(markup).not.toContain("Loading speaker content history");
+    expect(markup).not.toContain("Restore speaker profile history");
   });
   it("keeps Files and Deliverables route modes separate", () => {
     const filesMarkup = renderToStaticMarkup(
@@ -1036,7 +1037,7 @@ describe("deliverables workspace", () => {
     expect(filesMarkup).toContain("Select approved files from a session");
     expect(filesMarkup).toContain("Download selected files ZIP");
     expect(filesMarkup).not.toContain("New file request");
-    expect(filesMarkup).toContain("Files");
+    expect(filesMarkup).toContain("Uploaded files");
     const deliverablesMarkup = renderToStaticMarkup(
       createElement(DeliverablesWorkspaceView, {
         organizationId: "org-1",
@@ -1069,7 +1070,47 @@ describe("deliverables workspace", () => {
     expect(markup).toContain("slides.pdf");
     expect(markup).toContain("Authoritative current v2 · 2 versions");
     expect(markup).toContain("Review state");
-    expect(markup).toContain("View version history");
+    expect(markup).toContain("Review file");
+  });
+
+  it("opens one tabbed review drawer for the selected file family", () => {
+    const [family] = projectFileFamilies(
+      [assetV1, assetV2],
+      [{ ...matrixItem, currentAsset: assetV2, status: "uploaded" }],
+    );
+    if (family === undefined) throw new Error("Expected one file family.");
+
+    const markup = renderToStaticMarkup(
+      createElement(FileReviewDrawerBody, {
+        family,
+        asset: assetV2,
+        sessions: [session],
+        tasks: [task],
+        profiles: [profile],
+        history: [assetV1, assetV2],
+        comments: [
+          {
+            id: "comment-1",
+            eventId: "event-1",
+            assetId: assetV2.id,
+            versionId: assetV2.id,
+            body: "Please tighten the final slide.",
+            authorLabel: "Organizer",
+            createdAt: "2026-08-09T12:01:00.000Z",
+          },
+        ],
+        loading: false,
+        busy: false,
+        assetHistoryError: null,
+        commentsError: null,
+        reviewAvailable: false,
+      }),
+    );
+
+    expect(markup).toContain("Overview");
+    expect(markup).toContain("Comments");
+    expect(markup).toContain("Versions");
+    expect(markup).not.toContain("Selected asset evidence");
   });
 
   it("exposes file filtering and latest asset/session selection controls", () => {
@@ -1109,7 +1150,7 @@ describe("deliverables workspace", () => {
 
     expect(markup).toContain('data-current-version="asset-1"');
     expect(markup).toContain("Authoritative current v1 · 2 versions");
-    expect(markup).toContain("Slides · application/pdf · 1024 bytes");
+    expect(markup).toContain("Slides · application/pdf · 1 KiB");
     expect(markup).not.toContain('data-current-version="asset-2"');
   });
 
@@ -1155,15 +1196,14 @@ describe("deliverables workspace", () => {
     const markup = renderToStaticMarkup(
       createElement(ReminderPreview, {
         rows: [row],
-        selectedTaskIds: [],
         busy: false,
         sendAvailable: true,
         onSend: () => undefined,
       }),
     );
 
-    expect(markup).toContain("Explicit reminder recipients and outstanding tasks");
-    expect(markup).toContain("I confirm this exact outstanding recipient and task snapshot.");
+    expect(markup).toContain("Recipient and assignment snapshot");
+    expect(markup).toContain("I confirm this exact outstanding recipient and assignment snapshot.");
     expect(markup).toContain("Confirm and send reminders");
     expect(markup).toContain('disabled=""');
   });
@@ -1183,11 +1223,10 @@ describe("deliverables workspace", () => {
       }),
     );
     expect((deliverablesMarkup.match(/<h1\b/g) ?? []).length).toBe(1);
-    expect(deliverablesMarkup).toContain("Organizer-created speaker requests");
-    expect(deliverablesMarkup).toContain("For reminder");
-    expect(deliverablesMarkup).toContain("For ZIP export");
-    expect(deliverablesMarkup).toContain("changes public eligibility");
-    expect(deliverablesMarkup).toContain("does not publish immediately");
+    expect(deliverablesMarkup).toContain("Collect speaker files");
+    expect(deliverablesMarkup).toContain("Select outstanding assignment");
+    expect(deliverablesMarkup).toContain("Canonical content and profiles stay");
+    expect(deliverablesMarkup).toContain("Canonical content and profiles stay");
 
     const filesMarkup = renderToStaticMarkup(
       createElement(DeliverablesWorkspaceView, {
@@ -1263,8 +1302,8 @@ describe("deliverables workspace", () => {
       }),
     );
 
-    expect(markup).toContain("Request subject");
-    expect(markup).toContain("one accepted session per speaker");
+    expect(markup).toContain("New content request");
+    expect(markup).toContain("Current · 2 versions");
   });
 
   it("renders honest disabled capability states rather than fabricated success", () => {
@@ -1284,9 +1323,9 @@ describe("deliverables workspace", () => {
     expect(markup).toContain("Task tracking unavailable");
     expect(markup).toContain("Bulk reminder sending is unavailable");
     expect(markup).toContain("Task creation unavailable");
-    expect(markup).toContain("Session editing unavailable");
+    expect(markup).toContain("Session content lives in Sessions");
     expect(markup).not.toContain("objectKey");
-    expect(markup).toContain("Download selected deliverables ZIP");
+    expect(markup).toContain("Remind all outstanding (0)");
     expect(markup).toContain('disabled=""');
   });
   it("revokes the transient object URL after starting a ZIP download", () => {

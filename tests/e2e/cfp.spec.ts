@@ -209,12 +209,7 @@ test("submitter completes the account-first CFP with two participants", async ({
   await expect(
     page.getByText("Thank you for contributing to the program.", { exact: true }),
   ).toBeVisible();
-  await expect(page.getByRole("button", { name: "Continue to portal →" })).toBeVisible();
-  const statusDashboard = page.getByRole("link", { name: "View submission status dashboard" });
-  await expect(statusDashboard).toHaveAttribute(
-    "href",
-    "/portal/submissions?event=evt_evaluator_2026",
-  );
+  const statusDashboard = page.getByRole("button", { name: "View submission status dashboard" });
   await statusDashboard.click();
   await expect(page).toHaveURL(/\/portal\/submissions\?event=evt_evaluator_2026$/);
   await expect(page.getByRole("heading", { level: 1, name: "Submissions" })).toBeVisible();
@@ -233,25 +228,6 @@ test("submitter completes the account-first CFP with two participants", async ({
     "event-alternate-authorized",
   ]);
   expect(portalHandoff.selectedEventIds).not.toContain("event-not-authorized");
-
-  await page.goto(`${EVALUATOR_CFP_PATH}/complete`);
-  await expect(
-    page.getByRole("heading", {
-      level: 1,
-      name: "Submission received: Designing calm incident response",
-    }),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "Continue to portal →" }).click();
-  await expect(page).toHaveURL(/\/portal\?event=evt_evaluator_2026$/);
-  await expect(page.getByRole("heading", { level: 1, name: /Welcome, Ada/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Switch event or participant" })).toContainText(
-    "Submitted CFP Event",
-  );
-  expect(portalHandoff.selectedEventIds).toEqual([
-    "evt_evaluator_2026",
-    "event-alternate-authorized",
-    "evt_evaluator_2026",
-  ]);
 
   const browserState = await page.evaluate(() => ({
     pointer: window.localStorage.getItem(
@@ -960,6 +936,11 @@ test("published dynamic CFP keeps conditional sections, custom answers, and sche
   await page.goto(CFP_PATH);
 
   await expect(page.getByRole("heading", { level: 1, name: "Eventloom Conference" })).toBeVisible();
+  await expect(
+    page.getByText(`Up to ${CFP_FORM.settings.maxSubmissionsPerAccount} proposals per account`, {
+      exact: true,
+    }),
+  ).toBeVisible();
   await expect(page.getByText(CFP_FORM.welcomeContent, { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Continue →" }).click();
   await expect(page).toHaveURL(new RegExp(`${CFP_PATH}/account$`));

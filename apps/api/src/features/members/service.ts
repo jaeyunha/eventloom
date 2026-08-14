@@ -457,6 +457,7 @@ export class MemberService {
   async createOrganization(
     actor: MemberActor,
     input: CreateOrganizationInput,
+    authorization: "existing-owner" | "first-organization" = "existing-owner",
   ): Promise<OrganizationRecord> {
     const inputValue = objectValue(input, "organization creation");
     assertFields(inputValue, "organization creation", ORGANIZATION_FIELDS);
@@ -474,9 +475,11 @@ export class MemberService {
     if (actor.role !== "owner") {
       throw forbidden("Only an organization owner can create another organization.");
     }
-    const current = await this.#identity.getMember(organizationIdValue, userId);
-    if (current === null || current.role !== "owner") {
-      throw forbidden("Only an organization owner can create another organization.");
+    if (authorization === "existing-owner") {
+      const current = await this.#identity.getMember(organizationIdValue, userId);
+      if (current === null || current.role !== "owner") {
+        throw forbidden("Only an organization owner can create another organization.");
+      }
     }
 
     const idempotencyKey = normalized.idempotencyKey;
@@ -1116,9 +1119,6 @@ export class MemberService {
             "REVIEWER_NOT_ACTIVE",
           );
         }
-        throw forbidden("Only reviewer memberships can enter a reviewer pool.");
-      }
-      if (member.role !== "reviewer") {
         throw forbidden("Only reviewer memberships can enter a reviewer pool.");
       }
       if (!member.emailVerified) {

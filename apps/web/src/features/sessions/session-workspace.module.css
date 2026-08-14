@@ -1,0 +1,113 @@
+.workspace {
+  display: grid;
+  gap: 1.5rem;
+}
+
+.contentGrid {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: minmax(15rem, 0.8fr) minmax(0, 2fr);
+}
+
+.stack {
+  display: grid;
+  gap: 1.5rem;
+}
+
+.sessionList {
+  display: grid;
+  gap: 0.5rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.sessionButton {
+  height: auto;
+  justify-content: flex-start;
+  padding: 0.75rem;
+  text-align: left;
+  white-space: normal;
+  width: 100%;
+}
+
+.sessionButtonCopy {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.sessionButtonMeta,
+.muted {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  font-weight: 400;
+}
+
+.editorForm,
+.historyList {
+  display: grid;
+  gap: 1rem;
+}
+
+.field {
+  display: grid;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.approval {
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 0.75rem;
+  padding-top: 1.25rem;
+}
+
+.approvalHeader,
+.actions,
+.historyHeader {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.historyList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.historyItem {
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+}
+
+.historyHeader {
+  justify-content: space-between;
+}
+
+.historyCopy {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.snapshot {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.875rem;
+}
+
+.snapshotDescription {
+  color: var(--muted-foreground);
+  white-space: pre-wrap;
+}
+
+@media (max-width: 1023px) {
+  .contentGrid {
+    grid-template-columns: 1fr;
+  }
+}

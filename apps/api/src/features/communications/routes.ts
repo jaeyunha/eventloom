@@ -19,11 +19,7 @@ export interface CommunicationRouteEnvironment {
 
 const purposeSchema = z.enum(COMMUNICATION_TEMPLATE_PURPOSES);
 const audienceSchema = z.enum(COMMUNICATION_AUDIENCES);
-const senderSchema = z.enum([
-  "auth@sessionboard.namuh.co",
-  "speakers@sessionboard.namuh.co",
-  "calendar@sessionboard.namuh.co",
-]);
+const senderSchema = z.email().max(320);
 const dataSchema = z.record(z.string(), z.unknown()).optional();
 
 const createTemplateSchema = z.object({

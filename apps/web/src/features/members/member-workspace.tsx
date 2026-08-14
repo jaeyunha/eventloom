@@ -58,6 +58,7 @@ export interface MemberWorkspaceProps {
   readonly roundId?: string;
   readonly baseUrl?: string;
   readonly api?: MemberApi;
+  readonly view?: "members" | "settings";
 }
 
 type MemberFilter = "all" | MemberRole;
@@ -328,14 +329,16 @@ export function MemberWorkspace({
   roundId,
   baseUrl: explicitBaseUrl,
   api: providedApi,
+  view = "members",
 }: MemberWorkspaceProps) {
+  const settingsOnly = view === "settings";
   const baseUrl = apiBaseUrl(explicitBaseUrl);
   const [api, setApi] = useState<MemberApi | null>(providedApi ?? null);
   const [members, setMembers] = useState<readonly OrganizationMember[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<WorkspaceTab>("people");
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>(settingsOnly ? "settings" : "people");
   const [query, setQuery] = useState("");
   const [roleFilter, setRoleFilter] = useState<MemberFilter>("all");
   const [statusFilter, setStatusFilter] = useState<MemberStatusFilter>("all");
@@ -456,9 +459,13 @@ export function MemberWorkspace({
 
   useEffect(() => {
     const controller = new AbortController();
+    if (settingsOnly) {
+      setLoading(false);
+      return () => controller.abort();
+    }
     void loadMembers(controller.signal);
     return () => controller.abort();
-  }, [loadMembers]);
+  }, [loadMembers, settingsOnly]);
 
   useEffect(() => {
     setPoolEventId(eventId ?? "");
@@ -698,7 +705,8 @@ export function MemberWorkspace({
   function switchOrganization(targetOrganizationId: string): void {
     const target = targetOrganizationId.trim();
     if (!target || typeof window === "undefined") return;
-    window.location.assign(`/admin/organizations/${encodeURIComponent(target)}/members`);
+    const destination = view === "settings" ? "settings" : "members";
+    window.location.assign(`/admin/organizations/${encodeURIComponent(target)}/${destination}`);
   }
 
   function parseOrganizationConfigDraft(): Readonly<Record<string, unknown>> | null {
@@ -802,10 +810,11 @@ export function MemberWorkspace({
       <header className={styles.header}>
         <div className={styles.headerCopy}>
           <p className={styles.eyebrow}>Organization workspace</p>
-          <h1 className={styles.title}>People</h1>
+          <h1 className={styles.title}>{settingsOnly ? "Settings" : "People"}</h1>
           <p className={styles.description}>
-            Keep your organization access clear, invite teammates, and choose evaluators when a
-            review round is ready.
+            {settingsOnly
+              ? "Manage this organization and choose the workspace where you want to work."
+              : "Keep your organization access clear, invite teammates, and choose evaluators when a review round is ready."}
           </p>
           <p className={styles.contextLine}>
             {currentOrganization?.name ?? "Your organization"}
@@ -816,10 +825,16 @@ export function MemberWorkspace({
           <Button
             variant="outline"
             type="button"
-            onClick={() => void loadMembers()}
-            disabled={loading}
+            onClick={() => void (settingsOnly ? loadOrganizations() : loadMembers())}
+            disabled={settingsOnly ? organizationsLoading : loading}
           >
-            {loading ? "Refreshing…" : "Refresh people"}
+            {settingsOnly
+              ? organizationsLoading
+                ? "Refreshing…"
+                : "Refresh settings"
+              : loading
+                ? "Refreshing…"
+                : "Refresh people"}
           </Button>
         </div>
       </header>
@@ -832,11 +847,19 @@ export function MemberWorkspace({
         onValueChange={(value) => setActiveTab(value as WorkspaceTab)}
         className={styles.tabs}
       >
-        <TabsList className={styles.tabList} aria-label="People workspace sections">
-          <TabsTrigger value="people">People</TabsTrigger>
-          <TabsTrigger value="invite">Invite member</TabsTrigger>
-          <TabsTrigger value="pools">Reviewer pools</TabsTrigger>
-          <TabsTrigger value="settings">Organization settings</TabsTrigger>
+        <TabsList
+          className={styles.tabList}
+          aria-label={settingsOnly ? "Organization settings sections" : "People workspace sections"}
+        >
+          {settingsOnly ? (
+            <TabsTrigger value="settings">Organization settings</TabsTrigger>
+          ) : (
+            <>
+              <TabsTrigger value="people">People</TabsTrigger>
+              <TabsTrigger value="invite">Invite member</TabsTrigger>
+              <TabsTrigger value="pools">Reviewer pools</TabsTrigger>
+            </>
+          )}
         </TabsList>
 
         <TabsContent value="people" className={styles.tabContent}>

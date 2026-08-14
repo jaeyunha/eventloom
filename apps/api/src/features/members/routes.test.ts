@@ -626,6 +626,27 @@ describe("member provisioning service", () => {
     ).resolves.toMatchObject({ assignedCount: 1 });
   });
 
+  it("allows verified organizers to receive review assignments", async () => {
+    const { service } = fixture();
+
+    await expect(
+      service.setReviewerPool(actor(), {
+        organizationId: "org-a",
+        eventId: "event-a",
+        roundId: "round-a",
+        reviewerIds: ["owner-a"],
+        maxAssignmentsPerReviewer: 3,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        reviewerIds: ["owner-a"],
+        grants: [
+          expect.objectContaining({ reviewerId: "owner-a", maxAssignments: 3, assignedCount: 0 }),
+        ],
+      }),
+    );
+  });
+
   it("revokes membership and invalidates every user session", async () => {
     const { service, auth, delivery } = fixture();
     const invited = await service.inviteMember(actor(), {
@@ -739,6 +760,38 @@ describe("member provisioning routes", () => {
     });
     expect(replay.status).toBe(400);
   });
+
+  it("allows an authenticated user to create their first organization", async () => {
+    const { service } = fixture();
+    const currentPrincipal = principal();
+    if (currentPrincipal.kind !== "user") throw new Error("Expected a user principal.");
+    const app = appFor(service, {
+      ...currentPrincipal,
+      memberships: [],
+    });
+    const response = await app.request(
+      "http://localhost/api/admin/organizations/org-first/members/organizations",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", "idempotency-key": "first-organization" },
+        body: JSON.stringify({
+          organizationId: "org-first",
+          slug: "first-organization",
+          name: "First Organization",
+        }),
+      },
+    );
+
+    const responseBody = (await response.json()) as {
+      data?: { organizationId?: string };
+      error?: { message?: string };
+    };
+    expect(response.status, responseBody.error?.message).toBe(201);
+    expect(responseBody.data).toMatchObject({
+      organizationId: "org-first",
+    });
+  });
+
   it("creates, lists, switches, and updates a member-owned tenant context", async () => {
     const { service } = fixture();
     const app = appFor(service);

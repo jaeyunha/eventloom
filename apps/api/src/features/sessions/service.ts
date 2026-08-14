@@ -681,7 +681,9 @@ export class SessionService {
     const settings = await this.ensureSettings(actor.tenantId, eventId, actor.userId);
     const sessionStatus = input.status === undefined ? "Draft" : status(input.status);
     this.assertConfiguredStatus(sessionStatus, settings);
-    const initialContentStatus = sameStatus(sessionStatus, "Accepted") ? "Approved" : undefined;
+    const initialContentStatus = sameStatus(sessionStatus, "Accepted")
+      ? "Needs changes"
+      : undefined;
     const now = this.instant();
     const auditId = this.#generateId();
     const normalized = await this.normalizeSessionReferences(actor.tenantId, eventId, input);

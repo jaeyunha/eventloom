@@ -128,7 +128,7 @@ describe("integration admin UI", () => {
     expect(markup).toContain("Revoke");
   });
 
-  it("uses non-prefilled password controls for replacement credentials", () => {
+  it("keeps provider credentials deployment managed", () => {
     const markup = renderToStaticMarkup(
       createElement(IntegrationAdmin, {
         eventId: "event-a",
@@ -138,8 +138,9 @@ describe("integration admin UI", () => {
       }),
     );
 
-    expect(markup).toContain('type="password"');
-    expect(markup).toMatch(/autocomplete="off"/i);
+    expect(markup).not.toContain('type="password"');
+    expect(markup).toContain("Deployment managed");
+    expect(markup).toContain("cannot replace provider secrets here");
     expect(markup).not.toContain("os_sending_secret");
     expect(markup).not.toContain('2468" value=');
     expect(markup).toContain("Google or Microsoft Calendar OAuth is not required");

@@ -1,9 +1,11 @@
-import type { CalendarInvitationPayload } from "@eventloom/contracts";
 import { describe, expect, it } from "vitest";
 import {
+  type CalendarIntegrationOptions,
   type CalendarInvitationActionInput,
+  type CalendarInvitationDetails,
   CalendarInvitationError,
   CalendarInvitationLifecycle,
+  type CalendarInvitationPayload,
   type CalendarInvitationScope,
   createCalendarInvitation,
   createCalendarInvitationPayload,
@@ -11,7 +13,13 @@ import {
   foldIcalLine,
   InMemoryCalendarInvitationRepository,
   serializeCalendarInvitation,
+  validateCalendarIntegrationOptions,
 } from "./index";
+
+const integrationOptions: CalendarIntegrationOptions = {
+  organizer: "calendar@sessionboard.namuh.co",
+  uidDomain: "calendar.sessionboard.namuh.co",
+};
 
 const scope: CalendarInvitationScope = {
   tenantId: "tenant-demo",
@@ -19,12 +27,11 @@ const scope: CalendarInvitationScope = {
   sessionId: "session-demo",
 };
 
-const details: Omit<CalendarInvitationPayload, "uid" | "sequence"> = {
+const details: CalendarInvitationDetails = {
   method: "REQUEST",
   timeZone: "America/Los_Angeles",
   startsAt: "2025-03-09T09:30:00Z",
   endsAt: "2025-03-09T11:00:00Z",
-  organizer: "calendar@sessionboard.namuh.co",
   attendees: ["speaker@example.com", "host@example.com"],
   summary: "Session, with a; comma and \\slash",
   location: "Room 1, Building A",
@@ -35,7 +42,7 @@ function initialPayload(
   overrides: Partial<CalendarInvitationPayload> = {},
 ): CalendarInvitationPayload {
   return {
-    ...createCalendarInvitationPayload(scope, details),
+    ...createCalendarInvitationPayload(scope, details, integrationOptions),
     ...overrides,
   };
 }
@@ -48,7 +55,6 @@ function actionInput(
     timeZone: details.timeZone,
     startsAt: details.startsAt,
     endsAt: details.endsAt,
-    organizer: details.organizer,
     attendees: [...details.attendees],
     summary: details.summary,
     location: details.location,
@@ -58,19 +64,68 @@ function actionInput(
 }
 
 describe("calendar UID and lifecycle", () => {
-  it("creates a stable UID scoped to tenant, event, and session", () => {
-    const first = createCalendarUid(scope);
-    expect(first).toBe("tenant-demo.event-demo.session-demo@calendar.sessionboard.namuh.co");
-    expect(createCalendarUid({ ...scope })).toBe(first);
-    expect(createCalendarUid({ ...scope, sessionId: "another-session" })).not.toBe(first);
+  it("creates a stable UID with the explicitly configured domain", () => {
+    const options = { ...integrationOptions, uidDomain: "calendar.example.test" };
+    const first = createCalendarUid(scope, options);
+    expect(first).toBe("tenant-demo.event-demo.session-demo@calendar.example.test");
+    expect(createCalendarUid({ ...scope }, options)).toBe(first);
+    expect(createCalendarUid(scope.tenantId, scope.eventId, scope.sessionId, options)).toBe(first);
+    expect(createCalendarUid({ ...scope, sessionId: "another-session" }, options)).not.toBe(first);
   });
-  it("preserves a supplied UID when publishing an existing calendar identity", async () => {
+
+  it("validates organizer identity and UID domain options before use", () => {
+    expect(validateCalendarIntegrationOptions(integrationOptions)).toEqual(integrationOptions);
+    expect(() =>
+      validateCalendarIntegrationOptions({ ...integrationOptions, organizer: "not-an-email" }),
+    ).toThrow(CalendarInvitationError);
+    expect(() =>
+      validateCalendarIntegrationOptions({
+        ...integrationOptions,
+        uidDomain: "https://example.test",
+      }),
+    ).toThrow(CalendarInvitationError);
+    expect(() =>
+      createCalendarUid(scope, { ...integrationOptions, uidDomain: "bad\r\nX-Evil: yes" }),
+    ).toThrow(CalendarInvitationError);
+  });
+
+  it("applies configured identity to new payloads", () => {
+    const options = {
+      organizer: "events@example.test",
+      uidDomain: "invites.example.test",
+    };
+    const payload = createCalendarInvitationPayload(scope, details, options);
+
+    expect(payload.uid).toBe("tenant-demo.event-demo.session-demo@invites.example.test");
+    expect(payload.organizer).toBe("events@example.test");
+  });
+
+  it("preserves a supplied UID and organizer from an existing calendar identity", async () => {
     const existingUid = "tenant-demo.event-demo.session-demo@calendar.foreverbrowsing.com";
+    const existingOrganizer = "calendar@foreverbrowsing.com";
     const repository = new InMemoryCalendarInvitationRepository();
-    const published = await repository.publish(initialPayload({ uid: existingUid }));
+    const published = await repository.publish(
+      initialPayload({ uid: existingUid, organizer: existingOrganizer }),
+    );
 
     expect(published.uid).toBe(existingUid);
-    expect((await repository.load(existingUid))?.payload.uid).toBe(existingUid);
+    expect(published.payload.organizer).toBe(existingOrganizer);
+    expect(published.ical).toContain(`ORGANIZER:mailto:${existingOrganizer}`);
+    expect(await repository.load(existingUid)).toMatchObject({
+      uid: existingUid,
+      payload: { uid: existingUid, organizer: existingOrganizer },
+    });
+
+    const updated = await repository.publish(
+      initialPayload({
+        method: "UPDATE",
+        uid: existingUid,
+        organizer: "new-calendar@example.test",
+        idempotencyKey: "calendar-demo-002",
+      }),
+    );
+    expect(updated.payload.organizer).toBe(existingOrganizer);
+    expect(updated.ical).toContain(`ORGANIZER:mailto:${existingOrganizer}`);
   });
 
   it("starts at sequence zero and increments update and cancellation atomically", async () => {
@@ -78,6 +133,7 @@ describe("calendar UID and lifecycle", () => {
       new InMemoryCalendarInvitationRepository({
         now: () => new Date("2026-08-08T12:00:00.000Z"),
       }),
+      integrationOptions,
     );
     const first = await lifecycle.request(actionInput());
     const updated = await lifecycle.update(
@@ -94,7 +150,7 @@ describe("calendar UID and lifecycle", () => {
     expect(cancelled.payload.uid).toBe(first.payload.uid);
     expect(cancelled.ical).toContain("METHOD:CANCEL");
     expect(cancelled.ical).toContain("STATUS:CANCELLED");
-    expect(cancelled.ical).toContain("ORGANIZER:mailto:calendar@sessionboard.namuh.co");
+    expect(cancelled.ical).toContain(`ORGANIZER:mailto:${integrationOptions.organizer}`);
   });
 
   it("replays an idempotency key and rejects a conflicting reuse", async () => {
@@ -121,6 +177,7 @@ describe("RFC 5545 serialization", () => {
     const lines = ical.split("\r\n").slice(0, -1);
 
     expect(ical).toContain("METHOD:REQUEST\r\n");
+    expect(ical).toContain(`ORGANIZER:mailto:${payload.organizer}`);
     expect(ical).toContain("SUMMARY:Session\\, with a\\; comma and \\\\slash");
     expect(ical).not.toMatch(/(^|[^\r])\n/);
     expect(lines.every((line) => new TextEncoder().encode(line).length <= 75)).toBe(true);

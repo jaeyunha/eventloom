@@ -1,5 +1,5 @@
-import { OrganizerOverview } from "@/features/admin/organizer-overview";
+import { OrganizerRouteResolver } from "@/features/admin/organizer-route-resolver";
 
 export default function AdminOverviewPage() {
-  return <OrganizerOverview />;
+  return <OrganizerRouteResolver destination="overview" />;
 }

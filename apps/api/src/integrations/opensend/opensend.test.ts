@@ -14,8 +14,14 @@ import {
   type OpenSendSender,
 } from "./index";
 
+const senderAddresses = {
+  auth: "auth@sessionboard.namuh.co",
+  speakers: "speakers@sessionboard.namuh.co",
+  calendar: "calendar@sessionboard.namuh.co",
+} as const;
+
 const message: OpenSendMessage = {
-  from: "speakers@sessionboard.namuh.co",
+  from: senderAddresses.speakers,
   to: ["speaker@example.com"],
   subject: "Your session is accepted",
   html: "<p>Congratulations</p>",
@@ -61,6 +67,7 @@ describe("OpenSendClient", () => {
     const client = new OpenSendClient({
       sendingApiKey: "os_sending_secret",
       baseUrl: "https://mail.example.test/",
+      senderAddresses,
       fetch,
     });
 
@@ -103,7 +110,7 @@ describe("OpenSendClient", () => {
         status: 429,
         headers: { "retry-after": "3" },
       });
-    const client = new OpenSendClient({ sendingApiKey: "os_key", fetch });
+    const client = new OpenSendClient({ sendingApiKey: "os_key", senderAddresses, fetch });
 
     const rejection = client.send(message);
     await expect(rejection).rejects.toMatchObject({
@@ -121,7 +128,7 @@ describe("OpenSendClient", () => {
       requestCount += 1;
       return Response.json({ accepted: true });
     };
-    const client = new OpenSendClient({ sendingApiKey: "os_key", fetch });
+    const client = new OpenSendClient({ sendingApiKey: "os_key", senderAddresses, fetch });
 
     await expect(
       client.send({ ...message, from: "attacker@example.com" } as unknown as OpenSendMessage),

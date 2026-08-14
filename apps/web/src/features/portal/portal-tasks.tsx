@@ -9,7 +9,14 @@ import {
   taskStatusPresentation,
 } from "./model";
 import styles from "./portal.module.css";
+import {
+  portalFileStatus,
+  portalReviewStatus,
+  resolveAssetPointers as resolveSharedAssetPointers,
+  assetPointerLabels as sharedAssetPointerLabels,
+} from "./portal-assets";
 import { usePortal } from "./portal-provider";
+import { PortalTaskResponseEditor } from "./portal-task-response";
 import {
   EmptyState,
   formatPortalDate,
@@ -36,6 +43,11 @@ const filters: readonly { value: TaskFilter; label: string }[] = [
 ];
 
 export type TaskFilter = "all" | "attention" | "finished";
+export type PortalTaskGroup = "content-requests" | "other-event-tasks";
+
+export function portalTaskGroup(task: PortalTask): PortalTaskGroup {
+  return task.type === "action" ? "other-event-tasks" : "content-requests";
+}
 
 type RuntimeRecord = Record<string, unknown>;
 
@@ -53,7 +65,7 @@ function nonEmptyString(value: unknown): string | null {
 }
 
 function hasOwn(record: RuntimeRecord, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(record, key);
+  return Object.hasOwn(record, key);
 }
 
 export type TaskSubject =
@@ -405,7 +417,7 @@ export function resolveTaskAsset(
   assets: readonly PortalAsset[],
 ): TaskAssetResolution {
   const matchingAssets = assetsForTask(task, assets);
-  const pointers = resolveAssetPointers(matchingAssets, task);
+  const pointers = resolveSharedAssetPointers(matchingAssets, task);
   if (matchingAssets.length === 0) {
     return {
       status: "empty",
@@ -532,6 +544,12 @@ function PortalTasksContent() {
     return null;
   }
   const visibleTasks = filterTasks(view.tasks, filter);
+  const contentRequests = visibleTasks.filter(
+    (task) => portalTaskGroup(task) === "content-requests",
+  );
+  const otherEventTasks = visibleTasks.filter(
+    (task) => portalTaskGroup(task) === "other-event-tasks",
+  );
   const completed = view.tasks.filter(
     (task) => task.status === "completed" || task.status === "waived",
   ).length;
@@ -542,8 +560,8 @@ function PortalTasksContent() {
     <>
       <PageHeading
         eyebrow="Accepted speaker checklist"
-        title="Tasks"
-        description="Complete forms, uploads, and event actions assigned to your accepted sessions."
+        title="Requests & tasks"
+        description="Respond to event-team content requests and complete other actions for your accepted sessions."
       />
       <InlineMutationError />
 
@@ -558,14 +576,16 @@ function PortalTasksContent() {
             attention.
           </p>
         </div>
-        <Progress value={completionPercent} label="Task completion" />
+        <Progress value={completionPercent} label="Request and task completion" />
       </section>
 
       <section className={styles.panel} aria-labelledby="task-list-heading">
         <div className={styles.listToolbar}>
           <div>
-            <h2 id="task-list-heading">Your tasks</h2>
-            <p className={styles.toolbarDescription}>Tasks appear after a proposal is accepted.</p>
+            <h2 id="task-list-heading">Your event work</h2>
+            <p className={styles.toolbarDescription}>
+              Requests and tasks appear after a proposal is accepted.
+            </p>
           </div>
           <fieldset className={styles.segmentedControl}>
             <legend className={styles.srOnly}>Filter tasks</legend>
@@ -593,10 +613,36 @@ function PortalTasksContent() {
             description="Choose another filter to see your other tasks."
           />
         ) : (
-          <div className={styles.taskWorkspace}>
-            {visibleTasks.map((task) => (
-              <TaskCard key={task.id} task={task} />
-            ))}
+          <div className={styles.taskGroups}>
+            {contentRequests.length > 0 ? (
+              <section className={styles.taskGroup} aria-labelledby="content-requests-heading">
+                <div>
+                  <h3 id="content-requests-heading">Content requests</h3>
+                  <p>
+                    Files and information requested by the event team. Submit each request for
+                    review.
+                  </p>
+                </div>
+                <div className={styles.taskWorkspace}>
+                  {contentRequests.map((task) => (
+                    <TaskCard key={task.id} task={task} />
+                  ))}
+                </div>
+              </section>
+            ) : null}
+            {otherEventTasks.length > 0 ? (
+              <section className={styles.taskGroup} aria-labelledby="other-event-tasks-heading">
+                <div>
+                  <h3 id="other-event-tasks-heading">Other event tasks</h3>
+                  <p>Agreements, confirmations, and actions that do not require content review.</p>
+                </div>
+                <div className={styles.taskWorkspace}>
+                  {otherEventTasks.map((task) => (
+                    <TaskCard key={task.id} task={task} />
+                  ))}
+                </div>
+              </section>
+            ) : null}
           </div>
         )}
       </section>
@@ -808,11 +854,29 @@ function TaskCard({ task }: Readonly<{ task: PortalTask }>) {
       )}
       <div className={styles.taskMetadata}>
         <span>
-          <strong>Type</strong> {task.type === "upload" ? "File upload" : task.type}
+          <strong>Type</strong>{" "}
+          {task.type === "upload"
+            ? "File request"
+            : task.type === "form"
+              ? "Form request"
+              : "Event action"}
         </span>
         <span>
           <strong>Due</strong> {formatPortalDate(task.dueAt) ?? "No due date"}
         </span>
+        <span>
+          <strong>Request status</strong> {presentation.label}
+        </span>
+        {task.type === "upload" ? (
+          <>
+            <span>
+              <strong>File status</strong> {portalFileStatus(resolution.latest)}
+            </span>
+            <span>
+              <strong>Review status</strong> {portalReviewStatus(resolution.current)}
+            </span>
+          </>
+        ) : null}
       </div>
 
       {selectedAsset ? (
@@ -836,9 +900,9 @@ function TaskCard({ task }: Readonly<{ task: PortalTask }>) {
           </div>
           <fieldset className={styles.taskMetadata}>
             <legend className={styles.srOnly}>Authoritative asset pointers</legend>
-            {assetPointerLabels(selectedAsset, resolution.pointers).map((label) => (
+            {sharedAssetPointerLabels(selectedAsset, resolution.pointers).map((label) => (
               <span key={label} className={styles.badge}>
-                {label} version
+                {label}
               </span>
             ))}
             {resolution.pointers.status !== "ready" ? (
@@ -966,6 +1030,8 @@ function TaskCard({ task }: Readonly<{ task: PortalTask }>) {
         </div>
       ) : null}
 
+      {!blocked && task.type === "form" ? <PortalTaskResponseEditor task={task} /> : null}
+
       {!blocked && action === "upload" ? (
         <div className={styles.taskActionArea}>
           <label className={styles.fileField}>
@@ -991,7 +1057,7 @@ function TaskCard({ task }: Readonly<{ task: PortalTask }>) {
           ) : null}
           {uploadingStatus === "succeeded" ? (
             <p className={styles.saveConfirmation} role="status">
-              Upload succeeded and the task was submitted.
+              Upload complete. This request is awaiting event-team review.
             </p>
           ) : null}
           {uploadingStatus === "failure" ? (

@@ -8,7 +8,47 @@ The governing specification lists the competition deadline as **Wednesday, Augus
 
 Staging and production run separate web and API Workers. Their account,
 resource IDs, and HTTPS origins are supplied by ignored environment files and
-must match the observed candidate deployment.
+must match the observed candidate deployment. Production uses
+`workers_dev = false`, so each production environment must also set the four
+custom-domain route keys:
+
+```dotenv
+API_HOSTNAME=api.production.example.com
+API_ZONE_NAME=production.example.com
+WEB_HOSTNAME=web.production.example.com
+WEB_ZONE_NAME=production.example.com
+```
+
+These are production examples. Each hostname must belong to its operator-owned
+Cloudflare zone. The API preflight and API dry run validate the API renderer;
+the web deployment dry run validates the separate web renderer. The current
+hosted production web example is `https://eventloom.namuh.co`; staging web and
+all API origins remain operator-supplied and must not be inferred from that
+hostname.
+
+## Production Worker secrets
+
+Preview the production installation plan before any external write:
+
+```bash
+bun run cloudflare:secrets:production -- --dry-run
+```
+
+For the approved live operation, export the non-secret account ID and
+`CLOUDFLARE_API_TOKEN` from the secret manager, then run:
+
+```bash
+export CLOUDFLARE_ACCOUNT_ID="<production account id>"
+export CLOUDFLARE_API_TOKEN="<deployment token>"
+bun run cloudflare:secrets:production
+```
+
+Wrangler prompts for every value and the installer never persists or prints secrets. It installs
+the API secrets `BETTER_AUTH_SECRET`, `OPENSEND_API_KEY`, `OPENAI_API_KEY`,
+`AIRTABLE_OAUTH_CLIENT_SECRET`, `AIRTABLE_CREDENTIAL_ENCRYPTION_KEY`, and
+`CACHE_INVALIDATION_TOKEN`, then installs the same cache token on the web Worker. The Cloudflare
+deployment token, Airtable PATs, and R2/AWS access keys are intentionally not application Worker
+secrets and must not be added by this workflow.
 
 ## Stop conditions
 
@@ -104,6 +144,12 @@ does not deploy or seed.
 
 Inspect D1 migrations before any mutation. Retain the compatibility analysis, a usable backup/time-travel recovery point, migration output, and a named recovery owner. A dry run or preflight cannot prove that a migrated schema is compatible with the currently deployed Worker.
 
+Optional remote Drizzle inspection uses the same operator-owned
+`CLOUDFLARE_ACCOUNT_ID`, `D1_DATABASE_ID`, and `CLOUDFLARE_API_TOKEN` values as
+the deployment environment. `D1_DATABASE_ID` is the single D1 database ID
+variable; do not introduce a separate Drizzle-only alias. Drizzle inspection
+does not replace the Wrangler-owned numbered migration path.
+
 ## 4. Staging deployment and acceptance
 
 After preflight and migration approval, deploy the API Worker with the guarded script:
@@ -114,14 +160,19 @@ node scripts/cloudflare/deploy.mjs staging open-sessionboard:staging
 
 The command requires `CLOUDFLARE_API_TOKEN`, validates the deployment configuration, applies remote D1 migrations, and deploys the Worker. If migration succeeds while deployment fails, stop, keep the mirrors private, and execute the recorded recovery path before retrying.
 
-The repository staging/production contract selects OpenAI Responses, but AI remains optional at application boot. Before deploying, confirm that the target environment has its own `OPENAI_API_KEY` Cloudflare secret. Never place it in Wrangler `[vars]`, `NEXT_PUBLIC_*`, CI output, or evidence.
+Set `AI_PROVIDER=disabled` or `AI_PROVIDER=openai`. OpenAI is optional only
+when disabled, and `OPENAI_API_KEY` is required when `AI_PROVIDER=openai`.
+AI remains optional at application boot when disabled. Before deploying with
+OpenAI enabled, confirm that the target environment has its own
+`OPENAI_API_KEY` Cloudflare secret. Never place it in Wrangler `[vars]`,
+`NEXT_PUBLIC_*`, CI output, or evidence.
 
 Deploy the web Worker from the identical candidate commit. The script requires the exact browser-visible `NEXT_PUBLIC_APP_URL` and server-only `API_UPSTREAM_ORIGIN`. Organization scope comes from authenticated memberships and organization-qualified routes:
 
 ```bash
 set -eu
-export NEXT_PUBLIC_APP_URL='https://web-staging.example.com'
-export API_UPSTREAM_ORIGIN='https://api-staging.example.com'
+: "${NEXT_PUBLIC_APP_URL:?set the staging web origin from the operator-owned environment file}"
+: "${API_UPSTREAM_ORIGIN:?set the staging API upstream origin from the operator-owned environment file}"
 : "${CLOUDFLARE_API_TOKEN:?set the staging deployment token from the secret manager}"
 node scripts/cloudflare/deploy-web.mjs staging open-sessionboard-web:staging
 ```
@@ -184,8 +235,8 @@ Deploy the web Worker with the production-only browser-visible app URL, server-o
 
 ```bash
 set -eu
-export NEXT_PUBLIC_APP_URL='https://web-production.example.com'
-export API_UPSTREAM_ORIGIN='https://api-production.example.com'
+export NEXT_PUBLIC_APP_URL='https://your-production-web.example.com'
+: "${API_UPSTREAM_ORIGIN:?set the production API upstream origin from the operator-owned environment file}"
 : "${CLOUDFLARE_API_TOKEN:?set the production deployment token from the secret manager}"
 node scripts/cloudflare/deploy-web.mjs production open-sessionboard-web:production
 ```
@@ -289,7 +340,7 @@ Check every item against the same production candidate:
 - [ ] Manual, automated/local, provider/deployed, and LLM-judge evidence are labeled separately; mocked/local diagnostics and provider configuration are not release evidence.
 - [ ] Candidate SHA is clean and all evidence paths identify that SHA.
 - [ ] Staging/production web and API origins match their ignored environment files and observed Worker state.
-- [ ] Future stable domain names are clearly marked pending; no evidence claims DNS or routes are configured.
+- [ ] The selected web and API origins match operator-owned environment files and observed Worker state. `https://eventloom.namuh.co` may be recorded only as the current hosted example, never as a self-hosting requirement.
 - [ ] Automated local/CI checks and local Playwright/axe evidence passed without skipped or softened assertions.
 - [ ] Read-only preflight and migration compatibility/recovery review passed.
 - [ ] API and web deployments, health checks, CORS, cookies, and same-origin proxy behavior were observed.
@@ -326,7 +377,7 @@ If visibility cannot be verified, treat the product as unreleased. If a private 
 - [ ] OpenAPI link points to the verified production runtime document.
 - [ ] Screenshots/video are from the release commit and contain no private data or secrets.
 - [ ] Cloudflare, Airtable, Forge, OpenSend, API, accessibility, security, and performance evidence is included without unsupported claims.
-- [ ] Known limitations match the current contract, including pending stable domains and calendar implementation gaps.
+- [ ] Known limitations match the current contract, including operator-supplied deployment origins and calendar implementation gaps.
 - [ ] Submission title, description, URLs, credentials, category, contact fields, deadline, and timezone were reviewed by a second person.
 - [ ] Portal confirmation/receipt and UTC submission time are retained.
 

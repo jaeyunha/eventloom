@@ -11,6 +11,11 @@ enabled = true
 [vars]
 APP_ENV = "local"
 WEB_ORIGIN = "http://127.0.0.1:3015"
+OPENSEND_API_URL = "http://127.0.0.1:8026"
+AUTH_FROM_EMAIL = "login@local.example.test"
+SPEAKERS_FROM_EMAIL = "program@local.example.test"
+CALENDAR_FROM_EMAIL = "schedule@local.example.test"
+CALENDAR_UID_DOMAIN = "calendar.local.example.test"
 
 [[d1_databases]]
 binding = "DB"
@@ -49,21 +54,24 @@ workers_dev = true
 enabled = true
 [env.staging.vars]
 APP_ENV = "staging"
-AI_PROVIDER = "openai"
-OPENAI_MODEL = "gpt-5.6-terra"
-OPENAI_AGENDA_MODEL = "gpt-5.6-sol"
-OPENAI_EVALUATION_MODEL = "gpt-5.6-sol"
-OPENAI_REMIX_MODEL = "gpt-5.6-terra"
+AI_PROVIDER = "disabled"
+OPENAI_MODEL = "staging-openai-model-placeholder"
+OPENAI_AGENDA_MODEL = "staging-openai-agenda-model-placeholder"
+OPENAI_EVALUATION_MODEL = "staging-openai-evaluation-model-placeholder"
+OPENAI_REMIX_MODEL = "staging-openai-remix-model-placeholder"
 OPENAI_AGENDA_REASONING_EFFORT = "medium"
 OPENAI_EVALUATION_REASONING_EFFORT = "medium"
 OPENAI_REMIX_REASONING_EFFORT = "low"
 API_ORIGIN = "https://api-staging.example.invalid"
 WEB_ORIGIN = "https://web-staging.example.invalid"
 CACHE_INVALIDATION_URL = "https://web-staging.example.invalid/api/internal/cache-invalidation"
-OPENSEND_API_URL = "https://opensend.namuh.co"
-AUTH_FROM_EMAIL = "auth@sessionboard.namuh.co"
-SPEAKERS_FROM_EMAIL = "speakers@sessionboard.namuh.co"
-CALENDAR_FROM_EMAIL = "calendar@sessionboard.namuh.co"
+OPENSEND_API_URL = "https://opensend-staging.example.invalid"
+AUTH_FROM_EMAIL = "auth@staging.example.invalid"
+SPEAKERS_FROM_EMAIL = "speakers@staging.example.invalid"
+CALENDAR_FROM_EMAIL = "calendar@staging.example.invalid"
+CALENDAR_UID_DOMAIN = "calendar.staging.example.invalid"
+AIRTABLE_OAUTH_CLIENT_ID = "staging-airtable-oauth-client-placeholder"
+AIRTABLE_PAT_CONNECTION_ENABLED = "false"
 
 [[env.staging.d1_databases]]
 binding = "DB"
@@ -92,7 +100,12 @@ dead_letter_queue = "open-sessionboard-outbox-staging-dlq"
 
 [env.production]
 name = "open-sessionboard-api-production"
-workers_dev = true
+workers_dev = false
+
+[[env.production.routes]]
+pattern = "api-production.example.invalid"
+zone_name = "production.example.invalid"
+custom_domain = true
 
 [env.production.triggers]
 crons = ["0 * * * *"]
@@ -101,21 +114,24 @@ crons = ["0 * * * *"]
 enabled = true
 [env.production.vars]
 APP_ENV = "production"
-AI_PROVIDER = "openai"
-OPENAI_MODEL = "gpt-5.6-terra"
-OPENAI_AGENDA_MODEL = "gpt-5.6-sol"
-OPENAI_EVALUATION_MODEL = "gpt-5.6-sol"
-OPENAI_REMIX_MODEL = "gpt-5.6-terra"
+AI_PROVIDER = "disabled"
+OPENAI_MODEL = "production-openai-model-placeholder"
+OPENAI_AGENDA_MODEL = "production-openai-agenda-model-placeholder"
+OPENAI_EVALUATION_MODEL = "production-openai-evaluation-model-placeholder"
+OPENAI_REMIX_MODEL = "production-openai-remix-model-placeholder"
 OPENAI_AGENDA_REASONING_EFFORT = "medium"
 OPENAI_EVALUATION_REASONING_EFFORT = "medium"
 OPENAI_REMIX_REASONING_EFFORT = "low"
 API_ORIGIN = "https://api-production.example.invalid"
 WEB_ORIGIN = "https://web-production.example.invalid"
 CACHE_INVALIDATION_URL = "https://web-production.example.invalid/api/internal/cache-invalidation"
-OPENSEND_API_URL = "https://opensend.namuh.co"
-AUTH_FROM_EMAIL = "auth@sessionboard.namuh.co"
-SPEAKERS_FROM_EMAIL = "speakers@sessionboard.namuh.co"
-CALENDAR_FROM_EMAIL = "calendar@sessionboard.namuh.co"
+OPENSEND_API_URL = "https://opensend-production.example.invalid"
+AUTH_FROM_EMAIL = "auth@production.example.invalid"
+SPEAKERS_FROM_EMAIL = "speakers@production.example.invalid"
+CALENDAR_FROM_EMAIL = "calendar@production.example.invalid"
+CALENDAR_UID_DOMAIN = "calendar.production.example.invalid"
+AIRTABLE_OAUTH_CLIENT_ID = "production-airtable-oauth-client-placeholder"
+AIRTABLE_PAT_CONNECTION_ENABLED = "false"
 
 [[env.production.d1_databases]]
 binding = "DB"

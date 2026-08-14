@@ -1202,11 +1202,15 @@ function materializeRows(
 
 export class InMemoryReportRepository implements ReportRepository {
   readonly #definitions = new Map<string, ReportDefinition>();
-  readonly #records: readonly ReportProgramRecord[];
+  readonly #records: ReportProgramRecord[];
   readonly #runs = new Map<string, ReportRun>();
 
   constructor(records: readonly ReportProgramRecord[] = []) {
     this.#records = records.map((record) => stableClone(record));
+  }
+
+  replaceProgramRecords(records: readonly ReportProgramRecord[]): void {
+    this.#records.splice(0, this.#records.length, ...records.map((record) => stableClone(record)));
   }
 
   async listDefinitions(scopeValue: ReportRepositoryScope): Promise<readonly ReportDefinition[]> {

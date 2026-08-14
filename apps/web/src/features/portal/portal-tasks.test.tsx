@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { assetPointerLabels, resolveAssetPointers } from "./portal-assets";
 import {
-  assetPointerLabels,
   commentsForAsset,
   getTaskUploadPolicy,
-  resolveAssetPointers,
+  portalTaskGroup,
   resolveTaskAsset,
   resolveTaskSubject,
   taskSubjectPresentation,
@@ -49,6 +49,12 @@ function asset(id: string, overrides: Record<string, unknown> = {}): PortalAsset
 }
 
 describe("portal task deliverable helpers", () => {
+  it("groups content requests separately from other event tasks", () => {
+    expect(portalTaskGroup(task({ type: "upload" }))).toBe("content-requests");
+    expect(portalTaskGroup(task({ type: "form" }))).toBe("content-requests");
+    expect(portalTaskGroup(task({ type: "action" }))).toBe("other-event-tasks");
+  });
+
   it("fails closed when the server upload policy is absent or incomplete", () => {
     const missing = getTaskUploadPolicy(task());
     expect(missing.valid).toBe(false);
@@ -147,7 +153,7 @@ describe("portal task deliverable helpers", () => {
     expect(resolution.status).toBe("ready");
     expect(resolution.latest?.id).toBe("asset-current");
     expect(assetPointerLabels(current, resolution.pointers)).toEqual([
-      "Latest",
+      "Latest upload",
       "Current",
       "Released",
     ]);

@@ -158,6 +158,12 @@ function requestDigest(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
+export function mailpitOpenSendToken(
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): string {
+  return environment.OPENSEND_API_KEY?.trim() || DEFAULT_TOKEN;
+}
+
 export function createMailpitOpenSendHandler(options: {
   readonly transport: MailTransport;
   readonly token?: string;
@@ -250,6 +256,7 @@ export function startMailpitOpenSendBridge(): void {
     secure: false,
   });
   const handler = createMailpitOpenSendHandler({
+    token: mailpitOpenSendToken(),
     transport: {
       async sendMail(message) {
         const result = await transport.sendMail({

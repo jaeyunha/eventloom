@@ -12,7 +12,11 @@ describe("organizer workspace theme", () => {
     expect(shellSource).toContain("<ThemeToggle />");
   });
 
-  it("defines a dark workspace palette instead of mixing light shell surfaces", () => {
+  it("defines organizer aliases on the mounted shell in both themes", () => {
+    expect(shellStyles).toContain(".adminShell {");
+    expect(shellStyles).toContain("--admin-ink: var(--foreground)");
+    expect(shellStyles).toContain("--admin-border: var(--border)");
+    expect(shellStyles).toContain("--admin-settings-content-width: 52rem");
     expect(shellStyles).toContain(":global(.dark) .adminShell");
     expect(shellStyles).toContain(":global(.dark) .workspaceHeader");
     expect(shellStyles).toContain(":global(.dark) .metricsSection");

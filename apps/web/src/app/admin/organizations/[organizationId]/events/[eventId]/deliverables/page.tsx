@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import { DeliverablesWorkspace } from "@/features/deliverables/deliverables-workspace";
 
 export const metadata: Metadata = {
-  title: "Deliverables",
+  title: "Content requests",
   description:
-    "Organizer-created speaker requests, task tracking, and follow-up for event deliverables.",
+    "Create speaker file requests, track assignments, and follow up on outstanding content.",
 };
 
 interface DeliverablesPageProps {

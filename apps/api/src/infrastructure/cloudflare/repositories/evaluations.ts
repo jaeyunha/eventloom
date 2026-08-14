@@ -75,7 +75,11 @@ async function atomic(
 ): Promise<void> {
   try {
     await batch(database, statements);
-  } catch {
+  } catch (error) {
+    console.error("Evaluation repository atomic write failed.", {
+      error: error instanceof Error ? error.message : String(error),
+      statementCount: statements.length,
+    });
     writeConflict(message);
   }
 }
@@ -186,11 +190,11 @@ export class D1EvaluationRepository implements EvaluationRepository {
   constructor(private readonly database: D1Database) {}
 
   async getPlan(tenantId: string, planId: string): Promise<EvaluationPlan | null> {
-    const row = await statement(
-      this.database,
-      "SELECT * FROM review_plans WHERE organization_id = ? AND id = ?",
-      [tenantId, planId],
-    ).first<Row>();
+    const row = await this.database
+      .withSession("first-primary")
+      .prepare("SELECT * FROM review_plans WHERE organization_id = ? AND id = ?")
+      .bind(tenantId, planId)
+      .first<Row>();
     return row === null ? null : this.hydratePlan(row);
   }
 
@@ -285,6 +289,40 @@ export class D1EvaluationRepository implements EvaluationRepository {
             expectedVersion,
           ],
         ),
+      );
+      commands.push(
+        statement(
+          this.database,
+          `DELETE FROM reviewer_pool_members
+            WHERE organization_id = ? AND event_id = ?
+              AND pool_id IN (
+                SELECT id FROM reviewer_pools
+                 WHERE organization_id = ? AND event_id = ?
+                   AND round_id IN (
+                     SELECT id FROM review_rounds
+                      WHERE organization_id = ? AND event_id = ? AND plan_id = ?
+                   )
+              )`,
+          [
+            plan.tenantId,
+            plan.eventId,
+            plan.tenantId,
+            plan.eventId,
+            plan.tenantId,
+            plan.eventId,
+            plan.id,
+          ],
+        ),
+        statement(
+          this.database,
+          `DELETE FROM reviewer_pools
+            WHERE organization_id = ? AND event_id = ?
+              AND round_id IN (
+                SELECT id FROM review_rounds
+                 WHERE organization_id = ? AND event_id = ? AND plan_id = ?
+              )`,
+          [plan.tenantId, plan.eventId, plan.tenantId, plan.eventId, plan.id],
+        ),
         statement(
           this.database,
           "DELETE FROM review_rounds WHERE organization_id = ? AND event_id = ? AND plan_id = ?",
@@ -301,20 +339,81 @@ export class D1EvaluationRepository implements EvaluationRepository {
     await atomic(this.database, commands, "Evaluation plan changed since it was loaded.");
   }
 
+  async putPlanState(plan: EvaluationPlan, expectedVersion: number): Promise<void> {
+    const commands = [
+      updateGuard(
+        this.database,
+        "review_plans",
+        "organization_id = ? AND event_id = ? AND id = ? AND version = ?",
+        [plan.tenantId, plan.eventId, plan.id, expectedVersion],
+      ),
+      statement(
+        this.database,
+        `UPDATE review_plans
+            SET status = ?, grading_revision = ?, grading_locked_at = ?,
+                version = ?, updated_at = ?
+          WHERE organization_id = ? AND event_id = ? AND id = ? AND version = ?`,
+        [
+          plan.status,
+          plan.gradingRevision ?? null,
+          plan.gradingLockedAt ?? null,
+          plan.version,
+          plan.updatedAt,
+          plan.tenantId,
+          plan.eventId,
+          plan.id,
+          expectedVersion,
+        ],
+      ),
+    ];
+    await atomic(this.database, commands, "Evaluation plan changed since it was loaded.");
+  }
+
+  async putPlanSchedule(plan: EvaluationPlan, expectedVersion: number): Promise<void> {
+    const commands = [
+      updateGuard(
+        this.database,
+        "review_plans",
+        "organization_id = ? AND event_id = ? AND id = ? AND version = ?",
+        [plan.tenantId, plan.eventId, plan.id, expectedVersion],
+      ),
+      statement(
+        this.database,
+        `UPDATE review_plans
+            SET closes_at = ?, version = ?, updated_at = ?
+          WHERE organization_id = ? AND event_id = ? AND id = ? AND version = ?`,
+        [
+          plan.closesAt,
+          plan.version,
+          plan.updatedAt,
+          plan.tenantId,
+          plan.eventId,
+          plan.id,
+          expectedVersion,
+        ],
+      ),
+    ];
+    await atomic(this.database, commands, "Evaluation plan changed since it was loaded.");
+  }
+
   async getAssignment(tenantId: string, assignmentId: string) {
-    const row = await statement(
-      this.database,
-      "SELECT * FROM review_assignments WHERE organization_id = ? AND id = ?",
-      [tenantId, assignmentId],
-    ).first<Row>();
+    const row = await this.database
+      .withSession("first-primary")
+      .prepare("SELECT * FROM review_assignments WHERE organization_id = ? AND id = ?")
+      .bind(tenantId, assignmentId)
+      .first<Row>();
     return row === null ? null : assignmentFromRow(row);
   }
 
   async listAssignments(tenantId: string, planId: string) {
-    return this.assignmentQuery("organization_id = ? AND plan_id = ? ORDER BY id", [
-      tenantId,
-      planId,
-    ]);
+    const result = await this.database
+      .withSession("first-primary")
+      .prepare(
+        "SELECT * FROM review_assignments WHERE organization_id = ? AND plan_id = ? ORDER BY id",
+      )
+      .bind(tenantId, planId)
+      .all<Row>();
+    return rows(result).map(assignmentFromRow);
   }
 
   async replaceAssignment(
@@ -560,11 +659,11 @@ export class D1EvaluationRepository implements EvaluationRepository {
   }
 
   async getReview(tenantId: string, assignmentId: string) {
-    const row = await statement(
-      this.database,
-      "SELECT * FROM evaluation_reviews WHERE organization_id = ? AND assignment_id = ?",
-      [tenantId, assignmentId],
-    ).first<Row>();
+    const row = await this.database
+      .withSession("first-primary")
+      .prepare("SELECT * FROM evaluation_reviews WHERE organization_id = ? AND assignment_id = ?")
+      .bind(tenantId, assignmentId)
+      .first<Row>();
     return row === null ? null : this.hydrateReview(row);
   }
 
@@ -797,7 +896,31 @@ export class D1EvaluationRepository implements EvaluationRepository {
       "organization_id = ? AND plan_id = ? AND submission_id = ?",
       [tenantId, planId, submissionId],
     );
-    return decisions[0] ?? null;
+    const decision = decisions[0];
+    if (decision === undefined) return null;
+    const delivery = await this.database
+      .withSession("first-primary")
+      .prepare(
+        `SELECT state, completed_at, last_error_code
+           FROM outbox_jobs
+          WHERE tenant_id = ? AND topic = 'communications' AND deduplication_key = ?
+          LIMIT 1`,
+      )
+      .bind(tenantId, `decision:evaluation-decision:${submissionId}:v${decision.version}`)
+      .first<{
+        state: "pending" | "processing" | "delivered" | "failed";
+        completed_at: string | null;
+        last_error_code: string | null;
+      }>();
+    if (delivery === null) return decision;
+    return {
+      ...decision,
+      notificationDelivery: {
+        state: delivery.state,
+        ...(delivery.completed_at === null ? {} : { completedAt: delivery.completed_at }),
+        ...(delivery.last_error_code === null ? {} : { lastErrorCode: delivery.last_error_code }),
+      },
+    };
   }
 
   async putDecision(decision: EvaluationDecision, expectedVersion: number | null) {
@@ -1578,18 +1701,19 @@ export class D1EvaluationRepository implements EvaluationRepository {
     where: string,
     values: readonly D1Value[],
   ): Promise<readonly EvaluationDecision[]> {
-    const result = await statement(
-      this.database,
-      `SELECT * FROM evaluation_decisions WHERE ${where}`,
-      values,
-    ).all<Row>();
+    const session = this.database.withSession("first-primary");
+    const result = await session
+      .prepare(`SELECT * FROM evaluation_decisions WHERE ${where}`)
+      .bind(...values)
+      .all<Row>();
     return Promise.all(
       rows(result).map(async (row) => {
-        const transitions = await statement(
-          this.database,
-          `SELECT * FROM evaluation_decision_transitions WHERE organization_id = ? AND event_id = ? AND decision_id = ? ORDER BY ordinal`,
-          [text(row.organization_id), text(row.event_id), text(row.id)],
-        ).all<Row>();
+        const transitions = await session
+          .prepare(
+            `SELECT * FROM evaluation_decision_transitions WHERE organization_id = ? AND event_id = ? AND decision_id = ? ORDER BY ordinal`,
+          )
+          .bind(text(row.organization_id), text(row.event_id), text(row.id))
+          .all<Row>();
         const history: EvaluationDecisionTransition[] = rows(transitions).map((item) => ({
           from:
             item.from_status == null

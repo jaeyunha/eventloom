@@ -3,7 +3,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { createPortalApi, type PortalApi, validatePortalSocialUrl } from "./api";
 import { isPortalGenerationCurrent, loadPortalStartup, PortalProvider } from "./portal-provider";
-import { PortalSubmissions } from "./portal-submissions";
 import {
   formatPortalFileSize,
   NoParticipantWorkspaceState,
@@ -19,6 +18,7 @@ import {
   TaskStatusBadge,
 } from "./portal-ui";
 import { AssetDetails, groupPortalAssetVersions } from "./portal-workspace";
+import { SubmissionAnswers, SubmissionParticipants } from "./submission-detail";
 import type { PortalAsset, PortalContext, PortalProfile, PortalView } from "./types";
 
 vi.mock("next/navigation", () => ({
@@ -56,6 +56,54 @@ function portalStartupView(context: PortalContext): PortalView {
 }
 
 describe("speaker portal UI components", () => {
+  it("renders submitted proposal answers as read-only content", () => {
+    const markup = renderToStaticMarkup(
+      <SubmissionAnswers
+        answers={{
+          title: "Reliable CFP operations",
+          abstract: "How to preserve submitted content after closure.",
+          audienceLevel: "Advanced",
+          tags: ["Operations", "Reliability"],
+          recorded: false,
+        }}
+      />,
+    );
+    expect(markup).toContain("Proposal content");
+    expect(markup).toContain("Reliable CFP operations");
+    expect(markup).toContain("How to preserve submitted content after closure.");
+    expect(markup).toContain("Advanced");
+    expect(markup).toContain("Operations, Reliability");
+    expect(markup).toContain("No");
+    expect(markup).not.toContain("<input");
+    expect(markup).not.toContain("<textarea");
+  });
+  it("renders proposal participants with primary and co-author roles", () => {
+    const markup = renderToStaticMarkup(
+      <SubmissionParticipants
+        participants={[
+          {
+            id: "primary-speaker",
+            firstName: "Priya",
+            lastName: "Raman",
+            email: "priya@example.test",
+            role: "primary",
+          },
+          {
+            id: "co-author",
+            firstName: "Marcus",
+            lastName: "Okafor",
+            email: "marcus@example.test",
+            role: "co_author",
+          },
+        ]}
+      />,
+    );
+    expect(markup).toContain("Participants");
+    expect(markup).toContain("Priya Raman");
+    expect(markup).toContain("Primary speaker");
+    expect(markup).toContain("Marcus Okafor");
+    expect(markup).toContain("Co-author");
+  });
   it("separates submitter submission access from accepted-speaker capabilities", () => {
     const noCapabilities = () => false;
     expect(
@@ -343,10 +391,10 @@ describe("speaker portal UI components", () => {
     expect(portalNavigation.map(({ label }) => label)).toEqual([
       "Home",
       "Submissions",
-      "Tasks",
+      "Requests & tasks",
       "Profile",
       "Co-speakers",
-      "Files",
+      "Uploaded files",
       "Resources",
       "Wiki",
     ]);
@@ -365,9 +413,9 @@ describe("speaker portal UI components", () => {
   it("formats truthful private-asset metadata and states", () => {
     expect(formatPortalFileSize(1_536)).toBe("1.5 KiB");
     expect(formatPortalFileSize(-1)).toBe("Unknown size");
-    expect(portalAssetStateLabel("pending_upload")).toBe("Upload pending");
-    expect(portalAssetStateLabel("ready")).toBe("Ready");
-    expect(portalAssetStateLabel("rejected")).toBe("Rejected");
+    expect(portalAssetStateLabel("pending_upload")).toBe("Processing upload");
+    expect(portalAssetStateLabel("ready")).toBe("Uploaded");
+    expect(portalAssetStateLabel("rejected")).toBe("Upload failed");
   });
   it("offers secure retry and completion actions for pending speaker uploads", () => {
     const pendingAsset: PortalAsset = {
@@ -402,7 +450,7 @@ describe("speaker portal UI components", () => {
     expect(markup).toContain(">Mark upload complete</button>");
     expect(markup).toContain("Retry file upload");
     expect(markup).toContain('type="file"');
-    expect(markup).toContain("organizer approval happens separately");
+    expect(markup).toContain("event-team approval happens separately");
     expect(markup).not.toContain("Reject file");
     expect(markup).not.toMatch(/<button[^>]*>[^<]*(?:approve|review|reject)/iu);
   });

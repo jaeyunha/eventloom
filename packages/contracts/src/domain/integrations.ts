@@ -1,5 +1,11 @@
 import { z } from "zod";
-import { idempotencyKeySchema, jsonValueSchema, timestampSchema } from "./common";
+import {
+  apiScopeSchema,
+  apiScopes,
+  idempotencyKeySchema,
+  jsonValueSchema,
+  timestampSchema,
+} from "./common";
 import {
   agendaVersionIdSchema,
   eventIdSchema,
@@ -14,6 +20,38 @@ import {
   webhookSubscriptionIdSchema,
 } from "./ids";
 import { integrationPublicationStatusSchema, webhookDeliveryStatusSchema } from "./lifecycle";
+
+export const organizationApiKeySummarySchema = z.object({
+  id: z.string().trim().min(1),
+  label: z.string().trim().min(1).max(100),
+  prefix: z.string().trim().min(1),
+  scopes: z.array(apiScopeSchema).min(1),
+  eventId: z.string().trim().min(1).nullable(),
+  createdAt: timestampSchema,
+  lastUsedAt: timestampSchema.nullable(),
+  expiresAt: timestampSchema.nullable(),
+  revokedAt: timestampSchema.nullable(),
+});
+export type OrganizationApiKeySummary = z.infer<typeof organizationApiKeySummarySchema>;
+
+export const createOrganizationApiKeyRequestSchema = z.object({
+  label: z.string().trim().min(1).max(100),
+  scopes: z.array(apiScopeSchema).min(1).max(apiScopes.length),
+  expiresAt: z
+    .string()
+    .trim()
+    .max(80)
+    .refine((value) => !Number.isNaN(Date.parse(value)), "The expiration date is invalid.")
+    .nullable(),
+  eventId: z.string().trim().min(1).max(200).nullable().optional(),
+});
+export type CreateOrganizationApiKeyRequest = z.infer<typeof createOrganizationApiKeyRequestSchema>;
+
+export const oneTimeApiKeySecretSchema = z.object({
+  id: z.string().trim().min(1),
+  secret: z.string().trim().min(1),
+});
+export type OneTimeApiKeySecret = z.infer<typeof oneTimeApiKeySecretSchema>;
 
 export const webhookEventTypes = [
   "submission.created",
@@ -172,11 +210,7 @@ export const syncAttemptSchema = z.object({
 });
 export type SyncAttempt = z.infer<typeof syncAttemptSchema>;
 
-export const openSendSenderSchema = z.enum([
-  "auth@sessionboard.namuh.co",
-  "speakers@sessionboard.namuh.co",
-  "calendar@sessionboard.namuh.co",
-]);
+export const openSendSenderSchema = z.email();
 
 export const openSendEmailPayloadSchema = z.object({
   from: openSendSenderSchema,
@@ -195,7 +229,7 @@ export const calendarInvitationPayloadSchema = z.object({
   timeZone: z.string().trim().min(1),
   startsAt: timestampSchema,
   endsAt: timestampSchema,
-  organizer: z.literal("calendar@sessionboard.namuh.co"),
+  organizer: z.email(),
   attendees: z.array(z.email()).min(1),
   summary: z.string().trim().min(1).max(300),
   location: z.string().trim().max(300),

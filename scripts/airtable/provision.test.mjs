@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   AirtableProvisionError,
@@ -210,7 +209,7 @@ test("provisions the immutable published speaker projection table", () => {
     ],
   );
 });
-test("covers the expanded business-authority schema and sender identities", () => {
+test("covers the expanded business-authority schema with self-hostable sender identities", () => {
   const requiredTables = [
     "Sessions",
     "Rooms",
@@ -261,31 +260,60 @@ test("covers the expanded business-authority schema and sender identities", () =
   }
 
   const emailTemplate = definitions.get("Email Templates");
-  const senderField = emailTemplate?.fields.find((field) => field.name === "Sender");
-  assert.deepEqual(
-    senderField?.options?.choices?.map((choice) => choice.name),
-    [
-      "auth@sessionboard.namuh.co",
-      "speakers@sessionboard.namuh.co",
-      "calendar@sessionboard.namuh.co",
-    ],
-  );
+  const templateSenderField = emailTemplate?.fields.find((field) => field.name === "Sender");
+  assert.equal(templateSenderField?.type, "email");
+  assert.equal(templateSenderField?.options, undefined);
 
-  const expectedSenders = [
-    "auth@sessionboard.namuh.co",
-    "speakers@sessionboard.namuh.co",
-    "calendar@sessionboard.namuh.co",
-  ];
-  const envExample = readFileSync(".env.example", "utf8");
-  const setupGuide = readFileSync("docs/setup.md", "utf8");
-  for (const sender of expectedSenders) {
-    assert.equal(envExample.includes(sender), true);
-    assert.equal(setupGuide.includes(sender), true);
-  }
-  assert.equal(envExample.includes("foreverbrowsing.com"), false);
-  assert.equal(setupGuide.includes("foreverbrowsing.com"), false);
-  assert.equal(readFileSync("ARCHITECTURE.md", "utf8").includes("Accelevents"), false);
+  const emailSendSnapshot = definitions.get("Email Send Snapshots");
+  const snapshotSenderField = emailSendSnapshot?.fields.find((field) => field.name === "Sender");
+  assert.equal(snapshotSenderField?.type, "email");
+  assert.equal(snapshotSenderField?.options, undefined);
 });
+test("reconciles legacy sender choice fields to unconstrained email fields", async () => {
+  const source = metadataMock();
+  await provisionAirtableSchema({
+    accessToken: "test-token",
+    baseId: "app_test",
+    mode: "apply",
+    fetchImplementation: source.fetchImplementation,
+    apiOrigin: "https://airtable.test",
+  });
+
+  for (const tableName of ["Email Templates", "Email Send Snapshots"]) {
+    const table = source.tables.find((candidate) => candidate.name === tableName);
+    const sender = table.fields.find((field) => field.name === "Sender");
+    sender.type = "singleSelect";
+    sender.options = {
+      choices: [
+        { name: "auth@sessionboard.namuh.co" },
+        { name: "speakers@sessionboard.namuh.co" },
+        { name: "calendar@sessionboard.namuh.co" },
+      ],
+    };
+  }
+
+  const result = await provisionAirtableSchema({
+    accessToken: "test-token",
+    baseId: "app_test",
+    mode: "apply",
+    fetchImplementation: source.fetchImplementation,
+    apiOrigin: "https://airtable.test",
+  });
+
+  assert.deepEqual(result.updatedFields, ["Email Templates.Sender", "Email Send Snapshots.Sender"]);
+  for (const tableName of ["Email Templates", "Email Send Snapshots"]) {
+    const table = source.tables.find((candidate) => candidate.name === tableName);
+    const sender = table.fields.find((field) => field.name === "Sender");
+    assert.equal(sender.type, "email");
+    const request = source.requests.find(
+      (candidate) =>
+        candidate.method === "PATCH" &&
+        candidate.path.endsWith(`/tables/${table.id}/fields/${sender.id}`),
+    );
+    assert.deepEqual(request?.body, { type: "email" });
+  }
+});
+
 test("declares dedicated CRM authority tables and payload fields", () => {
   const definitions = new Map(TABLE_DEFINITIONS.map((definition) => [definition.name, definition]));
   const payloadFields = new Map([

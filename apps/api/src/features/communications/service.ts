@@ -17,7 +17,9 @@ import type {
   CommunicationRepository,
   CommunicationRole,
   CommunicationSend,
+  CommunicationSenderIdentities,
   CommunicationSenderIdentity,
+  CommunicationSenderPurpose,
   CommunicationSendStatus,
   CommunicationTemplate,
   CommunicationTemplatePurpose,
@@ -122,6 +124,7 @@ export interface CommunicationServiceOptions {
   clock?: () => Date;
   previewLifetimeMs?: number;
   reminders?: ReminderRuntime;
+  senderIdentities?: CommunicationSenderIdentities;
 }
 export interface ReminderPreviewInput {
   organizationId?: string;
@@ -233,18 +236,48 @@ function requirePurpose(value: CommunicationTemplatePurpose): CommunicationTempl
   return value;
 }
 
-function senderForPurpose(purpose: CommunicationTemplatePurpose): CommunicationSenderIdentity {
-  if (purpose === "verification") {
-    return "auth@sessionboard.namuh.co";
+const EMAIL_ADDRESS_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/u;
+
+function validEmailAddress(value: string): boolean {
+  return (
+    value.length <= 320 &&
+    value === value.trim() &&
+    !/[\r\n]/u.test(value) &&
+    EMAIL_ADDRESS_PATTERN.test(value)
+  );
+}
+
+function resolveSenderIdentities(
+  configured: CommunicationSenderIdentities | undefined,
+): CommunicationSenderIdentities | undefined {
+  if (configured === undefined) return undefined;
+  for (const purpose of ["auth", "speakers", "calendar"] as const) {
+    if (!validEmailAddress(configured[purpose])) {
+      throw new TypeError(`Communication ${purpose} sender must be a valid email address.`);
+    }
   }
+  return { ...configured };
+}
+
+function senderPurposeForTemplatePurpose(
+  purpose: CommunicationTemplatePurpose,
+): CommunicationSenderPurpose {
+  if (purpose === "verification") return "auth";
   if (
     purpose === "schedule_publish" ||
     purpose === "schedule_update" ||
     purpose === "schedule_cancel"
   ) {
-    return "calendar@sessionboard.namuh.co";
+    return "calendar";
   }
-  return "speakers@sessionboard.namuh.co";
+  return "speakers";
+}
+
+function senderForPurpose(
+  purpose: CommunicationTemplatePurpose,
+  identities: CommunicationSenderIdentities,
+): CommunicationSenderIdentity {
+  return identities[senderPurposeForTemplatePurpose(purpose)];
 }
 
 function hasGrant(actor: CommunicationActor, eventId: string, role: CommunicationRole): boolean {
@@ -630,6 +663,7 @@ function reminderCountStatus(status: ReminderDispatchStatus): {
 export class CommunicationService {
   private readonly clock: () => Date;
   private readonly previewLifetimeMs: number;
+  private readonly senderIdentities: CommunicationSenderIdentities | undefined;
   private reminders: ReminderRuntime | undefined;
 
   constructor(
@@ -639,6 +673,7 @@ export class CommunicationService {
   ) {
     this.clock = options.clock ?? (() => new Date());
     this.previewLifetimeMs = options.previewLifetimeMs ?? 15 * 60 * 1_000;
+    this.senderIdentities = resolveSenderIdentities(options.senderIdentities);
     if (!Number.isSafeInteger(this.previewLifetimeMs) || this.previewLifetimeMs < 1_000) {
       throw new Error("previewLifetimeMs must be at least one second.");
     }
@@ -657,8 +692,12 @@ export class CommunicationService {
     const text = requireText(input.text, "Template text", 100_000);
     const id =
       input.id === undefined ? createId("template") : requireText(input.id, "Template id", 200);
-    const sender = input.sender ?? senderForPurpose(purpose);
-    if (sender !== senderForPurpose(purpose)) {
+    if (this.senderIdentities === undefined) {
+      throw unavailable("Communication sender identities are not configured.");
+    }
+    const approvedSender = senderForPurpose(purpose, this.senderIdentities);
+    const sender = input.sender ?? approvedSender;
+    if (!validEmailAddress(sender) || sender !== approvedSender) {
       throw invalidInput(`The ${purpose} purpose must use its approved sender identity.`);
     }
     const variables = this.validateVariables(input.variables ?? [], subject, html, text);
@@ -703,6 +742,10 @@ export class CommunicationService {
       html,
       text,
     );
+    if (this.senderIdentities === undefined) {
+      throw unavailable("Communication sender identities are not configured.");
+    }
+    const sender = senderForPurpose(existing.purpose, this.senderIdentities);
     const versions = await this.repository.listTemplates(actor.tenantId, existing.eventId);
     const latest = versions
       .filter((candidate) => candidate.id === existing.id)
@@ -712,6 +755,7 @@ export class CommunicationService {
       ...existing,
       version: latest + 1,
       status: "draft",
+      sender,
       subject,
       html,
       text,
@@ -745,13 +789,14 @@ export class CommunicationService {
       throw conflict("An archived template version cannot be approved.");
     }
     const now = this.clock().toISOString();
-    return this.repository.saveTemplate({
+    const approved = {
       ...template,
       status: "approved",
       approvedBy: actor.userId,
       approvedAt: now,
       updatedAt: now,
-    });
+    } satisfies CommunicationTemplate;
+    return this.repository.updateTemplate?.(approved) ?? this.repository.saveTemplate(approved);
   }
 
   async archiveTemplate(
@@ -770,11 +815,12 @@ export class CommunicationService {
     if (template === undefined) {
       throw notFound("The template version was not found.");
     }
-    return this.repository.saveTemplate({
+    const archived = {
       ...template,
       status: "archived",
       updatedAt: this.clock().toISOString(),
-    });
+    } satisfies CommunicationTemplate;
+    return this.repository.updateTemplate?.(archived) ?? this.repository.saveTemplate(archived);
   }
 
   async listTemplates(
@@ -813,12 +859,20 @@ export class CommunicationService {
     input: CommunicationPreviewInput,
   ): Promise<CommunicationPreview> {
     requireOrganizer(actor, input.eventId);
-    if (input.purpose !== "organizer_group_email") {
+    if (input.purpose !== "organizer_group_email" && input.purpose !== "decision") {
       throw invalidInput(
-        "Only organizer group email templates can preview a participant audience.",
+        "Only organizer group email and decision templates can preview a participant audience.",
       );
     }
     const audience = requireAudience(input.audience);
+    if (
+      input.purpose === "decision" &&
+      audience !== "accepted_participants" &&
+      audience !== "waitlisted_participants" &&
+      audience !== "rejected_participants"
+    ) {
+      throw invalidInput("Decision templates require a decision-status participant audience.");
+    }
     const authorization = this.assertAudienceAuthorized(actor.tenantId, input.eventId, audience);
     const templatePromise = this.resolveApprovedTemplate(
       actor.tenantId,
@@ -1290,7 +1344,11 @@ export class CommunicationService {
     if (selected === undefined) {
       throw notFound("No approved template version is available for this purpose.");
     }
-    if (selected.sender !== senderForPurpose(purpose)) {
+    if (
+      !validEmailAddress(selected.sender) ||
+      (this.senderIdentities !== undefined &&
+        selected.sender !== senderForPurpose(purpose, this.senderIdentities))
+    ) {
       throw invalidInput(`The ${purpose} purpose must use its approved sender identity.`);
     }
     return selected;
@@ -1467,6 +1525,7 @@ export class CommunicationService {
         recipientId: recipient.id,
         to: recipient.email,
         from: current.template.sender,
+        senderPurpose: senderPurposeForTemplatePurpose(current.purpose),
         subject: rendered.subject,
         html: rendered.html,
         text: rendered.text,
@@ -2021,6 +2080,7 @@ export class CommunicationService {
           eventId: dispatch.eventId,
           recipient: candidate.normalizedEmail.trim(),
           from: candidate.renderedMessage.from,
+          senderPurpose: "speakers",
           subject: candidate.renderedMessage.subject,
           html: candidate.renderedMessage.html,
           text: candidate.renderedMessage.text,

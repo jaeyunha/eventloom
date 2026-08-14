@@ -18,6 +18,7 @@ export interface AgendaSession {
   summary?: string;
   format?: string;
   speakerNames?: readonly string[];
+  trackIds?: readonly string[];
 }
 
 export interface AgendaRoom {

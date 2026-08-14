@@ -1,0 +1,348 @@
+.root {
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+  border-radius: calc(var(--radius) + 0.35rem);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--muted) 30%, transparent), transparent 7rem),
+    var(--card);
+  box-shadow:
+    0 1px 2px color-mix(in srgb, var(--foreground) 5%, transparent),
+    0 12px 30px color-mix(in srgb, var(--foreground) 4%, transparent);
+}
+
+.heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 1.5rem;
+  align-items: flex-start;
+  padding: 1.15rem 1.2rem 1rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+}
+
+.heading h3 {
+  margin: 0.16rem 0 0;
+  font-size: 1rem;
+  line-height: 1.3;
+  letter-spacing: -0.02em;
+}
+
+.heading p {
+  max-width: 35rem;
+  margin: 0.28rem 0 0;
+  color: var(--muted-foreground);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.eyebrow,
+.detailLabel {
+  color: var(--muted-foreground);
+  font-size: 0.69rem;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.modeToggle {
+  flex: 0 0 auto;
+  padding: 0.2rem;
+  border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  border-radius: calc(var(--radius) + 0.1rem);
+  background: color-mix(in srgb, var(--muted) 68%, transparent);
+}
+
+.modeToggle button {
+  min-height: 2rem;
+  border: 0;
+  border-radius: var(--radius);
+  padding-inline: 0.7rem;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  box-shadow: none;
+}
+
+.modeToggle button[data-state="on"] {
+  background: var(--background);
+  color: var(--foreground);
+  box-shadow:
+    0 1px 2px color-mix(in srgb, var(--foreground) 10%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--border) 74%, transparent);
+}
+
+.summary {
+  display: flex;
+  gap: 0.8rem;
+  align-items: center;
+  min-height: 4.65rem;
+  padding: 0.75rem 1.2rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+}
+
+.summary > svg {
+  width: 1rem;
+  height: 1rem;
+  color: var(--muted-foreground);
+}
+
+.rangeSummary {
+  display: flex;
+  gap: 0.48rem;
+  align-items: center;
+}
+
+.boundaryButton {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 7.5rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  padding: 0.45rem 0.55rem;
+  color: var(--foreground);
+  text-align: left;
+}
+
+.boundaryButton:hover,
+.boundaryButton[data-active="true"] {
+  border-color: color-mix(in srgb, var(--primary) 36%, var(--border));
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+}
+
+.boundaryButton span {
+  color: var(--muted-foreground);
+  font-size: 0.66rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.boundaryButton strong {
+  font-size: 0.87rem;
+  font-weight: 600;
+}
+
+.rangeArrow {
+  color: var(--muted-foreground);
+  font-size: 0.73rem;
+}
+
+.individualSummary {
+  display: grid;
+  gap: 0.12rem;
+}
+
+.individualSummary strong {
+  font-size: 0.87rem;
+}
+
+.individualSummary span {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.pickerLayout {
+  display: grid;
+  grid-template-columns: minmax(19rem, 1fr) minmax(16rem, 0.72fr);
+}
+
+.calendar {
+  padding: 1rem 1.15rem 1.15rem;
+}
+
+.calendarHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.calendarHeader strong {
+  font-size: 0.88rem;
+  letter-spacing: -0.01em;
+}
+
+.monthControls {
+  display: flex;
+  gap: 0.15rem;
+}
+
+.monthControls button {
+  color: var(--muted-foreground);
+}
+
+.weekDays,
+.days {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+
+.weekDays {
+  margin-bottom: 0.18rem;
+}
+
+.weekDays span {
+  padding-block: 0.35rem;
+  color: var(--muted-foreground);
+  font-size: 0.67rem;
+  font-weight: 600;
+  text-align: center;
+}
+
+.day {
+  position: relative;
+  min-height: 2.45rem;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--foreground);
+  font-size: 0.78rem;
+}
+
+.day:hover:not(:disabled) {
+  z-index: 1;
+  border-radius: var(--radius);
+  background: var(--accent);
+}
+
+.day[data-muted="true"] {
+  color: color-mix(in srgb, var(--muted-foreground) 52%, transparent);
+}
+
+.day[data-within-range="true"] {
+  background: color-mix(in srgb, var(--primary) 11%, transparent);
+}
+
+.day[data-boundary="true"],
+.day[data-selected="true"] {
+  z-index: 2;
+  border-radius: var(--radius);
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.day[data-boundary="true"]:hover:not(:disabled),
+.day[data-selected="true"]:hover:not(:disabled) {
+  background: var(--primary);
+}
+
+.day:disabled {
+  color: color-mix(in srgb, var(--muted-foreground) 36%, transparent);
+  cursor: not-allowed;
+}
+
+.details {
+  display: grid;
+  align-content: start;
+  gap: 1rem;
+  padding: 1rem 1.15rem 1.15rem;
+  border-left: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  background: color-mix(in srgb, var(--muted) 24%, transparent);
+}
+
+.selectedDates {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.dateChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.dateChip {
+  display: inline-flex;
+  gap: 0.28rem;
+  align-items: center;
+  min-height: 1.8rem;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: 999px;
+  background: var(--background);
+  padding: 0.2rem 0.5rem 0.2rem 0.62rem;
+  color: var(--foreground);
+  font-size: 0.71rem;
+}
+
+.dateChip:hover {
+  border-color: color-mix(in srgb, var(--destructive) 32%, var(--border));
+  color: var(--destructive);
+}
+
+.dateChip svg {
+  width: 0.75rem;
+  height: 0.75rem;
+}
+
+.timeGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.timeGrid label {
+  display: grid;
+  gap: 0.38rem;
+}
+
+.detailLabel {
+  display: inline-flex;
+  gap: 0.3rem;
+  align-items: center;
+}
+
+.detailLabel svg {
+  width: 0.75rem;
+  height: 0.75rem;
+}
+
+.timeHint {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 0.73rem;
+  line-height: 1.55;
+}
+
+@media (max-width: 50rem) {
+  .heading {
+    display: grid;
+  }
+
+  .modeToggle {
+    width: 100%;
+  }
+
+  .modeToggle button {
+    flex: 1 1 0;
+  }
+
+  .pickerLayout {
+    grid-template-columns: 1fr;
+  }
+
+  .details {
+    border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+    border-left: 0;
+  }
+}
+
+@media (max-width: 34rem) {
+  .heading,
+  .summary,
+  .calendar,
+  .details {
+    padding-inline: 0.8rem;
+  }
+
+  .rangeSummary {
+    width: 100%;
+  }
+
+  .boundaryButton {
+    min-width: 0;
+    flex: 1 1 0;
+  }
+
+  .timeGrid {
+    grid-template-columns: 1fr;
+  }
+}

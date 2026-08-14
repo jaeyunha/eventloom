@@ -56,6 +56,7 @@ import {
   type AgendaRouteDependencies,
   createAgendaAdminRoutes,
   createPublishedAgendaRoutes,
+  type PublishedAgendaRouteOptions,
 } from "./routes/agenda";
 import {
   type AirtableIntegrationRouteDependencies,
@@ -65,6 +66,7 @@ import {
 } from "./routes/airtable-integration/routes";
 import {
   createIntegrationAdminRoutes,
+  createOrganizationApiKeyAdminRoutes,
   type IntegrationAdminRouteDependencies,
 } from "./routes/integrations";
 import {
@@ -153,7 +155,7 @@ export interface ApiDependencies<
   readonly airtableIntegration?: AirtableIntegrationRouteDependencies;
   readonly evaluations?: EvaluationRouteDependencies;
   readonly speaker?: SpeakerRouteDependencies;
-  readonly agenda?: AgendaRouteDependencies;
+  readonly agenda?: AgendaRouteDependencies & PublishedAgendaRouteOptions;
   readonly publishedEvents?: PublishedEventDirectoryRouteDependencies;
   readonly publishedSpeakers?: PublishedSpeakerRouteDependencies;
   readonly cfp?: CfpRouteDependencies;
@@ -574,6 +576,10 @@ export function createApp<
       "/api/admin/organizations/:organizationId/events/:eventId",
       createIntegrationAdminRoutes(dependencies.integrations),
     );
+    app.route(
+      "/api/admin/organizations/:organizationId/api-keys",
+      createOrganizationApiKeyAdminRoutes(dependencies.integrations),
+    );
   }
   if (dependencies.airtableIntegration !== undefined) {
     app.route(
@@ -581,7 +587,7 @@ export function createApp<
       createAirtableIntegrationRoutes(dependencies.airtableIntegration),
     );
     app.route(
-      "/api/integrations/airtable/organizations/:organizationId",
+      "/api/integrations/airtable",
       createAirtableOAuthCallbackRoutes(dependencies.airtableIntegration),
     );
     app.route(
@@ -750,11 +756,11 @@ export function createApp<
         method: context.req.method,
         path: context.req.path,
         errorName: error.name,
+        errorMessage: error.message.slice(0, 500),
         ...(error.name === "AgendaError"
           ? {
               errorCode:
                 "code" in error && typeof error.code === "string" ? error.code : "AGENDA_ERROR",
-              errorMessage: error.message.slice(0, 500),
             }
           : {}),
       }),

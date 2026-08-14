@@ -11,6 +11,7 @@ import {
   setupUrlWithoutToken,
 } from "./member-setup";
 import { inviteRolesForOrganization, MemberWorkspace } from "./member-workspace";
+import { OrganizationSettingsWorkspace } from "./organization-settings-workspace";
 
 const owner: OrganizationMember = {
   organizationId: "org-1",
@@ -255,7 +256,7 @@ describe("member invitation setup", () => {
       name: "Review Person",
       password: "StrongPass1!",
     });
-    expect(destination).toBe("/review");
+    expect(destination).toBe("/work");
     expect(calls).toEqual([
       "activate:one-time-token:StrongPass1!",
       "login:reviewer@example.test:StrongPass1!",
@@ -334,7 +335,7 @@ describe("member workspace", () => {
     expect(markup).toContain("People directory");
     expect(markup).toContain("Invite member");
     expect(markup).toContain("Reviewer pools");
-    expect(markup).toContain("Organization settings");
+    expect(markup).not.toContain("Organization settings");
     expect(markup).toContain("Search people");
     expect(markup).not.toContain("CEP-10");
     expect(markup).not.toContain("ABS-02");
@@ -343,5 +344,19 @@ describe("member workspace", () => {
     expect(markup).not.toContain("Organization configuration (JSON)");
     expect(markup).not.toContain("Event ID");
     expect(markup).not.toContain("Round ID");
+  });
+
+  it("renders organization settings only through the dedicated settings workspace", () => {
+    const markup = renderToStaticMarkup(
+      createElement(OrganizationSettingsWorkspace, {
+        organizationId: "org-1",
+        baseUrl: "https://api.example.test",
+      }),
+    );
+
+    expect(markup).toContain("Organization settings");
+    expect(markup).toContain("Refresh settings");
+    expect(markup).not.toContain("People directory");
+    expect(markup).not.toContain("Reviewer pools");
   });
 });

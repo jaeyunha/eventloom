@@ -38,6 +38,33 @@ function database() {
 const now = "2026-08-13T12:00:00.000Z";
 
 describe("D1 communications, reports, and remix repositories", () => {
+  it("updates an existing communication template version for approval", async () => {
+    const communications = database();
+    const template: CommunicationTemplate = {
+      id: "template-1",
+      tenantId: "org-1",
+      eventId: "event-1",
+      name: "Decision",
+      purpose: "decision",
+      version: 1,
+      status: "approved",
+      sender: "speakers@sessionboard.namuh.co",
+      subject: "Decision",
+      html: "<p>Decision</p>",
+      text: "Decision",
+      variables: [],
+      createdBy: "user-1",
+      createdAt: now,
+      updatedAt: now,
+      approvedBy: "user-1",
+      approvedAt: now,
+    };
+
+    await new D1CommunicationRepository(communications).updateTemplate(template);
+
+    expect(communications.queries.at(-1)).toContain("UPDATE communication_templates");
+  });
+
   it("batches tenant-scoped immutable writes, CAS guards, audit, and sync jobs", async () => {
     const communications = database();
     const template: CommunicationTemplate = {

@@ -1,39 +1,19 @@
 "use client";
 
-import {
-  CalendarDays,
-  ChartNoAxesColumn,
-  ClipboardList,
-  ContactRound,
-  ExternalLink,
-  FileText,
-  Folder,
-  LayoutDashboard,
-  ListChecks,
-  LogOut,
-  type LucideIcon,
-  Mail,
-  PanelsTopLeft,
-  Search,
-  Settings,
-  Sparkles,
-  Star,
-  Upload,
-  Users,
-} from "lucide-react";
+import { CalendarDays, ChevronDown, LayoutDashboard, LogOut } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { createContext, type ReactNode, useContext, useEffect, useState } from "react";
 import { ThemeToggle } from "@/components/product-shell/theme-toggle";
 import { Button } from "@/components/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Sidebar,
   SidebarContent,
@@ -50,55 +30,24 @@ import {
   SidebarRail,
   SidebarTrigger,
 } from "@/components/ui/sidebar";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { sessionHasAuthenticatedUser } from "../auth/session";
+import { AdminCommandPalette } from "./admin-command-palette";
+import type { AdminCommandPage } from "./admin-command-palette-model";
+import { AdminNavigationIcon } from "./admin-navigation-icon";
 import styles from "./admin-shell.module.css";
 
-interface AdminNavigationItem {
+export interface OrganizerNavigationItem {
   href: string;
   label: string;
   icon: string;
   match(pathname: string): boolean;
 }
 
-interface AdminNavigationGroup {
+export interface OrganizerNavigationGroup {
   label: string;
-  items: readonly AdminNavigationItem[];
+  items: readonly OrganizerNavigationItem[];
 }
-
-const navigationGroupOrder = [
-  {
-    label: "Workspace",
-    itemLabels: ["Home", "Events", "Event overview", "Members", "Settings"],
-  },
-  {
-    label: "Program operations",
-    itemLabels: ["CFP Form", "Submissions", "Reviews", "Agenda"],
-  },
-  {
-    label: "People & content",
-    itemLabels: ["Speakers", "Deliverables", "Files", "CRM"],
-  },
-  {
-    label: "Publish & measure",
-    itemLabels: ["Communications", "Reports", "Content remix", "Embeds", "Integrations"],
-  },
-] as const;
-
-const navigation: readonly AdminNavigationItem[] = [
-  {
-    href: "/admin",
-    label: "Home",
-    icon: "overview",
-    match: (pathname: string) => pathname === "/admin",
-  },
-  {
-    href: "/admin/events",
-    label: "Events",
-    icon: "events",
-    match: (pathname: string) => pathname === "/admin/events",
-  },
-] as const;
 const OrganizerOrganizationContext = createContext<string | null>(null);
 const ORGANIZER_ORGANIZATION_STORAGE_KEY = "eventloom.organizer-organization";
 const LEGACY_ORGANIZER_ORGANIZATION_STORAGE_KEY = "open-sessionboard.organizer-organization";
@@ -122,60 +71,26 @@ export function qualifiedEventContext(
     return null;
   }
 }
-const navigationIcons: Readonly<Record<string, LucideIcon>> = {
-  overview: LayoutDashboard,
-  events: CalendarDays,
-  members: Users,
-  crm: ContactRound,
-  form: FileText,
-  submissions: ClipboardList,
-  reviews: ListChecks,
-  speakers: Star,
-  deliverables: Upload,
-  files: Folder,
-  agenda: CalendarDays,
-  settings: Settings,
-  communications: Mail,
-  reports: ChartNoAxesColumn,
-  remix: Sparkles,
-  embeds: PanelsTopLeft,
-};
-
-function NavigationIcon({ name }: Readonly<{ name: string }>) {
-  const Icon = navigationIcons[name] ?? PanelsTopLeft;
-  return <Icon aria-hidden="true" />;
+export function organizationOverviewHref(organizationId: string): string {
+  return `/admin/organizations/${encodeURIComponent(organizationId)}`;
 }
 
-function eventNavigationItem(
-  basePath: string,
-  path: string,
+export function organizationEventsHref(organizationId: string): string {
+  return `${organizationOverviewHref(organizationId)}/events`;
+}
+
+function navigationItem(
+  href: string,
   label: string,
   icon: string,
-): AdminNavigationItem {
-  const href = `${basePath}/${path}`;
+  matchesChildren = false,
+): OrganizerNavigationItem {
   return {
     href,
     label,
     icon,
-    match: (pathname: string) => pathname === href || pathname.startsWith(`${href}/`),
-  };
-}
-function membersNavigationItem(organizationId: string): AdminNavigationItem {
-  const href = `/admin/organizations/${encodeURIComponent(organizationId)}/members`;
-  return {
-    href,
-    label: "Members",
-    icon: "members",
-    match: (pathname: string) => pathname === href || pathname.startsWith(`${href}/`),
-  };
-}
-function crmNavigationItem(organizationId: string): AdminNavigationItem {
-  const href = `/admin/organizations/${encodeURIComponent(organizationId)}/crm`;
-  return {
-    href,
-    label: "CRM",
-    icon: "crm",
-    match: (pathname: string) => pathname === href || pathname.startsWith(`${href}/`),
+    match: (pathname: string) =>
+      pathname === href || (matchesChildren && pathname.startsWith(`${href}/`)),
   };
 }
 
@@ -190,31 +105,21 @@ function organizationIdFromPathname(pathname: string): string | null {
   }
 }
 
-function groupedNavigation(items: readonly AdminNavigationItem[]): readonly AdminNavigationGroup[] {
-  const itemsByLabel = new Map(items.map((item) => [item.label, item]));
-  return navigationGroupOrder
-    .map((group) => ({
-      label: group.label,
-      items: group.itemLabels.flatMap((label) => {
-        const item = itemsByLabel.get(label);
-        return item ? [item] : [];
-      }),
-    }))
-    .filter((group) => group.items.length > 0);
-}
-
 export function isPublicMemberSetupPath(pathname: string): boolean {
   return /^\/admin\/organizations\/[^/]+\/members\/setup\/?$/u.test(pathname);
 }
 
 function organizationIdForNavigation(
   eventContext: { organizationId: string; eventId: string } | null,
+  requiredOrganizationId: string | null,
   authenticatedOrganizationId: string | null,
 ): string | null {
   if (eventContext !== null) {
     const contextualOrganizationId = eventContext.organizationId.trim();
     return contextualOrganizationId.length > 0 ? contextualOrganizationId : null;
   }
+  const required = requiredOrganizationId?.trim() ?? "";
+  if (required.length > 0) return required;
   const normalizedOrganizationId = authenticatedOrganizationId?.trim() ?? "";
   return normalizedOrganizationId.length > 0 ? normalizedOrganizationId : null;
 }
@@ -270,12 +175,24 @@ export function organizerOrganizationIdFromSession(
   return organizationIds[0] ?? null;
 }
 
+export function organizationNavigationFor(
+  organizationId: string | null,
+): readonly OrganizerNavigationItem[] {
+  const normalizedOrganizationId = organizationId?.trim() ?? "";
+  if (normalizedOrganizationId.length === 0) return [];
+  const base = organizationOverviewHref(normalizedOrganizationId);
+  return [
+    navigationItem(base, "Overview", "overview"),
+    navigationItem(`${base}/crm`, "CRM", "crm", true),
+    navigationItem(`${base}/integrations`, "Integrations", "integrations", true),
+    navigationItem(`${base}/members`, "Members", "members", true),
+    navigationItem(`${base}/settings`, "Settings", "settings", true),
+  ];
+}
+
 export function eventNavigationFor(
   eventContext: { organizationId: string; eventId: string } | null,
-  authenticatedOrganizationId: string | null = null,
-): readonly AdminNavigationItem[] {
-  const organizationId = organizationIdForNavigation(eventContext, authenticatedOrganizationId);
-  const organizationItems = organizationId === null ? [] : [membersNavigationItem(organizationId)];
+): readonly OrganizerNavigationItem[] {
   const scopedEventContext =
     eventContext !== null &&
     eventContext.organizationId.trim().length > 0 &&
@@ -285,45 +202,87 @@ export function eventNavigationFor(
           eventId: eventContext.eventId.trim(),
         }
       : null;
-  if (scopedEventContext === null) return [...navigation, ...organizationItems];
+  if (scopedEventContext === null) return [];
 
-  const eventBasePath = `/admin/organizations/${encodeURIComponent(scopedEventContext.organizationId)}/events/${encodeURIComponent(scopedEventContext.eventId)}`;
-  const eventItems = [
-    ...organizationItems,
-    {
-      href: eventBasePath,
-      label: "Event overview",
-      icon: "overview",
-      match: (pathname: string) => pathname === eventBasePath,
-    },
-    eventNavigationItem(eventBasePath, "cfp", "CFP Form", "form"),
-    eventNavigationItem(eventBasePath, "submissions", "Submissions", "submissions"),
-    eventNavigationItem(eventBasePath, "reviews", "Reviews", "reviews"),
-    eventNavigationItem(eventBasePath, "speakers", "Speakers", "speakers"),
-    eventNavigationItem(eventBasePath, "deliverables", "Deliverables", "deliverables"),
-    eventNavigationItem(eventBasePath, "files", "Files", "files"),
-    eventNavigationItem(eventBasePath, "agenda", "Agenda", "agenda"),
-    eventNavigationItem(eventBasePath, "settings", "Settings", "settings"),
-    eventNavigationItem(eventBasePath, "communications", "Communications", "communications"),
-    eventNavigationItem(eventBasePath, "reports", "Reports", "reports"),
-    eventNavigationItem(eventBasePath, "remix", "Content remix", "remix"),
-    eventNavigationItem(eventBasePath, "embeds", "Embeds", "embeds"),
-    eventNavigationItem(eventBasePath, "integrations", "Integrations", "integrations"),
+  const eventBasePath = `${organizationEventsHref(scopedEventContext.organizationId)}/${encodeURIComponent(scopedEventContext.eventId)}`;
+  return [
+    navigationItem(eventBasePath, "Program overview", "overview"),
+    navigationItem(`${eventBasePath}/cfp`, "CFP Form", "form", true),
+    navigationItem(`${eventBasePath}/submissions`, "Submissions", "submissions", true),
+    navigationItem(`${eventBasePath}/sessions`, "Sessions", "agenda", true),
+    navigationItem(`${eventBasePath}/reviews`, "Reviews", "reviews", true),
+    navigationItem(`${eventBasePath}/agenda`, "Agenda", "agenda", true),
+    navigationItem(`${eventBasePath}/settings`, "Program settings", "settings", true),
+    navigationItem(`${eventBasePath}/speakers`, "Speakers", "speakers", true),
+    navigationItem(`${eventBasePath}/deliverables`, "Content requests", "deliverables", true),
+    navigationItem(`${eventBasePath}/files`, "Files", "files", true),
+    navigationItem(`${eventBasePath}/communications`, "Communications", "communications", true),
+    navigationItem(`${eventBasePath}/remix`, "Content remix", "remix", true),
+    navigationItem(`${eventBasePath}/embeds`, "Embeds", "embeds", true),
+    navigationItem(`${eventBasePath}/reports`, "Reports", "reports", true),
+    navigationItem(`${eventBasePath}/integrations`, "Integrations", "integrations", true),
   ];
-  const itemsByHref = new Map(navigation.map((item) => [item.href, item]));
-  for (const item of eventItems) {
-    if (!itemsByHref.has(item.href)) itemsByHref.set(item.href, item);
-  }
-  return [...itemsByHref.values()];
 }
 
-function eventContextName(eventId: string): string {
-  if (eventId === "demo-event") return "Open Sessionboard Conference";
-  return eventId
-    .split(/[-_]/u)
-    .filter(Boolean)
-    .map((part) => `${part[0]?.toLocaleUpperCase() ?? ""}${part.slice(1)}`)
-    .join(" ");
+export function organizerNavigationGroupsFor(
+  eventContext: { organizationId: string; eventId: string } | null,
+  organizationId: string | null,
+): readonly OrganizerNavigationGroup[] {
+  if (eventContext === null) {
+    const organizationItems = organizationNavigationFor(organizationId);
+    return organizationItems.length === 0
+      ? []
+      : [{ label: "Organization", items: organizationItems }];
+  }
+  const eventItems = eventNavigationFor(eventContext);
+  if (eventItems.length === 0) return [];
+  return [
+    { label: "Program", items: eventItems.slice(0, 6) },
+    { label: "People", items: eventItems.slice(6, 9) },
+    { label: "Content operations", items: eventItems.slice(9, 11) },
+    { label: "Publish", items: eventItems.slice(11) },
+  ];
+}
+
+export function eventWorkspaceDestinationsFor(
+  eventContext: { organizationId: string; eventId: string } | null,
+): readonly { href: string; icon: string; label: string }[] {
+  if (eventContext === null) return [];
+  const organizationBase = organizationOverviewHref(eventContext.organizationId);
+  return [
+    { href: organizationBase, icon: "overview", label: "Organization overview" },
+    { href: `${organizationBase}/events`, icon: "events", label: "All events" },
+    { href: `${organizationBase}/crm`, icon: "crm", label: "CRM" },
+    { href: `${organizationBase}/integrations`, icon: "integrations", label: "Integrations" },
+    { href: `${organizationBase}/members`, icon: "members", label: "Members" },
+    { href: `${organizationBase}/settings`, icon: "settings", label: "Settings" },
+  ];
+}
+
+export function eventWorkspaceNameFromResponse(payload: unknown, eventId: string): string | null {
+  if (!isRecord(payload) || !isRecord(payload.data)) return null;
+  const event = payload.data;
+  if (event.id !== eventId || typeof event.name !== "string") return null;
+  const name = event.name.trim();
+  return name.length > 0 ? name : null;
+}
+
+export async function fetchOrganizerEventName(
+  apiBaseUrl: string,
+  organizationId: string,
+  eventId: string,
+  fetcher: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> = fetch,
+): Promise<string | null> {
+  const response = await fetcher(
+    `${apiBaseUrl}/api/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}`,
+    {
+      credentials: "include",
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    },
+  );
+  if (!response.ok) return null;
+  return eventWorkspaceNameFromResponse(await response.json().catch(() => null), eventId);
 }
 
 export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
@@ -337,14 +296,18 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
   const [availableOrganizationIds, setAvailableOrganizationIds] = useState<readonly string[]>([]);
   const currentOrganizationId = organizationIdForNavigation(
     eventContext,
+    requiredOrganizationId,
     authenticatedOrganizationId,
   );
-  const eventNavigation = eventNavigationFor(eventContext, authenticatedOrganizationId);
-  const navigationWithCrm =
-    currentOrganizationId === null
-      ? eventNavigation
-      : [...eventNavigation, crmNavigationItem(currentOrganizationId)];
-  const navigationGroups = groupedNavigation(navigationWithCrm);
+  const navigationGroups = organizerNavigationGroupsFor(eventContext, currentOrganizationId);
+  const eventWorkspaceDestinations = eventWorkspaceDestinationsFor(eventContext);
+  const eventOrganizationId = eventContext?.organizationId ?? null;
+  const eventId = eventContext?.eventId ?? null;
+  const [eventWorkspaceName, setEventWorkspaceName] = useState<{
+    eventId: string;
+    name: string;
+  } | null>(null);
+  const currentEventName = eventWorkspaceName?.eventId === eventId ? eventWorkspaceName.name : null;
   const [authentication, setAuthentication] = useState<"checking" | "authenticated" | "denied">(
     "checking",
   );
@@ -355,7 +318,30 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
       ? "checking"
       : authentication;
   const [commandOpen, setCommandOpen] = useState(false);
-  const [commandQuery, setCommandQuery] = useState("");
+
+  useEffect(() => {
+    if (eventOrganizationId === null || eventId === null) return;
+    const controller = new AbortController();
+    fetch(
+      `/api/admin/organizations/${encodeURIComponent(eventOrganizationId)}/events/${encodeURIComponent(eventId)}`,
+      {
+        credentials: "include",
+        headers: { Accept: "application/json" },
+        signal: controller.signal,
+      },
+    )
+      .then(async (response) => (response.ok ? response.json() : null))
+      .then((payload: unknown) => {
+        if (controller.signal.aborted) return;
+        const name = eventWorkspaceNameFromResponse(payload, eventId);
+        setEventWorkspaceName(name === null ? null : { eventId, name });
+      })
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        if (!controller.signal.aborted) setEventWorkspaceName(null);
+      });
+    return () => controller.abort();
+  }, [eventId, eventOrganizationId]);
 
   useEffect(() => {
     if (publicMemberSetup) {
@@ -412,7 +398,7 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
     function handleKeyboard(event: KeyboardEvent): void {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        setCommandOpen(true);
+        setCommandOpen((open) => !open);
       }
     }
     window.addEventListener("keydown", handleKeyboard);
@@ -431,36 +417,29 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
     window.location.assign("/");
   }
 
-  const commandItems = [
-    {
-      href: "/admin/events",
-      label: "Go to events",
-      keywords: "events programs calendar",
-    },
-    ...(eventContext
-      ? [
-          {
-            href: `/admin/organizations/${encodeURIComponent(eventContext.organizationId)}/events/${encodeURIComponent(eventContext.eventId)}/reviews`,
-            label: "Open reviews",
-            keywords: "reviews submissions evaluate",
-          },
-          {
-            href: `/admin/organizations/${encodeURIComponent(eventContext.organizationId)}/events/${encodeURIComponent(eventContext.eventId)}/agenda`,
-            label: "Open agenda",
-            keywords: "agenda schedule sessions",
-          },
-        ]
-      : []),
+  const commandPages: readonly AdminCommandPage[] = [
+    ...eventWorkspaceDestinations.map((item) => ({
+      current: pathname === item.href,
+      group: "Organization",
+      href: item.href,
+      icon: item.icon,
+      keywords: "organization workspace navigation",
+      label: item.label,
+    })),
+    ...navigationGroups.flatMap((group) =>
+      group.items.map((item) => ({
+        current: item.match(pathname),
+        group: group.label,
+        href: item.href,
+        icon: item.icon,
+        keywords: `${group.label} organizer navigation`,
+        label: item.label,
+      })),
+    ),
   ];
-  const normalizedCommandQuery = commandQuery.trim().toLocaleLowerCase();
-  const visibleCommandItems = normalizedCommandQuery
-    ? commandItems.filter((item) =>
-        `${item.label} ${item.keywords}`.toLocaleLowerCase().includes(normalizedCommandQuery),
-      )
-    : commandItems;
   const currentPageLabel =
     navigationGroups.flatMap((group) => group.items).find((item) => item.match(pathname))?.label ??
-    "Home";
+    (eventContext === null ? "Overview" : "Program overview");
 
   return (
     <TooltipProvider>
@@ -477,7 +456,14 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
             <SidebarMenu>
               <SidebarMenuItem>
                 <SidebarMenuButton asChild size="lg" tooltip="Eventloom">
-                  <Link href="/admin" aria-label="Eventloom organizer overview">
+                  <Link
+                    href={
+                      currentOrganizationId === null
+                        ? "/admin"
+                        : organizationOverviewHref(currentOrganizationId)
+                    }
+                    aria-label="Eventloom organizer overview"
+                  >
                     <span className={styles.brandMark}>EL</span>
                     <span className={styles.brandCopy}>
                       <strong>Eventloom</strong>
@@ -487,73 +473,70 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
                 </SidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>
-            <Dialog
+            <AdminCommandPalette
+              currentEventId={eventId}
+              onOpenChange={setCommandOpen}
               open={commandOpen}
-              onOpenChange={(open) => {
-                setCommandOpen(open);
-                if (open) setCommandQuery("");
-              }}
-            >
-              <DialogTrigger asChild>
-                <button
-                  aria-keyshortcuts="Meta+K Control+K"
-                  className={styles.commandButton}
-                  type="button"
-                >
-                  <Search aria-hidden="true" />
-                  <span>Search or jump to</span>
-                  <kbd>⌘ K</kbd>
-                </button>
-              </DialogTrigger>
-              <DialogContent
-                aria-label="Jump to a page or action"
-                className={styles.commandDialog}
-                showCloseButton={false}
-              >
-                <DialogHeader className="sr-only">
-                  <DialogTitle>Jump to a page or action</DialogTitle>
-                  <DialogDescription>
-                    Filter organizer pages and choose a destination.
-                  </DialogDescription>
-                </DialogHeader>
-                <label className={styles.commandSearch}>
-                  <Search aria-hidden="true" />
-                  <span className="sr-only">Search pages and actions</span>
-                  <input
-                    autoFocus
-                    placeholder="Search pages and actions…"
-                    type="search"
-                    value={commandQuery}
-                    onChange={(event) => setCommandQuery(event.currentTarget.value)}
-                  />
-                </label>
-                <div className={styles.commandResults}>
-                  {visibleCommandItems.map((item) => (
-                    <Link href={item.href} key={item.href} onClick={() => setCommandOpen(false)}>
-                      <span>{item.label}</span>
-                    </Link>
-                  ))}
-                  {visibleCommandItems.length === 0 ? (
-                    <p className={styles.commandEmpty}>No matching pages or actions.</p>
-                  ) : null}
-                </div>
-              </DialogContent>
-            </Dialog>
+              organizationId={currentOrganizationId}
+              pages={commandPages}
+              triggerClassName={styles.commandButton}
+            />
           </SidebarHeader>
 
           <nav className="flex min-h-0 flex-1 flex-col" aria-label="Organizer navigation">
             <SidebarContent className={styles.sidebarContent}>
-              {eventContext !== null ? (
-                <div className={styles.eventContext}>
-                  <div className={styles.eventContextIcon} aria-hidden="true">
-                    <CalendarDays />
-                  </div>
-                  <div>
-                    <span>Event workspace</span>
-                    <strong>{eventContextName(eventContext.eventId)}</strong>
-                  </div>
-                  <Link href="/admin/events">Switch</Link>
-                </div>
+              {eventContext !== null && currentEventName !== null ? (
+                <DropdownMenu>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          aria-label={`Switch workspace. Current event: ${currentEventName}`}
+                          className={styles.eventContext}
+                          type="button"
+                        >
+                          <span className={styles.eventContextIcon} aria-hidden="true">
+                            <CalendarDays />
+                          </span>
+                          <span className={styles.eventContextCopy}>
+                            <span>Event workspace</span>
+                            <strong>{currentEventName}</strong>
+                          </span>
+                          <ChevronDown className={styles.eventContextChevron} aria-hidden="true" />
+                        </button>
+                      </DropdownMenuTrigger>
+                    </TooltipTrigger>
+                    <TooltipContent
+                      className="bg-popover text-popover-foreground [&>svg]:bg-popover [&>svg]:fill-popover"
+                      side="right"
+                    >
+                      Current event: {currentEventName}
+                    </TooltipContent>
+                  </Tooltip>
+                  <DropdownMenuContent
+                    align="start"
+                    className={styles.eventWorkspaceMenu}
+                    sideOffset={6}
+                  >
+                    <DropdownMenuLabel className={styles.eventWorkspaceMenuLabel}>
+                      Organization workspace
+                    </DropdownMenuLabel>
+                    <DropdownMenuGroup>
+                      {eventWorkspaceDestinations.map((item) => (
+                        <DropdownMenuItem
+                          asChild
+                          className={styles.eventWorkspaceMenuItem}
+                          key={item.href}
+                        >
+                          <Link href={item.href}>
+                            <AdminNavigationIcon name={item.icon} />
+                            <span>{item.label}</span>
+                          </Link>
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               ) : null}
               {navigationGroups.map((group) => (
                 <SidebarGroup className={styles.sidebarGroup} key={group.label}>
@@ -573,7 +556,7 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
                               tooltip={item.label}
                             >
                               <Link href={item.href} aria-current={current ? "page" : undefined}>
-                                <NavigationIcon name={item.icon} />
+                                <AdminNavigationIcon name={item.icon} />
                                 <span>{item.label}</span>
                               </Link>
                             </SidebarMenuButton>
@@ -589,12 +572,17 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
 
           <SidebarFooter className={styles.accountFooter}>
             <div className={styles.organizationCard}>
-              <div className={styles.organizationIdentity}>
+              <div
+                className={styles.organizationIdentity}
+                title={`Organization workspace: ${currentOrganizationId ?? "Not selected"}`}
+              >
                 <div className={styles.organizationAvatar} aria-hidden="true">
                   <span>{currentOrganizationId?.slice(0, 1).toUpperCase() ?? "O"}</span>
                 </div>
                 <div className={styles.organizationCopy}>
-                  <label htmlFor="organizer-organization">Current workspace</label>
+                  <label htmlFor="organizer-organization">
+                    {eventContext === null ? "Current workspace" : "Organization workspace"}
+                  </label>
                   {availableOrganizationIds.length > 1 && currentOrganizationId !== null ? null : (
                     <strong>{currentOrganizationId ?? "Workspace not selected"}</strong>
                   )}
@@ -610,7 +598,9 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
                     if (!availableOrganizationIds.includes(organizationId)) return;
                     window.localStorage.setItem(ORGANIZER_ORGANIZATION_STORAGE_KEY, organizationId);
                     setAuthenticatedOrganizationId(organizationId);
-                    if (requiredOrganizationId !== null) window.location.assign("/admin");
+                    if (requiredOrganizationId !== null) {
+                      window.location.assign(organizationOverviewHref(organizationId));
+                    }
                   }}
                 >
                   {availableOrganizationIds.map((organizationId) => (
@@ -620,16 +610,27 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
                   ))}
                 </select>
               ) : null}
-              <Button asChild className={styles.organizationAction} size="sm" variant="ghost">
-                <Link href="/admin/events">
-                  <CalendarDays aria-hidden="true" />
-                  <span>View all events</span>
-                  <ExternalLink className={styles.organizationActionEnd} aria-hidden="true" />
-                </Link>
-              </Button>
+              {eventContext === null ? (
+                <Button asChild className={styles.organizationAction} size="sm" variant="ghost">
+                  <Link
+                    aria-label="View all events"
+                    href={
+                      currentOrganizationId === null
+                        ? "/admin/events"
+                        : organizationEventsHref(currentOrganizationId)
+                    }
+                    title="View all events"
+                  >
+                    <CalendarDays aria-hidden="true" />
+                    <span>View all events</span>
+                  </Link>
+                </Button>
+              ) : null}
               <Button
+                aria-label="Sign out"
                 className={`${styles.organizationAction} ${styles.signOutAction}`}
                 size="sm"
+                title="Sign out"
                 type="button"
                 variant="ghost"
                 onClick={() => void signOut()}
@@ -650,13 +651,19 @@ export function AdminShell({ children }: Readonly<{ children: ReactNode }>) {
               <span aria-hidden="true">/</span>
               {eventContext !== null ? (
                 <>
-                  <span>{eventContextName(eventContext.eventId)}</span>
+                  <span>{currentEventName ?? "Loading event"}</span>
                   <span aria-hidden="true">/</span>
                 </>
               ) : null}
               <strong>{currentPageLabel}</strong>
             </div>
             <div className={styles.workspaceHeaderActions}>
+              <Button asChild size="sm" variant="ghost">
+                <Link href="/work">
+                  <LayoutDashboard data-icon="inline-start" aria-hidden="true" />
+                  All work
+                </Link>
+              </Button>
               <ThemeToggle />
             </div>
           </header>

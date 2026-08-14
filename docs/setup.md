@@ -12,23 +12,39 @@ The deployment contract is supplied per operator environment:
 | --- | --- | --- | --- |
 | Local | `http://127.0.0.1:3015` | `http://127.0.0.1:8787` | Local processes; browser uses same-origin `/api/*` through the web proxy |
 | Staging | `NEXT_PUBLIC_APP_URL` / `WEB_ORIGIN` | `API_UPSTREAM_ORIGIN` / `API_URL` | Operator-supplied Cloudflare Workers origins |
-| Production | `https://eventloom.namuh.co` | `API_UPSTREAM_ORIGIN` / `API_URL` | Web Worker custom domain; operator-supplied API Worker origin |
+| Production | `NEXT_PUBLIC_APP_URL` / `WEB_ORIGIN` | `API_UPSTREAM_ORIGIN` / `API_URL` | Operator-supplied web and API Worker origins. `https://eventloom.namuh.co` is only the current hosted example. |
 
 Custom domains are recommended for a stable public contract. DNS, Worker
 bindings, cookies, CORS, callbacks, and health checks must be verified by each
 operator before those domains are used as deployment inputs.
 
-The production web Worker declares `eventloom.namuh.co` as a Cloudflare custom
-domain. The `namuh.co` zone must be active in the deployment account; Wrangler
-will create and manage the required DNS record when the production Worker is
-deployed. Do not manually point the hostname at a `workers.dev` address.
+The current hosted example uses `eventloom.namuh.co` as its custom domain.
+Self-hosted production deployments must supply and validate their own web and
+API origins and these four route keys. They are required because production
+uses `workers_dev = false` for both Workers:
+
+```dotenv
+API_HOSTNAME=api.production.example.com
+API_ZONE_NAME=production.example.com
+WEB_HOSTNAME=web.production.example.com
+WEB_ZONE_NAME=production.example.com
+```
+
+Each hostname must belong to the stated operator-owned Cloudflare zone. These
+are production examples, not required repository domains. The API renderer is
+validated by the API preflight and deployment dry run. The web renderer is
+validated separately by `deploy-web.mjs --dry-run`, which renders the web
+Worker configuration. The legacy `sessionboard.namuh.co` addresses used for
+sender identities and calendar UIDs are hosted defaults, not source-compiled
+hosting requirements. Do not manually point a custom hostname at a
+`workers.dev` address when using Cloudflare custom domains.
 
 ## Prerequisites and isolation
 
 - Bun 1.3.14 (the version pinned by `packageManager`).
 - A Cloudflare account with Workers, D1, Durable Objects, R2, and Queues enabled.
-- A dedicated Airtable base and restricted personal access token per environment.
-- An OpenSend sending-scoped key per environment. Staging must be suppressed, sandboxed, or recipient-allowlisted.
+- An Airtable base and restricted personal access token only when the optional organization integration is enabled.
+- An OpenSend sending-scoped key per environment. OpenSend is required by the current runtime, including local integrated development. Staging must be suppressed, sandboxed, or recipient-allowlisted.
 - Access to the private Forge repository `jaeyunha/open-sessionboard`.
 
 Keep local, staging, and production separate. Never copy an Airtable base/token, D1 database, R2 bucket, Queue, Better Auth secret, Cloudflare deployment token, or OpenSend key between environments. Staging data and delivery must never reach production resources or recipients.
@@ -53,14 +69,16 @@ API_URL=http://127.0.0.1:8787
 API_UPSTREAM_ORIGIN=http://127.0.0.1:8787
 BETTER_AUTH_URL=http://127.0.0.1:8787
 BETTER_AUTH_SECRET=<at-least-32-random-bytes>
-AIRTABLE_ACCESS_TOKEN=<local-base-token>
-AIRTABLE_BASE_ID=<local-base-id>
-OPENSEND_API_URL=https://opensend.namuh.co
-OPENSEND_API_KEY=<local-or-suppressed-sending-key>
-AUTH_FROM_EMAIL=auth@sessionboard.namuh.co
-SPEAKERS_FROM_EMAIL=speakers@sessionboard.namuh.co
-CALENDAR_FROM_EMAIL=calendar@sessionboard.namuh.co
-AI_PROVIDER=openai
+AIRTABLE_ACCESS_TOKEN=<local-development-base-token>
+AIRTABLE_BASE_DEV_ID=<local-development-base-id>
+OPENSEND_API_URL=http://127.0.0.1:8026
+OPENSEND_API_KEY=local-development
+AUTH_FROM_EMAIL=login@local.example.test
+SPEAKERS_FROM_EMAIL=program@local.example.test
+CALENDAR_FROM_EMAIL=schedule@local.example.test
+CALENDAR_UID_DOMAIN=calendar.local.example.test
+AI_PROVIDER=disabled
+# Use AI_PROVIDER=openai and set this backend-only key to enable OpenAI.
 OPENAI_API_KEY=<backend-only-openai-key>
 OPENAI_MODEL=gpt-5.6-terra
 OPENAI_AGENDA_MODEL=gpt-5.6-sol
@@ -111,7 +129,13 @@ curl --fail http://127.0.0.1:8787/api/health
 
 ## Advisory AI providers
 
-AI is not used to seed records. It runs only when an authorized user requests an agenda or evaluation proposal locally, or an agenda, evaluation, or content-remix proposal in the deployed Airtable runtime. Non-AI workflows boot and operate when no provider is configured.
+AI is not used to seed records. Set `AI_PROVIDER=disabled` or
+`AI_PROVIDER=openai`. It runs only when an authorized user requests an agenda
+or evaluation proposal locally, or an agenda, evaluation, or content-remix
+proposal in the deployed Airtable runtime. OpenAI is optional only when
+`AI_PROVIDER=disabled`; `OPENAI_API_KEY` is required when
+`AI_PROVIDER=openai`. Non-AI workflows boot and operate with the provider
+disabled.
 
 Local `make dev` loads the ignored root `.env` into the API Worker with Wrangler `--env-file`; `AI_PROVIDER=openai` uses the OpenAI Responses API. `OPENAI_API_KEY` is backend-only: never put it in `NEXT_PUBLIC_*`, browser storage, logs, evidence, committed files, or Wrangler `[vars]`.
 
@@ -125,7 +149,12 @@ RUN_OPENAI_LIVE=1 bunx vitest run \
 
 These synthetic checks prove the real Responses API adapter and local agenda proposal lifecycle. They do not replace deployed staging UI/API acceptance.
 
-Staging and production are configured with OpenAI Responses and the same quality-first per-feature defaults in `apps/api/wrangler.toml`: Sol/medium for agenda and evaluation, Terra/low for remix. `OPENAI_MODEL=gpt-5.6-terra` is the fallback for any future advisory feature without an explicit override. Before deploying either environment, store its distinct OpenAI key as a Cloudflare secret:
+When `AI_PROVIDER=openai`, staging and production use OpenAI Responses and
+the same quality-first per-feature defaults in `apps/api/wrangler.toml`:
+Sol/medium for agenda and evaluation, Terra/low for remix.
+`OPENAI_MODEL=gpt-5.6-terra` is the fallback for any future advisory feature
+without an explicit override. Before deploying an environment with OpenAI,
+store its distinct key as a Cloudflare secret:
 
 ```bash
 bunx wrangler secret put OPENAI_API_KEY --cwd apps/api --env staging
@@ -145,27 +174,50 @@ file. Keep the binding names `DB`, `AGENDA_COORDINATOR`, `PRIVATE_FILES`, and
 modifies the committed template.
 
 Copy `.env.cloudflare.example` to `.env.cloudflare-staging` and
-`.env.cloudflare-production`. These files are ignored. The root `.env` may
-hold shared credentials such as `CLOUDFLARE_API_TOKEN`; the target Cloudflare
-environment file supplies account, resource, and origin identity.
+`.env.cloudflare-production`. These files are ignored. Staging and production
+deploys do not inherit provider credentials from the local root `.env`; export
+`CLOUDFLARE_API_TOKEN` from the secret manager and put account, resource, and
+origin identity in the selected Cloudflare environment file.
 
-Before deploying the API Worker, configure required Worker Secrets for each
-environment. Never place these values in Wrangler configuration or commit them:
+For production, preview the interactive Worker-secret installation plan:
+
+```bash
+bun run cloudflare:secrets:production -- --dry-run
+```
+
+Then export the Cloudflare deployment credential and run the installer:
+
+```bash
+export CLOUDFLARE_ACCOUNT_ID="<production account id>"
+export CLOUDFLARE_API_TOKEN="<deployment token>"
+bun run cloudflare:secrets:production
+```
+
+Wrangler owns every hidden-value prompt; the installer never reads, writes, or prints Worker
+secret values. It installs `BETTER_AUTH_SECRET`, `OPENSEND_API_KEY`, `OPENAI_API_KEY`,
+`AIRTABLE_OAUTH_CLIENT_SECRET`, `AIRTABLE_CREDENTIAL_ENCRYPTION_KEY`, and
+`CACHE_INVALIDATION_TOKEN` on the API Worker, plus the same `CACHE_INVALIDATION_TOKEN` on the
+web Worker. Enter the identical production cache token at both cache-token prompts.
+
+The installer deliberately excludes `CLOUDFLARE_API_TOKEN`, `AIRTABLE_ACCESS_TOKEN`, and R2/AWS
+access credentials because those authenticate deployment tooling or external providers rather
+than application Workers.
+
+For staging or manual installation, configure required Worker Secrets directly. Airtable
+secrets are needed only for environments that enable the optional adapter. Never place these
+values in Wrangler configuration or commit them:
 
 ```bash
 for secret in \
-  AIRTABLE_ACCESS_TOKEN \
-  AIRTABLE_BASE_ID \
   BETTER_AUTH_SECRET \
   CACHE_INVALIDATION_TOKEN; do
   bunx wrangler secret put "$secret" --cwd apps/api --env staging
 done
 ```
 
-Repeat with `--env production` and production-specific values. Add
-`OPENSEND_API_KEY` when outbound email is enabled and `OPENAI_API_KEY` when
-`AI_PROVIDER=openai`. Configure other integration secrets from `.env.example`
-only when that integration is enabled.
+Repeat with `--env production` and production-specific values. Add the required `OPENSEND_API_KEY` for each environment and
+`OPENAI_API_KEY` when `AI_PROVIDER=openai`. Configure other integration secrets
+from `.env.example` only when that integration is enabled.
 
 Set `WEB_ORIGIN` to the web origin and `API_URL` to the API origin in the
 corresponding ignored environment file. The generated Wrangler configuration
@@ -222,8 +274,8 @@ The production form is identical except for the pinned production origins and co
 
 ```bash
 set -eu
-export NEXT_PUBLIC_APP_URL='https://eventloom.namuh.co'
-export API_UPSTREAM_ORIGIN='https://api-production.example.com'
+export NEXT_PUBLIC_APP_URL='https://your-production-web.example.com'
+export API_UPSTREAM_ORIGIN='https://your-production-api.example.com'
 : "${CLOUDFLARE_API_TOKEN:?set the production deployment token from the secret manager}"
 node scripts/cloudflare/deploy-web.mjs production open-sessionboard-web:production
 ```
@@ -245,6 +297,21 @@ Do not mix `drizzle-kit migrate` with Wrangler's `d1_migrations` history. Airtab
 optional per organization and may be connected through OAuth or a scoped PAT. Missing
 Airtable configuration must not prevent Worker boot.
 
+For organization-scoped Airtable OAuth:
+
+- Set `AIRTABLE_OAUTH_CLIENT_ID` in `.env.cloudflare-<environment>`.
+- Store `AIRTABLE_OAUTH_CLIENT_SECRET` and a distinct
+  `AIRTABLE_CREDENTIAL_ENCRYPTION_KEY` as API Worker secrets.
+- Register the production callback exactly as
+  `https://api.eventloom.namuh.co/api/integrations/airtable/oauth/callback`.
+- Grant only `schema.bases:read`, `data.records:read`, `data.records:write`, and
+  `webhook:manage`.
+- Use a separate OAuth registration for local, staging, and production.
+
+Hosted production stores organization-scoped OAuth credentials encrypted in D1 and does not use
+the development `AIRTABLE_ACCESS_TOKEN` or development `AIRTABLE_BASE_ID`. Manual PAT connection
+is an explicitly enabled self-hosting mode and is disabled by default in hosted production.
+
 Migration and reconciliation CLIs:
 
 ```bash
@@ -258,13 +325,21 @@ use an isolated local persistence path rather than deleting user state.
 
 Create an Airtable base only when that environment enables the optional adapter. D1 remains authoritative for organizations, events, CFPs, submissions, participants, reviews, sessions, agendas, CRM records, reports, and other program data. Airtable receives selected projections and controlled inbound fields; use synthetic records in staging and inspect a dry run before any schema mapping change.
 
-OpenSend is the email and calendar delivery boundary at `https://opensend.namuh.co`. Use these exact sender identities:
+OpenSend is the email and calendar delivery boundary. Configure and validate the
+endpoint, credentials, sender identities, and calendar UID domain per deployment.
+The current hosted defaults are `https://opensend.namuh.co`,
+`auth@sessionboard.namuh.co`, `speakers@sessionboard.namuh.co`,
+`calendar@sessionboard.namuh.co`, and `calendar.sessionboard.namuh.co`.
+They aren't source-compiled requirements for self-hosting. Provider-side sender
+verification and deliverability are not claimed by this repository. Calendar
+messages are provider-neutral RFC 5545 attachments with a stable UID, increasing
+`SEQUENCE`, and explicit IANA `TZID`; no calendar-provider account is configured
+by this project.
 
-- `auth@sessionboard.namuh.co` for verification and account mail.
-- `speakers@sessionboard.namuh.co` for CFP, decision, reminder, task, and organizer-group mail.
-- `calendar@sessionboard.namuh.co` for calendar invitations, updates, and cancellations.
-
-Provider-side sender verification and deliverability are not claimed by this repository. Calendar messages are provider-neutral RFC 5545 attachments with a stable UID, increasing `SEQUENCE`, and explicit IANA `TZID`; no calendar-provider account is configured by this project.
+HTTP-triggered delivery and Cloudflare Queue delivery must use the same validated
+settings. Queue delivery adds persistence, retry, and dead-letter handling, but
+it must not select a different endpoint, sender identity, credential, or calendar
+UID domain.
 
 ## Evaluator state preparation
 

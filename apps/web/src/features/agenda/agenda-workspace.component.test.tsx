@@ -14,10 +14,13 @@ import {
   agendaWorkspaceDataMatchesEvent,
   agendaWorkspaceScopeKey,
   canCommitAgendaAsyncCompletion,
+  createCanonicalAgendaWorkspaceApi,
   deriveAgendaViewGroups,
   isAgendaAsyncScopeTokenCurrent,
+  loadCanonicalAgendaWorkspace,
   serializeAgendaSuggestionOptions,
 } from "./agenda-workspace";
+import { createAgendaApi } from "./api";
 import type { AgendaPreview, AgendaWorkspaceData } from "./types";
 
 const workspaceStyles = readFileSync(
@@ -73,6 +76,8 @@ const data: AgendaWorkspaceData = {
       durationMinutes: 60,
       speakerNames: ["Sam Rivera"],
       capacityRequired: 40,
+      trackIds: ["track_main"],
+      trackNames: ["Main stage"],
     },
   ],
   revisions: [
@@ -308,6 +313,41 @@ describe("agenda organizer workspace", () => {
     expect(agendaWorkspaceDataMatchesEvent(data, data.event.id)).toBe(true);
     expect(agendaWorkspaceDataMatchesEvent(data, "event-b")).toBe(false);
   });
+  it("uses the same-origin canonical API in fixture profile and does not synthesize an unavailable agenda", async () => {
+    const previousRuntimeProfile = process.env.NEXT_PUBLIC_RUNTIME_PROFILE;
+    process.env.NEXT_PUBLIC_RUNTIME_PROFILE = "fixture";
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ data }));
+
+    try {
+      const api = createCanonicalAgendaWorkspaceApi("organization-1");
+      await expect(loadCanonicalAgendaWorkspace(api, data.event.id)).resolves.toEqual({
+        api,
+        data,
+      });
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/admin/organizations/organization-1/events/evt_open/agenda",
+        expect.objectContaining({ credentials: "include", cache: "no-store" }),
+      );
+
+      const unavailableApi = createAgendaApi("", "organization-1", async () =>
+        Response.json(
+          { error: { code: "DEPENDENCY_UNAVAILABLE", message: "Agenda unavailable" } },
+          { status: 503 },
+        ),
+      );
+      await expect(
+        loadCanonicalAgendaWorkspace(unavailableApi, data.event.id),
+      ).rejects.toMatchObject({ code: "DEPENDENCY_UNAVAILABLE", status: 503 });
+    } finally {
+      fetchMock.mockRestore();
+      if (previousRuntimeProfile === undefined) {
+        delete process.env.NEXT_PUBLIC_RUNTIME_PROFILE;
+      } else {
+        process.env.NEXT_PUBLIC_RUNTIME_PROFILE = previousRuntimeProfile;
+      }
+    }
+  });
+
   it("presents private draft context and structured conflicts", () => {
     const markup = renderToStaticMarkup(
       createElement(AgendaBoard, {
@@ -504,20 +544,58 @@ describe("agenda organizer workspace", () => {
     expect(markup).toContain("Practical review systems");
     expect(markup).toContain("Workshop");
     expect(markup).toContain("Sam Rivera");
+    expect(markup).toContain("Tracks: Main stage");
     expect(markup).toContain("Schedule session");
     expect(markup).toContain('aria-label="Schedule canvas"');
     expect(markup).not.toContain("Drag an unscheduled session here to open placement.");
   });
 
+  it("keeps a hundred-session placement queue bounded above the timetable", () => {
+    const unscheduledSessions = Array.from({ length: 100 }, (_, index) => ({
+      id: `session-${index + 1}`,
+      title: `Session ${String(index + 1).padStart(3, "0")}`,
+      format: index % 2 === 0 ? "Workshop" : "Talk",
+      durationMinutes: index % 3 === 0 ? 60 : 30,
+      speakerNames: [`Speaker ${index + 1}`],
+      capacityRequired: 40 + index,
+      trackIds: [index % 2 === 0 ? "track-1" : "track-2"],
+      trackNames: [index % 2 === 0 ? "Main stage" : "In practice"],
+    }));
+
+    const markup = renderBoard({
+      ...data,
+      unscheduledSessions,
+    });
+
+    expect(markup).toContain('data-queue-total="100"');
+    expect(markup).toContain('data-queue-visible="6"');
+    expect(markup.match(/data-queue-session=/gu)).toHaveLength(6);
+    expect(markup).toMatch(/<button[^>]*aria-haspopup="dialog"[^>]*>Browse all/u);
+  });
+
+  it("renders a room-by-time grid as the primary planning surface", () => {
+    const markup = renderBoard(multiDayData);
+
+    expect(markup).toContain('data-agenda-region="planner"');
+    expect(markup).toContain('data-agenda-order="1"');
+    expect(markup).toContain('data-agenda-region="release"');
+    expect(markup).toContain('data-agenda-order="2"');
+    expect(markup).toContain('aria-label="Timetable by room and time"');
+    expect(markup).toContain('data-agenda-grid="true"');
+    expect(markup).toContain('data-room-id="room_main"');
+    expect(markup).toContain('data-room-id="room_breakout"');
+    expect(markup).toContain('data-slot-minute="480"');
+    expect(markup).toContain('data-slot-minute="510"');
+    expect(markup).toContain('data-agenda-drop-target="placement-queue"');
+    expect(markup).toMatch(/data-entry-id="entry_keynote"[^>]*draggable="true"/u);
+  });
+
   it("presents an empty placement queue as complete instead of a broken action", () => {
     const markup = renderBoard({ ...data, unscheduledSessions: [] });
 
-    expect(markup).toContain("All accepted sessions placed");
-    expect(markup).toContain("No accepted sessions are waiting for a time and room.");
-    expect(markup).toContain('role="status"');
-    expect(markup).not.toMatch(
-      /<button[^>]*disabled=""[^>]*>All accepted sessions placed<\/button>/,
-    );
+    expect(markup).toContain('data-agenda-drop-target="placement-queue"');
+    expect(markup).toContain('data-empty="true"');
+    expect(markup).not.toContain("Choose time and room");
   });
   it("navigates every event day, including empty days, without crossing event boundaries", () => {
     const groups = deriveAgendaViewGroups(emptyDayData, "day");
@@ -568,7 +646,7 @@ describe("agenda organizer workspace", () => {
     expect(markup).toContain('aria-live="polite"');
     expect(markup).toMatch(/<button[^>]*disabled=""[^>]*>Apply selected changes<\/button>/);
   });
-  it("exposes all five accessible schedule tabs with Day selected by default", () => {
+  it("exposes all five accessible schedule tabs with Timetable selected by default", () => {
     const markup = renderBoard(multiDayData);
     expect(markup).toContain('role="tablist"');
     expect(markup).toContain('aria-labelledby="agenda-view-label"');
@@ -627,7 +705,11 @@ describe("agenda organizer workspace", () => {
     for (const mode of AGENDA_VIEW_MODES) {
       const markup = renderBoard(multiDayData, mode);
       expect(markup).toContain("Edit");
-      expect(markup).toContain("Hard conflict:");
+      if (mode === "day") {
+        expect(markup).toContain("Main hall already has a session at this time.");
+      } else {
+        expect(markup).toContain("Hard conflict:");
+      }
       expect(markup).toContain(`id="agenda-view-${mode}"`);
       expect(markup).toMatch(new RegExp(`id="agenda-view-${mode}"[^>]*aria-selected="true"`));
     }

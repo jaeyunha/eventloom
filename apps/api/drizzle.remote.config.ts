@@ -15,7 +15,7 @@ export default defineConfig({
   out: "./drizzle",
   dbCredentials: {
     accountId: requiredEnvironmentVariable("CLOUDFLARE_ACCOUNT_ID"),
-    databaseId: requiredEnvironmentVariable("CLOUDFLARE_D1_DATABASE_ID"),
+    databaseId: requiredEnvironmentVariable("D1_DATABASE_ID"),
     token: requiredEnvironmentVariable("CLOUDFLARE_API_TOKEN"),
   },
   strict: true,

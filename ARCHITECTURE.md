@@ -41,6 +41,8 @@ The exported runtime composes D1 repositories for supported product domains. Air
 
 Cloudflare D1 is the authoritative store for tenant, program, identity, and operational state: organizations and memberships; events, CFP, submissions, speakers, evaluations, sessions, and agenda; communications, reports, CRM, remix, and publication; authentication, API credentials, audit, idempotency, customer webhooks, integration state, and delivery coordination. Supported runtime repositories resolve these records from D1, and ordinary product traffic does not read Airtable or wait for it.
 
+Production UI modules never embed event, submission, speaker, agenda, review, task, activity, date, or metric records as runtime fallbacks. Loading, unavailable, empty, and error states remain explicit until an authoritative API response arrives. Deterministic examples are permitted only in test-only modules and isolated fixture inputs with no production import path. Local fixture scenarios must drive the same domain services and transitions as the deployed runtime; they may not create contradictory repository snapshots, silently default missing event scope, or substitute browser-side demo data after an API failure.
+
 Event creation and empty Agenda initialization commit in the same D1 batch. Every event
 therefore has exactly one Agenda workspace from state/draft version 1 before rooms,
 tracks, or sessions exist. `scripts/d1-airtable-migration/backfill-agendas/` repairs
@@ -101,7 +103,7 @@ The repository includes a forward-only Airtable-to-D1 migration toolchain:
 
 The checked-in import CLI currently validates and prints a plan; it explicitly does not write D1 without an injected execution adapter. Likewise, marker and fence adapters are injection boundaries rather than proof that a tenant has been cut over. Before `write-d1`, operators export, import, reconcile, shadow-read, acquire a short write fence, apply final deltas, and record the marker. A `read-d1` marker may roll back to `shadow`; after the first accepted D1-authoritative write, rollback to Airtable writes is prohibited. Recovery is forward repair from D1, with Airtable projection paused if necessary. Remote schema changes stay additive so the previous Worker can run against the expanded schema if deployment fails after migration.
 
-The current default runtime is already D1-backed and Airtable-optional. The migration/cutover tooling exists to move legacy organization data safely; documentation or a generated plan alone is not evidence that any remote dataset was imported, reconciled, or cut over.
+The current default runtime is already D1-backed and Airtable-optional. D1 remains authoritative even when the optional Airtable integration is enabled. The migration/cutover tooling exists to move legacy organization data safely; documentation or a generated plan alone is not evidence that any remote dataset was imported, reconciled, or cut over.
 
 ## Authentication and product scope
 
@@ -117,10 +119,11 @@ The built-in Speaker CRM is an organization-scoped first-party contact system wi
 
 ## Integrations and advisory AI
 
-- **OpenSend:** The API sends through `https://opensend.namuh.co` using `auth@sessionboard.namuh.co`, `speakers@sessionboard.namuh.co`, and `calendar@sessionboard.namuh.co`. Provider verification and environment-specific credentials are deployment concerns.
-- **Calendar:** RFC 5545 `REQUEST`, `UPDATE`, and `CANCEL` messages use UIDs under `calendar.sessionboard.namuh.co`, increasing `SEQUENCE`, explicit IANA time zones, and organizer `calendar@sessionboard.namuh.co`. Calendar-provider OAuth is not required.
+- **OpenSend:** OpenSend is required by the current API runtime because the Worker composes authentication, communications, and calendar delivery through the configured endpoint. It uses deployment-owned, validated sender identities for authentication, speaker, and calendar mail. The current hosted defaults are `auth@sessionboard.namuh.co`, `speakers@sessionboard.namuh.co`, and `calendar@sessionboard.namuh.co`; these are not source-compiled requirements. Provider verification and environment-specific credentials are deployment concerns.
+- **Calendar:** RFC 5545 `REQUEST`, `UPDATE`, and `CANCEL` messages use deployment-owned, validated UID-domain configuration, increasing `SEQUENCE`, and explicit IANA time zones. The current hosted default UID domain is `calendar.sessionboard.namuh.co`, with the calendar sender identity as organizer. Calendar-provider OAuth is not required.
+- **Delivery settings:** HTTP-triggered delivery and Cloudflare Queue delivery use the same deployment settings for the OpenSend endpoint, sender identities, calendar UID domain, credentials, and validation. Queue delivery changes transport and retry behavior, not provider identity or message configuration.
 - **Public API and webhooks:** Versioned REST resources, scoped API keys, cursor pagination, idempotent writes, optimistic concurrency, and signed retryable webhooks expose only authorized or published data.
-- **Optional advisory AI:** AI is feature-scoped, not an application boot or seed prerequisite. A provider is called only after an authorized user requests an agenda proposal, evaluation assistance, or remix proposal. If that feature's provider is unavailable, non-AI workflows continue and the control/API reports an explicit unavailable state.
+- **Optional advisory AI:** Set `AI_PROVIDER=disabled` or `AI_PROVIDER=openai`. OpenAI is optional only when disabled, and `OPENAI_API_KEY` is required when `AI_PROVIDER=openai`. AI is feature-scoped, not an application boot or seed prerequisite. A provider is called only after an authorized user requests an agenda proposal, evaluation assistance, or remix proposal. If that feature's provider is unavailable, non-AI workflows continue and the control/API reports an explicit unavailable state.
 - **Provider and model selection:** Local, staging, and production use OpenAI Responses (`openai-responses`) with a backend-only `OPENAI_API_KEY`. Agenda uses `gpt-5.6-sol` at medium reasoning because placement quality is the hardest constraint-planning task; deterministic conflict validation remains authoritative. Evaluation uses `gpt-5.6-sol` at medium reasoning because rubric interpretation and cited evidence are consequential and quality-sensitive. Content remix uses `gpt-5.6-terra` at low reasoning because it needs strong bounded writing quality without Sol's cost/latency. `gpt-5.6-luna` is the low-cost high-volume candidate, but is not selected until representative remix/evaluation benchmarks show no material quality loss. The adapter uses `POST /v1/responses` with JSON output and per-feature provenance. Each deployed environment requires its own provider-managed secret.
 - **Payload boundary:** Agenda requests contain the event and base draft/revision version, selected rooms, day/time windows, ordered rules, eligible session titles and scheduling fields, and existing agenda entries. Evaluation requests contain the selected rubric plus the submission title, abstract, and answers visible under the reviewer's projection. Remix requests contain only organizer-selected content fields and tone/guidance. Unselected private fields, credentials, and unrelated records are excluded.
 - **Advisory result boundary:** Providers return typed, private candidates with provider/model provenance. Base versions and source revisions are checked again before any application; stale candidates are rejected. A human must review and explicitly apply, edit, or reject a candidate. AI never scores, decides, schedules, publishes, sends, exports, or overwrites source records by itself.
@@ -128,11 +131,27 @@ The built-in Speaker CRM is an organization-scoped first-party contact system wi
 
 ## Current hosting
 
-Deployment origins are operator configuration. The public repository does not
-publish a Cloudflare account, D1 identifiers, or an account-specific
+Deployment origins and routes are operator configuration. Production sets
+`workers_dev = false`, so self-hosted production environments must define all
+four custom-domain route keys:
+
+```dotenv
+API_HOSTNAME=api.production.example.com
+API_ZONE_NAME=production.example.com
+WEB_HOSTNAME=web.production.example.com
+WEB_ZONE_NAME=production.example.com
+```
+
+These are production examples. Each hostname must belong to its operator-owned
+Cloudflare zone. The API preflight and API dry run render and validate the API
+Worker configuration. The web deployment dry run renders and validates the
+separate web Worker configuration. The public repository
+does not publish a Cloudflare account, D1 identifiers, or an account-specific
 `workers.dev` subdomain. Staging and production environment files supply their
-own HTTPS web/API origins and resource IDs. Custom domains are recommended for
-stable production URLs. Sender and calendar identities use
+own HTTPS web/API origins and resource IDs. A web custom-domain deployment also
+supplies its route `pattern` and Cloudflare `zone_name`. The current hosted
+`eventloom.namuh.co` route is only an example, not a self-hosting requirement.
+Custom domains are recommended for stable production URLs. Sender and calendar identities use
 `sessionboard.namuh.co` independently of web/API hosting.
 
 ## Repository policy

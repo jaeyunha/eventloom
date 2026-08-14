@@ -1,7 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AgendaState } from "../features/agenda/types";
 import type { RemixProviderInput } from "../features/remix/types";
-import { FakeAirtableTransport } from "../infrastructure/airtable";
 import {
   type CloudflareAiBinding,
   CloudflareAiProviderError,
@@ -14,8 +12,12 @@ import {
 } from "./cloudflare";
 import { createRuntimeDependencies } from "./composition";
 
+vi.setConfig({ testTimeout: 15_000 });
+
 const BASE_ID = "base-runtime-ai";
 const MODEL = "@cf/meta/test-runtime-model";
+const AIRTABLE_CREDENTIAL_ENCRYPTION_KEY =
+  "airtable-credential-key-that-is-at-least-32-characters-long";
 
 function database(): NonNullable<RuntimeBindings["DB"]> {
   return {
@@ -72,14 +74,17 @@ function productionBindings(ai: CloudflareAiBinding): RuntimeBindings {
     AGENDA_COORDINATOR: coordinator,
     PRIVATE_FILES: privateFiles,
     OUTBOX_QUEUE: outboxQueue,
-    AIRTABLE_ACCESS_TOKEN: "airtable-token",
     AIRTABLE_BASE_ID: BASE_ID,
+    AIRTABLE_CREDENTIAL_ENCRYPTION_KEY,
     BETTER_AUTH_SECRET: "runtime-secret-that-is-at-least-32-characters-long",
     OPENSEND_API_URL: "https://opensend.namuh.co",
     OPENSEND_API_KEY: "opensend-api-key",
     CACHE_INVALIDATION_URL: "https://web-production.example.test/api/internal/cache-invalidation",
     CACHE_INVALIDATION_TOKEN: "shared-cache-invalidation-token",
     AUTH_FROM_EMAIL: "auth@sessionboard.namuh.co",
+    SPEAKERS_FROM_EMAIL: "speakers@sessionboard.namuh.co",
+    CALENDAR_FROM_EMAIL: "calendar@sessionboard.namuh.co",
+    CALENDAR_UID_DOMAIN: "calendar.sessionboard.namuh.co",
     AI: ai,
     AI_MODEL: MODEL,
     AI_PROVIDER: "cloudflare",
@@ -106,40 +111,6 @@ function remixInput(): RemixProviderInput {
   };
 }
 
-function agendaState(): AgendaState {
-  return {
-    eventId: "event-1",
-    stateVersion: 0,
-    timeZone: "UTC",
-    minimumTravelMinutes: 0,
-    sessions: [
-      {
-        id: "session-1",
-        title: "A useful session",
-        status: "accepted",
-        participantIds: [],
-        resourceIds: [],
-        capacityRequired: 1,
-      },
-    ],
-    rooms: [{ id: "room-1", name: "Main room", capacity: 100 }],
-    tracks: [],
-    draft: {
-      eventId: "event-1",
-      version: 1,
-      timeZone: "UTC",
-      entries: [],
-      warningOverrides: [],
-      updatedAt: "2026-08-09T00:00:00.000Z",
-      updatedBy: "seed",
-    },
-    revisions: [],
-    currentPublishedRevisionId: null,
-    outbox: [],
-    audit: [],
-    suggestionRuns: [],
-  };
-}
 async function generateLocalSuggestion(
   dependencies: ReturnType<typeof createRuntimeDependencies>,
   eventId = "demo-event",
@@ -183,6 +154,48 @@ describe("Cloudflare runtime AI composition", () => {
     );
     expect(() => createCloudflareDependencies(withoutModel)).toThrow(
       "The production runtime is not configured.",
+    );
+  });
+
+  it("wires OAuth without a global base and enables PAT only through its explicit binding", () => {
+    const ai: CloudflareAiBinding = {
+      async run() {
+        return { response: "{}" };
+      },
+    };
+    const { AIRTABLE_BASE_ID: _legacyBaseId, ...oauthOnlyBindings } = productionBindings(ai);
+
+    const oauthOnly = createCloudflareDependencies({
+      ...oauthOnlyBindings,
+      AIRTABLE_OAUTH_CLIENT_ID: "airtable-oauth-client",
+    });
+    const patEnabled = createCloudflareDependencies({
+      ...oauthOnlyBindings,
+      AIRTABLE_OAUTH_CLIENT_ID: "airtable-oauth-client",
+      AIRTABLE_PAT_CONNECTION_ENABLED: "true",
+    });
+
+    expect(oauthOnly.airtableIntegration?.completeOAuth).toEqual(expect.any(Function));
+    expect(oauthOnly.airtableIntegration?.connectPat).toBeUndefined();
+    expect(patEnabled.airtableIntegration?.connectPat).toEqual(expect.any(Function));
+  });
+
+  it("requires a dedicated credential key when OAuth is configured outside local development", () => {
+    const ai: CloudflareAiBinding = {
+      async run() {
+        return { response: "{}" };
+      },
+    };
+    const { AIRTABLE_CREDENTIAL_ENCRYPTION_KEY: _credentialKey, ...withoutCredentialKey } =
+      productionBindings(ai);
+
+    expect(
+      inspectProductionRuntime({
+        ...withoutCredentialKey,
+        AIRTABLE_OAUTH_CLIENT_ID: "airtable-oauth-client",
+      }).issues,
+    ).toContain(
+      "AIRTABLE_CREDENTIAL_ENCRYPTION_KEY must contain at least 32 characters when Airtable OAuth is configured",
     );
   });
 

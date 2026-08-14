@@ -356,12 +356,14 @@ describe("public API v1", () => {
     };
     const document = (await openapi.json()) as {
       openapi: string;
+      servers: Array<{ url: string; description: string }>;
       paths: Record<string, unknown>;
     };
     expect(malformed.status).toBe(400);
     expect(body.error.traceId).toBe("trace-test");
     expect(body.error.message).not.toContain("base64");
     expect(document.openapi).toBe("3.1.0");
+    expect(document.servers).toEqual([{ url: "/", description: "API origin" }]);
     expect(document.paths["/api/v1/organizations/{organizationId}/events"]).toBeDefined();
     const collectionPath = document.paths["/api/v1/organizations/{organizationId}/events"] as {
       get: {

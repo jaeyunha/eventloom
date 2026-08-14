@@ -62,10 +62,18 @@ export interface PortalSubmission {
   title: string;
   status: PortalSubmissionStatus;
   participantIds: readonly string[];
+  participants?: readonly {
+    id: string;
+    firstName: string;
+    lastName: string;
+    email: string;
+    role: "primary" | "co_author";
+  }[];
   updatedAt: string;
   version?: number;
   formId?: string;
   closeAt?: string;
+  answers?: Readonly<Record<string, unknown>>;
 }
 
 export interface PortalProfile {
@@ -158,8 +166,18 @@ export interface PortalAsset {
   state: PortalAssetState;
   createdAt: string;
   version?: number;
+  versionId?: string;
   versionFamilyId?: string;
   supersedesAssetId?: string;
+  latestVersionId?: string | null;
+  currentVersionId?: string | null;
+  approvedVersionId?: string | null;
+  releasedVersionId?: string | null;
+  reviewState?: "approved" | "needs_changes";
+  reviewNote?: string;
+  reviewedAt?: string;
+  reviewedBy?: string;
+  reviewVersion?: number;
   commentThreadId?: string;
   rejectionReason?: string;
   finalizedAt?: string;

@@ -23,6 +23,7 @@ export interface AgendaEventMetadata {
   readonly timeZone: string;
   readonly startsOn: string;
   readonly endsOn: string;
+  readonly scheduleDates?: readonly string[];
   readonly venueName: string | null;
 }
 export interface AgendaRouteDependencies {
@@ -37,7 +38,16 @@ export interface AgendaRouteDependencies {
   /** Legacy projection selector retained for isolated route adapters. Runtime composition uses manifests. */
   readonly publicRevisionNumberForEventSlug?: (eventSlug: string) => Promise<number | null>;
 }
+export interface PublishedAgendaRouteOptions {
+  readonly calendarUidDomain: string;
+}
 
+const calendarUidDomainSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .max(253)
+  .regex(/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u);
 const identifierSchema = z.string().trim().min(1).max(200);
 const expectedVersionSchema = z.number().int().positive();
 const sessionSchema = z
@@ -251,8 +261,8 @@ function agendaErrorResponse(context: AgendaContext, error: AgendaError): Respon
       const suggestionRoute = context.req.path.includes("/suggestions");
       return errorResponse(
         context,
-        412,
-        "PRECONDITION_FAILED",
+        suggestionRoute ? 412 : 409,
+        suggestionRoute ? "PRECONDITION_FAILED" : "CONFLICT",
         suggestionRoute
           ? "The agenda suggestion base draft revision is stale."
           : "The agenda draft revision is stale.",
@@ -356,6 +366,13 @@ function agendaDate(value: string): string | null {
 }
 
 function agendaDateRange(metadata: AgendaEventMetadata): ReadonlySet<string> {
+  if (metadata.scheduleDates !== undefined && metadata.scheduleDates.length > 0) {
+    const dates = metadata.scheduleDates.map(agendaDate);
+    if (dates.some((date) => date === null)) {
+      throw new AgendaError("INVALID_AGENDA", "The event schedule dates are invalid.");
+    }
+    return new Set(dates as string[]);
+  }
   const start = agendaDate(metadata.startsOn);
   const end = agendaDate(metadata.endsOn);
   if (start === null || end === null || start > end) {
@@ -543,6 +560,7 @@ function adminAgendaWorkspaceView(
       .filter((session) => isAcceptedAgendaSession(session) && !scheduledSessionIds.has(session.id))
       .map((session) => {
         const record = agendaRecord(session);
+        const trackIds = agendaStrings(record, "trackIds");
         return {
           id: session.id,
           title: session.title,
@@ -551,6 +569,8 @@ function adminAgendaWorkspaceView(
             typeof session.durationMinutes === "number" ? session.durationMinutes : 30,
           speakerNames: agendaSessionSpeakerNames(session),
           capacityRequired: session.capacityRequired,
+          trackIds,
+          trackNames: trackIds.map((trackId) => trackById.get(trackId)?.name ?? trackId),
         };
       }),
     revisions: state.revisions.map((revision) => ({
@@ -1067,7 +1087,6 @@ function publishedAgendaView(revision: PublishedAgendaRevision) {
 
 const PUBLIC_AGENDA_CACHE_CONTROL =
   "public, max-age=0, s-maxage=60, stale-while-revalidate=30, must-revalidate";
-const PUBLIC_CALENDAR_UID_DOMAIN = "calendar.sessionboard.namuh.co";
 const publicEventSlugSchema = z.string().trim().min(1).max(200);
 type PublishedAgendaProjection = ReturnType<typeof publishedAgendaView>;
 type PublishedAgendaProjectionValue = {
@@ -1429,10 +1448,14 @@ function encodeCalendarUidPart(value: string): string {
   return encodeURIComponent(value).replaceAll(".", "%2E");
 }
 
-function publicCalendarUid(eventSlug: string, sessionId: string): string {
-  return `${encodeCalendarUidPart(eventSlug)}.${encodeCalendarUidPart(sessionId)}@${
-    PUBLIC_CALENDAR_UID_DOMAIN
-  }`;
+function publicCalendarUid(
+  eventSlug: string,
+  sessionId: string,
+  calendarUidDomain: string,
+): string {
+  return `${encodeCalendarUidPart(eventSlug)}.${encodeCalendarUidPart(
+    sessionId,
+  )}@${calendarUidDomain}`;
 }
 
 interface IcalDateTimeParts {
@@ -1507,7 +1530,11 @@ function formatCalendarUtcDateTime(value: string): string {
   ).padStart(2, "0")}Z`;
 }
 
-function publicAgendaCalendar(projection: PublishedAgendaProjection, eventSlug: string): string {
+function publicAgendaCalendar(
+  projection: PublishedAgendaProjection,
+  eventSlug: string,
+  calendarUidDomain: string,
+): string {
   const timeZone = publicCalendarTimeZone(projection.event.timeZone);
   const lines = [
     "BEGIN:VCALENDAR",
@@ -1530,7 +1557,7 @@ function publicAgendaCalendar(projection: PublishedAgendaProjection, eventSlug: 
     const endsAt = formatCalendarDateTime(calendarDateTimeParts(entry.endsAt, timeZone));
     lines.push(
       "BEGIN:VEVENT",
-      `UID:${publicCalendarUid(eventSlug, entry.sessionId)}`,
+      `UID:${publicCalendarUid(eventSlug, entry.sessionId, calendarUidDomain)}`,
       `DTSTAMP:${formatCalendarUtcDateTime(projection.revision.publishedAt)}`,
       `DTSTART;TZID=${timeZone}:${startsAt}`,
       `DTEND;TZID=${timeZone}:${endsAt}`,
@@ -1610,9 +1637,11 @@ export function createPublishedAgendaRoutes(
     | "eventIdForSlug"
     | "getProgramPublicationManifest"
     | "publicRevisionNumberForEventSlug"
-  >,
+  > &
+    PublishedAgendaRouteOptions,
 ): Hono<AgendaRouteEnvironment> {
   const routes = new Hono<AgendaRouteEnvironment>();
+  const calendarUidDomain = calendarUidDomainSchema.parse(dependencies.calendarUidDomain);
   const cacheState = agendaCacheState(dependencies.engine);
   const projectionForRequest = (
     context: AgendaContext,
@@ -1656,7 +1685,7 @@ export function createPublishedAgendaRoutes(
     );
   const icsRoute = (context: AgendaContext): Promise<Response> =>
     cachedFeed(context, "text/calendar; charset=utf-8", (result) =>
-      publicAgendaCalendar(result.projection, result.eventSlug),
+      publicAgendaCalendar(result.projection, result.eventSlug, calendarUidDomain),
     );
   routes.get("/agenda", jsonRoute);
   routes.get("/agenda.json", jsonRoute);

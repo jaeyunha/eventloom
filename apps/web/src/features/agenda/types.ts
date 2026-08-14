@@ -28,6 +28,8 @@ export interface AgendaSession {
   durationMinutes: number;
   speakerNames: readonly string[];
   capacityRequired: number;
+  trackIds: readonly string[];
+  trackNames: readonly string[];
 }
 
 export interface AgendaEntry {

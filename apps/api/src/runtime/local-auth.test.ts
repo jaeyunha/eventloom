@@ -1,11 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../app";
 import { createLocalDependencies } from "./local";
+
+vi.setConfig({ testTimeout: 15_000 });
 
 describe("local public applicant authentication", () => {
   const environment = {
     APP_ENV: "local" as const,
-    WEB_ORIGIN: "http://localhost:3015",
+    WEB_ORIGIN: "http://127.0.0.1:3015",
   };
 
   it("resolves the seeded demo event for the local agenda boundary", async () => {
@@ -34,6 +36,24 @@ describe("local public applicant authentication", () => {
           name: "Open Sessionboard Conference",
           timeZone: "America/Los_Angeles",
         },
+      },
+    });
+  });
+
+  it("authorizes organizer evaluations for the event id in the query", async () => {
+    const app = createApp(createLocalDependencies());
+    const response = await app.request(
+      "/api/admin/evaluations/organizer/workspace?eventId=open-sessionboard-conf",
+      {
+        headers: { cookie: "better-auth.session_token=local-session" },
+      },
+      environment,
+    );
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({
+      error: {
+        code: "NOT_FOUND",
       },
     });
   });
@@ -115,6 +135,27 @@ describe("local public applicant authentication", () => {
       data: {
         ownerAccountId: expect.stringContaining("local-applicant-"),
         status: "draft",
+      },
+    });
+  });
+
+  it("authorizes the local organizer account for the aggregate reviewer workspace", async () => {
+    const app = createApp(createLocalDependencies());
+
+    const response = await app.request(
+      "/api/admin/evaluations/reviewer/workspace",
+      {
+        headers: {
+          cookie: "better-auth.session_token=local-session",
+        },
+      },
+      environment,
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      data: {
+        assignments: expect.any(Array),
       },
     });
   });

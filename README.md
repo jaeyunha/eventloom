@@ -74,9 +74,24 @@ configuration contains non-deployable placeholders and stable public binding
 names only.
 
 Operators set `NEXT_PUBLIC_APP_URL`, `API_UPSTREAM_ORIGIN`, `WEB_ORIGIN`, and
-`API_URL` to their deployed HTTPS origins. Custom domains are recommended for
-stable production URLs, but no domain is claimed as part of the public source
-distribution.
+`API_URL` to their deployed HTTPS origins. Production custom-domain routing also
+requires these four explicit keys because the production API and web Workers
+use `workers_dev = false`:
+
+```dotenv
+API_HOSTNAME=api.production.example.com
+API_ZONE_NAME=production.example.com
+WEB_HOSTNAME=web.production.example.com
+WEB_ZONE_NAME=production.example.com
+```
+
+Each hostname must belong to its corresponding operator-owned Cloudflare zone.
+The values above are production examples, not repository-owned domains. Set
+`AI_PROVIDER=disabled` or `AI_PROVIDER=openai`. OpenAI is optional when the
+provider is disabled, but `OPENAI_API_KEY` is required when
+`AI_PROVIDER=openai`. The API deployment preflight validates the API renderer
+configuration, while the web deployment dry run validates the separate web
+renderer configuration.
 
 ## Repository policy
 
@@ -111,9 +126,12 @@ need:
 - a public HTTPS origin for the web Worker and another for the API Worker; and
 - Bun 1.3 or newer.
 
-OpenSend and OpenAI are optional until you enable outbound delivery or advisory
-AI. Better Auth secrets, provider tokens, and all operator resource IDs stay in
-ignored environment files or Cloudflare Worker Secrets.
+OpenSend is required by the current API runtime because authentication,
+communications, and calendar delivery are composed at Worker boot. Set `AI_PROVIDER=disabled` to run without OpenAI, or `AI_PROVIDER=openai` to
+enable advisory AI. OpenAI is optional only when the provider is disabled;
+`OPENAI_API_KEY` is required when `AI_PROVIDER=openai`. Better Auth secrets,
+provider tokens, and all operator resource IDs stay in ignored environment
+files or Cloudflare Worker Secrets.
 
 ### 1. Install and configure
 
@@ -127,8 +145,9 @@ cp .env.cloudflare.example .env.cloudflare-staging
 cp .env.cloudflare.example .env.cloudflare-production
 ```
 
-Set the authentication values in `.env`. Configure Airtable only when enabling
-the optional adapter. In each
+Set the authentication values in `.env`. Airtable is optional, and D1 remains
+authoritative. For integrated local Airtable, use `AIRTABLE_BASE_DEV_ID`, not
+`AIRTABLE_BASE_ID`. In each
 `.env.cloudflare-<environment>` file, set:
 
 ```dotenv
@@ -138,11 +157,25 @@ WEB_ORIGIN=https://your-web.example.com
 API_URL=https://your-api.example.com
 NEXT_PUBLIC_APP_URL=https://your-web.example.com
 API_UPSTREAM_ORIGIN=https://your-api.example.com
+OPENSEND_API_URL=https://your-opensend.example.com
+AUTH_FROM_EMAIL=auth@your-domain.example
+SPEAKERS_FROM_EMAIL=speakers@your-domain.example
+CALENDAR_FROM_EMAIL=calendar@your-domain.example
+CALENDAR_UID_DOMAIN=calendar.your-domain.example
+AI_PROVIDER=disabled
+# Set AI_PROVIDER=openai and add OPENAI_API_KEY when advisory AI is enabled.
+OPENAI_MODEL=<model-name>
+OPENAI_AGENDA_MODEL=<agenda-model-name>
+OPENAI_EVALUATION_MODEL=<evaluation-model-name>
+OPENAI_REMIX_MODEL=<remix-model-name>
+# Web custom-domain renderer values, when applicable:
+# route pattern=<your-web-host>, zone_name=<your-cloudflare-zone>
 ```
 
 Use separate D1, R2, Queue, and credential resources for staging and
-production. If Airtable is enabled, its bases and credentials must also remain
-isolated. The checked-in Wrangler files contain public placeholders only.
+production. OpenSend is required by the current runtime, so configure its
+endpoint, key, senders, and calendar UID domain for every environment. If
+Airtable is enabled, its bases and credentials must also remain isolated. The checked-in Wrangler files contain public placeholders only.
 Deployment generates the ignored `apps/api/wrangler.generated.toml`; do not
 commit that file or either `.env.cloudflare-*` file.
 

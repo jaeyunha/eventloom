@@ -21,6 +21,12 @@ class RecordingD1 {
   readonly batches: readonly RecordedStatement[][] = [];
   readonly firstRows: unknown[] = [];
   readonly allRows: unknown[][] = [];
+  readonly sessionConstraints: string[] = [];
+
+  withSession(constraint?: string) {
+    this.sessionConstraints.push(constraint ?? "");
+    return this;
+  }
 
   prepare(sql: string): RecordedStatement {
     const database = this;
@@ -49,6 +55,135 @@ class RecordingD1 {
 }
 
 const timestamp = "2026-08-13T12:00:00.000Z";
+
+describe("D1EvaluationRepository consistency", () => {
+  it("reads evaluation plans from the primary for optimistic transitions", async () => {
+    const database = new RecordingD1();
+    const repository = new D1EvaluationRepository(database as unknown as D1Database);
+
+    await repository.getPlan("org-1", "plan-1");
+
+    expect(database.sessionConstraints).toEqual(["first-primary"]);
+  });
+
+  it("reads assignments and reviews from the primary for reviewer writes", async () => {
+    const database = new RecordingD1();
+    const repository = new D1EvaluationRepository(database as unknown as D1Database);
+
+    await repository.getAssignment("org-1", "assignment-1");
+    await repository.getReview("org-1", "assignment-1");
+
+    expect(database.sessionConstraints).toEqual(["first-primary", "first-primary"]);
+  });
+
+  it("lists assignments from the primary after distribution writes", async () => {
+    const database = new RecordingD1();
+    const repository = new D1EvaluationRepository(database as unknown as D1Database);
+
+    await repository.listAssignments("org-1", "plan-1");
+
+    expect(database.sessionConstraints).toEqual(["first-primary"]);
+  });
+
+  it("reads decisions from the primary for organizer transitions", async () => {
+    const database = new RecordingD1();
+    const repository = new D1EvaluationRepository(database as unknown as D1Database);
+
+    await repository.getDecision("org-1", "plan-1", "submission-1");
+
+    expect(database.sessionConstraints).toEqual(["first-primary"]);
+  });
+
+  it("updates plan state without rebuilding referenced rounds", async () => {
+    const database = new RecordingD1();
+    database.firstRows.push({
+      id: "plan-1",
+      organization_id: "org-1",
+      event_id: "event-1",
+      name: "Review",
+      status: "draft",
+      blind_review: 0,
+      closes_at: null,
+      reviews_per_submission: 1,
+      max_assignments_per_reviewer: 5,
+      track_filter: null,
+      auto_distribute: 0,
+      reviewer_projection_field_ids_json: "[]",
+      reviewer_projection_file_ids_json: "[]",
+      grading_revision: null,
+      grading_locked_at: null,
+      version: 2,
+      created_at: timestamp,
+      updated_at: timestamp,
+    });
+    database.allRows.push([]);
+    const repository = new D1EvaluationRepository(database as unknown as D1Database);
+    const plan = {
+      id: "plan-1",
+      tenantId: "org-1",
+      eventId: "event-1",
+      name: "Review",
+      status: "open" as const,
+      blindReview: false,
+      closesAt: null,
+      assignmentRule: {
+        reviewsPerSubmission: 1,
+        maxAssignmentsPerReviewer: 5,
+        autoDistribute: false,
+      },
+      rounds: [],
+      version: 3,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+
+    await repository.putPlanState(plan, 2);
+
+    const sql = database.batches[0]?.map((statement) => statement.sql).join("\n") ?? "";
+    expect(sql).toContain("UPDATE review_plans");
+    expect(sql).not.toContain("DELETE FROM review_rounds");
+    expect(sql).not.toContain("DELETE FROM review_rubrics");
+    expect(sql).not.toContain("INSERT INTO review_rounds");
+  });
+
+  it("deletes reviewer pool children before rebuilding draft rounds", async () => {
+    const database = new RecordingD1();
+    const repository = new D1EvaluationRepository(database as unknown as D1Database);
+
+    await repository.putPlan(
+      {
+        id: "plan-1",
+        tenantId: "org-1",
+        eventId: "event-1",
+        name: "Review",
+        status: "draft",
+        blindReview: false,
+        closesAt: null,
+        assignmentRule: {
+          reviewsPerSubmission: 1,
+          maxAssignmentsPerReviewer: 5,
+          autoDistribute: false,
+        },
+        rounds: [],
+        version: 2,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      1,
+    );
+
+    const sql = database.batches[0]?.map((statement) => statement.sql) ?? [];
+    const memberDelete = sql.findIndex((value) =>
+      value.includes("DELETE FROM reviewer_pool_members"),
+    );
+    const poolDelete = sql.findIndex((value) => value.includes("DELETE FROM reviewer_pools"));
+    const roundDelete = sql.findIndex((value) => value.includes("DELETE FROM review_rounds"));
+
+    expect(memberDelete).toBeGreaterThan(-1);
+    expect(poolDelete).toBeGreaterThan(memberDelete);
+    expect(roundDelete).toBeGreaterThan(poolDelete);
+  });
+});
 const assignment: EvaluationAssignment = {
   id: "assignment-1",
   tenantId: "org-1",
@@ -107,6 +242,38 @@ function batchSql(db: RecordingD1): string {
 }
 
 describe("D1EvaluationRepository compound CAS", () => {
+  it("updates plan schedule without rebuilding preserved review state", async () => {
+    const database = new RecordingD1();
+    const repository = new D1EvaluationRepository(database as unknown as D1Database);
+    const timestamp = "2026-08-13T00:00:00.000Z";
+    await repository.putPlanSchedule?.(
+      {
+        id: "plan-1",
+        tenantId: "org-1",
+        eventId: "event-1",
+        name: "Review",
+        status: "open",
+        blindReview: false,
+        closesAt: "2026-09-01T00:00:00.000Z",
+        assignmentRule: {
+          reviewsPerSubmission: 1,
+          maxAssignmentsPerReviewer: 5,
+          autoDistribute: false,
+        },
+        rounds: [],
+        version: 4,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      3,
+    );
+    const sql = database.statements.map((entry) => entry.sql).join("\n");
+    expect(sql).toContain("UPDATE review_plans");
+    expect(sql).toContain("closes_at");
+    expect(sql).not.toContain("DELETE FROM review_rounds");
+    expect(sql).not.toContain("review_rubrics");
+    expect(sql).not.toContain("review_assignments");
+  });
   it("batches tenant/event-scoped assignment and review guards before saving a draft", async () => {
     const db = database();
     await new D1EvaluationRepository(db as unknown as D1Database).saveReviewDraft(

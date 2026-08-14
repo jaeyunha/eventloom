@@ -254,7 +254,7 @@ describe("speaker portal API adapter", () => {
     const api = createPortalApi("https://api.example.com", async (input) => {
       calls.push(String(input));
       return calls.length === 1
-        ? uploadAuthorizationResponse("http://localhost:8787/private/object")
+        ? uploadAuthorizationResponse("http://127.0.0.1:8787/private/object")
         : new Response(null, { status: 204 });
     });
 
@@ -267,7 +267,7 @@ describe("speaker portal API adapter", () => {
         file: new File(["slides"], "session.pdf", { type: "application/pdf" }),
       }),
     ).resolves.toEqual({ assetId: "asset-1" });
-    expect(calls[1]).toBe("http://localhost:8787/private/object");
+    expect(calls[1]).toBe("http://127.0.0.1:8787/private/object");
   });
 
   it.each(["javascript:alert('upload')", "ftp://uploads.example.com/private/object"])(

@@ -3,6 +3,7 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   agentRules: false,
   devIndicators: false,
+  distDir: process.env.NEXT_DIST_DIR?.trim() || ".next",
   output: "standalone",
   poweredByHeader: false,
   reactStrictMode: true,

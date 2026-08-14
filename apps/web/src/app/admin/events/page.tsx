@@ -1,5 +1,5 @@
-import { OrganizerEvents } from "@/features/admin/organizer-overview";
+import { OrganizerRouteResolver } from "@/features/admin/organizer-route-resolver";
 
 export default function AdminEventsPage() {
-  return <OrganizerEvents />;
+  return <OrganizerRouteResolver destination="events" />;
 }

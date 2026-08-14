@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { getPublishedProgramOrLocalDemo } from "@/features/embed/demo/projections";
+import { getPublishedProgram } from "@/features/embed/api";
 import { EmbedFrame, EmbedUnavailable } from "@/features/embed/embed-frame";
 import { parseEmbedQuery } from "@/features/embed/model";
 import { SpeakerGallery } from "@/features/embed/speaker-gallery";
@@ -27,11 +27,7 @@ export default async function SpeakerGalleryPage({
 
   const embedQuery = parseEmbedQuery(query);
   try {
-    const program = await getPublishedProgramOrLocalDemo(
-      apiBaseUrl,
-      eventSlug,
-      process.env.APP_ENV,
-    );
+    const program = await getPublishedProgram(apiBaseUrl, eventSlug, fetch, process.env.APP_ENV);
     return (
       <EmbedFrame
         event={program.agenda.event}

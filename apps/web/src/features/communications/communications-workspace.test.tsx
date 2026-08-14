@@ -20,6 +20,7 @@ import {
   findCommunicationTemplate,
   invalidateCommunicationPreviewState,
   loadCommunicationTemplates,
+  previewAudienceForTemplate,
 } from "./communications-workspace";
 
 function deferred<T>() {
@@ -33,9 +34,9 @@ function deferred<T>() {
 }
 
 const senders = {
-  auth: "auth@sessionboard.namuh.co",
-  speakers: "speakers@sessionboard.namuh.co",
-  calendar: "calendar@sessionboard.namuh.co",
+  auth: "login@self-hosted.example",
+  speakers: "program@self-hosted.example",
+  calendar: "schedule@self-hosted.example",
 } as const;
 
 function template(
@@ -288,7 +289,21 @@ const reminderFacts: ReminderFacts = {
 };
 
 describe("communications organizer workspace", () => {
-  it("displays exact approved sender identities and event-scoped version controls", () => {
+  it("waits for a server-returned sender on new drafts", () => {
+    const markup = renderToStaticMarkup(
+      createElement(CommunicationsWorkspaceView, {
+        eventId: "event-1",
+        organizationId: "org-1",
+        templates: [],
+        creatingTemplate: true,
+      }),
+    );
+
+    expect(markup).toContain("The server assigns the sender identity when this draft is saved.");
+    expect(markup).not.toContain("sessionboard.namuh.co");
+  });
+
+  it("displays exact server-returned sender identities and event-scoped version controls", () => {
     const markup = renderToStaticMarkup(
       createElement(CommunicationsWorkspaceView, {
         eventId: "event-1",
@@ -527,6 +542,24 @@ describe("communications organizer workspace", () => {
     expect(markup).toContain('data-template-selection="group-1:1"');
     expect(markup).toContain("Select organizer_group_email template version 2");
     expect(markup).toContain("Select exact approved version");
+  });
+
+  it("targets approved decision templates to decision-status audiences", () => {
+    expect(
+      previewAudienceForTemplate(template("accepted", "decision", senders.speakers, "approved", 1)),
+    ).toBe("accepted_participants");
+    expect(
+      previewAudienceForTemplate({
+        ...template("rejected", "decision", senders.speakers, "approved", 1),
+        name: "Rejected decision",
+      }),
+    ).toBe("rejected_participants");
+    expect(
+      previewAudienceForTemplate({
+        ...template("waitlisted", "decision", senders.speakers, "approved", 1),
+        name: "Waitlist decision",
+      }),
+    ).toBe("waitlisted_participants");
   });
 
   it("renders an approval review gate with cancel and confirm controls", () => {

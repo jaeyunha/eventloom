@@ -15,7 +15,6 @@ import type {
 } from "../../../features/communications/types";
 import {
   batch,
-  communicationOutboxStatement,
   consequentialStatements,
   guard,
   insertGuard,
@@ -157,6 +156,30 @@ export class D1CommunicationRepository implements CommunicationRepository {
       ]);
     } catch {
       throw conflict("The communication template version already exists.");
+    }
+    return value;
+  }
+
+  async updateTemplate(value: CommunicationTemplate) {
+    const result = await this.database
+      .prepare(
+        `UPDATE communication_templates
+            SET status = ?, approved_by = ?, approved_at = ?, updated_at = ?
+          WHERE organization_id = ? AND event_id = ? AND id = ? AND version = ?`,
+      )
+      .bind(
+        value.status,
+        value.approvedBy,
+        value.approvedAt,
+        value.updatedAt,
+        value.tenantId,
+        value.eventId,
+        value.id,
+        value.version,
+      )
+      .run();
+    if (result.meta.changes !== 1) {
+      throw conflict("The communication template version was not found.");
     }
     return value;
   }
@@ -381,7 +404,7 @@ export class D1CommunicationRepository implements CommunicationRepository {
       ).all<Row>(),
       statement(
         this.database,
-        `SELECT id,tenant_id,event_id,resource_id send_id,json_extract(details_json,'$.after.recipientId') recipient_id,action,json_extract(details_json,'$.after.actorId') actor_id,occurred_at,details_json FROM audit_events WHERE tenant_id=? AND resource_type='communication_send' AND resource_id=? ORDER BY occurred_at,id`,
+        `SELECT id,tenant_id,json_extract(details_json,'$.eventId') event_id,resource_id send_id,json_extract(details_json,'$.after.recipientId') recipient_id,action,json_extract(details_json,'$.after.actorId') actor_id,occurred_at,details_json FROM audit_events WHERE tenant_id=? AND resource_type='communication_send' AND resource_id=? ORDER BY occurred_at,id`,
         [tenantId, sendId],
       ).all<Row>(),
     ]);
@@ -575,21 +598,6 @@ export class D1CommunicationRepository implements CommunicationRepository {
         sync: { entityType: "communication_send", applicationId: value.id, payload: value },
       }),
     );
-    if (existing === null)
-      for (const d of value.deliveries)
-        statements.push(
-          communicationOutboxStatement(this.database, {
-            tenantId: value.tenantId,
-            deduplicationKey: `${value.idempotencyKey}:${d.recipientId}`,
-            occurredAt: value.createdAt,
-            payload: {
-              effect: "send_communication",
-              eventId: value.eventId,
-              sendId: value.id,
-              recipientId: d.recipientId,
-            },
-          }),
-        );
     try {
       await batch(this.database, statements);
     } catch {

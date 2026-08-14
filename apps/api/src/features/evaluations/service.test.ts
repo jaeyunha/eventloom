@@ -112,6 +112,22 @@ class WorkspaceBatchRepository extends InMemoryEvaluationRepository {
   }
 }
 
+class MultiTenantWorkspaceRepository extends InMemoryEvaluationRepository {
+  readonly workspaceScopes: Array<{
+    readonly tenantId: string;
+    readonly eventIds: readonly string[];
+  }> = [];
+
+  override async listReviewerWorkspaceRecords(
+    tenantId: string,
+    reviewerId: string,
+    eventIds: readonly string[],
+  ): Promise<ReviewerWorkspaceRecords> {
+    this.workspaceScopes.push({ tenantId, eventIds });
+    return super.listReviewerWorkspaceRecords(tenantId, reviewerId, eventIds);
+  }
+}
+
 class WorkspaceBatchSource extends InMemorySubmissionReviewSource {
   singleCalls = 0;
   batchCalls = 0;
@@ -285,6 +301,96 @@ async function expectEvaluationError(
 }
 
 describe("evaluation plans and assignments", () => {
+  it("loads reviewer work across every granted organization scope", async () => {
+    const repository = new MultiTenantWorkspaceRepository();
+    const service = new EvaluationService(repository, new InMemorySubmissionReviewSource());
+
+    await expect(
+      service.listReviewerWorkspace({
+        tenantId: "org-a",
+        userId: "reviewer-multi-org",
+        kind: "human",
+        grants: [
+          { tenantId: "org-a", eventId: "event-a", role: "reviewer" },
+          { tenantId: "org-b", eventId: "event-b", role: "reviewer" },
+        ],
+      }),
+    ).resolves.toEqual({ assignments: [] });
+
+    expect(repository.workspaceScopes).toEqual([
+      { tenantId: "org-a", eventIds: ["event-a"] },
+      { tenantId: "org-b", eventIds: ["event-b"] },
+    ]);
+  });
+
+  it("accepts zero-weight dropdowns and neutral free-text bounds", async () => {
+    const service = new EvaluationService(
+      new InMemoryEvaluationRepository(),
+      new InMemorySubmissionReviewSource(),
+    );
+    const plan = await service.createPlan(organizer, {
+      id: "plan-non-numeric-criteria",
+      eventId: "event-1",
+      name: "Program review",
+      blindReview: true,
+      closesAt: "2026-09-10T19:00:00.000Z",
+      assignmentRule: {
+        reviewsPerSubmission: 2,
+        maxAssignmentsPerReviewer: 12,
+      },
+      rounds: [
+        {
+          id: "round-1",
+          name: "Committee review",
+          sequence: 1,
+          opensAt: "2026-08-08T12:00:00.000Z",
+          closesAt: "2026-09-10T19:00:00.000Z",
+          blindReview: true,
+          anonymization: "double",
+          reviewerPool: { name: "Program committee", reviewerIds: ["reviewer-1"] },
+          rubric: {
+            id: "rubric-1",
+            name: "Program rubric",
+            criteria: [
+              {
+                id: "recommendation",
+                label: "Recommendation",
+                description: "Would you recommend this proposal?",
+                minimum: 0,
+                maximum: 2,
+                weight: 0,
+                required: true,
+                inputType: "dropdown",
+                options: [
+                  { label: "Accept", value: "accept" },
+                  { label: "Maybe", value: "maybe" },
+                  { label: "Reject", value: "reject" },
+                ],
+              },
+              {
+                id: "reviewer-notes",
+                label: "Reviewer notes",
+                description: "Share committee-only context.",
+                minimum: 0,
+                maximum: 0,
+                weight: 0,
+                required: false,
+                inputType: "free_text",
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    expect(plan.rounds[0]?.rubric.criteria).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "recommendation", inputType: "dropdown" }),
+        expect.objectContaining({ id: "reviewer-notes", inputType: "free_text" }),
+      ]),
+    );
+  });
+
   it("replaces the complete active reviewer set and validates resulting limits", async () => {
     const { service, repository } = await fixture({ reviewsPerSubmission: 2 });
     const initial = await service.assignReviewers(organizer, {
@@ -321,6 +427,182 @@ describe("evaluation plans and assignments", () => {
       }),
     ).resolves.toHaveLength(1);
   });
+  it("excludes terminal submissions from active queues and progress while retaining history", async () => {
+    const submissions = new WorkspaceBatchSource([
+      submission,
+      { ...submission, id: "submission-withdrawn", status: "withdrawn" },
+    ]);
+    const { service, repository } = await fixture({
+      submissions,
+      reviewsPerSubmission: 2,
+      maxAssignmentsPerReviewer: 2,
+    });
+    const activeAssignment = await assignOne(service, "reviewer-1");
+    const withdrawnAssignment: EvaluationAssignment = {
+      ...activeAssignment,
+      id: "assignment-withdrawn",
+      submissionId: "submission-withdrawn",
+      reviewerId: "reviewer-2",
+    };
+    await repository.putAssignmentsForTesting([withdrawnAssignment]);
+    await repository.putReview(
+      {
+        id: "review-withdrawn",
+        tenantId,
+        eventId,
+        planId: "plan-1",
+        roundId: round.id,
+        assignmentId: withdrawnAssignment.id,
+        submissionId: withdrawnAssignment.submissionId,
+        reviewerId: withdrawnAssignment.reviewerId,
+        scores: {},
+        comment: "Historical draft remains stored.",
+        submittedAt: null,
+        version: 1,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      },
+      null,
+    );
+
+    await expect(service.listReviewerWorkspace(reviewer("reviewer-2"), eventId)).resolves.toEqual({
+      assignments: [],
+    });
+    await expect(service.listOrganizerAssignments(organizer, "plan-1")).resolves.toEqual([
+      expect.objectContaining({ id: activeAssignment.id }),
+    ]);
+    await expect(service.getProgress(organizer, "plan-1")).resolves.toMatchObject({
+      total: 1,
+      assigned: 1,
+    });
+    await expect(repository.getAssignment(tenantId, withdrawnAssignment.id)).resolves.toMatchObject(
+      {
+        id: withdrawnAssignment.id,
+        status: "assigned",
+      },
+    );
+    await expect(repository.getReview(tenantId, withdrawnAssignment.id)).resolves.toMatchObject({
+      id: "review-withdrawn",
+    });
+    await expect(
+      service.getReviewContext(reviewer("reviewer-2"), withdrawnAssignment.id),
+    ).rejects.toMatchObject({ code: "EVALUATION_CONFLICT" });
+  });
+
+  it("excludes decided submissions from reviewer queues while retaining organizer facts", async () => {
+    const { service, repository } = await fixture({ reviewsPerSubmission: 1 });
+    const assignment = await assignOne(service);
+    await service.recordDecision(organizer, {
+      planId: "plan-1",
+      submissionId: submission.id,
+      status: "rejected",
+      reason: "The program committee reached a final decision.",
+      idempotencyKey: "terminal-review-decision",
+    });
+
+    await expect(
+      service.listReviewerAssignments(reviewer("reviewer-1"), "plan-1"),
+    ).resolves.toEqual([]);
+    await expect(service.getOrganizerWorkspace(organizer, eventId)).resolves.toMatchObject({
+      assignments: [
+        {
+          id: assignment.id,
+          submissionId: submission.id,
+          reviewerId: "reviewer-1",
+          status: "assigned",
+        },
+      ],
+      progress: { total: 1, assigned: 1, completionPercent: 0 },
+      aggregates: expect.arrayContaining([
+        expect.objectContaining({
+          submissionId: submission.id,
+          roundId: round.id,
+          submittedReviewCount: 0,
+          expectedReviewCount: 1,
+        }),
+      ]),
+      decisions: { [submission.id]: { status: "rejected" } },
+    });
+    await expect(repository.getAssignment(tenantId, assignment.id)).resolves.toMatchObject({
+      id: assignment.id,
+      status: "assigned",
+    });
+    await expect(
+      service.assignReviewers(organizer, {
+        planId: "plan-1",
+        roundId: round.id,
+        submissionId: submission.id,
+        reviewerIds: ["reviewer-2"],
+      }),
+    ).rejects.toMatchObject({ code: "EVALUATION_CONFLICT" });
+  });
+
+  it("allows a historical CFP outcome to enter a new review plan", async () => {
+    const submissions = new InMemorySubmissionReviewSource([
+      {
+        ...submission,
+        id: "submission-accepted",
+        status: "accepted",
+        title: "Accepted in an earlier CFP workflow",
+      },
+    ]);
+    const { service, plan, repository } = await fixture({
+      submissions,
+    });
+
+    const [assignment] = await service.assignReviewers(organizer, {
+      planId: plan.id,
+      roundId: plan.rounds[0]?.id ?? "",
+      submissionId: "submission-accepted",
+      reviewerIds: ["reviewer-1"],
+    });
+    expect(assignment).toMatchObject({
+      submissionId: "submission-accepted",
+      reviewerId: "reviewer-1",
+      status: "assigned",
+    });
+    await repository.putDecision(
+      {
+        id: "decision-historical-plan",
+        tenantId,
+        eventId,
+        planId: "historical-plan",
+        submissionId: "submission-accepted",
+        status: "accepted",
+        version: 1,
+        history: [],
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+      null,
+    );
+
+    await expect(service.getOrganizerWorkspace(organizer, eventId, plan.id)).resolves.toMatchObject(
+      {
+        assignments: [
+          {
+            submissionId: "submission-accepted",
+            reviewerId: "reviewer-1",
+            status: "assigned",
+          },
+        ],
+      },
+    );
+    await expect(
+      service.assignReviewers(organizer, {
+        planId: plan.id,
+        roundId: plan.rounds[0]?.id ?? "",
+        submissionId: "submission-accepted",
+        reviewerIds: ["reviewer-1"],
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        submissionId: "submission-accepted",
+        reviewerId: "reviewer-1",
+        status: "assigned",
+      }),
+    ]);
+  });
+
   it("supports an empty replacement and removes organizer and reviewer projections", async () => {
     const { service, repository } = await fixture();
     const assignment = await assignOne(service);
@@ -847,6 +1129,11 @@ describe("evaluation plans and assignments", () => {
           roundId: round.id,
           submittedReviewCount: 1,
         }),
+        expect.objectContaining({
+          submissionId: "submission-2",
+          roundId: round.id,
+          submittedReviewCount: 0,
+        }),
       ]),
     );
     expect(workspace.decisions[submission.id]).toMatchObject({
@@ -1284,7 +1571,7 @@ describe("review drafts, AI assistance, and aggregates", () => {
     expect(edited.scores.quality).toMatchObject({
       value: 5,
       origin: "human",
-      humanConfirmedBy: actor.userId,
+      humanConfirmedBy: null,
     });
     await expectEvaluationError(
       service.saveReview(actor, assignment.id, {
@@ -1704,15 +1991,26 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
     expect(edited.version).toBe(2);
     const opened = await service.openPlan(organizer, edited.id, edited.version);
     expect(opened.gradingLockedAt).toBe(nowIso);
+    const rescheduled = await service.updatePlanSchedule(organizer, opened.id, {
+      expectedVersion: opened.version,
+      closesAt: "2026-08-13T12:00:00.000Z",
+    });
+    expect(rescheduled).toMatchObject({
+      closesAt: "2026-08-13T12:00:00.000Z",
+      version: opened.version + 1,
+      gradingLockedAt: opened.gradingLockedAt,
+      gradingRevision: opened.gradingRevision,
+      rounds: opened.rounds,
+    });
     await expectEvaluationError(
       service.updatePlan(organizer, edited.id, {
-        expectedVersion: opened.version,
+        expectedVersion: rescheduled.version,
         name: "Must remain locked",
       }),
       "EVALUATION_CONFLICT",
     );
     const assignments = await service.assignReviewers(organizer, {
-      planId: edited.id,
+      planId: rescheduled.id,
       roundId: round.id,
       submissionId: submission.id,
       reviewerIds: ["reviewer-1"],
@@ -1772,6 +2070,63 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
         expectedVersion: reopened.version,
       }),
     ).resolves.toHaveLength(1);
+  });
+
+  it("clones a grading-locked plan to a new editable draft without changing historical review state", async () => {
+    const { service, repository, plan } = await fixture({ reviewsPerSubmission: 1 });
+    const assignment = await assignOne(service);
+    const draftReview = await service.saveReview(reviewer("reviewer-1"), assignment.id, {
+      scores: [
+        { criterionId: "quality", value: 4, origin: "human" },
+        { criterionId: "relevance", value: 8, origin: "human" },
+      ],
+      comment: "Historical review",
+    });
+    const closedPlan = await service.closePlan(organizer, plan.id, plan.version);
+    const reopened = await service.openPlan(organizer, closedPlan.id, closedPlan.version);
+
+    const revision = await service.revisePlanToDraft(organizer, reopened.id, {
+      expectedVersion: reopened.version,
+    });
+
+    expect(revision).toMatchObject({
+      id: `${reopened.id}-revision-${reopened.version}`,
+      eventId: reopened.eventId,
+      status: "draft",
+      version: 1,
+      gradingLockedAt: null,
+      name: `${reopened.name} revision`,
+    });
+    expect(revision.gradingRevision).toBeUndefined();
+    expect(revision.rounds).toEqual(
+      reopened.rounds.map(
+        ({ revision: _roundRevision, rubricRevision: _rubricRevision, ...round }) => ({
+          ...round,
+          id: `${round.id}-revision-${reopened.version}`,
+        }),
+      ),
+    );
+
+    const edited = await service.updatePlan(organizer, revision.id, {
+      expectedVersion: revision.version,
+      name: "Editable grading revision",
+    });
+    expect(edited).toMatchObject({
+      status: "draft",
+      version: 2,
+      name: "Editable grading revision",
+    });
+
+    expect(await repository.getPlan(tenantId, reopened.id)).toEqual(reopened);
+    expect(await repository.getAssignment(tenantId, assignment.id)).toEqual({
+      ...assignment,
+      status: "in_progress",
+      version: assignment.version + 1,
+      updatedAt: nowIso,
+    });
+    expect(await repository.getReview(tenantId, assignment.id)).toEqual(draftReview);
+    expect(await repository.listAssignments(tenantId, revision.id)).toEqual([]);
+    expect(await repository.listReviews(tenantId, revision.id)).toEqual([]);
   });
 
   it("requires an injected provider, snapshots revisions, and audits human resolutions", async () => {
@@ -1883,7 +2238,7 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
     });
     expect(edited.review?.scores.quality).toMatchObject({
       value: 5,
-      origin: "human",
+      origin: "ai",
       humanConfirmedBy: "reviewer-1",
       suggestionStatus: "edited",
     });
@@ -1897,7 +2252,7 @@ describe("evaluation authoring and advisory suggestion lifecycle", () => {
       actorId: "reviewer-1",
     });
     expect(resolved.review?.scores.quality).toMatchObject({
-      origin: "human",
+      origin: "ai",
       humanConfirmedBy: "reviewer-1",
       suggestionStatus: "accepted",
     });

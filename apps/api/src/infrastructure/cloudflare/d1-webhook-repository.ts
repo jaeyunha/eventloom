@@ -31,11 +31,12 @@ export interface D1WebhookRepositoryOptions {
 interface SubscriptionRow {
   id: string;
   organization_id: string;
-  endpoint: string;
-  encrypted_signing_secret: string;
+  event_id: string | null;
+  endpoint_url: string;
+  events_json: string;
+  active: number;
+  signing_secret_ciphertext: string;
   signing_secret_last_four: string;
-  event_filter_json: string;
-  is_active: number;
   created_at: string;
   updated_at: string;
 }
@@ -176,10 +177,8 @@ function payloadForAttempt(
 /**
  * D1-backed customer webhook persistence.
  *
- * The customer tables do not have an event scope column on subscriptions, so
- * non-null `eventId` subscription scopes are rejected instead of being stored
- * ambiguously in the event filter. Delivery claims are process-local handles
- * backed by owner/token/lease CAS predicates in D1.
+ * Delivery claims are process-local handles backed by owner/token/lease CAS
+ * predicates in D1.
  */
 export class D1WebhookRepository implements WebhookRepository {
   readonly #clock: { now(): Date };
@@ -207,13 +206,14 @@ export class D1WebhookRepository implements WebhookRepository {
     return {
       id: row.id,
       organizationId: row.organization_id,
-      endpointUrl: row.endpoint,
-      events: parseEvents(row.event_filter_json),
-      active: row.is_active === 1,
-      signingSecret: await this.options.secretCipher.decrypt(row.encrypted_signing_secret),
+      endpointUrl: row.endpoint_url,
+      events: parseEvents(row.events_json),
+      active: row.active === 1,
+      signingSecret: await this.options.secretCipher.decrypt(row.signing_secret_ciphertext),
       signingSecretLastFour: row.signing_secret_last_four,
       createdAt: new Date(row.created_at),
       updatedAt: new Date(row.updated_at),
+      ...(row.event_id === null ? {} : { eventId: row.event_id }),
     };
   }
 
@@ -242,7 +242,7 @@ export class D1WebhookRepository implements WebhookRepository {
   async listSubscriptions(organizationId: string): Promise<readonly WebhookSubscriptionRecord[]> {
     const rows = await this.database
       .prepare(
-        `SELECT * FROM customer_webhook_subscriptions
+        `SELECT * FROM webhook_subscriptions
           WHERE organization_id = ?
           ORDER BY created_at ASC, id ASC`,
       )
@@ -257,7 +257,7 @@ export class D1WebhookRepository implements WebhookRepository {
   ): Promise<WebhookSubscriptionRecord | null> {
     const row = await this.database
       .prepare(
-        `SELECT * FROM customer_webhook_subscriptions
+        `SELECT * FROM webhook_subscriptions
           WHERE organization_id = ? AND id = ?
           LIMIT 1`,
       )
@@ -269,12 +269,6 @@ export class D1WebhookRepository implements WebhookRepository {
   async createSubscription(
     input: CreateWebhookSubscriptionInput,
   ): Promise<WebhookSubscriptionRecord> {
-    if (input.eventId !== undefined) {
-      throw new WebhookRepositoryError(
-        "INVALID",
-        "The D1 customer webhook schema does not support event-scoped subscriptions.",
-      );
-    }
     const signingSecret = input.signingSecret ?? randomSecret();
     if (signingSecret.trim().length === 0) {
       throw new WebhookRepositoryError("INVALID", "A signing secret is required.");
@@ -284,19 +278,20 @@ export class D1WebhookRepository implements WebhookRepository {
     try {
       await this.database
         .prepare(
-          `INSERT INTO customer_webhook_subscriptions
-             (id, organization_id, endpoint, encrypted_signing_secret,
-              signing_secret_last_four, event_filter_json, is_active, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO webhook_subscriptions
+             (id, organization_id, event_id, endpoint_url, events_json, active,
+              signing_secret_ciphertext, signing_secret_last_four, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .bind(
           id,
           input.organizationId,
+          input.eventId ?? null,
           input.endpointUrl,
-          await this.options.secretCipher.encrypt(signingSecret),
-          lastFour(signingSecret),
           JSON.stringify([...input.events]),
           input.active === false ? 0 : 1,
+          await this.options.secretCipher.encrypt(signingSecret),
+          lastFour(signingSecret),
           now,
           now,
         )
@@ -317,6 +312,7 @@ export class D1WebhookRepository implements WebhookRepository {
       signingSecretLastFour: lastFour(signingSecret),
       createdAt: new Date(now),
       updatedAt: new Date(now),
+      ...(input.eventId === undefined ? {} : { eventId: input.eventId }),
     };
   }
 
@@ -325,12 +321,6 @@ export class D1WebhookRepository implements WebhookRepository {
     subscriptionId: string,
     input: UpdateWebhookSubscriptionInput,
   ): Promise<WebhookSubscriptionRecord | null> {
-    if (input.eventId !== undefined && input.eventId !== null) {
-      throw new WebhookRepositoryError(
-        "INVALID",
-        "The D1 customer webhook schema does not support event-scoped subscriptions.",
-      );
-    }
     const existing = await this.getSubscription(organizationId, subscriptionId);
     if (existing === null) return null;
     const signingSecret = input.signingSecret ?? existing.signingSecret;
@@ -338,26 +328,28 @@ export class D1WebhookRepository implements WebhookRepository {
       throw new WebhookRepositoryError("INVALID", "A signing secret is required.");
     }
     const now = this.#clock.now().toISOString();
+    const eventId = input.eventId === undefined ? existing.eventId : (input.eventId ?? undefined);
     const result = await this.database
       .prepare(
-        `UPDATE customer_webhook_subscriptions
-            SET endpoint = ?, encrypted_signing_secret = ?, signing_secret_last_four = ?,
-                event_filter_json = ?, is_active = ?, updated_at = ?
+        `UPDATE webhook_subscriptions
+            SET event_id = ?, endpoint_url = ?, events_json = ?, active = ?,
+                signing_secret_ciphertext = ?, signing_secret_last_four = ?, updated_at = ?
           WHERE organization_id = ? AND id = ?`,
       )
       .bind(
+        eventId ?? null,
         input.endpointUrl ?? existing.endpointUrl,
-        await this.options.secretCipher.encrypt(signingSecret),
-        lastFour(signingSecret),
         JSON.stringify(input.events === undefined ? existing.events : [...input.events]),
         (input.active ?? existing.active) ? 1 : 0,
+        await this.options.secretCipher.encrypt(signingSecret),
+        lastFour(signingSecret),
         now,
         organizationId,
         subscriptionId,
       )
       .run();
     if (changedRows(result) !== 1) return null;
-    return {
+    const updated: WebhookSubscriptionRecord = {
       ...existing,
       ...(input.endpointUrl === undefined ? {} : { endpointUrl: input.endpointUrl }),
       ...(input.events === undefined ? {} : { events: [...input.events] }),
@@ -366,11 +358,14 @@ export class D1WebhookRepository implements WebhookRepository {
       signingSecretLastFour: lastFour(signingSecret),
       updatedAt: new Date(now),
     };
+    if (eventId === undefined) delete updated.eventId;
+    else updated.eventId = eventId;
+    return updated;
   }
 
   async deleteSubscription(organizationId: string, subscriptionId: string): Promise<boolean> {
     const result = await this.database
-      .prepare("DELETE FROM customer_webhook_subscriptions WHERE organization_id = ? AND id = ?")
+      .prepare("DELETE FROM webhook_subscriptions WHERE organization_id = ? AND id = ?")
       .bind(organizationId, subscriptionId)
       .run();
     return changedRows(result) === 1;
@@ -379,7 +374,7 @@ export class D1WebhookRepository implements WebhookRepository {
   async createDelivery(input: CreateWebhookDeliveryInput): Promise<WebhookDelivery> {
     const subscription = await this.database
       .prepare(
-        `SELECT id FROM customer_webhook_subscriptions
+        `SELECT id FROM webhook_subscriptions
           WHERE organization_id = ? AND id = ?
           LIMIT 1`,
       )

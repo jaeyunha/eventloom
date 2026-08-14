@@ -9,14 +9,15 @@ import {
   closeCfpNowConfiguration,
   closeCfpNowInstant,
   configurationFromServer,
-  createSeededCfpConfiguration,
   isCfpCloseDatePast,
+  loadCfpEditorConfiguration,
   persistCfpConfiguration,
   selectEditorForm,
   summarizeRule,
   toFormConfiguration,
   validateCfpDateRange,
 } from "./cfp-editor";
+import { createTestCfpConfiguration } from "./cfp-editor.test-fixtures";
 
 describe("CFP editor", () => {
   it("keeps sticky section targets below the organizer header and navigator", () => {
@@ -24,65 +25,59 @@ describe("CFP editor", () => {
     expect(cfpActiveSectionThreshold(52, 64)).toBe(156);
   });
 
-  it("renders an accessible organizer hierarchy and labeled seeded controls", () => {
-    const markup = renderToStaticMarkup(
-      createElement(CfpEditor, { eventId: "summit-2026", organizationId: "organization-1" }),
-    );
-
-    expect(markup).toContain("<h1>Configure your call for proposals</h1>");
-    expect(markup).toContain('id="event-details-heading">Event details</h2>');
-    expect(markup).toContain('aria-label="Event and CFP configuration"');
-    expect(markup).toContain('for="event-name"');
-    expect(markup).toContain('for="event-timezone"');
-    expect(markup).toContain("Eventloom Summit 2026");
-    expect(markup).toContain("America/Los_Angeles");
-    expect(markup).toContain("2026-03-31");
-  });
-  it("exposes copy and open actions only when the public slug is authoritative", () => {
+  it("starts in a truthful loading state without fixture configuration", () => {
     const previousRuntimeProfile = process.env.NEXT_PUBLIC_RUNTIME_PROFILE;
     process.env.NEXT_PUBLIC_RUNTIME_PROFILE = "fixture";
     try {
       const markup = renderToStaticMarkup(
         createElement(CfpEditor, { eventId: "summit-2026", organizationId: "organization-1" }),
       );
-      expect(markup).toContain("Copy public link");
-      expect(markup).toContain("View public form");
+
+      expect(markup).toContain("Loading CFP configuration");
+      expect(markup).not.toContain("Eventloom Summit 2026");
+      expect(markup).not.toContain("America/Los_Angeles");
+      expect(markup).not.toContain("Copy public link");
+      expect(markup).not.toContain("View public form");
+      expect(markup).not.toContain('aria-label="Event and CFP configuration"');
     } finally {
       process.env.NEXT_PUBLIC_RUNTIME_PROFILE = previousRuntimeProfile;
     }
   });
-  it("renders one responsive section navigator and an explicit publish confirmation", () => {
-    const markup = renderToStaticMarkup(
-      createElement(CfpEditor, { eventId: "summit-2026", organizationId: "organization-1" }),
-    );
 
-    expect(markup).toContain('aria-label="CFP workspace sections"');
-    expect(markup).toContain('aria-current="location"');
-    expect(markup).toContain('aria-controls="public-preview"');
-    expect(markup).toContain('data-slot="collapsible"');
-    expect(markup).toContain("Current section");
-    expect(markup).toContain(">Publish form</button>");
+  it("loads authoritative event and form configuration through the injected API", async () => {
+    const configuration = createTestCfpConfiguration("devflow-conf-2027");
+    const event = {
+      id: "event-1",
+      tenantId: "organization-1",
+      version: 3,
+      slug: "devflow-conf-2027",
+      name: "DevFlow Conference",
+      timezone: "America/New_York",
+      opensAt: "2027-01-01T05:00:00.000Z",
+      closesAt: "2027-02-01T05:00:00.000Z",
+    };
+    const form = toFormConfiguration(configuration, "organization-1", "event-1");
+    const calls: string[] = [];
+    const api = {
+      getEvent: async () => {
+        calls.push("event");
+        return event;
+      },
+      listForms: async () => {
+        calls.push("forms");
+        return [form];
+      },
+    } as unknown as CfpApi;
+
+    const loaded = await loadCfpEditorConfiguration(api, {
+      organizationId: "organization-1",
+      eventId: "event-1",
+    });
+
+    expect(calls).toEqual(["event", "forms"]);
+    expect(loaded).toEqual({ event, form });
   });
-
-  it("exposes useful limits and applicant-facing configuration controls", () => {
-    const markup = renderToStaticMarkup(
-      createElement(CfpEditor, { eventId: "summit-2026", organizationId: "organization-1" }),
-    );
-
-    expect(markup).toContain('id="participant-limit"');
-    expect(markup).toContain('max="15"');
-    expect(markup).toContain("Up to 15 participants");
-    expect(markup).toContain('id="form-limit"');
-    expect(markup).toContain('max="20"');
-    expect(markup).toContain("between 1 and 20 forms");
-    expect(markup).toContain("Send reminder emails");
-    expect(markup).toContain("Notify admins of new submissions");
-    expect(markup).toContain("Tracks");
-    expect(markup).toContain("Helpful links");
-    expect(markup).toContain("Required");
-    expect(markup).toContain("Visible");
-  });
-  it("validates date ordering and exposes past-close consequences", () => {
+  it("validates date ordering and identifies past close dates", () => {
     expect(validateCfpDateRange("2026-08-10", "2026-08-10")).toBe(
       "The close date must be after the open date.",
     );
@@ -90,19 +85,13 @@ describe("CFP editor", () => {
       "Enter valid open and close dates.",
     );
     expect(isCfpCloseDatePast("2026-08-01", new Date("2026-08-10T00:00:00.000Z"))).toBe(true);
-
-    const markup = renderToStaticMarkup(
-      createElement(CfpEditor, { eventId: "summit-2026", organizationId: "organization-1" }),
-    );
-    expect(markup).toContain("Public visitors see the closed portal");
-    expect(markup).toContain('id="confirm-past-close"');
   });
   it("computes a server close-now instant without violating the open boundary", () => {
     const now = new Date("2026-08-10T13:46:51.000Z");
     expect(closeCfpNowInstant("2026-08-01", now)).toBe(now.toISOString());
     expect(closeCfpNowInstant("2026-08-20", now)).toBe("2026-08-20T00:00:00.001Z");
 
-    const configuration = createSeededCfpConfiguration("devflow-conf-2027");
+    const configuration = createTestCfpConfiguration("devflow-conf-2027");
     configuration.opensAt = "2027-01-01";
     const closed = closeCfpNowConfiguration(configuration, now);
     expect(closed.closesAt).toBe("2027-01-01T08:00:00.001Z");
@@ -112,7 +101,7 @@ describe("CFP editor", () => {
   });
 
   it("only reports a CFP save after event and form persistence both resolve", async () => {
-    const configuration = createSeededCfpConfiguration("devflow-conf-2027");
+    const configuration = createTestCfpConfiguration("devflow-conf-2027");
     configuration.opensAt = "2027-01-01";
     configuration.closesAt = "2027-02-01";
     configuration.id = "devflow-cfp";
@@ -174,11 +163,7 @@ describe("CFP editor", () => {
     ).rejects.toThrow("form persistence failed");
   });
 
-  it("shows nested AND/OR condition logic in the rule preview", () => {
-    const markup = renderToStaticMarkup(
-      createElement(CfpEditor, { eventId: "summit-2026", organizationId: "organization-1" }),
-    );
-
+  it("summarizes nested AND/OR condition logic", () => {
     expect(
       summarizeRule({
         type: "group",
@@ -196,30 +181,10 @@ describe("CFP editor", () => {
         ],
       }),
     ).toBe("(Format is Workshop AND (Track is Community OR Level is Introductory))");
-    expect(markup).toContain("Nested condition preview");
-    expect(markup).toContain("Format");
-    expect(markup).toContain("Workshop · 60 minutes");
-    expect(markup).toContain("AND");
-    expect(markup).toContain("OR");
-    expect(markup).toContain("Accessibility notes");
-  });
-
-  it("renders a semantic public form preview that mirrors seeded copy and options", () => {
-    const markup = renderToStaticMarkup(
-      createElement(CfpEditor, { eventId: "summit-2026", organizationId: "organization-1" }),
-    );
-
-    expect(markup).toContain('<h2 id="public-preview-heading">Public form preview</h2>');
-    expect(markup).toContain('aria-label="Public CFP form preview"');
-    expect(markup).toContain("Bring your best session to the Summit");
-    expect(markup).toContain('id="preview-first-name"');
-    expect(markup).toContain('id="preview-track"');
-    expect(markup).toContain("Responsible AI");
-    expect(markup).toContain("Your proposal is in");
-    expect(markup).toContain("This preview uses the current editor state");
   });
   it("round-trips sections, participant fields, rules, and reusable field lineage", () => {
-    const configuration = createSeededCfpConfiguration();
+    const configuration = createTestCfpConfiguration();
+    configuration.proposalLimit = 7;
     configuration.sections = [
       { id: "proposal", title: "Proposal", description: "Tell us what you will share." },
       { id: "logistics", title: "Logistics", description: "Accessibility and files." },
@@ -275,6 +240,8 @@ describe("CFP editor", () => {
         fieldVersion: 2,
       },
     ];
+    delete configuration.ruleTargetField;
+    configuration.ruleAction = "";
     configuration.rules = [
       {
         id: "show-logistics",
@@ -303,6 +270,8 @@ describe("CFP editor", () => {
     const form = toFormConfiguration(configuration, "org-1", "summit-2026");
     const restored = configurationFromServer(configuration, event, form);
 
+    expect(form.settings.maxSubmissionsPerAccount).toBe(7);
+    expect(restored.proposalLimit).toBe(7);
     expect(restored.sections).toEqual(configuration.sections);
     expect(restored.rules).toEqual(configuration.rules);
     expect(restored.participantFields?.[0]).toMatchObject({
@@ -333,13 +302,13 @@ describe("CFP editor", () => {
     });
   });
   it("discovers the published form for the exact event before stable fallbacks", () => {
-    const draftConfiguration = createSeededCfpConfiguration("devflow-conf-2027");
+    const draftConfiguration = createTestCfpConfiguration("devflow-conf-2027");
     draftConfiguration.id = "devflow-draft";
     draftConfiguration.status = "draft";
-    const publishedConfiguration = createSeededCfpConfiguration("devflow-conf-2027");
+    const publishedConfiguration = createTestCfpConfiguration("devflow-conf-2027");
     publishedConfiguration.id = "devflow-conf-2027-cfp";
     publishedConfiguration.status = "published";
-    const otherEventConfiguration = createSeededCfpConfiguration("other-event");
+    const otherEventConfiguration = createTestCfpConfiguration("other-event");
     otherEventConfiguration.id = "main-cfp";
     otherEventConfiguration.status = "published";
 
@@ -357,7 +326,7 @@ describe("CFP editor", () => {
   });
 
   it("uses an event-qualified form id when creating an empty event form", () => {
-    const seeded = createSeededCfpConfiguration("empty-event");
+    const seeded = createTestCfpConfiguration("empty-event");
     const { id: _id, formVersion: _formVersion, ...configuration } = seeded;
 
     expect(toFormConfiguration(configuration, "ai-engineer", "empty-event")).toMatchObject({
@@ -368,7 +337,7 @@ describe("CFP editor", () => {
   });
 
   it("round-trips equals Workshop to show_field prerequisites without inversion", () => {
-    const configuration = createSeededCfpConfiguration("devflow-conf-2027");
+    const configuration = createTestCfpConfiguration("devflow-conf-2027");
     configuration.rule = {
       type: "condition",
       field: "format",
@@ -559,7 +528,7 @@ describe("CFP editor", () => {
   });
 
   it("omits empty optional taxonomy fields from persisted forms", () => {
-    const configuration = createSeededCfpConfiguration("devflow-conf-2027");
+    const configuration = createTestCfpConfiguration("devflow-conf-2027");
     configuration.tags = [];
     configuration.levels = [];
     configuration.fields = configuration.fields.filter(

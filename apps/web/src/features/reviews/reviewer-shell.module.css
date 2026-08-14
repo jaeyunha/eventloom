@@ -1,0 +1,97 @@
+.shell {
+  min-height: 100dvh;
+  background: var(--background);
+}
+
+.topbar {
+  position: sticky;
+  z-index: 30;
+  top: 0;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--background) 92%, transparent);
+  backdrop-filter: blur(16px);
+}
+
+.topbarInner {
+  display: flex;
+  width: min(calc(100% - 2rem), 76rem);
+  min-height: 3.75rem;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 auto;
+}
+
+.brand {
+  display: inline-flex;
+  gap: 0.75rem;
+  align-items: center;
+  color: var(--foreground);
+  text-decoration: none;
+}
+
+.brandMark {
+  display: inline-grid;
+  width: 2rem;
+  height: 2rem;
+  place-items: center;
+  border-radius: 0.55rem;
+  background: var(--foreground);
+  color: var(--background);
+  font-size: 0.72rem;
+  font-weight: 760;
+  letter-spacing: -0.02em;
+}
+
+.brandCopy {
+  display: grid;
+  gap: 0.05rem;
+}
+
+.brandCopy strong {
+  font-size: 0.9rem;
+  font-weight: 680;
+  letter-spacing: -0.015em;
+}
+
+.brandCopy span {
+  color: var(--muted-foreground);
+  font-size: 0.72rem;
+}
+
+.actions {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.main {
+  min-width: 0;
+}
+
+.mobileSubmissionsLabel {
+  display: none;
+}
+
+@media (max-width: 40rem) {
+  .topbarInner {
+    width: min(calc(100% - 1rem), 76rem);
+  }
+
+  .brandCopy span {
+    display: none;
+  }
+
+  .submissionsLabel {
+    display: none;
+  }
+
+  .mobileSubmissionsLabel {
+    display: inline;
+  }
+}
+
+@media (max-width: 24rem) {
+  .brandCopy {
+    display: none;
+  }
+}

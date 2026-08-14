@@ -26,6 +26,40 @@
 }
 
 .adminShell {
+  --admin-ink: var(--foreground);
+  --admin-muted: var(--muted-foreground);
+  --admin-subtle: color-mix(in srgb, var(--muted-foreground) 72%, transparent);
+  --admin-canvas: var(--background);
+  --admin-surface: var(--card);
+  --admin-border: var(--border);
+  --admin-border-strong: var(--input);
+  --admin-brand: #4f46e5;
+  --admin-brand-strong: #3730a3;
+  --admin-brand-soft: #eef0ff;
+  --admin-accent: var(--success);
+  --admin-accent-soft: var(--success-surface);
+  --admin-warning: var(--warning);
+  --admin-warning-soft: var(--warning-surface);
+  --admin-danger: var(--failure);
+  --admin-danger-soft: var(--failure-surface);
+  --admin-focus: var(--ring);
+  --admin-radius-sm: 0.375rem;
+  --admin-radius-md: 0.5625rem;
+  --admin-radius-lg: 0.75rem;
+  --admin-space-1: 0.25rem;
+  --admin-space-2: 0.5rem;
+  --admin-space-3: 0.75rem;
+  --admin-space-4: 1rem;
+  --admin-space-5: 1.5rem;
+  --admin-space-6: 2rem;
+  --admin-text-caption: 0.625rem;
+  --admin-text-small: 0.7rem;
+  --admin-text-body: 0.8rem;
+  --admin-text-panel: 0.82rem;
+  --admin-settings-navigation-width: 13.5rem;
+  --admin-settings-content-width: 52rem;
+  --admin-settings-wide-width: 68rem;
+  --admin-sticky-offset: 4.25rem;
   --sidebar-width: 15.25rem;
   --sidebar-width-icon: 3rem;
   --background: #f7f7f8;
@@ -217,6 +251,7 @@
 .eventContext {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
+  width: auto;
   gap: 0.5rem;
   align-items: center;
   margin: 0.55rem 0.65rem 0.3rem;
@@ -224,7 +259,22 @@
   border: 1px solid #dedee3;
   border-radius: 0.5rem;
   background: #fff;
+  color: #71717a;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
   box-shadow: 0 1px 2px rgb(24 24 27 / 4%);
+}
+
+.eventContext:hover,
+.eventContext[data-state="open"] {
+  border-color: #c9c9cf;
+  background: #fafafa;
+}
+
+.eventContext:focus-visible {
+  outline: 2px solid #4f46e5;
+  outline-offset: 2px;
 }
 
 .eventContextIcon {
@@ -242,7 +292,7 @@
   height: 0.85rem;
 }
 
-.eventContext div:nth-child(2) {
+.eventContextCopy {
   display: grid;
   min-width: 0;
   gap: 0.05rem;
@@ -263,20 +313,84 @@
   white-space: nowrap;
 }
 
-.eventContext > a {
-  color: #71717a;
-  font-size: 0.61rem;
-  font-weight: 580;
-  text-decoration: none;
+.eventContextChevron {
+  width: 0.8rem;
+  height: 0.8rem;
+  color: #929299;
+  transition: transform 120ms ease;
 }
 
-.eventContext > a:hover {
-  color: #27272a;
-  text-decoration: underline;
+.eventContext[data-state="open"] .eventContextChevron {
+  transform: rotate(180deg);
+}
+
+.eventWorkspaceMenu {
+  min-width: 13rem;
+}
+
+.eventWorkspaceMenuLabel {
+  font-size: 0.625rem;
+}
+
+.eventWorkspaceMenuItem {
+  min-height: 2rem;
+  gap: 0.5rem;
+  font-size: 0.68rem;
+  font-weight: 560;
 }
 
 [data-collapsible="icon"] .eventContext {
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: center;
+  margin-inline: 0.5rem;
+  margin-bottom: 2.3rem;
+  padding: 0.25rem;
+}
+
+[data-collapsible="icon"] .eventContextIcon {
+  width: 1.35rem;
+  height: 1.35rem;
+}
+
+[data-collapsible="icon"] .eventContextCopy,
+[data-collapsible="icon"] .eventContextChevron {
   display: none;
+}
+
+[data-collapsible="icon"] .accountFooter {
+  padding: 0.5rem;
+}
+
+[data-collapsible="icon"] .accountFooter .organizationCard {
+  gap: 0.4rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+[data-collapsible="icon"] .organizationIdentity {
+  justify-content: center;
+}
+
+[data-collapsible="icon"] .organizationCopy,
+[data-collapsible="icon"] .organizationSelect,
+[data-collapsible="icon"] .organizationAction span {
+  display: none;
+}
+
+[data-collapsible="icon"] .organizationAvatar,
+[data-collapsible="icon"] .organizationAction {
+  width: 2rem;
+  min-width: 2rem;
+  height: 2rem;
+  min-height: 2rem;
+  margin-inline: auto;
+}
+
+[data-collapsible="icon"] .organizationAction {
+  justify-content: center;
+  padding: 0;
 }
 
 .sidebarHeader {
@@ -362,6 +476,20 @@
   font-size: 0.56rem;
 }
 
+[data-collapsible="icon"] .commandButton {
+  display: grid;
+  width: 2rem;
+  min-height: 2rem;
+  place-items: center;
+  margin-inline: auto;
+  padding: 0;
+}
+
+[data-collapsible="icon"] .commandButton span,
+[data-collapsible="icon"] .commandButton kbd {
+  display: none;
+}
+
 .adminInset {
   min-width: 0;
   background: linear-gradient(180deg, rgb(255 255 255 / 68%), transparent 10rem), #f7f7f8;
@@ -419,113 +547,6 @@
   width: min(calc(100% - 2rem), 94rem);
   margin-inline: auto;
   padding: 1rem 0 4rem;
-}
-
-.commandBackdrop {
-  position: fixed;
-  z-index: 100;
-  inset: 0;
-  display: grid;
-  place-items: start center;
-  padding-top: 12vh;
-  background: rgb(17 17 20 / 28%);
-  backdrop-filter: blur(2px);
-}
-
-.commandDismiss {
-  position: absolute;
-  inset: 0;
-  border: 0;
-  background: transparent;
-  cursor: default;
-}
-
-.commandDialog {
-  position: relative;
-  width: min(calc(100% - 1.75rem), 32.5rem);
-  overflow: hidden;
-  border: 1px solid #d2d2d6;
-  border-radius: 0.7rem;
-  background: #fff;
-  box-shadow:
-    0 12px 32px rgb(0 0 0 / 12%),
-    0 2px 8px rgb(0 0 0 / 6%);
-}
-
-.commandSearch {
-  display: flex;
-  min-height: 3rem;
-  gap: 0.6rem;
-  align-items: center;
-  margin: 0.55rem;
-  padding: 0 0.65rem;
-  border: 1px solid #d2d2d6;
-  border-radius: 0.4rem;
-  border-bottom: 1px solid #e4e4e7;
-  background: #fafafa;
-  transition:
-    border-color 120ms ease,
-    box-shadow 120ms ease,
-    background-color 120ms ease;
-}
-
-.commandSearch:focus-within {
-  border-color: #4f46e5;
-  background: #fff;
-  box-shadow: 0 0 0 3px rgb(79 70 229 / 18%);
-}
-
-.commandSearch svg {
-  width: 1rem;
-  height: 1rem;
-  color: #929299;
-}
-
-.commandSearch input {
-  width: 100%;
-  border: 0;
-  background: transparent;
-  color: #1b1b1f;
-  font: inherit;
-  font-size: 0.8rem;
-  outline: none;
-}
-
-.commandResults {
-  display: grid;
-  gap: 0.1rem;
-  padding: 0.4rem;
-}
-
-.commandEmpty {
-  margin: 0;
-  padding: 0.8rem;
-  color: #929299;
-  font-size: 0.68rem;
-  text-align: center;
-}
-
-.commandResults a {
-  display: flex;
-  min-height: 2.3rem;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 0.65rem;
-  border-radius: 0.4rem;
-  color: #56565d;
-  font-size: 0.7rem;
-  text-decoration: none;
-}
-
-.commandResults a:hover {
-  background: #eeeef0;
-  color: #1b1b1f;
-}
-
-.commandResults kbd {
-  color: #929299;
-  font-family: inherit;
-  font-size: 0.58rem;
 }
 
 .pageHeader {
@@ -781,9 +802,9 @@
 }
 
 .statusLive {
-  border-color: #cee5db;
-  background: #e9f7f1;
-  color: #17835c;
+  border-color: color-mix(in srgb, var(--success) 22%, transparent);
+  background: var(--success-surface);
+  color: var(--success);
 }
 
 .statusDraft,
@@ -1577,13 +1598,20 @@
   grid-template-columns: 15rem minmax(0, 1fr);
   min-width: 0;
 }
+.eventsCard {
+  container-type: inline-size;
+  overflow: hidden;
+}
+.calendarMain {
+  min-width: 0;
+}
 .calendarRail {
   display: grid;
   align-content: start;
   gap: 1.4rem;
   padding: 1.05rem;
   border-right: 1px solid var(--admin-border);
-  background: #fbfaf8;
+  background: var(--card);
 }
 .calendarRailSection {
   display: grid;
@@ -1615,7 +1643,21 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.upcomingLink span {
+.upcomingTitleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.eventIdentifier {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.68rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.upcomingLink > span:not(.upcomingTitleRow) {
   color: var(--admin-muted);
   font-size: 0.68rem;
 }
@@ -1643,6 +1685,7 @@
 }
 .calendarMain {
   min-width: 0;
+  overflow-x: auto;
 }
 .calendarToolbar {
   display: flex;
@@ -1731,7 +1774,7 @@
   border-right: 0;
 }
 .calendarCellOutside {
-  background: #faf9f7;
+  background: var(--muted);
   color: var(--admin-subtle);
 }
 .calendarDate {
@@ -1788,59 +1831,111 @@
 }
 .eventForm {
   display: grid;
-  gap: 1rem;
+  gap: 1.5rem;
+}
+.eventEditorCard {
+  width: min(100%, 52rem);
+}
+.eventEditorIntro {
+  display: grid;
+  gap: 0.35rem;
 }
 .eventEditorTitle {
   margin-bottom: 0.35rem;
 }
 .eventTwoColumn {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1rem;
 }
 .eventField {
   display: grid;
   gap: 0.35rem;
+  min-width: 0;
+}
+.eventFieldFull {
+  grid-column: 1 / -1;
 }
 .eventFieldLabel {
-  color: var(--admin-ink);
+  color: var(--foreground);
   font-size: 0.78rem;
   font-weight: 700;
+}
+.eventFieldDescription {
+  color: var(--muted-foreground);
+  font-size: 0.74rem;
+  line-height: 1.45;
+}
+.eventFieldDescription code {
+  color: var(--foreground);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.72rem;
 }
 .eventInput {
   width: 100%;
   min-height: 2.55rem;
   padding: 0.55rem 0.65rem;
-  border: 1px solid var(--admin-border-strong);
-  border-radius: var(--admin-radius-sm);
-  background: var(--admin-surface);
-  color: var(--admin-ink);
+  border: 1px solid var(--input);
+  border-radius: calc(var(--radius) - 2px);
+  background: transparent;
+  color: var(--foreground);
   font: inherit;
   font-size: 0.84rem;
 }
 .eventInput:focus-visible {
-  outline: 2px solid var(--admin-brand);
-  outline-offset: 1px;
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 .eventFieldset {
   display: grid;
   gap: 0.8rem;
   padding: 0.95rem;
   margin: 0;
-  border: 1px solid var(--admin-border);
-  border-radius: var(--admin-radius-sm);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) + 2px);
+  background: color-mix(in srgb, var(--muted) 42%, transparent);
 }
 .eventLegend {
   padding: 0 0.35rem;
+  color: var(--foreground);
   font-size: 0.86rem;
   font-weight: 750;
+}
+.eventAdvanced {
+  border-top: 1px solid var(--border);
+  padding-top: 0.15rem;
+}
+.eventAdvancedSummary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-block: 0.8rem;
+  color: var(--foreground);
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+.eventAdvancedSummary small {
+  color: var(--muted-foreground);
+  font-size: 0.72rem;
+  font-weight: 500;
 }
 .eventCheckboxLabel {
   display: flex;
   gap: 0.55rem;
-  align-items: center;
-  color: var(--admin-ink);
+  align-items: flex-start;
+  color: var(--foreground);
   font-size: 0.82rem;
+}
+.eventCheckboxLabel span {
+  display: grid;
+  gap: 0.1rem;
+}
+.eventCheckboxLabel small {
+  color: var(--muted-foreground);
+  font-size: 0.74rem;
+  font-weight: 400;
 }
 .eventError {
   margin: 0;
@@ -1986,6 +2081,29 @@
     border-right: 0;
     border-bottom: 1px solid var(--admin-border);
   }
+  .calendarGrid {
+    min-width: 0;
+  }
+}
+
+@container (max-width: 48rem) {
+  .calendarWorkspace {
+    grid-template-columns: 1fr;
+  }
+  .calendarRail {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    border-right: 0;
+    border-bottom: 1px solid var(--admin-border);
+  }
+  .calendarGrid {
+    min-width: 0;
+  }
+}
+
+@container (max-width: 34rem) {
+  .calendarRail {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 44rem) {
@@ -1997,6 +2115,19 @@
   .workspaceHeader {
     height: 3rem;
     padding-inline: 0.7rem;
+  }
+  .eventTwoColumn {
+    grid-template-columns: 1fr;
+  }
+  .eventAdvancedSummary {
+    align-items: flex-start;
+  }
+  .eventInlineActions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+  .eventInlineActions button {
+    width: 100%;
   }
 
   .commandButton {
@@ -2383,6 +2514,9 @@
 }
 
 :global(.dark) .adminShell {
+  --admin-brand: #9ba3ff;
+  --admin-brand-strong: #c4c9ff;
+  --admin-brand-soft: #292b45;
   --background: #111110;
   --foreground: #f5f5f3;
   --card: #1a1a19;
@@ -2440,6 +2574,11 @@
   color: #999993;
 }
 
+:global(.dark) .accountFooter {
+  border-top-color: #30302e;
+  background: #161615;
+}
+
 :global(.dark) .commandButton,
 :global(.dark) .organizationCard,
 :global(.dark) .eventContext {
@@ -2456,6 +2595,12 @@
   color: #ffffff;
 }
 
+:global(.dark) .eventContext:hover,
+:global(.dark) .eventContext[data-state="open"] {
+  border-color: #484845;
+  background: #242422;
+}
+
 :global(.dark) .organizationAvatar,
 :global(.dark) .commandButton kbd {
   border-color: #484845;
@@ -2470,9 +2615,12 @@
 }
 
 :global(.dark) .organizationAction,
-:global(.dark) .sidebarMenuButton,
-:global(.dark) .eventContext > a {
+:global(.dark) .sidebarMenuButton {
   color: #b8b8b2;
+}
+
+:global(.dark) .eventContextChevron {
+  color: #999993;
 }
 
 :global(.dark) .metricsSection,

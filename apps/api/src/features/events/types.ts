@@ -92,6 +92,7 @@ export interface Event {
   timeZone: string;
   startsAt: string;
   endsAt: string;
+  scheduleDates?: readonly string[] | undefined;
   venue: string | null;
   cfpSettings: EventCfpSettings;
   defaultCalendarSettings: EventDefaultCalendarSettings;
@@ -138,6 +139,7 @@ export interface CreateEventInput {
   timeZone: string;
   startsAt: string;
   endsAt: string;
+  scheduleDates?: readonly string[];
   venue?: string | null;
   cfpSettings?: EventCfpSettingsInput;
   defaultCalendarSettings?: EventDefaultCalendarSettingsInput;
@@ -154,6 +156,7 @@ export interface UpdateEventInput {
   timeZone?: string;
   startsAt?: string;
   endsAt?: string;
+  scheduleDates?: readonly string[];
   venue?: string | null;
   cfpSettings?: EventCfpSettingsInput;
   defaultCalendarSettings?: EventDefaultCalendarSettingsInput;

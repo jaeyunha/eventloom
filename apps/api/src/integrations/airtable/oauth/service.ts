@@ -30,6 +30,8 @@ export interface AirtableOAuthAttempt {
   exchangeToken: string | null;
   exchangeLeaseExpiresAt: string | null;
   attemptVersion: number;
+  /** Connection generation that this attempt is authorized to finalize. */
+  authorizationConnectionVersion: number;
   expiresAt: string;
   consumedAt: string | null;
   resultRedirect: string | null;
@@ -75,7 +77,17 @@ export interface AirtableOAuthTokenResponse {
 }
 
 export interface AirtableOAuthAttemptStore {
+  /** Creates only while the attempt's authorizing connection generation remains current. */
   create(attempt: AirtableOAuthAttempt): Promise<void>;
+
+  /** Invalidates unfinished attempts from an earlier connection authorization generation. */
+  supersede(input: {
+    organizationId: string;
+    connectionId: string;
+    authorizationConnectionVersion: number;
+    supersededAt: string;
+  }): Promise<void>;
+
   findByStateHash(stateHash: string): Promise<AirtableOAuthAttempt | null>;
 
   /**
@@ -303,6 +315,7 @@ export interface BeginAirtableAuthorizationResult {
 }
 
 export interface HandleAirtableCallbackResult {
+  organizationId: string;
   connectionId: string;
   connectionVersion: number;
   redirectTo: string;
@@ -403,27 +416,43 @@ export class AirtableOAuthService {
       );
     }
 
-    await this.attempts.create({
-      id: attemptId,
+    await this.attempts.supersede({
       organizationId,
-      initiatingUserId,
       connectionId: connection.id,
-      stateHash,
-      pkceVerifierCiphertext,
-      returnPath,
-      callbackCodeHash: null,
-      status: "pending",
-      exchangeOwner: null,
-      exchangeToken: null,
-      exchangeLeaseExpiresAt: null,
-      attemptVersion: 1,
-      expiresAt,
-      consumedAt: null,
-      resultRedirect: null,
-      errorCode: null,
-      createdAt: startedAt,
-      updatedAt: startedAt,
+      authorizationConnectionVersion: connection.connectionVersion,
+      supersededAt: startedAt,
     });
+
+    try {
+      await this.attempts.create({
+        id: attemptId,
+        organizationId,
+        initiatingUserId,
+        connectionId: connection.id,
+        stateHash,
+        pkceVerifierCiphertext,
+        returnPath,
+        callbackCodeHash: null,
+        status: "pending",
+        exchangeOwner: null,
+        exchangeToken: null,
+        exchangeLeaseExpiresAt: null,
+        attemptVersion: 1,
+        authorizationConnectionVersion: connection.connectionVersion,
+        expiresAt,
+        consumedAt: null,
+        resultRedirect: null,
+        errorCode: null,
+        createdAt: startedAt,
+        updatedAt: startedAt,
+      });
+    } catch {
+      throw new AirtableOAuthError(
+        "connection_unavailable",
+        "The Airtable connection changed while authorization was starting.",
+        true,
+      );
+    }
 
     return {
       attemptId,
@@ -593,6 +622,7 @@ export class AirtableOAuthService {
       }
 
       return {
+        organizationId: finalized.connection.organizationId,
         connectionId: finalized.connection.id,
         connectionVersion: finalized.connection.connectionVersion,
         redirectTo: finalized.attempt.resultRedirect ?? attempt.returnPath,

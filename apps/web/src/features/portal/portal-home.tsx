@@ -3,6 +3,11 @@
 import { ArrowRight, CalendarClock, CheckCircle2, CircleAlert, Sparkles } from "lucide-react";
 import Link from "next/link";
 import {
+  StatusBadge,
+  WorkspaceHeader,
+  WorkspaceMetaItem,
+} from "@/components/workspace/workspace-ui";
+import {
   findSubmissionForTask,
   isTaskBlocked,
   submissionStatusPresentation,
@@ -18,11 +23,16 @@ import {
   SubmissionStatusBadge,
   TaskStatusBadge,
 } from "./portal-ui";
-import {
-  StatusBadge,
-  WorkspaceHeader,
-  WorkspaceMetaItem,
-} from "@/components/workspace/workspace-ui";
+import type { PortalTask } from "./types";
+
+export function selectNextOutstandingPortalTask(
+  tasks: readonly PortalTask[],
+): PortalTask | undefined {
+  const outstanding = tasks.filter(
+    (task) => task.status !== "completed" && task.status !== "waived",
+  );
+  return outstanding.find((task) => !isTaskBlocked(task, tasks)) ?? outstanding[0];
+}
 
 export function PortalHome() {
   return (
@@ -44,7 +54,8 @@ function PortalHomeContent() {
   const visibleTasks = view.tasks.filter(
     (task) => task.status !== "completed" && task.status !== "waived",
   );
-  const nextTask = visibleTasks.find((task) => !isTaskBlocked(task, view.tasks));
+  const nextTask = selectNextOutstandingPortalTask(view.tasks);
+  const nextTaskDueDate = formatPortalDate(nextTask?.dueAt);
   const primarySubmission = view.submissions[0];
 
   return (
@@ -94,7 +105,7 @@ function PortalHomeContent() {
             <p>
               {nextTask
                 ? `${findSubmissionForTask(nextTask, view.submissions)?.title ?? "Speaker task"}${
-                    nextTask.dueAt ? ` · Due ${formatPortalDate(nextTask.dueAt)}` : ""
+                    nextTaskDueDate ? ` · Due ${nextTaskDueDate}` : ""
                   }`
                 : "Every assigned speaker task is complete."}
             </p>
@@ -203,15 +214,19 @@ function PortalHomeContent() {
         </section>
       </div>
 
-      <section className={styles.milestoneStrip} aria-label="Event milestones">
+      <section className={styles.milestoneStrip} aria-label="Task status">
         <span className={styles.milestoneIcon}>
           <CalendarClock aria-hidden="true" size={16} />
         </span>
         <div>
-          <strong>Next milestone</strong>
-          <span>Speaker assets due Aug 30 · Agenda publishes Sep 4</span>
+          <strong>Next task</strong>
+          <span>
+            {nextTask
+              ? `${nextTask.title}${nextTaskDueDate ? ` · Due ${nextTaskDueDate}` : ""}`
+              : "No outstanding tasks."}
+          </span>
         </div>
-        <Link href={`/portal/tasks${eventQuery}`}>View timeline</Link>
+        <Link href={`/portal/tasks${eventQuery}`}>View tasks</Link>
       </section>
 
       {summary.acceptedCount > 0 && can("task-response") ? (

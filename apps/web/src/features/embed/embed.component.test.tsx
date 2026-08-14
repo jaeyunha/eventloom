@@ -29,6 +29,18 @@ const agendaRouteSource = readFileSync(
   new URL("../../app/events/[eventSlug]/agenda/page.tsx", import.meta.url),
   "utf8",
 );
+const embedAgendaRouteSource = readFileSync(
+  new URL("../../app/embed/[eventSlug]/agenda/page.tsx", import.meta.url),
+  "utf8",
+);
+const embedSpeakersRouteSource = readFileSync(
+  new URL("../../app/embed/[eventSlug]/speakers/page.tsx", import.meta.url),
+  "utf8",
+);
+const embedViewRouteSource = readFileSync(
+  new URL("../../app/embed/[eventSlug]/[view]/page.tsx", import.meta.url),
+  "utf8",
+);
 const speakerGallerySource = readFileSync(
   new URL("./speaker-gallery.tsx", import.meta.url),
   "utf8",
@@ -233,19 +245,27 @@ const emptyFinalDayAgenda: PublishedAgenda = {
 };
 
 describe("public embeds", () => {
-  it("keeps anonymous event entry routes dynamic and projection-backed", () => {
+  it("keeps anonymous event entry routes dynamic and backed only by canonical public programs", () => {
     for (const [source, view, component] of [
       [sessionsRouteSource, "sessions", "PublicSessionsView"],
       [agendaRouteSource, "agenda", "PublicAgendaView"],
+      [embedAgendaRouteSource, "agenda", "PublicAgendaView"],
+      [embedSpeakersRouteSource, "speakers", "SpeakerGallery"],
+      [embedViewRouteSource, undefined, undefined],
     ] as const) {
-      expect(source).toContain("params: Promise<{ eventSlug: string }>");
+      expect(source).toContain("params: Promise<{ eventSlug");
       expect(source).toContain(
         "searchParams: Promise<Record<string, string | string[] | undefined>>",
       );
-      expect(source).toContain("getPublishedProgramOrLocalDemo");
+      expect(source).toContain('from "@/features/embed/api"');
+      expect(source).toContain("getPublishedProgram(");
+      expect(source).not.toContain("getPublishedProgramOrLocalDemo");
+      expect(source).not.toContain("/demo/projections");
       expect(source).toContain("parseEmbedQuery(query)");
-      expect(source).toContain(`view="${view}"`);
-      expect(source).toContain(`<${component}`);
+      if (view !== undefined && component !== undefined) {
+        expect(source).toContain(`view="${view}"`);
+        expect(source).toContain(`<${component}`);
+      }
       expect(source).toContain("EmbedUnavailable");
       expect(source).not.toContain("devflow-conf-2027");
       expect(source).not.toContain("/admin/");

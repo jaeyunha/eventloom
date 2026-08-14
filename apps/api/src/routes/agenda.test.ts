@@ -16,6 +16,7 @@ import type { AgendaRouteDependencies, AgendaRouteEnvironment } from "./agenda";
 import { createAgendaAdminRoutes, createPublishedAgendaRoutes } from "./agenda";
 
 const traceId = "00000000-0000-4000-8000-000000000001";
+const calendarUidDomain = "calendar.example.test";
 const catalog: AgendaCatalog = {
   sessions: [
     {
@@ -177,6 +178,7 @@ function appForWithPublic(
     "/api/public/events/:eventSlug",
     createPublishedAgendaRoutes({
       engine,
+      calendarUidDomain,
       ...(eventMetadataForEvent === undefined ? {} : { eventMetadataForEvent }),
     }),
   );
@@ -197,6 +199,7 @@ function publicAppFor(
     "/api/public/events/:eventSlug",
     createPublishedAgendaRoutes({
       engine,
+      calendarUidDomain,
       ...(eventMetadataForEvent === undefined ? {} : { eventMetadataForEvent }),
       ...(publicRevisionNumberForEventSlug === undefined
         ? {}
@@ -454,6 +457,7 @@ describe("canonical agenda draft routes", () => {
       timeZone: "America/Los_Angeles",
       startsOn: "2027-05-12",
       endsOn: "2027-05-14",
+      scheduleDates: ["2027-05-12", "2027-05-14"],
       venueName: "DevFlow venue",
     });
     const root = "/api/admin/organizations/org-a/events/event-a/agenda";
@@ -481,6 +485,7 @@ describe("canonical agenda draft routes", () => {
 
     for (const invalidEntry of [
       entry("2026-08-12T09:00", "2026-08-12T10:00"),
+      entry("2027-05-13T09:00", "2027-05-13T10:00"),
       entry("2027-05-12T23:30", "2027-05-13T00:30"),
     ]) {
       const response = await app.request(`${root}/draft`, {
@@ -642,9 +647,9 @@ describe("canonical agenda draft routes", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ expectedVersion: 1, entries: [] }),
     });
-    expect(stale.status).toBe(412);
+    expect(stale.status).toBe(409);
     expect(await responseError(stale)).toMatchObject({
-      code: "PRECONDITION_FAILED",
+      code: "CONFLICT",
       details: [
         {
           path: ["expectedVersion"],
@@ -1057,6 +1062,8 @@ describe("canonical agenda draft routes", () => {
         format: string;
         speakerNames: readonly string[];
         capacityRequired: number;
+        trackIds: readonly string[];
+        trackNames: readonly string[];
       }[];
     }>(workspace);
     expect(workspaceData.draft.entries.find((entry) => entry.id === "entry-2")).toMatchObject({
@@ -1070,6 +1077,8 @@ describe("canonical agenda draft routes", () => {
         format: "Session",
         speakerNames: ["participant-3"],
         capacityRequired: 40,
+        trackIds: [],
+        trackNames: [],
       },
     ]);
     const state = await engine.repository.load("event-a");
@@ -1337,12 +1346,23 @@ describe("agenda suggestion admin routes", () => {
   });
 });
 describe("anonymous published agenda feeds", () => {
+  it("rejects an invalid configured calendar UID domain", () => {
+    expect(() =>
+      createPublishedAgendaRoutes({
+        engine: publicEngine(publicRevision()),
+        calendarUidDomain: "https://calendar.example.test/path",
+      }),
+    ).toThrow();
+  });
+
   it("serves the public JSON projection with cache validators and excludes private fields", async () => {
     const app = publicAppFor(publicEngine(publicRevision()));
     const response = await app.request("/api/public/events/open-systems/agenda.json");
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toMatch(/^application\/json/u);
-    expect(response.headers.get("cache-control")).toContain("public");
+    expect(response.headers.get("cache-control")).toBe(
+      "public, max-age=0, s-maxage=60, stale-while-revalidate=30, must-revalidate",
+    );
     const etag = response.headers.get("etag");
     expect(etag).toMatch(/^"[a-f0-9]{64}"$/u);
     const body = (await response.json()) as {
@@ -1647,8 +1667,8 @@ describe("anonymous published agenda feeds", () => {
     expect(ical).toContain("DESCRIPTION:Description with a long speaker");
     expect(ical).toContain("LOCATION:Main hall\\, level 2");
     expect(ical).toContain("Morgan Lee");
-    expect(ical).toContain("@calendar.sessionboard.namuh.co");
-    expect(ical).toContain("UID:open-systems.session-public-1@calendar.sessionboard.namuh.co");
+    expect(ical).toContain(`@${calendarUidDomain}`);
+    expect(ical).toContain(`UID:open-systems.session-public-1@${calendarUidDomain}`);
     expect(ical).not.toContain("open-systems.entry-public-1@");
     expect(ical).not.toContain("private@example.test");
     expect(ical).not.toContain("Private event metadata.");

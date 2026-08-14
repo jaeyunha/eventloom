@@ -563,7 +563,7 @@ describe("evaluation HTTP routes", () => {
       data: {
         assignments: Array<{
           assignment: { id: string; reviewerId: string; status: string };
-          plan: { name: string };
+          plan: { name: string; closesAt: string | null };
           submission: {
             title: string;
             participants: unknown[];
@@ -590,6 +590,7 @@ describe("evaluation HTTP routes", () => {
     ).toBe(true);
     expect(body.data.assignments.map((entry) => entry.assignment.status)).toContain("submitted");
     expect(body.data.assignments[0]?.plan.name).toBe("Committee");
+    expect(body.data.assignments[0]?.plan.closesAt).toBe(planRequest.closesAt);
     expect(body.data.assignments[0]?.submission.title).toBe("Blind proposal");
     expect(body.data.assignments[0]?.submission.participants).toEqual([]);
     expect(body.data.assignments[0]?.submission.answers).toEqual({ topic: "Visible" });
@@ -1017,6 +1018,68 @@ describe("evaluation HTTP routes", () => {
       "decision_rejected",
     ]);
   });
+  it("does not return an accepted decision before onboarding succeeds", async () => {
+    const app = createTestApp({
+      acceptanceHandoff: {
+        accept: async () => {
+          throw new Error("accepted onboarding failed");
+        },
+      },
+    });
+    await jsonRequest(app, "/evaluations/plans", "POST", planRequest);
+    await jsonRequest(app, "/evaluations/plans/plan-1/open", "POST", { expectedVersion: 1 });
+
+    const response = await jsonRequest(
+      app,
+      "/evaluations/plans/plan-1/submissions/submission-1/decision",
+      "PUT",
+      {
+        status: "accepted",
+        reason: "Committee consensus",
+        idempotencyKey: "route-decision-onboarding-failure",
+      },
+    );
+
+    expect(response.status).toBe(500);
+  });
+  it("creates an editable draft revision instead of unlocking a reopened plan", async () => {
+    const app = createTestApp();
+    await jsonRequest(app, "/evaluations/plans", "POST", planRequest);
+    const opened = await jsonRequest(app, "/evaluations/plans/plan-1/open", "POST", {
+      expectedVersion: 1,
+    });
+    const openedBody = (await opened.json()) as { version: number };
+    const closed = await jsonRequest(app, "/evaluations/plans/plan-1/close", "POST", {
+      expectedVersion: openedBody.version,
+    });
+    const closedBody = (await closed.json()) as { version: number };
+    const reopened = await jsonRequest(app, "/evaluations/plans/plan-1/open", "POST", {
+      expectedVersion: closedBody.version,
+    });
+    const reopenedBody = (await reopened.json()) as { version: number };
+
+    const response = await jsonRequest(app, "/evaluations/plans/plan-1/revise", "POST", {
+      expectedVersion: reopenedBody.version,
+    });
+    const body = (await response.json()) as {
+      id: string;
+      status: string;
+      version: number;
+      gradingLockedAt: string | null;
+    };
+    const original = await app.request("/evaluations/plans/plan-1");
+    const originalBody = (await original.json()) as { status: string; version: number };
+
+    expect(response.status).toBe(201);
+    expect(body).toMatchObject({
+      id: `plan-1-revision-${reopenedBody.version}`,
+      status: "draft",
+      version: 1,
+      gradingLockedAt: null,
+    });
+    expect(originalBody).toMatchObject({ status: "open", version: reopenedBody.version });
+  });
+
   it("persists per-round pools and all scorecard input types", async () => {
     const app = createTestApp();
     const firstRound = planRequest.rounds[0];
@@ -1179,13 +1242,46 @@ describe("evaluation HTTP routes", () => {
       reviewerIds: readonly string[];
       assignmentIds: readonly string[];
     }> = [];
+    let deliveryReads = 0;
     const app = createTestApp(
       {},
       {
         reminders: {
           sendOutstandingReviewerReminders: async (_actor, input) => {
             calls.push(input);
-            return { queued: input.assignmentIds.length, reviewerIds: input.reviewerIds };
+            return {
+              queued: input.assignmentIds.length,
+              reviewerIds: input.reviewerIds,
+              facts: [
+                {
+                  outboxId: "outbox-reminder-1",
+                  reviewerId: "reviewer-1",
+                  roundId: "round-1",
+                  status: "queued",
+                  createdAt: "2026-08-08T12:00:00.000Z",
+                  updatedAt: "2026-08-08T12:00:00.000Z",
+                  completedAt: null,
+                  lastErrorCode: null,
+                },
+              ],
+            };
+          },
+          listOutstandingReviewerReminderDeliveries: async () => {
+            deliveryReads += 1;
+            return deliveryReads === 1
+              ? []
+              : [
+                  {
+                    outboxId: "outbox-reminder-1",
+                    reviewerId: "reviewer-1",
+                    roundId: "round-1",
+                    status: "delivered",
+                    createdAt: "2026-08-08T12:00:00.000Z",
+                    updatedAt: "2026-08-08T12:00:01.000Z",
+                    completedAt: "2026-08-08T12:00:01.000Z",
+                    lastErrorCode: null,
+                  },
+                ];
           },
         },
       },
@@ -1201,6 +1297,20 @@ describe("evaluation HTTP routes", () => {
       roundId: "round-1",
       reviewerIds: ["reviewer-1"],
     });
+    const repeatedReminder = await jsonRequest(app, "/evaluations/plans/plan-1/reminders", "POST", {
+      roundId: "round-1",
+      reviewerIds: ["reviewer-1"],
+    });
+    await jsonRequest(app, "/evaluations/plans/plan-1/submissions/submission-1/decision", "PUT", {
+      status: "rejected",
+      reason: "The program committee reached a final decision.",
+      idempotencyKey: "terminal-reminder-decision",
+    });
+    const terminalReminder = await jsonRequest(app, "/evaluations/plans/plan-1/reminders", "POST", {
+      roundId: "round-1",
+      reviewerIds: ["reviewer-1"],
+    });
+    const deliveries = await app.request("/evaluations/plans/plan-1/reminders");
     const unavailable = await jsonRequest(
       createTestApp(),
       "/evaluations/plans/plan-1/reminders",
@@ -1209,7 +1319,25 @@ describe("evaluation HTTP routes", () => {
     );
 
     expect(reminder.status).toBe(202);
-    expect(await reminder.json()).toEqual({ queued: 1, reviewerIds: ["reviewer-1"] });
+    expect(await reminder.json()).toMatchObject({
+      queued: 1,
+      reviewerIds: ["reviewer-1"],
+      facts: [{ outboxId: "outbox-reminder-1", status: "queued" }],
+    });
+    expect(repeatedReminder.status).toBe(200);
+    expect(await repeatedReminder.json()).toMatchObject({
+      queued: 0,
+      reviewerIds: ["reviewer-1"],
+      facts: [{ outboxId: "outbox-reminder-1", status: "delivered" }],
+    });
+    expect(terminalReminder.status).toBe(400);
+    await expect(terminalReminder.json()).resolves.toMatchObject({
+      error: { code: "EVALUATION_NO_OUTSTANDING_REVIEWS" },
+    });
+    expect(deliveries.status).toBe(200);
+    expect(await deliveries.json()).toMatchObject({
+      facts: [{ outboxId: "outbox-reminder-1", status: "delivered" }],
+    });
     expect(calls).toEqual([
       {
         planId: "plan-1",

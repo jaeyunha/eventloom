@@ -81,6 +81,11 @@ async function fixture() {
   const adapter = new FakeDeliveryAdapter();
   const service = new CommunicationService(repository, adapter, {
     clock: () => new Date(now),
+    senderIdentities: {
+      auth: "login@conference.example",
+      speakers: "program@conference.example",
+      calendar: "schedule@conference.example",
+    },
   });
   const template = await service.createTemplate(organizer, {
     id: "group-template",
@@ -220,18 +225,25 @@ async function expectCode(
 }
 
 describe("communications domain", () => {
-  it("maps every template purpose to its exact sender and rejects legacy or arbitrary identities", async () => {
-    const { service } = await fixture();
+  it("maps every template purpose to runtime-configured sender identities", async () => {
+    const configuredSenders = {
+      auth: "login@conference.example",
+      speakers: "program@conference.example",
+      calendar: "schedule@conference.example",
+    } as const;
+    const service = new CommunicationService(new InMemoryCommunicationRepository(), undefined, {
+      senderIdentities: configuredSenders,
+    });
     const purposeSenders: readonly [CommunicationTemplatePurpose, CommunicationSenderIdentity][] = [
-      ["verification", "auth@sessionboard.namuh.co"],
-      ["receipt", "speakers@sessionboard.namuh.co"],
-      ["reminder", "speakers@sessionboard.namuh.co"],
-      ["decision", "speakers@sessionboard.namuh.co"],
-      ["task", "speakers@sessionboard.namuh.co"],
-      ["schedule_publish", "calendar@sessionboard.namuh.co"],
-      ["schedule_update", "calendar@sessionboard.namuh.co"],
-      ["schedule_cancel", "calendar@sessionboard.namuh.co"],
-      ["organizer_group_email", "speakers@sessionboard.namuh.co"],
+      ["verification", configuredSenders.auth],
+      ["receipt", configuredSenders.speakers],
+      ["reminder", configuredSenders.speakers],
+      ["decision", configuredSenders.speakers],
+      ["task", configuredSenders.speakers],
+      ["schedule_publish", configuredSenders.calendar],
+      ["schedule_update", configuredSenders.calendar],
+      ["schedule_cancel", configuredSenders.calendar],
+      ["organizer_group_email", configuredSenders.speakers],
     ];
 
     for (const [purpose, sender] of purposeSenders) {
@@ -247,38 +259,128 @@ describe("communications domain", () => {
       expect(template.sender).toBe(sender);
     }
 
-    for (const [id, sender] of [
-      ["legacy", "auth@foreverbrowsing.com"],
-      ["arbitrary", "noreply@sessionboard.namuh.co"],
-    ] as const) {
-      await expectCode(
-        service.createTemplate(organizer, {
-          id: `sender-${id}`,
-          eventId,
-          name: `${id} sender`,
-          purpose: "verification",
-          sender: sender as unknown as CommunicationSenderIdentity,
-          subject: "Subject",
-          html: "<p>Body</p>",
-          text: "Body",
-        }),
-        "COMMUNICATION_INVALID_INPUT",
-      );
-    }
-
     await expectCode(
       service.createTemplate(organizer, {
         id: "sender-wrong-purpose",
         eventId,
         name: "Wrong purpose sender",
         purpose: "verification",
-        sender: "speakers@sessionboard.namuh.co",
+        sender: configuredSenders.speakers,
         subject: "Subject",
         html: "<p>Body</p>",
         text: "Body",
       }),
       "COMMUNICATION_INVALID_INPUT",
     );
+  });
+
+  it("rebinds new lineage versions to the current runtime sender without mutating history", async () => {
+    const repository = new InMemoryCommunicationRepository({
+      recipients,
+      authorizedAudiences: {
+        [`${tenantId}:${eventId}`]: ["all_participants"],
+      },
+    });
+    const originalService = new CommunicationService(repository, undefined, {
+      senderIdentities: {
+        auth: "login@legacy.example",
+        speakers: "program@legacy.example",
+        calendar: "schedule@legacy.example",
+      },
+    });
+    const original = await originalService.createTemplate(organizer, {
+      id: "rotated-group-template",
+      eventId,
+      name: "Rotated group template",
+      purpose: "organizer_group_email",
+      subject: "Original {{displayName}}",
+      html: "<p>Original {{displayName}}</p>",
+      text: "Original {{displayName}}",
+    });
+    await originalService.approveTemplate(organizer, eventId, original.id, original.version);
+
+    const adapter = new FakeDeliveryAdapter();
+    const rotatedService = new CommunicationService(repository, adapter, {
+      senderIdentities: {
+        auth: "login@conference.example",
+        speakers: "program@conference.example",
+        calendar: "schedule@conference.example",
+      },
+    });
+    const rotated = await rotatedService.createTemplateVersion(organizer, {
+      eventId,
+      templateId: original.id,
+      subject: "Rotated {{displayName}}",
+      html: "<p>Rotated {{displayName}}</p>",
+      text: "Rotated {{displayName}}",
+    });
+
+    expect(rotated.sender).toBe("program@conference.example");
+    expect(
+      (await rotatedService.getTemplate(organizer, eventId, original.id, original.version)).sender,
+    ).toBe("program@legacy.example");
+    await expectCode(
+      rotatedService.previewGroupSend(organizer, {
+        eventId,
+        purpose: "organizer_group_email",
+        templateId: original.id,
+        templateVersion: original.version,
+        audience: "all_participants",
+      }),
+      "COMMUNICATION_INVALID_INPUT",
+    );
+
+    await rotatedService.approveTemplate(organizer, eventId, rotated.id, rotated.version);
+    const preview = await rotatedService.previewGroupSend(organizer, {
+      eventId,
+      purpose: "organizer_group_email",
+      templateId: rotated.id,
+      templateVersion: rotated.version,
+      audience: "all_participants",
+    });
+    expect(preview.template.sender).toBe("program@conference.example");
+    const send = await rotatedService.sendGroup(organizer, {
+      eventId,
+      previewId: preview.id,
+      idempotencyKey: "rotated-group-send",
+    });
+    expect(send.template.sender).toBe("program@conference.example");
+    expect(adapter.requests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          from: "program@conference.example",
+          senderPurpose: "speakers",
+        }),
+      ]),
+    );
+  });
+
+  it("requires runtime sender configuration before creating a template", async () => {
+    const service = new CommunicationService(new InMemoryCommunicationRepository());
+    await expectCode(
+      service.createTemplate(organizer, {
+        eventId,
+        name: "Unconfigured sender",
+        purpose: "verification",
+        subject: "Subject",
+        html: "<p>Body</p>",
+        text: "Body",
+      }),
+      "COMMUNICATION_UNAVAILABLE",
+    );
+  });
+
+  it("rejects malformed runtime sender configuration", () => {
+    expect(
+      () =>
+        new CommunicationService(new InMemoryCommunicationRepository(), undefined, {
+          senderIdentities: {
+            auth: "not-an-email",
+            speakers: "program@conference.example",
+            calendar: "schedule@conference.example",
+          },
+        }),
+    ).toThrow("Communication auth sender must be a valid email address.");
   });
   it("isolates tenant/event data and keeps template versions immutable", async () => {
     const { service, version } = await fixture();
@@ -311,6 +413,7 @@ describe("communications domain", () => {
       data: { message: "<script>alert('x')</script>" },
     });
     expect(preview.recipientCount).toBe(2);
+    expect(preview.template.sender).toBe("program@conference.example");
     expect(
       preview.recipientPreviews.map((recipient) => ({
         recipientId: recipient.recipientId,
@@ -337,12 +440,17 @@ describe("communications domain", () => {
       idempotencyKey: "group-send-1",
     });
     expect(send.templateVersion).toBe(version.version);
+    expect(send.template.sender).toBe("program@conference.example");
     expect(send.previewId).toBe(preview.id);
     expect(send.recipients.map((recipient) => recipient.id)).toEqual([
       "participant-1",
       "participant-2",
     ]);
-    expect(adapter.requests[0]?.html).toContain("&lt;script&gt;");
+    expect(adapter.requests[0]).toMatchObject({
+      from: "program@conference.example",
+      senderPurpose: "speakers",
+      html: expect.stringContaining("&lt;script&gt;"),
+    });
     const firstRecipient = recipients[0];
     if (firstRecipient === undefined) {
       throw new Error("Expected recipient fixture.");
@@ -654,7 +762,10 @@ describe("reminder domain", () => {
       idempotencyKey: "task-review",
       expectedAudienceRevision: "revision-1",
     });
-    expect(outbox.requests.map((request) => request.subject)).toEqual(["Reminder", "Reminder"]);
+    expect(outbox.requests).toEqual([
+      expect.objectContaining({ subject: "Reminder", senderPurpose: "speakers" }),
+      expect.objectContaining({ subject: "Reminder", senderPurpose: "speakers" }),
+    ]);
   });
 
   it("enforces provider status transitions and correlates provider IDs", async () => {

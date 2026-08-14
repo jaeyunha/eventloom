@@ -3,6 +3,7 @@ import type { RequestAuthenticator } from "../features/auth/authenticator";
 import type { CloudflareOutboxMessage } from "../infrastructure/cloudflare/bindings";
 import { D1WebhookRepository } from "../infrastructure/cloudflare/d1-webhook-repository";
 import { D1AgendaRepository } from "../infrastructure/cloudflare/repositories/agenda";
+import { D1CalendarInvitationRepository } from "../infrastructure/cloudflare/repositories/calendar-invitations";
 import { D1CfpRepository } from "../infrastructure/cloudflare/repositories/cfp";
 import { D1CommunicationRepository } from "../infrastructure/cloudflare/repositories/communications";
 import { D1CrmRepository } from "../infrastructure/cloudflare/repositories/crm";
@@ -88,6 +89,12 @@ describe("D1 runtime composition", () => {
     expect(composition.repositories.agenda.forOrganization("org-1")).toBeInstanceOf(
       D1AgendaRepository,
     );
+    expect(
+      composition.repositories.calendarInvitationsForScope({
+        organizationId: "org-1",
+        eventId: "event-1",
+      }),
+    ).toBeInstanceOf(D1CalendarInvitationRepository);
     expect(composition.repositories.communications).toBeInstanceOf(D1CommunicationRepository);
     expect(composition.repositories.reports).toBeInstanceOf(D1ReportRepository);
     expect(composition.repositories.remix).toBeInstanceOf(D1RemixRepository);

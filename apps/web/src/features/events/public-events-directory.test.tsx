@@ -14,6 +14,7 @@ const organizations = [
         endsOn: "2026-09-19",
         venueName: "Pier 27",
         cfpOpen: true,
+        programPublished: true,
       },
     ],
   },

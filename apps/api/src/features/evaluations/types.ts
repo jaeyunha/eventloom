@@ -13,6 +13,7 @@ export type EvaluationCriterionInputType = "numeric" | "dropdown" | "free_text";
 export type EvaluationRoundAnonymization = "none" | "single" | "double";
 
 export interface EvaluationGrant {
+  tenantId?: string | undefined;
   eventId: string;
   role: EvaluationRole;
 }
@@ -310,6 +311,11 @@ export interface EvaluationDecision {
   version: number;
   history: readonly EvaluationDecisionTransition[];
   updatedAt: string;
+  notificationDelivery?: {
+    readonly state: "pending" | "processing" | "delivered" | "failed";
+    readonly completedAt?: string;
+    readonly lastErrorCode?: string;
+  };
 }
 export type EvaluationDecisionCommunicationTemplatePurpose =
   | "decision_accepted"
@@ -353,6 +359,8 @@ export interface SubmissionReviewMaterial {
   id: string;
   tenantId: string;
   eventId: string;
+  /** Authoritative CFP lifecycle status when the source exposes it. */
+  status?: string | undefined;
   title: string;
   abstract: string;
   answers: Readonly<Record<string, unknown>>;

@@ -81,6 +81,55 @@ function url(path: string, scopedOrganizationId = organizationId): string {
   return `/organizations/${scopedOrganizationId}/events/${eventId}/communications${path}`;
 }
 
+describe("communication routes", () => {
+  it("assigns a generic configured sender email and rejects malformed sender input", async () => {
+    const service = new CommunicationService(new InMemoryCommunicationRepository(), undefined, {
+      senderIdentities: {
+        auth: "login@conference.example",
+        speakers: "program@conference.example",
+        calendar: "schedule@conference.example",
+      },
+    });
+    const app = new Hono<CommunicationRouteEnvironment>();
+    app.use("/organizations/*", async (context, next) => {
+      context.set("communicationActor", actor);
+      await next();
+    });
+    app.route(
+      "/organizations/:organizationId/events/:eventId/communications",
+      createCommunicationRoutes(service),
+    );
+
+    const created = await app.request(url("/templates"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Login",
+        purpose: "verification",
+        subject: "Login",
+        html: "<p>Login</p>",
+        text: "Login",
+      }),
+    });
+    expect(created.status).toBe(201);
+    await expect(created.json()).resolves.toMatchObject({ sender: "login@conference.example" });
+
+    const malformed = await app.request(url("/templates"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Invalid",
+        purpose: "verification",
+        sender: "not-an-email",
+        subject: "Login",
+        html: "<p>Login</p>",
+        text: "Login",
+      }),
+    });
+    expect(malformed.status).toBe(400);
+  });
+});
+
 describe("communication reminder routes", () => {
   it("previews, creates, lists, and reports facts for an authorized event", async () => {
     const { app, outbox } = testApp();

@@ -71,6 +71,10 @@ const calendarSettingsInputSchema = z
   })
   .strict();
 const eventStatusSchema = z.enum(eventStatuses);
+const scheduleDatesSchema = z
+  .array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/u))
+  .max(366)
+  .optional();
 const embedConfigurationSchema = z
   .object({
     id: identifierSchema,
@@ -100,6 +104,7 @@ const createEventSchema = z
     timeZone: identifierSchema,
     startsAt: instantSchema,
     endsAt: instantSchema,
+    scheduleDates: scheduleDatesSchema,
     venue: z.string().trim().max(2_000).nullable().optional(),
     cfpSettings: settingsInputSchema.optional(),
     defaultCalendarSettings: calendarSettingsInputSchema.optional(),
@@ -115,6 +120,7 @@ const updateEventSchema = z
     timeZone: identifierSchema.optional(),
     startsAt: instantSchema.optional(),
     endsAt: instantSchema.optional(),
+    scheduleDates: scheduleDatesSchema,
     venue: z.string().trim().max(2_000).nullable().optional(),
     cfpSettings: settingsInputSchema.optional(),
     defaultCalendarSettings: calendarSettingsInputSchema.optional(),
@@ -268,6 +274,7 @@ function createServiceInput(input: CreateEventBody, organizationId: string): Cre
   if (input.id !== undefined) result.id = input.id;
   if (input.slug !== undefined) result.slug = input.slug;
   if (input.status !== undefined) result.status = input.status;
+  if (input.scheduleDates !== undefined) result.scheduleDates = [...input.scheduleDates];
   if (input.venue !== undefined) result.venue = input.venue;
   const cfpSettings = cfpInput(input.cfpSettings);
   if (cfpSettings !== undefined) result.cfpSettings = cfpSettings;
@@ -296,6 +303,7 @@ function updateServiceInput(
   if (input.timeZone !== undefined) result.timeZone = input.timeZone;
   if (input.startsAt !== undefined) result.startsAt = input.startsAt;
   if (input.endsAt !== undefined) result.endsAt = input.endsAt;
+  if (input.scheduleDates !== undefined) result.scheduleDates = [...input.scheduleDates];
   if (input.venue !== undefined) result.venue = input.venue;
   const cfpSettings = cfpInput(input.cfpSettings);
   if (cfpSettings !== undefined) result.cfpSettings = cfpSettings;

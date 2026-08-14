@@ -2,10 +2,11 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import {
+  decisionNotificationSummary,
   enrichCanonicalSubmission,
   getAcceptedHandoffMetadata,
-  getSeededSubmission,
   indexOrganizerEvaluationWorkspace,
+  initialOrganizerEventName,
   loadCanonicalSubmissionList,
   loadOrganizerEvaluationWorkspace,
   loadOrganizerEventIdentity,
@@ -15,6 +16,8 @@ import {
   SubmissionDetailWorkspace,
   SubmissionListWorkspace,
   submissionListState,
+  submissionLoadErrorMessage,
+  submissionLoadFailure,
 } from "./submission-workspace";
 
 const canonicalEnvelope = {
@@ -107,11 +110,20 @@ const canonicalEnvelope = {
 } as const;
 
 describe("organizer submission workspace", () => {
-  it("distinguishes loading, failure, empty, and filtered submission list states", () => {
+  it("formats durable decision notification delivery evidence", () => {
+    expect(
+      decisionNotificationSummary({
+        state: "delivered",
+        completedAt: "2026-08-13T20:00:00.000Z",
+      }),
+    ).toContain("Decision notification delivered");
+  });
+
+  it("distinguishes loading, failure, unconfigured, empty, and filtered states", () => {
     expect(
       submissionListState({
         loading: true,
-        loadError: null,
+        loadFailure: null,
         submissionCount: 0,
         visibleCount: 0,
       }),
@@ -119,7 +131,7 @@ describe("organizer submission workspace", () => {
     expect(
       submissionListState({
         loading: false,
-        loadError: "Gateway unavailable",
+        loadFailure: { kind: "failure", message: "Gateway unavailable" },
         submissionCount: 0,
         visibleCount: 0,
       }),
@@ -127,7 +139,18 @@ describe("organizer submission workspace", () => {
     expect(
       submissionListState({
         loading: false,
-        loadError: null,
+        loadFailure: {
+          kind: "unconfigured",
+          message: "Submission intake is not configured for this event.",
+        },
+        submissionCount: 0,
+        visibleCount: 0,
+      }),
+    ).toBe("unconfigured");
+    expect(
+      submissionListState({
+        loading: false,
+        loadFailure: null,
         submissionCount: 0,
         visibleCount: 0,
       }),
@@ -135,7 +158,7 @@ describe("organizer submission workspace", () => {
     expect(
       submissionListState({
         loading: false,
-        loadError: null,
+        loadFailure: null,
         submissionCount: 2,
         visibleCount: 0,
       }),
@@ -147,13 +170,27 @@ describe("organizer submission workspace", () => {
         organizationId: "org-1",
       }),
     );
-    expect(markup).toContain("No submissions yet");
-    expect(markup).not.toContain("Open public CFP");
-    expect(markup).toContain("Configure CFP");
-    expect(markup).not.toContain("No matching submissions");
+    expect(markup).toContain("Loading submissions");
+    expect(markup).not.toContain("No submissions yet");
     expect(markup).not.toContain('id="submission-search"');
     expect(markup).not.toContain("<table");
   });
+
+  it("explains a missing CFP record without claiming the event is missing", () => {
+    expect(submissionLoadFailure(404, "The event was not found.")).toEqual({
+      kind: "unconfigured",
+      message: "Submission intake is not configured for this event.",
+    });
+    expect(submissionLoadFailure(503, "Gateway unavailable")).toEqual({
+      kind: "failure",
+      message: "Gateway unavailable",
+    });
+    expect(submissionLoadErrorMessage(404, "The event was not found.")).toBe(
+      "Submission intake is not configured for this event.",
+    );
+    expect(submissionLoadErrorMessage(503, "Gateway unavailable")).toBe("Gateway unavailable");
+  });
+
   it("maps the exact canonical fields, edited values, and every co-speaker", () => {
     const record = mapCanonicalSubmission(canonicalEnvelope);
 
@@ -367,12 +404,27 @@ describe("organizer submission workspace", () => {
           },
         });
       }
+      if (url === "/api/admin/organizations/organization-1/members") {
+        return Response.json([
+          {
+            organizationId: "organization-1",
+            userId: "reviewer-1",
+            email: "sam@example.test",
+            name: "Sam Whitfield",
+            emailVerified: true,
+            status: "active",
+            role: "reviewer",
+            createdAt: "2026-08-13T00:00:00.000Z",
+            updatedAt: "2026-08-13T00:00:00.000Z",
+          },
+        ]);
+      }
 
       throw new Error(`Unexpected request: ${url}`);
     });
 
     try {
-      const submission = await enrichCanonicalSubmission("", canonicalEnvelope);
+      const submission = await enrichCanonicalSubmission("", canonicalEnvelope, "organization-1");
       expect(submission).toMatchObject({
         id: "submission-devflow-1",
         title: "Taming 40-Minute CI: Incremental Builds at Monorepo Scale",
@@ -380,7 +432,7 @@ describe("organizer submission workspace", () => {
         reviewSummary: { completed: 0, total: 1, averageScore: null, maxScore: 0 },
         reviewAssignments: [
           {
-            reviewer: "reviewer-1",
+            reviewer: "Sam Whitfield",
             status: "complete",
             criterionScores: [
               { criterion: "Overall Rating", value: 4 },
@@ -390,9 +442,9 @@ describe("organizer submission workspace", () => {
           },
         ],
       });
-      expect(requests).toHaveLength(2);
+      expect(requests).toHaveLength(3);
 
-      expect(requests.every((request) => request.startsWith("/api/admin/evaluations/"))).toBe(true);
+      expect(requests).toContain("/api/admin/organizations/organization-1/members");
       expect(requests.filter((request) => request.includes("/organizer/workspace"))).toHaveLength(
         1,
       );
@@ -492,7 +544,7 @@ describe("organizer submission workspace", () => {
       expect(
         submissionListState({
           loading: false,
-          loadError: null,
+          loadFailure: null,
           submissionCount: rows.length,
           visibleCount: rows.length,
         }),
@@ -502,6 +554,7 @@ describe("organizer submission workspace", () => {
       fetchMock.mockRestore();
     }
   });
+
   it("distinguishes submitted-review failures from an authoritative zero result", async () => {
     let reviewsFail = true;
     const reviewRequests: string[] = [];
@@ -619,17 +672,24 @@ describe("organizer submission workspace", () => {
     }
   });
 
-  it("reserves not-found for a missing canonical submission", () => {
-    const markup = renderToStaticMarkup(
-      createElement(SubmissionDetailWorkspace, {
-        eventId: "summit-2026",
-        submissionId: "missing-submission",
-        organizationId: "organization-1",
-      }),
-    );
+  it("starts submission detail in loading until the canonical list responds", () => {
+    const previousRuntimeProfile = process.env.NEXT_PUBLIC_RUNTIME_PROFILE;
+    process.env.NEXT_PUBLIC_RUNTIME_PROFILE = "fixture";
+    try {
+      const markup = renderToStaticMarkup(
+        createElement(SubmissionDetailWorkspace, {
+          eventId: "summit-2026",
+          submissionId: "missing-submission",
+          organizationId: "organization-1",
+        }),
+      );
 
-    expect(markup).toContain("Submission not found");
-    expect(markup).not.toContain("Unable to load submission");
+      expect(markup).toContain("Loading submission");
+      expect(markup).not.toContain("Submission not found");
+      expect(markup).not.toContain("Unable to load submission");
+    } finally {
+      process.env.NEXT_PUBLIC_RUNTIME_PROFILE = previousRuntimeProfile;
+    }
   });
 
   it("projects persisted accepted and rejected decisions into canonical statuses", async () => {
@@ -709,210 +769,60 @@ describe("organizer submission workspace", () => {
       format: "—",
     });
   });
-  it("renders the compact shadcn submission workspace with filters and progress", () => {
-    const markup = renderToStaticMarkup(
-      createElement(SubmissionListWorkspace, {
-        eventId: "summit-2026",
-        organizationId: "organization-1",
-      }),
-    );
+  it("keeps the initial event label neutral until authoritative identity loads", () => {
+    expect(initialOrganizerEventName()).toBe("Selected event");
 
-    expect(markup).toContain('data-slot="card"');
-    expect(markup).toContain('data-slot="badge"');
-    expect(markup).toContain('data-slot="table"');
-    expect(markup).toContain('data-slot="select-trigger"');
-    expect(markup).toContain('data-slot="input"');
-    expect(markup).toContain("<caption");
-    expect(markup).toContain('scope="col"');
-    expect(markup).toContain('scope="row"');
-    expect(markup).toContain('aria-label="Select all visible submissions"');
-    expect(markup).toContain('aria-label="Select Designing for Trust in AI-Assisted Teams"');
-    expect(markup).toContain('id="submission-search"');
-    expect(markup).toContain('id="submission-status"');
-    expect(markup).toContain('id="submission-track"');
-    expect(markup).toContain('id="submission-format"');
-    expect(markup).toContain('role="progressbar"');
-    expect(markup).toContain("Under review");
-    expect(markup).toContain("Review progress");
-    expect(markup.indexOf("Total submissions")).toBeLessThan(markup.indexOf("All submissions"));
-    expect(markup).toContain(
-      "/admin/organizations/organization-1/events/summit-2026/submissions/sub-001",
-    );
-    expect(markup).not.toContain("maya.chen@example.test");
-    expect(markup).not.toContain("Organizer notes");
-    expect(markup).not.toContain("Canonical CFP organizer view");
-    expect(markup).not.toContain("Authoritative CFP");
-  });
-
-  it("renders an action-first empty state without filter or table scaffolding", () => {
-    const markup = renderToStaticMarkup(
-      createElement(SubmissionListWorkspace, {
-        eventId: "event-with-no-submissions",
-        organizationId: "org-1",
-      }),
-    );
-
-    expect(markup).toContain("No submissions yet");
-    expect(markup).not.toContain("Open public CFP");
-    expect(markup).toContain("Configure CFP");
-    expect(markup).not.toContain('id="submission-search"');
-    expect(markup).not.toContain('data-slot="table"');
-  });
-
-  it("keeps detail content private to the organizer detail view", () => {
-    const markup = renderToStaticMarkup(
-      createElement(SubmissionDetailWorkspace, {
-        eventId: "summit-2026",
-        submissionId: "sub-001",
-        organizationId: "organization-1",
-      }),
-    );
-
-    expect(markup).toContain("Designing for Trust in AI-Assisted Teams");
-    expect(markup).toContain("Version 3");
-    expect(markup).toContain("maya.chen@example.test");
-    expect(markup).toContain("Structured answers");
-    expect(markup).toContain("Lifecycle timeline");
-    expect(markup).toContain("Review score summary");
-    expect(markup).toContain("Assignment &amp; conflicts");
-    expect(markup).toContain("Organizer notes");
-    expect(markup).toContain("Human-authored reason");
-    expect(markup).toContain("Overall rating: 5");
-    expect(markup).toContain("Reviewer comment: Strong evidence and a clear audience fit.");
-  });
-  it("renders an explicit submitted-review failure retry instead of the zero state", () => {
-    const seeded = getSeededSubmission("summit-2026", "sub-001");
-    expect(seeded).toBeDefined();
-    if (seeded === undefined) return;
-    const previous = seeded.submittedReviewRead;
-
-    try {
-      seeded.submittedReviewRead = {
-        status: "error",
-        message: "Submitted review read unavailable.",
-      };
-      const errorMarkup = renderToStaticMarkup(
-        createElement(SubmissionDetailWorkspace, {
-          eventId: "summit-2026",
-          submissionId: "sub-001",
+    for (const eventId of ["demo-event", "summit-2026", "forge-2025"]) {
+      const markup = renderToStaticMarkup(
+        createElement(SubmissionListWorkspace, {
+          eventId,
           organizationId: "organization-1",
         }),
       );
-      expect(errorMarkup).toContain('role="alert"');
-      expect(errorMarkup).toContain("Submitted reviews could not be loaded");
-      expect(errorMarkup).toContain("Retry submitted reviews");
-      expect(errorMarkup).not.toContain("No submitted reviews yet.");
-
-      seeded.submittedReviewRead = { status: "ready", count: 0 };
-      const emptyMarkup = renderToStaticMarkup(
-        createElement(SubmissionDetailWorkspace, {
-          eventId: "summit-2026",
-          submissionId: "sub-001",
-          organizationId: "organization-1",
-        }),
-      );
-      expect(emptyMarkup).toContain("No submitted reviews yet.");
-      expect(emptyMarkup).not.toContain("Retry submitted reviews");
-    } finally {
-      if (previous === undefined) delete seeded.submittedReviewRead;
-      else seeded.submittedReviewRead = previous;
+      expect(markup).toContain("Selected event");
+      expect(markup).not.toContain("Open Sessionboard Conference");
+      expect(markup).not.toContain("Eventloom Summit 2026");
+      expect(markup).not.toContain("Forge Community Day 2025");
     }
   });
-  it("exposes versioned decisions, queued audience notifications, and post-close lock guidance", () => {
-    const markup = renderToStaticMarkup(
-      createElement(SubmissionDetailWorkspace, {
-        eventId: "summit-2026",
-        submissionId: "sub-001",
-        organizationId: "organization-1",
-      }),
-    );
 
-    expect(markup).toContain("Decision outcome");
-    expect(markup).toContain("Save accept");
-    expect(markup).not.toContain("Accept submission");
-    expect(markup).not.toContain("Reject submission");
-    expect(markup).toContain("Decision and notification history");
-    expect(markup).toContain("speaker edits are");
-    expect(markup).toContain("read-only");
-    expect(markup).toContain("server evaluation plan");
-    expect(markup).toContain("submitter notification queue");
-    expect(markup).toContain("idempotent background handoff");
+  it("loads canonical submissions from the same-origin API even under fixture profile", async () => {
+    const previousRuntimeProfile = process.env.NEXT_PUBLIC_RUNTIME_PROFILE;
+    process.env.NEXT_PUBLIC_RUNTIME_PROFILE = "fixture";
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(Response.json({ data: [canonicalEnvelope] }));
+
+    try {
+      await expect(
+        loadCanonicalSubmissionList("", "organization-1", "summit-2026"),
+      ).resolves.toEqual([canonicalEnvelope]);
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/cfp/organizations/organization-1/events/summit-2026/submissions",
+        expect.objectContaining({ credentials: "include", cache: "no-store" }),
+      );
+    } finally {
+      fetchMock.mockRestore();
+      process.env.NEXT_PUBLIC_RUNTIME_PROFILE = previousRuntimeProfile;
+    }
   });
 
-  it("summarizes accepted handoff metadata from server participant identities", () => {
-    const accepted = getSeededSubmission("summit-2026", "sub-003");
-    expect(accepted).toBeDefined();
-    if (!accepted) return;
-
-    const metadata = getAcceptedHandoffMetadata(accepted);
-    expect(metadata).toMatchObject({
-      title: "Building Resilient Teams Through Small Experiments",
-      track: "People & Culture",
-      primarySpeaker: { name: "Elena Garcia", role: "Lead speaker" },
-      coSpeakers: [{ name: "Noah Kim", role: "Co-speaker" }],
-      version: 2,
+  it("derives accepted handoff metadata from canonical API data", () => {
+    const accepted = mapCanonicalSubmission({
+      ...canonicalEnvelope,
+      submission: {
+        ...canonicalEnvelope.submission,
+        status: "submitted",
+      },
     });
+    const metadata = getAcceptedHandoffMetadata(accepted);
 
-    const markup = renderToStaticMarkup(
-      createElement(SubmissionDetailWorkspace, {
-        eventId: "summit-2026",
-        submissionId: "sub-003",
-        organizationId: "organization-1",
-      }),
-    );
-    expect(markup).toContain("Accepted session handoff");
-    expect(markup).toContain("Elena Garcia");
-    expect(markup).toContain("Noah Kim");
-    expect(markup).toContain("People &amp; Culture");
-  });
-
-  it("requires an authored reason and explicit confirmation before reopening", () => {
-    const markup = renderToStaticMarkup(
-      createElement(SubmissionDetailWorkspace, {
-        eventId: "summit-2026",
-        submissionId: "sub-001",
-        organizationId: "organization-1",
-      }),
-    );
-
-    expect(markup).toContain('name="reopenReason"');
-    expect(markup).toContain('minLength="10"');
-    expect(markup).toContain('required=""');
-    expect(markup).toContain("I confirm that reopening is necessary and authorized");
-    expect(markup).toContain("Reopen and write audit event");
-    expect(markup).toContain('disabled=""');
-    expect(markup).toContain("Every reopen is recorded in the audit log");
-    expect(markup).toContain("automated tools cannot reopen a submission or make a final decision");
-  });
-
-  it("uses the requested event in every seeded list/detail lookup and link", () => {
-    const listMarkup = renderToStaticMarkup(
-      createElement(SubmissionListWorkspace, {
-        eventId: "forge-2025",
-        organizationId: "organization-1",
-      }),
-    );
-    const detailMarkup = renderToStaticMarkup(
-      createElement(SubmissionDetailWorkspace, {
-        eventId: "forge-2025",
-        submissionId: "sub-101",
-        organizationId: "organization-1",
-      }),
-    );
-
-    expect(getSeededSubmission("forge-2025", "sub-101")?.eventId).toBe("forge-2025");
-    expect(getSeededSubmission("summit-2026", "sub-101")).toBeUndefined();
-    expect(listMarkup).toContain(
-      "/admin/organizations/organization-1/events/forge-2025/submissions/sub-101",
-    );
-    expect(listMarkup).not.toContain("/admin/events/");
-    expect(detailMarkup).toContain(
-      "/admin/organizations/organization-1/events/forge-2025/submissions",
-    );
-    expect(detailMarkup).not.toContain("/admin/events/");
-  });
-
-  it("serves the canonical fixture event from the seeded demo workspace", () => {
-    expect(getSeededSubmission("demo-event", "submission_local_1")).toBeDefined();
+    expect(metadata).toMatchObject({
+      title: "Taming 40-Minute CI: Incremental Builds at Monorepo Scale",
+      track: "Platform & Infra",
+      primarySpeaker: { name: "Priya Raman", role: "Speaker" },
+      coSpeakers: [{ name: "Marcus Okafor", role: "Co-speaker" }],
+      version: 1,
+    });
   });
 });

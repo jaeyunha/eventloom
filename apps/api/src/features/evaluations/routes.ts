@@ -9,6 +9,16 @@ export interface EvaluationRouteEnvironment {
     evaluationActor: EvaluationActor;
   };
 }
+export interface EvaluationReminderDeliveryFact {
+  readonly outboxId: string;
+  readonly reviewerId: string;
+  readonly roundId: string | null;
+  readonly status: "pending" | "queued" | "processing" | "delivered" | "failed" | "dead-letter";
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly completedAt: string | null;
+  readonly lastErrorCode: string | null;
+}
 export interface EvaluationReminderBoundary {
   sendOutstandingReviewerReminders(
     actor: EvaluationActor,
@@ -21,7 +31,12 @@ export interface EvaluationReminderBoundary {
   ): Promise<{
     readonly queued: number;
     readonly reviewerIds: readonly string[];
+    readonly facts: readonly EvaluationReminderDeliveryFact[];
   }>;
+  listOutstandingReviewerReminderDeliveries(
+    actor: EvaluationActor,
+    input: { readonly planId: string },
+  ): Promise<readonly EvaluationReminderDeliveryFact[]>;
 }
 export interface EvaluationReviewerIdentityBoundary {
   resolveReviewerIds(
@@ -117,6 +132,12 @@ const updatePlanSchema = z.object({
 });
 
 const versionSchema = z.object({ expectedVersion: z.number().int().positive() });
+const updatePlanScheduleSchema = z
+  .object({
+    expectedVersion: z.number().int().positive(),
+    closesAt: z.string().nullable(),
+  })
+  .strict();
 const distributionPreviewSchema = z.object({
   roundId: z.string().min(1),
   submissionIds: z.array(z.string().min(1)).min(1),
@@ -558,6 +579,14 @@ export function createEvaluationRoutes(
     );
   });
 
+  routes.post("/plans/:planId/revise", async (context) => {
+    const body = versionSchema.parse(await context.req.json());
+    return context.json(
+      await service.revisePlanToDraft(actor(context), context.req.param("planId"), body),
+      201,
+    );
+  });
+
   routes.post("/plans/:planId/open", async (context) => {
     const body = versionSchema.parse(await context.req.json());
     return context.json(
@@ -569,6 +598,13 @@ export function createEvaluationRoutes(
     const body = versionSchema.parse(await context.req.json());
     return context.json(
       await service.closePlan(actor(context), context.req.param("planId"), body.expectedVersion),
+    );
+  });
+
+  routes.patch("/plans/:planId/schedule", async (context) => {
+    const body = updatePlanScheduleSchema.parse(await context.req.json());
+    return context.json(
+      await service.updatePlanSchedule(actor(context), context.req.param("planId"), body),
     );
   });
 
@@ -676,6 +712,27 @@ export function createEvaluationRoutes(
     );
   });
 
+  routes.get("/plans/:planId/reminders", async (context) => {
+    if (options.reminders === undefined) {
+      return context.json(
+        {
+          error: {
+            code: "EVALUATION_REMINDERS_UNAVAILABLE",
+            message: "Reviewer reminders are not connected to the communications boundary.",
+          },
+        },
+        503,
+      );
+    }
+    const currentActor = actor(context);
+    const plan = await service.getPlan(currentActor, context.req.param("planId"));
+    return context.json({
+      facts: await options.reminders.listOutstandingReviewerReminderDeliveries(currentActor, {
+        planId: plan.id,
+      }),
+    });
+  });
+
   routes.post("/plans/:planId/reminders", async (context) => {
     const body = reminderSchema.parse(await context.req.json());
     if (options.reminders === undefined) {
@@ -690,9 +747,11 @@ export function createEvaluationRoutes(
       );
     }
     const currentActor = actor(context);
-    const [plan, assignments] = await Promise.all([
-      service.getPlan(currentActor, context.req.param("planId")),
-      service.listOrganizerAssignments(currentActor, context.req.param("planId")),
+    const planId = context.req.param("planId");
+    const [plan, assignments, existingFacts] = await Promise.all([
+      service.getPlan(currentActor, planId),
+      service.listOrganizerAssignments(currentActor, planId),
+      options.reminders.listOutstandingReviewerReminderDeliveries(currentActor, { planId }),
     ]);
     const selected = assignments.filter(
       (assignment) =>
@@ -711,10 +770,31 @@ export function createEvaluationRoutes(
         400,
       );
     }
+    const reviewerIds = [...new Set(selected.map((assignment) => assignment.reviewerId))].sort();
+    const reusableStatuses = new Set(["queued", "processing", "delivered"]);
+    const reusableFacts = reviewerIds.flatMap((reviewerId) => {
+      const fact = existingFacts.find(
+        (candidate) =>
+          candidate.reviewerId === reviewerId &&
+          candidate.roundId === (body.roundId ?? null) &&
+          reusableStatuses.has(candidate.status),
+      );
+      return fact === undefined ? [] : [fact];
+    });
+    if (reusableFacts.length === reviewerIds.length) {
+      return context.json(
+        {
+          queued: 0,
+          reviewerIds,
+          facts: reusableFacts,
+        },
+        200,
+      );
+    }
     const result = await options.reminders.sendOutstandingReviewerReminders(currentActor, {
       planId: plan.id,
       ...(body.roundId === undefined ? {} : { roundId: body.roundId }),
-      reviewerIds: [...new Set(selected.map((assignment) => assignment.reviewerId))].sort(),
+      reviewerIds,
       assignmentIds: selected.map((assignment) => assignment.id).sort(),
     });
     return context.json(result, 202);
@@ -954,25 +1034,12 @@ export function createEvaluationRoutes(
 
   routes.put("/plans/:planId/submissions/:submissionId/decision", async (context) => {
     const body = decisionSchema.parse(await context.req.json());
-    const scheduleAcceptance = (operation: Promise<void>): boolean => {
-      try {
-        context.executionCtx.waitUntil(operation);
-        return true;
-      } catch {
-        // Hono tests and local invocations may not attach an execution context.
-        return false;
-      }
-    };
     return context.json(
-      await service.recordDecision(
-        actor(context),
-        {
-          planId: context.req.param("planId"),
-          submissionId: context.req.param("submissionId"),
-          ...body,
-        },
-        scheduleAcceptance,
-      ),
+      await service.recordDecision(actor(context), {
+        planId: context.req.param("planId"),
+        submissionId: context.req.param("submissionId"),
+        ...body,
+      }),
     );
   });
 

@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   inspectOrganizationIdMigrationReadiness,
   ORGANIZATION_ID_MIGRATION,
   PreflightError,
   parseDotEnv,
+  parseWranglerInventory,
   validateOrganizationIdMigrationReport,
   validateReleaseConfiguration,
   verifyCloudflare,
@@ -13,11 +15,12 @@ import {
 
 const environments = ["local", "staging", "production"];
 const accountId = "11111111-1111-4111-8111-111111111111";
+const apiWrangler = readFileSync(new URL("../../apps/api/wrangler.toml", import.meta.url), "utf8");
 
 function configurationFor(environment, index) {
   const local = environment === "local";
-  const webOrigin = local ? "http://localhost:3015" : `https://${environment}.example.test`;
-  const apiOrigin = local ? "http://localhost:8787" : `https://api-${environment}.example.test`;
+  const webOrigin = local ? "http://127.0.0.1:3015" : `https://${environment}.example.test`;
+  const apiOrigin = local ? "http://127.0.0.1:8787" : `https://api-${environment}.example.test`;
   return {
     APP_ENV: environment,
     WEB_ORIGIN: webOrigin,
@@ -40,6 +43,12 @@ function configurationFor(environment, index) {
     AUTH_FROM_EMAIL: "auth@foreverbrowsing.com",
     SPEAKERS_FROM_EMAIL: "speakers@foreverbrowsing.com",
     CALENDAR_FROM_EMAIL: "calendar@foreverbrowsing.com",
+    CALENDAR_UID_DOMAIN: "calendar.foreverbrowsing.com",
+    AI_PROVIDER: "disabled",
+    OPENAI_MODEL: "general-model",
+    OPENAI_AGENDA_MODEL: "agenda-model",
+    OPENAI_EVALUATION_MODEL: "evaluation-model",
+    OPENAI_REMIX_MODEL: "remix-model",
     FORGE_API_URL: "https://forge.example.test",
     FORGE_REPOSITORY: "jaeyunha/open-sessionboard",
     FORGE_API_TOKEN: "forge-secret-token",
@@ -120,6 +129,68 @@ function jsonResponse(payload, status = 200) {
   });
 }
 
+test("inventories current Worker names from the API Wrangler fixture", () => {
+  const inventory = parseWranglerInventory(apiWrangler);
+
+  assert.deepEqual(
+    Object.fromEntries(
+      environments.map((environment) => [environment, inventory[environment].workerName]),
+    ),
+    {
+      local: "open-sessionboard-api-local",
+      staging: "open-sessionboard-api-staging",
+      production: "open-sessionboard-api-production",
+    },
+  );
+});
+
+test("inventories operator-chosen Worker names by Wrangler environment structure", () => {
+  const customizedWrangler = apiWrangler
+    .replace('name = "open-sessionboard-api-local"', 'name = "community-worker"')
+    .replace('name = "open-sessionboard-api-staging"', 'name = "preview-service"')
+    .replace('name = "open-sessionboard-api-production"', 'name = "conference-backend"');
+
+  const inventory = parseWranglerInventory(customizedWrangler);
+  assert.equal(inventory.local.workerName, "community-worker");
+  assert.equal(inventory.staging.workerName, "preview-service");
+  assert.equal(inventory.production.workerName, "conference-backend");
+});
+
+test("rejects missing, repeated, or shared Worker names", () => {
+  const missingName = apiWrangler.replace('name = "open-sessionboard-api-staging"\n', "");
+  assert.throws(
+    () => parseWranglerInventory(missingName),
+    (error) =>
+      error instanceof PreflightError &&
+      error.code === "INVALID_WRANGLER_CONFIGURATION" &&
+      error.message.includes("Worker name"),
+  );
+
+  const repeatedDeclaration = apiWrangler.replace(
+    'name = "open-sessionboard-api-staging"',
+    'name = "preview-service"\nname = "preview-service-copy"',
+  );
+  assert.throws(
+    () => parseWranglerInventory(repeatedDeclaration),
+    (error) =>
+      error instanceof PreflightError &&
+      error.code === "INVALID_WRANGLER_CONFIGURATION" &&
+      error.message.includes("Worker name"),
+  );
+
+  const sharedName = apiWrangler.replace(
+    'name = "open-sessionboard-api-production"',
+    'name = "open-sessionboard-api-staging"',
+  );
+  assert.throws(
+    () => parseWranglerInventory(sharedName),
+    (error) =>
+      error instanceof PreflightError &&
+      error.code === "INVALID_WRANGLER_CONFIGURATION" &&
+      error.message.includes("Worker name"),
+  );
+});
+
 test("parses env files without expanding or exposing assignments", () => {
   assert.deepEqual(
     parseDotEnv('APP_ENV=staging\nQUOTED="literal value"\nTOKEN=secret # comment\n'),
@@ -145,6 +216,91 @@ test("validates D1-only configuration without Airtable or Accelevents", () => {
     wranglerInventory,
   });
   assert.deepEqual(result.providerStates.staging, {});
+});
+
+test("allows disabled AI without an OpenAI secret", () => {
+  const { configurations, wranglerInventory } = fixtures();
+  for (const configuration of Object.values(configurations)) {
+    delete configuration.OPENAI_API_KEY;
+  }
+
+  assert.doesNotThrow(() =>
+    validateReleaseConfiguration({
+      configurations,
+      targetEnvironment: "production",
+      wranglerInventory,
+    }),
+  );
+});
+
+test("requires an OpenAI secret when the deployment selects OpenAI", () => {
+  const { configurations, wranglerInventory } = fixtures();
+  configurations.production.AI_PROVIDER = "openai";
+
+  assert.throws(
+    () =>
+      validateReleaseConfiguration({
+        configurations,
+        targetEnvironment: "production",
+        wranglerInventory,
+      }),
+    (error) => error.code === "MISSING_CONFIGURATION" && error.message.includes("OPENAI_API_KEY"),
+  );
+
+  configurations.production.OPENAI_API_KEY = "production-openai-secret";
+  assert.doesNotThrow(() =>
+    validateReleaseConfiguration({
+      configurations,
+      targetEnvironment: "production",
+      wranglerInventory,
+    }),
+  );
+});
+
+test("rejects unsupported deployment AI providers", () => {
+  for (const AI_PROVIDER of ["", "auto", "cloudflare", "other"]) {
+    const { configurations, wranglerInventory } = fixtures();
+    configurations.staging.AI_PROVIDER = AI_PROVIDER;
+    assert.throws(
+      () =>
+        validateReleaseConfiguration({
+          configurations,
+          targetEnvironment: "staging",
+          wranglerInventory,
+        }),
+      (error) =>
+        error.code === (AI_PROVIDER ? "INVALID_CONFIGURATION" : "MISSING_CONFIGURATION") &&
+        error.message.includes("AI_PROVIDER"),
+    );
+  }
+});
+
+test("requires valid deployment-owned sender and calendar UID identities", () => {
+  const { configurations, wranglerInventory } = fixtures();
+
+  configurations.staging.AUTH_FROM_EMAIL = "not-an-email";
+  assert.throws(
+    () =>
+      validateReleaseConfiguration({
+        configurations,
+        targetEnvironment: "staging",
+        wranglerInventory,
+      }),
+    (error) => error.code === "INVALID_CONFIGURATION" && error.message.includes("AUTH_FROM_EMAIL"),
+  );
+
+  configurations.staging.AUTH_FROM_EMAIL = "auth@foreverbrowsing.com";
+  configurations.staging.CALENDAR_UID_DOMAIN = "https://calendar.example.test";
+  assert.throws(
+    () =>
+      validateReleaseConfiguration({
+        configurations,
+        targetEnvironment: "staging",
+        wranglerInventory,
+      }),
+    (error) =>
+      error.code === "INVALID_CONFIGURATION" && error.message.includes("CALENDAR_UID_DOMAIN"),
+  );
 });
 
 test("requires one consistent web and API origin contract per environment", () => {

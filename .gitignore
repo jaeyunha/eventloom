@@ -7,6 +7,7 @@
 # Dependencies and builds
 node_modules/
 .next/
+.next-*/
 .open-next/
 dist/
 build/
@@ -21,6 +22,7 @@ Kill-My-SaaS-Competition-Brief/
 .gjc/
 .omo/
 apps/api/wrangler.generated.toml
+apps/web/wrangler.generated.jsonc
 
 # Public-release exclusions
 .env.release-*

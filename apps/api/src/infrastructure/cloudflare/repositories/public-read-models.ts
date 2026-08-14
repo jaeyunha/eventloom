@@ -348,6 +348,98 @@ export class D1PublishedProgramReadModel implements PublishedSpeakerRouteDepende
     private readonly privateFiles: R2Bucket,
   ) {}
 
+  async listPublicEventDirectory(): Promise<
+    readonly {
+      organization: { id: string; name: string };
+      event: {
+        slug: string;
+        name: string;
+        timeZone: string;
+        startsOn: string;
+        endsOn: string;
+        venueName: string | null;
+        programPublished: boolean;
+      };
+      cfpOpen: boolean;
+    }[]
+  > {
+    const now = new Date().toISOString();
+    const result = await this.database
+      .withSession("first-primary")
+      .prepare(
+        `SELECT organizations.organization_id,
+                organizations.name AS organization_name,
+                events.slug,
+                events.name AS event_name,
+                events.time_zone,
+                substr(events.starts_at, 1, 10) AS starts_on,
+                substr(events.ends_at, 1, 10) AS ends_on,
+                events.venue,
+                CASE
+                  WHEN events.cfp_enabled = 1
+                   AND events.cfp_opens_at <= ?
+                   AND events.cfp_closes_at >= ?
+                   AND EXISTS (
+                     SELECT 1
+                       FROM cfp_forms
+                      WHERE cfp_forms.organization_id = events.organization_id
+                        AND cfp_forms.event_id = events.id
+                        AND cfp_forms.status = 'published'
+                   )
+                  THEN 1 ELSE 0
+                END AS cfp_open,
+                CASE
+                  WHEN EXISTS (
+                    SELECT 1
+                      FROM program_publication_states
+                     WHERE program_publication_states.organization_id = events.organization_id
+                       AND program_publication_states.event_id = events.id
+                       AND program_publication_states.served_revision IS NOT NULL
+                  )
+                  THEN 1 ELSE 0
+                END AS program_published
+           FROM events
+           JOIN organizations
+             ON organizations.organization_id = events.organization_id
+          WHERE events.status = 'active'
+            AND (
+              EXISTS (
+                SELECT 1
+                  FROM cfp_forms
+                 WHERE cfp_forms.organization_id = events.organization_id
+                   AND cfp_forms.event_id = events.id
+                   AND cfp_forms.status = 'published'
+              )
+              OR EXISTS (
+                SELECT 1
+                  FROM program_publication_states
+                 WHERE program_publication_states.organization_id = events.organization_id
+                   AND program_publication_states.event_id = events.id
+                   AND program_publication_states.served_revision IS NOT NULL
+              )
+            )
+       ORDER BY organizations.name, events.starts_at, events.name`,
+      )
+      .bind(now, now)
+      .all<Record<string, unknown>>();
+    return (result.results ?? []).map((row) => ({
+      organization: {
+        id: text(row.organization_id),
+        name: text(row.organization_name),
+      },
+      event: {
+        slug: text(row.slug),
+        name: text(row.event_name),
+        timeZone: text(row.time_zone),
+        startsOn: text(row.starts_on),
+        endsOn: text(row.ends_on),
+        venueName: nullableText(row.venue),
+        programPublished: Number(row.program_published) === 1,
+      },
+      cfpOpen: Number(row.cfp_open) === 1,
+    }));
+  }
+
   async putPublishedSpeakers(record: D1PublishedSpeakerProjectionRecord): Promise<void> {
     const statements: D1PreparedStatement[] = [
       this.database

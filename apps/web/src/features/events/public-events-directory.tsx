@@ -6,6 +6,7 @@ export interface PublicEventDirectoryEntry {
   readonly endsOn: string;
   readonly venueName: string | null;
   readonly cfpOpen: boolean;
+  readonly programPublished: boolean;
 }
 
 export interface PublicOrganizationDirectoryEntry {
@@ -52,7 +53,8 @@ export function PublicEventsDirectory({ organizations }: PublicEventsDirectoryPr
               <article className="event-directory-card" key={event.slug}>
                 <div className="event-directory-card-copy">
                   <span className="event-status">
-                    Program published{event.cfpOpen ? " · CFP open" : ""}
+                    {event.programPublished ? "Program published" : "Call for proposals"}
+                    {event.cfpOpen && event.programPublished ? " · CFP open" : ""}
                   </span>
                   <h3>{event.name}</h3>
                   <dl className="event-meta">

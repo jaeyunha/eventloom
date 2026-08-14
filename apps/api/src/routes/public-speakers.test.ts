@@ -11,7 +11,7 @@ import {
 
 const bindings: ApiBindings = {
   APP_ENV: "local",
-  WEB_ORIGIN: "http://localhost:3015",
+  WEB_ORIGIN: "http://127.0.0.1:3015",
 };
 
 const projection: PublishedSpeakerProjection = {

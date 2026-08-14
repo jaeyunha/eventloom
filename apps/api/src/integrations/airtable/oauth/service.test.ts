@@ -301,6 +301,7 @@ class InMemoryConnectionStore implements AirtableOAuthConnectionStore {
   finalizeAuthorization(input: {
     connectionId: string;
     organizationId: string;
+    authorizationConnectionVersion: number;
     credentialReference: string;
     airtableUserId: string | null;
     airtableAccountId: string | null;
@@ -313,7 +314,8 @@ class InMemoryConnectionStore implements AirtableOAuthConnectionStore {
     if (
       connection === undefined ||
       connection.organizationId !== input.organizationId ||
-      connection.status !== "authorizing"
+      connection.status !== "authorizing" ||
+      connection.connectionVersion !== input.authorizationConnectionVersion
     ) {
       return null;
     }
@@ -358,14 +360,49 @@ class InMemoryAttemptStore implements AirtableOAuthAttemptStore {
   constructor(private readonly connections: InMemoryConnectionStore) {}
 
   async create(attempt: AirtableOAuthAttempt): Promise<void> {
+    const connection = await this.connections.findById(attempt.connectionId);
     if (
       this.rows.has(attempt.id) ||
-      [...this.rows.values()].some((candidate) => candidate.stateHash === attempt.stateHash)
+      [...this.rows.values()].some((candidate) => candidate.stateHash === attempt.stateHash) ||
+      connection === null ||
+      connection.organizationId !== attempt.organizationId ||
+      connection.status !== "authorizing" ||
+      connection.connectionVersion !== attempt.authorizationConnectionVersion
     ) {
-      throw new Error("Duplicate OAuth attempt");
+      throw new Error("OAuth authorization attempt is no longer current");
     }
     this.rows.set(attempt.id, cloneAttempt(attempt));
     this.statusHistory.set(attempt.id, [attempt.status]);
+  }
+
+  async supersede(input: {
+    organizationId: string;
+    connectionId: string;
+    authorizationConnectionVersion: number;
+    supersededAt: string;
+  }): Promise<void> {
+    for (const [id, attempt] of this.rows) {
+      if (
+        attempt.organizationId !== input.organizationId ||
+        attempt.connectionId !== input.connectionId ||
+        attempt.authorizationConnectionVersion >= input.authorizationConnectionVersion ||
+        (attempt.status !== "pending" && attempt.status !== "exchanging")
+      ) {
+        continue;
+      }
+      const superseded: AirtableOAuthAttempt = {
+        ...attempt,
+        status: "failed",
+        exchangeOwner: null,
+        exchangeToken: null,
+        exchangeLeaseExpiresAt: null,
+        attemptVersion: attempt.attemptVersion + 1,
+        errorCode: "authorization_superseded",
+        updatedAt: input.supersededAt,
+      };
+      this.rows.set(id, superseded);
+      this.recordStatus(id, superseded.status);
+    }
   }
 
   async findByStateHash(stateHash: string): Promise<AirtableOAuthAttempt | null> {
@@ -487,6 +524,7 @@ class InMemoryAttemptStore implements AirtableOAuthAttemptStore {
     const connection = this.connections.finalizeAuthorization({
       connectionId: input.connection.id,
       organizationId: input.connection.organizationId,
+      authorizationConnectionVersion: attempt.authorizationConnectionVersion,
       credentialReference: input.connection.credentialReference,
       airtableUserId: input.connection.airtableUserId,
       airtableAccountId: input.connection.airtableAccountId,
@@ -637,6 +675,8 @@ class FakeProvider implements AirtableOAuthProvider {
     airtableAccountId: "airtable-account-1",
   };
   exchangeError: Error | null = null;
+  exchangeStarted: Deferred<void> | null = null;
+  exchangeGate: Promise<void> | null = null;
   refreshResults: AirtableOAuthTokenResponse[] = [];
   refreshError: Error | null = null;
 
@@ -657,6 +697,8 @@ class FakeProvider implements AirtableOAuthProvider {
     redirectUri: string;
   }): Promise<AirtableOAuthTokenResponse> {
     this.exchangeRequests.push({ ...input });
+    this.exchangeStarted?.resolve();
+    if (this.exchangeGate !== null) await this.exchangeGate;
     if (this.exchangeError !== null) {
       throw this.exchangeError;
     }
@@ -721,11 +763,12 @@ async function beginAuthorization(harness: ReturnType<typeof createHarness>): Pr
     returnPath: "/settings/integrations?connected=airtable",
   });
 
+  const randomOffset = harness.crypto.randomValues.length - 2;
   return {
     attemptId: result.attemptId,
     connectionId: result.connectionId,
-    state: harness.crypto.randomValues[0]?.value ?? "",
-    verifier: harness.crypto.randomValues[1]?.value ?? "",
+    state: harness.crypto.randomValues[randomOffset]?.value ?? "",
+    verifier: harness.crypto.randomValues[randomOffset + 1]?.value ?? "",
   };
 }
 
@@ -769,6 +812,20 @@ async function expectOAuthError(
   expect(caught).toBeInstanceOf(AirtableOAuthError);
   expect((caught as AirtableOAuthError).code).toBe(code);
   return caught as AirtableOAuthError;
+}
+
+class Deferred<T> {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T | PromiseLike<T>) => void;
+
+  constructor() {
+    let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
+    this.promise = new Promise<T>((resolvePromise) => {
+      resolve = resolvePromise;
+    });
+    if (resolve === undefined) throw new Error("Deferred promise initialization failed.");
+    this.resolve = resolve;
+  }
 }
 
 function cloneAttempt(attempt: AirtableOAuthAttempt): AirtableOAuthAttempt {
@@ -832,6 +889,7 @@ describe("AirtableOAuthService", () => {
       stateHash: harness.crypto.digestFor(state ?? ""),
       status: "pending",
       attemptVersion: 1,
+      authorizationConnectionVersion: 1,
       expiresAt: "2026-05-01T12:10:00.000Z",
     });
     expect(attempt.stateHash).not.toBe(state);
@@ -900,10 +958,101 @@ describe("AirtableOAuthService", () => {
       refreshToken: "refresh-token-1",
     });
     expect(result).toEqual({
+      organizationId: ORGANIZATION_ID,
       connectionId: authorization.connectionId,
       connectionVersion: 2,
       redirectTo: "/settings/integrations?connected=airtable",
     });
+  });
+
+  test("supersedes an earlier pending authorization when a newer authorization begins", async () => {
+    const harness = createHarness();
+    const first = await beginAuthorization(harness);
+    const second = await beginAuthorization(harness);
+
+    expect(second.connectionId).toBe(first.connectionId);
+    expect(harness.attempts.get(first.attemptId)).toMatchObject({
+      status: "failed",
+      errorCode: "authorization_superseded",
+      attemptVersion: 2,
+    });
+    expect(harness.attempts.get(second.attemptId)).toMatchObject({
+      status: "pending",
+      authorizationConnectionVersion: 2,
+    });
+    await expectOAuthError(
+      harness.service.handleCallback({
+        organizationId: ORGANIZATION_ID,
+        userId: USER_ID,
+        state: first.state,
+        code: "authorization-code-1",
+      }),
+      "attempt_failed",
+    );
+    expect(harness.provider.exchangeRequests).toHaveLength(0);
+  });
+
+  test("does not finalize a callback superseded during its token exchange", async () => {
+    const harness = createHarness();
+    const first = await beginAuthorization(harness);
+    const exchangeStarted = new Deferred<void>();
+    const exchangeRelease = new Deferred<void>();
+    harness.provider.exchangeStarted = exchangeStarted;
+    harness.provider.exchangeGate = exchangeRelease.promise;
+
+    const staleCallback = harness.service.handleCallback({
+      organizationId: ORGANIZATION_ID,
+      userId: USER_ID,
+      state: first.state,
+      code: "authorization-code-1",
+    });
+    await exchangeStarted.promise;
+    const second = await beginAuthorization(harness);
+    exchangeRelease.resolve();
+
+    await expectOAuthError(staleCallback, "callback_claim_lost");
+    expect(harness.attempts.get(first.attemptId)).toMatchObject({
+      status: "failed",
+      errorCode: "authorization_superseded",
+    });
+    expect(harness.attempts.get(second.attemptId).status).toBe("pending");
+    expect(harness.connections.get(first.connectionId)).toMatchObject({
+      status: "authorizing",
+      connectionVersion: 2,
+      credentialReference: null,
+    });
+    expect(harness.secrets.discarded).toHaveLength(1);
+  });
+
+  test("does not resurrect a disconnected connection after callback exchange", async () => {
+    const harness = createHarness();
+    const authorization = await beginAuthorization(harness);
+    const exchangeStarted = new Deferred<void>();
+    const exchangeRelease = new Deferred<void>();
+    harness.provider.exchangeStarted = exchangeStarted;
+    harness.provider.exchangeGate = exchangeRelease.promise;
+
+    const callback = harness.service.handleCallback({
+      organizationId: ORGANIZATION_ID,
+      userId: USER_ID,
+      state: authorization.state,
+      code: "authorization-code-1",
+    });
+    await exchangeStarted.promise;
+    harness.connections.seed({
+      ...harness.connections.get(authorization.connectionId),
+      status: "disconnected",
+      connectionVersion: 2,
+    });
+    exchangeRelease.resolve();
+
+    await expectOAuthError(callback, "callback_claim_lost");
+    expect(harness.connections.get(authorization.connectionId)).toMatchObject({
+      status: "disconnected",
+      connectionVersion: 2,
+      credentialReference: null,
+    });
+    expect(harness.secrets.discarded).toHaveLength(1);
   });
 
   test("rejects callbacks from a different user before exchange", async () => {

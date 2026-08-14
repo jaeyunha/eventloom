@@ -4,6 +4,11 @@ import { describe, expect, it, vi } from "vitest";
 import {
   AdminShell,
   eventNavigationFor,
+  eventWorkspaceDestinationsFor,
+  eventWorkspaceNameFromResponse,
+  fetchOrganizerEventName,
+  organizationNavigationFor,
+  organizerNavigationGroupsFor,
   organizerOrganizationIdFromSession,
   organizerOrganizationIdsFromSession,
   qualifiedEventContext,
@@ -17,12 +22,14 @@ import {
   eventStatusClass,
   getCalendarMonthCells,
   initialCalendarMonth,
+  normalizeOrganizerEventSlug,
   type OrganizerEventFormValues,
   type OrganizerEventRecord,
   OrganizerEventsView,
   type OrganizerOverviewActivityData,
   type OrganizerOverviewCoreData,
   OrganizerOverviewView,
+  organizerEventMinimumDateTimeLocal,
   parseOrganizerEventsResponse,
   parseOrganizerOverviewActivityResponse,
   parseOrganizerOverviewCoreResponse,
@@ -31,9 +38,11 @@ import {
 } from "./organizer-overview";
 
 const mockedPathname = vi.hoisted(() => ({ value: "/admin" }));
+const mockedRouter = vi.hoisted(() => ({ push: vi.fn() }));
 
 vi.mock("next/navigation", () => ({
   usePathname: () => mockedPathname.value,
+  useRouter: () => mockedRouter,
 }));
 
 const loadedCore: OrganizerOverviewCoreData = {
@@ -84,6 +93,7 @@ const eventRecord: OrganizerEventRecord = {
   timeZone: "America/Los_Angeles",
   startsAt: "2026-09-17T16:00:00.000Z",
   endsAt: "2026-09-18T00:00:00.000Z",
+  scheduleDates: ["2026-09-17"],
   venue: "Main hall",
   cfpSettings: {
     enabled: true,
@@ -376,6 +386,13 @@ describe("organizer overview", () => {
     expect(eventIntersectsCalendarDate(event, new Date(2026, 2, 1))).toBe(true);
     expect(eventIntersectsCalendarDate(event, new Date(2026, 2, 2))).toBe(true);
     expect(eventIntersectsCalendarDate(event, new Date(2026, 2, 3))).toBe(false);
+    const individualDatesEvent = {
+      startsAt: "2026-09-17T16:00:00.000Z",
+      endsAt: "2026-09-20T00:00:00.000Z",
+      scheduleDates: ["2026-09-17", "2026-09-19"],
+    };
+    expect(eventIntersectsCalendarDate(individualDatesEvent, "2026-09-18")).toBe(false);
+    expect(eventIntersectsCalendarDate(individualDatesEvent, "2026-09-19")).toBe(true);
     expect(
       eventIntersectsCalendarDate(
         { startsAt: "not-a-date", endsAt: "2026-03-02T01:00:00.000Z" },
@@ -472,6 +489,7 @@ describe("organizer overview", () => {
         timeZone: "America/Los_Angeles",
         startsAt: eventRecord.startsAt,
         endsAt: eventRecord.endsAt,
+        scheduleDates: eventRecord.scheduleDates ?? [],
         venue: "Main hall",
         cfpSettings: eventRecord.cfpSettings,
         defaultCalendarSettings: eventRecord.defaultCalendarSettings,
@@ -488,6 +506,7 @@ describe("organizer overview", () => {
       timeZone: "America/Los_Angeles",
       startsAt: eventRecord.startsAt,
       endsAt: eventRecord.endsAt,
+      scheduleDates: eventRecord.scheduleDates,
       venue: "Main hall",
       cfpSettings: eventRecord.cfpSettings,
       defaultCalendarSettings: eventRecord.defaultCalendarSettings,
@@ -566,6 +585,7 @@ describe("organizer overview", () => {
   });
 
   it("rejects legacy calendar timezone aliases and validates complete event form input", () => {
+    expect(normalizeOrganizerEventSlug("Test event creations")).toBe("test-event-creations");
     expect(() =>
       parseOrganizerEventsResponse({
         data: [
@@ -586,7 +606,9 @@ describe("organizer overview", () => {
       status: "draft",
       timeZone: "America/Los_Angeles",
       startsAt: "2026-09-17T09:00",
-      endsAt: "2026-09-17T17:00",
+      endsAt: "2026-09-20T17:00",
+      dateMode: "individual",
+      scheduleDates: ["2026-09-17", "2026-09-19", "2026-09-20"],
       venue: "Main hall",
       cfpEnabled: true,
       cfpOpensAt: "",
@@ -595,10 +617,12 @@ describe("organizer overview", () => {
       defaultCalendarTimeZone: "America/Los_Angeles",
       defaultCalendarLocation: "Main hall",
     };
-    const result = validateOrganizerEventForm(values);
+    const now = new Date("2026-08-14T12:00:00.000Z");
+    const result = validateOrganizerEventForm(values, { now });
     expect(result.error).toBeUndefined();
     expect(result.input).toMatchObject({
       timeZone: "America/Los_Angeles",
+      scheduleDates: ["2026-09-17", "2026-09-19", "2026-09-20"],
       cfpSettings: { enabled: true, opensAt: null, closesAt: null },
       defaultCalendarSettings: {
         durationMinutes: 45,
@@ -606,6 +630,17 @@ describe("organizer overview", () => {
         location: "Main hall",
       },
     });
+    expect(organizerEventMinimumDateTimeLocal("America/Los_Angeles", now)).toBe("2026-08-14T00:00");
+    expect(
+      validateOrganizerEventForm(
+        {
+          ...values,
+          startsAt: "2026-08-13T09:00",
+          endsAt: "2026-08-13T17:00",
+        },
+        { now },
+      ),
+    ).toEqual({ error: "Event start cannot be before today." });
   });
 });
 describe("admin navigation", () => {
@@ -613,22 +648,20 @@ describe("admin navigation", () => {
     const eventContext = { organizationId: "org/live", eventId: "event/live" };
     const items = eventNavigationFor(eventContext);
     const expected = [
-      ["Home", "/admin"],
-      ["Events", "/admin/events"],
-      ["Members", "/admin/organizations/org%2Flive/members"],
-      ["Event overview", "/admin/organizations/org%2Flive/events/event%2Flive"],
+      ["Program overview", "/admin/organizations/org%2Flive/events/event%2Flive"],
       ["CFP Form", "/admin/organizations/org%2Flive/events/event%2Flive/cfp"],
       ["Submissions", "/admin/organizations/org%2Flive/events/event%2Flive/submissions"],
+      ["Sessions", "/admin/organizations/org%2Flive/events/event%2Flive/sessions"],
       ["Reviews", "/admin/organizations/org%2Flive/events/event%2Flive/reviews"],
-      ["Speakers", "/admin/organizations/org%2Flive/events/event%2Flive/speakers"],
-      ["Deliverables", "/admin/organizations/org%2Flive/events/event%2Flive/deliverables"],
-      ["Files", "/admin/organizations/org%2Flive/events/event%2Flive/files"],
       ["Agenda", "/admin/organizations/org%2Flive/events/event%2Flive/agenda"],
-      ["Settings", "/admin/organizations/org%2Flive/events/event%2Flive/settings"],
+      ["Program settings", "/admin/organizations/org%2Flive/events/event%2Flive/settings"],
+      ["Speakers", "/admin/organizations/org%2Flive/events/event%2Flive/speakers"],
+      ["Content requests", "/admin/organizations/org%2Flive/events/event%2Flive/deliverables"],
+      ["Files", "/admin/organizations/org%2Flive/events/event%2Flive/files"],
       ["Communications", "/admin/organizations/org%2Flive/events/event%2Flive/communications"],
-      ["Reports", "/admin/organizations/org%2Flive/events/event%2Flive/reports"],
       ["Content remix", "/admin/organizations/org%2Flive/events/event%2Flive/remix"],
       ["Embeds", "/admin/organizations/org%2Flive/events/event%2Flive/embeds"],
+      ["Reports", "/admin/organizations/org%2Flive/events/event%2Flive/reports"],
       ["Integrations", "/admin/organizations/org%2Flive/events/event%2Flive/integrations"],
     ] as const;
 
@@ -645,23 +678,124 @@ describe("admin navigation", () => {
       expect(item?.match(href)).toBe(true);
     }
     const agenda = items.find((item) => item.label === "Agenda");
-    expect(agenda?.match(`${expected[10][1]}/sessions`)).toBe(true);
-    expect(agenda?.match(`${expected[10][1]}-draft`)).toBe(false);
+    expect(agenda?.match(`${expected[5][1]}/sessions`)).toBe(true);
+    expect(agenda?.match(`${expected[5][1]}-draft`)).toBe(false);
   });
 
-  it("keeps organization Members available outside and inside an event", () => {
-    expect(eventNavigationFor(null, "ai-engineer").map((item) => item.label)).toEqual([
-      "Home",
-      "Events",
-      "Members",
-    ]);
-
+  it("uses canonical organization destinations in the sidebar and event workspace menu", () => {
+    expect(organizationNavigationFor("ai-engineer").map((item) => [item.label, item.href])).toEqual(
+      [
+        ["Overview", "/admin/organizations/ai-engineer"],
+        ["CRM", "/admin/organizations/ai-engineer/crm"],
+        ["Integrations", "/admin/organizations/ai-engineer/integrations"],
+        ["Members", "/admin/organizations/ai-engineer/members"],
+        ["Settings", "/admin/organizations/ai-engineer/settings"],
+      ],
+    );
     expect(
-      eventNavigationFor({
+      eventWorkspaceDestinationsFor({
         organizationId: "ai-engineer",
         eventId: "event-live",
-      }).some((item) => item.href === "/admin/organizations/ai-engineer/members"),
-    ).toBe(true);
+      }),
+    ).toEqual([
+      {
+        href: "/admin/organizations/ai-engineer",
+        icon: "overview",
+        label: "Organization overview",
+      },
+      {
+        href: "/admin/organizations/ai-engineer/events",
+        icon: "events",
+        label: "All events",
+      },
+      { href: "/admin/organizations/ai-engineer/crm", icon: "crm", label: "CRM" },
+      {
+        href: "/admin/organizations/ai-engineer/integrations",
+        icon: "integrations",
+        label: "Integrations",
+      },
+      { href: "/admin/organizations/ai-engineer/members", icon: "members", label: "Members" },
+      { href: "/admin/organizations/ai-engineer/settings", icon: "settings", label: "Settings" },
+    ]);
+    expect(eventWorkspaceDestinationsFor(null)).toEqual([]);
+  });
+
+  it("groups event navigation into the agreed hierarchy without organization duplicates", () => {
+    const groups = organizerNavigationGroupsFor(
+      { organizationId: "ai-engineer", eventId: "event-live" },
+      "ai-engineer",
+    );
+
+    expect(groups.map((group) => group.label)).toEqual([
+      "Program",
+      "People",
+      "Content operations",
+      "Publish",
+    ]);
+    const labels = groups.flatMap((group) => group.items).map((item) => item.label);
+    expect(labels).not.toContain("Members");
+    expect(labels).not.toContain("CRM");
+  });
+
+  it("reads the authoritative event name from the event detail response", () => {
+    expect(
+      eventWorkspaceNameFromResponse(
+        {
+          data: {
+            id: "event-live",
+            name: "AI Engineer Conference 2026",
+          },
+        },
+        "event-live",
+      ),
+    ).toBe("AI Engineer Conference 2026");
+    expect(
+      eventWorkspaceNameFromResponse(
+        {
+          data: {
+            id: "another-event",
+            name: "Wrong event",
+          },
+        },
+        "event-live",
+      ),
+    ).toBeNull();
+  });
+
+  it("loads draft event names from the organizer-scoped event endpoint", async () => {
+    let requestedUrl = "";
+    const eventName = await fetchOrganizerEventName(
+      "",
+      "local-organization",
+      "open-sessionboard-conf",
+      async (url) => {
+        requestedUrl = String(url);
+        return new Response(
+          JSON.stringify({
+            data: {
+              id: "open-sessionboard-conf",
+              name: "Eventloom Conference",
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      },
+    );
+
+    expect(requestedUrl).toBe(
+      "/api/admin/organizations/local-organization/events/open-sessionboard-conf",
+    );
+    expect(eventName).toBe("Eventloom Conference");
+  });
+
+  it("keeps organization navigation scoped outside the event workflow", () => {
+    expect(organizerNavigationGroupsFor(null, "ai-engineer")).toMatchObject([
+      {
+        label: "Organization",
+        items: expect.arrayContaining([expect.objectContaining({ label: "Members" })]),
+      },
+    ]);
+    expect(eventNavigationFor(null)).toEqual([]);
   });
 
   it("recognizes only qualified event paths for event-scoped navigation", () => {
@@ -677,9 +811,9 @@ describe("admin navigation", () => {
     );
 
     expect(output).toContain("Eventloom");
-    expect(output).toContain("Workspace");
-    expect(output).not.toContain("Program operations");
-    expect(output).not.toContain("Publish &amp; measure");
+    expect(output).not.toContain("Program");
+    expect(output).not.toContain("Content operations");
+    expect(output).not.toContain("Publish");
     expect(output).toContain("Search or jump to");
     expect(output).toContain('aria-keyshortcuts="Meta+K Control+K"');
     expect(output).not.toContain("Primary organizer content");
@@ -693,10 +827,10 @@ describe("admin navigation", () => {
         createElement(AdminShell, null, createElement("p", null, "Event workspace content")),
       );
 
-      expect(output).toContain("Workspace");
-      expect(output).toContain("Program operations");
-      expect(output).toContain("People &amp; content");
-      expect(output).toContain("Publish &amp; measure");
+      expect(output).toContain("Program");
+      expect(output).toContain("People");
+      expect(output).toContain("Content operations");
+      expect(output).toContain("Publish");
       expect(output).toContain("Integrations");
       expect(output).toContain("/admin/organizations/ai-engineer/events/event-live/agenda");
       expect(output).toContain("/admin/organizations/ai-engineer/events/event-live/integrations");

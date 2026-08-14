@@ -14,6 +14,7 @@ import {
   type SessionSettingsRecord,
   validateRoomInput,
 } from "./api";
+import { eventSettingsSectionHref } from "./event-settings-sections";
 import {
   canCommitEventSettingsAsyncCompletion,
   EventSettingsWorkspace,
@@ -193,13 +194,16 @@ describe("event settings progressive loading", () => {
       createElement(EventSettingsWorkspaceView, {
         organizationId: "org_a",
         eventId: "event-a",
+        section: "workflow",
         state: { status: "loaded", data: core, detailsStatus: "loading" },
       }),
     );
-    expect(coreMarkup).toContain("Session settings");
-    expect(coreMarkup).toContain("Main room");
-    expect(coreMarkup).toContain("Loading session classification");
-    expect(coreMarkup).toContain("Loading settings audit history");
+    expect(coreMarkup).toContain("Session workflow");
+    expect(coreMarkup).toContain("Session statuses");
+    expect(coreMarkup).toContain("Accepted");
+    expect(coreMarkup).not.toContain("Main room");
+    expect(coreMarkup).not.toContain("Loading session classification");
+    expect(coreMarkup).not.toContain("Loading change history");
     expect(coreMarkup).not.toContain("One track");
 
     pending.get("/sessions/tracks")?.resolve(response(overview.tracks));
@@ -218,8 +222,16 @@ describe("event settings progressive loading", () => {
   it("rejects stale, aborted, and unmounted completions across event scopes", async () => {
     const scopeA = eventSettingsWorkspaceScopeKey("org_a", "event-a");
     const scopeB = eventSettingsWorkspaceScopeKey("org_a", "event-b");
-    const workspaceA = EventSettingsWorkspace({ organizationId: "org_a", eventId: "event-a" });
-    const workspaceB = EventSettingsWorkspace({ organizationId: "org_a", eventId: "event-b" });
+    const workspaceA = EventSettingsWorkspace({
+      organizationId: "org_a",
+      eventId: "event-a",
+      section: "workflow",
+    });
+    const workspaceB = EventSettingsWorkspace({
+      organizationId: "org_a",
+      eventId: "event-b",
+      section: "workflow",
+    });
     const pendingCompletion = deferred<string>();
     let currentRequestId = 1;
     let committed: string | null = null;
@@ -414,19 +426,18 @@ describe("event settings view", () => {
       createElement(EventSettingsWorkspaceView, {
         organizationId: "org_a",
         eventId: "event-a",
+        section: "history",
         state: { status: "loaded", data: overview },
       }),
     );
     expect(output).toContain('aria-label="Event settings sections"');
-    expect(output).toContain("Settings navigation");
-    expect(output).toContain("Choose a section");
-    expect(output).toContain("Configuration");
+    expect(output).toContain("Configure this event");
+    expect(output).toContain("Event setup");
+    expect(output).toContain("Governance");
     expect(output).toContain("Session classification");
-    expect(output).toContain("Communications");
-    expect(output).toContain("Calendar");
-    expect(output).toContain("Accepted");
-    expect(output).toContain("Settings audit history");
-    expect(output).toContain("Agenda eligibility and status settings updated to version 3.");
+    expect(output).toContain("Change history");
+    expect(output).toContain("Session statuses");
+    expect(output).toContain("Updated");
     expect(output).toContain("Organization org_a · Event event-a");
   });
 
@@ -435,6 +446,7 @@ describe("event settings view", () => {
       createElement(EventSettingsWorkspaceView, {
         organizationId: "org_a",
         eventId: "event-a",
+        section: "classification",
         state: {
           status: "loaded",
           data: {
@@ -470,26 +482,33 @@ describe("event settings view", () => {
       }),
     );
     expect(loading).toContain("Loading event settings");
-    const empty = renderToStaticMarkup(
+    const emptyData = {
+      ...overview,
+      rooms: [],
+      tracks: [],
+      formats: [],
+      levels: [],
+      tags: [],
+      audit: [],
+    };
+    const emptyRooms = renderToStaticMarkup(
       createElement(EventSettingsWorkspaceView, {
         organizationId: "org_a",
         eventId: "event-a",
-        state: {
-          status: "loaded",
-          data: {
-            ...overview,
-            rooms: [],
-            tracks: [],
-            formats: [],
-            levels: [],
-            tags: [],
-            audit: [],
-          },
-        },
+        section: "rooms",
+        state: { status: "loaded", data: emptyData },
       }),
     );
-    expect(empty).toContain("No rooms configured yet.");
-    expect(empty).toContain("No settings changes have been audited");
+    const emptyHistory = renderToStaticMarkup(
+      createElement(EventSettingsWorkspaceView, {
+        organizationId: "org_a",
+        eventId: "event-a",
+        section: "history",
+        state: { status: "loaded", data: emptyData },
+      }),
+    );
+    expect(emptyRooms).toContain("No rooms configured yet.");
+    expect(emptyHistory).toContain("No configuration changes have been audited");
     const notice = renderToStaticMarkup(
       createElement(EventSettingsWorkspaceView, {
         organizationId: "org_a",
@@ -509,7 +528,7 @@ describe("event settings view", () => {
     );
     expect(error).toContain("The settings API is unavailable.");
   });
-  it("exposes the shared section metadata as real, scrollable anchors", () => {
+  it("exposes the shared section metadata as qualified routed destinations", () => {
     const output = renderToStaticMarkup(
       createElement(EventSettingsWorkspaceView, {
         organizationId: "org_a",
@@ -518,15 +537,14 @@ describe("event settings view", () => {
       }),
     );
     for (const section of eventSettingsSectionNavigation) {
-      expect(output).toContain(`href="#${section.id}"`);
-      expect(output).toContain(`id="${section.id}"`);
+      expect(output).toContain(eventSettingsSectionHref("org_a", "event-a", section.id));
       expect(output).toContain(section.label);
     }
     expect(output).toContain('data-slot="collapsible"');
-    expect(output).toContain("Communications");
-    expect(output).toContain("Open Communications");
-    expect(output).not.toContain('href="#communications"');
-    expect(output).not.toContain('href="#calendar"');
+    expect(output).toContain('id="workflow"');
+    expect(output).not.toContain('href="#workflow"');
+    expect(output).not.toContain("Open Communications");
+    expect(output).not.toContain("Open Agenda &amp; Calendar");
   });
 
   it("keeps core failures full width and free of dead section anchors", () => {
@@ -546,10 +564,11 @@ describe("event settings view", () => {
   });
 
   it("keeps progressive details failure separate from loaded core settings", () => {
-    const output = renderToStaticMarkup(
+    const classification = renderToStaticMarkup(
       createElement(EventSettingsWorkspaceView, {
         organizationId: "org_a",
         eventId: "event-a",
+        section: "classification",
         state: {
           status: "loaded",
           data: overview,
@@ -558,13 +577,26 @@ describe("event settings view", () => {
         },
       }),
     );
-    expect(output).toContain("Session settings");
-    expect(output).toContain("Library reads timed out.");
-    expect(output).toContain("Settings audit history unavailable.");
-    expect(output).toContain("Session classification unavailable.");
+    const history = renderToStaticMarkup(
+      createElement(EventSettingsWorkspaceView, {
+        organizationId: "org_a",
+        eventId: "event-a",
+        section: "history",
+        state: {
+          status: "loaded",
+          data: overview,
+          detailsStatus: "error",
+          detailsMessage: "Library reads timed out.",
+        },
+      }),
+    );
+    expect(classification).toContain("Library reads timed out.");
+    expect(classification).toContain("Session classification unavailable.");
+    expect(history).toContain("Library reads timed out.");
+    expect(history).toContain("Change history unavailable.");
   });
 
-  it("renders one semantic status table with labelled eligibility controls and honest disabled actions", () => {
+  it("renders compact status rows with labelled eligibility and honest disabled actions", () => {
     const output = renderToStaticMarkup(
       createElement(EventSettingsWorkspaceView, {
         organizationId: "org_a",
@@ -574,11 +606,9 @@ describe("event settings view", () => {
       }),
     );
     expect(output).toContain("Configured session statuses and agenda eligibility");
-    expect(output).toContain("Agenda eligible for Accepted");
-    expect(output).toContain("Remove");
+    expect(output).toContain("Can Accepted appear on the private agenda");
+    expect(output).toContain("More actions for Accepted");
     expect(output).toContain("Session settings are read-only.");
-    expect(output).toContain("Room editing controls are read-only");
-    expect(output).toContain("Adding values is unavailable in this view.");
     expect(output).toMatch(/data-slot="button"[^>]*disabled/);
   });
   it("adds settings navigation context only for qualified event routes", () => {

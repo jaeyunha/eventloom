@@ -8,6 +8,13 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   StatusBadge,
   WorkspaceBreadcrumb,
   WorkspaceHeader,
@@ -17,13 +24,14 @@ import {
   createScopedReadFlightCoordinator,
   type ScopedReadFlightCoordinator,
 } from "@/lib/scoped-read-flight";
+import { AgendaPlacementQueue } from "./agenda-placement-queue";
+import {
+  AGENDA_ENTRY_DRAG_TYPE,
+  AgendaTimetable,
+  type AgendaTimetablePlacement,
+} from "./agenda-timetable";
 import styles from "./agenda-workspace.module.css";
 import { type AgendaApi, AgendaApiError, createAgendaApi } from "./api";
-import {
-  createLocalAgendaDemoApi,
-  loadAgendaWorkspace,
-  resolveAgendaAppEnvironment,
-} from "./demo/agenda-demo-api";
 import {
   agendaDays,
   conflictsForEntry,
@@ -141,6 +149,7 @@ interface EntryFormProps {
   tracks: readonly AgendaTrack[];
   eventStart: string;
   busy: boolean;
+  initialPlacement?: AgendaTimetablePlacement;
   initialSessionId?: string;
   onSubmit(entry: AgendaEntryInput): Promise<void>;
   onCancel?: () => void;
@@ -158,6 +167,7 @@ function EntryForm({
   tracks,
   eventStart,
   busy,
+  initialPlacement,
   initialSessionId,
   onSubmit,
   onCancel,
@@ -166,12 +176,18 @@ function EntryForm({
 }: EntryFormProps) {
   const firstSession = entry?.sessionId ?? initialSessionId ?? sessions[0]?.id ?? "";
   const [sessionId, setSessionId] = useState(firstSession);
-  const [roomId, setRoomId] = useState(entry?.roomId ?? rooms[0]?.id ?? "");
+  const [roomId, setRoomId] = useState(
+    entry?.roomId ?? initialPlacement?.roomId ?? rooms[0]?.id ?? "",
+  );
   const [trackIds, setTrackIds] = useState<readonly string[]>(
     entry?.trackIds ?? (tracks[0] ? [tracks[0].id] : []),
   );
-  const [startsAtLocal, setStartsAtLocal] = useState(entry?.startsAtLocal ?? `${eventStart}T09:00`);
-  const [endsAtLocal, setEndsAtLocal] = useState(entry?.endsAtLocal ?? `${eventStart}T10:00`);
+  const [startsAtLocal, setStartsAtLocal] = useState(
+    entry?.startsAtLocal ?? initialPlacement?.startsAtLocal ?? `${eventStart}T09:00`,
+  );
+  const [endsAtLocal, setEndsAtLocal] = useState(
+    entry?.endsAtLocal ?? initialPlacement?.endsAtLocal ?? `${eventStart}T10:00`,
+  );
   const [formError, setFormError] = useState<string | null>(null);
   const [roomCreatorOpen, setRoomCreatorOpen] = useState(false);
   const [trackCreatorOpen, setTrackCreatorOpen] = useState(false);
@@ -373,7 +389,11 @@ function EntryForm({
           />
         </label>
       </div>
-      {formError ? <p className={styles.formError}>{formError}</p> : null}
+      {formError ? (
+        <p className={styles.formError} role="alert">
+          {formError}
+        </p>
+      ) : null}
       <div className={styles.formActions}>
         {onCancel ? (
           <button className={styles.secondaryButton} type="button" onClick={onCancel}>
@@ -391,19 +411,19 @@ function EntryForm({
 export type AgendaViewMode = "list" | "day" | "week" | "track" | "room";
 
 export const AGENDA_VIEW_MODES: readonly AgendaViewMode[] = [
-  "list",
   "day",
   "week",
+  "list",
   "track",
   "room",
 ];
 
 const agendaViewLabels: Record<AgendaViewMode, string> = {
   list: "List",
-  day: "Day",
-  week: "Week",
-  track: "Track",
-  room: "Room",
+  day: "Timetable",
+  week: "All days",
+  track: "Tracks",
+  room: "Rooms",
 };
 
 export interface AgendaViewGroup {
@@ -601,7 +621,9 @@ export function AgendaBoard({
   const readiness = publicationReadiness(data, preview);
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
+  const [placementDraft, setPlacementDraft] = useState<AgendaTimetablePlacement | undefined>();
   const [placementSessionId, setPlacementSessionId] = useState<string | null>(null);
+  const [queueDropActive, setQueueDropActive] = useState(false);
   const [viewMode, setViewMode] = useState<AgendaViewMode>(initialView);
   const { startsOn, endsOn } = data.event;
   const eventDays = useMemo(
@@ -613,6 +635,10 @@ export function AgendaBoard({
   const viewTabRefs = useRef<Partial<Record<AgendaViewMode, HTMLButtonElement | null>>>({});
   const dateRailRef = useRef<HTMLElement | null>(null);
   const currentRevision = data.currentPublishedRevision;
+  const editingEntry =
+    editingEntryId === null
+      ? null
+      : (data.draft.entries.find((entry) => entry.id === editingEntryId) ?? null);
   const isBusyFor = (operation: AgendaBusyOperation): boolean =>
     busy && (busyOperation === undefined || busyOperation === null || busyOperation === operation);
   const settingsHref = `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(data.event.id)}/settings`;
@@ -667,7 +693,6 @@ export function AgendaBoard({
     const entryWarnings = warningsForEntry(entry.id, preview?.warnings ?? []);
     const hasIssues =
       entryConflicts.length + entryReleaseConflicts.length + entryWarnings.length > 0;
-    const editExpanded = viewMode === "day" && editingEntryId === entry.id;
     return (
       <li key={key}>
         <article
@@ -723,47 +748,17 @@ export function AgendaBoard({
               onClick={() => {
                 if (viewMode !== "day") {
                   setViewMode("day");
-                  setEditingEntryId(entry.id);
                   const entryDay = eventDays.find((day) => day.date === scheduleDate(entry));
                   if (entryDay) setSelectedDay(entryDay.date);
-                } else {
-                  setEditingEntryId((current) => (current === entry.id ? null : entry.id));
                 }
+                setEditingEntryId(entry.id);
               }}
-              aria-expanded={editExpanded}
-              aria-controls={`edit-${entry.id}`}
+              aria-haspopup="dialog"
             >
               Edit
             </button>
-            <button
-              type="button"
-              className={styles.dangerButton}
-              disabled={busy}
-              onClick={() => void onRemoveEntry(entry.id)}
-            >
-              Remove
-            </button>
           </div>
         </article>
-        {editExpanded ? (
-          <div id={`edit-${entry.id}`} className={styles.editPanel}>
-            <EntryForm
-              entry={entry}
-              sessions={[]}
-              rooms={data.rooms}
-              tracks={data.tracks}
-              eventStart={data.event.startsOn}
-              busy={busy}
-              onCancel={() => setEditingEntryId(null)}
-              {...(onCreateRoom === undefined ? {} : { onCreateRoom })}
-              {...(onCreateTrack === undefined ? {} : { onCreateTrack })}
-              onSubmit={async (input) => {
-                const saved = await onSaveEntry(input);
-                if (saved !== false) setEditingEntryId(null);
-              }}
-            />
-          </div>
-        ) : null}
       </li>
     );
   }
@@ -790,64 +785,6 @@ export function AgendaBoard({
               renderEntryCard(entry, `${group.id}-${entry.id}`, showDate),
             )}
           </ol>
-        )}
-      </section>
-    );
-  }
-
-  function renderUnscheduledGroup() {
-    const sessions = [...data.unscheduledSessions].sort((left, right) => {
-      const titleOrder = left.title.localeCompare(right.title);
-      return titleOrder === 0 ? left.id.localeCompare(right.id) : titleOrder;
-    });
-    return (
-      <section className={styles.unscheduledGroup} aria-labelledby="agenda-unscheduled-heading">
-        <header className={styles.viewGroupHeader}>
-          <div>
-            <p className={styles.eyebrow}>Placement queue</p>
-            <h3 id="agenda-unscheduled-heading">Sessions to place</h3>
-          </div>
-          <span>
-            {sessions.length} session{sessions.length === 1 ? "" : "s"}
-          </span>
-        </header>
-        <p className={styles.viewContext}>
-          {sessions.length === 0
-            ? "No accepted sessions are waiting for a time and room."
-            : "Accepted sessions waiting for a time and room."}
-        </p>
-        {sessions.length === 0 ? (
-          <p className={styles.emptyPool}>No unscheduled accepted sessions.</p>
-        ) : (
-          <ul className={styles.unscheduledList}>
-            {sessions.map((session) => (
-              <li
-                className={styles.unscheduledItem}
-                key={session.id}
-                draggable
-                onDragStart={(event) => {
-                  event.dataTransfer.setData("text/plain", session.id);
-                  event.dataTransfer.effectAllowed = "move";
-                }}
-              >
-                <strong>{session.title}</strong>
-                <span>
-                  {session.format} · {session.durationMinutes} minutes ·{" "}
-                  {session.speakerNames.join(", ")}
-                </span>
-                <button
-                  className={styles.textButton}
-                  type="button"
-                  onClick={() => {
-                    setPlacementSessionId(session.id);
-                    setShowAddForm(true);
-                  }}
-                >
-                  Choose time and room
-                </button>
-              </li>
-            ))}
-          </ul>
         )}
       </section>
     );
@@ -938,7 +875,6 @@ export function AgendaBoard({
               </ol>
             </section>
           )}
-          {renderUnscheduledGroup()}
         </>
       );
     }
@@ -946,18 +882,57 @@ export function AgendaBoard({
     if (viewMode === "day") {
       const currentIndex = groups.findIndex((group) => group.id === selectedDay);
       const currentGroup = groups[currentIndex >= 0 ? currentIndex : 0];
+      const conflictEntryIds = new Set(
+        [...(preview?.conflicts ?? []), ...(preview?.releaseConflicts ?? [])].flatMap(
+          (conflict) => conflict.entryIds,
+        ),
+      );
+      const warningEntryIds = new Set(
+        (preview?.warnings ?? []).flatMap((warning) => warning.entryIds),
+      );
       return (
         <>
           {renderDayNavigation(groups)}
           {currentGroup ? (
-            <div className={styles.days}>{renderGroup(currentGroup)}</div>
+            <AgendaTimetable
+              date={currentGroup.id}
+              entries={currentGroup.entries}
+              rooms={data.rooms}
+              sessions={data.unscheduledSessions}
+              tracks={data.tracks}
+              conflictEntryIds={conflictEntryIds}
+              warningEntryIds={warningEntryIds}
+              onEditEntry={(entryId) => {
+                setShowAddForm(false);
+                setEditingEntryId(entryId);
+              }}
+              onMoveEntry={async (placement) => {
+                const entry = data.draft.entries.find(
+                  (candidate) => candidate.id === placement.entryId,
+                );
+                if (entry === undefined) return;
+                await onSaveEntry({
+                  id: entry.id,
+                  sessionId: entry.sessionId,
+                  roomId: placement.roomId,
+                  trackIds: entry.trackIds,
+                  startsAtLocal: placement.startsAtLocal,
+                  endsAtLocal: placement.endsAtLocal,
+                });
+              }}
+              onRequestPlacement={(placement) => {
+                setEditingEntryId(null);
+                setPlacementSessionId(placement.sessionId);
+                setPlacementDraft(placement);
+                setShowAddForm(true);
+              }}
+            />
           ) : (
             <div className={styles.emptySchedule}>
               <strong>No event days are available</strong>
               <p>The event start and end dates do not define a navigable calendar range.</p>
             </div>
           )}
-          {renderUnscheduledGroup()}
         </>
       );
     }
@@ -966,26 +941,18 @@ export function AgendaBoard({
       const firstDate = groups[0]?.label;
       const lastDate = groups.at(-1)?.label;
       return (
-        <>
-          <div className={styles.weekView}>
-            <p className={styles.viewContext}>
-              {firstDate && lastDate && firstDate !== lastDate
-                ? `Week: ${firstDate} – ${lastDate}`
-                : "Week schedule"}
-            </p>
-            <div className={styles.weekGroups}>{groups.map((group) => renderGroup(group))}</div>
-          </div>
-          {renderUnscheduledGroup()}
-        </>
+        <div className={styles.weekView}>
+          <p className={styles.viewContext}>
+            {firstDate && lastDate && firstDate !== lastDate
+              ? `Week: ${firstDate} – ${lastDate}`
+              : "Week schedule"}
+          </p>
+          <div className={styles.weekGroups}>{groups.map((group) => renderGroup(group))}</div>
+        </div>
       );
     }
 
-    return (
-      <div className={styles.groupedView}>
-        <div className={styles.groupGroups}>{groups.map((group) => renderGroup(group))}</div>
-        {renderUnscheduledGroup()}
-      </div>
-    );
+    return <div className={styles.groupedView}>{groups.map((group) => renderGroup(group))}</div>;
   }
 
   return (
@@ -1075,7 +1042,12 @@ export function AgendaBoard({
           </div>
         </section>
 
-        <section className={styles.releaseCenter} aria-label="Agenda release center">
+        <section
+          className={styles.releaseCenter}
+          aria-label="Agenda release center"
+          data-agenda-region="release"
+          data-agenda-order="2"
+        >
           <header className={styles.releaseCenterHeader}>
             <div>
               <p className={styles.eyebrow}>Release center</p>
@@ -1333,7 +1305,7 @@ export function AgendaBoard({
           ) : null}
         </section>
 
-        <div className={styles.workspaceGrid}>
+        <div className={styles.workspaceGrid} data-agenda-region="planner" data-agenda-order="1">
           <section className={styles.boardColumn} aria-labelledby="schedule-heading">
             <div className={styles.sectionHeading}>
               <div>
@@ -1354,7 +1326,12 @@ export function AgendaBoard({
                   className={styles.primaryButton}
                   type="button"
                   disabled={busy || !hasRooms}
-                  onClick={() => setShowAddForm((current) => !current)}
+                  onClick={() => {
+                    setEditingEntryId(null);
+                    setPlacementSessionId(null);
+                    setPlacementDraft(undefined);
+                    setShowAddForm((current) => !current);
+                  }}
                   aria-expanded={showAddForm}
                   aria-controls="add-session-panel"
                 >
@@ -1402,32 +1379,48 @@ export function AgendaBoard({
               </div>
             </div>
 
-            {showAddForm && hasRooms ? (
-              <div id="add-session-panel" className={styles.addPanel}>
-                <h3>Schedule a session</h3>
-                <EntryForm
+            <section
+              className={styles.placementDock}
+              aria-label="Placement queue drop zone"
+              data-agenda-drop-target="placement-queue"
+              data-empty={data.unscheduledSessions.length === 0 ? "true" : undefined}
+              data-active={queueDropActive ? "true" : undefined}
+              onDragEnter={(event) => {
+                if (event.dataTransfer.types.includes(AGENDA_ENTRY_DRAG_TYPE)) {
+                  setQueueDropActive(true);
+                }
+              }}
+              onDragLeave={() => setQueueDropActive(false)}
+              onDragOver={(event) => {
+                if (!event.dataTransfer.types.includes(AGENDA_ENTRY_DRAG_TYPE)) return;
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "move";
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                setQueueDropActive(false);
+                const entryId = event.dataTransfer.getData(AGENDA_ENTRY_DRAG_TYPE);
+                if (entryId !== "") void onRemoveEntry(entryId);
+              }}
+            >
+              {data.unscheduledSessions.length > 0 ? (
+                <AgendaPlacementQueue
                   sessions={data.unscheduledSessions}
-                  rooms={data.rooms}
-                  tracks={data.tracks}
-                  eventStart={data.event.startsOn}
                   busy={busy}
-                  onCancel={() => {
-                    setShowAddForm(false);
-                    setPlacementSessionId(null);
-                  }}
-                  {...(placementSessionId === null ? {} : { initialSessionId: placementSessionId })}
-                  {...(onCreateRoom === undefined ? {} : { onCreateRoom })}
-                  {...(onCreateTrack === undefined ? {} : { onCreateTrack })}
-                  onSubmit={async (entry) => {
-                    const saved = await onSaveEntry(entry);
-                    if (saved !== false) {
-                      setShowAddForm(false);
-                      setPlacementSessionId(null);
-                    }
+                  onChooseSession={(sessionId) => {
+                    setPlacementSessionId(sessionId);
+                    setPlacementDraft(undefined);
+                    setEditingEntryId(null);
+                    setShowAddForm(true);
                   }}
                 />
-              </div>
-            ) : null}
+              ) : (
+                <div className={styles.placementDockEmpty} role="status">
+                  <strong>All accepted sessions are placed</strong>
+                  <span>Drag a scheduled session here to return it to the queue.</span>
+                </div>
+              )}
+            </section>
 
             <div
               id="agenda-view-panel"
@@ -1444,6 +1437,7 @@ export function AgendaBoard({
                 const sessionId = event.dataTransfer.getData("text/plain");
                 if (data.unscheduledSessions.some((session) => session.id === sessionId)) {
                   setPlacementSessionId(sessionId);
+                  setPlacementDraft(undefined);
                   setShowAddForm(true);
                 }
               }}
@@ -1451,6 +1445,109 @@ export function AgendaBoard({
               {renderScheduleView()}
             </div>
           </section>
+          <Dialog
+            open={showAddForm || editingEntry !== null}
+            onOpenChange={(open) => {
+              if (open) return;
+              setShowAddForm(false);
+              setPlacementSessionId(null);
+              setPlacementDraft(undefined);
+              setEditingEntryId(null);
+            }}
+          >
+            <DialogContent className={styles.agendaEditorDialog}>
+              <DialogHeader className={styles.agendaEditorHeader}>
+                <div className={styles.agendaEditorHeading}>
+                  <div>
+                    <p className={styles.eyebrow}>
+                      {showAddForm ? "Schedule placement" : "Session placement"}
+                    </p>
+                    <DialogTitle>
+                      {showAddForm ? "Schedule a session" : "Edit placement"}
+                    </DialogTitle>
+                  </div>
+                  <Badge variant="outline">
+                    {showAddForm ? "Accepted session" : "Scheduled session"}
+                  </Badge>
+                </div>
+                <DialogDescription>
+                  {showAddForm
+                    ? "Choose the room, tracks, and exact local time before adding this session to the private draft."
+                    : "Adjust this session without leaving the timetable. Changes remain private until the agenda is published."}
+                </DialogDescription>
+              </DialogHeader>
+              <div className={styles.agendaEditorBody}>
+                {showAddForm && hasRooms ? (
+                  <EntryForm
+                    key={
+                      placementDraft === undefined
+                        ? (placementSessionId ?? "new-placement")
+                        : `${placementDraft.sessionId}-${placementDraft.roomId}-${placementDraft.startsAtLocal}`
+                    }
+                    sessions={data.unscheduledSessions}
+                    rooms={data.rooms}
+                    tracks={data.tracks}
+                    eventStart={data.event.startsOn}
+                    busy={busy}
+                    onCancel={() => {
+                      setShowAddForm(false);
+                      setPlacementSessionId(null);
+                      setPlacementDraft(undefined);
+                    }}
+                    {...(placementSessionId === null
+                      ? {}
+                      : { initialSessionId: placementSessionId })}
+                    {...(placementDraft === undefined ? {} : { initialPlacement: placementDraft })}
+                    {...(onCreateRoom === undefined ? {} : { onCreateRoom })}
+                    {...(onCreateTrack === undefined ? {} : { onCreateTrack })}
+                    onSubmit={async (entry) => {
+                      const saved = await onSaveEntry(entry);
+                      if (saved !== false) {
+                        setShowAddForm(false);
+                        setPlacementSessionId(null);
+                        setPlacementDraft(undefined);
+                      }
+                    }}
+                  />
+                ) : editingEntry !== null ? (
+                  <>
+                    <EntryForm
+                      entry={editingEntry}
+                      sessions={[]}
+                      rooms={data.rooms}
+                      tracks={data.tracks}
+                      eventStart={data.event.startsOn}
+                      busy={busy}
+                      onCancel={() => setEditingEntryId(null)}
+                      {...(onCreateRoom === undefined ? {} : { onCreateRoom })}
+                      {...(onCreateTrack === undefined ? {} : { onCreateTrack })}
+                      onSubmit={async (entry) => {
+                        const saved = await onSaveEntry(entry);
+                        if (saved !== false) setEditingEntryId(null);
+                      }}
+                    />
+                    <div className={styles.agendaEditorDangerZone}>
+                      <div>
+                        <strong>Remove from this agenda draft</strong>
+                        <p>The accepted session returns to the placement queue.</p>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        disabled={busy}
+                        onClick={async () => {
+                          const removed = await onRemoveEntry(editingEntry.id);
+                          if (removed !== false) setEditingEntryId(null);
+                        }}
+                      >
+                        Remove placement
+                      </Button>
+                    </div>
+                  </>
+                ) : null}
+              </div>
+            </DialogContent>
+          </Dialog>
         </div>
       </main>
     </div>
@@ -1541,103 +1638,105 @@ export function AgendaSuggestionPanel({
             anything until an organizer explicitly selects and applies individual changes.
           </p>
           {run === null ? (
-            eligibleUnscheduledCount === 0 ? (
-              <div className={styles.suggestionEmpty} role="status">
-                <strong>No eligible unscheduled sessions</strong>
-                <p>
-                  No eligible unscheduled accepted sessions are currently available. Accept a
-                  session before generating private placement suggestions. The current draft already
-                  contains every accepted session available to this assistant.
-                </p>
-              </div>
-            ) : (
-              <>
-                <p role="status">No advisory suggestion run has been generated.</p>
-                <div className={styles.suggestionOptions}>
-                  <fieldset className={styles.scheduleOptions}>
-                    <legend>Existing session times</legend>
-                    <label
-                      className={`${styles.scheduleOption} ${
-                        existingSessionTimes === "keep" ? styles.scheduleOptionSelected : ""
-                      }`}
-                    >
-                      <input
-                        type="radio"
-                        name="existing-session-times"
-                        value="keep"
-                        checked={existingSessionTimes === "keep"}
-                        disabled={suggestionOptionsDisabled}
-                        onChange={() => setExistingSessionTimes("keep")}
-                      />
-                      <span className={styles.scheduleOptionCopy}>
-                        <strong>Keep scheduled sessions fixed</strong>
-                        <small>The generator preserves their current times.</small>
-                      </span>
-                    </label>
-                    <label
-                      className={`${styles.scheduleOption} ${
-                        existingSessionTimes === "move" ? styles.scheduleOptionSelected : ""
-                      }`}
-                    >
-                      <input
-                        type="radio"
-                        name="existing-session-times"
-                        value="move"
-                        checked={existingSessionTimes === "move"}
-                        disabled={suggestionOptionsDisabled}
-                        onChange={() => setExistingSessionTimes("move")}
-                      />
-                      <span className={styles.scheduleOptionCopy}>
-                        <strong>Allow scheduled sessions to move</strong>
-                        <small>The generator may assign them different times.</small>
-                      </span>
-                    </label>
-                  </fieldset>
-                  <fieldset className={styles.roomOptions}>
-                    <legend>Existing room occupancy</legend>
-                    <label className={styles.roomOption}>
-                      <input
-                        type="checkbox"
-                        checked={ignoreExistingRooms}
-                        disabled={suggestionOptionsDisabled}
-                        onChange={(event) => setIgnoreExistingRooms(event.target.checked)}
-                      />
-                      <span className={styles.scheduleOptionCopy}>
-                        <strong>Ignore existing room occupancy when generating</strong>
-                        <small>
-                          The generator may place sessions in rooms that already have a scheduled
-                          session.
-                        </small>
-                      </span>
-                    </label>
-                  </fieldset>
+            <div className={styles.suggestionSetup}>
+              {eligibleUnscheduledCount === 0 ? (
+                <div className={styles.suggestionEmpty} role="status">
+                  <strong>No eligible unscheduled sessions</strong>
+                  <p>
+                    No eligible unscheduled accepted sessions are currently available. Accept a
+                    session before generating private placement suggestions. The current draft
+                    already contains every accepted session available to this assistant.
+                  </p>
                 </div>
-                <Button
-                  variant="outline"
-                  type="button"
-                  disabled={suggestionOptionsDisabled}
-                  onClick={() =>
-                    onGenerate
-                      ? void onGenerate(
-                          serializeAgendaSuggestionOptions(
-                            existingSessionTimes,
-                            ignoreExistingRooms,
-                          ),
-                        )
-                      : undefined
-                  }
-                >
-                  {isBusyFor("generate-suggestion")
-                    ? "Generating..."
-                    : "Generate private suggestions"}
-                </Button>
-                {onGenerate === undefined ? (
-                  <small>
-                    Suggestion generation is unavailable until an approved provider is connected.
-                  </small>
-                ) : null}
-              </>
-            )
+              ) : (
+                <>
+                  <p role="status">No advisory suggestion run has been generated.</p>
+                  <div className={styles.suggestionOptions}>
+                    <fieldset className={styles.scheduleOptions}>
+                      <legend>Existing session times</legend>
+                      <label
+                        className={`${styles.scheduleOption} ${
+                          existingSessionTimes === "keep" ? styles.scheduleOptionSelected : ""
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name="existing-session-times"
+                          value="keep"
+                          checked={existingSessionTimes === "keep"}
+                          disabled={suggestionOptionsDisabled}
+                          onChange={() => setExistingSessionTimes("keep")}
+                        />
+                        <span className={styles.scheduleOptionCopy}>
+                          <strong>Keep scheduled sessions fixed</strong>
+                          <small>The generator preserves their current times.</small>
+                        </span>
+                      </label>
+                      <label
+                        className={`${styles.scheduleOption} ${
+                          existingSessionTimes === "move" ? styles.scheduleOptionSelected : ""
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name="existing-session-times"
+                          value="move"
+                          checked={existingSessionTimes === "move"}
+                          disabled={suggestionOptionsDisabled}
+                          onChange={() => setExistingSessionTimes("move")}
+                        />
+                        <span className={styles.scheduleOptionCopy}>
+                          <strong>Allow scheduled sessions to move</strong>
+                          <small>The generator may assign them different times.</small>
+                        </span>
+                      </label>
+                    </fieldset>
+                    <fieldset className={styles.roomOptions}>
+                      <legend>Existing room occupancy</legend>
+                      <label className={styles.roomOption}>
+                        <input
+                          type="checkbox"
+                          checked={ignoreExistingRooms}
+                          disabled={suggestionOptionsDisabled}
+                          onChange={(event) => setIgnoreExistingRooms(event.target.checked)}
+                        />
+                        <span className={styles.scheduleOptionCopy}>
+                          <strong>Ignore existing room occupancy when generating</strong>
+                          <small>
+                            The generator may place sessions in rooms that already have a scheduled
+                            session.
+                          </small>
+                        </span>
+                      </label>
+                    </fieldset>
+                  </div>
+                  <Button
+                    variant="outline"
+                    type="button"
+                    disabled={suggestionOptionsDisabled}
+                    onClick={() =>
+                      onGenerate
+                        ? void onGenerate(
+                            serializeAgendaSuggestionOptions(
+                              existingSessionTimes,
+                              ignoreExistingRooms,
+                            ),
+                          )
+                        : undefined
+                    }
+                  >
+                    {isBusyFor("generate-suggestion")
+                      ? "Generating..."
+                      : "Generate private suggestions"}
+                  </Button>
+                  {onGenerate === undefined ? (
+                    <small>
+                      Suggestion generation is unavailable until an approved provider is connected.
+                    </small>
+                  ) : null}
+                </>
+              )}
+            </div>
           ) : (
             <>
               <p role="status" aria-live="polite">
@@ -1781,9 +1880,27 @@ interface AgendaWorkspaceProps {
   eventId: string;
   organizationId: string;
   api?: AgendaApi;
-  appEnvironment?: string;
 }
-type AgendaWorkspaceLoadResult = Awaited<ReturnType<typeof loadAgendaWorkspace>>;
+
+interface AgendaWorkspaceLoadResult {
+  readonly api: AgendaApi;
+  readonly data: AgendaWorkspaceData;
+}
+
+export function createCanonicalAgendaWorkspaceApi(
+  organizationId: string,
+  providedApi?: AgendaApi,
+): AgendaApi {
+  return providedApi ?? createAgendaApi("", organizationId);
+}
+
+export async function loadCanonicalAgendaWorkspace(
+  api: AgendaApi,
+  eventId: string,
+  signal?: AbortSignal,
+): Promise<AgendaWorkspaceLoadResult> {
+  return { api, data: await api.getWorkspace(eventId, signal) };
+}
 
 export interface AgendaAsyncScopeToken {
   readonly scopeKey: string;
@@ -1839,38 +1956,12 @@ function ScopedAgendaWorkspace({
   organizationId,
   scopeKey,
   api: providedApi,
-  appEnvironment = process.env.APP_ENV,
 }: Readonly<ScopedAgendaWorkspaceProps>) {
-  const api = useMemo(
-    () => providedApi ?? createAgendaApi("", organizationId),
+  const agendaApi = useMemo(
+    () => createCanonicalAgendaWorkspaceApi(organizationId, providedApi),
     [organizationId, providedApi],
   );
-  const fixtureMode =
-    process.env.NODE_ENV === "test" || process.env.NEXT_PUBLIC_RUNTIME_PROFILE === "fixture";
-  const localDemoApiRef = useRef<{ eventId: string; api: AgendaApi } | null>(null);
-  const resolveLocalDemoApi = useCallback(
-    async (signal?: AbortSignal) => {
-      if (localDemoApiRef.current?.eventId === eventId) {
-        return localDemoApiRef.current.api;
-      }
-      const environment = await resolveAgendaAppEnvironment(appEnvironment, signal);
-      const localApi = fixtureMode ? createLocalAgendaDemoApi(environment, eventId) : null;
-      if (localApi) {
-        localDemoApiRef.current = { eventId, api: localApi };
-      }
-      return localApi;
-    },
-    [appEnvironment, eventId, fixtureMode],
-  );
-  const primaryAgendaApi = useMemo(() => {
-    if (!fixtureMode) return api;
-    const localApi = createLocalAgendaDemoApi("local", eventId);
-    return localApi ?? api;
-  }, [api, eventId, fixtureMode]);
-  const initialReadKey = useMemo(
-    () => ({ api: primaryAgendaApi, resolveLocalDemoApi, scopeKey }),
-    [primaryAgendaApi, resolveLocalDemoApi, scopeKey],
-  );
+  const initialReadKey = useMemo(() => ({ api: agendaApi, scopeKey }), [agendaApi, scopeKey]);
   const [snapshot, setSnapshot] = useState<ScopedAgendaSnapshot | null>(null);
   const [preview, setPreview] = useState<AgendaPreview | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1951,7 +2042,7 @@ function ScopedAgendaWorkspace({
       }
       try {
         const loaded = await (initialRead ??
-          loadAgendaWorkspace(primaryAgendaApi, resolveLocalDemoApi, eventId, signal));
+          loadCanonicalAgendaWorkspace(agendaApi, eventId, signal));
         if (!agendaWorkspaceDataMatchesEvent(loaded.data, eventId)) {
           throw new Error("The agenda response belongs to another event.");
         }
@@ -1959,11 +2050,7 @@ function ScopedAgendaWorkspace({
         setSnapshot({ scopeKey, api: loaded.api, data: loaded.data });
         setPreview(null);
         setSuggestionRun(null);
-        setStatusMessage(
-          loaded.usingLocalDemo
-            ? "Showing the deterministic local demo agenda because the local API has no agenda data."
-            : null,
-        );
+        setStatusMessage(null);
       } catch (loadError) {
         if (
           loadIsCurrent() &&
@@ -1977,23 +2064,16 @@ function ScopedAgendaWorkspace({
         }
       }
     },
-    [eventId, primaryAgendaApi, resolveLocalDemoApi, scopeKey],
+    [agendaApi, eventId, scopeKey],
   );
 
   useEffect(() => {
     const lease = initialReadCoordinator.acquire(initialReadKey, (signal) =>
-      loadAgendaWorkspace(primaryAgendaApi, resolveLocalDemoApi, eventId, signal),
+      loadCanonicalAgendaWorkspace(agendaApi, eventId, signal),
     );
     void load(lease.signal, lease.promise);
     return () => lease.release();
-  }, [
-    eventId,
-    initialReadCoordinator,
-    initialReadKey,
-    load,
-    primaryAgendaApi,
-    resolveLocalDemoApi,
-  ]);
+  }, [eventId, initialReadCoordinator, initialReadKey, load, agendaApi]);
 
   async function mutate(
     operation: (activeApi: AgendaApi, current: AgendaWorkspaceData) => Promise<AgendaWorkspaceData>,

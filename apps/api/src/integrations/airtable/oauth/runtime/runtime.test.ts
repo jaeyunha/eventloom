@@ -32,6 +32,7 @@ function attempt(): AirtableOAuthAttempt {
     exchangeToken: null,
     exchangeLeaseExpiresAt: null,
     attemptVersion: 1,
+    authorizationConnectionVersion: 1,
     expiresAt: "2026-08-13T13:20:00.000Z",
     consumedAt: null,
     resultRedirect: null,
@@ -54,6 +55,7 @@ function runtimeDependencies() {
         expiresAt: "2026-08-13T13:20:00.000Z",
       })),
       handleCallback: vi.fn(async () => ({
+        organizationId: "organization-1",
         connectionId: "connection-1",
         connectionVersion: 2,
         redirectTo: "/admin/integrations/airtable",

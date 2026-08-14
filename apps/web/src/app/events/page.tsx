@@ -17,7 +17,7 @@ export default async function PublicEventsPage() {
     apiBaseUrl === undefined
       ? []
       : await fetch(new URL("/api/public/events", apiBaseUrl), {
-          next: { revalidate: 60 },
+          cache: "no-store",
         })
           .then(async (response) => {
             if (!response.ok) {

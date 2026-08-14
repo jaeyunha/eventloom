@@ -29,10 +29,8 @@ info:
     name: Elastic License 2.0
     identifier: Elastic-2.0
 servers:
-  - url: https://api.example.invalid
-    description: Replace with the operator's deployed API origin
-  - url: http://127.0.0.1:8787
-    description: Local API origin
+  - url: /
+    description: API origin
 tags:
   - name: System
   - name: Organizations
@@ -4185,7 +4183,7 @@ components:
       enum: [verification, receipt, reminder, decision, task, schedule_publish, schedule_update, schedule_cancel, organizer_group_email]
     CommunicationSender:
       type: string
-      enum: [auth@sessionboard.namuh.co, speakers@sessionboard.namuh.co, calendar@sessionboard.namuh.co]
+      format: email
     CommunicationAudience:
       type: string
       enum: [all_participants, accepted_participants, waitlisted_participants, rejected_participants, task_assignees, scheduled_participants]

@@ -398,6 +398,7 @@ export class CloudflareReminderOutbox implements ReminderOutboxDelivery {
           dispatchId: input.dispatchId,
           payload: {
             from: input.from,
+            senderPurpose: input.senderPurpose,
             to: [input.recipient],
             subject: input.subject,
             html: input.html,

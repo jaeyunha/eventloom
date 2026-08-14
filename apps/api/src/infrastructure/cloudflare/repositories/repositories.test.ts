@@ -56,6 +56,7 @@ const event: Event = {
   timeZone: "UTC",
   startsAt: now,
   endsAt: "2026-08-14T12:00:00.000Z",
+  scheduleDates: ["2026-08-13", "2026-08-14"],
   venue: null,
   cfpSettings: { enabled: false, opensAt: null, closesAt: null },
   defaultCalendarSettings: { durationMinutes: 30, timeZone: "UTC", location: null },
@@ -119,8 +120,15 @@ describe("D1 event repository commands", () => {
     expect(db.batch).toHaveBeenCalledOnce();
     const queries = db.statements.map((item) => item.bound.query).join("\n");
     expect(queries).toContain("WHERE organization_id = ? AND id = ? AND version = ?");
+    expect(queries).toContain("schedule_dates_json = ?");
+    expect(db.statements[0]?.bound.values[6]).toBe('["2026-08-13","2026-08-14"]');
     expect(queries).toContain("INSERT INTO audit_events");
-    expect(queries).toContain("INSERT OR IGNORE INTO airtable_sync_jobs");
+    expect(queries).toContain("INSERT INTO airtable_sync_jobs");
+    expect(queries).toContain("attempt_count");
+    expect(queries).toContain("payload_hash");
+    expect(queries).toContain("connection.status = 'connected'");
+    expect(queries).not.toContain("attempts");
+    expect(queries).not.toContain("c.state");
   });
 
   it("initializes one empty agenda in the event creation batch", async () => {
@@ -134,6 +142,10 @@ describe("D1 event repository commands", () => {
     expect(queries).toContain("INSERT INTO agenda_states");
     expect(queries).toContain("INSERT INTO agenda_drafts");
     expect(queries).not.toContain("INSERT INTO agenda_revisions");
+    expect(queries).toContain(
+      "EXISTS (SELECT 1 FROM events WHERE organization_id = ? AND id = ? AND version = ?)",
+    );
+    expect(queries).not.toContain("changes()");
   });
 
   it("reports a stale compare-and-swap from the first batch result", async () => {
@@ -163,7 +175,12 @@ describe("D1 session repository commands", () => {
     );
     expect(queries).toContain("DELETE FROM session_tracks");
     expect(queries).toContain("INSERT INTO session_history");
-    expect(queries).toContain("INSERT OR IGNORE INTO airtable_sync_jobs");
+    expect(queries).toContain("INSERT INTO airtable_sync_jobs");
+    expect(queries).toContain("attempt_count");
+    expect(queries).toContain("payload_hash");
+    expect(queries).toContain("connection.status = 'connected'");
+    expect(queries).not.toContain("attempts");
+    expect(queries).not.toContain("c.state");
   });
 
   it("reports a stale compare-and-swap from the first batch result", async () => {

@@ -182,7 +182,8 @@ export class D1AgendaRepository implements AgendaRepository {
       this.db
         .prepare(`SELECT s.*, COALESCE((SELECT json_group_array(speaker_id) FROM session_speakers x WHERE x.organization_id=s.organization_id AND x.event_id=s.event_id AND x.session_id=s.id),'[]') participant_ids_json,
         COALESCE((SELECT json_group_array(resource_id) FROM session_resources x WHERE x.organization_id=s.organization_id AND x.event_id=s.event_id AND x.session_id=s.id),'[]') resource_ids_json,
-        COALESCE((SELECT json_group_array(display_name) FROM session_speakers x WHERE x.organization_id=s.organization_id AND x.event_id=s.event_id AND x.session_id=s.id AND display_name IS NOT NULL),'[]') speaker_names_json
+        COALESCE((SELECT json_group_array(display_name) FROM session_speakers x WHERE x.organization_id=s.organization_id AND x.event_id=s.event_id AND x.session_id=s.id AND display_name IS NOT NULL),'[]') speaker_names_json,
+        COALESCE((SELECT json_group_array(track_id) FROM session_tracks x WHERE x.organization_id=s.organization_id AND x.event_id=s.event_id AND x.session_id=s.id ORDER BY ordinal),'[]') track_ids_json
         FROM sessions s WHERE organization_id=? AND event_id=? AND deleted_at IS NULL ORDER BY id`)
         .bind(this.organizationId, eventId)
         .all<Row>(),
@@ -321,6 +322,7 @@ export class D1AgendaRepository implements AgendaRepository {
         summary: text(row.description),
         format: "",
         speakerNames: parse(row.speaker_names_json),
+        trackIds: parse(row.track_ids_json),
       })),
       rooms: (roomRows.results ?? []).map((row) => ({
         id: text(row.id),

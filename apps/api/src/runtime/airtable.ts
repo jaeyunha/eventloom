@@ -33,7 +33,11 @@ import {
   type CfpRepository,
   CfpService,
 } from "../features/cfp/service";
-import { CommunicationError, CommunicationService } from "../features/communications/service";
+import {
+  CommunicationError,
+  CommunicationService,
+  renderTemplate,
+} from "../features/communications/service";
 import {
   COMMUNICATION_TEMPLATE_PURPOSES,
   type CommunicationActor,
@@ -67,6 +71,7 @@ import type {
   CrmRepositoryFilter,
   CrmSegment,
 } from "../features/crm/types";
+import { evaluationRolesForOrganizationMembership } from "../features/evaluations/access";
 import { conflict } from "../features/evaluations/errors";
 import type {
   EvaluationRepository,
@@ -77,6 +82,7 @@ import type {
 } from "../features/evaluations/repository";
 import type {
   EvaluationReminderBoundary,
+  EvaluationReminderDeliveryFact,
   EvaluationReviewerIdentityBoundary,
 } from "../features/evaluations/routes";
 import type {
@@ -220,9 +226,20 @@ import {
   applicationIdFormula,
 } from "../infrastructure/airtable";
 import type { CloudflareOutboxMessage } from "../infrastructure/cloudflare/bindings";
-import { D1OrganizerOverviewReadModel } from "../infrastructure/cloudflare/repositories/public-read-models";
+import { D1CalendarInvitationRepository } from "../infrastructure/cloudflare/repositories/calendar-invitations";
+import {
+  D1OrganizerOverviewReadModel,
+  D1PublishedProgramReadModel,
+} from "../infrastructure/cloudflare/repositories/public-read-models";
 import type { CloudflareAiProviders } from "../integrations/ai";
-import { DEFAULT_OPEN_SEND_SENDERS } from "../integrations/opensend/client";
+import {
+  type CalendarIntegrationOptions,
+  CalendarInvitationLifecycle,
+  type CalendarInvitationPayload,
+  createCalendarUid,
+} from "../integrations/calendar";
+import type { OpenSendSenderAddresses } from "../integrations/opensend/client";
+import { openSendSenderAddressSchema } from "../integrations/opensend/types";
 import type {
   CreateWebhookDeliveryInput,
   CreateWebhookSubscriptionInput,
@@ -6754,6 +6771,7 @@ export class AirtableSubmissionReviewSource
       id: submission.id,
       tenantId,
       eventId,
+      status: submission.status,
       title: submissionTitle(submission),
       abstract: submissionAbstract(submission),
       answers,
@@ -6868,6 +6886,28 @@ function submissionAnswerIds(submission: Submission, ...keys: readonly string[])
   ];
 }
 
+function taxonomyIds(
+  explicitIds: readonly string[],
+  labels: readonly string[],
+  catalog: readonly { readonly id: string; readonly name: string }[],
+): string[] {
+  if (catalog.length === 0) return [...new Set(explicitIds)];
+  const byId = new Map(catalog.map((item) => [item.id, item.id]));
+  const byName = new Map(catalog.map((item) => [item.name.trim().toLocaleLowerCase(), item.id]));
+  return [
+    ...new Set([
+      ...explicitIds.flatMap((value) => {
+        const id = byId.get(value);
+        return id === undefined ? [] : [id];
+      }),
+      ...labels.flatMap((value) => {
+        const id = byName.get(value.trim().toLocaleLowerCase());
+        return id === undefined ? [] : [id];
+      }),
+    ]),
+  ];
+}
+
 function submissionDurationMinutes(submission: Submission): number {
   const value = submissionAnswerValue(
     submission,
@@ -6938,6 +6978,7 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
   readonly #sessions: SessionRepository;
   readonly #sessionService: SessionService | undefined;
   readonly #queue: Queue<CloudflareOutboxMessage>;
+  readonly #senderAddresses: OpenSendSenderAddresses;
 
   constructor(options: {
     readonly cfp: CfpRepository;
@@ -6946,6 +6987,7 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
     readonly database: D1Database;
     readonly sessionService?: SessionService;
     readonly queue: Queue<CloudflareOutboxMessage>;
+    readonly senderAddresses: OpenSendSenderAddresses;
   }) {
     this.#cfp = options.cfp;
     this.#speakers = options.speakers;
@@ -6953,6 +6995,7 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
     this.#queue = options.queue;
     this.#sessions = options.sessions;
     this.#sessionService = options.sessionService;
+    this.#senderAddresses = options.senderAddresses;
   }
 
   async accept(input: EvaluationAcceptanceHandoffInput): Promise<void> {
@@ -6970,19 +7013,23 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
         throw new Error("An accepted submission must contain at least one speaker.");
       }
       acceptedSubmission = submission;
-      const [session, , profiles] = await Promise.all([
-        this.#ensureCanonicalSession(input, submission),
-        this.#ensureAcceptedSubmission(submission, input.decidedAt),
-        Promise.all(
-          submission.participants.map(async (participant) => {
-            const [profile] = await Promise.all([
-              this.#ensureProfile(input, participant),
-              this.#ensureProfileTask(input, participant.id),
-            ]);
-            return profile.id;
-          }),
-        ),
-      ]);
+      await this.#ensureAcceptedSubmission(submission, input.decidedAt).catch((error: unknown) => {
+        throw new Error("Accepted speaker roster projection failed.", { cause: error });
+      });
+      const profiles = await Promise.all(
+        submission.participants.map(async (participant) => {
+          const profile = await this.#ensureProfile(input, participant);
+          await this.#ensureProfileTask(input, participant.id);
+          return profile.id;
+        }),
+      ).catch((error: unknown) => {
+        throw new Error("Accepted speaker onboarding failed.", { cause: error });
+      });
+      const session = await this.#ensureCanonicalSession(input, submission).catch(
+        (error: unknown) => {
+          throw new Error("Accepted session projection failed.", { cause: error });
+        },
+      );
 
       const recipients = submission.participants
         .map((participant) => participant.email.trim())
@@ -7019,7 +7066,8 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
                 "communications",
                 `evaluation-accepted:${input.submissionId}:${transitionKey}`,
                 {
-                  from: DEFAULT_OPEN_SEND_SENDERS.speakers,
+                  from: this.#senderAddresses.speakers,
+                  senderPurpose: "speakers",
                   to: recipients,
                   subject: "Your session was accepted",
                   html: "<p>Your session was accepted. Sign in to complete your speaker profile.</p>",
@@ -7131,21 +7179,31 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
   ): Promise<Session> {
     const id = `session-${submission.id}`;
     const current = await this.#sessions.getSession(input.tenantId, input.eventId, id);
-    const formatIds = submissionAnswerIds(submission, "formatId", "format");
-    const trackIdsFromAnswers = submissionAnswerIds(
-      submission,
-      "trackIds",
-      "tracks",
-      "trackId",
-      "track",
-    );
-    const tagIdsFromAnswers = submissionAnswerIds(submission, "tagIds", "tags", "tag");
+    const formatIds = submissionAnswerIds(submission, "formatId");
+    const formatLabels = submissionAnswerIds(submission, "format");
+    const trackIdsFromAnswers = submissionAnswerIds(submission, "trackIds", "trackId");
+    const trackLabels = submissionAnswerIds(submission, "tracks", "track");
+    const tagIdsFromAnswers = submissionAnswerIds(submission, "tagIds");
+    const tagLabels = submissionAnswerIds(submission, "tags", "tag");
+    const levelIds = submissionAnswerIds(submission, "levelId");
+    const levelLabels = submissionAnswerIds(submission, "level", "audience_level");
+    const [tracks, formats, tags, levels] = await Promise.all([
+      this.#sessions.listTracks(input.tenantId, input.eventId),
+      this.#sessions.listFormats(input.tenantId, input.eventId),
+      this.#sessions.listTags(input.tenantId, input.eventId),
+      this.#sessions.listLevels(input.tenantId, input.eventId),
+    ]);
+    const resolvedTrackIds = taxonomyIds(trackIdsFromAnswers, trackLabels, tracks);
+    const resolvedTagIds = taxonomyIds(tagIdsFromAnswers, tagLabels, tags);
+    const resolvedFormatIds = taxonomyIds(formatIds, formatLabels, formats);
+    const resolvedLevelIds = taxonomyIds(levelIds, levelLabels, levels);
     const trackIds =
-      trackIdsFromAnswers.length > 0
-        ? trackIdsFromAnswers
+      resolvedTrackIds.length > 0
+        ? resolvedTrackIds
         : [...(current?.trackIds ?? (current?.trackId === undefined ? [] : [current.trackId]))];
-    const tagIds = tagIdsFromAnswers.length > 0 ? tagIdsFromAnswers : [...(current?.tagIds ?? [])];
-    const formatId = formatIds[0] ?? current?.formatId;
+    const tagIds = resolvedTagIds.length > 0 ? resolvedTagIds : [...(current?.tagIds ?? [])];
+    const formatId = resolvedFormatIds[0] ?? current?.formatId;
+    const levelId = resolvedLevelIds[0] ?? current?.levelId;
     const durationAnswer = submissionAnswerValue(
       submission,
       "durationMinutes",
@@ -7187,7 +7245,7 @@ export class AirtableEvaluationAcceptanceHandoff implements EvaluationAcceptance
       ...(trackIds[0] === undefined ? {} : { trackId: trackIds[0] }),
       trackIds,
       ...(formatId === undefined ? {} : { formatId }),
-      ...(current?.levelId === undefined ? {} : { levelId: current.levelId }),
+      ...(levelId === undefined ? {} : { levelId }),
       tagIds,
       speakerIds,
       speakerRoster,
@@ -8077,10 +8135,16 @@ function escapeCfpReceiptHtml(value: string): string {
 export class CloudflareCfpEffects implements CfpEffects {
   readonly #queue: Queue<CloudflareOutboxMessage>;
   readonly #database: D1Database;
+  readonly #senderAddresses: OpenSendSenderAddresses;
 
-  constructor(queue: Queue<CloudflareOutboxMessage>, database: D1Database) {
+  constructor(
+    queue: Queue<CloudflareOutboxMessage>,
+    database: D1Database,
+    senderAddresses: OpenSendSenderAddresses,
+  ) {
     this.#queue = queue;
     this.#database = database;
+    this.#senderAddresses = senderAddresses;
   }
 
   async enqueueSubmissionConfirmation(input: {
@@ -8116,7 +8180,8 @@ export class CloudflareCfpEffects implements CfpEffects {
       topic: "communications",
       deduplicationKey: idempotencyKey,
       payload: {
-        from: "speakers@sessionboard.namuh.co",
+        from: this.#senderAddresses.speakers,
+        senderPurpose: "speakers",
         to: [email],
         subject: `Submission received: ${submissionTitle} — ${eventName}`,
         html: `<p>Your submission <strong>${escapedSubmissionTitle}</strong> for <strong>${escapedEventName}</strong> was received.</p>`,
@@ -8655,12 +8720,6 @@ const COMMUNICATION_TEMPLATE_STATUSES = [
   "archived",
 ] as const satisfies readonly CommunicationTemplateStatus[];
 
-const COMMUNICATION_TEMPLATE_SENDERS = [
-  "auth@sessionboard.namuh.co",
-  "speakers@sessionboard.namuh.co",
-  "calendar@sessionboard.namuh.co",
-] as const satisfies readonly CommunicationSenderIdentity[];
-
 function isNonEmptyTemplateString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
@@ -8723,7 +8782,10 @@ function normalizeTemplate(value: JsonRecord): CommunicationTemplate {
   const status = COMMUNICATION_TEMPLATE_STATUSES.find((candidate) => candidate === clean.status);
   if (status === undefined) invalidFields.add("status");
 
-  const sender = COMMUNICATION_TEMPLATE_SENDERS.find((candidate) => candidate === clean.sender);
+  const senderResult = openSendSenderAddressSchema.safeParse(clean.sender);
+  const sender = senderResult.success
+    ? (senderResult.data.toLowerCase() as CommunicationSenderIdentity)
+    : undefined;
   if (sender === undefined) invalidFields.add("sender");
 
   const version =
@@ -10755,6 +10817,7 @@ export class AirtableCrmOutreachBoundary implements CrmOutreachBoundary {
     private readonly repository: Pick<CrmRepository, "getContact">,
     private readonly database: D1Database,
     private readonly outboxQueue: Queue<CloudflareOutboxMessage>,
+    private readonly senderAddresses: OpenSendSenderAddresses,
     private readonly events?: Pick<EventRepository, "getEvent">,
   ) {}
 
@@ -10775,7 +10838,7 @@ export class AirtableCrmOutreachBoundary implements CrmOutreachBoundary {
     if (
       recipient === undefined ||
       recipient.length === 0 ||
-      speakerDeliverySenderAddress(recipient)
+      speakerDeliverySenderAddress(recipient, this.senderAddresses)
     ) {
       return { ...clone(command), status: "failed" };
     }
@@ -10794,7 +10857,8 @@ export class AirtableCrmOutreachBoundary implements CrmOutreachBoundary {
         eventId: command.eventId,
         idempotencyKey: command.idempotencyKey,
         payload: {
-          from: DEFAULT_OPEN_SEND_SENDERS.speakers,
+          from: this.senderAddresses.speakers,
+          senderPurpose: "speakers",
           to: [recipient],
           subject: command.subject,
           html: `<p>${escapedBody}</p>`,
@@ -10867,9 +10931,77 @@ async function enqueueCloudflareOutbox(input: {
   return { inserted, queued: true };
 }
 
-function speakerDeliverySenderAddress(email: string): boolean {
+async function enqueueCommunicationDeliveryOutbox(input: {
+  readonly database: D1Database;
+  readonly queue: Queue<CloudflareOutboxMessage>;
+  readonly request: CommunicationDeliveryRequest;
+}): Promise<void> {
+  const { request } = input;
+  const now = new Date().toISOString();
+  const fallbackJobId = `runtime:${request.tenantId}:communications:${request.idempotencyKey}`;
+  await input.database
+    .prepare(
+      `INSERT INTO outbox_jobs
+         (id, tenant_id, topic, deduplication_key, payload_json, state,
+          attempt_count, available_at, created_at, updated_at)
+       VALUES (?, ?, 'communications', ?, ?, 'pending', 0, ?, ?, ?)
+       ON CONFLICT (tenant_id, topic, deduplication_key) DO UPDATE SET
+         payload_json = excluded.payload_json,
+         updated_at = excluded.updated_at
+       WHERE outbox_jobs.state = 'pending'`,
+    )
+    .bind(
+      fallbackJobId,
+      request.tenantId,
+      request.idempotencyKey,
+      JSON.stringify({
+        effect: "send_communication",
+        sendId: request.sendId,
+        recipientId: request.recipientId,
+        eventId: request.eventId,
+        payload: {
+          from: request.from,
+          senderPurpose: request.senderPurpose,
+          to: [request.to],
+          subject: request.subject,
+          html: request.html,
+          text: request.text,
+          idempotencyKey: request.idempotencyKey,
+        },
+      }),
+      now,
+      now,
+      now,
+    )
+    .run();
+  const row = await input.database
+    .prepare(
+      "SELECT id, state FROM outbox_jobs WHERE tenant_id = ? AND topic = 'communications' AND deduplication_key = ? LIMIT 1",
+    )
+    .bind(request.tenantId, request.idempotencyKey)
+    .first<{ id: string; state: string }>();
+  if (row?.state !== "pending") return;
+  await input.queue.send({
+    version: 1,
+    jobId: row.id,
+    tenantId: request.tenantId,
+    topic: "communications",
+    enqueuedAt: now,
+  });
+  await input.database
+    .prepare(
+      "UPDATE outbox_jobs SET state = 'queued', updated_at = ? WHERE id = ? AND state = 'pending'",
+    )
+    .bind(now, row.id)
+    .run();
+}
+
+function speakerDeliverySenderAddress(
+  email: string,
+  senderAddresses: OpenSendSenderAddresses,
+): boolean {
   const normalized = email.trim().toLowerCase();
-  return Object.values(DEFAULT_OPEN_SEND_SENDERS).some(
+  return Object.values(senderAddresses).some(
     (sender) => sender.trim().toLowerCase() === normalized,
   );
 }
@@ -10882,6 +11014,39 @@ function speakerDeliveryHtml(value: string): string {
     .replaceAll('"', "&quot;");
 }
 
+async function compactIdempotencyKey(prefix: string, raw: string): Promise<string> {
+  if (raw.length <= 128) return raw;
+  const digest = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(raw)),
+  );
+  return `${prefix}:${[...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
+export function evaluationReminderAttemptKey(
+  baseIdempotencyKey: string,
+  priorJobs: readonly Readonly<{ state: string }>[],
+): string {
+  const terminalAttempts = priorJobs.filter(
+    (job) => job.state === "failed" || job.state === "dead-letter",
+  ).length;
+  const hasNonterminalAttempt = priorJobs.some(
+    (job) => job.state !== "failed" && job.state !== "dead-letter",
+  );
+  return terminalAttempts > 0 && !hasNonterminalAttempt
+    ? `${baseIdempotencyKey}:retry-${terminalAttempts}`
+    : baseIdempotencyKey;
+}
+
+export const EVALUATION_REMINDER_ATTEMPTS_SQL = `SELECT deduplication_key, state
+             FROM outbox_jobs
+            WHERE tenant_id = ?
+              AND topic = 'communications'
+              AND (
+                deduplication_key = ?
+                OR instr(deduplication_key, ? || ':retry-') = 1
+              )
+            ORDER BY created_at`;
+
 async function speakerDeliveryKey(
   kind: "email" | "invitation" | "reminder",
   organizationId: string,
@@ -10889,12 +11054,10 @@ async function speakerDeliveryKey(
   idempotencyKey: string,
   participantId: string,
 ): Promise<string> {
-  const raw = `speaker-${kind}:${organizationId}:${eventId}:${idempotencyKey}:${participantId}`;
-  if (raw.length <= 128) return raw;
-  const digest = new Uint8Array(
-    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(raw)),
+  return compactIdempotencyKey(
+    `speaker-${kind}`,
+    `speaker-${kind}:${organizationId}:${eventId}:${idempotencyKey}:${participantId}`,
   );
-  return `speaker-${kind}:${[...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
 export class AirtableSpeakerReminderDeliveryAdapter
@@ -10904,6 +11067,7 @@ export class AirtableSpeakerReminderDeliveryAdapter
     private readonly database: D1Database,
     private readonly outboxQueue: Queue<CloudflareOutboxMessage>,
     private readonly webOrigin: string,
+    private readonly senderAddresses: OpenSendSenderAddresses,
   ) {}
 
   enqueue(input: SpeakerReminderDeliveryInput): Promise<SpeakerReminderDeliveryReceipt> {
@@ -10929,6 +11093,7 @@ export class AirtableSpeakerReminderDeliveryAdapter
       deduplicationKey: deliveryKey,
       payload: {
         from: input.sender,
+        senderPurpose: "speakers",
         to: [recipientEmail],
         subject: input.subject,
         html: input.html,
@@ -10986,7 +11151,8 @@ export class AirtableSpeakerReminderDeliveryAdapter
       topic: "communications",
       deduplicationKey: deliveryKey,
       payload: {
-        from: DEFAULT_OPEN_SEND_SENDERS.speakers,
+        from: this.senderAddresses.speakers,
+        senderPurpose: "speakers",
         to: [recipientEmail],
         subject: `Speaker invitation for ${input.eventId}`,
         html: `<p>You are invited to participate as a speaker for <strong>${speakerDeliveryHtml(input.eventId)}</strong>.</p><p><a href="${escapedInvitationHref}">Sign in to the speaker portal</a></p>`,
@@ -11040,7 +11206,8 @@ export class AirtableSpeakerReminderDeliveryAdapter
       topic: "communications",
       deduplicationKey: deliveryKey,
       payload: {
-        from: DEFAULT_OPEN_SEND_SENDERS.speakers,
+        from: this.senderAddresses.speakers,
+        senderPurpose: "speakers",
         to: [recipientEmail],
         subject: `Reminder: ${taskSummary}`,
         html: `<p>Please complete ${escapedSummary}.</p>`,
@@ -11060,7 +11227,8 @@ export class AirtableSpeakerReminderDeliveryAdapter
 
   private async verifiedRecipientEmail(candidate: string | undefined): Promise<string | null> {
     const email = candidate?.trim().toLowerCase() ?? "";
-    if (email.length === 0 || speakerDeliverySenderAddress(email)) return null;
+    if (email.length === 0 || speakerDeliverySenderAddress(email, this.senderAddresses))
+      return null;
     const row = await this.database
       .prepare(
         `SELECT email
@@ -11075,38 +11243,23 @@ export class AirtableSpeakerReminderDeliveryAdapter
       row !== null && row !== undefined && typeof row.email === "string"
         ? row.email.trim().toLowerCase()
         : "";
-    return verifiedEmail.length > 0 && !speakerDeliverySenderAddress(verifiedEmail)
+    return verifiedEmail.length > 0 &&
+      !speakerDeliverySenderAddress(verifiedEmail, this.senderAddresses)
       ? verifiedEmail
       : null;
   }
 }
-class AirtableCommunicationDeliveryAdapter implements CommunicationDeliveryAdapter {
+export class AirtableCommunicationDeliveryAdapter implements CommunicationDeliveryAdapter {
   constructor(
     private readonly database: D1Database,
     private readonly queue: Queue<CloudflareOutboxMessage>,
   ) {}
 
   async send(request: CommunicationDeliveryRequest) {
-    await enqueueCloudflareOutbox({
+    await enqueueCommunicationDeliveryOutbox({
       database: this.database,
       queue: this.queue,
-      tenantId: request.tenantId,
-      topic: "communications",
-      deduplicationKey: request.idempotencyKey,
-      payload: {
-        effect: "send_communication",
-        sendId: request.sendId,
-        recipientId: request.recipientId,
-        eventId: request.eventId,
-        payload: {
-          from: request.from,
-          to: [request.to],
-          subject: request.subject,
-          html: request.html,
-          text: request.text,
-          idempotencyKey: request.idempotencyKey,
-        },
-      },
+      request,
     });
     return { status: "queued" as const };
   }
@@ -11464,6 +11617,116 @@ export interface AirtableRuntimeOptions {
   readonly webOrigin: string;
   readonly aiProviders?: CloudflareAiProviders;
   readonly businessRepositories: D1RuntimeDependencies;
+  readonly senderAddresses: OpenSendSenderAddresses;
+  readonly calendarIntegrationOptions: CalendarIntegrationOptions;
+}
+
+export async function reconcilePublishedAgendaCalendarInvitations(input: {
+  readonly database: D1Database;
+  readonly queue: Queue<CloudflareOutboxMessage>;
+  readonly organizationId: string;
+  readonly eventId: string;
+  readonly revision: PublishedAgendaRevision;
+  readonly agendaState: AgendaState;
+  readonly profiles: readonly SpeakerProfile[];
+  readonly integrationOptions: CalendarIntegrationOptions;
+}): Promise<void> {
+  const rootRepository = new D1CalendarInvitationRepository({
+    database: input.database,
+    queue: input.queue,
+    organizationId: input.organizationId,
+    eventId: input.eventId,
+  });
+  const persisted = await rootRepository.listForEvent();
+  const persistedBySessionId = new Map(persisted.map((item) => [item.sessionId, item.record]));
+  const profileByParticipantId = new Map(
+    input.profiles.map((profile) => [profile.participantId, profile]),
+  );
+  const sessionById = new Map(input.agendaState.sessions.map((session) => [session.id, session]));
+  const desiredSessionIds = new Set<string>();
+
+  for (const entry of input.revision.entries) {
+    const session = sessionById.get(entry.sessionId);
+    if (session === undefined) continue;
+    const attendees = [
+      ...new Set(
+        session.participantIds.flatMap((participantId) => {
+          const email = profileByParticipantId.get(participantId)?.email?.trim().toLowerCase();
+          return email !== undefined && openSendSenderAddressSchema.safeParse(email).success
+            ? [email]
+            : [];
+        }),
+      ),
+    ].sort();
+    if (attendees.length === 0) continue;
+    desiredSessionIds.add(session.id);
+    const repository = new D1CalendarInvitationRepository({
+      database: input.database,
+      queue: input.queue,
+      organizationId: input.organizationId,
+      eventId: input.eventId,
+      sessionId: session.id,
+    });
+    const lifecycle = new CalendarInvitationLifecycle(repository, input.integrationOptions);
+    const existing = persistedBySessionId.get(session.id) ?? (await repository.loadForSession());
+    const idempotencyKey = await compactIdempotencyKey(
+      "agenda-calendar",
+      `agenda-calendar:${input.eventId}:${input.revision.id}:${session.id}`,
+    );
+    const method: CalendarInvitationPayload["method"] =
+      existing === undefined || existing === null
+        ? "REQUEST"
+        : existing.payload.idempotencyKey === idempotencyKey
+          ? existing.payload.method
+          : "UPDATE";
+    await lifecycle.publishPayload({
+      method,
+      uid:
+        existing?.payload.uid ??
+        createCalendarUid(
+          {
+            tenantId: input.organizationId,
+            eventId: input.eventId,
+            sessionId: session.id,
+          },
+          input.integrationOptions,
+        ),
+      sequence: existing?.sequence ?? 0,
+      organizer: existing?.payload.organizer ?? input.integrationOptions.organizer,
+      attendees,
+      summary: entry.metadata?.title || session.title,
+      location: entry.metadata?.roomName ?? "",
+      timeZone: entry.timeZone,
+      startsAt: entry.startsAt,
+      endsAt: entry.endsAt,
+      idempotencyKey,
+    });
+  }
+
+  for (const { sessionId, record } of persisted) {
+    if (desiredSessionIds.has(sessionId)) continue;
+    const idempotencyKey = await compactIdempotencyKey(
+      "agenda-calendar-cancel",
+      `agenda-calendar-cancel:${input.eventId}:${input.revision.id}:${sessionId}`,
+    );
+    if (record.payload.method === "CANCEL" && record.payload.idempotencyKey !== idempotencyKey) {
+      continue;
+    }
+    const repository = new D1CalendarInvitationRepository({
+      database: input.database,
+      queue: input.queue,
+      organizationId: input.organizationId,
+      eventId: input.eventId,
+      sessionId,
+    });
+    const lifecycle = new CalendarInvitationLifecycle(repository, input.integrationOptions);
+    await lifecycle.publishPayload({
+      ...record.payload,
+      method: "CANCEL",
+      sequence: record.sequence,
+      idempotencyKey,
+    });
+  }
 }
 
 function eventIdFromRequest(request: Request): string | undefined {
@@ -11479,11 +11742,63 @@ export class AirtableEvaluationDecisionProjection {
     private readonly cfp: Pick<CfpRepository, "getSubmission">,
     private readonly database: D1Database,
     private readonly queue: Queue<CloudflareOutboxMessage>,
+    private readonly communications: Pick<CommunicationRepository, "listTemplates"> | undefined,
+    private readonly senderAddresses: OpenSendSenderAddresses,
   ) {}
 
   async projectDecision(input: EvaluationDecisionProjectionInput): Promise<void> {
     const submission = await this.cfp.getSubmission(input.tenantId, input.submissionId);
     if (submission === null || submission.eventId !== input.eventId) return;
+    const decidedAudience =
+      input.status === "accepted"
+        ? "accepted_participants"
+        : input.status === "waitlisted"
+          ? "waitlisted_participants"
+          : "rejected_participants";
+    const updatedAt = new Date().toISOString();
+    const audienceStatements: D1PreparedStatement[] = [];
+    for (const participant of submission.participants) {
+      const displayName =
+        `${participant.firstName} ${participant.lastName}`.trim() || participant.email;
+      audienceStatements.push(
+        this.database
+          .prepare(
+            `INSERT INTO communication_recipients
+               (id, organization_id, event_id, participant_id, email, display_name, data_json, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+               email = excluded.email,
+               display_name = excluded.display_name,
+               data_json = excluded.data_json,
+               updated_at = excluded.updated_at`,
+          )
+          .bind(
+            participant.id,
+            input.tenantId,
+            input.eventId,
+            participant.id,
+            participant.email,
+            displayName,
+            JSON.stringify({ submissionId: input.submissionId }),
+            updatedAt,
+          ),
+        this.database
+          .prepare(
+            `DELETE FROM communication_recipient_audiences
+              WHERE organization_id = ? AND event_id = ? AND recipient_id = ?
+                AND audience IN ('accepted_participants','waitlisted_participants','rejected_participants')`,
+          )
+          .bind(input.tenantId, input.eventId, participant.id),
+        this.database
+          .prepare(
+            `INSERT INTO communication_recipient_audiences
+               (organization_id, event_id, recipient_id, audience)
+             VALUES (?, ?, ?, ?)`,
+          )
+          .bind(input.tenantId, input.eventId, participant.id, decidedAudience),
+      );
+    }
+    if (audienceStatements.length > 0) await this.database.batch(audienceStatements);
     const recipients = submission.participants
       .map((participant) => participant.email.trim())
       .filter((email) => email.length > 0);
@@ -11504,6 +11819,29 @@ export class AirtableEvaluationDecisionProjection {
       .map((line) => `<div>${escapeCfpReceiptHtml(line)}</div>`)
       .join("");
     const statusText = `Decision: ${input.status}`;
+    const approvedTemplates =
+      (await this.communications?.listTemplates(input.tenantId, input.eventId, "decision")) ?? [];
+    const template = [...approvedTemplates]
+      .filter((candidate) => candidate.status === "approved")
+      .sort((left, right) => right.version - left.version)[0];
+    const rendered =
+      template === undefined
+        ? {
+            subject: `${input.eventId} — ${title} — ${input.status}`,
+            html: `${contextHtml}<div>${escapeCfpReceiptHtml(statusText)}</div>`,
+            text: `${contextText}\n${statusText}`,
+          }
+        : renderTemplate(template, {
+            recipient: {
+              displayName: participantNames.join(", "),
+            },
+            eventId: input.eventId,
+            submissionId: input.submissionId,
+            submissionTitle: title,
+            participantNames,
+            decisionStatus: input.status,
+            decisionReason: input.reason,
+          });
     await enqueueCloudflareOutbox({
       database: this.database,
       queue: this.queue,
@@ -11511,14 +11849,17 @@ export class AirtableEvaluationDecisionProjection {
       topic: "communications",
       deduplicationKey: idempotencyKey,
       payload: {
-        from: DEFAULT_OPEN_SEND_SENDERS.speakers,
+        from: template?.sender ?? this.senderAddresses.speakers,
+        senderPurpose: "speakers",
         to: recipients,
-        subject: `${input.eventId} — ${title} — ${input.status}`,
-        html: `${contextHtml}<div>${escapeCfpReceiptHtml(statusText)}</div>`,
-        text: `${contextText}\n${statusText}`,
+        subject: rendered.subject,
+        html: rendered.html,
+        text: rendered.text,
         idempotencyKey,
         purpose: "decision",
         templatePurpose,
+        templateId: template?.id,
+        templateVersion: template?.version,
         status: input.status,
       },
       now: input.decidedAt,
@@ -11552,7 +11893,6 @@ export class D1EvaluationReviewerIdentityBoundary implements EvaluationReviewerI
              FROM auth_users AS u
              INNER JOIN organization_memberships AS m ON m.user_id = u.id
             WHERE m.organization_id = ?
-              AND m.role = 'reviewer'
               AND u.email_verified = 1
               AND u.id = ?
             ORDER BY u.id
@@ -11577,7 +11917,58 @@ export class AirtableEvaluationReminderBoundary implements EvaluationReminderBou
     private readonly plans: Pick<EvaluationRepository, "getPlan" | "listAssignments">,
     private readonly database: D1Database,
     private readonly queue: Queue<CloudflareOutboxMessage>,
+    private readonly senderAddresses: OpenSendSenderAddresses,
   ) {}
+
+  async listOutstandingReviewerReminderDeliveries(
+    actor: EvaluationActor,
+    input: { readonly planId: string },
+  ): Promise<readonly EvaluationReminderDeliveryFact[]> {
+    const rows = await this.database
+      .prepare(
+        `SELECT id, payload_json, state, created_at, updated_at, completed_at, last_error_code
+           FROM outbox_jobs
+          WHERE tenant_id = ?
+            AND topic = 'communications'
+            AND json_extract(payload_json, '$.planId') = ?
+          ORDER BY created_at DESC, id DESC`,
+      )
+      .bind(actor.tenantId, input.planId)
+      .all<{
+        id: string;
+        payload_json: string;
+        state: EvaluationReminderDeliveryFact["status"];
+        created_at: string;
+        updated_at: string;
+        completed_at: string | null;
+        last_error_code: string | null;
+      }>();
+    return (rows.results ?? []).flatMap((row) => {
+      let payload: unknown;
+      try {
+        payload = JSON.parse(row.payload_json) as unknown;
+      } catch {
+        return [];
+      }
+      if (!isRecord(payload) || payload.planId !== input.planId) return [];
+      const reviewerId = typeof payload.reviewerId === "string" ? payload.reviewerId : null;
+      const roundId =
+        payload.roundId === null || typeof payload.roundId === "string" ? payload.roundId : null;
+      if (reviewerId === null) return [];
+      return [
+        {
+          outboxId: row.id,
+          reviewerId,
+          roundId,
+          status: row.state,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+          completedAt: row.completed_at,
+          lastErrorCode: row.last_error_code,
+        },
+      ];
+    });
+  }
 
   async sendOutstandingReviewerReminders(
     actor: EvaluationActor,
@@ -11590,9 +11981,10 @@ export class AirtableEvaluationReminderBoundary implements EvaluationReminderBou
   ): Promise<{
     readonly queued: number;
     readonly reviewerIds: readonly string[];
+    readonly facts: readonly EvaluationReminderDeliveryFact[];
   }> {
     const plan = await this.plans.getPlan(actor.tenantId, input.planId);
-    if (plan === null) return { queued: 0, reviewerIds: [] };
+    if (plan === null) return { queued: 0, reviewerIds: [], facts: [] };
     const requestedAssignmentIds = [...new Set(input.assignmentIds)].sort();
     const storedAssignments = await this.plans.listAssignments(actor.tenantId, plan.id);
     const matchingAssignments = storedAssignments.filter(
@@ -11613,7 +12005,7 @@ export class AirtableEvaluationReminderBoundary implements EvaluationReminderBou
         ? [...new Set(input.reviewerIds)].sort()
         : [...assignmentIdsByReviewer.keys()].sort();
     if (storedAssignments.length > 0 && assignmentIdsByReviewer.size === 0) {
-      return { queued: 0, reviewerIds: [] };
+      return { queued: 0, reviewerIds: [], facts: [] };
     }
     let queued = 0;
     for (const reviewerId of reviewerIds) {
@@ -11634,7 +12026,19 @@ export class AirtableEvaluationReminderBoundary implements EvaluationReminderBou
       const email = recipient?.email.trim();
       if (email === undefined || email.length === 0) continue;
       const round = input.roundId === undefined ? "all rounds" : `round ${input.roundId}`;
-      const idempotencyKey = `evaluation-reminder:${input.planId}:${input.roundId ?? "all"}:${reviewerId}`;
+      const baseIdempotencyKey = `evaluation-reminder:${input.planId}:${input.roundId ?? "all"}:${reviewerId}`;
+      const priorJobs = await this.database
+        .prepare(EVALUATION_REMINDER_ATTEMPTS_SQL)
+        .bind(actor.tenantId, baseIdempotencyKey, baseIdempotencyKey)
+        .all<{ deduplication_key: string; state: string }>();
+      const idempotencyKey = evaluationReminderAttemptKey(
+        baseIdempotencyKey,
+        priorJobs.results ?? [],
+      );
+      const emailIdempotencyKey = await compactIdempotencyKey(
+        "evaluation-reminder",
+        idempotencyKey,
+      );
       const result = await enqueueCloudflareOutbox({
         database: this.database,
         queue: this.queue,
@@ -11642,21 +12046,32 @@ export class AirtableEvaluationReminderBoundary implements EvaluationReminderBou
         topic: "communications",
         deduplicationKey: idempotencyKey,
         payload: {
-          from: DEFAULT_OPEN_SEND_SENDERS.speakers,
-          to: [email],
-          subject: `Review reminder: ${plan.name}`,
-          html: `<p>You have outstanding reviews for <strong>${plan.name}</strong> (${round}).</p>`,
-          text: `You have outstanding reviews for ${plan.name} (${round}).`,
-          idempotencyKey,
+          effect: "send_email",
           planId: input.planId,
           eventId: plan.eventId,
+          reviewerId,
           roundId: input.roundId ?? null,
           assignmentIds,
+          payload: {
+            from: this.senderAddresses.speakers,
+            senderPurpose: "speakers",
+            to: [email],
+            subject: `Review reminder: ${plan.name}`,
+            html: `<p>You have outstanding reviews for <strong>${plan.name}</strong> (${round}).</p>`,
+            text: `You have outstanding reviews for ${plan.name} (${round}).`,
+            idempotencyKey: emailIdempotencyKey,
+          },
         },
       });
       if (result.queued) queued += assignmentIds.length;
     }
-    return { queued, reviewerIds };
+    return {
+      queued,
+      reviewerIds,
+      facts: await this.listOutstandingReviewerReminderDeliveries(actor, {
+        planId: input.planId,
+      }),
+    };
   }
 }
 export function createD1ApplicationDependencies(options: AirtableRuntimeOptions): ApiDependencies {
@@ -11689,6 +12104,7 @@ export function createD1ApplicationDependencies(options: AirtableRuntimeOptions)
       crmRepository,
       options.database,
       options.outboxQueue,
+      options.senderAddresses,
       eventRepository,
     ),
   });
@@ -11702,15 +12118,21 @@ export function createD1ApplicationDependencies(options: AirtableRuntimeOptions)
     options.database,
     options.outboxQueue,
     options.webOrigin,
+    options.senderAddresses,
   );
   const speakerService = new SpeakerService(speakerRepository, privateAssets, {
     delivery: speakerDelivery,
     emailDelivery: speakerDelivery,
+    speakerSender: options.senderAddresses.speakers,
   });
   const cfpService = new CfpService({
     repository: cfpRepository,
     idempotency: cfpIdempotency,
-    effects: new CloudflareCfpEffects(options.outboxQueue, options.database),
+    effects: new CloudflareCfpEffects(
+      options.outboxQueue,
+      options.database,
+      options.senderAddresses,
+    ),
     organization: {
       async getPublicOrganization(tenantId) {
         const row = await options.database
@@ -11788,6 +12210,7 @@ export function createD1ApplicationDependencies(options: AirtableRuntimeOptions)
   const communicationService = new CommunicationService(
     communicationRepository,
     new AirtableCommunicationDeliveryAdapter(options.database, options.outboxQueue),
+    { senderIdentities: options.senderAddresses },
   );
   const reportRepository = options.businessRepositories.reports;
   const reportService = new ReportService(
@@ -11815,6 +12238,7 @@ export function createD1ApplicationDependencies(options: AirtableRuntimeOptions)
     sessionService,
     database: options.database,
     queue: options.outboxQueue,
+    senderAddresses: options.senderAddresses,
   });
   const evaluationService = new EvaluationService(evaluationRepository, evaluationSource, {
     acceptanceHandoff,
@@ -11822,6 +12246,8 @@ export function createD1ApplicationDependencies(options: AirtableRuntimeOptions)
       cfpRepository,
       options.database,
       options.outboxQueue,
+      communicationRepository,
+      options.senderAddresses,
     ),
     ...(options.aiProviders?.evaluations === undefined
       ? {}
@@ -11833,6 +12259,7 @@ export function createD1ApplicationDependencies(options: AirtableRuntimeOptions)
       evaluationRepository,
       options.database,
       options.outboxQueue,
+      options.senderAddresses,
     ),
     reviewerIdentity: new D1EvaluationReviewerIdentityBoundary(options.database),
     async actorFor(principal: AuthPrincipal, request: Request): Promise<EvaluationActor | null> {
@@ -11880,40 +12307,53 @@ export function createD1ApplicationDependencies(options: AirtableRuntimeOptions)
         const memberships = principal.memberships.filter((candidate) =>
           ["owner", "admin", "reviewer"].includes(candidate.role),
         );
-        if (memberships.length !== 1) return null;
+        if (memberships.length === 0) return null;
+        const grants = (
+          await Promise.all(
+            memberships.map(async (membership) => {
+              const plans = await evaluationRepository.listPlans(membership.organizationId);
+              return plans.flatMap((plan) =>
+                evaluationRolesForOrganizationMembership(membership.role).map((role) => ({
+                  tenantId: membership.organizationId,
+                  eventId: plan.eventId,
+                  role,
+                })),
+              );
+            }),
+          )
+        ).flat();
+        if (grants.length === 0) return null;
         const [membership] = memberships;
         if (membership === undefined) return null;
-        const plans = await evaluationRepository.listPlans(membership.organizationId);
-        const role =
-          membership.role === "owner" || membership.role === "admin" ? "organizer" : "reviewer";
         return {
           tenantId: membership.organizationId,
           userId: principal.userId,
           kind: "human",
-          grants: plans.map((plan) => ({ eventId: plan.eventId, role })),
+          grants,
         };
       }
 
-      let membership = principal.memberships.length === 1 ? principal.memberships[0] : undefined;
-      if (membership === undefined) {
-        for (const candidate of principal.memberships) {
-          const event = await cfpRepository.getEvent(candidate.organizationId, eventId);
-          if (event !== null) {
-            membership = candidate;
-            break;
-          }
-        }
-      }
-      if (membership === undefined) return null;
-      const organizer = membership.role === "owner" || membership.role === "admin";
+      const eventMemberships = (
+        await Promise.all(
+          principal.memberships.map(async (membership) => ({
+            membership,
+            event: await cfpRepository.getEvent(membership.organizationId, eventId),
+          })),
+        )
+      ).filter(({ event }) => event !== null);
+      if (eventMemberships.length !== 1) return null;
+      const [eventMembership] = eventMemberships;
+      if (eventMembership === undefined) return null;
+      const { membership } = eventMembership;
       return {
         tenantId: membership.organizationId,
         userId: principal.userId,
         kind: "human",
-        grants: [
-          ...(organizer ? [{ eventId, role: "organizer" as const }] : []),
-          ...(membership.role === "reviewer" ? [{ eventId, role: "reviewer" as const }] : []),
-        ],
+        grants: evaluationRolesForOrganizationMembership(membership.role).map((role) => ({
+          tenantId: membership.organizationId,
+          eventId,
+          role,
+        })),
       };
     },
   };
@@ -11925,6 +12365,10 @@ export function createD1ApplicationDependencies(options: AirtableRuntimeOptions)
     eventRepository,
     publicationRepository,
     speakerRepository,
+    options.privateFiles,
+  );
+  const publicProgramReadModel = new D1PublishedProgramReadModel(
+    options.database,
     options.privateFiles,
   );
   const organizerOverview = new D1OrganizerOverviewReadModel(options.database);
@@ -12017,9 +12461,10 @@ export function createD1ApplicationDependencies(options: AirtableRuntimeOptions)
     },
     agenda: {
       engine: agendaEngine,
+      calendarUidDomain: options.calendarIntegrationOptions.uidDomain,
       async organizationIdForEvent(eventId: string) {
         const rows = await options.database
-          .prepare("SELECT organization_id FROM events WHERE id = ? AND deleted_at IS NULL LIMIT 2")
+          .prepare("SELECT organization_id FROM events WHERE id = ? LIMIT 2")
           .bind(eventId)
           .all<{ organization_id: string }>();
         const matches = rows.results ?? [];
@@ -12027,7 +12472,7 @@ export function createD1ApplicationDependencies(options: AirtableRuntimeOptions)
       },
       async eventMetadataForEvent(eventId: string) {
         const rows = await options.database
-          .prepare("SELECT organization_id FROM events WHERE id = ? AND deleted_at IS NULL LIMIT 2")
+          .prepare("SELECT organization_id FROM events WHERE id = ? LIMIT 2")
           .bind(eventId)
           .all<{ organization_id: string }>();
         const matches = rows.results ?? [];
@@ -12049,7 +12494,7 @@ export function createD1ApplicationDependencies(options: AirtableRuntimeOptions)
       },
       async eventIdForSlug(eventSlug: string) {
         const rows = await options.database
-          .prepare("SELECT id FROM events WHERE lower(slug) = ? AND deleted_at IS NULL LIMIT 2")
+          .prepare("SELECT id FROM events WHERE lower(slug) = ? LIMIT 2")
           .bind(eventSlug.trim().toLowerCase())
           .all<{ id: string }>();
         const matches = rows.results ?? [];
@@ -12060,7 +12505,7 @@ export function createD1ApplicationDependencies(options: AirtableRuntimeOptions)
       ),
       async afterPublish(eventId, revision) {
         const organizationRows = await options.database
-          .prepare("SELECT organization_id FROM events WHERE id = ? AND deleted_at IS NULL LIMIT 2")
+          .prepare("SELECT organization_id FROM events WHERE id = ? LIMIT 2")
           .bind(eventId)
           .all<{ organization_id: string }>();
         const organizationMatches = organizationRows.results ?? [];
@@ -12087,6 +12532,16 @@ export function createD1ApplicationDependencies(options: AirtableRuntimeOptions)
           speakerRepository.listProfiles(eventId, participantIds),
           speakerRepository.listAssets(eventId, participantIds),
         ]);
+        await reconcilePublishedAgendaCalendarInvitations({
+          database: options.database,
+          queue: options.outboxQueue,
+          organizationId,
+          eventId,
+          revision,
+          agendaState,
+          profiles,
+          integrationOptions: options.calendarIntegrationOptions,
+        });
         const entriesBySessionId = new Map(
           revision.entries.map((entry) => [entry.sessionId, entry]),
         );
@@ -12233,40 +12688,7 @@ export function createD1ApplicationDependencies(options: AirtableRuntimeOptions)
     publishedSpeakers: publishedSpeakerProjections,
     publishedEvents: {
       async listPublishedEvents() {
-        const projections = await publishedSpeakerProjections.listPublishedEventProjections();
-        const organizationRows = await options.database
-          .prepare("SELECT organization_id, name FROM organizations")
-          .all<{ organization_id: string; name: string }>();
-        const organizationNameById = new Map(
-          organizationRows.results.map((row) => [row.organization_id, row.name]),
-        );
-        const now = new Date();
-        const records = await Promise.all(
-          projections.map(async (projection) => {
-            const event = await eventRepository.getEvent(
-              projection.organizationId,
-              projection.eventId,
-            );
-            const organizationName = organizationNameById.get(projection.organizationId);
-            if (event === null || event.status !== "active" || organizationName === undefined) {
-              return null;
-            }
-            return {
-              organization: {
-                id: projection.organizationId,
-                name: organizationName,
-              },
-              event: projection.event,
-              cfpOpen:
-                event.cfpSettings.enabled &&
-                (event.cfpSettings.opensAt === null ||
-                  new Date(event.cfpSettings.opensAt) <= now) &&
-                (event.cfpSettings.closesAt === null ||
-                  now <= new Date(event.cfpSettings.closesAt)),
-            };
-          }),
-        );
-        return records.filter((record) => record !== null);
+        return publicProgramReadModel.listPublicEventDirectory();
       },
     },
     organizerOverview,

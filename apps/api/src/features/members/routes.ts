@@ -207,6 +207,34 @@ function organizer(context: MemberContext, organizationId: string): MemberActor 
   return actor;
 }
 
+function organizationCreator(
+  context: MemberContext,
+  organizationId: string,
+): { actor: MemberActor; firstOrganization: boolean } {
+  const principal = context.get("authPrincipal");
+  if (principal === null || principal === undefined) {
+    throw new AuthAccessError("UNAUTHENTICATED", "Authentication is required.");
+  }
+  if (principal.kind !== "user") {
+    throw new AuthAccessError("FORBIDDEN", "User session authentication is required.");
+  }
+  if (principal.memberships.length === 0) {
+    return {
+      actor: {
+        kind: "user",
+        organizationId,
+        userId: principal.userId,
+        role: "owner",
+      },
+      firstOrganization: true,
+    };
+  }
+  return {
+    actor: organizer(context, organizationId),
+    firstOrganization: false,
+  };
+}
+
 function idempotencyKey(context: MemberContext): string {
   const result = context.req.header("idempotency-key")?.trim();
   if (result === undefined || result.length === 0) {
@@ -378,18 +406,22 @@ export function createMemberRoutes(
 
   routes.post("/organizations", async (context) => {
     const currentOrganizationId = routeParam(context, "organizationId");
-    const actor = organizer(context, currentOrganizationId);
+    const creator = organizationCreator(context, currentOrganizationId);
     const input = await body<CreateOrganizationBody>(context, createOrganizationSchema);
     const requestIdempotencyKey = optionalIdempotencyKey(context, {
       ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
     });
-    const data = await dependencies.service.createOrganization(actor, {
-      organizationId: input.organizationId,
-      slug: input.slug,
-      name: input.name,
-      ...(input.config === undefined ? {} : { config: input.config }),
-      ...(requestIdempotencyKey === undefined ? {} : { idempotencyKey: requestIdempotencyKey }),
-    } satisfies CreateOrganizationInput);
+    const data = await dependencies.service.createOrganization(
+      creator.actor,
+      {
+        organizationId: input.organizationId,
+        slug: input.slug,
+        name: input.name,
+        ...(input.config === undefined ? {} : { config: input.config }),
+        ...(requestIdempotencyKey === undefined ? {} : { idempotencyKey: requestIdempotencyKey }),
+      } satisfies CreateOrganizationInput,
+      creator.firstOrganization ? "first-organization" : "existing-owner",
+    );
     return context.json({ data }, 201);
   });
 

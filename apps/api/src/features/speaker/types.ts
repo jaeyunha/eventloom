@@ -66,6 +66,7 @@ export type SpeakerPortalCapability = (typeof speakerPortalCapabilities)[number]
 
 export interface SpeakerPortalContext {
   id: string;
+  organizationId?: string;
   eventId: string;
   name: string;
   slug?: string;
@@ -118,6 +119,13 @@ export interface SpeakerSubmission {
   title: string;
   status: SpeakerSubmissionStatus;
   participantIds: readonly string[];
+  participants?: readonly {
+    id: string;
+    firstName: string;
+    lastName: string;
+    email: string;
+    role: "primary" | "co_author";
+  }[];
   updatedAt: string;
   formId?: string;
   version?: number;

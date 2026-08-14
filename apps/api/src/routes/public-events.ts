@@ -14,6 +14,7 @@ const publishedEventSchema = z
       startsOn: z.string().trim().min(1),
       endsOn: z.string().trim().min(1),
       venueName: z.string().trim().min(1).nullable(),
+      programPublished: z.boolean(),
     }),
     cfpOpen: z.boolean(),
   })

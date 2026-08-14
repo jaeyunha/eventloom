@@ -436,11 +436,35 @@
 }
 
 .panel {
+  min-width: 0;
   padding: clamp(0.9rem, 1.6vw, 1.25rem);
   border: 1px solid var(--portal-border);
   border-radius: 0.65rem;
   background: var(--portal-surface);
   box-shadow: 0 1px 2px rgb(37 43 67 / 3%);
+}
+
+.submissionAnswers {
+  display: grid;
+  gap: 0.9rem;
+  margin: 0;
+}
+
+.submissionAnswers div {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.submissionAnswers dt {
+  color: var(--muted-foreground);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.submissionAnswers dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .panelHeading,
@@ -627,33 +651,33 @@
 }
 
 .tone_neutral {
-  border-color: #d8dbe2;
-  background: #f5f6f8;
-  color: #666d7c;
+  border-color: color-mix(in srgb, var(--border) 78%, transparent);
+  background: var(--muted);
+  color: var(--muted-foreground);
 }
 
 .tone_info {
-  border-color: #cbd2fa;
-  background: #f0f2ff;
-  color: #3d53d2;
+  border-color: color-mix(in srgb, var(--primary) 22%, transparent);
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+  color: var(--primary);
 }
 
 .tone_success {
-  border-color: #bfe4d1;
-  background: #ebf8f1;
-  color: #15754a;
+  border-color: color-mix(in srgb, var(--success) 22%, transparent);
+  background: var(--success-surface);
+  color: var(--success);
 }
 
 .tone_warning {
-  border-color: #f0db9b;
-  background: #fff8df;
-  color: #8a6200;
+  border-color: color-mix(in srgb, var(--warning) 24%, transparent);
+  background: var(--warning-surface);
+  color: var(--warning);
 }
 
 .tone_danger {
-  border-color: #f0c6cb;
-  background: #fff0f1;
-  color: #b33342;
+  border-color: color-mix(in srgb, var(--failure) 22%, transparent);
+  background: var(--failure-surface);
+  color: var(--failure);
 }
 
 .profilePreview {
@@ -859,13 +883,16 @@
   padding: 0.35rem 0.55rem;
   border-radius: 0.4rem;
   background: var(--portal-blue-dark);
-  color: white !important;
+  color: white;
 }
 
 .submissionTile footer a {
   color: var(--portal-blue-dark);
   font-weight: 750;
   text-decoration: none;
+}
+.submissionTile footer a.primaryTextLink {
+  color: white;
 }
 
 .backLink {
@@ -1046,10 +1073,16 @@
 }
 
 .readOnlyField {
+  min-width: 0;
   padding: 0.85rem 1rem;
   border: 1px solid var(--portal-border);
   border-radius: 0.65rem;
   background: #f7f8fa;
+}
+
+.readOnlyField select {
+  width: 100%;
+  min-width: 0;
 }
 
 .readOnlyField strong {
@@ -1125,6 +1158,87 @@
   padding-top: 0.4rem;
 }
 
+.responseSection,
+.responseForm {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.responseSection {
+  padding: 1rem;
+  border: 1px solid var(--portal-border);
+  border-radius: 0.75rem;
+  background: #fafbfc;
+}
+
+.responseField {
+  display: grid;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.responseField > span,
+.responseField > strong {
+  font-size: 0.8rem;
+  font-weight: 750;
+}
+
+.responseField input,
+.responseField select,
+.responseField textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #ccd1dc;
+  border-radius: 0.65rem;
+  background: white;
+  color: var(--portal-ink);
+  font: inherit;
+  font-size: 0.9rem;
+}
+
+.responseField input,
+.responseField select {
+  min-height: 2.6rem;
+  padding: 0.6rem 0.7rem;
+}
+
+.responseField textarea {
+  min-height: 7rem;
+  padding: 0.75rem;
+  resize: vertical;
+}
+
+.responseField input:focus,
+.responseField select:focus,
+.responseField textarea:focus {
+  border-color: var(--portal-blue);
+  outline: 3px solid rgb(77 100 232 / 14%);
+  outline-offset: 0;
+}
+
+.responseCheckbox {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.responseHistory summary {
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 750;
+}
+
+.responseHistory ol {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0.65rem 0 0;
+  padding-left: 1.25rem;
+  color: var(--portal-muted);
+  font-size: 0.78rem;
+}
+
 .inlineError {
   display: flex;
   align-items: center;
@@ -1172,8 +1286,12 @@
   background: #f6f7f9;
 }
 
+.segmentedControl a,
 .segmentedControl button {
+  display: inline-flex;
   min-height: 2.1rem;
+  align-items: center;
+  justify-content: center;
   padding: 0.35rem 0.7rem;
   border: 0;
   border-radius: 0.45rem;
@@ -1182,13 +1300,37 @@
   font: inherit;
   font-size: 0.72rem;
   font-weight: 700;
+  text-align: center;
+  text-decoration: none;
   cursor: pointer;
 }
 
+.segmentedControl a[aria-current="page"],
 .segmentedControl button[aria-pressed="true"] {
   background: white;
   color: var(--portal-blue-dark);
   box-shadow: 0 2px 7px rgb(37 43 67 / 10%);
+}
+
+.taskGroups {
+  display: grid;
+  gap: 1.5rem;
+}
+
+.taskGroup {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.taskGroup > div:first-child h3 {
+  font-size: 1rem;
+  letter-spacing: -0.02em;
+}
+
+.taskGroup > div:first-child p {
+  margin-top: 0.25rem;
+  color: var(--portal-muted);
+  font-size: 0.78rem;
 }
 
 .taskWorkspace {
@@ -1539,9 +1681,14 @@
     width: 100%;
   }
 
+  .segmentedControl {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .segmentedControl a,
   .segmentedControl button {
     min-width: 0;
-    flex: 1;
   }
 
   .statusTimeline {

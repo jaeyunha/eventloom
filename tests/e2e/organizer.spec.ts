@@ -39,6 +39,7 @@ interface OrganizerApiHarness {
 
 interface InstallOrganizerApiOptions {
   readonly includeSecondaryEvent?: boolean;
+  readonly primaryEndsAt?: string;
 }
 
 function eventRecord(input: {
@@ -174,6 +175,8 @@ function agendaFor(event: OrganizerEventRecord): AgendaWorkspaceData {
         durationMinutes: 60,
         speakerNames: ["Avery Kim"],
         capacityRequired: 80,
+        trackIds: [...entry.trackIds],
+        trackNames: [...entry.trackNames],
       },
     ],
     revisions: [revision],
@@ -326,7 +329,7 @@ async function installOrganizerApi(
     slug: PRIMARY_EVENT_ID,
     name: "Eventloom Conference",
     startsAt: "2026-09-18T16:00:00.000Z",
-    endsAt: "2026-09-19T23:00:00.000Z",
+    endsAt: options.primaryEndsAt ?? "2026-09-19T23:00:00.000Z",
     createdBy: session.userId,
   });
   const secondaryEvent = eventRecord({
@@ -815,7 +818,7 @@ test("agenda workspace exposes all five accessible view modes without an unavail
   await page.goto(agendaUrl(PRIMARY_EVENT_ID));
   await expectAgendaWorkspace(page);
 
-  const viewModes = ["List", "Day", "Week", "Track", "Room"] as const;
+  const viewModes = ["Timetable", "All days", "List", "Tracks", "Rooms"] as const;
   await expect(page.getByRole("tab")).toHaveCount(viewModes.length);
   for (const mode of viewModes) {
     const tab = page.getByRole("tab", { name: mode, exact: true });
@@ -823,6 +826,56 @@ test("agenda workspace exposes all five accessible view modes without an unavail
     await expect(tab).toHaveAttribute("aria-selected", "true");
     await expect(page.getByRole("tabpanel")).toBeVisible();
     await expectAgendaWorkspace(page);
+  }
+});
+
+test("agenda day navigation supports direct multi-day jumps at responsive widths", async ({
+  authSession,
+  page,
+}, testInfo) => {
+  await installOrganizerApi(page, authSession, {
+    primaryEndsAt: "2026-09-24T23:00:00.000Z",
+  });
+
+  for (const viewport of [
+    { name: "desktop", width: 1440, height: 1000 },
+    { name: "tablet", width: 820, height: 1180 },
+    { name: "mobile", width: 390, height: 844 },
+  ] as const) {
+    await page.setViewportSize(viewport);
+    await page.goto(agendaUrl(PRIMARY_EVENT_ID));
+    await expectAgendaWorkspace(page);
+
+    const dayChooser = page.getByRole("navigation", { name: "Choose an event day" });
+    await expect(dayChooser).toBeVisible();
+    await expect(dayChooser.getByRole("button")).toHaveCount(7);
+    await expect(
+      dayChooser.getByRole("button", { name: /Day 1.*Fri, Sep 18.*1 session/u }),
+    ).toHaveAttribute("aria-current", "date");
+
+    await dayChooser.getByRole("button", { name: /Day 7.*Thu, Sep 24.*0 sessions/u }).click();
+    await expect(
+      dayChooser.getByRole("button", { name: /Day 7.*Thu, Sep 24.*0 sessions/u }),
+    ).toHaveAttribute("aria-current", "date");
+    await expect(page.getByRole("heading", { name: "Thursday, September 24" })).toBeVisible();
+    await expect(page.getByText("No sessions scheduled on this day.")).toBeVisible();
+
+    const layout = await page.evaluate(() => ({
+      bodyWidth: document.body.scrollWidth,
+      viewportWidth: document.documentElement.clientWidth,
+      hanOrKanaOrHangul: (
+        document.body.innerText.match(
+          /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu,
+        ) ?? []
+      ).length,
+    }));
+    expect(layout.bodyWidth).toBeLessThanOrEqual(layout.viewportWidth);
+    expect(layout.hanOrKanaOrHangul).toBe(0);
+
+    await page.screenshot({
+      path: testInfo.outputPath(`agenda-multi-day-${viewport.name}.png`),
+      fullPage: true,
+    });
   }
 });
 
@@ -836,14 +889,14 @@ test("agenda data remains isolated between organization-qualified events", async
   await expectAgendaWorkspace(page);
   await expect(page.getByText("Eventloom Conference", { exact: true }).first()).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "Opening keynote: Systems that earn trust" }),
+    page.getByRole("button", { name: /Edit Opening keynote: Systems that earn trust/u }),
   ).toBeVisible();
   await expect(page.getByText("DevFlow Conf 2027", { exact: true })).toHaveCount(0);
 
   await page.goto(agendaUrl(SECONDARY_EVENT_ID));
   await expectAgendaWorkspace(page);
   await expect(page.getByText("DevFlow Conf 2027", { exact: true }).first()).toBeVisible();
-  await expect(page.getByRole("heading", { name: "DevFlow platform patterns" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Edit DevFlow platform patterns/u })).toBeVisible();
   await expect(page.getByText("Eventloom Conference", { exact: true })).toHaveCount(0);
 
   const agendaRequests = api.requests.filter(

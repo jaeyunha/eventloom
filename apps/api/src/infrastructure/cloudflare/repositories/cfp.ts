@@ -1,9 +1,8 @@
 import type { D1Database, D1PreparedStatement } from "@cloudflare/workers-types";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, ne } from "drizzle-orm";
 
 import { createDatabase, type OpenSessionboardDatabase } from "../../../db/client";
 import {
-  airtableConnections,
   cfpFormFields,
   cfpFormRules,
   cfpFormSections,
@@ -33,7 +32,7 @@ import {
   type CfpRepository,
   type CfpReusableField,
 } from "../../../features/cfp/service";
-import { createAirtableSyncDeduplicationKey } from "../../../integrations/airtable/sync/contracts";
+import { airtableSyncStatement } from "./shared";
 
 const json = (value: unknown): string => JSON.stringify(value);
 const nowIso = (): string => new Date().toISOString();
@@ -45,6 +44,33 @@ const assetId = (value: unknown): string | null => {
 
 function conflict(message: string): CfpError {
   return new CfpError("CONFLICT", message);
+}
+
+type EventCfpRow = Pick<
+  typeof events.$inferSelect,
+  | "id"
+  | "organizationId"
+  | "version"
+  | "slug"
+  | "name"
+  | "timeZone"
+  | "startsAt"
+  | "endsAt"
+  | "cfpOpensAt"
+  | "cfpClosesAt"
+>;
+
+export function eventCfpFromRow(row: EventCfpRow): EventCfp {
+  return eventCfpSchema.parse({
+    id: row.id,
+    tenantId: row.organizationId,
+    version: row.version,
+    slug: row.slug,
+    name: row.name,
+    timezone: row.timeZone,
+    opensAt: row.cfpOpensAt ?? row.startsAt,
+    closesAt: row.cfpClosesAt ?? row.endsAt,
+  });
 }
 
 export class D1CfpRepository implements CfpRepository {
@@ -339,6 +365,7 @@ export class D1CfpRepository implements CfpRepository {
           eq(submissions.eventId, input.eventId),
           eq(submissions.formId, input.formId),
           eq(submissions.ownerAccountId, input.ownerAccountId),
+          ne(submissions.status, "withdrawn"),
         ),
       );
     return rows.length;
@@ -374,18 +401,6 @@ export class D1CfpRepository implements CfpRepository {
     const current = await this.getSubmission(next.tenantId, next.id);
     if ((current?.version ?? null) !== expectedVersion)
       throw conflict("The CFP submission has changed.");
-    const connection = (
-      await this.#orm
-        .select({ id: airtableConnections.id, version: airtableConnections.connectionVersion })
-        .from(airtableConnections)
-        .where(
-          and(
-            eq(airtableConnections.organizationId, next.tenantId),
-            eq(airtableConnections.state, "connected"),
-          ),
-        )
-        .limit(1)
-    )[0];
     const statements: D1PreparedStatement[] = [];
     if (current === null) {
       statements.push(
@@ -523,35 +538,22 @@ export class D1CfpRepository implements CfpRepository {
           next.updatedAt,
         ),
     );
-    if (connection !== undefined) {
-      const dedupe = createAirtableSyncDeduplicationKey({
-        connectionId: connection.id,
+    statements.push(
+      airtableSyncStatement(this.#db, {
+        id: `sync:submission:${next.id}:${next.version}`,
+        tenantId: next.tenantId,
         entityType: "submission",
         applicationId: next.id,
         sourceVersion: next.version,
         operation: "upsert",
-      });
-      statements.push(
-        this.#db
-          .prepare(
-            `INSERT OR IGNORE INTO airtable_sync_jobs (id, connection_id, organization_id, connection_version, entity_type, application_id, source_version, operation, state, deduplication_key, payload_json, attempts, available_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, 'submission', ?, ?, 'upsert', 'pending', ?, ?, 0, ?, ?, ?)`,
-          )
-          .bind(
-            `airtable-sync:${dedupe}`,
-            connection.id,
-            next.tenantId,
-            connection.version,
-            next.id,
-            next.version,
-            dedupe,
-            json(next),
-            next.updatedAt,
-            next.updatedAt,
-            next.updatedAt,
-          ),
-      );
-    }
+        payloadJson: json(next),
+        availableAt: next.updatedAt,
+        condition: {
+          sql: "EXISTS (SELECT 1 FROM submission_versions WHERE organization_id = ? AND submission_id = ? AND version = ?)",
+          values: [next.tenantId, next.id, next.version],
+        },
+      }),
+    );
     try {
       const results = await this.#db.batch(statements);
       if ((results[0]?.meta?.changes ?? 0) !== 1) throw conflict("The CFP submission has changed.");
@@ -562,18 +564,7 @@ export class D1CfpRepository implements CfpRepository {
   }
 
   #event(row: typeof events.$inferSelect): EventCfp {
-    if (row.cfpOpensAt === null || row.cfpClosesAt === null)
-      throw new Error("The event does not have a CFP window.");
-    return eventCfpSchema.parse({
-      id: row.id,
-      tenantId: row.organizationId,
-      version: row.version,
-      slug: row.slug,
-      name: row.name,
-      timezone: row.timeZone,
-      opensAt: row.cfpOpensAt,
-      closesAt: row.cfpClosesAt,
-    });
+    return eventCfpFromRow(row);
   }
 
   async #hydrateForm(row: typeof cfpForms.$inferSelect): Promise<CfpForm> {

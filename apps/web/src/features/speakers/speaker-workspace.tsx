@@ -182,6 +182,7 @@ export interface SpeakerOnboardingTaskDefinition {
 
 const DEFAULT_STATUS_OPTIONS = ["pending", "invited", "confirmed", "accepted", "declined"] as const;
 const ASYNC_ACTION_TIMEOUT_MS = 15_000;
+export const SPEAKER_ROSTER_COLUMNS = ["Speaker", "Status", "Sessions", "Tasks", "Action"] as const;
 
 export const SPEAKER_WELCOME_EMAIL_STARTER = {
   name: "Speaker welcome",
@@ -3025,64 +3026,88 @@ export function SpeakerWorkspace({
                     </Empty>
                   ) : null}
                   {filteredSpeakers.length > 0 ? (
-                    <ul className={styles.speakerList} aria-label="Event speaker roster">
-                      {filteredSpeakers.map((speaker) => (
-                        <li
-                          className={`${styles.speakerRow}${selectedId === speaker.participantId ? ` ${styles.speakerRowSelected}` : ""}`}
-                          key={speaker.participantId}
-                        >
-                          <Field orientation="horizontal" className={styles.checkboxField}>
-                            <Checkbox
-                              id={`roster-selection-${speaker.participantId}`}
-                              aria-label={`Select ${speaker.displayName}`}
-                              checked={selectedSpeakerIds.includes(speaker.participantId)}
-                              onCheckedChange={() => toggleSpeakerSelection(speaker.participantId)}
-                            />
-                            <FieldLabel htmlFor={`roster-selection-${speaker.participantId}`}>
-                              Select speaker
-                            </FieldLabel>
-                          </Field>
-                          <div className={styles.speakerCopy}>
-                            <Button
-                              variant="link"
-                              size="sm"
-                              className={styles.speakerName}
-                              type="button"
-                              onClick={() => beginEdit(speaker)}
+                    <div className={styles.speakerTableViewport}>
+                      <Table className={styles.speakerTable}>
+                        <TableCaption className={styles.srOnly}>Event speaker roster</TableCaption>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>
+                              <span className={styles.srOnly}>Select</span>
+                            </TableHead>
+                            {SPEAKER_ROSTER_COLUMNS.map((column) => (
+                              <TableHead key={column}>{column}</TableHead>
+                            ))}
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {filteredSpeakers.map((speaker) => (
+                            <TableRow
+                              className={styles.speakerRow}
+                              key={speaker.participantId}
+                              aria-current={
+                                selectedId === speaker.participantId ? "true" : undefined
+                              }
+                              data-state={
+                                selectedId === speaker.participantId ? "selected" : undefined
+                              }
                             >
-                              {speaker.displayName}
-                            </Button>
-                            <span className={styles.speakerMeta}>{speaker.email}</span>
-                            <span className={styles.speakerMeta}>
-                              {speaker.jobTitle || speaker.company
-                                ? `${speaker.jobTitle ?? ""}${speaker.jobTitle && speaker.company ? " · " : ""}${speaker.company ?? ""}`
-                                : "Profile details pending"}
-                            </span>
-                          </div>
-                          <div className={styles.speakerStats}>
-                            <SpeakerStatusBadge status={speaker.status} />
-                            <span>
-                              {speaker.sessions.length} session
-                              {speaker.sessions.length === 1 ? "" : "s"}
-                            </span>
-                            <span>
-                              {speaker.taskSummary.completed} / {speaker.taskSummary.total} tasks
-                              {speaker.taskSummary.overdue > 0
-                                ? ` · ${speaker.taskSummary.overdue} overdue`
-                                : ""}
-                            </span>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              type="button"
-                              onClick={() => beginEdit(speaker)}
-                            >
-                              Open profile
-                            </Button>
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
+                              <TableCell className={styles.checkboxCell}>
+                                <Checkbox
+                                  id={`roster-selection-${speaker.participantId}`}
+                                  aria-label={`Select ${speaker.displayName}`}
+                                  checked={selectedSpeakerIds.includes(speaker.participantId)}
+                                  onCheckedChange={() =>
+                                    toggleSpeakerSelection(speaker.participantId)
+                                  }
+                                />
+                              </TableCell>
+                              <TableHead scope="row" className={styles.speakerIdentityCell}>
+                                <div className={styles.speakerCopy}>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className={styles.speakerName}
+                                    type="button"
+                                    onClick={() => beginEdit(speaker)}
+                                  >
+                                    {speaker.displayName}
+                                  </Button>
+                                  <span className={styles.speakerMeta}>{speaker.email}</span>
+                                  <span className={styles.speakerMeta}>
+                                    {speaker.jobTitle || speaker.company
+                                      ? `${speaker.jobTitle ?? ""}${speaker.jobTitle && speaker.company ? " · " : ""}${speaker.company ?? ""}`
+                                      : "Profile details pending"}
+                                  </span>
+                                </div>
+                              </TableHead>
+                              <TableCell>
+                                <SpeakerStatusBadge status={speaker.status} />
+                              </TableCell>
+                              <TableCell className={styles.numericCell}>
+                                {speaker.sessions.length} session
+                                {speaker.sessions.length === 1 ? "" : "s"}
+                              </TableCell>
+                              <TableCell className={styles.taskCell}>
+                                {speaker.taskSummary.completed} / {speaker.taskSummary.total} tasks
+                                {speaker.taskSummary.overdue > 0
+                                  ? ` · ${speaker.taskSummary.overdue} overdue`
+                                  : ""}
+                              </TableCell>
+                              <TableCell className={styles.actionCell}>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  type="button"
+                                  onClick={() => beginEdit(speaker)}
+                                >
+                                  Open
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
                   ) : null}
                 </div>
 

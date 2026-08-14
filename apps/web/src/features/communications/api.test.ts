@@ -36,7 +36,7 @@ function template(id: string, purpose: CommunicationTemplate["purpose"]): Commun
     purpose,
     version: 1,
     status: "approved",
-    sender: "speakers@sessionboard.namuh.co",
+    sender: "program@self-hosted.example",
     subject: "Subject",
     html: "<p>Body</p>",
     text: "Body",
@@ -115,6 +115,21 @@ function reminderFacts(): ReminderFacts {
 }
 
 describe("communications API", () => {
+  it("accepts generic server-returned sender emails and rejects malformed sender DTOs", async () => {
+    const valid = template("template-1", "receipt");
+    const fetcher = vi
+      .fn<TestFetcher>()
+      .mockResolvedValueOnce(jsonResponse({ templates: [valid] }))
+      .mockResolvedValueOnce(jsonResponse({ templates: [{ ...valid, sender: "not-an-email" }] }));
+    const api = createCommunicationApi("", "org-1", fetcher);
+
+    await expect(api.listTemplates("event-1")).resolves.toEqual([valid]);
+    await expect(api.listTemplates("event-1")).rejects.toMatchObject({
+      code: "COMMUNICATION_INVALID_RESPONSE",
+      status: 502,
+    });
+  });
+
   it("rejects malformed production template DTOs with a controlled validation error", async () => {
     const fetcher = vi.fn<TestFetcher>().mockResolvedValue(
       jsonResponse({
@@ -178,6 +193,40 @@ describe("communications API", () => {
       message: "Receipt templates unavailable",
       status: 503,
     });
+  });
+
+  it("creates templates without reconstructing or submitting a sender identity", async () => {
+    const created = template("template-created", "verification");
+    const fetcher = vi
+      .fn<TestFetcher>()
+      .mockResolvedValueOnce(jsonResponse(created, 201))
+      .mockResolvedValueOnce(jsonResponse({ ...created, sender: "not-an-email" }, 201));
+    const api = createCommunicationApi("", "org-1", fetcher);
+
+    await expect(
+      api.createTemplate({
+        eventId: "event-1",
+        name: "Login link",
+        purpose: "verification",
+        subject: "Your login link",
+        html: "<p>Open the link</p>",
+        text: "Open the link",
+      }),
+    ).resolves.toEqual(created);
+
+    const body = JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
+    expect(body).not.toHaveProperty("sender");
+
+    await expect(
+      api.createTemplate({
+        eventId: "event-1",
+        name: "Login link",
+        purpose: "verification",
+        subject: "Your login link",
+        html: "<p>Open the link</p>",
+        text: "Open the link",
+      }),
+    ).rejects.toMatchObject({ code: "COMMUNICATION_INVALID_RESPONSE", status: 502 });
   });
 
   it("sends previews with an idempotency key and preserves explicit API failures", async () => {

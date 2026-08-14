@@ -1,16 +1,16 @@
 import {
   type CalendarInvitationPayload,
-  calendarInvitationPayloadSchema,
-  openSendEmailPayloadSchema,
-} from "@eventloom/contracts";
-import { createCalendarInvitation } from "../../integrations/calendar/ical";
+  createCalendarInvitation,
+  validateCalendarInvitationPayload,
+} from "../../integrations/calendar";
 import {
-  DEFAULT_OPEN_SEND_SENDERS,
   OpenSendClient,
   type OpenSendMessage,
+  type OpenSendSenderAddresses,
+  type OpenSendSenderPurpose,
 } from "../../integrations/opensend";
 import { createCalendarOpenSendMessage } from "../../integrations/opensend/calendar-email";
-import { OpenSendError } from "../../integrations/opensend/types";
+import { OpenSendError, openSendMessageSchema } from "../../integrations/opensend/types";
 import {
   type CloudflareBindings,
   type CloudflareOutboxInvitationTransient,
@@ -430,6 +430,9 @@ export interface OutboxConsumerBindings extends CloudflareBindings {
   readonly OPENSEND_API_KEY?: string;
   readonly OPENSEND_SENDING_API_KEY?: string;
   readonly OPENSEND_API_URL?: string;
+  readonly AUTH_FROM_EMAIL?: string;
+  readonly SPEAKERS_FROM_EMAIL?: string;
+  readonly CALENDAR_FROM_EMAIL?: string;
   readonly WEBHOOK_DELIVERY_URL?: string;
   readonly WEBHOOK_DELIVERY_TOKEN?: string;
   readonly CACHE_INVALIDATION_URL?: string;
@@ -556,11 +559,10 @@ function parseInvitationTransient(value: unknown): CloudflareOutboxInvitationTra
   ) {
     return null;
   }
-  const result = openSendEmailPayloadSchema.safeParse(value.message);
+  const result = openSendMessageSchema.safeParse(value.message);
   if (!result.success) return null;
   const message = value.message as unknown as OpenSendMessage;
   if (
-    message.from !== DEFAULT_OPEN_SEND_SENDERS.auth ||
     message.to.length !== 1 ||
     message.to[0] !== value.recipient ||
     message.idempotencyKey !== `member-invitation:${value.invitationId}`
@@ -645,11 +647,49 @@ function emailPayloadEnvelope(value: unknown): unknown {
     : value;
 }
 
+function senderPurposeFromMachineMetadata(
+  value: Record<string, unknown>,
+): OpenSendSenderPurpose | undefined {
+  if (value.effect === "send_reminder" || value.effect === "send_crm_outreach") {
+    return "speakers";
+  }
+  if (
+    value.effect === "send_email" &&
+    typeof value.planId === "string" &&
+    typeof value.reviewerId === "string"
+  ) {
+    return "speakers";
+  }
+  switch (value.purpose ?? value.templatePurpose) {
+    case "verification":
+      return "auth";
+    case "schedule_publish":
+    case "schedule_update":
+    case "schedule_cancel":
+      return "calendar";
+    case "receipt":
+    case "reminder":
+    case "decision":
+    case "task":
+    case "organizer_group_email":
+      return "speakers";
+    default:
+      return undefined;
+  }
+}
+
 function parseEmailPayload(value: unknown): OpenSendMessage {
   const candidate = emailPayloadEnvelope(value);
-  const result = openSendEmailPayloadSchema.safeParse(candidate);
-  if (!result.success || !isRecord(candidate)) malformedPayload("communications");
-  return candidate as unknown as OpenSendMessage;
+  if (!isRecord(candidate)) malformedPayload("communications");
+  const senderPurpose =
+    candidate.senderPurpose ??
+    (isRecord(value)
+      ? (value.senderPurpose ?? senderPurposeFromMachineMetadata(value))
+      : undefined);
+  const message = senderPurpose === undefined ? candidate : { ...candidate, senderPurpose };
+  const result = openSendMessageSchema.safeParse(message);
+  if (!result.success) malformedPayload("communications");
+  return message as unknown as OpenSendMessage;
 }
 
 function payloadString(value: Record<string, unknown>, key: string): string {
@@ -693,9 +733,12 @@ function communicationStatusTarget(value: unknown): OutboxCommunicationStatusTar
 function parseCalendarPayload(value: unknown): CalendarInvitationPayload {
   const candidate =
     isRecord(value) && value.effect === "deliver_calendar_updates" ? value.payload : value;
-  const result = calendarInvitationPayloadSchema.safeParse(candidate);
-  if (!result.success) malformedPayload("calendar");
-  return result.data;
+  if (!isRecord(candidate)) malformedPayload("calendar");
+  try {
+    return validateCalendarInvitationPayload(candidate as unknown as CalendarInvitationPayload);
+  } catch {
+    return malformedPayload("calendar");
+  }
 }
 
 function parseWebhookPayload(value: unknown): { readonly deliveryId: string } {
@@ -839,11 +882,25 @@ function responseFailure(status: number, label: string): OutboxDeliveryError | n
   );
 }
 
+function senderPurposeForMessage(message: OpenSendMessage): OpenSendSenderPurpose {
+  if (message.senderPurpose !== undefined) return message.senderPurpose;
+  throw new OutboxDeliveryError(
+    "SENDER_PURPOSE_UNRESOLVED",
+    "The persisted email sender purpose cannot be determined safely.",
+    { retryable: false },
+  );
+}
+
 function createConfiguredAdapters(
   bindings: OutboxConsumerBindings,
   now: () => Date,
 ): OutboxAdapters {
   let client: OpenSendClient | undefined;
+  const senderAddresses: OpenSendSenderAddresses = {
+    auth: bindings.AUTH_FROM_EMAIL ?? "",
+    speakers: bindings.SPEAKERS_FROM_EMAIL ?? "",
+    calendar: bindings.CALENDAR_FROM_EMAIL ?? "",
+  };
   const openSend = (): OpenSendClient => {
     if (client !== undefined) return client;
     const key = bindings.OPENSEND_API_KEY ?? bindings.OPENSEND_SENDING_API_KEY;
@@ -855,13 +912,14 @@ function createConfiguredAdapters(
     client = new OpenSendClient({
       sendingApiKey: key,
       ...(bindings.OPENSEND_API_URL === undefined ? {} : { baseUrl: bindings.OPENSEND_API_URL }),
+      senderAddresses,
     });
     return client;
   };
 
   const sendCalendar: TopicAdapter<CalendarInvitationPayload> = async (payload) => {
     const invitation = createCalendarInvitation(payload, { generatedAt: now().toISOString() });
-    await openSend().send(createCalendarOpenSendMessage(payload, invitation));
+    await openSend().send(createCalendarOpenSendMessage(payload, invitation), "calendar");
     return undefined;
   };
 
@@ -921,7 +979,8 @@ function createConfiguredAdapters(
 
   return {
     communications: async (payload) => {
-      const result = await openSend().send(payload);
+      const purpose = senderPurposeForMessage(payload);
+      const result = await openSend().send(payload, purpose);
       return { providerMessageId: result.providerMessageId };
     },
     calendar: sendCalendar,
@@ -1222,7 +1281,7 @@ export class OutboxConsumer {
           payload = parseEmailPayload(job.payload);
         } else {
           assertInvitationTransientMatches(job, transient);
-          payload = transient.message;
+          payload = { ...transient.message, senderPurpose: "auth" };
         }
         const adapter = this.#adapters.communications ?? this.#adapters.email;
         if (adapter === undefined) throw adapterError(job.topic);

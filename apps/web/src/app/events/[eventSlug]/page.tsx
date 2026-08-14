@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { getPublishedProgramOrLocalDemo } from "@/features/embed/demo/projections";
+import { getPublishedProgram } from "@/features/embed/api";
 import { EmbedFrame, EmbedUnavailable } from "@/features/embed/embed-frame";
 import { parseEmbedQuery } from "@/features/embed/model";
 import { PublicSessionsView } from "@/features/embed/public-sessions";
@@ -23,11 +23,7 @@ export default async function PublicEventPage({ params, searchParams }: PublicEv
   }
 
   try {
-    const program = await getPublishedProgramOrLocalDemo(
-      apiBaseUrl,
-      eventSlug,
-      process.env.APP_ENV,
-    );
+    const program = await getPublishedProgram(apiBaseUrl, eventSlug, fetch, process.env.APP_ENV);
     const embedQuery = parseEmbedQuery(query);
     return (
       <EmbedFrame

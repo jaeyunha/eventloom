@@ -12,7 +12,17 @@ import {
   CardTitle,
 } from "../../components/ui/card";
 import { Checkbox } from "../../components/ui/checkbox";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../../components/ui/dialog";
 import { Field, FieldContent, FieldDescription, FieldLabel } from "../../components/ui/field";
+import { Input } from "../../components/ui/input";
 import { Progress } from "../../components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import {
@@ -21,7 +31,18 @@ import {
   type MemberApi,
   type OrganizationMember,
 } from "../members/api";
+import { OrganizerReviewOverview } from "./organizer-review-overview";
 import styles from "./review-workspace.module.css";
+import {
+  emptyReviewerInboxFilters,
+  filterReviewerInbox,
+  groupReviewerInbox,
+  type ReviewerInboxFilters,
+  type ReviewerInboxGroupBy,
+  type ReviewerInboxStatusView,
+  reviewerInboxItems,
+} from "./reviewer-inbox";
+import { scorecardPrimaryAction } from "./scorecard-action";
 
 export type ReviewWorkspaceMode = "organizer" | "evaluator";
 
@@ -221,8 +242,11 @@ export interface ReviewPlanAssignment {
 }
 type ApiAssignment = ReviewPlanAssignment;
 export interface EvaluatorAssignment {
+  readonly organizationId?: string | undefined;
+  readonly organizationName?: string | undefined;
   eventId: string;
   eventName: string;
+  readonly dueAt?: string | null | undefined;
   planId: string;
   planName: string;
   reviewVersion: number | undefined;
@@ -408,10 +432,14 @@ interface ApiReviewContext {
 }
 interface ApiReviewerWorkspacePlan {
   id: string;
+  organizationId?: string | undefined;
+  organizationName?: string | undefined;
   eventId: string;
+  eventName?: string | undefined;
   name: string;
   status: PlanStatus;
   blindReview: boolean;
+  closesAt: string | null;
   createdAt: string;
   updatedAt?: string;
 }
@@ -502,6 +530,19 @@ export function reviewerSelectionBlocked(
   return pendingAssignmentId !== null && nextAssignmentId !== selectedAssignmentId;
 }
 
+export function isHumanConfirmedReviewScore(score: {
+  origin: "human" | "ai";
+  humanConfirmedBy: string | null;
+  suggestionStatus?: "pending" | "accepted" | "edited" | "rejected" | "stale" | null;
+}): boolean {
+  return (
+    score.origin === "human" ||
+    (score.origin === "ai" &&
+      score.humanConfirmedBy !== null &&
+      (score.suggestionStatus === "accepted" || score.suggestionStatus === "edited"))
+  );
+}
+
 function apiBaseUrl(): string {
   return "";
 }
@@ -566,6 +607,20 @@ async function evaluationRequest<T>(
   }
   return body as T;
 }
+export async function reviseEvaluationPlan(
+  baseUrl: string,
+  planId: string,
+  expectedVersion: number,
+  fetcher: Fetcher = fetch,
+): Promise<ApiPlan> {
+  return evaluationRequest<ApiPlan>(
+    baseUrl,
+    `/plans/${encodeURIComponent(planId)}/revise`,
+    { method: "POST", body: JSON.stringify({ expectedVersion }) },
+    fetcher,
+  );
+}
+
 export interface DistributionPreviewInput {
   readonly roundId: string;
   readonly submissionIds: readonly string[];
@@ -719,9 +774,14 @@ export interface ReminderDeliveryFact {
   readonly runId?: string;
   readonly outboxId?: string;
   readonly providerId?: string;
+  readonly reviewerId?: string;
+  readonly roundId?: string | null;
   readonly status?: string;
   readonly timestamp?: string;
   readonly createdAt?: string;
+  readonly updatedAt?: string;
+  readonly completedAt?: string | null;
+  readonly lastErrorCode?: string | null;
 }
 
 export interface ReminderDeliveryResponse {
@@ -742,42 +802,89 @@ export function reminderDeliveryMessage(result: ReminderDeliveryResponse): strin
     ...(result.facts ?? []),
     ...(result.reminders ?? []),
     {
-      runId: result.runId,
-      outboxId: result.outboxId,
-      providerId: result.providerId,
-      status: result.status,
-      timestamp: result.timestamp,
-      createdAt: result.createdAt,
-    },
+      ...(result.runId === undefined ? {} : { runId: result.runId }),
+      ...(result.outboxId === undefined ? {} : { outboxId: result.outboxId }),
+      ...(result.providerId === undefined ? {} : { providerId: result.providerId }),
+      ...(result.status === undefined ? {} : { status: result.status }),
+      ...(result.timestamp === undefined ? {} : { timestamp: result.timestamp }),
+      ...(result.createdAt === undefined ? {} : { createdAt: result.createdAt }),
+    } satisfies ReminderDeliveryFact,
   ].filter((fact) =>
     Object.values(fact).some((value) => typeof value === "string" && value.trim().length > 0),
   );
   const delivered = facts.filter((fact) => fact.status?.toLowerCase() === "delivered");
-  const identifiers = facts
-    .flatMap((fact) =>
-      [fact.runId, fact.outboxId, fact.providerId].filter(
-        (value): value is string => typeof value === "string" && value.trim().length > 0,
-      ),
-    )
-    .join(", ");
-  const durableFacts = facts
-    .map((fact) =>
-      [
-        fact.status ? `status ${fact.status}` : null,
-        (fact.timestamp ?? fact.createdAt) ? `timestamp ${fact.timestamp ?? fact.createdAt}` : null,
-        fact.runId ? `run ${fact.runId}` : null,
-        fact.outboxId ? `outbox ${fact.outboxId}` : null,
-        fact.providerId ? `provider ${fact.providerId}` : null,
-      ]
-        .filter((value): value is string => value !== null)
-        .join(", "),
-    )
-    .filter((value) => value.length > 0)
-    .join("; ");
+  const failed = facts.filter((fact) => {
+    const status = fact.status?.toLowerCase();
+    return status === "failed" || status === "dead-letter";
+  });
   if (delivered.length > 0) {
-    return `Reminder delivery confirmed for ${delivered.length} durable record(s)${durableFacts.length > 0 ? `: ${durableFacts}` : identifiers.length > 0 ? ` (${identifiers})` : ""}.`;
+    return `Reminder delivery confirmed for ${delivered.length} reviewer${delivered.length === 1 ? "" : "s"}.`;
   }
-  return `Reminder request queued (${result.queued}); delivery is pending/unconfirmed and is not reported as delivered${durableFacts.length > 0 ? `: ${durableFacts}` : identifiers.length > 0 ? ` (${identifiers})` : ""}.`;
+  if (failed.length > 0) {
+    return `Reminder delivery failed for ${failed.length} reviewer${failed.length === 1 ? "" : "s"}.`;
+  }
+  const queued = result.queued > 0 ? result.queued : facts.length;
+  return `Reminder request queued for ${queued} reviewer${queued === 1 ? "" : "s"}; delivery is pending.`;
+}
+
+export async function loadReminderDeliveryFacts(
+  baseUrl: string,
+  planId: string,
+  fetcher: Fetcher = fetch,
+): Promise<readonly ReminderDeliveryFact[]> {
+  const result = await evaluationRequest<{ readonly facts: readonly ReminderDeliveryFact[] }>(
+    baseUrl,
+    `/plans/${encodeURIComponent(planId)}/reminders`,
+    {},
+    fetcher,
+  );
+  return result.facts;
+}
+
+export function reminderDeliveryForSelection(
+  facts: readonly ReminderDeliveryFact[],
+  roundId: string,
+  reviewerIds: readonly string[],
+): string {
+  const reviewerSet = new Set(reviewerIds);
+  const selectedFacts = facts.filter(
+    (fact) =>
+      fact.roundId === roundId &&
+      typeof fact.reviewerId === "string" &&
+      reviewerSet.has(fact.reviewerId),
+  );
+  return reminderDeliveryMessage({
+    queued: selectedFacts.length === 0 ? reviewerIds.length : 0,
+    facts: selectedFacts,
+  });
+}
+
+export function reminderReviewerIdsRequiringSend(
+  facts: readonly ReminderDeliveryFact[],
+  roundId: string,
+  reviewerIds: readonly string[],
+): readonly string[] {
+  const reusableStatuses = new Set(["queued", "processing", "delivered"]);
+  return reviewerIds.filter(
+    (reviewerId) =>
+      !facts.some(
+        (fact) =>
+          fact.roundId === roundId &&
+          fact.reviewerId === reviewerId &&
+          typeof fact.status === "string" &&
+          reusableStatuses.has(fact.status.toLowerCase()),
+      ),
+  );
+}
+
+export function reminderRequestPresentation(busy: boolean): Readonly<{
+  ariaBusy: boolean;
+  action: "idle" | "pending";
+}> {
+  return {
+    ariaBusy: busy,
+    action: busy ? "pending" : "idle",
+  };
 }
 
 function dateLabel(value: string | null): string {
@@ -793,12 +900,35 @@ function dateLabel(value: string | null): string {
     : value;
 }
 
+export function effectiveReviewClosesAt(plan: ApiPlan): string | null {
+  if (plan.closesAt !== null) return plan.closesAt;
+  return (
+    plan.rounds
+      .map((round) => round.closesAt)
+      .filter((value): value is string => value !== null)
+      .sort((left, right) => Date.parse(right) - Date.parse(left))[0] ?? null
+  );
+}
+
 function dateTimeLocalValue(value: string | null | undefined): string {
   if (!value) return "";
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return "";
   const pad = (part: number): string => String(part).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function authoringDateLabel(value: string | null | undefined): string {
+  if (!value) return "Not set";
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) return "Not set";
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(parsed);
 }
 
 function isoDateTimeValue(value: string): string | null {
@@ -936,8 +1066,8 @@ function mapPlan(
     eventName: eventId,
     planName: plan.name,
     status: plan.status,
-    opensAt: dateLabel(plan.createdAt),
-    closesAt: dateLabel(plan.closesAt),
+    opensAt: dateLabel(plan.rounds[0]?.opensAt ?? null),
+    closesAt: dateLabel(effectiveReviewClosesAt(plan)),
     blindReview: plan.blindReview,
     assignmentRule: plan.assignmentRule,
     ...(plan.reviewerProjection === undefined
@@ -1302,7 +1432,7 @@ function mapEvaluatorAssignment(
             ? "scheduled"
             : "open",
     opensAt: dateLabel(context.round.opensAt ?? plan.createdAt),
-    closesAt: dateLabel(context.round.closesAt),
+    closesAt: dateLabel(context.round.closesAt ?? plan.closesAt),
     completionPercent: 0,
     roundRevision: context.round.revision,
     rubricRevision: context.round.rubricRevision ?? context.rubricRevision,
@@ -1374,8 +1504,11 @@ function mapEvaluatorAssignment(
   ]);
   const resolvedEventId = context.assignment.eventId || plan.eventId;
   return {
+    organizationId: plan.organizationId ?? resolvedEventId,
+    organizationName: plan.organizationName ?? plan.organizationId ?? resolvedEventId,
     eventId: resolvedEventId,
-    eventName: resolvedEventId,
+    eventName: plan.eventName ?? resolvedEventId,
+    dueAt: round.closesAt ?? plan.closesAt,
     planId: context.assignment.planId || plan.id,
     planName: plan.name,
     reviewVersion: context.review?.version,
@@ -1385,7 +1518,7 @@ function mapEvaluatorAssignment(
       .filter(([criterionId, score]) => {
         const criterion = round.rubric.criteria.find((candidate) => candidate.id === criterionId);
         return (
-          score.humanConfirmedBy !== null &&
+          isHumanConfirmedReviewScore(score) &&
           criterion !== undefined &&
           criterionType(criterion) !== "free_text"
         );
@@ -1542,7 +1675,7 @@ function AssignmentStatusBadge({
           ? styles.statusRecused
           : styles.statusNeedsReview;
   return (
-    <Badge variant="outline" className={className}>
+    <Badge variant="outline" className={className} data-assignment-status={normalized}>
       {formatAssignmentStatus(status)}
     </Badge>
   );
@@ -1591,17 +1724,7 @@ function ReviewNavigation({
   mode,
   organizationId,
 }: Readonly<{ eventId?: string; mode: ReviewWorkspaceMode; organizationId?: string | undefined }>) {
-  if (mode === "evaluator") {
-    return (
-      <nav className={styles.reviewNavigation} aria-label="Reviewer navigation">
-        <Button asChild size="sm">
-          <Link href="/review" aria-current="page">
-            Review queue
-          </Link>
-        </Button>
-      </nav>
-    );
-  }
+  if (mode === "evaluator") return null;
   if (eventId === undefined) return null;
   const resolvedOrganizationId = configuredOrganizationId(organizationId);
   if (resolvedOrganizationId === null) return null;
@@ -1612,9 +1735,6 @@ function ReviewNavigation({
         <Link href={reviewBase} aria-current="page">
           Review plan
         </Link>
-      </Button>
-      <Button asChild size="sm" variant="ghost">
-        <Link href={`${reviewBase}/evaluate`}>Assigned review</Link>
       </Button>
       {resolvedOrganizationId === null ? null : (
         <Button asChild size="sm" variant="ghost">
@@ -2191,6 +2311,8 @@ function OrganizerAuthoring({
   reviewerMembersError,
   onAuthoritativePlan,
   onAssignmentsPersisted,
+  assignmentOnly = false,
+  assignmentTarget,
 }: Readonly<{
   seed: ReviewPlanSeed;
   baseUrl: string;
@@ -2199,6 +2321,13 @@ function OrganizerAuthoring({
   reviewerMembersError: string | null;
   onAuthoritativePlan?: ((plan: ApiPlan) => void) | undefined;
   onAssignmentsPersisted?: (() => Promise<void>) | undefined;
+  assignmentOnly?: boolean;
+  assignmentTarget?:
+    | {
+        readonly roundId: string;
+        readonly submissionId: string;
+      }
+    | undefined;
 }>) {
   const initialRounds: readonly ApiPlan["rounds"][number][] =
     seed.sourceRounds ??
@@ -2240,11 +2369,31 @@ function OrganizerAuthoring({
   const [message, setMessage] = useState<string | null>(null);
   const [assignmentSubmissionId, setAssignmentSubmissionId] = useState("");
   const [assignmentReviewerIds, setAssignmentReviewerIds] = useState<readonly string[]>([]);
+  const [assignmentReviewerQuery, setAssignmentReviewerQuery] = useState("");
   const [version, setVersion] = useState(seed.version);
   const [status, setStatus] = useState(seed.status);
   const [busy, setBusy] = useState(false);
   const reviewerIdSet = new Set(reviewerMembers.map((member) => member.userId));
   const reviewerDirectoryReady = !reviewerMembersLoading && reviewerMembersError === null;
+  const isDraft = status === "draft";
+  const criterionCount = rounds.reduce((total, round) => total + round.rubric.criteria.length, 0);
+  const planStatusLabel =
+    status === "open" ? "Open for review" : status === "closed" ? "Review closed" : "Draft";
+  const normalizedAssignmentReviewerQuery = assignmentReviewerQuery.trim().toLowerCase();
+  const matchingAssignmentReviewerMembers = reviewerMembers.filter((member) =>
+    [member.name, member.email]
+      .filter((value): value is string => typeof value === "string")
+      .some((value) => value.toLowerCase().includes(normalizedAssignmentReviewerQuery)),
+  );
+  const visibleAssignmentReviewerMembers = matchingAssignmentReviewerMembers.slice(0, 8);
+  const assignmentReviewerSelectionDisabled =
+    busy || status !== "open" || reviewerMembersLoading || reviewerMembersError !== null;
+
+  useEffect(() => {
+    if (assignmentTarget === undefined) return;
+    setAssignmentRoundId(assignmentTarget.roundId);
+    setAssignmentSubmissionId(assignmentTarget.submissionId);
+  }, [assignmentTarget]);
 
   useEffect(() => {
     const authoritativeReviewerIds = reviewerIdsForAssignmentTarget(
@@ -2268,11 +2417,32 @@ function OrganizerAuthoring({
     seed.assignments,
   ]);
   const assignmentSelectionKey = `${assignmentRoundId}:${assignmentSubmissionId}:${assignmentReviewerIds.join(",")}:${version}`;
+  const assignmentSelectionKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    if (assignmentSelectionKey.length === 0) return;
+    if (assignmentSelectionKeyRef.current === null) {
+      assignmentSelectionKeyRef.current = assignmentSelectionKey;
+      return;
+    }
+    if (assignmentSelectionKeyRef.current === assignmentSelectionKey) return;
+    assignmentSelectionKeyRef.current = assignmentSelectionKey;
     setAssignmentPreview(null);
     setAssignmentPreviewKey(null);
   }, [assignmentSelectionKey]);
+
+  function removeCriterion(roundIndex: number, criterionIndex: number): void {
+    setRounds((currentRounds) =>
+      currentRounds.map((round, currentRoundIndex) => {
+        if (currentRoundIndex !== roundIndex || round.rubric.criteria.length <= 1) return round;
+        return {
+          ...round,
+          rubric: {
+            ...round.rubric,
+            criteria: round.rubric.criteria.filter((_, index) => index !== criterionIndex),
+          },
+        };
+      }),
+    );
+  }
 
   function updateRound(
     roundIndex: number,
@@ -2423,6 +2593,37 @@ function OrganizerAuthoring({
       setBusy(false);
     }
   }
+
+  async function saveSchedule(): Promise<void> {
+    if (status !== "open") return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const updated = await evaluationRequest<ApiPlan>(
+        baseUrl,
+        `/plans/${encodeURIComponent(seed.planId)}/schedule`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            expectedVersion: version,
+            closesAt: planClosesAt.trim().length === 0 ? null : planClosesAt,
+          }),
+        },
+      );
+      setPlanClosesAt(updated.closesAt ?? "");
+      setVersion(updated.version);
+      setStatus(updated.status);
+      onAuthoritativePlan?.(updated);
+      setMessage("Review closing date saved.");
+    } catch (reason: unknown) {
+      setMessage(
+        reason instanceof Error ? reason.message : "The review closing date could not be saved.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function previewAssignments(): Promise<void> {
     if (status !== "open") {
       setAssignmentPreview(null);
@@ -2568,643 +2769,958 @@ function OrganizerAuthoring({
     }
   }
 
+  async function reviseToDraft(): Promise<void> {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const revision = await reviseEvaluationPlan(baseUrl, seed.planId, version);
+      setMessage(
+        "Editable draft revision created. Historical grading remains on the original plan.",
+      );
+      setRounds(revision.rounds);
+      setName(revision.name);
+      setBlindReview(revision.blindReview);
+      setPlanClosesAt(revision.closesAt ?? "");
+      setReviewsPerSubmission(revision.assignmentRule.reviewsPerSubmission);
+      setMaxAssignmentsPerReviewer(revision.assignmentRule.maxAssignmentsPerReviewer);
+      setFieldIds(revision.reviewerProjection?.fieldIds?.join(", ") ?? "");
+      setFileIds(revision.reviewerProjection?.fileIds?.join(", ") ?? "");
+      setVersion(revision.version);
+      setStatus(revision.status);
+      onAuthoritativePlan?.(revision);
+    } catch (reason: unknown) {
+      setMessage(
+        reason instanceof Error
+          ? reason.message
+          : "The editable plan revision could not be created.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
-    <section className={styles.section} aria-labelledby="authoring-heading">
+    <section
+      className={`${styles.section} ${assignmentOnly ? "" : styles.authoringSection}`}
+      aria-labelledby="authoring-heading"
+    >
       <div className={styles.sectionHeading}>
         <div>
-          <p className={styles.sectionEyebrow}>Organizer authoring</p>
-          <h2 id="authoring-heading">Configure the evaluation plan</h2>
+          <p className={styles.sectionEyebrow}>
+            {assignmentOnly ? "Coverage operations" : "Organizer authoring"}
+          </p>
+          <h2 id="authoring-heading">
+            {assignmentOnly
+              ? "Manage reviewer coverage"
+              : isDraft
+                ? "Draft configuration"
+                : "Live configuration"}
+          </h2>
         </div>
-        <span className={styles.mutedLabel}>Draft version {version}</span>
+        {!assignmentOnly ? (
+          <div className={styles.authoringStatus}>
+            <Badge variant={status === "open" ? "default" : "outline"}>{planStatusLabel}</Badge>
+            <span className={styles.mutedLabel}>Version {version}</span>
+          </div>
+        ) : null}
       </div>
       <p className={styles.sectionIntro}>
-        Edit rounds, rubric criteria, bounds, weights, and assignment limits while the plan is a
-        draft. Opening the plan locks grading configuration.
+        {assignmentOnly
+          ? "Choose a submission that needs attention, fill missing reviewer slots, preview coverage, and apply coverage without editing the plan or rubric. Existing assignments remain unchanged."
+          : isDraft
+            ? "Shape the review schedule, reviewer eligibility, and rubric before opening this version for reviewers."
+            : "Inspect the live grading configuration. Its rounds and rubric are locked to protect existing assignments and reviews; create a revision before changing them."}
       </p>
-      <div className={styles.formField}>
-        <label htmlFor="evaluation-plan-name">Plan name</label>
-        <input
-          id="evaluation-plan-name"
-          value={name}
-          onChange={(event) => setName(event.currentTarget.value)}
-        />
-      </div>
-      <div className={styles.formField}>
-        <label htmlFor="evaluation-plan-closes-at">Review closes</label>
-        <input
-          id="evaluation-plan-closes-at"
-          type="datetime-local"
-          value={dateTimeLocalValue(planClosesAt)}
-          onChange={(event) => setPlanClosesAt(isoDateTimeValue(event.currentTarget.value) ?? "")}
-        />
-      </div>
-      <details className={styles.disclosure}>
-        <summary>Assignment and reviewer visibility</summary>
-        <p className={styles.fieldHint}>
-          Keep the planning details below closed until you need to adjust reviewer coverage or
-          visibility.
-        </p>
-        <div className={styles.summaryGrid}>
-          <div className={styles.formField}>
-            <label htmlFor="reviews-per-submission">Reviews per submission</label>
-            <input
-              id="reviews-per-submission"
-              type="number"
-              min={1}
-              value={reviewsPerSubmission}
-              onChange={(event) =>
-                setReviewsPerSubmission(
-                  parseNumericAuthoringValue(reviewsPerSubmission, event.currentTarget.value),
-                )
-              }
-            />
-          </div>
-          <div className={styles.formField}>
-            <label htmlFor="max-assignments-per-reviewer">Maximum assignments per reviewer</label>
-            <input
-              id="max-assignments-per-reviewer"
-              type="number"
-              min={1}
-              value={maxAssignmentsPerReviewer}
-              onChange={(event) =>
-                setMaxAssignmentsPerReviewer(
-                  parseNumericAuthoringValue(maxAssignmentsPerReviewer, event.currentTarget.value),
-                )
-              }
-            />
-          </div>
-          <Field orientation="horizontal" className={styles.checkboxField}>
-            <Checkbox
-              id="blind-review-setting"
-              checked={blindReview}
-              onCheckedChange={(checked) => setBlindReview(checked === true)}
-            />
-            <FieldContent>
-              <FieldLabel htmlFor="blind-review-setting">Blind review</FieldLabel>
-              <FieldDescription>
-                Keep identity fields outside the evaluator projection.
-              </FieldDescription>
-            </FieldContent>
-          </Field>
-        </div>
-        <div className={styles.summaryGrid}>
-          <div className={styles.formField}>
-            <label htmlFor="reviewer-visible-fields">Evaluator-visible fields</label>
-            <input
-              id="reviewer-visible-fields"
-              value={fieldIds}
-              onChange={(event) => setFieldIds(event.currentTarget.value)}
-              placeholder="abstract, audience"
-              aria-describedby="projection-help"
-            />
-          </div>
-          <div className={styles.formField}>
-            <label htmlFor="reviewer-visible-files">Evaluator-visible files</label>
-            <input
-              id="reviewer-visible-files"
-              value={fileIds}
-              onChange={(event) => setFileIds(event.currentTarget.value)}
-              placeholder="file-id-1"
-              aria-describedby="projection-help"
-            />
-          </div>
-        </div>
-        <p className={styles.fieldHint} id="projection-help">
-          Only the fields and files listed here are shown to reviewers; everything else stays
-          private.
-        </p>
-        <div className={styles.summaryGrid} style={assignmentControlGridStyle}>
-          <fieldset className={styles.formField} style={assignmentControlFieldStyle}>
-            <legend className={styles.cardLabel}>Assignment target</legend>
-            <label htmlFor="assignment-round-id">Round for assignment</label>
-            <select
-              id="assignment-round-id"
-              style={assignmentControlSelectStyle}
-              value={assignmentRoundId}
-              disabled={busy || status !== "open"}
-              onChange={(event) => setAssignmentRoundId(event.currentTarget.value)}
-            >
-              {rounds.map((round) => (
-                <option value={round.id} key={round.id}>
-                  {round.name}
-                </option>
-              ))}
-            </select>
-          </fieldset>
-          <fieldset className={styles.formField} style={assignmentControlFieldStyle}>
-            <legend className={styles.cardLabel}>Assignment tooling</legend>
-            <span className={styles.fieldHint}>
-              The plan cap is {maxAssignmentsPerReviewer} assignments per reviewer. Choose the
-              complete reviewer set; an empty selection clears all active assignments. Preview
-              before posting the replacement.
+      {assignmentOnly ? (
+        <section
+          className={styles.assignmentCoverageTask}
+          aria-labelledby="assignment-task-heading"
+        >
+          <div className={styles.assignmentTaskHeader}>
+            <div>
+              <p className={styles.sectionEyebrow}>Assignment task</p>
+              <h3 id="assignment-task-heading">Fill missing reviewer slots</h3>
+            </div>
+            <span className={styles.assignmentSelectionCount} aria-live="polite">
+              {assignmentReviewerIds.length} selected
             </span>
-          </fieldset>
-        </div>
-        <div className={styles.summaryGrid} style={assignmentControlGridStyle}>
-          <fieldset className={styles.formField} style={assignmentControlFieldStyle}>
-            <legend className={styles.cardLabel}>Submission target</legend>
-            <label htmlFor="assignment-submission-id">
-              Submission for reviewer-set replacement
-            </label>
-            <select
-              id="assignment-submission-id"
-              style={assignmentControlSelectStyle}
-              value={assignmentSubmissionId}
-              onChange={(event) => setAssignmentSubmissionId(event.currentTarget.value)}
-              disabled={busy || status !== "open" || seed.aggregates.length === 0}
-              required
-              aria-describedby="assignment-submission-help"
-            >
-              <option value="">Choose a submission</option>
-              {seed.aggregates.map((aggregate) => (
-                <option value={aggregate.id} key={aggregate.id}>
-                  {aggregate.reference} · {aggregate.title}
-                </option>
-              ))}
-            </select>
-            <span className={styles.fieldHint} id="assignment-submission-help">
-              {seed.aggregates.length === 0
-                ? "No submissions are available for reviewer-set replacement."
-                : "Choose a submission from the authoritative event material; the reviewer selection replaces its complete active set."}
-            </span>
-          </fieldset>
-          <fieldset className={styles.formField} style={assignmentControlFieldStyle}>
-            <legend className={styles.cardLabel}>Reviewer replacement set</legend>
-            <label htmlFor="assignment-reviewer-ids">
-              Verified organization reviewers (complete replacement set)
-            </label>
-            <select
-              id="assignment-reviewer-ids"
-              style={assignmentControlSelectStyle}
-              multiple
-              size={Math.max(3, Math.min(8, reviewerMembers.length || 3))}
-              value={[...assignmentReviewerIds]}
-              disabled={
-                busy || status !== "open" || reviewerMembersLoading || reviewerMembersError !== null
-              }
-              onChange={(event) =>
-                setAssignmentReviewerIds(
-                  [...event.currentTarget.selectedOptions].map((option) => option.value),
-                )
-              }
+          </div>
+          <div className={styles.summaryGrid} style={assignmentControlGridStyle}>
+            <fieldset className={styles.formField} style={assignmentControlFieldStyle}>
+              <label htmlFor="assignment-round-id">Round</label>
+              <select
+                id="assignment-round-id"
+                style={assignmentControlSelectStyle}
+                value={assignmentRoundId}
+                disabled={busy || status !== "open"}
+                onChange={(event) => setAssignmentRoundId(event.currentTarget.value)}
+              >
+                {rounds.map((round) => (
+                  <option value={round.id} key={round.id}>
+                    {round.name}
+                  </option>
+                ))}
+              </select>
+            </fieldset>
+            <fieldset className={styles.formField} style={assignmentControlFieldStyle}>
+              <legend className={styles.cardLabel}>Coverage guidance</legend>
+              <span className={styles.fieldHint}>
+                The plan cap is {maxAssignmentsPerReviewer} assignments per reviewer. Select
+                reviewer candidates to fill missing reviewer slots. Existing assignments remain
+                unchanged.
+              </span>
+            </fieldset>
+          </div>
+          <div className={styles.summaryGrid} style={assignmentControlGridStyle}>
+            <fieldset className={styles.formField} style={assignmentControlFieldStyle}>
+              <label htmlFor="assignment-submission-id">Submission needing coverage</label>
+              <select
+                id="assignment-submission-id"
+                style={assignmentControlSelectStyle}
+                value={assignmentSubmissionId}
+                onChange={(event) => setAssignmentSubmissionId(event.currentTarget.value)}
+                disabled={busy || status !== "open" || seed.aggregates.length === 0}
+                required
+                aria-describedby="assignment-submission-help"
+              >
+                <option value="">Choose a submission</option>
+                {seed.aggregates.map((aggregate) => (
+                  <option value={aggregate.id} key={aggregate.id}>
+                    {aggregate.reference} · {aggregate.title}
+                  </option>
+                ))}
+              </select>
+              <span className={styles.fieldHint} id="assignment-submission-help">
+                {seed.aggregates.length === 0
+                  ? "No submissions are available for coverage."
+                  : "Choose a submission from the authoritative event material. Existing assignments remain unchanged."}
+              </span>
+            </fieldset>
+            <fieldset
+              className={`${styles.formField} ${styles.assignmentReviewerCandidates}`}
+              style={assignmentControlFieldStyle}
               aria-describedby="assignment-reviewer-help"
             >
-              {reviewerMembers.map((member) => (
-                <option value={member.userId} key={member.userId}>
-                  {member.name ?? member.email} · {member.email}
-                </option>
-              ))}
-            </select>
-            <span className={styles.fieldHint} id="assignment-reviewer-help">
-              {reviewerMembersLoading
-                ? "Loading active, verified organization reviewers…"
-                : (reviewerMembersError ??
-                  (reviewerMembers.length === 0
-                    ? "No active, verified organization reviewers are available."
-                    : "Selection replaces every active assignment for this round and submission; leave it empty to clear all. Names and email addresses are display-only; assignments submit each member user ID."))}
-            </span>
-          </fieldset>
-        </div>
-        <Button
-          type="button"
-          variant="outline"
-          onClick={previewAssignments}
-          disabled={busy || status !== "open" || !reviewerDirectoryReady}
-        >
-          Preview authoritative reviewer distribution
-        </Button>
-        {assignmentPreview ? (
-          <div className={styles.fieldHint} role="status" aria-live="polite">
-            <p>
-              Fingerprint: <code>{assignmentPreview.fingerprint}</code>
-            </p>
-            <p>
-              Desired assignments ({assignmentPreview.desiredAssignments.length}):{" "}
-              {[...assignmentPreview.desiredAssignments]
-                .sort(
-                  (left, right) =>
-                    left.submissionId.localeCompare(right.submissionId) ||
-                    left.reviewerId.localeCompare(right.reviewerId),
-                )
-                .map(
-                  (assignment) =>
-                    `${assignment.submissionId} → ${assignment.reviewerId}${assignment.existingAssignmentId ? ` (existing ${assignment.existingAssignmentId})` : ""}`,
-                )
-                .join(", ") || "none"}
-            </p>
-            <p>
-              Deficits ({assignmentPreview.deficits.length}):{" "}
-              {[...assignmentPreview.deficits]
-                .sort((left, right) => left.submissionId.localeCompare(right.submissionId))
-                .map(
-                  (deficit) =>
-                    `${deficit.submissionId}: ${deficit.missingReviewCount} (${deficit.reason})`,
-                )
-                .join(", ") || "none"}
-            </p>
-            <p>
-              Exclusions ({assignmentPreview.exclusions.length}):{" "}
-              {[...assignmentPreview.exclusions]
-                .sort(
-                  (left, right) =>
-                    left.submissionId.localeCompare(right.submissionId) ||
-                    left.reviewerId.localeCompare(right.reviewerId),
-                )
-                .map(
-                  (exclusion) =>
-                    `${exclusion.submissionId}/${exclusion.reviewerId}: ${exclusion.reason}`,
-                )
-                .join(", ") || "none"}
-            </p>
-            <p>
-              Submission revisions:{" "}
-              {[...assignmentPreview.submissionRevisions]
-                .sort((left, right) => left.submissionId.localeCompare(right.submissionId))
-                .map((revision) => `${revision.submissionId}=${revision.revision}`)
-                .join(", ") || "none"}
-            </p>
+              <legend className={styles.cardLabel}>Reviewer candidates</legend>
+              <div className={styles.assignmentCandidateToolbar}>
+                <label htmlFor="assignment-reviewer-search">Search reviewers</label>
+                <Input
+                  id="assignment-reviewer-search"
+                  type="search"
+                  value={assignmentReviewerQuery}
+                  onChange={(event) => setAssignmentReviewerQuery(event.currentTarget.value)}
+                  placeholder="Name or email"
+                  disabled={assignmentReviewerSelectionDisabled}
+                  aria-controls="assignment-reviewer-candidates"
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => setAssignmentReviewerIds([])}
+                  disabled={
+                    assignmentReviewerSelectionDisabled || assignmentReviewerIds.length === 0
+                  }
+                >
+                  Clear selection
+                </Button>
+              </div>
+              <ul
+                id="assignment-reviewer-candidates"
+                className={styles.assignmentCandidateList}
+                aria-label="Verified organization reviewers"
+              >
+                {visibleAssignmentReviewerMembers.map((member) => {
+                  const inputId = `assignment-reviewer-${member.userId}`;
+                  const checked = assignmentReviewerIds.includes(member.userId);
+                  return (
+                    <li key={member.userId}>
+                      <Field orientation="horizontal" className={styles.assignmentCandidate}>
+                        <Checkbox
+                          id={inputId}
+                          checked={checked}
+                          disabled={assignmentReviewerSelectionDisabled}
+                          onCheckedChange={(nextChecked) =>
+                            setAssignmentReviewerIds((current) =>
+                              nextChecked === true
+                                ? [...new Set([...current, member.userId])]
+                                : current.filter((reviewerId) => reviewerId !== member.userId),
+                            )
+                          }
+                        />
+                        <FieldContent>
+                          <FieldLabel htmlFor={inputId}>{member.name ?? member.email}</FieldLabel>
+                          <FieldDescription>{member.email}</FieldDescription>
+                        </FieldContent>
+                      </Field>
+                    </li>
+                  );
+                })}
+              </ul>
+              <span className={styles.fieldHint} id="assignment-reviewer-help">
+                {reviewerMembersLoading
+                  ? "Loading active, verified organization reviewers…"
+                  : (reviewerMembersError ??
+                    (reviewerMembers.length === 0
+                      ? "No active, verified organization reviewers are available."
+                      : matchingAssignmentReviewerMembers.length === 0
+                        ? "No reviewers match that search."
+                        : `${visibleAssignmentReviewerMembers.length} of ${matchingAssignmentReviewerMembers.length} matching reviewers shown. Names and email addresses are display-only; assignments submit each member user ID.`))}
+              </span>
+            </fieldset>
           </div>
-        ) : null}
-        <Button
-          type="button"
-          variant="outline"
-          onClick={() => void assignReviewers()}
-          disabled={
-            busy || status !== "open" || !reviewerDirectoryReady || assignmentPreview === null
-          }
-        >
-          Apply authoritative reviewer distribution
-        </Button>
-      </details>
-      <div className={styles.scoreList}>
-        {rounds.map((round, roundIndex) => (
-          <fieldset className={styles.scoreCard} key={round.id}>
-            <legend>{round.name}</legend>
-            <div className={styles.formField}>
-              <label htmlFor={`${round.id}-name`}>Round name</label>
-              <input
-                id={`${round.id}-name`}
-                value={round.name}
-                onChange={(event) => {
-                  const nextName = event.currentTarget.value;
-                  updateRound(roundIndex, (current) => ({
-                    ...current,
-                    name: nextName,
-                  }));
-                }}
-              />
-            </div>
-            <div className={styles.formField}>
-              <label htmlFor={`${round.id}-rubric`}>Rubric name</label>
-              <input
-                id={`${round.id}-rubric`}
-                value={round.rubric.name}
-                onChange={(event) => {
-                  const nextRubricName = event.currentTarget.value;
-                  updateRound(roundIndex, (current) => ({
-                    ...current,
-                    rubric: {
-                      ...current.rubric,
-                      name: nextRubricName,
-                    },
-                  }));
-                }}
-              />
-            </div>
-            <div className={styles.formField}>
-              <label htmlFor={`${round.id}-closes-at`}>Round closes</label>
-              <input
-                id={`${round.id}-closes-at`}
-                type="datetime-local"
-                value={dateTimeLocalValue(round.closesAt)}
-                onChange={(event) => {
-                  const nextClosesAt = isoDateTimeValue(event.currentTarget.value);
-                  updateRound(roundIndex, (current) => ({
-                    ...current,
-                    closesAt: nextClosesAt,
-                  }));
-                }}
-              />
-            </div>
-            <div className={styles.summaryGrid}>
-              <div className={styles.formField}>
-                <label htmlFor={`${round.id}-opens-at`}>Round opens</label>
-                <input
-                  id={`${round.id}-opens-at`}
-                  type="datetime-local"
-                  value={dateTimeLocalValue(round.opensAt)}
-                  onChange={(event) => {
-                    const nextOpensAt = isoDateTimeValue(event.currentTarget.value);
-                    updateRound(roundIndex, (current) => ({
-                      ...current,
-                      opensAt: nextOpensAt,
-                    }));
-                  }}
-                />
-              </div>
-              <div className={styles.formField}>
-                <label htmlFor={`${round.id}-anonymization`}>Anonymization / blind review</label>
-                <select
-                  id={`${round.id}-anonymization`}
-                  value={round.anonymization ?? (round.blindReview ? "double" : "none")}
-                  onChange={(event) => {
-                    const nextAnonymization = event.currentTarget.value as
-                      | "none"
-                      | "single"
-                      | "double";
-                    updateRound(roundIndex, (current) => ({
-                      ...current,
-                      anonymization: nextAnonymization,
-                      blindReview: nextAnonymization !== "none",
-                    }));
-                  }}
-                >
-                  <option value="none">No anonymization</option>
-                  <option value="single">Single-blind</option>
-                  <option value="double">Double-blind</option>
-                </select>
-              </div>
-            </div>
-            <div className={styles.summaryGrid} style={assignmentControlGridStyle}>
-              <fieldset className={styles.formField} style={assignmentControlFieldStyle}>
-                <legend className={styles.cardLabel}>Round reviewer pool</legend>
-                <label htmlFor={`${round.id}-reviewer-pool`}>
-                  Verified organization reviewers for this round
-                </label>
-                <select
-                  id={`${round.id}-reviewer-pool`}
-                  style={assignmentControlSelectStyle}
-                  multiple
-                  size={Math.max(3, Math.min(8, reviewerMembers.length || 3))}
-                  value={(round.reviewerPool?.reviewerIds ?? []).filter((reviewerId) =>
-                    reviewerIdSet.has(reviewerId),
-                  )}
-                  disabled={busy || reviewerMembersLoading || reviewerMembersError !== null}
-                  onChange={(event) => {
-                    const nextReviewerIds = [...event.currentTarget.selectedOptions].map(
-                      (option) => option.value,
-                    );
-                    updateRound(roundIndex, (current) => ({
-                      ...current,
-                      reviewerPool: {
-                        ...(current.reviewerPool ?? {}),
-                        reviewerIds: nextReviewerIds,
-                      },
-                    }));
-                  }}
-                  aria-describedby={`${round.id}-pool-help`}
-                >
-                  {reviewerMembers.map((member) => (
-                    <option value={member.userId} key={member.userId}>
-                      {member.name ?? member.email} · {member.email}
-                    </option>
-                  ))}
-                </select>
-                <span className={styles.fieldHint} id={`${round.id}-pool-help`}>
-                  {reviewerMembersLoading
-                    ? "Loading active, verified organization reviewers…"
-                    : (reviewerMembersError ??
-                      `This pool applies only to ${round.name}; other rounds have independent pools. Member names are display-only.`)}
-                </span>
-              </fieldset>
-              <fieldset className={styles.formField} style={assignmentControlFieldStyle}>
-                <legend className={styles.cardLabel}>Bulk assignment filter</legend>
-                <label htmlFor={`${round.id}-track-filter`}>Track filter for bulk assignment</label>
-                <input
-                  id={`${round.id}-track-filter`}
-                  value={round.trackFilter ?? ""}
-                  onChange={(event) => {
-                    const nextTrackFilter = event.currentTarget.value.trim() || null;
-                    updateRound(roundIndex, (current) => ({
-                      ...current,
-                      trackFilter: nextTrackFilter,
-                    }));
-                  }}
-                  placeholder="Platform & Infra"
-                />
-              </fieldset>
-            </div>
-            <section
-              className={styles.criteriaList}
-              aria-label={`${round.name} criteria authoring`}
-            >
-              {round.rubric.criteria.map((criterion, criterionIndex) => (
-                <fieldset className={styles.criterionEditor} key={criterion.id}>
-                  <legend>
-                    Criterion {criterionIndex + 1}: {criterion.label || "Untitled criterion"}
-                  </legend>
-                  <div className={styles.criterionEditorGrid}>
-                    <div className={styles.formField}>
-                      <label htmlFor={`${round.id}-criterion-${criterionIndex}-label`}>Label</label>
-                      <input
-                        id={`${round.id}-criterion-${criterionIndex}-label`}
-                        aria-label={`${round.name} criterion ${criterionIndex + 1} label`}
-                        value={criterion.label}
-                        onChange={(event) => {
-                          const nextLabel = event.currentTarget.value;
-                          updateCriterion(roundIndex, criterionIndex, (current) => ({
-                            ...current,
-                            label: nextLabel,
-                          }));
-                        }}
-                      />
-                    </div>
-                    <div className={styles.formField}>
-                      <label htmlFor={`${round.id}-criterion-${criterionIndex}-type`}>
-                        Input type
-                      </label>
-                      <select
-                        id={`${round.id}-criterion-${criterionIndex}-type`}
-                        aria-label={`${criterion.label} input type`}
-                        value={criterionType(criterion)}
-                        onChange={(event) => {
-                          const nextType = event.currentTarget.value as CriterionInputType;
-                          updateCriterion(roundIndex, criterionIndex, (current) => ({
-                            ...current,
-                            inputType: nextType,
-                            ...(nextType === "dropdown" ? {} : { options: undefined }),
-                          }));
-                        }}
-                      >
-                        <option value="numeric">Numeric rating</option>
-                        <option value="dropdown">Dropdown</option>
-                        <option value="free_text">Free text</option>
-                      </select>
-                    </div>
-                    <div className={styles.formField}>
-                      <label htmlFor={`${round.id}-criterion-${criterionIndex}-options`}>
-                        Dropdown options
-                      </label>
-                      <input
-                        id={`${round.id}-criterion-${criterionIndex}-options`}
-                        aria-label={`${criterion.label} dropdown options`}
-                        value={(criterion.options ?? []).map((option) => option.label).join(", ")}
-                        disabled={criterionType(criterion) !== "dropdown"}
-                        onChange={(event) => {
-                          const nextOptionLabels = event.currentTarget.value
-                            .split(",")
-                            .map((value) => value.trim())
-                            .filter((value) => value.length > 0);
-                          updateCriterion(roundIndex, criterionIndex, (current) => ({
-                            ...current,
-                            options: nextOptionLabels.map((value, index) => ({
-                              id: `${current.id}-option-${index + 1}`,
-                              label: value,
-                              value,
-                            })),
-                          }));
-                        }}
-                        placeholder="Accept, Maybe, Reject"
-                      />
-                    </div>
-                    <div className={styles.formField}>
-                      <label htmlFor={`${round.id}-criterion-${criterionIndex}-description`}>
-                        Description
-                      </label>
-                      <textarea
-                        id={`${round.id}-criterion-${criterionIndex}-description`}
-                        aria-label={`${criterion.label} description`}
-                        value={criterion.description}
-                        onChange={(event) => {
-                          const nextDescription = event.currentTarget.value;
-                          updateCriterion(roundIndex, criterionIndex, (current) => ({
-                            ...current,
-                            description: nextDescription,
-                          }));
-                        }}
-                        rows={3}
-                      />
-                    </div>
-                    <div className={styles.criterionBounds}>
-                      <div className={styles.formField}>
-                        <label htmlFor={`${round.id}-criterion-${criterionIndex}-minimum`}>
-                          Minimum
-                        </label>
-                        <input
-                          id={`${round.id}-criterion-${criterionIndex}-minimum`}
-                          aria-label={`${criterion.label} minimum`}
-                          type="number"
-                          value={criterion.minimum}
-                          onChange={(event) => {
-                            const nextMinimum = event.currentTarget.value;
-                            updateCriterion(roundIndex, criterionIndex, (current) => ({
-                              ...current,
-                              minimum: parseNumericAuthoringValue(current.minimum, nextMinimum),
-                            }));
-                          }}
-                        />
-                      </div>
-                      <div className={styles.formField}>
-                        <label htmlFor={`${round.id}-criterion-${criterionIndex}-maximum`}>
-                          Maximum
-                        </label>
-                        <input
-                          id={`${round.id}-criterion-${criterionIndex}-maximum`}
-                          aria-label={`${criterion.label} maximum`}
-                          type="number"
-                          value={criterion.maximum}
-                          onChange={(event) => {
-                            const nextMaximum = event.currentTarget.value;
-                            updateCriterion(roundIndex, criterionIndex, (current) => ({
-                              ...current,
-                              maximum: parseNumericAuthoringValue(current.maximum, nextMaximum),
-                            }));
-                          }}
-                        />
-                      </div>
-                      <div className={styles.formField}>
-                        <label htmlFor={`${round.id}-criterion-${criterionIndex}-weight`}>
-                          Weight
-                        </label>
-                        <input
-                          id={`${round.id}-criterion-${criterionIndex}-weight`}
-                          aria-label={`${criterion.label} weight`}
-                          type="number"
-                          min={0.01}
-                          step={0.01}
-                          value={criterion.weight}
-                          onChange={(event) => {
-                            const nextWeight = event.currentTarget.value;
-                            updateCriterion(roundIndex, criterionIndex, (current) => ({
-                              ...current,
-                              weight: parseNumericAuthoringValue(current.weight, nextWeight),
-                            }));
-                          }}
-                        />
-                      </div>
-                    </div>
-                    <Field orientation="horizontal" className={styles.checkboxField}>
-                      <Checkbox
-                        id={`${round.id}-criterion-${criterionIndex}-required`}
-                        aria-label={`${criterion.label} required`}
-                        checked={criterion.required}
-                        onCheckedChange={(checked) => {
-                          const nextRequired = checked === true;
-                          updateCriterion(roundIndex, criterionIndex, (current) => ({
-                            ...current,
-                            required: nextRequired,
-                          }));
-                        }}
-                      />
-                      <FieldContent>
-                        <FieldLabel htmlFor={`${round.id}-criterion-${criterionIndex}-required`}>
-                          Required criterion
-                        </FieldLabel>
-                        <FieldDescription>Reviewers must complete this criterion.</FieldDescription>
-                      </FieldContent>
-                    </Field>
-                  </div>
-                </fieldset>
-              ))}
-            </section>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => addCriterion(roundIndex)}
-              disabled={busy || status !== "draft"}
-            >
-              Add criterion
-            </Button>
-          </fieldset>
-        ))}
-      </div>
-      <div className={styles.confirmationActions}>
-        <Button
-          type="button"
-          variant="outline"
-          onClick={addRound}
-          disabled={busy || status !== "draft"}
-        >
-          Add round
-        </Button>
-        <Button
-          type="button"
-          onClick={() => void saveDraft()}
-          disabled={busy || status !== "draft"}
-        >
-          {busy ? "Saving…" : "Save authoring draft"}
-        </Button>
-        {status === "draft" ? (
-          <Button type="button" onClick={() => void transition("open")} disabled={busy}>
-            Open plan
-          </Button>
-        ) : null}
-        {status === "open" ? (
           <Button
             type="button"
-            variant="destructive"
-            onClick={() => void transition("close")}
-            disabled={busy}
+            variant="outline"
+            onClick={previewAssignments}
+            disabled={busy || status !== "open" || !reviewerDirectoryReady}
           >
-            Close plan
+            Preview coverage
           </Button>
-        ) : null}
-        {status === "closed" ? (
-          <Button type="button" onClick={() => void transition("open")} disabled={busy}>
-            Reopen plan
+          {assignmentPreview ? (
+            <div className={styles.fieldHint} role="status" aria-live="polite">
+              <p>
+                Fingerprint: <code>{assignmentPreview.fingerprint}</code>
+              </p>
+              <p>
+                Desired assignments ({assignmentPreview.desiredAssignments.length}):{" "}
+                {[...assignmentPreview.desiredAssignments]
+                  .sort(
+                    (left, right) =>
+                      left.submissionId.localeCompare(right.submissionId) ||
+                      left.reviewerId.localeCompare(right.reviewerId),
+                  )
+                  .map(
+                    (assignment) =>
+                      `${assignment.submissionId} → ${assignment.reviewerId}${assignment.existingAssignmentId ? ` (existing ${assignment.existingAssignmentId})` : ""}`,
+                  )
+                  .join(", ") || "none"}
+              </p>
+              <p>
+                Deficits ({assignmentPreview.deficits.length}):{" "}
+                {[...assignmentPreview.deficits]
+                  .sort((left, right) => left.submissionId.localeCompare(right.submissionId))
+                  .map(
+                    (deficit) =>
+                      `${deficit.submissionId}: ${deficit.missingReviewCount} (${deficit.reason})`,
+                  )
+                  .join(", ") || "none"}
+              </p>
+              <p>
+                Exclusions ({assignmentPreview.exclusions.length}):{" "}
+                {[...assignmentPreview.exclusions]
+                  .sort(
+                    (left, right) =>
+                      left.submissionId.localeCompare(right.submissionId) ||
+                      left.reviewerId.localeCompare(right.reviewerId),
+                  )
+                  .map(
+                    (exclusion) =>
+                      `${exclusion.submissionId}/${exclusion.reviewerId}: ${exclusion.reason}`,
+                  )
+                  .join(", ") || "none"}
+              </p>
+              <p>
+                Submission revisions:{" "}
+                {[...assignmentPreview.submissionRevisions]
+                  .sort((left, right) => left.submissionId.localeCompare(right.submissionId))
+                  .map((revision) => `${revision.submissionId}=${revision.revision}`)
+                  .join(", ") || "none"}
+              </p>
+            </div>
+          ) : null}
+          <Button
+            type="button"
+            variant="outline"
+            onClick={assignReviewers}
+            disabled={
+              busy || status !== "open" || !reviewerDirectoryReady || assignmentPreview === null
+            }
+          >
+            Apply coverage
           </Button>
-        ) : null}
-      </div>
+        </section>
+      ) : null}
+      {!assignmentOnly ? (
+        <div className={styles.authoringWorkbench} data-layout="plan-authoring-workbench">
+          <div className={styles.authoringMain}>
+            {isDraft ? (
+              <>
+                <section className={styles.authoringPanel} aria-labelledby="plan-basics-heading">
+                  <div className={styles.authoringPanelHeader}>
+                    <div>
+                      <p className={styles.sectionEyebrow}>Plan</p>
+                      <h3 id="plan-basics-heading">Plan basics</h3>
+                    </div>
+                    <span className={styles.authoringPanelMeta}>Editable draft</span>
+                  </div>
+                  <div className={styles.authoringBasicsGrid}>
+                    <div className={styles.formField}>
+                      <label htmlFor="evaluation-plan-name">Plan name</label>
+                      <input
+                        id="evaluation-plan-name"
+                        value={name}
+                        onChange={(event) => setName(event.currentTarget.value)}
+                      />
+                    </div>
+                    <div className={styles.formField}>
+                      <label htmlFor="evaluation-plan-closes-at">Overall review deadline</label>
+                      <input
+                        id="evaluation-plan-closes-at"
+                        type="datetime-local"
+                        value={dateTimeLocalValue(planClosesAt)}
+                        onChange={(event) =>
+                          setPlanClosesAt(isoDateTimeValue(event.currentTarget.value) ?? "")
+                        }
+                      />
+                    </div>
+                  </div>
+                </section>
+                <section className={styles.authoringRounds} aria-labelledby="review-rounds-heading">
+                  <div className={styles.authoringPanelHeader}>
+                    <div>
+                      <p className={styles.sectionEyebrow}>Workflow</p>
+                      <h3 id="review-rounds-heading">Review rounds</h3>
+                      <p className={styles.authoringPanelDescription}>
+                        Set the schedule and grading model for each stage of review.
+                      </p>
+                    </div>
+                    <Button type="button" variant="outline" onClick={addRound} disabled={busy}>
+                      Add round
+                    </Button>
+                  </div>
+                  <div className={styles.scoreList}>
+                    {rounds.map((round, roundIndex) => (
+                      <fieldset
+                        className={`${styles.scoreCard} ${styles.authoringRoundCard}`}
+                        data-authoring-round=""
+                        key={round.id}
+                      >
+                        <legend>
+                          <span>Round {roundIndex + 1}</span>
+                          <strong>{round.name}</strong>
+                        </legend>
+                        <div className={styles.formField}>
+                          <label htmlFor={`${round.id}-name`}>Round name</label>
+                          <input
+                            id={`${round.id}-name`}
+                            value={round.name}
+                            onChange={(event) => {
+                              const nextName = event.currentTarget.value;
+                              updateRound(roundIndex, (current) => ({
+                                ...current,
+                                name: nextName,
+                              }));
+                            }}
+                          />
+                        </div>
+                        <div className={styles.formField}>
+                          <label htmlFor={`${round.id}-rubric`}>Rubric name</label>
+                          <input
+                            id={`${round.id}-rubric`}
+                            value={round.rubric.name}
+                            onChange={(event) => {
+                              const nextRubricName = event.currentTarget.value;
+                              updateRound(roundIndex, (current) => ({
+                                ...current,
+                                rubric: {
+                                  ...current.rubric,
+                                  name: nextRubricName,
+                                },
+                              }));
+                            }}
+                          />
+                        </div>
+                        <div className={styles.formField}>
+                          <label htmlFor={`${round.id}-closes-at`}>Round closes</label>
+                          <input
+                            id={`${round.id}-closes-at`}
+                            type="datetime-local"
+                            value={dateTimeLocalValue(round.closesAt)}
+                            onChange={(event) => {
+                              const nextClosesAt = isoDateTimeValue(event.currentTarget.value);
+                              updateRound(roundIndex, (current) => ({
+                                ...current,
+                                closesAt: nextClosesAt,
+                              }));
+                            }}
+                          />
+                        </div>
+                        <div className={styles.authoringScheduleGrid}>
+                          <div className={styles.formField}>
+                            <label htmlFor={`${round.id}-opens-at`}>Round opens</label>
+                            <input
+                              id={`${round.id}-opens-at`}
+                              type="datetime-local"
+                              value={dateTimeLocalValue(round.opensAt)}
+                              onChange={(event) => {
+                                const nextOpensAt = isoDateTimeValue(event.currentTarget.value);
+                                updateRound(roundIndex, (current) => ({
+                                  ...current,
+                                  opensAt: nextOpensAt,
+                                }));
+                              }}
+                            />
+                          </div>
+                          <div className={styles.formField}>
+                            <label htmlFor={`${round.id}-anonymization`}>
+                              Anonymization / blind review
+                            </label>
+                            <select
+                              id={`${round.id}-anonymization`}
+                              value={round.anonymization ?? (round.blindReview ? "double" : "none")}
+                              onChange={(event) => {
+                                const nextAnonymization = event.currentTarget.value as
+                                  | "none"
+                                  | "single"
+                                  | "double";
+                                updateRound(roundIndex, (current) => ({
+                                  ...current,
+                                  anonymization: nextAnonymization,
+                                  blindReview: nextAnonymization !== "none",
+                                }));
+                              }}
+                            >
+                              <option value="none">No anonymization</option>
+                              <option value="single">Single-blind</option>
+                              <option value="double">Double-blind</option>
+                            </select>
+                          </div>
+                        </div>
+                        <details className={styles.reviewerTargeting}>
+                          <summary>
+                            <span>
+                              <strong>Reviewer targeting</strong>
+                              <small>Choose who can receive assignments in this round.</small>
+                            </span>
+                            <span>
+                              {round.reviewerPool?.reviewerIds.length ?? reviewerMembers.length}{" "}
+                              reviewers ·{" "}
+                              {round.trackFilter?.trim().length ? round.trackFilter : "all tracks"}
+                            </span>
+                          </summary>
+                          <div
+                            className={styles.reviewerTargetingGrid}
+                            style={assignmentControlGridStyle}
+                          >
+                            <fieldset
+                              className={styles.formField}
+                              style={assignmentControlFieldStyle}
+                            >
+                              <legend className={styles.cardLabel}>Round reviewer pool</legend>
+                              <label htmlFor={`${round.id}-reviewer-pool`}>
+                                Verified organization reviewers for this round
+                              </label>
+                              <select
+                                id={`${round.id}-reviewer-pool`}
+                                style={assignmentControlSelectStyle}
+                                multiple
+                                size={Math.max(3, Math.min(8, reviewerMembers.length || 3))}
+                                value={(round.reviewerPool?.reviewerIds ?? []).filter(
+                                  (reviewerId) => reviewerIdSet.has(reviewerId),
+                                )}
+                                disabled={
+                                  busy || reviewerMembersLoading || reviewerMembersError !== null
+                                }
+                                onChange={(event) => {
+                                  const nextReviewerIds = [
+                                    ...event.currentTarget.selectedOptions,
+                                  ].map((option) => option.value);
+                                  updateRound(roundIndex, (current) => ({
+                                    ...current,
+                                    reviewerPool: {
+                                      ...(current.reviewerPool ?? {}),
+                                      reviewerIds: nextReviewerIds,
+                                    },
+                                  }));
+                                }}
+                                aria-describedby={`${round.id}-pool-help`}
+                              >
+                                {reviewerMembers.map((member) => (
+                                  <option value={member.userId} key={member.userId}>
+                                    {member.name ?? member.email} · {member.email}
+                                  </option>
+                                ))}
+                              </select>
+                              <span className={styles.fieldHint} id={`${round.id}-pool-help`}>
+                                {reviewerMembersLoading
+                                  ? "Loading active, verified organization reviewers…"
+                                  : (reviewerMembersError ??
+                                    `This pool applies only to ${round.name}; other rounds have independent pools. Member names are display-only.`)}
+                              </span>
+                            </fieldset>
+                            <fieldset
+                              className={styles.formField}
+                              style={assignmentControlFieldStyle}
+                            >
+                              <legend className={styles.cardLabel}>Bulk assignment filter</legend>
+                              <label htmlFor={`${round.id}-track-filter`}>
+                                Track filter for bulk assignment
+                              </label>
+                              <input
+                                id={`${round.id}-track-filter`}
+                                value={round.trackFilter ?? ""}
+                                onChange={(event) => {
+                                  const nextTrackFilter = event.currentTarget.value.trim() || null;
+                                  updateRound(roundIndex, (current) => ({
+                                    ...current,
+                                    trackFilter: nextTrackFilter,
+                                  }));
+                                }}
+                                placeholder="Platform & Infra"
+                              />
+                            </fieldset>
+                          </div>
+                        </details>
+                        <section
+                          className={styles.criteriaList}
+                          aria-label={`${round.name} criteria authoring`}
+                        >
+                          {round.rubric.criteria.map((criterion, criterionIndex) => (
+                            <fieldset className={styles.criterionEditor} key={criterion.id}>
+                              <legend>
+                                Criterion {criterionIndex + 1}:{" "}
+                                {criterion.label || "Untitled criterion"}
+                              </legend>
+                              <div className={styles.criterionEditorGrid}>
+                                <div className={styles.formField}>
+                                  <label htmlFor={`${round.id}-criterion-${criterionIndex}-label`}>
+                                    Label
+                                  </label>
+                                  <input
+                                    id={`${round.id}-criterion-${criterionIndex}-label`}
+                                    aria-label={`${round.name} criterion ${criterionIndex + 1} label`}
+                                    value={criterion.label}
+                                    onChange={(event) => {
+                                      const nextLabel = event.currentTarget.value;
+                                      updateCriterion(roundIndex, criterionIndex, (current) => ({
+                                        ...current,
+                                        label: nextLabel,
+                                      }));
+                                    }}
+                                  />
+                                </div>
+                                <div className={styles.formField}>
+                                  <label htmlFor={`${round.id}-criterion-${criterionIndex}-type`}>
+                                    Input type
+                                  </label>
+                                  <select
+                                    id={`${round.id}-criterion-${criterionIndex}-type`}
+                                    aria-label={`${criterion.label} input type`}
+                                    value={criterionType(criterion)}
+                                    onChange={(event) => {
+                                      const nextType = event.currentTarget
+                                        .value as CriterionInputType;
+                                      updateCriterion(roundIndex, criterionIndex, (current) => ({
+                                        ...current,
+                                        inputType: nextType,
+                                        ...(nextType === "dropdown" ? {} : { options: undefined }),
+                                      }));
+                                    }}
+                                  >
+                                    <option value="numeric">Numeric rating</option>
+                                    <option value="dropdown">Dropdown</option>
+                                    <option value="free_text">Free text</option>
+                                  </select>
+                                </div>
+                                {criterionType(criterion) === "dropdown" ? (
+                                  <div className={styles.formField}>
+                                    <label
+                                      htmlFor={`${round.id}-criterion-${criterionIndex}-options`}
+                                    >
+                                      Dropdown options
+                                    </label>
+                                    <input
+                                      id={`${round.id}-criterion-${criterionIndex}-options`}
+                                      aria-label={`${criterion.label} dropdown options`}
+                                      value={(criterion.options ?? [])
+                                        .map((option) => option.label)
+                                        .join(", ")}
+                                      onChange={(event) => {
+                                        const nextOptionLabels = event.currentTarget.value
+                                          .split(",")
+                                          .map((value) => value.trim())
+                                          .filter((value) => value.length > 0);
+                                        updateCriterion(roundIndex, criterionIndex, (current) => ({
+                                          ...current,
+                                          options: nextOptionLabels.map((value, index) => ({
+                                            id: `${current.id}-option-${index + 1}`,
+                                            label: value,
+                                            value,
+                                          })),
+                                        }));
+                                      }}
+                                      placeholder="Accept, Maybe, Reject"
+                                    />
+                                  </div>
+                                ) : null}
+                                <div className={styles.formField}>
+                                  <label
+                                    htmlFor={`${round.id}-criterion-${criterionIndex}-description`}
+                                  >
+                                    Description
+                                  </label>
+                                  <textarea
+                                    id={`${round.id}-criterion-${criterionIndex}-description`}
+                                    aria-label={`${criterion.label} description`}
+                                    value={criterion.description}
+                                    onChange={(event) => {
+                                      const nextDescription = event.currentTarget.value;
+                                      updateCriterion(roundIndex, criterionIndex, (current) => ({
+                                        ...current,
+                                        description: nextDescription,
+                                      }));
+                                    }}
+                                    rows={3}
+                                  />
+                                </div>
+                                <div className={styles.criterionBounds}>
+                                  <div className={styles.formField}>
+                                    <label
+                                      htmlFor={`${round.id}-criterion-${criterionIndex}-minimum`}
+                                    >
+                                      Minimum
+                                    </label>
+                                    <input
+                                      id={`${round.id}-criterion-${criterionIndex}-minimum`}
+                                      aria-label={`${criterion.label} minimum`}
+                                      type="number"
+                                      value={criterion.minimum}
+                                      onChange={(event) => {
+                                        const nextMinimum = event.currentTarget.value;
+                                        updateCriterion(roundIndex, criterionIndex, (current) => ({
+                                          ...current,
+                                          minimum: parseNumericAuthoringValue(
+                                            current.minimum,
+                                            nextMinimum,
+                                          ),
+                                        }));
+                                      }}
+                                    />
+                                  </div>
+                                  <div className={styles.formField}>
+                                    <label
+                                      htmlFor={`${round.id}-criterion-${criterionIndex}-maximum`}
+                                    >
+                                      Maximum
+                                    </label>
+                                    <input
+                                      id={`${round.id}-criterion-${criterionIndex}-maximum`}
+                                      aria-label={`${criterion.label} maximum`}
+                                      type="number"
+                                      value={criterion.maximum}
+                                      onChange={(event) => {
+                                        const nextMaximum = event.currentTarget.value;
+                                        updateCriterion(roundIndex, criterionIndex, (current) => ({
+                                          ...current,
+                                          maximum: parseNumericAuthoringValue(
+                                            current.maximum,
+                                            nextMaximum,
+                                          ),
+                                        }));
+                                      }}
+                                    />
+                                  </div>
+                                  <div className={styles.formField}>
+                                    <label
+                                      htmlFor={`${round.id}-criterion-${criterionIndex}-weight`}
+                                    >
+                                      Weight
+                                    </label>
+                                    <input
+                                      id={`${round.id}-criterion-${criterionIndex}-weight`}
+                                      aria-label={`${criterion.label} weight`}
+                                      type="number"
+                                      min={0.01}
+                                      step={0.01}
+                                      value={criterion.weight}
+                                      onChange={(event) => {
+                                        const nextWeight = event.currentTarget.value;
+                                        updateCriterion(roundIndex, criterionIndex, (current) => ({
+                                          ...current,
+                                          weight: parseNumericAuthoringValue(
+                                            current.weight,
+                                            nextWeight,
+                                          ),
+                                        }));
+                                      }}
+                                    />
+                                  </div>
+                                </div>
+                                <Field orientation="horizontal" className={styles.checkboxField}>
+                                  <Checkbox
+                                    id={`${round.id}-criterion-${criterionIndex}-required`}
+                                    aria-label={`${criterion.label} required`}
+                                    checked={criterion.required}
+                                    onCheckedChange={(checked) => {
+                                      const nextRequired = checked === true;
+                                      updateCriterion(roundIndex, criterionIndex, (current) => ({
+                                        ...current,
+                                        required: nextRequired,
+                                      }));
+                                    }}
+                                  />
+                                  <FieldContent>
+                                    <FieldLabel
+                                      htmlFor={`${round.id}-criterion-${criterionIndex}-required`}
+                                    >
+                                      Required criterion
+                                    </FieldLabel>
+                                    <FieldDescription>
+                                      Reviewers must complete this criterion.
+                                    </FieldDescription>
+                                  </FieldContent>
+                                </Field>
+                              </div>
+                              {round.rubric.criteria.length > 1 ? (
+                                <Button
+                                  type="button"
+                                  variant="destructive"
+                                  onClick={() => removeCriterion(roundIndex, criterionIndex)}
+                                  disabled={busy || status !== "draft"}
+                                >
+                                  Remove criterion
+                                </Button>
+                              ) : null}
+                            </fieldset>
+                          ))}
+                        </section>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => addCriterion(roundIndex)}
+                          disabled={busy || status !== "draft"}
+                        >
+                          Add criterion
+                        </Button>
+                      </fieldset>
+                    ))}
+                  </div>
+                </section>
+              </>
+            ) : (
+              <div className={styles.authoringReadOnly}>
+                <section className={styles.authoringPanel} aria-labelledby="plan-overview-heading">
+                  <div className={styles.authoringPanelHeader}>
+                    <div>
+                      <p className={styles.sectionEyebrow}>Plan</p>
+                      <h3 id="plan-overview-heading">Plan overview</h3>
+                    </div>
+                    <Badge variant="outline">Grading locked</Badge>
+                  </div>
+                  <dl className={styles.authoringOverviewGrid}>
+                    <div>
+                      <dt>Plan name</dt>
+                      <dd>{name}</dd>
+                    </div>
+                    <div>
+                      <dt>Overall review deadline</dt>
+                      <dd>{authoringDateLabel(planClosesAt)}</dd>
+                    </div>
+                    <div>
+                      <dt>Rounds</dt>
+                      <dd>{rounds.length}</dd>
+                    </div>
+                    <div>
+                      <dt>Criteria</dt>
+                      <dd>{criterionCount}</dd>
+                    </div>
+                  </dl>
+                </section>
+                <section className={styles.authoringRounds} aria-labelledby="review-rounds-heading">
+                  <div className={styles.authoringPanelHeader}>
+                    <div>
+                      <p className={styles.sectionEyebrow}>Workflow</p>
+                      <h3 id="review-rounds-heading">Review rounds</h3>
+                      <p className={styles.authoringPanelDescription}>
+                        The live schedule and rubric reviewers are currently using.
+                      </p>
+                    </div>
+                  </div>
+                  <div className={styles.readOnlyRoundList}>
+                    {rounds.map((round, roundIndex) => {
+                      const selectedReviewerCount =
+                        round.reviewerPool?.reviewerIds.filter((reviewerId) =>
+                          reviewerIdSet.has(reviewerId),
+                        ).length ?? 0;
+                      const totalWeight = round.rubric.criteria.reduce(
+                        (total, criterion) => total + criterion.weight,
+                        0,
+                      );
+                      return (
+                        <article className={styles.readOnlyRound} key={round.id}>
+                          <header className={styles.readOnlyRoundHeader}>
+                            <div>
+                              <span className={styles.roundSequence}>Round {roundIndex + 1}</span>
+                              <h4>{round.name}</h4>
+                              <p>{round.rubric.name}</p>
+                            </div>
+                            <Badge variant="outline">
+                              {round.anonymization === "double"
+                                ? "Double-blind"
+                                : round.anonymization === "single"
+                                  ? "Single-blind"
+                                  : "Identities visible"}
+                            </Badge>
+                          </header>
+                          <dl className={styles.readOnlyRoundStats}>
+                            <div>
+                              <dt>Opens</dt>
+                              <dd>{authoringDateLabel(round.opensAt)}</dd>
+                            </div>
+                            <div>
+                              <dt>Deadline</dt>
+                              <dd>{authoringDateLabel(round.closesAt)}</dd>
+                            </div>
+                            <div>
+                              <dt>Reviewers</dt>
+                              <dd>{selectedReviewerCount}</dd>
+                            </div>
+                            <div>
+                              <dt>Total weight</dt>
+                              <dd>{totalWeight}</dd>
+                            </div>
+                          </dl>
+                          <div className={styles.readOnlyRubric}>
+                            <div className={styles.readOnlyRubricHeader}>
+                              <div>
+                                <span>Rubric</span>
+                                <strong>
+                                  {round.rubric.criteria.length}{" "}
+                                  {round.rubric.criteria.length === 1 ? "criterion" : "criteria"}
+                                </strong>
+                              </div>
+                              <span>
+                                {round.trackFilter?.trim().length
+                                  ? round.trackFilter
+                                  : "All tracks"}
+                              </span>
+                            </div>
+                            <ul className={styles.readOnlyCriteria}>
+                              {round.rubric.criteria.map((criterion) => (
+                                <li key={criterion.id}>
+                                  <div>
+                                    <strong>{criterion.label}</strong>
+                                    <span>{criterion.description}</span>
+                                  </div>
+                                  <div className={styles.readOnlyCriterionMeta}>
+                                    <span>
+                                      {criterionType(criterion) === "numeric"
+                                        ? `Numeric ${criterion.minimum}-${criterion.maximum}`
+                                        : criterionType(criterion) === "dropdown"
+                                          ? `${criterion.options?.length ?? 0} options`
+                                          : "Written response"}
+                                    </span>
+                                    <span>Weight {criterion.weight}</span>
+                                    <span>{criterion.required ? "Required" : "Optional"}</span>
+                                  </div>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                </section>
+              </div>
+            )}
+          </div>
+          <aside className={styles.authoringAside} aria-label="Plan authoring summary">
+            <div className={styles.authoringAsideInner}>
+              <div>
+                <p className={styles.sectionEyebrow}>Plan status</p>
+                <h3>{name}</h3>
+              </div>
+              <div className={styles.authoringAsideStatus}>
+                <Badge variant={status === "open" ? "default" : "outline"}>{planStatusLabel}</Badge>
+                <span className={styles.authoringVersion}>Version {version}</span>
+              </div>
+              <dl className={styles.authoringAsideMetrics}>
+                <div>
+                  <dt>Rounds</dt>
+                  <dd>{rounds.length}</dd>
+                </div>
+                <div>
+                  <dt>Criteria</dt>
+                  <dd>{criterionCount}</dd>
+                </div>
+                <div>
+                  <dt>Review deadline</dt>
+                  <dd>{authoringDateLabel(planClosesAt)}</dd>
+                </div>
+              </dl>
+              {status === "open" ? (
+                <div className={styles.authoringDeadlineEditor}>
+                  <label htmlFor="evaluation-plan-closes-at">Overall review deadline</label>
+                  <input
+                    id="evaluation-plan-closes-at"
+                    type="datetime-local"
+                    value={dateTimeLocalValue(planClosesAt)}
+                    onChange={(event) =>
+                      setPlanClosesAt(isoDateTimeValue(event.currentTarget.value) ?? "")
+                    }
+                  />
+                  <Button type="button" onClick={() => void saveSchedule()} disabled={busy}>
+                    {busy ? "Saving…" : "Update review deadline"}
+                  </Button>
+                </div>
+              ) : null}
+              <fieldset className={styles.authoringAsideActions}>
+                <legend className={styles.srOnly}>Plan lifecycle actions</legend>
+                {isDraft ? (
+                  <>
+                    <Button type="button" onClick={() => void saveDraft()} disabled={busy}>
+                      {busy ? "Saving…" : "Save authoring draft"}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => void transition("open")}
+                      disabled={busy}
+                    >
+                      Open plan for review
+                    </Button>
+                  </>
+                ) : (
+                  <Button
+                    type="button"
+                    variant={status === "open" ? "outline" : "default"}
+                    onClick={() => void reviseToDraft()}
+                    disabled={busy}
+                  >
+                    Create editable draft revision
+                  </Button>
+                )}
+                {status === "open" ? (
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    onClick={() => void transition("close")}
+                    disabled={busy}
+                  >
+                    Close plan
+                  </Button>
+                ) : null}
+                {status === "closed" ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => void transition("open")}
+                    disabled={busy}
+                  >
+                    Reopen plan
+                  </Button>
+                ) : null}
+              </fieldset>
+              <p className={styles.authoringAsideHint}>
+                {isDraft
+                  ? "Save the draft before opening it for reviewers."
+                  : "Create a revision to change rounds, reviewer eligibility, or rubric criteria without rewriting review history."}
+              </p>
+            </div>
+          </aside>
+        </div>
+      ) : null}
       {message ? (
         <p className={styles.submittedMessage} role="status">
           {message}
@@ -3351,7 +3867,17 @@ function OrganizerWorkspaceView({
   const [aggregateSort, setAggregateSort] = useState<"ascending" | "descending">("descending");
   const [exportMessage, setExportMessage] = useState<string | null>(null);
   const [view, setView] = useState<"overview" | "setup" | "assignments" | "decisions">("overview");
+  const [assignmentTarget, setAssignmentTarget] = useState<{
+    readonly roundId: string;
+    readonly submissionId: string;
+  } | null>(null);
   const [selectedDecisionId, setSelectedDecisionId] = useState<string | null>(null);
+  const [decisionQuery, setDecisionQuery] = useState("");
+  const [decisionFilter, setDecisionFilter] = useState<"all" | "undecided" | DecisionStatus>(
+    "undecided",
+  );
+  const [decisionRowLimit, setDecisionRowLimit] = useState(5);
+  const decisionEditorRef = useRef<HTMLDivElement | null>(null);
   const selectedRound = seed.rounds.find((round) => round.id === selectedRoundId) ?? activeRound;
   useEffect(() => {
     setRoundAggregates(seed.aggregates);
@@ -3387,6 +3913,11 @@ function OrganizerWorkspaceView({
       cancelled = true;
     };
   }, [baseUrl, seed, selectedRoundId]);
+  useEffect(() => {
+    if (selectedDecisionId === null) return;
+    decisionEditorRef.current?.focus();
+    decisionEditorRef.current?.scrollIntoView({ block: "start" });
+  }, [selectedDecisionId]);
   const sortedAggregates = [...roundAggregates].sort((left, right) => {
     const leftScore = Number(left.countedScore);
     const rightScore = Number(right.countedScore);
@@ -3398,14 +3929,153 @@ function OrganizerWorkspaceView({
     }
     return left.reference.localeCompare(right.reference);
   });
-  const outstandingReviews = Math.max(0, seed.progress.totalAssignments - seed.progress.submitted);
-  const undecidedCount = roundAggregates.filter(
-    (aggregate) => seed.decisionBySubmission[aggregate.id] === undefined,
-  ).length;
+  const filteredDecisionRows = sortedAggregates.filter((aggregate) => {
+    const decision = seed.decisionBySubmission[aggregate.id];
+    const matchesStatus =
+      decisionFilter === "all"
+        ? true
+        : decisionFilter === "undecided"
+          ? decision === undefined
+          : decision?.status === decisionFilter;
+    if (!matchesStatus) return false;
+    const query = decisionQuery.trim().toLocaleLowerCase();
+    if (query.length === 0) return true;
+    return [
+      aggregate.reference,
+      aggregate.title,
+      ...(aggregate.participants ?? []).map(({ displayName }) => displayName),
+    ]
+      .join(" ")
+      .toLocaleLowerCase()
+      .includes(query);
+  });
+  const visibleDecisionRows = filteredDecisionRows.slice(0, decisionRowLimit);
   const selectedAggregate =
     selectedDecisionId === null
       ? undefined
       : roundAggregates.find((aggregate) => aggregate.id === selectedDecisionId);
+  const overviewRows = [...roundAggregates]
+    .map((aggregate) => {
+      const roundId = aggregate.roundId ?? selectedRound?.id ?? selectedRoundId;
+      const reviewerIds = reviewerIdsForAssignmentTarget(seed.assignments, roundId, aggregate.id);
+      const expectedReviewCount = Math.max(
+        seed.assignmentRule.reviewsPerSubmission,
+        aggregate.expectedReviews,
+      );
+      const decision = seed.decisionBySubmission[aggregate.id];
+      let attentionKind: "none" | "assignment" | "completion" | "conflict" | "decision" = "none";
+      let attentionLabel = "Complete";
+      if (aggregate.conflicts > 0) {
+        attentionKind = "conflict";
+        attentionLabel = `${aggregate.conflicts} conflict${aggregate.conflicts === 1 ? "" : "s"}`;
+      } else if (reviewerIds.length < expectedReviewCount) {
+        const missingReviewers = expectedReviewCount - reviewerIds.length;
+        attentionKind = "assignment";
+        attentionLabel = `${missingReviewers} reviewer slot${missingReviewers === 1 ? "" : "s"} open`;
+      } else if (aggregate.countedReviews < expectedReviewCount) {
+        attentionKind = "completion";
+        attentionLabel = "Reviews in progress";
+      } else if (decision === undefined) {
+        attentionKind = "decision";
+        attentionLabel = "Decision needed";
+      }
+      return {
+        id: aggregate.id,
+        reference: aggregate.reference,
+        title: aggregate.title,
+        roundName: selectedRound?.name ?? "Round unavailable",
+        assignedReviewerCount: reviewerIds.length,
+        expectedReviewerCount: expectedReviewCount,
+        completedReviewCount: aggregate.countedReviews,
+        expectedReviewCount,
+        weightedScoreLabel:
+          aggregate.possibleScore === "—"
+            ? aggregate.countedScore
+            : `${aggregate.countedScore} / ${aggregate.possibleScore}`,
+        conflictCount: aggregate.conflicts,
+        decisionLabel:
+          decision === undefined ? "Not decided" : formatDecisionStatus(decision.status),
+        attentionKind,
+        attentionLabel,
+        reviewerDisplayNames: reviewerIds.map((reviewerId) =>
+          reviewerDisplayLabel(reviewerId, reviewerMembers),
+        ),
+        manageable: true,
+        attentionAction:
+          attentionKind === "decision"
+            ? { label: "Record decision", target: "decisions" as const }
+            : { label: "Manage reviewers", target: "reviewers" as const },
+      };
+    })
+    .sort(
+      (left, right) =>
+        left.reference.localeCompare(right.reference) || left.id.localeCompare(right.id),
+    );
+  const overviewExpectedReviewCount = overviewRows.reduce(
+    (total, row) => total + row.expectedReviewCount,
+    0,
+  );
+  const overviewAssignedReviewerCount = overviewRows.reduce(
+    (total, row) => total + row.assignedReviewerCount,
+    0,
+  );
+  const overviewCompletedReviewCount = overviewRows.reduce(
+    (total, row) => total + row.completedReviewCount,
+    0,
+  );
+  const overviewDecisionCount = overviewRows.filter(
+    (row) => row.decisionLabel !== "Not decided",
+  ).length;
+  const overviewAttentionCount = overviewRows.filter((row) => row.attentionKind !== "none").length;
+  const overviewCompletionPercent = normalizeCompletionPercent(seed.progress.completionPercent);
+  const overviewMetrics = [
+    {
+      label: "Review window",
+      value: seed.opensAt,
+      detail: `Closes ${seed.closesAt}`,
+    },
+    {
+      label: "Reviewer coverage",
+      value: `${overviewAssignedReviewerCount}/${overviewExpectedReviewCount}`,
+      detail: "reviewer slots assigned",
+    },
+    {
+      label: "Review completion",
+      value: `${overviewCompletionPercent}%`,
+      detail: `${overviewCompletedReviewCount} of ${overviewExpectedReviewCount} reviews submitted`,
+    },
+    {
+      label: "Decisions",
+      value: `${overviewDecisionCount}/${overviewRows.length}`,
+      detail: "submissions decided",
+    },
+  ];
+  const overviewAttentionSummary = {
+    count: overviewAttentionCount,
+    label:
+      overviewAttentionCount === 1 ? "submission needs attention" : "submissions need attention",
+    description:
+      overviewAttentionCount === 0
+        ? `${seed.progress.conflicts} conflicts declared. Coverage, review completion, and decisions are up to date.`
+        : `${seed.progress.conflicts} conflicts declared. Use row actions to resolve coverage, review progress, conflicts, or decisions.`,
+  };
+
+  function openReviewersForSubmission(submissionId: string): void {
+    const aggregate = roundAggregates.find((candidate) => candidate.id === submissionId);
+    const roundId = aggregate?.roundId ?? selectedRound?.id ?? selectedRoundId;
+    if (roundId.length > 0) setAssignmentTarget({ roundId, submissionId });
+    setView("assignments");
+  }
+
+  function openDecisionForSubmission(submissionId: string): void {
+    const aggregate = roundAggregates.find((candidate) => candidate.id === submissionId);
+    const roundId = aggregate?.roundId ?? selectedRound?.id ?? selectedRoundId;
+    if (roundId.length > 0) setSelectedRoundId(roundId);
+    setDecisionQuery("");
+    setDecisionFilter("all");
+    setSelectedDecisionId(submissionId);
+    setView("decisions");
+  }
 
   async function exportResults(): Promise<void> {
     setExportMessage(`Preparing evaluation-${seed.planId}.csv…`);
@@ -3447,10 +4117,10 @@ function OrganizerWorkspaceView({
       <header className={styles.workspaceHeader}>
         <div>
           <p className={styles.eyebrow}>{seed.eventName} · organizer review</p>
-          <h1>Evaluation plan</h1>
+          <h1>{seed.planName}</h1>
           <p className={styles.headerDescription}>
-            Keep review setup, reviewer follow-up, and final decisions in one focused workspace for{" "}
-            <strong>{seed.planName}</strong>.
+            Configure the plan, repair review coverage, follow up with reviewers, and record final
+            program decisions.
           </p>
         </div>
         <div className={styles.headerSide}>
@@ -3464,7 +4134,6 @@ function OrganizerWorkspaceView({
       </header>
 
       <div id="review-content" tabIndex={-1}>
-        <AuthorityNotice />
         <Tabs
           value={view}
           onValueChange={(value) =>
@@ -3472,13 +4141,17 @@ function OrganizerWorkspaceView({
           }
           className={styles.workspaceTabs}
         >
-          <TabsList variant="line" aria-label="Review plan sections">
+          <TabsList
+            className={styles.workspaceTabList}
+            variant="line"
+            aria-label="Review plan sections"
+          >
             {(
               [
                 ["overview", "Overview"],
-                ["setup", "Plan setup"],
-                ["assignments", "Assignments"],
-                ["decisions", "Decisions"],
+                ["assignments", "Reviewers"],
+                ["setup", "Plan & rubric"],
+                ["decisions", "Results"],
               ] as const
             ).map(([tabView, label]) => (
               <TabsTrigger
@@ -3486,7 +4159,6 @@ function OrganizerWorkspaceView({
                 value={tabView}
                 key={tabView}
                 aria-controls={`review-panel-${tabView}`}
-                onClick={() => setView(tabView)}
               >
                 {label}
               </TabsTrigger>
@@ -3499,102 +4171,19 @@ function OrganizerWorkspaceView({
             value="overview"
             className={styles.tabPanel}
           >
-            <div className={styles.sectionHeading}>
-              <div>
-                <p className={styles.sectionEyebrow}>Overview</p>
-                <h2>Review at a glance</h2>
-              </div>
-              <span className={styles.mutedLabel}>{roundAggregates.length} submissions</span>
-            </div>
-            <div className={styles.overviewGrid}>
-              <Card>
-                <CardHeader>
-                  <CardDescription>Plan status</CardDescription>
-                  <CardTitle>{formatPlanStatus(seed.status)}</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <dl className={styles.compactDefinitionList}>
-                    <div>
-                      <dt>Opens</dt>
-                      <dd>{seed.opensAt}</dd>
-                    </div>
-                    <div>
-                      <dt>Closes</dt>
-                      <dd>{seed.closesAt}</dd>
-                    </div>
-                  </dl>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader>
-                  <CardDescription>Active round</CardDescription>
-                  <CardTitle>{activeRound?.name ?? "No round configured"}</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <ProgressBar
-                    label={`${activeRound?.name ?? "Active round"} progress`}
-                    value={activeRound?.completionPercent ?? 0}
-                  />
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader>
-                  <CardDescription>Needs attention</CardDescription>
-                  <CardTitle>{outstandingReviews} reviews</CardTitle>
-                </CardHeader>
-                <CardContent className="text-sm text-muted-foreground">
-                  {seed.progress.conflicts} conflict{seed.progress.conflicts === 1 ? "" : "s"}{" "}
-                  declared
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader>
-                  <CardDescription>Next action</CardDescription>
-                  <CardTitle>
-                    {seed.status === "draft"
-                      ? "Finish plan setup"
-                      : seed.status === "closed"
-                        ? "Reopen plan"
-                        : outstandingReviews > 0
-                          ? "Follow up on reviews"
-                          : "Record decisions"}
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() =>
-                      setView(
-                        seed.status === "draft" || seed.status === "closed"
-                          ? "setup"
-                          : outstandingReviews > 0
-                            ? "assignments"
-                            : "decisions",
-                      )
-                    }
-                  >
-                    {seed.status === "draft"
-                      ? "Open plan setup"
-                      : seed.status === "closed"
-                        ? "Reopen plan"
-                        : outstandingReviews > 0
-                          ? "Open assignments"
-                          : "Open decisions"}
-                  </Button>
-                </CardContent>
-              </Card>
-            </div>
-            <div className={styles.overviewFooter}>
-              <ProgressBar
-                label="All assigned reviews submitted"
-                value={seed.progress.completionPercent}
-              />
-              <span>
-                {seed.progress.submitted} of {seed.progress.totalAssignments} submitted ·{" "}
-                {undecidedCount} decision{undecidedCount === 1 ? "" : "s"} to record
-              </span>
-            </div>
+            <OrganizerReviewOverview
+              planName={seed.planName}
+              planStatusLabel={formatPlanStatus(seed.status)}
+              description={`${selectedRound?.name ?? "Selected round"} has ${overviewRows.length} submission${overviewRows.length === 1 ? "" : "s"} in view.`}
+              metrics={overviewMetrics}
+              completionPercent={overviewCompletionPercent}
+              attentionSummary={overviewAttentionSummary}
+              rows={overviewRows}
+              onManageReviewers={openReviewersForSubmission}
+              onOpenPlan={() => setView("setup")}
+              onOpenReviewers={() => setView("assignments")}
+              onOpenDecisions={openDecisionForSubmission}
+            />
           </TabsContent>
 
           <TabsContent
@@ -3604,7 +4193,7 @@ function OrganizerWorkspaceView({
             className={styles.tabPanel}
           >
             <div className={styles.viewIntro}>
-              <p className={styles.sectionEyebrow}>Plan setup</p>
+              <p className={styles.sectionEyebrow}>Plan &amp; rubric</p>
               <h2>Configure the review plan</h2>
               <p>
                 Set dates, rounds, rubrics, reviewer pools, and the fields reviewers can use before
@@ -3628,12 +4217,26 @@ function OrganizerWorkspaceView({
             value="assignments"
             className={styles.tabPanel}
           >
+            <OrganizerAuthoring
+              seed={seed}
+              baseUrl={baseUrl}
+              reviewerMembers={reviewerMembers}
+              reviewerMembersLoading={reviewerMembersLoading}
+              reviewerMembersError={reviewerMembersError}
+              onAuthoritativePlan={onAuthoritativePlan}
+              onAssignmentsPersisted={onAssignmentsPersisted}
+              assignmentOnly
+              assignmentTarget={assignmentTarget ?? undefined}
+            />
             <div className={styles.viewIntro}>
-              <p className={styles.sectionEyebrow}>Assignments</p>
+              <p className={styles.sectionEyebrow}>Reviewers</p>
               <h2>Keep reviewer coverage moving</h2>
               <p>
                 Monitor completion, send reminders, and remove assignments that need to be replaced.
               </p>
+              <Button type="button" variant="outline" onClick={() => setView("assignments")}>
+                Add or update assignments
+              </Button>
             </div>
             {seed.assignments.length === 0 ? (
               <Card>
@@ -3644,7 +4247,7 @@ function OrganizerWorkspaceView({
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <Button type="button" onClick={() => setView("setup")}>
+                  <Button type="button" onClick={() => setView("assignments")}>
                     Assign reviewers
                   </Button>
                 </CardContent>
@@ -3675,8 +4278,8 @@ function OrganizerWorkspaceView({
             <section className={styles.section} aria-labelledby="aggregate-heading">
               <div className={styles.sectionHeading}>
                 <div>
-                  <p className={styles.sectionEyebrow}>Decisions</p>
-                  <h2 id="aggregate-heading">Scores and review status</h2>
+                  <p className={styles.sectionEyebrow}>Results</p>
+                  <h2 id="aggregate-heading">Scores and decisions</h2>
                 </div>
                 <div className={styles.viewToolbar}>
                   <Button
@@ -3740,13 +4343,62 @@ function OrganizerWorkspaceView({
                 round revision {selectedRound?.roundRevision ?? "unavailable"} and rubric revision{" "}
                 {selectedRound?.rubricRevision ?? "unavailable"}.
               </p>
+              <div className={styles.collectionToolbar}>
+                <div className={styles.formField}>
+                  <label htmlFor="decision-search">Find a submission</label>
+                  <input
+                    id="decision-search"
+                    type="search"
+                    placeholder="Search title, reference, or speaker"
+                    value={decisionQuery}
+                    onChange={(event) => setDecisionQuery(event.currentTarget.value)}
+                  />
+                </div>
+                <div className={styles.formField}>
+                  <label htmlFor="decision-status-filter">Decision status</label>
+                  <select
+                    id="decision-status-filter"
+                    value={decisionFilter}
+                    onChange={(event) =>
+                      setDecisionFilter(
+                        event.currentTarget.value as "all" | "undecided" | DecisionStatus,
+                      )
+                    }
+                  >
+                    <option value="undecided">Undecided</option>
+                    <option value="all">All submissions</option>
+                    <option value="accepted">Accepted</option>
+                    <option value="waitlisted">Waitlisted</option>
+                    <option value="rejected">Rejected</option>
+                  </select>
+                </div>
+                <div className={styles.formField}>
+                  <label htmlFor="decision-row-limit">Rows shown</label>
+                  <select
+                    id="decision-row-limit"
+                    value={decisionRowLimit}
+                    onChange={(event) => setDecisionRowLimit(Number(event.currentTarget.value))}
+                  >
+                    <option value={5}>5</option>
+                    <option value={10}>10</option>
+                    <option value={25}>25</option>
+                    <option value={50}>50</option>
+                    <option value={100}>100</option>
+                    <option value={300}>All 300</option>
+                  </select>
+                </div>
+                <p className={styles.toolbarMeta} role="status">
+                  Showing {visibleDecisionRows.length} of {filteredDecisionRows.length} matching
+                  submissions
+                </p>
+              </div>
               {exportMessage ? (
                 <p className={styles.fieldHint} role="status">
                   {exportMessage}
                 </p>
               ) : null}
               <div className={styles.tableWrap}>
-                <table className={styles.dataTable}>
+                <table className={`${styles.dataTable} ${styles.decisionTable}`}>
                   <caption>
                     Submission aggregates for {selectedRound?.name ?? selectedRoundId} · round
                     revision {selectedRound?.roundRevision ?? "unavailable"} · rubric revision{" "}
@@ -3763,14 +4415,15 @@ function OrganizerWorkspaceView({
                       </th>
                       <th scope="col">Reviews counted</th>
                       <th scope="col">Safety signals</th>
+                      <th scope="col">Decision</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {sortedAggregates.map((aggregate) => (
+                    {visibleDecisionRows.map((aggregate) => (
                       <tr key={aggregate.id}>
-                        <th scope="row">
-                          <strong>{aggregate.reference}</strong>
-                          <span>{aggregate.title}</span>
+                        <th scope="row" data-label="Submission">
+                          <strong>{aggregate.title}</strong>
+                          <span className={styles.mutedLabel}>{aggregate.reference}</span>
                           {aggregate.participants && aggregate.participants.length > 0 ? (
                             <span>
                               {aggregate.participants
@@ -3783,19 +4436,43 @@ function OrganizerWorkspaceView({
                             </span>
                           ) : null}
                         </th>
-                        <td>
+                        <td data-label="Counted score">
                           <strong>{aggregate.countedScore}</strong> / {aggregate.possibleScore}
                         </td>
-                        <td>
+                        <td data-label="Reviews counted">
                           {aggregate.countedReviews} / {aggregate.expectedReviews}
                         </td>
-                        <td>
+                        <td data-label="Safety signals">
                           {aggregate.conflicts > 0
                             ? `${aggregate.conflicts} conflict${aggregate.conflicts === 1 ? "" : "s"}`
                             : "No conflicts"}
                           {aggregate.abstentions > 0
                             ? ` · ${aggregate.abstentions} abstention`
                             : ""}
+                        </td>
+                        <td data-label="Decision">
+                          <div className={styles.tableAction}>
+                            {(() => {
+                              const decision = seed.decisionBySubmission[aggregate.id];
+                              return decision === undefined ? (
+                                <span className={styles.mutedLabel}>Not decided</span>
+                              ) : (
+                                <DecisionStatusBadge status={decision.status} />
+                              );
+                            })()}
+                            <Button
+                              className={styles.tableActionButton}
+                              type="button"
+                              variant="outline"
+                              onClick={() =>
+                                setSelectedDecisionId((current) =>
+                                  current === aggregate.id ? null : aggregate.id,
+                                )
+                              }
+                            >
+                              {selectedDecisionId === aggregate.id ? "Hide editor" : "Review"}
+                            </Button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -3805,60 +4482,15 @@ function OrganizerWorkspaceView({
               <p className={styles.tableNote}>
                 Scores count only after a reviewer confirms or edits them.
               </p>
-            </section>
-
-            <section className={styles.section} aria-labelledby="decisions-heading">
-              <div className={styles.sectionHeading}>
-                <div>
-                  <p className={styles.sectionEyebrow}>Organizer action</p>
-                  <h2 id="decisions-heading">Human decisions</h2>
-                </div>
-                <span className={styles.mutedLabel}>Accept · waitlist · reject</span>
-              </div>
-              <p className={styles.sectionIntro}>
-                Choose a submission to review its outcome. Only an authorized human organizer can
-                record a decision.
-              </p>
-              <div className={styles.decisionList}>
-                {roundAggregates.map((aggregate) => {
-                  const decision = seed.decisionBySubmission[aggregate.id];
-                  const selected = selectedDecisionId === aggregate.id;
-                  return (
-                    <article className={styles.decisionRow} key={aggregate.id}>
-                      <div className={styles.decisionRowSummary}>
-                        <div>
-                          <span className={styles.cardLabel}>{aggregate.reference}</span>
-                          <h3>{aggregate.title}</h3>
-                        </div>
-                        <span className={styles.decisionStatus}>
-                          {decision === undefined ? (
-                            "Not decided"
-                          ) : (
-                            <DecisionStatusBadge status={decision.status} />
-                          )}
-                        </span>
-                        <span className={styles.scorePill}>
-                          {aggregate.countedScore} / {aggregate.possibleScore}
-                        </span>
-                      </div>
-                      <Button
-                        size="sm"
-                        type="button"
-                        variant="outline"
-                        onClick={() => setSelectedDecisionId(selected ? null : aggregate.id)}
-                        aria-expanded={selected}
-                        aria-controls={selected ? `decision-editor-${aggregate.id}` : undefined}
-                      >
-                        {selected ? "Close editor" : "Review decision"}
-                      </Button>
-                    </article>
-                  );
-                })}
-              </div>
+              {visibleDecisionRows.length === 0 ? (
+                <p className={styles.emptyText}>No submissions match these decision filters.</p>
+              ) : null}
               {selectedAggregate ? (
                 <div
+                  ref={decisionEditorRef}
                   id={`decision-editor-${selectedAggregate.id}`}
                   className={styles.selectedDecisionEditor}
+                  tabIndex={-1}
                 >
                   <DecisionEditor
                     aggregate={selectedAggregate}
@@ -3869,7 +4501,7 @@ function OrganizerWorkspaceView({
                 </div>
               ) : (
                 <p className={styles.fieldHint}>
-                  Select Review decision to open one decision editor.
+                  Choose Review in the table to open one decision editor.
                 </p>
               )}
             </section>
@@ -3889,14 +4521,51 @@ function ReviewerProgressDashboard({
   reviewerMembers: readonly OrganizationMember[];
 }>) {
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
+  const [reviewerQuery, setReviewerQuery] = useState("");
+  const [reviewerRowLimit, setReviewerRowLimit] = useState(5);
   const [message, setMessage] = useState<string | null>(null);
+  const [messageTone, setMessageTone] = useState<"info" | "success" | "error">("info");
+  const [deliveryFacts, setDeliveryFacts] = useState<readonly ReminderDeliveryFact[]>([]);
   const [busy, setBusy] = useState(false);
+  const requestPresentation = reminderRequestPresentation(busy);
   const outstanding = seed.progress.reviewers.filter((reviewer) => reviewer.outstanding > 0);
+  const normalizedReviewerQuery = reviewerQuery.trim().toLowerCase();
+  const filteredReviewers = seed.progress.reviewers.filter((reviewer) => {
+    if (normalizedReviewerQuery.length === 0) return true;
+    const round = seed.rounds.find((candidate) => candidate.id === reviewer.roundId);
+    return [reviewerDisplayLabel(reviewer.reviewerId, reviewerMembers), round?.name]
+      .filter((value): value is string => value !== undefined)
+      .some((value) => value.toLowerCase().includes(normalizedReviewerQuery));
+  });
+  const visibleReviewers = filteredReviewers.slice(0, reviewerRowLimit);
+  const visibleOutstanding = visibleReviewers.filter((reviewer) => reviewer.outstanding > 0);
   const reviewerLabel = (reviewerId: string): string =>
     reviewerDisplayLabel(reviewerId, reviewerMembers);
   const selectedOutstanding = outstanding.filter((reviewer) =>
     selected.has(`${reviewer.reviewerId}\u0000${reviewer.roundId}`),
   );
+  const selectedVisibleOutstanding = visibleOutstanding.filter((reviewer) =>
+    selected.has(`${reviewer.reviewerId}\u0000${reviewer.roundId}`),
+  );
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void loadReminderDeliveryFacts(baseUrl, seed.planId, (input, init) =>
+      fetch(input, { ...init, signal: controller.signal }),
+    )
+      .then((facts) => setDeliveryFacts(facts))
+      .catch((reason: unknown) => {
+        if (!(reason instanceof DOMException && reason.name === "AbortError")) {
+          setMessageTone("error");
+          setMessage(
+            reason instanceof Error
+              ? reason.message
+              : "Reminder delivery status could not be loaded.",
+          );
+        }
+      });
+    return () => controller.abort();
+  }, [baseUrl, seed.planId]);
 
   function toggle(reviewer: ReviewerProgressSummary): void {
     const key = `${reviewer.reviewerId}\u0000${reviewer.roundId}`;
@@ -3910,34 +4579,69 @@ function ReviewerProgressDashboard({
 
   async function sendReminders(): Promise<void> {
     if (selectedOutstanding.length === 0) {
+      setMessageTone("error");
       setMessage("Select at least one reviewer with outstanding assignments.");
       return;
     }
-    setMessage(null);
     setBusy(true);
+    setMessageTone("info");
+    setMessage(
+      `Sending reminder to ${selectedOutstanding.length} selected reviewer${selectedOutstanding.length === 1 ? "" : "s"}… Delivery status will appear here when the request completes.`,
+    );
     try {
       const byRound = new Map<string, string[]>();
+      const responseFacts: ReminderDeliveryFact[] = [];
       for (const reviewer of selectedOutstanding) {
         const ids = byRound.get(reviewer.roundId) ?? [];
         if (!ids.includes(reviewer.reviewerId)) ids.push(reviewer.reviewerId);
         byRound.set(reviewer.roundId, ids);
       }
-      const deliveryMessages: string[] = [];
       for (const [roundId, reviewerIds] of byRound) {
+        const reviewerIdsToSend = reminderReviewerIdsRequiringSend(
+          deliveryFacts,
+          roundId,
+          reviewerIds,
+        );
+        const reusableFacts = deliveryFacts.filter(
+          (fact) =>
+            fact.roundId === roundId &&
+            typeof fact.reviewerId === "string" &&
+            reviewerIds.includes(fact.reviewerId) &&
+            fact.status !== undefined &&
+            ["queued", "processing", "delivered"].includes(fact.status.toLowerCase()),
+        );
+        responseFacts.push(...reusableFacts);
+        if (reviewerIdsToSend.length === 0) continue;
         const result = await evaluationRequest<ReminderDeliveryResponse>(
           baseUrl,
           `/plans/${encodeURIComponent(seed.planId)}/reminders`,
           {
             method: "POST",
-            body: JSON.stringify({ roundId, reviewerIds: reviewerIds.sort() }),
+            body: JSON.stringify({ roundId, reviewerIds: [...reviewerIdsToSend].sort() }),
           },
         );
-        const roundName = seed.rounds.find((round) => round.id === roundId)?.name ?? roundId;
-        deliveryMessages.push(`${roundName}: ${reminderDeliveryMessage(result)}`);
+        responseFacts.push(...(result.facts ?? []));
       }
-      setMessage(deliveryMessages.join(" "));
+      setDeliveryFacts((current) => {
+        const responseIds = new Set(responseFacts.map((fact) => fact.outboxId));
+        return [...responseFacts, ...current.filter((fact) => !responseIds.has(fact.outboxId))];
+      });
+      setMessage(
+        [...byRound.entries()]
+          .map(([roundId, reviewerIds]) => {
+            const roundName = seed.rounds.find((round) => round.id === roundId)?.name ?? roundId;
+            return `${roundName}: ${reminderDeliveryForSelection(
+              responseFacts,
+              roundId,
+              reviewerIds,
+            )}`;
+          })
+          .join(" "),
+      );
+      setMessageTone("success");
       setSelected(new Set<string>());
     } catch (reason: unknown) {
+      setMessageTone("error");
       setMessage(
         reason instanceof Error
           ? reason.message
@@ -3949,7 +4653,11 @@ function ReviewerProgressDashboard({
   }
 
   return (
-    <section className={styles.section} aria-labelledby="reviewer-progress-heading">
+    <section
+      className={styles.section}
+      aria-labelledby="reviewer-progress-heading"
+      aria-busy={requestPresentation.ariaBusy}
+    >
       <div className={styles.sectionHeading}>
         <div>
           <p className={styles.sectionEyebrow}>Per-reviewer monitoring</p>
@@ -3957,8 +4665,35 @@ function ReviewerProgressDashboard({
         </div>
         <span className={styles.mutedLabel}>{outstanding.length} with outstanding reviews</span>
       </div>
+      <div className={styles.collectionToolbar}>
+        <div className={styles.formField}>
+          <label htmlFor="reviewer-progress-search">Find a reviewer</label>
+          <input
+            id="reviewer-progress-search"
+            type="search"
+            value={reviewerQuery}
+            onChange={(event) => setReviewerQuery(event.currentTarget.value)}
+            placeholder="Search reviewer or round"
+          />
+        </div>
+        <div className={styles.formField}>
+          <label htmlFor="reviewer-progress-limit">Rows shown</label>
+          <select
+            id="reviewer-progress-limit"
+            value={reviewerRowLimit}
+            onChange={(event) => setReviewerRowLimit(Number(event.currentTarget.value))}
+          >
+            <option value={5}>5</option>
+            <option value={10}>10</option>
+            <option value={25}>25</option>
+          </select>
+        </div>
+        <p className={styles.toolbarMeta} role="status">
+          Showing {visibleReviewers.length} of {filteredReviewers.length} matching reviewers
+        </p>
+      </div>
       <div className={styles.tableWrap}>
-        <table className={styles.dataTable}>
+        <table className={`${styles.dataTable} ${styles.reviewerProgressTable}`}>
           <caption>Reviewer completion by round</caption>
           <thead>
             <tr>
@@ -3972,12 +4707,12 @@ function ReviewerProgressDashboard({
             </tr>
           </thead>
           <tbody>
-            {seed.progress.reviewers.map((reviewer) => {
+            {visibleReviewers.map((reviewer) => {
               const key = `${reviewer.reviewerId}\u0000${reviewer.roundId}`;
               const round = seed.rounds.find((candidate) => candidate.id === reviewer.roundId);
               return (
                 <tr key={key}>
-                  <td>
+                  <td data-label="Select">
                     <Field orientation="horizontal" className={styles.tableCheckboxField}>
                       <Checkbox
                         id={`reminder-${key.replaceAll("\u0000", "-")}`}
@@ -3994,12 +4729,16 @@ function ReviewerProgressDashboard({
                       </FieldLabel>
                     </Field>
                   </td>
-                  <th scope="row">{reviewerLabel(reviewer.reviewerId)}</th>
-                  <td>{round?.name ?? "Round unavailable"}</td>
-                  <td>{reviewer.assigned}</td>
-                  <td>{reviewer.submitted}</td>
-                  <td>{reviewer.outstanding}</td>
-                  <td>{normalizeCompletionPercent(reviewer.completionPercent)}%</td>
+                  <th scope="row" data-label="Reviewer">
+                    {reviewerLabel(reviewer.reviewerId)}
+                  </th>
+                  <td data-label="Round">{round?.name ?? "Round unavailable"}</td>
+                  <td data-label="Assigned">{reviewer.assigned}</td>
+                  <td data-label="Complete">{reviewer.submitted}</td>
+                  <td data-label="Outstanding">{reviewer.outstanding}</td>
+                  <td data-label="Completion">
+                    {normalizeCompletionPercent(reviewer.completionPercent)}%
+                  </td>
                 </tr>
               );
             })}
@@ -4009,6 +4748,24 @@ function ReviewerProgressDashboard({
       {seed.progress.reviewers.length === 0 ? (
         <p className={styles.fieldHint}>No reviewer assignments have been persisted yet.</p>
       ) : null}
+      {deliveryFacts.length > 0 ? (
+        <section aria-label="Reviewer reminder delivery status">
+          <p className={styles.fieldHint}>Durable reminder delivery status</p>
+          <ul>
+            {deliveryFacts.map((fact) => (
+              <li
+                key={fact.outboxId ?? `${fact.reviewerId ?? "reviewer"}:${fact.roundId ?? "all"}`}
+              >
+                {reviewerLabel(fact.reviewerId ?? "Unknown reviewer")}: {fact.status ?? "unknown"}
+                {(fact.completedAt ?? fact.updatedAt ?? fact.createdAt)
+                  ? ` at ${fact.completedAt ?? fact.updatedAt ?? fact.createdAt}`
+                  : ""}
+                {fact.lastErrorCode ? ` (${fact.lastErrorCode})` : ""}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
       <div className={styles.confirmationActions}>
         <button
           className={styles.secondaryButton}
@@ -4016,19 +4773,19 @@ function ReviewerProgressDashboard({
           onClick={() =>
             setSelected(
               new Set(
-                selectedOutstanding.length === outstanding.length
+                selectedVisibleOutstanding.length === visibleOutstanding.length
                   ? []
-                  : outstanding.map(
+                  : visibleOutstanding.map(
                       (reviewer) => `${reviewer.reviewerId}\u0000${reviewer.roundId}`,
                     ),
               ),
             )
           }
-          disabled={busy || outstanding.length === 0}
+          disabled={busy || visibleOutstanding.length === 0}
         >
-          {selectedOutstanding.length === outstanding.length
+          {selectedVisibleOutstanding.length === visibleOutstanding.length
             ? "Clear reminder selection"
-            : "Select all outstanding"}
+            : "Select shown outstanding"}
         </button>
         <button
           className={styles.secondaryButton}
@@ -4036,11 +4793,17 @@ function ReviewerProgressDashboard({
           onClick={() => void sendReminders()}
           disabled={busy || selectedOutstanding.length === 0}
         >
-          Send reminder to selected reviewers
+          {requestPresentation.action === "pending"
+            ? "Sending reminder…"
+            : "Send reminder to selected reviewers"}
         </button>
       </div>
       {message ? (
-        <p className={styles.submittedMessage} role="status">
+        <p
+          className={messageTone === "error" ? styles.formError : styles.submittedMessage}
+          role={messageTone === "error" ? "alert" : "status"}
+          aria-live="polite"
+        >
           {message}
         </p>
       ) : null}
@@ -4089,9 +4852,47 @@ function ReviewerAssignmentList({
   const [replacementReasonByAssignment, setReplacementReasonByAssignment] = useState<
     Readonly<Record<string, string>>
   >({});
+  const [assignmentQuery, setAssignmentQuery] = useState("");
+  const [assignmentStatusFilter, setAssignmentStatusFilter] = useState<
+    "all" | ReviewPlanAssignment["status"]
+  >("all");
+  const [assignmentRowLimit, setAssignmentRowLimit] = useState(5);
+  const [selectedAssignmentId, setSelectedAssignmentId] = useState<string | null>(null);
+  const assignmentEditorRef = useRef<HTMLElement | null>(null);
   const submissionById = new Map(seed.aggregates.map((aggregate) => [aggregate.id, aggregate]));
   const roundById = new Map(seed.rounds.map((round) => [round.id, round]));
   const verifiedReviewerIds = new Set(reviewerMembers.map((member) => member.userId));
+  const normalizedAssignmentQuery = assignmentQuery.trim().toLowerCase();
+  const filteredAssignments = seed.assignments.filter((assignment) => {
+    if (assignmentStatusFilter !== "all" && assignment.status !== assignmentStatusFilter) {
+      return false;
+    }
+    if (normalizedAssignmentQuery.length === 0) return true;
+    const aggregate = submissionById.get(assignment.submissionId);
+    const reviewer = reviewerDisplayLabel(assignment.reviewerId, reviewerMembers);
+    const round = roundById.get(assignment.roundId);
+    return [aggregate?.title, aggregate?.reference, reviewer, round?.name]
+      .filter((value): value is string => value !== undefined)
+      .some((value) => value.toLowerCase().includes(normalizedAssignmentQuery));
+  });
+  const visibleAssignments = filteredAssignments.slice(0, assignmentRowLimit);
+  const selectedAssignment =
+    seed.assignments.find((assignment) => assignment.id === selectedAssignmentId) ?? null;
+  const selectedAggregate =
+    selectedAssignment === null ? undefined : submissionById.get(selectedAssignment.submissionId);
+  const selectedRound =
+    selectedAssignment === null ? undefined : roundById.get(selectedAssignment.roundId);
+  const selectedReviewer =
+    selectedAssignment === null
+      ? null
+      : reviewerDisplayLabel(selectedAssignment.reviewerId, reviewerMembers);
+  const selectedProtectedHistory =
+    selectedAssignment?.status === "abstained" || selectedAssignment?.status === "superseded";
+  useEffect(() => {
+    if (selectedAssignmentId === null) return;
+    assignmentEditorRef.current?.focus();
+    assignmentEditorRef.current?.scrollIntoView({ block: "start" });
+  }, [selectedAssignmentId]);
 
   async function replaceAssignment(assignment: ReviewPlanAssignment): Promise<void> {
     const replacementReviewerId = replacementReviewerByAssignment[assignment.id]?.trim() ?? "";
@@ -4120,6 +4921,7 @@ function ReviewerAssignmentList({
       setMessage(
         `Assignment ${result.replacedAssignment.id} superseded by ${result.successorAssignment.id}. Lineage predecessor: ${result.successorAssignment.predecessorAssignmentId ?? result.replacedAssignment.id}; successor: ${result.replacedAssignment.successorAssignmentId ?? result.successorAssignment.id}. History preserved: ${result.history.length}.`,
       );
+      setSelectedAssignmentId(null);
       await onAssignmentsPersisted?.();
     } catch (reasonError: unknown) {
       setMessage(
@@ -4141,11 +4943,59 @@ function ReviewerAssignmentList({
         </div>
         <span className={styles.mutedLabel}>{seed.assignments.length} records</span>
       </div>
+      <div className={styles.collectionToolbar}>
+        <div className={styles.formField}>
+          <label htmlFor="assignment-search">Find an assignment</label>
+          <input
+            id="assignment-search"
+            type="search"
+            value={assignmentQuery}
+            onChange={(event) => setAssignmentQuery(event.currentTarget.value)}
+            placeholder="Search submission, reviewer, reference, or round"
+          />
+        </div>
+        <div className={styles.formField}>
+          <label htmlFor="assignment-status-filter">Assignment status</label>
+          <select
+            id="assignment-status-filter"
+            value={assignmentStatusFilter}
+            onChange={(event) =>
+              setAssignmentStatusFilter(
+                event.currentTarget.value as "all" | ReviewPlanAssignment["status"],
+              )
+            }
+          >
+            <option value="all">All statuses</option>
+            <option value="assigned">Assigned</option>
+            <option value="in_progress">In progress</option>
+            <option value="submitted">Submitted</option>
+            <option value="abstained">Conflict / recused</option>
+            <option value="superseded">Superseded</option>
+          </select>
+        </div>
+        <div className={styles.formField}>
+          <label htmlFor="assignment-row-limit">Rows shown</label>
+          <select
+            id="assignment-row-limit"
+            value={assignmentRowLimit}
+            onChange={(event) => setAssignmentRowLimit(Number(event.currentTarget.value))}
+          >
+            <option value={5}>5</option>
+            <option value={10}>10</option>
+            <option value={25}>25</option>
+            <option value={50}>50</option>
+            <option value={100}>100</option>
+          </select>
+        </div>
+        <p className={styles.toolbarMeta} role="status">
+          Showing {visibleAssignments.length} of {filteredAssignments.length} matching assignments
+        </p>
+      </div>
       {seed.assignments.length === 0 ? (
         <p className={styles.fieldHint}>No reviewer assignments have been persisted yet.</p>
       ) : (
         <div className={styles.tableWrap}>
-          <table className={styles.dataTable}>
+          <table className={`${styles.dataTable} ${styles.assignmentTable}`}>
             <caption>Active reviewer assignments and protected history</caption>
             <thead>
               <tr>
@@ -4157,25 +5007,24 @@ function ReviewerAssignmentList({
               </tr>
             </thead>
             <tbody>
-              {seed.assignments.map((assignment) => {
+              {visibleAssignments.map((assignment) => {
                 const aggregate = submissionById.get(assignment.submissionId);
                 const round = roundById.get(assignment.roundId);
                 const reviewer = reviewerDisplayLabel(assignment.reviewerId, reviewerMembers);
-                const busy = busyAssignmentId === assignment.id;
                 const protectedHistory =
                   assignment.status === "abstained" || assignment.status === "superseded";
                 const submissionTitle = aggregate?.title ?? "Untitled submission";
                 return (
                   <tr key={assignment.id}>
-                    <th scope="row">
+                    <th scope="row" data-label="Submission">
                       <strong>{submissionTitle}</strong>
                       <span>{aggregate?.reference ?? "Submission"}</span>
                     </th>
-                    <td>
+                    <td data-label="Reviewer">
                       <strong>{reviewer}</strong>
                     </td>
-                    <td>{round?.name ?? "Round unavailable"}</td>
-                    <td>
+                    <td data-label="Round">{round?.name ?? "Round unavailable"}</td>
+                    <td data-label="Status">
                       <AssignmentStatusBadge status={assignment.status} />
                       {assignment.predecessorAssignmentId || assignment.successorAssignmentId ? (
                         <span className={styles.fieldHint}>
@@ -4189,70 +5038,28 @@ function ReviewerAssignmentList({
                         </span>
                       ) : null}
                     </td>
-                    <td>
-                      {protectedHistory ? (
-                        <span className={styles.mutedLabel}>
-                          Protected {assignment.status === "superseded" ? "superseded" : "conflict"}{" "}
-                          history
-                        </span>
-                      ) : (
-                        <div className={styles.formField}>
-                          <label
-                            className={styles.srOnly}
-                            htmlFor={`replacement-reviewer-${assignment.id}`}
-                          >
-                            Replacement reviewer for {submissionTitle}
-                          </label>
-                          <select
-                            id={`replacement-reviewer-${assignment.id}`}
-                            value={replacementReviewerByAssignment[assignment.id] ?? ""}
-                            onChange={(event) =>
-                              setReplacementReviewerByAssignment((current) => ({
-                                ...current,
-                                [assignment.id]: event.currentTarget.value,
-                              }))
-                            }
-                            disabled={busyAssignmentId !== null}
-                          >
-                            <option value="">Choose verified reviewer</option>
-                            {reviewerMembers
-                              .filter((member) => member.userId !== assignment.reviewerId)
-                              .map((member) => (
-                                <option value={member.userId} key={member.userId}>
-                                  {member.name ?? member.email} · {member.email}
-                                </option>
-                              ))}
-                          </select>
-                          <label
-                            className={styles.srOnly}
-                            htmlFor={`replacement-reason-${assignment.id}`}
-                          >
-                            Replacement reason for {submissionTitle}
-                          </label>
-                          <textarea
-                            id={`replacement-reason-${assignment.id}`}
-                            rows={2}
-                            placeholder="Reason for replacement"
-                            value={replacementReasonByAssignment[assignment.id] ?? ""}
-                            onChange={(event) =>
-                              setReplacementReasonByAssignment((current) => ({
-                                ...current,
-                                [assignment.id]: event.currentTarget.value,
-                              }))
-                            }
-                            disabled={busyAssignmentId !== null}
-                          />
-                          <button
-                            className={styles.dangerButton}
-                            type="button"
-                            onClick={() => void replaceAssignment(assignment)}
-                            disabled={busyAssignmentId !== null}
-                            aria-label={`Replace ${reviewer} on ${submissionTitle}`}
-                          >
-                            {busy ? "Replacing…" : "Replace atomically"}
-                          </button>
-                        </div>
-                      )}
+                    <td data-label="History">
+                      <button
+                        className={styles.secondaryButton}
+                        type="button"
+                        onClick={() =>
+                          setSelectedAssignmentId((current) =>
+                            current === assignment.id ? null : assignment.id,
+                          )
+                        }
+                        aria-expanded={selectedAssignmentId === assignment.id}
+                        aria-controls={
+                          selectedAssignmentId === assignment.id
+                            ? `assignment-editor-${assignment.id}`
+                            : undefined
+                        }
+                      >
+                        {selectedAssignmentId === assignment.id
+                          ? "Hide assignment"
+                          : protectedHistory
+                            ? "View assignment"
+                            : "Manage assignment"}
+                      </button>
                     </td>
                   </tr>
                 );
@@ -4261,6 +5068,104 @@ function ReviewerAssignmentList({
           </table>
         </div>
       )}
+      {selectedAssignment ? (
+        <section
+          ref={assignmentEditorRef}
+          id={`assignment-editor-${selectedAssignment.id}`}
+          className={styles.assignmentManagementEditor}
+          aria-labelledby="assignment-editor-heading"
+          tabIndex={-1}
+        >
+          <div className={styles.sectionHeading}>
+            <div>
+              <p className={styles.sectionEyebrow}>Selected assignment</p>
+              <h3 id="assignment-editor-heading">
+                {selectedAggregate?.title ?? "Untitled submission"}
+              </h3>
+            </div>
+            <AssignmentStatusBadge status={selectedAssignment.status} />
+          </div>
+          <dl className={styles.assignmentEditorSummary}>
+            <div>
+              <dt>Reviewer</dt>
+              <dd>{selectedReviewer}</dd>
+            </div>
+            <div>
+              <dt>Round</dt>
+              <dd>{selectedRound?.name ?? "Round unavailable"}</dd>
+            </div>
+            <div>
+              <dt>Reference</dt>
+              <dd>{selectedAggregate?.reference ?? "Submission"}</dd>
+            </div>
+          </dl>
+          {selectedProtectedHistory ? (
+            <p className={styles.fieldHint}>
+              This {selectedAssignment.status} record is protected history and cannot be replaced.
+            </p>
+          ) : (
+            <div className={styles.assignmentReplacementForm}>
+              <div className={styles.formField}>
+                <label htmlFor={`replacement-reviewer-${selectedAssignment.id}`}>
+                  Replacement reviewer
+                </label>
+                <select
+                  id={`replacement-reviewer-${selectedAssignment.id}`}
+                  value={replacementReviewerByAssignment[selectedAssignment.id] ?? ""}
+                  onChange={(event) =>
+                    setReplacementReviewerByAssignment((current) => ({
+                      ...current,
+                      [selectedAssignment.id]: event.currentTarget.value,
+                    }))
+                  }
+                  disabled={busyAssignmentId !== null}
+                >
+                  <option value="">Choose verified reviewer</option>
+                  {reviewerMembers
+                    .filter((member) => member.userId !== selectedAssignment.reviewerId)
+                    .map((member) => (
+                      <option value={member.userId} key={member.userId}>
+                        {member.name ?? member.email} · {member.email}
+                      </option>
+                    ))}
+                </select>
+              </div>
+              <div className={styles.formField}>
+                <label htmlFor={`replacement-reason-${selectedAssignment.id}`}>
+                  Replacement reason
+                </label>
+                <textarea
+                  id={`replacement-reason-${selectedAssignment.id}`}
+                  rows={3}
+                  placeholder="Explain why this assignment must move."
+                  value={replacementReasonByAssignment[selectedAssignment.id] ?? ""}
+                  onChange={(event) =>
+                    setReplacementReasonByAssignment((current) => ({
+                      ...current,
+                      [selectedAssignment.id]: event.currentTarget.value,
+                    }))
+                  }
+                  disabled={busyAssignmentId !== null}
+                />
+              </div>
+              <button
+                className={styles.dangerButton}
+                type="button"
+                onClick={() => void replaceAssignment(selectedAssignment)}
+                disabled={busyAssignmentId !== null}
+              >
+                {busyAssignmentId === selectedAssignment.id
+                  ? "Replacing reviewer…"
+                  : "Replace reviewer"}
+              </button>
+              <p className={styles.fieldHint}>
+                The old assignment remains in protected history and the replacement is recorded
+                atomically.
+              </p>
+            </div>
+          )}
+        </section>
+      ) : null}
       {message ? (
         <p className={styles.submittedMessage} role="status">
           {message}
@@ -4435,12 +5340,46 @@ function ReviewerQueueWorkspace({
   const [draftsById, setDraftsById] = useState<Readonly<Record<string, EvaluatorDraftSnapshot>>>(
     {},
   );
-  const visibleEntries = entries.filter(
-    (entry) =>
-      entry.assignment.assignmentStatus !== "abstained" && !recusedIds.has(entry.assignment.id),
+  const [statusView, setStatusView] = useState<ReviewerInboxStatusView>("all");
+  const [filters, setFilters] = useState<ReviewerInboxFilters>(emptyReviewerInboxFilters);
+  const [groupBy, setGroupBy] = useState<ReviewerInboxGroupBy>("event");
+  const queueActionRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const detailHeadingRef = useRef<HTMLElement | null>(null);
+  const restoreQueueFocusIdRef = useRef<string | null>(null);
+  const normalizedAssignments = entries.map(({ assignment }) => ({
+    ...assignment,
+    organizationId: assignment.organizationId ?? assignment.eventId,
+    organizationName:
+      assignment.organizationName ?? assignment.organizationId ?? assignment.eventName,
+    eventName: assignment.eventName || assignment.eventId,
+    roundId: assignment.round.id,
+    roundName: assignment.round.name,
+    track: assignment.track ?? null,
+    dueAt: assignment.dueAt ?? assignment.round.closesAt ?? null,
+    assignmentStatus: assignment.assignmentStatus ?? "assigned",
+  }));
+  const inboxItems = reviewerInboxItems(
+    normalizedAssignments,
+    recusedIds,
+    submittedAtById,
+    new Date(),
   );
+  const filteredItems = filterReviewerInbox(inboxItems, statusView, filters);
+  const groupedItems = groupReviewerInbox(filteredItems, groupBy);
+  const visibleEntries = groupedItems.flatMap((group) =>
+    group.items.map(({ assignment }, index) => ({
+      assignment,
+      groupLabel: group.label,
+      groupCount: group.items.length,
+      groupStart: index === 0,
+    })),
+  );
+  const selectedVisible = visibleEntries.some((entry) => entry.assignment.id === selectedId);
+  const navigationEntries = selectedVisible
+    ? visibleEntries
+    : inboxItems.map(({ assignment }) => ({ assignment }));
   const selectedBase =
-    visibleEntries.find((entry) => entry.assignment.id === selectedId)?.assignment ?? null;
+    inboxItems.find(({ assignment }) => assignment.id === selectedId)?.assignment ?? null;
   const selectedDraft = selectedBase === null ? undefined : draftsById[selectedBase.id];
   const selected =
     selectedBase === null || selectedDraft === undefined
@@ -4456,7 +5395,69 @@ function ReviewerQueueWorkspace({
   const selectedIndex =
     selectedBase === null
       ? -1
-      : visibleEntries.findIndex((entry) => entry.assignment.id === selectedBase.id);
+      : navigationEntries.findIndex((entry) => entry.assignment.id === selectedBase.id);
+  const statusCounts = {
+    all: inboxItems.length,
+    needsReview: inboxItems.filter(({ status }) => status === "assigned").length,
+    inProgress: inboxItems.filter(({ status }) => status === "in_progress").length,
+    submitted: inboxItems.filter(({ status }) => status === "submitted").length,
+  };
+  const organizationOptions = [
+    ...new Map(
+      inboxItems.map(({ assignment }) => [assignment.organizationId, assignment.organizationName]),
+    ),
+  ].sort((left, right) => left[1].localeCompare(right[1]));
+  const eventOptions = [
+    ...new Map(
+      inboxItems
+        .filter(
+          ({ assignment }) =>
+            filters.organizationId === "all" ||
+            assignment.organizationId === filters.organizationId,
+        )
+        .map(({ assignment }) => [assignment.eventId, assignment.eventName]),
+    ),
+  ].sort((left, right) => left[1].localeCompare(right[1]));
+  const roundOptions = [
+    ...new Map(
+      inboxItems
+        .filter(
+          ({ assignment }) =>
+            (filters.organizationId === "all" ||
+              assignment.organizationId === filters.organizationId) &&
+            (filters.eventId === "all" || assignment.eventId === filters.eventId),
+        )
+        .map(({ assignment, roundKey }) => [
+          roundKey,
+          `${assignment.eventName} · ${assignment.roundName}`,
+        ]),
+    ),
+  ].sort((left, right) => left[1].localeCompare(right[1]));
+  const trackOptions = [
+    ...new Set(
+      inboxItems.flatMap(({ assignment }) => (assignment.track === null ? [] : [assignment.track])),
+    ),
+  ].sort((left, right) => left.localeCompare(right));
+  const filtersActive =
+    statusView !== "all" ||
+    filters.organizationId !== "all" ||
+    filters.eventId !== "all" ||
+    filters.roundKey !== "all" ||
+    filters.due !== "all" ||
+    filters.track !== "all";
+  useEffect(() => {
+    if (selectedId !== null) {
+      detailHeadingRef.current?.focus();
+      detailHeadingRef.current?.scrollIntoView({ block: "start" });
+      return;
+    }
+    const restoreId = restoreQueueFocusIdRef.current;
+    if (restoreId === null) return;
+    const action = queueActionRefs.current[restoreId];
+    action?.focus();
+    action?.scrollIntoView({ block: "center" });
+    restoreQueueFocusIdRef.current = null;
+  }, [selectedId]);
   function updateAutosavePending(assignmentId: string, pending: boolean): void {
     if (pending) {
       pendingAutosaveAssignmentRef.current = assignmentId;
@@ -4481,8 +5482,11 @@ function ReviewerQueueWorkspace({
 
   return (
     <div className={styles.workspace} id="review-workspace">
-      <a className={styles.skipLink} href="#review-content">
-        Skip to reviewer queue
+      <a
+        className={styles.skipLink}
+        href={selected ? `#scorecard-${encodeURIComponent(selected.id)}` : "#review-content"}
+      >
+        {selected ? "Skip to open scorecard" : "Skip to reviewer queue"}
       </a>
       <header className={styles.workspaceHeader}>
         <div>
@@ -4502,196 +5506,351 @@ function ReviewerQueueWorkspace({
         </div>
       </header>
 
-      <section
+      <div
         id="review-content"
-        className={styles.section}
-        aria-labelledby="review-queue-heading"
+        className={styles.reviewerWorkbench}
+        data-detail-open={selected !== null}
       >
-        <div className={styles.sectionHeading}>
-          <div>
-            <p className={styles.sectionEyebrow}>Assigned work</p>
-            <h2 id="review-queue-heading">Submissions to review</h2>
-            <p className={styles.sectionIntro}>
-              Open a scorecard to save a review or recuse from that single assignment when a
-              conflict exists.
-            </p>
-          </div>
-          <span className={styles.mutedLabel}>{visibleEntries.length} assigned</span>
-        </div>
-        {visibleEntries.length === 0 ? (
-          <div className={styles.emptyQueue} role="status">
-            <h3>No assigned reviews yet</h3>
-            <p>
-              This queue is assignment-driven. An organizer must assign a submission before it
-              appears here.
-            </p>
-          </div>
-        ) : (
-          <div className={styles.decisionList}>
-            {visibleEntries.map(({ assignment }, assignmentIndex) => {
-              const isSelected = assignment.id === selectedId;
-              return (
-                <article className={styles.decisionCard} key={assignment.id}>
-                  <div className={styles.decisionSummary}>
-                    <div>
-                      <p className={styles.sectionEyebrow}>
-                        {assignment.eventName} · {assignment.planName}
-                      </p>
-                      <h3>{assignment.title}</h3>
-                    </div>
-                    <span className={styles.referenceBadge}>{assignment.reference}</span>
-                  </div>
-                  <dl className={styles.assignmentDetails}>
-                    <div>
-                      <dt>Round</dt>
-                      <dd>{assignment.round.name}</dd>
-                    </div>
-                    <div>
-                      <dt>Queue position</dt>
-                      <dd>
-                        {assignmentIndex + 1} of {visibleEntries.length}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>Review closes</dt>
-                      <dd>{assignment.round.closesAt}</dd>
-                    </div>
-                    <div>
-                      <dt>Status</dt>
-                      <dd>
-                        {assignment.submittedAt !== null ||
-                        submittedAtById[assignment.id] !== undefined ? (
-                          <AssignmentStatusBadge status="submitted" />
-                        ) : (
-                          <AssignmentStatusBadge status={assignment.assignmentStatus} />
-                        )}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>Progress</dt>
-                      <dd>
-                        {assignment.submittedAt !== null ||
-                        submittedAtById[assignment.id] !== undefined
-                          ? "Complete"
-                          : assignment.assignmentStatus === "in_progress"
-                            ? "Draft saved"
-                            : "Not started"}
-                      </dd>
-                    </div>
-                  </dl>
-                  <Link
-                    className={styles.primaryButton}
-                    href={`#scorecard-${encodeURIComponent(assignment.id)}`}
-                    onClick={(event) => {
-                      if (!selectAssignment(assignment.id)) event.preventDefault();
-                    }}
-                    aria-label={`Open scorecard for ${assignment.title}`}
-                    aria-current={isSelected ? "location" : undefined}
-                    aria-disabled={
-                      reviewerSelectionBlocked(
-                        pendingAutosaveAssignmentId,
-                        selectedId,
-                        assignment.id,
-                      ) || undefined
-                    }
-                  >
-                    {isSelected
-                      ? "Scorecard open"
-                      : assignment.assignmentStatus === "in_progress"
-                        ? "Resume review"
-                        : "Start review"}
-                  </Link>
-                </article>
-              );
-            })}
-          </div>
-        )}
-      </section>
-
-      {selected ? (
         <section
-          className={styles.section}
-          id={`scorecard-${encodeURIComponent(selected.id)}`}
-          aria-labelledby="selected-scorecard-heading"
+          className={`${styles.section} ${styles.reviewerQueuePanel}`}
+          aria-labelledby="review-queue-heading"
         >
           <div className={styles.sectionHeading}>
             <div>
-              <p className={styles.sectionEyebrow}>Assigned scorecard</p>
-              <h2 id="selected-scorecard-heading">{selected.title}</h2>
+              <p className={styles.sectionEyebrow}>Assigned work</p>
+              <h2 id="review-queue-heading">Submissions to review</h2>
+              <p className={styles.sectionIntro}>
+                Open one scorecard at a time. Drafts stay saved while you move through the queue.
+              </p>
             </div>
-            <button
-              className={styles.secondaryButton}
-              type="button"
-              onClick={() => {
-                selectAssignment(null);
-              }}
-              disabled={reviewerSelectionBlocked(pendingAutosaveAssignmentId, selectedId, null)}
-            >
-              Back to reviewer queue
-            </button>
+            <span className={styles.mutedLabel}>
+              {filteredItems.length} of {inboxItems.length}
+            </span>
           </div>
-          <EvaluatorWorkspace
-            key={selected.id}
-            assignment={selected}
-            baseUrl={baseUrl}
-            submittedOverride={submittedAtById[selected.id] !== undefined}
-            queuePosition={{ position: selectedIndex + 1, total: visibleEntries.length }}
-            onPrevious={
-              selectedIndex > 0
-                ? () => {
-                    selectAssignment(visibleEntries[selectedIndex - 1]?.assignment.id ?? null);
-                  }
-                : undefined
-            }
-            onNext={
-              selectedIndex >= 0 && selectedIndex < visibleEntries.length - 1
-                ? () => {
-                    selectAssignment(visibleEntries[selectedIndex + 1]?.assignment.id ?? null);
-                  }
-                : undefined
-            }
-            onDraftChange={(snapshot) =>
-              setDraftsById((current) => ({ ...current, [selected.id]: snapshot }))
-            }
-            onAutosavePendingChange={(pending) => updateAutosavePending(selected.id, pending)}
-            onAbstain={() => {
-              setRecusedIds((current) => new Set([...current, selected.id]));
-              setSelectedId(null);
-            }}
-            onSubmitted={(review) => {
-              const submittedAt = review.submittedAt;
-              if (submittedAt !== null) {
-                setSubmittedAtById((current) => ({
-                  ...current,
-                  [selected.id]: submittedAt,
-                }));
-              }
-            }}
-          />
+          <fieldset className={styles.reviewerStatusViews}>
+            <legend className={styles.srOnly}>Review status views</legend>
+            {[
+              ["all", "All", statusCounts.all],
+              ["needs-review", "Needs review", statusCounts.needsReview],
+              ["in-progress", "In progress", statusCounts.inProgress],
+              ["submitted", "Submitted", statusCounts.submitted],
+            ].map(([value, label, count]) => (
+              <Button
+                aria-pressed={statusView === value}
+                key={String(value)}
+                size="sm"
+                type="button"
+                variant={statusView === value ? "default" : "outline"}
+                onClick={() => setStatusView(value as ReviewerInboxStatusView)}
+              >
+                {label}
+                <Badge variant={statusView === value ? "secondary" : "outline"}>{count}</Badge>
+              </Button>
+            ))}
+          </fieldset>
+          <fieldset className={styles.reviewerFilterBar}>
+            <legend className={styles.srOnly}>Reviewer inbox filters</legend>
+            <label className={styles.reviewerFilterField}>
+              <span>Organization</span>
+              <select
+                value={filters.organizationId}
+                onChange={(event) =>
+                  setFilters((current) => ({
+                    ...current,
+                    organizationId: event.target.value,
+                    eventId: "all",
+                    roundKey: "all",
+                  }))
+                }
+              >
+                <option value="all">All organizations</option>
+                {organizationOptions.map(([id, label]) => (
+                  <option key={id} value={id}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className={styles.reviewerFilterField}>
+              <span>Event</span>
+              <select
+                value={filters.eventId}
+                onChange={(event) =>
+                  setFilters((current) => ({
+                    ...current,
+                    eventId: event.target.value,
+                    roundKey: "all",
+                  }))
+                }
+              >
+                <option value="all">All events</option>
+                {eventOptions.map(([id, label]) => (
+                  <option key={id} value={id}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className={styles.reviewerFilterField}>
+              <span>Round</span>
+              <select
+                value={filters.roundKey}
+                onChange={(event) =>
+                  setFilters((current) => ({ ...current, roundKey: event.target.value }))
+                }
+              >
+                <option value="all">All rounds</option>
+                {roundOptions.map(([id, label]) => (
+                  <option key={id} value={id}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className={styles.reviewerFilterField}>
+              <span>Due</span>
+              <select
+                value={filters.due}
+                onChange={(event) =>
+                  setFilters((current) => ({
+                    ...current,
+                    due: event.target.value as ReviewerInboxFilters["due"],
+                  }))
+                }
+              >
+                <option value="all">Any time</option>
+                <option value="overdue">Overdue</option>
+                <option value="today">Today</option>
+                <option value="next-7-days">Next 7 days</option>
+                <option value="later">Later</option>
+                <option value="none">No deadline</option>
+              </select>
+            </label>
+            <label className={styles.reviewerFilterField}>
+              <span>Track</span>
+              <select
+                value={filters.track}
+                onChange={(event) =>
+                  setFilters((current) => ({ ...current, track: event.target.value }))
+                }
+              >
+                <option value="all">All tracks</option>
+                <option value="none">No track</option>
+                {trackOptions.map((track) => (
+                  <option key={track} value={track}>
+                    {track}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className={styles.reviewerFilterField}>
+              <span>Group by</span>
+              <select
+                value={groupBy}
+                onChange={(event) => setGroupBy(event.target.value as ReviewerInboxGroupBy)}
+              >
+                <option value="event">Event</option>
+                <option value="organization">Organization</option>
+                <option value="round">Round</option>
+                <option value="due">Due date</option>
+              </select>
+            </label>
+            {filtersActive ? (
+              <Button
+                className={styles.reviewerClearFilters}
+                size="sm"
+                type="button"
+                variant="ghost"
+                onClick={() => {
+                  setStatusView("all");
+                  setFilters(emptyReviewerInboxFilters);
+                }}
+              >
+                Clear filters
+              </Button>
+            ) : null}
+          </fieldset>
+          {inboxItems.length === 0 ? (
+            <div className={styles.emptyQueue} role="status">
+              <h3>No assigned reviews yet</h3>
+              <p>
+                This queue is assignment-driven. An organizer must assign a submission before it
+                appears here.
+              </p>
+            </div>
+          ) : filteredItems.length === 0 ? (
+            <div className={styles.filteredQueueEmpty} role="status">
+              <h3>No reviews match these filters</h3>
+              <Button
+                size="sm"
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setStatusView("all");
+                  setFilters(emptyReviewerInboxFilters);
+                }}
+              >
+                Clear filters
+              </Button>
+            </div>
+          ) : (
+            <div className={styles.reviewerQueueList}>
+              {visibleEntries.map(({ assignment, groupCount, groupLabel, groupStart }) => {
+                const isSelected = assignment.id === selectedId;
+                const isSubmitted =
+                  assignment.submittedAt !== null || submittedAtById[assignment.id] !== undefined;
+                const navigationBlocked = reviewerSelectionBlocked(
+                  pendingAutosaveAssignmentId,
+                  selectedId,
+                  assignment.id,
+                );
+                const actionLabel = isSubmitted
+                  ? "View review"
+                  : assignment.assignmentStatus === "in_progress"
+                    ? "Resume review"
+                    : "Start review";
+                return (
+                  <article
+                    className={`${styles.reviewerQueueCard} ${
+                      isSelected ? styles.reviewerQueueCardSelected : ""
+                    }`}
+                    key={assignment.id}
+                  >
+                    {groupStart ? (
+                      <div className={styles.reviewerGroupHeader}>
+                        <strong>{groupLabel}</strong>
+                        <span>{groupCount}</span>
+                      </div>
+                    ) : null}
+                    <div className={styles.reviewerQueueRow}>
+                      <div className={styles.reviewerQueueContent}>
+                        <div className={styles.reviewerQueueSummary}>
+                          <div>
+                            <p className={styles.sectionEyebrow}>
+                              {groupBy === "event"
+                                ? assignment.planName
+                                : `${assignment.eventName} · ${assignment.planName}`}
+                            </p>
+                            <h3>{assignment.title}</h3>
+                          </div>
+                          <span className={styles.mutedLabel}>{assignment.reference}</span>
+                        </div>
+                        <div className={styles.reviewerQueueMeta}>
+                          <span>{assignment.round.name}</span>
+                          <span>Due {assignment.round.closesAt}</span>
+                        </div>
+                      </div>
+                      <div className={styles.reviewerQueueFooter}>
+                        <AssignmentStatusBadge
+                          status={isSubmitted ? "submitted" : assignment.assignmentStatus}
+                        />
+                        <button
+                          ref={(element) => {
+                            queueActionRefs.current[assignment.id] = element;
+                          }}
+                          className={styles.reviewerQueueAction}
+                          data-action-kind={isSubmitted ? "secondary" : "primary"}
+                          type="button"
+                          onClick={() => {
+                            restoreQueueFocusIdRef.current = assignment.id;
+                            selectAssignment(assignment.id);
+                          }}
+                          aria-label={`Open scorecard for ${assignment.title}`}
+                          aria-pressed={isSelected}
+                          disabled={navigationBlocked}
+                        >
+                          {isSelected ? "Review open" : actionLabel}
+                        </button>
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
         </section>
-      ) : null}
+
+        {selected ? (
+          <section
+            className={`${styles.section} ${styles.reviewerDetailPanel}`}
+            id={`scorecard-${encodeURIComponent(selected.id)}`}
+            aria-label={`Review ${selected.title}`}
+            ref={detailHeadingRef}
+            tabIndex={-1}
+          >
+            <div className={styles.reviewerDetailToolbar}>
+              <span>
+                {selected.eventName} · {selected.round.name}
+              </span>
+              <button
+                className={styles.secondaryButton}
+                type="button"
+                onClick={() => {
+                  restoreQueueFocusIdRef.current = selected.id;
+                  selectAssignment(null);
+                }}
+                disabled={reviewerSelectionBlocked(pendingAutosaveAssignmentId, selectedId, null)}
+              >
+                Back to reviewer queue
+              </button>
+            </div>
+            <EvaluatorWorkspace
+              key={selected.id}
+              assignment={selected}
+              baseUrl={baseUrl}
+              embedded
+              submittedOverride={submittedAtById[selected.id] !== undefined}
+              queuePosition={{ position: selectedIndex + 1, total: navigationEntries.length }}
+              onNext={
+                selectedIndex >= 0 && selectedIndex < navigationEntries.length - 1
+                  ? () => {
+                      selectAssignment(navigationEntries[selectedIndex + 1]?.assignment.id ?? null);
+                    }
+                  : undefined
+              }
+              onDraftChange={(snapshot) =>
+                setDraftsById((current) => ({ ...current, [selected.id]: snapshot }))
+              }
+              onAutosavePendingChange={(pending) => updateAutosavePending(selected.id, pending)}
+              onAbstain={() => {
+                setRecusedIds((current) => new Set([...current, selected.id]));
+                setSelectedId(null);
+              }}
+              onSubmitted={(review) => {
+                const submittedAt = review.submittedAt;
+                if (submittedAt !== null) {
+                  setSubmittedAtById((current) => ({
+                    ...current,
+                    [selected.id]: submittedAt,
+                  }));
+                }
+              }}
+            />
+          </section>
+        ) : null}
+      </div>
     </div>
   );
 }
 function EvaluatorWorkspace({
   assignment,
   baseUrl,
+  embedded = false,
   onAbstain,
   onSubmitted,
   submittedOverride = false,
   queuePosition,
-  onPrevious,
   onNext,
   onDraftChange,
   onAutosavePendingChange,
 }: Readonly<{
   assignment: EvaluatorAssignment;
   baseUrl: string;
+  embedded?: boolean | undefined;
   onAbstain?: (() => void) | undefined;
   onSubmitted?: ((review: AuthoritativeReview) => void) | undefined;
   submittedOverride?: boolean | undefined;
   queuePosition?: Readonly<{ position: number; total: number }> | undefined;
-  onPrevious?: (() => void) | undefined;
   onNext?: (() => void) | undefined;
   onDraftChange?: ((snapshot: EvaluatorDraftSnapshot) => void) | undefined;
   onAutosavePendingChange?: ((pending: boolean) => void) | undefined;
@@ -4713,6 +5872,7 @@ function EvaluatorWorkspace({
   const [, setReviewVersion] = useState<number | undefined>(assignment.reviewVersion);
   const reviewVersionRef = useRef<number | undefined>(assignment.reviewVersion);
   const criterionRefs = useRef<Record<string, HTMLElement | null>>({});
+  const abstentionReasonRef = useRef<HTMLTextAreaElement | null>(null);
   const [showValidation, setShowValidation] = useState(false);
   const [autosavePending, setAutosavePending] = useState(false);
   const [autosaveQueue] = useState(() =>
@@ -4724,18 +5884,23 @@ function EvaluatorWorkspace({
   const [autosaveState, setAutosaveState] = useState(
     initiallySubmitted ? "Review submitted" : "Autosave ready",
   );
-  const [submitConfirmation, setSubmitConfirmation] = useState(false);
   const [submitted, setSubmitted] = useState(initiallySubmitted);
   const reviewLocked =
     submitted || assignment.assignmentStatus === "abstained" || assignment.round.status !== "open";
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [draftBusy, setDraftBusy] = useState(false);
   const [submitBusy, setSubmitBusy] = useState(false);
+  const primaryAction = scorecardPrimaryAction({
+    submitted,
+    hasNext: onNext !== undefined,
+    submitBusy,
+    autosavePending,
+  });
   const submitBusyRef = useRef(false);
   const [abstentionReason, setAbstentionReason] = useState("");
   const [abstentionError, setAbstentionError] = useState<string | null>(null);
   const [abstained, setAbstained] = useState(() => assignment.assignmentStatus === "abstained");
   const [abstentionBusy, setAbstentionBusy] = useState(false);
+  const [conflictDialogOpen, setConflictDialogOpen] = useState(false);
   const [suggestions, setSuggestions] = useState<readonly ApiSuggestion[]>(assignment.suggestions);
   const [suggestionBusy, setSuggestionBusy] = useState(false);
   const [suggestionUnavailable, setSuggestionUnavailable] = useState<string | null>(null);
@@ -4875,7 +6040,7 @@ function EvaluatorWorkspace({
           ),
         );
         setSuggestionConflict(
-          `${message} This suggestion is stale; regenerate it before resolving. Manual scoring, save, and submit remain available.`,
+          `${message} This suggestion is stale; regenerate it before resolving. Manual scoring, autosave, and submit remain available.`,
         );
         setAutosaveState("AI suggestion stale; manual scoring remains available");
       } else {
@@ -4908,7 +6073,7 @@ function EvaluatorWorkspace({
       } else if (criterionType(criterion) === "dropdown" && typeof score.value === "string") {
         nextScores[criterionId] = score.value;
       }
-      if (score.humanConfirmedBy !== null) nextConfirmed.add(criterionId);
+      if (isHumanConfirmedReviewScore(score)) nextConfirmed.add(criterionId);
     }
     const parsedComment = parseScorecardResponses(review.comment ?? "");
     setScoreValues(nextScores);
@@ -5008,28 +6173,6 @@ function EvaluatorWorkspace({
     });
   }
 
-  async function saveDraft(): Promise<void> {
-    if (reviewLocked) {
-      setSubmitError("This review is locked and cannot save another draft.");
-      return;
-    }
-    if (draftBusy || submitBusy) return;
-    setDraftBusy(true);
-    setSubmitError(null);
-    setAutosaveState("Saving draft…");
-    try {
-      await autosaveQueue.whenIdle();
-      await persistReview();
-      setAutosaveState("Draft saved");
-    } catch (reason: unknown) {
-      setAutosaveState("Save failed");
-      setSubmitError(
-        reason instanceof Error ? reason.message : "The review draft could not be saved.",
-      );
-    } finally {
-      setDraftBusy(false);
-    }
-  }
   function changeScore(criterionId: string, value: string): void {
     const criterion = assignment.round.rubric.criteria.find(
       (candidate) => candidate.id === criterionId,
@@ -5127,21 +6270,8 @@ function EvaluatorWorkspace({
       : `Choose and confirm a score from ${criterion.minimum} through ${criterion.maximum}.`;
   }
 
-  function openSubmitConfirmation(): void {
-    if (submitBusy || submitBusyRef.current) return;
-    const missing = assignment.round.rubric.criteria.find(
-      (criterion) => criterion.required && !criterionComplete(criterion),
-    );
-    if (missing) {
-      setShowValidation(true);
-      setSubmitError(`Confirm or edit the required “${missing.label}” score before submitting.`);
-      criterionRefs.current[missing.id]?.focus();
-      setSubmitConfirmation(false);
-      return;
-    }
-    setSubmitError(null);
-    setSubmitConfirmation(true);
-    setShowValidation(false);
+  function openConflictDisclosure(): void {
+    setConflictDialogOpen(true);
   }
 
   async function submitReview(): Promise<void> {
@@ -5157,7 +6287,6 @@ function EvaluatorWorkspace({
     if (missing) {
       setSubmitError(`Confirm or edit the required “${missing.label}” score before submitting.`);
       criterionRefs.current[missing.id]?.focus();
-      setSubmitConfirmation(false);
       return;
     }
     setSubmitError(null);
@@ -5177,7 +6306,6 @@ function EvaluatorWorkspace({
       applyAuthoritativeReview(submittedReview);
       setSubmitted(submittedReview.submittedAt !== null);
       if (submittedReview.submittedAt !== null) onSubmitted?.(submittedReview);
-      setSubmitConfirmation(false);
       setAutosaveState("Review submitted");
       setShowValidation(false);
     } catch (reason: unknown) {
@@ -5209,6 +6337,7 @@ function EvaluatorWorkspace({
       });
       setAbstentionReason(declaration.reason);
       setAbstained(true);
+      setConflictDialogOpen(false);
       onAbstain?.();
     } catch (reason: unknown) {
       setAbstentionError(
@@ -5273,36 +6402,45 @@ function EvaluatorWorkspace({
   }
 
   return (
-    <div className={styles.workspace} id="review-workspace">
-      <a className={styles.skipLink} href="#review-content">
-        Skip to review workspace content
-      </a>
-      <header className={styles.workspaceHeader}>
-        <div>
-          <p className={styles.eyebrow}>
-            Assigned review · {assignment.eventName} · {assignment.planName}
-          </p>
-          <h1>{assignment.title}</h1>
-          <p className={styles.headerDescription}>
-            Evaluate this submission in <strong>{assignment.round.name}</strong>. Only your assigned
-            submission is available in this workspace; your draft stays available while you move
-            through the reviewer queue.
-          </p>
-        </div>
-        <div className={styles.headerSide}>
-          <ReviewNavigation mode="evaluator" />
-          <section className={styles.reviewState} aria-label="Review state">
-            <AssignmentStatusBadge status={submitted ? "submitted" : assignment.assignmentStatus} />
-            <span className={styles.queuePosition}>
-              {queuePosition
-                ? `Queue position ${queuePosition.position} of ${queuePosition.total}`
-                : "Assigned submission"}
-            </span>
-          </section>
-        </div>
-      </header>
+    <div
+      className={embedded ? styles.embeddedEvaluator : styles.workspace}
+      id={embedded ? undefined : "review-workspace"}
+    >
+      {embedded ? null : (
+        <>
+          <a className={styles.skipLink} href="#review-content">
+            Skip to review workspace content
+          </a>
+          <header className={styles.workspaceHeader}>
+            <div>
+              <p className={styles.eyebrow}>
+                Assigned review · {assignment.eventName} · {assignment.planName}
+              </p>
+              <h1>{assignment.title}</h1>
+              <p className={styles.headerDescription}>
+                Evaluate this submission in <strong>{assignment.round.name}</strong>. Only your
+                assigned submission is available in this workspace; your draft stays available while
+                you move through the reviewer queue.
+              </p>
+            </div>
+            <div className={styles.headerSide}>
+              <ReviewNavigation mode="evaluator" />
+              <section className={styles.reviewState} aria-label="Review state">
+                <AssignmentStatusBadge
+                  status={submitted ? "submitted" : assignment.assignmentStatus}
+                />
+                <span className={styles.queuePosition}>
+                  {queuePosition
+                    ? `Queue position ${queuePosition.position} of ${queuePosition.total}`
+                    : "Assigned submission"}
+                </span>
+              </section>
+            </div>
+          </header>
+        </>
+      )}
 
-      <div id="review-content" tabIndex={-1}>
+      <div id={embedded ? undefined : "review-content"} tabIndex={embedded ? undefined : -1}>
         <AuthorityNotice />
 
         <section
@@ -5328,7 +6466,10 @@ function EvaluatorWorkspace({
         <section className={styles.submissionPanel} aria-labelledby="assigned-submission-heading">
           <div className={styles.sectionHeading}>
             <div>
-              <p className={styles.sectionEyebrow}>One assigned submission</p>
+              <p className={styles.sectionEyebrow}>
+                {assignment.organizationName ?? assignment.organizationId ?? assignment.eventName} ·{" "}
+                {assignment.eventName} · {assignment.planName}
+              </p>
               <h2 id="assigned-submission-heading">{assignment.title}</h2>
             </div>
             <span className={styles.referenceBadge}>{assignment.reference}</span>
@@ -5427,6 +6568,14 @@ function EvaluatorWorkspace({
           </p>
           <div className={styles.confirmationActions}>
             <button
+              className={styles.dangerButton}
+              type="button"
+              onClick={openConflictDisclosure}
+              disabled={abstentionBusy || reviewLocked}
+            >
+              Declare conflict
+            </button>
+            <button
               className={styles.secondaryButton}
               type="button"
               onClick={() => void generateSuggestions()}
@@ -5439,7 +6588,7 @@ function EvaluatorWorkspace({
             </span>
             {suggestionUnavailable ? (
               <p className={styles.fieldHint} role="status">
-                AI provider unavailable locally: {suggestionUnavailable} Manual scoring, save draft,
+                AI provider unavailable locally: {suggestionUnavailable} Manual scoring, autosave,
                 and submit evaluation remain usable.
               </p>
             ) : null}
@@ -5492,50 +6641,6 @@ function EvaluatorWorkspace({
                 submission revision {suggestion.submissionRevision}; generate a new suggestion.
               </p>
             ))}
-          <nav className={styles.reviewActions} aria-label="Evaluation actions">
-            <button
-              className={styles.secondaryButton}
-              type="button"
-              onClick={onPrevious}
-              disabled={reviewerNavigationDisabled(
-                onPrevious !== undefined,
-                autosavePending,
-                draftBusy,
-                submitBusy,
-              )}
-            >
-              Previous
-            </button>
-            <button
-              className={styles.secondaryButton}
-              type="button"
-              onClick={onNext}
-              disabled={reviewerNavigationDisabled(
-                onNext !== undefined,
-                autosavePending,
-                draftBusy,
-                submitBusy,
-              )}
-            >
-              Next
-            </button>
-            <button
-              className={styles.secondaryButton}
-              type="button"
-              onClick={() => void saveDraft()}
-              disabled={draftBusy || submitBusy || reviewLocked}
-            >
-              {draftBusy ? "Saving draft…" : "Save draft"}
-            </button>
-            <button
-              className={styles.primaryButton}
-              type="button"
-              onClick={openSubmitConfirmation}
-              disabled={submitBusy || draftBusy || reviewLocked}
-            >
-              Submit evaluation
-            </button>
-          </nav>
           <div className={styles.scoreList}>
             {assignment.round.rubric.criteria.map((criterion) => {
               const generatedSuggestion = suggestionForCriterion(criterion.id);
@@ -5551,6 +6656,9 @@ function EvaluatorWorkspace({
                   ? (responseValues[criterion.id] ?? "").trim().length > 0
                   : humanConfirmed.has(criterion.id);
               const validationMessage = criterionValidationMessage(criterion);
+              const compactNumericScale =
+                criterionType(criterion) === "numeric" &&
+                criterion.maximum - criterion.minimum <= 6;
               return (
                 <fieldset
                   className={`${styles.scoreCard} ${validationMessage ? styles.invalidCriterion : ""}`}
@@ -5575,7 +6683,13 @@ function EvaluatorWorkspace({
                   </div>
                   <div className={styles.scoreControls}>
                     <div className={styles.formField}>
-                      <label htmlFor={`${criterion.id}-score`}>
+                      <label
+                        htmlFor={
+                          compactNumericScale
+                            ? `${criterion.id}-score-${criterion.minimum}`
+                            : `${criterion.id}-score`
+                        }
+                      >
                         {criterionType(criterion) === "free_text"
                           ? "Human response"
                           : "Human score"}{" "}
@@ -5586,7 +6700,40 @@ function EvaluatorWorkspace({
                         ) : null}
                       </label>
                       {criterionType(criterion) === "numeric" ? (
-                        <>
+                        compactNumericScale ? (
+                          <div
+                            className={styles.ratingChoices}
+                            role="radiogroup"
+                            aria-label={`${criterion.label} rating choices`}
+                          >
+                            {Array.from(
+                              { length: criterion.maximum - criterion.minimum + 1 },
+                              (_, index) => criterion.minimum + index,
+                            ).map((value) => (
+                              <label className={styles.ratingChoice} key={value}>
+                                <input
+                                  id={`${criterion.id}-score-${value}`}
+                                  ref={
+                                    value === criterion.minimum
+                                      ? (element) => {
+                                          criterionRefs.current[criterion.id] = element;
+                                        }
+                                      : undefined
+                                  }
+                                  type="radio"
+                                  name={`${criterion.id}-rating-choice`}
+                                  value={value}
+                                  checked={scoreValues[criterion.id] === String(value)}
+                                  disabled={reviewLocked}
+                                  onChange={() => changeScore(criterion.id, String(value))}
+                                  aria-invalid={validationMessage !== null}
+                                  aria-describedby={`${criterion.id}-description ${criterion.id}-score-help${validationMessage ? ` ${criterion.id}-error` : ""}`}
+                                />
+                                <span>{value}</span>
+                              </label>
+                            ))}
+                          </div>
+                        ) : (
                           <input
                             id={`${criterion.id}-score`}
                             ref={(element) => {
@@ -5606,29 +6753,7 @@ function EvaluatorWorkspace({
                             aria-invalid={validationMessage !== null}
                             aria-describedby={`${criterion.id}-description ${criterion.id}-score-help${validationMessage ? ` ${criterion.id}-error` : ""}`}
                           />
-                          <div
-                            className={styles.ratingChoices}
-                            role="radiogroup"
-                            aria-label={`${criterion.label} rating choices`}
-                          >
-                            {Array.from(
-                              { length: criterion.maximum - criterion.minimum + 1 },
-                              (_, index) => criterion.minimum + index,
-                            ).map((value) => (
-                              <label className={styles.ratingChoice} key={value}>
-                                <input
-                                  type="radio"
-                                  name={`${criterion.id}-rating-choice`}
-                                  value={value}
-                                  checked={scoreValues[criterion.id] === String(value)}
-                                  disabled={reviewLocked}
-                                  onChange={() => changeScore(criterion.id, String(value))}
-                                />
-                                <span>{value}</span>
-                              </label>
-                            ))}
-                          </div>
-                        </>
+                        )
                       ) : criterionType(criterion) === "dropdown" ? (
                         <select
                           id={`${criterion.id}-score`}
@@ -5673,7 +6798,9 @@ function EvaluatorWorkspace({
                           ? "Written responses are stored with this scorecard criterion."
                           : criterionType(criterion) === "dropdown"
                             ? "Choose one of the configured scorecard options."
-                            : `Enter a whole number from ${criterion.minimum} through ${criterion.maximum}.`}
+                            : compactNumericScale
+                              ? `Choose one score from ${criterion.minimum} through ${criterion.maximum}.`
+                              : `Enter a whole number from ${criterion.minimum} through ${criterion.maximum}.`}
                       </p>
                       {validationMessage ? (
                         <p className={styles.formError} id={`${criterion.id}-error`} role="alert">
@@ -5777,75 +6904,40 @@ function EvaluatorWorkspace({
             </strong>
             <span> · AI suggestions never count until you confirm or edit them.</span>
           </p>
-        </section>
-
-        <section className={styles.section} aria-labelledby="comment-heading">
-          <div className={styles.sectionHeading}>
-            <div>
-              <p className={styles.sectionEyebrow}>Reviewer notes</p>
-              <h2 id="comment-heading">Comments</h2>
+          <section className={styles.commentRow} aria-labelledby="comment-heading">
+            <div className={styles.sectionHeading}>
+              <div>
+                <p className={styles.sectionEyebrow}>Reviewer notes</p>
+                <h2 id="comment-heading">Comments</h2>
+              </div>
             </div>
-          </div>
-          <div className={styles.formField}>
-            <label htmlFor="review-comment">Comments for the organizing committee</label>
-            <textarea
-              id="review-comment"
-              value={comment}
-              disabled={reviewLocked}
-              onChange={(event) => {
-                const nextComment = event.currentTarget.value;
-                setComment(nextComment);
-                reportDraft(scoreValues, responseValues, humanConfirmed, nextComment);
-                setAutosaveState("Unsaved changes");
-                enqueueAutosave(scoreValues, nextComment, humanConfirmed, responseValues);
-              }}
-              rows={5}
-              placeholder="Share evidence for your scores and any practical considerations."
-            />
-          </div>
+            <div className={styles.formField}>
+              <label htmlFor="review-comment">Comments for the organizing committee</label>
+              <textarea
+                id="review-comment"
+                value={comment}
+                disabled={reviewLocked}
+                onChange={(event) => {
+                  const nextComment = event.currentTarget.value;
+                  setComment(nextComment);
+                  reportDraft(scoreValues, responseValues, humanConfirmed, nextComment);
+                  setAutosaveState("Unsaved changes");
+                  enqueueAutosave(scoreValues, nextComment, humanConfirmed, responseValues);
+                }}
+                rows={5}
+                placeholder="Share evidence for your scores and any practical considerations."
+              />
+            </div>
+          </section>
         </section>
 
-        <nav className={styles.reviewActions} aria-label="Evaluation actions">
-          <button
-            className={styles.secondaryButton}
-            type="button"
-            onClick={onPrevious}
-            disabled={onPrevious === undefined || draftBusy || submitBusy}
-          >
-            Previous
-          </button>
-          <button
-            className={styles.secondaryButton}
-            type="button"
-            onClick={onNext}
-            disabled={onNext === undefined || draftBusy || submitBusy}
-          >
-            Next
-          </button>
-          <button
-            className={styles.secondaryButton}
-            type="button"
-            onClick={() => void saveDraft()}
-            disabled={draftBusy || submitBusy || reviewLocked}
-          >
-            {draftBusy ? "Saving draft…" : "Save draft"}
-          </button>
-          <button
-            className={styles.primaryButton}
-            type="button"
-            onClick={openSubmitConfirmation}
-            disabled={submitBusy || draftBusy || reviewLocked}
-          >
-            Submit evaluation
-          </button>
-        </nav>
         <section className={styles.submitPanel} aria-labelledby="submit-heading">
           <div>
             <p className={styles.sectionEyebrow}>Final step</p>
             <h2 id="submit-heading">Submit review</h2>
             <p>
-              A confirmation is required before this review is submitted. Submission locks your
-              scores and comments for organizer aggregation.
+              Submission waits for autosave, then locks scores and comments for organizer
+              aggregation.
             </p>
           </div>
           {submitError ? (
@@ -5853,98 +6945,79 @@ function EvaluatorWorkspace({
               {submitError}
             </p>
           ) : null}
-          {submitted ? (
-            <p className={styles.submittedMessage} role="status">
-              Review submitted to the committee.
-            </p>
-          ) : (
-            <>
-              <button
-                className={styles.primaryButton}
-                type="button"
-                onClick={openSubmitConfirmation}
-                disabled={submitBusy || reviewLocked}
-              >
-                Review and submit
-              </button>
-              {submitConfirmation ? (
-                <div
-                  className={styles.confirmationBox}
-                  role="dialog"
-                  aria-labelledby="confirm-submit-heading"
-                  aria-modal="false"
-                >
-                  <h3 id="confirm-submit-heading">Confirm review submission</h3>
-                  <p>
-                    Check that every required score is human-confirmed or edited before locking this
-                    review.
-                  </p>
-                  <div className={styles.confirmationActions}>
-                    <button
-                      className={styles.secondaryButton}
-                      type="button"
-                      onClick={() => setSubmitConfirmation(false)}
-                    >
-                      Keep editing
-                    </button>
-                    <button
-                      className={styles.primaryButton}
-                      type="button"
-                      onClick={submitReview}
-                      disabled={submitBusy}
-                    >
-                      Confirm and submit review
-                    </button>
-                  </div>
-                </div>
+          {primaryAction.kind !== "submit" ? (
+            <div className={styles.confirmationActions}>
+              <p className={styles.submittedMessage} role="status">
+                Review submitted to the committee.
+              </p>
+              {primaryAction.kind === "open-next" && onNext ? (
+                <button className={styles.primaryButton} type="button" onClick={onNext}>
+                  {primaryAction.label}
+                </button>
               ) : null}
-            </>
+            </div>
+          ) : (
+            <button
+              className={styles.primaryButton}
+              type="button"
+              onClick={() => void submitReview()}
+              disabled={primaryAction.disabled || reviewLocked}
+            >
+              {submitBusy ? "Submitting…" : primaryAction.label}
+            </button>
           )}
         </section>
 
-        <section className={styles.conflictPanel} aria-labelledby="conflict-heading">
-          <div>
-            <p className={styles.sectionEyebrow}>Safety control</p>
-            <h2 id="conflict-heading">Conflict of interest / recuse</h2>
-            <p>
-              If you have a personal, financial, or professional conflict with this submission,
-              abstain instead of scoring it. A written reason is required and immediately removes
-              your access.
-            </p>
-          </div>
-          <div className={styles.formField}>
-            <label htmlFor="abstention-reason">
-              Reason for abstention <span>(required)</span>
-            </label>
-            <textarea
-              id="abstention-reason"
-              value={abstentionReason}
-              disabled={abstentionBusy}
-              onChange={(event) => setAbstentionReason(event.currentTarget.value)}
-              rows={3}
-              required
-              aria-describedby="abstention-help"
-              placeholder="Describe the conflict for the organizer audit log."
-            />
-            <p className={styles.fieldHint} id="abstention-help">
-              The reason is visible to organizers; declaring a conflict removes this assignment from
-              your view.
-            </p>
-          </div>
-          {abstentionError ? (
-            <p className={styles.formError} role="alert">
-              {abstentionError}
-            </p>
-          ) : null}
-          <button
-            className={styles.dangerButton}
-            type="button"
-            onClick={declareAbstention}
-            disabled={abstentionBusy}
-          >
-            Recuse — Declare conflict and abstain
-          </button>
-        </section>
+        <Dialog open={conflictDialogOpen} onOpenChange={setConflictDialogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Declare a conflict</DialogTitle>
+              <DialogDescription>
+                A written reason is required. Declaring a conflict removes this assignment from your
+                reviewer inbox and records the reason for organizer audit.
+              </DialogDescription>
+            </DialogHeader>
+            <div className={styles.formField}>
+              <label htmlFor="abstention-reason">
+                Reason for abstention <span>(required)</span>
+              </label>
+              <textarea
+                ref={abstentionReasonRef}
+                id="abstention-reason"
+                value={abstentionReason}
+                disabled={abstentionBusy}
+                onChange={(event) => setAbstentionReason(event.currentTarget.value)}
+                rows={4}
+                required
+                aria-describedby="abstention-help"
+                placeholder="Describe the conflict for the organizer audit log."
+              />
+              <p className={styles.fieldHint} id="abstention-help">
+                This reason is visible to organizers.
+              </p>
+            </div>
+            {abstentionError ? (
+              <p className={styles.formError} role="alert">
+                {abstentionError}
+              </p>
+            ) : null}
+            <DialogFooter>
+              <DialogClose asChild>
+                <Button type="button" variant="outline">
+                  Cancel
+                </Button>
+              </DialogClose>
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={() => void declareAbstention()}
+                disabled={abstentionBusy}
+              >
+                {abstentionBusy ? "Declaring…" : "Declare conflict and abstain"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
   );

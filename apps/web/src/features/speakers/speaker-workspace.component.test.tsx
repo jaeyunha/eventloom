@@ -2,9 +2,13 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { SpeakerApi, SpeakerAsset } from "./api";
-import { SpeakerHeadshot, SpeakerWorkspace } from "./speaker-workspace";
+import { SPEAKER_ROSTER_COLUMNS, SpeakerHeadshot, SpeakerWorkspace } from "./speaker-workspace";
 
 describe("speaker workspace presentation", () => {
+  it("defines the compact roster table columns", () => {
+    expect(SPEAKER_ROSTER_COLUMNS).toEqual(["Speaker", "Status", "Sessions", "Tasks", "Action"]);
+  });
+
   it("defaults to the roster tab and composes Nova primitives for the workspace shell", () => {
     const markup = renderToStaticMarkup(
       createElement(SpeakerWorkspace, {

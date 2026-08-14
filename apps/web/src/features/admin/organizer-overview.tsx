@@ -17,6 +17,8 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   createScopedReadFlightCoordinator,
@@ -24,6 +26,11 @@ import {
 } from "@/lib/scoped-read-flight";
 import { useOrganizerOrganizationId } from "./admin-shell";
 import styles from "./admin-shell.module.css";
+import {
+  type EventDateMode,
+  EventDatePicker,
+  type EventDateSelectionValue,
+} from "./event-date-picker";
 
 export interface OrganizerOverviewCoreMetrics {
   readonly eventCount: number;
@@ -1246,6 +1253,7 @@ export interface OrganizerEventRecord {
   readonly timeZone: string;
   readonly startsAt: string;
   readonly endsAt: string;
+  readonly scheduleDates?: readonly string[];
   readonly venue: string | null;
   readonly cfpSettings: OrganizerEventCfpSettings;
   readonly defaultCalendarSettings: OrganizerEventDefaultCalendarSettings;
@@ -1264,6 +1272,7 @@ export interface OrganizerEventCreateInput {
   readonly timeZone: string;
   readonly startsAt: string;
   readonly endsAt: string;
+  readonly scheduleDates?: readonly string[];
   readonly venue?: string | null;
   readonly cfpSettings: OrganizerEventCfpSettings;
   readonly defaultCalendarSettings: OrganizerEventDefaultCalendarSettings;
@@ -1279,6 +1288,7 @@ export interface OrganizerEventUpdateInput {
   readonly timeZone?: string;
   readonly startsAt?: string;
   readonly endsAt?: string;
+  readonly scheduleDates?: readonly string[];
   readonly venue?: string | null;
   readonly cfpSettings?: OrganizerEventCfpSettings;
   readonly defaultCalendarSettings?: OrganizerEventDefaultCalendarSettings;
@@ -1371,6 +1381,26 @@ function eventStatus(value: unknown, field: string): OrganizerEventStatus {
     throw eventRecordError(`${field} must be draft, active, or archived.`);
   }
   return value as OrganizerEventStatus;
+}
+
+function eventScheduleDates(value: unknown, field: string): readonly string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw eventRecordError(`${field} must be an array of calendar dates.`);
+  }
+  const dates = value.map((date, index) => {
+    if (typeof date !== "string" || !/^\d{4}-\d{2}-\d{2}$/u.test(date)) {
+      throw eventRecordError(`${field}[${index}] must use YYYY-MM-DD.`);
+    }
+    return date;
+  });
+  if (new Set(dates).size !== dates.length) {
+    throw eventRecordError(`${field} must not contain duplicate dates.`);
+  }
+  if (dates.some((date, index) => index > 0 && date <= (dates[index - 1] ?? ""))) {
+    throw eventRecordError(`${field} must be ordered from earliest to latest.`);
+  }
+  return dates.length === 0 ? undefined : dates;
 }
 
 function parseOrganizerEventEmbedConfiguration(
@@ -1487,6 +1517,7 @@ export function parseOrganizerEventRecord(payload: unknown): OrganizerEventRecor
   if (!isRecord(payload)) {
     throw eventRecordError("the event must be an object.");
   }
+  const scheduleDates = eventScheduleDates(payload.scheduleDates, "scheduleDates");
   return {
     id: eventRequiredString(payload.id, "id"),
     organizationId: eventRequiredString(payload.organizationId, "organizationId"),
@@ -1496,6 +1527,7 @@ export function parseOrganizerEventRecord(payload: unknown): OrganizerEventRecor
     timeZone: eventRequiredString(payload.timeZone, "timeZone"),
     startsAt: eventRequiredString(payload.startsAt, "startsAt"),
     endsAt: eventRequiredString(payload.endsAt, "endsAt"),
+    ...(scheduleDates === undefined ? {} : { scheduleDates }),
     venue: eventNullableString(payload.venue, "venue"),
     cfpSettings: parseOrganizerEventCfpSettings(payload.cfpSettings, "cfpSettings"),
     defaultCalendarSettings: parseOrganizerEventCalendarSettings(
@@ -1568,6 +1600,9 @@ function eventCreateBody(input: OrganizerEventCreateInput): Record<string, unkno
     timeZone: input.timeZone,
     startsAt: input.startsAt,
     endsAt: input.endsAt,
+    ...(input.scheduleDates === undefined || input.scheduleDates.length === 0
+      ? {}
+      : { scheduleDates: input.scheduleDates }),
     venue: input.venue ?? null,
     cfpSettings: {
       enabled: input.cfpSettings.enabled,
@@ -1593,6 +1628,7 @@ function eventUpdateBody(input: OrganizerEventUpdateInput): Record<string, unkno
     ...(input.timeZone === undefined ? {} : { timeZone: input.timeZone }),
     ...(input.startsAt === undefined ? {} : { startsAt: input.startsAt }),
     ...(input.endsAt === undefined ? {} : { endsAt: input.endsAt }),
+    ...(input.scheduleDates === undefined ? {} : { scheduleDates: input.scheduleDates }),
     ...(input.venue === undefined ? {} : { venue: input.venue }),
     ...(input.cfpSettings === undefined
       ? {}
@@ -1694,6 +1730,8 @@ export interface OrganizerEventFormValues {
   readonly timeZone: string;
   readonly startsAt: string;
   readonly endsAt: string;
+  readonly dateMode: EventDateMode;
+  readonly scheduleDates: readonly string[];
   readonly venue: string;
   readonly cfpEnabled: boolean;
   readonly cfpOpensAt: string;
@@ -1718,6 +1756,17 @@ function validEventTimeZone(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+export function normalizeOrganizerEventSlug(value: string): string {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/gu, "")
+    .replace(/[^a-z0-9]+/gu, "-")
+    .replace(/^-+|-+$/gu, "");
+  return normalized;
 }
 
 function localDateTimeToIso(value: string, timeZone: string): string | null {
@@ -1806,6 +1855,8 @@ function eventEditorFormValues(event?: OrganizerEventRecord): OrganizerEventForm
     timeZone,
     startsAt: event ? isoToLocalDateTime(event.startsAt, timeZone) : "",
     endsAt: event ? isoToLocalDateTime(event.endsAt, timeZone) : "",
+    dateMode: event?.scheduleDates?.length ? "individual" : "range",
+    scheduleDates: event?.scheduleDates ?? [],
     venue: event?.venue ?? "",
     cfpEnabled: event?.cfpSettings.enabled ?? false,
     cfpOpensAt: event?.cfpSettings.opensAt
@@ -1822,7 +1873,34 @@ function eventEditorFormValues(event?: OrganizerEventRecord): OrganizerEventForm
 
 export const organizerEventEditorFormValues = eventEditorFormValues;
 
-export function validateOrganizerEventForm(values: OrganizerEventFormValues): {
+export function organizerEventMinimumDateTimeLocal(
+  timeZone: string,
+  now: Date = new Date(),
+): string {
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(now);
+    const values = new Map(parts.map((part) => [part.type, part.value]));
+    const year = values.get("year");
+    const month = values.get("month");
+    const day = values.get("day");
+    if (year !== undefined && month !== undefined && day !== undefined) {
+      return `${year}-${month}-${day}T00:00`;
+    }
+  } catch {
+    // Fall through to a stable UTC date boundary for an unsupported time zone.
+  }
+  return `${now.toISOString().slice(0, 10)}T00:00`;
+}
+
+export function validateOrganizerEventForm(
+  values: OrganizerEventFormValues,
+  options: Readonly<{ now?: Date; allowPastDates?: boolean }> = {},
+): {
   readonly input?: OrganizerEventCreateInput;
   readonly error?: string;
 } {
@@ -1830,12 +1908,43 @@ export function validateOrganizerEventForm(values: OrganizerEventFormValues): {
   if (!name) return { error: "Event name is required." };
   const timeZone = values.timeZone.trim();
   if (!validEventTimeZone(timeZone)) return { error: "Enter a valid IANA time zone." };
+  const scheduleDates =
+    values.dateMode === "individual"
+      ? [...new Set(values.scheduleDates)].sort((left, right) => left.localeCompare(right))
+      : [];
+  if (values.dateMode === "individual" && scheduleDates.length === 0) {
+    return { error: "Select at least one event day." };
+  }
+  if (
+    scheduleDates.some((date) => !/^\d{4}-\d{2}-\d{2}$/u.test(date)) ||
+    scheduleDates.length !== values.scheduleDates.length
+  ) {
+    return { error: "Selected event days must be valid and unique." };
+  }
   const startsAt = localDateTimeToIso(values.startsAt, timeZone);
   if (!startsAt) return { error: "Enter a valid event start date and time." };
+  const minimumStartsAt = localDateTimeToIso(
+    organizerEventMinimumDateTimeLocal(timeZone, options.now ?? new Date()),
+    timeZone,
+  );
+  if (
+    options.allowPastDates !== true &&
+    minimumStartsAt !== null &&
+    Date.parse(startsAt) < Date.parse(minimumStartsAt)
+  ) {
+    return { error: "Event start cannot be before today." };
+  }
   const endsAt = localDateTimeToIso(values.endsAt, timeZone);
   if (!endsAt) return { error: "Enter a valid event end date and time." };
   if (Date.parse(startsAt) >= Date.parse(endsAt)) {
     return { error: "Event end must be after event start." };
+  }
+  if (
+    scheduleDates.length > 0 &&
+    (scheduleDates[0] !== values.startsAt.slice(0, 10) ||
+      scheduleDates.at(-1) !== values.endsAt.slice(0, 10))
+  ) {
+    return { error: "Selected event days must include the first and last event date." };
   }
 
   const slug = values.slug.trim().toLowerCase();
@@ -1845,10 +1954,7 @@ export function validateOrganizerEventForm(values: OrganizerEventFormValues): {
     };
   }
 
-  const defaultCalendarTimeZone = values.defaultCalendarTimeZone.trim() || timeZone;
-  if (!validEventTimeZone(defaultCalendarTimeZone)) {
-    return { error: "Enter a valid default calendar time zone." };
-  }
+  const defaultCalendarTimeZone = timeZone;
   const durationMinutes = Number(values.defaultCalendarDurationMinutes);
   if (!Number.isSafeInteger(durationMinutes) || durationMinutes < 1 || durationMinutes > 1_440) {
     return {
@@ -1862,11 +1968,27 @@ export function validateOrganizerEventForm(values: OrganizerEventFormValues): {
   if (values.cfpOpensAt.trim() && !cfpOpensAt) {
     return { error: "Enter a valid CFP opening date and time." };
   }
+  if (
+    options.allowPastDates !== true &&
+    minimumStartsAt !== null &&
+    cfpOpensAt !== null &&
+    Date.parse(cfpOpensAt) < Date.parse(minimumStartsAt)
+  ) {
+    return { error: "CFP opening cannot be before today." };
+  }
   const cfpClosesAt = values.cfpClosesAt.trim()
     ? localDateTimeToIso(values.cfpClosesAt, timeZone)
     : null;
   if (values.cfpClosesAt.trim() && !cfpClosesAt) {
     return { error: "Enter a valid CFP closing date and time." };
+  }
+  if (
+    options.allowPastDates !== true &&
+    minimumStartsAt !== null &&
+    cfpClosesAt !== null &&
+    Date.parse(cfpClosesAt) < Date.parse(minimumStartsAt)
+  ) {
+    return { error: "CFP closing cannot be before today." };
   }
   if (
     cfpOpensAt !== null &&
@@ -1881,6 +2003,7 @@ export function validateOrganizerEventForm(values: OrganizerEventFormValues): {
     timeZone,
     startsAt,
     endsAt,
+    scheduleDates,
     venue: values.venue.trim() || null,
     cfpSettings: {
       enabled: values.cfpEnabled,
@@ -1890,7 +2013,7 @@ export function validateOrganizerEventForm(values: OrganizerEventFormValues): {
     defaultCalendarSettings: {
       durationMinutes,
       timeZone: defaultCalendarTimeZone,
-      location: values.defaultCalendarLocation.trim() || null,
+      location: values.defaultCalendarLocation.trim() || values.venue.trim() || null,
     },
     ...(slug ? { slug } : {}),
     status: values.status,
@@ -1917,6 +2040,12 @@ export function OrganizerEventEditor({
     eventEditorFormValues(event),
   );
   const [formError, setFormError] = useState<string | null>(null);
+  const eventSlugPreview = normalizeOrganizerEventSlug(values.slug || values.name);
+  const minimumDateTime = event ? undefined : organizerEventMinimumDateTimeLocal(values.timeZone);
+  const cfpCloseMinimum =
+    minimumDateTime === undefined || values.cfpOpensAt > minimumDateTime
+      ? values.cfpOpensAt || minimumDateTime
+      : minimumDateTime;
 
   useEffect(() => {
     setValues(eventEditorFormValues(event));
@@ -1933,7 +2062,7 @@ export function OrganizerEventEditor({
 
   async function submit(formEvent: FormEvent<HTMLFormElement>) {
     formEvent.preventDefault();
-    const result = validateOrganizerEventForm(values);
+    const result = validateOrganizerEventForm(values, { allowPastDates: event !== undefined });
     if (!result.input) {
       setFormError(result.error ?? "Check the event fields.");
       return;
@@ -1949,22 +2078,21 @@ export function OrganizerEventEditor({
 
   return (
     <form className={styles.eventForm} onSubmit={(formEvent) => void submit(formEvent)}>
-      <div>
+      <div className={styles.eventEditorIntro}>
         <h2
           className={`${styles.panelTitle} ${styles.eventEditorTitle}`}
           id="organizer-event-editor-title"
         >
-          {event ? "Configure event" : "Create an event"}
+          {event ? "Configure event" : "Create event"}
         </h2>
         <p className={styles.muted}>
-          Event dates are entered in the event time zone and saved as canonical ISO instants.
+          Add the public identity, schedule, and location. New events start as drafts.
         </p>
       </div>
       <div className={styles.eventTwoColumn}>
         <label className={styles.eventField} htmlFor="organizer-event-name">
           <span className={styles.eventFieldLabel}>Event name</span>
-          <input
-            className={styles.eventInput}
+          <Input
             id="organizer-event-name"
             name="name"
             type="text"
@@ -1973,11 +2101,13 @@ export function OrganizerEventEditor({
             required
             onChange={(formEvent) => updateValue("name", formEvent.target.value)}
           />
+          <span className={styles.eventFieldDescription}>
+            The display title organizers and attendees will see.
+          </span>
         </label>
         <label className={styles.eventField} htmlFor="organizer-event-slug">
-          <span className={styles.eventFieldLabel}>URL slug</span>
-          <input
-            className={styles.eventInput}
+          <span className={styles.eventFieldLabel}>Public URL slug</span>
+          <Input
             id="organizer-event-slug"
             name="slug"
             type="text"
@@ -1986,31 +2116,46 @@ export function OrganizerEventEditor({
             placeholder="summit-2026"
             onChange={(formEvent) => updateValue("slug", formEvent.target.value)}
           />
+          <span className={styles.eventFieldDescription}>
+            {eventSlugPreview ? (
+              <>
+                Public slug: <code>{eventSlugPreview}</code>.{" "}
+              </>
+            ) : null}
+            Leave blank to generate it from the event name. The private event ID is generated
+            separately after creation.
+          </span>
         </label>
       </div>
       <div className={styles.eventTwoColumn}>
-        <label className={styles.eventField} htmlFor="organizer-event-status">
-          <span className={styles.eventFieldLabel}>Status</span>
-          <select
-            className={styles.eventInput}
-            id="organizer-event-status"
-            name="status"
-            value={values.status}
-            onChange={(formEvent) =>
-              updateValue("status", formEvent.target.value as OrganizerEventStatus)
-            }
-          >
-            {organizerEventStatuses.map((status) => (
-              <option key={status} value={status}>
-                {status === "active" ? "Active" : status.charAt(0).toUpperCase() + status.slice(1)}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className={styles.eventField} htmlFor="organizer-event-time-zone">
+        {event ? (
+          <label className={styles.eventField} htmlFor="organizer-event-status">
+            <span className={styles.eventFieldLabel}>Status</span>
+            <select
+              className={styles.eventInput}
+              id="organizer-event-status"
+              name="status"
+              value={values.status}
+              onChange={(formEvent) =>
+                updateValue("status", formEvent.target.value as OrganizerEventStatus)
+              }
+            >
+              {organizerEventStatuses.map((status) => (
+                <option key={status} value={status}>
+                  {status === "active"
+                    ? "Active"
+                    : status.charAt(0).toUpperCase() + status.slice(1)}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+        <label
+          className={`${styles.eventField} ${event ? "" : styles.eventFieldFull}`}
+          htmlFor="organizer-event-time-zone"
+        >
           <span className={styles.eventFieldLabel}>Event time zone</span>
-          <input
-            className={styles.eventInput}
+          <Input
             id="organizer-event-time-zone"
             name="timeZone"
             type="text"
@@ -2020,6 +2165,9 @@ export function OrganizerEventEditor({
             required
             onChange={(formEvent) => updateValue("timeZone", formEvent.target.value)}
           />
+          <span className={styles.eventFieldDescription}>
+            All event and agenda times are entered and shown in this time zone.
+          </span>
           <datalist id="organizer-event-time-zones">
             <option value="UTC" />
             <option value="America/Los_Angeles" />
@@ -2029,156 +2177,103 @@ export function OrganizerEventEditor({
           </datalist>
         </label>
       </div>
-      <div className={styles.eventTwoColumn}>
-        <label className={styles.eventField} htmlFor="organizer-event-starts-at">
-          <span className={styles.eventFieldLabel}>Starts</span>
-          <input
-            className={styles.eventInput}
-            id="organizer-event-starts-at"
-            name="startsAt"
-            type="datetime-local"
-            value={values.startsAt}
-            required
-            onChange={(formEvent) => updateValue("startsAt", formEvent.target.value)}
-          />
-        </label>
-        <label className={styles.eventField} htmlFor="organizer-event-ends-at">
-          <span className={styles.eventFieldLabel}>Ends</span>
-          <input
-            className={styles.eventInput}
-            id="organizer-event-ends-at"
-            name="endsAt"
-            type="datetime-local"
-            value={values.endsAt}
-            required
-            onChange={(formEvent) => updateValue("endsAt", formEvent.target.value)}
-          />
-        </label>
-      </div>
+      <EventDatePicker
+        mode={values.dateMode}
+        startsAt={values.startsAt}
+        endsAt={values.endsAt}
+        scheduleDates={values.scheduleDates}
+        minimumDateTime={minimumDateTime}
+        onChange={(selection: EventDateSelectionValue) => {
+          setValues((current) => ({
+            ...current,
+            dateMode: selection.mode,
+            startsAt: selection.startsAt,
+            endsAt: selection.endsAt,
+            scheduleDates: selection.scheduleDates,
+          }));
+          if (formError) setFormError(null);
+        }}
+      />
       <label className={styles.eventField} htmlFor="organizer-event-venue">
-        <span className={styles.eventFieldLabel}>Venue</span>
-        <input
-          className={styles.eventInput}
+        <span className={styles.eventFieldLabel}>Event location</span>
+        <Input
           id="organizer-event-venue"
           name="venue"
           type="text"
           value={values.venue}
           maxLength={2_000}
+          placeholder="Pier 27, San Francisco or Online"
           onChange={(formEvent) => updateValue("venue", formEvent.target.value)}
         />
+        <span className={styles.eventFieldDescription}>
+          Shown on the event. Session rooms and join links can be more specific.
+        </span>
       </label>
-      <fieldset className={styles.eventFieldset}>
-        <legend className={styles.eventLegend}>CFP settings</legend>
-        <label className={styles.eventCheckboxLabel}>
-          <input
-            type="checkbox"
-            name="cfpSettings.enabled"
-            checked={values.cfpEnabled}
-            onChange={(formEvent) => updateValue("cfpEnabled", formEvent.target.checked)}
-          />
-          <span>Enable call for proposals</span>
-        </label>
-        <div className={styles.eventTwoColumn}>
-          <label className={styles.eventField} htmlFor="organizer-event-cfp-opens-at">
-            <span className={styles.eventFieldLabel}>CFP opens</span>
-            <input
-              className={styles.eventInput}
-              id="organizer-event-cfp-opens-at"
-              name="cfpSettings.opensAt"
-              type="datetime-local"
-              value={values.cfpOpensAt}
-              onChange={(formEvent) => updateValue("cfpOpensAt", formEvent.target.value)}
+      <details className={styles.eventAdvanced} open={values.cfpEnabled || undefined}>
+        <summary className={styles.eventAdvancedSummary}>
+          <span>Advanced setup</span>
+          <small>Optional call-for-proposals scheduling</small>
+        </summary>
+        <fieldset className={styles.eventFieldset}>
+          <legend className={styles.eventLegend}>Call for proposals</legend>
+          <div className={styles.eventCheckboxLabel}>
+            <Checkbox
+              aria-label="Open a call for proposals"
+              name="cfpSettings.enabled"
+              checked={values.cfpEnabled}
+              onCheckedChange={(checked) => updateValue("cfpEnabled", checked === true)}
             />
-          </label>
-          <label className={styles.eventField} htmlFor="organizer-event-cfp-closes-at">
-            <span className={styles.eventFieldLabel}>CFP closes</span>
-            <input
-              className={styles.eventInput}
-              id="organizer-event-cfp-closes-at"
-              name="cfpSettings.closesAt"
-              type="datetime-local"
-              value={values.cfpClosesAt}
-              onChange={(formEvent) => updateValue("cfpClosesAt", formEvent.target.value)}
-            />
-          </label>
-        </div>
-      </fieldset>
-      <fieldset className={styles.eventFieldset}>
-        <legend className={styles.eventLegend}>Default calendar settings</legend>
-        <div className={styles.eventTwoColumn}>
-          <label className={styles.eventField} htmlFor="organizer-event-calendar-duration">
-            <span className={styles.eventFieldLabel}>Default duration (minutes)</span>
-            <input
-              className={styles.eventInput}
-              id="organizer-event-calendar-duration"
-              name="defaultCalendarSettings.durationMinutes"
-              type="number"
-              min={1}
-              max={1440}
-              step={1}
-              value={values.defaultCalendarDurationMinutes}
-              required
-              onChange={(formEvent) =>
-                updateValue("defaultCalendarDurationMinutes", formEvent.target.value)
-              }
-            />
-          </label>
-          <label className={styles.eventField} htmlFor="organizer-event-calendar-time-zone">
-            <span className={styles.eventFieldLabel}>Calendar time zone</span>
-            <input
-              className={styles.eventInput}
-              id="organizer-event-calendar-time-zone"
-              name="defaultCalendarSettings.timeZone"
-              type="text"
-              value={values.defaultCalendarTimeZone}
-              required
-              onChange={(formEvent) =>
-                updateValue("defaultCalendarTimeZone", formEvent.target.value)
-              }
-            />
-          </label>
-        </div>
-        <label className={styles.eventField} htmlFor="organizer-event-calendar-location">
-          <span className={styles.eventFieldLabel}>Default calendar location</span>
-          <input
-            className={styles.eventInput}
-            id="organizer-event-calendar-location"
-            name="defaultCalendarSettings.location"
-            type="text"
-            value={values.defaultCalendarLocation}
-            maxLength={2_000}
-            onChange={(formEvent) => updateValue("defaultCalendarLocation", formEvent.target.value)}
-          />
-        </label>
-      </fieldset>
+            <span>
+              Open a call for proposals
+              <small>Collect session proposals for this event.</small>
+            </span>
+          </div>
+          {values.cfpEnabled ? (
+            <div className={styles.eventTwoColumn}>
+              <label className={styles.eventField} htmlFor="organizer-event-cfp-opens-at">
+                <span className={styles.eventFieldLabel}>CFP opens</span>
+                <Input
+                  id="organizer-event-cfp-opens-at"
+                  name="cfpSettings.opensAt"
+                  type="datetime-local"
+                  value={values.cfpOpensAt}
+                  min={minimumDateTime}
+                  onChange={(formEvent) => updateValue("cfpOpensAt", formEvent.target.value)}
+                />
+              </label>
+              <label className={styles.eventField} htmlFor="organizer-event-cfp-closes-at">
+                <span className={styles.eventFieldLabel}>CFP closes</span>
+                <Input
+                  id="organizer-event-cfp-closes-at"
+                  name="cfpSettings.closesAt"
+                  type="datetime-local"
+                  value={values.cfpClosesAt}
+                  min={cfpCloseMinimum}
+                  onChange={(formEvent) => updateValue("cfpClosesAt", formEvent.target.value)}
+                />
+              </label>
+            </div>
+          ) : null}
+        </fieldset>
+      </details>
       {formError ? (
-        <p className={styles.eventError} role="alert">
-          {formError}
-        </p>
+        <Alert variant="destructive">
+          <AlertTitle>Check the event details</AlertTitle>
+          <AlertDescription>{formError}</AlertDescription>
+        </Alert>
       ) : null}
       <div className={styles.eventInlineActions}>
         {onCancel ? (
-          <button className={styles.secondaryButton} type="button" onClick={onCancel}>
+          <Button variant="outline" type="button" onClick={onCancel}>
             Cancel
-          </button>
+          </Button>
         ) : null}
-        <button className={styles.primaryButton} type="submit" disabled={busy}>
+        <Button type="submit" disabled={busy}>
           {busy ? "Saving event…" : event ? "Save event" : "Create event"}
-        </button>
+        </Button>
       </div>
     </form>
   );
-}
-
-function eventManagementStatusClass(status: OrganizerEventStatus): string {
-  switch (status) {
-    case "active":
-      return styles.statusLive ?? "";
-    case "draft":
-      return styles.statusDraft ?? "";
-    case "archived":
-      return styles.statusArchived ?? "";
-  }
 }
 
 function eventManagementStatusLabel(status: OrganizerEventStatus): string {
@@ -2269,11 +2364,14 @@ export function getCalendarMonthCells(month: Date): readonly OrganizerCalendarDa
 export const calendarMonthCells = getCalendarMonthCells;
 
 export function organizerEventIntersectsCalendarDate(
-  event: Pick<OrganizerEventRecord, "startsAt" | "endsAt">,
+  event: Pick<OrganizerEventRecord, "startsAt" | "endsAt" | "scheduleDates">,
   date: Date | string,
 ): boolean {
   const cellDate = typeof date === "string" ? parseCalendarInstant(date) : date;
   if (cellDate === null || Number.isNaN(cellDate.valueOf())) return false;
+  if (event.scheduleDates !== undefined && event.scheduleDates.length > 0) {
+    return event.scheduleDates.includes(localDateKey(cellDate));
+  }
   const startsAt = parseCalendarInstant(event.startsAt);
   const endsAt = parseCalendarInstant(event.endsAt);
   if (startsAt === null || endsAt === null || startsAt > endsAt) return false;
@@ -2437,13 +2535,6 @@ function OrganizerEventsLoaded({
       return leftStart - rightStart;
     })
     .slice(0, 5);
-  const statusCounts = Object.fromEntries(
-    organizerEventStatuses.map((status) => [
-      status,
-      data.events.filter((event) => event.status === status).length,
-    ]),
-  ) as Record<OrganizerEventStatus, number>;
-
   useEffect(() => {
     if (!onCreate || !onUpdate) setEditor(null);
   }, [onCreate, onUpdate]);
@@ -2473,7 +2564,9 @@ function OrganizerEventsLoaded({
           <p className={styles.eyebrow}>Organizer workspace</p>
           <h1 className={styles.pageTitle}>Event management</h1>
           <p className={styles.pageDescription}>
-            Keep event dates visible at a glance, then switch to List for configuration and actions.
+            {editor === null
+              ? "Keep event dates visible at a glance, then switch to List for configuration and actions."
+              : "Complete the event setup below. The event collection returns when this editor closes."}
           </p>
         </div>
         {onCreate ? (
@@ -2498,7 +2591,11 @@ function OrganizerEventsLoaded({
       ) : null}
 
       {editor !== null && onCreate && onUpdate ? (
-        <Card id="organizer-event-editor" aria-labelledby="organizer-event-editor-title">
+        <Card
+          className={styles.eventEditorCard}
+          id="organizer-event-editor"
+          aria-labelledby="organizer-event-editor-title"
+        >
           <CardContent className="pt-6">
             <OrganizerEventEditor
               event={editingEvent}
@@ -2510,8 +2607,12 @@ function OrganizerEventsLoaded({
         </Card>
       ) : null}
 
-      <Tabs value={view} onValueChange={(value) => setView(value === "list" ? "list" : "calendar")}>
-        <Card aria-labelledby="organizer-events-title">
+      <Tabs
+        hidden={editor !== null}
+        value={view}
+        onValueChange={(value) => setView(value === "list" ? "list" : "calendar")}
+      >
+        <Card className={styles.eventsCard} aria-labelledby="organizer-events-title">
           <CardHeader className="flex-row items-start justify-between">
             <div>
               <CardDescription>Live organization data</CardDescription>
@@ -2546,7 +2647,13 @@ function OrganizerEventsLoaded({
                             className={styles.upcomingLink}
                             href={eventSettingsHref(data.organizationId, event.id)}
                           >
-                            <strong>{event.name}</strong>
+                            <span className={styles.upcomingTitleRow}>
+                              <strong>{event.name}</strong>
+                              <Badge className={eventStatusClass(event.status)} variant="outline">
+                                {eventManagementStatusLabel(event.status)}
+                              </Badge>
+                            </span>
+                            <code className={styles.eventIdentifier}>{event.id}</code>
                             <span>
                               {formatEventManagementDate(event.startsAt, event.timeZone)} ·{" "}
                               {event.timeZone}
@@ -2558,18 +2665,11 @@ function OrganizerEventsLoaded({
                   )}
                 </div>
                 <div className={styles.calendarRailSection}>
-                  <p className={styles.panelEyebrow}>Status</p>
-                  <ul className={styles.statusLegend}>
-                    {organizerEventStatuses.map((status) => (
-                      <li key={status}>
-                        <span
-                          className={`${styles.statusDot} ${eventManagementStatusClass(status)}`}
-                        />
-                        <span>{eventManagementStatusLabel(status)}</span>
-                        <strong>{statusCounts[status]}</strong>
-                      </li>
-                    ))}
-                  </ul>
+                  <p className={styles.panelEyebrow}>Event identity</p>
+                  <p className={styles.muted}>
+                    The event name is the display title. Its ID stays stable in URLs and keeps each
+                    event&apos;s data isolated.
+                  </p>
                 </div>
               </aside>
 
@@ -2708,7 +2808,7 @@ function OrganizerEventsLoaded({
                           <p className={styles.eventSlug}>/{event.slug}</p>
                         </td>
                         <td>
-                          <Badge variant={event.status === "active" ? "default" : "secondary"}>
+                          <Badge className={eventStatusClass(event.status)} variant="outline">
                             {eventManagementStatusLabel(event.status)}
                           </Badge>
                         </td>

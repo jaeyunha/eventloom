@@ -1,5 +1,5 @@
 import type { CalendarInvitationPayload } from "@eventloom/contracts";
-import { createCalendarInvitation, type CalendarInvitationResult } from "../calendar";
+import { type CalendarInvitationResult, createCalendarInvitation } from "../calendar";
 import type { OpenSendMessage } from "./types";
 
 export interface CalendarOpenSendMessageOptions {

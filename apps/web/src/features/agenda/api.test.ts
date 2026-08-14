@@ -58,6 +58,8 @@ describe("agenda API adapter", () => {
           durationMinutes: 60,
           speakerNames: ["Priya Raman"],
           capacityRequired: 10,
+          trackIds: [],
+          trackNames: [],
         },
       ],
     } satisfies AgendaWorkspaceData;

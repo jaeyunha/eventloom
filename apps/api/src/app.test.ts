@@ -6,10 +6,11 @@ import { CommunicationError } from "./features/communications/service";
 import { RemixError } from "./features/remix/service";
 import { ReportError } from "./features/reports/service";
 import { SessionServiceError } from "./features/sessions/service";
+import type { AirtableIntegrationRouteDependencies } from "./routes/airtable-integration/routes";
 
 const environment: ApiBindings = {
   APP_ENV: "local",
-  WEB_ORIGIN: "http://localhost:3015",
+  WEB_ORIGIN: "http://127.0.0.1:3015",
 };
 
 const requestId = "65f8d9b5-6862-4bbc-973c-f728e9185c22";
@@ -73,6 +74,105 @@ describe("API foundation", () => {
     expect(response.status).toBe(404);
     expect(body.error.code).toBe("NOT_FOUND");
     expect(response.headers.get("x-request-id")).toBe(body.error.traceId);
+  });
+});
+
+describe("Airtable OAuth callback wiring", () => {
+  it("mounts the provider callback at its static URL and leaves organization routing to opaque state", async () => {
+    let callback: { readonly code: string; readonly state: string } | null = null;
+    const integration: AirtableIntegrationRouteDependencies = {
+      webOrigin: environment.WEB_ORIGIN,
+      requireOrganizationAccess: async () => {},
+      getStatus: async () => null,
+      startOAuth: async () => null,
+      completeOAuth: async (...args: unknown[]) => {
+        callback = args.at(-1) as { readonly code: string; readonly state: string };
+        return new Response(null, { status: 204 });
+      },
+      connectPat: async () => null,
+      selectBase: async () => null,
+      updateMapping: async () => null,
+      pause: async () => null,
+      resume: async () => null,
+      disconnect: async () => null,
+      retry: async () => null,
+      listConflicts: async () => null,
+      resolveConflict: async () => null,
+      handleWebhookNotification: async () => new Response(null, { status: 204 }),
+    };
+    const app = createApp({
+      authenticator: { authenticate: async () => null },
+      airtableIntegration: integration,
+    });
+
+    const callbackResponse = await app.request(
+      "/api/integrations/airtable/oauth/callback?code=oauth-code&state=opaque-state",
+      undefined,
+      environment,
+    );
+    const legacyResponse = await app.request(
+      "/api/integrations/airtable/organizations/org-a/oauth/callback?code=oauth-code&state=opaque-state",
+      undefined,
+      environment,
+    );
+
+    expect(callbackResponse.status).toBe(204);
+    expect(callback).toEqual({ code: "oauth-code", state: "opaque-state" });
+    expect(legacyResponse.status).toBe(404);
+  });
+});
+
+describe("Airtable integration origin protection", () => {
+  it("rejects cross-origin session mutations while leaving public provider routes exempt", async () => {
+    const principal: UserPrincipal = {
+      kind: "user",
+      sessionId: "session-1",
+      userId: "user-1",
+      email: "organizer@example.test",
+      memberships: [{ organizationId: "org-a", role: "admin" }],
+      speakerGrants: [],
+    };
+    const integration: AirtableIntegrationRouteDependencies = {
+      webOrigin: environment.WEB_ORIGIN,
+      requireOrganizationAccess: async () => {},
+      getStatus: async () => null,
+      startOAuth: async () => ({ authorizationUrl: "https://airtable.example.test/oauth" }),
+      completeOAuth: async () => new Response(null, { status: 204 }),
+      selectBase: async () => null,
+      updateMapping: async () => null,
+      pause: async () => null,
+      resume: async () => null,
+      disconnect: async () => null,
+      retry: async () => null,
+      listConflicts: async () => null,
+      resolveConflict: async () => null,
+      handleWebhookNotification: async () => new Response(null, { status: 204 }),
+    };
+    const app = createApp({
+      authenticator: { authenticate: async () => principal },
+      airtableIntegration: integration,
+    });
+
+    const blocked = await app.request(
+      "/api/admin/organizations/org-a/integrations/airtable/oauth/start",
+      {
+        method: "POST",
+        headers: {
+          "idempotency-key": "command-1",
+          origin: "https://attacker.example.test",
+        },
+      },
+      environment,
+    );
+    const callback = await app.request(
+      "/api/integrations/airtable/oauth/callback?code=oauth-code&state=opaque-state",
+      undefined,
+      environment,
+    );
+
+    expect(blocked.status).toBe(403);
+    expect(apiErrorSchema.parse(await blocked.json()).error.code).toBe("ACCESS_DENIED");
+    expect(callback.status).toBe(204);
   });
 });
 

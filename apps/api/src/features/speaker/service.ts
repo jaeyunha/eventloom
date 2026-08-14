@@ -117,7 +117,7 @@ export interface SpeakerEmailTemplate {
   readonly name: string;
   readonly version: number;
   readonly status: "draft" | "approved" | "archived";
-  readonly sender: "speakers@sessionboard.namuh.co";
+  readonly sender: string;
   readonly subject: string;
   readonly html: string;
   readonly text: string;
@@ -143,6 +143,7 @@ export interface SpeakerEmailPreview {
   readonly eventId: string;
   readonly templateId: string;
   readonly templateVersion: number;
+  readonly sender: string;
   readonly recipientIds: readonly string[];
   readonly recipients: readonly SpeakerEmailPreviewRecipient[];
   readonly subject: string;
@@ -159,7 +160,7 @@ export interface SpeakerEmailDeliveryInput {
   readonly recipientEmail: string;
   readonly displayName: string;
   readonly firstName: string;
-  readonly sender: "speakers@sessionboard.namuh.co";
+  readonly sender: string;
   readonly templateId: string;
   readonly templateVersion: number;
   readonly subject: string;
@@ -187,6 +188,7 @@ export interface SpeakerEmailSend {
   readonly eventId: string;
   readonly templateId: string;
   readonly templateVersion: number;
+  readonly sender: string;
   readonly idempotencyKey: string;
   readonly status: "queued" | "sent" | "partial" | "failed";
   readonly recipientIds: readonly string[];
@@ -254,6 +256,7 @@ type SpeakerEmailRepository = {
   saveSpeakerEmailSend?: (send: SpeakerEmailSend) => Promise<SpeakerEmailSend>;
 };
 export interface SpeakerServiceOptions {
+  speakerSender: string;
   now?: () => Date;
   generateId?: () => string;
   delivery?: SpeakerReminderDelivery;
@@ -1184,6 +1187,21 @@ function travelLogisticsFrom(value: unknown): SpeakerTravelLogistics {
   return normalizeTravelLogistics(value as Partial<SpeakerTravelLogistics>);
 }
 
+const speakerSenderEmailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/u;
+
+function requireSpeakerSender(value: string): string {
+  if (
+    typeof value !== "string" ||
+    value.length > 320 ||
+    value !== value.trim() ||
+    /[\r\n]/u.test(value) ||
+    !speakerSenderEmailPattern.test(value)
+  ) {
+    throw new TypeError("Speaker sender must be a valid email address.");
+  }
+  return value;
+}
+
 function speakerEmailFirstName(displayName: string): string {
   const first = displayName.trim().split(/\s+/u)[0];
   return first === undefined || first.length === 0 ? displayName.trim() : first;
@@ -1602,6 +1620,7 @@ export class SpeakerService {
   private readonly assetAuditCache = new Map<string, SpeakerAssetAuditEntry[]>();
   private readonly delivery: SpeakerReminderDelivery | undefined;
   private readonly emailDelivery: SpeakerEmailDelivery | undefined;
+  private readonly speakerSender: string;
   private readonly emailTemplateCache = new Map<string, SpeakerEmailTemplate[]>();
   private readonly emailPreviewCache = new Map<string, SpeakerEmailPreview>();
   private readonly emailSendCache = new Map<string, SpeakerEmailSend>();
@@ -1616,8 +1635,9 @@ export class SpeakerService {
   constructor(
     private readonly repository: SpeakerRepository,
     private readonly assetGateway: PrivateAssetGateway,
-    options: SpeakerServiceOptions = {},
+    options: SpeakerServiceOptions,
   ) {
+    this.speakerSender = requireSpeakerSender(options.speakerSender);
     this.now = options.now ?? (() => new Date());
     this.generateId = options.generateId ?? (() => crypto.randomUUID());
     this.delivery = options.delivery ?? options.invitationDelivery ?? options.reminderDelivery;
@@ -2774,7 +2794,7 @@ export class SpeakerService {
         acceptedSubmissions,
         roster,
         model.tasks,
-      );
+      ).filter((task) => task.type === "upload");
       const participantIds = unique(tasks.map((task) => task.participantId));
       profiles = model.profiles.filter(
         (profile) => profile.eventId === eventId && participantIds.includes(profile.participantId),
@@ -2807,7 +2827,7 @@ export class SpeakerService {
         acceptedSubmissions,
         roster,
         storedTasks,
-      );
+      ).filter((task) => task.type === "upload");
       const taskParticipantIds = unique(tasks.map((task) => task.participantId));
       const [storedProfiles, storedAssets] = await Promise.all([
         this.repository.listProfiles(eventId, taskParticipantIds),
@@ -4101,6 +4121,7 @@ export class SpeakerService {
         return (
           subject !== undefined &&
           task.eventId === input.eventId &&
+          task.type === "upload" &&
           task.owner === "speaker" &&
           scope.participantIds.includes(task.participantId) &&
           (subject.type === "participant" ||
@@ -4260,7 +4281,7 @@ export class SpeakerService {
       name,
       version: latestVersion + 1,
       status: input.status ?? "approved",
-      sender: "speakers@sessionboard.namuh.co",
+      sender: this.speakerSender,
       subject,
       html,
       text,
@@ -4405,6 +4426,7 @@ export class SpeakerService {
       eventId: input.eventId,
       templateId: template.id,
       templateVersion: template.version,
+      sender: template.sender,
       recipientIds: speakers.map((speaker) => speaker.participantId),
       recipients: speakers,
       subject: first.subject,
@@ -4519,6 +4541,7 @@ export class SpeakerService {
       eventId: input.eventId,
       templateId: preview.templateId,
       templateVersion: preview.templateVersion,
+      sender: preview.sender,
       idempotencyKey,
       status: "queued",
       recipientIds: [...preview.recipientIds],
@@ -4551,7 +4574,7 @@ export class SpeakerService {
           recipientEmail: recipient.email,
           displayName: recipient.displayName,
           firstName: recipient.firstName,
-          sender: "speakers@sessionboard.namuh.co",
+          sender: preview.sender,
           templateId: preview.templateId,
           templateVersion: preview.templateVersion,
           subject: recipient.subject,

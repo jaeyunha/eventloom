@@ -2,16 +2,46 @@ import type { D1Database } from "@cloudflare/workers-types";
 import { describe, expect, it } from "vitest";
 
 import type { SpeakerAssetAuditEntry, SpeakerTask } from "../../../features/speaker/types";
-import { D1SpeakerRepository } from "./speaker";
+import { D1SpeakerRepository, portalSubmissionStatus } from "./speaker";
 
 class RecordingD1 {
   readonly batches: string[][] = [];
+  readonly queries: string[] = [];
+  readonly sessionConstraints: string[] = [];
+  withSession(constraint?: string) {
+    this.sessionConstraints.push(constraint ?? "");
+    return this;
+  }
   prepare(sql: string) {
+    this.queries.push(sql);
     const statement = {
       sql,
       bind: (..._values: unknown[]) => statement,
-      all: async () => ({ results: [] }),
-      first: async () => null,
+      all: async () => ({
+        results: sql.includes("s.owner_account_id = ?")
+          ? [
+              {
+                organization_id: "org-1",
+                event_id: "event-1",
+                event_name: "Event One",
+                event_slug: "event-one",
+                event_status: "active",
+                submission_id: "submission-1",
+                participant_id: "participant-1",
+                participant_role: "primary",
+              },
+            ]
+          : [],
+      }),
+      first: async () =>
+        sql.includes("GROUP BY s.organization_id")
+          ? {
+              organization_id: "org-1",
+              submission_ids: "submission-1",
+              participant_ids: "participant-1",
+              primary_participant_id: "participant-1",
+            }
+          : null,
       raw: async () => (sql.includes('from "events"') ? [["org-1", "event-1"]] : []),
       run: async () => ({ meta: { changes: 1 } }),
     };
@@ -54,6 +84,73 @@ const audit: SpeakerAssetAuditEntry = {
 };
 
 describe("D1SpeakerRepository", () => {
+  it("projects authoritative decisions into participant submission status", () => {
+    expect(portalSubmissionStatus("submitted", "accepted")).toBe("accepted");
+    expect(portalSubmissionStatus("submitted", "rejected")).toBe("declined");
+    expect(portalSubmissionStatus("submitted", "waitlisted")).toBe("under_review");
+    expect(portalSubmissionStatus("submitted", undefined)).toBe("submitted");
+  });
+
+  it("discovers CFP applicant portal contexts from owned submissions", async () => {
+    const database = new RecordingD1();
+    const repository = new D1SpeakerRepository(database as unknown as D1Database);
+
+    await expect(repository.listPortalContexts?.("account-1")).resolves.toEqual([
+      {
+        id: "event-1",
+        organizationId: "org-1",
+        eventId: "event-1",
+        name: "Event One",
+        slug: "event-one",
+        status: "active",
+        capabilities: ["submission-edit"],
+        submissionIds: ["submission-1"],
+        participantIds: ["participant-1"],
+        primaryParticipantId: "participant-1",
+      },
+    ]);
+    await expect(repository.listPortalContextScopes?.("account-1")).resolves.toEqual([
+      {
+        context: {
+          id: "event-1",
+          organizationId: "org-1",
+          eventId: "event-1",
+          name: "Event One",
+          slug: "event-one",
+          status: "active",
+          capabilities: ["submission-edit"],
+          submissionIds: ["submission-1"],
+          participantIds: ["participant-1"],
+          primaryParticipantId: "participant-1",
+        },
+        scope: {
+          submissionIds: ["submission-1"],
+          participantIds: ["participant-1"],
+          capabilities: ["submission-edit"],
+        },
+      },
+    ]);
+    expect(database.queries.join("\n")).toContain("s.owner_account_id = ?");
+    expect(database.sessionConstraints).toEqual(["first-primary", "first-primary"]);
+  });
+
+  it("authorizes CFP applicants to their owned submission resources", async () => {
+    const database = new RecordingD1();
+    const repository = new D1SpeakerRepository(database as unknown as D1Database);
+
+    await expect(repository.getAccessScope("event-1", "account-1")).resolves.toEqual({
+      tenantId: "org-1",
+      submissionIds: ["submission-1"],
+      participantIds: ["participant-1"],
+      capabilities: ["submission-edit"],
+      primaryParticipantId: "participant-1",
+      role: "speaker",
+    });
+    expect(database.queries.join("\n")).toContain("s.event_id = ?");
+    expect(database.queries.join("\n")).toContain("s.owner_account_id = ?");
+    expect(database.sessionConstraints).toContain("first-primary");
+  });
+
   it("batches task metadata with the task create", async () => {
     const database = new RecordingD1();
     const repository = new D1SpeakerRepository(database as unknown as D1Database);

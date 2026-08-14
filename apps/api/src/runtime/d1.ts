@@ -1,10 +1,14 @@
 import type { AgendaRepository, AgendaState } from "../features/agenda/types";
-import type { CloudflareBindings } from "../infrastructure/cloudflare/bindings";
+import type {
+  CloudflareBindings,
+  CloudflareOutboxMessage,
+} from "../infrastructure/cloudflare/bindings";
 import {
   D1WebhookRepository,
   type WebhookSecretCipher,
 } from "../infrastructure/cloudflare/d1-webhook-repository";
 import { D1AgendaRepository } from "../infrastructure/cloudflare/repositories/agenda";
+import { D1CalendarInvitationRepository } from "../infrastructure/cloudflare/repositories/calendar-invitations";
 import { D1CfpRepository } from "../infrastructure/cloudflare/repositories/cfp";
 import { D1CommunicationRepository } from "../infrastructure/cloudflare/repositories/communications";
 import { D1CrmRepository } from "../infrastructure/cloudflare/repositories/crm";
@@ -24,6 +28,12 @@ export interface D1BusinessRepositoryBundle {
   sessions: D1SessionRepository;
   speaker: D1SpeakerRepository;
   agendaForOrganization(organizationId: string): D1AgendaRepository;
+  calendarInvitationsForScope(input: {
+    organizationId: string;
+    eventId: string;
+    sessionId?: string;
+    queue: Queue<CloudflareOutboxMessage>;
+  }): D1CalendarInvitationRepository;
   communications: D1CommunicationRepository;
   reports: D1ReportRepository;
   crm: D1CrmRepository;
@@ -45,6 +55,14 @@ export function createD1BusinessRepositories(input: {
     sessions: new D1SessionRepository(database),
     speaker: new D1SpeakerRepository(database),
     agendaForOrganization: (organizationId) => new D1AgendaRepository(database, organizationId),
+    calendarInvitationsForScope: (scope) =>
+      new D1CalendarInvitationRepository({
+        database,
+        queue: scope.queue,
+        organizationId: scope.organizationId,
+        eventId: scope.eventId,
+        ...(scope.sessionId === undefined ? {} : { sessionId: scope.sessionId }),
+      }),
     communications: new D1CommunicationRepository(database),
     reports: new D1ReportRepository(database),
     crm: new D1CrmRepository(database),
@@ -136,6 +154,18 @@ export function createD1RuntimeComposition(options: D1RuntimeCompositionOptions)
       sessions: repositories.sessions,
       speaker: repositories.speaker,
       agenda: repositories.agenda as D1RuntimeAgendaRepository,
+      calendarInvitationsForScope: (scope: {
+        organizationId: string;
+        eventId: string;
+        sessionId?: string;
+      }) =>
+        new D1CalendarInvitationRepository({
+          database: options.database,
+          queue: options.outboxQueue,
+          organizationId: scope.organizationId,
+          eventId: scope.eventId,
+          ...(scope.sessionId === undefined ? {} : { sessionId: scope.sessionId }),
+        }),
       communications: repositories.communications,
       reports: repositories.reports,
       remix: repositories.remix,
@@ -173,9 +203,7 @@ export function createD1RuntimeDependencies(
     sessions: repositories.sessions,
     speaker: repositories.speaker,
     agenda: new D1RuntimeAgendaRepository(bindings.DB, async (eventId) => {
-      const row = await bindings.DB.prepare(
-        "SELECT organization_id FROM events WHERE id = ? AND deleted_at IS NULL",
-      )
+      const row = await bindings.DB.prepare("SELECT organization_id FROM events WHERE id = ?")
         .bind(eventId)
         .first<{ organization_id: string }>();
       return row?.organization_id ?? null;

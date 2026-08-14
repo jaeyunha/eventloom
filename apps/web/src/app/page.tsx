@@ -122,7 +122,7 @@ function AgendaProductFrame() {
               <div>
                 <small>Organizer workspace</small>
                 <h2>Organization overview</h2>
-                <p>Live operational data across events, submissions, reviews, and speaker work.</p>
+                <p>Illustrative preview of event, submission, review, and speaker workflows.</p>
               </div>
               <span className="home-demo-view-events">
                 View events
@@ -199,7 +199,7 @@ function AgendaProductFrame() {
 
             <Card className="home-demo-events-card" size="sm">
               <CardHeader>
-                <span className="home-demo-overline">Live event data</span>
+                <span className="home-demo-overline">Illustrative event preview</span>
                 <CardTitle>Events</CardTitle>
               </CardHeader>
               <CardContent>
@@ -670,6 +670,8 @@ export default function Home() {
         <nav aria-label="Footer navigation">
           <a href="/events">Events</a>
           <a href="/login">Sign in</a>
+          <a href="/privacy">Privacy</a>
+          <a href="/terms">Terms</a>
           <a href="https://github.com/jaeyunha/open-sessionboard">Source</a>
         </nav>
         <span>AGPL-3.0-or-later</span>

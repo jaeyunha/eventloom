@@ -35,10 +35,15 @@ export type CommunicationTemplateStatus = "draft" | "approved" | "archived";
 export type CommunicationActorKind = "human" | "automation";
 export type CommunicationRole = "organizer" | "delivery";
 
-export type CommunicationSenderIdentity =
-  | "auth@sessionboard.namuh.co"
-  | "speakers@sessionboard.namuh.co"
-  | "calendar@sessionboard.namuh.co";
+export type CommunicationSenderIdentity = string;
+
+export type CommunicationSenderPurpose = "auth" | "speakers" | "calendar";
+
+export interface CommunicationSenderIdentities {
+  readonly auth: CommunicationSenderIdentity;
+  readonly speakers: CommunicationSenderIdentity;
+  readonly calendar: CommunicationSenderIdentity;
+}
 
 export interface CommunicationGrant {
   eventId: string;
@@ -218,6 +223,7 @@ export interface CommunicationRepository {
     version?: number,
   ): Promise<CommunicationTemplate | undefined>;
   saveTemplate(template: CommunicationTemplate): Promise<CommunicationTemplate>;
+  updateTemplate?(template: CommunicationTemplate): Promise<CommunicationTemplate>;
   listRecipients(
     tenantId: string,
     eventId: string,
@@ -259,6 +265,7 @@ export interface CommunicationDeliveryRequest {
   recipientId: string;
   to: string;
   from: CommunicationSenderIdentity;
+  senderPurpose: CommunicationSenderPurpose;
   subject: string;
   html: string;
   text: string;
@@ -417,6 +424,7 @@ export interface ReminderOutboxEnqueueInput {
   eventId: string;
   recipient: string;
   from: CommunicationSenderIdentity;
+  senderPurpose: CommunicationSenderPurpose;
   subject: string;
   html: string;
   text: string;

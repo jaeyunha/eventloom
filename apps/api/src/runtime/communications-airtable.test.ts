@@ -70,7 +70,7 @@ function template(overrides: Partial<CommunicationTemplate> = {}): Communication
     purpose: "organizer_group_email",
     version: 1,
     status: "approved",
-    sender: "speakers@sessionboard.namuh.co",
+    sender: "program@conference.example",
     subject: "Hello",
     html: "<p>Hello</p>",
     text: "Hello",
@@ -132,6 +132,19 @@ describe("Airtable communication template reads", () => {
     expect(transport.templateListReads).toBe(1);
   });
 
+  it("accepts any normalized valid sender identity from persisted templates", async () => {
+    const transport = new DelayedCountingTransport();
+    seedTemplate(transport, template({ sender: "Program@Conference.Example" }));
+    const repository = new AirtableCommunicationRepository({
+      baseId: "base-test",
+      transport,
+    });
+
+    await expect(repository.listTemplates("org-1", "event-1")).resolves.toMatchObject([
+      { sender: "program@conference.example" },
+    ]);
+  });
+
   it("makes template creates and updates immediately visible through indexed reads", async () => {
     const transport = new DelayedCountingTransport();
     const repository = new AirtableCommunicationRepository({
@@ -149,7 +162,7 @@ describe("Airtable communication template reads", () => {
         "Event ID": "event-1",
         Purpose: "organizer_group_email",
         Status: "approved",
-        Sender: "speakers@sessionboard.namuh.co",
+        Sender: "program@conference.example",
         "Settings JSON": expect.any(String),
       },
     });
@@ -166,7 +179,7 @@ describe("Airtable communication template reads", () => {
         "Event ID": "event-1",
         Purpose: "organizer_group_email",
         Status: "approved",
-        Sender: "speakers@sessionboard.namuh.co",
+        Sender: "program@conference.example",
         "Settings JSON": expect.any(String),
       },
     });

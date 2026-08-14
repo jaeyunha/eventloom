@@ -1,5 +1,7 @@
 "use client";
 
+import { ChevronRight, MoreHorizontal, Pencil, Search, Trash2, Undo2 } from "lucide-react";
+import Link from "next/link";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertDialog,
@@ -23,10 +25,35 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
-import shellStyles from "../admin/admin-shell.module.css";
+import { SettingGroup, SettingRow, SettingsShell } from "@/components/workspace/settings-ui";
+import {
+  WorkspaceBreadcrumb,
+  WorkspaceHeader,
+  WorkspaceMetaItem,
+} from "@/components/workspace/workspace-ui";
 import {
   createEventSettingsApi,
   defaultAgendaEligibleStatuses,
@@ -42,6 +69,17 @@ import {
   type SessionSettingsRecord,
   type TaxonomyInput,
 } from "./api";
+import {
+  eventSettingsAuditDiff,
+  eventSettingsAuditPresentation,
+  settingsOnlyAuditEntries,
+} from "./event-settings-audit";
+import {
+  type EventSettingsSection,
+  eventSettingsSectionDefinition,
+  eventSettingsSectionHref,
+  eventSettingsSections,
+} from "./event-settings-sections";
 import styles from "./event-settings-workspace.module.css";
 
 export type EventSettingsDetailsStatus = "loading" | "loaded" | "error";
@@ -91,6 +129,7 @@ export interface EventSettingsWorkspaceActions {
 export interface EventSettingsWorkspaceViewProps {
   readonly organizationId: string;
   readonly eventId: string;
+  readonly section?: EventSettingsSection;
   readonly state: EventSettingsWorkspaceState;
   readonly busy?: boolean;
   readonly notice?: string | null;
@@ -254,55 +293,24 @@ function resourceGuidance(kind: EventSettingsResourceKind): string {
   }
 }
 
-function auditSummary(entry: EventSettingsAuditEntry): string {
-  if (entry.entityType === "settings" && entry.action === "settings.updated") {
-    return `Agenda eligibility and status settings updated to version ${entry.version}.`;
-  }
-  return `${entry.entityType} ${entry.action} at version ${entry.version}.`;
-}
-
-type SectionNavigationItem = Readonly<{
-  id: "session-settings" | "rooms" | "library" | "audit";
-  label: string;
-  group: string;
-}>;
-
-export const eventSettingsSectionNavigation: readonly SectionNavigationItem[] = [
-  { id: "session-settings", label: "Session workflow", group: "Configuration" },
-  { id: "rooms", label: "Rooms and venues", group: "Configuration" },
-  { id: "library", label: "Session classification", group: "Configuration" },
-  { id: "audit", label: "Audit history", group: "Safety and history" },
-];
+export const eventSettingsSectionNavigation = eventSettingsSections;
 
 function navigationGroupId(prefix: string, group: string): string {
   return `${prefix}-${group.toLowerCase().replaceAll(" ", "-")}`;
 }
-function SettingsSectionNavigation() {
-  const [activeId, setActiveId] = useState<SectionNavigationItem["id"]>("session-settings");
+function SettingsSectionNavigation({
+  organizationId,
+  eventId,
+  section = "workflow",
+}: Readonly<{
+  organizationId: string;
+  eventId: string;
+  section: EventSettingsSection;
+}>) {
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  useEffect(() => {
-    if (typeof IntersectionObserver === "undefined") return;
-    const sections = eventSettingsSectionNavigation
-      .map((item) => document.getElementById(item.id))
-      .filter((section): section is HTMLElement => section !== null);
-    if (sections.length === 0) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const visible = entries
-          .filter((entry) => entry.isIntersecting)
-          .sort((left, right) => left.boundingClientRect.top - right.boundingClientRect.top);
-        const first = visible[0]?.target.id as SectionNavigationItem["id"] | undefined;
-        if (first) setActiveId(first);
-      },
-      { rootMargin: "-96px 0px -60% 0px", threshold: [0, 0.15, 1] },
-    );
-    for (const section of sections) observer.observe(section);
-    return () => observer.disconnect();
-  }, []);
-
   const groups = useMemo(() => {
-    const grouped = new Map<string, SectionNavigationItem[]>();
+    const grouped = new Map<string, (typeof eventSettingsSections)[number][]>();
     for (const item of eventSettingsSectionNavigation) {
       const current = grouped.get(item.group) ?? [];
       current.push(item);
@@ -310,25 +318,24 @@ function SettingsSectionNavigation() {
     }
     return [...grouped.entries()];
   }, []);
-  const active =
-    eventSettingsSectionNavigation.find((item) => item.id === activeId) ??
-    ({ id: "session-settings", label: "Session workflow", group: "Configuration" } as const);
+  const active = eventSettingsSectionDefinition(section);
 
-  const links = (items: readonly SectionNavigationItem[]) => (
+  const links = (items: readonly (typeof eventSettingsSections)[number][]) => (
     <ul className={styles.navigationList}>
       {items.map((item) => (
         <li key={item.id}>
-          <a
-            className={`${styles.navigationLink} ${activeId === item.id ? styles.navigationLinkActive : ""}`}
-            href={`#${item.id}`}
-            aria-current={activeId === item.id ? "location" : undefined}
+          <Link
+            className={`${styles.navigationLink} ${section === item.id ? styles.navigationLinkActive : ""}`}
+            href={eventSettingsSectionHref(organizationId, eventId, item.id)}
+            aria-current={section === item.id ? "page" : undefined}
             onClick={() => setMobileOpen(false)}
           >
-            <span className={styles.navigationStep} aria-hidden="true">
-              {eventSettingsSectionNavigation.indexOf(item) + 1}
+            <item.icon className={styles.navigationIcon} aria-hidden />
+            <span className={styles.navigationLinkCopy}>
+              <strong>{item.label}</strong>
+              <span>{item.description}</span>
             </span>
-            <span>{item.label}</span>
-          </a>
+          </Link>
         </li>
       ))}
     </ul>
@@ -338,11 +345,8 @@ function SettingsSectionNavigation() {
     <div className={styles.navigationWrapper}>
       <aside className={styles.desktopNavigation} aria-label="Event settings sections">
         <div className={styles.navigationHeader}>
-          <p className={shellStyles.panelEyebrow}>Configure this event</p>
-          <h2 className={styles.navigationTitle}>Settings navigation</h2>
-          <p className={styles.navigationHint}>
-            Choose a section. Your place stays visible as you scroll.
-          </p>
+          <p className={styles.navigationEyebrow}>Event settings</p>
+          <h2 className={styles.navigationTitle}>Configure this event</h2>
         </div>
         {groups.map(([group, items]) => (
           <section
@@ -368,12 +372,12 @@ function SettingsSectionNavigation() {
         <CollapsibleTrigger asChild>
           <Button
             className={styles.mobileNavigationTrigger}
-            variant="outline"
+            variant="ghost"
             type="button"
             aria-label="Choose event settings section"
           >
-            <span>Settings navigation</span>
-            <strong>{active.label}</strong>
+            <span className={styles.mobileNavigationLabel}>Event settings</span>
+            <strong>{active.shortLabel}</strong>
             <span aria-hidden="true">{mobileOpen ? "−" : "+"}</span>
           </Button>
         </CollapsibleTrigger>
@@ -426,6 +430,13 @@ function StatusSettingsForm({
   const [eligible, setEligible] = useState<string[]>([...settings.agendaEligibleStatuses]);
   const [newStatus, setNewStatus] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
+  const cleanedStatuses = statuses.map(({ value }) => value.trim());
+  const normalizedEligible = cleanedStatuses.filter((status) => eligible.includes(status));
+  const normalizedEligibleSet = new Set(normalizedEligible);
+  const dirty =
+    cleanedStatuses.join("\u0000") !== settings.statuses.join("\u0000") ||
+    normalizedEligible.length !== settings.agendaEligibleStatuses.length ||
+    settings.agendaEligibleStatuses.some((status) => !normalizedEligibleSet.has(status));
 
   useEffect(() => {
     setStatuses(createStatusRows(settings.statuses));
@@ -475,9 +486,16 @@ function StatusSettingsForm({
     );
   }
 
+  function resetChanges() {
+    setStatuses(createStatusRows(settings.statuses));
+    setEligible([...settings.agendaEligibleStatuses]);
+    setNewStatus("");
+    setFormError(null);
+  }
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const cleaned = statuses.map((status) => status.value.trim());
+    const cleaned = cleanedStatuses;
     if (cleaned.some((status) => status.length === 0)) {
       setFormError("Status names cannot be empty.");
       return;
@@ -496,7 +514,7 @@ function StatusSettingsForm({
       await onSave({
         expectedVersion: settings.version,
         statuses: cleaned,
-        agendaEligibleStatuses: eligible,
+        agendaEligibleStatuses: normalizedEligible,
       });
     } catch (error) {
       setFormError(messageFrom(error));
@@ -505,78 +523,78 @@ function StatusSettingsForm({
 
   return (
     <form className={styles.settingsForm} onSubmit={(event) => void submit(event)}>
-      <div className={styles.formIntro}>
-        <div>
-          <h3 className={styles.subheading}>Session statuses</h3>
-          <p className={styles.mutedText}>
-            Statuses are event-scoped. Changes are versioned and audited.
-          </p>
-        </div>
-        <span className={styles.versionText}>Version {settings.version}</span>
-      </div>
       {readOnly ? (
         <p className={styles.capabilityNote}>
           Session status editing is unavailable until the organizer API capability is connected.
         </p>
       ) : null}
-      <div className={styles.tableWrap}>
-        <table className={styles.statusTable}>
-          <caption>Configured session statuses and agenda eligibility</caption>
-          <thead>
-            <tr>
-              <th scope="col">Status</th>
-              <th scope="col">Agenda eligible</th>
-              <th scope="col">Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {statuses.map((status, index) => {
-              const statusInputId = `${status.id}-value`;
-              const checkboxId = `${status.id}-agenda`;
-              return (
-                <tr key={status.id}>
-                  <td>
-                    <Label className={styles.fieldLabel} htmlFor={statusInputId}>
-                      <span className={shellStyles.srOnly}>Status {index + 1}</span>
-                    </Label>
-                    <Input
-                      id={statusInputId}
-                      value={status.value}
-                      maxLength={64}
+      <p className="sr-only">Configured session statuses and agenda eligibility</p>
+      <ul className={styles.settingRows} aria-label="Configured session statuses">
+        {statuses.map((status, index) => {
+          const statusInputId = `${status.id}-value`;
+          const checkboxId = `${status.id}-agenda`;
+          const statusLabel = status.value || `Status ${index + 1}`;
+          return (
+            <SettingRow
+              key={status.id}
+              label={
+                <>
+                  <Label className="sr-only" htmlFor={statusInputId}>
+                    Status {index + 1}
+                  </Label>
+                  <Input
+                    className={styles.statusNameInput}
+                    id={statusInputId}
+                    value={status.value}
+                    maxLength={64}
+                    disabled={disabled}
+                    onChange={(event) => changeStatus(status.id, event.target.value)}
+                  />
+                </>
+              }
+              description="Used to organize sessions through the review and scheduling workflow."
+              controls={
+                <>
+                  <Label className={styles.checkboxLabel} htmlFor={checkboxId}>
+                    <Checkbox
+                      id={checkboxId}
+                      checked={eligible.includes(status.value)}
                       disabled={disabled}
-                      onChange={(event) => changeStatus(status.id, event.target.value)}
+                      aria-label={`Can ${statusLabel} appear on the private agenda`}
+                      onCheckedChange={(checked) =>
+                        toggleEligibility(status.value, checked === true)
+                      }
                     />
-                  </td>
-                  <td>
-                    <Label className={styles.checkboxLabel} htmlFor={checkboxId}>
-                      <Checkbox
-                        id={checkboxId}
-                        checked={eligible.includes(status.value)}
+                    <span>Private agenda</span>
+                  </Label>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        type="button"
+                        size="icon-sm"
+                        variant="ghost"
                         disabled={disabled}
-                        aria-label={`Agenda eligible for ${status.value || `status ${index + 1}`}`}
-                        onCheckedChange={(checked) =>
-                          toggleEligibility(status.value, checked === true)
-                        }
-                      />
-                      <span>Eligible</span>
-                    </Label>
-                  </td>
-                  <td>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      disabled={disabled}
-                      onClick={() => removeStatus(status.value)}
-                    >
-                      Remove
-                    </Button>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+                        aria-label={`More actions for ${statusLabel}`}
+                      >
+                        <MoreHorizontal aria-hidden />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem
+                        variant="destructive"
+                        onSelect={() => removeStatus(status.value)}
+                      >
+                        <Trash2 aria-hidden />
+                        Remove status
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </>
+              }
+            />
+          );
+        })}
+      </ul>
       <div className={styles.addStatusRow}>
         <Label className={styles.formField} htmlFor="new-status">
           <span>Status name</span>
@@ -599,12 +617,18 @@ function StatusSettingsForm({
         </p>
       ) : null}
       <div className={styles.formActions}>
-        <Button type="submit" disabled={busy || readOnly || !onSave}>
+        {dirty ? (
+          <Button type="button" variant="ghost" disabled={disabled} onClick={resetChanges}>
+            <Undo2 aria-hidden />
+            Cancel changes
+          </Button>
+        ) : null}
+        <Button type="submit" disabled={busy || readOnly || !onSave || !dirty}>
           {readOnly
             ? "Session settings are read-only."
             : busy
               ? "Saving settings…"
-              : "Save session settings"}
+              : "Save changes"}
         </Button>
       </div>
     </form>
@@ -835,17 +859,12 @@ function RoomsSection({
   const canDelete = Boolean(actions.deleteRoom);
 
   return (
-    <section id="rooms" className={styles.panel} aria-labelledby="rooms-heading">
-      <header className={styles.panelHeader}>
-        <div className={styles.panelHeading}>
-          <p className={shellStyles.panelEyebrow}>Event setup</p>
-          <h2 id="rooms-heading" className={styles.panelTitle}>
-            Rooms
-          </h2>
-          <p className={styles.mutedText}>
-            Define capacity and resources before assigning sessions to the agenda.
-          </p>
-        </div>
+    <SettingGroup
+      id="rooms"
+      aria-labelledby="rooms-heading"
+      title="Rooms and venues"
+      description="Define capacity and resources before assigning sessions to the agenda."
+      action={
         <Button
           type="button"
           variant="outline"
@@ -860,70 +879,68 @@ function RoomsSection({
         >
           Add room
         </Button>
-      </header>
-      <CardContent className={styles.panelContent}>
-        {!canCreate || !canUpdate || !canDelete ? (
-          <p className={styles.capabilityNote}>
-            Room editing controls are read-only until the organizer API capabilities are connected.
-          </p>
-        ) : null}
-        <ul className={styles.resourceList} aria-label="Event rooms">
-          {rooms.length === 0 ? (
-            <li className={styles.emptyState}>
-              <strong>No rooms configured yet.</strong>
-              <span>Add a room with a capacity before scheduling accepted sessions.</span>
-            </li>
-          ) : (
-            rooms.map((room) => (
-              <li key={room.id}>
-                <Card size="sm" className={styles.resourceCard}>
-                  <CardHeader className={styles.resourceCardHeader}>
-                    <div>
-                      <CardTitle className={styles.cardHeading}>{room.name}</CardTitle>
-                      <CardDescription>
-                        {room.capacity} seats · Version {room.version}
-                      </CardDescription>
-                    </div>
-                    <div className={styles.cardActions}>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        disabled={busy || !canUpdate}
-                        title={canUpdate ? "Edit room" : "Room editing is unavailable"}
-                        aria-expanded={editingRoomId === room.id}
-                        aria-controls={`room-edit-${room.id}`}
-                        onClick={() => {
-                          setShowForm(false);
-                          setEditingRoomId((current) => (current === room.id ? null : room.id));
-                        }}
-                      >
-                        Edit
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="destructive"
-                        disabled={busy || !canDelete}
-                        title={canDelete ? "Delete room" : "Room deletion is unavailable"}
-                        onClick={() => setDeleteTarget(room)}
-                      >
-                        Delete
-                      </Button>
-                    </div>
-                  </CardHeader>
-                  <CardContent className={styles.resourceCardContent}>
-                    <span>
-                      <strong>Resources:</strong>{" "}
-                      {room.resources?.length || room.resourceIds?.length
-                        ? (room.resources ?? room.resourceIds ?? []).join(", ")
-                        : "None configured"}
-                    </span>
-                  </CardContent>
-                </Card>
-              </li>
-            ))
-          )}
-        </ul>
-      </CardContent>
+      }
+    >
+      {!canCreate || !canUpdate || !canDelete ? (
+        <p className={styles.capabilityNote}>
+          Room editing controls are read-only until the organizer API capabilities are connected.
+        </p>
+      ) : null}
+      <ul className={styles.resourceList} aria-label="Event rooms">
+        {rooms.length === 0 ? (
+          <li className={styles.emptyState}>
+            <strong>No rooms configured yet.</strong>
+            <span>Add a room with a capacity before scheduling accepted sessions.</span>
+          </li>
+        ) : (
+          rooms.map((room) => (
+            <SettingRow
+              key={room.id}
+              label={room.name}
+              description={`${room.capacity} seats · ${
+                room.resources?.length || room.resourceIds?.length
+                  ? (room.resources ?? room.resourceIds ?? []).join(", ")
+                  : "No resources configured"
+              }`}
+              controls={
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      type="button"
+                      size="icon-sm"
+                      variant="ghost"
+                      disabled={busy || (!canUpdate && !canDelete)}
+                      aria-label={`More actions for ${room.name}`}
+                    >
+                      <MoreHorizontal aria-hidden />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem
+                      disabled={!canUpdate}
+                      onSelect={() => {
+                        setShowForm(false);
+                        setEditingRoomId(room.id);
+                      }}
+                    >
+                      <Pencil aria-hidden />
+                      Edit room
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      variant="destructive"
+                      disabled={!canDelete}
+                      onSelect={() => setDeleteTarget(room)}
+                    >
+                      <Trash2 aria-hidden />
+                      Delete room
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              }
+            />
+          ))
+        )}
+      </ul>
       <Dialog
         open={showForm && canCreate}
         onOpenChange={(open) => {
@@ -1001,7 +1018,7 @@ function RoomsSection({
           setDeleteTarget(null);
         }}
       />
-    </section>
+    </SettingGroup>
   );
 }
 
@@ -1176,44 +1193,46 @@ function TaxonomySection({
           </li>
         ) : (
           resources.map((resource) => (
-            <li key={resource.id}>
-              <Card size="sm" className={styles.resourceCard}>
-                <CardHeader className={styles.resourceCardHeader}>
-                  <div>
-                    <CardTitle className={styles.cardHeading}>{resource.name}</CardTitle>
-                    {resource.description ? (
-                      <CardDescription>{resource.description}</CardDescription>
-                    ) : null}
-                    <CardDescription>Version {resource.version}</CardDescription>
-                  </div>
-                  <div className={styles.cardActions}>
+            <SettingRow
+              key={resource.id}
+              label={resource.name}
+              description={resource.description || `No ${kind} description`}
+              controls={
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
                     <Button
                       type="button"
-                      variant="outline"
-                      disabled={busy || !canUpdate}
-                      title={canUpdate ? `Edit ${kind}` : `${title} editing is unavailable`}
-                      aria-expanded={editingId === resource.id}
-                      aria-controls={`${kind}-edit-${resource.id}`}
-                      onClick={() => {
+                      size="icon-sm"
+                      variant="ghost"
+                      disabled={busy || (!canUpdate && !canDelete)}
+                      aria-label={`More actions for ${resource.name}`}
+                    >
+                      <MoreHorizontal aria-hidden />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem
+                      disabled={!canUpdate}
+                      onSelect={() => {
                         setShowForm(false);
-                        setEditingId((current) => (current === resource.id ? null : resource.id));
+                        setEditingId(resource.id);
                       }}
                     >
-                      Edit
-                    </Button>
-                    <Button
-                      type="button"
+                      <Pencil aria-hidden />
+                      Edit {kind}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
                       variant="destructive"
-                      disabled={busy || !canDelete}
-                      title={canDelete ? `Delete ${kind}` : `${title} deletion is unavailable`}
-                      onClick={() => setDeleteTarget(resource)}
+                      disabled={!canDelete}
+                      onSelect={() => setDeleteTarget(resource)}
                     >
-                      Delete
-                    </Button>
-                  </div>
-                </CardHeader>
-              </Card>
-            </li>
+                      <Trash2 aria-hidden />
+                      Delete {kind}
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              }
+            />
           ))
         )}
       </ul>
@@ -1296,94 +1315,176 @@ function TaxonomySection({
   );
 }
 
-function AuditSection({ audit }: Readonly<{ audit: readonly EventSettingsAuditEntry[] }>) {
-  return (
-    <section id="audit" className={styles.panel} aria-labelledby="audit-heading">
-      <header className={styles.panelHeader}>
-        <div className={styles.panelHeading}>
-          <p className={shellStyles.panelEyebrow}>Safety and history</p>
-          <h2 id="audit-heading" className={styles.panelTitle}>
-            Settings audit history
-          </h2>
-        </div>
-      </header>
-      <CardContent className={styles.panelContent}>
-        {audit.length === 0 ? (
-          <p className={styles.mutedText}>
-            No settings changes have been audited for this event yet.
-          </p>
-        ) : (
-          <ol className={styles.auditList} aria-label="Settings audit history">
-            {audit.map((entry) => (
-              <li key={entry.id} className={styles.auditEntry}>
-                <div>
-                  <strong>{auditSummary(entry)}</strong>
-                  <span>
-                    {entry.entityId} · actor {entry.actorId}
-                  </span>
-                </div>
-                <time dateTime={entry.occurredAt}>
-                  {new Date(entry.occurredAt).toLocaleString()}
-                </time>
-              </li>
-            ))}
-          </ol>
-        )}
-      </CardContent>
-    </section>
-  );
+function actorLabel(actorId: string): string {
+  return actorId
+    .split(/[-_]/u)
+    .filter(Boolean)
+    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+    .join(" ");
 }
 
-function RelatedWorkflows({
-  organizationId,
-  eventId,
-}: Readonly<{ organizationId: string; eventId: string }>) {
-  const eventBasePath = `/admin/organizations/${encodeURIComponent(organizationId)}/events/${encodeURIComponent(eventId)}`;
+function auditTimestamp(value: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+function AuditSection({ audit }: Readonly<{ audit: readonly EventSettingsAuditEntry[] }>) {
+  const [query, setQuery] = useState("");
+  const [scope, setScope] = useState("all");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const entries = settingsOnlyAuditEntries(audit);
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredEntries = entries.filter((entry) => {
+    if (scope !== "all" && entry.entityType !== scope) return false;
+    if (!normalizedQuery) return true;
+    const presentation = eventSettingsAuditPresentation(entry);
+    return [
+      presentation.domain,
+      presentation.entityLabel,
+      presentation.summary,
+      actorLabel(entry.actorId),
+      entry.entityId,
+    ].some((value) => value.toLowerCase().includes(normalizedQuery));
+  });
+  const selectedEntry = entries.find(({ id }) => id === selectedId) ?? null;
+  const selectedPresentation = selectedEntry ? eventSettingsAuditPresentation(selectedEntry) : null;
+  const selectedDiff = selectedEntry ? eventSettingsAuditDiff(selectedEntry) : [];
+
   return (
-    <section className={styles.relatedWorkflows} aria-labelledby="related-workflows-heading">
-      <div className={styles.sectionIntro}>
-        <div>
-          <p className={shellStyles.eyebrow}>Related workflows</p>
-          <h2 id="related-workflows-heading" className={styles.sectionTitle}>
-            Keep operational work in its dedicated workspace
-          </h2>
-        </div>
+    <SettingGroup
+      id="history"
+      aria-labelledby="history-heading"
+      title="Change history"
+      description="Review audited configuration changes without mixing in ordinary session activity."
+    >
+      <div className={styles.historyToolbar}>
+        <Label className={styles.historySearch} htmlFor="settings-history-search">
+          <Search aria-hidden />
+          <span className="sr-only">Search change history</span>
+          <Input
+            id="settings-history-search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search changes or entities"
+          />
+        </Label>
+        <Select value={scope} onValueChange={setScope}>
+          <SelectTrigger aria-label="Filter change history by configuration type">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All configuration</SelectItem>
+            <SelectItem value="settings">Session workflow</SelectItem>
+            <SelectItem value="room">Rooms and venues</SelectItem>
+            <SelectItem value="track">Tracks</SelectItem>
+            <SelectItem value="format">Formats</SelectItem>
+            <SelectItem value="level">Levels</SelectItem>
+            <SelectItem value="tag">Tags</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
-      <div className={styles.relatedGrid}>
-        <Card size="sm">
-          <CardHeader>
-            <CardTitle>Communications</CardTitle>
-            <CardDescription>
-              Templates, recipient previews, sends, and delivery history live in Communications.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className={styles.relatedCardContent}>
-            <Button asChild variant="link">
-              <a href={`${eventBasePath}/communications`}>Open Communications</a>
-            </Button>
-          </CardContent>
-        </Card>
-        <Card size="sm">
-          <CardHeader>
-            <CardTitle>Calendar</CardTitle>
-            <CardDescription>
-              Review agenda timing and published calendar delivery in the Agenda workspace.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className={styles.relatedCardContent}>
-            <Button asChild variant="link">
-              <a href={`${eventBasePath}/agenda`}>Open Agenda &amp; Calendar</a>
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
-    </section>
+      {entries.length === 0 ? (
+        <p className={styles.mutedText}>
+          No configuration changes have been audited for this event yet.
+        </p>
+      ) : filteredEntries.length === 0 ? (
+        <p className={styles.mutedText}>No changes match the current search and scope.</p>
+      ) : (
+        <ol className={styles.auditList} aria-label="Configuration change history">
+          {filteredEntries.map((entry) => {
+            const presentation = eventSettingsAuditPresentation(entry);
+            return (
+              <li key={entry.id} className={styles.auditEntry}>
+                <button type="button" onClick={() => setSelectedId(entry.id)}>
+                  <span className={styles.auditEntryMain}>
+                    <span className={styles.auditDomain}>{presentation.domain}</span>
+                    <strong>{presentation.entityLabel}</strong>
+                    <span>{presentation.summary}</span>
+                  </span>
+                  <span className={styles.auditEntryMeta}>
+                    <span>{actorLabel(entry.actorId)}</span>
+                    <time dateTime={entry.occurredAt}>{auditTimestamp(entry.occurredAt)}</time>
+                    <span>{presentation.versionLabel}</span>
+                    <ChevronRight aria-hidden />
+                  </span>
+                </button>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+      <Sheet
+        open={selectedEntry !== null}
+        onOpenChange={(open) => {
+          if (!open) setSelectedId(null);
+        }}
+      >
+        <SheetContent className={styles.revisionSheet}>
+          {selectedEntry && selectedPresentation ? (
+            <>
+              <SheetHeader>
+                <SheetTitle>{selectedPresentation.entityLabel} updated</SheetTitle>
+                <SheetDescription>
+                  {selectedPresentation.domain} · {actorLabel(selectedEntry.actorId)} ·{" "}
+                  {auditTimestamp(selectedEntry.occurredAt)}
+                </SheetDescription>
+              </SheetHeader>
+              <div className={styles.revisionSummary}>
+                <span>{selectedPresentation.summary}</span>
+                <strong>{selectedPresentation.versionLabel}</strong>
+              </div>
+              <div className={styles.revisionDiff}>
+                <h3>Changes</h3>
+                {selectedDiff.length === 0 ? (
+                  <p>No field-level difference is available for this revision.</p>
+                ) : (
+                  <dl>
+                    {selectedDiff.map((change) => (
+                      <div key={change.field}>
+                        <dt>{change.field}</dt>
+                        <dd>
+                          <span className={styles.revisionBefore}>− {change.before}</span>
+                          <span className={styles.revisionAfter}>+ {change.after}</span>
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                )}
+              </div>
+              <details className={styles.revisionTechnical}>
+                <summary>Technical details</summary>
+                <dl>
+                  <div>
+                    <dt>Audit ID</dt>
+                    <dd>{selectedEntry.id}</dd>
+                  </div>
+                  <div>
+                    <dt>Entity ID</dt>
+                    <dd>{selectedEntry.entityId}</dd>
+                  </div>
+                  <div>
+                    <dt>Actor ID</dt>
+                    <dd>{selectedEntry.actorId}</dd>
+                  </div>
+                </dl>
+              </details>
+            </>
+          ) : null}
+        </SheetContent>
+      </Sheet>
+    </SettingGroup>
   );
 }
 
 export function EventSettingsWorkspaceView({
   organizationId,
   eventId,
+  section = "workflow",
   state,
   busy = false,
   notice = null,
@@ -1396,20 +1497,24 @@ export function EventSettingsWorkspaceView({
     state.status === "loaded"
       ? (state.detailsMessage ?? "The event library and audit history could not be loaded.")
       : null;
+  const sectionDefinition = eventSettingsSectionDefinition(section);
 
   return (
     <main id="event-settings-content" className={styles.workspace} tabIndex={-1}>
-      <header className={shellStyles.pageHeader}>
-        <div className={shellStyles.pageHeaderCopy}>
-          <p className={shellStyles.eyebrow}>Event setup</p>
-          <h1 className={shellStyles.pageTitle}>Event settings</h1>
-          <p className={shellStyles.pageDescription}>
-            Configure the program vocabulary, scheduling rules, and operational groups for this
-            event.
-          </p>
-          <p className={styles.contextText}>{contextLabel(organizationId, eventId)}</p>
-        </div>
-      </header>
+      <WorkspaceHeader
+        breadcrumb={
+          <WorkspaceBreadcrumb>
+            <Link href="/admin/events">Events</Link>
+            <span aria-hidden="true">/</span>
+            <span>{eventId}</span>
+            <span aria-hidden="true">/</span>
+            <span>Settings</span>
+          </WorkspaceBreadcrumb>
+        }
+        title={sectionDefinition.label}
+        description={sectionDefinition.description}
+        metadata={<WorkspaceMetaItem>{contextLabel(organizationId, eventId)}</WorkspaceMetaItem>}
+      />
 
       {state.status === "error" || state.status === "config-error" ? (
         <Card className={styles.fullWidthState} role="alert">
@@ -1436,137 +1541,111 @@ export function EventSettingsWorkspaceView({
           </CardHeader>
         </Card>
       ) : data ? (
-        <div className={styles.dashboardGrid}>
-          <SettingsSectionNavigation />
-          <div className={styles.contentStack}>
-            <div className={shellStyles.srOnly} role="status" aria-live="polite">
+        <SettingsShell
+          navigation={
+            <SettingsSectionNavigation
+              organizationId={organizationId}
+              eventId={eventId}
+              section={section}
+            />
+          }
+          wide={section === "history"}
+        >
+          <div className="sr-only" role="status" aria-live="polite">
+            {notice}
+          </div>
+          {notice ? (
+            <div className={styles.notice} role="status" aria-live="polite">
               {notice}
             </div>
-            {notice ? (
-              <div className={styles.notice} role="status" aria-live="polite">
-                {notice}
-              </div>
-            ) : null}
-            <section
-              id="session-settings"
-              className={styles.panel}
-              aria-labelledby="session-settings-heading"
+          ) : null}
+          {section === "workflow" ? (
+            <SettingGroup
+              id="workflow"
+              aria-labelledby="workflow-heading"
+              title="Session statuses"
+              description="Define the statuses organizers use and which ones can appear on the private agenda."
+              metadata={`Version ${data.settings.version}`}
             >
-              <header className={styles.panelHeader}>
-                <div className={styles.panelHeading}>
-                  <p className={shellStyles.panelEyebrow}>Event setup</p>
-                  <h2 id="session-settings-heading" className={styles.panelTitle}>
-                    Session settings
-                  </h2>
-                  <p className={styles.mutedText}>
-                    Set statuses and decide which statuses are eligible for the private agenda.
-                  </p>
-                </div>
-              </header>
-              <CardContent className={styles.panelContent}>
-                <StatusSettingsForm
-                  settings={data.settings}
-                  busy={busy}
-                  {...(actions.updateSettings === undefined
-                    ? {}
-                    : { onSave: actions.updateSettings })}
-                  readOnly={!actions.updateSettings}
-                />
-              </CardContent>
-            </section>
+              <StatusSettingsForm
+                settings={data.settings}
+                busy={busy}
+                {...(actions.updateSettings === undefined
+                  ? {}
+                  : { onSave: actions.updateSettings })}
+                readOnly={!actions.updateSettings}
+              />
+            </SettingGroup>
+          ) : null}
+          {section === "rooms" ? (
             <RoomsSection rooms={data.rooms} busy={busy} actions={actions} />
-            <section
-              id="library"
-              className={`${styles.panel} ${styles.librarySection}`}
-              aria-labelledby="library-heading"
+          ) : null}
+          {section === "classification" ? (
+            <SettingGroup
+              id="classification"
+              className={styles.librarySection}
+              aria-labelledby="classification-heading"
+              title="Classification library"
+              description="Define how sessions are organized and discovered. These options appear in submissions, session editing, agenda filters, and the public program."
+              contentClassName={styles.classificationContent}
             >
-              <header className={styles.panelHeader}>
-                <div>
-                  <p className={shellStyles.eyebrow}>Session classification</p>
-                  <h2 id="library-heading" className={styles.sectionTitle}>
-                    Session classification
-                  </h2>
-                  <p className={styles.mutedText}>
-                    Define how sessions are organized and discovered. These options appear in
-                    submissions, session editing, agenda filters, and the public program.
-                  </p>
-                  <p className={styles.sectionNote}>
-                    Tracks, formats, and levels are recommended. Tags are optional and can be added
-                    later.
-                  </p>
+              <p className={styles.sectionNote}>
+                Tracks, formats, and levels are recommended. Tags are optional and can be added
+                later.
+              </p>
+              {detailsStatus === "loading" ? (
+                <Card className={styles.detailsState} role="status" aria-live="polite">
+                  <CardContent>
+                    <p>Loading session classification and audit history…</p>
+                  </CardContent>
+                </Card>
+              ) : detailsStatus === "error" ? (
+                <Card className={styles.detailsState} role="alert">
+                  <CardContent>
+                    <p>Session classification unavailable. {detailsMessage}</p>
+                  </CardContent>
+                </Card>
+              ) : (
+                <div className={styles.taxonomyGrid}>
+                  <TaxonomySection
+                    kind="track"
+                    resources={data.tracks}
+                    busy={busy}
+                    actions={actions}
+                  />
+                  <TaxonomySection
+                    kind="format"
+                    resources={data.formats}
+                    busy={busy}
+                    actions={actions}
+                  />
+                  <TaxonomySection
+                    kind="level"
+                    resources={data.levels}
+                    busy={busy}
+                    actions={actions}
+                  />
+                  <TaxonomySection kind="tag" resources={data.tags} busy={busy} actions={actions} />
                 </div>
-              </header>
-              <div className={styles.classificationContent}>
-                {detailsStatus === "loading" ? (
-                  <Card className={styles.detailsState} role="status" aria-live="polite">
-                    <CardContent>
-                      <p>Loading session classification and audit history…</p>
-                    </CardContent>
-                  </Card>
-                ) : detailsStatus === "error" ? (
-                  <Card className={styles.detailsState} role="alert">
-                    <CardContent>
-                      <p>Session classification unavailable. {detailsMessage}</p>
-                    </CardContent>
-                  </Card>
-                ) : (
-                  <div className={styles.taxonomyGrid}>
-                    <TaxonomySection
-                      kind="track"
-                      resources={data.tracks}
-                      busy={busy}
-                      actions={actions}
-                    />
-                    <TaxonomySection
-                      kind="format"
-                      resources={data.formats}
-                      busy={busy}
-                      actions={actions}
-                    />
-                    <TaxonomySection
-                      kind="level"
-                      resources={data.levels}
-                      busy={busy}
-                      actions={actions}
-                    />
-                    <TaxonomySection
-                      kind="tag"
-                      resources={data.tags}
-                      busy={busy}
-                      actions={actions}
-                    />
-                  </div>
-                )}
-              </div>
-            </section>
-            <RelatedWorkflows organizationId={organizationId} eventId={eventId} />
-            {detailsStatus === "loaded" ? (
-              <AuditSection audit={data.audit} />
-            ) : (
-              <section id="audit" className={styles.panel} aria-labelledby="audit-heading">
-                <header className={styles.panelHeader}>
-                  <div className={styles.panelHeading}>
-                    <p className={shellStyles.panelEyebrow}>Safety and history</p>
-                    <h2 id="audit-heading" className={styles.panelTitle}>
-                      Settings audit history
-                    </h2>
-                  </div>
-                </header>
-                <CardContent className={styles.panelContent}>
-                  <p
-                    className={styles.mutedText}
-                    role={detailsStatus === "error" ? "alert" : "status"}
-                    aria-live="polite"
-                  >
-                    {detailsStatus === "loading"
-                      ? "Loading settings audit history…"
-                      : `Settings audit history unavailable. ${detailsMessage}`}
-                  </p>
-                </CardContent>
-              </section>
-            )}
-          </div>
-        </div>
+              )}
+            </SettingGroup>
+          ) : null}
+          {section === "history" && detailsStatus === "loaded" ? (
+            <AuditSection audit={data.audit} />
+          ) : section === "history" ? (
+            <SettingGroup id="history" aria-labelledby="history-heading" title="Change history">
+              <p
+                className={styles.mutedText}
+                role={detailsStatus === "error" ? "alert" : "status"}
+                aria-live="polite"
+              >
+                {detailsStatus === "loading"
+                  ? "Loading change history…"
+                  : `Change history unavailable. ${detailsMessage}`}
+              </p>
+            </SettingGroup>
+          ) : null}
+        </SettingsShell>
       ) : null}
     </main>
   );
@@ -1575,6 +1654,7 @@ export function EventSettingsWorkspaceView({
 export interface EventSettingsWorkspaceProps {
   readonly organizationId: string;
   readonly eventId: string;
+  readonly section: EventSettingsSection;
   readonly api?: EventSettingsApi;
   readonly initialData?: EventSettingsData;
 }
@@ -1591,6 +1671,7 @@ export function EventSettingsWorkspace(props: Readonly<EventSettingsWorkspacePro
 function ScopedEventSettingsWorkspace({
   organizationId,
   eventId,
+  section,
   api: providedApi,
   initialData,
 }: Readonly<EventSettingsWorkspaceProps>) {
@@ -1809,6 +1890,7 @@ function ScopedEventSettingsWorkspace({
     <EventSettingsWorkspaceView
       organizationId={organizationId}
       eventId={eventId}
+      section={section}
       state={state}
       busy={busy}
       notice={notice}

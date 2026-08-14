@@ -310,6 +310,29 @@ class OrganizerSpeakerRepository extends FakeSpeakerRepository {
     return Promise.resolve({ ok: true, value: structuredClone(command.task) });
   }
 }
+class PersistedSpeakerEmailPreviewRepository extends OrganizerSpeakerRepository {
+  readonly emailPreviews = new Map<string, import("./service").SpeakerEmailPreview>();
+
+  getSpeakerEmailPreview(
+    organizationId: string,
+    eventId: string,
+    previewId: string,
+  ): Promise<import("./service").SpeakerEmailPreview | null> {
+    const preview = this.emailPreviews.get(previewId);
+    return Promise.resolve(
+      preview?.organizationId === organizationId && preview.eventId === eventId
+        ? structuredClone(preview)
+        : null,
+    );
+  }
+
+  saveSpeakerEmailPreview(
+    preview: import("./service").SpeakerEmailPreview,
+  ): Promise<import("./service").SpeakerEmailPreview> {
+    this.emailPreviews.set(preview.id, structuredClone(preview));
+    return Promise.resolve(structuredClone(preview));
+  }
+}
 class CountingOrganizerReadModelRepository extends OrganizerSpeakerRepository {
   readonly readModelResources: SpeakerOrganizerReadResources[] = [];
   readModelReads = 0;
@@ -675,6 +698,7 @@ class FakePrivateAssetGateway implements PrivateAssetGateway {
   }
 }
 
+const speakerSender = "speakers@self-hosted.example";
 const now = "2026-08-08T12:00:00.000Z";
 
 function submission(
@@ -801,13 +825,15 @@ function createFixture() {
 
   let sequence = 0;
   const service = new SpeakerService(repository, gateway, {
+    speakerSender,
     now: () => new Date(now),
     generateId: () => `generated-${++sequence}`,
   });
   return { repository, gateway, service };
 }
-function createOrganizerFixture() {
-  const repository = new OrganizerSpeakerRepository();
+function createOrganizerFixture(
+  repository: OrganizerSpeakerRepository = new OrganizerSpeakerRepository(),
+) {
   repository.organizerScopes.set("event-1:account-1", {
     tenantId: "org-1",
     eventId: "event-1",
@@ -824,6 +850,7 @@ function createOrganizerFixture() {
   let sequence = 0;
   const gateway = new FakePrivateAssetGateway();
   const service = new SpeakerService(repository, gateway, {
+    speakerSender,
     now: () => new Date(now),
     generateId: () => `generated-${++sequence}`,
   });
@@ -870,6 +897,7 @@ function createConcurrentOrganizerFixture() {
     createdAt: now,
   });
   const service = new SpeakerService(repository, new FakePrivateAssetGateway(), {
+    speakerSender,
     now: () => new Date(now),
   });
   return { repository, service };
@@ -977,6 +1005,7 @@ describe("SpeakerService organizer aggregate reads", () => {
     });
     repository.tasks.push(
       task({ id: "accepted-task", participantId: "participant-1" }),
+      task({ id: "action-task", participantId: "participant-1", type: "action" }),
       task({
         id: "manual-task",
         participantId: "participant-manual",
@@ -1055,11 +1084,13 @@ describe("SpeakerService organizer aggregate reads", () => {
       },
     );
     const service = new SpeakerService(repository, new FakePrivateAssetGateway(), {
+      speakerSender,
       now: () => new Date(now),
     });
 
     const matrix = await service.listDeliverables("event-1", "account-1");
     expect(matrix.items.map((item) => item.task.id)).toEqual(["accepted-task", "manual-task"]);
+    expect(matrix.items.some((item) => item.task.type !== "upload")).toBe(false);
     expect(matrix.items.flatMap((item) => item.assets.map((asset) => asset.id))).toEqual([
       "accepted-asset",
       "manual-asset",
@@ -1270,9 +1301,11 @@ describe("SpeakerService organizer roster read model", () => {
     fallbackRepository.tasks.push(...structuredClone(repository.tasks));
     fallbackRepository.assets.push(...structuredClone(repository.assets));
     const fallbackService = new SpeakerService(fallbackRepository, new FakePrivateAssetGateway(), {
+      speakerSender,
       now: () => new Date(now),
     });
     const service = new SpeakerService(repository, new FakePrivateAssetGateway(), {
+      speakerSender,
       now: () => new Date(now),
     });
 
@@ -1326,7 +1359,9 @@ describe("SpeakerService organizer roster read model", () => {
       submissionIds: ["submission-1"],
       participantIds: ["participant-1"],
     });
-    const service = new SpeakerService(repository, new FakePrivateAssetGateway());
+    const service = new SpeakerService(repository, new FakePrivateAssetGateway(), {
+      speakerSender,
+    });
     await expect(
       service.listOrganizerSpeakerRoster("org-1", "event-1", "account-1"),
     ).rejects.toSatisfy((error: unknown) => {
@@ -1349,7 +1384,9 @@ describe("SpeakerService organizer roster read model", () => {
       submissionIds: ["submission-1"],
       participantIds: ["participant-1"],
     });
-    const reviewerService = new SpeakerService(reviewerRepository, new FakePrivateAssetGateway());
+    const reviewerService = new SpeakerService(reviewerRepository, new FakePrivateAssetGateway(), {
+      speakerSender,
+    });
     await expect(
       reviewerService.listOrganizerSpeakerRoster("org-1", "event-1", "account-1"),
     ).rejects.toSatisfy((error: unknown) => {
@@ -1405,6 +1442,7 @@ describe("SpeakerService organizer asset reads", () => {
       createdAt: now,
     });
     const service = new SpeakerService(repository, new FakePrivateAssetGateway(), {
+      speakerSender,
       now: () => new Date(now),
     });
 
@@ -1746,6 +1784,7 @@ describe("SpeakerService organizer speaker writes", () => {
       version: 4,
     });
     const service = new SpeakerService(repository, new FakePrivateAssetGateway(), {
+      speakerSender,
       now: () => new Date(now),
     });
 
@@ -1976,6 +2015,7 @@ describe("SpeakerService organizer speaker writes", () => {
     });
 
     const restarted = new SpeakerService(repository, gateway, {
+      speakerSender,
       now: () => new Date(now),
       generateId: () => "restarted",
     });
@@ -2532,6 +2572,7 @@ describe("SpeakerService portal access", () => {
       participantIds: [],
     });
     const service = new SpeakerService(repository, new FakePrivateAssetGateway(), {
+      speakerSender,
       now: () => new Date(now),
     });
 
@@ -2583,6 +2624,7 @@ describe("SpeakerService portal access", () => {
       },
     );
     const service = new SpeakerService(repository, new FakePrivateAssetGateway(), {
+      speakerSender,
       now: () => new Date(now),
     });
 
@@ -2635,6 +2677,7 @@ describe("SpeakerService portal access", () => {
       },
     );
     const service = new SpeakerService(repository, new FakePrivateAssetGateway(), {
+      speakerSender,
       now: () => new Date(now),
     });
 
@@ -2683,6 +2726,7 @@ describe("SpeakerService portal access", () => {
     });
 
     const service = new SpeakerService(repository, new FakePrivateAssetGateway(), {
+      speakerSender,
       now: () => new Date(now),
     });
     await expect(service.listPortalContexts("account-1")).resolves.toEqual([]);
@@ -2726,6 +2770,7 @@ describe("SpeakerService portal access", () => {
       },
     );
     const service = new SpeakerService(repository, new FakePrivateAssetGateway(), {
+      speakerSender,
       now: () => new Date(now),
     });
 
@@ -2792,6 +2837,7 @@ describe("SpeakerService portal access", () => {
       updatedAt: now,
     });
     const service = new SpeakerService(repository, new FakePrivateAssetGateway(), {
+      speakerSender,
       now: () => new Date(now),
     });
 
@@ -2908,6 +2954,7 @@ describe("SpeakerService portal access", () => {
     });
     const gateway = new FakePrivateAssetGateway();
     const service = new SpeakerService(repository, gateway, {
+      speakerSender,
       now: () => new Date(now),
     });
 
@@ -3064,6 +3111,7 @@ describe("SpeakerService portal access", () => {
     );
     const gateway = new FakePrivateAssetGateway();
     const service = new SpeakerService(repository, gateway, {
+      speakerSender,
       now: () => new Date(now),
     });
 
@@ -3149,6 +3197,7 @@ describe("SpeakerService portal access", () => {
       submission("  speaker-submission:submission-1  ", "participant-1"),
     );
     const service = new SpeakerService(repository, new FakePrivateAssetGateway(), {
+      speakerSender,
       now: () => new Date(now),
     });
 
@@ -4121,6 +4170,18 @@ describe("canonical speaker admin routes", () => {
   });
 });
 describe("SpeakerService organizer email previews", () => {
+  it.each(["", "not-an-email", "speaker@example.test\r\nBcc: attacker@example.test"])(
+    "rejects an invalid runtime speaker sender identity: %j",
+    (invalidSender) => {
+      expect(
+        () =>
+          new SpeakerService(new OrganizerSpeakerRepository(), new FakePrivateAssetGateway(), {
+            speakerSender: invalidSender,
+          }),
+      ).toThrow(new TypeError("Speaker sender must be a valid email address."));
+    },
+  );
+
   const createTemplate = (service: SpeakerService) =>
     service.createOrganizerSpeakerEmailTemplate({
       organizationId: "org-1",
@@ -4222,24 +4283,32 @@ describe("SpeakerService organizer email previews", () => {
 });
 
 it("persists logistics, exposes reminder eligibility, and queues a versioned bulk email", async () => {
-  const { repository } = createOrganizerFixture();
-  const deliveries: Array<{ participantId: string; subject: string; html: string }> = [];
+  const { repository } = createOrganizerFixture(new PersistedSpeakerEmailPreviewRepository());
+  const deliveries: Array<{
+    participantId: string;
+    sender: string;
+    subject: string;
+    html: string;
+  }> = [];
+  const emailDelivery = {
+    enqueueEmail(input: import("./service").SpeakerEmailDeliveryInput) {
+      deliveries.push({
+        participantId: input.participantId,
+        sender: input.sender,
+        subject: input.subject,
+        html: input.html,
+      });
+      return Promise.resolve({ status: "queued" as const });
+    },
+  };
   const service = new SpeakerService(repository, new FakePrivateAssetGateway(), {
+    speakerSender,
     now: () => new Date(now),
     generateId: (() => {
       let sequence = 0;
       return () => `email-generated-${++sequence}`;
     })(),
-    emailDelivery: {
-      enqueueEmail(input) {
-        deliveries.push({
-          participantId: input.participantId,
-          subject: input.subject,
-          html: input.html,
-        });
-        return Promise.resolve({ status: "queued" as const });
-      },
-    },
+    emailDelivery,
   });
 
   await service.createOrganizerSpeaker({
@@ -4296,9 +4365,11 @@ it("persists logistics, exposes reminder eligibility, and queues a versioned bul
   const task = await service.createOrganizerTask({
     eventId: "event-1",
     accountId: "account-1",
-    type: "action",
-    title: "Provide arrival details",
+    type: "upload",
+    title: "Upload arrival details",
     description: "Share the confirmed arrival plan.",
+    allowedMimeTypes: ["application/pdf"],
+    maxBytes: 5_000_000,
     dueAt: "2026-08-07",
     reminderOffsetsMinutes: [60],
     assignments: [
@@ -4313,11 +4384,24 @@ it("persists logistics, exposes reminder eligibility, and queues a versioned bul
   expect(task.map((item) => item.subject?.type)).toEqual(["participant", "participant"]);
   expect(task.every((item) => item.dueAt === "2026-08-07")).toBe(true);
 
+  const actionTask = task[0];
+  if (actionTask === undefined) {
+    throw new Error("Expected an upload task fixture.");
+  }
+  repository.tasks.push({
+    ...actionTask,
+    id: "action-reminder-contamination",
+    type: "action",
+  });
+
   const eligibility = await service.getReminderEligibility({
     eventId: "event-1",
     accountId: "account-1",
   });
   expect(eligibility.eligibleTaskIds).toEqual(expect.arrayContaining(task.map((item) => item.id)));
+  expect(eligibility.items.some((item) => item.taskId === "action-reminder-contamination")).toBe(
+    false,
+  );
 
   const template = await service.createOrganizerSpeakerEmailTemplate({
     organizationId: "org-1",
@@ -4328,6 +4412,7 @@ it("persists logistics, exposes reminder eligibility, and queues a versioned bul
     html: "<p>Hello {{first_name}} ({{display_name}}) at {{email}}</p>",
     text: "Hello {{first_name}}, {{display_name}} ({{email}})",
   });
+  expect(template.sender).toBe(speakerSender);
   const preview = await service.previewOrganizerSpeakerEmails({
     organizationId: "org-1",
     eventId: "event-1",
@@ -4336,6 +4421,7 @@ it("persists logistics, exposes reminder eligibility, and queues a versioned bul
     templateId: template.id,
     templateVersion: template.version,
   });
+  expect(preview.sender).toBe(speakerSender);
   expect(preview.recipients[0]).toMatchObject({
     displayName: "Priya Raman",
     firstName: "Priya",
@@ -4344,17 +4430,23 @@ it("persists logistics, exposes reminder eligibility, and queues a versioned bul
     html: "<p>Hello Priya (Priya Raman) at priya@example.test</p>",
     text: "Hello Priya, Priya Raman (priya@example.test)",
   });
-  const send = await service.sendOrganizerSpeakerEmails({
+  const reloadedService = new SpeakerService(repository, new FakePrivateAssetGateway(), {
+    speakerSender: "changed@example.test",
+    now: () => new Date(now),
+    emailDelivery,
+  });
+  const send = await reloadedService.sendOrganizerSpeakerEmails({
     organizationId: "org-1",
     eventId: "event-1",
     accountId: "account-1",
     previewId: preview.id,
     idempotencyKey: "bulk-email-once",
   });
-  expect(send.status).toBe("queued");
+  expect(send).toMatchObject({ status: "queued", sender: speakerSender });
   expect(deliveries).toHaveLength(2);
+  expect(deliveries.every((delivery) => delivery.sender === speakerSender)).toBe(true);
   expect(send.history.some((entry) => entry.action === "delivery_queued")).toBe(true);
-  const replay = await service.sendOrganizerSpeakerEmails({
+  const replay = await reloadedService.sendOrganizerSpeakerEmails({
     organizationId: "org-1",
     eventId: "event-1",
     accountId: "account-1",
@@ -4381,6 +4473,7 @@ it("returns terminal invitation receipts and reports idempotent replays per reci
   );
   const deliveries: string[] = [];
   const invitationService = new SpeakerService(repository, new FakePrivateAssetGateway(), {
+    speakerSender,
     now: () => new Date(now),
     delivery: {
       enqueueInvitation(input) {
@@ -4484,6 +4577,7 @@ it("queues due scheduled reminders idempotently without sending ineligible tasks
     readonly taskIds: readonly string[];
   }> = [];
   const scheduledService = new SpeakerService(repository, new FakePrivateAssetGateway(), {
+    speakerSender,
     now: () => new Date(now),
     delivery: {
       enqueue(input) {

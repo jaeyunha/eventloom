@@ -52,7 +52,7 @@ function rowToJob(row: Record<string, unknown>): AirtableSyncJob {
     availableAt: String(row.available_at),
     state: row.state as AirtableSyncJob["state"],
     deduplicationKey: String(row.deduplication_key),
-    attempts: Number(row.attempts),
+    attempts: Number(row.attempt_count),
     connectionVersion: Number(row.connection_version),
     claimOwner: row.claim_owner === null ? null : String(row.claim_owner),
     claimToken: row.claim_token === null ? null : String(row.claim_token),
@@ -170,7 +170,7 @@ export class D1AirtableSyncJobRepository implements AirtableSyncJobRepository {
       .prepare(
         `UPDATE airtable_sync_jobs
             SET state = 'retry',
-                attempts = attempts + 1,
+                attempt_count = attempt_count + 1,
                 available_at = ?,
                 claim_owner = NULL,
                 claim_token = NULL,

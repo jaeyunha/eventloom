@@ -31,7 +31,7 @@ import type {
   Track,
 } from "../../../features/sessions/types";
 import { SessionRepositoryConflictError } from "../../../features/sessions/types";
-import { createAirtableSyncDeduplicationKey } from "../../../integrations/airtable/sync/contracts";
+import { airtableSyncStatement } from "./shared";
 
 interface D1MutationResult {
   readonly meta?: { readonly changes?: number };
@@ -825,31 +825,20 @@ export class D1SessionRepository implements SessionRepository {
 
   #syncStatement(audit: SessionAuditEntry, value?: PutValue): D1PreparedStatement {
     const operation = audit.action === "deleted" ? "delete" : "upsert";
-    const placeholderKey = createAirtableSyncDeduplicationKey({
-      connectionId: "connection",
+    return airtableSyncStatement(this.binding, {
+      id: `sync:${audit.id}`,
+      tenantId: audit.tenantId,
       entityType: audit.entityType,
       applicationId: audit.entityId,
       sourceVersion: audit.version,
       operation,
+      payloadJson: JSON.stringify(value ?? audit.before ?? {}),
+      availableAt: audit.occurredAt,
+      condition: {
+        sql: "EXISTS (SELECT 1 FROM session_history WHERE id = ?)",
+        values: [audit.id],
+      },
     });
-    return this.binding
-      .prepare(
-        `INSERT OR IGNORE INTO airtable_sync_jobs (id, organization_id, connection_id, connection_version, entity_type, application_id, source_version, operation, state, deduplication_key, attempts, available_at, payload_json, created_at, updated_at) SELECT ?, c.organization_id, c.id, c.connection_version, ?, ?, ?, ?, 'pending', replace(?, 'connection:', c.id || ':'), 0, ?, ?, ?, ? FROM airtable_connections c WHERE c.organization_id = ? AND c.state IN ('connected', 'refreshing', 'paused') AND EXISTS (SELECT 1 FROM session_history WHERE id = ?)`,
-      )
-      .bind(
-        `sync:${audit.id}`,
-        audit.entityType,
-        audit.entityId,
-        audit.version,
-        operation,
-        placeholderKey,
-        audit.occurredAt,
-        JSON.stringify(value ?? audit.before ?? {}),
-        audit.occurredAt,
-        audit.occurredAt,
-        audit.tenantId,
-        audit.id,
-      );
   }
 }
 

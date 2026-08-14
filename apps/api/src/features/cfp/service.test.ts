@@ -39,7 +39,7 @@ function buildForm(overrides: Partial<CfpForm> = {}): CfpForm {
     welcomeContent: "Welcome",
     settings: {
       speakerLimit: 3,
-      maxSubmissionsPerAccount: 2,
+      maxSubmissionsPerAccount: 3,
       remindersEnabled: true,
       adminNotificationsEnabled: true,
       confirmationMessage: "Received",
@@ -758,6 +758,10 @@ describe("CFP submission lifecycle", () => {
     });
     expect(repeatedCreate.id).toBe(firstCreate.id);
     expect(firstCreate.completedSteps).toEqual(["welcome"]);
+    expect(repository.submissions.size).toBe(1);
+    expect(
+      repository.versions.filter((version) => version.reason === "draft_created"),
+    ).toHaveLength(1);
 
     const ready = await completeValidDraft(service);
     expect(ready.completedSteps).toEqual([
@@ -941,20 +945,40 @@ describe("CFP submission lifecycle", () => {
       ownerAccountId: "account_1",
       idempotencyKey: "limit-1",
     });
-    await service.createDraft({
+    const editedFirst = await service.saveDraft({
+      tenantId: "tenant_1",
+      submissionId: first.id,
+      ownerAccountId: "account_1",
+      expectedVersion: first.version,
+      idempotencyKey: "limit-1-edit",
+      answers: { title: "Edited proposal" },
+    });
+    expect(editedFirst).toMatchObject({
+      id: first.id,
+      version: first.version + 1,
+    });
+    const second = await service.createDraft({
       tenantId: "tenant_1",
       eventId: "event_1",
       formId: "form_1",
       ownerAccountId: "account_1",
       idempotencyKey: "limit-2",
     });
+    const third = await service.createDraft({
+      tenantId: "tenant_1",
+      eventId: "event_1",
+      formId: "form_1",
+      ownerAccountId: "account_1",
+      idempotencyKey: "limit-3",
+    });
+    expect(new Set([first.id, second.id, third.id])).toHaveLength(3);
     await expect(
       service.createDraft({
         tenantId: "tenant_1",
         eventId: "event_1",
         formId: "form_1",
         ownerAccountId: "account_1",
-        idempotencyKey: "limit-3",
+        idempotencyKey: "limit-4",
       }),
     ).rejects.toMatchObject({ code: "SUBMISSION_LIMIT_REACHED" });
     await expect(
@@ -971,7 +995,7 @@ describe("CFP submission lifecycle", () => {
         tenantId: "tenant_1",
         submissionId: first.id,
         ownerAccountId: "account_1",
-        expectedVersion: first.version,
+        expectedVersion: editedFirst.version,
         idempotencyKey: "skip-step",
         completedStep: "submission",
       }),
@@ -1561,5 +1585,41 @@ describe("CFP submission lifecycle", () => {
       },
     });
     expect(repository.submissions.get(storedSubmission.id)).toEqual(storedSubmission);
+
+    const participantOnlyUpdate = await service.saveDraft({
+      tenantId: "tenant_1",
+      eventId: "event_1",
+      submissionId: storedSubmission.id,
+      ownerAccountId: storedSubmission.ownerAccountId,
+      expectedVersion: storedSubmission.version,
+      formVersion: storedSubmission.formVersion,
+      idempotencyKey: "legacy-form-participant-update",
+      completedStep: "participant",
+      participants: [
+        ...storedSubmission.participants,
+        {
+          id: "participant_2",
+          firstName: " Marcus ",
+          lastName: " Okafor ",
+          email: "MARCUS@EXAMPLE.COM",
+          role: "co_speaker",
+          biography: "<b>Co-author</b>",
+          answers: { legacyField: "must not be interpreted by the current schema" },
+        },
+      ],
+    });
+    expect(participantOnlyUpdate.answers).toEqual(storedSubmission.answers);
+    expect(participantOnlyUpdate.participants).toContainEqual({
+      id: "participant_2",
+      firstName: "Marcus",
+      lastName: "Okafor",
+      email: "marcus@example.com",
+      role: "co_speaker",
+      biography: "bCo-author/b",
+      answers: {
+        firstName: "Grace",
+        legacyRole: "co-speaker",
+      },
+    });
   });
 });

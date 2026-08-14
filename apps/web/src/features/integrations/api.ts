@@ -1,5 +1,10 @@
 import type { ApiScope, WebhookEventType } from "@eventloom/contracts";
-import type { IntegrationAdminSnapshot, IntegrationErrorBody, OneTimeSecret } from "./types";
+import type {
+  ApiKeySummary,
+  IntegrationAdminSnapshot,
+  IntegrationErrorBody,
+  OneTimeSecret,
+} from "./types";
 
 export class IntegrationAdminApiError extends Error {
   readonly code: string;
@@ -27,13 +32,15 @@ export interface IntegrationAdminApi {
     provider: "opensend";
     secret: string;
   }): Promise<void>;
+  listApiKeys(organizationId: string, signal?: AbortSignal): Promise<readonly ApiKeySummary[]>;
   createApiKey(input: {
     organizationId: string;
-    eventId: string;
+    eventId?: string | null;
     label: string;
     scopes: readonly ApiScope[];
     expiresAt: string | null;
   }): Promise<OneTimeSecret>;
+  revokeApiKey(organizationId: string, apiKeyId: string): Promise<void>;
   revokeApiKey(organizationId: string, eventId: string, apiKeyId: string): Promise<void>;
   createWebhook(input: {
     organizationId: string;
@@ -108,6 +115,10 @@ export function createIntegrationAdminApi(
     return body.data;
   }
 
+  function organizationPath(organizationId: string): string {
+    return `/${segment(organizationId)}`;
+  }
+
   function eventPath(organizationId: string, eventId: string): string {
     return `/${segment(organizationId)}/events/${segment(eventId)}`;
   }
@@ -140,20 +151,29 @@ export function createIntegrationAdminApi(
       );
     },
 
+    listApiKeys(organizationId, signal) {
+      return request<readonly ApiKeySummary[]>(`${organizationPath(organizationId)}/api-keys`, {
+        cache: "no-store",
+        ...(signal === undefined ? {} : { signal }),
+      });
+    },
+
     createApiKey(input) {
-      return request<OneTimeSecret>(`${eventPath(input.organizationId, input.eventId)}/api-keys`, {
+      return request<OneTimeSecret>(`${organizationPath(input.organizationId)}/api-keys`, {
         method: "POST",
         headers: { "idempotency-key": idempotencyKey() },
         body: JSON.stringify({
           label: input.label.trim(),
           scopes: input.scopes,
           expiresAt: input.expiresAt,
+          eventId: input.eventId ?? null,
         }),
       });
     },
 
-    revokeApiKey(organizationId, eventId, apiKeyId) {
-      return request<void>(`${eventPath(organizationId, eventId)}/api-keys/${segment(apiKeyId)}`, {
+    revokeApiKey(organizationId: string, eventIdOrApiKeyId: string, apiKeyId?: string) {
+      const keyId = apiKeyId ?? eventIdOrApiKeyId;
+      return request<void>(`${organizationPath(organizationId)}/api-keys/${segment(keyId)}`, {
         method: "DELETE",
         headers: { "idempotency-key": idempotencyKey() },
       });

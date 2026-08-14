@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { createMailpitOpenSendHandler, type MailTransport } from "./mailpit-opensend-bridge";
+import {
+  createMailpitOpenSendHandler,
+  type MailTransport,
+  mailpitOpenSendToken,
+} from "./mailpit-opensend-bridge";
 
 const payload = {
   from: "auth@sessionboard.namuh.co",
@@ -31,6 +35,11 @@ function request(body: unknown = payload, key = "mail-key-1", token = "local-dev
 }
 
 describe("Mailpit OpenSend bridge", () => {
+  it("uses the configured OpenSend key for bridge authentication", () => {
+    expect(mailpitOpenSendToken({ OPENSEND_API_KEY: " configured-key " })).toBe("configured-key");
+    expect(mailpitOpenSendToken({ OPENSEND_API_KEY: " " })).toBe("local-development");
+  });
+
   it("captures HTML, text, headers, and calendar attachments", async () => {
     const sendMail = vi.fn<MailTransport["sendMail"]>(async () => ({ messageId: "mailpit-1" }));
     const handler = createMailpitOpenSendHandler({ transport: { sendMail } });

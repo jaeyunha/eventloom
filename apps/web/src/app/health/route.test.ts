@@ -4,7 +4,7 @@ import { createWebHealthResponse } from "./route";
 
 const validEnvironment = {
   APP_ENV: "local",
-  NEXT_PUBLIC_APP_URL: "http://localhost:3015",
+  NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3015",
 };
 
 describe("web health endpoint", () => {

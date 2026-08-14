@@ -28,6 +28,7 @@ export const events = sqliteTable(
     timeZone: text("time_zone").notNull(),
     startsAt: text("starts_at").notNull(),
     endsAt: text("ends_at").notNull(),
+    scheduleDatesJson: jsonArray("schedule_dates_json").$type<readonly string[]>(),
     venue: text(),
     cfpEnabled: bool("cfp_enabled"),
     cfpOpensAt: text("cfp_opens_at"),
