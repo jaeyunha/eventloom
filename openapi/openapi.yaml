@@ -8,10 +8,11 @@ info:
     may use the deployed web app's same-origin `/api/*` proxy; it forwards to
     the API Worker and is not a separate API origin.
 
-    The checked-in document intentionally combines the broader internal application API paths
+    The checked-in document intentionally combines a substantial set of internal application API paths
     (`/api/admin/...`, `/api/speaker/...`, and `/api/public/...`) with tenant-scoped public-v1
-    webhook administration. Internal routes may require organizer or participant session
-    authentication and are not public-v1 guarantees.
+    webhook administration. It is not an exhaustive inventory of every mounted
+    session-authenticated application route. Internal routes may require
+    organizer or participant session authentication and are not public-v1 guarantees.
 
     Organizer routes are qualified by organizationId and eventId and require an authenticated
     organizer session. Participant routes require the authenticated account's event grant.

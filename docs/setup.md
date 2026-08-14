@@ -69,8 +69,6 @@ API_URL=http://127.0.0.1:8787
 API_UPSTREAM_ORIGIN=http://127.0.0.1:8787
 BETTER_AUTH_URL=http://127.0.0.1:8787
 BETTER_AUTH_SECRET=<at-least-32-random-bytes>
-AIRTABLE_ACCESS_TOKEN=<local-development-base-token>
-AIRTABLE_BASE_DEV_ID=<local-development-base-id>
 OPENSEND_API_URL=http://127.0.0.1:8026
 OPENSEND_API_KEY=local-development
 AUTH_FROM_EMAIL=login@local.example.test
@@ -89,7 +87,14 @@ OPENAI_EVALUATION_REASONING_EFFORT=medium
 OPENAI_REMIX_REASONING_EFFORT=low
 ```
 
-The angle-bracket values are operator placeholders, not credentials to commit. Apply local D1 migrations and start both services from the repository root:
+The angle-bracket values are operator placeholders, not credentials to commit.
+The integrated runtime does not require or consume
+`AIRTABLE_ACCESS_TOKEN`/`AIRTABLE_BASE_DEV_ID` at startup. Airtable
+administration is composed only when its organization-scoped integration
+configuration is enabled; manual PAT mode must also be explicitly enabled and
+is not the hosted-production default.
+
+Apply local D1 migrations and start both services from the repository root:
 
 ```bash
 bunx wrangler d1 migrations apply DB --cwd apps/api --local

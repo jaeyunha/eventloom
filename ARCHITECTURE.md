@@ -163,7 +163,7 @@ Forge and GitHub are intentional dual private mirrors:
 
 Both remain private until the release gate passes. Forge is retained for competition-bonus eligibility. Neither mirror is the sole repository mirror or public before that gate.
 
-## Invariants and status pointers
+## Invariants
 
 - Every protected query and mutation is tenant-scoped and authorization-checked.
 - Human decisions and explicit publication remain authoritative; advisory AI output is never consequential by itself, and provider availability is feature-scoped rather than a boot prerequisite.
@@ -172,4 +172,23 @@ Both remain private until the release gate passes. Forge is retained for competi
 - Secrets stay in environment/provider secret stores and never appear in API responses or evidence.
 - Backend provider secrets stay in environment/provider secret stores and never appear in `NEXT_PUBLIC_*`, Wrangler variables, browser evidence, logs, API responses, or committed files.
 
-For supported scope and current status, read [`spec/eventloom.md`](spec/eventloom.md). For executable procedures, use [`docs/setup.md`](docs/setup.md), [`docs/deployment-readiness.md`](docs/deployment-readiness.md), [`docs/qa-runbook.md`](docs/qa-runbook.md), and [`docs/release-runbook.md`](docs/release-runbook.md). Evaluator outcomes and limitations are recorded in [`docs/llm-judge-runs.md`](docs/llm-judge-runs.md); this architecture document does not claim release verification. Advisory AI remains partial until deployed, real-provider end-to-end evidence is accepted.
+## Documentation map
+
+- Supported scope and current status: [`spec/eventloom.md`](spec/eventloom.md)
+- Visual and interaction contract: [`DESIGN.md`](DESIGN.md)
+- Environment and deployment setup: [`docs/setup.md`](docs/setup.md)
+- Public API and webhooks: [`docs/api.md`](docs/api.md) and
+  [`openapi/openapi.yaml`](openapi/openapi.yaml)
+- Calendar lifecycle and timezone rules:
+  [`docs/calendar-semantics.md`](docs/calendar-semantics.md)
+- Configuration preflight: [`docs/deployment-readiness.md`](docs/deployment-readiness.md)
+- Browser and accessibility acceptance: [`docs/qa-runbook.md`](docs/qa-runbook.md)
+- Release, visibility, and submission gates:
+  [`docs/release-runbook.md`](docs/release-runbook.md) and
+  [`docs/public-release.md`](docs/public-release.md)
+- Evaluator history and limitations:
+  [`docs/llm-judge-runs.md`](docs/llm-judge-runs.md)
+- Retained evidence classes and provenance: [`evidence/README.md`](evidence/README.md)
+
+This architecture document does not claim release verification. Advisory AI
+remains partial until deployed real-provider end-to-end evidence is accepted.

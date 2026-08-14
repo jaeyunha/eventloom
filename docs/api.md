@@ -8,7 +8,13 @@ Browser traffic uses the deployed web app's same-origin `/api/*` proxy. The
 proxy forwards to the API Worker without changing the API contract and is not a
 second API origin.
 
-The checked-in [`openapi/openapi.yaml`](../openapi/openapi.yaml) describes the mounted routes. The tenant-scoped public-v1 surface currently exposes discovery and webhook administration only; generic program-resource routes are intentionally not mounted.
+The runtime document at `/api/v1/openapi.json` is canonical for the mounted
+public-v1 surface. The checked-in
+[`openapi/openapi.yaml`](../openapi/openapi.yaml) additionally documents a
+substantial internal/session-authenticated application contract, but it is not
+an exhaustive inventory of every mounted internal route. The tenant-scoped
+public-v1 surface currently exposes discovery and webhook administration only;
+generic program-resource routes are intentionally not mounted.
 
 ## Authentication and scopes
 

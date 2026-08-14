@@ -14,13 +14,16 @@ Use this precedence when sources disagree:
 4. Operational documents define executable procedures.
 5. [`docs/llm-judge-runs.md`](docs/llm-judge-runs.md) records evaluator evidence, coverage, and limitations.
 
-The repository and local or mocked checks do not by themselves constitute release verification. Evidence artifacts and cited product research are retained under [`evidence/`](evidence/) and linked from the spec.
+The repository and local or mocked checks do not by themselves constitute
+release verification. [`evidence/README.md`](evidence/README.md) distinguishes
+retained source snapshots, provider observations, and local QA artifacts from
+release evidence.
 
-The retained [`Kill My SaaS competition brief`](evidence/sources/kill-my-saas-brief.pdf)
-awards bonus credit for Airtable use; it does not define an Airtable schema or require
-it to be authoritative. D1 is the business database. Organizations may optionally
-connect an isolated Airtable base through OAuth or a restricted personal access token
-for asynchronous projections and controlled selected-field inbound updates.
+The competition brief awards bonus credit for Airtable use; it does not define
+an Airtable schema or require Airtable to be authoritative. D1 is the business
+database. Organizations may optionally connect an isolated Airtable base
+through OAuth or an explicitly enabled restricted personal access token for
+asynchronous projections and controlled selected-field inbound updates.
 
 ## Supported scope
 
@@ -43,14 +46,18 @@ The canonical request path is:
 browser
   -> Next.js same-origin /api/* gateway
   -> separately deployed Hono Worker
-  -> Airtable and Cloudflare operational services
+  -> D1 business and operational authority
+     + Durable Object coordination
+     + R2 private files and artifacts
+     + D1 outbox and Cloudflare Queue delivery
+     + optional Airtable and OpenAI adapters
 ```
 
 - **Next.js web:** Renders the browser UI and forwards same-origin `/api/*` requests to the configured API upstream. It does not hold provider credentials or access Airtable, D1, R2, or Durable Objects directly.
 - **Hono API Worker:** Enforces authentication and tenant authorization, validates requests, runs business workflows, serves the versioned API, and orchestrates integrations.
-- **Airtable:** Authoritative store for program and business records.
-- **D1:** Operational state, Better Auth records, API keys, idempotency, durable outbox jobs, delivery state, and audit records.
-- **Durable Objects:** Tenant/event mutation serialization, schedule locks and conflict coordination, and calendar sequence allocation.
+- **D1:** Authoritative store for program records and operational state, including Better Auth records, API keys, idempotency, outbox jobs, delivery state, and audit records.
+- **Airtable:** Optional organization-scoped adapter for asynchronous projections and controlled selected-field inbound updates; ordinary reads and writes do not depend on it.
+- **Durable Objects:** Tenant/event mutation admission and schedule coordination; D1 remains authoritative for committed business state.
 - **R2:** Private uploads and export artifacts, exposed only through authorized access.
 - **Queue:** One multiplexed Cloudflare Queue (`OUTBOX_QUEUE`) carries typed outbox work for communications, calendar delivery, webhooks, and cache invalidation.
 - **Ingress and advisory AI:** The API Worker handles HTTP `fetch`, Queue deliveries, and the production Cron Trigger for scheduled reminders. Advisory AI uses OpenAI Responses with a backend-only key and is never an authority or application boot prerequisite.
@@ -105,6 +112,11 @@ Both mirrors are currently private. Forge is retained for competition-bonus elig
 ## Local development
 
 Normal `make dev` runs the production-shaped D1 runtime with Wrangler-local D1/Durable Objects/R2/Queue, real local Better Auth, and Mailpit-captured email. Airtable is optional and can be connected to a dedicated development base when integration work requires it.
+
+After copying `.env.example`, set a random `BETTER_AUTH_SECRET` and set
+`AI_PROVIDER=disabled` unless you are also supplying a backend-only
+`OPENAI_API_KEY`. The committed template selects OpenAI for explicit local AI
+work and will reject an empty key.
 
 ```bash
 bun install
@@ -245,8 +257,9 @@ cp .env.cloudflare.example .env.cloudflare-production
 ```
 
 Set the authentication values in `.env`. Airtable is optional, and D1 remains
-authoritative. For integrated local Airtable, use `AIRTABLE_BASE_DEV_ID`, not
-`AIRTABLE_BASE_ID`. In each
+authoritative. The integrated runtime does not use `AIRTABLE_BASE_ID` or
+`AIRTABLE_BASE_DEV_ID` as startup requirements; organizations connect their
+authorized base through the integration flow. In each
 `.env.cloudflare-<environment>` file, set:
 
 ```dotenv
@@ -289,11 +302,12 @@ make test
 
 ### 3. Deploy
 
-Supply `CLOUDFLARE_API_TOKEN` through the shell, root `.env`, or your CI secret
-store. Before the first deployment, add the required Better Auth and
+Supply `CLOUDFLARE_API_TOKEN` through the shell or your CI secret store.
+Staging and production deployment scripts do not inherit it from the local root
+`.env`. Before the first deployment, add the required Better Auth and
 cache-invalidation values as Cloudflare Worker Secrets. Add Airtable credentials
 only when enabling the optional adapter; follow
-[`docs/setup.md`](docs/setup.md#cloudflare-worker-deployment). Then run:
+[`docs/setup.md`](docs/setup.md#cloudflare-resources-and-api-deployment). Then run:
 
 ```bash
 node scripts/cloudflare/deploy.mjs staging open-sessionboard:staging
@@ -320,7 +334,11 @@ make all
 
 ## API and operations
 
-API clients use organization-scoped bearer keys with least-privilege scopes, stable cursor pagination, idempotency keys for retryable mutations, and optimistic concurrency for generic updates. Public embeds and feeds expose only explicitly published projections.
+The mounted tenant-scoped public-v1 API currently provides discovery and
+webhook administration through organization-scoped bearer keys. Generic
+program-resource routes remain withheld until publication-safe projections and
+their concurrency contracts are ready. Public embeds and feeds are separate
+anonymous surfaces that expose only explicitly published projections.
 
 See the [API guide](docs/api.md), [OpenAPI contract](openapi/openapi.yaml), [calendar semantics](docs/calendar-semantics.md), [QA runbook](docs/qa-runbook.md), [deployment-readiness preflight](docs/deployment-readiness.md), and [release runbook](docs/release-runbook.md). The release runbook governs release evidence and any repository-visibility change; this README makes no release claim.
 

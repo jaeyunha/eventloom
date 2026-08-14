@@ -2,8 +2,8 @@
 
 ## 0. Authority and superseded references
 
-This file is the canonical visual and interaction contract for every Open
-Sessionboard surface: marketing, organizer administration, reviewer work,
+This file is the canonical visual and interaction contract for every Eventloom
+surface: marketing, organizer administration, reviewer work,
 speaker portal, public event views, embeds, and CFP.
 
 Competition briefs, source-product screenshots, evaluator evidence, and prior
@@ -12,11 +12,11 @@ explain required capabilities, but they do not define layout, styling,
 information architecture, component behavior, or interaction patterns. When
 those artifacts conflict with this file, this file wins.
 
-Open Sessionboard is not a pixel-for-pixel reproduction of Sessionboard,
+Eventloom is not a pixel-for-pixel reproduction of Sessionboard,
 Accelevents, Airtable, or any other source product. Linear is a quality
 reference for product principles, not a template to copy literally. Reuse its
 precision, speed, density, keyboard fluency, and calm hierarchy while preserving
-Open Sessionboard's own event-program vocabulary and workflows.
+Eventloom's own event-program vocabulary and workflows.
 
 ## 1. Product character
 

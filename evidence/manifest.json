@@ -1,26 +1,21 @@
 {
   "version": 1,
-  "purpose": "Evidence baseline for product behavior, visual fidelity, acceptance tests, and implementation decisions.",
+  "purpose": "Index of retained historical source snapshots, local QA artifacts, and provider observations. Entries are not release evidence unless a governing runbook explicitly accepts them.",
   "governing_spec": "spec/eventloom.md",
   "sources": [
     {
       "path": "evidence/sources/kill-my-saas-brief.pdf",
-      "kind": "competition brief",
-      "authority": "primary"
+      "kind": "historical competition brief snapshot",
+      "authority": "historical_snapshot"
     },
     {
       "path": "evidence/sources/transcriptfromhost.rtf",
       "kind": "host walkthrough transcript",
-      "authority": "primary"
+      "authority": "supporting"
     },
     {
       "path": "evidence/sources/sessionboard-and-forge-llms.txt",
       "kind": "documentation research snapshot",
-      "authority": "supporting"
-    },
-    {
-      "path": "evidence/source/discord-messages.md",
-      "kind": "competition Discord export",
       "authority": "supporting"
     }
   ],
@@ -299,6 +294,7 @@
     }
   ],
   "notes": [
+    "The authoritative competition reference is the ignored out-of-tree Kill-My-SaaS-Competition-Brief directory when present; the tracked PDF is a historical snapshot.",
     "Sessionboard imagery is a behavioral and visual reference, not source code.",
     "The unrelated browser-agent failure screenshot was intentionally excluded.",
     "When evidence is incomplete, use focused research and preserve the resulting decision in tests or architecture documentation."
